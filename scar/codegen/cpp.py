@@ -61,6 +61,17 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def runtime_implementation_sha256() -> str:
+    """Version this CPU boundary for cost contexts, outside the call hot path.
+
+    This receipt does not revoke older artifacts' numeric semantics. Cost
+    planning can compare it with the implementation a profile actually timed.
+    """
+    files = [{"path": filename, "sha256": _digest((_DIRECTORY / filename).read_bytes())}
+             for filename in ("cpp.py", "kernel_v1.cpp.in", "scar_abi_v1.h", "timed.py")]
+    return _digest(json.dumps(files, sort_keys=True, separators=(",", ":")).encode())
+
+
 def _plan_digest(plan: ExecutionPlan) -> str:
     return _digest(json.dumps(document(plan), sort_keys=True, allow_nan=False,
                               separators=(",", ":")).encode())
@@ -380,6 +391,8 @@ class CppArtifact:
     _library: object
     _run: object
     _resource_schedule: dict | None = None
+    _timed_plan: dict | None = None
+    _timed_admission: dict | None = None
 
     @property
     def source_path(self) -> Path:
@@ -411,6 +424,24 @@ class CppArtifact:
         return json.loads(json.dumps(self._resource_schedule))
 
     @property
+    def timed_plan_path(self) -> Path | None:
+        filename = self._metadata["files"].get("timed_plan")
+        return self.directory / filename if filename is not None else None
+
+    @property
+    def timed_admission_path(self) -> Path | None:
+        filename = self._metadata["files"].get("timed_admission")
+        return self.directory / filename if filename is not None else None
+
+    @property
+    def timed_plan(self) -> dict | None:
+        return json.loads(json.dumps(self._timed_plan))
+
+    @property
+    def timed_admission(self) -> dict | None:
+        return json.loads(json.dumps(self._timed_admission))
+
+    @property
     def compiler_options(self) -> tuple[str, ...]:
         return tuple(self._metadata["compiler_options"])
 
@@ -420,6 +451,8 @@ class CppArtifact:
                 "source_path": str(self.source_path), "library_path": str(self.library_path),
                 "plan_path": str(self.plan_path), "metadata_path": str(self.metadata_path),
                 "resource_schedule_path": str(self.resource_schedule_path) if self.resource_schedule_path is not None else None,
+                "timed_plan_path": str(self.timed_plan_path) if self.timed_plan_path is not None else None,
+                "timed_admission_path": str(self.timed_admission_path) if self.timed_admission_path is not None else None,
                 "abi_header_path": str(self.abi_header_path)}
 
     def run(self, *arrays):
@@ -427,15 +460,30 @@ class CppArtifact:
         if len(arrays) != len(self.plan.region.parameters):
             raise GuardFailure("C++ input count does not match region parameters")
         descriptors = [_descriptor(array) for array in arrays]
+        guards = self._timed_admission["must_guard"] if self._timed_admission is not None else None
+        if guards is not None:
+            for parameter, array in zip(self.plan.region.parameters, arrays):
+                if not array.flags.c_contiguous:
+                    raise GuardFailure("timed plan input_layout requires C_CONTIGUOUS arrays")
+                if array.shape != tuple(guards["input_shapes"][parameter]):
+                    raise GuardFailure("timed plan input_shapes differ from the modeled call")
         shape = _output_shape(self.plan, arrays)
         output_bytes = shape[0] * shape[1] * 8
         budget = self.plan.cost.get("memory_budget_bytes")
+        if guards is not None:
+            if shape != tuple(guards["output_shape"]) or output_bytes != guards["output_nbytes"]:
+                raise GuardFailure("timed plan output shape or nbytes differ from the model")
+            if budget != guards["memory_budget_bytes"] or output_bytes > guards["memory_budget_bytes"]:
+                raise GuardFailure("timed plan output differs from the modeled memory budget")
         if output_bytes > sys.maxsize or (budget is not None and output_bytes > budget):
             raise GuardFailure("C++ fresh output exceeds memory_budget_bytes or platform size")
         try:
             output = np.empty(shape, dtype=np.float64)
         except (MemoryError, ValueError, OverflowError) as exc:
             raise GuardFailure("C++ fresh output cannot be allocated") from exc
+        if guards is not None and (output.shape != tuple(guards["output_shape"]) or
+                                   output.nbytes != guards["output_nbytes"]):
+            raise GuardFailure("timed plan allocation differs from modeled output storage")
         output_descriptor = _descriptor(output)
         inputs = (_Array * len(descriptors))(*descriptors)
         status = self._run(inputs, len(descriptors), ctypes.byref(output_descriptor))
@@ -447,7 +495,7 @@ class CppArtifact:
         return output
 
 
-def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None) -> CppArtifact:
+def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=None) -> CppArtifact:
     """Validate, emit and compile a persistent host shared-library artifact."""
     # Freeze the caller's mutable nested attrs/proof dictionaries via its wire format.
     plan = plan_from_dict(document(plan))
@@ -461,6 +509,16 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None) -> CppArtif
             raise ValueError("resource schedule admission must return a JSON document")
         schedule_bytes = (json.dumps(admitted_schedule, sort_keys=True, indent=2,
                                      allow_nan=False) + "\n").encode()
+    linked_admission = None
+    timed_bytes = admission_bytes = b""
+    if timed_plan is not None:
+        if admitted_schedule is None:
+            raise ValueError("timed plan execution requires an admitted resource_schedule")
+        from .timed import _link_timed_plan
+        timed_plan = json.loads(json.dumps(timed_plan, allow_nan=False))
+        linked_admission = _link_timed_plan(plan, admitted_schedule, timed_plan)
+        timed_bytes = (json.dumps(timed_plan, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+        admission_bytes = (json.dumps(linked_admission, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
     source = _source(plan, scalar)
     compiler_options = (*COMPILER_OPTIONS, *(("-fopenmp",) if plan.cpu_threads > 1 else ()))
     compiler = shlex.split(os.environ.get("CXX", "g++"))
@@ -475,7 +533,8 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None) -> CppArtif
     source_path.write_text(source)
     header_path.write_bytes(header)
     write_plan(plan, plan_path)
-    build_id = _digest(source.encode() + header + repr(compiler_options).encode() + schedule_bytes)
+    build_id = _digest(source.encode() + header + repr(compiler_options).encode() +
+                       schedule_bytes + timed_bytes + admission_bytes)
     library_path = directory / f"kernel_{build_id[:20]}.so"
     fd, temporary = tempfile.mkstemp(prefix=".kernel-", suffix=".so", dir=directory)
     os.close(fd)
@@ -494,6 +553,7 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None) -> CppArtif
         "schema": "scar.native-artifact", "schema_version": 1, "backend": "cpp",
         "operator_abi_version": ABI_VERSION, "execution_plan_schema_version": plan.schema_version,
         "cxx_standard": 20, "python_boundary": "ctypes", "build_id": build_id,
+        "runtime_implementation_sha256": runtime_implementation_sha256(),
         "host_loop_lowering": "guarded_view_and_row_pointer_hoisting",
         "cpu_threads": plan.cpu_threads,
         "parallel_runtime": "openmp" if plan.cpu_threads > 1 else "serial",
@@ -544,6 +604,16 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None) -> CppArtif
             "asynchronous_transfers": False,
             "numa_page_binding": False,
         }
+    if linked_admission is not None:
+        for key, filename, data in (("timed_plan", "timed-plan.json", timed_bytes),
+                                    ("timed_admission", "timed-admission.json", admission_bytes)):
+            (directory / filename).write_bytes(data)
+            metadata["files"][key] = filename
+            metadata["sha256"][key] = _digest(data)
+            metadata[key + "_sha256"] = _digest(data)
+        metadata["timed_plan_execution"] = _timed_execution_report(linked_admission)
+        metadata.update(execution_linked=True, physical_optimality_proven=False,
+                        deployment_authorized=False)
     (directory / "artifact.json").write_text(json.dumps(metadata, indent=2, allow_nan=False) + "\n")
     return load(directory)
 
@@ -570,6 +640,7 @@ def load(out: Path) -> CppArtifact:
     if has_schedule != ("resource_schedule_sha256" in metadata):
         raise ValueError("artifact resource schedule metadata is inconsistent")
     admitted_schedule = None
+    schedule_bytes = b""
     if has_schedule:
         from .schedule import admit_schedule
         schedule_bytes = (directory / metadata["files"]["resource_schedule"]).read_bytes()
@@ -580,6 +651,38 @@ def load(out: Path) -> CppArtifact:
         admitted_schedule = admit_schedule(plan, schedule)
         if admitted_schedule != schedule:
             raise ValueError("artifact resource schedule differs from admitted execution profile")
+    timed_keys = ("timed_plan", "timed_admission")
+    timed_fields = [key in metadata["files"] for key in timed_keys]
+    timed_fields += [key + "_sha256" in metadata for key in timed_keys]
+    if any(timed_fields) and not all(timed_fields):
+        raise ValueError("artifact timed plan metadata is inconsistent")
+    timed_plan = linked_admission = None
+    if any(timed_fields):
+        if admitted_schedule is None:
+            raise ValueError("artifact timed plan has no admitted resource schedule")
+        from .timed import _link_timed_plan
+        data = {}
+        for key in timed_keys:
+            data[key] = (directory / metadata["files"][key]).read_bytes()
+            digest = _digest(data[key])
+            if digest != metadata[key + "_sha256"] or digest != metadata["sha256"].get(key):
+                raise ValueError(f"artifact {key} digest mismatch")
+        timed_plan = json.loads(data["timed_plan"])
+        linked_admission = _link_timed_plan(plan, admitted_schedule, timed_plan)
+        if linked_admission != json.loads(data["timed_admission"]):
+            raise ValueError("artifact timed admission differs from current linked guards and receipts")
+        if (metadata.get("timed_plan_execution") != _timed_execution_report(linked_admission) or
+                metadata.get("execution_linked") is not True or
+                metadata.get("physical_optimality_proven") is not False or
+                metadata.get("deployment_authorized") is not False):
+            raise ValueError("artifact timed execution policy differs from the supported profile")
+        expected_build_id = _digest(
+            (directory / metadata["files"]["source"]).read_bytes() +
+            (directory / metadata["files"]["abi_header"]).read_bytes() +
+            repr(tuple(metadata["compiler_options"])).encode() + schedule_bytes +
+            data["timed_plan"] + data["timed_admission"])
+        if expected_build_id != metadata["build_id"]:
+            raise ValueError("artifact timed plan build identity mismatch")
     library = ctypes.CDLL(str(directory / metadata["files"]["library"]))
     getter = library.scar_get_operator_table_v1
     getter.argtypes = []
@@ -592,4 +695,24 @@ def load(out: Path) -> CppArtifact:
             table.input_count != len(plan.region.parameters) or not table.run or
             table.plan_sha256 != metadata["plan_sha256"].encode()):
         raise ValueError("native operator table does not match artifact plan/ABI")
-    return CppArtifact(plan, directory, metadata, library, table.run, admitted_schedule)
+    return CppArtifact(plan, directory, metadata, library, table.run, admitted_schedule,
+                       timed_plan, linked_admission)
+
+
+def _timed_execution_report(admission):
+    return {
+        "profile": "synchronous_cpu_allocation_compute_export", "execution_linked": True,
+        "dependency_order": admission["dependency_order"],
+        "timing_policy": admission["timing_policy"],
+        "snapshot_validation_scope": admission["snapshot_validation_scope"],
+        "runtime_guard_scope": admission["runtime_guard_scope"],
+        "modeled_input_shapes": admission["must_guard"]["input_shapes"],
+        "modeled_input_layout": admission["must_guard"]["input_layout"],
+        "modeled_output_shape": admission["must_guard"]["output_shape"],
+        "modeled_output_nbytes": admission["must_guard"]["output_nbytes"],
+        "memory_budget_bytes": admission["must_guard"]["memory_budget_bytes"],
+        "physical_optimality_proven": False, "deployment_authorized": False,
+        "selection": "REQUIRES_EXTERNAL_VALIDATION_REPORT",
+        "cpp_general_scheduler": False, "asynchronous_transfers": False,
+        "numa_page_binding": False,
+    }

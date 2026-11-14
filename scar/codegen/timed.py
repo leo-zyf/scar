@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import sys
+from hashlib import sha256
+from pathlib import Path
 
 from scar.compiler.model import document
 from scar.optimization import resource_solver as solver
@@ -229,6 +231,7 @@ def admit_timed_plan(plan, resource_schedule, solver_result) -> dict:
         "resource_constraints": expected_constraints,
         "must_guard": {
             "input_shapes": input_shapes, "output_shape": instantiation["output_shape"],
+            "input_layout": "C_CONTIGUOUS",
             "output_nbytes": output_bytes, "memory_budget_bytes": budget,
             "cpu_ids": list(binding.cpu_ids), "executor_id": binding.executor_id,
             "source_version": {"path": plan.region.source.path,
@@ -249,3 +252,34 @@ def admit_timed_plan(plan, resource_schedule, solver_result) -> dict:
 
 
 __all__ = ["admit_timed_plan"]
+
+
+def _link_timed_plan(plan, resource_schedule, solver_result) -> dict:
+    """Bind admission to cpp.CppArtifact's implemented synchronous guards."""
+    admission = admit_timed_plan(plan, resource_schedule, solver_result)
+    source = admission["must_guard"]["source_version"]
+    try:
+        source_digest = sha256(Path(source["path"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError("timed source snapshot cannot be read") from error
+    _require(source_digest == source["sha256"], "timed source snapshot digest mismatch")
+    # admit_timed_plan -> admit_schedule/hardware_model_skeleton has also
+    # validated the original target snapshot and retained resource receipts.
+    admission.update(
+        status="LINKED_SYNCHRONOUS_CPU_PROFILE", execution_linked=True,
+        snapshot_validation_scope={
+            "source_file_sha256": "BUILD_AND_LOAD",
+            "target_snapshot_and_resource_receipts": "BUILD_AND_LOAD",
+            "python_function_code_identity": "EXTERNAL_INSTALL_BOUNDARY",
+            "per_call_disk_hashing": False,
+        },
+        runtime_guard_scope={
+            "modeled_input_shapes": "PYTHON_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+            "modeled_input_layout": "C_CONTIGUOUS_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+            "modeled_output_shape_and_nbytes": "PYTHON_EACH_CALL_BEFORE_COMPUTE",
+            "output_memory_budget": "PYTHON_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+            "dtype_ownership_alignment_bounds": "EXISTING_ARRAY_ADMISSION_EACH_CALL",
+            "cpu_availability_binding_and_restore": "NATIVE_EACH_CALL",
+        },
+    )
+    return admission
