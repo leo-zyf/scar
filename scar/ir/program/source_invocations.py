@@ -6,6 +6,8 @@ from .call_edges import InvocationKey, CallRecordAnchor
 from .normal_targets import GlobalPort, Body
 from .providers import ProviderFactReference
 from .ids import ProviderID
+from .view import SourceAnchor
+from .source_productions import ProductionRegionID,ProductionStepID
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +36,19 @@ class SourceInvocationPort:
             raise ValueError('occurrence handle requires an actual call scope and original source port')
         if self.boundary is not None and type(self.boundary) is not CallRecordAnchor:
             raise ValueError('boundary occurrence requires its original attempt record anchor')
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInvocationNode:
+    """A query qualification of a shared region/step, never a body copy."""
+    call_scope: SourceCallScope
+    original: SourceAnchor
+
+    def __post_init__(self):
+        if (type(self.call_scope)is not SourceCallScope or type(self.original)is not SourceAnchor
+                or type(self.original.original) not in (ProductionRegionID,ProductionStepID)
+                or self.original.template is None):
+            raise ValueError('scoped source node needs an original F4 region/step anchor')
 
 
 @dataclass(frozen=True, slots=True)

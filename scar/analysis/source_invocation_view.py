@@ -5,10 +5,11 @@ copied; occurrence handles qualify original ports by run and InvocationKey.
 Static DependencyFrame remains a static interface selection.
 """
 from collections import defaultdict
+from dataclasses import replace
 
 from scar.analysis.program_view import _digest
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import source_invocations as I, normal_targets as T, source_productions as P, view as V
+from scar.ir.program import source_invocations as I, normal_targets as T, source_productions as P, view as V, normal_graph as G
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import ProviderID
@@ -22,6 +23,9 @@ from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEd
 SCHEMA='scar.source-invocation-ports'
 _GUARDS=('RECORDED_DIRECT_INVOCATION_SELECTED','ORIGINAL_SOURCE_INTERFACE_CONDITIONS_RETAINED',
     'SOURCE_WORLD_BINDING_IS_NOT_CONTENT_PRESERVATION','NO_CONTENT_VERSION_EQUALITY_OR_EFFECT_PURITY_PROVEN')
+_BODY_GUARDS=('ORIGINAL_SHARED_F4_RELATION_PARAMETERIZED_BY_INVOCATION',
+    'STATIC_PATH_COMPLETION_AND_ITERATION_SELECTION_NOT_OBSERVED',
+    'NO_CONTENT_VERSION_EQUALITY_OR_EFFECT_CLOSURE_PROVEN')
 
 
 def derive_invocation_bindings(view,groups,observations,activations,interfaces,trace,targets,
@@ -159,9 +163,41 @@ def derive_invocation_bindings(view,groups,observations,activations,interfaces,t
     check();return tuple(result)
 
 
+class _SharedBody:
+    """One original-body membership lens; adjacency stays in its source unit."""
+    def __init__(self,view,body):
+        from scar.analysis.source_namespace_interfaces import NamespacePlanView
+        self.body=body;self.source=source=view.unit(body.unit)
+        material=getattr(source,'material',None)
+        if material is None:raise ValueError('original F4 body material is unavailable')
+        children=defaultdict(list)
+        for (caller,_),link in material.interfaces['links'].items():children[caller].append(link.callee)
+        pending=[body.template];keys=set()
+        while pending:
+            key=pending.pop()
+            if key in keys:continue
+            keys.add(key);pending.extend(children.get(key,()))
+        source._expand(tuple(key for key in material.interfaces['nodes'] if key in keys))
+        contexts={key:NamespacePlanView(body.unit,source.plans[key]) for key in keys}
+        owner=contexts[body.template].owner(body.region).owner
+        self.allowed=set()
+        for node,projection in source.nodes.items():
+            anchor=projection.anchor
+            if anchor.template not in contexts:continue
+            context=contexts[anchor.template];original=anchor.original
+            if type(original)is G.Port:original=original.owner
+            region=(context.steps[original].region if type(original)is P.ProductionStepID else original)
+            if type(region)is P.ProductionRegionID and context.owner(region).owner==owner:self.allowed.add(node)
+        self.root=view.source_region(body.unit,body.template,body.region)
+        if self.root.node not in self.allowed:raise ValueError('body root is outside its original code scope')
+
+    def contains(self,point):return point.namespace==self.source.namespace and point.node in self.allowed
+
+
 class SourceInvocationProvider:
     """Occurrence-qualified boundary relations on the existing ProgramView."""
-    relation_kinds=frozenset((K.ARGUMENT,K.ENVIRONMENT,K.STATE_INTERFACE,K.COMPLETION))
+    relation_kinds=frozenset((K.ARGUMENT,K.ENVIRONMENT,K.STATE_INTERFACE,K.COMPLETION,
+        K.VALUE_USE,K.OPERAND,K.RESULT,K.STATE_INPUT,K.STATE_OUTPUT,K.CONTROL_FLOW,K.CONTAINS,K.IMPLEMENTATION))
 
     def __init__(self,view,bindings,*,check=lambda:None):
         from scar.analysis.source_call_view import prepare_source_ports
@@ -170,8 +206,9 @@ class SourceInvocationProvider:
             for port in (route.source,route.target)))
         self.nodes={};self.points={};self.in_edges=defaultdict(list);self.out_edges=defaultdict(list)
         self.frontiers=defaultdict(list);self.port_bindings=defaultdict(list)
-        self.binding_points={}
+        self.binding_points={};self.scope_bindings=defaultdict(list);self.shared_bodies={}
         for binding in self.bindings:
+            self.scope_bindings[binding.call_scope].append(binding)
             body=view.source_region(binding.body.unit,binding.body.template,binding.body.region)
             occurrence=Point(body.namespace,binding.id)
             self.nodes[occurrence.node]=(binding,body);self.binding_points[binding.id]=occurrence
@@ -203,17 +240,76 @@ class SourceInvocationProvider:
             self.points[record]=point;self.nodes[point.node]=(record,original)
         return self.points[record]
 
+    def _body(self,scope):
+        rows=self.scope_bindings.get(scope,())
+        bodies={row.body for row in rows}
+        if len(bodies)!=1 or any(f.field=='target' for row in rows for f in row.frontiers):
+            raise ValueError('call scope has no uniquely admitted original body')
+        body=next(iter(bodies))
+        if body not in self.shared_bodies:self.shared_bodies[body]=_SharedBody(self.view,body)
+        return self.shared_bodies[body]
+
+    def scoped(self,call_scope,original):
+        """Qualify an original local F4 point; reject another code's body.
+
+        Actual caller-attempt handles remain separate boundary occurrences;
+        this query qualification is not an observed iteration/content version.
+        """
+        self.check();body=self._body(call_scope)
+        if type(original)is T.GlobalPort:original=self.view.source_port(original)
+        if type(original)is not Point or original.context not in (None,()):
+            raise ValueError('scoped projection requires an original source point without static frames')
+        if not body.contains(original):raise ValueError('original endpoint is outside the admitted call body')
+        original=replace(original,context=None)
+        anchor=body.source.nodes[original.node].anchor
+        if type(anchor.original)is G.Port:
+            point=self.port(I.SourceInvocationPort(call_scope,T.GlobalPort(anchor.unit,anchor.original)))
+        else:
+            record=I.SourceInvocationNode(call_scope,anchor)
+            if record not in self.points:
+                point=Point(original.namespace,ProviderID(_digest((SCHEMA+'.body',record))))
+                self.points[record]=point;self.nodes[point.node]=(record,original)
+            point=self.points[record]
+        for binding in self.scope_bindings[call_scope]:
+            if binding not in self.port_bindings[point.node]:self.port_bindings[point.node].append(binding)
+        return point
+
+    def body(self,call_scope):
+        """The shared original body root, qualified by one actual InvocationKey."""
+        return self.scoped(call_scope,self._body(call_scope).root)
+
+    def shared(self,point):
+        """Explicit audit reference; expansion itself preserves call_scope."""
+        return self.nodes[point.node][1]
+
     def describe(self,point):
         if point.node not in self.nodes:return None
         self.check();record,original=self.nodes[point.node]
         if point.namespace!=original.namespace:return None
-        return V.ProgramNode(point,None,V.ProgramNodeRole.PROVIDER,original,self.view.get(original).value_type)
+        metadata=self.view.get(original);owner=None
+        if type(record)is I.SourceInvocationBinding:
+            try:owner=self.body(record.call_scope)
+            except ValueError:pass
+        elif not (type(record)is I.SourceInvocationPort and record.boundary is not None):
+            try:
+                body=self._body(record.call_scope);parent=getattr(metadata,'owner',None)
+                if parent is not None and body.contains(parent):owner=self.scoped(record.call_scope,parent)
+            except ValueError:pass
+        return V.ProgramNode(point,None,V.ProgramNodeRole.PROVIDER,owner,metadata.value_type)
 
     def original(self,point):return self.nodes[point.node][0]
-    def expand(self,point):return (self.nodes[point.node][1],)
+    def expand(self,point):
+        self.check();record=self.original(point)
+        if type(record)is I.SourceInvocationBinding:
+            try:return (self.body(record.call_scope),)
+            except ValueError:return ()
+        if type(record)is I.SourceInvocationPort and record.boundary is not None:return ()
+        try:body=self._body(record.call_scope)
+        except ValueError:return ()
+        return tuple(self.scoped(record.call_scope,p) for p in body.source.expand(self.shared(point)) if body.contains(p))
     def explain(self,point):
         record=self.original(point)
-        return dict(original=record,call_scope=record.call_scope,shared_source=self.expand(point)[0],
+        return dict(original=record,call_scope=record.call_scope,shared_source=self.shared(point),
             occurrence_evidence=tuple(dict.fromkeys(self.port_bindings[point.node])),
             content_preservation_proven=False,logical_content_version_proven=False,source_body_copied=False)
 
@@ -223,7 +319,49 @@ class SourceInvocationProvider:
         if point.context!=():
             return Neighborhood(frontiers=(Frontier(point,'STATIC_FRAME_IS_NOT_INVOCATION_SCOPE',
                 'Use the original run/InvocationKey occurrence handle without a static frame context.'),))
-        return Neighborhood(tuple((self.in_edges if incoming else self.out_edges)[point.node]),tuple(self.frontiers[point.node]))
+        edges=list((self.in_edges if incoming else self.out_edges)[point.node]);frontiers=list(self.frontiers[point.node])
+        record,original=self.nodes[point.node]
+        if type(record)is I.SourceInvocationBinding:return Neighborhood(tuple(edges),tuple(frontiers))
+        if type(record)is I.SourceInvocationPort and record.boundary is not None:
+            frontiers.append(Frontier(point,'CALLER_ATTEMPT_INTERNAL_SELECTION_OPEN',
+                'The retained attempt boundary is not a selected caller iteration or content version.'))
+            return Neighborhood(tuple(edges),tuple(frontiers))
+        try:
+            body=self._body(record.call_scope)
+            if not body.contains(original):raise ValueError('port is outside the admitted call body')
+            adjacency=body.source.incoming_edges if incoming else body.source.outgoing_edges
+            for edge in adjacency[original.node]:
+                participants=(edge.source,edge.target,*(p for c in edge.conditions
+                    for p in (*(() if c.subject is None else (c.subject,)),*c.operands)))
+                if not all(body.contains(p) for p in participants):
+                    frontiers.append(Frontier(point,'ORIGINAL_RELATION_OUTSIDE_INVOCATION_BODY',edge.kind.value));continue
+                qualify=lambda p:self.scoped(record.call_scope,p)
+                conditions=tuple(replace(c,subject=None if c.subject is None else qualify(c.subject),
+                    operands=tuple(qualify(p) for p in c.operands)) for c in edge.conditions)
+                source,target=qualify(edge.source),qualify(edge.target)
+                edges.append(Edge(source,target,edge.kind,edge.meaning,
+                    (*edge.evidence,Evidence(SCHEMA+'.shared-body',(body.source.locator,),(source,target))),
+                    (*conditions,*(Condition(SCHEMA,guard,source,operands=(source,target)) for guard in _BODY_GUARDS)),Strength.MAY))
+            projection=body.source.nodes[original.node]
+            if projection.kind is V.ProgramEntityKind.OPERATION:
+                effects=body.source.effects(original)
+                frontiers.extend(Frontier(point,'SCOPED_SOURCE_EFFECT_FIELD_OPEN',field) for field in effects.unresolved_fields)
+                frontiers.extend(Frontier(point,'SCOPED_SOURCE_EFFECT_RULE_MISSING',rule) for rule in effects.missing_rules)
+                if effects.rule.resolution.value=='DYNAMIC_TARGET_OR_PROTOCOL':
+                    frontiers.append(Frontier(point,'INTERNAL_CALL_PROTOCOL_SELECTION_OPEN',effects.rule.instruction))
+            if (type(projection.anchor.original)is G.Port
+                    and projection.anchor.original.kind is G.PortKind.PARAMETER
+                    and not self.in_edges[point.node]
+                    and not any(e.kind in (K.VALUE_USE,K.STATE_INTERFACE) and body.contains(e.source)
+                        for e in body.source.incoming_edges[original.node])):
+                frontiers.append(Frontier(point,'SCOPED_REGION_INPUT_BINDING_OPEN',
+                    'No original local interface or admitted caller route supplies this parameter.'))
+            if original.node==body.root.node:
+                frontiers.append(Frontier(point,'ORIGINAL_NORMAL_SUCCESS_PROFILE_LIMIT',
+                    'Internal branches, iterations and general exceptional paths are not observed execution selections.'))
+        except ValueError as error:
+            frontiers.append(Frontier(point,'SCOPED_SHARED_BODY_UNAVAILABLE',str(error)))
+        return Neighborhood(tuple(dict.fromkeys(edges)),tuple(dict.fromkeys(frontiers)))
 
     def incoming(self,point):return self._neighbors(point,True)
     def outgoing(self,point):return self._neighbors(point,False)
