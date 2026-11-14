@@ -61,14 +61,17 @@ scar lower-cpu-choices --choices /path/to/cpu-choice/choice/choice.json --out /p
 ```bash
 scar compile-pipeline --source /path/to/program.py --catalog /path/to/catalog --out /path/to/discovery
 scar observe-region-inputs --plan /path/to/discovery/pipeline-0/pipeline.json --out /path/to/inputs -- python /path/to/entry.py
-scar compile-pipeline --pipeline /path/to/discovery/pipeline-0/pipeline.json --inputs /path/to/inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 33554432 --out /path/to/pipeline-build
+scar compile-pipeline --pipeline /path/to/discovery/pipeline-0/pipeline.json --inputs /path/to/inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --out /path/to/pipeline-build
 scar benchmark-pipeline /path/to/pipeline-build/pipeline-0/native --inputs /path/to/inputs/inputs.json --out /path/to/pipeline-benchmark.json
 ```
 
-这里优化固定执行顺序下的 workspace payload。C++ 宿主按已验证的 last-use 复用槽位，最终输出独立新建；
+默认 `--strategy auto` 在满足契约时将完整 elementwise 子图融合为单 kernel，以减少材料化；不满足时保原调用与 pool。
+`--strategy pool` 显式保留原调用划分。预算先在选定表示上判定，原 pool 不可行不代表合法改图后也不可行。
+原调用和 callee guards 始终保留，融合证书与后续算子图优化映射分开验证，不重关联浮点运算。
+C++ host/pool 路径按已验证的 last-use 复用槽位，融合路径不分配中间 workspace，最终输出都独立新建；
 输入与实际 global callee 由运行边界守卫。`scar.compiler.pipeline_runtime.install_pipeline` 可在测量通过后安装，
 传入完整 benchmark 报告作为 `selection`；`trial=True` 仅用于受控验收。
-线程数目前是显式未排名配置，新宿主成本尚未校准，不声称最优调度、NUMA 放置或实际传输。
+线程数目前是显式未排名配置，表示选择的目标是增量 payload，整体时间尚未建模；不声称最优调度、NUMA 放置或实际传输。
 
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。

@@ -105,6 +105,10 @@ Operation、Value、StateLocation、Region、Resource 及其原 ID 保持；任�
 `slot_id`是分配规划变量，不是 Python ObjectID、实际 StorageID 或数据版本；每次入口的分配有独立生命期。
 固定 pool 的逻辑 release 只授权复用，物理槽持有到入口返回；最终输出独立新建并逃逸到调用方。
 该 profile 的最优目标是固定顺序下的 workspace payload 容量，不是动态峰值、RSS 或整体时间最优。
+完整 elementwise 融合进一步允许逻辑数组值没有独立物理材料化。原调用图及 guards 不变，
+`原 leaf/source Expr → raw 融合 Expr → 既有优化器 Expr → 原生算子`逐层保引用和摘要；
+raw 融合证书不冒充后续 CSE 后的图证明。输入替换依据 SSA producer 值边，不依据变量名称或物理槽。
+有 slice、开放效果、逃逸或死 call 的区域不由该融合规则跨越，仍保原表示及其条件。
 
 ## 图、端口与层次
 

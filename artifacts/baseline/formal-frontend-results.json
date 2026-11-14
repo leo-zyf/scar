@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "pipeline_memory_execution_progress",
+  "current_milestone": "pipeline_fusion_execution_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -5594,6 +5594,421 @@
       "cross_region_graph_fusion_with_original_callee_effect_guards",
       "materialization_placement_COPY_ready_release_and_residency_recomputation_joint_model",
       "native_host_cost_model_and_general_control_effect_lowering"
+    ]
+  },
+  "pipeline_fusion_execution_progress": {
+    "schema": "scar.pipeline-fusion-execution-milestone",
+    "schema_version": 1,
+    "recorded_utc": "2026-11-14T22:15:04.393382+00:00",
+    "status": "VERIFIED_SOURCE_GRAPH_FUSION_PAYLOAD_STRATEGY_SINGLE_CPP_OPERATOR_AND_PROGRAM_AB_NOT_COMPLETE_SYSTEM",
+    "stage1": {
+      "original_pipeline": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/discovery/pipeline-0/pipeline.json",
+        "sha256": "fd879e174a883b445edf2915ab27db621a38fb79f945e0c29296b8a801e54e8c",
+        "bytes": 718537
+      },
+      "pipeline_sha256": "99f1586b76a94701c764eb7909022901a7f0fea06b56290412882e9af1a11d4a",
+      "raw_certificate": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/fusion-certificate.json",
+        "sha256": "b26218c2b71b2f2cc38784358a08c7bd54f5fe7a56b6ff7af76a64a93d5581aa",
+        "bytes": 6284
+      },
+      "source_to_native": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/source-to-native-provenance.json",
+        "sha256": "fcfac83691ea527b24d300cd34b95e4e3778cb6c83364ad2bd5166b409239976",
+        "bytes": 24619
+      },
+      "counts": {
+        "original_calls": 4,
+        "leaf_source_expression_entries": 20,
+        "leaf_current_expression_entries": 20,
+        "certificate_source_expression_entries": 20,
+        "certificate_current_expression_entries": 20,
+        "raw_expression_nodes": 17,
+        "raw_arithmetic_nodes": 10,
+        "raw_constant_nodes": 6,
+        "raw_to_optimized_map_entries": 17,
+        "optimized_expression_nodes": 16,
+        "actual_operator_expression_nodes": 16,
+        "optimized_arithmetic_nodes": 10,
+        "optimized_constant_nodes": 5,
+        "source_expression_rows": 20,
+        "source_elisions": 0,
+        "new_optimized_elisions": 0,
+        "cse_many_to_one_groups": 1,
+        "optimizer_reason_counts": {
+          "preserved": 16,
+          "common_subexpression": 1
+        },
+        "original_f4_origin_refs": 20,
+        "original_f4_origin_rows_covered": 20,
+        "external_input_port_substitutions": 1,
+        "cross_call_input_port_substitutions": 3,
+        "distinct_pipeline_value_producers_raw": 5,
+        "distinct_pipeline_value_producers_optimized": 5
+      },
+      "callee_guards_retained": 4,
+      "target_reexecuted_for_graph": false,
+      "original_pipeline_mutated": false,
+      "business_name_rules": false,
+      "mapping_chain": [
+        "ORIGINAL_F4_AND_LEAF_SOURCE_EXPRESSIONS",
+        "CERTIFIED_RAW_FUSION_DAG",
+        "EXISTING_OPTIMIZER_SOURCE_OPERATION_MAP",
+        "ACTUAL_BOUND_CPP_OPERATOR_PLAN"
+      ]
+    },
+    "stage2": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/compiled/pipeline-0/strategy.json",
+        "sha256": "ef937a89484fa4978061743f43fb8f7fede95e506002fbbc2324b228271d7b79",
+        "bytes": 20985
+      },
+      "selected_strategy": "FULL_FUSION",
+      "raw_region_sha256": "16de12ae3a1d766b3b046bd0a90aff62f821ddb53c545ff710b38429f6ebe6a6",
+      "optimized_plan_sha256": "c67213340fc0e196b81199ff80b42ecdbdb2f016c2cfd3ad54f525b449ff70ed",
+      "original_pool_status": "INFEASIBLE_WITHIN_FIXED_POOL_MODEL",
+      "original_pool_payload_bytes": 25215000,
+      "fused_payload_bytes": 8405000,
+      "workspace_bytes": 0,
+      "fresh_final_bytes": 8405000,
+      "payload_budget_bytes": 12582912,
+      "payload_lower_bound_bytes": 8405000,
+      "payload_gap_bytes": 0,
+      "representation_optimality": "REPRESENTATION_PAYLOAD_MODEL_OPTIMUM_ESTABLISHED",
+      "optimality_scope": "GIVEN_FRESH_FINAL_Q_AND_TWO_SUPPORTED_REPRESENTATIONS_INCREMENTAL_PAYLOAD_ONLY",
+      "original_array_materializations": 4,
+      "fused_array_materializations": 1,
+      "raw_nodes": 17,
+      "optimized_nodes": 16,
+      "selected_shape_replay": [
+        {
+          "value_id": "arg:0",
+          "raw_expression": "fused:input:0",
+          "original_shape": [
+            1025,
+            1025
+          ],
+          "merged_shape": [
+            1025,
+            1025
+          ]
+        },
+        {
+          "value_id": "call:0:output",
+          "raw_expression": "fused:call:0:expr:6",
+          "original_shape": [
+            1025,
+            1025
+          ],
+          "merged_shape": [
+            1025,
+            1025
+          ]
+        },
+        {
+          "value_id": "call:1:output",
+          "raw_expression": "fused:call:1:expr:2",
+          "original_shape": [
+            1025,
+            1025
+          ],
+          "merged_shape": [
+            1025,
+            1025
+          ]
+        },
+        {
+          "value_id": "call:2:output",
+          "raw_expression": "fused:call:2:expr:2",
+          "original_shape": [
+            1025,
+            1025
+          ],
+          "merged_shape": [
+            1025,
+            1025
+          ]
+        },
+        {
+          "value_id": "call:3:output",
+          "raw_expression": "fused:call:3:expr:6",
+          "original_shape": [
+            1025,
+            1025
+          ],
+          "merged_shape": [
+            1025,
+            1025
+          ]
+        }
+      ],
+      "cpu_workers": 8,
+      "cpu_allocation_policy": "EXPLICIT_UNRANKED",
+      "target_variants_trial_run_for_ranking": 0,
+      "duration_predicted": false,
+      "dram_traffic_predicted": false,
+      "partial_partition_search": false,
+      "budget_excludes": [
+        "EXTERNAL_INPUTS",
+        "ALLOCATOR_METADATA_AND_ALIGNMENT_OVERHEAD",
+        "THREAD_SCRATCH",
+        "PROCESS_RSS"
+      ],
+      "original_python_no_op": {
+        "available": true,
+        "native_budget_proven": false
+      },
+      "insufficient_final_budget": {
+        "bytes": 4194304,
+        "status": "NO_OP",
+        "native_created": false,
+        "operators_compiled": false
+      }
+    },
+    "stage3": {
+      "artifact": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/compiled/pipeline-0/native/artifact.json",
+        "sha256": "a5face7da360057e8c07cb757b9a6209dd0b6bde5aaaf92e3a85993aee52670f",
+        "bytes": 4408
+      },
+      "build_id": "2d664d004640499c5e75ebe86bdd7e2e4c36d286b77b667419ced876ae1b210b",
+      "pipeline_sha256": "99f1586b76a94701c764eb7909022901a7f0fea06b56290412882e9af1a11d4a",
+      "strategy_sha256": "5c62875036ff57fa916747bd1bd314c97bcfbda5a709aca2cb4e6cdf269272c3",
+      "memory_plan_sha256": "f6b5b85f68b2e4f381583f87ff084db49d50e9f6dbfa71db9f0264c29cb19235",
+      "cpp_standard": 20,
+      "operator_abi_version": 1,
+      "native_operators": 1,
+      "native_ffi_calls_per_run": 1,
+      "original_call_count": 4,
+      "original_callee_guards_retained": true,
+      "selected_for_use": "MEASURED_REPORT_REQUIRED",
+      "whole_program_compiled": false
+    },
+    "region_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/region-benchmark.json",
+        "sha256": "bfbd9ebd984b09a7f5555378a401483d13331e04336ac5bceef01c26300caa1f",
+        "bytes": 9014
+      },
+      "baseline": {
+        "median": 0.009971465,
+        "min": 0.009645796,
+        "max": 0.0106707,
+        "stdev": 0.00043562839101520917,
+        "samples": [
+          0.009850925,
+          0.009971465,
+          0.01060085,
+          0.009796831,
+          0.0106707,
+          0.009645796,
+          0.010555799,
+          0.009724008,
+          0.01059473
+        ]
+      },
+      "native": {
+        "median": 0.001004294,
+        "min": 0.000604726,
+        "max": 0.001136752,
+        "stdev": 0.00019130284865495338,
+        "samples": [
+          0.001004294,
+          0.000748915,
+          0.001087926,
+          0.000773944,
+          0.001004933,
+          0.000604726,
+          0.001049671,
+          0.000722961,
+          0.001136752
+        ]
+      },
+      "speedup": 9.9288306013976,
+      "warmup": 3,
+      "repetitions": 9,
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "validation": {
+        "bitwise_output": true,
+        "input_unchanged": true,
+        "fresh_final": true,
+        "mutable_input_invalidation": true,
+        "caller_output_mutation_safe": true,
+        "dtype_fallback_once": true,
+        "partial_native_failure_fallback_once": true,
+        "changed_callee_fallback_once": true
+      },
+      "native_timed_calls": 9,
+      "timed_fallbacks": 0
+    },
+    "whole_program_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/program-validation/result.json",
+        "sha256": "2a996473b7d785cd19e8e204d96ccf4ae39789bafeed5a6f3bae9b2bc45ac230",
+        "bytes": 12714
+      },
+      "baseline": {
+        "median": 3.855545644997619,
+        "min": 3.8064213170146104,
+        "max": 3.882165946997702,
+        "stdev": 0.038425445236269576,
+        "samples": [
+          3.8064213170146104,
+          3.882165946997702,
+          3.855545644997619
+        ]
+      },
+      "native": {
+        "median": 0.18531209300272167,
+        "min": 0.18238833799841814,
+        "max": 0.192136161000235,
+        "stdev": 0.005002271161426338,
+        "samples": [
+          0.192136161000235,
+          0.18238833799841814,
+          0.18531209300272167
+        ]
+      },
+      "speedup": 20.805688298717737,
+      "warmup": 1,
+      "repetitions": 3,
+      "steps": 400,
+      "input_shapes": {
+        "x": [
+          1025,
+          1025
+        ]
+      },
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "trajectory_steps": 20,
+      "native_calls_per_episode": 400,
+      "native_fallbacks": 0,
+      "correctness": {
+        "trajectory": true,
+        "final_state": true,
+        "stdout": true,
+        "output_files": true
+      },
+      "instrumented": false,
+      "attribution": "COMBINED_GRAPH_FUSION_MEMORY_DISPATCH_AND_PARALLEL_CHANGES_NOT_AN_ISOLATED_OR_UNIVERSAL_SPEEDUP"
+    },
+    "actual_selected_execution": {
+      "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/selection-and-budget-validation.json",
+      "sha256": "79dcfcacc16d1b25d603e98babaced05ec58afacc351a899e6184ce1be427159",
+      "bytes": 577
+    },
+    "tests": {
+      "result": "96 passed in 8.51s",
+      "log": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/final-tests.log",
+        "sha256": "e5a76ac2f5606639975b5527efda87d3c54e2ecde54fdbb7d4989a480da7681d",
+        "bytes": 179
+      }
+    },
+    "distribution": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-fusion-execution-v1/wheel-verification.json",
+        "sha256": "4002879d9fc182ebaa17f89fc23cde548f330ad93ceeb415298e2552088c605e",
+        "bytes": 8613
+      },
+      "status": "PASS",
+      "wheel": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-fusion-execution-v1/wheel/scar-0.1.0-py3-none-any.whl",
+        "bytes": 4571407,
+        "sha256": "0f9e79362624952f249abc560eccbd650aec31985e242860b589c796b6f1e632"
+      },
+      "verified_file_count": 1009,
+      "implementation_sha256": {
+        "core": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+        "wheel_core": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+        "host": "683506adc9e38f0bc1baba799cfa31c6f818a0d3324eb07835cd4510c7163217",
+        "wheel_host": "683506adc9e38f0bc1baba799cfa31c6f818a0d3324eb07835cd4510c7163217",
+        "fused": "d128492adc7459c771e82efb9aaa37c4747245465d4e78fe655b37fa125bd361",
+        "wheel_fused": "d128492adc7459c771e82efb9aaa37c4747245465d4e78fe655b37fa125bd361",
+        "native_core": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+        "native_fused": "d128492adc7459c771e82efb9aaa37c4747245465d4e78fe655b37fa125bd361",
+        "all_applicable_equal": true
+      },
+      "native_identity": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-fusion-execution-v1/compiled/pipeline-0/native",
+        "manifest": {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-fusion-execution-v1/compiled/pipeline-0/native/artifact.json",
+          "bytes": 4408,
+          "sha256": "a5face7da360057e8c07cb757b9a6209dd0b6bde5aaaf92e3a85993aee52670f"
+        },
+        "build_id": "2d664d004640499c5e75ebe86bdd7e2e4c36d286b77b667419ced876ae1b210b",
+        "pipeline_sha256": "99f1586b76a94701c764eb7909022901a7f0fea06b56290412882e9af1a11d4a",
+        "memory_plan_sha256": "f6b5b85f68b2e4f381583f87ff084db49d50e9f6dbfa71db9f0264c29cb19235",
+        "strategy_sha256": "5c62875036ff57fa916747bd1bd314c97bcfbda5a709aca2cb4e6cdf269272c3",
+        "payload_sha256": {
+          "memory_plan": "934abba4aeaccc1650de488bdb42de8d72bd179f3fbd77248323b3999bf3410d",
+          "pipeline": "065254af9734782cff144df9eaba5c32cf77c2bdeabc58885aa2ed2e3bf44590",
+          "strategy": "9a22ef72bde441c25e6d53ecd59b16ea8ede23a89465380cea598dea9196c33e"
+        },
+        "raw_fusion_region_sha256": "16de12ae3a1d766b3b046bd0a90aff62f821ddb53c545ff710b38429f6ebe6a6",
+        "optimized_fusion_plan_sha256": "c67213340fc0e196b81199ff80b42ecdbdb2f016c2cfd3ad54f525b449ff70ed",
+        "raw_expression_count": 17,
+        "optimized_expression_count": 16,
+        "raw_to_optimized_source_operation_map_sha256": "e391e5987d9377cc458050bb0a0fcf36e955779190066b8a96709911ce529c1e",
+        "source_operation_map_entries": 17,
+        "operator_build_id": "ee8314b696fccb45cf88478a2e1e87b12aa18894f5f9fe5e0b8184c11db693e3",
+        "operator_plan_sha256": "2e72ab051e20e93ea174e89ccb0962a4581bee9a7677c0a83213c72e719ba6c6",
+        "operator_library_sha256": "1ce7c7c5d6d3f22a56175087751fb6bae3c3e4370225dde395718bfe4e3f74ce",
+        "operator_file_receipts_verified": 6,
+        "original_calls_and_guards": 4,
+        "native_operators": 1,
+        "cpu_threads": 8,
+        "cpu_ids": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "workspace_bytes": 0,
+        "final_bytes": 8405000,
+        "incremental_payload_bytes": 8405000,
+        "memory_budget_bytes": 12582912,
+        "load_admission_only_no_kernel_execution": true,
+        "strategy_certificate_raw_to_optimized_operator_binding_replay": true,
+        "retained_benchmark_reports_exactly_equal": true
+      },
+      "performance_benchmark_repeated": false
+    },
+    "external_workload": {
+      "kind": "EXTERNALLY_CONSTRUCTED_SCIENTIFIC_ARRAY_TESTCASE",
+      "root": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction",
+      "git_revision": "c87a7e68986fbe8dab05ed446e8cfd5b7f8ec4b6",
+      "source": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/physics.py",
+        "sha256": "54b83f4941d420c33e986326a9189ef1aac3417fc1e407b505eb3495d3320572",
+        "bytes": 339
+      },
+      "entry": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/run.py",
+        "sha256": "7a7362fbb7b30417ce9d304a44474b52cac59d0e1b90a87e2872cdf8ebfc737c",
+        "bytes": 903
+      },
+      "validator": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/validate.py",
+        "sha256": "274041b9caa9e0d4dbb500d8bf9094adfc90d4c8cc2a6b0821f6141a39e9e5a2",
+        "bytes": 5356
+      }
+    },
+    "first_stage_complete": false,
+    "whole_program_compiled": false,
+    "physical_optimality_proven": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "torch_cuda_upgraded": false,
+    "next_layers": [
+      "partial_region_partitions_and_general_control_structure",
+      "joint_graph_rewrite_placement_COPY_ready_release_and_residency_schedule",
+      "calibrated_whole_execution_costs_and_general_CPP_delivery"
     ]
   }
 }

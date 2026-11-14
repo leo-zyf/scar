@@ -111,6 +111,9 @@ CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周�
 C++ 宿主用一次入口 FFI 调度已有 ABI1 算子并持有私有 pool，Python 不逐算子调度。
 实际 global callee 的 CodeID/source/函数状态在入口边界守卫；未知控制/调用不能借此 profile 跨越。
 该 profile 的内存目标与 CPU 显式分配不等于已校准的整体时间模型，原 leaf Python 边界成本不能直接相加当宿主成本。
+`pipeline_fusion`从原值边机械替换 leaf 形参，生成 raw region 与独立证书；`pipeline_strategy`逐原DAG及raw/优化后图重放shape，
+在保原pool与完整融合两种表示中按payload选用，再交单算子后端或原宿主。原图超预算时仍先检查合法改图，不能提前宣告整个程序不可行。
+融合产物保原完整pipeline，运行边界继续检查全部callee；后端分别核raw证书、既有optimizer映射及实际bound operator，只有最终选中的表示进入编译。
 跨区域结构变换、放置、搬运与调度的联合优化仍是下一层，当前不声称物理最优或完整硬件调度。
 
 ## 形式阶段与顺序

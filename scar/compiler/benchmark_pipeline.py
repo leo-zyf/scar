@@ -16,7 +16,7 @@ from .pipeline_runtime import guarded_pipeline_function, select_pipeline_measure
 
 
 def benchmark_pipeline(artifact_path, out, *, input_metadata_path=None, warmup=3, repetitions=9):
-    from scar.codegen.pipeline import load
+    from scar.codegen.pipeline_loader import load
     if sys.getprofile() is not None or sys.gettrace() is not None:
         raise ValueError('clean benchmark requires no Python tracing or profile hooks')
     if warmup < 1 or repetitions < 3:
