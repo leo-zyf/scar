@@ -73,6 +73,21 @@ def test_lowers_original_operations_parameter_local_alias_and_return():
     assert origins[0]['value']['port']['kind']=='PARAMETER'
 
 
+def test_float_literal_uses_original_f4_payload_scalar_when_sparse_fact_omits_it():
+    from scar.ir.program.source_syntax import AstValue
+    lowerer=_graph();context=lowerer.resolver.plan(None,None)
+    literal=PythonLiteral.from_python(0.125,exact=True)
+    lowerer.syntax=NS(nodes=(NS(fields=(AstValue('SCALAR',None,(),literal),
+        AstValue('SCALAR',None,(),PythonLiteral.from_python(None,exact=True)))),))
+    step=NS(id=P.ProductionStepID('literal'),instruction=P.ConstructValue(P.ConstructionKind.LITERAL,
+        (P.SlotRef(0,'FIELD',0),P.SlotRef(0,'FIELD',1))),completions=(P.ProductionCompletion(C.FALLTHROUGH,()),))
+    value,_=lowerer.construct(context,step,(),{},dict(kind='original_f4'))
+    assert value.value==0.125
+    lowerer.constants[context.result(step).port]=PythonLiteral.from_python(2,exact=True)
+    with pytest.raises(GraphRegionRejected,match='differs'):
+        lowerer.construct(context,step,(),{},dict(kind='original_f4'))
+
+
 @pytest.mark.parametrize('instruction',[
     P.ApplyLanguageAction(P.LanguageActionKind.CALL),
     P.ApplyLanguageAction(P.LanguageActionKind.ATTRIBUTE_SET),

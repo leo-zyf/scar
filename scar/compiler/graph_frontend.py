@@ -71,8 +71,9 @@ def _origin(context, region, step=None, **extra):
 
 class _GraphLowerer:
     """Walk every action in a bounded straight-line body, including dead work."""
-    def __init__(self, source, function, resolver):
+    def __init__(self, source, function, resolver, *, syntax=None):
         self.source, self.function, self.resolver = source, function, resolver
+        self.syntax = syntax
         self.facts = source.facts
         self.nodes, self.origins, self.locals = [], [], {}
         self.by_id, self.active = {}, set()
@@ -154,6 +155,20 @@ class _GraphLowerer:
         ins = step.instruction
         if ins.construction is P.ConstructionKind.LITERAL:
             literal = self.constants.get(context.result(step).port)
+            # Sparse UnitFacts intentionally omit some scalar types (notably
+            # floats). The F4 literal's payload still names its exact pinned
+            # F2 scalar field; reading it adds no new expression selection.
+            if self.syntax is not None:
+                if not ins.payload:
+                    _reject('LITERAL_SOURCE_SLOT','literal needs its original value scalar slot',origin)
+                site=ins.payload[0]
+                value=self.syntax.nodes[site.occurrence].fields[site.ordinal]
+                for index in site.item_path:value=value.items[index]
+                if value.kind!='SCALAR' or value.scalar is None:
+                    _reject('LITERAL_SOURCE_SLOT','F4 literal payload does not address an original scalar',origin)
+                if literal is not None and literal!=value.scalar:
+                    _reject('LITERAL_FACT_MISMATCH','constant fact differs from its original F4/F2 scalar',origin)
+                literal=value.scalar
             if literal is None:
                 _reject('LITERAL_FACT_MISSING', 'literal has no admitted original constant fact', origin)
             value = literal.to_python()
@@ -367,7 +382,7 @@ def discover_graph_regions(catalog, source=None) -> tuple[list[ArrayRegion], lis
                 if len(candidates) != 1:
                     _reject('CODE_IDENTITY_UNAVAILABLE', 'original function has no unique complete code identity')
                 code = candidates[0]
-                lowerer = _GraphLowerer(source_view, function, resolver)
+                lowerer = _GraphLowerer(source_view, function, resolver,syntax=syntax)
                 nodes, output, origins = lowerer.lower()
                 key = code_key(code)
                 identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
