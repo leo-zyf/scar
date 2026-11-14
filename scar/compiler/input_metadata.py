@@ -5,10 +5,49 @@ claims are inferred. Collection can run with no selected transform, so the
 original function supplies the actual workload behavior.
 """
 from pathlib import Path
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
 import uuid
+from .model import SourceRef
+
+@dataclass(frozen=True)
+class InputBoundary:
+    source: SourceRef
+    parameters: tuple[str,...]
+    callees: tuple=()
+
+def read_input_boundary(path):
+    """Read a declared code boundary; no artifact is loaded or transformed."""
+    document=json.loads(Path(path).read_bytes())
+    if document.get('schema')=='scar.array-pipeline-plan':
+        from .pipeline_model import pipeline_from_dict
+        pipeline=pipeline_from_dict(document)
+        return InputBoundary(pipeline.source,pipeline.parameters,
+            tuple({(call.callee.lookup_path,call.callee.source.code_key):call.callee
+                for call in pipeline.calls}.values()))
+    from .model import plan_from_dict
+    plan=plan_from_dict(document)
+    return InputBoundary(plan.region.source,plan.region.parameters)
+
+def callee_metadata(guards,namespace):
+    """Observe selected global function code IDs, without reading tensor data."""
+    from types import FunctionType
+    from scar.trace.code_snapshot import code_key
+    records=[]
+    for guard in guards:
+        actual=namespace.get(guard.lookup_path[0])
+        record=dict(lookup_path=list(guard.lookup_path),
+            declared_code_key=guard.source.code_key,source_sha256_verified=False)
+        if type(actual)is FunctionType:
+            observed=code_key(actual.__code__)
+            record.update(kind='EXACT_PYTHON_FUNCTION',observed_code_key=observed,
+                observed_filename=actual.__code__.co_filename,
+                declared_code_matches=observed==guard.source.code_key)
+        else:record.update(kind='FUNCTION_CODE_NOT_OBSERVED',declared_code_matches=False)
+        records.append(record)
+    return records
 
 class InputMetadataObserver:
     def __init__(self,max_calls_per_code=2):

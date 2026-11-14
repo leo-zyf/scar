@@ -56,6 +56,20 @@ scar lower-cpu-choices --choices /path/to/cpu-choice/choice/choice.json --out /p
 校准只运行规范原语；模型选择完成后仅编译所选目标实现，最终是否采用仍由正确性和 A/B 验收决定。
 当前域是给定 CPU 池中每 executor 的前缀 CPU 集合及 1/2 的幂/上限线程数，不是所有物理实现；NUMA 页未绑定。
 
+原 F4 中只调用已准入数组函数的直线子图，可自动组成多区域 pipeline：
+
+```bash
+scar compile-pipeline --source /path/to/program.py --catalog /path/to/catalog --out /path/to/discovery
+scar observe-region-inputs --plan /path/to/discovery/pipeline-0/pipeline.json --out /path/to/inputs -- python /path/to/entry.py
+scar compile-pipeline --pipeline /path/to/discovery/pipeline-0/pipeline.json --inputs /path/to/inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 33554432 --out /path/to/pipeline-build
+scar benchmark-pipeline /path/to/pipeline-build/pipeline-0/native --inputs /path/to/inputs/inputs.json --out /path/to/pipeline-benchmark.json
+```
+
+这里优化固定执行顺序下的 workspace payload。C++ 宿主按已验证的 last-use 复用槽位，最终输出独立新建；
+输入与实际 global callee 由运行边界守卫。`scar.compiler.pipeline_runtime.install_pipeline` 可在测量通过后安装，
+传入完整 benchmark 报告作为 `selection`；`trial=True` 仅用于受控验收。
+线程数目前是显式未排名配置，新宿主成本尚未校准，不声称最优调度、NUMA 放置或实际传输。
+
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。
 契约要求同步 CPU 执行及无外部并发写入；这些不是由 ndarray 类型推断的全局事实。

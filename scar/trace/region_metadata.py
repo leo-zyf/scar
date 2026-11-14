@@ -14,8 +14,7 @@ import re
 import sys
 from types import CodeType
 
-from scar.compiler.input_metadata import InputMetadataObserver
-from scar.compiler.model import read_plan
+from scar.compiler.input_metadata import InputMetadataObserver,read_input_boundary,callee_metadata
 from scar.trace.code_snapshot import code_key
 
 
@@ -46,8 +45,8 @@ class RegionMetadataCollector:
     def start(self):
         try:
             if self.plan_path is None or self.out is None:raise ValueError('plan and output directory required')
-            self.plan=read_plan(self.plan_path);self.source=self.plan.region.source
-            self.parameters=self.plan.region.parameters
+            self.plan=read_input_boundary(self.plan_path);self.source=self.plan.source
+            self.parameters=self.plan.parameters
             if (not Path(self.source.path).is_absolute()
                     or re.fullmatch(r'[0-9a-f]{64}',self.source.sha256) is None
                     or re.fullmatch(r'pycode-v2:[0-9a-f]{64}',self.source.code_key) is None
@@ -147,6 +146,8 @@ class RegionMetadataCollector:
             values=tuple(frame.f_locals[name] for name in self.parameters)
             self.callbacks+=1
             more=self.observer(self.source,self.parameters,values)
+            if self.plan.callees:
+                self.observer.records[-1]['callee_bindings']=callee_metadata(self.plan.callees,frame.f_globals)
             if not more or self.callbacks>=2:
                 self.status='COMPLETE';self.stopped=True;self._disable()
                 self.window_flushed=True

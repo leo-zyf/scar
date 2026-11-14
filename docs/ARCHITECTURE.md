@@ -106,6 +106,11 @@ CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周�
 该辅助比较图不取代原程序图；typed IO/materialization 仍由各原任务图与收据引用，位置固定，不暗增 COPY。
 同步CPU后端已执行allocation→compute→export的 timed 计划；shape、连续布局、输出字节预算及CPU绑定逐调用检查。
 预测 tick 不用于睡眠；源码和硬件收据在build/load核对，其他 timed 形态仍不支持。
+另一个已准入 profile 是原 F4 直线数组调用 pipeline：共享 leaf plans，值边引用各调用 producer。
+固定 pool 规划根据 shape、consumer 与 last-use 分配槽，区分逻辑释放与物理持有；最终输出不复用 workspace。
+C++ 宿主用一次入口 FFI 调度已有 ABI1 算子并持有私有 pool，Python 不逐算子调度。
+实际 global callee 的 CodeID/source/函数状态在入口边界守卫；未知控制/调用不能借此 profile 跨越。
+该 profile 的内存目标与 CPU 显式分配不等于已校准的整体时间模型，原 leaf Python 边界成本不能直接相加当宿主成本。
 跨区域结构变换、放置、搬运与调度的联合优化仍是下一层，当前不声称物理最优或完整硬件调度。
 
 ## 形式阶段与顺序

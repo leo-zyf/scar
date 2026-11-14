@@ -96,8 +96,15 @@ Operation、Value、StateLocation、Region、Resource 及其原 ID 保持；任�
 目标是在峰值 memory、容量/可用预算、transfer 与同步约束下最小化 makespan；allocation 不等于 ready，逃逸输出不能提前释放。
 算术次数和逻辑 bytes 是静态需求，不直接等于 duration、实际 DRAM 流量、cache miss 或有效带宽；缺少的成本逐字段保留 UNKNOWN。
 当前固定 placement solver 只在给定整数 duration、资源需求与预算的离散模型内求解；尚未完成 joint placement，也不证明物理全局最优。
-当前可执行后端仍只准入有运行时 guard 的纯 CPU 数组区域；任务图不自动关闭开放效果、控制或跨调用内容版本条件。
+当前可执行后端准入有运行时 guard 的纯 CPU 数组区域及直线函数 pipeline；任务图不自动关闭开放效果、控制或跨调用内容版本条件。
 实测用于成本校准及正确性/性能验收；优化主链由程序图、硬件模型与 Q 驱动，不以黑盒编译版本排名替代。
+
+数组 pipeline 是派生 profile，不是第六类核心实体：`PipelinePlan`引用原入口区域，`RegionCall`引用共享 leaf plan，
+`inputs/output`是本次入口作用域内的值边。全局 callee 选择保留 CodeID guard，不能把源码声明当成实际 callable。
+内存规划再从这些值边派生 producer/consumer/ready/last-use；逻辑值与物理槽分开，同槽上的后续值不等于旧值。
+`slot_id`是分配规划变量，不是 Python ObjectID、实际 StorageID 或数据版本；每次入口的分配有独立生命期。
+固定 pool 的逻辑 release 只授权复用，物理槽持有到入口返回；最终输出独立新建并逃逸到调用方。
+该 profile 的最优目标是固定顺序下的 workspace payload 容量，不是动态峰值、RSS 或整体时间最优。
 
 ## 图、端口与层次
 

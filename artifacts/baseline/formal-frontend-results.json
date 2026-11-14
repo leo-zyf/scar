@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "hardware_cpu_choice_progress",
+  "current_milestone": "pipeline_memory_execution_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -5177,5 +5177,423 @@
       },
       "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810"
     }
+  },
+  "pipeline_memory_execution_progress": {
+    "schema": "scar.pipeline-memory-execution-milestone",
+    "schema_version": 1,
+    "recorded_utc": "2026-11-14T21:23:04.685505+00:00",
+    "status": "VERIFIED_AUTOMATIC_F4_PIPELINE_MEMORY_PLAN_NATIVE_HOST_AND_REAL_PROGRAM_AB_NOT_COMPLETE_SYSTEM",
+    "stage1": {
+      "frontend": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/frontend/result.json",
+        "sha256": "ab51285a820b41ed90b1da61d5e2f025bec382fa9262e78650fc8582e498ce20",
+        "bytes": 2405
+      },
+      "formal_layers": 25,
+      "admitted_layers": 25,
+      "seconds": 41.40125552499376,
+      "target_executed_for_static_graph": false,
+      "pipeline": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/discovery/pipeline-0/pipeline.json",
+        "sha256": "fd879e174a883b445edf2915ab27db621a38fb79f945e0c29296b8a801e54e8c",
+        "bytes": 718537
+      },
+      "pipeline_sha256": "99f1586b76a94701c764eb7909022901a7f0fea06b56290412882e9af1a11d4a",
+      "calls": [
+        {
+          "id": "call:0",
+          "leaf_code_key": "pycode-v2:4568178f26abcde21675ce53493fe0d759f607db3258fe814fd1f03f2771aa06",
+          "global_lookup": [
+            "reaction"
+          ],
+          "inputs": [
+            "arg:0"
+          ],
+          "output": "call:0:output",
+          "lowering_context": "PIPELINE_NATIVE_HOST_COMPONENT",
+          "standalone_lowering_eligible": true,
+          "standalone_cost_decision": "proposed"
+        },
+        {
+          "id": "call:1",
+          "leaf_code_key": "pycode-v2:e1dcba73134fa14c72324702b7e507991ffa9f7bd79cb50b2b1cc87e8dab4949",
+          "global_lookup": [
+            "decay"
+          ],
+          "inputs": [
+            "call:0:output"
+          ],
+          "output": "call:1:output",
+          "lowering_context": "PIPELINE_NATIVE_HOST_COMPONENT",
+          "standalone_lowering_eligible": false,
+          "standalone_cost_decision": "not_profitable"
+        },
+        {
+          "id": "call:2",
+          "leaf_code_key": "pycode-v2:da2138638927e844680010bf439d43cbba1cc953c8b369f8f7823b52b9d5762b",
+          "global_lookup": [
+            "drive"
+          ],
+          "inputs": [
+            "call:1:output"
+          ],
+          "output": "call:2:output",
+          "lowering_context": "PIPELINE_NATIVE_HOST_COMPONENT",
+          "standalone_lowering_eligible": false,
+          "standalone_cost_decision": "not_profitable"
+        },
+        {
+          "id": "call:3",
+          "leaf_code_key": "pycode-v2:60ff3a2eaf82ff4a91cd15f2d829b023f916937c88a31b7b1f5cbf30d08a049a",
+          "global_lookup": [
+            "response"
+          ],
+          "inputs": [
+            "call:2:output"
+          ],
+          "output": "call:3:output",
+          "lowering_context": "PIPELINE_NATIVE_HOST_COMPONENT",
+          "standalone_lowering_eligible": true,
+          "standalone_cost_decision": "proposed"
+        }
+      ],
+      "f4_automatic_wiring": true,
+      "business_name_rules": false,
+      "leaf_bodies_shared": true,
+      "callee_sources_not_duplicated_on_wire": true,
+      "literal_bridge": "ORIGINAL_F4_PAYLOAD_TO_PINNED_F2_EXACT_SCALAR_NO_NEW_AST_PARSE_OR_OLD_FACT_RESIGNING"
+    },
+    "dynamic_fields": {
+      "run": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/inputs/result.json",
+        "sha256": "48101143ca5ea27ec209c40397f51bdb1cd805e2e321fe9e23a188d7238ad076",
+        "bytes": 1488
+      },
+      "metadata": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/inputs/inputs.json",
+        "sha256": "52764e5074a148e599ef1ed7c3726921fcced67604681b5283df371e96488392",
+        "bytes": 6331
+      },
+      "observations": 2,
+      "seconds": 0.35381713799142744,
+      "input_shapes": {
+        "x": [
+          1025,
+          1025
+        ]
+      },
+      "actual_callee_code_matches": true,
+      "tensor_values_recorded": false,
+      "logical_content_versions_inferred": false,
+      "global_profile_hook_installed": false
+    },
+    "stage2": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/compiled/pipeline-0/memory-plan.json",
+        "sha256": "19f0c6dbf32c646bff3237eab327b4da3939417b130f11d787ced9fd3611251e",
+        "bytes": 9487
+      },
+      "status": "OPTIMAL_WITHIN_FIXED_POOL_MODEL",
+      "objective": "MINIMIZE_SUM_OF_FIXED_WORKSPACE_SLOT_CAPACITIES",
+      "optimality_scope": "FIXED_ORDER_PREALLOCATED_HOST_UNBOUND_PAYLOAD_POOL_ONLY",
+      "ownership": "FIXED_ENTRY_POOL_LOGICAL_RELEASE_PERMITS_REUSE_PHYSICAL_FREE_AT_EXIT",
+      "intermediate_logical_values": 3,
+      "workspace_slots": [
+        {
+          "id": "slot:0",
+          "capacity_bytes": 8405000,
+          "values": [
+            "call:0:output",
+            "call:2:output"
+          ]
+        },
+        {
+          "id": "slot:1",
+          "capacity_bytes": 8405000,
+          "values": [
+            "call:1:output"
+          ]
+        }
+      ],
+      "workspace_bytes": 16810000,
+      "final_bytes": 8405000,
+      "incremental_payload_bytes": 25215000,
+      "payload_budget_bytes": 33554432,
+      "no_reuse_reference": {
+        "basis": "INFERRED_ONE_SLOT_PER_INTERMEDIATE_MODEL_NOT_MEASURED_RSS",
+        "workspace_bytes": 25215000,
+        "total_payload_bytes": 33620000
+      },
+      "budget_excludes": [
+        "EXTERNAL_INPUTS",
+        "ALLOCATOR_METADATA_AND_ALIGNMENT_OVERHEAD",
+        "THREAD_SCRATCH",
+        "PROCESS_RSS"
+      ],
+      "lower_bound_workspace_bytes": 16810000,
+      "gap_bytes": 0,
+      "cpu_allocation": "EXPLICIT_8_WORKERS_FIRST_FEASIBLE_EXECUTOR_UNRANKED",
+      "duration_predicted": false,
+      "copy_tasks_inserted": false,
+      "physical_optimality_proven": false,
+      "rejection": {
+        "report": {
+          "path": "artifacts/current/experiments/pipeline-memory-execution-v1/too-small-pool-budget/result.json",
+          "sha256": "6eac38cc12a3d8728dbf865e7f2f711cdfb5a6214ef4218edd5594f9c233ee3f",
+          "bytes": 219756
+        },
+        "status": "INFEASIBLE_WITHIN_FIXED_POOL_MODEL",
+        "payload_budget_bytes": 25165824,
+        "operator_compilation_started": false,
+        "native_created": false
+      }
+    },
+    "stage3": {
+      "artifact": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/compiled/pipeline-0/native/artifact.json",
+        "sha256": "bec25a0c699d7e18a6bdd779a738ce42926884f338198b851d049a7f8255fde4",
+        "bytes": 11900
+      },
+      "cxx_standard": 20,
+      "operator_abi_version": 1,
+      "pipeline_abi_version": 1,
+      "build_id": "55a302281ce7f57294cadc431dcd00d3e44e2b74eaf1b5a8dd313559f503fc0b",
+      "pipeline_sha256": "99f1586b76a94701c764eb7909022901a7f0fea06b56290412882e9af1a11d4a",
+      "memory_plan_sha256": "2929283fd9925372d0e02599564e9a800be0afac76fc5683df4c8f3defd2a9ac",
+      "host_entry_ffi_per_pipeline_call": 1,
+      "operator_calls_per_pipeline": 4,
+      "leaf_python_run_called": false,
+      "python_operator_scheduling": false,
+      "memory_policy": "UNBOUND",
+      "asynchronous_transfers": false,
+      "scope": "ONE_PIPELINE_REGION_OUTER_PYTHON_DRIVER_RETAINED"
+    },
+    "region_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/region-benchmark.json",
+        "sha256": "ccce8d65969130a7157fd794a0c5c003d5f82f42e4bbc80d9d732c390e3fef48",
+        "bytes": 16770
+      },
+      "baseline": {
+        "median": 0.009360999,
+        "min": 0.009018576,
+        "max": 0.010207064,
+        "stdev": 0.0005763304682924494,
+        "samples": [
+          0.009097099,
+          0.009019017,
+          0.010180561,
+          0.009018576,
+          0.010152547,
+          0.009360999,
+          0.010187821,
+          0.009036638,
+          0.010207064
+        ]
+      },
+      "native": {
+        "median": 0.001769919,
+        "min": 0.001008863,
+        "max": 0.00214375,
+        "stdev": 0.0003636771154516737,
+        "samples": [
+          0.002016987,
+          0.00161532,
+          0.001769919,
+          0.001008863,
+          0.00214375,
+          0.001620933,
+          0.002077349,
+          0.001574683,
+          0.002085183
+        ]
+      },
+      "speedup": 5.288942036330476,
+      "validation": {
+        "bitwise_output": true,
+        "input_unchanged": true,
+        "fresh_final": true,
+        "mutable_input_invalidation": true,
+        "caller_output_mutation_safe": true,
+        "dtype_fallback_once": true,
+        "partial_native_failure_fallback_once": true,
+        "changed_callee_fallback_once": true
+      },
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "warmup": 3,
+      "repetitions": 9,
+      "native_timed_calls": 9,
+      "timed_fallbacks": 0
+    },
+    "whole_program_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/program-validation/result.json",
+        "sha256": "c7eb3a388ed9b5345520722f357d320a5d14defd485952fc371952947f233678",
+        "bytes": 20479
+      },
+      "baseline": {
+        "median": 3.983763695010566,
+        "min": 3.8417956699995557,
+        "max": 4.01424714399036,
+        "stdev": 0.09203592746751287,
+        "samples": [
+          3.983763695010566,
+          4.01424714399036,
+          3.8417956699995557
+        ]
+      },
+      "native": {
+        "median": 1.4704327530052979,
+        "min": 1.4592214849981247,
+        "max": 1.5175903889903566,
+        "stdev": 0.030974355294023367,
+        "samples": [
+          1.4704327530052979,
+          1.4592214849981247,
+          1.5175903889903566
+        ]
+      },
+      "speedup": 2.7092457556243055,
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "steps": 400,
+      "warmup": 1,
+      "repetitions": 3,
+      "trajectory_steps": 20,
+      "native_calls_per_episode": 400,
+      "native_fallbacks": 0,
+      "correctness": {
+        "trajectory": true,
+        "final_state": true,
+        "stdout": true,
+        "output_files": true
+      },
+      "instrumented": false,
+      "attribution": "COMBINED_LEAF_FUSION_PARALLELISM_DISPATCH_AND_MEMORY_CHANGES_NOT_ISOLATED_FACTORS"
+    },
+    "normal_measured_application": {
+      "path": "artifacts/current/experiments/pipeline-memory-execution-v1/measured-selection-application.json",
+      "sha256": "f420186dae9e475310d57427859e5f16f6b222c6b51e1a205fbeb8c613372110",
+      "bytes": 428
+    },
+    "environment": {
+      "conda_environment": "lewm",
+      "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+      "numpy": "2.5.2",
+      "torch": "2.13.0+cu132",
+      "cuda_build": "13.2",
+      "gpu_available": false,
+      "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "cpu_workers": 8,
+      "torch_cuda_upgraded": false
+    },
+    "external_workload": {
+      "kind": "EXTERNALLY_CONSTRUCTED_SCIENTIFIC_ARRAY_TESTCASE_NOT_LEWM_OR_GRAY_SCOTT_RESULT",
+      "root": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction",
+      "git_revision": "fa51c4491ee99667911f44dfed57a02f44ae26e7",
+      "source": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/physics.py",
+        "sha256": "54b83f4941d420c33e986326a9189ef1aac3417fc1e407b505eb3495d3320572",
+        "bytes": 339
+      },
+      "entry": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/run.py",
+        "sha256": "7a7362fbb7b30417ce9d304a44474b52cac59d0e1b90a87e2872cdf8ebfc737c",
+        "bytes": 903
+      },
+      "validator": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/split_reaction/validate.py",
+        "sha256": "44de2058472a79b8dff70f4518b5e1e858b671738a25a2799d4b6fbd13052929",
+        "bytes": 5349
+      },
+      "validator_relocation": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/external-source-location.json",
+        "sha256": "92f237cc3da3b16137dc247112e1604ef243b8316307f24ee04577ec9c2ea189",
+        "bytes": 431
+      }
+    },
+    "rule_sources": [
+      {
+        "path": "scar/compiler/pipeline_model.py",
+        "sha256": "5f20fd5991e49b8e8da4330c125cde59ef6a1d3932e9186e469fa3b3ae60580d",
+        "bytes": 9822
+      },
+      {
+        "path": "scar/compiler/pipeline_frontend.py",
+        "sha256": "ee499732ee0d282521ed197bf9879f2bf9441db476622a9fa79de7333194ab65",
+        "bytes": 13097
+      },
+      {
+        "path": "scar/compiler/graph_frontend.py",
+        "sha256": "54cfeca0e623bb962085ddb2b13a9ae8c0f7cf2bd22e5d9b4b9d1b15e35770c6",
+        "bytes": 24002
+      },
+      {
+        "path": "scar/optimization/pipeline_memory.py",
+        "sha256": "7f63cc5cd8c777940299275cac1e3e591612739d380cacfb4d1c38c878d994c1",
+        "bytes": 13939
+      },
+      {
+        "path": "scar/compiler/pipeline_runtime.py",
+        "sha256": "4cba31be2083cb4182f9051ff43ef6f9e8b53e4ae0ec905b0860f2a89bf39c2f",
+        "bytes": 8063
+      },
+      {
+        "path": "scar/codegen/pipeline.py",
+        "sha256": "5155efb4d17df9b638764a1d1fb9ca0cede92d26f03ac6d71ee6a6f20785a2c5",
+        "bytes": 18347
+      },
+      {
+        "path": "scar/codegen/pipeline_v1.cpp.in",
+        "sha256": "29e53859fd3128ba5965279e6bee083845d21807a22dcfdba30147ab18854fc7",
+        "bytes": 8697
+      }
+    ],
+    "tests": {
+      "result": "90 passed in 7.77s",
+      "log": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/final-tests.log",
+        "sha256": "b290c7813043cf7735e6fb84cf70bef3b856ef81b2ac74f086023d98d20ed469",
+        "bytes": 179
+      }
+    },
+    "distribution": {
+      "report": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/wheel-verification.json",
+        "sha256": "5bde4930c0e57d2239826cb22ec4e3566db10bd4388ed4af910fda9bf8b9ee8a",
+        "bytes": 11330
+      },
+      "wheel": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-memory-execution-v1/wheel-fixed/scar-0.1.0-py3-none-any.whl",
+        "bytes": 4559562,
+        "sha256": "fc04ab5539dafcf64ffdd92fb99fd3986fb53fb6c234f1ea6f43c45937f86784"
+      },
+      "status": "PASS",
+      "verified_file_count": 1005,
+      "build_attempts": 2,
+      "baseline_packaging_defect": [
+        "scar/native/symtable_context.cpp",
+        "scar/trace/_native_callable_probe.c"
+      ],
+      "fixed": true,
+      "old_leaf_runtime_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+      "current_host_implementation_sha256": "683506adc9e38f0bc1baba799cfa31c6f818a0d3324eb07835cd4510c7163217",
+      "native_recorded_host_implementation_sha256": "9977120396daf981e410cbfb7a7902d21ee0848017e63a80d58d631aecf5d883",
+      "fingerprint_difference_scope": "176_BYTES_BUILD_LOAD_PLACEMENT_RECEIPT_VALIDATION_ONLY_RUN_AND_GENERATED_SOURCE_UNCHANGED",
+      "native_identity_evidence": "SEE_RETAINED_WHEEL_VERIFICATION_GENERATED_SOURCE_PLAN_OPERATOR_LIBRARY_AND_BENCHMARK_IDENTITIES",
+      "performance_benchmark_repeated_for_packaging": false,
+      "host_source_delta": {
+        "path": "artifacts/current/experiments/pipeline-memory-execution-v1/host-source-delta.json",
+        "sha256": "8d4a3f4d674040ce5029dbfac99c4680f5a1fe5a6277e094fcbec1ebc305f567"
+      }
+    },
+    "first_stage_complete": false,
+    "whole_program_compiled": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "next_layers": [
+      "cross_region_graph_fusion_with_original_callee_effect_guards",
+      "materialization_placement_COPY_ready_release_and_residency_recomputation_joint_model",
+      "native_host_cost_model_and_general_control_effect_lowering"
+    ]
   }
 }

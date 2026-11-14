@@ -7,10 +7,10 @@ import signal
 import subprocess
 import time
 
-from .model import read_plan
+from .input_metadata import read_input_boundary
 
 def observe_inputs(plan_path,command,out,*,max_seconds=None,stop_when_collected=False):
-    plan_path=Path(plan_path).absolute();read_plan(plan_path)
+    plan_path=Path(plan_path).absolute();read_input_boundary(plan_path)
     out=Path(out).absolute()
     if out.exists():raise ValueError('fresh observation output required')
     if not command:raise ValueError('original program command required')
