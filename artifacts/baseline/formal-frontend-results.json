@@ -4280,5 +4280,380 @@
     "physical_optimality_proven": false,
     "goal_complete": false,
     "lewm_modified": false
-  }
+  },
+  "model_cost_execution_progress": {
+    "schema": "scar.three-stage-model-cost-execution-milestone",
+    "schema_version": 1,
+    "recorded_utc": "2026-11-14T19:29:50.076305+00:00",
+    "status": "VERIFIED_BOUNDED_CPU_MAIN_CHAIN_NOT_COMPLETE_SYSTEM",
+    "stage1": {
+      "status": "IMPLEMENTED_AND_VERIFIED_WITH_EXPLICIT_FRONTIERS",
+      "build": {
+        "path": "artifacts/current/experiments/source-invocation-binding-v1/f4-current-rules-v1/manifest.json",
+        "sha256": "cc137a5bbcbeef0bc12844ae2c50c960f07f9308d7b28ca4ba72097e2f23894b",
+        "bytes": 10995
+      },
+      "readback": {
+        "path": "artifacts/current/experiments/source-invocation-binding-v1/f4-current-rules-validation.json",
+        "sha256": "34df8f1042f080754e2b201fd4539e4f7632255b2927d7052041028e0ea26772",
+        "bytes": 3875
+      },
+      "actual_call_handles": 29,
+      "dependency_routes": 134,
+      "field_frontiers": 50,
+      "body_entry_coverage": {
+        "observed_entries": 81,
+        "covered_entries": 33,
+        "uncovered_entries": 48,
+        "source": {
+          "path": "artifacts/current/experiments/source-invocation-binding-v1/current-rules-unit/body-activations/result.json",
+          "sha256": "79989be9cfd3eb044fc5c5fe0a42e21991e738bc1fea5de6123abc1a79a4fe72",
+          "bytes": 4727
+        }
+      },
+      "route_fields": [
+        "argument",
+        "data_return",
+        "environment",
+        "world_input",
+        "world_return"
+      ],
+      "body_copies": 0,
+      "loops_unrolled": false,
+      "formal_build": {
+        "assembly_seconds": 300.4520713279926,
+        "cli_wall_seconds": 386.98,
+        "peak_rss_kib": 1532840,
+        "log": {
+          "path": "artifacts/current/experiments/source-invocation-binding-v1/f4-current-rules-v1.log",
+          "sha256": "f9a6bd9c44ad7124ba016e624dd68487cb648343da2d420a5865a5ea560d6896",
+          "bytes": 1798
+        }
+      },
+      "independent_readback": {
+        "seconds": 376.94263886200497,
+        "cli_wall_seconds": 383.77,
+        "peak_rss_kib": 1528244,
+        "log": {
+          "path": "artifacts/current/experiments/source-invocation-binding-v1/f4-current-rules-validation.log",
+          "sha256": "f439d5e4b826dd81d7412b32546da4d4408ea2e5cee46b08de5331d8d5a02238",
+          "bytes": 1450
+        }
+      },
+      "content_preservation_proven": false,
+      "source_content_versions_inferred": false
+    },
+    "selective_input_collection": {
+      "status": "OBSERVED",
+      "complete_run": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/cli-observed-inputs/result.json",
+        "sha256": "01b16f8c9fecfe16d0912d4ff7b3b2eadb387134c262deabf0a5b523de6c3f72",
+        "bytes": 1432
+      },
+      "prefix_run": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/cli-bounded-inputs/result.json",
+        "sha256": "3510e08597a749099254989de7e664e0f0d616d2500058bc01d49ce905b04c5b",
+        "bytes": 1511
+      },
+      "complete_run_seconds": 1.1552291400003014,
+      "prefix_seconds": 1.1693980990094133,
+      "observations_per_run": 2,
+      "prefix_full_run_completed": false,
+      "input_shapes": {
+        "a": [
+          259,
+          259
+        ]
+      },
+      "input_dtype": "float64",
+      "output_shape": [
+        257,
+        257
+      ],
+      "output_bytes": 528392,
+      "global_monitoring_events_enabled": false,
+      "sys_setprofile_installed": false,
+      "tensor_contents_recorded": false,
+      "logical_versions_inferred": false,
+      "scope": "ORIGINAL_UNTRANSFORMED_PROGRAM_CODE_SELECTED_METADATA_NOT_PERFORMANCE_TRACE"
+    },
+    "stage2": {
+      "status": "IMPLEMENTED_AND_VERIFIED_UNDER_COST_PROFILE_CONTRACT",
+      "planning": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/planning-cli-inputs.json",
+        "sha256": "12c9bc8f2ff6675bf1fae0845f4f9f7de5de64bd6bf5ceb3889ba7c1597aef79",
+        "bytes": 167094
+      },
+      "profile": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/calibration-observed/profile.json",
+        "sha256": "3acf185ae907d5dace19efa251316d24ee5748dfcff1945881dea1e073aec768",
+        "bytes": 13662
+      },
+      "observations": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/calibration-observed/observations.json",
+        "sha256": "61ea97edac6683f981689e322cb0df3ebe222e8147011e9a916d13b236cda7cd",
+        "bytes": 46015
+      },
+      "target": {
+        "target_sha256": "40321723a1746800b433c54ca6a59723a101d9401482c6fd4149aeb54086af69",
+        "executor_id": "target_resource:cpu/numa0",
+        "cpu_ids": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "compiler_argv": [
+        "g++"
+      ],
+      "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+      "task_durations_ticks": {
+        "allocate:output": 418,
+        "compute:region": 246393,
+        "export:output": 131
+      },
+      "tick_seconds": 1e-09,
+      "solver_status": "OPTIMAL_WITHIN_MODEL",
+      "model_makespan_ticks": 246942,
+      "model_lower_bound_ticks": 246942,
+      "model_validation": {
+        "fit_rank": 10,
+        "fit_parameters": 12,
+        "parameters_unique": false,
+        "fit_rmse_ticks": 18055.439201506662,
+        "maximum_holdout_relative_error": 0.15712879770111177,
+        "scope": "CANONICAL_PRIMITIVES_ONLY_NOT_TARGET_WORKLOAD",
+        "physical_optimality_proven": false
+      },
+      "target_program_variants_ranked": false,
+      "primitive_calibration_target_workload_executed": false,
+      "calibration_timing_scope": "CPP_ARTIFACT_RUN_EXCLUDES_COMPATIBILITY_WRAPPER_AND_CALLER",
+      "caveats": [
+        "Effective affine fit; coefficients may be non-identifiable and zero at an active NNLS constraint.",
+        "Logical payload bytes are not measured DRAM transfers or cache misses.",
+        "Allocation probe includes immediate release; compute observations subtract the fitted boundary terms.",
+        "Export coefficient uses an empty Python call/return proxy, not an independent ndarray export measurement.",
+        "Cache/NUMA residency and other workload contention are not controlled or proven.",
+        "Calibration of canonical primitives does not prove accuracy for an arbitrary composed region."
+      ],
+      "finite_implementation_choices": {
+        "implemented": true,
+        "connected_to_main_chain": false,
+        "fixed_materialization_locations": true
+      },
+      "cost_prediction_tampering_rejected": {
+        "rejected": true,
+        "reason": "solver task durations differ from the calibrated cost prediction",
+        "output_created": false
+      }
+    },
+    "stage3": {
+      "status": "IMPLEMENTED_AND_VERIFIED_SYNCHRONOUS_CPU_TIMED_PROFILE",
+      "lowering": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/native-cli/lowering.json",
+        "sha256": "ead6a5f9bf9a3702cb1675b87205b77eef951eae8eb70001658458ca50a5894f",
+        "bytes": 12150
+      },
+      "artifact": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/native-cli/artifact.json",
+        "sha256": "ccf127a81e3903b87b043fc12c911b3005a70433d86d2842a689b82876d47f47",
+        "bytes": 5705
+      },
+      "execution_linked": true,
+      "cxx_standard": 20,
+      "operator_abi_version": 1,
+      "execution_plan_schema_version": 2,
+      "runtime_guards": {
+        "modeled_input_shapes": "PYTHON_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+        "modeled_input_layout": "C_CONTIGUOUS_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+        "modeled_output_shape_and_nbytes": "PYTHON_EACH_CALL_BEFORE_COMPUTE",
+        "output_memory_budget": "PYTHON_EACH_CALL_BEFORE_OUTPUT_ALLOCATION",
+        "dtype_ownership_alignment_bounds": "EXISTING_ARRAY_ADMISSION_EACH_CALL",
+        "cpu_availability_binding_and_restore": "NATIVE_EACH_CALL"
+      },
+      "per_call_disk_hashing": false,
+      "asynchronous_transfers": false,
+      "numa_page_binding": false
+    },
+    "diagnostics": {
+      "misdeclared_shape_run": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/program-validation-final/result.json",
+        "sha256": "8d3dfa9d2b827fa4f7edd331f259b119f8bb9be4e527074086a1a384c889006f",
+        "bytes": 14900
+      },
+      "classification": "REJECTED_NATIVE_PERFORMANCE_EVIDENCE_ALL_CALLS_FELL_BACK",
+      "cause": "Input shape was assumed 258x258 from configuration; actual function input is 259x259. Runtime guard rejected mismatch.",
+      "native_calls_per_episode": 0,
+      "fallbacks_per_episode": 160,
+      "original_program_defect": false,
+      "retained_for_audit": true
+    },
+    "region_validation": {
+      "report": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/region-observed.json",
+        "sha256": "43b15fc57bc885ec15c5713d72a046f7cfdd4a4fb972d079f38d47010f343235",
+        "bytes": 719617
+      },
+      "baseline": {
+        "median": 0.00043051,
+        "min": 0.000406903,
+        "max": 0.000440378,
+        "stdev": 1.256369186385912e-05,
+        "samples": [
+          0.00043051,
+          0.000436717,
+          0.000428924,
+          0.000434404,
+          0.000416993,
+          0.000440378,
+          0.000407808,
+          0.000434108,
+          0.000406903
+        ]
+      },
+      "native": {
+        "median": 0.000207765,
+        "min": 0.000192567,
+        "max": 0.000223229,
+        "stdev": 1.1234685465112053e-05,
+        "samples": [
+          0.000223229,
+          0.000193677,
+          0.000211025,
+          0.000195232,
+          0.000207765,
+          0.000192567,
+          0.000218899,
+          0.000200133,
+          0.000211959
+        ]
+      },
+      "speedup": 2.0721006906841866,
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "warmup": 3,
+      "repetitions": 9,
+      "native_without_fallback": true
+    },
+    "whole_program_validation": {
+      "report": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/program-validation-observed/result.json",
+        "sha256": "1c1019baf9312a0b97a354ebeea8ec1bc2e07df9f0d9afa098b6768f789d2995",
+        "bytes": 14499
+      },
+      "selection_report": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/whole-program-selection.json",
+        "sha256": "5e86ffa5084ce5e33067623cd072143e418319b1b86124545127204998dbb90c",
+        "bytes": 1899
+      },
+      "baseline": {
+        "median": 0.5508258890040452,
+        "min": 0.5464334200078156,
+        "max": 0.5564246690046275,
+        "stdev": 0.005007746963356776,
+        "samples": [
+          0.5564246690046275,
+          0.5508258890040452,
+          0.5464334200078156
+        ]
+      },
+      "native": {
+        "median": 0.5348810620052973,
+        "min": 0.5243468319968088,
+        "max": 0.5349845300079323,
+        "stdev": 0.00611202812050648,
+        "samples": [
+          0.5243468319968088,
+          0.5348810620052973,
+          0.5349845300079323
+        ]
+      },
+      "speedup": 1.029810042140901,
+      "decision": "NO_OP",
+      "minimum_gain": 0.05,
+      "native_calls_per_episode": 160,
+      "native_fallbacks": 0,
+      "correctness": {
+        "region": true,
+        "single_step": true,
+        "trajectory_20_steps": true,
+        "full_integrate": true,
+        "required_state": true,
+        "stdout": true,
+        "files": true
+      },
+      "warmup": 1,
+      "repetitions": 3,
+      "grid": 256,
+      "steps": 80
+    },
+    "tests": {
+      "result": "78 passed in 5.09s",
+      "log": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/final-tests-with-cli.log",
+        "sha256": "2d4ca6f60f8ddad1aa067ca46b657b9344b02d534c3145eaaf8e81caaaf4a6cd",
+        "bytes": 179
+      }
+    },
+    "environment": {
+      "conda_environment": "lewm",
+      "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+      "numpy": "2.5.2",
+      "platform": "Linux-6.17.0-29-generic-x86_64-with-glibc2.39",
+      "logical_cpus": 56,
+      "planned_cpu_threads": 4,
+      "torch_cuda_upgraded": false,
+      "gpu_available": false,
+      "torch": "2.13.0+cu132",
+      "cuda_build": "13.2"
+    },
+    "external_validator": {
+      "path": "/home/zyf/AAA/scar-testcases/cpu_science/compiler_validate.py",
+      "sha256": "373580734fa2b234c768d51754153c9788cefa54662e88cdc06572f3ecd96077",
+      "bytes": 6093
+    },
+    "first_stage_complete": false,
+    "whole_program_compiled": false,
+    "physical_optimality_proven": false,
+    "deployment_authorized": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "next_layers": [
+      "call_scope_internal_data_state_effect_routes",
+      "semantic_task_to_legal_implementation_domain",
+      "selected_binding_to_execution_plan_lowering",
+      "materialization_placement_COPY_lifetime_joint_model",
+      "multi_region_buffer_COPY_WAIT_RELEASE_execution"
+    ],
+    "distribution": {
+      "status": "PASS",
+      "report": {
+        "path": "artifacts/current/experiments/model-cost-execution-v1/wheel-verification.json",
+        "sha256": "0acf2aa3223e82819dc0676cc51ea9f6816455b36a8ab8bcb850ae1b959be19b"
+      },
+      "wheel": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/model-cost-execution-v1/wheel/scar-0.1.0-py3-none-any.whl",
+        "size_bytes": 4510880,
+        "sha256": "de5b6b87412b53fdeabfc4ba0eed922ab89f74539c468960c1de65be5eb65a9b"
+      },
+      "build_attempts": 1,
+      "verified_files": 992,
+      "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+      "native_identity": {
+        "native_cli": "/home/zyf/AAA/scar/artifacts/current/experiments/model-cost-execution-v1/native-cli",
+        "native_observed": "/home/zyf/AAA/scar/artifacts/current/experiments/model-cost-execution-v1/native-observed",
+        "all_identity_fields_equal": true,
+        "all_payload_file_hashes_equal": true,
+        "build_id": "21f9bdf8a0100f5391e178002d4b1b7280a9ef247615aace80e7289857db9ed4",
+        "plan_sha256": "e99cbb8f9ab93852c192da3cd6cb24ca57e4566c5998ea9752e3ed58f21aee24",
+        "resource_schedule_sha256": "b672231b6e9921983aa3b8bc32b9ca11867eedd613634e1fb694c7388f81e35e",
+        "timed_plan_sha256": "1b26f57faaff33fe53abc915a54d9e9a17c79f18651d3d6957cfa296761c75da",
+        "timed_admission_sha256": "1226bed8b0c861d8cd79f422de313f71b1389d12a8df1a33c0b5a8f1d642c222",
+        "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810"
+      },
+      "performance_benchmark_repeated": false
+    }
+  },
+  "current_milestone": "model_cost_execution_progress"
 }

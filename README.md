@@ -20,17 +20,30 @@ scar benchmark-region /path/to/compiled/region-0/native --out /path/to/compiled/
 ```
 
 有catalog时直接降低原F4操作和端口；F0编译仅恢复CodeID，不重新用AST选择表达式语义。
-硬件规划按模型推导，实测用于成本校准及验收，不以黑盒程序版本排名为主链：
+硬件规划按模型推导；动态只补静态不能确定的输入字段，实测用于原语成本校准及最终验收：
 
 ```bash
-scar compile-region /path/to/program.py --catalog /path/to/catalog --target /path/to/hardware --cpu-threads 4 --out /path/to/preview
-scar plan-resources /path/to/preview/region-0/resource-plan.json --plan /path/to/preview/region-0/plan.json --shape 258 258 --out /path/to/planning.json
+scar compile-region /path/to/program.py --catalog /path/to/catalog --target /path/to/hardware --cpu-threads 4 --memory-budget-bytes 8388608 --out /path/to/preview
+scar observe-region-inputs --plan /path/to/preview/region-0/plan.json --out /path/to/inputs --max-seconds 60 --stop-when-collected -- python /path/to/entry.py
+scar calibrate-cpu --plan /path/to/preview/region-0/plan.json --inputs /path/to/inputs/inputs.json --out /path/to/calibration
+scar plan-resources /path/to/preview/region-0/resource-plan.json --plan /path/to/preview/region-0/plan.json --inputs /path/to/inputs/inputs.json --profile /path/to/calibration/profile.json --out /path/to/planning.json
+scar lower-resources --plan /path/to/preview/region-0/plan.json --resources /path/to/preview/region-0/resource-plan.json --planning /path/to/planning.json --out /path/to/native
+scar benchmark-region /path/to/native --inputs /path/to/inputs/inputs.json --out /path/to/benchmark.json
 ```
+
+这些命令的输出路径须尚不存在。预览计划须声明增量内存预算，不能将硬件总内存当可用预算。
+输入采集要求 CPython 的 `sys.monitoring`，只对完整 CodeID 匹配的普通函数启用局部进入事件；
+最多记录两次 shape/dtype/strides 等元数据，不记录数组内容。`--stop-when-collected` 会中断本次启动的子程序，
+所得结果只覆盖执行前缀；省略该参数则让原程序继续。采集不加载原生库、不应用变换，也不是性能测量。
+原语校准可用 `cpu-cost` 可选依赖（SciPy），不运行或排名目标程序的多个实现版本。
+成本 profile 限定硬件快照、CPU 集合、编译器及完整参数、runtime 指纹、形状与布局；
+当前是有效仿射模型，不能推导物理最优、实际 DRAM 流量或 cache miss。
 
 固定线程参数当前只生成未排名的可行分配预览；未指定时，硬件分配缺代价模型则报告`PLANNING_REQUIRED`，不编译多版本比时。
 `plan-resources --model COSTS.json`接显式任务成本；资源容量、CPU需求和切片输出大小从原计划推导，未知成本或预算不补零。
 求解器当前只覆盖固定放置、非抢占任务和增量内存预算；模型最优不等于物理最优，联合放置/搬运/融合仍未完成。
-资源任务图区分分配、值就绪和导出；C++当前仅消费同步CPU三任务形态，拒绝未实现的copy/wait或NUMA放置。
+资源任务图区分分配、值就绪和导出；C++已消费同步CPU三任务的 timed 计划，逐调用守卫 shape/layout/字节预算/CPU 绑定。
+它按依赖执行，不等待预测 tick；未实现的 copy/wait 或 NUMA 页放置继续拒绝。
 
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。
@@ -88,6 +101,8 @@ Python 中用 `BuildSession(build_path)` 共享一次查询会话的 catalog/代
 `source_region_ref` 可先连接原声明的函数正文；`get/expand` 再读取和核验正文，循环与函数仍共享原 ID。
 F4 构建的观察选择保留原 trace 与调用接口的 run scope，`attach_trace()` 返回已接入材料摘要；
 静态调用 frame 不是动态 invocation。旧 model 构建继续通过 `observed_scopes/observed_ports` 查询独立观察调用域。
+F4 自动按需建立实际调用 scope：原共享端口加 run/InvocationKey，同一 caller 内重复 CALL 再加 attempt 锚点。
+参数、数据返回、环境和 world 状态关系引用原图，不复制正文；结构共享不授予内容版本相等。
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh

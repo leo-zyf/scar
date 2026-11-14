@@ -1,6 +1,14 @@
 """Auto-loaded by Python child processes launched by SCAR."""
 import os
 
+if os.environ.get('SCAR_REGION_METADATA_PLAN'):
+    try:
+        from scar.trace.region_metadata import install as _scar_install_region_metadata
+        _scar_region_metadata = _scar_install_region_metadata()
+    except Exception as _scar_metadata_error:
+        if os.environ.get('SCAR_TRACE_DEBUG'):
+            print(f'SCAR input metadata disabled: {_scar_metadata_error}', flush=True)
+
 if os.environ.get("SCAR_TRACE_DIR"):
     try:
         if os.environ.get('SCAR_TRACE_CALL_EDGES') == '1':

@@ -35,10 +35,14 @@ def distribution(values):
 def bitwise_equal(left,right):
     return left.dtype==right.dtype and left.shape==right.shape and np.array_equal(left.view(np.uint64),right.view(np.uint64))
 
-def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9):
+def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9,input_metadata_path=None):
     if warmup<0 or repetitions<3 or len(shape)!=2 or min(shape)<3:raise ValueError('valid 2D shape and >=3 repetitions required')
     if sys.getprofile() is not None or sys.gettrace() is not None:raise ValueError('clean benchmark cannot have Python trace/profile hooks')
     artifact=artifact_path if isinstance(artifact_path,CppArtifact) else load(artifact_path)
+    input_shapes={name:list(shape) for name in artifact.plan.region.parameters};shape_evidence=None
+    if input_metadata_path is not None:
+        from .input_metadata import shapes_from_metadata
+        input_shapes,shape_evidence=shapes_from_metadata(input_metadata_path,artifact.plan.region.source,artifact.plan.region.parameters)
     if sha256(Path(artifact.plan.region.source.path).read_bytes()).hexdigest()!=artifact.plan.region.source.sha256:
         raise ValueError('benchmark source version differs from compiled graph')
     module=load_source(artifact.plan.region.source.path)
@@ -51,7 +55,7 @@ def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9):
             if signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY:keywords[name]=value
             else:positional.append(value)
         return function(*positional,**keywords)
-    rng=np.random.default_rng(42);arrays=[rng.normal(0,0.1,size=shape) for _ in artifact.plan.region.parameters]
+    rng=np.random.default_rng(42);arrays=[rng.normal(0,0.1,size=input_shapes[name]) for name in artifact.plan.region.parameters]
     snapshots=[a.copy() for a in arrays];before=invoke(original,arrays);after=invoke(wrapped,arrays)
     if not bitwise_equal(before,after):raise AssertionError('region output differs bitwise')
     if any(not np.array_equal(a,b) for a,b in zip(arrays,snapshots)):raise AssertionError('region mutated input')
@@ -79,10 +83,13 @@ def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9):
     decision=select_measured(artifact.plan,timings[0],timings[1],validated=True,
         native_fallbacks=wrapped.scar_stats['fallback_calls']-fallback_before_timing)
     selected=decision['selected']
+    shapes={tuple(value) for value in input_shapes.values()}
+    common_shape=list(next(iter(shapes))) if len(shapes)==1 else None
     report=dict(schema='scar.region-benchmark',schema_version=1,scope='controlled_synchronous_cpu_region',
         validation=dict(bitwise_output=True,input_unchanged=True,fresh_output=True,mutable_input_invalidation=True,
             caller_output_mutation_safe=True,dtype_fallback_once=True,nonfinite_fallback=True),
-        source=asdict(artifact.plan.region.source),artifact=artifact.report,shape=list(shape),
+        source=asdict(artifact.plan.region.source),artifact=artifact.report,shape=common_shape,
+        input_shapes=input_shapes,input_shape_evidence=shape_evidence,
         region_id=artifact.plan.region.id,
         resource_binding=None if artifact.plan.resource_binding is None else asdict(artifact.plan.resource_binding),
         warmup=warmup,repetitions=repetitions,paired_order='AB_BA_ALTERNATING',instrumented=False,
@@ -100,9 +107,12 @@ def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('artifact');p.add_argument('--out',required=True)
-    p.add_argument('--shape',type=int,nargs=2,default=(1026,1026));p.add_argument('--warmup',type=int,default=3)
+    inputs=p.add_mutually_exclusive_group()
+    inputs.add_argument('--shape',type=int,nargs=2,default=(1026,1026))
+    inputs.add_argument('--inputs',help='actual version-checked function input metadata')
+    p.add_argument('--warmup',type=int,default=3)
     p.add_argument('--repetitions',type=int,default=9);a=p.parse_args()
-    r=benchmark(a.artifact,a.out,shape=a.shape,warmup=a.warmup,repetitions=a.repetitions)
+    r=benchmark(a.artifact,a.out,shape=a.shape,warmup=a.warmup,repetitions=a.repetitions,input_metadata_path=a.inputs)
     print(json.dumps({k:r[k] for k in ('decision','speedup','profitability','baseline_seconds','optimized_seconds')}))
 
 if __name__=='__main__':main()

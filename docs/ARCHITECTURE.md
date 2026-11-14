@@ -95,8 +95,15 @@ CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周�
 编译资格、契约合法性和实测选用分开；无收益选择NO_OP，已测收益只对对应计划和shape/layout生效。
 
 资源规划主链现为原F4/值来源→符号工作量→硬件资源约束→materialization/ready/分配生命周期任务图→模型求解。
-固定放置求解器使用显式时间代价、资源容量与增量内存预算；未知成本逐字段保留，不编译多版本做黑盒排名。
-同步CPU后端只接受已落实的allocation→compute→export形态；general timed计划仅有独立准入与必需guards清单，尚未接执行。
+实际调用视图以原端口加 run/InvocationKey 表示；caller 内重复 CALL 加原 attempt 锚点。
+共享正文不展开为调用副本，原 GP→实例的发现关系只是结构边，不冒充数据生产或内容相等。
+静态不能确定的输入 shape/layout 可由完整 CodeID 选中的局部进入事件补充，最多两次元数据后关闭；不采数值。
+固定放置求解器使用时间代价、资源容量与增量内存预算；未知成本逐字段保留，不编译目标程序多版本做黑盒排名。
+`calibrate-cpu` 在同硬件/编译器/runtime/guard 上下文测规范原语；`predict_region_costs` 将原图工作量代入有效仿射成本，
+`plan-resources` 再求解，`lower-resources` 重核证据并降低。校准的秩与留出误差单列，缓存与 NUMA 假设不伪装为已证事实。
+有限实现选择求解器可联合比较实现需求与任务时序，尚未接回执行计划；materialization 位置仍固定，不暗增 COPY。
+同步CPU后端已执行allocation→compute→export的 timed 计划；shape、连续布局、输出字节预算及CPU绑定逐调用检查。
+预测 tick 不用于睡眠；源码和硬件收据在build/load核对，其他 timed 形态仍不支持。
 跨区域结构变换、放置、搬运与调度的联合优化仍是下一层，当前不声称物理最优或完整硬件调度。
 
 ## 形式阶段与顺序
