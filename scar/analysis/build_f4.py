@@ -14,6 +14,33 @@ from scar.ir.program.dependencies import NODE_TYPES
 from scar.ir.record_codec import encode
 
 
+def _bounded_call_binding_inputs(paths):
+    """Reference original metadata publications; no events are copied or traced."""
+    from scar.analysis.build import _receipt
+    result=[]
+    for path in dict.fromkeys(Path(p).resolve() for p in paths):
+        file=path/'result.json'
+        if file.is_symlink() or not file.is_file() or file.stat().st_size>2_000_000:
+            raise ValueError('bounded CALL bindings require an original bounded run result')
+        run=json.loads(file.read_bytes())
+        if (run.get('schema')!='scar.call-binding-run' or run.get('schema_version')!=1
+                or run.get('global_profile_hook')is not False or run.get('tensor_contents_recorded')is not False
+                or run.get('first_stage_complete')is not False):
+            raise ValueError('bounded CALL run is not the separate metadata-only capture channel')
+        raw=run.get('raw_observations');plan=run.get('plan');join=run.get('join')
+        if (type(plan)is not str or not Path(plan).is_absolute() or type(raw)is not list or not raw
+                or len(raw)>128 or any(type(p)is not str or not Path(p).is_absolute() for p in raw)
+                or len(set(raw))!=len(raw)
+                or join is not None and (type(join)is not str or not Path(join).is_absolute())):
+            raise ValueError('bounded CALL run lacks original plan/raw observation references')
+        selected=[Path(plan),*(Path(p) for p in raw),*(() if join is None else (Path(join),))]
+        if any(p.is_symlink() or not p.is_file() or p.stat().st_size>2_000_000 for p in selected):
+            raise ValueError('bounded CALL inputs must remain bounded original regular files')
+        result.append(dict(run=_receipt(file),plan=_receipt(Path(plan)),
+            raw_observations=[_receipt(Path(p)) for p in raw],join=None if join is None else _receipt(Path(join))))
+    return result
+
+
 def _reports(roots):
     seen=set();rows=[]
     for root in roots:
@@ -144,6 +171,7 @@ class F4BuildSession:
         self._functions(spec['functions'])
         self._checkpoint('function_interfaces')
         self._components(spec['components'])
+        self._bounded_call_bindings()
         self._invocations()
         if not _publishing:
             saved=json.loads((self.path/'observed.json').read_bytes()).get('invocations')
@@ -186,6 +214,20 @@ class F4BuildSession:
     def _component_path(self,name):
         r=self.report['f4']['components'].get(name)
         return self._admit(r) if r is not None else None
+
+    def _bounded_call_bindings(self):
+        from scar.analysis.source_call_binding_view import SourceCallBindingProvider
+        inputs=self.report.get('bounded_call_bindings',())
+        if inputs and _bounded_call_binding_inputs(Path(row['run']['path']).parent for row in inputs)!=inputs:
+            raise ValueError('bounded CALL publication references changed')
+        for index,row in enumerate(inputs):
+            for receipt in (row['run'],row['plan'],*row['raw_observations'],*(() if row['join']is None else (row['join'],))):
+                self._admit(receipt)
+            provider=SourceCallBindingProvider(self.view,row['plan']['path'],[r['path'] for r in row['raw_observations']])
+            if row['join']is not None and json.loads(Path(row['join']['path']).read_bytes())!=provider.summary:
+                raise ValueError('saved bounded CALL join differs from original raw attempt replay')
+            self.providers['bounded_call_bindings:'+str(index)]=provider
+        if inputs:self._checkpoint('bounded_call_target_metadata')
 
     def _functions(self,receipts):
         from scar.analysis.source_call_view import open_function_interfaces,SourceFunctionCallProvider
@@ -322,6 +364,16 @@ class F4BuildSession:
             resumptions=resumptions,invocations=(self.providers['invocations'].publication()
                 if 'invocations' in self.providers else None),
             runtime_events_replaced_by_static_frames=False)
+        self.observed['bounded_call_bindings']=[]
+        for name,provider in self.providers.items():
+            if not name.startswith('bounded_call_bindings:'):continue
+            provider.check();index=int(name.split(':')[-1]);material=self.report['bounded_call_bindings'][index]
+            summary=provider.summary
+            self.observed['bounded_call_bindings'].append(dict(
+                run=material['run'],plan=material['plan'],raw_observations=material['raw_observations'],
+                planned_sites=summary['planned_sites'],observed_sites=summary['observed_sites'],
+                attempts=summary['attempts'],target_records=len(provider.nodes),
+                metadata_only=True,InvocationKey_created=False,callee_entry_or_completion_proven=False))
         return self.observed
 
     def select(self,*,file=None,entry=None,kind=None):
@@ -362,7 +414,8 @@ class F4BuildSession:
     def layer_summary(self):
         return dict(unified=True,local_state=dict(bindings=True,content=True),
             cross_layer=dict(functions=any(k.startswith('functions:') for k in self.providers),
-                **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','invocations','resumptions','resource_scopes','binding_states')}),resources=True,
+                **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','invocations','resumptions','resource_scopes','binding_states')},
+                bounded_call_target_metadata=any(k.startswith('bounded_call_bindings:') for k in self.providers)),resources=True,
             storage=True,readback=True,providers=sorted(self.providers),
             loaded_units=len(self.view.units),catalog_units=len(self.catalog.fact_store.rows),
             catalog_local_graph_materialized=bool(self.source_coverage and self.source_coverage['catalog_local_graph_materialized']),
@@ -386,6 +439,7 @@ class F4BuildSession:
             observed_binding_states=observed['binding_states'],
             observed_resumptions=observed['resumptions'],
             observed_invocation_scopes=observed['invocations'],
+            observed_bounded_call_targets=observed['bounded_call_bindings'],
             entry_query_purpose='BOUNDED_NAVIGATION_EXAMPLE_NOT_COVERAGE_DENOMINATOR',
             runtime_path_complete=False,effects_closed=False,first_stage_complete=False)
 
@@ -405,7 +459,8 @@ class F4BuildSession:
         for receipt in (*self._admitted.values(),*report['tables'].values()):_check(receipt)
         spec=report['f4']
         relationships=dict(schema='scar.build-f4-relationships',catalog=spec['catalog'],
-            function_leaves=spec['functions'],components=spec['components'],copied_bodies=0)
+            function_leaves=spec['functions'],components=spec['components'],
+            bounded_call_bindings=report.get('bounded_call_bindings',[]),copied_bodies=0)
         if json.loads((self.path/'relationships.json').read_bytes())!=relationships:
             raise ValueError('stored relationship references differ from admitted components')
         canonical=lambda value:json.loads(json.dumps(value))
@@ -425,6 +480,8 @@ class F4BuildSession:
         for store in stores.values():
             guard=getattr(store,'validate',None) or getattr(store,'check',None)
             if guard is not None:guard()
+        for name,provider in self.providers.items():
+            if name.startswith('bounded_call_bindings:'):provider.check()
         self.view.expand(self.entry)
         for source in self.view.units.values():source.check()
         for receipt in (*self._admitted.values(),*report['tables'].values()):_check(receipt)
@@ -441,10 +498,11 @@ class F4BuildSession:
         self.view.dependencies.providers.clear();self.view.units.clear();self.view.namespaces.clear()
 
 
-def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3600,max_input_bytes=16*1024**3,target=None):
+def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3600,max_input_bytes=16*1024**3,target=None,
+        bounded_call_bindings=()):
     from scar.analysis.build import _rules,_receipt,_write,_configuration_inputs
     from scar.analysis.program_dependency_export import export_dependency_walk
-    started=time.monotonic();out.mkdir(parents=True)
+    started=time.monotonic();bounded_inputs=_bounded_call_binding_inputs(bounded_call_bindings);out.mkdir(parents=True)
     trace_ref=None
     if trace:
         from scar.analysis.program_observed_dependencies import _inputs
@@ -452,6 +510,7 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
     report=dict(schema='scar.program-build',schema_version=1,backend='F4',entry=str(entry),rules=_rules(),
         f4=spec,model=None,trace=trace_ref,
         target=None if target is None else _receipt(Path(target)/'result.json'),
+        bounded_call_bindings=bounded_inputs,
         tables={},workflow_complete=False,first_stage_complete=False,
         target_executed=False,original_body_bytes_copied=0,loops_unrolled=False,
         limits=dict(max_seconds=max_seconds,max_input_bytes=max_input_bytes,
@@ -473,13 +532,14 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
         gaps.extend(dict(layer='query',kind=f.kind,detail=f.detail,point=encode(f.point)) for f in walk.frontiers)
         # Persist references to original relation shards, not expanded bodies.
         _write(out/'relationships.json',dict(schema='scar.build-f4-relationships',catalog=spec['catalog'],
-            function_leaves=spec['functions'],components=spec['components'],copied_bodies=0))
+            function_leaves=spec['functions'],components=spec['components'],bounded_call_bindings=bounded_inputs,copied_bodies=0))
         payload=session.resources.payload()
         import gzip
         (out/'resources.json.gz').write_bytes(gzip.compress(json.dumps(payload,separators=(',',':')).encode(),mtime=0))
         report['layers']=session.layer_summary()
         report['assembly_elapsed_by_layer']=session.timings
         report['observed_admission']='ADMITTED' if any(observed[k] for k in ('publications','boundaries','body_activations','resumptions','resource_scopes','binding_states')) else 'NOT_JOINED'
+        report['bounded_call_bindings_admission']='ADMITTED_ATTEMPT_METADATA' if observed['bounded_call_bindings'] else 'NOT_SUPPLIED'
         report['summary']=dict(source_units=len(session.catalog.fact_store.rows),loaded_units=len(session.view.units),
             configuration_inputs=len(configuration),observed_publications=len(observed['publications']),
             observed_boundary_publications=len(observed['boundaries']),
@@ -487,6 +547,8 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
             observed_resumption_publications=len(observed['resumptions']),
             observed_resource_scope_publications=len(observed['resource_scopes']),
             observed_binding_state_publications=len(observed['binding_states']),
+            bounded_call_binding_publications=len(observed['bounded_call_bindings']),
+            bounded_call_target_attempts=sum(row['attempts'] for row in observed['bounded_call_bindings']),
             observed_invocation_handles=(observed['invocations']['actual_call_handles']
                 if observed['invocations'] is not None else 0),
             catalog_local_graph_materialized=bool(session.source_coverage and session.source_coverage['catalog_local_graph_materialized']),

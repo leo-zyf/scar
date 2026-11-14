@@ -37,6 +37,8 @@ def _rules():
             '../ir/program/source_body_interfaces.py','../ir/program/source_body_activations.py',
             'program_view.py','program_state_coverage.py','program_inventory_admission.py',
             'source_graph_material.py','source_effect_projection.py','source_effects.py','source_state.py',
+            'source_call_binding_view.py','../compiler/call_binding.py','../trace/call_binding.py',
+            '../trace/code_snapshot.py','../trace/lean_capture.py',
             '../ir/program/source_state.py',
             '../ir/program/build_f4_resources.py')}
 
@@ -156,6 +158,8 @@ class BuildSession:
             self._f4=F4BuildSession(path,seconds=seconds,input_bytes=input_bytes,_publishing=_publishing)
             self.session=self._f4;self.view=self._f4.view;self.resources=self._f4.resources
             self.entry=self._f4.entry;self.entries=self._f4.entries;return
+        if self.report.get('bounded_call_bindings'):
+            raise ValueError('bounded CALL metadata is supported only by the F4 backend')
         if (self.report.get('schema'), self.report.get('schema_version')) != (SCHEMA, 1):
             raise ValueError('unsupported build manifest')
         if self.report['rules'] != _rules():
@@ -225,7 +229,7 @@ def _model_for(entry, explicit):
 
 def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
           max_seconds=3600, max_input_bytes=16 * 1024**3,catalog=None,cache_roots=(),target=None,
-          body_scope='all', call_binding=None):
+          body_scope='all', call_binding=None, bounded_call_bindings=()):
     from scar.analysis.static_program import build_static_program, link_static_program, read_static_program
     from scar.analysis.static_calls import StaticCallBudget
     from scar.analysis.program_dependency_export import export_dependency_walk
@@ -257,7 +261,10 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
     f4=discover(entry,trace_path,catalog=catalog,cache_roots=cache_roots) if catalog or model is None else None
     if f4 is not None:
         return build_f4(entry,trace_path,out,f4,source_roots=source_roots,
-            max_seconds=max_seconds,max_input_bytes=max_input_bytes,target=target_path)
+            max_seconds=max_seconds,max_input_bytes=max_input_bytes,target=target_path,
+            bounded_call_bindings=bounded_call_bindings)
+    if bounded_call_bindings:
+        raise ValueError('bounded CALL metadata requires an admitted F4 catalog; legacy backend is unsupported')
     selected = _model_for(entry, model) if model or not source_roots else None
     out.mkdir(parents=True)
     if selected is None:
@@ -399,6 +406,8 @@ def main(argv=None):
         help='lower all declared bodies or exact observed code bodies; all source templates remain indexed')
     parser.add_argument('--call-binding', choices=('static','observed'),
         help='infer static call targets or join actual trace selections; observed body scope defaults to observed binding')
+    parser.add_argument('--call-bindings', action='append', default=[], metavar='RUN_DIR',
+        help='retain bounded CALL target metadata from a capture run (repeatable; F4 only, not InvocationKey trace)')
     parser.add_argument('--out', required=True)
     parser.add_argument('--model', help='reuse an existing admitted source model')
     parser.add_argument('--source-root', action='append', default=[])
@@ -411,7 +420,7 @@ def main(argv=None):
     result = build(args.entry, args.trace, args.out, model=args.model, jobs=args.jobs,
         source_roots=args.source_root, max_seconds=args.max_seconds, max_input_bytes=args.max_input_bytes,
         catalog=args.catalog,cache_roots=args.cache_root,target=args.target,body_scope=args.body_scope,
-        call_binding=args.call_binding)
+        call_binding=args.call_binding,bounded_call_bindings=args.call_bindings)
     print(json.dumps(dict(workflow_complete=result['workflow_complete'],
         first_stage_complete=result['first_stage_complete'], **result['summary'])))
     return 0
