@@ -14,7 +14,7 @@ import re
 import sys
 from types import CodeType
 
-from scar.compiler.input_metadata import InputMetadataObserver,read_input_boundary,callee_metadata
+from scar.compiler.input_metadata import InputMetadataObserver,read_input_boundary,boundary_callee_metadata
 from scar.trace.code_snapshot import code_key
 
 
@@ -46,6 +46,8 @@ class RegionMetadataCollector:
         try:
             if self.plan_path is None or self.out is None:raise ValueError('plan and output directory required')
             self.plan=read_input_boundary(self.plan_path);self.source=self.plan.source
+            self.observer=InputMetadataObserver(max_calls_per_code=self.plan.max_calls,
+                scalar_parameters=self.plan.scalar_parameters)
             self.parameters=self.plan.parameters
             if (not Path(self.source.path).is_absolute()
                     or re.fullmatch(r'[0-9a-f]{64}',self.source.sha256) is None
@@ -80,7 +82,8 @@ class RegionMetadataCollector:
 
     def _after_fork(self):
         try:
-            self.pid=os.getpid();self.observer=InputMetadataObserver(max_calls_per_code=2)
+            self.pid=os.getpid();self.observer=InputMetadataObserver(max_calls_per_code=self.plan.max_calls if self.plan else 2,
+                scalar_parameters=self.plan.scalar_parameters if self.plan else ())
             self.callbacks=0;self.errors=[];self.closed=False;self.stopped=False;self._busy=False
             self.window_flushed=False;self.fork_resets+=1;self.status='WAITING'
             if self._owns_tool():
@@ -147,8 +150,8 @@ class RegionMetadataCollector:
             self.callbacks+=1
             more=self.observer(self.source,self.parameters,values)
             if self.plan.callees:
-                self.observer.records[-1]['callee_bindings']=callee_metadata(self.plan.callees,frame.f_globals)
-            if not more or self.callbacks>=2:
+                self.observer.records[-1]['callee_bindings']=boundary_callee_metadata(self.plan,frame.f_globals)
+            if not more:
                 self.status='COMPLETE';self.stopped=True;self._disable()
                 self.window_flushed=True
                 if not self.flush():self.window_flushed=False
@@ -170,7 +173,7 @@ class RegionMetadataCollector:
             status=self.status,process_id=self.pid,plan=None if self.plan_path is None else str(self.plan_path),
             matched=self.matched,callbacks=self.callbacks,exec_source_hash_checks=self.exec_checks,
             local_event='PY_START',global_events_enabled=False,profile_hook_installed=False,
-            max_calls=2,window_flushed=self.window_flushed,closed=self.closed,
+            max_calls=self.observer.limit,window_flushed=self.window_flushed,closed=self.closed,
             audit_hook_installed=self.hook_installed,resumable_code_supported=False,
             fork_observer_resets=self.fork_resets))
         return result

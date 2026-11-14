@@ -432,3 +432,11 @@ SourceStateProjection把输入内容候选连接到原调用的(receiver referen
 统一source查询的 `effects(point)` / `explain(point)` 返回强类型SourceEffectSummary：原world输入/输出、六个集合字段及RNG/异常/外部/排序字段分别保Knowledge。集合成员引用同一unit的绑定/content访问表；已知成员与集合完整性分开。直接词法读取可明确槽读取及不写槽，不能推出对象/Tensor内容或物理storage不变。未附加状态地址时保具体missing rule；不为查询其他操作而展开无关正文。
 
 F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOST、HOST_INTERFACE_OPEN、EXTERNAL_INTERFACE_OPEN。组合节点的需求由进入的子区域组成，不声称子区域无资源。原生executor路由保原CALL、named match、normalization、官方schema和dispatch声明；CPU/GPU/内存/SSD/NVMe兼容边始终是未选候选，独立于实际dispatch、allocation、placement或transfer证据。
+
+### 共享时间循环的受约束 lowering
+
+`ArrayLoopPlan` 引用原入口、一个共享 `PipelinePlan`、原参数角色与 F4 来源。原 for 的控制参数是 iterator/world；数组由 lexical binding 读写传递，优化 IR 不伪造原图中不存在的显式数组 phi。抽象递推为 `carry(t+1, i) = body(carry(t, i))`。
+
+只有单数组输入、逐元素算术/标量常量、无 slice/逃逸/开放效果且输出形状保持时，跨元素依赖为空，才可交换 `(t, i)` 执行次序为 `(i, t)`。时间方向仍依序执行每次运算；R0 融合证书、优化后 P 与实际循环合同身份分开保存。次数是观测/声明后逐调用精确守卫的信息，不能从一次运行推出未来相同。
+
+`TEMPORAL_FUSION` 用一个 native 运行循环、一个元素局部 carry、一个新建最终数组，IR 大小为 O(body)。预算为增量数组 payload，排除输入、allocator 元数据、线程 scratch 与 RSS。原 leaf 结果数量和算法字节量不等于真实 malloc 次数、DRAM 流量或 cache 事件。全局 FP 状态 flags 不作为该 profile 的程序输出；后端保存恢复调用者环境，并对非法浮点状态及非有限 carry 回退。

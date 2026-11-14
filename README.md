@@ -73,6 +73,18 @@ C++ host/pool 路径按已验证的 last-use 复用槽位，融合路径不分�
 传入完整 benchmark 报告作为 `selection`；`trial=True` 仅用于受控验收。
 线程数目前是显式未排名配置，表示选择的目标是增量 payload，整体时间尚未建模；不声称最优调度、NUMA 放置或实际传输。
 
+共享循环主链已接入：原 F4 的 `range(count)`、局部 carry 读写与 world 回边组成一个可展开循环节点，正文只存一份。当前 native profile 限单个形状保持的数组 carry、纯 elementwise pipeline。
+
+```bash
+scar compile-loop --source /path/to/program.py --catalog /path/to/catalog --out /path/to/loop-preview
+scar observe-region-inputs --plan /path/to/loop-preview/loop-0/loop.json --out /path/to/loop-inputs --stop-when-collected -- python /path/to/entry.py
+scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --out /path/to/loop-build
+```
+
+循环仅观察一次入口，保存数组元数据、精确整数次数及真实嵌套 callable CodeID，不保存数组数值。规划先证明各元素互不依赖，再把时间递推放入元素局部的 C++20 循环；不 unroll，也不按次数复制 IR。只读初值、写独立最终数组，无中间数组 workspace。这是增量 payload 下界，不是时间或物理最优证明；CPU 数量仍显式指定。
+
+运行使用 `scar.codegen.loop.load` 与 `scar.compiler.loop_runtime.install_loop`。原入口、正文及各自 globals 中的叶函数均需匹配；次数变化、零次/负次数、布局或浮点守卫失配时执行原循环一次。正常启用需要该 artifact 的正确性与测量收据。
+
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。
 契约要求同步 CPU 执行及无外部并发写入；这些不是由 ndarray 类型推断的全局事实。

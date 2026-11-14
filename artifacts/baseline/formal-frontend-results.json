@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "pipeline_fusion_execution_progress",
+  "current_milestone": "shared_loop_execution_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -6010,5 +6010,289 @@
       "joint_graph_rewrite_placement_COPY_ready_release_and_residency_schedule",
       "calibrated_whole_execution_costs_and_general_CPP_delivery"
     ]
+  },
+  "shared_loop_execution_progress": {
+    "schema": "scar.shared-loop-milestone",
+    "schema_version": 1,
+    "recorded_at": "2026-11-14T23:04:35.701151+00:00",
+    "status": "VERIFIED_BOUNDED_THREE_STAGE_LOOP_PATH",
+    "phase_order": [
+      "ORIGINAL_F4_SHARED_LOOP_AND_SCOPED_CALLABLE_GRAPH",
+      "DEPENDENCE_LEGAL_TEMPORAL_REPRESENTATION_AND_HARDWARE_PAYLOAD_PLAN",
+      "CPP20_SINGLE_FFI_LOOP_WITH_EXACT_RUNTIME_GUARDS"
+    ],
+    "observed": {
+      "source_frontend_seconds": 64.74310750301811,
+      "target_executed_by_static_frontend": false,
+      "metadata_prefix_seconds": 0.31640569801675156,
+      "metadata_callbacks": 1,
+      "tensor_contents_recorded": false,
+      "metadata_is_full_program_run": false,
+      "input_shape": [
+        1025,
+        1025
+      ],
+      "trip_count": 400,
+      "environment": {
+        "python": "3.14.7",
+        "torch": "2.13.0+cu132",
+        "torch_cuda": "13.2",
+        "cuda_available": false,
+        "gpu_count": 0,
+        "cpp_standard": "C++20",
+        "native_operator_abi": 1,
+        "native_loop_abi": 1,
+        "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz"
+      },
+      "retained_inventory_is_not_current_gpu_availability": true
+    },
+    "implemented": {
+      "original_loop_sha256": "66d8fb8cd74c9a5f924d7bd6122468a43353cc3669f21308c76e272097b67a84",
+      "body_source_unrolled": false,
+      "body_expression_nodes": 16,
+      "iteration_expression_copies": 0,
+      "original_body_calls": 4,
+      "nested_callable_guard_environments_preserved": true,
+      "strategy": "TEMPORAL_FUSION",
+      "workspace_bytes": 0,
+      "final_bytes": 8405000,
+      "payload_budget_bytes": 12582912,
+      "cpu_threads": 8,
+      "cpu_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "cpu_allocation_policy": "EXPLICIT_UNRANKED_FIRST_FEASIBLE_EXECUTOR",
+      "cpp_standard": "C++20",
+      "loop_abi_version": 1,
+      "native_build_id": "c9695f61f84830a292fcf5e736e43c12f69b3207a0fa7d9d52da05a67b91cefa"
+    },
+    "verified": {
+      "baseline": {
+        "count": 3,
+        "units": "seconds",
+        "median": 4.664984890987398,
+        "min": 4.634111229999689,
+        "max": 4.665309802017873,
+        "stdev": 0.017919446633641204
+      },
+      "native": {
+        "count": 3,
+        "units": "seconds",
+        "median": 0.7658985940215643,
+        "min": 0.7464015529840253,
+        "max": 0.7775967950001359,
+        "stdev": 0.01575925992233478
+      },
+      "speedup": 6.090864936169412,
+      "warmup": 1,
+      "repetitions": 3,
+      "order": "PAIRED_ABBA",
+      "scope": "UNCHANGED_EXTERNAL_SCIENTIFIC_PROGRAM_ENTRY_NOT_LEWM",
+      "state_bitwise_equal": true,
+      "stdout_and_npy_file_bytes_equal": true,
+      "native_calls_per_program": 1,
+      "fallbacks_per_program": 0,
+      "normal_measured_selection_used": true,
+      "intermediate_iteration_outputs_observed": false,
+      "changed_input_recomputed": true,
+      "caller_output_mutation_isolated": true,
+      "zero_and_negative_count_alias_preserved": true,
+      "changed_count_and_nested_effects_fall_back": true,
+      "tests": {
+        "passed": 7,
+        "seconds": 2.37
+      },
+      "wheel_source_assets_checked": 1017
+    },
+    "source_and_hardware_graph": {
+      "entry_f4_seconds": 27.606947618012782,
+      "unified_build_seconds": 3.3796918939915486,
+      "unified_resources": {
+        "resource_definitions": 19,
+        "resource_requirements": 224,
+        "requirement_kinds": {
+          "cpu": 112,
+          "memory": 112
+        },
+        "resource_edges": 755,
+        "edge_strengths": {
+          "MAY": 755
+        },
+        "interfaces": 335,
+        "applicability": {
+          "HOST_INTERFACE_OPEN": 53,
+          "NOT_APPLICABLE": 1,
+          "COMPOSITE": 222,
+          "HOST": 2,
+          "EXTERNAL_INTERFACE_OPEN": 57
+        },
+        "target_reference_projections": 12,
+        "target_inventory_resources": 12,
+        "target_types": {
+          "Accelerator": 1,
+          "CpuExecutor": 2,
+          "MemoryDomain": 3,
+          "StorageDevice": 4,
+          "StorageEndpoint": 2
+        },
+        "native_resource_routes": 0,
+        "native_executor_routes": 0,
+        "frontier_reasons": {
+          "UNRESOLVED_EXTERNAL_RESOURCE_INTERFACE": 110,
+          "RESOURCE_RUNTIME_EVIDENCE_MISSING": 112
+        },
+        "adapter_gaps": []
+      },
+      "original_call_interfaces_connected": 7,
+      "external_call_interfaces_unconnected": 19,
+      "runtime_resource_use_proven": false,
+      "target_hardware_is_retained_snapshot": true
+    },
+    "rejected": {
+      "budget_4194304_bytes": "NO_OP_BEFORE_NATIVE_COMPILE",
+      "nonpositive_count": "ORIGINAL_ALIAS_RETURN",
+      "first_discovery_attempt": "LOOP_MISSING_TRANSFER_FIXED_FROM_ACTUAL_F4_LOOP_COMPLETION_ABI"
+    },
+    "inferred": {
+      "loop_interchange_basis": "ONE_CARRY_ELEMENTWISE_NO_CROSS_ELEMENT_DEPENDENCE_AND_CLOSED_EFFECT_PROFILE",
+      "payload_optimality_scope": "EXACT_ELEMENTWISE_RECURRENCE_FRESH_FINAL_INCREMENTAL_ARRAY_PAYLOAD_ONLY",
+      "scalar_temporal_vs_packed_flat_codegen_observed": true,
+      "backend_structure_is_not_measured_causal_bottleneck_contribution": true
+    },
+    "external_assumptions": [
+      "SYNCHRONOUS_CPU_EXECUTION",
+      "NO_FOREIGN_CONCURRENT_INPUT_WRITERS",
+      "FP_STATUS_FLAGS_NOT_USED_AS_PROGRAM_OUTPUT"
+    ],
+    "proposed_next_layers": [
+      "Bounded external-call bindings to existing static subgraphs; preserve unresolved effect/content fields",
+      "Sourced SIMD/ILP/recurrence/guard/launch/memory hierarchy costs with explicit frontiers",
+      "C++ vector/block or transfer scheduling after an admitted upstream hardware plan"
+    ],
+    "implementation_commits": [
+      "9a12625e",
+      "2c2910b0",
+      "dfc8af44"
+    ],
+    "external_testcase": {
+      "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction",
+      "git_head": "27f2485dd968bb6ae4d8e8dd5b6433fed4ce6d4b",
+      "files": {
+        "physics.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/physics.py",
+          "sha256": "f047f71cab0545402c9e5ca27152e2e258c710efa04b31f06f99b8ef10d1f5ea",
+          "bytes": 451
+        },
+        "run.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/run.py",
+          "sha256": "cb30e9f9e9486475e91e24eb11ccea5e6375714c10c6534548102d5c5d1626d6",
+          "bytes": 908
+        },
+        "validate.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/validate.py",
+          "sha256": "0eb3ac54b0d52377234cffd73046203d4b5d8c72880b21e1fbc6328dde645314",
+          "bytes": 6697
+        }
+      }
+    },
+    "artifacts": {
+      "frontend/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/frontend/result.json",
+        "sha256": "223b61f3172c25ed53733a2fa9e034a46e3609197b2e5707da6898e9b35a1d4b",
+        "bytes": 2397
+      },
+      "entry-model-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/entry-model-receipt.json",
+        "sha256": "aa9f8af51a01dccf47231bdababbbbda06cceef857d5ee8de5fba4a46986bb68",
+        "bytes": 15701
+      },
+      "unified-entry-resource-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/unified-entry-resource-receipt.json",
+        "sha256": "f1dbab755caa34185d44ba808ff224a64b885d599a61f2e60fbaa7a7394b8f29",
+        "bytes": 12404
+      },
+      "inputs/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/inputs/result.json",
+        "sha256": "b40122ef93414491f723ab0862899a0b1c1839e7c556dc385ca685cfd389fd9e",
+        "bytes": 1503
+      },
+      "compiled/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/compiled/result.json",
+        "sha256": "cdf955ada2351b8927a8a2348e76bac9c4a82254af2388e6824f4e27ba88928c",
+        "bytes": 7471
+      },
+      "compiled/loop-0/strategy.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/compiled/loop-0/strategy.json",
+        "sha256": "bdf4a6e389e281089da9533dede563af47a50aaa195f373a6a9d3f399240d09e",
+        "bytes": 23188
+      },
+      "compiled/loop-0/native/artifact.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/compiled/loop-0/native/artifact.json",
+        "sha256": "219b2bf0d045e44b0bf259f918265dd82a505cd5b3d639b3d99868851d1ca4c2",
+        "bytes": 3545
+      },
+      "program-validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/program-validation/result.json",
+        "sha256": "c072bb85b5535bf4f37999fcd749d038b5c707ca2f67aed2bd6dfd1b7d4d19e7",
+        "bytes": 8497
+      },
+      "qualified-selection.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/qualified-selection.json",
+        "sha256": "23d48234bd3ee4516aa0a25c31d941fbee64e1c2b44654b9667849157e8b913a",
+        "bytes": 2123
+      },
+      "too-small-budget/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/too-small-budget/result.json",
+        "sha256": "f1d202977a0eb8d5d4564dafc3a108bf42e0fcc1ee6938f19af088da9d198d69",
+        "bytes": 2574
+      },
+      "source-to-native-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/source-to-native-receipt.json",
+        "sha256": "df83bcf5f275f730c421d4c2a0dae61e584452f2213f2c2a4d2e65c85a382ed2",
+        "bytes": 15047
+      },
+      "backend-structure-audit.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/backend-structure-audit.json",
+        "sha256": "4b0d31ced7db6fcd0acad47e7eeb6a5978fa0005915e9c379fe5305e891ff3b9",
+        "bytes": 9119
+      },
+      "hardware-planning-gaps.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/hardware-planning-gaps.json",
+        "sha256": "517a1e34a9d736c90a4c5c5c5652300903082b251043d6ca94cbf9b4b5408d95",
+        "bytes": 6680
+      },
+      "wheel-verification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/wheel-verification.json",
+        "sha256": "d3863f5b2834de9c44716f7c5b6df221d59b3e8565ef0a6a6bfa2e84eae9573f",
+        "bytes": 6186
+      },
+      "environment.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/environment.json",
+        "sha256": "b777a06f5c2333bd2d356e3de0b60ddae0d8ebfe96375fdd3bc9e11be268d363",
+        "bytes": 260
+      },
+      "final-tests.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-temporal-execution-v1/final-tests.log",
+        "sha256": "c1a0288eccdfde38d65c6aff62b8679281d772af106a322d7dd4220c67d1e88f",
+        "bytes": 98
+      }
+    },
+    "first_stage_complete": false,
+    "second_stage_complete": false,
+    "third_stage_complete": false,
+    "whole_program_compiled": false,
+    "physical_optimality_proven": false,
+    "execution_time_optimality_proven": false,
+    "target_variant_black_box_search": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "torch_cuda_upgraded": false
   }
 }

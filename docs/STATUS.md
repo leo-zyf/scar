@@ -1,13 +1,27 @@
 # 当前状态
 
-三阶段已贯通受约束的多函数 CPU 数组 pipeline：原 F4 图自动拆解→跨区域融合与内存表示选择→C++20 执行。
+三阶段已贯通受约束的多函数 CPU 数组 pipeline 与共享时间循环：原 F4 图自动拆解→跨区域/跨迭代化简与内存规划→C++20 执行。
 整程序建模与通用宏观编译器尚未完成；LeWM 未改，本机无可用 GPU。
 
 | 阶段 | 已实现并核验 | 主要缺口 |
 |---|---|---|
-| 建图 | F0–F4、保调用 scope 的共享正文查询、原 CALL 参数/返回路由、自动数组 pipeline、有限动态绑定与输入字段 | 完整环境/内容版本/effects、一般控制流和原生边界接线 |
-| 硬件化简 | 跨区域完整 elementwise 融合、表示/payload 选择、原语成本与有限 CPU 域、固定 pool 生命周期规划 | 部分分区、放置/COPY/驻留/重算/调度联合优化；整体时间模型 |
-| C++20 | ABI1 算子、融合后单 kernel、资源计划 v2、单区域 timed 执行、多区域原生宿主与 pool | 一般循环/分支、真实 COPY/异步、外部效果与完整程序交付 |
+| 建图 | F0–F4、保调用 scope 的共享正文查询、原 CALL 路由、自动数组 pipeline 与单 carry range 循环、有限动态绑定与输入字段 | 完整环境/内容版本/effects、一般控制流和原生边界接线 |
+| 硬件化简 | 跨区域完整 elementwise 融合、跨迭代元素局部递推、表示/payload 选择、原语成本与有限 CPU 域、固定 pool 生命周期规划 | SIMD/依赖延迟成本、部分分区、放置/COPY/驻留/重算/调度联合优化；整体时间模型 |
+| C++20 | ABI1 算子、单 kernel、资源计划 v2、多区域原生宿主与 pool、独立 loop ABI1/真实循环 | 一般循环/分支、真实 COPY/异步、外部效果与完整程序交付 |
+
+**Verified：最新共享循环主链**
+
+`compile-loop` 从原 F4 自动识别 iterator/world 回边与 lexical carry，不伪造数组 phi；正文保留一份，400 次迭代不展开。一次原入口采集耗时 0.316 秒，取得 shape/layout、精确 count 及真实 body/leaf CodeID，未保存数组数值；采集前缀主动停止，不作为完整运行或性能数据。
+
+图证明各元素间无依赖、输出形状保持后，C++20 每个元素局部执行完整时间递推，一次 FFI、无中间数组，独立最终输出 8,405,000 bytes。12 MiB 增量 payload 预算可行，4 MiB 在编译前 NO_OP；不证明整体时间最优。
+
+新外部科学程序 1025²/400 步，warmup 1、配对重复 3 次：完整原入口 baseline median **4.665 s**，native **0.766 s**，**6.091×**。最终状态、stdout、npy 字节一致，每次运行 1 native/0 fallback；关闭 trial 后正常选用通过。零/负次数返回原输入别名，次数变化及嵌套 callee 副作用回退原循环一次。未观测中间每次迭代输出，不宣称全 Python 效果等价。
+
+生成码核查发现新 temporal 热循环使用标量算术，历史 flat kernel 有跨元素 packed SIMD。两次历史测量不是受控版本排名；减少材料化不能推出时间更快。下一层硬件规划必须同时考虑 SIMD、算术依赖链与调度成本，不能只最小化 payload。当前 8 CPU 显式未排名，flags 不作为程序输出属于外部合同。
+
+7 项相关检查通过（2.37 秒）。最新验收目录 `artifacts/current/experiments/loop-temporal-execution-v1/`；下方旧 pipeline 测量保留原范围，不能当作 LeWM 或所有程序的加速比。
+
+双文件入口静态 F4 另核验通过（27.61 秒，RSS 85,316 KiB），统一 `build --target` 用 3.38 秒接入保留硬件图；main 有界展开覆盖 329 操作，755 条资源边均为条件 MAY。CPU/host memory/SSD/NVMe 引用可查，保留库存中的 accelerator 不代表本机当前可用 GPU。19 个外部 CALL 接线、内容/效果及实际 placement/I/O/transfer 仍开放，不能把工作流成功当作整程序闭合。
 
 **Verified：最新多区域主链**
 
@@ -40,10 +54,10 @@
 已有进展保留在版本化收据：调用 scope 的内部条件查询不证明内容保持；有限 CPU 模型最优不等于物理最优。
 此前 Gray–Scott 完整短程序约 1.052×，耗时下降 4.99% 未达门槛，仍 NO_OP，不能用新测试程序结果替换该结论。
 
-下一层先在原图上做跨区域化简，再扩硬件规划：
-1. 从完整 elementwise 融合扩展到部分子图与一般控制结构，继续保原输入、callee guard、数据版本和效果边界。
-2. 把图变换与 materialization 位置、COPY/ready/release、驻留/重算及执行次序联合建模；补执行成本，不猜时间。
-3. C++ 后端按上层计划增加真实传输与异步能力，未实现的任务继续拒绝。
+后续三层继续有序交接：
+1. 建图：从共享单 carry 循环扩到一般控制结构，补入口到原生/IO 的依赖；保输入、callee、版本与效果边界。
+2. 硬件规划：先补 SIMD/依赖链与 native 执行成本，再联合 materialization、COPY/ready/release、驻留/重算及执行次序；不猜时间。
+3. C++ 后端：消费上层明确计划扩展向量化/分块与真实传输/异步，未实现的任务继续拒绝。
 
 最新真实产物：`artifacts/current/experiments/pipeline-fusion-execution-v1/`；原 host/pool 验收保留在 `pipeline-memory-execution-v1/`。
 精简版本化验收入口：`artifacts/baseline/formal-frontend-results.json`。

@@ -10,7 +10,7 @@ import time
 from .input_metadata import read_input_boundary
 
 def observe_inputs(plan_path,command,out,*,max_seconds=None,stop_when_collected=False):
-    plan_path=Path(plan_path).absolute();read_input_boundary(plan_path)
+    plan_path=Path(plan_path).absolute();boundary=read_input_boundary(plan_path)
     out=Path(out).absolute()
     if out.exists():raise ValueError('fresh observation output required')
     if not command:raise ValueError('original program command required')
@@ -51,7 +51,7 @@ def observe_inputs(plan_path,command,out,*,max_seconds=None,stop_when_collected=
             raise ValueError('unexpected child metadata schema')
         records.extend(document['records']);collectors.append(dict(path=str(path),status=document.get('collector')))
     merged=dict(schema='scar.region-input-metadata',schema_version=1,records=records,
-        max_calls_per_code=2,tensor_contents_recorded=False,
+        max_calls_per_code=boundary.max_calls,tensor_contents_recorded=False,
         observation_ids_are_trace_invocation_keys=False,logical_versions_inferred=False)
     (out/'inputs.json').write_text(json.dumps(merged,indent=2,allow_nan=False)+'\n')
     report=dict(schema='scar.input-metadata-run',schema_version=1,command=command,
