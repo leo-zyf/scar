@@ -45,6 +45,17 @@ scar benchmark-region /path/to/native --inputs /path/to/inputs/inputs.json --out
 资源任务图区分分配、值就绪和导出；C++已消费同步CPU三任务的 timed 计划，逐调用守卫 shape/layout/字节预算/CPU 绑定。
 它按依赖执行，不等待预测 tick；未实现的 copy/wait 或 NUMA 页放置继续拒绝。
 
+未指定线程数的硬件预览会输出未绑定的 `plan.json`，可自动构造 CPU 实现域并正向选择：
+
+```bash
+scar choose-cpu --plan /path/to/unbound/plan.json --target /path/to/hardware --inputs /path/to/inputs/inputs.json --cpu-pool 0 1 2 3 4 5 6 7 --max-threads 8 --calibrate-missing --out /path/to/cpu-choice
+scar lower-cpu-choices --choices /path/to/cpu-choice/choice/choice.json --out /path/to/chosen-native
+```
+
+可重复传 `--profile FILE` 复用已有成本。缺失且未要求校准的实现保留为前沿，不能删除后宣称完整域最优。
+校准只运行规范原语；模型选择完成后仅编译所选目标实现，最终是否采用仍由正确性和 A/B 验收决定。
+当前域是给定 CPU 池中每 executor 的前缀 CPU 集合及 1/2 的幂/上限线程数，不是所有物理实现；NUMA 页未绑定。
+
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。
 契约要求同步 CPU 执行及无外部并发写入；这些不是由 ndarray 类型推断的全局事实。
@@ -103,6 +114,8 @@ F4 构建的观察选择保留原 trace 与调用接口的 run scope，`attach_t
 静态调用 frame 不是动态 invocation。旧 model 构建继续通过 `observed_scopes/observed_ports` 查询独立观察调用域。
 F4 自动按需建立实际调用 scope：原共享端口加 run/InvocationKey，同一 caller 内重复 CALL 再加 attempt 锚点。
 参数、数据返回、环境和 world 状态关系引用原图，不复制正文；结构共享不授予内容版本相等。
+实际调用 provider 的 `scoped(scope, original)`、`body(scope)` 和 `shared(point)` 支持 scope 内正文查询与原点审计。
+内部条件和循环回边保留，不因一次进入证据推导实际分支或迭代内容；caller attempt 始终单独表示。
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh

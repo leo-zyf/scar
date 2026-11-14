@@ -101,7 +101,9 @@ CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周�
 固定放置求解器使用时间代价、资源容量与增量内存预算；未知成本逐字段保留，不编译目标程序多版本做黑盒排名。
 `calibrate-cpu` 在同硬件/编译器/runtime/guard 上下文测规范原语；`predict_region_costs` 将原图工作量代入有效仿射成本，
 `plan-resources` 再求解，`lower-resources` 重核证据并降低。校准的秩与留出误差单列，缓存与 NUMA 假设不伪装为已证事实。
-有限实现选择求解器可联合比较实现需求与任务时序，尚未接回执行计划；materialization 位置仍固定，不暗增 COPY。
+`choose-cpu` 从未绑定原计划与硬件约束生成有限 CPU 家族，用同上下文原语成本比较一个同步调用的完整三任务成本；
+`lower-cpu-choices` 重放全部域和合同，只降低选中绑定。原 Python NO_OP 仍合法，模型选择不等于部署验收。
+该辅助比较图不取代原程序图；typed IO/materialization 仍由各原任务图与收据引用，位置固定，不暗增 COPY。
 同步CPU后端已执行allocation→compute→export的 timed 计划；shape、连续布局、输出字节预算及CPU绑定逐调用检查。
 预测 tick 不用于睡眠；源码和硬件收据在build/load核对，其他 timed 形态仍不支持。
 跨区域结构变换、放置、搬运与调度的联合优化仍是下一层，当前不声称物理最优或完整硬件调度。

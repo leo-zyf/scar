@@ -4655,5 +4655,527 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "model_cost_execution_progress"
+  "current_milestone": "hardware_cpu_choice_progress",
+  "hardware_cpu_choice_progress": {
+    "schema": "scar.hardware-cpu-choice-milestone",
+    "schema_version": 1,
+    "recorded_utc": "2026-11-14T20:08:10.615620+00:00",
+    "status": "VERIFIED_SCOPED_BODY_AND_MODEL_DRIVEN_CPU_IMPLEMENTATION_MAIN_CHAIN_NOT_COMPLETE_SYSTEM",
+    "stage1": {
+      "report": {
+        "path": "artifacts/current/experiments/source-invocation-binding-v1/scoped-body-query-v1.json",
+        "sha256": "ffe17cab1fad7a29b321d7c2d6e46e919dd6b5a3d32ac525c0cffa9fe2444d5a",
+        "bytes": 17465
+      },
+      "seconds": 23.335487297998043,
+      "actual_scopes": 2,
+      "shared_body_lenses": 1,
+      "shared_f4_templates": 59,
+      "queries": [
+        {
+          "call_scope": {
+            "run_scope": "16b71c9e296f2a015b8163f1d5725f5bf64152d66fe14cd5428a5e214c23a860",
+            "invocation": {
+              "process_id": 12405,
+              "thread_id": 133270623487808,
+              "invocation_id": 46
+            }
+          },
+          "visited_scoped_nodes": 1340,
+          "internal_dependency_edges": 1685,
+          "parameter_to_return_path_edges": 12,
+          "frontiers": {
+            "SCOPED_SOURCE_EFFECT_FIELD_OPEN": 1625,
+            "INTERNAL_CALL_PROTOCOL_SELECTION_OPEN": 18,
+            "SCOPED_SOURCE_EFFECT_RULE_MISSING": 5
+          },
+          "normal_return_to_original_caller_boundary": true,
+          "path_metadata_owner_scope_preserved": true
+        },
+        {
+          "call_scope": {
+            "run_scope": "16b71c9e296f2a015b8163f1d5725f5bf64152d66fe14cd5428a5e214c23a860",
+            "invocation": {
+              "process_id": 12405,
+              "thread_id": 133270623487808,
+              "invocation_id": 52
+            }
+          },
+          "visited_scoped_nodes": 1340,
+          "internal_dependency_edges": 1685,
+          "parameter_to_return_path_edges": 12,
+          "frontiers": {
+            "SCOPED_SOURCE_EFFECT_FIELD_OPEN": 1625,
+            "INTERNAL_CALL_PROTOCOL_SELECTION_OPEN": 18,
+            "SCOPED_SOURCE_EFFECT_RULE_MISSING": 5
+          },
+          "normal_return_to_original_caller_boundary": true,
+          "path_metadata_owner_scope_preserved": true
+        }
+      ],
+      "body_copies": false,
+      "loop_iterations_unrolled": false,
+      "internal_path_conditions_selected": false,
+      "logical_content_versions_inferred": false,
+      "effects_closed": false,
+      "old_whole_reports_recertified": false,
+      "old_provider_proof_resigned": false,
+      "complete_f4_build_repeated": false
+    },
+    "stage2": {
+      "choice": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/choice/choice.json",
+        "sha256": "f3b9f67c22a0c187913b8c2c21268505eb69f8d44bfa5398c7cc54857ab071e7",
+        "bytes": 46930
+      },
+      "automatic_domain": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/domain.json",
+        "sha256": "d3b339be9a7c4fb137ec57079f08182bc09d8271308a5421443d16e5fd9e7b21",
+        "bytes": 46663
+      },
+      "original_automatic_calibration_run": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/automatic-eight-cpu-domain/domain.json",
+        "sha256": "2f6c0996939ded18f40a26a63316dbcf25a9416719c9f021cd57607f2ea83337",
+        "bytes": 46883
+      },
+      "finite_cpp_domain": "CPU_POOL_0_TO_7_EXECUTOR_PREFIXES_ONE_POWERS_OF_TWO_AND_CAP",
+      "cpu_pool": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "max_threads": 8,
+      "variants": [
+        {
+          "id": "cpu-8fa205bf51e2da17",
+          "cpu_threads": 1,
+          "cpu_ids": [
+            0
+          ],
+          "modeled_total_ticks": 423586,
+          "profile": {
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/cpu-1/calibration/profile.json",
+            "sha256": "38fd8f54fa0b0a37e5cbc8bba996d69c97297fc63796019cdf6a1aaee94afb16",
+            "bytes": 13711,
+            "semantic_sha256": "30255c7b4cec76b58fcddfde4516356597758c8d771179d12980805ca263a7e3"
+          },
+          "prediction": {
+            "artifact": {
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/choice/variant-0/evidence.json",
+              "sha256": "400aa8e2d1715eba446a9a13d2ebbc18e245676ac42410fd8484b7abb750f24a",
+              "size_bytes": 160136,
+              "schema": "scar.cpu-choice-variant-evidence"
+            },
+            "locator": "#/prediction"
+          },
+          "uncertainty": {
+            "fit_rank": 10,
+            "fit_parameters": 12,
+            "parameters_unique": false,
+            "fit_rmse_ticks": 47152.669063131754,
+            "maximum_holdout_relative_error": 0.44217730210171446,
+            "scope": "CANONICAL_PRIMITIVES_ONLY_NOT_TARGET_WORKLOAD",
+            "physical_optimality_proven": false
+          }
+        },
+        {
+          "id": "cpu-ff2b256282ccab0e",
+          "cpu_threads": 2,
+          "cpu_ids": [
+            0,
+            1
+          ],
+          "modeled_total_ticks": 329454,
+          "profile": {
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/cpu-2/calibration/profile.json",
+            "sha256": "013c8246687f8f497e4fa13762ac0a5e837664606c8d29d107f172b6634956c2",
+            "bytes": 13596,
+            "semantic_sha256": "a3ef61ccf3ad0d4c973d5340edbafb45e0b784be4e7b87effc765a0f71361f02"
+          },
+          "prediction": {
+            "artifact": {
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/choice/variant-1/evidence.json",
+              "sha256": "fb247d7facc0a262de61a6d24358e5aaa6bb5f2c65d4efdb2751b06247ba35c7",
+              "size_bytes": 159924,
+              "schema": "scar.cpu-choice-variant-evidence"
+            },
+            "locator": "#/prediction"
+          },
+          "uncertainty": {
+            "fit_rank": 10,
+            "fit_parameters": 12,
+            "parameters_unique": false,
+            "fit_rmse_ticks": 23721.412225575914,
+            "maximum_holdout_relative_error": 0.11907521072416498,
+            "scope": "CANONICAL_PRIMITIVES_ONLY_NOT_TARGET_WORKLOAD",
+            "physical_optimality_proven": false
+          }
+        },
+        {
+          "id": "cpu-cecac70f76331dc4",
+          "cpu_threads": 4,
+          "cpu_ids": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "modeled_total_ticks": 246942,
+          "profile": {
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/model-cost-execution-v1/calibration-observed/profile.json",
+            "sha256": "3acf185ae907d5dace19efa251316d24ee5748dfcff1945881dea1e073aec768",
+            "bytes": 13662,
+            "semantic_sha256": "6006b9875a99a7a063d305be7226dd48cfd3fed583a676d825dada46188a1465"
+          },
+          "prediction": {
+            "artifact": {
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/choice/variant-2/evidence.json",
+              "sha256": "1e433474638debfe54c1e58acce7b64845a065db8cdda6f347604e66ab84411d",
+              "size_bytes": 159856,
+              "schema": "scar.cpu-choice-variant-evidence"
+            },
+            "locator": "#/prediction"
+          },
+          "uncertainty": {
+            "fit_rank": 10,
+            "fit_parameters": 12,
+            "parameters_unique": false,
+            "fit_rmse_ticks": 18055.439201506662,
+            "maximum_holdout_relative_error": 0.15712879770111177,
+            "scope": "CANONICAL_PRIMITIVES_ONLY_NOT_TARGET_WORKLOAD",
+            "physical_optimality_proven": false
+          }
+        },
+        {
+          "id": "cpu-6b8d1716ef26d2fb",
+          "cpu_threads": 8,
+          "cpu_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "modeled_total_ticks": 195926,
+          "profile": {
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/automatic-eight-cpu-domain/implementation-3/calibration/profile.json",
+            "sha256": "d6a3bb3fb31e8c29957ad6731c5b66d82bfce3d96d888b2a2b2c317ce48126df",
+            "bytes": 14376,
+            "semantic_sha256": "11a6878bac98643886d3ca42e019b2929b52e4db74d3c3199cf2e8bebcec42c7"
+          },
+          "prediction": {
+            "artifact": {
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/compact-eight-cpu-domain/choice/variant-3/evidence.json",
+              "sha256": "e2359236b7283f7b04b4408956abacf00bc22f0d873d159256e66cb5ea93bb9c",
+              "size_bytes": 162110,
+              "schema": "scar.cpu-choice-variant-evidence"
+            },
+            "locator": "#/prediction"
+          },
+          "uncertainty": {
+            "fit_rank": 10,
+            "fit_parameters": 12,
+            "parameters_unique": false,
+            "fit_rmse_ticks": 11148.093650887826,
+            "maximum_holdout_relative_error": 0.26978905127455616,
+            "scope": "CANONICAL_PRIMITIVES_ONLY_NOT_TARGET_WORKLOAD",
+            "physical_optimality_proven": false
+          }
+        }
+      ],
+      "model_status": "OPTIMAL_WITHIN_FINITE_MODEL",
+      "complete_domain": true,
+      "selected_variant": {
+        "id": "cpu-6b8d1716ef26d2fb",
+        "index": 3
+      },
+      "selected_total_ticks": 195926,
+      "tick_seconds": 1e-09,
+      "primitive_contexts_newly_calibrated": [
+        1,
+        2,
+        8
+      ],
+      "four_cpu_context_reused": true,
+      "target_implementation_variants_trial_run_for_ranking": 0,
+      "source_python_no_op": {
+        "available": true,
+        "cost_modeled": false,
+        "outperformed": false
+      },
+      "selection_scope": "CPP_IMPLEMENTATION_FOR_LOWERING",
+      "placement_optimized": false,
+      "implicit_transfers_inserted": false,
+      "materialization_locations_fixed": true,
+      "scope": "ONE_SYNCHRONOUS_CALL_CPP_IMPLEMENTATION_MODEL_NOT_MULTI_REGION_OR_PHYSICAL_OPTIMALITY"
+    },
+    "stage3": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/compact-selected-native/lowering.json",
+        "sha256": "ee20b36f4ea0437b1cfe979445b39e7e5d234a7e00355bf803c77311bba048e8",
+        "bytes": 27841
+      },
+      "native_artifact": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/compact-selected-native/native/artifact.json",
+        "sha256": "3032488fa2808d3450366adae6e4183f6c35011568187a81fb5e389836de3d5e",
+        "bytes": 5801
+      },
+      "selected_binding": {
+        "cpu_threads": 8,
+        "executor_id": "target_resource:cpu/numa0",
+        "installation_guard": "CPU_IDS_WITHIN_CURRENT_PROCESS_AFFINITY",
+        "memory_domain_id": "target_resource:memory/numa0",
+        "memory_policy": "UNBOUND",
+        "physical_memory_placement_proven": false,
+        "target_sha256": "40321723a1746800b433c54ca6a59723a101d9401482c6fd4149aeb54086af69"
+      },
+      "compiled_implementation_variants": 1,
+      "execution_linked": true,
+      "cxx_standard": 20,
+      "operator_abi_version": 1,
+      "execution_plan_schema_version": 2,
+      "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+      "selected_for_use": false,
+      "deployment_authorized": false,
+      "whole_program_compiled": false,
+      "artifact_identity_equivalence": {
+        "compact": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/compact-selected-native/native",
+        "original": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/selected-native/native",
+        "identity_equal": true,
+        "build_id": "c4b9bef80a3e1ee8f54acc54b20f456ae4ea449a91e07f3adaba5d2cb2952f7d",
+        "plan_sha256": "494cc93d533fcefa72bae3211bcd691f4520a35e3519b929545a5a75750e5ba6",
+        "resource_schedule_sha256": "746e369b49dfade24b2071d6e69525ea9ea39f91bda0433bb202ed002e3b58bf",
+        "timed_plan_sha256": "56b7ef7d85163f06e9e9b0a04a9776471ee039a572ba46c4a88aabab5106b48a",
+        "timed_admission_sha256": "6d9ba6a8cfc75e646b43ef9e36414b7dd0e034fb0a01de3fa233893946eab9b3",
+        "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810",
+        "payload_sha256": {
+          "plan": "93ad0e99424806ce88973f183d9058ec9b1723f1e6c555c4524c7fc4728baae7",
+          "source": "2790459f5c91e31a2c819ae97a77937ffa895b7246ff830eed5f0344cb388e85",
+          "abi_header": "dbc4997e2098ec65adab31164605d0650eba904480eec5ebbd4833452d889edf",
+          "library": "6966ce00a6893342d16cdb9c681bcb85f5a446e25d145582ac755976e09f6c5e",
+          "resource_schedule": "746e369b49dfade24b2071d6e69525ea9ea39f91bda0433bb202ed002e3b58bf",
+          "timed_plan": "56b7ef7d85163f06e9e9b0a04a9776471ee039a572ba46c4a88aabab5106b48a",
+          "timed_admission": "6d9ba6a8cfc75e646b43ef9e36414b7dd0e034fb0a01de3fa233893946eab9b3"
+        }
+      },
+      "selected_version_development_builds": 2,
+      "second_build_reason": "Storage-only choice report compaction; native plan and all payload identities are equal, so no repeated performance validation.",
+      "benchmark_repeated_after_storage_compaction": false
+    },
+    "storage": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/compact-storage-verification.json",
+        "sha256": "23aa1c23518fe8182d43dda648feb7cb8296ac33cb4e0db2c9e82cec59a4f733",
+        "bytes": 537
+      },
+      "sizes": {
+        "choice/domain.json": {
+          "before": 843425,
+          "after": 6039,
+          "reduction_fraction": 0.9928399087055755
+        },
+        "choice/choice.json": {
+          "before": 1588500,
+          "after": 46930,
+          "reduction_fraction": 0.9704564054139125
+        }
+      },
+      "full_base_graph_embedded": false,
+      "prediction_storage": "PROVIDER_FACT_REFERENCE_TO_VARIANT_EVIDENCE_SHARD"
+    },
+    "incomplete_domain_rejection": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/incomplete-domain-rejection.json",
+        "sha256": "18bdee29cf4d00727184ed279acb08b0436b16c42db064c1c8a8bc8efcdbc83a",
+        "bytes": 410
+      },
+      "declared_variants": 4,
+      "domain_frontiers": 9,
+      "known_subset_incumbent_retained": true,
+      "output_created": false,
+      "compiled": false
+    },
+    "region_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/selected-region-benchmark.json",
+        "sha256": "6b2585caf1af78e1ecd0f39007d88671ba2db905c79cf070c89ad8eab275a4ae",
+        "bytes": 719272
+      },
+      "baseline": {
+        "median": 0.000431768,
+        "min": 0.000401917,
+        "max": 0.000506804,
+        "stdev": 3.73302410110683e-05,
+        "samples": [
+          0.000503686,
+          0.000506804,
+          0.000458651,
+          0.000439956,
+          0.000401917,
+          0.000431768,
+          0.000422295,
+          0.00043144,
+          0.000414245
+        ]
+      },
+      "native": {
+        "median": 0.000222912,
+        "min": 0.000203439,
+        "max": 0.000261038,
+        "stdev": 1.7138176841322545e-05,
+        "samples": [
+          0.000261038,
+          0.000224063,
+          0.000227208,
+          0.000203439,
+          0.000224808,
+          0.000212012,
+          0.000222395,
+          0.000203493,
+          0.000222912
+        ]
+      },
+      "speedup": 1.936943726672409,
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "warmup": 3,
+      "repetitions": 9,
+      "native_without_fallback": true
+    },
+    "whole_program_benchmark": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/selected-program-validation/result.json",
+        "sha256": "cf8c35600c61f97c1e24b617787e48d08f6fb1f32b3cf00c2ed849c0e17a4d00",
+        "bytes": 14731
+      },
+      "selection_report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/whole-program-selection.json",
+        "sha256": "6f1c91718ca3c05c1d00f1cc95f0cef1b5e28e76d7c2e4cddd33bf2c88922a81",
+        "bytes": 1819
+      },
+      "baseline": {
+        "median": 0.5488204060093267,
+        "min": 0.5462405389989726,
+        "max": 0.5575978209963068,
+        "stdev": 0.005953802454618795,
+        "samples": [
+          0.5575978209963068,
+          0.5488204060093267,
+          0.5462405389989726
+        ]
+      },
+      "native": {
+        "median": 0.5214525960036553,
+        "min": 0.5164676570129814,
+        "max": 0.5353390380041674,
+        "stdev": 0.009779331169093512,
+        "samples": [
+          0.5164676570129814,
+          0.5214525960036553,
+          0.5353390380041674
+        ]
+      },
+      "speedup": 1.0524837928038229,
+      "elapsed_time_reduction": 0.049866604277112536,
+      "decision": "NO_OP",
+      "minimum_gain": 0.05,
+      "warmup": 1,
+      "repetitions": 3,
+      "grid": 256,
+      "steps": 80,
+      "correctness": {
+        "region": true,
+        "single_step": true,
+        "trajectory_20_steps": true,
+        "full_integrate": true,
+        "required_state": true,
+        "stdout": true,
+        "files": true
+      },
+      "native_calls_per_episode": 160,
+      "native_fallbacks": 0
+    },
+    "tests": {
+      "result": "83 passed in 6.08s",
+      "log": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/final-tests.log",
+        "sha256": "95c4d5a3da3accd72f3ae5df035b7c71f12703f3ba7886fd19c84c1f638bc96c",
+        "bytes": 179
+      }
+    },
+    "first_stage_complete": false,
+    "whole_program_compiled": false,
+    "physical_optimality_proven": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "torch_cuda_upgraded": false,
+    "next_layers": [
+      "resolve_internal_call_protocol_and_state_effect_fields",
+      "materialization_placement_COPY_READY_RELEASE_option_model",
+      "joint_residency_recomputation_and_multi_region_scheduling",
+      "CPP_multi_region_buffer_and_transfer_execution"
+    ],
+    "distribution": {
+      "report": {
+        "path": "artifacts/current/experiments/hardware-implementation-choice-v1/wheel-verification.json",
+        "sha256": "a7dc82d515adeff1254476d0d2a9fa63b2c2dbf9bed7866780d8ed7dfc728bd9",
+        "bytes": 5606
+      },
+      "status": "PASS",
+      "wheel": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-implementation-choice-v1/wheel/scar-0.1.0-py3-none-any.whl",
+        "bytes": 4525797,
+        "sha256": "fec57a963235d7426423cf385124eb14093cffb073879f3755009569e2c1c823"
+      },
+      "source_verification": {
+        "verified_file_count": 995,
+        "counts_by_package": {
+          "analysis": 530,
+          "backends": 6,
+          "codegen": 6,
+          "compiler": 16,
+          "ir": 341,
+          "optimization": 11,
+          "package_root": 3,
+          "planner": 4,
+          "store": 8,
+          "trace": 64,
+          "validate": 4,
+          "workloads": 2
+        },
+        "required_entries": [
+          "scar/compiler/choose_cpu.py",
+          "scar/compiler/lower_cpu_choices.py",
+          "scar/optimization/cpu_choices.py",
+          "sitecustomize.py",
+          "scar/codegen/cpp.py",
+          "scar/codegen/timed.py",
+          "scar/codegen/kernel_v1.cpp.in",
+          "scar/codegen/scar_abi_v1.h"
+        ],
+        "missing": [],
+        "byte_mismatches": [],
+        "stale_python_members": [],
+        "verified_file_sha_manifest_sha256": "8270598fd2579cd4cc478d8277188b5e401cad58d837b9f897ec01cfd30b6d8e",
+        "required_file_sha256": {
+          "scar/codegen/cpp.py": "1275f195f45481ec98033feaf5b89fe51288b8704655bc574066fd225560eaf5",
+          "scar/codegen/timed.py": "cb2ba4bfbc59eea5eed7db56d5d950dd1e02b6c9c469aba5484714ded3418b5b",
+          "scar/compiler/choose_cpu.py": "55d21acca8f9fcd40c18b6edc0379491c7145402f5e1a1812a7db348808da85d",
+          "scar/compiler/lower_cpu_choices.py": "a946db1c8d6af25ba968cba1a1421e7f86feaffde05bfda28969f7387d132b8d",
+          "scar/optimization/cpu_choices.py": "552ba3effae0820bc83de5a49fa5116ac1846a24f8963be4ed0f2614787a7d2a",
+          "sitecustomize.py": "33085d1b6e93940472f32d00d5cf6c7c970f27429ff9ce9afaffbcbf6a5afc0f",
+          "scar/codegen/scar_abi_v1.h": "dbc4997e2098ec65adab31164605d0650eba904480eec5ebbd4833452d889edf",
+          "scar/codegen/kernel_v1.cpp.in": "c135b3f25fd44bb6a9fc06593f2ba1f045e76086b3983e7b99b66c55720ece9c"
+        }
+      },
+      "runtime_implementation_sha256": "846e46ab07e2a15bff3fc750fba71f37316d2ee5b69d1fe232a9ab20e50c4810"
+    }
+  }
 }
