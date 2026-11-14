@@ -3,14 +3,16 @@ import ctypes
 from hashlib import sha256
 import json
 import os
+import shlex
 import shutil
+import subprocess
 
 import numpy as np
 import pytest
 
 from scar.analysis.target_graph import build_target_graph
 from scar.codegen import cpp
-from scar.codegen.loop import GuardFailure, build, load
+from scar.codegen.loop import GuardFailure, build, load, layout_compiler_options
 from scar.compiler.loop_model import ArrayLoopPlan
 from scar.compiler.loop_runtime import guarded_loop_function
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
@@ -24,7 +26,7 @@ def test_bound_temporal_loop_one_entry_fresh_bits_guards_and_environment(tmp_pat
     if shutil.which("g++") is None or not hasattr(os, "sched_getaffinity"):
         pytest.skip("Linux and g++ required for bound loop execution")
     body_path = tmp_path / "body.py"
-    body_path.write_text("def leaf(x):\n    return (x + 1.0) * 2.0\n\n"
+    body_path.write_text("def leaf(x):\n    return ((x + 1.0) * 2.0) / (x * 0.01 + 1.0)\n\n"
                          "def advance(u):\n    a = leaf(u)\n    return leaf(a)\n")
     body = {}; exec(compile(body_path.read_text(), str(body_path), "exec"), body)
     outer_path = tmp_path / "outer.py"
@@ -40,7 +42,9 @@ def test_bound_temporal_loop_one_entry_fresh_bits_guards_and_environment(tmp_pat
     leaf = optimize_region(ArrayRegion("leaf", leaf_source, ("x",), (
         Expr("x", "input", attrs={"name": "x"}), Expr("one", "const", attrs={"value": 1.0}),
         Expr("a", "add", ("x", "one")), Expr("two", "const", attrs={"value": 2.0}),
-        Expr("out", "mul", ("a", "two"))), "out"))
+        Expr("numerator", "mul", ("a", "two")), Expr("rate", "const", attrs={"value": 0.01}),
+        Expr("product", "mul", ("x", "rate")), Expr("denominator", "add", ("product", "one")),
+        Expr("out", "div", ("numerator", "denominator"))), "out"))
     body_source = source(body, body_path, "advance")
     calls = (RegionCall("a", leaf, ("arg:0",), "a", CalleeGuard(leaf_source, ("leaf",))),
              RegionCall("b", leaf, ("a",), "b", CalleeGuard(leaf_source, ("leaf",))))
@@ -124,3 +128,67 @@ def test_bound_temporal_loop_one_entry_fresh_bits_guards_and_environment(tmp_pat
             load(artifact.directory)
     finally:
         strategy_path.write_bytes(raw)
+
+    # A separate shape ensures every legal chain count has a packed tile and
+    # an odd scalar tail. These sourced numbers are test declarations, not a
+    # calibration or a target timing comparison.
+    from scar.optimization.loop_layout import plan_loop_layout
+    packed_strategy = plan_loop_strategy(loop, input_shapes={"x": [3, 33]}, trip_count=7, memory_budget_bytes=792)
+    packed_plan = loop_execution_plan(loop, packed_strategy)
+    placement = next(value for value in propose_cpu_placements(packed_plan, target, affinity=cpus,
+        memory_budget_bytes=792, max_threads=len(cpus)) if len(value.cpu_ids) == len(cpus))
+    packed_bound = bind_cpu_placement(packed_plan, placement)
+    argv = shlex.split(os.environ.get("CXX", "g++"))
+    identity = subprocess.run([*argv, "--version"], capture_output=True, text=True, check=True).stdout.splitlines()[0]
+    context = dict(target_path=placement.target_path, target_sha256=placement.target_sha256,
+        executor_id=placement.executor_id, measured_cpu_id=cpus[0], cpu_ids=cpus, cpu_model="fixture CPU",
+        compiler=dict(argv=argv, identity=identity, options=list(layout_compiler_options(packed_bound))))
+    isa = dict(architecture="x86_64", name="SSE2_X86_64", lanes=2, vector_registers=16, supported=True)
+    registers = dict(reserved_vector_registers=3, max_vector_chains=4)
+    facts = dict(schema="scar.test-simd-declarations",
+                 finite_mask_implementation="SSE2_INTEGER_EXPONENT_AND_CMPEQ32_MOVEMASK_PD",
+                 context=context, isa=isa, registers=registers,
+                 values=dict(dependent=10, independent=1, finite=1))
+    fact_path = tmp_path / "declared-simd-facts.json"; fact_path.write_text(json.dumps(facts))
+    fact_raw = fact_path.read_bytes()
+    def reference(locator):
+        return dict(artifact=dict(uri=str(fact_path), sha256=sha256(fact_raw).hexdigest(),
+                                 size_bytes=len(fact_raw), schema=facts["schema"]), locator=locator)
+    def metric(name):
+        return dict(value=facts["values"][name], unit="ns/vector", evidence=[reference("#/values/" + name)])
+    profile = dict(schema="scar.cpu-simd-primitives", schema_version=1,
+        context={**context, "evidence": [reference("#/context")]},
+        isa={**isa, "evidence": [reference("#/isa")]},
+        register_model={**registers, "evidence": [reference("#/registers")]},
+        measurements=dict(ops={op:dict(dependent_ns_per_vector=metric("dependent"),
+            independent_ns_per_vector=metric("independent")) for op in ("add", "mul", "div")},
+            finite_mask=dict(ns_per_vector=metric("finite"))))
+    layout = plan_loop_layout(loop, packed_strategy, packed_bound, hardware_profile=profile)
+    assert layout["status"] == "PLANNED_UNDER_MODEL" and layout["selected"]["vector_chains"] >= 1
+    packed = build(loop, tmp_path / "simd", strategy=packed_strategy, execution_plan=packed_bound, layout=layout)
+    assert packed.report["schema_version"] == 2 and packed.layout == layout
+    values = np.arange(99, dtype=np.float64).reshape(3, 33); values[0, 0] = -0.0
+    actual = packed.run(values, 7)
+    np.testing.assert_array_equal(actual.view(np.uint64), original(7, values).view(np.uint64))
+    assert actual.flags.owndata and not np.shares_memory(actual, values)
+    np.testing.assert_array_equal(load(packed.directory).run(values, 7), original(7, values))
+    audit = json.loads((packed.directory / "isa-audit.json").read_bytes())
+    assert audit["packed_double_arithmetic_sites"]["divpd"] > 0
+    assert audit["no_compiler_spills_proven"] is False and not audit["dynamic_rsp_sub_sites"]
+    for index in (0, 1, 32):
+        bad = values.copy(); bad[0, index] = np.nan
+        with pytest.raises(GuardFailure, match="non-finite"):
+            packed.run(bad, 7)
+    wrapped = guarded_loop_function(original, packed, exclusive_inputs=True, trial=True)
+    with np.errstate(over="raise"):
+        with pytest.raises(FloatingPointError):
+            wrapped(7, np.full((3, 33), 1e308))
+    assert wrapped.scar_stats["fallback_calls"] == 1
+    assert os.sched_getaffinity(0) == affinity
+    layout_path = packed.directory / "layout.json"; raw = layout_path.read_bytes()
+    layout_path.write_bytes(raw + b" ")
+    try:
+        with pytest.raises(ValueError, match="receipt differs"):
+            load(packed.directory)
+    finally:
+        layout_path.write_bytes(raw)
