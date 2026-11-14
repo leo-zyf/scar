@@ -144,6 +144,13 @@ class F4BuildSession:
         self._functions(spec['functions'])
         self._checkpoint('function_interfaces')
         self._components(spec['components'])
+        self._invocations()
+        if not _publishing:
+            saved=json.loads((self.path/'observed.json').read_bytes()).get('invocations')
+            if saved is not None:
+                provider=self.providers.get('invocations')
+                if provider is None:raise ValueError('stored invocation scope provider is not available')
+                provider.restore(saved)
         self._checkpoint('cross_layer_interfaces')
         self.view.register(_LazyState(self.view))
         binding_states=self.providers.get('binding_states')
@@ -268,6 +275,17 @@ class F4BuildSession:
             except (OSError,ValueError) as error:
                 self.gaps.append(dict(layer=name,kind='MATERIAL_NOT_JOINED',detail=str(error)))
 
+    def _invocations(self):
+        """Install same-run scope discovery; original group units stay lazy."""
+        from scar.analysis.source_invocation_view import LazySourceInvocationProvider
+        activations=self.providers.get('body_activations')
+        if activations is None:
+            self.gaps.append(dict(layer='invocations',kind='BODY_ACTIVATION_MATERIAL_NOT_AVAILABLE'))
+            return
+        functions=[provider for name,provider in self.providers.items() if name.startswith('functions:')]
+        self.providers['invocations']=LazySourceInvocationProvider(self.view,activations,functions,
+            gaps=self.gaps,checkpoint=self._checkpoint)
+
     def attach_trace(self):
         """Actual F4 selections already admitted through their matched leaf."""
         if self.report['trace']:
@@ -301,7 +319,8 @@ class F4BuildSession:
                     shared_phase_interfaces=len(p.groups)))
         self.observed=dict(schema='scar.build-f4-observed-selections',publications=observations,
             boundaries=boundaries,body_activations=activations,resource_scopes=resource_scopes,binding_states=binding_states,
-            resumptions=resumptions,
+            resumptions=resumptions,invocations=(self.providers['invocations'].publication()
+                if 'invocations' in self.providers else None),
             runtime_events_replaced_by_static_frames=False)
         return self.observed
 
@@ -343,7 +362,7 @@ class F4BuildSession:
     def layer_summary(self):
         return dict(unified=True,local_state=dict(bindings=True,content=True),
             cross_layer=dict(functions=any(k.startswith('functions:') for k in self.providers),
-                **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','resumptions','resource_scopes','binding_states')}),resources=True,
+                **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','invocations','resumptions','resource_scopes','binding_states')}),resources=True,
             storage=True,readback=True,providers=sorted(self.providers),
             loaded_units=len(self.view.units),catalog_units=len(self.catalog.fact_store.rows),
             catalog_local_graph_materialized=bool(self.source_coverage and self.source_coverage['catalog_local_graph_materialized']),
@@ -366,6 +385,7 @@ class F4BuildSession:
             observed_resource_scopes=[r['summary'] for r in observed['resource_scopes']],
             observed_binding_states=observed['binding_states'],
             observed_resumptions=observed['resumptions'],
+            observed_invocation_scopes=observed['invocations'],
             entry_query_purpose='BOUNDED_NAVIGATION_EXAMPLE_NOT_COVERAGE_DENOMINATOR',
             runtime_path_complete=False,effects_closed=False,first_stage_complete=False)
 
@@ -441,10 +461,12 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
     gaps=[];configuration=_configuration_inputs((entry.parent,*(Path(p).resolve() for p in source_roots)),out,gaps)
     session=F4BuildSession(out,_publishing=True,seconds=max_seconds,input_bytes=max_input_bytes)
     try:
-        observed=session.attach_trace();_write(out/'observed.json',observed)
-        _write(out/'coverage.json',session.coverage_summary())
         walk=session.view.dependencies.walk((session.entry,),direction='outgoing',include_structure=True,
             max_points=max_points,max_edges=512,max_depth=8)
+        # A bounded walk may demand an original invocation-group unit. Publish
+        # its receipts/counts after that demand, without copying event rows.
+        observed=session.attach_trace();_write(out/'observed.json',observed)
+        _write(out/'coverage.json',session.coverage_summary())
         _write(out/'entry-query.json',export_dependency_walk(walk))
         gaps.extend(session.gaps)
         gaps.extend(session.resources.gaps)
@@ -465,6 +487,8 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
             observed_resumption_publications=len(observed['resumptions']),
             observed_resource_scope_publications=len(observed['resource_scopes']),
             observed_binding_state_publications=len(observed['binding_states']),
+            observed_invocation_handles=(observed['invocations']['actual_call_handles']
+                if observed['invocations'] is not None else 0),
             catalog_local_graph_materialized=bool(session.source_coverage and session.source_coverage['catalog_local_graph_materialized']),
             resource_records=len(session.resources.provider.records))
         return _finish_publication(session,report,gaps,started)

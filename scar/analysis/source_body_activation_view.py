@@ -268,6 +268,21 @@ class SourceBodyActivationProvider:
     def outgoing(self,point):return self._neighbors(point,False)
     def incoming(self,point):return self._neighbors(point,True)
 
+    def bind_invocations(self,groups,*,group_facts,check=lambda:None):
+        """Attach actual run/InvocationKey routes without changing static frames.
+
+        Groups and their original facts must come from the same admitted
+        observed-interface reader/session as this activation store's index.
+        """
+        from scar.analysis.source_invocation_view import derive_invocation_bindings,SourceInvocationProvider
+        def guard():
+            self.store.check();check()
+        codes=self.store.index.codes
+        bindings=derive_invocation_bindings(self.view,groups,
+            tuple(row for rows in self.observations.values() for row in rows),self.activations,self.interfaces,
+            codes.trace,codes.targets,group_facts=group_facts,check=guard)
+        return SourceInvocationProvider(self.view,bindings,check=guard)
+
 
 def verify_body_activations(path,out,*,index=None):
     """Read stored tables and every balanced relation; reuse an admitted index."""
