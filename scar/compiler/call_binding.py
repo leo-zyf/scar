@@ -11,17 +11,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-from scar.analysis.program_view import ProgramView
-from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
-from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_declared_calls import _owners
-from scar.compiler.graph_frontend import _source_identity,_metadata
-from scar.ir.program.call_edges import CapturedCode
-from scar.ir.record_codec import decode,encode
-from scar.ir.semantics_v2 import SourceSnapshot
-from scar.trace.code_snapshot import describe_code,site
-from scar.trace.lean_capture import LeanBodyPlan,LeanCapturePlan
+from scar.trace.lean_capture import LeanCapturePlan
 
 
 SCHEMA='scar.call-binding-plan'
@@ -37,20 +27,29 @@ def _receipt(path):
     return dict(path=str(path),bytes=len(raw),sha256=sha256(raw).hexdigest())
 
 
-class _StaticCallMapping:
-    """Read-only inputs to the existing mapper, without fake trace records."""
-    _source_syntax=ObservedSourceCallsiteIndex._source_syntax
-    _index=ObservedSourceCallsiteIndex._index
+def _static_call_mapping(view,unit):
+    """Load the original static mapper only for explicit planning/replay."""
+    from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
+    from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+    from scar.analysis.source_namespace_interfaces import NamespacePlanView
+    from scar.analysis.source_declared_calls import _owners
 
-    def __init__(self,view,unit):
-        self.view=view;self._syntax={};self._roles={};self._static={}
-        source=view.unit(unit);facts=source.facts
-        self._owners={unit:_owners(facts)}
-        self._calls={unit:tuple((i,c,source_port(facts,c.result)) for i,c in enumerate(facts.calls))}
-        keys=tuple(dict.fromkeys(gp.port.template for _,_,gp in self._calls[unit]))
-        self._plans={unit:source.material.plans(keys)}
-        self._contexts={unit:{key:NamespacePlanView(unit,plan) for key,plan in self._plans[unit].items()}}
-        self.slicer=ReferenceSlicer(NS(fact_store=view.catalog.fact_store))
+    class _StaticCallMapping:
+        """Read-only mapper inputs, without invented runtime trace records."""
+        _source_syntax=ObservedSourceCallsiteIndex._source_syntax
+        _index=ObservedSourceCallsiteIndex._index
+
+        def __init__(self):
+            self.view=view;self._syntax={};self._roles={};self._static={}
+            source=view.unit(unit);facts=source.facts
+            self._owners={unit:_owners(facts)}
+            self._calls={unit:tuple((i,c,source_port(facts,c.result)) for i,c in enumerate(facts.calls))}
+            keys=tuple(dict.fromkeys(gp.port.template for _,_,gp in self._calls[unit]))
+            self._plans={unit:source.material.plans(keys)}
+            self._contexts={unit:{key:NamespacePlanView(unit,plan) for key,plan in self._plans[unit].items()}}
+            self.slicer=ReferenceSlicer(NS(fact_store=view.catalog.fact_store))
+
+    return _StaticCallMapping()
 
 
 def plan_call_bindings(catalog,source,*,entry=None,call_indices=None,max_targets_per_site=2):
@@ -60,6 +59,15 @@ def plan_call_bindings(catalog,source,*,entry=None,call_indices=None,max_targets
     Unmapped/ambiguous operations remain per-field frontiers. Existing F2 and
     original F4 ABI checks in ObservedSourceCallsiteIndex own correspondence.
     """
+    from scar.analysis.program_view import ProgramView
+    from scar.analysis.source_reference_slice import source_port
+    from scar.compiler.graph_frontend import _source_identity,_metadata
+    from scar.ir.program.call_edges import CapturedCode
+    from scar.ir.record_codec import decode,encode
+    from scar.ir.semantics_v2 import SourceSnapshot
+    from scar.trace.code_snapshot import describe_code,site
+    from scar.trace.lean_capture import LeanBodyPlan
+
     if type(max_targets_per_site)is not int or max_targets_per_site not in (1,2):
         raise ValueError('each selected site needs an exact one/two observation budget')
     if call_indices is not None:
@@ -72,7 +80,7 @@ def plan_call_bindings(catalog,source,*,entry=None,call_indices=None,max_targets
     for unit in units:
         original=view.unit(unit);facts=original.facts
         model,syntax,codes,_,digest=_source_identity(view.catalog,unit)
-        mapper=_StaticCallMapping(view,unit)
+        mapper=_static_call_mapping(view,unit)
         selected=[]
         for fn in facts.functions:
             name,span,lines=_metadata(syntax,fn.template.occurrence)
