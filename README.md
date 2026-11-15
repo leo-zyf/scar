@@ -222,6 +222,18 @@ scar compile-invariant-loop --catalog FRONTEND/catalog --source tests/workloads/
 
 `scar compile-build --domains DOMAINS --calibration RESOURCE_OBSERVATIONS --out PIPELINE` 可复用已有区域/硬件域，串联依赖查询、全部 CPU 配置的前向成本和已选方案降低。`--calibration` 可重复传入；缺失或被拒绝的成本仍阻止选择。
 
+统一三阶段入口现在还支持原图自动发现的纯数组循环。shape/count 是输入约束，carry 与外提节点由图推导：
+
+```bash
+scar build --entry ENTRY.py --catalog FRONTEND/catalog --out PROGRAM
+scar plan-build --build PROGRAM --shape 256 256 --memory-budget-bytes 33554432 --out DOMAINS
+scar compile-build --domains DOMAINS --loop-trip-count 400 --out COMPILED
+scar validate-build --pipeline COMPILED --out VALIDATION -- ENTRY.py --size 256 --steps 400
+scar run-build --pipeline COMPILED --deployment VALIDATION/deployment.json --exclusive-inputs -- ENTRY.py --size 256 --steps 400
+```
+
+资源计划比较重算、物化和逐元素时间融合；当前后端支持最后一种单线程实现，保留全部硬件图。运行包复用同一份 ELF，正常执行不加载编译器/图。成本门严格绑定已测入口与实现，不匹配时回原程序。兼容入口和 I/O 仍由 Python 执行；这不是整个程序已转为纯 C++。
+
 无 trace 时可省略 `--trace`。`--catalog` 选择 F4 局部声明或 context catalog，`--cache-root` 指定接口材料目录；
 `--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
 新源码构建的 `--body-scope observed` 根据完整运行 CodeID 选择正文，并自动准入 trace 涉及的外部源码文件；保留其余源码声明，不扫描整个依赖安装目录、不证明未观察路径为死代码。

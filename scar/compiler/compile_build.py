@@ -11,7 +11,8 @@ from pathlib import Path
 import time
 
 
-def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False):
+def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
+                  loop_trip_count=None,loop_inputs=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -63,10 +64,13 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             caller_loop_proof='NOT_ESTABLISHED_BY_PER_CALL_TRANSFER',
             automatic_caller_replacement_authorized=False)
         rows.append(row)
+    from scar.compiler.invariant_build import compile_invariant_build
+    loops=compile_invariant_build(document,out/'loops',loop_trip_count=loop_trip_count,
+        loop_inputs=loop_inputs,plan_only=plan_only)
     read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
     report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
         program=document['program'],hardware=document['hardware'],loop_dependencies=loop_ref,
-        regions=rows,source_rejections=document['rejections'],
+        regions=rows,invariant_loops=loops,source_rejections=document['rejections'],
         scope='GUARDED_STATEFUL_REGIONS_WITH_EXPLICIT_CALLER_AND_COST_FRONTIERS',
         source_graph_unrolled=False,target_variants_ranked_by_measurement=False,
         target_program_executed=False,whole_program_compiled=False,three_stages_complete=False,
@@ -80,11 +84,16 @@ def main(argv=None):
     parser.add_argument('--domains',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--calibration',action='append',default=[])
     parser.add_argument('--no-op-profiles',help='JSON mapping region IDs to same-boundary original-call profiles')
+    loops=parser.add_mutually_exclusive_group()
+    loops.add_argument('--loop-trip-count',type=int,help='declared common trip count for retained invariant loops')
+    loops.add_argument('--loop-inputs',help='JSON mapping original loop IDs to input_shapes/trip_count/budget constraints')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
-        plan_only=args.plan_only)
-    print(json.dumps(dict(regions=len(result['regions']),statuses=[r['status'] for r in result['regions']],
+        plan_only=args.plan_only,loop_trip_count=args.loop_trip_count,
+        loop_inputs=None if args.loop_inputs is None else json.loads(Path(args.loop_inputs).read_bytes()))
+    print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
+        statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops']]],
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2));return 0
 
 

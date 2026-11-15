@@ -1,5 +1,7 @@
 """Carry roles follow original write bindings, independently of argument order."""
 from dataclasses import replace
+from hashlib import sha256
+import json
 from types import SimpleNamespace as NS
 
 import pytest
@@ -8,13 +10,14 @@ from test_loop_frontend import _original_loop
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.compiler.graph_frontend import GraphRegionRejected
 from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer
+from scar.compiler import invariant_loop_frontend as frontend
 from scar.compiler.model import ArrayRegion, Expr
 from scar.compiler.pipeline_frontend import _Callee
 from scar.ir.program import source_productions as P, normal_graph as G, normal_links as F
 from scar.ir.program.control import LanguageCompletionKind as C
 
 
-def test_multi_input_leaf_carry_write_infers_roles_and_rejects_duplicate_carry():
+def test_multi_input_leaf_carry_write_infers_roles_and_rejects_duplicate_carry(tmp_path,monkeypatch):
     original,function,plan,_,pipeline = _original_loop()
     ref=plan.regions[0].parameters[0]; world=plan.regions[0].parameters[-1]
     sid=P.ProductionStepID; rid=P.ProductionRegionID
@@ -84,3 +87,28 @@ def test_multi_input_leaf_carry_write_infers_roles_and_rejects_duplicate_carry()
     with pytest.raises(GraphRegionRejected) as error:
         _InvariantLoopLowerer(bad_original,function,NS(plan=lambda *_:changed_context),globals).lower()
     assert error.value.code=='INVARIANT_LOOP_CARRY_MULTIPLICITY'
+    # Persisted provenance is only a replay request: matching source bytes and
+    # F4 marker strings do not permit replacing the discovered leaf's DAG.
+    source_path=tmp_path/'original.py';source_path.write_text('def original():\n    pass\n')
+    digest=sha256(source_path.read_bytes()).hexdigest()
+    def identity(key):
+        return dict(kind='source_identity',unit='unit',method='COMPILE_ONLY_RETAINED_F0',
+            semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS',code_key=key)
+    outer=replace(body.source,path=str(source_path),sha256=digest,qualname='outer',
+        origins=(identity(body.source.code_key),))
+    retained_body=replace(body,source=replace(body.source,path=str(source_path),sha256=digest,
+        origins=(identity(body.source.code_key),)))
+    proof=frontend.InvariantLoopProof('invariant-array-loop:fixture',outer,function.parameter_names,
+        retained_body,carry,trip,mapping,name,origins)
+    path=tmp_path/'proof.json';frontend.write_invariant_loop_proof(proof,path)
+    catalog=object();replays=[]
+    def rediscover(candidate,source):
+        assert candidate is catalog and source==str(source_path)
+        replays.append(source);return [proof],[]
+    monkeypatch.setattr(frontend,'discover_invariant_loops',rediscover)
+    assert frontend.read_invariant_loop_proof(path,catalog=catalog)==proof
+    changed=json.loads(path.read_text());changed['body']['nodes'][-1]['op']='mul'
+    path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError,match='original F4 rediscovery'):
+        frontend.read_invariant_loop_proof(path,catalog=catalog)
+    assert len(replays)==2

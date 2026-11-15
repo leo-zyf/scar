@@ -10,14 +10,67 @@ from pathlib import Path
 import time
 
 
+def _invariant_loop_links(proof,loops,reference):
+    """Join original F4 identifiers, never function/source-name similarity."""
+    control=next(row for row in proof.origins if row.get('role')=='single_shared_invariant_loop')
+    call=next(row for row in proof.origins if row.get('role')=='invariant_array_leaf_call')
+    links=[];headers=0
+    for i,function in enumerate(loops['functions']):
+        for j,loop in enumerate(function['loops']):
+            header=loop['header'];port=header['port']
+            if (header['unit']!=control['unit'] or port['template']!=control['template']
+                    or port['owner']['wire']!=control['step'] or port['kind']!='ENTER'):
+                continue
+            headers+=1
+            for k,body_call in enumerate(loop['body_calls']):
+                if body_call['result']!=call['call_result']:continue
+                prefix=f'#/functions/{i}/loops/{j}'
+                links.append(dict(kind='EXACT_ORIGINAL_F4_LOOP_HEADER_AND_CALL_RESULT',
+                    loop=dict(artifact=reference,locator=prefix),
+                    call=dict(artifact=reference,locator=prefix+f'/body_calls/{k}')))
+    frontier=[] if len(links)==1 else [dict(kind='ORIGINAL_LOOP_CALL_LINK',status='UNRESOLVED',
+        matching_headers=headers,matching_call_links=len(links),
+        reason='unique original loop header and enclosed leaf CALL result not matched')]
+    return links,frontier
+
+
+def _planning_sources(catalog,source):
+    """Enumerate only source identities already admitted by this catalog."""
+    if source is not None:return [str(Path(source).absolute())]
+    store=catalog.fact_store;paths=set()
+    for unit,row in store.rows.items():
+        model=store.model_units.get(unit,{})
+        path=model.get('path',row.get('path'))
+        if type(path) is not str or not path:
+            raise ValueError('admitted source unit has no retained source path: '+unit)
+        paths.add(str(Path(path).absolute()))
+    return sorted(paths)
+
+
+def _planning_loops(view,sources,source_filter):
+    from scar.analysis.source_loop_dependencies import source_loop_dependencies
+    functions=[]
+    for source in sources:
+        projection=source_loop_dependencies(view,source)
+        functions.extend(dict(function,source_path=source) for function in projection['functions'])
+    return dict(schema='scar.source-loop-dependencies',schema_version=1,
+        source=None if source_filter is None else str(source_filter),sources=sources,
+        functions=functions,loop_count=sum(len(row['loops']) for row in functions),
+        loop_body_call_count=sum(len(loop['body_calls']) for row in functions for loop in row['loops']),
+        source_unit_scope='DECLARED_CATALOG_UNITS_NOT_RUNTIME_REACHABILITY'
+            if source_filter is None else 'EXPLICIT_SOURCE_FILTER_NOT_RUNTIME_REACHABILITY',
+        loops_unrolled=False,first_stage_complete=False)
+
+
 def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                memory_budget_bytes, affinity=None, max_threads=None):
     from scar.analysis.build import BuildSession,_check
     from scar.analysis.build_f4 import _validate_catalog_parents
     from scar.compiler.stateful_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
+    from scar.compiler.invariant_loop_frontend import discover_invariant_loops,write_invariant_loop_proof
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
-    from scar.analysis.source_loop_dependencies import source_loop_dependencies,attach_loop_call_observations
+    from scar.analysis.source_loop_dependencies import attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
     program=Path(program).absolute();out=Path(out).absolute()
@@ -30,20 +83,22 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     parent=artifact_reference(program/'manifest.json','scar.program-build')
     manifest=read_artifact(parent)
     if manifest.get('backend')!='F4':raise ValueError('original F4 program build required')
-    source=Path(source or manifest['entry']).absolute()
+    source_filter=None if source is None else Path(source).absolute()
     with BuildSession(program) as session:
         target=manifest.get('target')
         if target is None:raise ValueError('program build has no target hardware snapshot')
         _check(target)
         hardware=Path(target['path']).parent
         # Reuse this session's catalog and original shared function bodies.
-        regions,rejected=discover_stateful_regions(session.view,source=source)
+        sources=_planning_sources(session.view.catalog,source_filter)
+        regions,rejected=discover_stateful_regions(session.view,source=source_filter)
         out.mkdir(parents=True)
-        loops=source_loop_dependencies(session.view,source)
+        loops=_planning_loops(session.view,sources,source_filter)
         if session._f4 is not None:
             providers=tuple(p for name,p in session._f4.providers.items() if name.startswith('bounded_call_bindings:'))
             attach_loop_call_observations(session.view,loops,providers)
         (out/'loops.json').write_text(json.dumps(loops,indent=2,sort_keys=True)+'\n')
+        loop_reference=artifact_reference(out/'loops.json',loops['schema'])
         rows=[]
         for index,region in enumerate(regions):
             folder=out/('region-'+str(index));folder.mkdir()
@@ -65,14 +120,35 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                     domain_id=domain['domain_id'],candidate_count=len(domain['candidates']),
                     retained_hardware_resources=len(domain['all_resources']))
             rows.append(row)
+        # Pure array-loop proofs share the admitted source session and original
+        # hardware snapshot. The body is stored once inside its proof artifact;
+        # later cost/lowering passes refer to that body instead of re-extracting
+        # a disconnected array DAG or copying it per hardware configuration.
+        invariant_proofs,invariant_rejected=discover_invariant_loops(session.view,source=source_filter)
+        invariant_rows=[]
+        for index,proof in enumerate(invariant_proofs):
+            folder=out/('invariant-loop-'+str(index));folder.mkdir()
+            reference=write_invariant_loop_proof(proof,folder/'proof.json')
+            links,frontier=_invariant_loop_links(proof,loops,loop_reference)
+            shapes=({name:list(shape) for name in proof.body.parameters} if shape is not None else None)
+            invariant_rows.append(dict(id=proof.id,source_code_key=proof.source.code_key,
+                status='SOURCE_LOOP_PROOF_RETAINED',proof=reference,body_pointer='#/body',
+                input_shapes=shapes,trip_count_status='REQUIRES_RUNTIME_OR_DECLARED_INPUT',
+                memory_budget_bytes=memory_budget_bytes,hardware=target,loop_links=links,
+                loop_link_frontier=frontier,iterations_unrolled=False,
+                original_f4_replay_required_for_lowering=True,
+                source_replacement_authorized=False,selected_for_use=False,lowering_authorized=False))
         _validate_catalog_parents(session.view.catalog)
         _check(target)
         if artifact_reference(program/'manifest.json',parent['schema'])!=parent:
             raise ValueError('program build changed during graph planning')
     report=dict(schema='scar.program-optimization-domains',schema_version=1,
-        program=parent,source=str(source),hardware=target,regions=rows,rejections=rejected,
+        program=parent,source=str(source_filter or Path(manifest['entry']).absolute()),
+        source_filter=None if source_filter is None else str(source_filter),sources=sources,
+        source_unit_scope=loops['source_unit_scope'],hardware=target,regions=rows,rejections=rejected,
+        invariant_loops=invariant_rows,invariant_loop_rejections=invariant_rejected,
         semantics='ORIGINAL_F4_FUNCTION_WORLD_AND_SOURCE_PORTS',
-        loop_dependencies=artifact_reference(out/'loops.json',loops['schema']),
+        loop_dependencies=loop_reference,
         loops=loops['loop_count'],loop_body_calls=loops['loop_body_call_count'],loops_unrolled=False,
         catalog_reader_reused_for_region_discovery=True,
         source_ast_fallback_used=False,target_program_executed=False,
@@ -94,7 +170,8 @@ def main(argv=None):
     result=plan_build(args.build,args.out,source=args.source,shape=args.shape,
         input_shapes=None if args.input_shapes is None else json.loads(Path(args.input_shapes).read_bytes()),
         memory_budget_bytes=args.memory_budget_bytes,max_threads=args.max_threads)
-    print(json.dumps(dict(regions=len(result['regions']),rejections=len(result['rejections']),
+    print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
+        rejections=len(result['rejections']),
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2))
     return 0
 

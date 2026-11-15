@@ -1,71 +1,35 @@
 # 当前状态
 
-SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方法建模、统一执行图、C++20 降低及原入口自动装配；Sunfish/Cirq 暂只有基线，没有 LeWM/GPU 加速结论。
+三阶段的第一条统一主链已在受限 CPU 数组循环上完成：原程序 → 软件/硬件图 → 依赖与资源规划 → C++20 → 原入口验证 → 成本门控执行。**通用 SCAR 尚未开发完毕**；不能把这一闭环等同于所有程序、所有硬件均受支持。
 
-当前优先推进循环外提，已有第一条原源码自动闭环：原 F4 识别 range/carry/实参映射，沿纯数组 DAG 求不变子图，用既有 C++ 算子 ABI v1 将其放入前置区域，native host 执行剩余循环。真实微程序的乘法从400次变为1次，加法仍400次；完整输出逐位一致，输入不变，零/负次数保原别名，修改 leaf/range 会回退。只支持单 carry、固定 range、只读外部数组与直接纯 leaf；一般调用、条件循环和作用域外提尚未覆盖，未自动部署。
+## 当前可运行主链
 
-同一微程序256×256/float64/400步，warm1/配对3次：Python median48.453ms，未外提 C++32.902ms，外提 C++34.185ms。隔离外提比率0.9625×，**not profitable**，没有因其减少计算就启用；Python→外提的1.4174×不能归因于LICM。完整样本、方差及守卫验证见 `artifacts/current/experiments/plan-closure-v1/licm-experiment.json`。
+- 建图使用原 F0–F4 材料；默认分析已准入 catalog 的全部源码单元，显式 `--source` 才限制文件。循环保存共享正文、原入口/回边、调用和参数端口，不逐次展开。静态充分的部分用证明，动态 callable、dtype、shape、次数、布局和 CPU 条件由运行守卫确认。
+- 真实两文件入口自动找到导入模块的循环。当前硬件快照保留全部 **204 个资源、477 条连接**；此前 201/202 的历史库存不代表当前快照，虚拟网络接口数量已有变化。
+- 外提依据原绑定写入推导 carry、原 CALL 推导参数映射，再沿 Expr 依赖闭包求不变量；不按变量名、函数名或 workload 匹配。proof/loop/CALL/硬件引用在降低前重新核验。
+- 规划比较循环内重算、整数组物化外提、逐元素时间融合。选中的方案在每个元素的计数循环前计算不变量，只产生一个最终输出；CPU 单线程放置、内存 UNBOUND。选择仅证明逻辑工作和增量数组空间模型内的弱支配，未证明墙钟或全平台最优。
+- 真实 256×256、400 步：乘法 65,536 次，加法 26,214,400 次；逻辑 load 131,072 元素、store 65,536 元素，私有输出 524,288B。逻辑量不等于 DRAM 流量；C++ 局部变量不等于已证明分配到物理寄存器。
+- 分配/计算任务已正确绑定 CPU 与 host-memory 资源；独立源码/计划重放审计 19/19 通过。
+- 导出复用同一份 ELF，运行包 22,519B。运行端无需 graph、compiler、codegen、planner 或 g++；真实原入口已在禁止导入这些模块的进程中通过。
+- `validate-build` 只比较原执行与已经选出的一个方案。通过后 `run-build --deployment` 才正常启用；代码、输入规格、argv、工作目录、Python、affinity 或线程环境不匹配则保留原执行。
 
-Gray 原图新增两份共享循环接口、9个循环体CALL及3条原观察目标接线；入口/回边端口和局部读写分开，t/s明确为BODY_WRITTEN，self引用未被直接重绑定不代表字段内容不变。CALL/RETURN按原CallSite配对，避免共享子图把循环后的调用误连进循环。区域依赖投影91记录/145边/58KB，原正文只按引用共享。`compile-build`现将依赖、全部106配置成本和降低串为一次流程；去掉每配置重复重建同一域后，一次流程观察263.04s→21.85s，源/硬件在发布前重新核验。融合成本仍未准入，真实Gray保留原执行。
+## 本轮实测
 
-本轮补齐平台硬件主链：`build` 默认自动采集，独立于 workload、affinity、CUDA 可见性。当前真实 `TargetHardwareGraph/v2` 有 201 个资源、474 条连接，涵盖 56 个逻辑 CPU、28 核、2 package/NUMA、86 个 cache、ISA、DRAM、PCIe、3 NVMe + 1 SATA SSD、2 物理 NIC（另 3 虚拟接口）及 ASPEED 显示设备。201 个已发现 PCI function 全部有图表示；控制/性能计数接口聚合为边界。旧快照中的 RTX4090 不在当前 PCI 清单，其原 BDF 当前是 NVMe；历史证据保留，不用于冒充当前设备。设备存在、进程访问限制、后端可执行能力分别记录；不凭显示设备发明 CUDA 或独立显存。
+两文件科学微程序，256×256、float64、400 步，单线程；完整独立进程时间包括启动、导入、原应用和候选报告 I/O。预热 1 组，正式交替配对 3 组：
 
-真实采集 0.939s，离线建硬件图 0.112s，含紧凑库存的存图 712,594B；这些时间只属于硬件层，不是全程序建图时间。OS 未暴露的硬件、可用预算、有效带宽/延迟及真正 compute access 仍不推断。原 v1 快照按库存严格重放兼容，不重签旧结果。证据：`artifacts/current/experiments/platform-hardware-current/`。
+| 执行 | 中位数 | min / max | stdev |
+|---|---:|---:|---:|
+| 原版 | 298.316ms | 295.810 / 300.395ms | 2.296ms |
+| 选中 C++ | 276.459ms | 250.180 / 277.977ms | 15.629ms |
 
-真实 Gray–Scott 默认 `build`（不传 `--target`）已完成 workflow，202 个硬件资源全部进入程序资源图，包含文件系统端点；无需运行应用。完整入口仍耗时 187.07s / 峰值 697,912KiB，主要为 discovery 和 assembly 两次加载完整软件 catalog，不能拿约一秒硬件采集代表此总时间。此次只装载 14 个源单元中的 1 个，仍有 62 个明确 gap、未接新 trace，故不声称第一阶段全程序完成。发现的 context-only protocol 缓存误接 observed catalog 已按接口类型准入修复，没有吞掉 TypeError 或放宽旧材料 pin。
+比率 **1.0791×**，中位数减少 7.33%；这是该输入/实现的观测，不是未来保证。输出、stderr 和退出码一致，预热及正式共 native 4 / fallback 0。随后正常成本门控入口 native 1 / fallback 0；改变 size/steps 后正确回到原程序。文件副作用或任意 episode 的全状态等价没有由 stdout 比较证明，区域正确性另依赖 F4 与运行合同。
 
-随后真实修复 catalog 重复加载：会话内 handoff 在原 reader 准入后重验输入、receipt 和规则，发布会话不再读第二次 catalog；独立读回仍重新认证，不建全局 cache。相同默认入口实测 106.48s / 698,672KiB，session catalog 0.055s（discovery 仍读一次）。这是一次建图时间观察，不是业务性能 A/B。14-unit 库存已按当前规则重建并独立准入：70,817 模板、248,292 操作、85,635 区域、3,205,873 关系，零失败；8 workers 共 447.95s，分片 518,677,778B，worker 最大 RSS 1,982,836KiB。旧 pin 未放宽。
+此前整数组物化 LICM：乘法虽减少，但同一 C++ 控制组比较为 0.9625×，继续记录为 not profitable。该旧结果与本轮逐元素时间融合及完整进程边界不同，不能混算或归咎于已证明的计时误差。
 
-同一统一入口已接入上述完整局部图库存、全部 202 个硬件资源及 477 条连接、一次真实四步运行的 37/72 个 CALL 目标观察。连接构建 110.31s，catalog_local_graph_materialized=true；采集子进程 1.629s，无 global profile、无数组值保存。未观察到的位点保留；CALL 目标观察不冒充实际 Invocation/完成/效果证据。另对原科学代码单元求解 63/63 个局部 binding fixed points，全部收敛、20 条保控制环，但 256/256 个读都有 OPAQUE_EFFECT 弱定义候选。原因已定位到通用 world 操作的过宽弱写规则；局部读写与未知 callback/析构/反射需分开证明，尚未删掉这些候选。证据在 `artifacts/current/experiments/compiler-integration-current/`。
+真实证据：`artifacts/current/experiments/three-stage-entry-v1/`；摘要见 `artifacts/baseline/three-stage-entry.json`。
 
-## 已验证的主链
+## 已有其他能力与边界
 
-原 F4 自动提取一个状态方法：54 个 Expr、24 次求值、2 次写入，保原代码/端口/world 来源。输入类型是运行时守卫的候选约束。规则不按 workload、函数或字段名称选择；原程序未修改。
+真实 Gray–Scott 512×512/5000步已有有序状态方法的 C++20 实现，u/v 及必要状态验证通过；历史干净完整积分 3.7098×，候选完整入口 5.2205×。它们使用显式 4 线程，未证明最佳；新的全部 CPU 配置成本仍不完整，不能据历史样本宣称新规划已自动选择或进一步加速。Sunfish/Cirq 暂有基线；无新 LeWM/GPU 加速结论。
 
-公共 `ResourceSchedule/v2` 将逻辑值、物化版本和物理 slot 分开。真实图有 20 个任务、8 个逻辑值、12 个物化版本、6 个 slot：分配不代表值就绪；覆盖旧 slot 前所有消费者必须 happens-before；外部 COMMIT 在完整 success fence 后执行。最后写回与 private shadow 共用一个逻辑值，各自保物化 ready 时间。v1 序列化保持不变。
-
-统一 recipe 引用同一份正文/来源及原硬件库存，没有展开 5000 步。完整重放后经原 C++20 backend 降低，build ID 与 library SHA 和此前实测版本相同，未引入新数学实现。recipe 94,322B；源区域含内联 provenance 约 2.8MB。
-
-物理预算：workspace 8,454,304B + 外部数组 4,243,600B = 12,697,904B，声明预算 32MiB。CPU 0–3 / 4 线程显式指定、未排名；内存页 UNBOUND。通用 makespan solver 已接 v2，按 4 个 workspace slot 计费，不重复计算 12 个物化版本。真实逐任务成本缺失，仍返回 UNRESOLVED，不补零；未证明联合硬件或全局时间最优。
-
-新增硬件导出的 stateful CPU 域：本机两个 executor 各覆盖 1–28 的每个整数线程数，核优先/SMT 优先等代表 mask 去重后共 106 个；保留全部 201 个硬件资源及 ISA/cache/访问限制来源。后端 capability 查询仅为 SUPPORTED_UNDER_GUARDS，仍须完整降低及运行时准入。缺 106 个完整调用成本与同边界 NO_OP 成本，故不选实现。该域没有枚举全部 CPU 子集、跨 socket team 或新后端，不能声称全局最优；既有 4 线程实测也未证明最佳。
-
-`choose-stateful-cpu` 与 `lower-stateful-choices` 已接公开 CLI。真实 Gray 域在缺成本时输出原执行且不编译；完整声明模型的单个小数组区域已走公共 v2 recipe、真实 g++ 和逐位结果验证。此单元模型验证机械交付，不是 Gray 的性能选择或新加速证据。真实资源成本校准仍在补齐。
-
-新增独立 C++20 resource probe 与两层成本上下文：资源事实按硬件/mask/compiler/provider/layout 匹配，完整 cost profile 才绑定源区域及调用边界。CPU 0–3、warm2/reps9 的 10 类资源签名已实测；14 个需求项已知加权约 1.30ms，但 guard/descriptor/FFI、tagged scalar 与两段 fused row stage 仍未知，不将部分总和称完整 native 时间。原方法同 call-dispatch→return 边界另测 warm2/reps9，中位数 6.622406ms（min6.608414/max6.639910/stdev0.010387ms），无 native 变体执行；已成为可重放 NO_OP 前向成本。完整 native/其它 masks 成本仍缺，选择继续 UNRESOLVED。没有新业务加速结论。
-
-本轮落实状态分区：新增独立 READ-only 和 FRAME_ISOLATION 条件分析，strict 原图行为不变。Gray 共享一次会话实测，frame 隔离 Q 下 251/256 读只剩 FORMAL/WRITE may 候选（242 单候选、9 多候选）；候选边 15,487→272，其余5读保 RAISE opaque。控制、操作及迭代结构完全相同，heap/RNG/数组内容效果不因此闭合。Q 尚未解除，未授予变换权限。
-
-`plan-build` 已真实从统一图自动发现同一状态区域并生成106配置，保全部202硬件资源，用时107.40s；没有单独手写或指定抽取区域。另补真实共享 guard/packing/FFI 的 canonical no-op ABI 校准（131,612ns）及 tagged scalar（614ns），明确为声明组件模型、未跑目标数学。现16项已知加权1.431615ms，只余两个fused项。612个独立原语的修正fused模型达到满秩，但匹配范围独立holdout误差22.83%超过预定20%政策，保留不可选点估计及拒绝证据，不生成完整native成本或新加速结论。
-
-解码实验只优化union分派，108个兼容性检查通过，但实际reader81.33s与此前约83.47s差异不足以证明实质收益，已恢复原验证器；该路线记为Rejected。后续重点是解除有证据支持的frame Q、改进fused前向模型并传播不确定性，以及扩展C++控制/类型/进程交付；不靠删检查或补零通过。
-
-轻量运行包 40,550B，复用原库字节；无需 catalog、完整图、planner 或 g++。原入口自然 import 后装配类方法；真实 20 步 u/v、time、dt 逐位相同，native 20 / fallback 0，未导入 compiler/codegen/analysis/IR/optimization。仍依赖原应用源码、Python/NumPy 和系统共享库，不是独立 C++ 主程序。
-
-## 性能证据分开报告
-
-均为真实 Gray–Scott、512×512、5000 步、float64。原版 native library 1 线程；候选区域 4 线程。保留原积分、ghosts、dt、日志和 PNG；不减少步骤或降低精度，无诊断函数 trace/profiler。原 baseline 最后 dt=0 的行为保留。
-
-| 范围 | 预热 / 正式配对 | 原版 | native | 比率 |
-|---|---|---:|---:|---:|
-| 进程内完整积分，中位数 | 1 / 3 | 32.949516s | 8.881688s | 3.709826× |
-| 独立进程候选自动入口，中位数 | 1 / 3 | 50.793170s | 9.729574s | 5.220493× |
-| 独立进程正常成本门，一次观察 | 0 / 1 | 50.341570s | 9.780156s | 5.147318× |
-
-独立进程候选原始样本：baseline `[50.290012, 50.893130, 50.793170]`；native `[9.729525, 9.729574, 9.779819]`。stdev 分别 0.323242s、0.029023s；完整启动、导入、加载、守卫、应用 I/O 和报告 I/O 均计入。
-
-候选正式 15000 次 native、0 fallback；正常成本门另 5000 次 native、0 fallback。新入口的报告字段、日志、PNG 一致，明确排除原程序输出的观察者 `wall_seconds` 计时字段；新轻量边界另做 20 步完整数组逐位核对。此前进程内完整积分已逐位比较最终 u/v。不同范围不混算，单次正常入口不冒充三次统计。
-
-可确认实现了整方法一次 FFI、写入屏障间融合、跨屏障物化保留、固定 buffer 复用及 4 线程并行。尚未做各机制的消融，不能分别归因加速贡献。5.22× 与 3.71× 使用相同库、不同测量边界，不代表新增数学优化。
-
-正常路径最初由 DECLARED_MODEL bootstrap 选择：候选完整进程观测 + 独立冷 import/metadata gate 组件，max 样本 0.011253s，不是理论上界。真实正常入口完成后，单对完整时钟另立 OBSERVED 总成本事实与 metadata replay；未把候选标签改成正常观测，也未宣称新的 observed profile 已再次运行。精确 argv/pin/CPU/内存范围变化会拒绝旧成本。
-
-## 当前边界与下一步
-
-- 建图：还需完整搜索、多进程任务、一般 alias/content/effects 和 caller 循环状态连接；catalog 冷加载约 81s、首次源准备约 11s，复用查询 4.33s，仍需加速及压缩共享来源。
-- 化简与硬件规划：当前是选定实现的有序任务图；缺有出处的逐任务与全部边界成本、自动 worker/分块/NUMA/放置、CPU/GPU/内存/存储联合调度。stage 估计不冒充完整 native/Python 调用成本。
-- 交付：尚未支持一般控制、复杂 dtype、跨进程及异步设备后端、入口自身定义目标的装配和独立 C++ 宿主。所有可能别名的调用覆盖未证明，运行报告保留这一限制。
-
-CPU 主测试组：Sunfish 单核搜索 7.047s；Gray–Scott 如上；Cirq 22 qubit / 8 进程 620.142s。旧单 stencil 完整 A/B 0.894566× 继续拒绝。自建 temporal_reaction 的约 10× 仅为回归，不能归给这三个程序。
-
-当前证据在 `artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/` 和 `stateful-auto-v1/`；版本化摘要见 `artifacts/baseline/formal-frontend-results.json`、`cpu-workloads.json`。
+仍缺一般跨函数/嵌套及自适应循环外提、一般 alias/content/effect 闭合、多进程/MPI、自动多线程/NUMA/CPU-GPU联合调度、复杂 dtype 和独立 C++ 应用宿主。当前保留 Python 入口及明确兼容调用，完整程序不是纯 C++。后续继续补这些能力；原执行始终可选。

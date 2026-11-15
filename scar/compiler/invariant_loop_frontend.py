@@ -6,9 +6,11 @@ This source proof does not discharge ndarray, global identity or concurrency
 guards and is not an arbitrary boolean credential for loop lowering.
 """
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
+import json
+import re
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
@@ -17,7 +19,7 @@ from scar.compiler.graph_frontend import (discover_graph_regions, _source_identi
     _metadata, _origin, GraphRegionRejected, _reject, _ENV, _WORLD)
 from scar.compiler.loop_frontend import _LoopLowerer, _Parameter, _Range, _Iterator, _Carry, _RANGE, _ITEM
 from scar.compiler.pipeline_frontend import _global_functions, _Callee
-from scar.compiler.model import ArrayRegion, SourceRef
+from scar.compiler.model import ArrayRegion, SourceRef, region_from_dict
 from scar.ir.program import source_productions as P, normal_links as F, normal_graph as G
 from scar.ir.program.normal_targets import Body
 from scar.ir.program.control import LanguageCompletionKind as C
@@ -242,4 +244,156 @@ def discover_invariant_loops(catalog, source=None):
     return loops, rejected
 
 
-__all__ = ['InvariantLoopProof', 'discover_invariant_loops']
+PROOF_SCHEMA = 'scar.invariant-loop-proof'
+
+
+def validate_invariant_loop_proof(proof):
+    """Validate the retained shape/bytes, never replace original F4 replay."""
+    from scar.compiler.validation import validate_region
+    if type(proof) is not InvariantLoopProof:
+        raise ValueError('typed original invariant loop proof required')
+    validate_region(proof.body)
+    if (type(proof.id) is not str or not proof.id.startswith('invariant-array-loop:')
+            or type(proof.parameters) is not tuple or len(proof.parameters) < 3
+            or len(set(proof.parameters)) != len(proof.parameters)
+            or any(type(name) is not str or not name.isidentifier() for name in proof.parameters)
+            or proof.trip_count_parameter not in proof.parameters
+            or proof.carry_parameter not in proof.body.parameters
+            or type(proof.parameter_map) is not dict or set(proof.parameter_map) != set(proof.body.parameters)
+            or any(value not in proof.parameters or value == proof.trip_count_parameter for value in proof.parameter_map.values())
+            or type(proof.leaf_global_name) is not str or not proof.leaf_global_name.isidentifier()):
+        raise ValueError('original outer/leaf parameter mapping required')
+    if list(proof.parameter_map.values()).count(proof.carry_outer_parameter) != 1:
+        raise ValueError('carried outer parameter must map to exactly one leaf formal')
+    identities=[]
+    for source in (proof.source, proof.body.source):
+        if (type(source) is not SourceRef or not Path(source.path).is_absolute()
+                or re.fullmatch('[0-9a-f]{64}', source.sha256) is None
+                or re.fullmatch('pycode-v2:[0-9a-f]{64}', source.code_key) is None
+                or sha256(Path(source.path).read_bytes()).hexdigest() != source.sha256):
+            raise ValueError('original source bytes/code identity changed')
+        candidates=[row for row in source.origins if row.get('kind')=='source_identity'
+            and row.get('method')=='COMPILE_ONLY_RETAINED_F0'
+            and row.get('semantic_authority')=='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS'
+            and row.get('code_key')==source.code_key]
+        if len(candidates)!=1:raise ValueError('original F0 identity with F4 semantic provenance required')
+        identities.append(candidates[0])
+    if (proof.source.path,proof.source.sha256,identities[0]['unit']) != (
+            proof.body.source.path,proof.body.source.sha256,identities[1]['unit']):
+        raise ValueError('loop and direct global leaf must share the original unit')
+    witnesses={}
+    for role in ('builtin_range','lexical_carry_write','invariant_array_leaf_call','single_shared_invariant_loop'):
+        candidates=[row for row in proof.origins if row.get('role')==role
+            and row.get('kind')=='original_f4' and row.get('unit')==identities[0]['unit']]
+        if len(candidates)!=1:raise ValueError('missing unique original F4 loop witness: '+role)
+        witnesses[role]=candidates[0]
+    carry=proof.parameters.index(proof.carry_outer_parameter)
+    actuals=[proof.parameters.index(proof.parameter_map[name]) for name in proof.body.parameters]
+    if (witnesses['builtin_range']['trip_parameter_index']!=proof.parameters.index(proof.trip_count_parameter)
+            or witnesses['lexical_carry_write']['outer_parameter_index']!=carry
+            or witnesses['lexical_carry_write']['leaf_formal_index']!=proof.body.parameters.index(proof.carry_parameter)
+            or witnesses['invariant_array_leaf_call']['outer_parameter_indices']!=actuals
+            or witnesses['invariant_array_leaf_call']['leaf_region_id']!=proof.body.id
+            or len(witnesses['invariant_array_leaf_call']['call_inputs'])!=len(proof.body.parameters)
+            or witnesses['single_shared_invariant_loop']['loop_unrolled'] is not False):
+        raise ValueError('retained F4 witnesses differ from the declared loop interface')
+    return proof
+
+
+def invariant_loop_proof_document(proof):
+    return dict(schema=PROOF_SCHEMA,schema_version=1,**asdict(validate_invariant_loop_proof(proof)))
+
+
+def write_invariant_loop_proof(proof,path):
+    """Store the original body once; the file itself grants no permission."""
+    path=Path(path).absolute();document=invariant_loop_proof_document(proof)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('x') as stream:json.dump(document,stream,indent=2,sort_keys=True,allow_nan=False);stream.write('\n')
+    from scar.ir.execution_recipe import artifact_reference
+    return artifact_reference(path,PROOF_SCHEMA)
+
+
+def read_invariant_loop_proof(path,*,catalog):
+    """Read only after replaying the same proof through an admitted F4 catalog.
+
+    Original IDs/provenance plus matching source bytes are not sufficient by
+    themselves: a forged marker or mapping must fail original graph replay.
+    The caller supplies its existing ProgramView to reuse one source session.
+    """
+    from scar.ir.execution_recipe import artifact_reference,read_artifact
+    reference=artifact_reference(path,PROOF_SCHEMA);document=read_artifact(reference)
+    fields={'schema','schema_version',*InvariantLoopProof.__dataclass_fields__}
+    if set(document)!=fields or document['schema_version']!=1 or type(document['schema_version']) is not int:
+        raise ValueError('unsupported original invariant loop proof fields/version')
+    data={name:document[name] for name in InvariantLoopProof.__dataclass_fields__}
+    source=dict(data['source']);source['origins']=tuple(source.get('origins',()))
+    data.update(source=SourceRef(**source),body=region_from_dict(data['body']),
+        parameters=tuple(data['parameters']),origins=tuple(data['origins']))
+    proof=validate_invariant_loop_proof(InvariantLoopProof(**data))
+    original,_=discover_invariant_loops(catalog,source=proof.source.path)
+    canonical=lambda value:json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
+    matches=[value for value in original if value.id==proof.id and
+        canonical(invariant_loop_proof_document(value))==canonical(document)]
+    if len(matches)!=1:raise ValueError('invariant loop proof differs from original F4 rediscovery')
+    read_artifact(reference,json_document=False)
+    return matches[0]
+
+
+def validate_invariant_loop_links(proof,spec,loopsref):
+    """Join the retained loop/CALL facts to an already F4-replayed proof.
+
+    No catalog is opened and no source graph is rebuilt here. Both FactRefs
+    must point into the same byte-checked loops publication and their original
+    ports must equal the proof's control/CALL witnesses, including world ABI.
+    """
+    from scar.ir.execution_recipe import read_artifact
+    if type(proof) is not InvariantLoopProof or spec.get('id')!=proof.id:
+        raise ValueError('loop specification differs from its original proof ID')
+    if spec.get('source_code_key')!=proof.source.code_key or spec.get('loop_link_frontier'):
+        raise ValueError('original source code identity and closed loop links required')
+    document=read_artifact(loopsref)
+    if document.get('schema')!='scar.source-loop-dependencies' or document.get('schema_version')!=1:
+        raise ValueError('original source loop dependency publication required')
+    links=spec.get('loop_links')
+    if type(links) is not list or len(links)!=1:
+        raise ValueError('one original F4 loop/CALL relationship required')
+    link=links[0]
+    if (set(link)!={'kind','loop','call'} or link['kind']!='EXACT_ORIGINAL_F4_LOOP_HEADER_AND_CALL_RESULT'
+            or any(type(link[name]) is not dict or set(link[name])!={'artifact','locator'}
+                or link[name]['artifact']!=loopsref for name in ('loop','call'))):
+        raise ValueError('loop and CALL FactRefs must use the retained parent artifact')
+    location=link['loop']['locator'];call_location=link['call']['locator']
+    match=re.fullmatch(r'#/functions/(0|[1-9][0-9]*)/loops/(0|[1-9][0-9]*)',location)
+    call_match=re.fullmatch(re.escape(location)+r'/body_calls/(0|[1-9][0-9]*)',call_location)
+    if match is None or call_match is None:raise ValueError('canonical original loop and enclosed CALL locators required')
+    try:
+        function=document['functions'][int(match[1])]
+        loop=function['loops'][int(match[2])];call=loop['body_calls'][int(call_match[1])]
+        control=next(row for row in proof.origins if row.get('role')=='single_shared_invariant_loop')
+        original=next(row for row in proof.origins if row.get('role')=='invariant_array_leaf_call')
+        identity=next(row for row in proof.source.origins if row.get('kind')=='source_identity')
+        header=loop['header'];port=header['port']
+        normal_world=[value for value in original['results'] if value['port']['completion']=='FALLTHROUGH'
+            and value['port']['ordinal']==1]
+        if (function['body']['unit']!=control['unit'] or function['body']['template']['occurrence']!=identity['occurrence']
+                or header['unit']!=control['unit'] or port['template']!=control['template']
+                or port['owner']['wire']!=control['step'] or port['kind']!='ENTER'
+                or loop['body']['unit']!=control['unit'] or loop['body']['template']!=control['template']
+                or loop['body']['region']['wire']!=control['body_region']
+                or call['result']!=original['call_result'] or call['callee']!=original['call_callee']
+                or call['positional']!=original['call_inputs'] or call['keywords']
+                or call['positional_pack'] is not None or call['keyword_pack'] is not None
+                or call['world_before']!=original['arguments'][-1]
+                or len(normal_world)!=1 or call['world_after']!=normal_world[0]
+                or len(loop['slots'])!=2 or loop['slots'][0]['formal']!=control['iterator_parameter']
+                or [slot['role'] for slot in loop['slots']]!=['INVARIANT_PREFIX','CARRIED_SUFFIX']
+                or not loop['control_backedges'] or not loop['slots'][1]['backedges']):
+            raise ValueError('retained loop/CALL facts differ from original F4 control, operands or world ports')
+    except (KeyError,IndexError,StopIteration,TypeError) as error:
+        raise ValueError('original loop/CALL FactRef locator or witness is absent') from error
+    return links
+
+
+__all__ = ['InvariantLoopProof','discover_invariant_loops','validate_invariant_loop_proof',
+    'invariant_loop_proof_document','write_invariant_loop_proof','read_invariant_loop_proof',
+    'validate_invariant_loop_links','PROOF_SCHEMA']

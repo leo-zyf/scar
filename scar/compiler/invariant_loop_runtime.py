@@ -14,6 +14,8 @@ from scar.compiler.runtime import SourceMismatch
 from scar.trace.code_snapshot import code_key
 from scar.optimization.resource_solver import semantic_sha256
 
+_RANGE=range
+
 
 def guarded_invariant_loop(original,artifact,proof,*,exclusive_inputs=False,trial=False):
     """Admit a source-derived loop for validation; deployment cost is separate.
@@ -54,7 +56,7 @@ def guarded_invariant_loop(original,artifact,proof,*,exclusive_inputs=False,tria
         if monitoring is not None and any(monitoring.get_tool(i) is not None for i in range(6)):
             return fallback('monitoring_observer_active',args,kwargs)
         if (not _same_state(original,snapshot) or original.__globals__.get(proof.leaf_global_name) is not leaf
-                or not _same_state(leaf,leaf_state) or exact_range() is not builtins.range):
+                or not _same_state(leaf,leaf_state) or exact_range() is not _RANGE):
             return fallback('loop_leaf_or_range_binding_changed',args,kwargs)
         try:bound=signature.bind(*args,**kwargs)
         except TypeError:return fallback('original_argument_binding',args,kwargs)
@@ -62,6 +64,16 @@ def guarded_invariant_loop(original,artifact,proof,*,exclusive_inputs=False,tria
         if type(count) is not int or not -(2**63)<=count<2**63:
             return fallback('trip_count_outside_int64',args,kwargs)
         inputs={leaf_name:bound.arguments[outer] for leaf_name,outer in parameter_map.items()}
+        specialization=artifact.plan['loop_interface'].get('execution_specialization')
+        if specialization is not None:
+            if count!=specialization['trip_count']:
+                return fallback('outside_sourced_execution_specialization',args,kwargs)
+            import numpy as np
+            if any(type(value) is not np.ndarray for value in inputs.values()):
+                return fallback('outside_exact_array_input_contract',args,kwargs)
+            if any(list(inputs[name].shape)!=shape for name,shape in specialization['input_shapes'].items()) or (
+                    specialization.get('input_layout')=='C_CONTIGUOUS' and any(not value.flags.c_contiguous for value in inputs.values())):
+                return fallback('outside_sourced_execution_specialization',args,kwargs)
         failed=[False]
         def original_once():
             failed[0]=True
