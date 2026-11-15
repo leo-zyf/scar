@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "ordered_stateful_real_program_progress",
+  "current_milestone": "unified_stateful_recipe_and_entry_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -7999,6 +7999,269 @@
       "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-integration.json",
       "sha256": "d6af996326c4912803d57e79fa719404ca30bc492cc3da79b2009e03b3add574",
       "bytes": 12567
+    }
+  },
+  "unified_stateful_recipe_and_entry_progress": {
+    "schema": "scar.unified-stateful-recipe-and-entry-progress",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T07:00:58.993580+00:00",
+    "status": "VERIFIED_TYPED_GRAPH_TO_CPP_AND_UNCHANGED_ENTRY_WITH_SEPARATE_COST_EVIDENCE",
+    "version": {
+      "base_commit": "87ea37bc",
+      "current_changeset_contains_acceptance": true
+    },
+    "graph": {
+      "recipe_id": "recipe-v1:63b2af68aee5a6afe1c796cb616a2cd86d47cc635671b2fc59b76fb43dfc2486",
+      "resource_schedule_schema": 2,
+      "schema_version": 2,
+      "tasks": 20,
+      "logical_values": 8,
+      "materializations": 12,
+      "storage_slots": 6,
+      "topological_order": [
+        "allocate:slot:0",
+        "allocate:slot:1",
+        "allocate:slot:2",
+        "allocate:slot:3",
+        "stage:0",
+        "stage:1",
+        "stage:2",
+        "stage:3",
+        "stage:4",
+        "stage:5",
+        "stage:6",
+        "stage:7",
+        "stage:8",
+        "success:precommit",
+        "stage:9",
+        "stage:10",
+        "release:slot:0",
+        "release:slot:1",
+        "release:slot:2",
+        "release:slot:3"
+      ],
+      "executable": true,
+      "fixed_capacity_bytes": 12697904,
+      "overwrite_happens_before_verified": true,
+      "external_commit_fenced": true,
+      "recipe_bytes": 94322,
+      "logical_value_vs_materialization_producer_separated": true,
+      "final_shadow_and_external_share_logical_value": true,
+      "allocation_is_not_ready": true,
+      "overwritten_slot_consumers_happen_before_new_writer": true,
+      "all_external_commits_follow_success_fence": true,
+      "original_f4_source_world_and_full_hardware_inventory_retained": true,
+      "iterations_unrolled": false,
+      "interpretation": "CHOSEN_IMPLEMENTATION_TASK_ORDER_NOT_ALL_INTRINSIC_PROGRAM_DEPENDENCIES"
+    },
+    "solver": {
+      "status": "UNRESOLVED",
+      "missing_task_costs_are_unknown_not_zero": true,
+      "physical_workspace_slots": 4,
+      "workspace_payload_bytes": 8454304,
+      "external_array_payload_bytes": 4243600,
+      "whole_region_payload_bytes": 12697904,
+      "declared_region_budget_bytes": 33554432,
+      "same_search_engine_supports_v1_v2": true,
+      "placement_jointly_optimized": false
+    },
+    "lowering": {
+      "recipe_replayed": true,
+      "same_library_bytes_as_measured_previous_version": true,
+      "build_id": "192faab0b2e8e7cec34fb7e102560a8136cdb1afa650214fad098ddc6674502b",
+      "library_sha256": "186132e3ee9672d7f02bb55e80c60ed826f40970eafc553f8fbf5f9293d26320",
+      "backend": "C++20",
+      "stateful_abi_version": 1
+    },
+    "runtime": {
+      "bundle_bytes": 40550,
+      "admission_sha256": "44c7702772df9148c3684be6132d26d04e7318ded694ab266511752f75476afe",
+      "compiler_graph_and_planner_needed_at_deployment": false,
+      "application_source_required": true,
+      "python_numpy_and_system_libraries_required": true,
+      "same_guard_shared_with_compiler_facade": true,
+      "actual_light_boundary": {
+        "schema": "scar.lightweight-stateful-actual-validation",
+        "grid": 512,
+        "trajectory_steps": 20,
+        "complete_u_v_bytes_equal": true,
+        "time_dt_equal": true,
+        "stats": {
+          "native_calls": 20,
+          "fallback_calls": 0,
+          "reasons": {}
+        },
+        "forbidden_heavy_imports": [],
+        "library_sha256": "186132e3ee9672d7f02bb55e80c60ed826f40970eafc553f8fbf5f9293d26320",
+        "native_recompiled": false
+      }
+    },
+    "candidate_fresh_measurement": {
+      "scope": "FRESH_PROCESS_SUPERVISOR_WALL_INCLUDING_IMPORT_LOAD_GUARDS_APPLICATION_IO_AND_REPORT_IO",
+      "launch_policy": "MEASURE_ADMITTED_CANDIDATE",
+      "warmup_pairs": 1,
+      "repetitions": 3,
+      "baseline": {
+        "samples": [
+          50.290012281999225,
+          50.893130390002625,
+          50.793169912009034
+        ],
+        "median": 50.793169912009034,
+        "min": 50.290012281999225,
+        "max": 50.893130390002625,
+        "stdev": 0.3232416923395961,
+        "variance": 0.10448519166656611
+      },
+      "native": {
+        "samples": [
+          9.729525028000353,
+          9.729574038006831,
+          9.779818976996467
+        ],
+        "median": 9.729574038006831,
+        "min": 9.729525028000353,
+        "max": 9.779818976996467,
+        "stdev": 0.029023087366430115,
+        "variance": 0.0008423396002794353
+      },
+      "speedup": 5.220492666338182,
+      "native_calls_measured": 15000,
+      "fallback_calls_measured": 0,
+      "output_contract": "REPORTED_FIELDS_LOG_LINES_AND_PNG_BYTES_EXCEPT_OBSERVER_WALL_SECONDS",
+      "same_native_kernel_as_prior_3_71x_inprocess_scope": true,
+      "causal_ablation_performed": false,
+      "baseline_native_library_threads": 1,
+      "native_region_threads": 4
+    },
+    "normal_policy_validation": {
+      "scope": "FRESH_PROCESS_SUPERVISOR_WALL_INCLUDING_IMPORT_LOAD_GUARDS_APPLICATION_IO_AND_REPORT_IO",
+      "launch_policy": "COST_GATED_DEPLOYMENT",
+      "warmup_pairs": 0,
+      "repetitions": 1,
+      "baseline_seconds": 50.341569700976834,
+      "native_seconds": 9.780155577987898,
+      "observed_ratio": 5.147317882578486,
+      "statistical_speedup_established_by_this_one_pair": false,
+      "native_calls": 5000,
+      "fallback_calls": 0,
+      "gate_decision": "LOAD_NATIVE_CANDIDATE",
+      "gate_cost_bases": {
+        "native_total": "DECLARED_MODEL",
+        "original_total": "DECLARED_MODEL"
+      },
+      "actual_bootstrap_model_was_not_observed_normal_total": true,
+      "whole_entry_normal_totals_now_observed": true,
+      "new_observed_profile_metadata_replayed": true,
+      "new_observed_profile_used_for_another_entry_run": false,
+      "global_boundary_alias_coverage_proven": false
+    },
+    "evidence_protocol": {
+      "schema": "scar.entry-benchmark",
+      "schema_version": 1,
+      "core_has_no_scientific_workload_schema_or_filename_rules": true,
+      "generic_calibration": "DECLARED_MODEL_BOOTSTRAPPED"
+    },
+    "first_stage_complete": false,
+    "all_three_stages_complete": false,
+    "whole_program_cpp": false,
+    "numerical_algorithm_or_precision_changed": false,
+    "target_sources_modified": false,
+    "tests": {
+      "focused_public_ir_recipe_solver_and_legacy_recipe_checks": 10,
+      "seconds": 4.88,
+      "entry_and_cost_gate_checks": 4,
+      "entry_and_cost_gate_seconds": 0.5,
+      "wheel_source_assets_verified": 1065
+    },
+    "limits": [
+      "Real task-level timing remains UNKNOWN; whole-call totals are not split into invented task durations.",
+      "Stage-only estimates do not establish complete native/Python boundary overhead coverage.",
+      "CPU count is explicit and unranked; no joint worker/NUMA/GPU/storage makespan optimum is proved.",
+      "The lightweight package is not a standalone C++ application and main-defined source boundaries remain unsupported.",
+      "Sunfish full search and Cirq multi-process dependency closure/backends remain incomplete."
+    ],
+    "next_work": [
+      "Join caller loop-carried state and actual process/task interfaces without unrolling.",
+      "Acquire sourced operation/transfer/guard costs and distinguish semantic dependence from selected implementation ordering.",
+      "Extend hardware-aware implementation selection and C++ host/operator capabilities on the same real suite."
+    ],
+    "evidence": [
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/recipe.json",
+        "sha256": "590f95232905d031238601833b4bedffe4f8d3ca787cd828d62e34a474805929",
+        "bytes": 94322
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/estimate.json",
+        "sha256": "17beec4753fe28ece6aafd9f4e27ab606ecdd5f5935709fe0d11a22dfb6b5eda",
+        "bytes": 6569
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/solver-unresolved.json",
+        "sha256": "a341d5c80f2c2f692710ef038ba6472b9db316e6d19800d68fe97d9a4c1752ac",
+        "bytes": 8822
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/lowered/lowering-receipt.json",
+        "sha256": "c89b5f0ac7ba8f419d6b8eae3b05f8308ed0399c542961f9c20d01df8e9e0f7a",
+        "bytes": 7302
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/bundle/export-report.json",
+        "sha256": "5d29c7a7be0b7674b0e7a7eb31688de1f88e02735f71795cada431bdb83b6020",
+        "bytes": 1156
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/light-boundary-check.json",
+        "sha256": "593cadc4de5dbb804e4b46dba295fc5dba317a92c8e12bba3e62eac8060cb3ca",
+        "bytes": 400
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/candidate-entry-validation/result.json",
+        "sha256": "08adb8a935f893fbe694d69520c2788bb4fdd8109ea91f6abfcb75a40b863008",
+        "bytes": 7316
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/candidate-entry-validation/entry-benchmark.json",
+        "sha256": "7ff772ad0cc9b37d53eb87e2a883c93c2c06c0308f45872dd2d41f197c0d1639",
+        "bytes": 19952
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/cost-gated-entry-validation/result.json",
+        "sha256": "84d846c6f7f999886bc96518eeb6d8ac398c54d788744eccd47bffab667a1d6a",
+        "bytes": 3480
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/cost-gated-entry-validation/entry-benchmark.json",
+        "sha256": "688004eb18791456beac4e1e1f9cb9a4f303476424af0028c7269dfeaacc13b7",
+        "bytes": 13350
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/gate-bootstrap-proof/result.json",
+        "sha256": "5d4bde6165839ca6fb6cc8964f8bfa75f96d51f6d7a545bb0df696be59ee01a0",
+        "bytes": 14551
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/generic-gate-calibration/result.json",
+        "sha256": "8df54fb414711c9a07c3e9729baf9c1b9e97956d3ef027b387a1fcbc181460d7",
+        "bytes": 16031
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/observed-deployment/gate.json",
+        "sha256": "a70f4149c4ab2280a95a4bb74afae27bfe0a3787654e67b20bab0eb084c9e028",
+        "bytes": 4128
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/wheel-verification.json",
+        "sha256": "5749bf9f41b1f5522dab7d255f4883b9cf6a5de3efeed8fb258dc4d12e314522",
+        "bytes": 398
+      }
+    ],
+    "integration_receipt": {
+      "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-auto-v1/integration.json",
+      "sha256": "a84e049d26fad672363b7cb3aa22ec9c08195fb0f48d9033bdc29405d79c5085",
+      "bytes": 10380
     }
   }
 }

@@ -40,6 +40,11 @@ def main(argv=None):
     from .entry_runner import run_script
     metadata = inspect_bundle(args.bundle, expected_admission_sha256=args.admission_sha256)
     contract = metadata['contract']
+    stateful = contract.get('schema') == 'scar.stateful-runtime-contract'
+    required_bytes = (contract['memory']['total_region_array_payload_bytes'] if stateful
+                      else contract['array']['final_bytes'])
+    memory_scope = (contract['memory']['scope'] if stateful else
+                   'REGION_INCREMENTAL_FRESH_FINAL_PAYLOAD_EXCLUDES_EXTERNAL_INPUTS_AND_PROCESS_RSS')
     scope = entry_scope(entry, command[1:])
     gate = dict(decision='NO_OP', selected=False, reasons=['deployment_cost_plan_not_provided'],
                 deployment_authorized=False)
@@ -51,14 +56,13 @@ def main(argv=None):
             available_cpu_ids=sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None,
             memory_budget_bytes=args.memory_budget_bytes,
             required_cpu_ids=contract['cpu']['ids'],
-            required_memory_bytes=contract['array']['final_bytes'],
-            memory_scope='REGION_INCREMENTAL_FRESH_FINAL_PAYLOAD_EXCLUDES_EXTERNAL_INPUTS_AND_PROCESS_RSS')
+            required_memory_bytes=required_bytes, memory_scope=memory_scope)
     elif args.measure_candidate:
         gate = dict(decision='MEASURE_ADMITTED_CANDIDATE', selected=True,
                     deployment_authorized=False,
                     reasons=['explicit_candidate_measurement_is_not_a_cost_approval'])
     enabled = gate['decision'] in ('LOAD_NATIVE_CANDIDATE', 'MEASURE_ADMITTED_CANDIDATE')
-    if args.memory_budget_bytes is not None and args.memory_budget_bytes < contract['array']['final_bytes']:
+    if args.memory_budget_bytes is not None and args.memory_budget_bytes < required_bytes:
         enabled = False
         gate = dict(decision='NO_OP', selected=False, deployment_authorized=False,
                     reasons=['explicit_payload_memory_budget_insufficient'])
@@ -78,6 +82,7 @@ def main(argv=None):
         cost_scope_verified=(gate['decision'] == 'LOAD_NATIVE_CANDIDATE' and complete
                              and matches and statistics.get('fallback_calls') == 0),
         memory_budget_bytes=args.memory_budget_bytes,
+        required_memory_bytes=required_bytes, memory_scope=memory_scope,
         mode='MEASUREMENT_ONLY' if args.measure_candidate else 'COST_GATED_DEPLOYMENT',
         full_program_cpp=False, global_optimality_proven=False)
     if report_path is not None:

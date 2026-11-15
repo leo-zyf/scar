@@ -21,7 +21,12 @@ def inspect_bundle(bundle, *, expected_admission_sha256):
     admission_raw = _small_raw(directory / 'admission.json')
     if sha256(admission_raw).hexdigest() != expected_admission_sha256:
         raise ValueError('admission SHA256 differs from explicit trust pin')
-    admission = validate_admission(_json(admission_raw))
+    document = _json(admission_raw)
+    if document.get('schema') == 'scar.stateful-runtime-admission':
+        from .stateful_contract import inspect_stateful_bundle
+        return inspect_stateful_bundle(directory,
+            expected_admission_sha256=expected_admission_sha256)
+    admission = validate_admission(document)
     runtime_raw = _small_raw(directory / 'runtime.json')
     if sha256(runtime_raw).hexdigest() != admission['runtime_contract_sha256']:
         raise ValueError('runtime contract byte SHA256 differs')

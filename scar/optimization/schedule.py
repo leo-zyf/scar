@@ -94,10 +94,16 @@ class ConnectionResult:
 
 
 def schedule_document(schedule) -> dict:
+    from scar.ir.versioned_schedule import VersionedResourceSchedule, schedule_document as versioned_document
+    if isinstance(schedule, VersionedResourceSchedule):
+        return versioned_document(schedule)
     return {"schema": "scar.resource-schedule", "schema_version": 1, **encode(schedule)}
 
 
 def schedule_from_dict(document) -> ResourceSchedule:
+    if document.get("schema") == "scar.resource-schedule" and document.get("schema_version") == 2:
+        from scar.ir.versioned_schedule import schedule_from_dict as versioned_from_dict
+        return versioned_from_dict(document)
     document = dict(document)
     if (document.pop("schema", None), document.pop("schema_version", None)) != ("scar.resource-schedule", 1):
         raise ValueError("unsupported resource schedule schema")
@@ -117,6 +123,9 @@ def _unique(records, label):
 
 def validate_schedule(schedule) -> dict:
     """Validate causality, ownership and escaping storage, not just tuple order."""
+    from scar.ir.versioned_schedule import VersionedResourceSchedule, validate_versioned_schedule
+    if isinstance(schedule, VersionedResourceSchedule):
+        return validate_versioned_schedule(schedule)
     if not isinstance(schedule, ResourceSchedule):
         raise ValueError("ResourceSchedule required")
     values = _unique(schedule.values, "logical value")

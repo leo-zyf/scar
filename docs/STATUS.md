@@ -1,67 +1,43 @@
 # 当前状态
 
-主测试组为项目外的 **Sunfish、Gray–Scott、Cirq**。真实 Gray–Scott 已贯通有状态方法的 F4 提取、图规划、C++20 交付和完整积分 A/B，受测范围加速 **3.710×**。Sunfish/Cirq 暂只有基线；三个阶段均未全部完成，未修改原程序，没有 LeWM/GPU 加速结论。
+SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方法建模、统一执行图、C++20 降低及原入口自动装配；Sunfish/Cirq 暂只有基线，没有 LeWM/GPU 加速结论。
 
-## Observed / Verified：指定的三个 CPU 程序
+## 已验证的主链
 
-| 程序 | 实际配置 | 本轮原版运行 | 优化状态 |
-|---|---|---:|---|
-| Sunfish | startpos，`go movetime 10000`，单核搜索 | 7.047s，平均 0.991 核 | 仅基线；自然返回 bestmove，未做固定工作量 A/B |
-| Gray–Scott | 512×512，5000 步，原版 PDE integrate，float64 | 新配对基线中位数 32.950s | 整方法版本 8.882s，3.710×；旧单 stencil 版本仍拒绝 |
-| Cirq | 22 qubit、depth 20、12 rounds、8 circuits / 8 进程、complex128 | 620.142s，105600 gates | 仅基线；实际 8 个 worker，峰值采样约 803% CPU |
+原 F4 自动提取一个状态方法：54 个 Expr、24 次求值、2 次写入，保原代码/端口/world 来源。输入类型是运行时守卫的候选约束。规则不按 workload、函数或字段名称选择；原程序未修改。
 
-Sunfish 返回 `bestmove d2d4 ponder d7d5`，定时搜索自然提前返回，因此历史运行秒数不能作为固定工作量加速比较。Cirq 最大 norm error 为 1.22e-14；与历史同配置结果的 norm/Z0 标量一致，不代表已逐元素比较完整 state vector。进程 RSS 求和峰值约 4.74GiB，可能重复计算共享页，采样间隔 2 秒。
+公共 `ResourceSchedule/v2` 将逻辑值、物化版本和物理 slot 分开。真实图有 20 个任务、8 个逻辑值、12 个物化版本、6 个 slot：分配不代表值就绪；覆盖旧 slot 前所有消费者必须 happens-before；外部 COMMIT 在完整 success fence 后执行。最后写回与 private shadow 共用一个逻辑值，各自保物化 ready 时间。v1 序列化保持不变。
 
-## Implemented / Verified：真实有状态方法闭环
+统一 recipe 引用同一份正文/来源及原硬件库存，没有展开 5000 步。完整重放后经原 C++20 backend 降低，build ID 与 library SHA 和此前实测版本相同，未引入新数学实现。recipe 94,322B；源区域含内联 provenance 约 2.8MB。
 
-原 F4/UnitFacts 自动发现唯一可接受的有状态方法，机械提取 54 个 Expr、24 次求值、2 次有序写入、2 个数组及 5 个标量字段输入，保原 SourceRef/CodeID/world。接收者、字段和函数名称都不参与规则选择；静态分析未执行目标。
+物理预算：workspace 8,454,304B + 外部数组 4,243,600B = 12,697,904B，声明预算 32MiB。CPU 0–3 / 4 线程显式指定、未排名；内存页 UNBOUND。通用 makespan solver 已接 v2，按 4 个 workspace slot 计费，不重复计算 12 个物化版本。真实逐任务成本缺失，仍返回 UNRESOLVED，不补零；未证明联合硬件或全局时间最优。
 
-规划区分 slice alias、已计算的不可变临时值和 call-local storage epoch。跨写入仍被消费的旧计算值物化保留；stencil RHS 完成后才写 private shadow，成功后提交原 ROI。11 个阶段共享 4 个 payload slot；workspace 8,454,304B，外部数组 4,243,600B，总 region payload 12,697,904B，预算 32MiB。CPU 0–3 来自原硬件库存，4 线程显式指定且未排名；内存页 UNBOUND。不是进程 RSS、物理驻留或全局最优声明。
+轻量运行包 40,550B，复用原库字节；无需 catalog、完整图、planner 或 g++。原入口自然 import 后装配类方法；真实 20 步 u/v、time、dt 逐位相同，native 20 / fallback 0，未导入 compiler/codegen/analysis/IR/optimization。仍依赖原应用源码、Python/NumPy 和系统共享库，不是独立 C++ 主程序。
 
-后端 C++20 / stateful ABI v1 按该计划执行，一次原方法调用对应一次 native 调用；`np.power` 复用原 NumPy native ufunc，不换成乘法。该 provider 精确绑定 NumPy 2.5.2、加载二进制和实验性 capsule ABI；没有改全局环境或重写算子数学。
+## 性能证据分开报告
 
-完整原 `integrate` 保留外层 5000 步、ghosts、dt、stdout、PNG。预热 1 对、交替 AB/BA 正式 3 对，原版 library 线程数 1，候选区域 4；无诊断函数 trace/profiler，计时包含构造和原程序输出，排除进程启动/候选加载。
+均为真实 Gray–Scott、512×512、5000 步、float64。原版 native library 1 线程；候选区域 4 线程。保留原积分、ghosts、dt、日志和 PNG；不减少步骤或降低精度，无诊断函数 trace/profiler。原 baseline 最后 dt=0 的行为保留。
 
-| 秒 | 原版 | 整方法 C++ |
-|---|---:|---:|
-| samples | 32.150804 / 33.303012 / 32.949516 | 8.908676 / 8.872576 / 8.881688 |
-| median | 32.949516 | 8.881688 |
-| min–max | 32.150804–33.303012 | 8.872576–8.908676 |
-| stdev | 0.590266 | 0.018773 |
+| 范围 | 预热 / 正式配对 | 原版 | native | 比率 |
+|---|---|---:|---:|---:|
+| 进程内完整积分，中位数 | 1 / 3 | 32.949516s | 8.881688s | 3.709826× |
+| 独立进程候选自动入口，中位数 | 1 / 3 | 50.793170s | 9.729574s | 5.220493× |
+| 独立进程正常成本门，一次观察 | 0 / 1 | 50.341570s | 9.780156s | 5.147318× |
 
-**3.709826×，TRANSFORM_UNDER_CONTRACT。** 三次正式运行共 15000 次 native、0 fallback；区域、20 步 trajectory、完整积分的 u/v 逐位、数组对象身份、dt、dump、stdout 和 PNG 字节均一致。原 baseline 最后 dt=0 的行为保留。更改标量或调用者写数组后重新读取；替换嵌套 callee 回原执行；数值失败在外部零写时拒绝。
+独立进程候选原始样本：baseline `[50.290012, 50.893130, 50.793170]`；native `[9.729525, 9.729574, 9.779819]`。stdev 分别 0.323242s、0.029023s；完整启动、导入、加载、守卫、应用 I/O 和报告 I/O 均计入。
 
-成本门以完整 A/B 样本选择后，非 trial 的正常守卫入口另验证 20 步、native 20 / fallback 0、状态及时间逐位一致。没有将此 20 步验证冒充第二组完整 A/B，也没有取得独立进程自动部署资格。完整程序仍由 Python 宿主执行，只有发现的方法区域下放 C++。
+候选正式 15000 次 native、0 fallback；正常成本门另 5000 次 native、0 fallback。新入口的报告字段、日志、PNG 一致，明确排除原程序输出的观察者 `wall_seconds` 计时字段；新轻量边界另做 20 步完整数组逐位核对。此前进程内完整积分已逐位比较最终 u/v。不同范围不混算，单次正常入口不冒充三次统计。
 
-实际 catalog 冷加载约 81 秒，首次 source 准备约 11 秒，复用查询约 4.33 秒；不能仅报后者。带内联来源的 region JSON 约 2.8MB，未按调用次数复制，来源引用的进一步共享仍需改进。
+可确认实现了整方法一次 FFI、写入屏障间融合、跨屏障物化保留、固定 buffer 复用及 4 线程并行。尚未做各机制的消融，不能分别归因加速贡献。5.22× 与 3.71× 使用相同库、不同测量边界，不代表新增数学优化。
 
-## Rejected：此前只替换单 stencil 的完整 A/B
+正常路径最初由 DECLARED_MODEL bootstrap 选择：候选完整进程观测 + 独立冷 import/metadata gate 组件，max 样本 0.011253s，不是理论上界。真实正常入口完成后，单对完整时钟另立 OBSERVED 总成本事实与 metadata replay；未把候选标签改成正常观测，也未宣称新的 observed profile 已再次运行。精确 argv/pin/CPU/内存范围变化会拒绝旧成本。
 
-原源码及适配器哈希未变。静态图自动发现的 stencil 区域已有通用 C++20 实现；本次用显式安装的候选路径验证，外层 Euler 更新、ghosts、5000 步循环、dt、stdout、PNG 输出继续执行原程序。原版 native library 线程数为 1；候选区域显式使用 4 个 CPU（0–3），内存页未绑定。
+## 当前边界与下一步
 
-预热 1 对、正式 3 对，交替 AB/BA；未开启函数级 trace 或 profiler。计时包含原 integrate 的输出，不是独立进程自动部署时间。
+- 建图：还需完整搜索、多进程任务、一般 alias/content/effects 和 caller 循环状态连接；catalog 冷加载约 81s、首次源准备约 11s，复用查询 4.33s，仍需加速及压缩共享来源。
+- 化简与硬件规划：当前是选定实现的有序任务图；缺有出处的逐任务与全部边界成本、自动 worker/分块/NUMA/放置、CPU/GPU/内存/存储联合调度。stage 估计不冒充完整 native/Python 调用成本。
+- 交付：尚未支持一般控制、复杂 dtype、跨进程及异步设备后端、入口自身定义目标的装配和独立 C++ 宿主。所有可能别名的调用覆盖未证明，运行报告保留这一限制。
 
-| 秒 | 原版 | C++ 区域版本 |
-|---|---:|---:|
-| 原始样本 | 49.182733 / 33.752529 / 32.215041 | 38.763393 / 37.730605 / 23.272260 |
-| median | 33.752529 | 37.730605 |
-| min–max | 32.215041–49.182733 | 23.272260–38.763393 |
-| stdev | 9.384008 | 8.661078 |
+CPU 主测试组：Sunfish 单核搜索 7.047s；Gray–Scott 如上；Cirq 22 qubit / 8 进程 620.142s。旧单 stencil 完整 A/B 0.894566× 继续拒绝。自建 temporal_reaction 的约 10× 仅为回归，不能归给这三个程序。
 
-**0.894566×，not profitable，NO_OP。** 候选中位数增加约 11.8%；样本波动较大，未筛样或重跑获取正结果。现有通用 `select_measured` 根据同一原始样本返回成本拒绝，保留原执行。
-
-区域、单步、20 步 trajectory、完整 integrate 的 u/v 状态逐位、dt、dump 次数、stdout 和 PNG 字节比较通过；正式候选共 30000 次 native、0 fallback。此结论验证了区域正确性与该配置的成本拒绝，没有证明全程序已编译或硬件安排最优。
-
-## 三阶段实际边界与下一步
-
-| 阶段 | 已有能力 | 真实测试组暴露的主要缺口 |
-|---|---|---|
-| 建图 | F0–F4、共享 function/loop、硬件库存、有限动态绑定；实际有状态方法的读/写/版本/原调用来源 | 完整搜索及多进程任务依赖；通用 alias/content/effect 闭合；catalog 冷加载和共享来源存储 |
-| 化简与硬件规划 | 有序写入间融合、跨 barrier 物化、payload liveness/slot 复用、资源绑定、完整 A/B 成本门 | 将 state epoch/外部 ROI commit/成功 fence 接入共享 recipe；宏观操作成本与联合 worker/分块/放置/搬运/同步时序 |
-| C++20 交付 | 受约束数组及状态方法、原 NumPy provider、源码/ABI/资源守卫与事务 fallback | 一般控制/复杂 dtype/跨进程后端、正式自动入口、完整独立 C++ 宿主 |
-
-下一步将新区域引用接到共同宏观 recipe，明确每 epoch 的值、独立 storage slot、成功屏障与外部提交，不能把多次修改 storage 冒充旧单写者 fresh-output/EXPORT。随后补有来源的任务与部署成本、真实搜索/进程依赖。保持循环正文共享、不保存逐次 tensor 值，局部算子继续交给 GCC/LLVM、成熟库或外部算子后端。
-
-先前约 **10.256×** 来自自建 `temporal_reaction` 点式递推，仅保留为受约束回归案例，不能归给上述三个程序、LeWM 或通用宏观编译器。统一 recipe 的既有贯通结果仍有效，其实测成本模型和全程序推广尚未完成。
-
-当前原始结果：`artifacts/current/experiments/real-cpu-suite-v1/current-results.json`、`gray-scott/stateful-integration.json`；版本化配置及摘要：`artifacts/baseline/cpu-workloads.json`、`artifacts/baseline/formal-frontend-results.json`。
+当前证据在 `artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-recipe-current/` 和 `stateful-auto-v1/`；版本化摘要见 `artifacts/baseline/formal-frontend-results.json`、`cpu-workloads.json`。

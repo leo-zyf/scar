@@ -469,3 +469,8 @@ call-local storage epoch 只记录本区域有序写入推进，不是全局 Log
 预算包含引用的外部状态数组与固定 workspace payload，排除其他程序数组、allocator 元数据、线程 scratch 和 RSS，不把 cache 容量当 malloc 预算。
 Q 保原算术依赖与次序、dtype 和独立 provider；当前只在声明的 stage/存储模型内规划，不宣称整程序闭合或 makespan/物理最优。
 一份共享方法区域可由原积分程序调用 5000 次，不复制或 unroll 这 5000 次正文；外围调用、边界更新与 I/O 的证明范围仍各自保留。
+
+公共 `ResourceSchedule/v2` 将不可变 LogicalValue、带独立 ready 的 Materialization、物理 StorageSlot/Region 分开。
+同 slot 不同版本覆盖前，所有旧版本重叠消费者须 happens-before；ALLOCATION 不产生值就绪。
+完整 SUCCESS_FENCE 后才准外部 COMMIT。最后写回若由 full snapshot、全部 ROI 覆盖及 exclusive-state 合同证明完整结果等值，沿用 shadow LogicalValue 的 producer，仅新增外部物化 ready；早期 overlay 不冒充原中间状态。
+这里表达选定实现的任务顺序，不能直接将全部调度边当成程序固有依赖。成本、别名覆盖和全程序闭合仍各自需要证据，v1 wire 不变。

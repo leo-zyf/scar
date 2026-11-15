@@ -12,6 +12,7 @@ from hashlib import sha256
 import json
 
 from .schedule import ResourceSchedule, TaskKind, schedule_document, validate_schedule
+from scar.ir.versioned_schedule import VersionedResourceSchedule
 
 
 _MODEL_ASSUMPTIONS = [
@@ -185,6 +186,26 @@ def hardware_model_skeleton(plan, schedule, *, input_shapes=None) -> dict:
     }
 
 
+def _allocation_view(schedule):
+    """Adapt storage events, leaving the common makespan search unchanged.
+
+    V1 allocation identities are materializations. V2 identities are physical
+    slots: multiple immutable content versions/replicas never allocate a slot
+    again. The original public graph is still validated and hashed as-is.
+    """
+    if isinstance(schedule, VersionedResourceSchedule):
+        records = {slot.id: slot for slot in schedule.storage_slots
+                   if slot.ownership == "SCHEDULE" and slot.allocated_by is not None}
+        return records, {task.id: task.allocates for task in schedule.tasks}, {
+            task.id: task.releases for task in schedule.tasks}
+    records = {material.id: material for material in schedule.materializations
+               if material.ownership == "SCHEDULE" and material.allocated_by is not None}
+    return records, {
+        task.id: tuple(key for key in task.writes if key in records)
+                 if task.kind is TaskKind.ALLOCATION else () for task in schedule.tasks}, {
+        task.id: task.reads if task.kind is TaskKind.RELEASE else () for task in schedule.tasks}
+
+
 def _problem(schedule, task_costs, task_placements, resource_capacities,
              memory_capacities, materialization_sizes, memory_locations):
     unresolved = []
@@ -238,23 +259,34 @@ def _problem(schedule, task_costs, task_placements, resource_capacities,
             if not _integer(capacity, 1):
                 missing(f"resource_capacities.{resource}", "explicit positive integer capacity required")
             demands[task.id][resource] = units
-    allocations = {m.id: m for m in schedule.materializations
-                   if m.ownership == "SCHEDULE" and m.allocated_by is not None}
+    allocations, _, _ = _allocation_view(schedule)
+    versioned = isinstance(schedule, VersionedResourceSchedule)
+    if versioned:
+        for field, values in (("materialization_sizes", sizes), ("memory_locations", locations)):
+            for key in values.keys() - allocations.keys():
+                missing(f"{field}.{key}",
+                        "v2 accepts scheduled physical slot IDs only, not materialization or external slot IDs")
     allocation_model = {}
     for key, material in allocations.items():
         size, location = sizes.get(key), locations.get(key)
+        valid_size = _integer(size)
         if not _integer(size):
-            missing(f"materialization_sizes.{key}", "explicit nonnegative byte size required; symbolic bytes need instantiation")
+            missing(f"materialization_sizes.{key}",
+                    "explicit physical slot capacity_bytes required" if versioned else
+                    "explicit nonnegative byte size required; symbolic bytes need instantiation")
+        elif versioned and size != material.capacity_bytes:
+            valid_size = False
+            missing(f"materialization_sizes.{key}", "v2 size must equal the original physical slot capacity_bytes")
         if not isinstance(location, str) or not location:
             missing(f"memory_locations.{key}", "explicit budget pool required; UNBOUND is not a NUMA placement")
         elif not _integer(memory_caps.get(location)):
             missing(f"memory_capacities.{location}", "explicit incremental byte budget required; total capacity is not free budget")
-        if _integer(size) and isinstance(location, str) and location and _integer(memory_caps.get(location)):
+        if valid_size and isinstance(location, str) and location and _integer(memory_caps.get(location)):
             allocation_model[key] = (location, size)
     return durations, demands, dict(capacities), dict(memory_caps), allocation_model, unresolved
 
 
-def solve_resource_schedule(schedule: ResourceSchedule, *, task_costs=None,
+def solve_resource_schedule(schedule: ResourceSchedule | VersionedResourceSchedule, *, task_costs=None,
                             task_placements=None, resource_capacities=None,
                             memory_capacities=None, materialization_sizes=None,
                             memory_locations=None, model_instantiation=None,
@@ -266,6 +298,11 @@ def solve_resource_schedule(schedule: ResourceSchedule, *, task_costs=None,
     lists of exclusive resource names. Every task needs both fields, including
     explicit zero-duration/control-only tasks. Each owned allocation also needs
     instantiated bytes, a memory pool, and that pool's incremental byte budget.
+    For a v2 graph, the legacy argument names materialization_sizes and
+    memory_locations refer exclusively to SCHEDULE-owned physical slot IDs;
+    sizes must exactly equal slot.capacity_bytes. They do not count logical
+    versions or external roots. The v2 graph's separate all-region budget is
+    enforced by validate_schedule, not substituted for these pool budgets.
 
     Search enumerates eligible task starts and advances to completion events.
     For constant, nonpreemptive durations/resources and allocation lifetimes,
@@ -300,6 +337,22 @@ def solve_resource_schedule(schedule: ResourceSchedule, *, task_costs=None,
         "solution": None, "lower_bound_ticks": None, "gap_ticks": None,
         "relative_gap": None, "states_explored": 0, "search_budget": search_budget,
     }
+    versioned = isinstance(schedule, VersionedResourceSchedule)
+    if versioned:
+        result["storage_accounting"] = {
+            "allocation_identity": "SCHEDULE_OWNED_PHYSICAL_STORAGE_SLOT_ID",
+            "sizes_argument": "materialization_sizes", "pools_argument": "memory_locations",
+            "size_authority": "EXACT_ORIGINAL_SLOT_CAPACITY_BYTES",
+            "memory_capacities_scope": "EXPLICIT_SCHEDULED_ALLOCATION_POOL_BUDGETS",
+            "external_storage_in_solver_allocation_model": False,
+            "source_graph_budget_scope": schedule.budget_scope,
+            "source_graph_budget_bytes": schedule.budget_bytes,
+            "source_graph_budget_validated_separately": True,
+        }
+        result["model_assumptions"] += [
+            "VERSIONED_GRAPH_MEMORY_IS_COUNTED_PER_PHYSICAL_SLOT_NOT_PER_MATERIALIZATION",
+            "SOURCE_GRAPH_REGION_BUDGET_INCLUDING_EXTERNAL_STORAGE_IS_VALIDATED_SEPARATELY",
+        ]
     if unresolved:
         return result
     result["model"] = {"task_durations_ticks": durations, "resource_demands": demands,
@@ -308,14 +361,14 @@ def solve_resource_schedule(schedule: ResourceSchedule, *, task_costs=None,
                                                       for key, (pool, size) in allocation_model.items()}}
     if model_instantiation is not None:
         result["model"]["instantiation"] = deepcopy(dict(model_instantiation))
+    if versioned:
+        result["model"]["allocation_identity"] = "PHYSICAL_STORAGE_SLOT_ID"
     result["model_sha256"] = semantic_sha256(result["model"])
     tasks = {task.id: task for task in schedule.tasks}
     order = validate_schedule(schedule)["topological_order"]
     ids = tuple(sorted(tasks))
     dependencies = {key: set(tasks[key].depends_on) for key in ids}
-    allocation_writes = {key: tuple(m for m in tasks[key].writes if m in allocation_model)
-                         if tasks[key].kind is TaskKind.ALLOCATION else () for key in ids}
-    release_reads = {key: tasks[key].reads if tasks[key].kind is TaskKind.RELEASE else () for key in ids}
+    allocation_records, allocation_writes, release_reads = _allocation_view(schedule)
 
     def lower_bound(time, completed, running):
         remaining_finish = {}
@@ -434,9 +487,10 @@ def solve_resource_schedule(schedule: ResourceSchedule, *, task_costs=None,
     release_task = {material: key for key in ids for material in release_reads[key]}
     lifetimes = []
     for material, (pool, size) in allocation_model.items():
-        allocation = next(m.allocated_by for m in schedule.materializations if m.id == material)
+        allocation = allocation_records[material].allocated_by
         release = release_task.get(material)
-        lifetimes.append({"materialization": material, "memory_pool": pool, "bytes": size,
+        lifetimes.append({"storage_slot" if versioned else "materialization": material,
+                          "memory_pool": pool, "bytes": size,
                           "start_ticks": best_starts[allocation],
                           "end_ticks": best_starts[release] + durations[release] if release else best_time,
                           "retained_through_makespan": release is None})

@@ -11,17 +11,19 @@ from scar.optimization.deployment_gate import MEMORY_SCOPE, deployment_gate, ver
 
 
 def setup_gate(tmp_path, *, legacy=False, components=False, launch_policy='COST_GATED_DEPLOYMENT', argv=None,
-               profile_cpu_ids=None, profile_required_memory_bytes=64, profile_memory_scope=MEMORY_SCOPE):
+               profile_cpu_ids=None, profile_required_memory_bytes=64, profile_memory_scope=MEMORY_SCOPE,
+               native_ids=None, actual_memory_scope=MEMORY_SCOPE):
     tmp_path.mkdir(parents=True, exist_ok=True)
     entry = tmp_path / 'entry.py'; entry.write_text("raise RuntimeError('must not execute')\n")
     ids = dict(zip(('build_id', 'loop_sha256', 'strategy_sha256', 'execution_plan_sha256', 'contract_sha256'),
                    (letter * 64 for letter in 'abcde')))
+    if native_ids is not None: ids = native_ids
     scope = dict(kind='AUTOMATIC_RUNNER', entry_path=str(entry), entry_sha256=sha256(entry.read_bytes()).hexdigest(),
         argv=[str(entry), '--out', str(tmp_path / 'output.npy')] if argv is None else argv,
         runner_implementation_sha256='f' * 64)
     actual = dict(bundle_ids=ids, admission_sha256='1' * 64, entry_scope=scope,
                   reuse_count=1, available_cpu_ids=[0, 1], memory_budget_bytes=64,
-                  required_cpu_ids=[0, 1], required_memory_bytes=64, memory_scope=MEMORY_SCOPE)
+                  required_cpu_ids=[0, 1], required_memory_bytes=64, memory_scope=actual_memory_scope)
     context = dict(boundary='FRESH_PROCESS', workload_id='loop', artifact_id=ids['build_id'],
         cpu_ids=[0, 1] if profile_cpu_ids is None else profile_cpu_ids,
         required_memory_bytes=profile_required_memory_bytes, memory_scope=profile_memory_scope,
@@ -104,3 +106,16 @@ def test_legacy_scope_reuse_resources_and_models_keep_fail_closed_contracts(tmp_
     forged = json.loads(path.read_bytes()); forged['total_costs']['native']['seconds'] = 0
     invalid = deployment_gate(forged, **actual)
     assert invalid['decision'] == 'NO_OP' and invalid['frontier'][0]['field'] == 'deployment_plan'
+
+
+def test_stateful_ids_require_total_region_payload_scope(tmp_path):
+    from scar.optimization.deployment_gate import STATEFUL_MEMORY_SCOPE
+    ids=dict(zip(('build_id','region_sha256','plan_sha256','contract_sha256'),
+                 (letter*64 for letter in 'abcd')))
+    path,actual,_=setup_gate(tmp_path,native_ids=ids,profile_memory_scope=STATEFUL_MEMORY_SCOPE,
+                            actual_memory_scope=STATEFUL_MEMORY_SCOPE)
+    result=deployment_gate(path,**actual)
+    assert result['decision']=='LOAD_NATIVE_CANDIDATE'
+    assert 'EXTERNAL_INPUTS' not in result['current_resources']['budget_excludes']
+    assert deployment_gate(path,**{**actual,'memory_scope':MEMORY_SCOPE})['decision']=='NO_OP'
+    assert deployment_gate(path,**{**actual,'memory_budget_bytes':63})['decision']=='NO_OP'

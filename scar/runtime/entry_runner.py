@@ -15,6 +15,8 @@ import runpy
 import sys
 from types import ModuleType
 
+_STATEFUL = 'scar.stateful-runtime-contract'
+
 
 def runner_implementation_sha256():
     package = Path(__file__).resolve().parents[1]
@@ -22,6 +24,7 @@ def runner_implementation_sha256():
              "runtime/loop_contract.py", "runtime/bundle_metadata.py", "runtime/entry_cli.py",
              "runtime/__init__.py", "entrypoint.py", "__main__.py", "trace/code_snapshot.py", "trace/__init__.py",
              "optimization/deployment_gate.py", "optimization/deployment_cost.py", "optimization/__init__.py")
+    names += ('runtime/native_stateful.py', 'runtime/stateful_guard.py', 'runtime/stateful_contract.py')
     files = [{"path": name, "sha256": sha256((package / name).read_bytes()).hexdigest()} for name in names]
     implementation = dict(name=sys.implementation.name, cache_tag=sys.implementation.cache_tag,
                           version=list(sys.implementation.version), sys_version=sys.version)
@@ -72,8 +75,14 @@ class _Finder(importlib.abc.MetaPathFinder):
 
 class _Scope:
     def __init__(self, artifact):
-        from .loop_guard import guarded_loop_function, SourceMismatch
-        self.artifact, self.make_guard, self.mismatch = artifact, guarded_loop_function, SourceMismatch
+        self.stateful = artifact.contract.get('schema') == _STATEFUL
+        if self.stateful:
+            from .stateful_guard import guarded_stateful_function, SourceMismatch
+            make_guard = guarded_stateful_function
+        else:
+            from .loop_guard import guarded_loop_function, SourceMismatch
+            make_guard = guarded_loop_function
+        self.artifact, self.make_guard, self.mismatch = artifact, make_guard, SourceMismatch
         self.source = Path(artifact.contract["source"]["path"]).resolve()
         self.name = artifact.contract["source"]["qualname"]
         self.active, self.bindings, self.seen, self.frontier = True, [], set(), []
@@ -81,15 +90,34 @@ class _Scope:
     def attach(self, module, name, *, natural):
         if not self.active or id(module) in self.seen: return
         self.seen.add(id(module))
-        if type(module) is not ModuleType or _file(module) != self.source or not self.name.isidentifier():
-            self.frontier.append("source_is_not_a_direct_module_function"); return
+        parts = self.name.split('.')
+        if (type(module) is not ModuleType or _file(module) != self.source
+                or any(not part.isidentifier() for part in parts)
+                or not self.stateful and len(parts) != 1):
+            self.frontier.append("source_has_no_supported_module_or_class_boundary"); return
         spec = vars(module).get("__spec__")
         if not natural and (spec is None or getattr(spec, "_initializing", False)
                             or type(getattr(spec, "loader", None)) is not SourceFileLoader):
             self.frontier.append("preloaded_source_not_a_completed_standard_module"); return
-        original = vars(module).get(self.name)
+        owner, attribute = module, parts[-1]
         try:
-            guarded = self.make_guard(original, self.artifact, exclusive_inputs=True)
+            for part in parts[:-1]:
+                if type(owner) not in (ModuleType, type):
+                    raise ValueError('custom boundary owner')
+                owner = vars(owner)[part]
+            if type(owner) not in (ModuleType, type):
+                raise ValueError('custom boundary owner')
+            descriptor = vars(owner).get(attribute)
+            if type(descriptor) is staticmethod:
+                original, wrap, receiver_owner = descriptor.__func__, staticmethod, None
+            else:
+                original, wrap = descriptor, lambda value: value
+                receiver_owner = owner if type(owner) is type else None
+            if self.stateful:
+                guarded = self.make_guard(original, self.artifact,
+                    owner=receiver_owner, exclusive_inputs=True)
+            else:
+                guarded = self.make_guard(original, self.artifact, exclusive_inputs=True)
         except (self.mismatch, ValueError, KeyError) as error:
             self.frontier.append("source_guard_rejected:" + str(error)); return
         scope = self
@@ -98,9 +126,11 @@ class _Scope:
             return guarded(*args, **kwargs) if scope.active else original(*args, **kwargs)
         binding.scar_stats = guarded.scar_stats
         binding.scar_artifact = self.artifact
-        vars(module)[self.name] = binding
+        installed = wrap(binding)
+        setattr(owner, attribute, installed)
         self.bindings.append(dict(module=module, module_name=name, original=original,
-                                  binding=binding, stats=guarded.scar_stats, natural_import=natural))
+            owner=owner, attribute=attribute, descriptor=descriptor, installed=installed,
+            binding=binding, stats=guarded.scar_stats, natural_import=natural))
 
     def finish(self):
         self.active = False
@@ -114,8 +144,8 @@ class _Scope:
                 pair = replacements.get(id(value))
                 if pair is not None and value is pair[0]: namespace[name] = pair[1]
         for row in self.bindings:
-            if vars(row["module"]).get(self.name) is row["binding"]:
-                vars(row["module"])[self.name] = row["original"]
+            if vars(row['owner']).get(row['attribute']) is row['installed']:
+                setattr(row['owner'], row['attribute'], row['descriptor'])
 
 
 @contextmanager
@@ -195,7 +225,10 @@ def run_script(entry, argv, *, bundle, expected_admission_sha256, exclusive_inpu
     metadata = inspect_bundle(bundle, expected_admission_sha256=expected_admission_sha256)
     if Path(metadata["contract"]["source"]["path"]).resolve() == entry:
         return _execute(entry, argv, None, "entry_defined_loop_main_installation_not_supported")
-    from .native_loop import load
+    if metadata['contract'].get('schema') == _STATEFUL:
+        from .native_stateful import load
+    else:
+        from .native_loop import load
     artifact = load(bundle, expected_admission_sha256=expected_admission_sha256)
     return _execute(entry, argv, _Scope(artifact), "ordinary_import_source_boundary")
 

@@ -7,7 +7,7 @@ State · Control · Action · Resource：面向Python程序的宏观编译器。
 当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
 已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
 完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
-主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 5000 步的有状态方法完整 A/B：32.95s→8.88s，**3.71×**，状态及输出逐位一致；旧单 stencil 版本 0.895× 仍拒绝。另两项只有基线，自建点式递推仅为回归案例，详见 [当前状态](docs/STATUS.md)。
+主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 5000 步：进程内完整积分 **3.71×**；相同 C++ 库的独立进程自动入口 **5.22×**（3 对中位数），正式成本门另作一次完整验收。不同测量范围分开报告。旧单 stencil 版本 0.895× 仍拒绝，另两项只有基线，详见 [当前状态](docs/STATUS.md)。
 LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
 后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
 
@@ -20,6 +20,18 @@ scar compile-stateful --source /path/to/program.py --catalog /path/to/catalog --
 ```
 
 已保留的原 F4 区域可用 `--region REGION.json` 代替 `--source/--catalog`，避免重复目录加载。运行边界为 `scar.compiler.stateful_runtime.install_stateful_regions`；成本选择与合法性分开，未测产物仅可显式 trial。原 NumPy provider 精确绑定版本/二进制，无跨版本 ABI 保证。
+
+共享执行图与原入口交付：
+
+```bash
+scar recipe plan-stateful --region REGION.json --plan STAGE_PLAN.json --out /path/to/recipe
+scar recipe estimate --recipe /path/to/recipe/recipe.json --out /path/to/estimate.json
+scar recipe lower --recipe /path/to/recipe/recipe.json --out /path/to/lowered
+scar export-stateful-runtime --artifact /path/to/lowered/native --selection SELECTION.json --out /path/to/bundle
+scar run --bundle /path/to/bundle --admission-sha256 PRODUCER_PIN --exclusive-inputs --memory-budget-bytes 33554432 --reuse-count 5000 --deployment-plan COST_PLAN.json --report /path/to/run.json -- /path/to/entry.py [arguments]
+```
+
+缺少成本计划时保留原执行；`--measure-candidate` 显式测候选，不表示部署盈利。公共资源图 v2 保状态版本、独立 storage slot、就绪与提交屏障；缺任务成本继续 UNKNOWN。轻量包仍需要原源码、Python/NumPy 和系统库，尚非独立 C++ 主程序。
 
 三阶段区域闭环（CPU、精确 float64 二维 ndarray；其他输入回到原执行）：
 

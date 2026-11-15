@@ -18,8 +18,12 @@ def main(argv=None):
     plan.add_argument('--loop', required=True); plan.add_argument('--strategy', required=True)
     plan.add_argument('--plan', required=True); plan.add_argument('--layout')
     plan.add_argument('--cpu-hierarchy'); plan.add_argument('--out', required=True)
+    stateful = commands.add_parser('plan-stateful', help='project one verified transactional array call into a macro recipe')
+    stateful.add_argument('--region', required=True); stateful.add_argument('--plan', required=True)
+    stateful.add_argument('--cpu-hierarchy'); stateful.add_argument('--out', required=True)
     estimate = commands.add_parser('estimate', help='estimate without mutating a recipe or executing its target')
     estimate.add_argument('--recipe', required=True); estimate.add_argument('--worker-profile')
+    estimate.add_argument('--task-costs', help='sourced direct task costs for the stateful recipe profile')
     estimate.add_argument('--out', required=True)
     lower = commands.add_parser('lower', help='lower exactly the recipe consumed by estimation')
     lower.add_argument('--recipe', required=True); lower.add_argument('--out', required=True)
@@ -34,9 +38,23 @@ def main(argv=None):
             layout=layout, cpu_hierarchy=args.cpu_hierarchy, out=args.out)
         result = dict(recipe_id=recipe['recipe_id'], profile=recipe['profile'],
                       recipe=str(Path(args.out).absolute()/'recipe.json'), native_compiled=False)
+    elif args.command == 'plan-stateful':
+        from scar.optimization.stateful_recipe import make_stateful_recipe
+        recipe = make_stateful_recipe(args.region, args.plan, cpu_hierarchy=args.cpu_hierarchy, out=args.out)
+        result = dict(recipe_id=recipe['recipe_id'], profile=recipe['profile'],
+                      recipe=str(Path(args.out).absolute()/'recipe.json'), native_compiled=False)
     elif args.command == 'estimate':
-        from scar.optimization.loop_recipe import estimate_loop_recipe
-        value = estimate_loop_recipe(args.recipe, worker_profile=args.worker_profile)
+        from scar.ir.execution_recipe import read_recipe
+        recipe = read_recipe(args.recipe)
+        if recipe['profile'] == 'cpu-temporal-loop-v1':
+            from scar.optimization.loop_recipe import estimate_loop_recipe
+            if args.task_costs: parser.error('--task-costs is only supported by the stateful recipe profile')
+            value = estimate_loop_recipe(recipe, worker_profile=args.worker_profile)
+        elif recipe['profile'] == 'cpu-stateful-array-region-v1':
+            from scar.optimization.stateful_recipe import estimate_stateful_recipe
+            if args.worker_profile: parser.error('--worker-profile is only supported by the temporal loop recipe profile')
+            value = estimate_stateful_recipe(recipe, task_costs=args.task_costs)
+        else: parser.error('unsupported execution recipe profile')
         _write(args.out, value)
         result = dict(recipe_id=value['recipe_id'], estimate=str(Path(args.out).absolute()),
                       status=value.get('status', value.get('timing', {}).get('status', 'UNSPECIFIED')),

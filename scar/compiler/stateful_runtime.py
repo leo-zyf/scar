@@ -1,239 +1,63 @@
-"""Guard a discovered mutable-state region at its original Python boundary.
-
-No content hashes or tensor snapshots are collected here. The caller grants
-exclusive region state for the duration of a synchronous call. Native code
-works transactionally and can decline only before committing external writes.
-"""
+"""Compatibility facade for the shared lightweight stateful boundary guards."""
 from contextlib import contextmanager
-from functools import wraps
-from hashlib import sha256
-import inspect
-import math
-import os
-from pathlib import Path
-import threading
-import types
 
+from scar.runtime import stateful_guard as _guard
+from scar.runtime.native_stateful import GuardFailure as _RuntimeGuardFailure
+from scar.runtime.stateful_guard import (_ordinary, _field,
+    _input, _lookup, _function_state, _same_function_state)
 from scar.compiler.runtime import SourceMismatch
-from scar.trace.code_snapshot import code_key
 
 
 def _function(source, value):
-    if (type(value) is not types.FunctionType or value.__closure__
-            or code_key(value.__code__) != source.code_key
-            or sha256(Path(source.path).read_bytes()).hexdigest() != source.sha256):
-        raise SourceMismatch('stateful source/code/closure differs from discovered boundary')
-    return value
+    try:
+        return _guard._function(source, value)
+    except _guard.SourceMismatch as error:
+        raise SourceMismatch(str(error)) from error
 
 
-def _ordinary(value):
-    cls = type(value)
-    if type(cls) is not type:
-        raise ValueError('custom receiver metaclass')
-    for base in cls.__mro__:
-        if base is object:
-            continue
-        if any(name in vars(base) for name in ('__getattribute__', '__getattr__', '__setattr__')):
-            raise ValueError('custom receiver attribute protocol')
-    dictionary = next((vars(base)['__dict__'] for base in cls.__mro__ if '__dict__' in vars(base)), None)
-    if (type(dictionary) is not types.GetSetDescriptorType
-            or dictionary.__name__ != '__dict__' or dictionary.__objclass__ not in cls.__mro__):
-        raise ValueError('receiver requires the ordinary instance dictionary descriptor')
-    fields = object.__getattribute__(value, '__dict__')
-    if type(fields) is not dict:
-        raise ValueError('receiver requires ordinary instance fields')
-    return fields
+class _ArtifactAdapter:
+    def __init__(self, artifact, selection):
+        from scar.compiler.stateful_model import validate_stateful_region
+        from scar.compiler.export_stateful import project_stateful_contract
+        validate_stateful_region(artifact.region)
+        self.original = artifact
+        self.contract = project_stateful_contract(artifact, selection, require_selection=False)
+        self.report = artifact.report
 
-
-def _field(value, name):
-    fields = _ordinary(value)
-    # Data descriptors can override an instance dictionary. Do not execute one.
-    for base in type(value).__mro__:
-        if name in vars(base):
-            descriptor = vars(base)[name]
-            descriptor_type = type(descriptor)
-            if type(descriptor_type) is not type:
-                raise ValueError('state descriptor has a custom metaclass')
-            if any('__set__' in vars(parent) or '__delete__' in vars(parent)
-                   for parent in descriptor_type.__mro__):
-                raise ValueError('state input has a data descriptor')
-            break
-    return fields[name]
-
-
-def _input(path, bound):
-    value = bound[path[0]]
-    for name in path[1:]:
-        value = _field(value, name)
-    return value
-
-
-def _lookup(path, bound, globals):
-    """Resolve only ordinary global/module and exact staticmethod lookups."""
-    value = bound[path[0]] if path[0] in bound else globals[path[0]]
-    for name in path[1:]:
-        if type(value) is types.ModuleType:
-            value = vars(value)[name]
-        elif type(value) is type:
-            descriptor = vars(value)[name]
-            if type(descriptor) is not staticmethod:
-                raise ValueError('callee requires exact staticmethod')
-            value = descriptor.__func__
-        else:
-            fields = _ordinary(value)
-            if name in fields:
-                raise ValueError('instance shadows a discovered callee')
-            descriptor = next(vars(base)[name] for base in type(value).__mro__ if name in vars(base))
-            if type(descriptor) is not staticmethod:
-                raise ValueError('callee requires exact staticmethod')
-            value = descriptor.__func__
-    return value
-
-
-def _function_state(fn):
-    return (fn.__code__, fn.__defaults__,
-            tuple((key, id(value)) for key, value in (fn.__kwdefaults__ or {}).items()))
-
-
-def _same_function_state(fn, state):
-    return (fn.__code__ is state[0] and fn.__defaults__ is state[1]
-            and tuple((key, id(value)) for key, value in (fn.__kwdefaults__ or {}).items()) == state[2])
+    def run(self, arrays, scalars):
+        from scar.codegen.stateful import GuardFailure
+        try:
+            return self.original.run(arrays, scalars)
+        except GuardFailure as error:
+            raise _RuntimeGuardFailure(str(error)) from error
 
 
 def guarded_stateful_function(original, artifact, *, owner=None,
                               exclusive_inputs=False, selection=None, trial=False):
-    from scar.codegen.stateful import GuardFailure
-    from scar.compiler.stateful_model import validate_stateful_region
-    import numpy as np
-
-    region = artifact.region
-    validate_stateful_region(region)
-    _function(region.source, original)
-    if '__signature__' in vars(original) or '__wrapped__' in vars(original):
-        raise SourceMismatch('custom function signature metadata is outside the discovered call ABI')
-    signature = inspect.signature(original)
-    state = _function_state(original)
-    identity = artifact.report
-    stats = dict(native_calls=0, fallback_calls=0, reasons={})
-    callee_states = {}
-    for callee in region.callees:
-        # Receiver-dependent paths are resolved on each invocation below.
-        if callee.path[0] not in signature.parameters:
-            fn = _function(callee.source, _lookup(callee.path, {}, original.__globals__))
-            callee_states[callee.path] = (fn, _function_state(fn))
-    provider_targets = {}
-    for provider in region.providers:
-        if provider.module != 'numpy' or provider.symbol != 'power' or type(np.power) is not np.ufunc:
-            raise SourceMismatch('stateful provider has no admitted runtime binding')
-        provider_targets[provider.id] = np.power
-    written_inputs = {action.target for action in region.actions if action.kind == 'write'}
-
-    def fallback(reason, args, kwargs):
-        stats['fallback_calls'] += 1
-        stats['reasons'][reason] = stats['reasons'].get(reason, 0) + 1
-        return original(*args, **kwargs)
-
-    @wraps(original)
-    def call(*args, **kwargs):
-        if not exclusive_inputs or threading.active_count() != 1:
-            return fallback('exclusive_synchronous_state_contract', args, kwargs)
-        if (not _same_function_state(original, state)
-                or '__signature__' in vars(original) or '__wrapped__' in vars(original)):
-            return fallback('function_state_changed', args, kwargs)
-        try:
-            bound = signature.bind(*args, **kwargs)
-            bound.apply_defaults()
-            if owner is not None:
-                receiver = bound.arguments[region.parameter_names[0]]
-                if type(receiver) is not owner:
-                    raise ValueError('receiver class differs')
-            for callee in region.callees:
-                fn = _lookup(callee.path, bound.arguments, original.__globals__)
-                current = callee_states.get(callee.path)
-                if current is None:
-                    fn = _function(callee.source, fn)
-                    current = (fn, _function_state(fn))
-                    callee_states[callee.path] = current
-                if fn is not current[0] or not _same_function_state(fn, current[1]):
-                    raise ValueError('nested callee changed')
-            for provider in region.providers:
-                if _lookup(provider.lookup_path, bound.arguments, original.__globals__) is not provider_targets[provider.id]:
-                    raise ValueError('native provider changed')
-            arrays, scalars = {}, {}
-            for spec in region.inputs:
-                value = _input(spec.path, bound.arguments)
-                if spec.kind == 'array':
-                    if (type(value) is not np.ndarray or value.dtype != np.float64
-                            or value.ndim != 2 or not value.flags.c_contiguous
-                            or spec.id in written_inputs and not value.flags.writeable):
-                        raise ValueError('array type/layout differs')
-                    arrays[spec.id] = value
-                elif spec.kind == 'scalar':
-                    if (type(value) not in (int, float, np.float64)
-                            or type(value) is int and abs(value) > 2**53
-                            or not math.isfinite(value)):
-                        raise ValueError('finite exact scalar required')
-                    scalars[spec.id] = value if type(value) is int else float(value)
-                else:
-                    raise ValueError('unsupported state input kind')
-            values = list(arrays.values())
-            for index, value in enumerate(values):
-                if any(np.may_share_memory(value, other) for other in values[:index]):
-                    raise ValueError('external array roots may alias')
-        except (TypeError, ValueError, KeyError, AttributeError, StopIteration) as error:
-            return fallback(str(error), args, kwargs)
-        if not trial:
-            pinned = selection.get('artifact', {}) if type(selection) is dict else {}
-            if (not selection or selection.get('decision') != 'TRANSFORM_UNDER_CONTRACT'
-                    or any(pinned.get(key) != identity.get(key) or pinned.get(key) is None
-                           for key in ('build_id', 'plan_sha256'))):
-                return fallback('no_measured_selection_for_stateful_plan', args, kwargs)
-            shapes = selection.get('input_shapes', {})
-            if type(shapes) is not dict or any(list(value.shape) != shapes.get(name) for name, value in arrays.items()):
-                return fallback('outside_measured_state_shapes', args, kwargs)
-        try:
-            result = artifact.run(arrays, scalars)
-        except GuardFailure as error:
-            return fallback('native_precommit_guard:' + str(error), args, kwargs)
-        stats['native_calls'] += 1
-        return result
-
-    call.scar_stats, call.scar_artifact = stats, artifact
-    return call
+    adapter = artifact if hasattr(artifact, 'contract') else _ArtifactAdapter(artifact, selection)
+    try:
+        wrapper = _guard.guarded_stateful_function(original, adapter, owner=owner,
+            exclusive_inputs=exclusive_inputs, selection=selection, trial=trial)
+    except _guard.SourceMismatch as error:
+        raise SourceMismatch(str(error)) from error
+    wrapper.scar_artifact = artifact
+    return wrapper
 
 
 @contextmanager
 def install_stateful_regions(module, artifacts, *, exclusive_inputs=False,
                              selection=None, trial=False):
-    """Install derived boundaries; restore only bindings this context still owns."""
-    changes, wrappers = [], []
+    artifacts = list(artifacts)
+    adapters = [artifact if hasattr(artifact, 'contract') else _ArtifactAdapter(artifact, selection)
+                for artifact in artifacts]
     try:
-        for artifact in artifacts:
-            parts = artifact.region.source.qualname.split('.')
-            owner = module
-            for part in parts[:-1]:
-                if part == '<locals>' or type(owner) not in (types.ModuleType, type):
-                    raise SourceMismatch('stateful boundary has no ordinary module/class path')
-                owner = vars(owner)[part]
-            if type(owner) not in (types.ModuleType, type):
-                raise SourceMismatch('custom boundary owner')
-            name = parts[-1]
-            descriptor = vars(owner)[name]
-            if type(descriptor) is staticmethod:
-                original, wrap, receiver_owner = descriptor.__func__, staticmethod, None
-            elif type(descriptor) is types.FunctionType:
-                original, wrap = descriptor, lambda value: value
-                receiver_owner = owner if type(owner) is type else None
-            else:
-                raise SourceMismatch('stateful boundary requires an ordinary function descriptor')
-            wrapper = guarded_stateful_function(original, artifact, owner=receiver_owner,
-                exclusive_inputs=exclusive_inputs, selection=selection, trial=trial)
-            installed = wrap(wrapper)
-            setattr(owner, name, installed)
-            changes.append((owner, name, descriptor, installed))
-            wrappers.append(wrapper)
-        yield wrappers
-    finally:
-        for owner, name, descriptor, installed in reversed(changes):
-            if vars(owner).get(name) is installed:
-                setattr(owner, name, descriptor)
+        with _guard.install_stateful_regions(module, adapters, exclusive_inputs=exclusive_inputs,
+                                            selection=selection, trial=trial) as wrappers:
+            for wrapper, artifact in zip(wrappers, artifacts):
+                wrapper.scar_artifact = artifact
+            yield wrappers
+    except _guard.SourceMismatch as error:
+        raise SourceMismatch(str(error)) from error
+
+
+__all__ = ['SourceMismatch', 'guarded_stateful_function', 'install_stateful_regions']
