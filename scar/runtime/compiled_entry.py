@@ -85,22 +85,38 @@ def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=
     pipeline=Path(pipeline).resolve()
     if pipeline.is_dir():pipeline=pipeline/'result.json'
     reference=artifact_reference(pipeline,'scar.program-compiler-pipeline');report=read_artifact(reference)
-    from scar.runtime.compiled_deployment import deployment_gate
+    from scar.runtime.compiled_deployment import deployment_gate,selected_rows
     gate=(dict(decision='MEASURE_SELECTED_MODEL_IMPLEMENTATION',deployment_authorized=False)
         if measure_candidate else deployment_gate(deployment,reference,entry,argv))
     if not exclusive_inputs or gate['decision'] not in ('MEASURE_SELECTED_MODEL_IMPLEMENTATION','LOAD_MODEL_SELECTED_NATIVE'):
         return dict(mode='ORIGINAL_EXECUTION',reason='candidate_measurement_and_exclusive_inputs_required',
             execution=run_original_script(entry,argv),pipeline=reference,deployment_gate=gate)
-    rows=[r for r in report.get('invariant_loops',()) if r['status']=='MODEL_SELECTED_LOOP_COMPILED']
+    rows=selected_rows(report)
     if not rows:return dict(mode='ORIGINAL_EXECUTION',execution=run_original_script(entry,argv),pipeline=reference)
+    if any(row.get('proof',{}).get('schema')=='scar.composite-invariant-loop-proof'
+            and not row.get('bundle_export') for row in rows):
+        return dict(mode='ORIGINAL_EXECUTION',reason='composite_compact_export_required',
+            execution=run_original_script(entry,argv),pipeline=reference,deployment_gate=gate)
     scopes=[]
     if all(row.get('bundle_export') for row in rows):
         from scar.runtime.native_temporal_invariant import load
         for row in rows:
             exported=read_artifact(row['bundle_export'])
             if exported['bundle']!=row['bundle']:raise ValueError('bundle directory differs from retained export')
+            if row.get('selected_kind')=='ORDERED_STATEFUL_REGION':
+                from scar.runtime.native_stateful import load as stateful_load
+                artifact=stateful_load(row['bundle'],expected_admission_sha256=exported['expected_admission_sha256'])
+                contract=artifact.contract
+                if (any(exported[key]!=contract['native']['ids'][key] for key in contract['native']['ids'])
+                        or contract['selection']['input_shapes']!=row['input_shapes']
+                        or contract['memory']['memory_budget_bytes']!=row['memory_budget_bytes']):
+                    raise ValueError('stateful export differs from retained validated implementation')
+                scopes.append(_Scope(artifact));continue
             artifact=load(row['bundle'],expected_admission_sha256=exported['expected_admission_sha256'])
             contract=artifact.contract;schedule=read_artifact(row['schedule'])
+            if ((contract.get('proof_kind')=='COMPOSITE') !=
+                    (row['proof']['schema']=='scar.composite-invariant-loop-proof')):
+                raise ValueError('composite row/runtime requires the separate original proof kind')
             receipt=contract['resource_schedule']['receipt']
             if (contract['source_proof']!=row['proof'] or receipt['path']!=row['schedule']['uri']
                     or receipt['sha256']!=row['schedule']['sha256'] or receipt['bytes']!=row['schedule']['size_bytes']

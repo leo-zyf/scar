@@ -71,7 +71,7 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
     A deployment receipt qualifies exactly this entry/argv/cwd/interpreter,
     inherited CPU-affinity/thread-environment and pipeline, not other inputs.
     """
-    from scar.runtime.compiled_deployment import entry_context,runner_identity
+    from scar.runtime.compiled_deployment import entry_context,runner_identity,selected_rows
     pipeline=Path(pipeline).resolve()
     if pipeline.is_dir():pipeline=pipeline/'result.json'
     entry=Path(entry).resolve();out=Path(out).resolve();argv=list(argv)
@@ -82,7 +82,7 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
     if out.exists():raise ValueError('fresh compiled-program validation output required')
     if entry.suffix!='.py' or not entry.is_file():raise ValueError('original Python script entry required')
     pipeline_ref=_reference(pipeline,'scar.program-compiler-pipeline');compiled=_read(pipeline_ref)
-    selected=[row for row in compiled.get('invariant_loops',()) if row['status']=='MODEL_SELECTED_LOOP_COMPILED']
+    selected=selected_rows(compiled)
     if not selected:raise ValueError('an already-model-selected compiled loop implementation is required')
     specializations=[]
     for row in selected:

@@ -1,0 +1,123 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "scar_abi_v1.h"
+#include <algorithm>
+#include <bit>
+#include <cfenv>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <cerrno>
+#include <sched.h>
+#include <unistd.h>
+#include <omp.h>
+#pragma STDC FENV_ACCESS ON
+namespace {
+constexpr size_t minimum_cpu_slots=@CPU_SLOTS@;
+@AFFINITY_CLASS@
+@ARRAY_HELPERS@
+using Clock=std::chrono::steady_clock;
+double now_ns(){return std::chrono::duration<double,std::nano>(Clock::now().time_since_epoch()).count();}
+bool finite_bits(double value){return (std::bit_cast<uint64_t>(value)&UINT64_C(0x7ff0000000000000))!=UINT64_C(0x7ff0000000000000);}
+constexpr int flags=FE_DIVBYZERO|FE_INVALID|FE_OVERFLOW|FE_UNDERFLOW;
+struct Args {const scar_array_v1 *inputs;scar_array_v1 *output;uint64_t steps;};
+@FAMILY_FUNCTIONS@
+using Kernel=void(*)(const Args &,int64_t,int64_t,uint32_t &,uint64_t &,uint64_t &);
+constexpr Kernel kernels[]={@FAMILY_POINTERS@};
+
+int32_t empty_team(const int32_t *cpus,int workers,int32_t *observations){
+    ThreadAffinity caller;
+    for(int i=0;i<workers;++i)if(!caller.contains(cpus[i]))return 4;
+    fenv_t saved,execution;
+    if(std::feholdexcept(&saved))return 3;
+    if(std::fegetenv(&execution)){std::fesetenv(&saved);return 3;}
+    uint32_t guard=0;
+    #pragma omp parallel num_threads(workers) reduction(|:guard)
+    {
+        int tid=omp_get_thread_num();ThreadAffinity affinity;fenv_t previous;
+        bool ready=omp_get_num_threads()==workers && tid<workers && affinity.bind(cpus[tid]);
+        bool saved_ok=std::fegetenv(&previous)==0;
+        bool fp=saved_ok && std::fesetenv(&execution)==0;
+        int actual=ready?sched_getcpu():-1;
+        int raised=fp?std::fetestexcept(flags):0;
+        bool fp_restored=saved_ok && std::fesetenv(&previous)==0;
+        bool kept=affinity.bound(),restored=affinity.restore();
+        guard|=static_cast<uint32_t>(!ready||!fp||raised||!fp_restored||!kept||!restored);
+        if(tid<workers){observations[tid*4]=actual;observations[tid*4+1]=ready;
+            observations[tid*4+2]=fp_restored;observations[tid*4+3]=restored;}
+    }
+    bool restored=std::fesetenv(&saved)==0,affinity_restored=caller.restore();
+    return guard||!restored||!affinity_restored?3:0;
+}
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_canonical_boundary_v1(const scar_array_v1 *inputs,
+    uint64_t count,uint64_t steps,scar_array_v1 *output,uint64_t *counters){
+    if(!inputs||!output||!counters||count!=2||!steps||steps>INT64_MAX)return 1;
+    for(uint64_t i=0;i<count;++i)if(!valid_array(inputs[i]))return 1;
+    if(!valid_array(*output))return 1;
+    for(uint64_t i=0;i<count;++i){
+        if(inputs[i].shape[0]!=output->shape[0]||inputs[i].shape[1]!=output->shape[1])return 2;
+        if(output->lower_bound<inputs[i].upper_bound && inputs[i].lower_bound<output->upper_bound)return 1;
+    }
+    if(output->strides[1]!=8 || output->strides[0]!=__int128(output->shape[1])*8 ||
+        __int128(output->shape[0])*output->shape[1]*steps>UINT64_MAX)return 1;
+    counters[0]=uint64_t(output->shape[0])*output->shape[1];counters[1]=counters[0]*steps;
+    return 0;
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_canonical_team_samples_v1(const int32_t *cpus,int32_t workers,
+    uint64_t repetitions,uint64_t warmup,double *samples,int32_t *observations){
+    if(!cpus||!samples||!observations||workers<1||workers>256||!repetitions)return 1;
+    for(uint64_t i=0;i<repetitions+warmup;++i){
+        double start=now_ns();int32_t status=empty_team(cpus,workers,observations);double elapsed=now_ns()-start;
+        if(status)return status;if(i>=warmup)samples[i-warmup]=elapsed;
+    }
+    return 0;
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_canonical_chunk_samples_v1(const int32_t *cpus,int32_t workers,
+    int32_t family,const scar_array_v1 *inputs,scar_array_v1 *output,uint64_t steps,
+    uint64_t repetitions,uint64_t warmup,double *samples,uint64_t *checksum,int32_t *observations){
+    if(!cpus||!inputs||!output||!samples||!checksum||!observations||workers<1||workers>256||family<0||family>=2||!repetitions)return 1;
+    uint64_t counters[2];if(scar_canonical_boundary_v1(inputs,2,steps,output,counters))return 1;
+    ThreadAffinity caller;for(int i=0;i<workers;++i)if(!caller.contains(cpus[i]))return 4;
+    fenv_t saved,execution;if(std::feholdexcept(&saved))return 3;
+    if(std::fegetenv(&execution)){std::fesetenv(&saved);return 3;}
+    uint32_t guard=0;uint64_t sink=0;Args args{inputs,output,steps};
+    #pragma omp parallel num_threads(workers) reduction(|:guard) reduction(^:sink)
+    {
+        int tid=omp_get_thread_num();ThreadAffinity affinity;fenv_t previous;
+        bool ready=omp_get_num_threads()==workers && tid<workers && affinity.bind(cpus[tid]);
+        bool saved_ok=std::fegetenv(&previous)==0;bool fp=saved_ok && std::fesetenv(&execution)==0;
+        int actual=ready?sched_getcpu():-1;
+        uint32_t bad=static_cast<uint32_t>(!ready||!fp);
+        guard|=bad;
+        #pragma omp barrier
+        // num_threads normally guarantees this team. Each worker can still
+        // execute the same barrier sequence even if its local pin/FP guard fails.
+        int64_t base=output->shape[0]/workers,remainder=output->shape[0]%workers;
+        int64_t begin=tid*base+std::min<int64_t>(tid,remainder);
+        int64_t end=begin+base+(tid<remainder);
+        uint32_t nonfinite=0;
+        for(uint64_t i=0;i<repetitions+warmup;++i){
+            uint64_t preheaders=0,iterations=0;
+            #pragma omp barrier
+            double start=now_ns();
+            if(ready&&fp)kernels[family](args,begin,end,nonfinite,preheaders,iterations);
+            double elapsed=now_ns()-start;
+            if(tid<workers && i>=warmup)samples[(i-warmup)*workers+tid]=elapsed;
+            #pragma omp barrier
+        }
+        if(ready&&fp)for(int64_t row=begin;row<end;++row)for(int64_t col=0;col<output->shape[1];++col)
+            sink^=std::bit_cast<uint64_t>(static_cast<double *>(output->data)[row*output->shape[1]+col]);
+        int raised=fp?std::fetestexcept(flags):0;
+        bool fp_restored=saved_ok && std::fesetenv(&previous)==0;
+        bool kept=affinity.bound(),restored=affinity.restore();
+        guard|=static_cast<uint32_t>(!ready||!fp||nonfinite||raised||!fp_restored||!kept||!restored);
+        if(tid<workers){observations[tid*4]=actual;observations[tid*4+1]=ready;
+            observations[tid*4+2]=fp_restored;observations[tid*4+3]=restored;}
+    }
+    bool restored=std::fesetenv(&saved)==0,affinity_restored=caller.restore();*checksum=sink;
+    return guard||!restored||!affinity_restored?3:0;
+}

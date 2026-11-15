@@ -12,7 +12,9 @@ import time
 
 
 def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
-                  loop_trip_count=None,loop_inputs=None):
+                  loop_trip_count=None,loop_inputs=None,prepare_stateful_validation=False,stateful_cpu_threads=1,
+                  loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
+                  loop_max_threads=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -63,14 +65,32 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             unresolved_components=dict(gaps),rejected_components=dict(rejected),
             caller_loop_proof='NOT_ESTABLISHED_BY_PER_CALL_TRANSFER',
             automatic_caller_replacement_authorized=False)
+        if prepare_stateful_validation and not plan_only and lowered['native_directory'] is None:
+            from scar.compiler.stateful_candidate import prepare_stateful_candidate
+            candidate=prepare_stateful_candidate(document['program']['uri'],domain,directory/'validation-candidate',
+                cpu_threads=stateful_cpu_threads)
+            row['validation_candidate']=artifact_reference(directory/'validation-candidate/candidate.json',candidate['schema'])
         rows.append(row)
     from scar.compiler.invariant_build import compile_invariant_build
+    from scar.compiler.composite_invariant_build import compile_composite_invariant_build
+    original_ids={row['id'] for row in document.get('invariant_loops',())}
+    composite_ids={row['id'] for row in document.get('composite_invariant_loops',())}
+    if loop_inputs is not None and set(loop_inputs)-(original_ids|composite_ids):
+        raise ValueError('loop inputs name an unknown original or composite loop')
+    original_inputs=None if loop_inputs is None else {key:value for key,value in loop_inputs.items() if key in original_ids}
+    composite_inputs=None if loop_inputs is None else {key:value for key,value in loop_inputs.items() if key in composite_ids}
     loops=compile_invariant_build(document,out/'loops',loop_trip_count=loop_trip_count,
-        loop_inputs=loop_inputs,plan_only=plan_only)
+        loop_inputs=original_inputs,plan_only=plan_only,loop_cpu_threads=loop_cpu_threads,
+        loop_cpu_model=loop_cpu_model,loop_calibrations=loop_calibrations,
+        loop_no_op_profiles=loop_no_op_profiles,loop_max_threads=loop_max_threads)
+    composite_loops=compile_composite_invariant_build(document,out/'composite-loops',loop_trip_count=loop_trip_count,
+        loop_inputs=composite_inputs,plan_only=plan_only,loop_cpu_threads=loop_cpu_threads,
+        cpu_cost_model=loop_cpu_model)
     read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
     report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
         program=document['program'],hardware=document['hardware'],loop_dependencies=loop_ref,
         regions=rows,invariant_loops=loops,source_rejections=document['rejections'],
+        composite_invariant_loops=composite_loops,
         scope='GUARDED_STATEFUL_REGIONS_WITH_EXPLICIT_CALLER_AND_COST_FRONTIERS',
         source_graph_unrolled=False,target_variants_ranked_by_measurement=False,
         target_program_executed=False,whole_program_compiled=False,three_stages_complete=False,
@@ -87,13 +107,27 @@ def main(argv=None):
     loops=parser.add_mutually_exclusive_group()
     loops.add_argument('--loop-trip-count',type=int,help='declared common trip count for retained invariant loops')
     loops.add_argument('--loop-inputs',help='JSON mapping original loop IDs to input_shapes/trip_count/budget constraints')
+    parser.add_argument('--prepare-stateful-validation',action='store_true',help='prepare one original-F4-proven stateful candidate without changing cost selection')
+    parser.add_argument('--stateful-cpu-threads',type=int,default=1,help='explicit unranked worker count for stateful validation preview')
+    cpu=parser.add_mutually_exclusive_group()
+    cpu.add_argument('--loop-cpu-threads',type=int,help='explicit hardware-checked OpenMP team preview; not a claim of best worker count')
+    cpu.add_argument('--loop-cpu-model',action='store_true',help='select only from a complete sourced forward CPU component cost domain')
+    parser.add_argument('--loop-calibration',action='append',default=[],help='independent fixed-family temporal resource observations or projected component facts')
+    parser.add_argument('--loop-no-op-profiles',help='JSON mapping original loop IDs to retained same-boundary original-call cost profiles')
+    parser.add_argument('--loop-max-threads',type=int,help='explicit maximum team size for the cost model; all representative masks within that limit remain visible')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
         plan_only=args.plan_only,loop_trip_count=args.loop_trip_count,
-        loop_inputs=None if args.loop_inputs is None else json.loads(Path(args.loop_inputs).read_bytes()))
+        loop_inputs=None if args.loop_inputs is None else json.loads(Path(args.loop_inputs).read_bytes()),
+        prepare_stateful_validation=args.prepare_stateful_validation,stateful_cpu_threads=args.stateful_cpu_threads,
+        loop_cpu_threads=args.loop_cpu_threads,loop_cpu_model=args.loop_cpu_model,
+        loop_calibrations=args.loop_calibration,
+        loop_no_op_profiles=None if args.loop_no_op_profiles is None else json.loads(Path(args.loop_no_op_profiles).read_bytes()),
+        loop_max_threads=args.loop_max_threads)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
-        statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops']]],
+        composite_invariant_loops=len(result['composite_invariant_loops']),
+        statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2));return 0
 
 

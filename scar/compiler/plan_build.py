@@ -69,6 +69,8 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.compiler.stateful_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
     from scar.compiler.invariant_loop_frontend import discover_invariant_loops,write_invariant_loop_proof
+    from scar.compiler.pipeline_loop_frontend import (discover_pipeline_invariant_loops,
+        write_composite_invariant_loop_proof)
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.analysis.source_loop_dependencies import attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
@@ -138,6 +140,22 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                 loop_link_frontier=frontier,iterations_unrolled=False,
                 original_f4_replay_required_for_lowering=True,
                 source_replacement_authorized=False,selected_for_use=False,lowering_authorized=False))
+        composite_proofs,composite_rejected=discover_pipeline_invariant_loops(session.view,source=source_filter)
+        composite_rows=[]
+        for index,proof in enumerate(composite_proofs):
+            folder=out/('composite-loop-'+str(index));folder.mkdir()
+            reference=write_composite_invariant_loop_proof(proof,folder/'proof.json')
+            links,frontier=_invariant_loop_links(proof,loops,loop_reference)
+            shapes=({name:list(shape) for name in proof.body.parameters} if shape is not None else None)
+            composite_rows.append(dict(id=proof.id,source_code_key=proof.source.code_key,
+                status='SOURCE_COMPOSITE_LOOP_PROOF_RETAINED',proof=reference,body_pointer='#/body',
+                proof_kind=proof.profile,body_identity=proof.body_identity,
+                nested_global_guard_count=len(proof.nested_callee_guards),
+                input_shapes=shapes,trip_count_status='REQUIRES_RUNTIME_OR_DECLARED_INPUT',
+                memory_budget_bytes=memory_budget_bytes,hardware=target,loop_links=links,
+                loop_link_frontier=frontier,iterations_unrolled=False,
+                original_f4_replay_required_for_lowering=True,runtime_global_route_guards_required=True,
+                source_replacement_authorized=False,selected_for_use=False,lowering_authorized=False))
         _validate_catalog_parents(session.view.catalog)
         _check(target)
         if artifact_reference(program/'manifest.json',parent['schema'])!=parent:
@@ -147,6 +165,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         source_filter=None if source_filter is None else str(source_filter),sources=sources,
         source_unit_scope=loops['source_unit_scope'],hardware=target,regions=rows,rejections=rejected,
         invariant_loops=invariant_rows,invariant_loop_rejections=invariant_rejected,
+        composite_invariant_loops=composite_rows,composite_rejections=composite_rejected,
         semantics='ORIGINAL_F4_FUNCTION_WORLD_AND_SOURCE_PORTS',
         loop_dependencies=loop_reference,
         loops=loops['loop_count'],loop_body_calls=loops['loop_body_call_count'],loops_unrolled=False,
@@ -171,6 +190,7 @@ def main(argv=None):
         input_shapes=None if args.input_shapes is None else json.loads(Path(args.input_shapes).read_bytes()),
         memory_budget_bytes=args.memory_budget_bytes,max_threads=args.max_threads)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
+        composite_invariant_loops=len(result['composite_invariant_loops']),
         rejections=len(result['rejections']),
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2))
     return 0

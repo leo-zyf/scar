@@ -8,23 +8,37 @@ import statistics
 import sys
 
 
+def thread_environment():
+    names={'OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'}
+    names.update(name for name in os.environ if name.startswith(('OMP_','GOMP_','KMP_')))
+    return {name:os.environ.get(name) for name in sorted(names)}
+
+
 def entry_context(entry,argv):
     path=Path(entry).resolve()
     return dict(entry_path=str(path),entry_sha256=sha256(path.read_bytes()).hexdigest(),argv=list(argv),
         working_directory=str(Path.cwd().resolve()),python_executable=str(Path(sys.executable).resolve()),
         python_version=sys.version,python_cache_tag=sys.implementation.cache_tag,
         process_affinity_cpu_ids=sorted(os.sched_getaffinity(0)),
-        native_thread_environment={name:os.environ.get(name) for name in
-            ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS')})
+        native_thread_environment=thread_environment())
 
 
 def runner_identity():
     root=Path(__file__).resolve().parents[1]
     names=('entrypoint.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_temporal_invariant.py','runtime/native_loop.py',
-        'runtime/loop_guard.py','trace/code_snapshot.py')
+        'runtime/loop_guard.py','runtime/native_stateful.py','runtime/stateful_guard.py',
+        'runtime/stateful_contract.py','runtime/bundle_metadata.py','trace/code_snapshot.py')
     values=[(name,sha256((root/name).read_bytes()).hexdigest()) for name in names]
     return sha256(json.dumps(values,separators=(',',':')).encode()).hexdigest()
+
+
+def selected_rows(compiled):
+    loops=[row for row in compiled.get('invariant_loops',()) if row['status']=='MODEL_SELECTED_LOOP_COMPILED']
+    composites=[row for row in compiled.get('composite_invariant_loops',())
+        if row['status']=='MODEL_SELECTED_COMPOSITE_LOOP_COMPILED']
+    states=[row for row in compiled.get('stateful_regions',()) if row['status']=='MEASURED_STATEFUL_BUNDLE_READY']
+    return [*loops,*composites,*states]
 
 
 def _raw(reference):
@@ -54,8 +68,7 @@ def deployment_gate(path,pipeline,entry,argv):
             raise ValueError('measured policy differs from frozen design')
         compiled=json.loads(_raw(pipeline))
         keys=('id','proof','schedule','bundle_export','bundle','input_shapes','trip_count','memory_budget_bytes','selected_kind')
-        specializations=[{key:row[key] for key in keys if key in row} for row in compiled.get('invariant_loops',())
-            if row['status']=='MODEL_SELECTED_LOOP_COMPILED']
+        specializations=[{key:row[key] for key in keys if key in row} for row in selected_rows(compiled)]
         if specializations!=receipt['specializations']:raise ValueError('measured specialization differs from selected pipeline')
         policy=receipt['policy']
         expected={('WARMUP',i) for i in range(policy['warmup'])}|{('MEASUREMENT',i) for i in range(policy['repetitions'])}

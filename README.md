@@ -232,7 +232,38 @@ scar validate-build --pipeline COMPILED --out VALIDATION -- ENTRY.py --size 256 
 scar run-build --pipeline COMPILED --deployment VALIDATION/deployment.json --exclusive-inputs -- ENTRY.py --size 256 --steps 400
 ```
 
-资源计划比较重算、物化和逐元素时间融合；当前后端支持最后一种单线程实现，保留全部硬件图。运行包复用同一份 ELF，正常执行不加载编译器/图。成本门严格绑定已测入口与实现，不匹配时回原程序。兼容入口和 I/O 仍由 Python 执行；这不是整个程序已转为纯 C++。
+资源计划比较重算、物化和逐元素时间融合，保留全部硬件图。除了单个 leaf，统一入口还支持经原 F4 证明的多层纯函数组合；其独立 proof 保留每条函数全局调用路径，运行时逐条守卫。`compile-build --loop-cpu-threads 2` 可生成显式 CPU 团队的 OpenMP 实现，按确定的行分区并行，保留每个元素的原运算顺序；这个显式参数不代表最佳线程数。
+
+运行包复用同一份 ELF，正常执行不加载编译器/图。成本门严格绑定已测入口与实现，不匹配时回原程序。兼容入口和 I/O 仍由 Python 执行；这不是整个程序已转为纯 C++。
+
+可对全部已准入源码的模块初始化和函数 CALL 做一次有限观察，再连回同一图；每个调用点达到预算后停止记录，不逐次展开循环：
+
+```bash
+scar observe-call-bindings --all-sources --catalog FRONTEND/catalog --out CALLS -- python ENTRY.py ARGS
+scar build --entry ENTRY.py --catalog FRONTEND/catalog --call-bindings CALLS --out PROGRAM
+```
+
+捕获到的 Python CodeID 以完整 descriptor 匹配原 F4 共享函数正文，使用 `IMPLEMENTATION` 关系连接；它不代替动态参数、状态版本或完成证明。未准入的库正文保留为具体边界，不据一次观察删除其他路径。采集不启用全局 profile，也不记录 Tensor 数值。
+
+CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
+
+```bash
+scar calibrate-temporal-cpu --target HARDWARE --cpu-masks '0;0,1;0,1,2,3' --shape 256 256 --trip-count 400 --out RESOURCE_COSTS
+scar compile-build --domains DOMAINS --loop-trip-count 400 --loop-cpu-model --loop-max-threads 4 --loop-calibration RESOURCE_COSTS/result.json --loop-no-op-profiles ORIGINAL_COSTS.json --out COMPILED
+```
+
+原语不接受目标源码/DAG，只测固定家族；投影须匹配匿名有序值依赖、shape/count、完整 CPU mask 和后端版本。计时组合是显式模型假设。缺任何可行配置或同边界原执行成本时保留 `NO_OP`；完整时按模型选择准确的 CPU mask，随后仍须完整入口验证。当前此成本入口支持直接纯数组循环，组合区域明确保留成本模型边界。
+
+状态数组区域可先生成一个供验证的明确 CPU 配置，完整成本域缺口仍保留。外部 testcase 只负责输入/输出/状态和 episode 验证；核心导出再次核对原区域、计划、C++ 身份和样本：
+
+```bash
+scar compile-build --domains DOMAINS --prepare-stateful-validation --stateful-cpu-threads 1 --out COMPILED
+scar finalize-stateful-candidate --pipeline COMPILED --candidate COMPILED/region-0/validation-candidate --validation REGIONAL_VALIDATION --out FINALIZED
+scar validate-build --pipeline FINALIZED --out VALIDATION -- ENTRY.py ARGS
+scar run-build --pipeline FINALIZED --deployment VALIDATION/deployment.json --exclusive-inputs -- ENTRY.py ARGS
+```
+
+`REGIONAL_VALIDATION` 需要实际区域/轨迹/状态、stdout/文件以及至少三组配对计时记录。区域验证不冒充完整入口成本，后者由 `validate-build` 独立测量；任意程序的全部隐藏副作用等价仍不能只靠 stdout 比较证明。
 
 无 trace 时可省略 `--trace`。`--catalog` 选择 F4 局部声明或 context catalog，`--cache-root` 指定接口材料目录；
 `--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
