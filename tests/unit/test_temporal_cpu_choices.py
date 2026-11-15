@@ -15,7 +15,7 @@ from scar.optimization.temporal_cpu_choices import (build_temporal_cpu_domain,
 from scar.optimization.temporal_cpu_choices import plan_selected_temporal_cpu_choice,verify_selected_temporal_cpu_choice
 
 
-def test_hardware_masks_exact_chunks_unknown_costs_and_sourced_forward_choice(hardware,tmp_path):
+def test_hardware_masks_exact_chunks_unknown_costs_and_sourced_forward_choice(hardware,tmp_path,monkeypatch):
     source=tmp_path/'original.py';source.write_text('def leaf(s,x):\n    return s+x*x\n')
     digest=sha256(source.read_bytes()).hexdigest();key='pycode-v2:'+'1'*64;unit='fixture'
     original=SourceRef(str(source),digest,'leaf',1,0,key,(dict(kind='source_identity',
@@ -94,3 +94,11 @@ def test_hardware_masks_exact_chunks_unknown_costs_and_sourced_forward_choice(ha
         trip_count=10,memory_budget_bytes=128,max_threads=2)
     sibling=next(row for row in smt_domain['candidates'] if row['resource_binding']['cpu_ids']==(0,2))
     assert sibling['smt_siblings_beyond_first']==1 and sibling['cpu_threads']==2
+    # OpenMP controls change the applicability of old component facts even
+    # when the four common thread-count variables stay identical.
+    monkeypatch.setenv('OMP_DYNAMIC','TRUE')
+    changed=build_temporal_cpu_domain(proof,hardware,input_shapes=dict(s=[5,3],x=[5,3]),
+        trip_count=10,memory_budget_bytes=128,max_threads=2)
+    assert changed['live_constraints']['native_thread_environment']['OMP_DYNAMIC']=='TRUE'
+    stale=plan_temporal_cpu_choices(changed,resource_facts=facts)
+    assert not any(row['model']['complete'] for row in stale['variants'])

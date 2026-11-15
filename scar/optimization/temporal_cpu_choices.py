@@ -23,10 +23,10 @@ from scar.optimization.deployment_cost import _fact, _profile
 from scar.optimization.hardware import _target_materials, propose_cpu_allocations, validate_cpu_placement
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.resource_solver import semantic_sha256
+from scar.runtime.compiled_deployment import thread_environment
 
 _PARTITION='CONTIGUOUS_ROWS_FIRST_REMAINDER_EXPLICIT_V1'
 _OPS=('add','sub','mul','div','neg')
-_ENV=('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS')
 _SCOPE='ONE_GUARDED_ORIGINAL_LOOP_CALL_DISPATCH_THROUGH_RETURN_ARGUMENT_EXPRESSIONS_ALREADY_EVALUATED'
 
 
@@ -82,8 +82,8 @@ def temporal_resource_context(snapshot_sha256,executor_id,cpu_ids,caller_affinit
         scope=_SCOPE,composition='SERIAL_OVERHEAD_PLUS_MAX_EXACT_WORKER_CHUNKS')
 
 
-def _anonymous_body(proof,budget):
-    execution=prepare_pipeline_leaf(optimize_region(proof.body,memory_budget_bytes=budget))
+def _anonymous_body(source_body,carry_parameter,budget):
+    execution=prepare_pipeline_leaf(optimize_region(source_body,memory_budget_bytes=budget))
     body=execution.region; ordinals={}; dependencies={}; result=[]
     for index,node in enumerate(body.nodes):
         ordinals[node.id]=index
@@ -91,35 +91,43 @@ def _anonymous_body(proof,budget):
             set().union(*(dependencies[key] for key in node.inputs)))
         attrs=deepcopy(node.attrs)
         if node.op=='input':
-            attrs=dict(role='CARRY' if node.attrs['name']==proof.carry_parameter else 'READONLY',
+            attrs=dict(role='CARRY' if node.attrs['name']==carry_parameter else 'READONLY',
                 argument_index=body.parameters.index(node.attrs['name']))
         result.append(dict(op=node.op,inputs=[ordinals[key] for key in node.inputs],attrs=attrs,
-            placement='INVARIANT_PREHEADER' if proof.carry_parameter not in dependencies[node.id] else 'TEMPORAL_BODY'))
+            placement='INVARIANT_PREHEADER' if carry_parameter not in dependencies[node.id] else 'TEMPORAL_BODY'))
     return dict(nodes=result,output=ordinals[body.output],argument_count=len(body.parameters),
-        carry_argument_index=body.parameters.index(proof.carry_parameter),source_ids_are_not_primitive_keys=True)
+        carry_argument_index=body.parameters.index(carry_parameter),source_ids_are_not_primitive_keys=True)
 
 
 def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budget_bytes,max_threads=None):
     """Enumerate representative physical-core/SMT masks; never compile a target."""
-    from scar.compiler.parallel_temporal_invariant import describe_parallel_temporal_capability
     proof=validate_invariant_loop_proof(proof)
+    return _build_temporal_body_cpu_domain(proof.body,proof.carry_parameter,target,
+        proof_id=proof.id,proof_sha256=semantic_sha256(asdict(proof)),input_shapes=input_shapes,
+        trip_count=trip_count,memory_budget_bytes=memory_budget_bytes,max_threads=max_threads)
+
+
+def _build_temporal_body_cpu_domain(source_body,carry_parameter,target,*,proof_id,proof_sha256,
+        input_shapes,trip_count,memory_budget_bytes,max_threads=None):
+    """Shared derived-body/resource algorithm; this is not a source proof cast."""
+    from scar.compiler.parallel_temporal_invariant import describe_parallel_temporal_capability
     if type(trip_count) is not int or not -(2**63)<=trip_count<2**63:
         raise ValueError('exact signed int64 trip count required')
     if type(memory_budget_bytes) is not int or memory_budget_bytes<8:
         raise ValueError('explicit incremental output payload budget required')
     if max_threads is not None and (type(max_threads) is not int or max_threads<1):
         raise ValueError('positive exact worker cap or None required')
-    if type(input_shapes) is not dict or set(input_shapes)!=set(proof.body.parameters):
+    if type(input_shapes) is not dict or set(input_shapes)!=set(source_body.parameters):
         raise ValueError('complete original leaf input shape map required')
     shapes={name:list(shape) for name,shape in input_shapes.items()}
     if any(len(shape)!=2 or any(type(value) is not int or value<=0 for value in shape) for shape in shapes.values()):
         raise ValueError('positive exact rank-two input shapes required')
-    shape=shapes[proof.carry_parameter]
+    shape=shapes[carry_parameter]
     if any(value!=shape for value in shapes.values()):raise ValueError('equal elementwise input shapes required')
     from scar.compiler.invariant_loop import plan_invariant_loop
-    cut=plan_invariant_loop(proof.body,carry_parameter=proof.carry_parameter,
-        loop_interface=dict(carry_parameter=proof.carry_parameter,
-            readonly_parameters=[name for name in proof.body.parameters if name!=proof.carry_parameter]),
+    cut=plan_invariant_loop(source_body,carry_parameter=carry_parameter,
+        loop_interface=dict(carry_parameter=carry_parameter,
+            readonly_parameters=[name for name in source_body.parameters if name!=carry_parameter]),
         memory_budget_bytes=memory_budget_bytes)
     graph,snapshot,resources,connections=_target_materials(target)
     # A worker-count cap must not truncate the executor CPU universe: SMT
@@ -165,18 +173,18 @@ def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budg
                 capability=dict(status='SUPPORTED_UNDER_RUNTIME_GUARDS' if not issues else 'UNRESOLVED',
                     backend_sha256=semantic_sha256(backend),workers=workers,cpu_ids=list(mask)),
                 lowering_admitted=False,cost_status='UNKNOWN'))
-    source=asdict(proof.body.source);source['origins']=[]
-    result=dict(schema='scar.temporal-cpu-domain',schema_version=1,proof_id=proof.id,
-        proof_sha256=semantic_sha256(asdict(proof)),source_loop_original_f4_replay_required=True,
-        body_sha256=semantic_sha256(asdict(proof.body)),source_interface=dict(body_source=source,
-            parameters=list(proof.body.parameters),carry_parameter=proof.carry_parameter),
+    source=asdict(source_body.source);source['origins']=[]
+    result=dict(schema='scar.temporal-cpu-domain',schema_version=1,proof_id=proof_id,
+        proof_sha256=proof_sha256,source_loop_original_f4_replay_required=True,
+        body_sha256=semantic_sha256(asdict(source_body)),source_interface=dict(body_source=source,
+            parameters=list(source_body.parameters),carry_parameter=carry_parameter),
         target_path=str(graph.path),target_snapshot=encode(snapshot),
         all_resources=[encode(H.TargetResourceRef(snapshot,row.id)) for row in resources],
         hardware_connections_retained_count=len(connections),backend=backend,
         input_shapes=shapes,shape=shape,trip_count=trip_count,memory_budget_bytes=memory_budget_bytes,
-        max_threads=max_threads,body=_anonymous_body(proof,memory_budget_bytes),
+        max_threads=max_threads,body=_anonymous_body(source_body,carry_parameter,memory_budget_bytes),
         live_constraints=dict(process_affinity_cpu_ids=sorted(os.sched_getaffinity(0)),
-            native_thread_environment={key:os.environ.get(key) for key in _ENV}),
+            native_thread_environment=thread_environment()),
         candidates=rows,topology_frontier=frontier,
         runtime_guards=[*cut['Q'],'EXACT_C_CONTIGUOUS_INPUTS_AT_RUNTIME',
             'ORIGINAL_F4_AND_CALLABLE_SOURCE_IDENTITIES_MATCH','EXACT_SHAPES_COUNT_AND_C_CONTIGUOUS_INPUTS',
@@ -204,10 +212,12 @@ def verify_temporal_cpu_domain(proof,target,domain):
 def temporal_cpu_cost_context(domain,candidate_id):
     row=next((row for row in domain['candidates'] if row['id']==candidate_id),None)
     if row is None and candidate_id!='NO_OP':raise ValueError('unknown temporal CPU implementation')
-    return dict(proof_sha256=domain['proof_sha256'],target_snapshot_sha256=domain['target_snapshot']['sha256'],
+    result=dict(proof_sha256=domain['proof_sha256'],target_snapshot_sha256=domain['target_snapshot']['sha256'],
         input_shapes=domain['input_shapes'],trip_count=domain['trip_count'],memory_budget_bytes=domain['memory_budget_bytes'],
         resource_binding=None if row is None else row['resource_binding'],
         backend=None if row is None else domain['backend'],live_constraints=domain['live_constraints'],scope=_SCOPE)
+    if domain.get('proof_kind')=='COMPOSITE':result.update(proof_kind='COMPOSITE',guard_profile=domain['guard_profile'])
+    return result
 
 
 def temporal_cpu_cost_demand(domain,candidate_id):
@@ -221,7 +231,10 @@ def temporal_cpu_cost_demand(domain,candidate_id):
     def term(identifier,component,parameters,composition='SERIAL'):
         terms.append(dict(id=identifier,component=component,parameters=parameters,composition=composition,
             key=semantic_sha256(dict(component=component,parameters=parameters))))
-    term('boundary','GUARDED_TEMPORAL_CALL_BOUNDARY',dict(inputs=domain['body']['argument_count'],shape=[rows,cols]))
+    if domain.get('proof_kind')=='COMPOSITE':
+        term('boundary','COMPOSITE_GUARDED_TEMPORAL_CALL_BOUNDARY',dict(inputs=domain['body']['argument_count'],
+            shape=[rows,cols],guard_profile=domain['guard_profile']))
+    else:term('boundary','GUARDED_TEMPORAL_CALL_BOUNDARY',dict(inputs=domain['body']['argument_count'],shape=[rows,cols]))
     term('allocate','NUMPY_ALLOCATE_ONE_FRESH_OUTPUT',dict(shape=[rows,cols],nbytes=8*rows*cols))
     term('team','EXACT_CPU_TEAM_AFFINITY_FENV_SETUP_AND_COMPLETION',dict(workers=workers,cpu_ids=binding['cpu_ids']))
     term('return','FINAL_GUARD_RESULT_PUBLICATION',dict(shape=[rows,cols]))
@@ -437,3 +450,12 @@ def verify_selected_temporal_cpu_choice(proof,target,plan):
     if expected is None or semantic_sha256(expected)!=semantic_sha256(plan):
         raise ValueError('cost-selected temporal schedule differs from original full-domain cost/hardware replay')
     return expected
+
+
+def __getattr__(name):
+    if name in ('build_composite_temporal_cpu_domain','verify_composite_temporal_cpu_domain',
+            'preview_composite_temporal_cpu_choice','verify_composite_temporal_cpu_preview',
+            'plan_selected_composite_temporal_cpu_choice','verify_selected_composite_temporal_cpu_choice'):
+        from scar.optimization import composite_temporal_cpu_choices
+        return getattr(composite_temporal_cpu_choices,name)
+    raise AttributeError(name)

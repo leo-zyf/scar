@@ -23,6 +23,7 @@ import time
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.hardware import _target_materials, propose_cpu_allocations, validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
+from scar.runtime.compiled_deployment import thread_environment
 from scar.optimization.temporal_cpu_choices import (temporal_primitive_families,
     match_temporal_primitive_family, temporal_resource_context, temporal_cpu_cost_demand)
 
@@ -139,8 +140,7 @@ def calibrate_temporal_cpu(target,cpu_masks,input_shape,trip_count,out,*,repetit
         raise ValueError('bounded positive shape/count, at least three samples and one warmup required')
     if sys.gettrace() is not None or sys.getprofile() is not None:raise ValueError('independent calibration cannot run under a Python trace/profile hook')
     graph,snapshot,resources,_=_target_materials(target);backend=describe_parallel_temporal_capability()
-    caller=sorted(os.sched_getaffinity(0));environment={name:os.environ.get(name) for name in
-        ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS')}
+    caller=sorted(os.sched_getaffinity(0));environment=thread_environment()
     masks=[tuple(sorted(mask)) for mask in cpu_masks]
     if not masks or len(set(masks))!=len(masks) or any(not mask or len(set(mask))!=len(mask)
             or any(type(cpu) is not int or cpu<0 for cpu in mask) for mask in masks):raise ValueError('distinct explicit nonempty CPU masks required')
@@ -222,7 +222,7 @@ def calibrate_temporal_cpu(target,cpu_masks,input_shape,trip_count,out,*,repetit
                 checksum=checksum.value,canonical_output_bitwise_checked=True,canonical_expected_scalar=expected))
             _save(out/'raw-observations.json',dict(schema='scar.temporal-canonical-resource-observations',schema_version=1,
                 frozen_design=design_ref,native=native,observations=observations))
-    if (sorted(os.sched_getaffinity(0))!=caller or any(os.environ.get(key)!=value for key,value in environment.items())
+    if (sorted(os.sched_getaffinity(0))!=caller or thread_environment()!=environment
             or artifact_reference(out/'design.json',design['schema'])!=design_ref):raise ValueError('calibration caller or frozen design changed')
     report=dict(schema='scar.temporal-cpu-resource-calibration',schema_version=1,frozen_design=design_ref,
         raw_observations=artifact_reference(out/'raw-observations.json','scar.temporal-canonical-resource-observations'),
@@ -278,6 +278,10 @@ def _project_temporal_facts(domain,candidate_id,out,reference,measured,index):
         if len(matching)!=1:raise ValueError('no unique independently measured family/mask/shape/count context')
         observation_index,row=matching[0]
         for term in demand['terms']:
+            if term['component']=='COMPOSITE_GUARDED_TEMPORAL_CALL_BOUNDARY':
+                unresolved.append(dict(component=term['component'],parameters=term['parameters'],
+                    reason='COMPOSITE_EXTRA_ROUTE_AND_SOURCE_CHECKS_REQUIRE_SEPARATE_INDEPENDENT_CALIBRATION'))
+                continue
             if term['id'].startswith('worker:'):
                 worker=int(term['id'].split(':')[1]);measurement=row['worker_chunks'][worker]
                 if any(measurement[key]!=term['parameters'][key] for key in ('cpu_id','row_begin','row_end')):
@@ -330,12 +334,186 @@ def project_temporal_resource_fact_batch(domain,calibration,out):
     _save(out/'result.json',report);return report
 
 
+def _canonical_composite_guards(profile,source_directory):
+    """Instantiate numeric route geometry; never import or compile a target."""
+    from types import FunctionType
+    from scar.runtime.native_temporal_invariant import _ordinary_composite_function,_composite_route
+    from scar.runtime.loop_guard import _state,_same_state
+    from scar.trace.code_snapshot import code_key
+    if (profile.get('schema'),profile.get('schema_version'))!=('scar.composite-temporal-guard-profile',1):
+        raise ValueError('numeric composite guard profile required')
+    if profile.get('source_contents_or_names_in_profile') is not False:
+        raise ValueError('source-independent guard geometry required')
+    source_directory.mkdir();sources=[]
+    for index,size in enumerate(profile['source_byte_lengths']):
+        if type(size) is not int or size<0:raise ValueError('exact nonnegative source byte geometry required')
+        path=source_directory/('source-'+str(index)+'.txt');path.write_bytes(b'x'*size)
+        sources.append((path,sha256(path.read_bytes()).hexdigest()))
+    namespaces={row['namespace']:{'__builtins__':__builtins__} for row in profile['functions']}
+    functions=[];identities=[]
+    for index,row in enumerate(profile['functions']):
+        code=_canonical_leaf.__code__.replace(co_name='function_'+str(index),co_qualname='function_'+str(index))
+        function=FunctionType(code,namespaces[row['namespace']]);functions.append(function)
+        identities.append(dict(code_key=code_key(code)))
+    for edge in profile['global_slots']:
+        namespaces[edge['namespace']]['slot_'+str(edge['slot'])]=functions[edge['target']]
+    original=functions[profile['original_function']];root=functions[profile['root_function']]
+    routes=[]
+    for route in profile['routes']:
+        guard=dict(global_path=['slot_'+str(slot) for slot in route['path_slots']],
+            lookup_name='slot_'+str(route['lookup_slot']),owner_source=identities[route['owner']],
+            target_source=identities[route['target']])
+        owner,target=_composite_route(original,guard)
+        if owner is not functions[route['owner']] or target is not functions[route['target']]:
+            raise ValueError('canonical numeric route geometry is inconsistent')
+        routes.append((guard,owner,target,_state(owner),_state(target)))
+    def extra_guards():
+        # Common direct original/root _same_state, range, argument binding,
+        # descriptors and FFI are supplied by the retained base calibration.
+        _ordinary_composite_function(original,identities[profile['original_function']])
+        _ordinary_composite_function(root,identities[profile['root_function']])
+        if original.__globals__.get('slot_'+str(profile['root_slot'])) is not root:
+            raise ValueError('canonical root binding changed')
+        for guard,owner,target,owner_state,target_state in routes:
+            actual_owner,actual_target=_composite_route(original,guard)
+            if (actual_owner is not owner or actual_target is not target
+                    or not _same_state(owner,owner_state) or not _same_state(target,target_state)):
+                raise ValueError('canonical composite route changed')
+        if not all(sha256(path.read_bytes()).hexdigest()==digest for path,digest in sources):
+            raise ValueError('canonical source bytes changed')
+        return True
+    return extra_guards
+
+
+def calibrate_composite_temporal_boundary(guard_profile,out,*,repetitions=9,warmup=2):
+    """Measure only canonical extra composite guard work, independent of DAGs.
+
+    This does not measure a target call. A later projection composes it with a
+    matching retained direct-boundary component, explicitly as a declared model.
+    """
+    out=Path(out).resolve()
+    if out.exists():raise ValueError('fresh composite boundary calibration output required')
+    if type(repetitions) is not int or repetitions<3 or type(warmup) is not int or warmup<1:
+        raise ValueError('at least three repetitions and one warmup required')
+    if sys.gettrace() is not None or sys.getprofile() is not None:raise ValueError('untraced calibration required')
+    from scar.runtime import native_temporal_invariant,loop_guard
+    from scar.trace import code_snapshot
+    helpers=[_receipt(module.__file__) for module in (native_temporal_invariant,loop_guard,code_snapshot)]
+    caller=sorted(os.sched_getaffinity(0));environment=thread_environment()
+    out.mkdir(parents=True)
+    assumptions=[*_ASSUMPTIONS,
+        'EXTRA_GUARD_PLUS_DIRECT_BOUNDARY_IS_DECLARED_COMPOSITION_NOT_A_MEASURED_COMPLETE_CALL',
+        'NUMERIC_GLOBAL_ROUTE_GEOMETRY_PRESERVED_NAMES_AND_CODE_CONTENTS_NOT_USED',
+        'DEFINING_SOURCE_UNITS_SHARE_CANONICAL_NAMESPACES_RUNTIME_ALIASING_MAY_DIFFER',
+        'REPEATED_SYNTHETIC_SOURCE_READS_MODEL_WARM_HOST_FILE_CACHE_NOT_TARGET_PAGE_RESIDENCY',
+        'CANONICAL_FUNCTION_METADATA_DEFAULTS_EMPTY_AND_CODE_KEY_CACHE_WARM',
+        'EXTRA_PYTHON_LOOP_AND_BRANCH_BOUNDARY_NONADDITIVITY_NOT_PROVEN']
+    design=dict(schema='scar.composite-temporal-boundary-design',schema_version=1,guard_profile=guard_profile,
+        repetitions=repetitions,warmup=warmup,implementation=_receipt(__file__),runtime_helpers=helpers,
+        python_runtime=dict(version=sys.version,cache_tag=sys.implementation.cache_tag),
+        caller_affinity_cpu_ids=caller,native_thread_environment=environment,
+        source_independent=True,target_body_or_domain_accepted_by_probe=False,target_workload_executed=False,
+        target_variants_ranked=False,component_scope='EXTRA_ORDINARY_FUNCTION_GLOBAL_ROUTE_STATE_AND_SOURCE_HASH_CHECKS',
+        assumptions=assumptions)
+    _save(out/'design.json',design);designref=artifact_reference(out/'design.json',design['schema'])
+    check=_canonical_composite_guards(guard_profile,out/'canonical-sources')
+    measured=_samples(check,repetitions,warmup)
+    raw=dict(schema='scar.composite-temporal-boundary-observations',schema_version=1,
+        frozen_design=designref,extra_guards=measured)
+    _save(out/'raw-observations.json',raw)
+    if sorted(os.sched_getaffinity(0))!=caller or thread_environment()!=environment:
+        raise ValueError('caller affinity or native thread environment changed')
+    for receipt in helpers:
+        if _receipt(receipt['path'])!=receipt:raise ValueError('runtime helper changed during canonical measurement')
+    report=dict(schema='scar.composite-temporal-boundary-calibration',schema_version=1,
+        frozen_design=designref,raw_observations=artifact_reference(out/'raw-observations.json',raw['schema']),
+        guard_profile=guard_profile,extra_guards=measured,python_runtime=design['python_runtime'],
+        caller_affinity_cpu_ids=caller,native_thread_environment=environment,runtime_helpers=helpers,
+        assumptions=assumptions,basis='DECLARED_COMPONENT_MODEL',source_independent=True,
+        target_workload_executed=False,target_variants_ranked=False,target_body_or_domain_accepted_by_probe=False,
+        source_code_ids_or_function_names_in_primitive_keys=False,complete_target_call_measured=False)
+    _save(out/'result.json',report);return report
+
+
+def project_composite_boundary_facts(domain,calibration,out,*,base_calibrations=()):
+    """Project a numeric extra-guard observation plus exact matching base cost.
+
+    Every emitted replacement boundary cites both independent raw sources. A
+    missing base, mismatched profile or unrelated domain emits no false cost.
+    """
+    out=Path(out).resolve()
+    if out.exists():raise ValueError('fresh composite boundary fact batch output required')
+    reference=artifact_reference(calibration,'scar.composite-temporal-boundary-calibration');measured=read_artifact(reference)
+    design=read_artifact(measured['frozen_design']);raw=read_artifact(measured['raw_observations'])
+    if (raw['frozen_design']!=measured['frozen_design'] or raw['extra_guards']!=measured['extra_guards']
+            or design['guard_profile']!=measured['guard_profile'] or measured.get('source_independent') is not True
+            or measured.get('target_workload_executed') is not False or measured.get('target_variants_ranked') is not False):
+        raise ValueError('independent composite boundary receipts differ')
+    for receipt in measured['runtime_helpers']:
+        if _receipt(receipt['path'])!=receipt:raise ValueError('composite guard runtime source differs from calibration')
+    bases=[_projection_materials(path) for path in base_calibrations]
+    out.mkdir(parents=True);rows=[]
+    for index,candidate in enumerate(domain['candidates']):
+        demand=temporal_cpu_cost_demand(domain,candidate['id']);components=[];unresolved=[]
+        terms=[term for term in demand['terms'] if term['component']=='COMPOSITE_GUARDED_TEMPORAL_CALL_BOUNDARY']
+        try:
+            if len(terms)!=1:raise ValueError('UNRELATED_DIRECT_DOMAIN_BOUNDARY_NOT_APPLICABLE')
+            term=terms[0];context=demand['resource_context']
+            if (measured['guard_profile']!=domain['guard_profile'] or measured['python_runtime']!=context['python_runtime']
+                    or measured['caller_affinity_cpu_ids']!=context['caller_affinity_cpu_ids']
+                    or measured['native_thread_environment']!=context['native_thread_environment']):
+                raise ValueError('canonical guard geometry or runtime context differs')
+            family=match_temporal_primitive_family(domain['body']);matches=[]
+            key=(family['family'],semantic_sha256(context),tuple(domain['shape']),domain['trip_count'])
+            for base_ref,base,indexed in bases:
+                for ordinal,observation in indexed.get(key,()):matches.append((base_ref,base,ordinal,observation))
+            if len(matches)!=1:raise ValueError('no unique matching retained direct canonical boundary')
+            base_ref,base,ordinal,observation=matches[0];basecost=observation['serial_components']['boundary']
+            extra=measured['extra_guards']
+            components.append(dict(component=term['component'],parameters=term['parameters'],basis='DECLARED_COMPONENT_MODEL',
+                median_ns=basecost['median_ns']+extra['median_ns'],
+                derivation='RETAINED_DIRECT_CANONICAL_BOUNDARY_MEDIAN_PLUS_INDEPENDENT_EXTRA_COMPOSITE_GUARD_MEDIAN',
+                measurement_sources=[dict(artifact=base_ref,locator=f'#/observations/{ordinal}/serial_components/boundary'),
+                    dict(artifact=reference,locator='#/extra_guards')],family_match_proof=family,
+                component_statistics=dict(base=basecost,extra=extra),
+                assumptions=list(dict.fromkeys([*base['assumptions'],*measured['assumptions']])),
+                complete_target_component_measured=False,additivity_proven=False))
+        except ValueError as error:
+            unresolved=[dict(component='COMPOSITE_GUARDED_TEMPORAL_CALL_BOUNDARY',reason=str(error))]
+        result=dict(schema='scar.temporal-resource-calibration',schema_version=1,
+            resource_context=demand['resource_context'],source_calibration=reference,
+            components=components,unsupported_components=unresolved,target_workload_executed=False,
+            target_variants_ranked=False,worker_scaling_inferred=False,complete_target_call_measured=False)
+        folder=out/('candidate-'+str(index));folder.mkdir();_save(folder/'observations.json',result)
+        rows.append(dict(candidate_id=candidate['id'],complete=bool(components) and not unresolved,
+            observations=artifact_reference(folder/'observations.json',result['schema'])))
+    for ref in (reference,measured['frozen_design'],measured['raw_observations'],
+            *(ref for base in bases for ref in (base[0],base[1]['frozen_design'],base[1]['raw_observations']))):
+        read_artifact(ref,json_document=False)
+    report=dict(schema='scar.temporal-resource-fact-batch',schema_version=1,source_calibration=reference,
+        base_calibrations=[base[0] for base in bases],domain_id=domain['id'],candidates=rows,
+        raw_observation_sets_parsed=1+len(bases),source_receipts_rechecked=True,target_program_executed=False)
+    _save(out/'result.json',report);return report
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target',required=True);parser.add_argument('--cpu-masks',required=True,help='semicolon-separated comma CPU masks')
-    parser.add_argument('--shape',required=True,nargs=2,type=int);parser.add_argument('--trip-count',required=True,type=int)
+    parser.add_argument('--target');parser.add_argument('--cpu-masks',help='semicolon-separated comma CPU masks')
+    parser.add_argument('--shape',nargs=2,type=int);parser.add_argument('--trip-count',type=int)
+    parser.add_argument('--guard-profile',help='standalone numeric composite guard geometry; no target code or DAG is accepted')
     parser.add_argument('--repetitions',type=int,default=7);parser.add_argument('--warmup',type=int,default=2);parser.add_argument('--out',required=True)
-    args=parser.parse_args(argv);masks=[[int(cpu) for cpu in mask.split(',')] for mask in args.cpu_masks.split(';')]
+    args=parser.parse_args(argv)
+    if args.guard_profile is not None:
+        if any(value is not None for value in (args.target,args.cpu_masks,args.shape,args.trip_count)):
+            parser.error('numeric guard geometry and native mathematical calibration are separate modes')
+        profile=json.loads(Path(args.guard_profile).read_bytes())
+        result=calibrate_composite_temporal_boundary(profile,args.out,repetitions=args.repetitions,warmup=args.warmup)
+        print(json.dumps(dict(result=str(Path(args.out).resolve()/'result.json'),
+            median_extra_guard_ns=result['extra_guards']['median_ns'],basis=result['basis'],
+            target_workload_executed=False),sort_keys=True));return 0
+    if any(value is None for value in (args.target,args.cpu_masks,args.shape,args.trip_count)):
+        parser.error('--target --cpu-masks --shape --trip-count required for native primitive calibration')
+    masks=[[int(cpu) for cpu in mask.split(',')] for mask in args.cpu_masks.split(';')]
     result=calibrate_temporal_cpu(args.target,masks,args.shape,args.trip_count,args.out,repetitions=args.repetitions,warmup=args.warmup)
     print(json.dumps(dict(result=str(Path(args.out).resolve()/'result.json'),observations=len(result['observations']),
         native_compilations=1,seconds=result['seconds'],basis=result['basis'],target_workload_executed=False),sort_keys=True))

@@ -38,6 +38,7 @@ def _worker(spec_path,sample_path):
     from scar.runtime.entry_runner import _Loader,_file
     from scar.runtime.loop_guard import _state,_same_state,_range
     from scar.runtime.compiled_deployment import entry_context
+    from scar.runtime.native_temporal_invariant import _composite_route,SourceMismatch
     from scar.trace.code_snapshot import code_key
     spec=json.loads(Path(spec_path).read_bytes());sample_path=Path(sample_path)
     observed=dict(schema='scar.original-loop-call-sample',schema_version=1,
@@ -69,6 +70,10 @@ def _worker(spec_path,sample_path):
             leaf=original.__globals__.get(spec['leaf']['global_name'])
             if not ordinary(leaf,spec['leaf']['source']):raise ValueError('original leaf does not match admitted CodeID')
             entry_state=_state(original);leaf_state=_state(leaf)
+            routes=[]
+            for guard in spec.get('nested_callee_guards',()):
+                owner,target=_composite_route(original,guard)
+                routes.append((guard,owner,target,_state(owner),_state(target)))
             shadow=FunctionType(original.__code__,original.__globals__,argdefs=original.__defaults__)
             shadow.__kwdefaults__=original.__kwdefaults__;signature=inspect.signature(shadow,follow_wrapped=False)
             @wraps(original)
@@ -82,6 +87,13 @@ def _worker(spec_path,sample_path):
                         or original.__globals__.get(spec['leaf']['global_name']) is not leaf
                         or _range(original) is not _RANGE):
                     reason='ORIGINAL_CALLABLE_DEFAULTS_RANGE_OR_GLOBAL_BINDING_CHANGED'
+                for guard,owner,target,owner_state,target_state in routes:
+                    try:actual_owner,actual_target=_composite_route(original,guard)
+                    except SourceMismatch:
+                        reason='COMPOSITE_GLOBAL_ROUTE_CHANGED';break
+                    if (actual_owner is not owner or actual_target is not target
+                            or not _same_state(owner,owner_state) or not _same_state(target,target_state)):
+                        reason='COMPOSITE_GLOBAL_ROUTE_CHANGED';break
                 if any(_receipt(path)['sha256']!=digest for path,digest in sources.items()):
                     reason='ORIGINAL_SOURCE_VERSION_CHANGED'
                 try:bound=signature.bind(*args,**kwargs);bound.apply_defaults()
@@ -109,6 +121,7 @@ def _worker(spec_path,sample_path):
                     reason='EXECUTION_CONTEXT_CHANGED_BEFORE_ORIGINAL_CALL'
                 if sys.gettrace() is not None or sys.getprofile() is not None:
                     reason='EXISTING_GLOBAL_OBSERVER_OUTSIDE_COST_CONTEXT'
+                metadata['original_global_routes_checked']=len(routes)
                 observed['metadata']=metadata
                 if reason is not None:
                     observed.update(status='OUTSIDE_FROZEN_CONTEXT',reason=reason)
@@ -168,13 +181,23 @@ def observe_original_loop_cost(domain_path,program,proof_reference,entry,argv,ou
     if out.exists():raise ValueError('fresh original-loop observation output required')
     entry=Path(entry).resolve();argv=list(argv)
     if not entry.is_file() or any(type(a) is not str for a in argv):raise ValueError('original script and exact argv strings required')
-    domain_ref=artifact_reference(domain_path,'scar.temporal-cpu-domain');domain=read_artifact(domain_ref)
+    domain_path=Path(domain_path).resolve();domain_schema=json.loads(domain_path.read_bytes()).get('schema')
+    if domain_schema not in ('scar.temporal-cpu-domain','scar.composite-temporal-cpu-domain'):
+        raise ValueError('original direct or composite CPU domain required')
+    composite=domain_schema=='scar.composite-temporal-cpu-domain'
+    domain_ref=artifact_reference(domain_path,domain_schema);domain=read_artifact(domain_ref)
     if isinstance(proof_reference,(str,Path)):
-        proof_reference=artifact_reference(proof_reference,'scar.invariant-loop-proof')
+        proof_reference=artifact_reference(proof_reference,'scar.composite-invariant-loop-proof' if composite else 'scar.invariant-loop-proof')
     read_artifact(proof_reference)
     with BuildSession(program) as session:
-        proof=read_invariant_loop_proof(proof_reference['uri'],catalog=session.view)
-        verify_temporal_cpu_domain(proof,domain['target_path'],domain)
+        if composite:
+            from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_proof
+            from scar.optimization.temporal_cpu_choices import verify_composite_temporal_cpu_domain
+            proof=read_composite_invariant_loop_proof(proof_reference['uri'],catalog=session.view)
+            verify_composite_temporal_cpu_domain(proof,domain['target_path'],domain,catalog=session.view)
+        else:
+            proof=read_invariant_loop_proof(proof_reference['uri'],catalog=session.view)
+            verify_temporal_cpu_domain(proof,domain['target_path'],domain)
         if _digest(asdict(proof))!=domain['proof_sha256']:raise ValueError('original cost proof differs from domain')
     if not proof.source.qualname.isidentifier() or Path(proof.source.path)==entry:
         raise ValueError('original cost observation requires an ordinary imported module-level function boundary')
@@ -185,11 +208,26 @@ def observe_original_loop_cost(domain_path,program,proof_reference,entry,argv,ou
         raise ValueError('original observation affinity/thread environment differs from domain')
     env=dict(os.environ);removed=[name for name in _DISABLE if name in env]
     for name in _DISABLE:env.pop(name,None)
+    leaf_name=proof.root_global_name if composite else proof.leaf_global_name
+    leaf_source=proof.root_callee_source if composite else proof.body.source
+    source_refs=[proof.source,leaf_source]
+    if composite:
+        source_refs.extend(source for guard in proof.nested_callee_guards
+            for source in (guard.owner_source,guard.target_source))
+    by_source={}
+    for source in source_refs:
+        previous=by_source.setdefault(source.path,_source(source))
+        if previous['sha256']!=source.sha256:raise ValueError('original source path has conflicting versions')
     specification=dict(schema='scar.original-loop-observation-design',schema_version=1,
         domain=domain_ref,program=_receipt(Path(program)/'manifest.json'),proof=proof_reference,
         context=context,entry=str(entry),argv=argv,entry_context=current,
-        source=_source(proof.source),leaf=dict(global_name=proof.leaf_global_name,source=_source(proof.body.source)),
-        sources=[_source(proof.source),_source(proof.body.source)],parameter_map=proof.parameter_map,
+        proof_kind='COMPOSITE' if composite else 'DIRECT',
+        source=_source(proof.source),leaf=dict(global_name=leaf_name,source=_source(leaf_source)),
+        sources=list(by_source.values()),parameter_map=proof.parameter_map,
+        nested_callee_guards=[] if not composite else [dict(owner_source=_source(guard.owner_source),
+            target_source=_source(guard.target_source),lookup_name=guard.lookup_name,
+            global_path=list(guard.global_path),lookup_semantics=guard.lookup_semantics)
+            for guard in proof.nested_callee_guards],
         trip_count_parameter=proof.trip_count_parameter,input_shapes=domain['input_shapes'],trip_count=domain['trip_count'],
         warmup=warmup,repetitions=repetitions,max_seconds=max_seconds,environment_sha256=_digest(env),
         environment_variable_names=sorted(env),removed_instrumentation_variables=removed,

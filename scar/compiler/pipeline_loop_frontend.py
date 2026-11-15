@@ -15,9 +15,10 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRejected,
     _source_identity, _metadata, _reject, _origin, _ENV, _WORLD)
-from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer
+from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer,_PendingLeafResult
+from scar.compiler.loop_frontend import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
-from scar.compiler.pipeline_frontend import (_PipelineLowerer, _Value, _global_functions,
+from scar.compiler.pipeline_frontend import (_PipelineLowerer, _Value, _Callee, _global_functions,
     discover_graph_pipelines)
 from scar.compiler.pipeline_model import (PipelinePlan, compose_pipeline, prepare_pipeline_leaf,
     document as pipeline_document,pipeline_from_dict)
@@ -106,6 +107,62 @@ class _OneOrMoreCallLowerer(_PipelineLowerer):
         return tuple(self.calls),result[0].id,tuple(self.origins)
 
 
+class _ImportedPipelineLowerer(_OneOrMoreCallLowerer):
+    def __init__(self,*args,function_routes,**kwargs):
+        super().__init__(*args,**kwargs);self.function_routes=function_routes
+
+    def action(self,context,step,args,origin):
+        before=len(self.calls);result=super().action(context,step,args,origin)
+        if len(self.calls)>before:
+            from dataclasses import replace
+            call=self.calls[-1];route=self.function_routes.imported_route(self.source.unit,call.callee.lookup_path[0])
+            if route is not None:self.calls[-1]=replace(call,origins=(*call.origins,route))
+        return result
+
+
+class _ImportedLoopLowerer(_InvariantLoopLowerer):
+    def __init__(self,*args,function_routes,**kwargs):
+        super().__init__(*args,**kwargs);self.function_routes=function_routes
+
+    def action(self,context,step,args,origin):
+        if not args or type(args[0]) is not _Callee:return super().action(context,step,args,origin)
+        callee=args[0];identity=next(row for row in callee.plan.source.origins if row.get('kind')=='source_identity')
+        target_unit=identity['unit']
+        if target_unit==self.source.unit:return super().action(context,step,args,origin)
+        if step.instruction.action is not P.LanguageActionKind.CALL:
+            _reject('CROSS_UNIT_LOOP_EXTRA_ACTION','original fixed global CALL required',origin)
+        fact=self.call_facts.get(context.result(step).port)
+        if (fact is None or fact.keywords or fact.positional_pack is not None or fact.keyword_pack is not None
+                or len(args)!=len(fact.positional)+2 or args[-1] is not _WORLD):
+            _reject('CROSS_UNIT_LOOP_CALL_ARGUMENTS','original positional CALL ABI required',origin)
+        if (tuple(context.value(value).port for value in step.arguments)!=tuple(source_port(self.facts,i).port
+                for i in (fact.callee,*fact.positional,fact.world))
+                or context.result(step,1).port!=source_port(self.facts,fact.result_world).port):
+            _reject('CROSS_UNIT_LOOP_CALL_ABI','CALL ports differ from original F4',origin)
+        body=callee.plan;actuals=args[1:-1]
+        if (self.phase!='BODY' or self.body_calls or type(body) is not ArrayRegion or len(body.parameters)<2
+                or len(actuals)!=len(body.parameters)
+                or any(type(value) is not _Parameter or value.index==self.roles[1] for value in actuals)):
+            _reject('CROSS_UNIT_LOOP_ARRAY_ARGUMENTS','one admitted composite CALL over original non-trip parameters required',origin)
+        signature=callee.function.environment.parameters
+        if (len(signature)!=len(body.parameters) or any(parameter.kind not in
+                (P.DeferredParameterKind.POSITIONAL_ONLY,P.DeferredParameterKind.POSITIONAL_OR_KEYWORD)
+                or parameter.default_source is not None for parameter in signature)):
+            _reject('CROSS_UNIT_LOOP_SIGNATURE','explicit fixed callee parameters required',origin)
+        # The selected callee's template is qualified by its actual source
+        # unit. Equal occurrence numbers in different files are not identity.
+        target_context=self.resolver.plan(target_unit,callee.function.template)
+        if any(type(row.instruction) is P.ApplyDecorator for row in target_context.plan.steps):
+            _reject('CROSS_UNIT_LOOP_DECORATOR','decorated imported callee unsupported',origin)
+        self.body_calls+=1;self.selected_body=callee
+        self.origins.append(dict(origin,role='invariant_array_leaf_call',leaf_region_id=body.id,
+            call_callee=encode(source_port(self.facts,fact.callee)),call_result=encode(source_port(self.facts,fact.result)),
+            call_inputs=[encode(source_port(self.facts,i)) for i in fact.positional],
+            outer_parameter_indices=[value.index for value in actuals],
+            declared_global_import_route=self.function_routes.imported_route(self.source.unit,callee.name)))
+        return (_PendingLeafResult(tuple(value.index for value in actuals)),_WORLD)
+
+
 def _source_reference(unit,function,model,syntax,codes,recipe,digest,origins=()):
     name,span,lines=_metadata(syntax,function.template.occurrence)
     candidates=[code for code in codes if code.co_name==name and code.co_firstlineno in lines
@@ -139,67 +196,77 @@ def _component(pipeline,by_code):
 
 
 def discover_pipeline_invariant_loops(catalog,source=None):
-    """Resolve only admitted local module definitions to a finite fixed point.
+    """Resolve admitted ordinary module/from-import functions to one fixed point.
 
-    Missing imported targets, recursion, dynamic dispatch, effects and unused
-    arithmetic remain explicit refusals; no filesystem dependency scan runs.
+    The source argument filters returned loop owners, not their imported
+    dependencies. Every dependency provider must already exist in the catalog.
     """
+    from scar.compiler.source_function_components import SourceFunctionComponents
     view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
-    leaves,_=discover_graph_regions(view,source);pipelines,_=discover_graph_pipelines(view,source)
+    roots=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
+        view.catalog.units_for_source(str(Path(source).absolute())) or ()))
+    if source is not None and not roots:return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
+    routes=SourceFunctionComponents(view);units=routes.dependency_units(roots)
+    store=view.catalog.fact_store
+    paths=sorted({store.model_units[unit].get('path',store.rows[unit]['path']) for unit in units})
+    leaves=[];pipelines=[]
+    for path in paths:
+        found,_=discover_graph_regions(view,path);leaves.extend(found)
+        found,_=discover_graph_pipelines(view,path);pipelines.extend(found)
     leaf_by_unit={};pipeline_by_unit={}
     for leaf in leaves:
         identity=next(row for row in leaf.source.origins if row.get('kind')=='source_identity')
-        leaf_by_unit[identity['unit'],identity['occurrence']]=leaf
+        if identity['unit'] in units:leaf_by_unit[identity['unit'],identity['occurrence']]=leaf
     for pipeline in pipelines:
         identity=next(row for row in pipeline.source.origins if row.get('kind')=='source_identity')
-        pipeline_by_unit[identity['unit'],identity['occurrence']]=pipeline
-    units=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
-        view.catalog.units_for_source(str(Path(source).absolute())) or ()))
-    if source is not None and not units:return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
-    result=[];rejections=[];resolver=BodyInterfaceResolver(view)
+        if identity['unit'] in units:pipeline_by_unit[identity['unit'],identity['occurrence']]=pipeline
+    result=[];rejections=[];resolver=BodyInterfaceResolver(view);originals={};metadata={}
     for unit in units:
-        original=view.unit(unit);functions=original.facts.functions
-        resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in functions)
-        try:model,syntax,codes,recipe,digest=_source_identity(view.catalog,unit)
+        original=view.unit(unit);originals[unit]=original
+        resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in original.facts.functions)
+        try:metadata[unit]=_source_identity(view.catalog,unit)
         except (ValueError,KeyError,SyntaxError,OSError) as error:
-            rejections.append(dict(unit=unit,code='COMPOSITE_SOURCE_IDENTITY',detail=str(error)));continue
-        components={};by_code={};last={}
-        for function in functions:
-            leaf=leaf_by_unit.get((unit,function.template.occurrence))
-            if leaf is not None:
-                component=_Component(prepare_pipeline_leaf(optimize_region(leaf)))
-                components[function.template]=component;by_code[leaf.source.path,leaf.source.code_key]=component
-        # Each success adds one original definition. A recursion cycle never
-        # gets a fabricated component and cannot grow an unbounded call tree.
-        pending=[fn for fn in functions if fn.template not in components]
-        while pending:
-            progress=False;remaining=[]
-            globals=_global_functions(original.facts,{key:value.execution for key,value in components.items()})
-            for function in pending:
-                try:
-                    pipeline=pipeline_by_unit.get((unit,function.template.occurrence))
-                    if pipeline is None:
-                        calls,output,origins=_OneOrMoreCallLowerer(original,function,resolver,globals).lower()
-                        reference=_source_reference(unit,function,model,syntax,codes,recipe,digest,origins)
-                        pipeline=compose_pipeline(reference,function.parameter_names,calls,output)
-                    component=_component(pipeline,by_code)
-                    components[function.template]=component
-                    source_ref=component.execution.region.source
-                    by_code[source_ref.path,source_ref.code_key]=component;progress=True
-                except GraphRegionRejected as error:
-                    last[function.template]=dict(unit=unit,occurrence=function.template.occurrence,
-                        code=error.code,detail=error.detail,origin=error.origin);remaining.append(function)
-            pending=remaining
-            if not progress:break
-        globals=_global_functions(original.facts,{key:value.fused_body for key,value in components.items()
-            if value.compositions})
-        module_functions={value.function.template for values in _global_functions(original.facts,
-            {fn.template:fn for fn in functions}).values() for value in values}
-        for function in functions:
-            if function.template not in module_functions or function.template in components:continue
+            rejections.append(dict(unit=unit,code='COMPOSITE_SOURCE_IDENTITY',detail=str(error)))
+    components={};by_code={};last={};pending=[]
+    for unit in units:
+        if unit not in metadata:continue
+        for function in originals[unit].facts.functions:
+            leaf=leaf_by_unit.get((unit,function.template.occurrence));key=unit,function.template
+            if leaf is None:pending.append((unit,function));continue
+            component=_Component(prepare_pipeline_leaf(optimize_region(leaf)))
+            components[key]=component;by_code[leaf.source.path,leaf.source.code_key]=component
+    while pending:
+        progress=False;remaining=[]
+        globals_by_unit={unit:routes.globals(unit,components) for unit in metadata}
+        for unit,function in pending:
+            key=unit,function.template;original=originals[unit]
+            model,syntax,codes,recipe,digest=metadata[unit]
             try:
-                body,carry,trip,mapping,name,origins=_InvariantLoopLowerer(
-                    original,function,resolver,globals,syntax=syntax).lower()
+                pipeline=pipeline_by_unit.get((unit,function.template.occurrence))
+                if pipeline is None:
+                    calls,output,origins=_ImportedPipelineLowerer(original,function,resolver,
+                        globals_by_unit[unit],function_routes=routes).lower()
+                    reference=_source_reference(unit,function,model,syntax,codes,recipe,digest,origins)
+                    pipeline=compose_pipeline(reference,function.parameter_names,calls,output)
+                component=_component(pipeline,by_code);components[key]=component
+                ref=component.execution.region.source;by_code[ref.path,ref.code_key]=component;progress=True
+            except GraphRegionRejected as error:
+                last[key]=dict(unit=unit,occurrence=function.template.occurrence,code=error.code,
+                    detail=error.detail,origin=error.origin);remaining.append((unit,function))
+        pending=remaining
+        if not progress:break
+    for unit in roots:
+        if unit not in metadata:continue
+        original=originals[unit];model,syntax,codes,recipe,digest=metadata[unit]
+        globals=routes.globals(unit,components,fused=True)
+        module_functions={value.function.template for values in _global_functions(original.facts,
+            {fn.template:fn for fn in original.facts.functions}).values() for value in values}
+        for function in original.facts.functions:
+            key=unit,function.template
+            if function.template not in module_functions or key in components:continue
+            try:
+                body,carry,trip,mapping,name,origins=_ImportedLoopLowerer(original,function,resolver,globals,
+                    syntax=syntax,function_routes=routes).lower()
                 root=by_code[body.source.path,body.source.code_key]
                 if not root.compositions:_reject('COMPOSITE_BODY_REQUIRED','loop body must expand a proven composition')
                 reference=_source_reference(unit,function,model,syntax,codes,recipe,digest)
@@ -211,9 +278,10 @@ def discover_pipeline_invariant_loops(catalog,source=None):
                 result.append(CompositeInvariantLoopProof(identifier,reference,function.parameter_names,
                     body,carry,trip,mapping,body.source,name,guards,root.compositions,origins))
             except GraphRegionRejected as error:
-                rejections.append(dict(unit=unit,occurrence=function.template.occurrence,
-                    code=error.code,detail=error.detail,origin=error.origin,
-                    composition_frontier=last.get(function.template)))
+                rejections.append(dict(unit=unit,occurrence=function.template.occurrence,code=error.code,
+                    detail=error.detail,origin=error.origin,composition_frontier=last.get(key),
+                    declared_global_frontiers=routes.frontiers.get(unit,{}),
+                    unresolved_component_dependencies=routes.unresolved_dependencies(unit,function,components,last)))
     return result,rejections
 
 

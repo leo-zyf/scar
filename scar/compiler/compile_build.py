@@ -77,21 +77,32 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     composite_ids={row['id'] for row in document.get('composite_invariant_loops',())}
     if loop_inputs is not None and set(loop_inputs)-(original_ids|composite_ids):
         raise ValueError('loop inputs name an unknown original or composite loop')
+    loop_no_op_profiles={} if loop_no_op_profiles is None else loop_no_op_profiles
+    if set(loop_no_op_profiles)-(original_ids|composite_ids):
+        raise ValueError('loop original costs name an unknown original or composite loop')
     original_inputs=None if loop_inputs is None else {key:value for key,value in loop_inputs.items() if key in original_ids}
     composite_inputs=None if loop_inputs is None else {key:value for key,value in loop_inputs.items() if key in composite_ids}
     loops=compile_invariant_build(document,out/'loops',loop_trip_count=loop_trip_count,
         loop_inputs=original_inputs,plan_only=plan_only,loop_cpu_threads=loop_cpu_threads,
         loop_cpu_model=loop_cpu_model,loop_calibrations=loop_calibrations,
-        loop_no_op_profiles=loop_no_op_profiles,loop_max_threads=loop_max_threads)
+        loop_no_op_profiles={key:value for key,value in loop_no_op_profiles.items() if key in original_ids},
+        loop_max_threads=loop_max_threads)
     composite_loops=compile_composite_invariant_build(document,out/'composite-loops',loop_trip_count=loop_trip_count,
         loop_inputs=composite_inputs,plan_only=plan_only,loop_cpu_threads=loop_cpu_threads,
-        cpu_cost_model=loop_cpu_model)
+        cpu_cost_model=loop_cpu_model,loop_calibrations=loop_calibrations,
+        loop_no_op_profiles={key:value for key,value in loop_no_op_profiles.items() if key in composite_ids},
+        loop_max_threads=loop_max_threads)
     read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
     report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
         program=document['program'],hardware=document['hardware'],loop_dependencies=loop_ref,
         regions=rows,invariant_loops=loops,source_rejections=document['rejections'],
+        source_rejection_views=dict(
+            invariant_loops=dict(artifact=parent,locator='#/invariant_loop_rejections',
+                count=len(document.get('invariant_loop_rejections',[]))),
+            composite_loops=dict(artifact=parent,locator='#/composite_rejections',
+                count=len(document.get('composite_rejections',[])))),
         composite_invariant_loops=composite_loops,
-        scope='GUARDED_STATEFUL_REGIONS_WITH_EXPLICIT_CALLER_AND_COST_FRONTIERS',
+        scope='ORIGINAL_F4_STATEFUL_AND_PURE_LOOP_REGIONS_WITH_SCOPED_CALLER_COST_AND_RUNTIME_CONTRACTS',
         source_graph_unrolled=False,target_variants_ranked_by_measurement=False,
         target_program_executed=False,whole_program_compiled=False,three_stages_complete=False,
         selected_for_use=False,seconds=time.monotonic()-started)

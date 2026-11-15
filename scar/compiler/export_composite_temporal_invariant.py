@@ -18,7 +18,14 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
         raise ValueError('separate composite proof reference required; v1 cast is not admission')
     proof_document=read_artifact(proof_reference)
     proof=read_composite_invariant_loop_proof(proof_reference['uri'],catalog=catalog)
-    artifact=load_temporal_invariant_loop(native);interface=artifact.plan['loop_interface']
+    native=Path(native).resolve();manifest=json.loads((native/'artifact.json').read_bytes())
+    parallel=manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
+    if parallel:
+        from scar.compiler.parallel_temporal_invariant import load_parallel_temporal_invariant_loop
+        artifact=load_parallel_temporal_invariant_loop(native)
+    else:
+        artifact=load_temporal_invariant_loop(native)
+    interface=artifact.plan['loop_interface']
     if (interface.get('proof_kind')!=proof.profile or interface.get('synthetic_body_is_original_callable') is not False
             or semantic_sha256(interface.get('original_composite_f4_proof'))!=semantic_sha256(asdict(proof))
             or semantic_sha256(interface.get('root_callee_source'))!=semantic_sha256(asdict(proof.root_callee_source))
@@ -27,7 +34,22 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     schedule_path=Path(schedule_path).resolve();schedule_raw=schedule_path.read_bytes()
     schedule_receipt=dict(path=str(schedule_path),sha256=sha256(schedule_raw).hexdigest(),bytes=len(schedule_raw))
     schedule=json.loads(schedule_raw)
-    verify_composite_invariant_loop_schedule(proof,schedule['target_path'],schedule,catalog=catalog)
+    schema=schedule.get('schema')
+    if schema=='scar.composite-invariant-loop-resource-plan':
+        if parallel:raise ValueError('serial structural composite plan cannot authorize a parallel artifact')
+        verify_composite_invariant_loop_schedule(proof,schedule['target_path'],schedule,catalog=catalog)
+    elif schema in ('scar.parallel-composite-temporal-resource-plan','scar.cost-selected-composite-temporal-cpu-resource-plan'):
+        from scar.optimization.composite_temporal_cpu_choices import (
+            verify_composite_temporal_cpu_preview,verify_selected_composite_temporal_cpu_choice)
+        if not parallel:raise ValueError('parallel composite CPU choice requires the actual OpenMP artifact')
+        verifier=(verify_composite_temporal_cpu_preview if schema=='scar.parallel-composite-temporal-resource-plan'
+            else verify_selected_composite_temporal_cpu_choice)
+        verifier(proof,schedule['target_path'],schedule,catalog=catalog)
+        scheduled=schedule['backend'];compiled=artifact.report['capability']
+        if any(semantic_sha256(scheduled[key])!=semantic_sha256(compiled[key])
+                for key in ('family','compiler','generators','row_partition')):
+            raise ValueError('composite CPU choice backend/compiler/partition differs from actual native artifact')
+    else:raise ValueError('separate replayable composite resource plan required; v1 plan casts are not admission')
     if schedule['selected_kind']!='REGISTER_TEMPORAL_FUSION' or schedule['trip_count']<=0:
         raise ValueError('composite positive-count resource schedule required for native export')
     binding=artifact.plan['execution_plan'].get('resource_binding')
@@ -50,10 +72,11 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     guards=[dict(owner_source=_source(g.owner_source),lookup_name=g.lookup_name,
         target_source=_source(g.target_source),global_path=list(g.global_path),lookup_semantics=g.lookup_semantics)
         for g in proof.nested_callee_guards]
+    family='CPP_OPENMP_EXPLICIT_ROW_PARTITION_TEMPORAL' if parallel else 'CPP_SERIAL_TEMPORAL'
     contract=dict(schema=SCHEMA,schema_version=1,proof_kind='COMPOSITE',
         body_identity=proof.body_identity,derived_body_sha256=artifact.plan['body_sha256'],
         native=dict(library='temporal.so',library_sha256=digest,operator_descriptor_abi_version=1,
-            temporal_control_abi_version=1,control_family='CPP_SERIAL_TEMPORAL'),
+            temporal_control_abi_version=1,control_family=family),
         source=_source(proof.source),leaf=dict(global_name=proof.root_global_name,source=_source(proof.root_callee_source)),
         root_callee_source=_source(proof.root_callee_source),nested_callee_guards=guards,
         parameters=list(proof.parameters),input_order=list(proof.body.parameters),parameter_map=proof.parameter_map,
@@ -67,12 +90,16 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
         Q=artifact.plan['Q'],source_proof=proof_reference,resource_schedule=dict(id=schedule['id'],receipt=schedule_receipt),
         original_composite_f4_proof_sha256=semantic_sha256(asdict(proof)),
         specialization_authority='COMPILED_INTERFACE' if specialization is not None else 'EXPORT_RUNTIME_NARROWING_OF_GENERIC_NATIVE',
-        selection_authority='STRUCTURAL_COMPOSITE_LOGICAL_WORK_NOT_PERFORMANCE_SELECTION',
+        selection_authority=('COMPLETE_COMPOSITE_CPU_FORWARD_COST_MODEL_NOT_ENTRY_PERFORMANCE_SELECTION'
+            if schema=='scar.cost-selected-composite-temporal-cpu-resource-plan' else
+            'EXPLICIT_COMPOSITE_CPU_TEAM_PREVIEW_NOT_COST_SELECTION' if parallel else
+            'STRUCTURAL_COMPOSITE_LOGICAL_WORK_NOT_PERFORMANCE_SELECTION'),
         profitability_status='UNPROVEN_NO_SOURCED_TIMING_MODEL',deployment_authorized=False,validation_execution_requires_trial=True)
     validate_contract(contract);raw=_json(contract)
     admission=dict(schema=ADMISSION,schema_version=1,runtime_sha256=sha256(raw).hexdigest(),library_sha256=digest,
         trust_policy=TRUST,evidence=evidence,producer=dict(name='SCAR',version='0.1.0',exporter=_receipt(__file__)),
         proof_kind='COMPOSITE',original_composite_f4_replayed=True,resource_schedule_replayed=True,
+        control_family=family,cpu_threads=len(binding['cpu_ids']),resource_plan_schema=schema,
         synthetic_body_is_original_callable=False,performance_qualified=False,deployment_authorized=False)
     admission_raw=_json(admission)
     for receipt in evidence:

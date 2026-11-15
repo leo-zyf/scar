@@ -262,6 +262,16 @@ scar observe-original-loop-cost --domain PREVIEW/loops/loop-0/cpu-domain.json --
 
 省略 `--loop-max-threads` 时，域覆盖所有受支持的每 NUMA 线程数及 SMT 代表 mask；显式 cap 只缩小声明域，不证明全平台最优。多份独立校准可以重复传入，已有上下文可复用；批量投影共享一次已验证原观测索引。成本计划留在构建端，紧凑运行端不读源码图或完整成本计划。
 
+组合区域也可跨已准入模块的普通 `from … import … as …` 函数链发现；解析使用原 F4 namespace/import/export 事实。`--source` 限制结果根，不丢弃已准入依赖；歧义目标、递归及未知效果保留具体前沿。组合 proof 独立重放实际调用路径，融合数据图不冒充原 Python callable。
+
+复合 CPU 域与直接调用域分开。已有数学/团队/分配组件可以按相同上下文复用，额外的函数全局路径和源码版本检查另用数字化 guard geometry 校准。先做 `compile-build --loop-cpu-model --plan-only`，取得 `composite-loops/loop-0/guard-profile.json`；它只有结构和字节数，不包含目标源码、函数名或计算 DAG：
+
+```bash
+scar calibrate-temporal-cpu --guard-profile PREVIEW/composite-loops/loop-0/guard-profile.json --out GUARD_COSTS
+```
+
+将 `GUARD_COSTS/result.json` 与已有数学校准重复传入 `--loop-calibration`，使用原复合循环的 NO_OP profile，即可走相同自动选择和 C++20 交付链。两个 proof/schema 不互相强转；深层实际绑定、CodeID、defaults或源码变化会回退原循环。
+
 状态数组区域可先生成一个供验证的明确 CPU 配置，完整成本域缺口仍保留。外部 testcase 只负责输入/输出/状态和 episode 验证；核心导出再次核对原区域、计划、C++ 身份和样本：
 
 ```bash

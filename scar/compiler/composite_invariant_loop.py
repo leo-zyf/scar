@@ -25,9 +25,15 @@ _AUTHORITY='ORIGINAL_F4_COMPOSITE_FUSION_AND_FUNCTION_GLOBAL_ROUTE_REPLAY'
 
 
 def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resource_binding=None,
-        execution_specialization=None):
+        execution_specialization=None,parallel=None):
     """Replay source/fusion/routes, then lower the existing derived Expr DAG."""
     from scar.compiler.temporal_invariant_loop import build_temporal_invariant_loop
+    if parallel is not None and type(parallel) is not bool:
+        raise ValueError('parallel requires an exact boolean or placement-derived None')
+    workers=1 if resource_binding is None else len(resource_binding.cpu_ids)
+    parallel=workers>1 if parallel is None else parallel
+    if parallel and resource_binding is None:raise ValueError('parallel composite requires an explicit retained CPU placement')
+    if not parallel and workers!=1:raise ValueError('serial composite requires exactly one planned CPU')
     proof=validate_composite_invariant_loop_proof(proof,catalog=catalog)
     interface=dict(proof_kind=proof.profile,original_composite_f4_proof=asdict(proof),
         carry_parameter=proof.carry_parameter,
@@ -47,7 +53,11 @@ def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resou
             raise ValueError('exact composite shape/count/contiguous-layout specialization required')
         interface['execution_specialization']=dict(input_shapes={name:list(shape) for name,shape in spec['input_shapes'].items()},
             trip_count=spec['trip_count'],input_layout=spec['input_layout'])
-    return build_temporal_invariant_loop(proof.body,out,carry_parameter=proof.carry_parameter,
+    builder=build_temporal_invariant_loop
+    if parallel:
+        from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop
+        builder=build_parallel_temporal_invariant_loop
+    return builder(proof.body,out,carry_parameter=proof.carry_parameter,
         loop_interface=interface,memory_budget_bytes=memory_budget_bytes,resource_binding=resource_binding)
 
 

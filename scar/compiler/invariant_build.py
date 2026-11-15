@@ -53,19 +53,9 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
                 domain_path=directory/'cpu-domain.json'
                 domain_path.write_text(json.dumps(domain,indent=2,sort_keys=True)+'\n')
                 row['cpu_domain']=artifact_reference(domain_path,domain['schema'])
-                facts=[]
-                for calibration_index,value in enumerate(loop_calibrations):
-                    source=Path(value).resolve()
-                    if source.is_dir():source=source/'result.json'
-                    calibration=json.loads(source.read_bytes())
-                    if calibration.get('schema')=='scar.temporal-resource-calibration':
-                        facts.append(source)
-                    elif calibration.get('schema')=='scar.temporal-cpu-resource-calibration':
-                        from scar.compiler.calibrate_temporal_cpu import project_temporal_resource_fact_batch
-                        batch=project_temporal_resource_fact_batch(domain,source,
-                            directory/('resource-facts-'+str(calibration_index)))
-                        facts.extend(Path(row['observations']['uri']) for row in batch['candidates'])
-                    else:raise ValueError('independent temporal resource calibration required')
+                from scar.compiler.temporal_cost_inputs import project_loop_calibrations
+                facts,cost_inputs=project_loop_calibrations(domain,loop_calibrations,directory/'resource-facts')
+                row['cost_inputs']=cost_inputs
                 selection=plan_selected_temporal_cpu_choice(domain,resource_facts=facts,
                     no_op_profile=no_op_profiles.get(proof.id))
                 choice=selection['choice'];schedule=selection['schedule']
