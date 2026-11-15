@@ -81,6 +81,25 @@ scar observe-region-inputs --plan /path/to/loop-preview/loop-0/loop.json --out /
 scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --out /path/to/loop-build
 ```
 
+可对已绑定的 body plan 校准独立 SSE2 原语，再由硬件模型选择向量链布局。校准不执行目标程序或其变体：
+
+```bash
+scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --plan-only --out /path/to/bound-plan
+scar calibrate-loop-primitives --plan /path/to/bound-plan/loop-0/execution-plan.json --out /path/to/primitive-profile
+scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --simd-profile /path/to/primitive-profile/profile.json --out /path/to/simd-loop-build
+```
+
+布局按原 DAG 的 last-use、SSE2 two-address 复用、寄存器预算和有来源的依赖/吞吐代理选链数；只编译选中布局。v2 artifact 附 layout 和实际 ELF 的 ISA/栈审计，loop ABI 仍为 1，旧无 layout 的 v1 可读。代理成本不是纯指令延迟或整程序耗时预测，抽象向量存储预算不是实际线程栈上限。
+
+外部调用可按原 F4 code/offset 轻量补位，再自动挂到统一图：
+
+```bash
+scar observe-call-bindings --source /path/to/entry.py --entry main --catalog /path/to/catalog --out /path/to/call-targets -- python /path/to/entry.py
+scar build --entry /path/to/entry.py --catalog /path/to/catalog --target /path/to/hardware --call-bindings /path/to/call-targets --out /path/to/unified
+```
+
+每个位点默认只留一次实际 callable 元数据，局部 CALL 事件不采集 operands 或数组数值。`BuildSession.view` 通过 `CALL_TARGET` 条件 MAY 边查询独立观察句柄；它不是 InvocationKey，不能证明 callee 进入、完成、effects 或未来分派。
+
 循环仅观察一次入口，保存数组元数据、精确整数次数及真实嵌套 callable CodeID，不保存数组数值。规划先证明各元素互不依赖，再把时间递推放入元素局部的 C++20 循环；不 unroll，也不按次数复制 IR。只读初值、写独立最终数组，无中间数组 workspace。这是增量 payload 下界，不是时间或物理最优证明；CPU 数量仍显式指定。
 
 运行使用 `scar.codegen.loop.load` 与 `scar.compiler.loop_runtime.install_loop`。原入口、正文及各自 globals 中的叶函数均需匹配；次数变化、零次/负次数、布局或浮点守卫失配时执行原循环一次。正常启用需要该 artifact 的正确性与测量收据。

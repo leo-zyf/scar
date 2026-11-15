@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "shared_loop_execution_progress",
+  "current_milestone": "hardware_simd_and_bounded_binding_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -6294,5 +6294,449 @@
     "goal_complete": false,
     "lewm_modified": false,
     "torch_cuda_upgraded": false
+  },
+  "hardware_simd_and_bounded_binding_progress": {
+    "schema": "scar.hardware-simd-and-bounded-binding-milestone",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T00:03:19.211797+00:00",
+    "previous_goal_turn": "PROGRESS",
+    "status": "VERIFIED_BOUNDED_THREE_STAGE_PROGRESS",
+    "implemented": {
+      "stage1": "ORIGINAL_F4_CALL_SITES_PLUS_BOUNDED_ACTUAL_TARGET_FIELDS_AUTOMATIC_UNIFIED_VIEW_ASSEMBLY",
+      "stage2": "SOURCED_SSE2_DEPENDENCY_THROUGHPUT_PROXY_WITH_LAST_USE_TWO_ADDRESS_REGISTER_LAYOUT",
+      "stage3": "CPP20_PACKED_TEMPORAL_CHAINS_ABI1_ARTIFACT_V2_WITH_HASH_BOUND_CONTRACT_IDENTITIES"
+    },
+    "observed": {
+      "main_call_sites": 19,
+      "main_attempt_records": 19,
+      "unique_python_code_ids": 5,
+      "target_kinds": {
+        "PYTHON_FUNCTION": 7,
+        "NATIVE_CARRIER": 6,
+        "TYPE_OBJECT": 3,
+        "OTHER_CALLABLE": 3
+      },
+      "invocation_handles_inferred": 0,
+      "call_target_edges": "MAY_WITH_RUN_PROCESS_THREAD_ATTEMPT_CONDITIONS",
+      "light_capture_seconds": 0.6194410810130648,
+      "light_capture_includes_original_small_program_and_startup": true,
+      "captured_tensor_contents": false,
+      "collector_analysis_imports": 0,
+      "unified_assembly_uses_original_raw_run_not_latest_light_capture": true,
+      "original_raw_run_and_latest_light_capture_have_equal_target_metadata_not_shared_object_identity": true,
+      "selected_layout": {
+        "kind": "SSE2_F64_TEMPORAL_BLOCK_V1",
+        "isa": "SSE2_X86_64",
+        "simd_lanes": 2,
+        "vector_chains": 3,
+        "tile_elements": 6,
+        "lane_mapping": "CONTIGUOUS_ROW_CHAINS",
+        "scalar_tail": true
+      },
+      "register_model": {
+        "vector_registers": 16,
+        "reserved_vector_registers": 2,
+        "shared_constant_vectors": 5,
+        "per_chain_live_peak": 3,
+        "max_register_feasible_vector_chains": 3,
+        "max_feasible_vector_chains": 3,
+        "predicted_vector_registers": 16,
+        "live_ranges": [
+          {
+            "expression": "fused:call:0:expr:2",
+            "live_before": [
+              "fused:input:0"
+            ],
+            "reuse_first_operand": null,
+            "vector_registers_during_definition": 2
+          },
+          {
+            "expression": "fused:call:0:expr:4",
+            "live_before": [
+              "fused:call:0:expr:2",
+              "fused:input:0"
+            ],
+            "reuse_first_operand": null,
+            "vector_registers_during_definition": 3
+          },
+          {
+            "expression": "fused:call:0:expr:5",
+            "live_before": [
+              "fused:call:0:expr:2",
+              "fused:call:0:expr:4",
+              "fused:input:0"
+            ],
+            "reuse_first_operand": "fused:call:0:expr:2",
+            "vector_registers_during_definition": 3
+          },
+          {
+            "expression": "fused:call:0:expr:6",
+            "live_before": [
+              "fused:call:0:expr:5",
+              "fused:input:0"
+            ],
+            "reuse_first_operand": "fused:input:0",
+            "vector_registers_during_definition": 2
+          },
+          {
+            "expression": "fused:call:1:expr:2",
+            "live_before": [
+              "fused:call:0:expr:6"
+            ],
+            "reuse_first_operand": "fused:call:0:expr:6",
+            "vector_registers_during_definition": 1
+          },
+          {
+            "expression": "fused:call:2:expr:2",
+            "live_before": [
+              "fused:call:1:expr:2"
+            ],
+            "reuse_first_operand": "fused:call:1:expr:2",
+            "vector_registers_during_definition": 1
+          },
+          {
+            "expression": "fused:call:3:expr:2",
+            "live_before": [
+              "fused:call:2:expr:2"
+            ],
+            "reuse_first_operand": null,
+            "vector_registers_during_definition": 2
+          },
+          {
+            "expression": "fused:call:3:expr:3",
+            "live_before": [
+              "fused:call:2:expr:2",
+              "fused:call:3:expr:2"
+            ],
+            "reuse_first_operand": "fused:call:3:expr:2",
+            "vector_registers_during_definition": 2
+          },
+          {
+            "expression": "fused:call:3:expr:5",
+            "live_before": [
+              "fused:call:2:expr:2",
+              "fused:call:3:expr:3"
+            ],
+            "reuse_first_operand": null,
+            "vector_registers_during_definition": 3
+          },
+          {
+            "expression": "fused:call:3:expr:6",
+            "live_before": [
+              "fused:call:2:expr:2",
+              "fused:call:3:expr:5"
+            ],
+            "reuse_first_operand": "fused:call:2:expr:2",
+            "vector_registers_during_definition": 2
+          }
+        ],
+        "policy": "SSE2_TWO_ADDRESS_FIRST_OPERAND_LAST_USE_REUSE_NO_COMMUTATION",
+        "actual_compiler_register_allocation_verified": false,
+        "compiler_spills_verified": false
+      },
+      "isa_audit": {
+        "dynamic_rsp_sub_sites": [],
+        "instruction_counts_are_static_sites": true,
+        "isa_profile": "SSE2_X86_64",
+        "library_sha256": "419c4971fae5e27305c5843e3dfeb3a07ef0c714a92c03aed9a904276437a458",
+        "maximum_static_rsp_sub_bytes": 200,
+        "no_compiler_spills_proven": false,
+        "packed_double_arithmetic_sites": {
+          "addpd": 9,
+          "divpd": 3,
+          "mulpd": 15,
+          "subpd": 3
+        },
+        "schema": "scar.loop-isa-audit",
+        "schema_version": 1,
+        "scope": "THIS_ELF_STATIC_STACK_ADJUSTMENTS_EXCLUDES_CALLEE_LIBRARIES_CPU_MASK_HEAP_FULL_THREAD_STACK_AND_RSS",
+        "stack_operands_are_possible_spills_not_all_proven_spills": true,
+        "sum_static_rsp_sub_sites_bytes": 368,
+        "xmm_stack_memory_examples": [],
+        "xmm_stack_memory_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "xmm_stack_memory_sites": 0
+      }
+    },
+    "verified": {
+      "main": {
+        "scope": "WARM_IN_PROCESS_MAIN_CALL_EXCLUDES_MODULE_LOAD_AND_PROCESS_STARTUP",
+        "warmup": 1,
+        "repetitions": 3,
+        "baseline": {
+          "count": 3,
+          "units": "seconds",
+          "median": 4.637067864998244,
+          "min": 4.63241598001332,
+          "max": 4.655400413001189,
+          "stdev": 0.012151862065592252
+        },
+        "native": {
+          "count": 3,
+          "units": "seconds",
+          "median": 0.18100918698473834,
+          "min": 0.1629731530265417,
+          "max": 0.18232013599481434,
+          "stdev": 0.010811435752810334
+        },
+        "speedup": 25.617859194015466,
+        "selection": "TRANSFORM_UNDER_CONTRACT"
+      },
+      "process": {
+        "scope": "FRESH_PROCESS_START_THROUGH_EXIT_INCLUDES_IMPORTS_ARTIFACT_LOAD_AND_OUTPUT_IO",
+        "warmup_processes_per_mode": 1,
+        "repetitions": 3,
+        "baseline": {
+          "count": 3,
+          "units": "seconds",
+          "median": 4.1026200579945,
+          "min": 4.0366196100076195,
+          "max": 4.133389859984163,
+          "stdev": 0.04944242633183695
+        },
+        "native": {
+          "count": 3,
+          "units": "seconds",
+          "median": 2.0358458269911353,
+          "min": 2.0206116100016516,
+          "max": 2.0440360980283003,
+          "stdev": 0.011887448186045577
+        },
+        "speedup": 2.015191918563863,
+        "selection": "TRANSFORM_UNDER_CONTRACT",
+        "includes_native_adapter_statistics_file_io": true
+      },
+      "output_state_bitwise_equal": true,
+      "stdout_and_npy_bytes_equal": true,
+      "native_calls_each_program": 1,
+      "native_fallbacks_each_program": 0,
+      "normal_trial_false_selection_used": true,
+      "tests": {
+        "passed": 4,
+        "seconds": 2.86,
+        "post_import_refactor_targeted_test_passed": 1
+      },
+      "wheel_source_assets_checked": 1024,
+      "legacy_core_host_fused_implementations_unchanged": true,
+      "legacy_loop_v1_cpp_bytes_compatible": true,
+      "first_use_calibration_requires_no_target_compile": true
+    },
+    "inferred": {
+      "selected_vector_chains_basis": "SOURCED_FINITE_DOMAIN_PROXY_SCORE_WITH_ABSTRACT_REGISTER_AND_ROW_WIDTH_CONSTRAINTS",
+      "pure_instruction_latency_or_full_program_duration_proven": false,
+      "actual_compiler_spill_freedom_proven": false,
+      "physical_or_global_time_optimality_proven": false,
+      "runtime_loader_static_replanning_is_a_deployment_gap": true,
+      "timings_are_separate_scopes_not_additive_component_measurements": true
+    },
+    "rejected": {
+      "memory_budget_4194304": "NO_OP_BEFORE_NATIVE_COMPILE",
+      "first_fp_finite_mask_primitive": "EXCLUDED_COST_EVIDENCE_INTEGER_IMPLEMENTATION_CONTRACT_REQUIRED"
+    },
+    "model": {
+      "logical_payload_final_bytes": 8405000,
+      "array_workspace_bytes": 0,
+      "memory_budget_bytes": 12582912,
+      "abstract_vector_storage_bytes_per_worker": 256,
+      "abstract_vector_storage_is_not_native_stack_cap": true,
+      "cpu_allocation": "EXPLICIT_8_CPUS_UNRANKED",
+      "time_iterations_unrolled": false,
+      "source_body_expression_nodes": 16,
+      "canonical_calibration_target_variants_executed": false,
+      "compiled_target_layouts": 1,
+      "target_black_box_mode_ranking": false
+    },
+    "external_assumptions": [
+      "SYNCHRONOUS_CPU_EXECUTION",
+      "NO_FOREIGN_CONCURRENT_INPUT_WRITERS",
+      "FP_STATUS_FLAGS_NOT_USED_AS_PROGRAM_OUTPUT"
+    ],
+    "environment": {
+      "python": "3.14.7",
+      "numpy": "2.5.2",
+      "torch": "2.13.0+cu132",
+      "torch_cuda": "13.2",
+      "cuda_available": false,
+      "cpp_standard": "C++20",
+      "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+      "cpu_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "loop_abi_version": 1,
+      "native_artifact_version": 2
+    },
+    "remaining": {
+      "stage1": [
+        "callee entry/completion and argument/default/receiver/content state",
+        "native schema/effects and complete software/hardware dependency closure"
+      ],
+      "stage2": [
+        "full-boundary execution costs,parallel scaling and memory hierarchy",
+        "joint partition/placement/COPY/residency/recompute/ready-release scheduling"
+      ],
+      "stage3": [
+        "minimal deployment runtime separated from compiler/planner/admission",
+        "portable runtime contract and standalone/general CPP delivery with effects and asynchronous tasks"
+      ]
+    },
+    "next_actions": [
+      "Separate build-time admission from install/per-call live guards without deleting validation",
+      "Connect observed target metadata to actual library/native schemas and value provenance",
+      "Add deployment/setup context to cost-aware NO_OP decisions"
+    ],
+    "external_testcase": {
+      "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction",
+      "git_head": "c2c6f0d1c84df65d8189940c8d2210ef436c69cd",
+      "files": {
+        "physics.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/physics.py",
+          "sha256": "f047f71cab0545402c9e5ca27152e2e258c710efa04b31f06f99b8ef10d1f5ea",
+          "bytes": 451
+        },
+        "run.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/run.py",
+          "sha256": "cb30e9f9e9486475e91e24eb11ccea5e6375714c10c6534548102d5c5d1626d6",
+          "bytes": 908
+        },
+        "validate.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/validate.py",
+          "sha256": "0eb3ac54b0d52377234cffd73046203d4b5d8c72880b21e1fbc6328dde645314",
+          "bytes": 6697
+        },
+        "process_validate.py": {
+          "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/process_validate.py",
+          "sha256": "86dd918e64bae6a9c99384a588d1d776cb784c20f91ab06f1bf9931889a406b7",
+          "bytes": 4259
+        }
+      }
+    },
+    "artifacts": {
+      "compiled/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/compiled/result.json",
+        "sha256": "aa589b2ec499805f8ae06a2e537c286be7ace5b515654bf202fcf5037e48ba6a",
+        "bytes": 12274
+      },
+      "compiled/loop-0/layout.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/compiled/loop-0/layout.json",
+        "sha256": "aab77f7544bf600a7da6daffcb0c44c43dde1ceb34957450fe7239fdd5ff67b7",
+        "bytes": 6388
+      },
+      "compiled/loop-0/native/artifact.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/compiled/loop-0/native/artifact.json",
+        "sha256": "bb5b7647b878ee652afbf2b8276e7cb9509d3008c72060f8317e400c83824e5a",
+        "bytes": 7281
+      },
+      "compiled/loop-0/native/isa-audit.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/compiled/loop-0/native/isa-audit.json",
+        "sha256": "69406137a525e6e31518d55dcc0dc2837f2ed60105d42964c92788127b37241f",
+        "bytes": 829
+      },
+      "primitive-calibration-integer-guard/profile.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/primitive-calibration-integer-guard/profile.json",
+        "sha256": "34a90f056f82690bd906ca5271610e52a39f0bb9bd597bf585c462df95db0229",
+        "bytes": 10276
+      },
+      "primitive-calibration-integer-guard/observations.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/primitive-calibration-integer-guard/observations.json",
+        "sha256": "8a94fe30c058cac7b3152e439eb466760295042f1cfb71425aac62d010c05dbb",
+        "bytes": 7491
+      },
+      "calibration-qualification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/calibration-qualification.json",
+        "sha256": "317d13a1299a49324d61c2310fc0789e5e620179a9a3b2493867ff4d16c512cd",
+        "bytes": 686
+      },
+      "program-validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/program-validation/result.json",
+        "sha256": "99462f498f4a52369ff96dfed18612c208e67f66f322d4ca2763f1cc84e2f257",
+        "bytes": 12508
+      },
+      "process-validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/process-validation/result.json",
+        "sha256": "15f74a88bda29ef66beb5766e8db18039961e212adfd8ae9e236eca4ed07fd78",
+        "bytes": 12405
+      },
+      "call-bindings-light/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/call-bindings-light/result.json",
+        "sha256": "1194e7feb805f10757ef21eb7e71875dabaec848fe5e11462c758954b227a8b9",
+        "bytes": 1072
+      },
+      "call-bindings-light/join.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/call-bindings-light/join.json",
+        "sha256": "d762f5ab8983b06470ea0477b49158bc546969675ebec441ac1dfa10ff8dbd09",
+        "bytes": 30428
+      },
+      "call-bindings/source-call-target-query-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/call-bindings/source-call-target-query-receipt.json",
+        "sha256": "3fa87ad11e419448440345e8d4a1a6be4c18eaab5377ab768fc6d38d101cf1e7",
+        "bytes": 8411
+      },
+      "assembly-light-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/assembly-light-receipt.json",
+        "sha256": "c43aede71a8af2528c407fb4e33ae4f4f52972eb40c877b9af1d6ccd9f52dc22",
+        "bytes": 3872
+      },
+      "import-light-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/import-light-receipt.json",
+        "sha256": "8d656830740e21deac0cda64f227a39ab4db9b0b69f90936f2d1f524132e53a1",
+        "bytes": 2390
+      },
+      "backend-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/backend-receipt.json",
+        "sha256": "7230855e60f431ec294e82ec8fa1ea435536d7c819900f3f0569152e6faa4a47",
+        "bytes": 8211
+      },
+      "runtime-load-boundary.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/runtime-load-boundary.json",
+        "sha256": "61b03994b79d6385383667327ab3ffbe730edbfc2f054ef5354470631622d07a",
+        "bytes": 8210
+      },
+      "too-small-budget/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/too-small-budget/result.json",
+        "sha256": "b882fbfa8d486ede3e01023a82c34597302464368216be5ee2e8675229396a93",
+        "bytes": 2564
+      },
+      "final-tests.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/final-tests.log",
+        "sha256": "9ec88763ca7b1e87a2ba76c9669081800c3bf52d9f3da256103d558b923e173f",
+        "bytes": 98
+      },
+      "environment.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/environment.json",
+        "sha256": "9ee95ec3128ded70fbba543c8ae060d0b7d7d68329c1f410c6833eab30d14a57",
+        "bytes": 403
+      },
+      "wheel-verification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/wheel-verification.json",
+        "sha256": "aaa7ac6a0c048e2e7d24304ccd1bbf5673dc01b3b0bd07b552928dea8d30d938",
+        "bytes": 1142
+      },
+      "first-use-preview/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-simd-execution-v1/first-use-preview/result.json",
+        "sha256": "ce4ebc7bab34677de5cba5bfdcfc7f5966e0c9fd50999dd2238602c1ccbdad0d",
+        "bytes": 2791
+      }
+    },
+    "implementation_commits": [
+      "3f40220c",
+      "48530cf5",
+      "56f996a0",
+      "b262fa66"
+    ],
+    "first_stage_complete": false,
+    "second_stage_complete": false,
+    "third_stage_complete": false,
+    "whole_program_cpp": false,
+    "lewm_modified": false,
+    "lewm_speedup_measured": false,
+    "torch_cuda_upgraded": false,
+    "goal_complete": false
   }
 }

@@ -440,3 +440,7 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 只有单数组输入、逐元素算术/标量常量、无 slice/逃逸/开放效果且输出形状保持时，跨元素依赖为空，才可交换 `(t, i)` 执行次序为 `(i, t)`。时间方向仍依序执行每次运算；R0 融合证书、优化后 P 与实际循环合同身份分开保存。次数是观测/声明后逐调用精确守卫的信息，不能从一次运行推出未来相同。
 
 `TEMPORAL_FUSION` 用一个 native 运行循环、一个元素局部 carry、一个新建最终数组，IR 大小为 O(body)。预算为增量数组 payload，排除输入、allocator 元数据、线程 scratch 与 RSS。原 leaf 结果数量和算法字节量不等于真实 malloc 次数、DRAM 流量或 cache 事件。全局 FP 状态 flags 不作为该 profile 的程序输出；后端保存恢复调用者环境，并对非法浮点状态及非有限 carry 回退。
+
+`scar.loop-layout` 在该语义上单独描述空间 lane/chain 布局：有来源的 ISA、固定寄存器预算、每 Expr 活跃区间、first operand 最后使用时的 two-address 复用、行宽/尾部及规范原语成本代理。共享 SSA 值不因复用机器寄存器而合并身份。逐 lane 时间顺序不变，向量链在 DAG 节点之间交错；只选中布局被编译。实际 spill/栈调整来自独立 ELF 审计，不能从抽象寄存器预算反推；模型不预测全程序时间或线性多核收益。
+
+`SourceObservedCallTarget` 是原 F4 CALL 上的独立观察记录，记录实际 callable CodeID 或精确 native carrier/type 及原始收据。图以 `CALL_TARGET/MAY` 和 run/process/thread/attempt 条件引用它，不把相同 CodeID 的多次观察合成一次 invocation，也不凭 native 名称生成实现 ID。caller invocation、callee entry/completion、参数/defaults、内容与 effects 仍各自有开放字段；显式装配进 `BuildSession` 不改变这些证据边界。

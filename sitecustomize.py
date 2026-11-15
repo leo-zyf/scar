@@ -1,6 +1,14 @@
 """Auto-loaded by Python child processes launched by SCAR."""
 import os
 
+if os.environ.get('SCAR_CALL_BINDING_PLAN'):
+    try:
+        from scar.trace.call_binding import install as _scar_install_call_binding
+        _scar_call_binding = _scar_install_call_binding()
+    except Exception as _scar_binding_error:
+        if os.environ.get('SCAR_TRACE_DEBUG'):
+            print(f'SCAR call bindings disabled: {_scar_binding_error}', flush=True)
+
 if os.environ.get('SCAR_REGION_METADATA_PLAN'):
     try:
         from scar.trace.region_metadata import install as _scar_install_region_metadata
