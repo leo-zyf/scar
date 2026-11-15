@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "compiler_independent_runtime_progress",
+  "current_milestone": "automatic_entry_and_macro_planning_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -7056,5 +7056,190 @@
     "lewm_modified": false,
     "lewm_speedup_measured": false,
     "torch_cuda_upgraded": false
+  },
+  "automatic_entry_and_macro_planning_progress": {
+    "schema": "scar.automatic-entry-milestone",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T02:35:52.312270+00:00",
+    "status": "VERIFIED_THREE_STAGE_PROGRESS_AND_PHASE2_ARCHITECTURE_REVIEW",
+    "previous_goal_turn": "PROGRESS",
+    "implemented": {
+      "stage1": [
+        "BOUNDED_STATIC_ENTRY_SOURCE_OWNERSHIP",
+        "FULL_MODULE_CODE_ID_POST_STORE_CANDIDATE_ANCHORS",
+        "CONDITIONAL_CPU_CACHE_SMT_NUMA_SUBGRAPH"
+      ],
+      "stage2": [
+        "EXACT_ENTRY_LAUNCH_POLICY_BUNDLE_CPU_PAYLOAD_DEPLOYMENT_GATE",
+        "SOURCED_TEMPORAL_WORKER_CHOICE_ADAPTER_SYNTHETIC_ONLY"
+      ],
+      "stage3": [
+        "AUTOMATIC_ORDINARY_SOURCE_IMPORT_ATTACHMENT",
+        "LIGHTWEIGHT_CONSOLE_DISPATCH",
+        "MAIN_LOCAL_CODE_ATTACHMENT_PROTOTYPE_NOT_CLI_ACTIVATED"
+      ]
+    },
+    "observed": {
+      "scope": "PARENT_CLOCK_FRESH_PROCESS_START_TO_EXIT_INCLUDES_COST_GATE_AND_REPORT_IO",
+      "statistics": {
+        "baseline": {
+          "count": 3,
+          "max": 4.222196759015787,
+          "median": 4.1956922769895755,
+          "min": 4.136184595990926,
+          "stdev": 0.04404873031376755,
+          "units": "seconds"
+        },
+        "native": {
+          "count": 3,
+          "max": 0.4082490639993921,
+          "median": 0.3988567040069029,
+          "min": 0.38754457799950615,
+          "stdev": 0.010367066135566084,
+          "units": "seconds"
+        }
+      },
+      "speedup": 10.519297368803816,
+      "warmup": 1,
+      "repetitions": 3,
+      "shape": [
+        1025,
+        1025
+      ],
+      "steps": 400,
+      "cpu_allocation": "EXPLICIT_EIGHT_CPUS_NOT_MODEL_SELECTED",
+      "automatic_import_native_calls_per_program": 1,
+      "automatic_import_fallbacks_per_program": 0,
+      "stdout_and_npy_bytes_equal": true,
+      "entry_and_physics_source_bytes_unchanged": true,
+      "runner_implementation_sha256": "532dbc2a74a258649e64a0d11768a015174e388648781d99d4d2ef612f63343d"
+    },
+    "cost_model": {
+      "basis": "DECLARED_MODEL",
+      "native_metadata_surcharge_seconds": 0.1,
+      "surcharge_is_observed_or_proven_bound": false,
+      "separate_normal_cost_gated_AB": true,
+      "observations_rewrote_model": false,
+      "all_alias_call_observation_complete": false,
+      "cost_scope_verified": false
+    },
+    "phase2_architecture": {
+      "status": "PROPOSED_NOT_IMPLEMENTED_PASS_MANAGER",
+      "decisions": "WHETHER_HOW_OFTEN_WHERE_WHEN_CONCURRENTLY_WITH_WHICH_MATERIALIZATION_LIFETIME_TRANSFER_AND_SYNC",
+      "layers": [
+        "ANALYSES",
+        "LEGAL_LOGICAL_GRAPH_REWRITES",
+        "CROSS_RESOURCE_EXECUTION_ORGANIZATION_AND_PLACEMENT",
+        "TARGET_REFINEMENT_AND_JOINT_COST_SELECTION",
+        "BOUND_PLAN_HANDOFF_TO_CPP_BACKENDS"
+      ],
+      "llvm_gcc_role": "LOCAL_CODE_GENERATION_NOT_A_MACRO_RESOURCE_PLANNER",
+      "resource_domain": [
+        "CPU",
+        "ACCELERATORS",
+        "HOST_AND_DEVICE_MEMORY",
+        "STORAGE",
+        "CONNECTIONS_AND_CONTENTION"
+      ],
+      "physical_node_count_is_performance_objective": false,
+      "source": "docs/ARCHITECTURE.md"
+    },
+    "cpu_hierarchy": {
+      "artifact": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/queries/cpu-hierarchy/result.json",
+        "sha256": "16a82f6e919b526762a51317066fd10684740140229dbac2fdae3793c5cdeb83",
+        "bytes": 207520
+      },
+      "statistics": {
+        "bytes_read": 6242,
+        "cache_index_observations": 224,
+        "deduplicated_cache_nodes": 86,
+        "files_attempted": 1344,
+        "files_read": 1344,
+        "seconds": 0.07240300899138674
+      },
+      "query_seconds": 0.07240300899138674,
+      "unique_caches": 86,
+      "l3_capacity_bytes_per_cache": 36700160,
+      "cache_line_bytes": 64,
+      "cache_is_allocatable": false,
+      "same_machine_join_proven": false,
+      "integrated_into_existing_unified_planner": false
+    },
+    "not_yet_verified": [
+      "REAL_TEMPORAL_MULTIWORKER_CALIBRATION_AND_AUTOMATIC_BOUND_CPP_EXECUTION",
+      "MAIN_ATTACHMENT_ACTIVATED_IN_FORMAL_CLI_AND_REAL_WORKLOAD",
+      "GENERAL_EFFECT_ALIAS_CONTENT_AND_LOOP_DISTANCE_ANALYSES",
+      "SCOPED_ANALYSIS_MANAGER_PASSRESULT_AND_EXECUTION_RECIPE_REFACTOR",
+      "JOINT_CPU_GPU_MEMORY_STORAGE_PLACEMENT_TRANSFER_AND_ASYNC_LOWERING",
+      "WHOLE_PROGRAM_STANDALONE_CPP"
+    ],
+    "proofs": {
+      "artifacts/current/experiments/automatic-entry-v1/entry-inspection.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/entry-inspection.json",
+        "sha256": "7714c5b75d6664aa75f33d21b5249296abff604bb02215f156e81ac78cba7494",
+        "bytes": 9068
+      },
+      "artifacts/current/experiments/automatic-entry-v1/integration-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/integration-receipt.json",
+        "sha256": "f9c6365b2ad1a17fbaa23df9b1a41b07a349ba3ce0b32d53e0197e59d09d9c00",
+        "bytes": 2399
+      },
+      "artifacts/current/experiments/automatic-entry-v1/validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/validation/result.json",
+        "sha256": "c836c76c77b632da3771d49bdfef0cfe66433381c1aedc0e52bef6d4755ec181",
+        "bytes": 51256
+      },
+      "artifacts/current/experiments/automatic-entry-v1/validation/plan.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/validation/plan.json",
+        "sha256": "972f419c8705b5c164d668fb034a01ab214e0f403c9b33a5021bb4cb7f41e8b1",
+        "bytes": 11271
+      },
+      "artifacts/current/experiments/automatic-entry-v1/validation/profile.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/validation/profile.json",
+        "sha256": "7a8155f3a4eef5b8497ea327250aaa4499f02925abf2e3024af43fb7630d196e",
+        "bytes": 3932
+      },
+      "artifacts/current/experiments/automatic-entry-v1/validation/model.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/validation/model.json",
+        "sha256": "dab4b46e094b23bfacee813745cf61de01f38d6c82aa8e6007d122274b9f9e01",
+        "bytes": 3004
+      },
+      "artifacts/current/experiments/automatic-entry-v1/noop-report.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/noop-report.json",
+        "sha256": "16365100bcf0e84b2446a93560e61e2b6e67864c4af2e17534a74ee371a52273",
+        "bytes": 2018
+      },
+      "artifacts/current/experiments/automatic-entry-v1/focused-checks.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/focused-checks.log",
+        "sha256": "8d0c0cdca84c00aefcec15705f88c5b8c048f448af649c97f1af89ebbb5bc5d0",
+        "bytes": 98
+      },
+      "artifacts/current/experiments/automatic-entry-v1/layer-handoffs.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/layer-handoffs.log",
+        "sha256": "761eac00c84e96a33333e0cd0ed09ebeac74af875bdb5aa68901418d1e994610",
+        "bytes": 98
+      },
+      "artifacts/current/experiments/automatic-entry-v1/wheel-verification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-entry-v1/wheel-verification.json",
+        "sha256": "31ccdf0c06820afc5e0f32a1ca1f8d525366236ebeb8cd4c6dd30fc28662a41d",
+        "bytes": 973
+      },
+      "artifacts/current/queries/cpu-hierarchy/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/queries/cpu-hierarchy/result.json",
+        "sha256": "16a82f6e919b526762a51317066fd10684740140229dbac2fdae3793c5cdeb83",
+        "bytes": 207520
+      }
+    },
+    "external_testcase_commit": "92a5c37fba6cabb496929a31e08b37697e0c0889",
+    "native_recompiled": false,
+    "lewm_modified": false,
+    "lewm_speedup_measured": false,
+    "torch_cuda_upgraded": false,
+    "first_stage_complete": false,
+    "second_stage_complete": false,
+    "third_stage_complete": false,
+    "entire_program_CPP": false,
+    "goal_complete": false
   }
 }

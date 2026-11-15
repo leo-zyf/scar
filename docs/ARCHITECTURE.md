@@ -94,7 +94,9 @@ C++宿主通过版本化C函数表接入插件（仍是C++后端），传递描�
 CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周期约束，原生浮点异常转交原NumPy路径。
 编译资格、契约合法性和实测选用分开；无收益选择NO_OP，已测收益只对对应计划和shape/layout生效。
 
-构建与部署已有独立接口：`export-loop-runtime` 在构建端完整准入原 loop/layout/profile/ELF，再输出小 runtime contract、admission 与原 library。`scar.runtime` 不导入 compiler/optimization/analysis/codegen/IR，不重渲染模板、调用 objdump 或读取 proof 档案。安装时核源码/实际环境，调用时保数组、次数、CPU/fenv/回退守卫；明确的 producer admission pin 不充当数字签名。成本门控可在加载前处理，并不授权跳过准入。当前仍有 Python 入口与 fallback，完整 standalone C++ 交付尚未完成。
+构建与部署已有独立接口：`export-loop-runtime` 在构建端完整准入原 loop/layout/profile/ELF，再输出小 runtime contract、admission 与原 library。原生 loader 不导入 compiler/optimization/analysis/codegen/IR，不重渲染模板、调用 objdump 或读取 proof 档案。安装时核源码/实际环境，调用时保数组、次数、CPU/fenv/回退守卫；明确的 producer admission pin 不充当数字签名。成本门控可在加载前处理，并不授权跳过准入。当前仍有 Python 入口与 fallback，完整 standalone C++ 交付尚未完成。
+
+`scar run` 经轻量 dispatcher 接入原脚本；元数据成本门可导入纯 stdlib 的 deployment cost/gate，执行器不导入 compiler/analysis/codegen/IR。静态 entry inspection 只提供本地候选；scoped 普通 loader 在目标模块初始化结束后装配已准入边界，供自然 from-import 使用，退出撤销装配。成本拒绝不加载 native，继续原入口。入口自己定义的目标、custom loader、循环初始化与未知别名覆盖仍保明确前沿。
 
 资源规划主链现为原F4/值来源→符号工作量→硬件资源约束→materialization/ready/分配生命周期任务图→模型求解。
 实际调用视图以原端口加 run/InvocationKey 表示；caller 内重复 CALL 加原 attempt 锚点。
@@ -108,6 +110,47 @@ CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周�
 该辅助比较图不取代原程序图；typed IO/materialization 仍由各原任务图与收据引用，位置固定，不暗增 COPY。
 同步CPU后端已执行allocation→compute→export的 timed 计划；shape、连续布局、输出字节预算及CPU绑定逐调用检查。
 预测 tick 不用于睡眠；源码和硬件收据在build/load核对，其他 timed 形态仍不支持。
+
+### 第二阶段分层：跨资源规划，局部编译器降低（Proposed）
+
+SCAR 保留程序/状态/效果/循环的高层图，并与整机资源图结合。LLVM/GCC 负责局部机器代码；
+它们不替代跨 Python 调用、CPU/GPU、DRAM/设备内存、存储、搬运及流水的宏观规划。
+未被当前程序使用的设备仍在资源域；库存、可分配预算、实时可用性和实际使用分开。
+SCAR 的决策单位是操作、区域、循环或 pipeline stage：是否执行/复用、执行次数、融合/分块、
+执行位置与并发方式、数据表示/驻留/生命周期、搬运和同步。SIMD 是可委托的后端能力之一；
+现有手写 SSE2 原型保留用于验证，后续优先统一上层 execution recipe，不继续扩写机器指令选择、寄存器分配或通用向量化器。
+
+| 层 | 输入 → 输出 | 不变量 |
+|---|---|---|
+| A 分析 | 原图 → 依赖/alias/effects、shape、loop carry、liveness、资源能力与来源 | 不修改程序；未知字段有明确前沿；证据不因变换被覆盖 |
+| B 逻辑变换 | 原图＋分析 → 合法 region/loop 变换图及前后关系 | 源/值/状态/效果/Q 可追溯；保留共享循环，不按迭代复制正文 |
+| C 执行组织与放置 | 合法图＋全部可用资源/实现能力 → 分块、融合、materialization、placement、transfer、并发的参数化计划 | CPU/GPU/存储共同参与；新复制/预取任务须有必要性、所有权和 ready/order 约束 |
+| D 目标细化与联合选择 | 参数化计划＋能力/预算/有来源成本 → 明确 CPU team/SIMD/NUMA 或 GPU batch/block/stream 等执行 recipe | 成本描述实际将生成的结构；峰值内存、链路/执行器竞争、数值与同步约束共同满足 |
+| E 物化交接 | 已选 recipe → bound 执行计划，供第三阶段 C++20/backend lowering | 只交付受支持实现；语义合法、资源可行、预计收益、实测收益是不同状态 |
+
+C/D 需反馈：融合影响寄存器/缓存或 GPU occupancy，分块影响搬运和 pipeline；不能先固定 placement 再把它称联合最优。
+逻辑 batch 与物理 microbatch 分开，RNG、归约顺序及算法输入规模仍受 Q 约束。
+图节点数量并非性能目标；有效的分块、prefetch 或异步 copy 可能增加执行节点。
+process/MPI、GPU offload 和存储流水只有具备相应实现/分区/通信/effect/cost 合同时才可执行，不能由资源存在推导合法性。
+
+每个 pass 计划统一返回 `PassResult(input_ir_id, output_ir_id, relation, required_analyses,
+preserved, invalidated, obligations, frontiers)`。分析以 IR 版本、作用域和相关 target/profile/Q 版本为键；
+默认变换后失效，逐步允许显式 preservation。独立 region 可并行，pass 不任意修改兄弟作用域或共享全局可变分析。
+合法变换、成本计划和最终物化分开；同一 recipe 应同时支持成本估计与代码生成，避免估计一种结构却生成另一种。
+
+现状：已有 SSA/def-use/CFG/dom、显式 state 流、共享 loop 端口和局部 profile；
+通用 AA/ModRef/clobber、循环递推/迭代距离分析及上述 PassManager 尚未完成。
+`optimizer`/`loop_strategy`/`loop_layout`/`loop_workers` 仍混合多层责任，`passes` 字符串不代表已有管理器。
+新增 CPU cache/SMT/NUMA 子图可提供硬件输入；它目前仍是条件化 sidecar，尚未接入统一 planner。
+worker cost/choice 适配层已实现，真实多 worker 校准及自动 binding→C++ 仍未打通。
+
+下一节点：先提取共享分析/合法性与 PassResult；再把既有 temporal/SIMD/worker 决策改成显式 recipe，
+补独立并行原语校准并只降低所选绑定；随后扩 CPU NUMA/缓存/进程及设备/存储放置能力，保持同一跨资源协议。
+
+参考：[LLVM 分析与 pass 管理](https://llvm.org/docs/NewPassManager.html)、
+[VPlan](https://llvm.org/docs/VectorizationPlan.html)、[向量化合法性/成本](https://llvm.org/docs/Vectorizers.html)、
+[MLIR 分层操作与 pass](https://mlir.llvm.org/docs/PassManagement/)、
+[保留高层结构与逐步 bufferization](https://mlir.llvm.org/docs/Bufferization/)。
 另一个已准入 profile 是原 F4 直线数组调用 pipeline：共享 leaf plans，值边引用各调用 producer。
 固定 pool 规划根据 shape、consumer 与 last-use 分配槽，区分逻辑释放与物理持有；最终输出不复用 workspace。
 C++ 宿主用一次入口 FFI 调度已有 ABI1 算子并持有私有 pool，Python 不逐算子调度。

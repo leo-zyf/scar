@@ -97,16 +97,14 @@ scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/t
 scar export-loop-runtime --artifact /path/to/simd-loop-build/loop-0/native --selection /path/to/measured-result.json --out /path/to/runtime-bundle
 ```
 
-```python
-from scar.runtime.native_loop import load
-from scar.runtime.loop_guard import install_loop
-
-artifact = load('/path/to/runtime-bundle', expected_admission_sha256='导出时得到的受信任收据哈希')
-with install_loop(application_module, artifact, exclusive_inputs=True):
-    application_module.evolve(inputs, steps)  # 此处使用应用自己的入口与参数
+```bash
+scar inspect-entry --entry /path/to/application.py --contract /path/to/runtime-bundle/runtime.json --out /path/to/entry-map.json
+scar run --bundle /path/to/runtime-bundle --admission-sha256 TRUSTED_SHA256 --exclusive-inputs --memory-budget-bytes BYTES --deployment-plan /path/to/cost-plan.json --report /path/to/execution.json -- /path/to/application.py [arguments]
 ```
 
-pin 必须来自调用者信任的构建记录，loader 不从包内 report 自行取信；哈希不等于签名。运行包保 library/ABI、原应用源码与嵌套 globals、实际函数 builtins、shape/count/owner、CPU/ISA/fenv 等守卫。仍依赖 Python/NumPy、原应用源码和系统共享库，尚非独立 C++ 程序。
+`inspect-entry` 静态解析有界本地导入候选；`run` 在普通目标模块自然导入完成后安装守卫，无需 testcase 手写导入/替换，也不改应用源码。不支持的 loader、入口自身定义的目标函数等保留原路径。`--measure-candidate` 可替代 `--deployment-plan` 测量已准入候选，但不代表成本已批准。无成本计划时默认 NO_OP。
+
+pin 必须来自调用者信任的构建记录，loader 不从包内 report 自行取信；哈希不等于签名。运行包保 library/ABI、原应用源码与嵌套 globals、实际函数 builtins、shape/count/owner、CPU/ISA/fenv 等守卫。仍依赖 Python/NumPy、原应用源码和系统共享库，尚非独立 C++ 程序。手动嵌入仍可用轻量 `scar.runtime.native_loop.load` 和 `scar.runtime.loop_guard.install_loop`。
 
 部署成本可先在元数据上门控：`scar plan-deployment --profile PROFILE --context CONTEXT --reuse-count N --cpu-ids 0 1 --memory-budget-bytes BYTES --out REPORT`。完整 scope 观测只在其原 scope/count 回放；组件模型必须分别有来源的加载、安装及调用成本。缺失值保持 NO_OP，不从 warm/fresh median 差值推导 setup。正向结果仅 `LOAD_NATIVE_CANDIDATE`，不能替代准入和动态守卫。
 
@@ -121,7 +119,7 @@ scar build --entry /path/to/entry.py --catalog /path/to/catalog --target /path/t
 
 循环仅观察一次入口，保存数组元数据、精确整数次数及真实嵌套 callable CodeID，不保存数组数值。规划先证明各元素互不依赖，再把时间递推放入元素局部的 C++20 循环；不 unroll，也不按次数复制 IR。只读初值、写独立最终数组，无中间数组 workspace。这是增量 payload 下界，不是时间或物理最优证明；CPU 数量仍显式指定。
 
-运行使用 `scar.codegen.loop.load` 与 `scar.compiler.loop_runtime.install_loop`。原入口、正文及各自 globals 中的叶函数均需匹配；次数变化、零次/负次数、布局或浮点守卫失配时执行原循环一次。正常启用需要该 artifact 的正确性与测量收据。
+原入口、正文及各自 globals 中的叶函数均需匹配；次数变化、零次/负次数、布局或浮点守卫失配时执行原循环一次。正常启用需要该 artifact 的正确性与测量收据。
 
 未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
 仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。

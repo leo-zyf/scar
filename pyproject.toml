@@ -15,7 +15,7 @@ native-source = ["tree-sitter==0.26.0", "tree-sitter-cpp==0.23.4"]
 configuration-source = ["PyYAML>=6,<7", "antlr4-python3-runtime==4.9.3"]
 
 [project.scripts]
-scar = "scar.cli:main"
+scar = "scar.entrypoint:main"
 
 [tool.setuptools.packages.find]
 include = ["scar*"]

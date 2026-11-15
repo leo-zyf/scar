@@ -448,3 +448,5 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 部署投影 `scar.loop-runtime-contract` 不取代上述图：构建端完整重放后，把必要的源码/环境/数组/CPU/ABI/selection 合同及 library 身份投影到小包，admission 收据绑定其原始字节。运行端依调用者信任的 admission pin 核对，再执行 live guards，不重新规划或读 proof 档案。函数 builtins 是函数创建时保留的环境，不能用之后的 `globals['__builtins__']` 代替。
 
 `scar.deployment-cost-profile` 区分 COMPONENTS 与 COMPLETE_SCOPE，并完整绑定边界、artifact、CPU、内存与假设。组件和可复用次数用有来源的显式量正向计算；整边界观测不能跨 scope 或外推次数，也不能互减冒充加载成本。成本允许加载候选与执行准入是两种资格，原始 NO_OP 始终有效。
+
+自动入口另绑定 entry 源版本、逐字 argv、runner 实现及 launch policy。成本资源必须等于实际 native 合同规定的 CPU 与新增输出 payload，不以成本文件自报的较小需求替代。导入候选不是实际 loader 证据；普通目标模块完成加载后才安装源码/环境守卫。已安装边界的调用计数与所有可能别名的覆盖度分开；测得一次 native 不证明整个程序只有一次调用。
