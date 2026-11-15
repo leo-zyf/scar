@@ -575,6 +575,7 @@ def main(argv=None) -> int:
         'export-loop-runtime': 'scar.compiler.export_runtime',
         'plan-deployment': 'scar.compiler.plan_deployment',
         'inspect-entry': 'scar.compiler.runtime_entry',
+        'recipe': 'scar.compiler.recipe',
         'calibrate-loop-primitives': 'scar.compiler.calibrate_simd',
         'observe-call-bindings': 'scar.compiler.observe_call_bindings',
         'benchmark-pipeline': 'scar.compiler.benchmark_pipeline',

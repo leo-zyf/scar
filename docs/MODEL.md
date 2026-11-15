@@ -450,3 +450,7 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 `scar.deployment-cost-profile` 区分 COMPONENTS 与 COMPLETE_SCOPE，并完整绑定边界、artifact、CPU、内存与假设。组件和可复用次数用有来源的显式量正向计算；整边界观测不能跨 scope 或外推次数，也不能互减冒充加载成本。成本允许加载候选与执行准入是两种资格，原始 NO_OP 始终有效。
 
 自动入口另绑定 entry 源版本、逐字 argv、runner 实现及 launch policy。成本资源必须等于实际 native 合同规定的 CPU 与新增输出 payload，不以成本文件自报的较小需求替代。导入候选不是实际 loader 证据；普通目标模块完成加载后才安装源码/环境守卫。已安装边界的调用计数与所有可能别名的覆盖度分开；测得一次 native 不证明整个程序只有一次调用。
+
+`scar.execution-recipe/v1` 是上层执行组织的交接件：semantic_boundary、control、typed task_graph、全部库存与已选 resources、后端 implementation/capability、原 artifacts 和 obligations。估价与选择不写回 recipe，按同一 recipe_id 独立引用；降低重放同份结构并核真实 compiler/ABI/layout/implementation。ID 是版本关联，不代替合法性或执行授权。现有 cpu-temporal-loop-v1 保一份共享正文与每坐标严格 time carry；分配只准备存储，完整计算完成才令最终值就绪。局部端口 label 不是原 ValueID/LogicalVersion/StorageID，原图端口和来源仍以引用保留。全调用成本不擅自拆成 allocation/compute/export 时长，缺项不补 0。
+
+整体优化目标是依赖及资源约束下的完成时间：数据/状态/顺序前驱必须满足，live allocations 受容量约束，执行器与通道受并发约束。不同设备不自动意味独立；物理任务图可因分块、预取或异步搬运增加节点。循环保持结构化控制，不按毫秒或迭代完全展开。算法与计算精度不变，允许设备实现固有浮点差异是当前全局意向；现有严格 CPU profile 保其较强的顺序、fenv、finite 及逐位验证合同，没有擅自放宽或加入量化、近似或删减迭代。

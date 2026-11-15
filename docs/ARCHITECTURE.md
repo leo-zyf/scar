@@ -141,8 +141,12 @@ preserved, invalidated, obligations, frontiers)`。分析以 IR 版本、作用�
 现状：已有 SSA/def-use/CFG/dom、显式 state 流、共享 loop 端口和局部 profile；
 通用 AA/ModRef/clobber、循环递推/迭代距离分析及上述 PassManager 尚未完成。
 `optimizer`/`loop_strategy`/`loop_layout`/`loop_workers` 仍混合多层责任，`passes` 字符串不代表已有管理器。
-新增 CPU cache/SMT/NUMA 子图可提供硬件输入；它目前仍是条件化 sidecar，尚未接入统一 planner。
-worker cost/choice 适配层已实现，真实多 worker 校准及自动 binding→C++ 仍未打通。
+上层交接已先贯通 `recipe_boundary → loop_recipe → recipe estimate/codegen`：资源独立的语义边界、
+task ready/ownership、全部库存、条件化 CPU cache/SMT/NUMA sidecar 和已选 binding 明确分开。
+同 recipe ID 绑定完整 backend capability/编译上下文，估价和 lowering 消费同份计划；
+共享合法性提到 compiler.loop_admission，新分析不再调用 codegen 私有准入。
+当前只覆盖已准入 CPU temporal 区域；worker cost/choice 适配层已有，真实多 worker 校准、
+自动 binding 选择及全程序跨 CPU/GPU/内存/存储的联合时序求解仍未打通。
 
 下一节点：先提取共享分析/合法性与 PassResult；再把既有 temporal/SIMD/worker 决策改成显式 recipe，
 补独立并行原语校准并只降低所选绑定；随后扩 CPU NUMA/缓存/进程及设备/存储放置能力，保持同一跨资源协议。

@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "automatic_entry_and_macro_planning_progress",
+  "current_milestone": "macro_execution_recipe_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -7241,5 +7241,230 @@
     "third_stage_complete": false,
     "entire_program_CPP": false,
     "goal_complete": false
+  },
+  "macro_execution_recipe_progress": {
+    "schema": "scar.macro-execution-recipe-milestone",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T03:36:15.797225+00:00",
+    "status": "VERIFIED_RECIPE_TO_CPP_PIPELINE_PROGRESS",
+    "previous_goal_turn": "PROGRESS",
+    "implemented": {
+      "stage1": "RESOURCE_INDEPENDENT_SEMANTIC_BOUNDARY_WITH_SOURCE_PORT_AND_READY_CARRY_REFERENCES",
+      "stage2": "ONE_VERSIONED_RECIPE_FOR_CONTROL_MATERIALIZATION_READY_RESOURCE_BUDGET_AND_BACKEND_CAPABILITY",
+      "stage3": "SHARED_LEGALITY_AND_REPLAYED_RECIPE_TO_EXISTING_CPP20_BACKEND_WITH_ACTUAL_DESCRIPTOR_COMPARE"
+    },
+    "objective": "MINIMIZE_PROGRAM_MAKESPAN_UNDER_DATA_STATE_ORDER_RESOURCE_AND_MEMORY_LIFETIME_CONSTRAINTS",
+    "contract_intent": "SAME_ALGORITHM_AND_COMPUTATION_PRECISION_NATIVE_DEVICE_FLOATING_VARIATION_ACCEPTED_NO_LOSSY_TRANSFORMS",
+    "verified_current_contract": "EXISTING_STRICT_CPU_F64_PROFILE_BITWISE_VALIDATION_NOT_RELAXED",
+    "recipe_id": "recipe-v1:a61a86ed0c0e82b6158d479f1fe74fe291a260f6159e518483d1ba1553eaebfd",
+    "semantic_boundary_id": "loop-semantic-boundary:04afc2e124ee42b0243089658c4b94a7202c381192e1475d7174710f50b5877f",
+    "observed": {
+      "schema": "scar.macro-recipe-integration",
+      "schema_version": 1,
+      "status": "PASS",
+      "recipe_id": "recipe-v1:a61a86ed0c0e82b6158d479f1fe74fe291a260f6159e518483d1ba1553eaebfd",
+      "semantic_boundary_id": "loop-semantic-boundary:04afc2e124ee42b0243089658c4b94a7202c381192e1475d7174710f50b5877f",
+      "original_and_lowered_recipe_bytes_equal": true,
+      "estimation_and_lowering_same_recipe": true,
+      "full_backend_capability_matches_actual_codegen": true,
+      "timing_unknown_preserved": true,
+      "missing_task_durations_not_zero": true,
+      "shared_body_instances": 1,
+      "trip_count": 400,
+      "tasks": 3,
+      "all_retained_resources": 12,
+      "cpu_hierarchy_referenced": true,
+      "fresh_payload_bytes": 8405000,
+      "workspace_bytes": 0,
+      "explicit_payload_budget_bytes": 12582912,
+      "original_application_sources_unchanged": true,
+      "generated_cpp_headers_and_library_equal_previous_kernel": true,
+      "native_recompiled": true,
+      "target_compiles": 1,
+      "target_variants_ranked": false,
+      "new_native_build_id": "a1651c6226b485a23fa26adf0791fa1d19f94e4a0f0ae4fe2e9cf1cef26528de",
+      "library_sha256": "419c4971fae5e27305c5843e3dfeb3a07ef0c714a92c03aed9a904276437a458",
+      "core_bundle_bytes": 32739,
+      "old_kernel_math_not_new_local_optimization": true,
+      "recipe_bytes": 56190,
+      "recipe_definition": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/recipe/recipe.json",
+        "sha256": "d47f9e5bdf088e9dcb93984cbe1f94a35d1236737bbdc3515fa29cdb72567b6a",
+        "bytes": 56190
+      },
+      "lowering_receipt": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/lowered/lowering-receipt.json",
+        "sha256": "3fcad54f28b93422d51a38af5c1b61e1c10970af31423ca234e5cd943b4b150f",
+        "bytes": 7284
+      },
+      "environment": {
+        "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+        "packages": {
+          "numpy": "2.5.2",
+          "torch": "2.13.0+cu132",
+          "scar": "0.1.0"
+        }
+      },
+      "entire_program_cpp": false,
+      "full_program_schedule_optimal": false,
+      "lewm_modified": false,
+      "lewm_speedup_measured": false,
+      "region_correctness": {
+        "bitwise_final_state": true,
+        "stdout_and_npy_bytes_equal": true,
+        "input_preserved": true,
+        "fresh_output": true,
+        "output_mutation_isolated": true,
+        "changed_input_recomputed": true,
+        "zero_and_negative_trip_alias_preserved": true,
+        "changed_trip_count_falls_back": true,
+        "effectful_nested_callee_falls_back_once": true
+      },
+      "intermediate_iteration_outputs_observed": false
+    },
+    "performance": {
+      "scope": "PARENT_CLOCK_FRESH_PROCESS_START_TO_EXIT_INCLUDES_COST_GATE_AND_REPORT_IO",
+      "statistics": {
+        "baseline": {
+          "count": 3,
+          "max": 4.07107105400064,
+          "median": 4.05330175999552,
+          "min": 4.03711672098143,
+          "stdev": 0.016983325293295905,
+          "units": "seconds"
+        },
+        "native": {
+          "count": 3,
+          "max": 0.39822476301924326,
+          "median": 0.3951948519970756,
+          "min": 0.3887895229854621,
+          "stdev": 0.00481719757819726,
+          "units": "seconds"
+        }
+      },
+      "speedup": 10.256463968375565,
+      "shape": [
+        1025,
+        1025
+      ],
+      "steps": 400,
+      "warmup": 1,
+      "repetitions": 3,
+      "cpu_allocation": "EXPLICIT_EIGHT_CPUS_UNRANKED",
+      "native_calls_per_program": 1,
+      "fallbacks_per_program": 0,
+      "kernel_bytes_identical_to_previous": true,
+      "new_local_kernel_acceleration_claim": false
+    },
+    "estimated": {
+      "payload": "EXACT_FINAL_BYTES_AND_ZERO_WORKSPACE_UNDER_SHAPE_CONTRACT",
+      "time": "UNKNOWN",
+      "per_task_time": "UNKNOWN_NOT_ZERO",
+      "full_program_makespan": null,
+      "old_single_step_cost_not_reused": true
+    },
+    "deployment_cost_model": {
+      "basis": "DECLARED_MODEL",
+      "metadata_surcharge_seconds": 0.1,
+      "surcharge_is_observed_or_proven_bound": false,
+      "normal_gated_process_AB_separate": true,
+      "observations_rewrote_plan": false,
+      "alias_call_observation_complete": false,
+      "cost_scope_verified": false
+    },
+    "remaining": [
+      "REAL_BACKEND_MACRO_OPERATION_TIME_WORKSPACE_TRANSFER_AND_SYNC_COSTS",
+      "GENERAL_ALIAS_CONTENT_EFFECT_RECURRENCE_AND_ITERATION_DISTANCE_ANALYSES",
+      "SCOPED_PASSRESULT_ANALYSIS_INVALIDATION_AND_RECIPE_SELECTION",
+      "AUTOMATIC_WORKER_PARTITION_PLACEMENT_AND_PIPELINE_TIMING",
+      "PARTIAL_REGION_SHARED_STORAGE_AND_READY_AGGREGATION_FOR_SPLIT_EXECUTION",
+      "JOINT_CPU_GPU_MEMORY_STORAGE_MAKESPAN_WITH_EXECUTABLE_BACKEND_SUPPORT",
+      "FORMAL_MAIN_ATTACH_ASYNC_HOST_IO_AND_WHOLE_PROGRAM_CPP_DELIVERY"
+    ],
+    "proofs": {
+      "recipe/recipe.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/recipe/recipe.json",
+        "sha256": "d47f9e5bdf088e9dcb93984cbe1f94a35d1236737bbdc3515fa29cdb72567b6a",
+        "bytes": 56190
+      },
+      "estimate.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/estimate.json",
+        "sha256": "a97311828037421a1aeefe2f7c74cf32aa14dbf18d9131f745c052c6adeb3897",
+        "bytes": 1634
+      },
+      "lowered/recipe.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/lowered/recipe.json",
+        "sha256": "d47f9e5bdf088e9dcb93984cbe1f94a35d1236737bbdc3515fa29cdb72567b6a",
+        "bytes": 56190
+      },
+      "lowered/lowering-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/lowered/lowering-receipt.json",
+        "sha256": "3fcad54f28b93422d51a38af5c1b61e1c10970af31423ca234e5cd943b4b150f",
+        "bytes": 7284
+      },
+      "lowered/native/artifact.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/lowered/native/artifact.json",
+        "sha256": "de1bc57dd04d81c4ebd04ce913e51b8af3b8a4c8a81e25b5571afd4ab90064cd",
+        "bytes": 7281
+      },
+      "bundle/admission.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/bundle/admission.json",
+        "sha256": "62473ba4fbcd7388c3a2ac6964bd062bbeb5e8b5b3e7e0768fa43ca3a9a68729",
+        "bytes": 5340
+      },
+      "bundle/runtime.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/bundle/runtime.json",
+        "sha256": "760b4b1daec398873bb1c3c905da0fad7c2b727efcb544a728f0af503253cbf5",
+        "bytes": 5967
+      },
+      "bundle/export-report.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/bundle/export-report.json",
+        "sha256": "bd88396295950e05428eb5b955eb82cada93ef3795493e80ea2b27e9e9cf1b84",
+        "bytes": 1113
+      },
+      "region-validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/region-validation/result.json",
+        "sha256": "607a1cfcc82be5c8c3a6911baf4c5b21c3b3e4d00b1b0b5a14893b6b6c2e958a",
+        "bytes": 12448
+      },
+      "automatic-validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/automatic-validation/result.json",
+        "sha256": "55c42036389e8254ae43e87bb67472b3b7cca62e94f8e301caeb7022e14fe185",
+        "bytes": 51493
+      },
+      "automatic-validation/model.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/automatic-validation/model.json",
+        "sha256": "60c3e7165f6115991ce5c030178654a8b8db0fc3e4b37c7389e685b48862ec0b",
+        "bytes": 3018
+      },
+      "automatic-validation/plan.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/automatic-validation/plan.json",
+        "sha256": "2f07b07262b58bf1c2a12363f9d97c0d3bc11b5763b1e5d398be6ae56ff0d1db",
+        "bytes": 11320
+      },
+      "integration-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/integration-receipt.json",
+        "sha256": "eb23f1793552ea7e16d76c84bb6b39999f9c23d3925cfe6cfb0c44ae0a6e4e31",
+        "bytes": 2523
+      },
+      "focused-checks.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/focused-checks.log",
+        "sha256": "c2a5285fdeedf79fa600f6db9741f5a65ed9e2ef5f029156220272592613ffe1",
+        "bytes": 98
+      },
+      "wheel-verification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/macro-recipe-v1/wheel-verification.json",
+        "sha256": "3691ec9863c2439401ff9524eb122e6ed5caedace58fc7d8ddc6b6b7c545f656",
+        "bytes": 626
+      }
+    },
+    "first_stage_complete": false,
+    "second_stage_complete": false,
+    "third_stage_complete": false,
+    "entire_program_CPP": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "lewm_speedup_measured": false,
+    "torch_cuda_upgraded": false
   }
 }

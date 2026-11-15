@@ -91,6 +91,16 @@ scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/t
 
 布局按原 DAG 的 last-use、SSE2 two-address 复用、寄存器预算和有来源的依赖/吞吐代理选链数；只编译选中布局。v2 artifact 附 layout 和实际 ELF 的 ISA/栈审计，loop ABI 仍为 1，旧无 layout 的 v1 可读。代理成本不是纯指令延迟或整程序耗时预测，抽象向量存储预算不是实际线程栈上限。
 
+同一份上层 execution recipe 现在可贯通语义边界、任务/资源图、估价和 C++ 降低：
+
+```bash
+scar recipe plan-loop --loop LOOP.json --strategy STRATEGY.json --plan BOUND_PLAN.json --layout LAYOUT.json --cpu-hierarchy CPU_HIERARCHY.json --out /path/to/recipe
+scar recipe estimate --recipe /path/to/recipe/recipe.json --out /path/to/estimate.json
+scar recipe lower --recipe /path/to/recipe/recipe.json --out /path/to/lowered
+```
+
+输入来自现有静态循环发现及 plan-only 流程；layout/cache sidecar 可省略。recipe 引用原组件，不复制循环正文或展开迭代，完整保留未选资源。语义边界不随 CPU 数改变；recipe ID 还绑定资源、后端实现、编译器和布局。估计与 lowering 收据引用同一 ID。缺真实 temporal 成本时输出 UNKNOWN，编译仅取得待测产物；不是自动部署资格，也不表示全程序时序已求解。降低产物在 `lowered/native/`，继续使用下述导出及运行入口。
+
 部署前一次性准入原 proof，再导出小运行包；完整 IR、profile、硬件档案和模板不进入运行进程：
 
 ```bash
