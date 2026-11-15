@@ -1,0 +1,100 @@
+{
+  "schema": "scar.demand-interface-admission-gate",
+  "schema_version": 1,
+  "status": "VERIFIED_SCOPED_DEMAND_ADMISSION_AND_MAIN_GRAPH",
+  "model": {
+    "order": [
+      "IMMUTABLE_DIRECTORY_AND_BYTE_RECEIPTS",
+      "ORIGINAL_UNIT_FACTS_TYPED_ON_DEMAND",
+      "ORIGINAL_INTERFACE_FAMILY_AND_WITNESS_VALIDATION"
+    ],
+    "unqueried_does_not_mean_absent": true,
+    "unknown_fields_not_replaced_by_false_purity": true
+  },
+  "catalog": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/catalog/result.json",
+    "sha256": "81d52dacd36516e4468fbf0ca76c9f92dcb27fabf8135da0dac746e33154a95e",
+    "bytes": 40447
+  },
+  "admission_inspection": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/admission-inspection/result.json",
+    "sha256": "f228afaf0207dd4dd49ecd8fce5323f5f3db4f3fcd6d33ce8456cf45b6ca311b",
+    "bytes": 27056
+  },
+  "contract_negative_checks": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/contract-negative-checks.json",
+    "sha256": "ac8294681431961aa5318f9a8311e3ec874457ca51ce0fc92c496ca9076cd0a9",
+    "bytes": 556
+  },
+  "capture": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/call-bindings/result.json",
+    "sha256": "303aaa18cc164c20667e162c7d21d7799ba4039c5302ea8ca7a05b6ae38ae570",
+    "bytes": 1100
+  },
+  "program": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/program-build/manifest.json",
+    "sha256": "a16c1f78196ffee6c45b85ae7fc53852a539275f2003515d167c39c5bc894523",
+    "bytes": 13060
+  },
+  "interface_inspection": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/interface-inspection/result.json",
+    "sha256": "a814bb0fbc2e72afd1bd44627fcdcfa7e6e72e37d66ff1e7a82b974ce94df6bd",
+    "bytes": 177460
+  },
+  "graph_validation": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/demand-interface-admission-v1/interface-inspection/validation.json",
+    "sha256": "a2a94d2cb3f1b2b1bd3078517220ad31d2713918c27e8f53aedde269b0303715",
+    "bytes": 716
+  },
+  "original_leaf_source_and_interface_receipts_unchanged": true,
+  "hardware_snapshot": {
+    "bytes": 8704,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-entry-v1/program-build/hardware/result.json",
+    "sha256": "7ae291c8509831fe19c9780bc5969e48cd86c44d81bcda6ef850d9e95e252dd8"
+  },
+  "hardware_reprobed": false,
+  "resource_records": 257,
+  "observed_analysis_latency": {
+    "scope": "ONE_DIAGNOSTIC_OBSERVATION_EACH_NOT_A_CLEAN_TARGET_BENCHMARK",
+    "previous_interface_inspection": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/result.json",
+      "sha256": "980fafd585c9dd128cb5471adcb7c228a17d786c1120e34b4d404c2e20fe231b",
+      "bytes": 177346
+    },
+    "previous_open_phase": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/phase-timing.json",
+      "sha256": "2fc1daa8600634e67afdd8f020fc62ea12c931014ff6de37b60c20d5aae8b99e",
+      "bytes": 737
+    },
+    "previous_total_seconds": 102.32502773602027,
+    "current_total_seconds": 55.66132394800661,
+    "previous_independent_open_seconds": 101.57691060297657,
+    "current_independent_open_seconds": 54.81663680000929,
+    "observed_open_time_reduction_fraction": 0.4603435320624629,
+    "current_phase_seconds": {
+      "build_session_constructor": 54.81663680000929,
+      "explicit_provider_unit_attach": 0.3046014540013857,
+      "main_graph_outgoing_calls": 0.4117767919669859,
+      "other_before_publication": 0.037227940862067044,
+      "report_record_encoding": 0.09108096116688102
+    }
+  },
+  "verification": {
+    "unit_checks": 7,
+    "seconds": 7.13,
+    "command": "python -m pytest -q tests/unit/test_lazy_compiled_interfaces.py tests/unit/test_call_binding.py tests/unit/test_bounded_source_interfaces.py",
+    "negative_contract_checks": 3,
+    "frontend_or_primitive_leaf_rebuilt": false,
+    "new_optimization_backend": false,
+    "new_target_AB_speedup_claim": null
+  },
+  "remaining": [
+    "EAGER_COMPILED_MATERIAL_TEMPLATE_GRAPHS_APPROX_105559408_DECODED_BYTES",
+    "GENERAL_ALIAS_CONTENT_VERSION_AND_CREATOR_ENVIRONMENT_LINKS",
+    "NATIVE_SCHEMA_AND_EFFECT_CLOSURE",
+    "STATEFUL_COMPLETE_CPU_COST_DOMAIN_AND_GENERAL_CPP_HOST"
+  ],
+  "first_stage_complete": false,
+  "all_three_stages_complete": false,
+  "transformation_authorized_by_this_gate": false
+}

@@ -20,9 +20,18 @@ from scar.analysis.observed_compiled_material import ObservedCompiledLocalMateri
 
 
 SCHEMA = 'scar.observed-source-catalog'
+SCHEMA_VERSION = 4
 _FALSE = ('original_compile_options_proven', 'execution_namespace_proven',
     'source_code_temporal_pairing_proven', 'historical_source_version_proven',
     'target_executed', 'first_stage_complete')
+
+
+def reader_contract():
+    """Pin demand admission independently of the unchanged primitive leaves."""
+    folder=Path(__file__).parent
+    return dict(profile='ALL_BYTE_RECEIPTS_DEMAND_COMPILED_INTERFACE_SEMANTICS_V1',
+        dependency_pins={name:sha256((folder/name).read_bytes()).hexdigest() for name in
+            ('lazy_compiled_interfaces.py','reissue_observed_catalog.py')})
 
 
 class _Facts:
@@ -75,9 +84,9 @@ class _Facts:
 class _Interfaces:
     """Route the same three interface families to their actual local shards."""
     def __init__(self, catalog):
-        from scar.analysis.compiled_local_interfaces import CompiledLocalInterfaces
+        from scar.analysis.lazy_compiled_interfaces import LazyCompiledInterfaces
         self.catalog = catalog; self.base = catalog.base.interface_store
-        self.compiled = {entry['unit']:CompiledLocalInterfaces(Path(entry['interfaces']['path']).parent,
+        self.compiled = {entry['unit']:LazyCompiledInterfaces(Path(entry['interfaces']['path']).parent,
             catalog.materials[entry['unit']]) for entry in catalog.report['compiled']}
     @property
     def stats(self):
@@ -94,16 +103,54 @@ class _Interfaces:
     def body(self, unit, item): return self._provider(unit).body(unit, item)
     def mapping(self, unit, template): return self._provider(unit).mapping(unit, template)
 
+    def admission_summary(self):
+        """Directory coverage and actual decoding are separate quantities."""
+        return dict(compiled_units=len(self.compiled),
+            interfaces_loaded=sum(provider.is_loaded for provider in self.compiled.values()),
+            declared_counts={name:sum(provider.declared_counts.get(name,0)
+                for provider in self.compiled.values()) for name in
+                {key for provider in self.compiled.values() for key in provider.declared_counts}},
+            read_counts=self.stats,all_primitive_directories_retained=True,
+            material_graphs_eager=True,first_stage_complete=False)
+
 
 class ObservedSourceCatalog(DeclaredSourceCatalog):
-    def __init__(self, path):
+    def __init__(self, path, *, _expected_implementation=None):
         self.path = Path(path).absolute(); self._root_receipt = _receipt(self.path/'result.json')
         self.report = r = json.loads((self.path/'result.json').read_bytes())
-        if ((r['schema'], r['schema_version']) != (SCHEMA, 3)
-                or r['implementation_sha256'] != sha256(Path(__file__).read_bytes()).hexdigest()
+        # The explicit legacy entry is used only while republishing a v3
+        # contract at a fresh path. Normal consumers never ignore a stale pin.
+        legacy=_expected_implementation is not None
+        if legacy and (type(_expected_implementation)is not str or len(_expected_implementation)!=64
+                or any(c not in '0123456789abcdef' for c in _expected_implementation)):
+            raise ValueError('explicit prior implementation SHA256 required for catalog republication')
+        expected=_expected_implementation if legacy else sha256(Path(__file__).read_bytes()).hexdigest()
+        self._reader_implementation=sha256(Path(__file__).read_bytes()).hexdigest()
+        self._reader_contract=reader_contract()
+        if ((r['schema'], r['schema_version']) != (SCHEMA, 3 if legacy else SCHEMA_VERSION)
+                or r['implementation_sha256'] != expected
+                or (not legacy and r.get('reader_contract')!=self._reader_contract)
                 or any(r[name] is not False for name in _FALSE)):
             raise ValueError('observed source catalog contract or producer differs')
         receipts = [r[name] for name in ('base','matches','external_matches','external_materials','input_catalog','facts') if r[name] is not None]
+        if r.get('reissue') is not None:
+            migration=r['reissue'];prior=migration['prior_catalog']
+            _check(prior);previous=json.loads(Path(prior['path']).read_bytes())
+            reissuer=Path(__file__).with_name('reissue_observed_catalog.py')
+            if ((migration.get('schema'),migration.get('schema_version'))!=('scar.observed-source-catalog-reissue',1)
+                    or migration.get('prior_schema_version')!=3 or previous.get('schema_version')!=3
+                    or previous.get('schema')!=SCHEMA
+                    or migration['prior_implementation_sha256']!=previous['implementation_sha256']
+                    or migration['current_catalog_implementation_sha256']!=expected
+                    or migration['reissuer_implementation_sha256']!=sha256(reissuer.read_bytes()).hexdigest()
+                    or migration['rules_sha256']!=sha256(_json(self._reader_contract)).hexdigest()
+                    or migration.get('operation')!='REISSUE_ROUTING_DIRECTORY_REUSE_VALIDATED_PRIMITIVE_LEAVES'
+                    or migration.get('original_materials_modified')is not False
+                    or migration.get('target_executed')is not False
+                    or any(r[name]!=previous[name] for name in ('base','matches','external_matches',
+                        'external_materials','input_catalog','compiled','source_units','unselected_roots'))):
+                raise ValueError('explicit catalog republication changed retained source evidence')
+            receipts.append(prior)
         for receipt in receipts: _check(receipt)
         self.audit = None; self.external = None; self.external_readers = {}
         if r['matches'] is not None:
@@ -171,6 +218,9 @@ class ObservedSourceCatalog(DeclaredSourceCatalog):
             for r in (*self._receipts, self._root_receipt)}}
 
     def validate_parents(self):
+        if (sha256(Path(__file__).read_bytes()).hexdigest()!=self._reader_implementation
+                or reader_contract()!=self._reader_contract):
+            raise ValueError('catalog demand-admission reader rules changed during this session')
         _check(self._root_receipt)
         if json.loads((self.path/'result.json').read_bytes()) != self.report:
             raise ValueError('observed source catalog changed in memory')
@@ -265,7 +315,7 @@ def build_observed_catalog(base, trace, matches, out, *, project_root, material_
     facts = dict(schema='scar.observed-source-facts', schema_version=1, units=rows)
     _durable_bytes(out/'facts.json', _json(facts), replace=False)
     audit.check(); base.validate_parents(); _check(match_receipt)
-    result = dict(schema=SCHEMA, schema_version=3, base=_receipt(base.path/'result.json'),
+    result = dict(schema=SCHEMA, schema_version=SCHEMA_VERSION,reader_contract=reader_contract(),base=_receipt(base.path/'result.json'),
         facts=_receipt(out/'facts.json'), matches=match_receipt, external_matches=None,external_materials=None,
         input_catalog=None,compiled=entries,
         unselected_roots=unselected, selection='ROOT_OR_NESTED_FULL_CODE_ID_IN_FRAME_CAPTURE',

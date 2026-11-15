@@ -39,6 +39,7 @@ def _rules():
             'source_graph_material.py','source_effect_projection.py','source_effects.py','source_state.py',
             'source_call_binding_view.py','bounded_function_interfaces.py','source_call_view.py',
             'source_function_connections.py','source_call_defaults.py','source_call_captures.py',
+            'observed_source_catalog.py','lazy_compiled_interfaces.py','reissue_observed_catalog.py',
             '../compiler/call_binding.py','../trace/call_binding.py',
             '../trace/code_snapshot.py','../trace/lean_capture.py',
             '../ir/program/source_state.py',

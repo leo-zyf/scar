@@ -103,13 +103,23 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
     if manifest.get('backend')!='F4':raise ValueError('original F4 unified program build required')
     started=time.monotonic();edges=[];edge_ids={};frontiers=[];frontier_ids={}
     providers=[];calls=[];metadata=[];truncated=False;missing_relations=0;interface_kinds=Counter()
-    references=_ReportReferences();encode=references.encode
+    phase_seconds=dict(build_session_constructor=0.0,explicit_provider_unit_attach=0.0,
+        main_graph_outgoing_calls=0.0,report_record_encoding=0.0)
+    phase_calls=dict(build_session_constructor=0,explicit_provider_unit_attach=0,main_graph_outgoing_calls=0)
+    references=_ReportReferences()
+    def encode(value):
+        before=time.monotonic()
+        try:return references.encode(value)
+        finally:phase_seconds['report_record_encoding']+=time.monotonic()-before
     def note_frontiers(neighborhood):
         for item in neighborhood.frontiers:
             if item not in frontier_ids:
                 frontier_ids[item]=len(frontiers);frontiers.append(item)
         return [frontier_ids[item] for item in neighborhood.frontiers]
-    with BuildSession(program) as session:
+    before=time.monotonic();admitted_session=BuildSession(program)
+    phase_seconds['build_session_constructor']=time.monotonic()-before
+    phase_calls['build_session_constructor']=1
+    with admitted_session as session:
         graph=session.view.dependencies;inner=session.session
         for name,provider in inner.providers.items():
             if name.startswith('bounded_call_bindings:'):
@@ -126,7 +136,9 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
                 raise TypeError('bounded interfaces must use the existing shared source-call provider')
             for unit in sorted(provider.available_units):
                 if len(calls)>=max_calls:truncated=True;break
-                provider.attach(unit)
+                before=time.monotonic();provider.attach(unit)
+                phase_seconds['explicit_provider_unit_attach']+=time.monotonic()-before
+                phase_calls['explicit_provider_unit_attach']+=1
                 for key,frame in tuple(provider.frames.items()):
                     if key[0]!=unit:continue
                     if len(calls)>=max_calls:truncated=True;break
@@ -142,7 +154,9 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
                         enter=relation.flow is Flow.ENTER
                         source=replace(relation.source,context=caller_context if enter else callee_context)
                         target=replace(relation.target,context=callee_context if enter else caller_context)
-                        neighborhood=graph.outgoing(source,kinds=provider.relation_kinds)
+                        before=time.monotonic();neighborhood=graph.outgoing(source,kinds=provider.relation_kinds)
+                        phase_seconds['main_graph_outgoing_calls']+=time.monotonic()-before
+                        phase_calls['main_graph_outgoing_calls']+=1
                         found=[edge for edge in neighborhood.edges
                             if edge.source==source and edge.target==target and edge.kind is relation.kind]
                         query_frontiers.extend(note_frontiers(neighborhood))
@@ -206,6 +220,11 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
     report['reference_scope']='REPORT_LOCAL_ALIASES_OF_ORIGINAL_RECORDS_NOT_NEW_PROGRAM_IDS'
     report['reference_syntax']='A single-key {$TYPE: ordinal} indexes reference_tables[TYPE]; typed IDs use their original canonical wire strings; source-qualified endpoints and evidence remain in shared tables.'
     report['summary']['reference_records']={name:len(rows) for name,rows in references.tables.items()}
+    report['seconds']=time.monotonic()-started
+    phase_seconds['other_before_publication']=max(0.0,report['seconds']-sum(phase_seconds.values()))
+    report['phase_seconds']=phase_seconds
+    report['phase_calls']=phase_calls
+    report['timing_scope']='NONOVERLAPPING_WALL_INTERVALS_BEFORE_FINAL_JSON_SERIALIZATION_AND_FILE_WRITE; outgoing_calls_include_any_resolution_triggered_inside_that_API; constructor_is_not_graph_query_time'
     out.mkdir(parents=True);(out/'result.json').write_text(json.dumps(report,separators=(',',':'),sort_keys=True,allow_nan=False)+'\n')
     return report
 
@@ -216,7 +235,8 @@ def main(argv=None):
     parser.add_argument('--max-calls',type=int,default=64);parser.add_argument('--max-edges',type=int,default=4096)
     args=parser.parse_args(argv)
     report=inspect_bounded_interfaces(args.build,args.out,max_calls=args.max_calls,max_edges=args.max_edges)
-    print(json.dumps(dict(result=str(Path(args.out)/'result.json'),summary=report['summary'],seconds=report['seconds']),indent=2))
+    print(json.dumps(dict(result=str(Path(args.out)/'result.json'),summary=report['summary'],
+        seconds=report['seconds'],phase_seconds=report['phase_seconds'],phase_calls=report['phase_calls']),indent=2))
     return 0
 
 

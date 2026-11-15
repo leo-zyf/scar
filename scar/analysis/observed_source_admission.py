@@ -122,7 +122,7 @@ def extend(catalog, materials, out):
     reader.check();catalog.validate_parents();_check(receipt)
     _durable_mkdir(out)
     _durable_bytes(out/'facts.json',_json(dict(schema='scar.observed-source-facts',schema_version=1,units=rows)),replace=False)
-    report=dict(schema=SCHEMA,schema_version=3,base=_receipt(base.path/'result.json'),
+    report=dict(schema=SCHEMA,schema_version=producer.SCHEMA_VERSION,reader_contract=producer.reader_contract(),base=_receipt(base.path/'result.json'),
         matches=catalog.report['matches'] if observed else None,external_matches=batch['source_reader'],
         external_materials=receipt,input_catalog=_receipt(catalog.path/'result.json'),
         facts=_receipt(out/'facts.json'),compiled=entries,
