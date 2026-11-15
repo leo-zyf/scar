@@ -1,0 +1,208 @@
+{
+  "all_three_stages_complete": false,
+  "compiler_seconds": 20.659245492017362,
+  "configuration": {
+    "cpu": "Intel Xeon E5-2680 v4",
+    "gpu_used": false,
+    "memory_budget_bytes": 33554432,
+    "memory_policy": "UNBOUND",
+    "numa_page_residency_proven": false,
+    "numpy": "2.5.2",
+    "python": "3.14.7",
+    "shape": [
+      512,
+      512
+    ],
+    "trip_count": 1000
+  },
+  "cost_collection": {
+    "basis": "DECLARED_COMPONENT_FORWARD_MODEL_PLUS_OBSERVED_ORIGINAL_CALL_WITH_WRAPPER_DISPATCH_COST_MODEL",
+    "complete_coverage_evidence": {
+      "bytes": 72188,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/result.json",
+      "sha256": "a4fb2fec2553d47a37ba6fdf9a0474dced0238985234bffdd426c146c433046f"
+    },
+    "full_domain_candidates": 106,
+    "new_masks_sampled": 92,
+    "old_masks_reused": 14,
+    "original_call_profile": {
+      "bytes": 2898,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/original-cost/profile.json",
+      "sha256": "6314b9119f5416a5f7bb57a087ac887e99cd435d572bea5a188413ee7e81ece7"
+    },
+    "source_calibrations": [
+      {
+        "bytes": 311548,
+        "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/calibration/result.json",
+        "sha256": "e112e70c204feae4e03baaa6fa4ce0032255aff3766a545c8b84cc12ea5b86e2"
+      },
+      {
+        "bytes": 3858546,
+        "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/calibration-missing/result.json",
+        "sha256": "953a93b3a51bfb270ee3a90f70aab90e48e74148f0d0f67f5ddac024e39bd963"
+      }
+    ],
+    "source_independent_primitives": true,
+    "target_body_accepted_by_probe": false,
+    "target_implementations_ranked_by_timing": false,
+    "total_canonical_observations": 212
+  },
+  "deployment": {
+    "fallback_calls": 0,
+    "native_calls": 1,
+    "normal_entry": {
+      "bytes": 1360,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/normal-entry.json",
+      "sha256": "bed1c8e465ba3e2a8c8345303a46a4a6694f95c8ffb082f2cdabd181be1c4bf0"
+    },
+    "receipt": {
+      "bytes": 27085,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/entry-validation/deployment.json",
+      "sha256": "d20e40d03ace510f36ab5b461f99e1e8ccec85e4d4a0054dcc2641d71df66a76"
+    },
+    "runner_identity": "838f7c52dc93a1417f0b8f3c92c60fc6b7f82f3debf28e78dce985c02f227c00"
+  },
+  "graph": {
+    "hardware": {
+      "bytes": 8704,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-entry-v1/program-build/hardware/result.json",
+      "sha256": "7ae291c8509831fe19c9780bc5969e48cd86c44d81bcda6ef850d9e95e252dd8"
+    },
+    "hardware_resources": 204,
+    "iterations_unrolled": false,
+    "program": {
+      "schema": "scar.program-build",
+      "sha256": "188be757d5d231799ba0b507122774418520d6984b0e79709854895226698026",
+      "size_bytes": 11748,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/temporal-resource-model-v1/program-build/manifest.json"
+    },
+    "source_proof": {
+      "schema": "scar.invariant-loop-proof",
+      "sha256": "1fec7707f76f1f5e537d6dbe11bfa7a8eba6a9bd97adb6e713d718d43b6c97c3",
+      "size_bytes": 279444,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-temporal-cpu-v1/program-domains/invariant-loop-0/proof.json"
+    }
+  },
+  "implementation": {
+    "backend": "C++20",
+    "bundle": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-temporal-cpu-v1/compiled/loops/loop-0/bundle",
+    "bundle_export": {
+      "schema": "scar.temporal-invariant-runtime-export",
+      "sha256": "8e144901e19d3864d87ae32796b4cf988dec30c503eadc556bf94136b228a2e1",
+      "size_bytes": 1519,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-temporal-cpu-v1/compiled/loops/loop-0/bundle/export-report.json"
+    },
+    "full_program_cpp": false,
+    "native_cpp_absolute_path": "/home/zyf/AAA/scar/artifacts/current/experiments/automatic-temporal-cpu-v1/compiled/loops/loop-0/native/temporal.cpp",
+    "only_one_selected_target_implementation_compiled": true,
+    "pipeline": {
+      "bytes": 6398,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/compiled/result.json",
+      "sha256": "e5349260f70abb8a9784261776f22c3c2a51f625b79cb93a6a64019cd7818bda"
+    },
+    "source_or_cost_graph_required_at_runtime": false
+  },
+  "performance": {
+    "baseline": {
+      "max_ns": 872810289,
+      "median_ns": 857374327,
+      "min_ns": 854495004,
+      "samples_ns": [
+        854495004,
+        857374327,
+        872810289
+      ],
+      "stdev_ns": 9848934.70072608
+    },
+    "clock": "PARENT_MONOTONIC_FULL_PROCESS_LIFETIME",
+    "empirical_global_fastest_implementation_proven": false,
+    "gain_fraction": 0.6642222166747944,
+    "optimized": {
+      "max_ns": 309073572,
+      "median_ns": 287887251,
+      "min_ns": 287681995,
+      "samples_ns": [
+        287887251,
+        287681995,
+        309073572
+      ],
+      "stdev_ns": 12291608.886333162
+    },
+    "policy": {
+      "admission": "EXACT_OUTPUTS_NATIVE_ONLY_AND_MEDIAN_GAIN_AT_LEAST_DECLARED_THRESHOLD",
+      "frozen_before_measurement": true,
+      "minimum_gain": 0.05,
+      "repetitions": 3,
+      "warmup": 1
+    },
+    "speedup": 2.9781601096326424,
+    "timing_scope": "COMPLETE_FRESH_PROCESS_LIFETIME_INCLUDING_STARTUP_IMPORTS_APPLICATION_AND_REPORT_IO",
+    "validation": {
+      "all_candidate_native_only": true,
+      "arbitrary_file_io_hidden_state_or_episode_equivalence_proven": false,
+      "complete": true,
+      "completed_measurement_pairs": 3,
+      "exact_stdout_stderr_and_returncode": true,
+      "fallback_calls_total": 0,
+      "native_calls_total": 4,
+      "scope": "EXACT_STDOUT_STDERR_AND_SUCCESSFUL_EXIT_PLUS_ORIGINAL_REGIONAL_F4_AND_RUNTIME_GUARD_BASIS",
+      "validated": true
+    },
+    "warmup_pairs_excluded_from_statistics": 1
+  },
+  "qualification": "Scientific compiler regression, not a replacement for real Sunfish/Gray-Scott/Cirq benchmarks",
+  "recorded_at": "2026-11-15T15:13:33.318673+00:00",
+  "runtime_evidence": {
+    "bytes": 458,
+    "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/runtime-without-plan.json",
+    "sha256": "8ee81c89eabc73cf01779d22245ab290aeef502d45dec95380b1abe2f82435be"
+  },
+  "schema": "scar.automatic-temporal-cpu-checkpoint",
+  "schema_version": 1,
+  "scope": "BOUNDED_ORIGINAL_F4_EQUAL_SHAPE_FLOAT64_PURE_ARRAY_LOOP",
+  "selection": {
+    "authoritative_domain": "ALL_SUPPORTED_PER_NUMA_THREAD_COUNTS_AND_REPRESENTATIVE_SMT_MASKS_NOT_ALL_CPU_SUBSETS",
+    "choice": {
+      "bytes": 6824804,
+      "path": "artifacts/current/experiments/automatic-temporal-cpu-v1/compiled/loops/loop-0/cpu-choice.json",
+      "sha256": "ea3081799a8ddd67d97663afae775e23298b2b86f33264c190b7fca58533099b"
+    },
+    "cpu_ids": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41
+    ],
+    "cpu_threads": 28,
+    "cross_socket_teams_considered": false,
+    "original_complete_call_ns": 604746601,
+    "physical_optimality_proven": false,
+    "predicted_complete_call_ns": 13739768,
+    "prediction_is_observed_native_timing": false
+  },
+  "status": "VERIFIED_AUTOMATIC_MODEL_CHOICE_TO_CPP_AND_COST_GATED_ENTRY"
+}

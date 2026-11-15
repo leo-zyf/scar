@@ -113,14 +113,15 @@ def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=
                     raise ValueError('stateful export differs from retained validated implementation')
                 scopes.append(_Scope(artifact));continue
             artifact=load(row['bundle'],expected_admission_sha256=exported['expected_admission_sha256'])
-            contract=artifact.contract;schedule=read_artifact(row['schedule'])
+            contract=artifact.contract
             if ((contract.get('proof_kind')=='COMPOSITE') !=
                     (row['proof']['schema']=='scar.composite-invariant-loop-proof')):
                 raise ValueError('composite row/runtime requires the separate original proof kind')
             receipt=contract['resource_schedule']['receipt']
+            # Export replay sealed this plan hash into the compact contract.
+            # Execution matches that reference without parsing the cost graph.
             if (contract['source_proof']!=row['proof'] or receipt['path']!=row['schedule']['uri']
-                    or receipt['sha256']!=row['schedule']['sha256'] or receipt['bytes']!=row['schedule']['size_bytes']
-                    or contract['resource_schedule']['id']!=schedule['id']):
+                    or receipt['sha256']!=row['schedule']['sha256'] or receipt['bytes']!=row['schedule']['size_bytes']):
                 raise ValueError('bundle proof/schedule differs from compiled pipeline')
             scope=_LoopScope.__new__(_LoopScope)
             scope.artifact,scope.proof,scope.spec=artifact,None,row

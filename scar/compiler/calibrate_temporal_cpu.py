@@ -250,33 +250,42 @@ def _placements(mask,observations):
     return rows
 
 
-def project_temporal_resource_facts(domain,candidate_id,calibration,out):
-    """Bind independently measured family/geometry to one actual demand later."""
-    out=Path(out).resolve()
-    if out.exists():raise ValueError('fresh projected temporal resource facts output required')
+def _projection_materials(calibration):
+    """Authenticate one immutable observation set once per projection batch."""
     reference=artifact_reference(calibration,'scar.temporal-cpu-resource-calibration');measured=read_artifact(reference)
-    design=read_artifact(measured['frozen_design']);read_artifact(measured['raw_observations'])
+    design=read_artifact(measured['frozen_design']);raw=read_artifact(measured['raw_observations'])
     if measured['family_registry']!=temporal_primitive_families() or design['family_registry']!=measured['family_registry']:
         raise ValueError('frozen independent family registry differs')
     if measured['target_workload_executed'] is not False or measured['target_body_or_domain_accepted_by_probe'] is not False:
         raise ValueError('source-independent primitive calibration required')
+    if raw['observations']!=measured['observations'] or raw['frozen_design']!=measured['frozen_design']:
+        raise ValueError('calibration summary differs from retained raw observation rows')
+    index={}
+    for ordinal,row in enumerate(measured['observations']):
+        key=(row['family'],semantic_sha256(row['resource_context']),tuple(row['shape']),row['trip_count'])
+        index.setdefault(key,[]).append((ordinal,row))
+    return reference,measured,index
+
+
+def _project_temporal_facts(domain,candidate_id,out,reference,measured,index):
+    out=Path(out).resolve()
+    if out.exists():raise ValueError('fresh projected temporal resource facts output required')
     demand=temporal_cpu_cost_demand(domain,candidate_id);components=[];unresolved=[];matching=[];family=None
     try:
         family=match_temporal_primitive_family(domain['body'])
-        matching=[(i,row) for i,row in enumerate(measured['observations']) if row['family']==family['family']
-            and semantic_sha256(row['resource_context'])==semantic_sha256(demand['resource_context'])
-            and row['shape']==domain['shape'] and row['trip_count']==domain['trip_count']]
+        matching=index.get((family['family'],semantic_sha256(demand['resource_context']),
+            tuple(domain['shape']),domain['trip_count']),[])
         if len(matching)!=1:raise ValueError('no unique independently measured family/mask/shape/count context')
-        index,row=matching[0]
+        observation_index,row=matching[0]
         for term in demand['terms']:
             if term['id'].startswith('worker:'):
                 worker=int(term['id'].split(':')[1]);measurement=row['worker_chunks'][worker]
                 if any(measurement[key]!=term['parameters'][key] for key in ('cpu_id','row_begin','row_end')):
                     raise ValueError('measured canonical partition differs from actual anonymous demand')
-                locator=f'#/observations/{index}/worker_chunks/{worker}'
+                locator=f'#/observations/{observation_index}/worker_chunks/{worker}'
             else:
                 key=dict(boundary='boundary',allocate='allocation',team='team',**{'return':'publication'})[term['id']]
-                measurement=row['serial_components'][key];locator=f'#/observations/{index}/serial_components/{key}'
+                measurement=row['serial_components'][key];locator=f'#/observations/{observation_index}/serial_components/{key}'
             components.append(dict(component=term['component'],parameters=term['parameters'],basis='DECLARED_COMPONENT_MODEL',
                 **measurement,measurement_source=dict(artifact=reference,locator=locator),family_match_proof=family,
                 assumptions=measured['assumptions'],complete_target_component_measured=False))
@@ -288,6 +297,37 @@ def project_temporal_resource_facts(domain,candidate_id,calibration,out):
         complete_target_call_measured=False,physical_optimality_proven=False)
     out.mkdir(parents=True);_save(out/'observations.json',result)
     return result
+
+
+def project_temporal_resource_facts(domain,candidate_id,calibration,out):
+    """Bind independently measured family/geometry to one actual demand later."""
+    materials=_projection_materials(calibration)
+    result=_project_temporal_facts(domain,candidate_id,out,*materials)
+    for reference in (materials[0],materials[1]['frozen_design'],materials[1]['raw_observations']):
+        read_artifact(reference,json_document=False)
+    return result
+
+
+def project_temporal_resource_fact_batch(domain,calibration,out):
+    """Share one verified raw index; emit independent per-candidate shards.
+
+    Parsing and indexing scale with observation count plus candidate count.
+    Input receipts are checked again before publishing the batch manifest.
+    """
+    out=Path(out).resolve()
+    if out.exists():raise ValueError('fresh temporal fact batch output required')
+    materials=_projection_materials(calibration);out.mkdir(parents=True);rows=[]
+    for index,candidate in enumerate(domain['candidates']):
+        folder=out/('candidate-'+str(index))
+        result=_project_temporal_facts(domain,candidate['id'],folder,*materials)
+        rows.append(dict(candidate_id=candidate['id'],complete=bool(result['components']) and not result['unsupported_components'],
+            observations=artifact_reference(folder/'observations.json',result['schema'])))
+    for reference in (materials[0],materials[1]['frozen_design'],materials[1]['raw_observations']):
+        read_artifact(reference,json_document=False)
+    report=dict(schema='scar.temporal-resource-fact-batch',schema_version=1,
+        source_calibration=materials[0],domain_id=domain['id'],candidates=rows,
+        raw_observation_sets_parsed=1,source_receipts_rechecked=True,target_program_executed=False)
+    _save(out/'result.json',report);return report
 
 
 def main(argv=None):

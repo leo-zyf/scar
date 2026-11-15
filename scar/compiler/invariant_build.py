@@ -61,11 +61,10 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
                     if calibration.get('schema')=='scar.temporal-resource-calibration':
                         facts.append(source)
                     elif calibration.get('schema')=='scar.temporal-cpu-resource-calibration':
-                        from scar.compiler.calibrate_temporal_cpu import project_temporal_resource_facts
-                        for candidate_index,candidate in enumerate(domain['candidates']):
-                            folder=directory/('resource-facts-'+str(calibration_index)+'-'+str(candidate_index))
-                            project_temporal_resource_facts(domain,candidate['id'],source,folder)
-                            facts.append(folder/'observations.json')
+                        from scar.compiler.calibrate_temporal_cpu import project_temporal_resource_fact_batch
+                        batch=project_temporal_resource_fact_batch(domain,source,
+                            directory/('resource-facts-'+str(calibration_index)))
+                        facts.extend(Path(row['observations']['uri']) for row in batch['candidates'])
                     else:raise ValueError('independent temporal resource calibration required')
                 selection=plan_selected_temporal_cpu_choice(domain,resource_facts=facts,
                     no_op_profile=no_op_profiles.get(proof.id))

@@ -16,21 +16,24 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 - 规划比较循环内重算、整数组物化、逐元素时间融合；支持有序可变状态区域、buffer 计划及明确 CPU 绑定。逻辑工作减少不等于墙钟加速，局部 scalar 不等于已证明寄存器分配。
 - 多核 C++ 按确定行分区运行，保留每个元素原运算顺序、worker affinity 与浮点环境。显式线程预览不宣称线程数最优。
 - 独立固定原语校准：一次编译、3.273s，两个固定计算家族 × 1/2/4 个 CPU。前向模型使用串行组件之和加最慢 worker chunk；不把串行时间除以线程数，不轮流测试目标实现。
-- 当前 cap=4 的域保留 14 个代表 mask，包含 SMT `(0,28)`。其中 3 个配置成本完整；其余 11 个及同边界原执行成本未知，因此统一 `compile-build --loop-cpu-model` 全域仍 `UNRESOLVED`/`NO_OP`。完整合成成本另验证了准确 mask 选择到 C++ 交付，其数值不作硬件性能证据。已知子集最小值不是全域最优。固定原语到目标图只按匿名有序值依赖、常量和资源上下文匹配，不按函数/程序名匹配。
+- 完整自动选择已推进到每 NUMA 的 1–28 线程及 SMT 代表域，共 **106 个 mask**：复用先前 14 个，只补采 92 个，全部成本有独立固定原语覆盖。原函数有限边界观察另取得同上下文原执行成本（中位数 604.747ms），不记录 Tensor 数值、不插桩函数内部，也不冒充干净完整入口基线。
+- `compile-build --loop-cpu-model` 机械比较完整 106 个成本和原执行，选出 CPU 0–13/28–41 的 **28 workers**，声明模型预测区域 13.740ms。只降低这一种目标实现；未试跑其他目标变体。域不包含任意 CPU 子集、跨 socket 团队或 NUMA 绑页，因此不是物理全局最优。
+- 固定原语到目标图只按匿名有序值依赖、常量和资源上下文匹配，不按函数/程序名匹配。早先缺成本的 cap4 结果和单独合成完整模型记录仍保留；不得拿合成成本作硬件性能证据。批量投影每份原观测只解析/索引一次，再写独立事实分片。
 
 ## 第三阶段：C++20 交付及真实结果
 
 - 原图 → 计划 → C++20 → 同一 ELF 导出 → 普通 Python 入口已贯通。运行包无需 compiler、IR、planner、codegen 或 g++；状态包加载仍需要原 NumPy ufunc 提供者；入口和明确的兼容/I/O 仍保留 Python，完整程序不是纯 C++。
 - 跨函数组合实际普通入口：256×256/20 步，结果逐位相同，native 1/fallback 0。替换深层 binding/defaults/代码/函数 globals 四种情况均准确整循环回退一次；恢复后重新启用 native。
-- 新 Gray–Scott 完整入口：512×512/1000 步、float64、C++ 单线程 CPU 0；预热 1 组，交替配对正式 3 组。原版中位数 **11.139s**（10.977–11.367s，stdev 0.196s），优化 **3.956s**（3.936–3.994s，stdev 0.030s），**2.8160×**。包括进程启动、导入、应用、I/O 和报告开销；这不是纯 kernel 计时或未来性能保证。
+- 自动线程选择的科学微程序：512×512/1000 步、float64，完整进程预热 1 组、正式交替 3 组。原版中位数 **857.374ms**（854.495–872.810ms，stdev 9.849ms），选中实现 **287.887ms**（287.682–309.074ms，stdev 12.292ms），**2.9782×**。输出逐位一致，预热及正式 native 4/fallback 0；正常成本门控入口另 native 1/fallback 0。这是编译回归程序，不替代真实三程序套件。
+- 真实 Gray–Scott 完整入口：512×512/1000 步、float64、C++ 单线程 CPU 0；当前运行端版本重新预热 1 组，交替正式 3 组。原版中位数 **11.136s**（11.097–11.189s，stdev 0.046s），优化 **3.939s**（3.916–3.943s，stdev 0.015s），**2.8271×**。包括进程启动、导入、应用、I/O 和报告开销；这不是纯 kernel 计时或未来性能保证。
 - 区域/单步/20 步轨迹/完整积分、u/v、必要状态、数组身份、stdout 和文件逐层通过；完整进程测量 native 4000/fallback 0。随后正常成本门控入口 native 1000/fallback 0；改变 argv 后保留原执行。
 - 上述区域配置是明确单线程验证预览，尚未证明最佳。完整域成本缺口未被这份测量抹去。baseline 的最终 dt=0 行为原样保留。
 - 先前整数组物化 LICM 的 0.9625× 继续记录为 not profitable；不得与本次不同实现/计时边界混算。Sunfish/Cirq 仍仅有基线，无新增加速结论；当前无 GPU，不作 LeWM/GPU 实测加速声明。
 
-证据：`artifacts/current/experiments/stateful-entry-v1/`、`composite-licm-v1/`、`parallel-temporal-delivery-v1/`、`temporal-resource-model-v1/`。摘要：`artifacts/baseline/three-stage-system.json`。
+证据：`artifacts/current/experiments/stateful-entry-v1/`、`composite-licm-v1/`、`parallel-temporal-delivery-v1/`、`temporal-resource-model-v1/`、`automatic-temporal-cpu-v1/`。摘要：`artifacts/baseline/three-stage-system.json` 和 `automatic-temporal-cpu.json`。成本计划 7.50MB 在构建时保留；运行端只核准入合同中的原计划哈希引用，不读取该计划或源码图。
 
 ## 接下来仍需完成
 
 1. 建图：将更多已观察代码体接通参数/world/返回及别名内容版本；补齐一般对象状态、跨包创建环境与原生算子 schema。局部静态图存在不代表这些已闭合。
-2. 规划：补齐同边界原执行和剩余 CPU/NUMA 配置的可信成本，打通一般嵌套/自适应循环与跨区域调度；之后才扩大多进程、MPI 和 CPU/GPU 联合域。
+2. 规划：把完整 CPU 成本链扩展到有序状态和更多算子家族，打通一般嵌套/自适应循环与跨区域调度；之后扩大 NUMA 绑页、多进程、MPI 和 CPU/GPU 联合域。当前自动选择不覆盖 Gray–Scott 的完整 CPU 成本域。
 3. 交付：将更多版本化区域/控制结构接入公共降低链，扩展 dtype 和宿主；目前尚未提供任意程序独立 C++ 应用交付。

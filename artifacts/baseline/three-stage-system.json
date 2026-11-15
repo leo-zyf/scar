@@ -1,5 +1,10 @@
 {
   "all_three_stages_complete": false,
+  "complete_automatic_cpu_chain": {
+    "bytes": 7418,
+    "path": "artifacts/baseline/automatic-temporal-cpu.json",
+    "sha256": "9b1666ba3402f7ee8fa223379c27cf983d1120af729b079d3bc4867abbe5ee27"
+  },
   "composite": {
     "actual_ordinary_entry_fallbacks": 0,
     "actual_ordinary_entry_native_calls": 1,
@@ -141,6 +146,7 @@
       "sha256": "c462279ea2321f0559f3e4314251c33abda921937ae428ddbe964f07212f8659"
     }
   },
+  "historical_measurement_receipts_preserved": true,
   "historical_noop": {
     "materialized_array_licm_speedup": 0.9625,
     "status": "NOT_PROFITABLE_DIFFERENT_BOUNDARY_AND_IMPLEMENTATION"
@@ -158,14 +164,14 @@
         "sha256": "3b89b44f385c47f025d2ef789dd0b8e0db78d544b925fb1af10be3afa861c23b"
       },
       {
-        "bytes": 27556,
-        "path": "artifacts/current/experiments/stateful-entry-v1/entry-validation/deployment.json",
-        "sha256": "36c6b01b4babdedeefef2c868c7db1c59c8c7f6fad27f38afca301458c6dabea"
+        "bytes": 27979,
+        "path": "artifacts/current/experiments/stateful-entry-v1/entry-validation-current/deployment.json",
+        "sha256": "18d2b4022b58824ae25424a1460f64b9bb7192c67c204beb4d744053fb1bf4f2"
       },
       {
         "bytes": 1286,
-        "path": "artifacts/current/experiments/stateful-entry-v1/normal-entry.json",
-        "sha256": "aa8527bc1a691f5e331f8ce1636ee82fcb2b9fcbca6900935e60d5b23c328d67"
+        "path": "artifacts/current/experiments/stateful-entry-v1/normal-entry-current.json",
+        "sha256": "bcbeef5d508f8696fee524fc0fed3f775d19c1505e82a5ae6f51953eb3280af4"
       },
       {
         "bytes": 1458,
@@ -182,30 +188,30 @@
       },
       "performance": {
         "baseline": {
-          "max_ns": 11366972465,
-          "median_ns": 11139484487,
-          "min_ns": 10976758575,
+          "max_ns": 11189253102,
+          "median_ns": 11135678622,
+          "min_ns": 11096919223,
           "samples_ns": [
-            11139484487,
-            11366972465,
-            10976758575
+            11135678622,
+            11096919223,
+            11189253102
           ],
-          "stdev_ns": 196000587.80511022
+          "stdev_ns": 46364607.78312527
         },
         "clock": "PARENT_MONOTONIC_FULL_PROCESS_LIFETIME",
-        "gain_fraction": 0.6448878843885049,
+        "gain_fraction": 0.6462834574609367,
         "optimized": {
-          "max_ns": 3994447420,
-          "median_ns": 3955765903,
-          "min_ns": 3936204379,
+          "max_ns": 3943499095,
+          "median_ns": 3938873741,
+          "min_ns": 3916044385,
           "samples_ns": [
-            3936204379,
-            3994447420,
-            3955765903
+            3943499095,
+            3916044385,
+            3938873741
           ],
-          "stdev_ns": 29639964.022558983
+          "stdev_ns": 14698834.96621502
         },
-        "speedup": 2.816012059397136,
+        "speedup": 2.8271225112112575,
         "warmup_pairs_excluded_from_statistics": 1
       },
       "policy": {
@@ -215,7 +221,7 @@
         "repetitions": 3,
         "warmup": 1
       },
-      "runner_identity": "19d953896c9784ff65b7c060ff36652a246deeb1fb4cdfd9c7f35f81fa45cf8f",
+      "runner_identity": "838f7c52dc93a1417f0b8f3c92c60fc6b7f82f3debf28e78dce985c02f227c00",
       "validation": {
         "all_candidate_native_only": true,
         "arbitrary_file_io_hidden_state_or_episode_equivalence_proven": false,

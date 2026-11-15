@@ -254,6 +254,14 @@ scar compile-build --domains DOMAINS --loop-trip-count 400 --loop-cpu-model --lo
 
 原语不接受目标源码/DAG，只测固定家族；投影须匹配匿名有序值依赖、shape/count、完整 CPU mask 和后端版本。计时组合是显式模型假设。缺任何可行配置或同边界原执行成本时保留 `NO_OP`；完整时按模型选择准确的 CPU mask，随后仍须完整入口验证。当前此成本入口支持直接纯数组循环，组合区域明确保留成本模型边界。
 
+同边界原执行成本可从有限的原函数调用取得：先用 `compile-build --loop-cpu-model --plan-only` 输出原 CPU 域，再运行下述采集并把 `profile.json` 按原 loop ID 写入 `ORIGINAL_COSTS.json`。它只观察原函数，不执行候选，不记录数组数值，函数内部不插桩。这个 wrapper 边界计时用于成本模型；最终性能仍由干净 `validate-build` 测量。
+
+```bash
+scar observe-original-loop-cost --domain PREVIEW/loops/loop-0/cpu-domain.json --build PROGRAM --proof DOMAINS/invariant-loop-0/proof.json --out ORIGINAL -- ENTRY.py ARGS
+```
+
+省略 `--loop-max-threads` 时，域覆盖所有受支持的每 NUMA 线程数及 SMT 代表 mask；显式 cap 只缩小声明域，不证明全平台最优。多份独立校准可以重复传入，已有上下文可复用；批量投影共享一次已验证原观测索引。成本计划留在构建端，紧凑运行端不读源码图或完整成本计划。
+
 状态数组区域可先生成一个供验证的明确 CPU 配置，完整成本域缺口仍保留。外部 testcase 只负责输入/输出/状态和 episode 验证；核心导出再次核对原区域、计划、C++ 身份和样本：
 
 ```bash
