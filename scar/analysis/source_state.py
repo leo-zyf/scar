@@ -4,7 +4,8 @@ No source parsing or target execution. Original C2 interfaces select symbolic
 addresses; the existing matched-control solver supplies definition choices.
 This adapter does not infer object contents from a stable reference binding.
 """
-from collections import defaultdict
+from collections import ChainMap, defaultdict
+from copy import copy
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,9 +28,26 @@ from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEd
 from scar.ir.program.ids import LocationID, OperationID, ValueID
 
 
+class _AppendBuffer:
+    """Reserve final ordinals while keeping one operation's rows private."""
+    def __init__(self, base):self.base=base;self.added=[]
+    def __len__(self):return len(self.base)+len(self.added)
+    def append(self,value):self.added.append(value)
+    def __getitem__(self,index):
+        return self.base[index]if index<len(self.base)else self.added[index-len(self.base)]
+
+
+def _publish_edges(target, staged):
+    for rows in staged.out_edges.values():
+        for edge in rows:
+            if edge not in target.out_edges[edge.source.node]:
+                target.out_edges[edge.source.node].append(edge)
+                target.in_edges[edge.target.node].append(edge)
+
+
 class SourceStateProvider:
     def __init__(self, view, unit):
-        self.view = view; self.source = view.project_unit(unit)
+        self.view = view; self.source = view.unit(unit)
         self.material = self.source.material; self.namespace = self.source.namespace
         self.bindings, self.declarations, self.materials = _bindings(self.material, {})
         self.interface_ids = {descriptor:index for index,descriptor in enumerate(self.bindings.interfaces)}
@@ -41,38 +59,105 @@ class SourceStateProvider:
         self.flows = {}; self.anchors = None
         self.read_frontiers = defaultdict(list)
         self.content_provider = None
-        self.root_scopes = {step.instruction.interface.scope for plan in self.source.plans.values()
-            for step in plan.steps if type(step.instruction) is P.EnterRootBody}
-        self.class_scopes = {step.instruction.interface.scope for plan in self.source.plans.values()
-            for step in plan.steps if type(step.instruction) is P.EnterClassBody}
-        for key, plan in self.source.plans.items():
-            context = NamespacePlanView(unit, plan)
-            for step in plan.steps:
-                operation = self.source._identity(OperationID, key, step.id)
-                rule = classify_instruction(step.instruction)
-                accesses = self._identify(context, step, operation)
-                projection = None
-                if type(step.instruction) is P.ReadClassTypeParameters:
-                    from scar.analysis.source_environment_values import identify_class_type_parameters, attach_class_type_parameters
-                    projection = identify_class_type_parameters(self.source, context, step, operation)
-                    self.environment_values[operation] = projection
-                    attach_class_type_parameters(self, projection)
-                missing = (() if accesses or projection is not None else ('STATE_ADDRESS_PROJECTION_NOT_IMPLEMENTED',)) if rule.resolution.value == 'ADDRESS_RULE' else ()
-                self.requests[operation] = S.SourceEffectRequest(operation, rule, accesses, missing,
-                    ('CALLBACK_OBJECT_CONTENT_ALIAS_RNG_EXTERNAL_AND_ORDERING_EFFECTS_NOT_CLOSED',))
+        root=self.source.facts.root_scope
+        if root is None or root.owner.unit!=unit:
+            raise ValueError('state source requires its original root scope witness')
+        self.root_scopes={root.source_scope}
+        self.class_scopes={row.scope for row in self.source.facts.classes}
+        if self.root_scopes & self.class_scopes or any(row.body_scope is not None and
+                (row.body_scope.source_scope!=row.scope or row.body_scope.owner.unit!=unit
+                    or row.body_scope.template!=row.template or row.body_scope.region!=row.body)
+                for row in self.source.facts.classes):
+            raise ValueError('state root/class source scope witnesses differ')
+        self.analyzed_operations=set();self._building=set();self._failures={}
+        self.bindings_complete=False
         self.source.effect_provider = self
         view.register(self)
 
-    def content(self):
-        """Attach object/index requests to the same source namespace."""
+    def content(self, *, complete=True):
+        """Attach contents; the old no-argument call explicitly requests all."""
         if self.content_provider is None:
             from scar.analysis.source_content import SourceContentProvider
-            self.content_provider = SourceContentProvider(self)
-            for operation in self.content_provider.operation_accesses:
-                request=self.requests[operation]
-                self.requests[operation]=replace(request,missing_rules=tuple(rule for rule in request.missing_rules
-                    if rule!='STATE_ADDRESS_PROJECTION_NOT_IMPLEMENTED'))
+            provider=SourceContentProvider(self,register=False)
+            self.content_provider=provider
+            self.view.register(provider)
+        if complete:self.ensure_all(include_content=True)
         return self.content_provider
+
+    def _operation_context(self, operation):
+        point=operation if type(operation)is Point else Point(self.namespace,operation,None)
+        self.source.ensure(point)
+        step=self.source.records[point.node]
+        if type(step)is not P.ProductionStep:
+            raise TypeError('state request requires an original source operation')
+        key=self.source.nodes[point.node].anchor.template
+        context=self.source.effect_contexts.get(key)
+        if context is None:
+            context=NamespacePlanView(self.source.unit,self.source.plans[key])
+            self.source.effect_contexts[key]=context
+        if context.steps.get(step.id)!=step:
+            raise ValueError('state request differs from its original plan operation')
+        return point,context,step
+
+    def ensure_operation(self, operation, *, include_content=False):
+        """Identify one operation once; newly admitted plans need no sweep."""
+        point,context,step=self._operation_context(operation);identity=point.node
+        if identity in self._building:return self.requests[identity]
+        if identity in self._failures:raise ValueError(self._failures[identity])
+        if identity not in self.analyzed_operations:
+            rule=classify_instruction(step.instruction)
+            pending=('CALLBACK_OBJECT_CONTENT_ALIAS_RNG_EXTERNAL_AND_ORDERING_EFFECTS_NOT_CLOSED',)
+            self.requests[identity]=S.SourceEffectRequest(identity,rule,(),
+                ('SOURCE_STATE_EFFECT_REQUEST_PENDING',),pending)
+            self._building.add(identity)
+            try:
+                staged=copy(self);staged.locations=ChainMap({},self.locations)
+                staged.accesses=_AppendBuffer(self.accesses)
+                staged.environment_values={};staged.in_edges=defaultdict(list);staged.out_edges=defaultdict(list)
+                accesses=staged._identify(context,step,identity);projection=None
+                if type(step.instruction)is P.ReadClassTypeParameters:
+                    from scar.analysis.source_environment_values import identify_class_type_parameters,attach_class_type_parameters
+                    projection=identify_class_type_parameters(self.source,context,step,identity)
+                    staged.environment_values[identity]=projection
+                    attach_class_type_parameters(staged,projection)
+                missing=(()if accesses or projection is not None else
+                    ('SOURCE_CONTENT_EFFECT_REQUEST_NOT_ANALYZED',))if rule.resolution.value=='ADDRESS_RULE'else ()
+                request=S.SourceEffectRequest(identity,rule,accesses,missing,pending)
+                self.check(point)
+                self.locations.update(staged.locations.maps[0]);self.accesses.extend(staged.accesses.added)
+                self.environment_values.update(staged.environment_values);_publish_edges(self,staged)
+                self.requests[identity]=request;self.analyzed_operations.add(identity)
+            except Exception as error:
+                self.requests[identity]=replace(self.requests[identity],missing_rules=('SOURCE_STATE_EFFECT_ANALYSIS_FAILED',))
+                self._failures[identity]='state operation identification failed: '+str(error)
+                raise
+            finally:self._building.remove(identity)
+        if include_content:self.content(complete=False).ensure_operation(point)
+        return self.requests[identity]
+
+    def ensure_regions(self, key, regions, *, include_content=False):
+        """Identify direct steps of selected original regions, not child code."""
+        regions=tuple(dict.fromkeys(regions));self.source._expand_regions(key,regions)
+        index=self.source.region_indexes[key]
+        requests=[]
+        for region in regions:
+            for step in index._emitter.regions[region].steps:
+                point=self.source._node(key,step)
+                requests.append(self.ensure_operation(point,include_content=include_content))
+        return tuple(requests)
+
+    def ensure_all(self, *, include_content=True):
+        """Explicit complete unit projection, preserving the former full path."""
+        self.check()
+        if self.bindings_complete and (not include_content or
+                self.content_provider is not None and self.content_provider.complete):return self
+        keys=tuple(self.material.interfaces['nodes']);self.source._admit(keys)
+        for key in keys:
+            self.ensure_regions(key,(region.id for region in self.source.plans[key].regions),
+                include_content=include_content)
+        self.check();self.bindings_complete=True
+        if include_content:self.content(complete=False).complete=True
+        return self
 
     def _name(self, name):
         return self.declarations.names[name.index].value if name.kind == 'SOURCE' else name.symbol
@@ -241,7 +326,10 @@ class SourceStateProvider:
             if v.source_function == source_function and v.namespace == namespace}
         for index, read in enumerate(graph.reads):
             access = graph.anchor_graph.accesses[read.access]
-            op = self.source._identity(OperationID, access.site.port.template, access.site.port.owner)
+            self.view.source_port(access.site)
+            point=self.source._node(access.site.port.template,access.site.port.owner)
+            self.ensure_operation(point,include_content=False)
+            op=point.node
             target = Point(self.namespace, op)
             versions = tuple(by_definition[n] for n in read.definitions)
             self.selections.append(S.BindingReadSelection(ordinal, index, read.access, read.state, versions))
@@ -254,10 +342,7 @@ class SourceStateProvider:
         return graph
 
     def effects(self, operation):
-        self.check()
-        if type(operation) is Point:
-            self.source.check(operation); operation = operation.node
-        return self.requests[operation]
+        return self.ensure_operation(operation,include_content=False)
 
     def effect_members(self, operation):
         """Expose the exact access rows referenced by a field-level summary."""
@@ -301,12 +386,18 @@ class SourceStateProvider:
     def _neighbors(self, point, incoming):
         if point.namespace != self.namespace: return DependencyNeighborhood()
         self.check(point)
+        if type(point.node)is OperationID and point.node in self.source.nodes:
+            self.ensure_operation(point,include_content=False)
         rows = self.in_edges[point.node] if incoming else self.out_edges[point.node]
         edges = tuple(replace(edge, source=replace(edge.source, context=point.context),
             target=replace(edge.target, context=point.context), conditions=tuple(replace(c,
                 subject=None if c.subject is None else replace(c.subject, context=point.context),
                 operands=tuple(replace(p, context=point.context) for p in c.operands)) for c in edge.conditions)) for edge in rows)
         frontiers = []
+        if not self.bindings_complete and (type(point.node)is LocationID or point.node in self.versions
+                or point.node in self.source.nodes and type(point.node)is not OperationID):
+            frontiers.append(DependencyFrontier(point,'SOURCE_STATE_ADJACENCY_PARTIAL',
+                'Only requested operations have binding accesses; ensure_all() explicitly projects the remaining original unit.'))
         if point.node in self.locations or point.node in self.versions:
             frontiers.append(DependencyFrontier(point, 'STATE_INSTANCE_AND_OBJECT_CONTENT_NOT_SELECTED',
                 'Static binding versions require a frame/occurrence and do not identify tensor contents.'))

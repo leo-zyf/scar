@@ -68,17 +68,18 @@ def function_interface_fact(store,unit,ordinal):
 
 
 def prepare_source_ports(view,ports,*,bodies=()):
-    """Batch only referenced original templates before individual port queries.
+    """Batch plan admission, then normalize only referenced owner regions.
 
     Construction interfaces contribute their original call/class anchors;
-    they are not source ports. Each unit receives one deduplicated _expand,
+    they are not source ports. Each unit receives one deduplicated _admit,
     without admitting callers, copying bodies or changing context selections.
     """
-    keys=defaultdict(set)
+    keys=defaultdict(set);owners=defaultdict(set)
     def add(point):
         if type(point) is T.GlobalPort:
             if type(point.port) is not G.Port:raise TypeError('source preparation needs an original graph port')
             keys[point.unit].add(point.port.template)
+            owners[point.unit].add((point.port.template,point.port.owner))
         elif type(point) is T.ConstructionPort:
             if type(point.call) is not T.GlobalPort or type(point.source_class) is not T.GlobalPort:
                 raise TypeError('construction preparation needs its original call/class ports')
@@ -90,8 +91,14 @@ def prepare_source_ports(view,ports,*,bodies=()):
     for body in bodies:
         if type(body) is not T.Body:raise TypeError('source preparation needs exact original Body records')
         keys[body.unit].add(body.template)
+        owners[body.unit].add((body.template,body.region))
     for unit in sorted(keys):
-        view.unit(unit)._expand(tuple(sorted(keys[unit],key=lambda key:(key.occurrence,key.purpose.value))))
+        source=view.unit(unit)
+        source._admit(tuple(sorted(keys[unit],key=lambda key:(key.occurrence,key.purpose.value))))
+        selected=defaultdict(set)
+        for key,owner in owners[unit]:selected[key].add(source.region_indexes[key].owner_region(owner))
+        for key in sorted(selected,key=lambda key:(key.occurrence,key.purpose.value)):
+            source._expand_regions(key,tuple(r for r in source.region_indexes[key].region_ids if r in selected[key]))
 
 
 def source_call_site(view,link):
@@ -101,7 +108,7 @@ def source_call_site(view,link):
     generated-native interfaces share the same exact original ABI check.
     """
     caller=view.unit(link.result.unit)
-    caller._expand((link.result.port.template,))
+    caller._ensure_original(link.result.port.template,link.result.port)
     operation=caller._node(link.result.port.template,link.result.port.owner)
     step=view.original(operation);context=NamespacePlanView(caller.unit,caller.plans[link.result.port.template])
     if (context.result(step)!=link.result or not step.arguments

@@ -10,6 +10,8 @@ def local_read_tracks(state):
     a slot of the reading activation. Different function creations can select
     the same body, so all original creation endpoints are retained.
     """
+    # This API explicitly enumerates the whole unit, unlike point queries.
+    state.ensure_all(include_content=False)
     functions = {}
     for function in state.source.facts.functions:
         if function.body_scope is not None:

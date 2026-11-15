@@ -82,6 +82,7 @@ class SourceEdgeProjection:
     ordinal: int
     original: Edge | None
     rule: str
+    region: ProductionRegionID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +108,7 @@ class StoredDependencyCondition:
 
 @dataclass(frozen=True, slots=True)
 class StoredSourceEdge:
-    """original=True references the header's sealed F4 template/edge ordinal.
+    """Original edges use sealed (template, region, local edge ordinal).
 
     Helper relations use rule plus the same template/ordinal coordinates.
     Neither form duplicates the original G.Edge or an executable instruction.
@@ -122,3 +123,4 @@ class StoredSourceEdge:
     rule: str
     original: bool
     conditions: tuple[StoredDependencyCondition, ...]
+    region: ProductionRegionID | None = None

@@ -232,7 +232,14 @@ class _LazyState:
         source=self.view.namespaces.get(point.namespace)
         if source is None:return Neighborhood()
         provider=self.view.state(source.unit)
-        provider.content()
+        node=source.nodes.get(point.node)
+        if node is not None and node.anchor.template is not None:
+            from scar.ir.program import normal_graph as G
+            original=node.anchor.original
+            owner=original.owner if type(original)is G.Port else original
+            key=node.anchor.template;source._admit((key,))
+            provider.ensure_regions(key,source.region_indexes[key].touching_regions(owner),include_content=True)
+        else:provider.content(complete=False)
         return (provider.incoming if incoming else provider.outgoing)(point)
     def incoming(self,point):return self._query(point,True)
     def outgoing(self,point):return self._query(point,False)
@@ -283,7 +290,7 @@ class F4BuildSession:
         binding_states=self.providers.get('binding_states')
         if binding_states is not None and spec['entry_unit'] in binding_states.headers:
             binding_states.ensure(spec['entry_unit'])
-        self.view.state(spec['entry_unit']).content()
+        self.view.state(spec['entry_unit']).content(complete=False)
         self._checkpoint('local_state_and_content')
         from scar.analysis.build_f4_resources import LazyF4Resources
         target=self.report.get('target')
@@ -517,7 +524,9 @@ class F4BuildSession:
         point=Point(namespaces[0],cls(raw),None);self.view.get(point);return point
 
     def layer_summary(self):
-        return dict(unified=True,local_state=dict(bindings=True,content=True),
+        return dict(unified=True,local_state=dict(bindings=True,content=True,mode='DEMAND_REGION_REQUESTS',
+                analyzed_operations=sum(len(p.analyzed_operations)for p in self.view.state_providers.values()),
+                binding_units_complete=sum(p.bindings_complete for p in self.view.state_providers.values())),
             cross_layer=dict(functions=any(k.startswith(('functions:','bounded_call_interfaces:')) for k in self.providers),
                 **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','invocations','resumptions','resource_scopes','binding_states')},
                 bounded_call_target_metadata=any(k.startswith('bounded_call_bindings:') for k in self.providers),

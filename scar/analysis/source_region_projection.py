@@ -6,7 +6,7 @@ following an edge never emits the target body. Ordered concatenation of every
 region's packet is exactly the original normal-graph emission.
 """
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from types import MappingProxyType
 
 from scar.analysis.normal_graph import _Emitter
@@ -69,21 +69,94 @@ class RegionProjectionIndex:
         self.template = key
         self.plan_sha256 = digest
         self.origin = origin
-        # Snapshot only the routing maps, not any template/function body.
-        self.interfaces = MappingProxyType(dict(
-            nodes=MappingProxyType(dict(interfaces['nodes'])),
-            links=MappingProxyType(dict(interfaces['links']))))
+        # A provider can share its already frozen unit-wide maps across every
+        # template index. Do not copy those maps again for each small plan.
+        if isinstance(interfaces, MappingProxyType):
+            self.interfaces = interfaces
+        else:
+            self.interfaces = MappingProxyType({name: values
+                if isinstance(values, MappingProxyType) else MappingProxyType(dict(values))
+                for name, values in ((name, interfaces[name]) for name in ('nodes', 'links'))})
         self._emitter = _Emitter(plan, key, self.interfaces)
         self._ordinals = {region.id: index for index, region in enumerate(plan.regions)}
+        self._region_ids = tuple(self._ordinals)
         self._projections = {}
+        self._build_routing()
+
+    def _build_routing(self):
+        """Index original typed mentions, without running any edge emitter.
+
+        A region can emit an edge touching a foreign region's parameters,
+        results or call boundary. References nested inside invocation inputs,
+        saved values and captures count equally. Lexical parenthood is kept
+        separately; it is not evidence of an invocation or of a value use.
+        """
+        mentioned_cache, field_cache = {}, {}
+        empty = frozenset()
+
+        def mentioned(value):
+            kind = type(value)
+            if kind in (P.ProductionRegionID, P.ProductionStepID):
+                return (value,)
+            if kind is P.ProductionParameter:
+                return (value.region,)
+            if kind is P.ProductionResult:
+                return (value.step,)
+            if kind is not tuple and not is_dataclass(value):
+                return empty
+            identity = id(value)
+            if identity not in mentioned_cache:
+                if kind is tuple:
+                    children = value
+                else:
+                    if kind not in field_cache:
+                        field_cache[kind] = tuple(field.name for field in fields(value))
+                    children = (getattr(value, name) for name in field_cache[kind])
+                mentioned_cache[identity] = frozenset(owner for child in children
+                    for owner in mentioned(child))
+            return mentioned_cache[identity]
+
+        owners, touching = {}, {}
+        children = {region: [] for region in self._region_ids}
+        for region in self.plan.regions:
+            owners[region.id] = region.id
+            if region.parent is not None:
+                children[region.parent].append(region.id)
+            references = {region.id, *region.steps}
+            for identity in region.steps:
+                step = self._emitter.steps[identity]
+                owners[identity] = region.id
+                references.update(mentioned(step.arguments))
+                references.update(mentioned(step.instruction))
+            for owner in references:
+                touching.setdefault(owner, []).append(region.id)
+        self._owner_regions = MappingProxyType(owners)
+        # Regions were visited once in original plan order, so these lists
+        # already are deterministic ordered sets without a sort or emission.
+        self._touching_regions = MappingProxyType({owner: tuple(regions)
+            for owner, regions in touching.items()})
+        self.children = MappingProxyType({owner: tuple(regions)
+            for owner, regions in children.items()})
 
     @property
     def region_ids(self):
-        return tuple(region.id for region in self.plan.regions)
+        return self._region_ids
 
     @property
     def projected_regions(self):
         return tuple(self._projections)
+
+    def owner_region(self, owner):
+        """Return the original region owning this region/step identity."""
+        if type(owner) not in (P.ProductionRegionID, P.ProductionStepID):
+            raise TypeError('original typed region or step identity required')
+        return self._owner_regions[owner]
+
+    def touching_regions(self, owner):
+        """Conservative emitting-region candidates in original plan order."""
+        if type(owner) not in (P.ProductionRegionID, P.ProductionStepID):
+            raise TypeError('original typed region or step identity required')
+        return self._touching_regions.get(owner, ())
 
     def project(self, region):
         if type(region) is not P.ProductionRegionID:

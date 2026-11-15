@@ -56,6 +56,15 @@ def pack_edges(provider):
                 raise ValueError('stored edge differs from its owning projected relation')
             if row.original is not None and type(row.original) is not G.Edge:
                 raise TypeError('stored original edge must reference a sealed G.Edge')
+            if row.original is not None:
+                if type(row.region)is not P.ProductionRegionID:
+                    raise TypeError('stored original edge needs its original region coordinate')
+                packet=provider.region_indexes[row.template].project(row.region)
+                if (type(row.ordinal)is not int or not 0<=row.ordinal<len(packet.edges)
+                        or packet.edges[row.ordinal]!=row.original):
+                    raise ValueError('stored original edge differs from sealed region/local ordinal')
+            elif row.region is not None:
+                raise ValueError('helper relation cannot impersonate an original region edge')
             # This exact provenance is factored into the shared header and
             # rule/endpoints. Reject any extra source/anchor instead of silently
             # losing evidence that the compact schema cannot represent.
@@ -66,7 +75,7 @@ def pack_edges(provider):
             for point in relation.evidence[0].anchors:
                 _local(provider, point)
             yield V.StoredSourceEdge(source, target, relation.kind, relation.meaning, relation.strength,
-                row.template, row.ordinal, row.rule, row.original is not None, conditions)
+                row.template, row.ordinal, row.rule, row.original is not None, conditions, row.region)
     provider.check()
 
 

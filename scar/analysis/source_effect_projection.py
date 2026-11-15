@@ -37,10 +37,12 @@ def project_effects(source, point):
     scalar = {name:K.UNKNOWN for name in SCALAR_FIELDS}
     missing = ()
     provider = source.effect_provider
+    identification_pending=False
     if provider is not None:
         provider.check(point)
         request = provider.effects(point)
         missing = request.missing_rules
+        identification_pending=(point.node in provider._building or point.node in provider._failures)
         accesses = tuple((n, provider.accesses[n]) for n in request.accesses)
         if any(a.operation != point.node for _, a in accesses):
             raise ValueError('source effect access belongs to a different operation')
@@ -57,7 +59,7 @@ def project_effects(source, point):
         fields['writes'] = S.SourceEffectSet(K.UNKNOWN, write, writes)
         # A direct lexical load has no mapping/descriptor callback. This
         # neither selects an instance nor proves referenced object contents.
-        if (type(step.instruction) is P.AccessBinding and step.instruction.action is P.BindingActionKind.READ
+        if (not identification_pending and type(step.instruction) is P.AccessBinding and step.instruction.action is P.BindingActionKind.READ
                 and len(accesses) == 1 and accesses[0][1].alternatives
                 and all(provider.locations[a.location].interface.kind == 'LEXICAL_BINDING'
                     for a in accesses[0][1].alternatives)):
@@ -66,7 +68,7 @@ def project_effects(source, point):
             for name in ('rng_effect', 'external_effect', 'ordering_effect'): scalar[name] = K.NONE
     elif rule.resolution.value == 'ADDRESS_RULE':
         missing = ('SOURCE_STATE_ADDRESS_PROVIDER_NOT_ATTACHED',)
-    if type(step.instruction) in _IDENTITY_INTRINSICS:
+    if not identification_pending and type(step.instruction) in _IDENTITY_INTRINSICS:
         fields['reads'] = fields['writes'] = S.SourceEffectSet(K.NONE)
         for name in SCALAR_FIELDS: scalar[name] = K.NONE
     elif any(completion.kind is C.RAISE for completion in step.completions):

@@ -261,6 +261,8 @@ scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out 
 
 外部正文回接同时索引保留的编译filename，通过原body scope、C3 constant path和完整CodeID确认；快照存放路径不同不会直接导致“目录外”。查询按原CALL和scope准入，声明的全部接口与本次实际展开的接口分开记录。
 
+主图查询按原region展开，反向索引补齐跨区生产者、消费者和调用方；函数、循环正文仍共享一份。state/content请求随区域登记，显式`project_unit`/`ensure_all`保留全量路径。图表schema v3用`template + region + local ordinal`引用原始边；未查询的状态邻接保留明确边界，不能当作无依赖。
+
 CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
 
 ```bash

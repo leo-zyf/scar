@@ -16,7 +16,7 @@ import time
 from scar.analysis.program_dependencies import ProgramDependencyGraph
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_declared_catalog import read_source_catalog
-from scar.analysis.normal_graph import normal_edges, _Emitter
+from scar.analysis.source_region_projection import RegionProjectionIndex
 from scar.analysis.source_template_links import _json, _worker_stores
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_reference_slice import source_port
@@ -31,7 +31,7 @@ from scar.ir.program.ids import (OperationID, RegionID, ValueID, UseID, ControlP
 from scar.ir.record_codec import encode, _encode, _record_tags
 
 
-SOURCE_REPRESENTATION = 'scar.f4.normal-success.v1'
+SOURCE_REPRESENTATION = 'scar.f4.normal-success.v2'
 _CONTROL = frozenset((G.PortKind.ENTER, G.PortKind.EXIT, G.PortKind.CALL_RETURN))
 _SOURCE_TAGS = MappingProxyType(_record_tags(P.PRODUCTION_RECORD_TAGS))
 
@@ -73,7 +73,10 @@ class SourceUnitProvider:
         self.metadata_providers = ()
         self.effect_provider = None
         self.effect_contexts = {}
-        self.plans = {}; self.callers = defaultdict(set)
+        self.plans = {}; self.callers = defaultdict(list)
+        self.region_indexes = {}; self.declared_regions = set(); self.expanded_regions = set()
+        self.region_interfaces = MappingProxyType({name:MappingProxyType(rows)
+            for name,rows in material.interfaces.items()})
         self.basis = _digest((self.unit, self.graph.input, self.graph.profile))
         root = self.facts.root_scope
         root_id = self._identity(RegionID, root.template, root.region)
@@ -83,7 +86,7 @@ class SourceUnitProvider:
         self.evidence = DependencyEvidence('scar.f4.identity-and-interface.v1', (self.locator,))
         for node in self.graph.templates:
             self._node(node.key, node.root)
-        for link in self.graph.links: self.callers[link.callee].add(link.caller)
+        for link in self.graph.links: self.callers[link.callee].append(link)
         self.formals = {source_port(self.facts,p).port for f in self.facts.functions for p in f.formals}
         world = self.graph.profile.world
         if type(world) is M.ValueType and world.kind is M.ValueKind.STATE:
@@ -174,30 +177,38 @@ class SourceUnitProvider:
             self.anchors[anchor] = identity; self.records[identity] = original
         return point
 
-    def _relation(self, source, target, kind, meaning, template, ordinal, rule, original=None, conditions=()):
+    def _relation(self, source, target, kind, meaning, template, ordinal, rule, original=None, conditions=(), region=None):
         relation = DependencyEdge(source, target, kind, meaning,
             (DependencyEvidence(rule, (self.locator,), (source, target)),), tuple(conditions))
-        projection = V.SourceEdgeProjection(relation, template, ordinal, original, rule)
+        projection = V.SourceEdgeProjection(relation, template, ordinal, original, rule, region)
         if relation not in self.edge_sources:
             self.outgoing_edges[source.node].append(relation); self.incoming_edges[target.node].append(relation)
         if projection not in self.edge_sources[relation]: self.edge_sources[relation].append(projection)
 
-    def _interfaces(self, key, plan):
-        emitter = _Emitter(plan, key, self.material.interfaces)
-        for region in plan.regions:
-            point = self._node(key, region.id); self.records[point.node] = region
+    def _region_header(self, key, region):
+        point = self._node(key, region.id); self.records[point.node] = region
+        if region.parent is not None:
+            parent = self._node(key, region.parent)
+            self.nodes[point.node] = replace(self.nodes[point.node], owner=parent)
+            self._relation(parent, point, K.CONTAINS, Meaning.STRUCTURE, key, 0, 'scar.f4.region-parent.v1')
+        return point
+
+    def _interfaces(self, key, plan, regions):
+        emitter = self.region_indexes[key]._emitter
+        regions = tuple(r for r in dict.fromkeys(regions) if (key,r) not in self.declared_regions)
+        for identity in regions:
+            region = emitter.regions[identity]
+            self._region_header(key, region)
             self._node(key, emitter.port(region.id, G.PortKind.ENTER))
-            if region.parent is not None:
-                parent = self._node(key, region.parent)
-                self.nodes[point.node] = replace(self.nodes[point.node], owner=parent)
-                self._relation(parent, point, K.CONTAINS, Meaning.STRUCTURE, key, 0, 'scar.f4.region-parent.v1')
             for index, type_ in enumerate(region.parameters):
                 self._node(key, emitter.port(region.id, G.PortKind.PARAMETER, index), type_)
             for completion in region.completions:
                 self._node(key, emitter.port(region.id, G.PortKind.EXIT, completion=completion))
                 for index, type_ in enumerate(completion.types):
                     self._node(key, emitter.port(region.id, G.PortKind.RESULT, index, completion), type_)
-        for step in plan.steps:
+            self.declared_regions.add((key, identity))
+        for step in (emitter.steps[step_id] for identity in regions
+                for step_id in emitter.regions[identity].steps):
             operation = self._node(key, step.id); self.records[operation.node] = step
             self._node(key, emitter.port(step.id, G.PortKind.ENTER))
             owner = self._node(key, step.region)
@@ -219,14 +230,26 @@ class SourceUnitProvider:
                         conditions=(DependencyCondition('scar.f4.declared-completion', completion.kind.value,
                             exit_port, index, (port,)),))
 
-    def _expand(self, keys):
+    def _admit(self, keys):
+        """Verify original plans and build routing indexes, without edge emission."""
         self.check()
-        keys = tuple(k for k in dict.fromkeys(keys) if k not in self.expanded)
+        keys = tuple(k for k in dict.fromkeys(keys) if k not in self.plans)
         if not keys: return
         plans = self.material.plans(keys)
         for key, plan in plans.items():
-            self.plans[key] = plan; self._interfaces(key, plan)
-            for ordinal, edge in enumerate(normal_edges(plan, self.material.interfaces)):
+            index = RegionProjectionIndex(plan, self.region_interfaces)
+            self.plans[key] = plan; self.region_indexes[key] = index
+        self.material.validate_parents()
+
+    def _expand_regions(self, key, regions):
+        """Emit selected original packets; never recursively emit target bodies."""
+        self._admit((key,))
+        regions = tuple(r for r in dict.fromkeys(regions) if (key,r) not in self.expanded_regions)
+        if not regions:return
+        self._interfaces(key, self.plans[key], regions)
+        for region in regions:
+            packet = self.region_indexes[key].project(region)
+            for ordinal, edge in enumerate(packet.edges):
                 source = self._node(edge.source.template, edge.source, edge.value_type)
                 target = self._node(edge.target.template, edge.target, edge.value_type)
                 conditions = []
@@ -234,8 +257,8 @@ class SourceUnitProvider:
                     condition = self._node(edge.condition.template, edge.condition)
                     conditions.append(DependencyCondition('scar.f4.branch', 'TRUE' if edge.when else 'FALSE', condition))
                 if edge.transition is not G.Transition.DIRECT:
-                    conditions.append(DependencyCondition('scar.f4.recipe-transition', edge.transition.value,
-                        source, ordinal, (source, target)))
+                    conditions.append(DependencyCondition('scar.f4.region-recipe-transition.v1', edge.transition.value,
+                        source, ordinal, (self._node(key, region), source, target)))
                 if edge.kind is G.EdgeKind.STATE:
                     kind, meaning = K.STATE_INTERFACE, Meaning.STATE_INTERFACE
                 elif edge.kind is G.EdgeKind.DATA:
@@ -247,14 +270,29 @@ class SourceUnitProvider:
                 else:
                     kind, meaning = K.IMPLEMENTATION, Meaning.STRUCTURE
                 self._relation(source, target, kind, meaning, key, ordinal,
-                    'scar.f4.normal-interface.v1', edge, conditions)
-            self.expanded.add(key)
+                    'scar.f4.normal-region-interface.v1', edge, conditions, region)
+            self.expanded_regions.add((key,region))
+        if all((key,r) in self.expanded_regions for r in self.region_indexes[key].region_ids):self.expanded.add(key)
         self.material.validate_parents()
+
+    def _expand(self, keys):
+        """Explicit whole-template compatibility path, in original region order."""
+        keys = tuple(dict.fromkeys(keys));self._admit(keys)
+        for key in keys:self._expand_regions(key,self.region_indexes[key].region_ids)
+
+    def _owner_region(self, key, original):
+        self._admit((key,))
+        owner = original.owner if type(original) is G.Port else original
+        return self.region_indexes[key].owner_region(owner)
+
+    def _ensure_original(self, key, original):
+        region = self._owner_region(key,original)
+        self._expand_regions(key,(region,))
 
     def port(self, port, *, context=None):
         if type(port) is not G.Port or port.template not in self.material.interfaces['nodes']:
             raise ValueError('source port is outside its original unit templates')
-        self._expand((port.template,))
+        self._ensure_original(port.template, port)
         cls = ControlPortID if port.kind in _CONTROL else UseID if port.kind is G.PortKind.ARGUMENT else ValueID
         identity = self._identity(cls, port.template, port)
         if identity not in self.nodes: raise ValueError('source port is not in a retained declared interface')
@@ -264,7 +302,6 @@ class SourceUnitProvider:
         self.ensure(point)
         anchor = self.nodes[point.node].anchor
         if anchor.template is None: return ()
-        self._expand((anchor.template,))
         original = self.records[point.node]
         if type(original) is P.ProductionRegion:
             return tuple(replace(self._node(anchor.template, step), context=point.context) for step in original.steps)
@@ -284,7 +321,7 @@ class SourceUnitProvider:
         self.check(point)
         if point.node not in self.nodes:raise ValueError('source endpoint has no admitted identity projection')
         key=self.nodes[point.node].anchor.template
-        if key is not None:self._expand((key,))
+        if key is not None:self._ensure_original(key,self.nodes[point.node].anchor.original)
         if type(point.node) is RegionID and type(self.records[point.node]) is not P.ProductionRegion:
             raise ValueError('declared source region is absent from its original recipe')
 
@@ -299,7 +336,20 @@ class SourceUnitProvider:
                 return DependencyNeighborhood()
             raise ValueError('source endpoint has no admitted identity projection')
         node = self.nodes[point.node]; key = node.anchor.template
-        if key is not None: self._expand((key, *sorted(self.callers[key], key=lambda k: (k.occurrence,k.purpose.value))))
+        if key is not None:
+            self._admit((key,))
+            owner = node.anchor.original.owner if type(node.anchor.original) is G.Port else node.anchor.original
+            index = self.region_indexes[key]
+            self._expand_regions(key,index.touching_regions(owner))
+            # Static template links identify the exact invoking step. Loading
+            # a shared callee interface must not normalize unrelated callers.
+            links = self.callers[key] if owner == self.material.interfaces['nodes'][key].root else ()
+            for link in links:
+                self._admit((link.caller,))
+                self._expand_regions(link.caller,(self.region_indexes[link.caller].owner_region(link.step),))
+            # CONTAINS is a declared ownership relation, independent of calls.
+            if type(owner) is P.ProductionRegionID:
+                for child in index.children[owner]:self._region_header(key,index._emitter.regions[child])
         edges = self.incoming_edges[point.node] if incoming else self.outgoing_edges[point.node]
         projected = tuple(replace(e, source=replace(e.source, context=point.context),
             target=replace(e.target, context=point.context), conditions=tuple(replace(c,
@@ -407,7 +457,7 @@ class ProgramView:
         return self.unit(global_port.unit).port(global_port.port, context=context)
 
     def source_region(self, unit, template, region, *, context=None):
-        provider = self.unit(unit); provider._expand((template,))
+        provider = self.unit(unit); provider._ensure_original(template,region)
         identity = provider._identity(RegionID, template, region)
         if identity not in provider.nodes or type(provider.records[identity]) is not P.ProductionRegion:
             raise ValueError('source region is outside its original recipe')
@@ -417,8 +467,8 @@ class ProgramView:
         """Reference a sealed root or declared code body without expansion.
 
         The header or exact original function/class fact supplies the identity.
-        get/original/expand still admit the full recipe when its fields or
-        dependencies are queried; no arbitrary nested region is introduced.
+        get/original/expand admit the original owning region packet when its
+        fields or dependencies are queried; no arbitrary region is introduced.
         """
         provider=self.unit(unit)
         declared=provider.material.interfaces['nodes'].get(template)
@@ -549,6 +599,12 @@ class ProgramView:
         provider._expand(keys)
         return provider
 
+    def project_region(self, unit, template, region):
+        """Normalize one sealed region, keeping external references shared."""
+        provider = self.unit(unit)
+        provider._expand_regions(template,(region,))
+        return provider
+
 
 def mapping_contract():
     """Closed source record domains; unsupported kinds never become OPAQUE."""
@@ -557,6 +613,7 @@ def mapping_contract():
         edge_kinds={G.EdgeKind.DATA.value:K.VALUE_USE.value, G.EdgeKind.STATE.value:K.STATE_INTERFACE.value,
             G.EdgeKind.CONTROL.value:K.CONTROL_FLOW.value, G.EdgeKind.DECLARE.value:K.IMPLEMENTATION.value},
         transitions=[k.value for k in G.Transition],
+        original_edge_coordinates=['template','region','local_edge_ordinal'],
         instruction_records=sorted(cls.__name__ for cls in P.ProductionInstruction.__args__),
         unknown_instruction_fallback=False, traversal_is_execution_proof=False,
         auxiliary_roles_are_not_new_entities=True, declaration_is_body_activation=False)
@@ -565,12 +622,12 @@ def mapping_contract():
 def _pins():
     from scar.ir.program import dependencies
     from scar.analysis import program_dependencies, normal_graph, source_graph_material
-    from scar.analysis import program_view_storage
+    from scar.analysis import program_view_storage, source_region_projection
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{
         name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('types', V), ('core_types', dependencies),
         ('query_engine', program_dependencies), ('normal_edges', normal_graph), ('materials', source_graph_material),
-        ('storage', program_view_storage))}
+        ('storage', program_view_storage), ('region_projection', source_region_projection))}
     )
 
 
@@ -602,7 +659,7 @@ def publish_program_view(catalog, units, out):
     catalog_artifact = _artifact(catalog.path/'result.json', catalog.report['schema'])
     tables = {unit+'/'+name:dict(receipt,path=shard['path']+'/'+receipt['path'])
         for unit,shard in shards.items() for name,receipt in shard['tables'].items()}
-    report = dict(schema='scar.unified-program-view', schema_version=2, catalog=str(catalog.path),
+    report = dict(schema='scar.unified-program-view', schema_version=3, catalog=str(catalog.path),
         parent=encode(catalog_artifact), pins=pins, contract=mapping_contract(), shards=shards, tables=tables,
         acceptance='PINNED_DATA_CONTRACT_AND_CURRENT_SOURCE_REDERIVATION',
         seconds=time.monotonic()-started, original_body_bytes_copied=0, loops_unrolled=False,
@@ -617,17 +674,9 @@ def read_program_view(path, *, unit):
     from scar.analysis.source_value_flow import _artifact
     path=Path(path).absolute();raw=(path/'result.json').read_bytes();report=json.loads(raw)
     current_pins=_pins()
-    # Schema 2's compact storage forbids contexts (program_view_storage._local).
-    # The known previous dependency declaration predates Frame.selection only;
-    # no Frame is present in these tables. Admit that exact producer receipt,
-    # then still rederive every node/edge with current rules below. Contextual
-    # query records have no such migration and retain exact wire validation.
-    frameless_v2_dependency_pin='fec8584d711dbecd8ecb6bc9dd80eb85d7a1f16f03d6c5959f4d7581e3dd73e6'
-    if ((report['schema'],report['schema_version'])!=('scar.unified-program-view',2)
+    if ((report['schema'],report['schema_version'])!=('scar.unified-program-view',3)
             or set(report['pins'])!=set(current_pins)
-            or any(report['pins'][k]!=current_pins[k] and not
-                (k=='core_types' and report['pins'][k]==frameless_v2_dependency_pin)
-                for k in current_pins if k!='producer')
+            or any(report['pins'][k]!=current_pins[k] for k in current_pins if k!='producer')
             or len(report['pins']['producer'])!=64 or any(c not in '0123456789abcdef' for c in report['pins']['producer'])
             or report['contract']!=mapping_contract()
             or report['acceptance']!='PINNED_DATA_CONTRACT_AND_CURRENT_SOURCE_REDERIVATION'):

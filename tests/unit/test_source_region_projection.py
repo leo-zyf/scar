@@ -1,5 +1,6 @@
 """One finite loop/branch/child packet preserves the original edge algebra."""
 from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 
@@ -57,11 +58,12 @@ def test_region_packets_emit_only_demanded_body_and_merge_to_original_edges(monk
         (parameter('loop', 0), parameter('loop', 1)), (world,))
     for name, owner in (('test', 'condition'), ('choose', 'body')):
         step(name, owner, P.ApplyLanguageAction(P.LanguageActionKind.TRUTH),
-            (parameter(owner, 0), parameter(owner, 1)), (boolean, world))
+            (result('declare', 0) if name == 'choose' else parameter(owner, 0),
+                parameter(owner, 1)), (boolean, world))
     step('tested', 'condition', P.TransferCompletion(C.FALLTHROUGH),
         (result('test', 0), result('test', 1)), (boolean, world))
     step('branch', 'body', P.BranchControl(*(
-        P.ProductionRegionCall(rid(name), (parameter('body', 0), result('choose', 1)))
+        P.ProductionRegionCall(rid(name), (parameter('root', 0), result('choose', 1)))
         for name in ('yes', 'no'))), (result('choose', 0),), (world,))
     step('body_done', 'body', P.TransferCompletion(C.FALLTHROUGH), (result('branch', 0),), (world,))
     for name in ('yes', 'no', 'deferred'):
@@ -76,7 +78,8 @@ def test_region_packets_emit_only_demanded_body_and_merge_to_original_edges(monk
             (completion(world),), replace(origin, plan_sha256='0'*64))}
     link = SourceTemplateLink(key, sid('child'), child_key,
         (parameter('root', 0), parameter('root', 1)))
-    interfaces = dict(nodes=nodes, links={(key, sid('child')): link})
+    interfaces = MappingProxyType(dict(nodes=MappingProxyType(nodes),
+        links=MappingProxyType({(key, sid('child')): link})))
 
     emitted = []
     original_run = normal_graph._Emitter.run
@@ -87,6 +90,15 @@ def test_region_packets_emit_only_demanded_body_and_merge_to_original_edges(monk
 
     monkeypatch.setattr(normal_graph._Emitter, 'run', watched_run)
     index = RegionProjectionIndex(plan, interfaces)
+    assert not emitted and not index.projected_regions
+    assert index.interfaces is interfaces
+    assert index.owner_region(sid('declare')) == rid('root')
+    assert index.owner_region(rid('body')) == rid('body')
+    assert index.touching_regions(sid('declare')) == (rid('root'), rid('body'))
+    assert index.touching_regions(rid('root')) == (rid('root'), rid('body'))
+    assert index.children[rid('root')] == (rid('loop'), rid('deferred'))
+    assert index.children[rid('body')] == (rid('yes'), rid('no'))
+    assert rid('loop') not in index.touching_regions(rid('root'))
     assert not emitted and not index.projected_regions
     root_packet = index.project(rid('root'))
     assert emitted == [(rid('root'),)]
@@ -112,5 +124,8 @@ def test_region_packets_emit_only_demanded_body_and_merge_to_original_edges(monk
             for port in (edge.source, edge.target, edge.condition) if port is not None}
         assert set(packet.local_ports).isdisjoint(packet.external_ports)
         assert set(packet.local_ports).union(packet.external_ports) == endpoints
+        for port in endpoints:
+            if port.template == key:
+                assert packet.region.id in index.touching_regions(port.owner)
     with pytest.raises(ValueError, match='sealed template'):
         RegionProjectionIndex(replace(plan, input=replace(basis, f2_sha256='b'*64)), interfaces)
