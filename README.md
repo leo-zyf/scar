@@ -266,6 +266,15 @@ scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out 
 
 主图查询按原region展开，反向索引补齐跨区生产者、消费者和调用方；函数、循环正文仍共享一份。state/content请求随区域登记，显式`project_unit`/`ensure_all`保留全量路径。图表schema v3用`template + region + local ordinal`引用原始边；未查询的状态邻接保留明确边界，不能当作无依赖。
 
+同一主图还可自动发现受支持的有序数组区域、接入内容epoch/切片描述，以及应用有条件的内建槽引用定理；这些分析不执行目标程序：
+
+```bash
+scar inspect-stateful-graph --build PROGRAM --out ORDERED_GRAPHS
+scar inspect-content-forwarding --build PROGRAM --out SLOT_PROOFS
+```
+
+前者从原源码重新推导区域，不将局部epoch当成全局逻辑版本；后者按原控制路径自动匹配写后读，分别保存静态事实、运行时检查和外部假设。未建立activation接口的caller context保留边界，两类产物均不授权直接改写。
+
 原caller-matched接口可进入既有C++20 pipeline，当前只生成验证预览：
 
 ```bash

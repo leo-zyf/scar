@@ -46,7 +46,8 @@ def _raw(receipt):
 def _implementation():
     root=Path(__file__).resolve().parents[1]
     names=('optimization/stateful_cost_rebase.py','optimization/stateful_cpu_choices.py',
-        'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py')
+        'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py',
+        'codegen/cpu_instruction_cost.py','codegen/cpu_instruction_cost_replay.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 
@@ -143,17 +144,18 @@ def _component_dependencies(facts,domain,candidate):
         raise ValueError('unsupported primitive-composition model dependency')
     demand=stateful_cpu_demand(domain,candidate);refs=derivation['component_refs'];total=0
     if len(refs)!=len(demand['terms']):raise ValueError('complete ordered primitive dependencies required')
-    checked=set()
-    def receipts(value):
+    checked=set();instruction_replays={}
+    def receipts(value,additional=frozenset()):
         if type(value)is dict:
             if set(value)=={'uri','sha256','size_bytes','schema'}:
-                if value['schema']not in ('scar.target-inventory','scar.target-hardware-graph'):
+                if (value['schema']not in ('scar.target-inventory','scar.target-hardware-graph')
+                        and semantic_sha256(value)not in additional):
                     raise ValueError('unsupported additional resource-model artifact dependency')
                 read_artifact(value,json_document=False);return
             if set(value)=={'path','sha256','bytes'}:_raw(value);return
-            for child in value.values():receipts(child)
+            for child in value.values():receipts(child,additional)
         elif type(value)is list:
-            for child in value:receipts(child)
+            for child in value:receipts(child,additional)
     for reference,term in zip(refs,demand['terms']):
         document=read_artifact(reference['artifact'])
         if (document.get('schema'),document.get('schema_version'))!=('scar.stateful-resource-calibration',1):
@@ -163,12 +165,27 @@ def _component_dependencies(facts,domain,candidate):
             raise ValueError('independent primitive context or authority differs')
         identity=semantic_sha256(reference['artifact'])
         if identity not in checked:
-            receipts(document);checked.add(identity)
+            additional=frozenset()
+            if document.get('source_model',{}).get('schema')=='scar.cpu-instruction-cost-model':
+                # The sole supported fitted-model extension replays actual
+                # source/plan/placement, compiler assembly, natural loops,
+                # MCA outputs and every projected component. A schema or
+                # hash alone cannot discharge these dependencies.
+                from scar.codegen.cpu_instruction_cost_replay import verify_instruction_projection
+                replay=verify_instruction_projection(domain,candidate,reference['artifact']['uri'])
+                if replay['projection']!=reference['artifact']:
+                    raise ValueError('instruction projection differs from original component facts')
+                instruction_replays[identity]=replay
+                additional=frozenset(map(semantic_sha256,(replay['source_profile'],replay['static_lowering'])))
+            receipts(document,additional);checked.add(identity)
         value,_=_fact(reference)
         # Fitted/external model dependencies require their own future replay
         # adapter. They cannot be admitted merely because their JSON hashes.
         if any(key in value for key in ('source_model','source_validation','measurement_sources')):
-            raise ValueError('unsupported additional component model dependency')
+            replay=instruction_replays.get(identity)
+            rows=()if replay is None else tuple(row for row in replay['components']if row['fact']==reference)
+            if len(rows)!=1 or rows[0]['component']!=value:
+                raise ValueError('unsupported or non-replayed additional component model dependency')
         if (component_key(value['component'],value['parameters'])!=term['key']
                 or value['basis']not in ('DIRECT_COMPONENT_TIMING','DECLARED_COMPONENT_MODEL')
                 or any(value.get(key)is False for key in ('selectable','precision_admitted','exportable_as_complete_cost'))
@@ -177,7 +194,11 @@ def _component_dependencies(facts,domain,candidate):
         total+=value['median_ns']*term['count']
     if facts['estimate']!=dict(duration_ticks=math.ceil(total),tick_seconds=1e-9):
         raise ValueError('original primitive forward estimate replay differs')
-    return dict(kind='ORDERED_INDEPENDENT_COMPONENT_SUM',component_refs=refs,duration_ticks=math.ceil(total))
+    result=dict(kind='ORDERED_INDEPENDENT_COMPONENT_SUM',component_refs=refs,duration_ticks=math.ceil(total))
+    if instruction_replays:
+        result['instruction_model_replays']=[{key:value for key,value in replay.items()if key!='components'}
+            for replay in instruction_replays.values()]
+    return result
 
 
 def _model_dependencies(profile,domain,domain_ref,context,candidate):
