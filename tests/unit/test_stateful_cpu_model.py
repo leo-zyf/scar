@@ -29,7 +29,8 @@ def test_resource_reuse_complete_scope_and_missing_component_frontier(hardware,t
         basis='DECLARED_COMPONENT_MODEL',scope='SYNTHETIC_UNIT_MODEL_NOT_HARDWARE_MEASUREMENTS')
         for i,row in enumerate(terms.values())]
     source=dict(schema='scar.stateful-resource-calibration',schema_version=1,
-        resource_context=demand['resource_context'],components=records)
+        resource_context=demand['resource_context'],components=records,
+        target_workload_executed=False,target_variants_ranked=False)
     partial=tmp_path/'partial.json';partial.write_text(json.dumps({**source,'components':records[:-1]}))
     missing=predict_stateful_cpu_model(domain,candidate,[partial],out=tmp_path/'missing-model')
     assert not missing['complete'] and missing['duration_ticks'] is None and missing['profile'] is None

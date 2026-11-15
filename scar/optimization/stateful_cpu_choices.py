@@ -10,6 +10,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from scar.runtime.compiled_deployment import thread_environment
 import struct
 import sys
 
@@ -135,8 +136,7 @@ def _construct(region_ref,target,request,base_plan_ref):
         backend_capabilities=capabilities,
         request=request,live_constraints=dict(affinity_cpu_ids=list(allowed),origin=origin,
             process_affinity_cpu_ids=list(_affinity(None)[0]),
-            native_thread_environment={key:os.environ.get(key) for key in
-                ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS')},
+            native_thread_environment=thread_environment(),
             affinity_is_reservation=False,memory_capacity_is_available_budget=False),
         semantic_family_sha256=semantic_sha256(_family(base)),region_sha256=stateful_digest(region),
         candidates=rows,topology_frontier=gaps,

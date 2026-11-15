@@ -257,7 +257,8 @@ def calibrate_stateful_boundary(domain,candidate_id,out,*,repetitions=9,warmup=2
     actual=sorted(os.sched_getaffinity(0));cpus=candidate['binding']['cpu_ids']
     _need(actual==domain['live_constraints']['process_affinity_cpu_ids'] and set(cpus)<=set(actual),
         'caller affinity must match exact calibration context')
-    thread_env={key:os.environ.get(key) for key in domain['live_constraints']['native_thread_environment']}
+    from scar.runtime.compiled_deployment import thread_environment
+    thread_env=thread_environment()
     _need(thread_env==domain['live_constraints']['native_thread_environment'], 'native thread environment differs')
     demand=stateful_cpu_demand(domain,candidate_id)
     terms=[];seen=set()
@@ -315,7 +316,7 @@ def calibrate_stateful_boundary(domain,candidate_id,out,*,repetitions=9,warmup=2
         observed_after=sorted(os.sched_getaffinity(0))
         if observed_after!=actual: os.sched_setaffinity(0,actual)
     _need(observed_after==actual, 'probe failed to restore exact caller affinity')
-    _need({key:os.environ.get(key) for key in thread_env}==thread_env, 'probe changed thread environment')
+    _need(thread_environment()==thread_env, 'probe changed thread environment')
     document=dict(schema='scar.stateful-resource-calibration',schema_version=1,
         resource_context=demand['resource_context'],probe_context=context,components=components,
         unsupported_components=[],extra_observations=[],probe=probe,canonical_structure=structure,

@@ -12,7 +12,7 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 | 优化 | O0 原图准入与依赖事实 → O1 结构化简及合法性 → O2 实现、内存和资源成本域 → O3 联合计划选择 → O4 计划重放与NO_OP |
 | 交付 | C0 已选计划准入 → C1 C++20控制/算子ABI降低 → C2 紧凑包、guard与回退 → C3 正确性、干净A/B及部署门控 |
 
-三阶段主链已在受支持区域贯通。G3 已接条件参数、环境、world、返回及标准实例 receiver，G4 已有分级材料准入；本轮修正外部源码身份回接并按原CALL准入。随后继续区域级展开、一般对象/别名内容版本及O2可信成本输入。每轮按具体缺口验收，不靠新增后端掩盖前层缺口。
+三阶段主链已在受支持区域贯通。当前顺序是：① G2/G3 按 region 展开并同步登记 state/content 请求；② O2 补独立融合成本，再交 O3 选择；③ C1 将普通 caller 图接入已有 PipelinePlan。每层保留原 ID 和上游证据，验收通过再扩大范围。
 
 ## 第一阶段：建图
 
@@ -27,6 +27,7 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 - 实际目录验收保留14单元、495591端口；冷时12份外部facts/interfaces均未加载，一次原接口查询0.301s通过类型、family和witness核验，其余11份保持冷。实际Gray仍37记录→10接口→64主图关系，缺失0；完整查询单次诊断102.325s→55.661s（独立打开101.577s→54.817s，64次邻接合计0.412s）。这是SCAR分析延迟，不是目标程序加速基准。当前约105.6MB模板图仍eager；目录/byte准入不冒充全部语义已验证。证据：`artifacts/baseline/demand-interface-admission.json`。
 - 当前硬件图保留全部 204 个资源、477 条连接，包括 CPU/SMT/ISA、NUMA/DRAM/cache、PCIe、存储及网络库存。硬件存在、可访问、后端支持和实际使用分别表达。
 - 实际修正此前13个“目录外”误报：同一37条Gray记录中的23个Python目标全部匹配保留正文，产生27个条件ABI alternative（含descriptor分支）、19个共享正文；匹配阶段7个外部单元没有正规化template。按原CALL查询准入，先检查所属scope，再展开所选接口。另选最小外部leaf的一次真实跨文件查询，6条参数/env/world/正常返回关系均在主图可见，缺失0；其他73个原query明确未选择。材料重开与完整身份验证仍使这次检查耗时119.534s，不能与旧10接口范围的55.661s混作性能比较；不宣称27个ABI正文已全部展开。证据：`artifacts/baseline/retained-code-bridge.json`。
+- region 发射层已实现：真实循环模板单区生成24条边，5区合并与原109条边顺序一致，保留13个跨区端口及循环回边，未展开迭代。此验收尚未将主 provider/state/content 切换为增量模式；下一层接通该生命周期。
 
 ## 第二阶段：化简及硬件规划
 
@@ -38,7 +39,8 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 - `compile-build --loop-cpu-model` 机械比较完整 106 个成本和原执行，选出 CPU 0–13/28–41 的 **28 workers**，声明模型预测区域 13.740ms。只降低这一种目标实现；未试跑其他目标变体。域不包含任意 CPU 子集、跨 socket 团队或 NUMA 绑页，因此不是物理全局最优。
 - 复合区域也已进入完整自动CPU成本链：复用原106配置的数学校准，单独补充数字化函数路由/源码字节读取的规范边界模型（额外中位数59.729μs），不把原direct边界直接当作完整复合边界。source-unit namespace分组只是规范模型，不证明实际globals身份或别名。OMP/GOMP/KMP控制环境参与成本适用性，改变时旧事实不能复用。
 - 固定原语到目标图只按匿名有序值依赖、常量和资源上下文匹配，不按函数/程序名匹配。早先缺成本的 cap4 结果和单独合成完整模型记录仍保留；不得拿合成成本作硬件性能证据。批量投影每份原观测只解析/索引一次，再写独立事实分片。
-- 已修正stateful校准准入：`target_workload_executed`及`target_variants_ranked`必须显式False，缺失或True均保留拒绝证据与UNKNOWN成本。真实Gray的106mask主链接口已存在，但完整profile仍0：旧融合阶段模型holdout误差22.8316%超冻结20%门槛，且旧校准硬件context不匹配；不能复制temporal时间值或降门槛。下一门补通用原始method调用NO_OP观测及新独立融合模型。
+- 已修正stateful校准准入：`target_workload_executed`及`target_variants_ranked`必须显式False，缺失或True均保留拒绝证据与UNKNOWN成本。真实Gray的106mask主链接口已存在；旧融合阶段模型holdout误差22.8316%超冻结20%门槛，且旧校准硬件context不匹配，不能复制temporal时间值或降门槛。
+- 原始状态method成本采集已接入主规划链：仅在guard外计首个原调用，每个样本独立进程，不加载native变体、不记录数组内容。真实512×512、4步入口的单次method采样为6.970ms中位数（6.671–7.095ms，stdev0.218ms），预备1个进程排除、正式3个进程；预备进程不预热正式进程的cache。这是成本模型输入，不是干净完整入口性能。主规划读入后NO_OP成本已知，106个native成本仍未知，保留原执行。完整OMP/GOMP/KMP控制环境纳入成本上下文。证据：`artifacts/baseline/stateful-original-observation.json`。
 
 ## 第三阶段：C++20 交付及真实结果
 

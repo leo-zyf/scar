@@ -7,7 +7,7 @@ State · Control · Action · Resource：面向Python程序的宏观编译器。
 当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
 已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
 完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
-主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 5000 步：进程内完整积分 **3.71×**；相同 C++ 库的独立进程自动入口 **5.22×**（3 对中位数），正式成本门另作一次完整验收。不同测量范围分开报告。旧单 stencil 版本 0.895× 仍拒绝，另两项只有基线，详见 [当前状态](docs/STATUS.md)。
+主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 1000 步当前完整入口 A/B：原版11.136s、显式单线程C++版本3.939s，**2.8271×**（1组预热、3组交替测量的中位数）。完整CPU域自动选择仍缺native成本；另两项只有基线，详见 [当前状态](docs/STATUS.md)。
 LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
 后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
 
@@ -210,6 +210,15 @@ scar choose-stateful-cpu --domain DOMAINS/region-0/domain/domain.json --out CHOI
 ```
 
 `plan-build` 当前为受支持的状态数组区域生成规划域，其余函数保留具体拒绝原因。输入 shape 是显式约束；局部绑定的 frame-isolation 投影保留未解除的 Q，引用稳定不能证明数组内容不变。
+
+状态区域原执行成本可独立采集，再按区域ID将输出的`forward-cost/profile.json`写入`ORIGINAL_COSTS.json`映射：
+
+```bash
+scar observe-original-stateful-cost --domain DOMAINS/region-0/domain/domain.json --build PROGRAM_BUILD --out ORIGINAL --warmup 1 --repetitions 3 -- ENTRY.py ARGS
+scar compile-build --domains DOMAINS --no-op-profiles ORIGINAL_COSTS.json --plan-only --out COST_ADMISSION
+```
+
+计时只覆盖每个新进程首个匹配method的原调用，输入/源码/provider检查在计时外；不记录数组内容，不加载native变体。它提供同边界NO_OP成本，最终加速比仍需干净完整入口A/B。缺native成本继续保留原执行。
 
 循环外提已有原 F4 → 依赖闭包 → C++20 验证入口：
 

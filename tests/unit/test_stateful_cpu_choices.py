@@ -11,7 +11,7 @@ from scar.optimization.stateful_cpu_choices import (build_stateful_cpu_domain,
     stateful_cpu_cost_context,plan_stateful_cpu_choices,verify_stateful_cpu_choices,selected_stateful_plan)
 
 
-def test_every_worker_count_and_missing_noop_cost_prevent_unjustified_selection(hardware,tmp_path):
+def test_every_worker_count_and_missing_noop_cost_prevent_unjustified_selection(hardware,tmp_path,monkeypatch):
     from scar.analysis.target_graph import build_target_graph
     inventory=json.loads((tmp_path/'inventory.json').read_bytes())
     inventory['platform']=dict(machine='x86_64',system='linux')
@@ -64,3 +64,7 @@ def test_every_worker_count_and_missing_noop_cost_prevent_unjustified_selection(
     assert not chosen['physical_optimality_proven'] and not chosen['target_variants_executed']
     bad=deepcopy(chosen);bad['selected_id']='NO_OP'
     with pytest.raises(ValueError,match='complete replay'): verify_stateful_cpu_choices(bad)
+    with monkeypatch.context()as context:
+        context.setenv('OMP_DYNAMIC','TRUE')
+        with pytest.raises(ValueError,match='retained hardware/source replay'):
+            verify_stateful_cpu_choices(chosen)
