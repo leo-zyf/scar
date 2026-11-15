@@ -34,7 +34,38 @@
       "max_rss_kib": 69048,
       "result": "bestmove d2d4 ponder d7d5",
       "capture": "cpu-sunfish-current/trace-endgame",
-      "capture_scope": "different small endgame position, depth 1; not full starting-position search"
+      "capture_scope": "different small endgame position, depth 1; not full starting-position search",
+      "current_run": {
+        "name": "Sunfish",
+        "status": "OBSERVED_BASELINE",
+        "configuration": {
+          "position": "startpos",
+          "go_movetime_ms": 10000,
+          "stop": "natural bestmove then quit",
+          "workers": 1
+        },
+        "baseline_wall_seconds": 7.047398844995769,
+        "average_cores": 0.9905905928620946,
+        "max_rss_kib": 71224,
+        "bestmove": "bestmove d2d4 ponder d7d5",
+        "repetitions": 1,
+        "warmup": 0,
+        "fixed_work_comparison": false,
+        "acceleration_claimed": false,
+        "full_search_graph_certified": false,
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/sunfish/result.json",
+            "sha256": "88b6fcc146a0709055127e59b8ad38604fecb9b03da1d105410bd0dfa3d89491",
+            "bytes": 2188
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/sunfish/graph-audit.json",
+            "sha256": "67734649bc6c825fc8cd60b09c02183ec2665a8ff726fda735d04a8ca6a495f0",
+            "bytes": 40867
+          }
+        ]
+      }
     },
     {
       "name": "Gray-Scott",
@@ -65,7 +96,93 @@
         ]
       },
       "capture": "cpu-gray-scott-current/trace",
-      "capture_scope": "original upstream driver, end_time 2; not full 5000-step run"
+      "capture_scope": "original upstream driver, end_time 2; not full 5000-step run",
+      "current_run": {
+        "name": "Gray-Scott",
+        "status": "VERIFIED_CORRECTNESS_REJECTED_FOR_COST",
+        "configuration": {
+          "grid": 512,
+          "steps": 5000,
+          "baseline_native_library_threads": 1,
+          "native_region_threads": 4,
+          "native_region_cpu_ids": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "memory_policy": "UNBOUND",
+          "dtype": "float64",
+          "region": "source-selected static stencil; outer integrate unchanged"
+        },
+        "initial_baseline_wall_seconds": 50.69,
+        "baseline": {
+          "median": 33.7525294389925,
+          "min": 32.215040612005396,
+          "max": 49.18273344199406,
+          "stdev": 9.384008271524172,
+          "samples": [
+            49.18273344199406,
+            33.7525294389925,
+            32.215040612005396
+          ],
+          "variance_seconds_squared": 88.05961124003406
+        },
+        "native": {
+          "median": 37.73060455400264,
+          "min": 23.272259949008003,
+          "max": 38.76339307401213,
+          "stdev": 8.661077553634623,
+          "samples": [
+            38.76339307401213,
+            37.73060455400264,
+            23.272259949008003
+          ],
+          "variance_seconds_squared": 75.01426439007349
+        },
+        "warmup_pairs": 1,
+        "paired_repetitions": 3,
+        "speedup": 0.8945663563562453,
+        "correctness": {
+          "region": true,
+          "single_step": true,
+          "trajectory_20_steps": true,
+          "full_integrate": true,
+          "required_state": true,
+          "stdout": true,
+          "files": true
+        },
+        "native_calls_measured": 30000,
+        "fallback_calls_measured": 0,
+        "decision": "NO_OP",
+        "selected": false,
+        "whole_program_compiled": false,
+        "fresh_process_scope_measured": false,
+        "automatic_runner_cost_context_qualified": false,
+        "original_source_modified": false,
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-validation/result.json",
+            "sha256": "e1dc74e2ac71ecb02f2dfb78eb889e3a1bc794895162d097f9326e554676d10c",
+            "bytes": 12100
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-summary.json",
+            "sha256": "cca0ce49006338562ed7d487f9aade38eb8b9fbc4226d6d43a39bec678925982",
+            "bytes": 3504
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/generic-selector-result.json",
+            "sha256": "1d059fbc2c4426737d91e932cd9b20cb22721a7788f18772149f7cfeb39bc597",
+            "bytes": 1811
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/source-handoff.json",
+            "sha256": "67a699f98a6568d0abb722636e5d1faee354c16c4666c55aee8e2bd1712fd888",
+            "bytes": 4534
+          }
+        ]
+      }
     },
     {
       "name": "Cirq",
@@ -283,14 +400,54 @@
         }
       },
       "capture": "cpu-quantum-current/trace",
-      "capture_scope": "3 qubits, depth 1, one worker; parallel process handoff is not certified"
+      "capture_scope": "3 qubits, depth 1, one worker; parallel process handoff is not certified",
+      "current_run": {
+        "name": "Cirq",
+        "status": "OBSERVED_BASELINE",
+        "configuration": {
+          "qubits": 22,
+          "depth": 20,
+          "rounds": 12,
+          "circuits": 8,
+          "workers": 8,
+          "dtype": "complex128"
+        },
+        "baseline_wall_seconds": 620.1419372250093,
+        "supervisor_wall_seconds": 621.8631995249889,
+        "worker_compute_cpu_seconds": 4861.174944549,
+        "actual_workers": 8,
+        "peak_sampled_cpu_percent": 802.7219103262287,
+        "peak_sampled_sum_process_rss_bytes": 5084094464,
+        "rss_scope": "PROCESS_TREE_RSS_SUM_SHARED_PAGES_MAY_BE_COUNTED_MULTIPLE_TIMES_2_SECOND_SAMPLING",
+        "total_simulated_gates": 105600,
+        "max_norm_error": 1.2212453270876722e-14,
+        "norm_tolerance": 1e-09,
+        "repetitions": 1,
+        "warmup": 0,
+        "acceleration_claimed": false,
+        "full_multiprocess_graph_certified": false,
+        "correctness_scope": "original norm checks and historical reported norm/Z0 scalar comparison; no full-state equality claim",
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/cirq/verification.json",
+            "sha256": "5d0adf4cbd36c9b7fe54594e0078421f9d113176f2bca83703ddb8643845fb96",
+            "bytes": 6547
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/cirq/provenance-capability-review.json",
+            "sha256": "a94c2271ae3305a7ae161025f02f308e0c9e507deb7881bba5c16953318e84c3",
+            "bytes": 8950
+          }
+        ]
+      }
     }
   ],
   "measurement_contract": {
     "repetitions": 1,
     "warmup": 0,
     "speedup_claimed": false,
-    "program_output_arrays_saved_by_collector": false
+    "program_output_arrays_saved_by_collector": false,
+    "current_scope": "Per-case current_run overrides the initial single-observation contract: Gray-Scott has one warmup pair and three measured pairs; Sunfish/Cirq have one baseline each."
   },
   "known_limits": [
     "source graph exists does not prove dependency/effect closure",
@@ -308,5 +465,12 @@
       "sha256": "89c98a323ea07cdf5dddd492a8c8e7d4726a0d97c42a92304de11488d6ea4801",
       "text": "\"\"\"CPU state-vector simulation of parameterized, entangling quantum circuits.\n\nEach task represents an independent circuit experiment. Repeated rounds evolve\nthe previous quantum state; no state vector is serialized or written to disk.\nThe parent reports norm and Z expectation scalars and real worker CPU time.\n\"\"\"\nimport argparse\nfrom concurrent.futures import ProcessPoolExecutor\nimport json\nimport multiprocessing\nimport os\nfrom pathlib import Path\nimport resource\nimport sys\nimport time\n\n\ndef simulate_experiment(spec):\n    import cirq\n    import numpy as np\n\n    qubits, depth, rounds, seed, ordinal, dtype, tolerance = spec\n    started = time.perf_counter()\n    cpu_started = time.process_time()\n    rng = np.random.default_rng(seed + ordinal)\n    wires = cirq.LineQubit.range(qubits)\n    circuit = cirq.Circuit()\n    for layer in range(depth):\n        circuit.append(cirq.rx(float(rng.uniform(-np.pi, np.pi)))(q) for q in wires)\n        circuit.append(cirq.rz(float(rng.uniform(-np.pi, np.pi)))(q) for q in wires)\n        circuit.append(cirq.CZ(wires[q], wires[q + 1]) for q in range(layer % 2, qubits - 1, 2))\n        if layer % 2:\n            circuit.append(cirq.CZ(wires[-1], wires[0]))\n    simulator = cirq.Simulator(dtype=getattr(np, dtype), seed=seed + ordinal)\n    state = 0\n    for _ in range(rounds):\n        result = simulator.simulate(circuit, initial_state=state, qubit_order=wires)\n        state = result.final_state_vector\n    norm = float(np.vdot(state, state).real)\n    half = state.size // 2\n    z0 = float(np.vdot(state[:half], state[:half]).real - np.vdot(state[half:], state[half:]).real)\n    if not np.isfinite(norm) or abs(norm - 1.0) > tolerance:\n        raise ValueError('state norm failed: ' + str(norm))\n    return dict(experiment=ordinal, pid=os.getpid(), seed=seed + ordinal,\n        gates_per_round=sum(1 for _ in circuit.all_operations()), rounds=rounds,\n        norm=norm, norm_error=abs(norm - 1.0), norm_tolerance=tolerance,\n        z0=z0, cpu_seconds=time.process_time() - cpu_started,\n        wall_seconds=time.perf_counter() - started,\n        max_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument('--qubits', type=int, default=20)\n    parser.add_argument('--depth', type=int, default=20)\n    parser.add_argument('--rounds', type=int, default=1)\n    parser.add_argument('--circuits', type=int, default=1)\n    parser.add_argument('--workers', type=int, choices=(1, 2, 4, 8), default=1)\n    parser.add_argument('--seed', type=int, default=1729)\n    parser.add_argument('--dtype', choices=('complex64', 'complex128'), default='complex128')\n    parser.add_argument('--norm-tolerance', type=float)\n    parser.add_argument('--out', type=Path)\n    args = parser.parse_args()\n    if not 2 <= args.qubits <= 25 or min(args.depth, args.rounds, args.circuits) < 1:\n        parser.error('qubits must be 2..25; depth, rounds and circuits must be positive')\n    tolerance = args.norm_tolerance\n    if tolerance is None:\n        tolerance = 1e-9 if args.dtype == 'complex128' else 5e-3\n    if not 0 < tolerance < 1:\n        parser.error('norm tolerance must be strictly between 0 and 1')\n    # Configure native CPU libraries before their first import in each process.\n    for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):\n        os.environ[key] = '1'\n    specs = [(args.qubits, args.depth, args.rounds, args.seed, i, args.dtype, tolerance) for i in range(args.circuits)]\n    started = time.perf_counter()\n    if args.workers == 1:\n        results = [simulate_experiment(spec) for spec in specs]\n    else:\n        with ProcessPoolExecutor(max_workers=args.workers,\n                mp_context=multiprocessing.get_context('spawn')) as pool:\n            results = list(pool.map(simulate_experiment, specs, chunksize=1))\n    elapsed = time.perf_counter() - started\n    report = dict(schema='scar.cpu-quantum-workload', backend='cirq.Simulator / NumPy CPU',\n        parameters={k: v for k, v in vars(args).items() if k != 'out'},\n        python=sys.version, wall_seconds=elapsed,\n        worker_cpu_seconds=sum(r['cpu_seconds'] for r in results),\n        norm_tolerance=tolerance,\n        max_norm_error=max(r['norm_error'] for r in results),\n        active_worker_pids=sorted({r['pid'] for r in results}), results=results,\n        state_vectors_saved=False, accelerator_used=False)\n    if args.out:\n        args.out.write_text(json.dumps(report, indent=2) + '\\n')\n    print(json.dumps(report))\n\n\nif __name__ == '__main__':\n    main()\n"
     }
-  ]
+  ],
+  "initial_measurements_note": "Existing top-level case measurements below are initial observations; current_run and current_suite_results identify the current authoritative runs.",
+  "current_suite_results": {
+    "path": "artifacts/current/experiments/real-cpu-suite-v1/summary.json",
+    "sha256": "3b5b9e878f95565c1512f29aaa2305edd017bd57f0255d14b3f617371fb10401",
+    "bytes": 7260
+  },
+  "primary_suite_policy": "Sunfish, Gray-Scott and Cirq are the primary external testcases; temporal_reaction is a synthetic regression only."
 }

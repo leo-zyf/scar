@@ -1,43 +1,44 @@
 # 当前状态
 
-统一上层 execution recipe 已贯通一个受约束的 CPU 共享循环：语义边界→任务/资源计划→估价→C++20→自动入口实测。
-通用宏观编译器尚未完成；本轮没有 LeWM/GPU 测量，未改 LeWM。
+主测试组为项目外的 **Sunfish、Gray–Scott、Cirq**。三个真实负载已重新运行；尚无这三个程序的可信加速结果，三个阶段均未完成。本轮未修改原程序，没有 LeWM/GPU 测量。
 
-| 阶段 | 已实现并核验 | 主要缺口 |
+## Observed / Verified：指定的三个 CPU 程序
+
+| 程序 | 实际配置 | 本轮原版运行 | 优化状态 |
+|---|---|---:|---|
+| Sunfish | startpos，`go movetime 10000`，单核搜索 | 7.047s，平均 0.991 核 | 仅基线；自然返回 bestmove，未做固定工作量 A/B |
+| Gray–Scott | 512×512，5000 步，原版 PDE integrate，float64 | 初次完整运行 50.69s；配对测量见下 | C++ stencil 区域正确，但成本门拒绝 |
+| Cirq | 22 qubit、depth 20、12 rounds、8 circuits / 8 进程、complex128 | 620.142s，105600 gates | 仅基线；实际 8 个 worker，峰值采样约 803% CPU |
+
+Sunfish 返回 `bestmove d2d4 ponder d7d5`，定时搜索自然提前返回，因此历史运行秒数不能作为固定工作量加速比较。Cirq 最大 norm error 为 1.22e-14；与历史同配置结果的 norm/Z0 标量一致，不代表已逐元素比较完整 state vector。进程 RSS 求和峰值约 4.74GiB，可能重复计算共享页，采样间隔 2 秒。
+
+## Verified / Rejected：真实 Gray–Scott 完整 A/B
+
+原源码及适配器哈希未变。静态图自动发现的 stencil 区域已有通用 C++20 实现；本次用显式安装的候选路径验证，外层 Euler 更新、ghosts、5000 步循环、dt、stdout、PNG 输出继续执行原程序。原版 native library 线程数为 1；候选区域显式使用 4 个 CPU（0–3），内存页未绑定。
+
+预热 1 对、正式 3 对，交替 AB/BA；未开启函数级 trace 或 profiler。计时包含原 integrate 的输出，不是独立进程自动部署时间。
+
+| 秒 | 原版 | C++ 区域版本 |
+|---|---:|---:|
+| 原始样本 | 49.182733 / 33.752529 / 32.215041 | 38.763393 / 37.730605 / 23.272260 |
+| median | 33.752529 | 37.730605 |
+| min–max | 32.215041–49.182733 | 23.272260–38.763393 |
+| stdev | 9.384008 | 8.661078 |
+
+**0.894566×，not profitable，NO_OP。** 候选中位数增加约 11.8%；样本波动较大，未筛样或重跑获取正结果。现有通用 `select_measured` 根据同一原始样本返回成本拒绝，保留原执行。
+
+区域、单步、20 步 trajectory、完整 integrate 的 u/v 状态逐位、dt、dump 次数、stdout 和 PNG 字节比较通过；正式候选共 30000 次 native、0 fallback。此结论验证了区域正确性与该配置的成本拒绝，没有证明全程序已编译或硬件安排最优。
+
+## 三阶段实际边界与下一步
+
+| 阶段 | 已有能力 | 真实测试组暴露的主要缺口 |
 |---|---|---|
-| 建图 | F0–F4、共享 function/loop、CALL/参数/返回/world、原端口引用；资源独立的 loop 语义边界；全部 target 与条件化 cache/SMT/NUMA 引用 | 通用 alias/content/effects、递推/迭代距离、一般控制流闭合 |
-| 上层规划 | 统一 recipe 的 control、value/materialization、ready/ownership、资源/预算与后端能力；成本和降低共用 recipe ID | 真实宏观操作成本、自动 worker/分块/放置、全程序跨 CPU/GPU/内存/存储的联合时序 |
-| C++20 | 共享公开准入、recipe 精确重放、能力/编译器/ABI/layout 比对；原生循环、普通模块自然导入和轻量部署 | 一般控制/异步/设备后端、正式 main 挂接、完整 standalone C++ |
+| 建图 | F0–F4、共享 function/loop、调用/参数/返回/state 端口、硬件库存、有限动态绑定 | Sunfish 旧 capture 主要覆盖启动协议，不能代表完整搜索；Cirq 小配置单进程 capture 未闭合 8 worker 任务依赖；通用 alias/content/effect 仍未闭合 |
+| 化简与硬件规划 | 区域规则、依赖/容量计划、受约束 execution recipe、成本选择与 NO_OP | 真实循环整体的数据/状态/边界写入及中间值生命周期；宏观操作成本；联合 worker/分块/放置/搬运/同步规划 |
+| C++20 交付 | 受约束 real float64 数组区域、共享点式递推、源/ABI/资源守卫及 fallback | 一般递归/字典/生成器/IO、complex128 耦合算子、跨进程任务与全程序宿主交付 |
 
-**Verified：本轮主链**
+下一步用同一主测试组按层补实际调用与状态/进程接口，再形成更大的合法替换区域，最后让硬件计划决定调度和交付。保持循环正文共享，不展开上万次迭代，不逐次保存 tensor 值。局部算子继续交给 GCC/LLVM、成熟库或外部算子后端。
 
-`scar recipe plan-loop/estimate/lower` 已实际执行。recipe 56,190B，引用组件各保存一次；400 步仍只有一份共享正文、3 个宏观任务和 12 个原 target 资源引用，另附条件化 CPU hierarchy。语义边界不随 CPU 数/布局改变；recipe ID 还绑定资源及后端实现、编译上下文、ABI/layout。源、边界、任务图或能力改变须重放，不能沿用原身份。
+先前约 **10.256×** 来自自建 `temporal_reaction` 点式递推，仅保留为受约束回归案例，不能归给上述三个程序、LeWM 或通用宏观编译器。统一 recipe 的既有贯通结果仍有效，其实测成本模型和全程序推广尚未完成。
 
-分配只准备存储；完整 temporal compute 完成才令最终数组 ready，export 持有逃逸输出。原数据/状态/carry/顺序依赖保留，未选资源不被程序当前用法裁剪。新增输出 payload 为 8,405,000B，workspace=0，显式预算 12MiB；不包括输入、线程 scratch、分配器及 RSS，不声称物理 cache/NUMA 驻留。
-
-估价 JSON、降低收据与导出的 native 身份已逐项接通。新编译器/ABI/实现/layout 必须等于 recipe 的 capability record。合法性已从 codegen 私有函数提到 compiler.loop_admission。此次重新编译一次；模板、flags、数学表达式未改，生成 library 与原 kernel 逐字节相同。本轮验证的是上层计划交接，不能归因为新增局部加速。
-
-**Verified：真实运行**
-
-区域验证通过输入变化重算、输出修改隔离、零/负次数别名、次数变化与嵌套 callee 状态回退，输出逐位一致，获得 TRANSFORM_UNDER_CONTRACT。随后导出 32,739B 核心包，经原未改入口自然导入执行；无需 testcase 手写 install。
-
-独立进程父时钟，包括启动/导入/成本门/装配/原程序 IO/报告 IO；1025² float64、400 步、8 个显式未排名 CPU，warmup 1、配对重复 3：
-
-| | median | min | max | stdev |
-|---|---:|---:|---:|---:|
-| 原程序 | 4.053302s | 4.037117s | 4.071071s | 0.016983s |
-| 原生路径 | 0.395195s | 0.388790s | 0.398225s | 0.004817s |
-
-本 scope **10.256×**；每次 1 native/0 fallback，stdout/最终 npy 字节一致。seconds.txt 是时间测量输出。不是 LeWM 加速、全局最优或旧版本排名。
-
-**明确前沿**
-
-recipe 时间估价仍 UNKNOWN：尚无真实多 worker temporal profile，不从旧 single-step 成本或总调用时间拆造子任务时长。部署 A/B 的启动模型仍显式使用候选时间＋0.1s metadata surcharge 假设，不冒充实测上界；正常成本门路径另测，观测不回写模型。全别名调用覆盖仍未证明，cost_scope_verified 保守 false。新主链 4 项聚焦检查通过（3.14s），另外现有 tiny native/source-admission 回归已通过。
-
-下一步按层推进：
-1. 保留 source/state/loop/Q 与原图关系，统一共享分析及 PassResult/失效协议；不重做低层编译器。
-2. 为宏观操作接入有来源的时间、workspace、搬运/同步成本；联合资源容量、数据 ready、memory lifetime 求 makespan，再扩 worker/分块/CPU-GPU/存储规划。LLVM/GCC 和算子库承担局部实现。
-3. 让正式入口、异步/设备后端消费同一 recipe；扩 source==main 原型及 C++ 宿主 IO，保持原路径 fallback。
-
-最新产物：artifacts/current/experiments/macro-recipe-v1/。
-版本化验收入口：artifacts/baseline/formal-frontend-results.json。三个阶段均未宣告全部完成。
+本轮原始结果：`artifacts/current/experiments/real-cpu-suite-v1/summary.json`；版本化配置及摘要：`artifacts/baseline/cpu-workloads.json`、`artifacts/baseline/formal-frontend-results.json`。

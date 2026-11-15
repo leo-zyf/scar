@@ -7,6 +7,7 @@ State · Control · Action · Resource：面向Python程序的宏观编译器。
 当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
 已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
 完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
+主测试组为 Sunfish、Gray–Scott、Cirq；本轮三个真实负载均已运行。Gray–Scott 完整 A/B 正确性通过但中位数倍率 0.895×，保留原执行；另外两项只有基线。自建点式递推的约 10× 仅为回归案例，详见 [当前状态](docs/STATUS.md)。
 LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
 后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
 
@@ -239,3 +240,4 @@ python -B -m scar.cli name-flow --declared FRESH_CALLS --unit SOURCE_UNIT --out 
 
 当前 CPU 主测试程序位于项目外、与 `le-wm` 同级：`sunfish`（一般程序）、`gray-scott`（PDE）、`cirq`（量子电路模拟）。
 外部入口及命令、10 秒至 10 分钟的实测负载见 `artifacts/baseline/cpu-workloads.json`；测试程序的运行成功与完整建图验收分别报告。
+该清单的 `current_run` 指向本轮结果；原始记录在 `artifacts/current/experiments/real-cpu-suite-v1/`。

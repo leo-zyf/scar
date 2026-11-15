@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "macro_execution_recipe_progress",
+  "current_milestone": "real_cpu_suite_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -7466,5 +7466,206 @@
     "lewm_modified": false,
     "lewm_speedup_measured": false,
     "torch_cuda_upgraded": false
+  },
+  "real_cpu_suite_progress": {
+    "schema": "scar.real-cpu-suite-results",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T04:22:42.936252+00:00",
+    "status": "THREE_REAL_PROGRAM_BASELINES_COMPLETED_ONE_FULL_PAIRED_AB_NO_PROFITABLE_TRANSFORM",
+    "environment": {
+      "conda": "lewm",
+      "python": "3.14.7",
+      "numpy": "2.5.2",
+      "cpu": "Intel Xeon E5-2680 v4",
+      "logical_cpus": 56,
+      "physical_cores": 28,
+      "numa_nodes": 2,
+      "accelerator_used": false
+    },
+    "primary_cases": [
+      "Sunfish",
+      "Gray-Scott",
+      "Cirq"
+    ],
+    "synthetic_temporal_reaction_role": "REGRESSION_ONLY_NOT_PRIMARY_SUITE_OR_EVIDENCE_OF_REAL_PROGRAM_SPEEDUP",
+    "cases": [
+      {
+        "name": "Sunfish",
+        "status": "OBSERVED_BASELINE",
+        "configuration": {
+          "position": "startpos",
+          "go_movetime_ms": 10000,
+          "stop": "natural bestmove then quit",
+          "workers": 1
+        },
+        "baseline_wall_seconds": 7.047398844995769,
+        "average_cores": 0.9905905928620946,
+        "max_rss_kib": 71224,
+        "bestmove": "bestmove d2d4 ponder d7d5",
+        "repetitions": 1,
+        "warmup": 0,
+        "fixed_work_comparison": false,
+        "acceleration_claimed": false,
+        "full_search_graph_certified": false,
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/sunfish/result.json",
+            "sha256": "88b6fcc146a0709055127e59b8ad38604fecb9b03da1d105410bd0dfa3d89491",
+            "bytes": 2188
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/sunfish/graph-audit.json",
+            "sha256": "67734649bc6c825fc8cd60b09c02183ec2665a8ff726fda735d04a8ca6a495f0",
+            "bytes": 40867
+          }
+        ]
+      },
+      {
+        "name": "Gray-Scott",
+        "status": "VERIFIED_CORRECTNESS_REJECTED_FOR_COST",
+        "configuration": {
+          "grid": 512,
+          "steps": 5000,
+          "baseline_native_library_threads": 1,
+          "native_region_threads": 4,
+          "native_region_cpu_ids": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "memory_policy": "UNBOUND",
+          "dtype": "float64",
+          "region": "source-selected static stencil; outer integrate unchanged"
+        },
+        "initial_baseline_wall_seconds": 50.69,
+        "baseline": {
+          "median": 33.7525294389925,
+          "min": 32.215040612005396,
+          "max": 49.18273344199406,
+          "stdev": 9.384008271524172,
+          "samples": [
+            49.18273344199406,
+            33.7525294389925,
+            32.215040612005396
+          ],
+          "variance_seconds_squared": 88.05961124003406
+        },
+        "native": {
+          "median": 37.73060455400264,
+          "min": 23.272259949008003,
+          "max": 38.76339307401213,
+          "stdev": 8.661077553634623,
+          "samples": [
+            38.76339307401213,
+            37.73060455400264,
+            23.272259949008003
+          ],
+          "variance_seconds_squared": 75.01426439007349
+        },
+        "warmup_pairs": 1,
+        "paired_repetitions": 3,
+        "speedup": 0.8945663563562453,
+        "correctness": {
+          "region": true,
+          "single_step": true,
+          "trajectory_20_steps": true,
+          "full_integrate": true,
+          "required_state": true,
+          "stdout": true,
+          "files": true
+        },
+        "native_calls_measured": 30000,
+        "fallback_calls_measured": 0,
+        "decision": "NO_OP",
+        "selected": false,
+        "whole_program_compiled": false,
+        "fresh_process_scope_measured": false,
+        "automatic_runner_cost_context_qualified": false,
+        "original_source_modified": false,
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-validation/result.json",
+            "sha256": "e1dc74e2ac71ecb02f2dfb78eb889e3a1bc794895162d097f9326e554676d10c",
+            "bytes": 12100
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-summary.json",
+            "sha256": "cca0ce49006338562ed7d487f9aade38eb8b9fbc4226d6d43a39bec678925982",
+            "bytes": 3504
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/generic-selector-result.json",
+            "sha256": "1d059fbc2c4426737d91e932cd9b20cb22721a7788f18772149f7cfeb39bc597",
+            "bytes": 1811
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/source-handoff.json",
+            "sha256": "67a699f98a6568d0abb722636e5d1faee354c16c4666c55aee8e2bd1712fd888",
+            "bytes": 4534
+          }
+        ]
+      },
+      {
+        "name": "Cirq",
+        "status": "OBSERVED_BASELINE",
+        "configuration": {
+          "qubits": 22,
+          "depth": 20,
+          "rounds": 12,
+          "circuits": 8,
+          "workers": 8,
+          "dtype": "complex128"
+        },
+        "baseline_wall_seconds": 620.1419372250093,
+        "supervisor_wall_seconds": 621.8631995249889,
+        "worker_compute_cpu_seconds": 4861.174944549,
+        "actual_workers": 8,
+        "peak_sampled_cpu_percent": 802.7219103262287,
+        "peak_sampled_sum_process_rss_bytes": 5084094464,
+        "rss_scope": "PROCESS_TREE_RSS_SUM_SHARED_PAGES_MAY_BE_COUNTED_MULTIPLE_TIMES_2_SECOND_SAMPLING",
+        "total_simulated_gates": 105600,
+        "max_norm_error": 1.2212453270876722e-14,
+        "norm_tolerance": 1e-09,
+        "repetitions": 1,
+        "warmup": 0,
+        "acceleration_claimed": false,
+        "full_multiprocess_graph_certified": false,
+        "correctness_scope": "original norm checks and historical reported norm/Z0 scalar comparison; no full-state equality claim",
+        "evidence": [
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/cirq/verification.json",
+            "sha256": "5d0adf4cbd36c9b7fe54594e0078421f9d113176f2bca83703ddb8643845fb96",
+            "bytes": 6547
+          },
+          {
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/cirq/provenance-capability-review.json",
+            "sha256": "a94c2271ae3305a7ae161025f02f308e0c9e507deb7881bba5c16953318e84c3",
+            "bytes": 8950
+          }
+        ]
+      }
+    ],
+    "first_stage_complete": false,
+    "all_three_stages_complete": false,
+    "profitable_real_program_transforms": 0,
+    "measurement_limits": [
+      "Single baseline observations for Sunfish/Cirq establish execution, not speedup.",
+      "Sunfish timed search uses variable work; a future A/B must freeze a fixed-work task.",
+      "Gray-Scott full integration timings are inside paired validator processes, not fresh-process automatic-runner timings.",
+      "Gray-Scott samples vary substantially; no filtering or remeasurement was used to force a positive result.",
+      "Benchmark execution and bounded graph capture have different coverage; no full-run dependency closure is inferred."
+    ],
+    "next_work": [
+      "Bounded actual search capture and its shared state/callback links for the general-program case.",
+      "Model full scientific-loop dependencies, aliases, boundary writes and materialization lifetimes before selecting a larger replacement region.",
+      "Connect worker task arguments, process execution and completion as shared interprocess interfaces.",
+      "Use macro dependency/resource schedules to decide replacement scope and execution placement; retain native libraries for local kernels."
+    ],
+    "summary": {
+      "path": "artifacts/current/experiments/real-cpu-suite-v1/summary.json",
+      "sha256": "3b5b9e878f95565c1512f29aaa2305edd017bd57f0255d14b3f617371fb10401",
+      "bytes": 7260
+    }
   }
 }
