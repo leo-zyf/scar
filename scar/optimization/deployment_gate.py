@@ -15,6 +15,7 @@ from .deployment_cost import _digest, _profile, plan_deployment, verify_deployme
 _IDS = {'build_id', 'loop_sha256', 'strategy_sha256', 'execution_plan_sha256', 'contract_sha256'}
 _ENTRY = {'kind', 'entry_path', 'entry_sha256', 'argv', 'runner_implementation_sha256'}
 _ERRORS = (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, OverflowError)
+MEMORY_SCOPE = 'REGION_INCREMENTAL_FRESH_FINAL_PAYLOAD_EXCLUDES_EXTERNAL_INPUTS_AND_PROCESS_RSS'
 
 
 def _hash(value):
@@ -22,7 +23,8 @@ def _hash(value):
 
 
 def deployment_gate(report, *, bundle_ids, admission_sha256, entry_scope, reuse_count,
-                    available_cpu_ids, memory_budget_bytes, profile=None):
+                    available_cpu_ids, memory_budget_bytes, profile=None,
+                    required_cpu_ids=None, required_memory_bytes=None, memory_scope=None):
     """Replay cost evidence and current resources before loading any native code.
 
     ``bundle_ids`` are the five identities from runtime.json.native.ids; the
@@ -30,6 +32,8 @@ def deployment_gate(report, *, bundle_ids, admission_sha256, entry_scope, reuse_
     metadata identities, not the authenticity or bytes of a native library.
     Entry argv is exact, including output paths and all flags. No legacy/manual
     installation scope is promoted to an automatic-runner observation.
+    Positive admission additionally requires the actual validated runtime
+    contract's CPU order and fresh final payload, not profile self-declarations.
     """
     frontier, reasons = [], []
     def issue(field, reason): frontier.append(dict(field=field, reason=reason))
@@ -42,6 +46,14 @@ def deployment_gate(report, *, bundle_ids, admission_sha256, entry_scope, reuse_
     if not isinstance(bundle_ids, dict) or set(bundle_ids) != _IDS or not all(_hash(v) for v in bundle_ids.values()):
         issue('bundle_ids', 'complete exact native identity hashes required')
     if not _hash(admission_sha256): issue('admission_sha256', 'explicit producer admission SHA256 required')
+    actual_cpus = list(required_cpu_ids) if isinstance(required_cpu_ids, (list, tuple)) else None
+    if (not actual_cpus or any(type(cpu) is not int or cpu < 0 for cpu in actual_cpus)
+            or len(set(actual_cpus)) != len(actual_cpus)):
+        issue('required_cpu_ids', 'actual runtime contract CPU allocation and order required'); actual_cpus = None
+    if type(required_memory_bytes) is not int or required_memory_bytes < 0:
+        issue('required_memory_bytes', 'actual runtime array.final_bytes required')
+    if memory_scope != MEMORY_SCOPE:
+        issue('memory_scope', 'explicit fresh-final-only runtime payload scope required')
     if not isinstance(entry_scope, dict) or set(entry_scope) != _ENTRY:
         issue('entry_scope', 'complete automatic-runner entry and exact argv scope required')
     else:
@@ -64,6 +76,12 @@ def deployment_gate(report, *, bundle_ids, admission_sha256, entry_scope, reuse_
             issue('context.boundary', 'this automatic-runner gate requires an original FRESH_PROCESS scope')
         if context.get('launch_policy') != 'COST_GATED_DEPLOYMENT':
             issue('context.launch_policy', 'original costs must describe COST_GATED_DEPLOYMENT, not a measurement bypass')
+        if actual_cpus is not None and context.get('cpu_ids') != actual_cpus:
+            issue('context.cpu_ids', 'cost CPU allocation differs from the actual runtime contract')
+        if type(required_memory_bytes) is int and required_memory_bytes >= 0 and context.get('required_memory_bytes') != required_memory_bytes:
+            issue('context.required_memory_bytes', 'cost payload differs from the actual runtime array.final_bytes')
+        if memory_scope == MEMORY_SCOPE and context.get('memory_scope') != memory_scope:
+            issue('context.memory_scope', 'cost memory scope differs from the actual fresh-final payload contract')
         bundle = context.get('runtime_bundle')
         expected_bundle = dict(ids=bundle_ids, admission_sha256=admission_sha256)
         if not isinstance(bundle, dict) or set(bundle) != {'ids', 'admission_sha256'}:
@@ -111,8 +129,9 @@ def deployment_gate(report, *, bundle_ids, admission_sha256, entry_scope, reuse_
         reuse_count=reuse_count,
         current_resources=None if current is None else dict(
             available_cpu_ids=current['request']['available_cpu_ids'], memory_budget_bytes=memory_budget_bytes,
-            required_cpu_ids=context.get('cpu_ids'), required_memory_bytes=context.get('required_memory_bytes'),
-            memory_scope=context.get('memory_scope')),
+            required_cpu_ids=actual_cpus, required_memory_bytes=required_memory_bytes, memory_scope=memory_scope,
+            requirements_source='CALLER_VALIDATED_PINNED_RUNTIME_CONTRACT',
+            budget_excludes=['EXTERNAL_INPUTS', 'ALLOCATOR_METADATA_AND_ALIGNMENT_OVERHEAD', 'THREAD_SCRATCH', 'PROCESS_RSS']),
         mode=None if value is None else value['mode'],
         cost_bases={} if value is None else deepcopy(value['cost_bases']),
         whole_scope_cost_observed=False if value is None else value['whole_scope_cost_observed'],
@@ -135,4 +154,4 @@ def verify_deployment_gate(report, result, **actual_context):
     return value
 
 
-__all__ = ['deployment_gate', 'verify_deployment_gate']
+__all__ = ['MEMORY_SCOPE', 'deployment_gate', 'verify_deployment_gate']

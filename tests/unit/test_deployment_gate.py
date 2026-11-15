@@ -7,10 +7,11 @@ import subprocess
 import sys
 
 from scar.optimization.deployment_cost import plan_deployment
-from scar.optimization.deployment_gate import deployment_gate, verify_deployment_gate
+from scar.optimization.deployment_gate import MEMORY_SCOPE, deployment_gate, verify_deployment_gate
 
 
-def setup_gate(tmp_path, *, legacy=False, components=False, launch_policy='COST_GATED_DEPLOYMENT', argv=None):
+def setup_gate(tmp_path, *, legacy=False, components=False, launch_policy='COST_GATED_DEPLOYMENT', argv=None,
+               profile_cpu_ids=None, profile_required_memory_bytes=64, profile_memory_scope=MEMORY_SCOPE):
     tmp_path.mkdir(parents=True, exist_ok=True)
     entry = tmp_path / 'entry.py'; entry.write_text("raise RuntimeError('must not execute')\n")
     ids = dict(zip(('build_id', 'loop_sha256', 'strategy_sha256', 'execution_plan_sha256', 'contract_sha256'),
@@ -19,9 +20,11 @@ def setup_gate(tmp_path, *, legacy=False, components=False, launch_policy='COST_
         argv=[str(entry), '--out', str(tmp_path / 'output.npy')] if argv is None else argv,
         runner_implementation_sha256='f' * 64)
     actual = dict(bundle_ids=ids, admission_sha256='1' * 64, entry_scope=scope,
-                  reuse_count=1, available_cpu_ids=[0, 1], memory_budget_bytes=64)
+                  reuse_count=1, available_cpu_ids=[0, 1], memory_budget_bytes=64,
+                  required_cpu_ids=[0, 1], required_memory_bytes=64, memory_scope=MEMORY_SCOPE)
     context = dict(boundary='FRESH_PROCESS', workload_id='loop', artifact_id=ids['build_id'],
-        cpu_ids=[0, 1], required_memory_bytes=64, memory_scope='INCREMENTAL_ARRAY_PAYLOAD',
+        cpu_ids=[0, 1] if profile_cpu_ids is None else profile_cpu_ids,
+        required_memory_bytes=profile_required_memory_bytes, memory_scope=profile_memory_scope,
         external_assumptions=['FP_STATUS_FLAGS_NOT_USED_AS_PROGRAM_OUTPUT'], runtime_guards=['SOURCE_AND_SHAPE'])
     if not legacy:
         context.update(runtime_bundle=dict(ids=ids, admission_sha256=actual['admission_sha256']), entry_scope=scope,
@@ -78,6 +81,15 @@ def test_legacy_scope_reuse_resources_and_models_keep_fail_closed_contracts(tmp_
     assert model['decision'] == 'LOAD_NATIVE_CANDIDATE' and not model['whole_scope_cost_observed']
     assert set(model['cost_bases'].values()) == {'DECLARED_MODEL'}
     assert model['model_assumptions'] and model['external_assumptions'] == profile['context']['external_assumptions']
+    missing = {key:value for key,value in actual.items() if key not in ('required_cpu_ids','required_memory_bytes','memory_scope')}
+    unbound = deployment_gate(path, **missing)
+    assert unbound['decision'] == 'NO_OP'
+    assert {row['field'] for row in unbound['frontier']} >= {'required_cpu_ids','required_memory_bytes','memory_scope'}
+    wrong_path, wrong_actual, _ = setup_gate(tmp_path / 'wrong-contract', profile_cpu_ids=[0],
+        profile_required_memory_bytes=32, profile_memory_scope='PROCESS_RSS')
+    wrong = deployment_gate(wrong_path, **wrong_actual)
+    assert wrong['decision'] == 'NO_OP'
+    assert {row['field'] for row in wrong['frontier']} >= {'context.cpu_ids','context.required_memory_bytes','context.memory_scope'}
     bypass_path, bypass_actual, _ = setup_gate(tmp_path / 'measure', launch_policy='MEASURE_CANDIDATE')
     bypass = deployment_gate(bypass_path, **bypass_actual)
     assert bypass['decision'] == 'NO_OP' and any(row['field'] == 'context.launch_policy' for row in bypass['frontier'])
