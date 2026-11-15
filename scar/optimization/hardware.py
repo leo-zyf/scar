@@ -142,9 +142,6 @@ def propose_cpu_placements(plan, target, *, affinity=None, memory_budget_bytes=N
     Unknown available memory remains unknown; explicit budgets become output
     allocation guards. Reported physical capacity is never used as a budget.
     """
-    _budget(memory_budget_bytes, "memory_budget_bytes")
-    if max_threads is not None and (type(max_threads) is not int or max_threads < 1):
-        raise ValueError("max_threads must be a positive integer or None")
     if not isinstance(plan, ExecutionPlan):
         raise ValueError("ExecutionPlan required")
     if target is None:
@@ -154,6 +151,29 @@ def propose_cpu_placements(plan, target, *, affinity=None, memory_budget_bytes=N
         return ()
     validate_plan(plan)
     plan_budget = _budget(plan.cost.get("memory_budget_bytes"), "plan memory budget")
+    return _propose_cpu_allocations(target, affinity=affinity,
+        memory_budget_bytes=memory_budget_bytes, max_threads=max_threads, plan_budget=plan_budget)
+
+
+def propose_cpu_allocations(target, *, affinity=None, memory_budget_bytes=None,
+                            max_threads=None) -> tuple[CpuPlacement, ...]:
+    """Describe CPU/memory allocations independently of an operator profile.
+
+    A stateful region or other macro plan can use the original resource graph
+    without fabricating a pure array operator. This is an implementation domain,
+    not admission of its caller's semantics and not a performance ranking.
+    """
+    return _propose_cpu_allocations(target, affinity=affinity,
+        memory_budget_bytes=memory_budget_bytes, max_threads=max_threads, plan_budget=None)
+
+
+def _propose_cpu_allocations(target, *, affinity, memory_budget_bytes,
+                              max_threads, plan_budget):
+    _budget(memory_budget_bytes, "memory_budget_bytes")
+    if max_threads is not None and (type(max_threads) is not int or max_threads < 1):
+        raise ValueError("max_threads must be a positive integer or None")
+    if target is None:
+        return ()
     allowed, affinity_origin = _affinity(affinity)
     graph, snapshot, resources, connections = _target_materials(target)
     indexed = _indexed_resources(resources)

@@ -454,3 +454,18 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 `scar.execution-recipe/v1` 是上层执行组织的交接件：semantic_boundary、control、typed task_graph、全部库存与已选 resources、后端 implementation/capability、原 artifacts 和 obligations。估价与选择不写回 recipe，按同一 recipe_id 独立引用；降低重放同份结构并核真实 compiler/ABI/layout/implementation。ID 是版本关联，不代替合法性或执行授权。现有 cpu-temporal-loop-v1 保一份共享正文与每坐标严格 time carry；分配只准备存储，完整计算完成才令最终值就绪。局部端口 label 不是原 ValueID/LogicalVersion/StorageID，原图端口和来源仍以引用保留。全调用成本不擅自拆成 allocation/compute/export 时长，缺项不补 0。
 
 整体优化目标是依赖及资源约束下的完成时间：数据/状态/顺序前驱必须满足，live allocations 受容量约束，执行器与通道受并发约束。不同设备不自动意味独立；物理任务图可因分块、预取或异步搬运增加节点。循环保持结构化控制，不按毫秒或迭代完全展开。算法与计算精度不变，允许设备实现固有浮点差异是当前全局意向；现有严格 CPU profile 保其较强的顺序、fenv、finite 及逐位验证合同，没有擅自放宽或加入量化、近似或删减迭代。
+
+`StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
+参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
+
+slice 是 alias descriptor，在使用处读取数组根的当前 epoch；已 evaluate 的计算结果保定义时 payload，后续写入不能将它改成新状态读取。
+call-local storage epoch 只记录本区域有序写入推进，不是全局 LogicalVersion，也不以相同 storage、epoch 或来源证明内容相等。
+
+写入保原 world 顺序；普通接收者字段、同源 bare staticmethod 的 CodeID 和原 NumPy provider 各有独立守卫，power 不改写成乘法。
+计算和写入先发生于私有 shadow，全部检查成功后才提交原写入区域；失败从未改动的外部状态调用原方法一次。
+此事务边界要求同步 CPU 执行及无外部并发状态读者或写者，仍受原浮点环境、异常和返回 None 的合同约束。
+
+规划保固定 stages、就绪依赖、payload lifetime、最后使用后 slot 复用及显式 CPU resource binding；预分配 workspace 容量保留到方法返回。
+预算包含引用的外部状态数组与固定 workspace payload，排除其他程序数组、allocator 元数据、线程 scratch 和 RSS，不把 cache 容量当 malloc 预算。
+Q 保原算术依赖与次序、dtype 和独立 provider；当前只在声明的 stage/存储模型内规划，不宣称整程序闭合或 makespan/物理最优。
+一份共享方法区域可由原积分程序调用 5000 次，不复制或 unroll 这 5000 次正文；外围调用、边界更新与 I/O 的证明范围仍各自保留。

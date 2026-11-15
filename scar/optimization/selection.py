@@ -75,6 +75,13 @@ def select_measured(plan, baseline_seconds, native_seconds, *, validated,
     required = {"NO_FOREIGN_CONCURRENT_INPUT_WRITERS", "SYNCHRONOUS_CPU_EXECUTION"}
     if not required.issubset(assumptions):
         reasons.append("missing_external_contract_assumptions")
+    return _finish_decision(baseline, native, reasons, assumptions, guards,
+                            validated, native_fallbacks, minimum_gain)
+
+
+def _finish_decision(baseline, native, reasons, assumptions, guards,
+                     validated, native_fallbacks, minimum_gain):
+    """Cost policy shared by separately admitted semantic profiles."""
     if validated is not True:
         reasons.append("correctness_not_validated")
     if type(native_fallbacks) is not int or native_fallbacks < 0:
@@ -111,3 +118,42 @@ def select_measured(plan, baseline_seconds, native_seconds, *, validated,
         "scope": "Selection applies only to the validated workload and explicit profile "
                  "contract; it does not prove global purity or new provenance.",
     }
+
+
+def select_stateful_measured(artifact, baseline_seconds, native_seconds, *, validated,
+                             native_fallbacks=0, minimum_gain=0.05):
+    """Admit one measured stateful implementation, retaining original execution.
+
+    Legality is checked through the ordered stateful plan, independently of the
+    pure-array profile. No comparison expands source, shape or provider scope.
+    """
+    from scar.compiler.stateful_model import validate_stateful_region
+    from scar.optimization.stateful_schedule import verify_stateful_plan
+
+    baseline, baseline_error = _samples(baseline_seconds)
+    native, native_error = _samples(native_seconds)
+    reasons = [label + '_' + error for label, error in
+               (('baseline', baseline_error), ('native', native_error)) if error]
+    region, plan, report = artifact.region, artifact.plan, artifact.report
+    try:
+        validate_stateful_region(region)
+        verify_stateful_plan(region, plan)
+        if (plan.get('frontier') or plan.get('frontiers') or plan.get('budget_satisfied') is not True
+                or plan.get('status') != 'READY' or plan.get('allocation_search_complete') is not True):
+            reasons.append('stateful_plan_not_executable_within_budget')
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        reasons.append('invalid_stateful_execution_plan')
+    assumptions = plan.get('external_assumptions', ())
+    if (not isinstance(assumptions, (list, tuple))
+            or not {'SYNCHRONOUS_CPU_EXECUTION', 'NO_FOREIGN_CONCURRENT_STATE_READERS_OR_WRITERS',
+                    'FP_STATUS_FLAGS_NOT_USED_AS_PROGRAM_OUTPUT'}.issubset(assumptions)):
+        assumptions = ()
+        reasons.append('missing_stateful_external_contract_assumptions')
+    result = _finish_decision(baseline, native, reasons, assumptions, region.guards,
+                             validated, native_fallbacks, minimum_gain)
+    result.update(profile=region.profile,
+        artifact={key: report.get(key) for key in ('build_id', 'plan_sha256')},
+        input_shapes=plan.get('input_shapes', {}),
+        automatic_runner_cost_context_qualified=False,
+        fresh_process_scope_measured=False)
+    return result

@@ -9,7 +9,7 @@
     "cuda_available": false
   },
   "first_stage_complete": false,
-  "transformation_applied": false,
+  "transformation_applied": true,
   "cases": [
     {
       "name": "Sunfish",
@@ -99,7 +99,7 @@
       "capture_scope": "original upstream driver, end_time 2; not full 5000-step run",
       "current_run": {
         "name": "Gray-Scott",
-        "status": "VERIFIED_CORRECTNESS_REJECTED_FOR_COST",
+        "status": "VERIFIED_PROFITABLE_STATEFUL_REGION_UNDER_CONTRACT",
         "configuration": {
           "grid": 512,
           "steps": 5000,
@@ -113,75 +113,85 @@
           ],
           "memory_policy": "UNBOUND",
           "dtype": "float64",
-          "region": "source-selected static stencil; outer integrate unchanged"
+          "region": "AUTOMATIC_F4_ORDERED_MUTABLE_STATE_METHOD"
         },
         "initial_baseline_wall_seconds": 50.69,
         "baseline": {
-          "median": 33.7525294389925,
-          "min": 32.215040612005396,
-          "max": 49.18273344199406,
-          "stdev": 9.384008271524172,
+          "median": 32.949515780986985,
+          "min": 32.1508041699999,
+          "max": 33.30301229900215,
+          "stdev": 0.5902659850035528,
           "samples": [
-            49.18273344199406,
-            33.7525294389925,
-            32.215040612005396
-          ],
-          "variance_seconds_squared": 88.05961124003406
+            32.1508041699999,
+            33.30301229900215,
+            32.949515780986985
+          ]
         },
         "native": {
-          "median": 37.73060455400264,
-          "min": 23.272259949008003,
-          "max": 38.76339307401213,
-          "stdev": 8.661077553634623,
+          "median": 8.881688035005936,
+          "min": 8.872576222987846,
+          "max": 8.90867639699718,
+          "stdev": 0.01877329381829249,
           "samples": [
-            38.76339307401213,
-            37.73060455400264,
-            23.272259949008003
-          ],
-          "variance_seconds_squared": 75.01426439007349
+            8.90867639699718,
+            8.872576222987846,
+            8.881688035005936
+          ]
         },
         "warmup_pairs": 1,
         "paired_repetitions": 3,
-        "speedup": 0.8945663563562453,
+        "speedup": 3.7098258406646414,
         "correctness": {
           "region": true,
           "single_step": true,
           "trajectory_20_steps": true,
           "full_integrate": true,
           "required_state": true,
+          "storage_identity": true,
           "stdout": true,
           "files": true
         },
-        "native_calls_measured": 30000,
+        "native_calls_measured": 15000,
         "fallback_calls_measured": 0,
-        "decision": "NO_OP",
-        "selected": false,
+        "decision": "TRANSFORM_UNDER_CONTRACT",
+        "selected": true,
         "whole_program_compiled": false,
         "fresh_process_scope_measured": false,
         "automatic_runner_cost_context_qualified": false,
         "original_source_modified": false,
         "evidence": [
           {
-            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-validation/result.json",
-            "sha256": "e1dc74e2ac71ecb02f2dfb78eb889e3a1bc794895162d097f9326e554676d10c",
-            "bytes": 12100
-          },
-          {
-            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-summary.json",
-            "sha256": "cca0ce49006338562ed7d487f9aade38eb8b9fbc4226d6d43a39bec678925982",
-            "bytes": 3504
-          },
-          {
-            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/generic-selector-result.json",
-            "sha256": "1d059fbc2c4426737d91e932cd9b20cb22721a7788f18772149f7cfeb39bc597",
-            "bytes": 1811
-          },
-          {
-            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/source-handoff.json",
-            "sha256": "67a699f98a6568d0abb722636e5d1faee354c16c4666c55aee8e2bd1712fd888",
-            "bytes": 4534
+            "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-integration.json",
+            "sha256": "d6af996326c4912803d57e79fa719404ca30bc492cc3da79b2009e03b3add574",
+            "bytes": 12567
           }
-        ]
+        ],
+        "previous_single_operator_ab": {
+          "decision": "NO_OP",
+          "speedup": 0.8945663563562453,
+          "evidence": [
+            {
+              "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-validation/result.json",
+              "sha256": "e1dc74e2ac71ecb02f2dfb78eb889e3a1bc794895162d097f9326e554676d10c",
+              "bytes": 12100
+            },
+            {
+              "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/paired-full-summary.json",
+              "sha256": "cca0ce49006338562ed7d487f9aade38eb8b9fbc4226d6d43a39bec678925982",
+              "bytes": 3504
+            },
+            {
+              "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/generic-selector-result.json",
+              "sha256": "1d059fbc2c4426737d91e932cd9b20cb22721a7788f18772149f7cfeb39bc597",
+              "bytes": 1811
+            },
+            {
+              "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/source-handoff.json",
+              "sha256": "67a699f98a6568d0abb722636e5d1faee354c16c4666c55aee8e2bd1712fd888",
+              "bytes": 4534
+            }
+          ]
+        }
       }
     },
     {
@@ -447,7 +457,9 @@
     "warmup": 0,
     "speedup_claimed": false,
     "program_output_arrays_saved_by_collector": false,
-    "current_scope": "Per-case current_run overrides the initial single-observation contract: Gray-Scott has one warmup pair and three measured pairs; Sunfish/Cirq have one baseline each."
+    "current_scope": "Per-case current_run overrides the initial single-observation contract: Gray-Scott has one warmup pair and three measured pairs; Sunfish/Cirq have one baseline each.",
+    "current_speedup_established": true,
+    "current_speedup_scope": "Explicit stateful-boundary paired full integration; see current_run, not initial single-observation fields."
   },
   "known_limits": [
     "source graph exists does not prove dependency/effect closure",
@@ -468,9 +480,15 @@
   ],
   "initial_measurements_note": "Existing top-level case measurements below are initial observations; current_run and current_suite_results identify the current authoritative runs.",
   "current_suite_results": {
-    "path": "artifacts/current/experiments/real-cpu-suite-v1/summary.json",
-    "sha256": "3b5b9e878f95565c1512f29aaa2305edd017bd57f0255d14b3f617371fb10401",
-    "bytes": 7260
+    "path": "artifacts/current/experiments/real-cpu-suite-v1/current-results.json",
+    "sha256": "2ccc073b033d3e542b4b83385ca4d27235e22d4743823778c0e2206175ee4880",
+    "bytes": 7660
   },
-  "primary_suite_policy": "Sunfish, Gray-Scott and Cirq are the primary external testcases; temporal_reaction is a synthetic regression only."
+  "primary_suite_policy": "Sunfish, Gray-Scott and Cirq are the primary external testcases; temporal_reaction is a synthetic regression only.",
+  "current_validation_adapter": {
+    "path": "/home/zyf/AAA/scar-testcases/cpu_science/compiler_validate.py",
+    "sha256": "b51f6088ffb61352a85a76dc5b9c53a42e156c354990a536f303dd3bebd9a3b6",
+    "text": "\"\"\"External Gray–Scott validation; no workload rules live in SCAR itself.\"\"\"\nimport argparse\nfrom contextlib import redirect_stdout\nfrom hashlib import sha256\nimport io\nimport json\nfrom pathlib import Path\nimport statistics\nimport time\nimport numpy as np\n\nfrom scar.codegen import load\nfrom scar.compiler.benchmark import load_source,bitwise_equal,distribution\nfrom scar.compiler.runtime import install_regions\nfrom scar.compiler.input_metadata import InputMetadataObserver\n\n\ndef main():\n    p=argparse.ArgumentParser(description=__doc__)\n    p.add_argument('--artifact',required=True);p.add_argument('--out',required=True)\n    p.add_argument('--backend',choices=('region','stateful'),default='region')\n    p.add_argument('--grid',type=int,default=256);p.add_argument('--steps',type=int,default=80)\n    p.add_argument('--repetitions',type=int,default=3);p.add_argument('--inputs-only',action='store_true');args=p.parse_args()\n    out=Path(args.out).absolute();out.mkdir(parents=True,exist_ok=False)\n    if args.backend=='stateful':\n        from scar.codegen.stateful import load as load_stateful\n        from scar.compiler.stateful_runtime import install_stateful_regions\n        if args.inputs_only:p.error('--inputs-only currently applies to the read-only region observer')\n        artifact=load_stateful(args.artifact);source=artifact.region.source\n        install=install_stateful_regions\n    else:\n        artifact=load(args.artifact);source=artifact.plan.region.source\n        install=install_regions\n    module=load_source(source.path)\n    def simulation(folder):return module.GrayScott(N=args.grid,second_order=False,movie=False,outdir=str(folder))\n    if args.inputs_only:\n        observer=InputMetadataObserver()\n        sim=simulation(out/'observation')\n        with install(module,[artifact],exclusive_inputs=True,observer=observer) as wrapped:\n            sim.update(time=0.0)\n            stats=[w.scar_stats.copy() for w in wrapped]\n        observer.write(out/'inputs.json')\n        (out/'observation.json').write_text(json.dumps(dict(original_execution=True,native_calls=sum(x['native_calls'] for x in stats),stats=stats),indent=2)+'\\n')\n        print(json.dumps(observer.document()));return\n    # Fixed-input single-step and trajectory validation, including mutated\n    # persistent u/v buffers, required dt and ghost-cell state.\n    base=simulation(out/'trajectory-baseline');opt=simulation(out/'trajectory-native')\n    trajectory=[]\n    with install(module,[artifact],exclusive_inputs=True,trial=True) as wrapped:\n        # Invoke the baseline descriptor directly in a separate unpatched module.\n        baseline_module=load_source(source.path)\n        base=baseline_module.GrayScott(N=args.grid,second_order=False,movie=False,outdir=str(out/'trajectory-baseline'))\n        base_buffers=(base.u,base.v);opt_buffers=(opt.u,opt.v)\n        tb=to=0.0\n        for step in range(20):\n            tb=base.update(time=tb);to=opt.update(time=to)\n            assert tb==to and base.dt==opt.dt\n            assert bitwise_equal(base.u,opt.u) and bitwise_equal(base.v,opt.v)\n            assert base.u is base_buffers[0] and base.v is base_buffers[1]\n            assert opt.u is opt_buffers[0] and opt.v is opt_buffers[1]\n            trajectory.append(dict(step=step+1,time=tb,u_sha256=sha256(base.u.tobytes()).hexdigest(),\n                v_sha256=sha256(base.v.tobytes()).hexdigest()))\n        trajectory_stats=[w.scar_stats.copy() for w in wrapped]\n    # Full integrate, including original snapshot IO and stdout; AB/BA paired\n    # order with one warmup pair and independently recreated initial state.\n    baseline=[];native=[];episodes=[]\n    for repetition in range(-1,args.repetitions):\n        results={}\n        for mode in (('baseline','native') if repetition%2==0 else ('native','baseline')):\n            folder=out/f'run-{repetition}-{mode}';folder.mkdir()\n            captured=io.StringIO()\n            if mode=='native':\n                with install(module,[artifact],exclusive_inputs=True,trial=True) as wrapped:\n                    started=time.perf_counter();sim=simulation(folder)\n                    buffers=(sim.u,sim.v)\n                    with redirect_stdout(captured):sim.integrate(0,args.steps*sim.dt,dump_freq=args.steps+1)\n                    elapsed=time.perf_counter()-started;stats=[w.scar_stats.copy() for w in wrapped]\n            else:\n                started=time.perf_counter();sim=simulation(folder)\n                buffers=(sim.u,sim.v)\n                with redirect_stdout(captured):sim.integrate(0,args.steps*sim.dt,dump_freq=args.steps+1)\n                elapsed=time.perf_counter()-started;stats=[]\n            assert np.isfinite(sim.u).all() and np.isfinite(sim.v).all()\n            assert sim.u is buffers[0] and sim.v is buffers[1]\n            files={str(f.relative_to(folder)):sha256(f.read_bytes()).hexdigest() for f in folder.rglob('*') if f.is_file()}\n            results[mode]=dict(u=sim.u.copy(),v=sim.v.copy(),dt=sim.dt,dump_count=sim.dump_count,\n                stdout=captured.getvalue(),files=files,seconds=elapsed,stats=stats)\n            if repetition>=0:(baseline if mode=='baseline' else native).append(elapsed)\n        a,b=results['baseline'],results['native']\n        assert bitwise_equal(a['u'],b['u']) and bitwise_equal(a['v'],b['v'])\n        assert a['dt']==b['dt'] and a['dump_count']==b['dump_count']\n        assert a['stdout']==b['stdout'] and a['files']==b['files']\n        episodes.append(dict(repetition=repetition,bitwise_state=True,stdout_equal=True,file_bytes_equal=True,\n            baseline_seconds=a['seconds'],native_seconds=b['seconds'],native_stats=b['stats']))\n    report=dict(schema='scar.external-scientific-program-validation',program='external Gray–Scott',\n        grid=args.grid,steps=args.steps,warmup=1,repetitions=args.repetitions,instrumented=False,\n        trajectory=trajectory,trajectory_stats=trajectory_stats,episodes=episodes,\n        baseline_seconds=distribution(baseline),optimized_seconds=distribution(native),\n        speedup=statistics.median(baseline)/statistics.median(native),\n        correctness=dict(region=True,single_step=True,trajectory_20_steps=True,full_integrate=True,\n            required_state=True,storage_identity=True,stdout=True,files=True),\n        native_execution_validated=all(s['native_calls']>0 and s['fallback_calls']==0 for e in episodes for s in e['native_stats']),\n        artifact=artifact.report,backend=args.backend,compiled_qualname=source.qualname,\n        whole_program_compiled=False,original_source_modified=False,\n        assumptions=['SYNCHRONOUS_CPU_EXECUTION','NO_FOREIGN_CONCURRENT_INPUT_WRITERS'])\n    (out/'result.json').write_text(json.dumps(report,indent=2)+'\\n')\n    print(json.dumps({k:report[k] for k in ('native_execution_validated','correctness','speedup','baseline_seconds','optimized_seconds')}))\n    if not report['native_execution_validated']:raise SystemExit('native validation failed: workload fell back to original execution')\n\nif __name__=='__main__':main()\n"
+  },
+  "transformation_scope": "Actual Gray-Scott full candidate A/B and selected normal 20-step boundary; no automatic fresh-process deployment claim."
 }

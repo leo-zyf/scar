@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "real_cpu_suite_progress",
+  "current_milestone": "ordered_stateful_real_program_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -7666,6 +7666,339 @@
       "path": "artifacts/current/experiments/real-cpu-suite-v1/summary.json",
       "sha256": "3b5b9e878f95565c1512f29aaa2305edd017bd57f0255d14b3f617371fb10401",
       "bytes": 7260
+    }
+  },
+  "ordered_stateful_real_program_progress": {
+    "schema": "scar.ordered-stateful-real-program-integration",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T05:13:40.851115+00:00",
+    "status": "VERIFIED_FULL_SCIENTIFIC_INTEGRATION_TRANSFORM_UNDER_CONTRACT",
+    "workload": {
+      "path": "/home/zyf/AAA/gray-scott",
+      "source": "/home/zyf/AAA/gray-scott/python/gray_scott.py",
+      "source_sha256": "f46500cc095334cee159b4588705f39ce8c86d54a2621deeca3caf5c16f26e4a",
+      "grid": 512,
+      "requested_steps": 5000,
+      "dtype": "float64",
+      "original_source_modified": false,
+      "source_code_key": "pycode-v2:46748f944fd4ce29d18ba2791f4e16ac571013d76b96f5fbc539f47c66b64e9a",
+      "compiled_qualname": "GrayScott._euler"
+    },
+    "discovery": {
+      "authority": "ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS",
+      "accepted_regions": 1,
+      "expressions": 54,
+      "original_evaluations": 24,
+      "ordered_array_writes": 2,
+      "array_input_paths": 2,
+      "scalar_input_paths": 5,
+      "callee_guard_source_identities": 1,
+      "callee_original_call_sites": 2,
+      "power_provider": "ORIGINAL_NUMPY_UFUNC_NOT_MULTIPLICATION_REWRITE",
+      "input_kind_authority": "RUNTIME_GUARDED_CANDIDATE",
+      "dynamic_target_execution_during_discovery": false,
+      "cold_catalog_load_seconds": 81.06260385399219,
+      "initial_source_preparation_seconds": 11.305142208002508,
+      "source_discovery_seconds_after_reuse": 4.334463984007016,
+      "source_origins_are_shared_graph_references_with_current_inline_wire_overhead": true,
+      "actual_discovery_receipt": {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-discovery/result.json",
+        "sha256": "d8ef7e5729f8aa164156f73a42eba7c36e8c7fdec40fbe90f51a31d455d70bf0",
+        "bytes": 50876
+      },
+      "timings": {
+        "cold_view_load_seconds": 81.06260385399219,
+        "initial_source_prepare_and_rejected_query_seconds": 11.305142208002508,
+        "cached_rejected_query_seconds": 3.280847538000671,
+        "successful_reused_view_query_seconds": 4.334463984007016,
+        "initial_discovery_failed_before_persisted_view": "RAW_FACT_PORT_DICT_USED_WITHOUT_SOURCE_PORT_DECODER",
+        "cold_load_excluded_from_successful_query_seconds": true
+      }
+    },
+    "plan": {
+      "region_sha256": "ae5f3ef4aa3be15c8eba4387c68fadfdf3e4bebf0a1a05fbb62ffba1cf55e7cb",
+      "plan_sha256": "30403a481cd65e57e1f8c9097f45576ecf17e9e27e4e83b4902f7822df9b9599",
+      "stages": 11,
+      "state_barriers": 2,
+      "workspace_slots": 4,
+      "workspace_payload_bytes": 8454304,
+      "external_array_bytes": 4243600,
+      "total_region_array_payload_bytes": 12697904,
+      "budget_bytes": 33554432,
+      "budget_scope": "ALL_REGION_ARRAY_PAYLOAD_EXTERNAL_STATE_PLUS_FIXED_WORKSPACE",
+      "budget_excludes": [
+        "OTHER_UNREFERENCED_PROGRAM_ARRAYS",
+        "ALLOCATOR_METADATA_AND_ALIGNMENT_OVERHEAD",
+        "THREAD_SCRATCH",
+        "PROCESS_RSS"
+      ],
+      "cpu_threads": 4,
+      "cpu_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory_policy": "UNBOUND",
+      "original_resource_inventory_retained": true,
+      "iterations_unrolled": false,
+      "algorithm_or_precision_changed": false,
+      "fixed_pool_allocation_search_complete": true,
+      "time_or_physical_optimality_proven": false
+    },
+    "backend": {
+      "host_backend": "C++20",
+      "stateful_abi_version": 1,
+      "build_id": "192faab0b2e8e7cec34fb7e102560a8136cdb1afa650214fad098ddc6674502b",
+      "library_sha256": "186132e3ee9672d7f02bb55e80c60ed826f40970eafc553f8fbf5f9293d26320",
+      "source_sha256": "4798d05774178cc2c68961a6e3d84f21007361c308d177bb51ac42805ac39897",
+      "provider_runtime": {
+        "API_stability": "EXPERIMENTAL_EXACT_NUMPY_VERSION_AND_BINARY_PIN",
+        "capsule_abi": "numpy_1.24_ufunc_call_info",
+        "dtype_signature": [
+          "float64",
+          "float64",
+          "float64"
+        ],
+        "execution": "ORIGINAL_NUMPY_UFUNC_STRIDED_LOOP_SERIAL_PROVIDER_STAGE",
+        "fixed_strides": [
+          8,
+          0,
+          8
+        ],
+        "loaded_binary": {
+          "bytes": 10624953,
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/numpy/_core/_multiarray_umath.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "27bd88fd60f4b9fcd5c938572e9b9e3df0aed9cfed4888e57d94c516b45512b7"
+        },
+        "ndarray_c_abi": 33554432,
+        "numpy_version": "2.5.2",
+        "requires_pyapi": false
+      },
+      "native_calls_per_original_method": 1,
+      "ordinary_source_modules_modified": false,
+      "whole_program_compiled": false
+    },
+    "correctness": {
+      "region": true,
+      "single_step": true,
+      "trajectory_20_steps": true,
+      "full_integrate": true,
+      "required_state": true,
+      "storage_identity": true,
+      "stdout": true,
+      "files": true
+    },
+    "native_calls_measured": 15000,
+    "fallback_calls_measured": 0,
+    "performance": {
+      "scope": "CONSTRUCTOR_AND_COMPLETE_512_GRID_5000_STEP_ORIGINAL_INTEGRATE_WITH_EXPLICIT_STATEFUL_REGION_INSTALLATION",
+      "baseline": {
+        "median": 32.949515780986985,
+        "min": 32.1508041699999,
+        "max": 33.30301229900215,
+        "stdev": 0.5902659850035528,
+        "samples": [
+          32.1508041699999,
+          33.30301229900215,
+          32.949515780986985
+        ]
+      },
+      "native": {
+        "median": 8.881688035005936,
+        "min": 8.872576222987846,
+        "max": 8.90867639699718,
+        "stdev": 0.01877329381829249,
+        "samples": [
+          8.90867639699718,
+          8.872576222987846,
+          8.881688035005936
+        ]
+      },
+      "baseline_variance_seconds_squared": 0.34841393305221435,
+      "native_variance_seconds_squared": 0.00035243656078793895,
+      "speedup": 3.7098258406646414,
+      "warmup_pairs": 1,
+      "paired_repetitions": 3,
+      "paired_order": "ALTERNATING_AB_BA",
+      "baseline_native_library_threads": 1,
+      "native_region_threads": 4,
+      "diagnostic_function_trace_or_profiler": false,
+      "gnu_time": {
+        "wall_seconds": 169.75,
+        "user_seconds": 267.61,
+        "system_seconds": 2.14,
+        "cpu_percent": "158%",
+        "max_rss_kib": 372228,
+        "exit_code": 0
+      },
+      "fresh_process_startup_included": false
+    },
+    "selection": {
+      "decision": "TRANSFORM_UNDER_CONTRACT",
+      "selected": true,
+      "minimum_gain": 0.05,
+      "normal_nontrial_boundary_20_steps": {
+        "schema": "scar.stateful-selected-boundary-validation",
+        "selected_decision": "TRANSFORM_UNDER_CONTRACT",
+        "trial": false,
+        "input_shapes": {
+          "input:0": [
+            515,
+            515
+          ],
+          "input:1": [
+            515,
+            515
+          ]
+        },
+        "trajectory_steps": 20,
+        "bitwise_state_and_time": true,
+        "stats": {
+          "native_calls": 20,
+          "fallback_calls": 0,
+          "reasons": {}
+        },
+        "full_5000_step_ab_scope": "SEPARATE_COMPLETED_TRIAL_CANDIDATE_AB_VALIDATION",
+        "automatic_entry_deployment_verified": false,
+        "fresh_process_startup_cost_measured": false
+      },
+      "automatic_entry_deployment_verified": false,
+      "automatic_runner_cost_context_qualified": false
+    },
+    "first_stage_complete": false,
+    "all_three_stages_complete": false,
+    "evidence": [
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-discovery/result.json",
+        "sha256": "d8ef7e5729f8aa164156f73a42eba7c36e8c7fdec40fbe90f51a31d455d70bf0",
+        "bytes": 50876
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-discovery/region-0.json",
+        "sha256": "b75654ed94c9213be3e93e01bd9bafa94f5b69e5c6ef8a16a15bc1658666d481",
+        "bytes": 2802135
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-build/result.json",
+        "sha256": "7f5942553b87c606b2a620ee31d899918dfac0a91001d5c18e0174fd1049fd00",
+        "bytes": 1926104
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-build/region-0/schedule.json",
+        "sha256": "19ee3a35a11f0f66fbb4b4eac3799db6bc9abb9ace4e52b99a2959ddffb74292",
+        "bytes": 350131
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-build/region-0/native/artifact.json",
+        "sha256": "c15007f15ae3df1ca94eb220655a7e18dd21bacabec87b0cc296ab350aa506b2",
+        "bytes": 3110
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-boundary-check.json",
+        "sha256": "3f19f8cd14d97527a96a2eb53c8cdaafe1bf388e45c536285af1a6b11f1ecd87",
+        "bytes": 1088
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-full-launch.json",
+        "sha256": "e7718b0187b5d119c7e9af6b6c8db607393913a334982e5ffc3f5e71e23c510a",
+        "bytes": 2593
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-full-validation/result.json",
+        "sha256": "0f56d70623c93d40fecbd3de93c46d5f5175d09f66ec573408ea443e505c3ac0",
+        "bytes": 10853
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-full-time.json",
+        "sha256": "b671ec3f77d32292bc0a2c264ba620a37ae385b0d7af19319c8181f1c78ce364",
+        "bytes": 124
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-selection.json",
+        "sha256": "7ef6a46128ce92dadf700980c812a961ca1ccea48a1dc30e41a3c379ed8eb414",
+        "bytes": 2295
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-selected-boundary-check.json",
+        "sha256": "364e6e24a74ae4e5cdeb99f21f937830c5d054dc758cdda07b14f37b86c60f15",
+        "bytes": 566
+      },
+      {
+        "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/wheel-verification.json",
+        "sha256": "f5f240898b9253d41d6fa0f58f2ed71868bf1ffaa86707000b0672be76a173b2",
+        "bytes": 746
+      }
+    ],
+    "limits": [
+      "This compiles an ordered mutable-state method; original integrate loop, ghost updates and IO remain Python.",
+      "Exact NumPy 2.5.2 and its loaded binary/capsule ABI are pinned for this native provider.",
+      "Array budget is region payload, not process RSS or proven physical cache/NUMA residency.",
+      "Current inline original F4 provenance makes the region JSON about 2.8 MB; not multiplied by invocation count.",
+      "Existing single-writer ResourceSchedule/loop recipe does not yet model external mutation and transaction commit; this profile is not relabeled as an immutable EXPORT.",
+      "No new Sunfish/Cirq transformation or LeWM/GPU speedup is claimed."
+    ],
+    "next_work": [
+      "Represent versioned storage writes and a precommit success fence in the shared macro-recipe interface without losing source/world origins.",
+      "Attach sourced macro-operation costs and caller/deployment costs before selecting workers, placement or asynchronous hardware schedules.",
+      "Continue actual search/shared-state and multiprocess complex-valued provider interfaces on the same three primary real testcases."
+    ],
+    "core_implementation": [
+      {
+        "path": "scar/compiler/stateful_frontend.py",
+        "sha256": "d8bca5014fe11fb4841fcb92a80dfc10fd381ccc699be217738a7e34305569c4",
+        "bytes": 29238
+      },
+      {
+        "path": "scar/compiler/stateful_model.py",
+        "sha256": "6203c0601df1364e19a492237008bdc7f65633cdf1432ea7b0f102a6c518bfb7",
+        "bytes": 12967
+      },
+      {
+        "path": "scar/compiler/stateful_runtime.py",
+        "sha256": "694f2780e3dc573360270887a312f84fca5c870ad050ed0d4bc9079ae9b94f53",
+        "bytes": 11483
+      },
+      {
+        "path": "scar/compiler/compile_stateful.py",
+        "sha256": "4e001d8f09553672505a151ad693a0bd8e15ac13e81d596c6ab86f672537b516",
+        "bytes": 5662
+      },
+      {
+        "path": "scar/optimization/stateful_schedule.py",
+        "sha256": "205d0634a8216eec5543220aa2a01e9ed4e8fdbfa40b700b11b09a31c8f94200",
+        "bytes": 18989
+      },
+      {
+        "path": "scar/optimization/hardware.py",
+        "sha256": "e85910031b1cace4baa1d3a389508845dabe9504975dcd796e98451f1bc4f6d7",
+        "bytes": 16909
+      },
+      {
+        "path": "scar/optimization/selection.py",
+        "sha256": "d05804e89720497e926dce92ef37d257851cf6aa63510c2008178acbd96f3905",
+        "bytes": 8030
+      },
+      {
+        "path": "scar/codegen/stateful.py",
+        "sha256": "2a9a3561b644a4b1b485d95bbd0e26f2f460fccb17e3f9a9ccd8a0e558b9e917",
+        "bytes": 24399
+      },
+      {
+        "path": "scar/codegen/stateful_v1.cpp.in",
+        "sha256": "e55b3118a2dedd1dcbdcf34bc6c5b1f50e59d0a495dcf999bf7fe5385b29c7e5",
+        "bytes": 5571
+      },
+      {
+        "path": "scar/codegen/stateful_abi_v1.h",
+        "sha256": "624691664ec54383a7d45cad0326f1e20a143a8b26b1b91f38b2d2b039c67b7d",
+        "bytes": 1015
+      }
+    ],
+    "integration_receipt": {
+      "path": "artifacts/current/experiments/real-cpu-suite-v1/gray-scott/stateful-integration.json",
+      "sha256": "d6af996326c4912803d57e79fa719404ca30bc492cc3da79b2009e03b3add574",
+      "bytes": 12567
     }
   }
 }

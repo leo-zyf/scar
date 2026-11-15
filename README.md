@@ -7,11 +7,19 @@ State · Control · Action · Resource：面向Python程序的宏观编译器。
 当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
 已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
 完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
-主测试组为 Sunfish、Gray–Scott、Cirq；本轮三个真实负载均已运行。Gray–Scott 完整 A/B 正确性通过但中位数倍率 0.895×，保留原执行；另外两项只有基线。自建点式递推的约 10× 仅为回归案例，详见 [当前状态](docs/STATUS.md)。
+主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 5000 步的有状态方法完整 A/B：32.95s→8.88s，**3.71×**，状态及输出逐位一致；旧单 stencil 版本 0.895× 仍拒绝。另两项只有基线，自建点式递推仅为回归案例，详见 [当前状态](docs/STATUS.md)。
 LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
 后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
 
 ## 使用
+
+有序数组状态区域：从原 F4 自动发现字段读、求值、切片写入，再规划 barrier/临时存储并生成 C++20；当前需要显式形状、CPU 和数组 payload 预算。源程序不修改，产物尚未测量时不自动启用。
+
+```bash
+scar compile-stateful --source /path/to/program.py --catalog /path/to/catalog --shape 515 515 --target /path/to/target-hardware --cpu-threads 4 --memory-budget-bytes 33554432 --out /path/to/compiled-state
+```
+
+已保留的原 F4 区域可用 `--region REGION.json` 代替 `--source/--catalog`，避免重复目录加载。运行边界为 `scar.compiler.stateful_runtime.install_stateful_regions`；成本选择与合法性分开，未测产物仅可显式 trial。原 NumPy provider 精确绑定版本/二进制，无跨版本 ABI 保证。
 
 三阶段区域闭环（CPU、精确 float64 二维 ndarray；其他输入回到原执行）：
 
