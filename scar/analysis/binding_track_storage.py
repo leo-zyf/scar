@@ -200,7 +200,7 @@ def read_state_view(path):
     """Optional independent solver replay; default graph reads do not call it."""
     from itertools import zip_longest
     from scar.analysis.program_view import ProgramView
-    from scar.analysis.program_state_view import _rows,_counts,_pins
+    from scar.analysis.program_state_view import _rows,_counts,_pins,_restore_request_order
     from scar.analysis.source_value_flow import _artifact
     from scar.ir.program import normal_targets as T,normal_links as F
     path=Path(path).resolve();raw=(path/'result.json').read_bytes();header=json.loads(raw)
@@ -217,6 +217,7 @@ def read_state_view(path):
             or encode(state.namespace)!=header['namespace']
             or encode(state.material.result_artifact)!=header['source_material']
             or encode(state.materials)!=header['binding_materials']):raise ValueError('state replay original inputs differ')
+    _restore_request_order(state,path,header['tables'])
     controls=list(_table(path,header['tables']['controls']))
     for wire in _table(path,header['tables']['tracks']):
         i=wire['control']
@@ -233,6 +234,13 @@ def read_state_view(path):
     for name,(cls,expected) in rows.items():
         if name=='tracks':continue
         actual=(decode(cls,wire,record_tags=P.PRODUCTION_RECORD_TAGS) for wire in _table(path,header['tables'][name]))
+        if name in ('locations','versions','edges'):
+            remaining=set(expected)
+            for record in actual:
+                if record not in remaining:raise ValueError('packed state declaration/relation differs: '+name)
+                remaining.remove(record)
+            if remaining:raise ValueError('packed state declaration/relation is missing: '+name)
+            continue
         if any(a!=b for a,b in zip_longest(actual,expected,fillvalue=missing)):
             raise ValueError('packed state '+name+' differs from original projection')
     if _counts(state)!=header['counts'] or raw!=(path/'result.json').read_bytes():

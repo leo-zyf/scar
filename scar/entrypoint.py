@@ -10,5 +10,8 @@ def main(argv=None):
     if arguments and arguments[0] == 'run-build':
         from scar.runtime.compiled_entry import main as run
         return run(arguments[1:])
+    if arguments and arguments[0] == 'run-caller-pipeline':
+        from scar.runtime.caller_pipeline_cli import main as run
+        return run(arguments[1:])
     from scar.cli import main as commands
     return commands(arguments)

@@ -12,7 +12,7 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 | 优化 | O0 原图准入与依赖事实 → O1 结构化简及合法性 → O2 实现、内存和资源成本域 → O3 联合计划选择 → O4 计划重放与NO_OP |
 | 交付 | C0 已选计划准入 → C1 C++20控制/算子ABI降低 → C2 紧凑包、guard与回退 → C3 正确性、干净A/B及部署门控 |
 
-三阶段主链已在受支持区域贯通。当前规则下的两文件覆盖收据已恢复，成本证据重绑定与caller图到PipelinePlan也已接通。下一层分别补内容/创建环境版本、独立融合成本，以及caller-frame运行时guard。每层保留原ID和上游证据，验收通过再扩大范围。
+三阶段主链已在受支持区域贯通。本轮补值↔内容状态的实际连接、按需顺序的存储重放，以及轻量caller运行时guard。下一层分别补可证明的内容版本/别名、混合ALU资源成本、完整性能与部署准入；不能把MAY依赖或已编译产物当作这些证明。
 
 ## 第一阶段：建图
 
@@ -31,6 +31,8 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 - 原始边用`(template,region,local ordinal)`定位，存储schema v3、source representation v2。批量读回已消除逐行重复标签表校验；同批2000条真实记录，1次预热/3次交替测量，严格解码中位数616.469ms→272.954ms（2.2585×）。完整库图发布/读回本次49.488s，原压缩表7,516,613字节逐字节相同；旧81.183s是历史诊断，不当作受控A/B。
 - 当前图合同与使用到的types/codec/writer/mapping pins都进入coverage准入，2进程新发布完整2-unit库存24.063s：4235操作、1329模板、1410region、51425端点、55018关系，分片9,235,411字节；worker峰值约86/191MiB，地址规则缺口0，未运行binding固定点，也不证明alias/RNG/外部效果闭合。
 - 主build已实际接入上述覆盖、当前短动态记录和完整硬件快照：入口`tests/workloads/gray_scott_entry.py`与库字节均匹配F0；32×32/3步采集1.525s，103站点中观察68个，主build11.051s、12个条件函数接口、273资源记录（含全部204物理资源引用）。修复了`--cache-root`只查子目录而忽略本目录报告的接线问题。另一个成本采样入口在外部testcases中，不属于此catalog；此前误记为版本变化的范围诊断已纠正，测量不变。
+- 内容lineage已自动接入公共图并按unit保存独立记录/边表：真实2文件220条GET/SET连接，包含GET的state→result及SET的payload→state；全为有条件MAY依赖，不创建逻辑版本、别名或相等证明。UPDATE/DELETE有定向测试，未在该真实case称已观察。父表ordinal仅用于引用，语义边不随查询顺序改变。当前完整库存26.568s、9,342,103字节，最终主build11.355s；新图公共GET/SET查询均通过。
+- 修复按需持久化的真实缺陷：先查询后部操作再保存，旧cold reader按默认顺序重建会拒绝自己的requests表。两种存储格式的读回现在均按保存的request/content次序独立重放；ID声明/关系按集合严格比较，保留有行号引用的访问顺序。543操作/38条lineage实际完整读回通过，未减少字段、类型或收据核验。
 - 新主图继续贯穿域规划与C++20验证包生成：仍发现1个有序状态区域、保留106个CPU配置和全部204个资源引用；规划35.006s，生成/编译验证包55.766s。未执行新native候选，成本不全继续NO_OP。证据：`artifacts/baseline/region-demand-main.json`。
 
 ## 第二阶段：化简及硬件规划
@@ -46,11 +48,15 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 - 已修正stateful校准准入：`target_workload_executed`及`target_variants_ranked`必须显式False，缺失或True均保留拒绝证据与UNKNOWN成本。真实Gray的106mask主链接口已存在；旧融合阶段模型holdout误差22.8316%超冻结20%门槛，且旧校准硬件context不匹配，不能复制temporal时间值或降门槛。
 - 原始状态method成本采集已接入主规划链：仅在guard外计首个原调用，每个样本独立进程，不加载native变体、不记录数组内容。真实512×512、4步入口的单次method采样为6.970ms中位数（6.671–7.095ms，stdev0.218ms），预备1个进程排除、正式3个进程；预备进程不预热正式进程的cache。这是成本模型输入，不是干净完整入口性能。主规划读入后NO_OP成本已知，106个native成本仍未知，保留原执行。完整OMP/GOMP/KMP控制环境纳入成本上下文。证据：`artifacts/baseline/stateful-original-observation.json`。
 - 新增显式成本证据重绑定：完整重放原/目标domain、原profile和已支持的模型依赖，只允许相同schema/sha/size物料的URI别名及3个同值pointer的domain_id变化，原estimate/derivation/evidence不变。真实旧6,970,369 ticks成本通过新域准入，规划结果1个KNOWN/106个UNRESOLVED、仍NO_OP；坏收据、修改scope和未知模型依赖拒绝，未重测目标。
+- 本轮在预先声明的CPU0–3校准点补10个资源signature和2个guard/scalar边界signature，已知组件合计1.513ms，只剩2个FUSED阶段。新的匿名DAG/拓扑模型和`barrier+max(memory,ALU,path)`模型分别用全新冻结holdout验收，最大误差约28.34%/28.49%，均超过20%并拒绝投影；原始数据、汇编和拒绝原因保留。没有测目标变体、降门槛或扩充106mask后宣称成功。
+- 下一成本缺口已具体化：当前ALU内部仍按不同运算吞吐求和，缺少混合算术竞争/重叠及寄存器压力的独立原语证据。端口解释目前是推断，不能称硬件事实；W1串行边界也不能套用W4 OpenMP模型。
 
 ## 第三阶段：C++20 交付及真实结果
 
 - 原图 → 计划 → C++20 → 同一 ELF 导出 → 普通 Python 入口已贯通。运行包无需 compiler、IR、planner、codegen 或 g++；状态包加载仍需要原 NumPy ufunc 提供者；入口和明确的兼容/I/O 仍保留 Python，完整程序不是纯 C++。
-- C1新增原caller-matched接口桥接：同一主build的原CALL/frame/参数/world/返回关系，按完整F4步骤顺序组成既有PipelinePlan；两个跨文件叶的query顺序实际为[5,4]，不按query编号猜执行顺序。CLI生成C++20及ELF后，8×8输入实际3次区域调用逐位一致、输入不变、输出修改隔离、输入修改重新计算。该新路径仍为preview，caller-frame的live guard adapter尚未实现，不自动部署，也无新性能结论。
+- C1原caller-matched接口桥接已接通：同一主build的原CALL/frame/参数/world/返回关系按完整F4步骤组成既有PipelinePlan；两个跨文件叶的query顺序实际为[5,4]。C++20及ELF区域3次逐位验证通过。
+- C2新增紧凑运行包，合同约4.5KB，host/operator ELF逐字节相同；运行端无需compiler/IR/codegen/planner。实际原入口8×8/3步native3/fallback0、stdout一致；9×9变为native0/fallback3，stdout仍一致。代码/default/callee/输入/observer等10类变化以及真实native状态103均整caller回退一次、私有结果不发布。监测包含sys.monitoring全局和局部事件，不缓存输入内容。
+- 默认NO_OP不加载ELF、不安装import hook；只有显式measure-candidate执行候选。新运行命令已走轻量dispatcher，实际禁止导入compiler/analysis/IR/codegen/planner仍成功。该dispatcher扩展改变runner身份，旧完整入口部署收据不直接复用；历史A/B保留，本轮未重做性能准入。当前只支持普通函数、float64二维数组和pool host，不是任意Python独立交付。
 - 跨文件组合自动选择：4个准入源码文件，3个库文件、4条真实函数全局路径，512×512/1000步，完整106配置自动选28线程。预热1组、正式3组：原完整进程中位数849.953ms（800.455–854.940ms，stdev30.121ms），选中实现261.466ms（250.753–282.104ms，stdev15.935ms），3.2507×；输出一致，native4/fallback0，正常成本门控另native1/fallback0。它是跨模块编译回归，不是新的LeWM或三程序套件加速。
 - 跨函数组合实际普通入口：256×256/20 步，结果逐位相同，native 1/fallback 0。替换深层 binding/defaults/代码/函数 globals 四种情况均准确整循环回退一次；恢复后重新启用 native。
 - 自动线程选择的科学微程序：512×512/1000 步、float64，完整进程预热 1 组、正式交替 3 组。原版中位数 **857.374ms**（854.495–872.810ms，stdev 9.849ms），选中实现 **287.887ms**（287.682–309.074ms，stdev 12.292ms），**2.9782×**。输出逐位一致，预热及正式 native 4/fallback 0；正常成本门控入口另 native 1/fallback 0。这是编译回归程序，不替代真实三程序套件。
@@ -63,8 +69,8 @@ SCAR 已有三阶段贯通的 CPU 原型：原源码图和硬件 → 依赖/资�
 
 ## 接下来仍需完成
 
-1. 建图：两文件当前覆盖、动态目标和硬件已在主build汇合；继续内容/别名版本、创建环境及原生schema，分开查询范围与效果闭合。批量存取仍有成本，按实际热点推进。
-2. 规划：把完整 CPU 成本链扩展到有序状态和更多算子家族，打通一般嵌套/自适应循环与跨区域调度；之后扩大 NUMA 绑页、多进程、MPI 和 CPU/GPU 联合域。当前自动选择不覆盖 Gray–Scott 的完整 CPU 成本域。
-3. 交付：普通caller-matched图到可重放PipelinePlan/C++20预览已接通；接下来落实其live guard adapter及完整入口验证，再扩大dtype/控制及宿主。当前仍非任意程序独立C++交付。
+1. G3：先接通普通内容槽/数组view的可证明别名、支配写入与创建环境，再推导内容版本；验收要求跨调用路径不混线、原地写入失效、未知协议仍留边界。
+2. O2→O3：补独立mixed-ALU/operand压力原语及串行计时路径，全新holdout通过后才扩大完整CPU域并选择一个实现。之后推进一般循环、跨区域调度、NUMA/多进程/MPI及CPU/GPU联合域。
+3. C3：基于已通过的host成本，完成干净整入口A/B和当前runner部署准入；未通过时默认NO_OP。再扩大dtype/控制及宿主。
 
-本轮统一证据：`artifacts/baseline/layered-evidence-bridge.json`；代码、范围修正和真实结果一起版本管理。
+本轮统一证据：`artifacts/baseline/content-lineage-caller-runtime.json`；代码、拒绝原因和真实结果一起版本管理。

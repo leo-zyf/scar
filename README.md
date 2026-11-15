@@ -269,10 +269,11 @@ scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out 
 原caller-matched接口可进入既有C++20 pipeline，当前只生成验证预览：
 
 ```bash
-scar compile-caller-pipeline --build PROGRAM --unit ORIGINAL_UNIT --function-ordinal 0 --provider bounded_call_interfaces:0 --input-shapes '{"payload":[8,8],"fixed":[8,8]}' --cpu-threads 1 --memory-budget-bytes 33554432 --out CALLER_PREVIEW
+scar compile-caller-pipeline --build PROGRAM --unit ORIGINAL_UNIT --function-ordinal 0 --provider bounded_call_interfaces:0 --input-shapes '{"payload":[8,8],"fixed":[8,8]}' --cpu-threads 1 --memory-budget-bytes 33554432 --out CALLER_PREVIEW --runtime-out CALLER_BUNDLE
+scar run-caller-pipeline --bundle CALLER_BUNDLE --admission-sha256 EXPORT_PIN --exclusive-inputs --measure-candidate --report TRIAL.json -- ENTRY.py ARGS
 ```
 
-降低前重新核验原CALL顺序、ABI和纯数组叶；默认值、pack、隐式receiver及开放效果继续拒绝。caller-frame运行时guard尚未接入，该预览不授权自动部署。
+降低前重新核验原CALL顺序、ABI和纯数组叶；运行包只读紧凑合同和相同ELF，检查当前普通函数/callee/source/default/输入及observer。成本未知时默认NO_OP且不加载ELF，显式`--measure-candidate`仅用于验证，不授权部署。默认值、pack、隐式receiver及开放效果继续拒绝。
 
 CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
 

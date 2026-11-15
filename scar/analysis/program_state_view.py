@@ -15,7 +15,9 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import source_state as S, source_productions as P, source_content as C
+from scar.ir.program import source_content_lineage as L
 from scar.ir.program import view as V
+from scar.ir.program.ids import OperationID
 from scar.ir.record_codec import encode, decode
 
 
@@ -26,6 +28,7 @@ def _pins():
     from scar.analysis import source_annotation_namespaces
     from scar.analysis import source_content, source_content_interfaces
     from scar.analysis import source_environment_values
+    from scar.analysis import source_content_lineage
     from scar.ir.program import source_environment_values as environment_types
     from scar.ir.program import source_effects as effects_types
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
@@ -35,6 +38,7 @@ def _pins():
         ('implicit_addresses', source_implicit_namespaces),
         ('annotation_addresses', source_annotation_namespaces),
         ('content', source_content), ('content_types', C), ('content_interfaces', source_content_interfaces),
+        ('content_lineage', source_content_lineage), ('content_lineage_types', L),
         ('environment_values', source_environment_values), ('environment_value_types', environment_types),
         ('body_projection', source_value_flow), ('unified_adapter', program_view))}
 
@@ -60,6 +64,7 @@ def _tracks(state):
 
 def _rows(state):
     content=state.content()
+    lineage=state.content_lineage.ensure_all()
     return dict(rules=(type(catalog()[0]),catalog()),
         requests=(S.SourceEffectRequest,state.requests.values()),
         locations=(S.BindingLocationTemplate,state.locations.values()),
@@ -70,16 +75,21 @@ def _rows(state):
         content_addresses=(C.ContentAddressTemplate,content.addresses.values()),
         content_states=(C.ContentStateProjection,content.projections.values()),
         content_accesses=(C.ContentAccessTemplate,content.accesses),
-        content_edges=(S.StoredBindingEdge,_edges(content)))
+        content_edges=(S.StoredBindingEdge,_edges(content)),
+        content_lineage=(L.ContentValueLineage,lineage.records),
+        content_lineage_edges=(S.StoredBindingEdge,_edges(lineage)))
 
 
 def _counts(state):
     content=state.content()
+    lineage=state.content_lineage.ensure_all()
     return dict(operations=len(state.requests),binding_accesses=len(state.accesses),locations=len(state.locations),
         versions=len(state.versions),read_selections=len(state.selections),tracks=len(state.tracks),
         relations=sum(len(rows) for rows in state.out_edges.values()),
         content_accesses=len(content.accesses),content_addresses=len(content.addresses),
         content_states=len(content.projections),content_relations=sum(len(rows) for rows in content.out_edges.values()),
+        content_lineage_records=len(lineage.records),
+        content_lineage_relations=sum(len(rows) for rows in lineage.out_edges.values()),
         missing_address_rules=dict(Counter(r.rule.instruction for r in state.requests.values() if r.missing_rules)))
 
 
@@ -100,6 +110,29 @@ def publish_state_view(state, out):
     if pins!=_pins():raise ValueError('state-view rules changed during publication')
     _durable_bytes(out/'result.json',_json(report),replace=False)
     return report
+
+
+def _restore_request_order(state, path, tables):
+    """Replay saved demand order; row references retain their original meaning.
+
+    Operation IDs resolve only through the original sealed plans. This pass
+    does not trust saved effects: all rows are decoded and compared with the
+    independently rederived records below.
+    """
+    source=state.source
+    source._admit(tuple(source.material.interfaces['nodes']))
+    owners={source._identity(OperationID,key,step.id):(key,step.id)
+        for key,plan in source.plans.items()for step in plan.steps}
+    for wire in _table(path,tables['requests']):
+        operation=decode(OperationID,wire['operation'])
+        if operation not in owners:raise ValueError('saved effect operation is absent from original source plans')
+        key,step=owners[operation]
+        state.ensure_operation(source._node(key,step),include_content=False)
+    content=state.content(complete=False)
+    for wire in _table(path,tables['content_accesses']):
+        operation=decode(OperationID,wire['operation'])
+        if operation not in state.requests:raise ValueError('saved content access lacks its original effect request')
+        content.ensure_operation(source.nodes[operation].point)
 
 
 def read_state_view(path):
@@ -138,6 +171,7 @@ def read_state_view(path):
     if (encode(state.namespace)!=report['namespace'] or encode(state.material.result_artifact)!=report['source_material']
             or encode(state.materials)!=report['binding_materials']):
         raise ValueError('state view source address material differs')
+    _restore_request_order(state,path,report['tables'])
     sentinel=object()
     # First decode the compact tracks, then ask the certified source solver to
     # reconstruct them. Declared IDs alone cannot establish a graph version.
@@ -149,6 +183,15 @@ def read_state_view(path):
     if set(rows)!=set(report['tables']):raise ValueError('state view table domain differs')
     for name,(cls,expected) in rows.items():
         actual=(decode(cls,row,record_tags=P.PRODUCTION_RECORD_TAGS) for row in _table(path,report['tables'][name]))
+        if name in ('locations','versions','edges'):
+            # ID-addressed declarations and relation sets have no row-order
+            # semantics. Track discovery may precede ordinary binding reads.
+            remaining=set(expected)
+            for record in actual:
+                if record not in remaining:raise ValueError('state view source declaration/relation differs: '+name)
+                remaining.remove(record)
+            if remaining:raise ValueError('state view source declaration/relation is missing: '+name)
+            continue
         if any(a!=b for a,b in zip_longest(actual,expected,fillvalue=sentinel)):
             raise ValueError('state view source rederivation differs: '+name)
     if _counts(state)!=report['counts']:raise ValueError('state view coverage counts differ')

@@ -59,6 +59,7 @@ class SourceStateProvider:
         self.flows = {}; self.anchors = None
         self.read_frontiers = defaultdict(list)
         self.content_provider = None
+        self.content_lineage = None
         root=self.source.facts.root_scope
         if root is None or root.owner.unit!=unit:
             raise ValueError('state source requires its original root scope witness')
@@ -81,6 +82,8 @@ class SourceStateProvider:
             provider=SourceContentProvider(self,register=False)
             self.content_provider=provider
             self.view.register(provider)
+            from scar.analysis.source_content_lineage import SourceContentLineageProvider
+            self.content_lineage=SourceContentLineageProvider(provider)
         if complete:self.ensure_all(include_content=True)
         return self.content_provider
 
