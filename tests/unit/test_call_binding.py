@@ -10,6 +10,23 @@ from scar.trace.code_snapshot import code_key,site
 from scar.trace.lean_capture import LeanCapturePlan,LeanBodyPlan
 
 
+def test_compile_only_formal_match_uses_code_layout_for_variadics():
+    from types import SimpleNamespace as NS
+    from scar.compiler.call_binding import _function_code_matches
+    from scar.ir.program.source_productions import DeferredParameterKind as P
+    root=compile('def f(a, /, b=1, *rest, flag=2, **extras):\n    return a\n',
+        'formal-layout.py','exec',dont_inherit=True)
+    code=next(value for value in root.co_consts if type(value)is type(root))
+    kinds=(P.POSITIONAL_ONLY,P.POSITIONAL_OR_KEYWORD,P.VAR_POSITIONAL,P.KEYWORD_ONLY,P.VAR_KEYWORD)
+    original=NS(parameter_names=('a','b','rest','flag','extras'),
+        environment=NS(parameters=tuple(NS(kind=k) for k in kinds)))
+    assert _function_code_matches(code,original,'f',{1})
+    changed=NS(parameter_names=('a','b','rest','flag','extras'),
+        environment=NS(parameters=tuple(NS(kind=k) for k in (P.POSITIONAL_OR_KEYWORD,*kinds[1:]))))
+    assert not _function_code_matches(code,changed,'f',{1})
+    assert not _function_code_matches(code,original,'f',{2})
+
+
 def test_local_call_budget_original_offset_and_unknown_native_fields(tmp_path,monkeypatch):
     if sys.implementation.name!='cpython' or sys.version_info[:3]!=(3,14,7):
         pytest.skip('pinned monitoring CALL contract required')

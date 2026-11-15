@@ -326,6 +326,7 @@ class F4BuildSession:
             if row['join']is not None and json.loads(Path(row['join']['path']).read_bytes())!=provider.summary:
                 raise ValueError('saved bounded CALL join differs from original raw attempt replay')
             self.providers['bounded_call_bindings:'+str(index)]=provider
+            self.providers['bounded_call_interfaces:'+str(index)]=provider.attach_function_interfaces()
         if inputs:self._checkpoint('bounded_call_target_metadata')
 
     def _functions(self,receipts):
@@ -471,11 +472,13 @@ class F4BuildSession:
             if not name.startswith('bounded_call_bindings:'):continue
             provider.check();index=int(name.split(':')[-1]);material=self.report['bounded_call_bindings'][index]
             summary=provider.summary
+            interfaces=provider.function_interfaces
             self.observed['bounded_call_bindings'].append(dict(
                 run=material['run'],plan=material['plan'],raw_observations=material['raw_observations'],
                 planned_sites=summary['planned_sites'],observed_sites=summary['observed_sites'],
                 attempts=summary['attempts'],target_records=len(provider.nodes),
-                metadata_only=True,InvocationKey_created=False,callee_entry_or_completion_proven=False))
+                metadata_only=True,InvocationKey_created=False,callee_entry_or_completion_proven=False,
+                conditional_source_interfaces=(None if interfaces is None else interfaces.store.coverage_summary())))
         return self.observed
 
     def select(self,*,file=None,entry=None,kind=None):
@@ -515,9 +518,10 @@ class F4BuildSession:
 
     def layer_summary(self):
         return dict(unified=True,local_state=dict(bindings=True,content=True),
-            cross_layer=dict(functions=any(k.startswith('functions:') for k in self.providers),
+            cross_layer=dict(functions=any(k.startswith(('functions:','bounded_call_interfaces:')) for k in self.providers),
                 **{k:k in self.providers for k in ('exec','creations','native','protocol','configuration','observed_boundaries','body_activations','invocations','resumptions','resource_scopes','binding_states')},
-                bounded_call_target_metadata=any(k.startswith('bounded_call_bindings:') for k in self.providers)),resources=True,
+                bounded_call_target_metadata=any(k.startswith('bounded_call_bindings:') for k in self.providers),
+                bounded_source_function_interfaces=any(k.startswith('bounded_call_interfaces:') for k in self.providers)),resources=True,
             storage=True,readback=True,providers=sorted(self.providers),
             loaded_units=len(self.view.units),catalog_units=len(self.catalog.fact_store.rows),
             catalog_local_graph_materialized=bool(self.source_coverage and self.source_coverage['catalog_local_graph_materialized']),
@@ -656,6 +660,9 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
             observed_binding_state_publications=len(observed['binding_states']),
             bounded_call_binding_publications=len(observed['bounded_call_bindings']),
             bounded_call_target_attempts=sum(row['attempts'] for row in observed['bounded_call_bindings']),
+            bounded_source_function_interfaces=sum(
+                row['conditional_source_interfaces']['interfaces']
+                for row in observed['bounded_call_bindings'] if row['conditional_source_interfaces'] is not None),
             observed_invocation_handles=(observed['invocations']['actual_call_handles']
                 if observed['invocations'] is not None else 0),
             catalog_local_graph_materialized=bool(session.source_coverage and session.source_coverage['catalog_local_graph_materialized']),

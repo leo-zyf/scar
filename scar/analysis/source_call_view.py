@@ -170,8 +170,16 @@ class SourceFunctionCallProvider:
         if callable(getattr(self.store,'callable_provenance',None)):
             from scar.analysis.source_callable_provenance_view import ReturnedCallableProvider
             self.returned=ReturnedCallableProvider(self)
-        artifact=_artifact(self.store.path/'result.json',self.store.report['schema'])
-        self.manifest=SourceArtifactLocator(artifact,artifact.sha256,artifact.size_bytes,'canonical-json')
+        # A projection over retained observations can be an in-memory reader.
+        # Its evidence remains the original immutable plan/record, rather
+        # than an invented interfaces file at the reader's working directory.
+        self.manifest=getattr(self.store,'manifest_locator',None)
+        if self.manifest is None:
+            artifact=_artifact(self.store.path/'result.json',self.store.report['schema'])
+            self.manifest=SourceArtifactLocator(artifact,artifact.sha256,artifact.size_bytes,'canonical-json')
+        elif type(self.manifest) is not SourceArtifactLocator:
+            raise TypeError('function interface reader needs its original manifest locator')
+        self.manifest.__post_init__()
         # Stored interface shards already are the complete conditional graph.
         # Normalize only selected/demanded units; opening a large store must
         # not instantiate every body and retain every normalized endpoint.
@@ -383,7 +391,9 @@ class SourceFunctionCallProvider:
             target_context=callee_context if relation.flow is Flow.ENTER else caller_context
             source=replace(relation.source,context=source_context);target=replace(relation.target,context=target_context)
             call=Point(relation.frame.caller,relation.frame.operation,caller_context)
-            manifest=replace(self.manifest,pointer='#/shards/'+unit+'/tables/interfaces')
+            locator=getattr(self.store,'interface_locator',None)
+            manifest=(locator(unit,ordinal) if callable(locator) else
+                replace(self.manifest,pointer='#/shards/'+unit+'/tables/interfaces'))
             sources=(self.view.namespaces[relation.frame.caller].locator,
                 self.view.namespaces[relation.frame.target].locator,manifest)
             conditions=tuple(Condition('scar.source-call.precondition',name,call,ordinal)

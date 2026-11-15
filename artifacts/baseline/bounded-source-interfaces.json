@@ -1,0 +1,238 @@
+{
+  "schema": "scar.bounded-source-interface-gate",
+  "schema_version": 1,
+  "status": "VERIFIED_CONDITIONAL_G3_INTERFACES",
+  "implemented": [
+    "BOUNDED_CODE_TARGET_TO_EXISTING_SIGNATURE_BINDER",
+    "CALLER_MATCHED_ARGUMENT_ENVIRONMENT_WORLD_RETURN",
+    "CURRENT_DEFAULT_STATE_AND_SYMBOLIC_PACK_PROJECTIONS",
+    "DEFERRED_CREATION_BOUNDARY",
+    "CONDITIONAL_SOURCE_ATTRIBUTE_INSTANCE_RECEIVER",
+    "SHARED_BODY_AND_REPORT_REFERENCE_TABLES"
+  ],
+  "cross_unit": {
+    "capture": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cross-unit-composite-v1/call-bindings/result.json",
+      "sha256": "e22fcfceae7b5b531ff2cff190b352e9280cb242088beea829bbffba8495e62f",
+      "bytes": 968
+    },
+    "build": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cross-unit-composite-v1/connected-program-build/manifest.json",
+      "sha256": "5217bfe7f2680d04374955d17a9843a7b469e0ccdf50dba72c70697d83fcf14a",
+      "bytes": 13348
+    },
+    "inspection": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cross-unit-composite-v1/connected-interface-inspection/result.json",
+      "sha256": "764849ceb9243f6d394826768c3a4e6537fcc4b94a603bd69dec1af287e5877c",
+      "bytes": 109804
+    },
+    "validation": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cross-unit-composite-v1/connected-interface-inspection/validation.json",
+      "sha256": "d2ecbf33e04c1c1fb26f472003f5d5e606d3fc57c3cdb21437f8d2ab9c88c35e",
+      "bytes": 547
+    },
+    "summary": {
+      "conditional_static_frames": 6,
+      "conditions": {
+        "BOUNDED_CALL_ATTEMPT_SELECTS_EXACT_RETAINED_CODE_BODY_ONLY": 40,
+        "CALL_ATTEMPT_DOES_NOT_PROVE_CALLER_INVOCATION_OR_CALLEE_ENTRY": 40,
+        "CURRENT_CALLABLE_DESCRIPTOR": 40,
+        "CURRENT_CALLABLE_IS_RECORDED_SOURCE_FUNCTION_WITH_COMPATIBLE_CALL_PROTOCOL": 40,
+        "ENTER": 28,
+        "FUNCTION_CODE_CAPTURE_DEFAULT_AND_NAMESPACE_VERSIONS_MATCH_DECLARATION": 40,
+        "PARAMETER_ROUTE_ARGUMENT": 10,
+        "PARAMETER_ROUTE_FUNCTION_ENVIRONMENT": 6,
+        "PARAMETER_ROUTE_STATE": 6,
+        "RETURN": 12,
+        "RETURN_ROUTES_REQUIRE_NORMAL_COMPLETION_NOT_OBSERVED_BY_CALL_CAPTURE": 40,
+        "SOURCE_ARGUMENT_ABI_HAS_NO_ADDITIONAL_UNMODELED_RECEIVER": 40,
+        "SOURCE_ARGUMENT_EVALUATION_AND_SIGNATURE_ACCEPTANCE_REQUIRED": 40,
+        "SOURCE_STATIC_CANDIDATE": 40,
+        "STANDARD_MODULE_NAMESPACES": 40,
+        "UNOBSERVED_PATHS_FUTURE_DISPATCH_AND_EFFECT_PURITY_REMAIN_OPEN": 40
+      },
+      "enter_relations": 28,
+      "frontier_reasons": {
+        "BOUNDED_CALL_FIELD_OPEN": 48,
+        "ORIGINAL_CALLEE_NAMESPACE_FRONTIERS_REMAIN_OPEN": 12,
+        "PARENT_CALLEE_REFERENCE_FRONTIERS_REMAIN_OPEN": 12,
+        "SOURCE_CALL_CONTEXT_FRAME_NOT_SELECTED": 12,
+        "SOURCE_CALL_CONTEXT_PREFIX_OPEN": 40,
+        "SOURCE_EFFECT_FIELDS_PARTIALLY_RESOLVED": 6
+      },
+      "interface_kinds": {
+        "DIRECT_FUNCTION": 6
+      },
+      "interface_providers": 1,
+      "kinds": {
+        "ARGUMENT": 10,
+        "CALL_TARGET": 6,
+        "COMPLETION": 6,
+        "ENVIRONMENT": 6,
+        "STATE_INTERFACE": 12
+      },
+      "main_graph_edges": 40,
+      "missing_main_graph_relations": 0,
+      "raw_attempt_records": 26,
+      "reference_records": {
+        "body": 0,
+        "code": 10,
+        "condition": 123,
+        "evidence": 40,
+        "evidence_rule": 1,
+        "fact": 41,
+        "frame": 6,
+        "frontier": 130,
+        "frontier_rule": 13,
+        "locator": 7,
+        "material": 6,
+        "namespace": 4,
+        "point": 102,
+        "predicate": 16
+      },
+      "relations": 40,
+      "report_budget_exhausted": false,
+      "return_relations": 12
+    }
+  },
+  "gray_scott": {
+    "reused_capture": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/call-bindings/result.json",
+      "sha256": "13888fdf92957bd2da00852e7a3f0415884ec7f408bd7ed0f77c89b288683fba",
+      "bytes": 1070
+    },
+    "build": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interfaces-program-build/manifest.json",
+      "sha256": "c991bf9eada826dfd43f500c26722e2c3074dc285e630d124b1c94e8fd342e5b",
+      "bytes": 13288
+    },
+    "inspection": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/result.json",
+      "sha256": "980fafd585c9dd128cb5471adcb7c228a17d786c1120e34b4d404c2e20fe231b",
+      "bytes": 177346
+    },
+    "validation": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/validation.json",
+      "sha256": "69c570d2e0aeb2826ab7cd915d261f9caa0231427832748442544b78bed81cf7",
+      "bytes": 578
+    },
+    "summary": {
+      "conditional_static_frames": 10,
+      "conditions": {
+        "ATTRIBUTE_GET_RECEIVER_IS_SELECTED_INSTANCE_NOT_A_CLASS_RECEIVER": 28,
+        "BOUNDED_CALL_ATTEMPT_SELECTS_EXACT_RETAINED_CODE_BODY_ONLY": 64,
+        "CALL_ATTEMPT_DOES_NOT_PROVE_CALLER_INVOCATION_OR_CALLEE_ENTRY": 64,
+        "CURRENT_CALLABLE_DESCRIPTOR": 64,
+        "CURRENT_CALLABLE_IS_RECORDED_SOURCE_FUNCTION_WITH_COMPATIBLE_CALL_PROTOCOL": 64,
+        "DESCRIPTOR_AND_RECEIVER_VERSIONS_MATCH_SELECTED_ATTRIBUTE_ACCESS": 28,
+        "ENTER": 44,
+        "FUNCTION_CODE_CAPTURE_DEFAULT_AND_NAMESPACE_VERSIONS_MATCH_DECLARATION": 64,
+        "OBSERVED_CALL_ATTEMPT_DOES_NOT_PROVE_RECEIVER_IDENTITY_OR_DESCRIPTOR_BINDING": 28,
+        "ORIGINAL_ATTRIBUTE_GET_AND_ALIAS_PATH_SELECT_RECORDED_CALLABLE_CODE": 28,
+        "PARAMETER_ROUTE_ARGUMENT": 13,
+        "PARAMETER_ROUTE_FUNCTION_ENVIRONMENT": 10,
+        "PARAMETER_ROUTE_INITIAL_DEFAULT": 1,
+        "PARAMETER_ROUTE_STATE": 10,
+        "RETURN": 20,
+        "RETURN_ROUTES_REQUIRE_NORMAL_COMPLETION_NOT_OBSERVED_BY_CALL_CAPTURE": 64,
+        "SELECTED_FUNCTION_IS_CLASS_MEMBER_NOT_INSTANCE_ATTRIBUTE_SHADOW": 28,
+        "SOURCE_ARGUMENT_ABI_HAS_NO_ADDITIONAL_UNMODELED_RECEIVER": 36,
+        "SOURCE_ARGUMENT_ABI_IS_EXPLICIT_ARGUMENTS_PLUS_SELECTED_DESCRIPTOR_RECEIVER": 28,
+        "SOURCE_ARGUMENT_EVALUATION_AND_SIGNATURE_ACCEPTANCE_REQUIRED": 64,
+        "SOURCE_STATIC_CANDIDATE": 64,
+        "STANDARD_ATTRIBUTE_LOOKUP_HAS_NO_CUSTOM_GETATTRIBUTE_OR_GETATTR_REDIRECTION": 28,
+        "STANDARD_MODULE_NAMESPACES": 64,
+        "STANDARD_PYTHON_FUNCTION_INSTANCE_DESCRIPTOR_SELECTED": 28,
+        "STATICMETHOD_CLASSMETHOD_AND_CUSTOM_DESCRIPTOR_PROTOCOLS_NOT_SELECTED": 28,
+        "UNOBSERVED_PATHS_FUTURE_DISPATCH_AND_EFFECT_PURITY_REMAIN_OPEN": 64
+      },
+      "enter_relations": 44,
+      "frontier_reasons": {
+        "BOUNDED_CALL_FIELD_OPEN": 80,
+        "FUNCTION_DEFAULT_CREATION_INSTANCE_AND_MUTATION_HISTORY_NOT_SELECTED": 1,
+        "SOURCE_CALL_CONTEXT_PREFIX_OPEN": 64,
+        "SOURCE_EFFECT_FIELDS_PARTIALLY_RESOLVED": 10
+      },
+      "interface_kinds": {
+        "DIRECT_FUNCTION": 6,
+        "STANDARD_INSTANCE_FUNCTION_DESCRIPTOR": 4
+      },
+      "interface_providers": 1,
+      "kinds": {
+        "ARGUMENT": 13,
+        "CALL_TARGET": 10,
+        "COMPLETION": 10,
+        "ENVIRONMENT": 10,
+        "PROJECTION": 1,
+        "STATE_INTERFACE": 20
+      },
+      "main_graph_edges": 64,
+      "missing_main_graph_relations": 0,
+      "raw_attempt_records": 37,
+      "reference_records": {
+        "body": 0,
+        "code": 19,
+        "condition": 237,
+        "evidence": 64,
+        "evidence_rule": 1,
+        "fact": 106,
+        "frame": 10,
+        "frontier": 155,
+        "frontier_rule": 11,
+        "locator": 11,
+        "material": 4,
+        "namespace": 1,
+        "point": 161,
+        "predicate": 26
+      },
+      "relations": 64,
+      "report_budget_exhausted": false,
+      "return_relations": 20
+    },
+    "independent_session_phase_timing": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/phase-timing.json",
+      "sha256": "2fc1daa8600634e67afdd8f020fc62ea12c931014ff6de37b60c20d5aae8b99e",
+      "bytes": 737
+    },
+    "single_warm_analysis_query_profile": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/query-profile.json",
+      "sha256": "0e9d935778f383f0121a6676de348ee30af4bdd064af70bc03cdb98881e0ad84",
+      "bytes": 6079
+    },
+    "retained_full_catalog_material_inventory": "REJECTED_OLD_RULE_PINS_NOT_FULLY_REPUBLISHED",
+    "catalog_admission_size_audit": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/compiler-integration-current/interface-inspection/catalog-size-audit.json",
+      "bytes": 6978,
+      "sha256": "60d32a63e9782c96b4751e11889ce04a022fc3738d789d7f0485e9c121be9571"
+    }
+  },
+  "verification": {
+    "targeted_checks_passed": 9,
+    "command": "python -m pytest -q tests/unit/test_call_binding.py tests/unit/test_bounded_source_interfaces.py tests/unit/test_source_body_interfaces.py",
+    "seconds": 6.48,
+    "frontend_rebuilt": false,
+    "new_original_full_episode_executed": false,
+    "new_backend_added": false
+  },
+  "known_boundaries": [
+    "ACTUAL_RECEIVER_AND_DESCRIPTOR_BINDING_NOT_OBSERVED",
+    "CREATOR_ENVIRONMENT_DEFAULT_AND_CONTENT_VERSIONS_NOT_PROVEN",
+    "NATIVE_SCHEMA_AND_EFFECTS_OPEN",
+    "UNOBSERVED_PATHS_AND_DYNAMIC_INVOCATIONS_OPEN",
+    "GENERAL_ALIAS_CONTENT_VERSIONS_INCOMPLETE",
+    "INDEPENDENT_CATALOG_ADMISSION_COLD_START_UNRESOLVED"
+  ],
+  "performance": {
+    "new_speedup_claim": null,
+    "reason": "GRAPH_ONLY_CHANGE_NO_NEW_TARGET_AB_BENCHMARK",
+    "analysis_timing_is_not_target_execution_time": true
+  },
+  "next_gate": [
+    "DEFER_UNUSED_COMPILED_LEAF_TYPED_DECODING_PRESERVING_BYTE_RECEIPTS_AND_EXPLICIT_CATALOG_REPUBLICATION",
+    "CONTINUE_G3_GENERAL_VALUE_STATE_ALIAS_VERSION_LINKS",
+    "EXTEND_STATEFUL_CPU_COST_DOMAIN_AFTER_INPUT_FACTS_ARE_ADMITTED"
+  ],
+  "first_stage_complete": false,
+  "all_three_stages_complete": false,
+  "transformation_authorized_by_this_gate": false
+}

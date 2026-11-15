@@ -28,6 +28,32 @@ def _receipt(path):
     return dict(path=str(path),bytes=len(raw),sha256=sha256(raw).hexdigest())
 
 
+def _function_code_matches(code,function,name,lines):
+    """Compare original formal metadata in CPython's parameter layout.
+
+    Source signatures order ``*args`` before keyword-only parameters; the
+    code object stores it after them. This compile-only correspondence does
+    not establish a callable instance, receiver or argument binding.
+    """
+    from scar.ir.program.source_productions import DeferredParameterKind as P
+    from scar.trace.code_snapshot import code_parameters
+    import inspect
+    parameters=function.environment.parameters
+    if len(parameters)!=len(function.parameter_names):return False
+    kinds=tuple(p.kind for p in parameters)
+    positional=(P.POSITIONAL_ONLY,P.POSITIONAL_OR_KEYWORD,P.INITIAL_ITERATOR)
+    groups=(positional,(P.KEYWORD_ONLY,),(P.VAR_POSITIONAL,),(P.VAR_KEYWORD,))
+    expected=tuple(label for group in groups for p,label in zip(parameters,function.parameter_names)
+        if p.kind in group)
+    return (code.co_name==(name if name is not None else '<lambda>')
+        and code.co_firstlineno in lines and code_parameters(code)==expected
+        and code.co_argcount==sum(k in positional for k in kinds)
+        and code.co_posonlyargcount==kinds.count(P.POSITIONAL_ONLY)
+        and code.co_kwonlyargcount==kinds.count(P.KEYWORD_ONLY)
+        and bool(code.co_flags&inspect.CO_VARARGS)==(P.VAR_POSITIONAL in kinds)
+        and bool(code.co_flags&inspect.CO_VARKEYWORDS)==(P.VAR_KEYWORD in kinds))
+
+
 def _static_call_mapping(view,unit):
     """Load the original static mapper only for explicit planning/replay."""
     from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
@@ -85,9 +111,9 @@ def plan_call_bindings(catalog,source,*,entry=None,call_indices=None,max_targets
         selected=[]
         for fn in facts.functions:
             name,span,lines=_metadata(syntax,fn.template.occurrence)
-            if entry is not None and entry!=name and not entry.endswith('.'+name):continue
-            matches=[c for c in codes if c.co_name==name and c.co_firstlineno in lines
-                and c.co_varnames[:c.co_argcount+c.co_kwonlyargcount]==fn.parameter_names]
+            label=name if name is not None else '<lambda>'
+            if entry is not None and entry!=label and not entry.endswith('.'+label):continue
+            matches=[c for c in codes if _function_code_matches(c,fn,name,lines)]
             if len(matches)!=1:
                 frontiers.append(dict(unit=unit,field='caller.code_key',reason='UNIQUE_ORIGINAL_CODE_ID_UNAVAILABLE',template=encode(fn.template)));continue
             selected.append((fn.body_scope,matches[0]))

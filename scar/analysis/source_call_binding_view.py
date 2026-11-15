@@ -73,6 +73,7 @@ class SourceCallBindingProvider:
         self.view=view;self.materials={};self.nodes={};self.by_call=defaultdict(list)
         self.out_edges=defaultdict(list);self.in_edges=defaultdict(list);self.operations={};self.sources={}
         self.body_targets={};self.body_frontiers={};self.body_keys=set();self._code_bodies={};self._code_metadata={}
+        self.function_interfaces=None
         self.plan_path=Path(plan_path).absolute();self.plan=read_call_binding_plan(self.plan_path)
         self._read(self.plan_path)
         catalog=self.plan['catalog'];catalog_path=view.catalog.path/'result.json'
@@ -154,11 +155,25 @@ class SourceCallBindingProvider:
                 self.body_keys.add((body.namespace,body.node))
         self.summary=joined;self.check();view.register(self)
 
+    def attach_function_interfaces(self):
+        """Project conditional source ABIs; an attempt is never an invocation.
+
+        The existing function provider owns signature/default/capture and
+        balanced ENTER/RETURN semantics. This metadata provider continues to
+        retain the complete, bounded attempts independently of that view.
+        """
+        if self.function_interfaces is None:
+            from scar.analysis.bounded_function_interfaces import BoundedFunctionInterfaceStore
+            from scar.analysis.source_call_view import SourceFunctionCallProvider
+            self.function_interfaces=SourceFunctionCallProvider(self.view,BoundedFunctionInterfaceStore(self))
+        return self.function_interfaces
+
     def _target_body(self,code):
         """Match original source metadata by full CodeID, never import/name guesses."""
         if code is None:return None,None
         if code.key in self._code_bodies:return self._code_bodies[code.key]
         from scar.compiler.graph_frontend import _source_identity,_metadata
+        from scar.compiler.call_binding import _function_code_matches
         from scar.trace.code_snapshot import describe_code
         units=tuple(self.view.catalog.units_for_source(code.filename) or ())
         if not units:
@@ -174,8 +189,7 @@ class SourceCallBindingProvider:
                 actual=exact[0]
                 for function in source.facts.functions:
                     name,_,lines=_metadata(syntax,function.template.occurrence)
-                    if (actual.co_name==name and actual.co_firstlineno in lines
-                            and actual.co_varnames[:actual.co_argcount+actual.co_kwonlyargcount]==function.parameter_names):
+                    if _function_code_matches(actual,function,name,lines):
                         self.sources[source.unit]=source
                         matches.append(self.view.source_region_ref(unit,function.template,function.body))
             unique=list(dict.fromkeys(matches))
@@ -234,7 +248,8 @@ class SourceCallBindingProvider:
             source_body=encode(self.body_targets.get((p.namespace,p.node))),
             source_body_frontier=self.body_frontiers.get((p.namespace,p.node)))
             for p in self.by_call.get(key,())] if call.context is None else [],
-            remaining_fields=list(_OPEN),static_context_bound_to_recorded_attempt=False,first_stage_complete=False)
+            remaining_fields=list(_OPEN),static_context_bound_to_recorded_attempt=False,
+            conditional_source_interfaces_attached=self.function_interfaces is not None,first_stage_complete=False)
 
     def explain(self,point):
         return dict(original=self.original(point),remaining_fields=list(_OPEN),entry_completion_or_effects_proven=False)
