@@ -44,7 +44,9 @@ def _resources(document,artifact):
         if row['cpu_ids']:
             identity=H.TargetResourceID('cpu/'+name);cpus[nid]=identity
             core_ids={(processors[c]['package_id'],processors[c]['core_id']) for c in row['cpu_ids'] if c in processors}
-            cores=len(core_ids) if len([c for c in row['cpu_ids'] if c in processors])==len(row['cpu_ids']) else None
+            complete=all(c in processors and processors[c]['package_id'] is not None
+                and processors[c]['core_id'] is not None for c in row['cpu_ids'])
+            cores=len(core_ids) if complete else None
             nodes.append(H.CpuExecutor(identity,nid,tuple(row['cpu_ids']),cores,tuple(document['cpu']['model_names']),evidence(pointer)))
         identity=H.TargetResourceID('memory/'+name);memory[nid]=identity
         nodes.append(H.MemoryDomain(identity,H.MemoryKind.HOST,cpus.get(nid),nid,row['memory_total_bytes'],None,None,evidence(pointer)))
@@ -88,6 +90,10 @@ def _resources(document,artifact):
             for name in row['backing_disks']:
                 if name in disks:connect(identity,disks[name],H.ConnectionKind.STORAGE_BACKING,pointer)
         paths.append(H.PathEndpoint(row['requested_path'],row['resolved_path'],identity,row['backing_status'],evidence(pointer)))
+    if 'cpu_topology' in document or 'pci' in document:
+        from scar.analysis.platform_graph import platform_resources
+        extra,edges=platform_resources(document,artifact,nodes)
+        nodes.extend(extra);links.extend(edges)
     return nodes,list(dict.fromkeys(links)),paths
 
 
@@ -104,7 +110,8 @@ def build_target_graph(out,paths=(),*,inventory=None):
     for row in nodes:families.setdefault(type(row).__name__,[]).append(row)
     tables={name:_table(out/(name+'.jsonl.gz'),rows) for name,rows in sorted(families.items())}
     edges=_table(out/'connections.jsonl.gz',links);locations=_table(out/'paths.jsonl.gz',paths)
-    result=dict(schema='scar.target-hardware-graph',schema_version=1,status='TARGET_DESCRIPTION_BUILT',
+    extended='cpu_topology' in document or 'pci' in document
+    result=dict(schema='scar.target-hardware-graph',schema_version=2 if extended else 1,status='TARGET_DESCRIPTION_BUILT',
         inventory=dict(uri=artifact.uri,sha256=artifact.sha256,size_bytes=artifact.size_bytes),
         nodes=tables,connections=edges,paths=locations,resource_count=len(nodes),connection_count=len(links),
         reported_host_memory_bytes=document['dram']['memory_total_bytes'],
@@ -113,18 +120,41 @@ def build_target_graph(out,paths=(),*,inventory=None):
         collector_sha256=sha256(Path(target_inventory.__file__).read_bytes()).hexdigest(),
         implementation_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),types_sha256=sha256(Path(H.__file__).read_bytes()).hexdigest(),
         seconds=time.monotonic()-started)
+    if extended:
+        from scar.analysis import platform_graph
+        availability,constraints=platform_graph.platform_metadata(document,artifact)
+        result.update(availability=_table(out/'availability.jsonl.gz',availability),
+            constraints=_table(out/'constraints.jsonl.gz',constraints),
+            platform_coverage=platform_graph.platform_coverage(document,nodes),
+            platform_implementation_sha256=sha256(Path(platform_graph.__file__).read_bytes()).hexdigest())
     _durable_bytes(out/'result.json',_json(result),replace=False);return result
 
 
 class TargetHardwareGraph:
     def __init__(self,path):
         self.path=Path(path).absolute();self.report=json.loads((self.path/'result.json').read_bytes())
-        if self.report['schema']!='scar.target-hardware-graph' or self.report['schema_version']!=1:raise ValueError('target graph version differs')
-        if self.report['types_sha256']!=sha256(Path(H.__file__).read_bytes()).hexdigest():raise ValueError('target types differ')
-        if self.report['implementation_sha256']!=sha256(Path(__file__).read_bytes()).hexdigest():raise ValueError('target builder differs')
+        if self.report['schema']!='scar.target-hardware-graph' or self.report['schema_version'] not in (1,2):raise ValueError('target graph version differs')
         receipt=self.report['inventory'];raw=Path(receipt['uri']).read_bytes()
         if len(raw)!=receipt['size_bytes'] or sha256(raw).hexdigest()!=receipt['sha256']:raise ValueError('target inventory receipt differs')
         self.inventory=json.loads(raw)
+        # Producer hashes identify historical evidence. Wire compatibility and
+        # retained-content replay decide readability, not today's source hash.
+        for source in self.inventory['sources']:
+            if source['text'] is not None and sha256(source['text'].encode()).hexdigest()!=source['sha256']:
+                raise ValueError('retained target source differs')
+        artifact=ProviderArtifact(receipt['uri'],receipt['sha256'],receipt['size_bytes'],'scar.target-inventory')
+        nodes,links,paths=_resources(self.inventory,artifact)
+        current=self.resources()
+        if (len({r.id for r in current})!=len(current) or {r.id:r for r in current}!={r.id:r for r in nodes}
+                or self.connections()!=tuple(links) or self.paths()!=tuple(paths)):
+            raise ValueError('target topology differs from retained inventory')
+        if self.report['schema_version']==2:
+            from scar.analysis.platform_graph import platform_metadata,platform_coverage
+            availability,constraints=platform_metadata(self.inventory,artifact)
+            if self.availability()!=tuple(availability) or self.constraints()!=tuple(constraints):
+                raise ValueError('target availability or constraints differ from retained inventory')
+            if self.report['platform_coverage']!=platform_coverage(self.inventory,nodes):
+                raise ValueError('target hardware coverage differs from retained inventory')
 
     def table(self,receipt,cls):
         payload=(self.path/receipt['path']).read_bytes()
@@ -140,6 +170,12 @@ class TargetHardwareGraph:
     def connections(self):return self.table(self.report['connections'],H.ResourceConnection)
 
     def paths(self):return self.table(self.report['paths'],H.PathEndpoint)
+
+    def availability(self):
+        return self.table(self.report['availability'],H.ResourceAvailability) if 'availability' in self.report else ()
+
+    def constraints(self):
+        return self.table(self.report['constraints'],H.ExecutionConstraints) if 'constraints' in self.report else ()
 
 
 def main():

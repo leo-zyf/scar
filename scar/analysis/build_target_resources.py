@@ -20,6 +20,29 @@ from scar.ir.record_codec import encode
 SCHEMA = 'scar.build-target-resources.v1'
 
 
+def target_kind_role(record):
+    """Hardware topology is not implicitly a storage or execution endpoint."""
+    if type(record) is H.CpuExecutor:
+        return ResourceKind.CPU, ResourceRole.EXECUTOR
+    if type(record) is H.Accelerator:
+        return ResourceKind.GPU, ResourceRole.EXECUTOR
+    if type(record) is H.MemoryDomain:
+        return ResourceKind.MEMORY, ResourceRole.MEMORY_POOL
+    if type(record) in (H.StorageDevice,H.StorageEndpoint):
+        return ResourceKind.STORAGE, ResourceRole.STORAGE_ENDPOINT
+    if type(record) is H.HardwareThread:
+        return ResourceKind.THREAD, ResourceRole.OPAQUE_RESOURCE
+    if type(record) in (H.CpuCore,H.CpuPackage):
+        return ResourceKind.CPU, ResourceRole.OPAQUE_RESOURCE
+    if type(record) is H.CacheDomain:
+        return ResourceKind.MEMORY, ResourceRole.OPAQUE_RESOURCE
+    if type(record) in (H.PciFunction,H.DiscoveredAccelerator,H.NetworkInterface,H.RdmaAdapter):
+        return ResourceKind.DEVICE, ResourceRole.OPAQUE_RESOURCE
+    if type(record) is H.HardwareBoundary:
+        return ResourceKind.OTHER, ResourceRole.OPAQUE_RESOURCE
+    raise ValueError('unclassified target hardware record')
+
+
 def _stamp(path):
     stat = path.stat()
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
@@ -28,9 +51,10 @@ def _stamp(path):
 class RetainedBuildTarget:
     """Project original hardware IDs into demanded program namespaces once."""
     def __init__(self, provider, path):
-        from scar.analysis.source_resource_graph import _target
+        from scar.analysis.target_graph import TargetHardwareGraph
         self.provider = provider
-        self.graph, self.resources = _target(Path(path).resolve())
+        self.graph = TargetHardwareGraph(Path(path).resolve())
+        self.resources = self.graph.resources()
         self.connections = self.graph.connections()
         self.paths = self.graph.paths()
         path = self.graph.path / 'result.json'
@@ -43,7 +67,8 @@ class RetainedBuildTarget:
         files = (path, Path(report['inventory']['uri']),
             *(self.graph.path / r['path'] for r in report['nodes'].values()),
             self.graph.path / report['connections']['path'],
-            self.graph.path / report['paths']['path'])
+            self.graph.path / report['paths']['path'],
+            *(self.graph.path/report[name]['path'] for name in ('availability','constraints') if name in report))
         self._stamps = {p: _stamp(p) for p in files}
         self.points = {}
         self.bindings = set()
@@ -72,14 +97,7 @@ class RetainedBuildTarget:
         root = Point(namespace, namespace.root, None)
         points = {}
         for record in self.resources:
-            if type(record) is H.CpuExecutor:
-                kind, role = ResourceKind.CPU, ResourceRole.EXECUTOR
-            elif type(record) is H.Accelerator:
-                kind, role = ResourceKind.GPU, ResourceRole.EXECUTOR
-            elif type(record) is H.MemoryDomain:
-                kind, role = ResourceKind.MEMORY, ResourceRole.MEMORY_POOL
-            else:
-                kind, role = ResourceKind.STORAGE, ResourceRole.STORAGE_ENDPOINT
+            kind, role = target_kind_role(record)
             point = self._point(namespace, record)
             definition = ResourceDefinition(point.node, kind, role,
                 ExternalResource(namespace.root, 'target-snapshot:' + str(record.id)))
@@ -129,5 +147,6 @@ class RetainedBuildTarget:
         return dict(schema=SCHEMA, snapshot=encode(self.snapshot),
             resources=encode(self.resources, record_tags=H.TARGET_RECORD_TAGS),
             connections=encode(self.connections), paths=encode(self.paths),
+            availability=encode(self.graph.availability()),constraints=encode(self.graph.constraints()),
             physical_use_established=False, allocation_budgets_established=False,
             transfers_observed=False)

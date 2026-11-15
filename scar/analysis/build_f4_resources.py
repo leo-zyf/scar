@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from scar.analysis.build_resources import BuildResourceProvider, _key
-from scar.analysis.build_target_resources import RetainedBuildTarget
+from scar.analysis.build_target_resources import RetainedBuildTarget, target_kind_role
 from scar.analysis.source_call_view import source_call_site
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.program_view import SOURCE_REPRESENTATION, _digest
@@ -101,6 +101,9 @@ class LazyF4Resources:
             self._remember(Path(self.target.report['inventory']['uri']))
             for receipt in (*self.target.report['nodes'].values(), self.target.report['connections'], self.target.report['paths']):
                 self._remember(self.target.path/receipt['path'])
+            for name in ('availability','constraints'):
+                if name in self.target.report:
+                    self._remember(self.target.path/self.target.report[name]['path'])
         self._rules = self._pins()
         view.register(self)
 
@@ -130,10 +133,7 @@ class LazyF4Resources:
         if any(p.namespace == source.namespace for p in self.hardware): return
         root = Point(source.namespace, source.namespace.root, None); points = {}
         for record in self.target_resources:
-            if type(record) is H.CpuExecutor: kind, role = ResourceKind.CPU, ResourceRole.EXECUTOR
-            elif type(record) is H.Accelerator: kind, role = ResourceKind.GPU, ResourceRole.EXECUTOR
-            elif type(record) is H.MemoryDomain: kind, role = ResourceKind.MEMORY, ResourceRole.MEMORY_POOL
-            else: kind, role = ResourceKind.STORAGE, ResourceRole.STORAGE_ENDPOINT
+            kind, role = target_kind_role(record)
             identity = ResourceDefinitionID(_digest((SCHEMA, self.target_ref, record.id)))
             point = Point(source.namespace, identity, None)
             definition = ResourceDefinition(identity, kind, role,

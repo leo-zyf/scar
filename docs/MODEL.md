@@ -224,6 +224,8 @@ source world→native world、native normal world→source result_world也是依
 原声明图不覆盖或删除。NORMAL_SUCCESS过滤另带路径条件，不能从该投影排除应用异常/resume路径或证明当前内容、纯性、dead work及优化合法性。
 原生Tensor/Device/Generator类型投影通过原归一化依赖接入硬件图；Optional/List投影不是实际元素、分配或副本。native输出到Python包装结果也只是依赖，不把整个Python容器置于GPU。
 host执行、native executor与目标内存池分别保候选；保留CPU/GPU/内存/存储拓扑不等于证明程序使用这些资源。source文件所在磁盘也不是运行I/O。
+
+`TargetHardwareGraph/v2` 按平台发现全部 OS 可见硬件，独立于 workload：CPU package/core/thread 与 ISA、NUMA DRAM、共享 cache、PCIe、加速器、物理 SSD/NVMe、NIC/RDMA 及存储 backing。cache 是不可直接分配的硬件域；独立 device memory 必须有证据。控制/性能计数接口可聚合为有原 PCI ID 的边界，不建驱动内部。affinity/cgroup/设备可见性与 accelerator 的 discovery/access/backend 状态独立存表；未知属性保持未知，设备仍保留。所有关系有原 inventory FactRef；链路规格和相对 NUMA distance 不冒充实测带宽/延迟。硬件生产者 SHA 是历史来源，读者以版本化类型及原库存重推接纳 v1/v2，不重签旧快照。
 类基项保原求值端口、顺序和CLASSES fact所属创建scope；packed ABI仍含body/name，不能直接当base列表。
 namespace图的class-definition来源是附条件的源码声明产物，不是运行时class或MRO证明；当前版本、builtin及动态属性缺口仍逐字段保留。
 继承成员记录原有序base槽及完整来源路径；每条descriptor选择可追至记录，不选择第一条基类或写入作为实际MRO/当前成员。

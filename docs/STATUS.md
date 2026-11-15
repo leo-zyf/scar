@@ -2,6 +2,12 @@
 
 SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方法建模、统一执行图、C++20 降低及原入口自动装配；Sunfish/Cirq 暂只有基线，没有 LeWM/GPU 加速结论。
 
+本轮补齐平台硬件主链：`build` 默认自动采集，独立于 workload、affinity、CUDA 可见性。当前真实 `TargetHardwareGraph/v2` 有 201 个资源、474 条连接，涵盖 56 个逻辑 CPU、28 核、2 package/NUMA、86 个 cache、ISA、DRAM、PCIe、3 NVMe + 1 SATA SSD、2 物理 NIC（另 3 虚拟接口）及 ASPEED 显示设备。201 个已发现 PCI function 全部有图表示；控制/性能计数接口聚合为边界。旧快照中的 RTX4090 不在当前 PCI 清单，其原 BDF 当前是 NVMe；历史证据保留，不用于冒充当前设备。设备存在、进程访问限制、后端可执行能力分别记录；不凭显示设备发明 CUDA 或独立显存。
+
+真实采集 0.939s，离线建硬件图 0.112s，含紧凑库存的存图 712,594B；这些时间只属于硬件层，不是全程序建图时间。OS 未暴露的硬件、可用预算、有效带宽/延迟及真正 compute access 仍不推断。原 v1 快照按库存严格重放兼容，不重签旧结果。证据：`artifacts/current/experiments/platform-hardware-current/`。
+
+真实 Gray–Scott 默认 `build`（不传 `--target`）已完成 workflow，202 个硬件资源全部进入程序资源图，包含文件系统端点；无需运行应用。完整入口仍耗时 187.07s / 峰值 697,912KiB，主要为 discovery 和 assembly 两次加载完整软件 catalog，不能拿约一秒硬件采集代表此总时间。此次只装载 14 个源单元中的 1 个，仍有 62 个明确 gap、未接新 trace，故不声称第一阶段全程序完成。发现的 context-only protocol 缓存误接 observed catalog 已按接口类型准入修复，没有吞掉 TypeError 或放宽旧材料 pin。
+
 ## 已验证的主链
 
 原 F4 自动提取一个状态方法：54 个 Expr、24 次求值、2 次写入，保原代码/端口/world 来源。输入类型是运行时守卫的候选约束。规则不按 workload、函数或字段名称选择；原程序未修改。
@@ -11,6 +17,8 @@ SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方�
 统一 recipe 引用同一份正文/来源及原硬件库存，没有展开 5000 步。完整重放后经原 C++20 backend 降低，build ID 与 library SHA 和此前实测版本相同，未引入新数学实现。recipe 94,322B；源区域含内联 provenance 约 2.8MB。
 
 物理预算：workspace 8,454,304B + 外部数组 4,243,600B = 12,697,904B，声明预算 32MiB。CPU 0–3 / 4 线程显式指定、未排名；内存页 UNBOUND。通用 makespan solver 已接 v2，按 4 个 workspace slot 计费，不重复计算 12 个物化版本。真实逐任务成本缺失，仍返回 UNRESOLVED，不补零；未证明联合硬件或全局时间最优。
+
+新增硬件导出的 stateful CPU 域：本机两个 executor 各覆盖 1–28 的每个整数线程数，核优先/SMT 优先等代表 mask 去重后共 106 个；保留全部 201 个硬件资源及 ISA/cache/访问限制来源。后端 capability 查询仅为 SUPPORTED_UNDER_GUARDS，仍须完整降低及运行时准入。缺 106 个完整调用成本与同边界 NO_OP 成本，故不选实现。该域没有枚举全部 CPU 子集、跨 socket team 或新后端，不能声称全局最优；既有 4 线程实测也未证明最佳。
 
 轻量运行包 40,550B，复用原库字节；无需 catalog、完整图、planner 或 g++。原入口自然 import 后装配类方法；真实 20 步 u/v、time、dt 逐位相同，native 20 / fallback 0，未导入 compiler/codegen/analysis/IR/optimization。仍依赖原应用源码、Python/NumPy 和系统共享库，不是独立 C++ 主程序。
 

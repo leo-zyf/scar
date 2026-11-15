@@ -196,7 +196,9 @@ scar build-query /path/to/fresh-build --action dependencies --file model.py --en
 `--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
 新源码构建的 `--body-scope observed` 根据完整运行 CodeID 选择正文，并自动准入 trace 涉及的外部源码文件；保留其余源码声明，不扫描整个依赖安装目录、不证明未观察路径为死代码。
 该模式默认直接连接运行中的实际调用，跳过全局静态目标求解；`--call-binding static` 可显式恢复静态求解。
-已有 source model 可用 `--model MODEL --call-binding observed` 接新 trace。`--target` 引用独立的硬件库存；库存、条件候选和实际资源使用分别保存。
+已有 source model 可用 `--model MODEL --call-binding observed` 接新 trace。`build` 默认自动发现当前平台并保存到 `OUT/hardware`；`--target` 可复用明确指定的独立硬件快照。硬件发现不按 workload、CPU affinity 或 CUDA 可见性删设备；库存、访问限制、后端支持和实际资源使用分别保存。
+
+硬件图包含 CPU package/core/SMT/ISA、NUMA DRAM、共享缓存、PCIe 端点/互连、加速器、物理磁盘及文件系统 backing、网卡/RDMA。控制与监测接口在完整 PCI 台账中保留并聚合为边界；发现显示设备不推断可执行 CUDA 或独立显存。可用预算与带宽成本仍需独立证据。单独采集：`python -m scar.analysis.target_graph --out FRESH --path /path/to/input`。
 `manifest.json` 引用原正文和关系分片；资源按原操作/区域延迟接线，观察依据独立保存。
 入口源码树及显式依赖根的 YAML 自动进入现有配置材料解析器；不执行 tag、插值或 Hydra 组合。
 `gaps.json` 保留局部缺口、跨层前沿、未接运行资源及查询截断。

@@ -52,6 +52,20 @@ def _reports(roots):
     return sorted(rows,key=lambda p:p[0].stat().st_mtime_ns,reverse=True)
 
 
+def _component_catalog_gap(name,catalog,*,path=None):
+    """Keep context-only readers from coercing another typed catalog to a path."""
+    if name not in ('protocol','members'):return None
+    from scar.analysis.source_context_query import ContextTargetGraph
+    if isinstance(catalog,ContextTargetGraph):return None
+    gap=dict(layer=name,kind='UNSUPPORTED_CATALOG_KIND',
+        catalog_schema=catalog.report.get('schema'),
+        supported_catalog_schemas=['scar.context-source-targets'],
+        detail='Constructor/member protocol materials require the original context-qualified catalog; '
+            'declared and observed source catalogs do not provide that interface.')
+    if path is not None:gap['path']=str(path)
+    return gap
+
+
 def discover(entry,trace,*,catalog=None,cache_roots=()):
     """Choose compatible cached materials by schema and exact catalog, not names."""
     from scar.analysis.source_declared_catalog import read_source_catalog
@@ -96,6 +110,9 @@ def discover(entry,trace,*,catalog=None,cache_roots=()):
             'scar.source-resource-scopes':'resource_scopes',
             'scar.source-observed-resumptions':'resumptions',
             'scar.source-body-activations':'body_activations'}.get(schema)
+        gap=_component_catalog_gap(key,c,path=path)
+        if gap is not None:
+            gaps.append(gap);continue
         if key=='resumptions':
             from scar.analysis.source_observed_resumptions import _pins as resumption_pins
             if trace is None or r['trace']!=str(trace) or Path(r['catalog']).resolve()!=c.path.resolve():continue
@@ -256,6 +273,9 @@ class F4BuildSession:
                 path=self._component_path(name)
                 if path is None:
                     self.gaps.append(dict(layer=name,kind='MATERIAL_NOT_AVAILABLE'));continue
+                gap=_component_catalog_gap(name,self.catalog,path=path)
+                if gap is not None:
+                    self.gaps.append(gap);continue
                 if name=='creations':
                     from scar.analysis.source_creation_view import SourceFunctionCreationProvider
                     provider=SourceFunctionCreationProvider(self.view,path)
@@ -500,9 +520,10 @@ class F4BuildSession:
 
 def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3600,max_input_bytes=16*1024**3,target=None,
         bounded_call_bindings=()):
-    from scar.analysis.build import _rules,_receipt,_write,_configuration_inputs
+    from scar.analysis.build import _rules,_receipt,_write,_configuration_inputs,_build_target
     from scar.analysis.program_dependency_export import export_dependency_walk
     started=time.monotonic();bounded_inputs=_bounded_call_binding_inputs(bounded_call_bindings);out.mkdir(parents=True)
+    target=_build_target(out,entry,source_roots,target)
     trace_ref=None
     if trace:
         from scar.analysis.program_observed_dependencies import _inputs

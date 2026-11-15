@@ -53,6 +53,15 @@ def _receipt(path):
     return dict(path=str(path), sha256=sha256(raw).hexdigest(), bytes=len(raw))
 
 
+def _build_target(out, entry, source_roots, target):
+    """Every build references a full target, independent of workload usage."""
+    if target is None:
+        from scar.analysis.target_graph import build_target_graph
+        target = Path(out)/'hardware'
+        build_target_graph(target,paths=tuple(dict.fromkeys(str(p) for p in (entry,*source_roots))))
+    return Path(target).resolve()
+
+
 def _check(receipt):
     if _receipt(Path(receipt['path'])) != receipt:
         raise ValueError('build input receipt changed: ' + receipt['path'])
@@ -267,6 +276,9 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         raise ValueError('bounded CALL metadata requires an admitted F4 catalog; legacy backend is unsupported')
     selected = _model_for(entry, model) if model or not source_roots else None
     out.mkdir(parents=True)
+    if target_path is None:
+        target_path = _build_target(out,entry,source_roots,None)
+        target_ref = _receipt(target_path/'result.json')
     if selected is None:
         selected = out / 'source'
         observed_scope = None
@@ -401,7 +413,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog='scar build')
     parser.add_argument('--entry', required=True)
     parser.add_argument('--trace')
-    parser.add_argument('--target', help='retained target hardware graph; inventory is not placement evidence')
+    parser.add_argument('--target', help='reuse a retained hardware graph; default discovers the current platform into OUT/hardware')
     parser.add_argument('--body-scope', choices=('all','observed'), default='all',
         help='lower all declared bodies or exact observed code bodies; all source templates remain indexed')
     parser.add_argument('--call-binding', choices=('static','observed'),

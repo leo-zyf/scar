@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -295,15 +296,21 @@ def collect_inventory(paths: tuple[str, ...]) -> dict:
     Missing provider interfaces produce null values, empty discoveries, and
     explicit source statuses. All returned values are JSON serializable.
     """
+    observed_from = datetime.now(timezone.utc).isoformat()
     sources = _Sources()
     cpu, dram = _cpu_and_dram(sources)
     gpus = _gpus(sources)
     storage, aliases, backing, storage_source = _storage(sources)
     path_rows = [_path_inventory(path, sources, aliases, backing, storage_source) for path in paths]
+    from .platform_inventory import collect_platform_inventory
+    extension = collect_platform_inventory(sources, cpu, dram, gpus, storage)
     return {"schema": "scar.target-inventory", "schema_version": 1,
             "platform": {"system": sys.platform, "machine": os.uname().machine},
             "cpu": cpu, "dram": dram, "gpus": gpus, "storage": storage, "paths": path_rows,
-            "sources": sources.rows, "diagnostics": sources.diagnostics}
+            "sources": sources.rows, "diagnostics": sources.diagnostics,
+            "observed_at": observed_from,
+            "observation_window": {"started_at": observed_from,
+                "finished_at": datetime.now(timezone.utc).isoformat(), "atomic": False}, **extension}
 
 
 def main(argv: list[str] | None = None) -> int:
