@@ -94,6 +94,8 @@ C++宿主通过版本化C函数表接入插件（仍是C++后端），传递描�
 CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周期约束，原生浮点异常转交原NumPy路径。
 编译资格、契约合法性和实测选用分开；无收益选择NO_OP，已测收益只对对应计划和shape/layout生效。
 
+构建与部署已有独立接口：`export-loop-runtime` 在构建端完整准入原 loop/layout/profile/ELF，再输出小 runtime contract、admission 与原 library。`scar.runtime` 不导入 compiler/optimization/analysis/codegen/IR，不重渲染模板、调用 objdump 或读取 proof 档案。安装时核源码/实际环境，调用时保数组、次数、CPU/fenv/回退守卫；明确的 producer admission pin 不充当数字签名。成本门控可在加载前处理，并不授权跳过准入。当前仍有 Python 入口与 fallback，完整 standalone C++ 交付尚未完成。
+
 资源规划主链现为原F4/值来源→符号工作量→硬件资源约束→materialization/ready/分配生命周期任务图→模型求解。
 实际调用视图以原端口加 run/InvocationKey 表示；caller 内重复 CALL 加原 attempt 锚点。
 共享正文不展开为调用副本，原 GP→实例的发现关系只是结构边，不冒充数据生产或内容相等。

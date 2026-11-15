@@ -1,5 +1,4 @@
 """Original nested callable guards around a compiled, shared array loop."""
-import builtins
 from contextlib import contextmanager
 from functools import wraps
 from hashlib import sha256
@@ -20,11 +19,12 @@ from .runtime import SourceMismatch
 _RANGE = range
 
 
-def _range(namespace):
+def _range(function):
+    namespace = function.__globals__
     if 'range' in namespace:
         return namespace['range']
-    standard = namespace.get('__builtins__', builtins)
-    return standard.get('range') if type(standard) is dict else getattr(standard, 'range', None)
+    standard = function.__builtins__
+    return standard.get('range') if type(standard) is dict else None
 
 
 def guarded_loop_function(original, artifact, *, exclusive_inputs=False, selection=None, trial=False):
@@ -32,7 +32,7 @@ def guarded_loop_function(original, artifact, *, exclusive_inputs=False, selecti
     if (type(original) is not FunctionType or original.__closure__
             or code_key(original.__code__) != loop.source.code_key):
         raise SourceMismatch('loop requires its original ordinary Python function')
-    if _range(original.__globals__) is not _RANGE:
+    if _range(original) is not _RANGE:
         raise SourceMismatch('loop range lookup is not builtin range')
     source_versions = {loop.source.path: loop.source.sha256}
     guards = []
@@ -86,7 +86,7 @@ def guarded_loop_function(original, artifact, *, exclusive_inputs=False, selecti
             return fallback('synchronous_exclusive_input_contract', args, kwargs)
         if cpus and (not hasattr(os, 'sched_getaffinity') or not cpus <= os.sched_getaffinity(0)):
             return fallback('planned_cpu_allocation_unavailable', args, kwargs)
-        if not _same_state(original, state) or _range(original.__globals__) is not _RANGE:
+        if not _same_state(original, state) or _range(original) is not _RANGE:
             return fallback('loop_code_or_range_changed', args, kwargs)
         if any(namespace.get(name) is not function or not _same_state(function, expected)
                for namespace, name, function, expected in guards):

@@ -444,3 +444,7 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 `scar.loop-layout` 在该语义上单独描述空间 lane/chain 布局：有来源的 ISA、固定寄存器预算、每 Expr 活跃区间、first operand 最后使用时的 two-address 复用、行宽/尾部及规范原语成本代理。共享 SSA 值不因复用机器寄存器而合并身份。逐 lane 时间顺序不变，向量链在 DAG 节点之间交错；只选中布局被编译。实际 spill/栈调整来自独立 ELF 审计，不能从抽象寄存器预算反推；模型不预测全程序时间或线性多核收益。
 
 `SourceObservedCallTarget` 是原 F4 CALL 上的独立观察记录，记录实际 callable CodeID 或精确 native carrier/type 及原始收据。图以 `CALL_TARGET/MAY` 和 run/process/thread/attempt 条件引用它，不把相同 CodeID 的多次观察合成一次 invocation，也不凭 native 名称生成实现 ID。caller invocation、callee entry/completion、参数/defaults、内容与 effects 仍各自有开放字段；显式装配进 `BuildSession` 不改变这些证据边界。
+
+部署投影 `scar.loop-runtime-contract` 不取代上述图：构建端完整重放后，把必要的源码/环境/数组/CPU/ABI/selection 合同及 library 身份投影到小包，admission 收据绑定其原始字节。运行端依调用者信任的 admission pin 核对，再执行 live guards，不重新规划或读 proof 档案。函数 builtins 是函数创建时保留的环境，不能用之后的 `globals['__builtins__']` 代替。
+
+`scar.deployment-cost-profile` 区分 COMPONENTS 与 COMPLETE_SCOPE，并完整绑定边界、artifact、CPU、内存与假设。组件和可复用次数用有来源的显式量正向计算；整边界观测不能跨 scope 或外推次数，也不能互减冒充加载成本。成本允许加载候选与执行准入是两种资格，原始 NO_OP 始终有效。

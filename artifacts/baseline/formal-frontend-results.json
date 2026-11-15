@@ -4655,7 +4655,7 @@
       "performance_benchmark_repeated": false
     }
   },
-  "current_milestone": "hardware_simd_and_bounded_binding_progress",
+  "current_milestone": "compiler_independent_runtime_progress",
   "hardware_cpu_choice_progress": {
     "schema": "scar.hardware-cpu-choice-milestone",
     "schema_version": 1,
@@ -6738,5 +6738,323 @@
     "lewm_speedup_measured": false,
     "torch_cuda_upgraded": false,
     "goal_complete": false
+  },
+  "compiler_independent_runtime_progress": {
+    "schema": "scar.compiler-independent-runtime-milestone",
+    "schema_version": 1,
+    "recorded_at": "2026-11-15T01:18:48.932056+00:00",
+    "status": "VERIFIED_THREE_STAGE_RUNTIME_DELIVERY_PROGRESS",
+    "previous_goal_turn": "PROGRESS",
+    "implemented": {
+      "stage1": "MECHANICAL_PROJECTION_OF_FULLY_ADMITTED_LOOP_SOURCE_AND_ENVIRONMENT_GUARDS",
+      "stage2": "SOURCED_DEPLOYMENT_SCOPE_AND_REUSE_COST_GATE_BEFORE_NATIVE_LOADING",
+      "stage3": "COMPILER_INDEPENDENT_BUNDLE_LOADER_AND_LIVE_GUARDS_WITH_UNCHANGED_CPP20_KERNEL"
+    },
+    "observed": {
+      "runtime_contract_bytes": 5964,
+      "admission_bytes": 5498,
+      "library_bytes": 21432,
+      "core_bundle_bytes": 32894,
+      "expected_admission_sha256": "3b302daacece154f9236dae62cd3891577cd2e6d56cf20b44f9acc8144aff806",
+      "library_sha256": "419c4971fae5e27305c5843e3dfeb3a07ef0c714a92c03aed9a904276437a458",
+      "original_library_bytes_preserved": true,
+      "original_native_ids": {
+        "build_id": "44857a97a12480dc559e5950f9bb95e1823ec786c8e79a1d46d967ab6feaee76",
+        "contract_sha256": "e86e14e97af8ddff87ab60ceb01e23f6e8927cb4a03d16f6ac303a538d14ee4d",
+        "execution_plan_sha256": "b2cef76482683b05a7e35dc7e2fd7acd45a1a85618cf0ddebd182345b6759725",
+        "loop_sha256": "66d8fb8cd74c9a5f924d7bd6122468a43353cc3669f21308c76e272097b67a84",
+        "strategy_sha256": "45cf78d78b26d9ff837b07f734285024f9006ed64f33b354178e78a9bbe70b1e"
+      },
+      "archival_evidence_receipts": 16,
+      "runtime_does_not_open_admission_evidence_paths": true,
+      "original_application_source_still_required": true
+    },
+    "verified": {
+      "scopes": {
+        "WARM_MAIN": {
+          "samples_seconds": {
+            "baseline": [
+              3.8831304050108884,
+              3.8615140769979917,
+              3.844410211982904
+            ],
+            "native": [
+              0.17636763298651204,
+              0.16305926398490556,
+              0.17555966100189835
+            ]
+          },
+          "baseline": {
+            "count": 3,
+            "units": "seconds",
+            "median": 3.8615140769979917,
+            "min": 3.844410211982904,
+            "max": 3.8831304050108884,
+            "stdev": 0.019403870676318897
+          },
+          "native": {
+            "count": 3,
+            "units": "seconds",
+            "median": 0.17555966100189835,
+            "min": 0.16305926398490556,
+            "max": 0.17636763298651204,
+            "stdev": 0.00746129378630457
+          },
+          "speedup": 21.995451887755905
+        },
+        "FRESH_PROCESS": {
+          "samples_seconds": {
+            "baseline": [
+              4.114370707015041,
+              4.177743089996511,
+              4.155381312011741
+            ],
+            "native": [
+              0.42773534799925983,
+              0.4101963319990318,
+              0.3899236290017143
+            ]
+          },
+          "baseline": {
+            "count": 3,
+            "units": "seconds",
+            "median": 4.155381312011741,
+            "min": 4.114370707015041,
+            "max": 4.177743089996511,
+            "stdev": 0.032140259700220164
+          },
+          "native": {
+            "count": 3,
+            "units": "seconds",
+            "median": 0.4101963319990318,
+            "min": 0.3899236290017143,
+            "max": 0.42773534799925983,
+            "stdev": 0.01892232219110121
+          },
+          "speedup": 10.130225425861557
+        }
+      },
+      "warmup": 1,
+      "repetitions": 3,
+      "order": "PAIRED_ABBA",
+      "fresh_process_scope": "PROCESS_START_THROUGH_EXIT_INCLUDING_RUNTIME_IMPORT_LOAD_INSTALL_AND_ORIGINAL_PROGRAM_IO",
+      "warm_scope": "ALREADY_LOADED_MAIN_CALL_INCLUDING_ORIGINAL_MAIN_WORK_AND_IO",
+      "output_final_state_bitwise_equal": true,
+      "stdout_and_npy_bytes_equal": true,
+      "every_program_native_calls": 1,
+      "every_program_fallbacks": 0,
+      "normal_mode": true,
+      "changed_input_recomputed": true,
+      "output_mutation_isolated": true,
+      "nonpositive_alias_preserved": true,
+      "changed_count_and_nested_state_fall_back_once": true,
+      "actual_function_builtin_snapshot_checked": true,
+      "isolation_archives_templates_compiler_imports_and_subprocess_forbidden": true,
+      "no_compiler_optimizer_analysis_codegen_IR_imports_in_measured_children": true,
+      "tests": {
+        "targeted_passed": 4,
+        "targeted_seconds": 0.97,
+        "legacy_guard_regression_passed": 1,
+        "legacy_guard_regression_seconds": 1.79,
+        "lazy_package_regressions_passed": 4,
+        "lazy_package_seconds": 1.1
+      },
+      "wheel_source_assets_checked": 1032,
+      "flagship_target_kernel_compilations": 0,
+      "new_native_unit_fixture_compilation_is_separate": true
+    },
+    "rejected": {
+      "unobserved_complete_scope_reuse_count_2": "NO_OP_NOT_EXTRAPOLATED",
+      "mismatched_deployment_boundary": "NO_OP_NOT_MIXED_WITH_WARM_SESSION",
+      "insufficient_explicit_memory_budget": "NO_OP_BEFORE_NATIVE_LOAD",
+      "missing_component_costs": "UNKNOWN_NOT_ZERO"
+    },
+    "baseline_defect": {
+      "schema": "scar.baseline-defect",
+      "schema_version": 1,
+      "defect": "LEGACY_RANGE_GUARD_LOOKED_AT_MUTABLE_GLOBALS_BUILTINS_INSTEAD_OF_FUNCTION_BUILTINS_SNAPSHOT",
+      "observed_scenario": "Function created with a custom builtin range, then globals __builtins__ rebound to the standard dict; actual function retains the custom dict.",
+      "fix": "Resolve globals range first, then the actual FunctionType.__builtins__ dictionary in both legacy and lightweight guard boundaries.",
+      "regression_validation": "Both boundaries follow actual snapshot before/after globals rebinding; legacy native focused test passed.",
+      "fixed_source_sha256": "c604a30d9a8d35ac0d0124eb9974afa94a7918534201ded90a5d03bdf6a69a50",
+      "numerical_benchmark_original_program_modified": false,
+      "performance_gain_attributed_to_this_fix": false,
+      "separate_from_loader_optimization": true
+    },
+    "external_assumptions": [
+      "SYNCHRONOUS_CPU_EXECUTION",
+      "NO_FOREIGN_CONCURRENT_INPUT_WRITERS",
+      "FP_STATUS_FLAGS_NOT_USED_AS_PROGRAM_OUTPUT"
+    ],
+    "limitations": {
+      "no_crypto_signature": true,
+      "trust_pin_must_come_from_trusted_build_producer": true,
+      "native_system_libraries_required": true,
+      "numpy_python_and_application_source_required": true,
+      "not_standalone_CPP_program": true,
+      "not_global_time_or_physical_optimality": true,
+      "no_observed_intermediate_iteration_outputs": true,
+      "direct_child_load_and_install_intervals_are_not_pure_dlopen_or_complete_component_models": true
+    },
+    "next_layers": [
+      "Connect observed targets to argument/default/receiver/content and native effects/schemas",
+      "Extend sourced component and memory/concurrency costs and joint placement/COPY scheduling",
+      "Automate generic entry assembly and expand portable C++ host/control/IO delivery"
+    ],
+    "implementation_commits": [
+      "498d9da3",
+      "80ac0d67",
+      "33a0fcc0"
+    ],
+    "environment": {
+      "python": "3.14.7",
+      "numpy": "2.5.2",
+      "torch": "2.13.0+cu132",
+      "torch_cuda": "13.2",
+      "cuda_available": false,
+      "cpp_standard": "C++20",
+      "loop_abi_version": 1,
+      "runtime_contract_schema_version": 1,
+      "cpu_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz"
+    },
+    "external_testcase": {
+      "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction",
+      "git_head": "034f60cdaf381a34e6d7260d5f6044afe5dcd8b9",
+      "driver": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/runtime_validate.py",
+        "sha256": "e1d555d69b5cc7ba75be783d987bbd0ea73a7ae38a87a3bfaeb64fe870dedf48",
+        "bytes": 8923
+      },
+      "original_source": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/physics.py",
+        "sha256": "f047f71cab0545402c9e5ca27152e2e258c710efa04b31f06f99b8ef10d1f5ea",
+        "bytes": 451
+      },
+      "entry": {
+        "path": "/home/zyf/AAA/scar-testcases/cpu_science/temporal_reaction/run.py",
+        "sha256": "cb30e9f9e9486475e91e24eb11ccea5e6375714c10c6534548102d5c5d1626d6",
+        "bytes": 908
+      }
+    },
+    "artifacts": {
+      "bundle/export-report.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/bundle/export-report.json",
+        "sha256": "c98303d13b4d9a9ba3b3f0a1e742fa06eb024a25e2b6c809f891ad21e9aca4f0",
+        "bytes": 1149
+      },
+      "bundle/runtime.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/bundle/runtime.json",
+        "sha256": "a712f3665bdea270e21c23634098b1d72ac5a6275c7ea8378f2355ae9d523982",
+        "bytes": 5964
+      },
+      "bundle/admission.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/bundle/admission.json",
+        "sha256": "3b302daacece154f9236dae62cd3891577cd2e6d56cf20b44f9acc8144aff806",
+        "bytes": 5498
+      },
+      "validation/result.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/validation/result.json",
+        "sha256": "2c95b96161ac08006c093b3e43d6e67728dcd0ee9a4433e4390c2e41cb098cd5",
+        "bytes": 9607
+      },
+      "isolation-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/isolation-receipt.json",
+        "sha256": "a0401b0123a17c91853de35397315ffc0d70bec8cf77a0ae4bd86d9e8d68326f",
+        "bytes": 2095
+      },
+      "runtime-binding-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/runtime-binding-receipt.json",
+        "sha256": "e28029f2a7bff5a83ce082a9525eb516a7660945062d64834c755f38c8887c54",
+        "bytes": 5787
+      },
+      "import-receipt.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/import-receipt.json",
+        "sha256": "a12f7844e7fa06daee407b0feee3cd7cf849f8b8eb5d983ba2bf18999c41beb6",
+        "bytes": 756
+      },
+      "deployment-costs/WARM_MAIN/profile.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/WARM_MAIN/profile.json",
+        "sha256": "f75b94b5b9ac5e78ab17b054f6adc5392ccbbd9e2f0f6ab3350e429c866598d7",
+        "bytes": 3705
+      },
+      "deployment-costs/WARM_MAIN/plan.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/WARM_MAIN/plan.json",
+        "sha256": "c1e85f85234f8cbc87245bd35c45845b1b8dc137a9bb7bd879883dc3a31236cb",
+        "bytes": 10834
+      },
+      "deployment-costs/FRESH_PROCESS/profile.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/FRESH_PROCESS/profile.json",
+        "sha256": "23e5bffc27b601f9f77f5426c9ba56e0f7c145df6434d17b23136289e5570e4e",
+        "bytes": 3720
+      },
+      "deployment-costs/FRESH_PROCESS/plan.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/FRESH_PROCESS/plan.json",
+        "sha256": "bd84020955e1706b3b7c327a9e874bce04f18548e84781212642dcbe79b0d0b0",
+        "bytes": 10380
+      },
+      "deployment-costs/FRESH_PROCESS/unobserved-reuse-count.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/FRESH_PROCESS/unobserved-reuse-count.json",
+        "sha256": "f631e2f8fb868c3dbc9dbad825ea451eda884258f482a25d9c329dbd6c8c5966",
+        "bytes": 10665
+      },
+      "deployment-costs/FRESH_PROCESS/mismatched-boundary.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/FRESH_PROCESS/mismatched-boundary.json",
+        "sha256": "0a20ad84a0eb32cbf1469b29cf69602331406e27198d482677638080dcbdca93",
+        "bytes": 10999
+      },
+      "deployment-costs/FRESH_PROCESS/insufficient-budget.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/deployment-costs/FRESH_PROCESS/insufficient-budget.json",
+        "sha256": "9200f0aca1c0aecf0d71a951f0484ed5302ab47f1f6352ce932d699de3abd275",
+        "bytes": 10884
+      },
+      "baseline-defect.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/baseline-defect.json",
+        "sha256": "e10a867b6a072fbf8569170dcfb43c2b52648fbb591ed688f2a5c9ee8b2cced0",
+        "bytes": 865
+      },
+      "final-tests.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/final-tests.log",
+        "sha256": "8dfac3bbd5e94bf48d8afe948b918d10a07ca81ec8a5405af139d518972d2230",
+        "bytes": 98
+      },
+      "legacy-guard-regression.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/legacy-guard-regression.log",
+        "sha256": "f846ef4f29093638d9226f7e4a313def975d18b32ff0425cd659d1f6eea95ac1",
+        "bytes": 98
+      },
+      "lazy-package-regression.log": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/lazy-package-regression.log",
+        "sha256": "130d319c84892e40c30c8cdeb1aaf50a9c08f3c5c2548ef6560aae9715e1640c",
+        "bytes": 98
+      },
+      "environment.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/environment.json",
+        "sha256": "56fe3a49d9ad7582e97a8c6a02b334a46b0b7759cd02cf5eb56887487ee4d7a6",
+        "bytes": 350
+      },
+      "wheel-verification.json": {
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/loop-runtime-delivery-v1/wheel-verification.json",
+        "sha256": "076613e894a1a4ed4530696617cf373690faefcbaf3894c8913118042afc6a66",
+        "bytes": 1080
+      }
+    },
+    "first_stage_complete": false,
+    "second_stage_complete": false,
+    "third_stage_complete": false,
+    "entire_program_CPP": false,
+    "goal_complete": false,
+    "lewm_modified": false,
+    "lewm_speedup_measured": false,
+    "torch_cuda_upgraded": false
   }
 }

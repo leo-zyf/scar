@@ -91,6 +91,25 @@ scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/t
 
 布局按原 DAG 的 last-use、SSE2 two-address 复用、寄存器预算和有来源的依赖/吞吐代理选链数；只编译选中布局。v2 artifact 附 layout 和实际 ELF 的 ISA/栈审计，loop ABI 仍为 1，旧无 layout 的 v1 可读。代理成本不是纯指令延迟或整程序耗时预测，抽象向量存储预算不是实际线程栈上限。
 
+部署前一次性准入原 proof，再导出小运行包；完整 IR、profile、硬件档案和模板不进入运行进程：
+
+```bash
+scar export-loop-runtime --artifact /path/to/simd-loop-build/loop-0/native --selection /path/to/measured-result.json --out /path/to/runtime-bundle
+```
+
+```python
+from scar.runtime.native_loop import load
+from scar.runtime.loop_guard import install_loop
+
+artifact = load('/path/to/runtime-bundle', expected_admission_sha256='导出时得到的受信任收据哈希')
+with install_loop(application_module, artifact, exclusive_inputs=True):
+    application_module.evolve(inputs, steps)  # 此处使用应用自己的入口与参数
+```
+
+pin 必须来自调用者信任的构建记录，loader 不从包内 report 自行取信；哈希不等于签名。运行包保 library/ABI、原应用源码与嵌套 globals、实际函数 builtins、shape/count/owner、CPU/ISA/fenv 等守卫。仍依赖 Python/NumPy、原应用源码和系统共享库，尚非独立 C++ 程序。
+
+部署成本可先在元数据上门控：`scar plan-deployment --profile PROFILE --context CONTEXT --reuse-count N --cpu-ids 0 1 --memory-budget-bytes BYTES --out REPORT`。完整 scope 观测只在其原 scope/count 回放；组件模型必须分别有来源的加载、安装及调用成本。缺失值保持 NO_OP，不从 warm/fresh median 差值推导 setup。正向结果仅 `LOAD_NATIVE_CANDIDATE`，不能替代准入和动态守卫。
+
 外部调用可按原 F4 code/offset 轻量补位，再自动挂到统一图：
 
 ```bash
