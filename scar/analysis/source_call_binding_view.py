@@ -67,11 +67,12 @@ class SourceObservedCallTarget:
 
 
 class SourceCallBindingProvider:
-    relation_kinds=frozenset((K.CALL_TARGET,))
+    relation_kinds=frozenset((K.CALL_TARGET,K.IMPLEMENTATION))
 
     def __init__(self,view,plan_path,observation_paths):
         self.view=view;self.materials={};self.nodes={};self.by_call=defaultdict(list)
         self.out_edges=defaultdict(list);self.in_edges=defaultdict(list);self.operations={};self.sources={}
+        self.body_targets={};self.body_frontiers={};self.body_keys=set();self._code_bodies={};self._code_metadata={}
         self.plan_path=Path(plan_path).absolute();self.plan=read_call_binding_plan(self.plan_path)
         self._read(self.plan_path)
         catalog=self.plan['catalog'];catalog_path=view.catalog.path/'result.json'
@@ -135,7 +136,52 @@ class SourceCallBindingProvider:
                 (Evidence(SCHEMA+'.attempt',(locator,source.locator),(operation,point)),),
                 tuple(Condition(SCHEMA,guard,point,index=record.attempt_index) for guard in guards),Strength.MAY)
             self.out_edges[operation.namespace,operation.node].append(edge);self.in_edges[point.namespace,point.node].append(edge)
+            body,reason=self._target_body(record.target_code)
+            self.body_targets[point.namespace,point.node]=body
+            if reason is not None:self.body_frontiers[point.namespace,point.node]=reason
+            if body is not None:
+                # This expands the observed implementation's static body. It
+                # does not invent an invocation, formal binding or return edge.
+                original_source=self.view.namespaces[body.namespace]
+                locators=(locator,original_source.locator)
+                implementation=Edge(point,body,K.IMPLEMENTATION,Meaning.STRUCTURE,
+                    (Evidence(SCHEMA+'.original-code-body',locators,(point,body)),),
+                    tuple(Condition(SCHEMA,guard,point,index=record.attempt_index) for guard in
+                        ('EXACT_RETAINED_CODE_DESCRIPTOR_MATCH','SOURCE_BODY_IS_NOT_ACTIVATION',
+                         'CREATOR_ENVIRONMENT_ARGUMENT_BINDING_AND_NATIVE_EFFECTS_REMAIN_OPEN')),Strength.MAY)
+                self.out_edges[point.namespace,point.node].append(implementation)
+                self.in_edges[body.namespace,body.node].append(implementation)
+                self.body_keys.add((body.namespace,body.node))
         self.summary=joined;self.check();view.register(self)
+
+    def _target_body(self,code):
+        """Match original source metadata by full CodeID, never import/name guesses."""
+        if code is None:return None,None
+        if code.key in self._code_bodies:return self._code_bodies[code.key]
+        from scar.compiler.graph_frontend import _source_identity,_metadata
+        from scar.trace.code_snapshot import describe_code
+        units=tuple(self.view.catalog.units_for_source(code.filename) or ())
+        if not units:
+            result=(None,'OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG')
+        else:
+            matches=[]
+            for unit in sorted(units):
+                source=self.view.unit(unit)
+                if unit not in self._code_metadata:self._code_metadata[unit]=_source_identity(self.view.catalog,unit)
+                _,syntax,codes,_,_=self._code_metadata[unit]
+                exact=[value for value in codes if describe_code(value)==encode(code)]
+                if len(exact)!=1:continue
+                actual=exact[0]
+                for function in source.facts.functions:
+                    name,_,lines=_metadata(syntax,function.template.occurrence)
+                    if (actual.co_name==name and actual.co_firstlineno in lines
+                            and actual.co_varnames[:actual.co_argcount+actual.co_kwonlyargcount]==function.parameter_names):
+                        self.sources[source.unit]=source
+                        matches.append(self.view.source_region_ref(unit,function.template,function.body))
+            unique=list(dict.fromkeys(matches))
+            result=(unique[0],None) if len(unique)==1 else (None,'UNIQUE_ORIGINAL_CODE_BODY_NOT_ESTABLISHED')
+        self._code_bodies[code.key]=result
+        return result
 
     def _read(self,path):
         if path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=2_000_000:
@@ -164,13 +210,16 @@ class SourceCallBindingProvider:
 
     def _neighbors(self,point,incoming):
         key=point.namespace,point.node
-        if key not in self.nodes and key not in self.by_call:return Neighborhood()
+        if key not in self.nodes and key not in self.by_call and key not in self.body_keys:return Neighborhood()
         self.check()
         if point.context is not None:
             return Neighborhood((),(Frontier(point,'BOUNDED_CALL_CONTEXT_NOT_BOUND_TO_ATTEMPT',
                 'A static DependencyFrame is not the recorded caller InvocationKey.'),))
         edges=(self.in_edges if incoming else self.out_edges).get(key,())
+        if key in self.body_keys:return Neighborhood(tuple(edges))
         frontiers=tuple(Frontier(point,'BOUNDED_CALL_FIELD_OPEN',field) for field in _OPEN)
+        if key in self.body_frontiers:
+            frontiers+=(Frontier(point,'BOUNDED_CALL_BODY_OPEN',self.body_frontiers[key]),)
         if key in self.by_call and not self.by_call[key]:
             frontiers+=(Frontier(point,'SELECTED_CALL_TARGET_NOT_OBSERVED','No retained attempt supplies this selected site.'),)
         return Neighborhood(tuple(edges),frontiers)
@@ -181,7 +230,10 @@ class SourceCallBindingProvider:
     def query(self,call):
         self.check();key=call.namespace,call.node
         return dict(schema=SCHEMA,call=encode(call),targets=[dict(point=encode(p),record=encode(self.original(p)),
-            metadata=json.loads(self.original(p).metadata_json)) for p in self.by_call.get(key,())] if call.context is None else [],
+            metadata=json.loads(self.original(p).metadata_json),
+            source_body=encode(self.body_targets.get((p.namespace,p.node))),
+            source_body_frontier=self.body_frontiers.get((p.namespace,p.node)))
+            for p in self.by_call.get(key,())] if call.context is None else [],
             remaining_fields=list(_OPEN),static_context_bound_to_recorded_attempt=False,first_stage_complete=False)
 
     def explain(self,point):

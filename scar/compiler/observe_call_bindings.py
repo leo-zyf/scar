@@ -7,16 +7,25 @@ import signal
 import subprocess
 import time
 
-from .call_binding import (plan_call_bindings, read_call_binding_plan,
+from .call_binding import (plan_call_bindings, plan_program_call_bindings, read_call_binding_plan,
                           write_call_binding_plan, join_call_bindings)
 
 
 def observe_call_bindings(command, out, *, plan_path=None, source=None, catalog=None,
-                          entry=None, max_targets_per_site=1, max_seconds=60):
+                          entry=None, max_targets_per_site=1, max_seconds=60,
+                          all_sources=False,include_modules=False):
     if plan_path is not None:
-        if source is not None or catalog is not None: raise ValueError('read a plan or select original source calls')
+        if source is not None or catalog is not None or all_sources or include_modules:
+            raise ValueError('read a plan or select original source calls')
         plan=read_call_binding_plan(plan_path)
+    elif all_sources or include_modules or isinstance(source,(list,tuple)) and len(source)>1:
+        if catalog is None or entry is not None:
+            raise ValueError('program-wide CALL selection requires a catalog and no declaration filter')
+        sources=None if all_sources else ([source] if isinstance(source,(str,Path)) else source)
+        plan=plan_program_call_bindings(catalog,sources,include_modules=all_sources or include_modules,
+            max_targets_per_site=max_targets_per_site)
     else:
+        if isinstance(source,(list,tuple)):source=source[0] if source else None
         if source is None or catalog is None: raise ValueError('original source and F4 catalog required')
         plan=plan_call_bindings(catalog,source,entry=entry,max_targets_per_site=max_targets_per_site)
     if not command or max_seconds <= 0: raise ValueError('original command and positive time budget required')
@@ -57,14 +66,17 @@ def observe_call_bindings(command, out, *, plan_path=None, source=None, catalog=
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     origin=parser.add_mutually_exclusive_group(required=True)
-    origin.add_argument('--plan');origin.add_argument('--source')
+    origin.add_argument('--plan');origin.add_argument('--source',action='append')
+    origin.add_argument('--all-sources',action='store_true',help='select functions and modules from every admitted catalog unit in one bounded run')
+    parser.add_argument('--include-modules',action='store_true',help='include module initialization CALLs in the selected original sources')
     parser.add_argument('--catalog');parser.add_argument('--entry');parser.add_argument('--out',required=True)
     parser.add_argument('--max-targets-per-site',type=int,choices=(1,2),default=1)
     parser.add_argument('--max-seconds',type=float,default=60)
     parser.add_argument('command',nargs=argparse.REMAINDER)
     args=parser.parse_args();command=args.command[1:] if args.command[:1]==['--'] else args.command
     result=observe_call_bindings(command,args.out,plan_path=args.plan,source=args.source,catalog=args.catalog,
-        entry=args.entry,max_targets_per_site=args.max_targets_per_site,max_seconds=args.max_seconds)
+        entry=args.entry,max_targets_per_site=args.max_targets_per_site,max_seconds=args.max_seconds,
+        all_sources=args.all_sources,include_modules=args.include_modules)
     print(json.dumps(result))
     if result['child_returncode'] and result['stop_reason'] is None: raise SystemExit(result['child_returncode'])
     if not result['attempts']: raise SystemExit(2)

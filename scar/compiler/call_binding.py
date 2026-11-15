@@ -7,6 +7,7 @@ semantic interpreter runs here. A CALL attempt never proves entry/completion.
 from collections import defaultdict
 from hashlib import sha256
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -158,6 +159,53 @@ def validate_call_binding_plan(plan):
     return plan
 
 
+def plan_program_call_bindings(catalog, sources=None, *, include_modules=True,
+                               max_targets_per_site=1):
+    """One bounded selector across admitted source units, without running them.
+
+    File boundaries organize immutable source material, not the execution
+    graph. Each selected site retains its original unit/CALL/world identity;
+    the collector disables that site after its own observation budget.
+    """
+    from scar.analysis.program_view import ProgramView
+    from scar.trace.lean_capture import LeanBodyPlan
+    from scar.ir.record_codec import decode
+    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
+    if sources is None:
+        store=view.catalog.fact_store
+        paths={store.model_units.get(unit,{}).get('path',row.get('path'))
+            for unit,row in store.rows.items()}
+        if any(type(path)is not str or not path for path in paths):
+            raise ValueError('every admitted source unit requires its original path')
+    else:
+        paths={str(Path(path).absolute()) for path in sources}
+    if not paths:raise ValueError('at least one admitted source unit required')
+    sites={};bodies={};frontiers=[];receipt=None
+    for path in sorted(paths):
+        for entry in ((None,'<module>') if include_modules else (None,)):
+            plan=plan_call_bindings(view,path,entry=entry,max_targets_per_site=max_targets_per_site)
+            if receipt is None:receipt=plan['catalog']
+            if receipt!=plan['catalog']:raise ValueError('source catalog changed while selecting CALL sites')
+            frontiers.extend(dict(issue,source_path=path) for issue in plan['frontiers'])
+            for row in plan['sites']:
+                previous=sites.setdefault(row['id'],row)
+                if previous!=row:raise ValueError('one original CALL has conflicting source selectors')
+            if plan['selector'] is not None:
+                for raw in plan['selector']['bodies']:
+                    body=decode(LeanBodyPlan,raw);previous=bodies.setdefault(body.code.key,body)
+                    if previous!=body:raise ValueError('one original code has conflicting CALL selectors')
+    namespace=os.path.commonpath([str(Path(path).parent) for path in paths])
+    selector=None if not bodies else LeanCapturePlan(namespace,tuple(bodies.values()),max_codes=64).to_dict()
+    result=dict(schema=SCHEMA,schema_version=1,max_targets_per_site=max_targets_per_site,
+        selector=selector,catalog=receipt,sites=list(sites.values()),frontiers=frontiers,
+        sources=sorted(paths),module_bodies_included=include_modules,
+        source_selection='ORIGINAL_ADMITTED_CATALOG_UNITS',
+        source_compilation_role='RETAINED_F0_CODE_IDENTITY_ONLY',
+        semantic_authority='ORIGINAL_F4_CALL_AND_WORLD_PORTS',
+        target_executed=False,first_stage_complete=False)
+    return validate_call_binding_plan(result)
+
+
 def write_call_binding_plan(plan,path):
     validate_call_binding_plan(plan);Path(path).write_text(json.dumps(plan,indent=2,allow_nan=False)+'\n')
 
@@ -202,4 +250,4 @@ def join_call_bindings(plan,observations):
             'UNOBSERVED_PATHS_AND_FUTURE_TARGETS_OPEN'],loops_unrolled=False,first_stage_complete=False)
 
 
-__all__=['plan_call_bindings','plan_digest','validate_call_binding_plan','write_call_binding_plan','read_call_binding_plan','join_call_bindings']
+__all__=['plan_call_bindings','plan_program_call_bindings','plan_digest','validate_call_binding_plan','write_call_binding_plan','read_call_binding_plan','join_call_bindings']
