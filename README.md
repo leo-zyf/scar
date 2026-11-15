@@ -192,6 +192,16 @@ scar build-query /path/to/fresh-build --action resources
 scar build-query /path/to/fresh-build --action dependencies --file model.py --entry forward --node program_value:ORIGINAL_ID
 ```
 
+已提取的状态区域可按硬件产生 CPU 域，再将可信成本选择交给同一 C++20 后端：
+
+```bash
+scar choose-stateful-cpu --region REGION.json --target HARDWARE --shape 515 515 --memory-budget-bytes 33554432 --out PLAN
+scar choose-stateful-cpu --domain PLAN/domain/domain.json --cost-profiles PROFILES.json --no-op-profile ORIGINAL.json --out CHOICE
+scar lower-stateful-choices --choices CHOICE/choice/choice.json --out NATIVE
+```
+
+省略 `--target` 时自动发现平台硬件。成本不足保留原执行，完整声明模型只降低选中的一个实现；编译不授权部署，也不证明物理全局最优。已有区域正文仅按 artifact 引用共享，不为每个 CPU mask 复制。
+
 无 trace 时可省略 `--trace`。`--catalog` 选择 F4 局部声明或 context catalog，`--cache-root` 指定接口材料目录；
 `--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
 新源码构建的 `--body-scope observed` 根据完整运行 CodeID 选择正文，并自动准入 trace 涉及的外部源码文件；保留其余源码声明，不扫描整个依赖安装目录、不证明未观察路径为死代码。

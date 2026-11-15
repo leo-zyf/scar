@@ -266,12 +266,14 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         hardware = TargetHardwareGraph(target_path)
         hardware.resources(); hardware.connections(); hardware.paths()
         target_ref = _receipt(target_path / 'result.json')
-    from scar.analysis.build_f4 import discover,build_f4
-    f4=discover(entry,trace_path,catalog=catalog,cache_roots=cache_roots) if catalog or model is None else None
+    from scar.analysis.build_f4 import discover,build_f4,CatalogHandoff
+    catalog_handoff=CatalogHandoff()
+    f4=discover(entry,trace_path,catalog=catalog,cache_roots=cache_roots,
+        catalog_handoff=catalog_handoff) if catalog or model is None else None
     if f4 is not None:
         return build_f4(entry,trace_path,out,f4,source_roots=source_roots,
             max_seconds=max_seconds,max_input_bytes=max_input_bytes,target=target_path,
-            bounded_call_bindings=bounded_call_bindings)
+            bounded_call_bindings=bounded_call_bindings,catalog_handoff=catalog_handoff)
     if bounded_call_bindings:
         raise ValueError('bounded CALL metadata requires an admitted F4 catalog; legacy backend is unsupported')
     selected = _model_for(entry, model) if model or not source_roots else None

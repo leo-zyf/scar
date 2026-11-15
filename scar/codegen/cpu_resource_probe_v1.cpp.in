@@ -1,0 +1,243 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "stateful_abi_v1.h"
+#include <algorithm>
+#include <bit>
+#include <cerrno>
+#include <cfenv>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <new>
+#include <sched.h>
+#include <unistd.h>
+#include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#pragma STDC FENV_ACCESS ON
+namespace {
+constexpr size_t minimum_cpu_slots = @CPU_SLOTS@;
+constexpr int32_t affinity_guard_status = 4;
+constexpr int planned_cpu_ids[] = {@CPU_IDS@};
+constexpr int floating_flags = FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW | FE_UNDERFLOW;
+@AFFINITY_CLASS@
+@FLOATING_CLASS@
+using Clock = std::chrono::steady_clock;
+double now() { return std::chrono::duration<double, std::nano>(Clock::now().time_since_epoch()).count(); }
+void compiler_fence(const void *pointer) { asm volatile("" : : "g"(pointer) : "memory"); }
+int tid() {
+#ifdef _OPENMP
+    return omp_get_thread_num();
+#else
+    return 0;
+#endif
+}
+int team_size() {
+#ifdef _OPENMP
+    return omp_get_num_threads();
+#else
+    return 1;
+#endif
+}
+bool probe_finite(double value) { return (std::bit_cast<uint64_t>(value) & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000); }
+struct Config {
+    int32_t component, operation, workers, reserved;
+    int64_t rows, cols, strides[3], offsets[3];
+    uint64_t capacity_count;
+    const uint64_t *capacities;
+};
+// Component codes are versioned by the source/manifest, not target operators.
+enum { COPY_STAGE=1, COPY_SERIAL=2, FINITE_SCAN=3, OP_STAGE=4,
+       INPLACE_STAGE=5, POWER_STAGE=6, ALLOCATE=7, RELEASE=8, TEAM=9, SUCCESS=10, BARRIER=11 };
+template<int Op> double arithmetic(double a, double b) {
+    if constexpr(Op==0) return b;
+    if constexpr(Op==1) return a+b;
+    if constexpr(Op==2) return a-b;
+    if constexpr(Op==3) return a*b;
+    if constexpr(Op==4) return a/b;
+    if constexpr(Op==5) return -a;
+    return 0;
+}
+template<int Op> void operation_stage(const Config &c, const double *a, const double *b, double *out) {
+    #pragma omp for schedule(static)
+    for (int64_t row=0; row<c.rows; ++row)
+        for (int64_t col=0; col<c.cols; ++col)
+            out[c.offsets[2]+row*c.strides[2]+col] = arithmetic<Op>(
+                a[c.offsets[0]+row*c.strides[0]+col], b[c.offsets[1]+row*c.strides[1]+col]);
+}
+template<int Op> void inplace_stage(const Config &c, const double *a, double *out) {
+    #pragma omp for schedule(static)
+    for (int64_t row=0; row<c.rows; ++row)
+        for (int64_t col=0; col<c.cols; ++col) {
+            double &dest=out[c.offsets[2]+row*c.strides[2]+col];
+            dest=arithmetic<Op>(dest,a[c.offsets[0]+row*c.strides[0]+col]);
+        }
+}
+void stage(const Config &c, const double *a, const double *b, double *out, const scar_provider_v1 &provider, uint32_t &guard) {
+    if (c.component==COPY_STAGE) {
+        #pragma omp for schedule(static)
+        for (int64_t row=0; row<c.rows; ++row)
+            for (int64_t col=0; col<c.cols; ++col)
+                out[c.offsets[2]+row*c.strides[2]+col]=a[c.offsets[0]+row*c.strides[0]+col];
+    } else if (c.component==POWER_STAGE) {
+        #pragma omp single
+        {
+            for (int64_t row=0; row<c.rows; ++row) {
+                double exponent=2.0;
+                char *data[]={reinterpret_cast<char *>(const_cast<double *>(a)+c.offsets[0]+row*c.strides[0]),
+                    reinterpret_cast<char *>(&exponent),reinterpret_cast<char *>(out+row*c.cols)};
+                const intptr_t dimensions[]={c.cols}, strides[]={8,0,8};
+                guard |= static_cast<uint32_t>(provider.loop(provider.context,data,dimensions,strides,provider.auxdata)!=0);
+            }
+        }
+    } else if (c.component==BARRIER) {
+        #pragma omp barrier
+    } else if (c.component==OP_STAGE) {
+        switch(c.operation) {
+            case 1: operation_stage<1>(c,a,b,out); break;
+            case 2: operation_stage<2>(c,a,b,out); break;
+            case 3: operation_stage<3>(c,a,b,out); break;
+            case 4: operation_stage<4>(c,a,b,out); break;
+            case 5: operation_stage<5>(c,a,b,out); break;
+        }
+    } else {
+        switch(c.operation) {
+            case 0: inplace_stage<0>(c,a,out); break;
+            case 1: inplace_stage<1>(c,a,out); break;
+            case 2: inplace_stage<2>(c,a,out); break;
+            case 3: inplace_stage<3>(c,a,out); break;
+            case 4: inplace_stage<4>(c,a,out); break;
+        }
+    }
+}
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_resource_probe_v1(const Config *config, const scar_provider_v1 *provider,
+    uint64_t repetitions, uint64_t warmup, double *samples, double *paired, int32_t *observed_cpu, uint64_t *checksum) {
+    if (!config || !samples || !paired || !observed_cpu || !checksum || repetitions<1 || repetitions>10000 || warmup>10000) return 1;
+    const Config &c=*config;
+    if (c.workers<1 || c.workers>int(sizeof(planned_cpu_ids)/sizeof(int)) || c.rows<0 || c.cols<0 ||
+        c.component<1 || c.component>11 || c.operation<0 || c.operation>5 || c.capacity_count>4096) return 1;
+    ThreadAffinity caller;
+    for (int cpu:planned_cpu_ids) if (!caller.contains(cpu)) return 4;
+    FloatingScope caller_environment;
+    if (!caller_environment.begin()) return 3;
+    fenv_t execution_environment;
+    if (std::fegetenv(&execution_environment)!=0) return 3;
+    observed_cpu[0]=sched_getcpu();
+    uint64_t sizes[3]={};
+    for (int i=0;i<3;++i) {
+        const __int128 count=(c.rows && c.cols) ? __int128(c.offsets[i])+__int128(c.rows-1)*c.strides[i]+c.cols : 1;
+        if (c.offsets[i]<0 || c.strides[i]<c.cols || count<1 || count>PTRDIFF_MAX/8) return 1;
+        sizes[i]=static_cast<uint64_t>(count);
+    }
+    if (__int128(sizes[0]+sizes[1]+sizes[2])*8>@MAX_PAYLOAD@ULL) return 7;
+    std::unique_ptr<double[]> a(new(std::nothrow) double[sizes[0]]), b(new(std::nothrow) double[sizes[1]]), out(new(std::nothrow) double[sizes[2]]);
+    if (!a || !b || !out) return 5;
+    std::fill_n(a.get(),sizes[0],1.25);std::fill_n(b.get(),sizes[1],0.75);std::fill_n(out.get(),sizes[2],1.5);
+    uint32_t guard=0; uint64_t sink=0;
+    const uint64_t iterations=repetitions+warmup;
+    if (c.component==ALLOCATE || c.component==RELEASE) {
+        std::vector<std::unique_ptr<double[]>> pool(c.capacity_count);
+        __int128 payload=0;
+        for (uint64_t i=0;i<c.capacity_count;++i) {
+            if (!c.capacities || c.capacities[i]%8) return 1;
+            payload+=c.capacities[i];
+        }
+        if (payload>@MAX_PAYLOAD@ULL) return 7;
+        for (uint64_t rep=0;rep<iterations;++rep) {
+            double start=0;
+            if(c.component==ALLOCATE) start=now();
+            for(uint64_t i=0;i<c.capacity_count;++i) if(c.capacities[i]) {
+                pool[i].reset(new(std::nothrow) double[c.capacities[i]/8]);if(!pool[i])return 5;
+                compiler_fence(pool[i].get());
+            }
+            double allocation=now()-start;
+            start=now();for(auto &slot:pool)slot.reset();const double release=now()-start;
+            if(rep>=warmup)samples[rep-warmup]=c.component==ALLOCATE?allocation:release;
+        }
+    } else if(c.component==FINITE_SCAN || c.component==COPY_SERIAL) {
+        for(uint64_t rep=0;rep<iterations;++rep) {
+            compiler_fence(a.get());compiler_fence(out.get());
+            const double start=now();
+            if(c.component==FINITE_SCAN) {
+                for(uint64_t i=0;i<sizes[0];++i) guard|=static_cast<uint32_t>(!probe_finite(a[i]));
+            } else for(int64_t row=0;row<c.rows;++row) if(c.cols)
+                std::memcpy(out.get()+c.offsets[2]+row*c.strides[2],a.get()+c.offsets[0]+row*c.strides[0],c.cols*8);
+            compiler_fence(out.get());compiler_fence(&guard);
+            const double elapsed=now()-start;if(rep>=warmup)samples[rep-warmup]=elapsed;
+        }
+    } else if(c.component==TEAM || c.component==SUCCESS) {
+        for(uint64_t rep=0;rep<iterations;++rep) {
+            const double start=now();double middle=start;
+            ThreadAffinity entry_affinity;FloatingScope entry_environment;
+            if(!entry_environment.begin())return 3;
+            fenv_t shared_environment;if(std::fegetenv(&shared_environment)!=0)return 3;
+            if(c.workers==1) {
+                const bool ready=entry_affinity.bind(planned_cpu_ids[0]);
+                middle=now();
+                guard|=static_cast<uint32_t>(!ready || !entry_affinity.bound());
+            } else {
+                #pragma omp parallel num_threads(c.workers) reduction(|:guard)
+                {
+                    ThreadAffinity affinity;FloatingScope environment;
+                    bool ok=team_size()==c.workers && affinity.bind(planned_cpu_ids[tid()]);
+                    ok=environment.begin(&shared_environment)&&ok;
+                    #pragma omp barrier
+                    #pragma omp master
+                    middle=now();
+                    #pragma omp barrier
+                    guard|=static_cast<uint32_t>(!ok || std::fetestexcept(floating_flags));
+                    guard|=static_cast<uint32_t>(!environment.restore());
+                    const bool kept=affinity.bound(),restored=affinity.restore();guard|=static_cast<uint32_t>(!kept||!restored);
+                }
+            }
+            guard|=static_cast<uint32_t>(std::fetestexcept(floating_flags)!=0);
+            guard|=static_cast<uint32_t>(!entry_environment.restore());
+            guard|=static_cast<uint32_t>(!entry_affinity.restore_original());
+            const double end=now();
+            if(rep>=warmup){samples[rep-warmup]=c.component==TEAM?middle-start:end-middle;paired[rep-warmup]=c.component==TEAM?end-middle:middle-start;}
+        }
+    } else {
+        if(c.component==POWER_STAGE && (!provider || !provider->loop || !provider->context))return 6;
+        const scar_provider_v1 empty={};const scar_provider_v1 &original=provider?*provider:empty;
+        std::vector<double> elapsed(c.workers);uint32_t ready_guard=0;
+        #pragma omp parallel num_threads(c.workers) reduction(|:guard) reduction(^:sink)
+        {
+            ThreadAffinity affinity;FloatingScope environment;
+            bool ok=team_size()==c.workers && affinity.bind(planned_cpu_ids[tid()]);
+            ok=environment.begin(&execution_environment)&&ok;
+            #pragma omp atomic update
+            ready_guard|=static_cast<uint32_t>(!ok);
+            #pragma omp barrier
+            if(!ready_guard)for(uint64_t rep=0;rep<iterations;++rep) {
+                // Reset inputs to an independent finite canonical workload outside timing.
+                #pragma omp for schedule(static)
+                for(uint64_t i=0;i<sizes[2];++i)out[i]=1.5;
+                compiler_fence(a.get());compiler_fence(b.get());compiler_fence(out.get());
+                const double start=now();stage(c,a.get(),b.get(),out.get(),original,guard);
+                compiler_fence(out.get());compiler_fence(&guard);
+                elapsed[tid()]=now()-start;
+                #pragma omp barrier
+                #pragma omp master
+                if(rep>=warmup)samples[rep-warmup]=*std::max_element(elapsed.begin(),elapsed.end());
+                #pragma omp barrier
+            }
+            // Observe all output bits outside timing so generated work remains live.
+            #pragma omp for schedule(static)
+            for(uint64_t i=0;i<sizes[2];++i)sink^=std::bit_cast<uint64_t>(out[i]);
+            guard|=static_cast<uint32_t>(!ok||std::fetestexcept(floating_flags));
+            guard|=static_cast<uint32_t>(!environment.restore());
+            const bool kept=affinity.bound(),restored=affinity.restore();guard|=static_cast<uint32_t>(!kept||!restored);
+        }
+        guard|=ready_guard;
+    }
+    for(uint64_t i=0;i<sizes[2];++i)sink^=std::bit_cast<uint64_t>(out[i]);
+    guard|=static_cast<uint32_t>(std::fetestexcept(floating_flags));
+    const bool environment_restored=caller_environment.restore(),affinity_restored=caller.restore_original();
+    observed_cpu[1]=sched_getcpu();*checksum=sink;
+    return guard||!environment_restored||!affinity_restored?3:0;
+}

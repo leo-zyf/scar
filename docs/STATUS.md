@@ -8,6 +8,10 @@ SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方�
 
 真实 Gray–Scott 默认 `build`（不传 `--target`）已完成 workflow，202 个硬件资源全部进入程序资源图，包含文件系统端点；无需运行应用。完整入口仍耗时 187.07s / 峰值 697,912KiB，主要为 discovery 和 assembly 两次加载完整软件 catalog，不能拿约一秒硬件采集代表此总时间。此次只装载 14 个源单元中的 1 个，仍有 62 个明确 gap、未接新 trace，故不声称第一阶段全程序完成。发现的 context-only protocol 缓存误接 observed catalog 已按接口类型准入修复，没有吞掉 TypeError 或放宽旧材料 pin。
 
+随后真实修复 catalog 重复加载：会话内 handoff 在原 reader 准入后重验输入、receipt 和规则，发布会话不再读第二次 catalog；独立读回仍重新认证，不建全局 cache。相同默认入口实测 106.48s / 698,672KiB，session catalog 0.055s（discovery 仍读一次）。这是一次建图时间观察，不是业务性能 A/B。14-unit 库存已按当前规则重建并独立准入：70,817 模板、248,292 操作、85,635 区域、3,205,873 关系，零失败；8 workers 共 447.95s，分片 518,677,778B，worker 最大 RSS 1,982,836KiB。旧 pin 未放宽。
+
+同一统一入口已接入上述完整局部图库存、全部 202 个硬件资源及 477 条连接、一次真实四步运行的 37/72 个 CALL 目标观察。连接构建 110.31s，catalog_local_graph_materialized=true；采集子进程 1.629s，无 global profile、无数组值保存。未观察到的位点保留；CALL 目标观察不冒充实际 Invocation/完成/效果证据。另对原科学代码单元求解 63/63 个局部 binding fixed points，全部收敛、20 条保控制环，但 256/256 个读都有 OPAQUE_EFFECT 弱定义候选。原因已定位到通用 world 操作的过宽弱写规则；局部读写与未知 callback/析构/反射需分开证明，尚未删掉这些候选。证据在 `artifacts/current/experiments/compiler-integration-current/`。
+
 ## 已验证的主链
 
 原 F4 自动提取一个状态方法：54 个 Expr、24 次求值、2 次写入，保原代码/端口/world 来源。输入类型是运行时守卫的候选约束。规则不按 workload、函数或字段名称选择；原程序未修改。
@@ -19,6 +23,10 @@ SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方�
 物理预算：workspace 8,454,304B + 外部数组 4,243,600B = 12,697,904B，声明预算 32MiB。CPU 0–3 / 4 线程显式指定、未排名；内存页 UNBOUND。通用 makespan solver 已接 v2，按 4 个 workspace slot 计费，不重复计算 12 个物化版本。真实逐任务成本缺失，仍返回 UNRESOLVED，不补零；未证明联合硬件或全局时间最优。
 
 新增硬件导出的 stateful CPU 域：本机两个 executor 各覆盖 1–28 的每个整数线程数，核优先/SMT 优先等代表 mask 去重后共 106 个；保留全部 201 个硬件资源及 ISA/cache/访问限制来源。后端 capability 查询仅为 SUPPORTED_UNDER_GUARDS，仍须完整降低及运行时准入。缺 106 个完整调用成本与同边界 NO_OP 成本，故不选实现。该域没有枚举全部 CPU 子集、跨 socket team 或新后端，不能声称全局最优；既有 4 线程实测也未证明最佳。
+
+`choose-stateful-cpu` 与 `lower-stateful-choices` 已接公开 CLI。真实 Gray 域在缺成本时输出原执行且不编译；完整声明模型的单个小数组区域已走公共 v2 recipe、真实 g++ 和逐位结果验证。此单元模型验证机械交付，不是 Gray 的性能选择或新加速证据。真实资源成本校准仍在补齐。
+
+新增独立 C++20 resource probe 与两层成本上下文：资源事实按硬件/mask/compiler/provider/layout 匹配，完整 cost profile 才绑定源区域及调用边界。CPU 0–3、warm2/reps9 的 10 类资源签名已实测；14 个需求项已知加权约 1.30ms，但 guard/descriptor/FFI、tagged scalar 与两段 fused row stage 仍未知，不将部分总和称完整 native 时间。原方法同 call-dispatch→return 边界另测 warm2/reps9，中位数 6.622406ms（min6.608414/max6.639910/stdev0.010387ms），无 native 变体执行；已成为可重放 NO_OP 前向成本。完整 native/其它 masks 成本仍缺，选择继续 UNRESOLVED。没有新业务加速结论。
 
 轻量运行包 40,550B，复用原库字节；无需 catalog、完整图、planner 或 g++。原入口自然 import 后装配类方法；真实 20 步 u/v、time、dt 逐位相同，native 20 / fallback 0，未导入 compiler/codegen/analysis/IR/optimization。仍依赖原应用源码、Python/NumPy 和系统共享库，不是独立 C++ 主程序。
 

@@ -25,8 +25,10 @@ from .schedule import ResourceSchedule,Task,TaskKind
 from .stateful_recipe import stateful_backend_capability
 from .stateful_schedule import plan_stateful_region,verify_stateful_plan
 
-_SCOPE=dict(boundary='WARM_SESSION',call_scope='ONE_GUARDED_STATEFUL_METHOD_CALL',reuse_count=1,
-    includes='GUARDS_DISPATCH_ALL_ARRAY_ALLOCATION_STAGES_RESTORATION_COMMIT_RELEASE',
+_SCOPE=dict(boundary='WARM_SESSION',call_scope='ONE_ORIGINAL_METHOD_CALL_SITE',reuse_count=1,
+    includes='ALL_IMPLEMENTATION_WORK_FROM_CALL_DISPATCH_THROUGH_RETURN',
+    argument_expressions='ALREADY_EVALUATED_BEFORE_TIMING',
+    implementation_components='ORIGINAL_AND_NATIVE_HAVE_DIFFERENT_INTERNAL_WORK',
     excludes='PROCESS_START_IMPORT_COMPILE_INSTALL_ONE_TIME_LOAD')
 
 
@@ -152,14 +154,17 @@ def build_stateful_cpu_domain(region,target,*,input_shapes,memory_budget_bytes,a
     if type(memory_budget_bytes) is not int or memory_budget_bytes<8: raise ValueError('explicit payload budget of at least 8 bytes required')
     out=Path(out).absolute()
     if out.exists(): raise ValueError('fresh stateful CPU domain directory required')
-    region=read_stateful(region) if isinstance(region,(str,Path)) else region
+    region_path=Path(region).absolute() if isinstance(region,(str,Path)) else None
+    region=read_stateful(region_path) if region_path is not None else region
     allowed,_=_affinity(affinity)
     proposals=propose_cpu_allocations(target,affinity=allowed,memory_budget_bytes=memory_budget_bytes,max_threads=max_threads)
     if not proposals: raise ValueError('no supported CPU/host allocation from original target and live constraints')
     seed=proposals[0]
     plan=plan_stateful_region(region,input_shapes=input_shapes,cpu_threads=len(seed.cpu_ids),
         memory_budget_bytes=memory_budget_bytes,resource_binding=seed)
-    region_ref=_write(out/'region.json',document(region));plan_ref=_write(out/'base-stage-plan.json',plan)
+    region_ref=(artifact_reference(region_path,'scar.stateful-array-region') if region_path is not None
+        else _write(out/'region.json',document(region)))
+    plan_ref=_write(out/'base-stage-plan.json',plan)
     request=dict(input_shapes=plan['input_shapes'],memory_budget_bytes=memory_budget_bytes,
         affinity=list(allowed),max_threads=max_threads)
     domain=_construct(region_ref,target,request,plan_ref)

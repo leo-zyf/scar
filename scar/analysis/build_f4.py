@@ -6,7 +6,9 @@ missing component is a reported gap, never an empty dependency proof.
 from collections import Counter
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import sys
 import time
 
 from scar.ir.program.dependencies import DependencyPoint as Point,DependencyNeighborhood as Neighborhood
@@ -66,16 +68,76 @@ def _component_catalog_gap(name,catalog,*,path=None):
     return gap
 
 
-def discover(entry,trace,*,catalog=None,cache_roots=()):
+def _validate_catalog_parents(catalog):
+    from scar.analysis.source_declared_catalog import DeclaredSourceCatalog
+    from scar.analysis.source_context_query import ContextTargetGraph
+    if isinstance(catalog,DeclaredSourceCatalog):catalog.validate_parents()
+    elif isinstance(catalog,ContextTargetGraph):
+        catalog.fact_store.validate_parents();catalog.interface_store.validate_parents()
+    else:raise TypeError('catalog handoff requires an original typed source catalog')
+
+
+class CatalogHandoff:
+    """One same-process discovery admission, never a serialized verification claim.
+
+    Only discover fills this empty handle. Consumers recheck original parent
+    guards and reader bytes; independent sessions still admit their own catalog.
+    """
+    __slots__=('_state',)
+
+    def __init__(self):self._state=None
+
+    def _seal(self,catalog,spec,entry,reader_calls):
+        from scar.analysis.build import _receipt,_rules
+        if self._state is not None:raise ValueError('catalog handoff is already filled')
+        _validate_catalog_parents(catalog)
+        entry_receipt=_receipt(entry)
+        if entry_receipt['sha256']!=catalog.fact_store.model_units[spec['entry_unit']]['raw_sha256']:
+            raise ValueError('catalog handoff entry source differs from its admitted model')
+        # The original readers checked their own producer pins. Retain their
+        # implementation bytes as session guards without decoding tables again.
+        readers={Path(module.__file__).resolve() for name,module in tuple(sys.modules.items())
+            if name.startswith('scar.') and getattr(module,'__file__',None)}
+        self._state=dict(catalog=catalog,receipt=dict(spec['catalog']),entry_unit=spec['entry_unit'],
+            entry=entry_receipt,report=json.loads(json.dumps(catalog.report)),pid=os.getpid(),used=False,
+            rules=_rules(),readers=tuple(_receipt(path) for path in sorted(readers)),reader_calls=reader_calls)
+        self.check()
+
+    def check(self):
+        from scar.analysis.build import _check,_rules
+        state=self._state
+        if state is None or state['pid']!=os.getpid():raise ValueError('catalog handoff is not admitted in this process')
+        catalog=state['catalog'];receipt=state['receipt']
+        if (catalog.path/'result.json'!=Path(receipt['path']) or catalog.report!=state['report']
+                or state['rules']!=_rules()):
+            raise ValueError('catalog handoff identity, report or reader rules changed')
+        for source in (receipt,state['entry'],*state['readers']):_check(source)
+        if json.loads(Path(receipt['path']).read_bytes())!=state['report']:
+            raise ValueError('catalog handoff report differs from its original receipt')
+        _validate_catalog_parents(catalog)
+
+    def _consume(self,spec,entry):
+        state=self._state
+        if state is None or state['used']:raise ValueError('catalog handoff is empty or already consumed')
+        state['used']=True
+        if (spec['catalog']!=state['receipt'] or spec['entry_unit']!=state['entry_unit']
+                or str(entry)!=state['entry']['path']):
+            raise ValueError('catalog handoff does not match this build selection')
+        self.check()
+        return state['catalog']
+
+
+def discover(entry,trace,*,catalog=None,cache_roots=(),catalog_handoff=None):
     """Choose compatible cached materials by schema and exact catalog, not names."""
     from scar.analysis.source_declared_catalog import read_source_catalog
     from scar.analysis.build import _receipt
     roots=tuple(cache_roots) or (Path(__file__).resolve().parents[2]/'artifacts/current/queries',)
-    rows=_reports(roots);gaps=[];selected=None
+    rows=_reports(roots);gaps=[];selected=None;reader_calls=0
     schemas=('scar.context-source-targets','scar.declared-source-catalog','scar.observed-source-catalog')
     candidates=[Path(catalog)] if catalog else [p for p,r in rows if r.get('schema') in schemas]
     for path in candidates:
         try:
+            reader_calls+=1
             c=read_source_catalog(path)
             units=[u for u,r in c.fact_store.rows.items() if r['path']==str(entry)
                 and u not in c.fact_store.original_source_units]
@@ -89,6 +151,11 @@ def discover(entry,trace,*,catalog=None,cache_roots=()):
         if catalog:raise ValueError('explicit F4 catalog does not contain the current entry')
         return None
     c,unit=selected
+    if catalog is not None:
+        # Published siblings belong to this explicit catalog's experiment;
+        # their normal readers still establish exact parent/receipt identity.
+        local=_reports((c.path.parent,));seen={p.resolve() for p,r in local}
+        rows=local+[(p,r) for p,r in rows if p.resolve() not in seen]
     components={};functions=[];component_pins={}
     priority={'scar.source-observed-function-interfaces':0,'scar.source-returned-function-interfaces':1,
         'scar.source-function-interface-collection':2,'scar.source-function-interfaces':3,
@@ -151,8 +218,12 @@ def discover(entry,trace,*,catalog=None,cache_roots=()):
                 continue
         if key and key not in components:
             components[key]=_receipt(path/'result.json')
-    return dict(catalog=_receipt(c.path/'result.json'),entry_unit=unit,functions=functions,
+    spec=dict(catalog=_receipt(c.path/'result.json'),entry_unit=unit,functions=functions,
         components=components,selection_gaps=gaps)
+    if catalog_handoff is not None:
+        if type(catalog_handoff)is not CatalogHandoff:raise TypeError('expected an empty CatalogHandoff')
+        catalog_handoff._seal(c,spec,entry,reader_calls)
+    return spec
 
 
 class _LazyState:
@@ -168,7 +239,7 @@ class _LazyState:
 
 
 class F4BuildSession:
-    def __init__(self,path,*,_publishing=False,seconds=3600,input_bytes=16*1024**3):
+    def __init__(self,path,*,_publishing=False,seconds=3600,input_bytes=16*1024**3,_catalog_handoff=None):
         from scar.analysis.build import _check,_rules
         from scar.analysis.source_declared_catalog import read_source_catalog
         from scar.analysis.program_view import ProgramView
@@ -179,7 +250,18 @@ class F4BuildSession:
         if not _publishing and not self.report['workflow_complete']:raise ValueError('F4 build not published')
         for receipt in self.report['tables'].values():self._admit(receipt)
         spec=self.report['f4'];self._admit(spec['catalog'])
-        self.catalog=read_source_catalog(Path(spec['catalog']['path']).parent)
+        self._catalog_handoff=_catalog_handoff
+        if _catalog_handoff is None:
+            self.catalog=read_source_catalog(Path(spec['catalog']['path']).parent)
+            self.catalog_admission=dict(mode='INDEPENDENT_READER',session_reader_calls=1,
+                global_cache_used=False)
+        else:
+            if not _publishing or type(_catalog_handoff)is not CatalogHandoff:
+                raise ValueError('catalog handoff is only available to its publishing session')
+            self.catalog=_catalog_handoff._consume(spec,Path(self.report['entry']))
+            self.catalog_admission=dict(mode='SESSION_LOCAL_DISCOVERY_HANDOFF',
+                discovery_reader_calls=_catalog_handoff._state['reader_calls'],session_reader_calls=0,
+                consumed_once=True,original_parent_and_reader_guards_rechecked=True,global_cache_used=False)
         self._checkpoint('catalog')
         self.view=ProgramView(self.catalog);self.providers={};self.gaps=list(spec['selection_gaps'])
         self._claimed=set();self.closed=False;self.observed=None;self.source_coverage=None;self.coverage_path=None
@@ -473,6 +555,7 @@ class F4BuildSession:
         from scar.analysis.build import _check,_rules
         import gzip
         started=time.monotonic()
+        if self._catalog_handoff is not None:self._catalog_handoff.check()
         if (json.loads((self.path/'manifest.json').read_bytes())!=report
                 or report['rules']!=_rules()):
             raise ValueError('publication manifest or implementation changed')
@@ -506,6 +589,7 @@ class F4BuildSession:
         for source in self.view.units.values():source.check()
         for receipt in (*self._admitted.values(),*report['tables'].values()):_check(receipt)
         if report['rules']!=_rules():raise ValueError('publication implementation changed during readback')
+        if self._catalog_handoff is not None:self._catalog_handoff.check()
         self._checkpoint()
         return dict(mode='STORED_TABLES_WITH_ADMITTED_INDEX',
             output_tables=len(report['tables']),admitted_publications=len(self._admitted),
@@ -519,7 +603,7 @@ class F4BuildSession:
 
 
 def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3600,max_input_bytes=16*1024**3,target=None,
-        bounded_call_bindings=()):
+        bounded_call_bindings=(),catalog_handoff=None):
     from scar.analysis.build import _rules,_receipt,_write,_configuration_inputs,_build_target
     from scar.analysis.program_dependency_export import export_dependency_walk
     started=time.monotonic();bounded_inputs=_bounded_call_binding_inputs(bounded_call_bindings);out.mkdir(parents=True)
@@ -539,7 +623,8 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
         entry_probe_limits=dict(max_points=max_points,max_edges=512,max_depth=8))
     _write(out/'manifest.json',report)
     gaps=[];configuration=_configuration_inputs((entry.parent,*(Path(p).resolve() for p in source_roots)),out,gaps)
-    session=F4BuildSession(out,_publishing=True,seconds=max_seconds,input_bytes=max_input_bytes)
+    session=F4BuildSession(out,_publishing=True,seconds=max_seconds,input_bytes=max_input_bytes,
+        _catalog_handoff=catalog_handoff)
     try:
         walk=session.view.dependencies.walk((session.entry,),direction='outgoing',include_structure=True,
             max_points=max_points,max_edges=512,max_depth=8)
@@ -558,6 +643,7 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
         import gzip
         (out/'resources.json.gz').write_bytes(gzip.compress(json.dumps(payload,separators=(',',':')).encode(),mtime=0))
         report['layers']=session.layer_summary()
+        report['catalog_admission']=session.catalog_admission
         report['assembly_elapsed_by_layer']=session.timings
         report['observed_admission']='ADMITTED' if any(observed[k] for k in ('publications','boundaries','body_activations','resumptions','resource_scopes','binding_states')) else 'NOT_JOINED'
         report['bounded_call_bindings_admission']='ADMITTED_ATTEMPT_METADATA' if observed['bounded_call_bindings'] else 'NOT_SUPPLIED'
