@@ -2,6 +2,12 @@
 
 SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方法建模、统一执行图、C++20 降低及原入口自动装配；Sunfish/Cirq 暂只有基线，没有 LeWM/GPU 加速结论。
 
+当前优先推进循环外提，已有第一条原源码自动闭环：原 F4 识别 range/carry/实参映射，沿纯数组 DAG 求不变子图，用既有 C++ 算子 ABI v1 将其放入前置区域，native host 执行剩余循环。真实微程序的乘法从400次变为1次，加法仍400次；完整输出逐位一致，输入不变，零/负次数保原别名，修改 leaf/range 会回退。只支持单 carry、固定 range、只读外部数组与直接纯 leaf；一般调用、条件循环和作用域外提尚未覆盖，未自动部署。
+
+同一微程序256×256/float64/400步，warm1/配对3次：Python median48.453ms，未外提 C++32.902ms，外提 C++34.185ms。隔离外提比率0.9625×，**not profitable**，没有因其减少计算就启用；Python→外提的1.4174×不能归因于LICM。完整样本、方差及守卫验证见 `artifacts/current/experiments/plan-closure-v1/licm-experiment.json`。
+
+Gray 原图新增两份共享循环接口、9个循环体CALL及3条原观察目标接线；入口/回边端口和局部读写分开，t/s明确为BODY_WRITTEN，self引用未被直接重绑定不代表字段内容不变。CALL/RETURN按原CallSite配对，避免共享子图把循环后的调用误连进循环。区域依赖投影91记录/145边/58KB，原正文只按引用共享。`compile-build`现将依赖、全部106配置成本和降低串为一次流程；去掉每配置重复重建同一域后，一次流程观察263.04s→21.85s，源/硬件在发布前重新核验。融合成本仍未准入，真实Gray保留原执行。
+
 本轮补齐平台硬件主链：`build` 默认自动采集，独立于 workload、affinity、CUDA 可见性。当前真实 `TargetHardwareGraph/v2` 有 201 个资源、474 条连接，涵盖 56 个逻辑 CPU、28 核、2 package/NUMA、86 个 cache、ISA、DRAM、PCIe、3 NVMe + 1 SATA SSD、2 物理 NIC（另 3 虚拟接口）及 ASPEED 显示设备。201 个已发现 PCI function 全部有图表示；控制/性能计数接口聚合为边界。旧快照中的 RTX4090 不在当前 PCI 清单，其原 BDF 当前是 NVMe；历史证据保留，不用于冒充当前设备。设备存在、进程访问限制、后端可执行能力分别记录；不凭显示设备发明 CUDA 或独立显存。
 
 真实采集 0.939s，离线建硬件图 0.112s，含紧凑库存的存图 712,594B；这些时间只属于硬件层，不是全程序建图时间。OS 未暴露的硬件、可用预算、有效带宽/延迟及真正 compute access 仍不推断。原 v1 快照按库存严格重放兼容，不重签旧结果。证据：`artifacts/current/experiments/platform-hardware-current/`。

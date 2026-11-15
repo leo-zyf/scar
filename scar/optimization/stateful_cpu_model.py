@@ -173,6 +173,11 @@ def _save(path,value):
 def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     """Compose exact matching resource signatures; leave unsupported fusion unknown."""
     domain=_domain(domain)
+    return _predict_stateful_cpu_model(domain,candidate_id,calibrations,out=out)
+
+
+def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
+    """Internal composition within an already admitted domain session."""
     demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[];rejected={}
     for value in calibrations:
         document,source=_profile(value)
@@ -247,12 +252,16 @@ def build_stateful_cpu_profiles(domain,calibrations,*,out):
     if out.exists():raise ValueError('fresh CPU profile-set output required')
     mapping={};reports=[];baseline=None
     for identifier in [r['id'] for r in domain['candidates']]+['NO_OP']:
-        report=predict_stateful_cpu_model(domain,identifier,calibrations,out=out/identifier)
+        report=_predict_stateful_cpu_model(domain,identifier,calibrations,out=out/identifier)
         reports.append(dict(id=identifier,model=str(out/identifier/'model.json'),complete=report['complete'],
             known_components=sum(r['status']=='SOURCED_EFFECTIVE_COMPONENT' for r in report['components']),missing_components=len(report['unresolved'])))
         if report['profile'] is not None:
             if identifier=='NO_OP':baseline=report['profile']
             else:mapping[identifier]=report['profile']
+    # Recheck original hardware/source/ABI receipts before publishing the set.
+    # This avoids rebuilding the identical 106-mask domain for each estimate,
+    # without introducing a global cache or accepting caller-supplied flags.
+    _domain(domain)
     result=dict(schema='scar.stateful-cpu-profile-set',schema_version=1,cost_profiles=mapping,
         no_op_profile=baseline,reports=reports,complete_domain=len(mapping)==len(domain['candidates']) and baseline is not None,
         target_workload_executed=False,physical_optimality_proven=False)

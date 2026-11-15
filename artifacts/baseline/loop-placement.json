@@ -1,0 +1,202 @@
+{
+  "checks": {
+    "focused_tests_passed": 7,
+    "full_source_frontend_stages": 25,
+    "original_f4_positive_loop_count": 1,
+    "original_f4_rejected_loops": 2
+  },
+  "evidence": {
+    "build-domains-current/loops.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/build-domains-current/loops.json",
+      "sha256": "6d20406df830e24881eb3423ecc1bab9c5ccd87dc9c99b1fbe09d2f58d9a4ba4",
+      "size_bytes": 143144
+    },
+    "build-domains-current/region-0/dependencies/dependencies.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/build-domains-current/region-0/dependencies/dependencies.json",
+      "sha256": "92ef3315c5cdceb9f728b5044b308a844cf2e2cea5b984faa0563fd440ab9d18",
+      "size_bytes": 58048
+    },
+    "build-domains-current/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/build-domains-current/result.json",
+      "sha256": "7707a700c63ea2446a709223b8592001f820b30af9148826a5ee202f5bc4507b",
+      "size_bytes": 49692
+    },
+    "compiler-pipeline-current/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/compiler-pipeline-current/result.json",
+      "sha256": "0449ed2336eb471682b12c2156bc823a73589f03a141e6ed128c3c43db5c80e2",
+      "size_bytes": 50617
+    },
+    "cost-diagnostics-cli/diagnostics.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/cost-diagnostics-cli/diagnostics.json",
+      "sha256": "754435bf4bfcba5da71a59520cbcb468965159d58058abf98110573c1442105a",
+      "size_bytes": 68548
+    },
+    "cpp-control/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/cpp-control/result.json",
+      "sha256": "32c199ccb3c805dce2f157ee604b5827e6c2ae38be75aeb63dd7a9d40f907b11",
+      "size_bytes": 1796
+    },
+    "licm-experiment.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/licm-experiment.json",
+      "sha256": "5f151fbc72339cfc6cad43244cca7dbed6f4d17cf6aa14649409f353e1f36646",
+      "size_bytes": 7050
+    },
+    "licm-frontend/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/licm-frontend/result.json",
+      "sha256": "bb1573fc38f63a115aa7b2d47ddfe7dfa55031a9ae57f60b1311b7dd9e3b45f6",
+      "size_bytes": 2312
+    },
+    "licm-native-current/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/licm-native-current/result.json",
+      "sha256": "1b577a67d0e3cb7160c2dc5365fcbaf619baad22e0e3246da84407dee3a23dde",
+      "size_bytes": 338704
+    },
+    "topology-ablation-current/result.json": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/topology-ablation-current/result.json",
+      "sha256": "5fbfe66c35e1bb4cd05471eb64eece07a32407ed4e92376036fecf241fa524b1",
+      "size_bytes": 13967
+    }
+  },
+  "graph": {
+    "build_seconds": 110.34071843000129,
+    "hardware_resources": 202,
+    "iterations_unrolled": false,
+    "loop_body_calls": 9,
+    "loops": 2,
+    "observed_target_attempts": 3
+  },
+  "licm": {
+    "array_shape": [
+      256,
+      256
+    ],
+    "control_counts": {
+      "hoisted_calls": 0,
+      "residual_calls": 400,
+      "status": 0
+    },
+    "deployment_selected": false,
+    "discovery": "ORIGINAL_F4_AUTO_CARRY_AND_ARGUMENT_MAPPING",
+    "dtype": "float64",
+    "environment": {
+      "compiler": "g++ 13.3.0",
+      "cpu": "Intel Xeon E5-2680 v4",
+      "cxx_standard": 20,
+      "numpy": "2.5.2",
+      "operator_abi_version": 1,
+      "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+      "rng_seed": 7,
+      "workers": 1
+    },
+    "generated_host": "/home/zyf/AAA/scar/artifacts/current/experiments/plan-closure-v1/licm-native-current/loop-0/native/host.cpp",
+    "hoisted_roots": [
+      "n2"
+    ],
+    "invariant_operations": 1,
+    "isolated_licm_profitable": false,
+    "isolated_licm_ratio": 0.9624757228148808,
+    "native_counts": {
+      "hoisted_calls": 1,
+      "residual_calls": 400,
+      "status": 0
+    },
+    "paired_repetitions": 3,
+    "proof_id": "invariant-array-loop:67b0f86af6c409d4bf76b817",
+    "python_to_licm_ratio": 1.4173952850604077,
+    "scope": "MICRO_PROGRAM_ORIGINAL_SOURCE_LOOP_NOT_GRAY_SCOTT_OR_LEWM",
+    "source": {
+      "path": "/home/zyf/AAA/scar/tests/workloads/licm_program.py",
+      "sha256": "4cdbf2d684bf8075304b6e8d74b5872e87fa30342f0a6252b10b34d2df605831"
+    },
+    "summaries": {
+      "native_control": {
+        "max_seconds": 0.03305294900201261,
+        "median_seconds": 0.032901863974984735,
+        "min_seconds": 0.03258998101227917,
+        "samples_seconds": [
+          0.03305294900201261,
+          0.032901863974984735,
+          0.03258998101227917
+        ],
+        "stdev_seconds": 0.00023609215267766427
+      },
+      "native_licm": {
+        "max_seconds": 0.034330330992816016,
+        "median_seconds": 0.03418461701949127,
+        "min_seconds": 0.034064926992869005,
+        "samples_seconds": [
+          0.034330330992816016,
+          0.034064926992869005,
+          0.03418461701949127
+        ],
+        "stdev_seconds": 0.00013291447606311654
+      },
+      "python": {
+        "max_seconds": 0.04869949398562312,
+        "median_seconds": 0.048453114985022694,
+        "min_seconds": 0.04829857900040224,
+        "samples_seconds": [
+          0.048453114985022694,
+          0.04869949398562312,
+          0.04829857900040224
+        ],
+        "stdev_seconds": 0.00020220320136525032
+      }
+    },
+    "trip_count": 400,
+    "validation": {
+      "bitwise_outputs": true,
+      "changed_input_between_invocations_recomputed": true,
+      "changed_leaf_falls_back": true,
+      "changed_range_falls_back": true,
+      "inputs_unchanged": true,
+      "zero_negative_original_alias": true
+    },
+    "warmup": 1
+  },
+  "limitations": [
+    "GENERAL_CALLER_STATE_AND_ALIAS_CLOSURE_INCOMPLETE",
+    "LICM_BOUNDED_FIXED_RANGE_PURE_ARRAY_LEAF_PROFILE",
+    "NO_AUTOMATIC_LICM_DEPLOYMENT_COST_SELECTION",
+    "GRAY_ADAPTIVE_CALLER_NOT_BATCHED",
+    "CPU_FORWARD_COST_MODEL_STILL_REJECTED",
+    "NO_GLOBAL_HARDWARE_OPTIMALITY_PROOF"
+  ],
+  "pipeline": {
+    "initial_independent_run_seconds": 263.03984100499656,
+    "intermediate_shared_domain_run_seconds": 21.85422768900753,
+    "regions": [
+      {
+        "candidate_count": 106,
+        "complete_cost_profiles": 0,
+        "region_id": "stateful-region:288a4988786d24d10e8d9660",
+        "rejected_components": {},
+        "status": "ORIGINAL_EXECUTION_RETAINED",
+        "unresolved_components": {
+          "ALLOCATE_FIXED_POOL": 106,
+          "CALLER_WORKER_AFFINITY_FENV_TEAM": 106,
+          "FUSED_SCALAR_DAG_ROW_STAGE": 212,
+          "GUARDED_METHOD_AND_NATIVE_ARTIFACT_BOUNDARY": 106,
+          "INPLACE_ROW_OPERATION_STAGE": 212,
+          "INPUT_FINITE_SCAN_SERIAL": 212,
+          "NUMPY_EAGER_OPERATION_WITH_OWN_ALLOCATION_RELEASE": 23,
+          "NUMPY_INPLACE_WRITE": 2,
+          "NUMPY_POWER2_NATIVE_ROW_STAGE": 106,
+          "ORIGINAL_METHOD_BINDINGS_SCALARS_AND_VIEWS": 1,
+          "PYTHON_TAGGED_SCALAR_OPERATION": 1,
+          "RELEASE_FIXED_POOL": 106,
+          "ROW_COPY_SERIAL": 212,
+          "ROW_COPY_STAGE": 212,
+          "ROW_OPERATION_STAGE": 106,
+          "SUCCESS_CHECK_AND_CALLER_RESTORATION": 106,
+          "TAGGED_SCALAR_SETUP_STAGE": 106
+        }
+      }
+    ],
+    "seconds": 21.7695078960096
+  },
+  "priority": "DEPENDENCY_DERIVED_LOOP_INVARIANT_CODE_MOTION",
+  "schema": "scar.loop-placement-checkpoint",
+  "schema_version": 1,
+  "three_stages_complete": false
+}

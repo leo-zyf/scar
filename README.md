@@ -211,6 +211,17 @@ scar choose-stateful-cpu --domain DOMAINS/region-0/domain/domain.json --out CHOI
 
 `plan-build` 当前为受支持的状态数组区域生成规划域，其余函数保留具体拒绝原因。输入 shape 是显式约束；局部绑定的 frame-isolation 投影保留未解除的 Q，引用稳定不能证明数组内容不变。
 
+循环外提已有原 F4 → 依赖闭包 → C++20 验证入口：
+
+```bash
+scar frontend tests/workloads --source tests/workloads/licm_program.py --jobs 4 --out FRONTEND
+scar compile-invariant-loop --catalog FRONTEND/catalog --source tests/workloads/licm_program.py --memory-budget-bytes 33554432 --out LICM
+```
+
+当前支持普通函数的固定 `range` 循环：循环体将一个纯数组函数的结果赋回 carry，其他数组实参只读。carry 由原绑定写入推导，外提节点由输入依赖闭包推导；输出保留原调用、回边和参数映射证据。生成 C++ 沿用算子 ABI v1；验证包装器另检查原 callable/range 和输入条件。非正次数保原输入别名，失败不暴露私有中间结果。该入口只编译供验证，尚不自动部署，也不覆盖一般自适应循环。
+
+`scar compile-build --domains DOMAINS --calibration RESOURCE_OBSERVATIONS --out PIPELINE` 可复用已有区域/硬件域，串联依赖查询、全部 CPU 配置的前向成本和已选方案降低。`--calibration` 可重复传入；缺失或被拒绝的成本仍阻止选择。
+
 无 trace 时可省略 `--trace`。`--catalog` 选择 F4 局部声明或 context catalog，`--cache-root` 指定接口材料目录；
 `--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
 新源码构建的 `--body-scope observed` 根据完整运行 CodeID 选择正文，并自动准入 trace 涉及的外部源码文件；保留其余源码声明，不扫描整个依赖安装目录、不证明未观察路径为死代码。

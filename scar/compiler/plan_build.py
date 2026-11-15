@@ -16,6 +16,8 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.analysis.build_f4 import _validate_catalog_parents
     from scar.compiler.stateful_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
+    from scar.analysis.stateful_dependencies import project_stateful_dependencies
+    from scar.analysis.source_loop_dependencies import source_loop_dependencies,attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
     program=Path(program).absolute();out=Path(out).absolute()
@@ -37,14 +39,21 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         # Reuse this session's catalog and original shared function bodies.
         regions,rejected=discover_stateful_regions(session.view,source=source)
         out.mkdir(parents=True)
+        loops=source_loop_dependencies(session.view,source)
+        if session._f4 is not None:
+            providers=tuple(p for name,p in session._f4.providers.items() if name.startswith('bounded_call_bindings:'))
+            attach_loop_call_observations(session.view,loops,providers)
+        (out/'loops.json').write_text(json.dumps(loops,indent=2,sort_keys=True)+'\n')
         rows=[]
         for index,region in enumerate(regions):
             folder=out/('region-'+str(index));folder.mkdir()
             path=folder/'region.json';write_stateful(region,path)
+            dependencies=project_stateful_dependencies(path,out=folder/'dependencies')
             shapes=({value.id:list(shape) for value in region.inputs if value.kind=='array'}
                 if shape is not None else input_shapes.get(region.id))
             row=dict(region_id=region.id,source_code_key=region.source.code_key,
                 region=str(path),source_unit_scope='DECLARED_FUNCTION_PROFILE_NOT_RUNTIME_REACHABILITY',
+                dependencies=artifact_reference(folder/'dependencies/dependencies.json',dependencies['schema']),
                 selected_for_use=False,lowering_authorized=False)
             if shapes is None:
                 row.update(status='INPUT_SHAPES_REQUIRED')
@@ -63,6 +72,8 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     report=dict(schema='scar.program-optimization-domains',schema_version=1,
         program=parent,source=str(source),hardware=target,regions=rows,rejections=rejected,
         semantics='ORIGINAL_F4_FUNCTION_WORLD_AND_SOURCE_PORTS',
+        loop_dependencies=artifact_reference(out/'loops.json',loops['schema']),
+        loops=loops['loop_count'],loop_body_calls=loops['loop_body_call_count'],loops_unrolled=False,
         catalog_reader_reused_for_region_discovery=True,
         source_ast_fallback_used=False,target_program_executed=False,
         target_variants_compiled=False,whole_program_compiled=False,
