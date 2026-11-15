@@ -179,6 +179,7 @@ def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
 def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     """Internal composition within an already admitted domain session."""
     demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[];rejected={}
+    rejected_calibrations=[]
     for value in calibrations:
         document,source=_profile(value)
         if document.get('schema')!='scar.stateful-resource-calibration' or document.get('schema_version')!=1:
@@ -188,6 +189,20 @@ def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
         artifact=artifact_reference(source['path'],document['schema']) if source['kind']=='PATH' else None
         if artifact is None: raise ValueError('retained calibration JSON path required')
         sources.append(artifact)
+        independence=('target_workload_executed','target_variants_ranked')
+        invalid=[name for name in independence if document.get(name) is not False]
+        if invalid:
+            reason='independent calibration requires explicit False: '+', '.join(invalid)
+            rejected_calibrations.append(dict(artifact=artifact,reason=reason,
+                missing_fields=[name for name in invalid if name not in document],
+                observed_flags={name:document.get(name) for name in invalid}))
+            # Preserve offered estimates only as rejected diagnostic evidence;
+            # they do not enter records, component sums or complete profiles.
+            for index,row in enumerate(document.get('components',())):
+                key=component_key(row['component'],row['parameters'])
+                rejected.setdefault(key,[]).append(dict(point_estimate_ns=row.get('median_ns'),
+                    reason=reason,evidence=dict(artifact=artifact,locator=f'#/components/{index}')))
+            continue
         for index,row in enumerate(document.get('proposed_estimates',())):
             if row.get('selectable') is not False:
                 raise ValueError('diagnostic estimates cannot authorize selection')
@@ -222,7 +237,7 @@ def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     report=dict(schema='scar.stateful-cpu-model',schema_version=1,context=context,demand=demand,
         resource_context=demand['resource_context'],components=evaluated,unresolved=issues,known_component_sum_ns=total,
         complete=not issues,duration_ticks=math.ceil(total) if not issues else None,tick_seconds=1e-9,
-        source_calibrations=sources,profile=None,
+        source_calibrations=sources,rejected_calibrations=rejected_calibrations,profile=None,
         assumptions=['EFFECTIVE_COMPONENT_SUM_IS_A_MODEL_NOT_AN_ADDITIVITY_THEOREM',
             'STAGE_MEASUREMENTS_INCLUDE_THEIR_OWN_IMPLICIT_BARRIER_NO_DOUBLE_CHARGE',
             'CACHE_NUMA_ALIGNMENT_CONTENTION_REGIMES_REMAIN_APPLICABILITY_ASSUMPTIONS',

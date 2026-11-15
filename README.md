@@ -242,11 +242,15 @@ scar run-build --pipeline COMPILED --deployment VALIDATION/deployment.json --exc
 scar observe-call-bindings --all-sources --catalog FRONTEND/catalog --out CALLS -- python ENTRY.py ARGS
 scar build --entry ENTRY.py --catalog FRONTEND/catalog --call-bindings CALLS --out PROGRAM
 scar inspect-bounded-interfaces --build PROGRAM --out INTERFACES
+# 可按原unit/query索引逐个查询；未选项仍保留其原证据与边界
+scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out ONE_INTERFACE
 ```
 
 捕获到的 Python CodeID 以完整 descriptor 匹配原 F4 共享函数正文。统一建图随后复用签名绑定器，建立带匹配 caller frame 的条件参数、环境、world 和正常返回接口；属性 GET 还可提供标准实例方法绑定的条件 receiver 路径。当前默认参数由 pre-call world 下的逻辑槽表达，pack 保留投影，deferred 调用不冒充普通函数返回。这些关系不代替实际接收者、内容版本、纯性或调用完成证明。未准入的库正文保留为具体边界，不据一次观察删除其他路径。采集不启用全局 profile，也不记录 Tensor 数值。`inspect-bounded-interfaces` 从同一主图查询这些连接，报告使用共享引用表。
 
 观察源码目录现在使用 v4 合同：检查全部字节收据并保留完整目录，外部 UnitFacts/辅助接口按需交给原严格 reader 校验。`scar inspect-catalog-admission --catalog CATALOG --out AUDIT` 可核对冷状态并验证一次实际接口读取。旧 v3 需显式运行 `scar reissue-observed-catalog --prior OLD --out NEW --expected-prior-implementation-sha256 PRIOR_SHA256`，原始子图和报告保持不变；尚未按需解码的接口不会被当成已验证或不存在。
+
+外部正文回接同时索引保留的编译filename，通过原body scope、C3 constant path和完整CodeID确认；快照存放路径不同不会直接导致“目录外”。查询按原CALL和scope准入，声明的全部接口与本次实际展开的接口分开记录。
 
 CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
 

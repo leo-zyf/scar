@@ -72,7 +72,9 @@ class SourceCallBindingProvider:
     def __init__(self,view,plan_path,observation_paths):
         self.view=view;self.materials={};self.nodes={};self.by_call=defaultdict(list)
         self.out_edges=defaultdict(list);self.in_edges=defaultdict(list);self.operations={};self.sources={}
-        self.body_targets={};self.body_frontiers={};self.body_keys=set();self._code_bodies={};self._code_metadata={}
+        self.body_targets={};self.body_frontiers={};self.body_keys=set()
+        from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+        self.body_index=RetainedCodeBodyIndex(view)
         self.function_interfaces=None
         self.plan_path=Path(plan_path).absolute();self.plan=read_call_binding_plan(self.plan_path)
         self._read(self.plan_path)
@@ -169,32 +171,10 @@ class SourceCallBindingProvider:
         return self.function_interfaces
 
     def _target_body(self,code):
-        """Match original source metadata by full CodeID, never import/name guesses."""
+        """Join original compiler paths, including retained replay filenames."""
         if code is None:return None,None
-        if code.key in self._code_bodies:return self._code_bodies[code.key]
-        from scar.compiler.graph_frontend import _source_identity,_metadata
-        from scar.compiler.call_binding import _function_code_matches
-        from scar.trace.code_snapshot import describe_code
-        units=tuple(self.view.catalog.units_for_source(code.filename) or ())
-        if not units:
-            result=(None,'OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG')
-        else:
-            matches=[]
-            for unit in sorted(units):
-                source=self.view.unit(unit)
-                if unit not in self._code_metadata:self._code_metadata[unit]=_source_identity(self.view.catalog,unit)
-                _,syntax,codes,_,_=self._code_metadata[unit]
-                exact=[value for value in codes if describe_code(value)==encode(code)]
-                if len(exact)!=1:continue
-                actual=exact[0]
-                for function in source.facts.functions:
-                    name,_,lines=_metadata(syntax,function.template.occurrence)
-                    if _function_code_matches(actual,function,name,lines):
-                        self.sources[source.unit]=source
-                        matches.append(self.view.source_region_ref(unit,function.template,function.body))
-            unique=list(dict.fromkeys(matches))
-            result=(unique[0],None) if len(unique)==1 else (None,'UNIQUE_ORIGINAL_CODE_BODY_NOT_ESTABLISHED')
-        self._code_bodies[code.key]=result
+        result=self.body_index.match(code)
+        self.sources.update(self.body_index.sources)
         return result
 
     def _read(self,path):
@@ -203,6 +183,7 @@ class SourceCallBindingProvider:
         raw=path.read_bytes();self.materials[path]=raw;return raw
 
     def check(self):
+        self.body_index.check()
         if any(path.read_bytes()!=raw for path,raw in self.materials.items()):
             raise ValueError('original bounded CALL materials changed')
         if json.loads(self.materials[self.plan_path])!=self.plan:
@@ -252,7 +233,10 @@ class SourceCallBindingProvider:
             conditional_source_interfaces_attached=self.function_interfaces is not None,first_stage_complete=False)
 
     def explain(self,point):
-        return dict(original=self.original(point),remaining_fields=list(_OPEN),entry_completion_or_effects_proven=False)
+        record=self.original(point)
+        return dict(original=record,remaining_fields=list(_OPEN),
+            code_correspondence=None if record.target_code is None else self.body_index.explain(record.target_code),
+            entry_completion_or_effects_proven=False)
 
 
 __all__=['SourceObservedCallTarget','SourceCallBindingProvider']

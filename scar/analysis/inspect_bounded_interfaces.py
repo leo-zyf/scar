@@ -90,21 +90,27 @@ class _ReportReferences:
         return encode(value)
 
 
-def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
+def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096,call_queries=None):
     from scar.analysis.build import BuildSession
     from scar.analysis.source_call_view import SourceFunctionCallProvider,Flow
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.ir.program.dependencies import context_push
     if any(type(n) is not int or n<1 for n in (max_calls,max_edges)):
         raise ValueError('positive explicit interface and edge report budgets required')
+    if call_queries is not None and (type(call_queries)is not tuple or any(
+            type(pair)is not tuple or len(pair)!=2 or type(pair[0])is not str or not pair[0]
+            or type(pair[1])is not int or pair[1]<0 for pair in call_queries)):
+        raise TypeError('call_queries must be an optional tuple of (original unit, nonnegative query ordinal) pairs')
+    requested=None if call_queries is None else frozenset(call_queries)
     program=Path(program).resolve();out=Path(out).resolve()
     if out.exists():raise ValueError('fresh bounded interface inspection output required')
     parent=artifact_reference(program/'manifest.json','scar.program-build');manifest=read_artifact(parent)
     if manifest.get('backend')!='F4':raise ValueError('original F4 unified program build required')
     started=time.monotonic();edges=[];edge_ids={};frontiers=[];frontier_ids={}
     providers=[];calls=[];metadata=[];truncated=False;missing_relations=0;interface_kinds=Counter()
+    domains={};selection_rows=[];unselected=[];selected_query_count=0
     phase_seconds=dict(build_session_constructor=0.0,explicit_provider_unit_attach=0.0,
-        main_graph_outgoing_calls=0.0,report_record_encoding=0.0)
+        main_graph_outgoing_calls=0.0,report_record_encoding=0.0,bounded_query_metadata=0.0)
     phase_calls=dict(build_session_constructor=0,explicit_provider_unit_attach=0,main_graph_outgoing_calls=0)
     references=_ReportReferences()
     def encode(value):
@@ -130,17 +136,46 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
                         source_body=encode(provider.body_targets.get((point.namespace,point.node))),
                         source_body_frontier=provider.body_frontiers.get((point.namespace,point.node)),
                         remaining_fields=list(record.remaining_fields),runtime_invocation_created=False))
+        # Only metadata is read here. Selecting source queries must precede
+        # attach(), which can normalize the caller and shared callee bodies.
+        before=time.monotonic()
         for name,provider in inner.providers.items():
             if not name.startswith('bounded_call_interfaces:'):continue
-            if type(provider) is not SourceFunctionCallProvider:
+            if type(provider)is not SourceFunctionCallProvider:
                 raise TypeError('bounded interfaces must use the existing shared source-call provider')
-            for unit in sorted(provider.available_units):
-                if len(calls)>=max_calls:truncated=True;break
-                before=time.monotonic();provider.attach(unit)
-                phase_seconds['explicit_provider_unit_attach']+=time.monotonic()-before
-                phase_calls['explicit_provider_unit_attach']+=1
+            domains[name]={unit:provider.store.read_unit(unit) for unit in sorted(provider.available_units)}
+        available={(unit,query.query) for units in domains.values() for unit,material in units.items()
+            for query in material.queries}
+        if requested is not None and not requested<=available:
+            raise ValueError('requested original CALL query is absent from retained bounded metadata: '
+                +repr(sorted(requested-available)))
+        phase_seconds['bounded_query_metadata']=time.monotonic()-before
+        for name,provider in inner.providers.items():
+            if not name.startswith('bounded_call_interfaces:'):continue
+            for unit,material in domains[name].items():
+                declared=tuple(sorted(query.query for query in material.queries))
+                eligible=[qi for qi in declared if requested is None or (unit,qi)in requested]
+                remaining=max(0,max_calls-selected_query_count)
+                selected=tuple(eligible[:remaining]) if len(calls)<max_calls else ()
+                if len(selected)<len(eligible):truncated=True
+                selected_query_count+=len(selected)
+                selected_set=frozenset(selected)
+                selection_rows.append(dict(provider=name,unit=unit,original_calls=material.calls,
+                    retained_metadata_queries=list(declared),selected_queries=list(selected),
+                    calls_outside_retained_metadata=material.calls-len(declared)))
+                for query in material.queries:
+                    if query.query in selected_set:continue
+                    unselected.append(dict(provider=name,source_unit=unit,source_query_ordinal=query.query,
+                        original_call=encode(query.call),declared=encode(query.declared),reference=encode(query.reference),
+                        reason='NOT_SELECTED_FOR_THIS_INSPECTION' if query.query not in eligible
+                            else 'REPORT_BUDGET_EXHAUSTED_BEFORE_INTERFACE_ATTACH',
+                        interface_ordinals=list(query.interfaces),normalized_by_this_explicit_selection=False))
+                if selected:
+                    before=time.monotonic();provider.attach(unit,queries=selected)
+                    phase_seconds['explicit_provider_unit_attach']+=time.monotonic()-before
+                    phase_calls['explicit_provider_unit_attach']+=1
                 for key,frame in tuple(provider.frames.items()):
-                    if key[0]!=unit:continue
+                    if key[0]!=unit or provider.links[key].query not in selected_set:continue
                     if len(calls)>=max_calls:truncated=True;break
                     interface=provider.links[key];link=interface.link
                     # None means an unknown static caller prefix. A closed ()
@@ -187,11 +222,13 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
                         body_value_equivalence_proven=False,transformation_authorized=False))
             # These include unsupported/non-observed targets that cannot create
             # an ordinary frame. Omitting them would disguise interface gaps.
-            unresolved=[encode(item) for material in provider.graphs.values() for item in material.frontiers]
+            unresolved=[encode(item) for material in domains[name].values() for item in material.frontiers]
             coverage=getattr(provider.store,'coverage_summary',None)
             coverage=None if coverage is None else coverage()
             if coverage is not None:interface_kinds.update(coverage.get('callable_binding_alternatives',{}))
-            providers.append(dict(name=name,summary=provider.summary(),coverage=coverage,interface_frontiers=unresolved))
+            providers.append(dict(name=name,summary=provider.summary(),coverage=coverage,interface_frontiers=unresolved,
+                actually_attached_queries={unit:sorted(queries) for unit,queries in provider.attached_queries.items()},
+                coverage_scope='DECLARED_BOUNDED_METADATA_DOMAIN_NOT_INSPECTED_GRAPH_CLOSURE'))
         read_artifact(parent)
         gaps=list(inner.gaps)
     encoded_edges=[encode(edge) for edge in edges]
@@ -200,6 +237,7 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
         metadata_attempts=metadata,interfaces=calls,edges=encoded_edges,
         query_frontiers=[encode(item) for item in frontiers],build_gaps=gaps,
         summary=dict(conditional_static_frames=len(calls),raw_attempt_records=len(metadata),
+            selected_call_queries=selected_query_count,unselected_retained_queries=len(unselected),
             relations=sum(len(row['relations']) for row in calls),main_graph_edges=len(edges),
             missing_main_graph_relations=missing_relations,
             enter_relations=sum(r['flow']=='ENTER' for row in calls for r in row['relations']),
@@ -208,8 +246,18 @@ def inspect_bounded_interfaces(program,out,*,max_calls=64,max_edges=4096):
             conditions=dict(Counter(condition.name for edge in edges for condition in edge.conditions)),
             frontier_reasons=dict(Counter(item.kind for item in frontiers)),
             interface_kinds=dict(interface_kinds),
+            interface_kinds_scope='ALL_RETAINED_BOUNDED_METADATA_ALTERNATIVES_NOT_ONLY_INSPECTED_FRAMES',
             report_budget_exhausted=truncated,interface_providers=len(providers)),
-        limits=dict(max_calls=max_calls,max_edges=max_edges),
+        limits=dict(max_calls=max_calls,max_edges=max_edges,
+            max_calls_scope='BOTH_ORIGINAL_CALL_QUERY_ADMISSIONS_BEFORE_ATTACH_AND_REPORTED_STATIC_FRAMES'),
+        query_selection=dict(mode='EXPLICIT_ORIGINAL_CALL_QUERIES'if requested is not None else
+                'DECLARED_ORIGINAL_CALL_QUERIES_UNDER_PREATTACH_BUDGET',
+            requested=None if requested is None else [list(pair) for pair in sorted(requested)],
+            domains=selection_rows,unselected_query_frontiers=unselected,
+            unselected_query_meaning='NOT_REQUESTED_OR_BUDGETED_NOT_ABSENT_OR_DEAD',
+            unplanned_original_calls_covered=False,unselected_source_bodies_removed=False,
+            full_declared_graph_inspected=False),
+        metadata_attempt_scope='ALL_ORIGINAL_BOUNDED_PUBLICATIONS_NOT_ONLY_INSPECTED_QUERIES',
         semantics='CONDITIONAL_SOURCE_INTERFACES_WITH_CALLER_MATCHED_STATIC_FRAMES',
         return_scope='SOURCE_COMPLETION_PORT_ROUTES_NOT_RECORDED_RETURN_EVENTS',
         runtime_invocation_ids_created=False,callee_entry_or_completion_proven=False,
@@ -233,8 +281,17 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--max-calls',type=int,default=64);parser.add_argument('--max-edges',type=int,default=4096)
+    def call_query(value):
+        try:
+            unit,ordinal=value.rsplit(':',1);ordinal=int(ordinal)
+            if not unit or ordinal<0:raise ValueError
+            return unit,ordinal
+        except (ValueError,TypeError):raise argparse.ArgumentTypeError('expected original UNIT:NONNEGATIVE_QUERY_ORDINAL')
+    parser.add_argument('--call-query',action='append',type=call_query,
+        help='select one retained original source CALL query before interface/body normalization; repeatable')
     args=parser.parse_args(argv)
-    report=inspect_bounded_interfaces(args.build,args.out,max_calls=args.max_calls,max_edges=args.max_edges)
+    report=inspect_bounded_interfaces(args.build,args.out,max_calls=args.max_calls,max_edges=args.max_edges,
+        call_queries=None if args.call_query is None else tuple(args.call_query))
     print(json.dumps(dict(result=str(Path(args.out)/'result.json'),summary=report['summary'],
         seconds=report['seconds'],phase_seconds=report['phase_seconds'],phase_calls=report['phase_calls']),indent=2))
     return 0

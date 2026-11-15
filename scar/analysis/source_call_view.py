@@ -160,6 +160,7 @@ class SourceFunctionCallProvider:
         if view.catalog is None or (view.catalog.path,view.catalog.report)!=(self.store.catalog.path,self.store.catalog.report):
             raise ValueError('source call view and interfaces need the same original catalog')
         self.graphs={};self.frames={};self.links={};self.relations=[]
+        self.attached_queries=defaultdict(set);self.call_query_indexes={};self.call_query_owners={}
         self.body_formals={}
         self.available_units=frozenset(self.store.report['shards']);self.boundary_ports={}
         self.incoming_index=defaultdict(list);self.outgoing_index=defaultdict(list)
@@ -193,12 +194,38 @@ class SourceFunctionCallProvider:
     def _note(self,point,reason):self.pending[self._key(point)].add(reason)
 
     def _demand(self,point):
-        if type(point.node) not in (OperationID,ValueID,UseID,ControlPortID):return
-        namespaces=(point.namespace,*(f.caller for f in context_frames(point.context)))
-        for namespace in dict.fromkeys(namespaces):
+        if type(point.node) not in (OperationID,ValueID,UseID,ControlPortID):return ()
+        reasons=set()
+        frames=context_frames(point.context)
+        requests=[(point.namespace,point.node,point.context)]
+        for index,frame in enumerate(frames):
+            prefix=context_pop(point.context,frames[index:])
+            requests.append((frame.caller,frame.operation,prefix.remaining))
+        for namespace,node,context in requests:
             source=self.view.namespaces.get(namespace)
             unit=getattr(source,'unit',None)
-            if unit in self.available_units and unit not in self.graphs:self.attach(unit)
+            if unit not in self.available_units:continue
+            if unit not in self.call_query_indexes:
+                from scar.analysis.source_declared_calls import _owners
+                indexes=defaultdict(set)
+                for qi,call in enumerate(source.facts.calls):
+                    result=source_port(source.facts,call.result)
+                    indexes[source._identity(OperationID,result.port.template,result.port.owner)].add(qi)
+                    for index in (call.callee,call.result,call.world,call.result_world):
+                        port=source_port(source.facts,index).port
+                        indexes[source._identity(ValueID,port.template,port)].add(qi)
+                self.call_query_indexes[unit]=indexes
+                self.call_query_owners[unit]=_owners(source.facts)
+            queries=self.call_query_indexes[unit].get(node,())
+            original=source.records.get(node)
+            if type(original)is G.Port and type(node)in(UseID,ControlPortID):
+                operation=source._identity(OperationID,original.template,original.owner)
+                queries=self.call_query_indexes[unit].get(operation,())
+            active=source_active_scope(self.view,namespace,context)
+            selected=[qi for qi in queries if active is None or active in self.call_query_owners[unit][qi]]
+            if len(selected)<len(queries):reasons.add('SOURCE_CALLER_CODE_SCOPE_DOES_NOT_OWN_CALLSITE')
+            if selected:self.attach(unit,queries=selected)
+        return tuple(sorted(reasons))
 
     def _boundary(self,point):
         source=self.view.namespaces.get(point.namespace)
@@ -261,15 +288,28 @@ class SourceFunctionCallProvider:
         covered.update(projection.formal for projection in link.projections)
         return tuple(formal for formal in formals if formal not in covered)
 
-    def attach(self,unit):
-        if unit in self.graphs:return self.graphs[unit]
-        graph=self.store.read_unit(unit);self.graphs[unit]=graph
+    def attach(self,unit,*,queries=None):
+        """Admit requested original CALL queries; bodies and ordinals stay shared.
+
+        The default explicitly requests the full unit. Neighborhood demand
+        selects only the owning CALL(s), avoiding unrelated body expansion.
+        """
+        if unit not in self.graphs:self.graphs[unit]=self.store.read_unit(unit)
+        graph=self.graphs[unit]
+        selected=set(range(graph.calls)) if queries is None else set(queries)
+        if any(type(qi)is not int or not 0<=qi<graph.calls for qi in selected):
+            raise ValueError('original source CALL query ordinals required')
+        selected-=self.attached_queries[unit]
+        if not selected:return graph
+        query_rows=tuple(query for query in graph.queries if query.query in selected)
+        interface_rows=tuple((ordinal,interface) for ordinal,interface in enumerate(graph.interfaces)
+            if interface.query in selected)
         caller=self.view.unit(unit);facts=caller.facts
         ports=[];bodies=[]
-        for query in graph.queries:
+        for query in query_rows:
             call=facts.calls[query.query]
             ports.extend((source_port(facts,call.result),source_port(facts,call.callee)))
-        for interface in graph.interfaces:
+        for _,interface in interface_rows:
             link=interface.link
             ports.extend(p for p in (link.callee,link.result,link.source_callable) if p is not None)
             if link.body is not None:bodies.append(link.body)
@@ -286,7 +326,7 @@ class SourceFunctionCallProvider:
                 ports.extend(p for p in (pack.positional,pack.keywords,pack.receiver,pack.class_receiver) if p is not None)
         prepare_source_ports(self.view,ports,bodies=bodies)
         call_points={}
-        for query in graph.queries:
+        for query in query_rows:
             fact=facts.calls[query.query]
             result_gp=source_port(facts,fact.result)
             result=self.view.source_port(result_gp)
@@ -300,8 +340,9 @@ class SourceFunctionCallProvider:
             for point in (operation,callee,result):
                 for reason in reasons:self._note(point,reason)
         for frontier in graph.frontiers:
+            if frontier.query not in selected:continue
             for point in call_points[frontier.query]:self._note(point,frontier.reason)
-        for ordinal,interface in enumerate(graph.interfaces):
+        for ordinal,interface in interface_rows:
             key=unit,ordinal;link=interface.link;self.links[key]=interface
             operation,use,value=self._call(link)
             if interface.activation is not T.FunctionActivation.NORMAL:
@@ -362,16 +403,18 @@ class SourceFunctionCallProvider:
                     Kind.COMPLETION if data else Kind.STATE_INTERFACE,
                     Meaning.REFERENCE if data else Meaning.STATE_INTERFACE,key,ri,link.conditions)
         self.store.validate()
+        self.attached_queries[unit].update(selected)
         return graph
 
     def _neighbors(self,point,incoming):
-        self._demand(point)
+        demand_reasons=self._demand(point)
         key=self._key(point);rows=(self.incoming_index if incoming else self.outgoing_index).get(key,())
         if not rows and key not in self.pending:
             if self._boundary(point):
                 return Neighborhood(frontiers=(Frontier(point,'SOURCE_CALL_CONTEXT_FRAME_NOT_SELECTED',
                     'A declared function boundary has no selected attached caller/resume interface.'),))
-            return Neighborhood()
+            return Neighborhood(frontiers=tuple(Frontier(point,reason,
+                'The selected source scope does not own this CALL query.')for reason in demand_reasons))
         self.store.validate();self.view.get(point)
         edges=[];needs_frame=False;matched=False;wrong_caller_scope=False
         for relation in rows:
@@ -402,7 +445,7 @@ class SourceFunctionCallProvider:
             edges.append(Edge(source,target,relation.kind,relation.meaning,
                 (Evidence('scar.source-call.matched-interface.v1',sources,(call,source,target)),),
                 conditions,Strength.MAY))
-        reasons=set(self.pending.get(key,()))
+        reasons=set(self.pending.get(key,()))|set(demand_reasons)
         if needs_frame and not matched:reasons.add('SOURCE_CALL_CONTEXT_FRAME_NOT_SELECTED')
         if wrong_caller_scope:reasons.add('SOURCE_CALLER_CODE_SCOPE_DOES_NOT_OWN_CALLSITE')
         if edges and not context_is_closed(point.context):reasons.add('SOURCE_CALL_CONTEXT_PREFIX_OPEN')
@@ -416,6 +459,7 @@ class SourceFunctionCallProvider:
     def summary(self):
         return dict(units=len(self.graphs),available_units=len(self.available_units),
             available_calls=self.store.report['counts']['calls'],calls=sum(g.calls for g in self.graphs.values()),
+            attached_queries=sum(len(queries)for queries in self.attached_queries.values()),
             interfaces=len(self.links),normal_frames=len(self.frames),relations=len(self.relations),
             flows=dict(Counter(r.flow.value for r in self.relations)),
             kinds=dict(Counter(r.kind.value for r in self.relations)),
