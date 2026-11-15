@@ -34,6 +34,14 @@ def test_resource_reuse_complete_scope_and_missing_component_frontier(hardware,t
     missing=predict_stateful_cpu_model(domain,candidate,[partial],out=tmp_path/'missing-model')
     assert not missing['complete'] and missing['duration_ticks'] is None and missing['profile'] is None
     assert missing['unresolved'] and missing['known_component_sum_ns']>0
+    rejected=tmp_path/'rejected.json'
+    rejected.write_text(json.dumps({**source,'components':[],
+        'proposed_estimates':[dict(component=records[-1]['component'],parameters=records[-1]['parameters'],
+            selectable=False,point_estimate_ns=1.0,rejection_reason='independent validation error exceeds declared policy')]}))
+    diagnostic=predict_stateful_cpu_model(domain,candidate,[partial,rejected],out=tmp_path/'rejected-model')
+    assert diagnostic['profile'] is None and not diagnostic['complete']
+    assert diagnostic['known_component_sum_ns']==missing['known_component_sum_ns']
+    assert diagnostic['unresolved'][0]['rejected_estimates'][0]['point_estimate_ns']==1.0
     complete=tmp_path/'complete.json';complete.write_text(json.dumps(source))
     model=predict_stateful_cpu_model(domain,candidate,[complete],out=tmp_path/'complete-model')
     assert model['complete'] and not model['unresolved']

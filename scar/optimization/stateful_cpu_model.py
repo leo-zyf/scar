@@ -42,7 +42,7 @@ def stateful_cpu_demand(domain,candidate_id):
     context=stateful_cpu_cost_context(domain,candidate_id)
     row=next((r for r in domain['candidates'] if r['id']==candidate_id),None)
     workers=1 if row is None else row['worker_count'];nodes={n.id:n for n in region.nodes}
-    shapes={};views={};origins={};available={};terms=[]
+    shapes={};views={};origins={};available={};available_payloads={};terms=[]
     def term(component,parameters,source_ref=None):
         terms.append(dict(id='term:'+str(len(terms)),component=component,parameters=parameters,
             key=component_key(component,parameters),count=1,source_ref=source_ref))
@@ -84,7 +84,13 @@ def stateful_cpu_demand(domain,candidate_id):
                 available[action.value]=dict(stride=shapes[action.value][1],offset=0)
     else:
         term('GUARDED_METHOD_AND_NATIVE_ARTIFACT_BOUNDARY',dict(arrays=sum(i.kind=='array' for i in region.inputs),
-            scalars=sum(i.kind=='scalar' for i in region.inputs),callees=len(region.callees),providers=len(region.providers)))
+            scalars=sum(i.kind=='scalar' for i in region.inputs),callees=len(region.callees),providers=len(region.providers),
+            input_path_depths=[len(i.path)-1 for i in region.inputs],
+            callee_path_depths=[len(i.path)-1 for i in region.callees],
+            provider_lookup_depths=[len(i.lookup_path)-1 for i in region.providers],
+            array_shapes=[plan['input_shapes'][i.id] for i in region.inputs if i.kind=='array'],
+            written_arrays=[i.id in plan['shadows'] for i in region.inputs if i.kind=='array'],
+            workspace_slot_capacities=[r['capacity_bytes'] for r in plan['workspace_slots']]))
         capacities=[r['capacity_bytes'] for r in plan['workspace_slots']]
         term('ALLOCATE_FIXED_POOL',dict(capacities=capacities))
         for shape in plan['input_shapes'].values(): term('INPUT_FINITE_SCAN_SERIAL',dict(rows=shape[0],cols=shape[1]))
@@ -118,24 +124,37 @@ def stateful_cpu_demand(domain,candidate_id):
                     term('ROW_OPERATION_STAGE',dict(op=nodes[root].op,rows=shape[0],cols=shape[1],
                         operands=operands,workers=workers),ref)
                 else:
-                    loads={};depth={}
+                    loads={};depth={};groups={}
                     def visit(key):
                         if key in depth:return depth[key]
                         descriptor=view(key)
                         if descriptor is not None:
                             identity=(str(origins.get(key,('computed',key))),descriptor['stride'],descriptor['offset'])
-                            loads[identity]=descriptor;depth[key]=0
+                            storage=str(origins.get(key,('computed',key)))
+                            group=groups.setdefault(storage,len(groups))
+                            loads[identity]=dict(**descriptor,storage_group=group);depth[key]=0
                         elif shapes[key] is None:depth[key]=0
                         else:depth[key]=1+max((visit(i) for i in nodes[key].inputs),default=0)
                         return depth[key]
                     span=visit(root)
+                    layouts=sorted(loads.values(),key=lambda d:(d['stride'],d['offset'],d['storage_group']))
+                    canonical_groups={}
+                    layouts=[{**layout,'storage_group':canonical_groups.setdefault(layout['storage_group'],len(canonical_groups))}
+                             for layout in layouts]
                     term('FUSED_SCALAR_DAG_ROW_STAGE',dict(rows=shape[0],cols=shape[1],workers=workers,
                         arithmetic={op:sum(n.op==op and shapes[n.id] is not None for n in operations)
                                     for op in ('add','sub','mul','div','neg')},
                         array_loads=len(loads),output_stores=1,dependent_operation_depth=span,
-                        operand_layouts=sorted(loads.values(),key=lambda d:(d['stride'],d['offset']))),ref)
+                        backing_storage_groups=len(canonical_groups),operand_layouts=layouts),ref)
             if stage['output_payload'] is not None and root is not None:
                 available[root]=dict(stride=shape[1],offset=0)
+                available_payloads[root]=stage['output_payload']
+            # Match codegen's stage-local residency. A released workspace
+            # value is not an available load in a later fused expression.
+            released=set(stage.get('release_values_after',()))
+            available={key:value for key,value in available.items()
+                if available_payloads[key] not in released}
+            available_payloads={key:value for key,value in available_payloads.items() if key in available}
         term('SUCCESS_CHECK_AND_CALLER_RESTORATION',dict(workers=workers))
         term('RELEASE_FIXED_POOL',dict(capacities=capacities))
     return dict(schema='scar.stateful-cpu-demand',schema_version=1,context=context,
@@ -154,7 +173,7 @@ def _save(path,value):
 def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     """Compose exact matching resource signatures; leave unsupported fusion unknown."""
     domain=_domain(domain)
-    demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[]
+    demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[];rejected={}
     for value in calibrations:
         document,source=_profile(value)
         if document.get('schema')!='scar.stateful-resource-calibration' or document.get('schema_version')!=1:
@@ -164,11 +183,20 @@ def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
         artifact=artifact_reference(source['path'],document['schema']) if source['kind']=='PATH' else None
         if artifact is None: raise ValueError('retained calibration JSON path required')
         sources.append(artifact)
+        for index,row in enumerate(document.get('proposed_estimates',())):
+            if row.get('selectable') is not False:
+                raise ValueError('diagnostic estimates cannot authorize selection')
+            key=component_key(row['component'],row['parameters'])
+            rejected.setdefault(key,[]).append(dict(
+                point_estimate_ns=row.get('point_estimate_ns'),reason=row.get('rejection_reason'),
+                evidence=dict(artifact=artifact,locator=f'#/proposed_estimates/{index}')))
         for index,row in enumerate(document['components']):
             key=component_key(row['component'],row['parameters'])
             if key in records: raise ValueError('ambiguous resource component observations')
             record, _=_fact(dict(artifact=artifact,locator=f'#/components/{index}'))
             if (record['basis'] not in ('DIRECT_COMPONENT_TIMING','DECLARED_COMPONENT_MODEL')
+                    or record.get('selectable') is False or record.get('precision_admitted') is False
+                    or record.get('exportable_as_complete_cost') is False
                     or type(record['median_ns']) not in (int,float)
                     or not math.isfinite(record['median_ns']) or record['median_ns']<0):
                 raise ValueError('sourced direct or explicitly declared nonnegative resource cost required')
@@ -177,10 +205,13 @@ def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     evaluated=[];total=0
     for term in demand['terms']:
         record=records.get(term['key'])
+        proposals=rejected.get(term['key'],[])
         if record is None: issues.append(dict(term=term['id'],component=term['component'],parameters=term['parameters'],
-            reason='no exact-context independent component model or direct measurement'))
+            reason='independent component model rejected by its admission policy' if proposals else
+                'no exact-context independent component model or direct measurement',rejected_estimates=proposals))
         else:total+=record['duration_ns']*term['count']
-        evaluated.append(dict(**term,status='UNKNOWN' if record is None else 'SOURCED_EFFECTIVE_COMPONENT',measurement=record))
+        evaluated.append(dict(**term,status=('MODEL_REJECTED' if proposals else 'UNKNOWN')
+            if record is None else 'SOURCED_EFFECTIVE_COMPONENT',measurement=record,rejected_estimates=proposals))
     out=Path(out).absolute()
     if out.exists(): raise ValueError('fresh stateful CPU model output required')
     report=dict(schema='scar.stateful-cpu-model',schema_version=1,context=context,demand=demand,
@@ -218,7 +249,7 @@ def build_stateful_cpu_profiles(domain,calibrations,*,out):
     for identifier in [r['id'] for r in domain['candidates']]+['NO_OP']:
         report=predict_stateful_cpu_model(domain,identifier,calibrations,out=out/identifier)
         reports.append(dict(id=identifier,model=str(out/identifier/'model.json'),complete=report['complete'],
-            known_components=sum(r['status']!='UNKNOWN' for r in report['components']),missing_components=len(report['unresolved'])))
+            known_components=sum(r['status']=='SOURCED_EFFECTIVE_COMPONENT' for r in report['components']),missing_components=len(report['unresolved'])))
         if report['profile'] is not None:
             if identifier=='NO_OP':baseline=report['profile']
             else:mapping[identifier]=report['profile']

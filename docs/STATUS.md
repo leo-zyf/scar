@@ -28,6 +28,12 @@ SCAR 三阶段仍未全部完成。当前贯通真实 Gray–Scott 的状态方�
 
 新增独立 C++20 resource probe 与两层成本上下文：资源事实按硬件/mask/compiler/provider/layout 匹配，完整 cost profile 才绑定源区域及调用边界。CPU 0–3、warm2/reps9 的 10 类资源签名已实测；14 个需求项已知加权约 1.30ms，但 guard/descriptor/FFI、tagged scalar 与两段 fused row stage 仍未知，不将部分总和称完整 native 时间。原方法同 call-dispatch→return 边界另测 warm2/reps9，中位数 6.622406ms（min6.608414/max6.639910/stdev0.010387ms），无 native 变体执行；已成为可重放 NO_OP 前向成本。完整 native/其它 masks 成本仍缺，选择继续 UNRESOLVED。没有新业务加速结论。
 
+本轮落实状态分区：新增独立 READ-only 和 FRAME_ISOLATION 条件分析，strict 原图行为不变。Gray 共享一次会话实测，frame 隔离 Q 下 251/256 读只剩 FORMAL/WRITE may 候选（242 单候选、9 多候选）；候选边 15,487→272，其余5读保 RAISE opaque。控制、操作及迭代结构完全相同，heap/RNG/数组内容效果不因此闭合。Q 尚未解除，未授予变换权限。
+
+`plan-build` 已真实从统一图自动发现同一状态区域并生成106配置，保全部202硬件资源，用时107.40s；没有单独手写或指定抽取区域。另补真实共享 guard/packing/FFI 的 canonical no-op ABI 校准（131,612ns）及 tagged scalar（614ns），明确为声明组件模型、未跑目标数学。现16项已知加权1.431615ms，只余两个fused项。612个独立原语的修正fused模型达到满秩，但匹配范围独立holdout误差22.83%超过预定20%政策，保留不可选点估计及拒绝证据，不生成完整native成本或新加速结论。
+
+解码实验只优化union分派，108个兼容性检查通过，但实际reader81.33s与此前约83.47s差异不足以证明实质收益，已恢复原验证器；该路线记为Rejected。后续重点是解除有证据支持的frame Q、改进fused前向模型并传播不确定性，以及扩展C++控制/类型/进程交付；不靠删检查或补零通过。
+
 轻量运行包 40,550B，复用原库字节；无需 catalog、完整图、planner 或 g++。原入口自然 import 后装配类方法；真实 20 步 u/v、time、dt 逐位相同，native 20 / fallback 0，未导入 compiler/codegen/analysis/IR/optimization。仍依赖原应用源码、Python/NumPy 和系统共享库，不是独立 C++ 主程序。
 
 ## 性能证据分开报告

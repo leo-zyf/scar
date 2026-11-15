@@ -70,6 +70,15 @@ def _normal_resumptions(material, edges, scope):
 
 def reaching_name_definitions(snapshot, source_function, namespace, *, anchor_graph=None,
         material=None, flow=None, max_states=20000, max_stack=128, max_updates=1000000):
+    """Strict original may definitions; no operation-effect exemptions."""
+    return _reaching_name_definitions(snapshot, source_function, namespace,
+        anchor_graph=anchor_graph, material=material, flow=flow, max_states=max_states,
+        max_stack=max_stack, max_updates=max_updates)
+
+
+def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_graph=None,
+        material=None, flow=None, max_states=20000, max_stack=128, max_updates=1000000,
+        _local_read_effects=None, _frame_isolation_effects=None):
     """Track may definitions under original binding/frame and branch guards.
 
     Reuse a caller's original material/anchor graph/SourceBodyValueFlow when
@@ -104,6 +113,20 @@ def reaching_name_definitions(snapshot, source_function, namespace, *, anchor_gr
     elif (type(flow) is not V.SourceBodyValueFlow or flow.source_function != source_function
             or flow.body != body or flow.source_templates != material.result_artifact):
         raise ValueError('name definition flow differs from its original function/body/material')
+    if _local_read_effects is not None:
+        from scar.analysis.source_binding_effects import LocalReadEffectContext
+        if type(_local_read_effects) is not LocalReadEffectContext:
+            raise TypeError('conditional local reads require original typed effect witnesses')
+        read_only = _local_read_effects.witnesses(material, anchor_graph, function, scope, flow)
+        read_only_sites = {w.site.port for w in read_only}
+    else:read_only_sites = set()
+    if _frame_isolation_effects is not None:
+        from scar.analysis.source_frame_binding_effects import FrameBindingIsolationContext
+        if type(_frame_isolation_effects) is not FrameBindingIsolationContext or _local_read_effects is not None:
+            raise TypeError('frame isolation requires its independent original-slot witness')
+        isolation = _frame_isolation_effects.witness(material, anchor_graph, function, scope, flow, namespace)
+        isolated_sites = set() if isolation is None else {flow.operations[i].entry for i in isolation.filtered_operations}
+    else:isolated_sites = set()
     edges = tuple(e for e in flow.edges if e.kind is G.EdgeKind.CONTROL)
     adjacency = defaultdict(list)
     for ordinal, edge in enumerate(edges): adjacency[edge.source].append(ordinal)
@@ -179,6 +202,9 @@ def reaching_name_definitions(snapshot, source_function, namespace, *, anchor_gr
         if not any(_state(port.value_type) for port in operation.inputs): continue
         completions = {(port.port.completion, port.port.target) for port in operation.outputs if _state(port.value_type)}
         for completion, target in sorted(completions, key=lambda pair: (pair[0].value, str(pair[1]))):
+            if ((operation.entry in read_only_sites or operation.entry in isolated_sites)
+                    and completion is C.FALLTHROUGH and target is None):
+                continue
             site = _exit(operation.entry, completion, target)
             weak[site] |= definition(D.NameDefinitionKind.OPAQUE_EFFECT, site, operation=ordinal, conditions=(
                 'OPERATION_MAY_CHANGE_TRACKED_SLOT_THROUGH_UNRESOLVED_CALLBACK_OR_CAPTURE',
