@@ -209,6 +209,13 @@ def _cost(profile,context):
     issues=[]
     try:
         profile,source=_profile(profile)
+        if (profile.get('schema'),profile.get('schema_version'))==('scar.rebased-stateful-cpu-cost-profile',1):
+            from scar.optimization.stateful_cost_rebase import verify_rebased_stateful_cpu_cost
+            replay=verify_rebased_stateful_cpu_cost(profile,expected_context=context)
+            cost=dict(replay['original_cost'])
+            cost['source']=dict(kind='VERIFIED_DOMAIN_EVIDENCE_REBASE',profile=source,
+                original=profile['source_profile'],proof=profile['rebase_proof'])
+            return cost,[],profile
         if (profile.get('schema'),profile.get('schema_version'))!=('scar.stateful-cpu-cost-profile',1): raise ValueError('stateful whole-call cost profile required')
         if set(profile)-{'schema','schema_version','context','context_evidence','estimate','derivation'}: raise ValueError('unsupported cost constraints')
         if semantic_sha256(profile['context'])!=semantic_sha256(context): raise ValueError('full scope/CPU/backend/source/shape/budget context differs')

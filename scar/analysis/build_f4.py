@@ -46,8 +46,9 @@ def _bounded_call_binding_inputs(paths):
 def _reports(roots):
     seen=set();rows=[]
     for root in roots:
-        for path in Path(root).glob('*/result.json'):
-            if path in seen or path.stat().st_size>2_000_000:continue
+        root=Path(root).resolve()
+        for path in (root/'result.json',*root.glob('*/result.json')):
+            if path in seen or not path.is_file()or path.stat().st_size>2_000_000:continue
             seen.add(path)
             try:rows.append((path.parent,json.loads(path.read_bytes())))
             except (OSError,ValueError):continue

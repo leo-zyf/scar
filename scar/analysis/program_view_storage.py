@@ -9,7 +9,7 @@ from itertools import zip_longest
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import view as V, source_productions as P, normal_graph as G
 from scar.ir.program.dependencies import DependencyPoint, DependencyCondition
-from scar.ir.record_codec import decode
+from scar.ir.record_codec import _decode, _record_tags
 
 
 def _local(provider, point):
@@ -89,13 +89,16 @@ def read_and_validate(folder, tables, provider):
     if set(tables) != {'nodes', 'edges'}:
         raise ValueError('compact source view needs exactly nodes and edges tables')
     provider.check(); missing = object(); counts = {}
+    # One private validated snapshot per read, just as normal_output prepares
+    # tags per write. Every row still uses the original strict typed decoder.
+    tags = _record_tags(P.PRODUCTION_RECORD_TAGS)
     for name, cls, expected in (('nodes', V.StoredSourceNode, pack_nodes(provider)),
             ('edges', V.StoredSourceEdge, pack_edges(provider))):
         count = 0
         for wire, record in zip_longest(_table(folder, tables[name]), expected, fillvalue=missing):
             if wire is missing or record is missing:
                 raise ValueError('compact source '+name+' table length differs')
-            actual = decode(cls, wire, record_tags=P.PRODUCTION_RECORD_TAGS)
+            actual = _decode(cls, wire, tags)
             if actual != record:
                 raise ValueError('compact source '+name+' record differs from its original projection')
             count += 1

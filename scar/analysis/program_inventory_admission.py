@@ -8,13 +8,14 @@ Stored bytes and historical pins are never modified.
 import json
 from pathlib import Path
 
-from scar.analysis.program_state_coverage import _pins,_inventory_index
+from scar.analysis.program_state_coverage import _pins,_inventory_index,_graph_contract
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.record_codec import encode
 
 
 def compatible_static_pins(plan):
+    if plan.get('local_graph_shards') and plan.get('graph_contract')!=_graph_contract():return False
     expected=_pins();actual=plan['pins']
     if actual==expected:return True
     if plan.get('binding_fixed_points_run')is not False:return False
@@ -39,4 +40,5 @@ def admit_static_inventory(path,*,catalog=None):
         raise ValueError('static inventory source unit denominator differs')
     if raw!=(path/'index.json').read_bytes():raise ValueError('static inventory changed during admission')
     return dict(index,admission=dict(profile='STATIC_GRAPH_AND_STATE_WITHOUT_BINDING_FIXED_POINTS',
-        unused_definition_solver_pin_ignored=ignored,stored_receipts_rewritten=False))
+        unused_definition_solver_pin_ignored=ignored,stored_receipts_rewritten=False,
+        graph_wire_contract_checked=bool(plan.get('local_graph_shards'))))

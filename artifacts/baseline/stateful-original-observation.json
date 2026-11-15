@@ -101,9 +101,15 @@
       "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-original-observation-v1/application-output"
     ],
     "library_source": "/home/zyf/AAA/gray-scott/python/gray_scott.py",
-    "current_launcher_differs_from_retained_frontend_snapshot": true,
     "library_program_and_separately_frozen_launcher": true,
-    "full_current_launcher_static_coverage_claimed": false
+    "full_current_launcher_static_coverage_claimed": false,
+    "observation_entry_not_in_retained_catalog": true,
+    "catalog_source_bytes_current": true,
+    "scope_diagnosis_correction": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/record-codec-session-v1/source-scope.json",
+      "bytes": 1349,
+      "sha256": "8970b87becf9b8fa14a746ad8d9c9e24f021f28a4bd6b9afcc750f503cc9b984"
+    }
   },
   "verification": {
     "command": "python -m pytest -q tests/unit/test_original_stateful_cost_observation.py tests/unit/test_source_region_projection.py tests/unit/test_stateful_cpu_choices.py tests/unit/test_stateful_cpu_model.py",

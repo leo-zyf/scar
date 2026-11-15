@@ -216,9 +216,12 @@ scar choose-stateful-cpu --domain DOMAINS/region-0/domain/domain.json --out CHOI
 ```bash
 scar observe-original-stateful-cost --domain DOMAINS/region-0/domain/domain.json --build PROGRAM_BUILD --out ORIGINAL --warmup 1 --repetitions 3 -- ENTRY.py ARGS
 scar compile-build --domains DOMAINS --no-op-profiles ORIGINAL_COSTS.json --plan-only --out COST_ADMISSION
+scar rebase-stateful-cost --profile ORIGINAL/forward-cost/profile.json --source-domain OLD/domain.json --target-domain NEW/domain.json --out REBASED
 ```
 
 计时只覆盖每个新进程首个匹配method的原调用，输入/源码/provider检查在计时外；不记录数组内容，不加载native变体。它提供同边界NO_OP成本，最终加速比仍需干净完整入口A/B。缺native成本继续保留原执行。
+
+重绑定会重放双域、原成本和支持的依赖，只接受同值物料/证据引用的变化；原测量和推导保持不变，未知模型不自动迁移。
 
 循环外提已有原 F4 → 依赖闭包 → C++20 验证入口：
 
@@ -262,6 +265,14 @@ scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out 
 外部正文回接同时索引保留的编译filename，通过原body scope、C3 constant path和完整CodeID确认；快照存放路径不同不会直接导致“目录外”。查询按原CALL和scope准入，声明的全部接口与本次实际展开的接口分开记录。
 
 主图查询按原region展开，反向索引补齐跨区生产者、消费者和调用方；函数、循环正文仍共享一份。state/content请求随区域登记，显式`project_unit`/`ensure_all`保留全量路径。图表schema v3用`template + region + local ordinal`引用原始边；未查询的状态邻接保留明确边界，不能当作无依赖。
+
+原caller-matched接口可进入既有C++20 pipeline，当前只生成验证预览：
+
+```bash
+scar compile-caller-pipeline --build PROGRAM --unit ORIGINAL_UNIT --function-ordinal 0 --provider bounded_call_interfaces:0 --input-shapes '{"payload":[8,8],"fixed":[8,8]}' --cpu-threads 1 --memory-budget-bytes 33554432 --out CALLER_PREVIEW
+```
+
+降低前重新核验原CALL顺序、ABI和纯数组叶；默认值、pack、隐式receiver及开放效果继续拒绝。caller-frame运行时guard尚未接入，该预览不授权自动部署。
 
 CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
 

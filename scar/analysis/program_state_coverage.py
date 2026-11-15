@@ -34,10 +34,20 @@ _WORKER=None
 
 
 def _pins():
-    from scar.analysis import source_local_state,program_view_storage
+    from scar.analysis import source_local_state,program_view_storage,program_view,normal_output
+    from scar.ir import record_codec
     return dict(inventory=sha256(Path(__file__).read_bytes()).hexdigest(),state=state_pins(),
         graph_storage=sha256(Path(program_view_storage.__file__).read_bytes()).hexdigest(),
+        graph_mapping=program_view._pins(),
+        wire_codec=sha256(Path(record_codec.__file__).read_bytes()).hexdigest(),
+        table_output=sha256(Path(normal_output.__file__).read_bytes()).hexdigest(),
         track_selection=sha256(Path(source_local_state.__file__).read_bytes()).hexdigest())
+
+
+def _graph_contract():
+    """Use the actual graph mapper's grammar, not a second version registry."""
+    from scar.analysis.program_view import SOURCE_REPRESENTATION,mapping_contract
+    return dict(representation=SOURCE_REPRESENTATION,mapping=mapping_contract())
 
 
 def _release(catalog,view):
@@ -97,7 +107,7 @@ def _unit(unit):
             unit=unit,path=row['path'],namespace=encode(state.namespace),source_material=encode(state.material.result_artifact),
             counts=counts,instructions=dict(instructions),families=dict(families),open_effect_fields=dict(pending),
             gaps=table,gap_operations=len(gaps),binding_fixed_points_complete=False,
-            graph=dict(tables=graph_tables,templates=len(source.expanded),nodes=len(source.nodes),
+            graph=dict(contract=_graph_contract(),tables=graph_tables,templates=len(source.expanded),nodes=len(source.nodes),
                 relations=len(source.edge_sources),edge_projections=projections),state_tables=state_tables,
             original_body_bytes_copied=0,loops_unrolled=False,
             target_executed=False,first_stage_complete=False)
@@ -133,6 +143,7 @@ def inventory(catalog,out,*,units=(),jobs=16,memory_mib=8192):
         scope='CATALOG' if not units else 'EXPLICIT_ORIGINAL_UNITS',catalog_units=len(all_units),
         selected_units=ordered,entry_sources=source.report.get('entry_sources'),pins=pins,
         catalog_schema=source.report['schema'],local_graph_shards=True,
+        graph_contract=_graph_contract(),
         jobs=min(jobs,len(ordered) or 1),worker_memory_mib=memory_mib,
         binding_fixed_points_run=False,target_executed=False,first_stage_complete=False)
     _durable_bytes(out/'plan.json',_json(plan),replace=False);results={}
@@ -174,6 +185,8 @@ def _inventory_index(path):
     plan=json.loads((path/'plan.json').read_bytes())
     if plan!=report['plan'] or len(set(plan['selected_units']))!=len(plan['selected_units']):
         raise ValueError('inventory plan or original unit domain differs')
+    if plan.get('local_graph_shards') and plan.get('graph_contract')!=_graph_contract():
+        raise ValueError('inventory graph wire/mapping contract differs')
     actual={};counts=Counter();gaps=Counter();instructions=Counter();families=Counter()
     failures=[];peaks={};stored=0
     for unit in plan['selected_units']:
@@ -197,7 +210,9 @@ def _inventory_index(path):
             raise ValueError('inventory gap receipt/count differs')
         if plan.get('local_graph_shards'):
             graph=row['graph']
-            if (set(graph['tables'])!={'nodes','edges'} or row['loops_unrolled']is not False
+            if (graph.get('contract')!=plan['graph_contract']
+                    or row['namespace']['representation']!=plan['graph_contract']['representation']
+                    or set(graph['tables'])!={'nodes','edges'} or row['loops_unrolled']is not False
                     or row['original_body_bytes_copied']!=0
                     or graph['templates']!=row['counts']['templates']
                     or graph['nodes']!=graph['tables']['nodes']['records']
@@ -221,6 +236,7 @@ def _inventory_index(path):
     result=dict(schema='scar.source-state-coverage-index',schema_version=1,
         inventory=encode(_artifact(path/'result.json',report['schema'])),
         plan=encode(_artifact(path/'plan.json',plan['schema'])),units=actual,
+        graph_contract=plan.get('graph_contract'),
         stored_shard_bytes=stored,worker_peak_rss_kib=peaks,
         catalog_local_graph_materialized=bool(plan.get('local_graph_shards') and not failures
             and plan['scope']=='CATALOG' and len(actual)==plan['catalog_units']),
