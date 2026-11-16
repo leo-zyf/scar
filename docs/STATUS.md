@@ -10,6 +10,8 @@ G3 集中按子层推进：a 原活动/组件范围与证据桥 → b 补实际 
 
 G3b 已贯通 standalone Gray 的“原图→实施阶段→时间→资源→成本”：原20活动加10个实施phase，原8值/12物化/6slots、全部旧HB与预算不变，74个事件；8个PRE phase纳入fence、2个POST仅正常交接。补上的2个输入扫描可接原样本，24个计费subject中12有条件估计、12未知，剩3个组合成本端点仍不匹配；不均摊、不重复计费。完整来源冷读与5项定向检查通过，原共享循环拒绝误套standalone边界，报告：`artifacts/baseline/g3b-implementation-envelope.json`。范围不包括compact/repeat实施，G3全层仍未完成；下一层G3c先明确剩余phase的资源/计时契约，再接缺失成本，暂不进入G4/G5。
 
+G3c1 已验：`refine-time-envelope --bind-serial-demands` 静态重放 bind→闭合代码→restore；provider 的 affinity 保持合同缺失时立即失效，不用最终检查倒推。Gray 只证明前两个 SNAPSHOT 的CPU0单位需求，其后维持UNKNOWN，原任务/数据/时间边界不变；真实三链冷读与2项定向检查通过，报告：`artifacts/baseline/g3c1-serial-affinity.json`。继续顺序是 G3c2 排他边界时钟cut及明确残差 → G3c3 fused-DAG/tagged-scalar缺项 → G3c4 全范围成本和资源适用条件验收；完成前不开放G4/G5。
+
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
 当前严格按层推进：L1 原图/资源输入 → L2 成本与约束投影 → L3 联合求解 → L4 执行证书 → L5 C++ → L6 原入口。L2 源码主链已验：16项时长和11项控制占用默认 UNKNOWN，2560B增量pool与external分账，矛盾shape拒绝，禁止solver/codegen。L3 `solve-pipeline-temporal` 已重放显式有限域：声明模型的两布局得21/13 ticks，五CALL顺序例得13并匹配下界；UNKNOWN case保留并阻止闭域选择，独立域收据防裁剪。上述ticks均非测量。报告在 `pipeline-solver-order-v1/l2-acceptance.json`、`l3-acceptance.json`。L4以后仍须逐层验收，试做文件不算完成。

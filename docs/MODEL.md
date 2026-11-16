@@ -477,6 +477,8 @@ SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代
 
 `refine-time-envelope` 将既有 standalone stateful CPU 执行器的实际边界细化到同一 VRS；`IMPLEMENTATION_PHASE` 保留固定源版本、actor 资格域和明确 effects，允许读原外部输入，不准写 Tensor 或冒充 payload 分配/释放。所有 PRECOMMIT phase 进入原成功 fence，POSTCOMMIT 只描述不可回退的正常状态交接；派生图不可执行。原数据、slot、旧 HB 不变，函数/循环仍使用原 scope。当前实施范围限定 compiler artifact 与共享 stateful guard，不覆盖 compact runtime 或 repeat adapter。新增有限性扫描可接已有 canonical 组件；非连续 guard/setup 或不匹配后缀的组合成本继续 unmapped，不能以 scope 父成本与 leaf 累加。
 
+`--bind-serial-demands` 对同图执行前向 affinity 状态推理：原串行 bind 成功后为 BOUND，闭合的自生成代码保持；遇无保持合同的 opaque/provider 则 UNKNOWN，不能从末尾检查成功倒推历史。仅已证明区间内的活动取得原 HardwareThread 的单位需求，其余不变。该记录是有来源的静态资格，非 CPU 运行观测、独占资源预留或 Tensor 内容版本；任务、数据、时长、事件和依赖不变，重复推导幂等。
+
 `StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
 参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
 
