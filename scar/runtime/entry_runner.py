@@ -121,9 +121,21 @@ class _Scope:
         except (self.mismatch, ValueError, KeyError) as error:
             self.frontier.append("source_guard_rejected:" + str(error)); return
         scope = self
-        @wraps(original)
+        # Installing a boundary must not evaluate deferred annotations.
+        @wraps(original, assigned=('__module__', '__name__', '__qualname__', '__doc__'))
         def binding(*args, **kwargs):
             return guarded(*args, **kwargs) if scope.active else original(*args, **kwargs)
+        if getattr(original, '__annotate__', None) is not None:
+            # Delegate on demand, including the original function's cache.
+            # Installing a wrapper neither executes nor drops annotations.
+            def annotate(format):
+                from annotationlib import Format, get_annotations
+                if format == Format.VALUE:
+                    return original.__annotations__
+                return get_annotations(original, format=format)
+            binding.__annotate__ = annotate
+        else:
+            binding.__annotations__ = original.__annotations__
         binding.scar_stats = guarded.scar_stats
         binding.scar_artifact = self.artifact
         installed = wrap(binding)
