@@ -62,6 +62,15 @@ scar compile-copy-choice --choice CHOICE/result.json --out CHOICE_TRIAL
 
 原完整窗口与融合窗口交替采样，各自一个计时区间；不累加旧单项成本，不运行完整目标来搜索变体。选择器按这两个固定 CPU 组件的 median 选择，平局保留原窗口；C++ 构建端消费选择并绑定对应子产物。经验范围和未证明的上下文差异保留，默认仍 NO_OP，仅显式试验，不据此宣称整程序收益或全局最优。这三个命令也支持 `--check`。
 
+原源循环的私有 workspace 生命期外提可使用：
+
+```bash
+scar prepare-workspace --loop-build SOURCE_LOOP/result.json --out WORKSPACE
+scar compile-workspace --preparation WORKSPACE/result.json --out WORKSPACE_NATIVE
+```
+
+准备端重放原 F4 循环/单步证明，检查本轮所有私有读取均由本轮写入覆盖；图保留一份 LOOP_REGION 正文，外层持有固定容量，每轮内容仍有独立版本。C++ 保留单步编译边界及每轮 guard、计算、FP/CPU 还原和提交，只移动私有分配/释放。原函数可通过 `scar.compiler.stateful_workspace_runtime.guarded_workspace_loop` 显式试验接入，失败只续跑未提交后缀，默认 NO_OP。`prepare-workspace --recipe RECIPE --trip-count N` 则仅生成固定输入的显式调用组合，不授权替换未经证明的原调用循环。减少分配请求不保证更快；当前均未自动启用。
+
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
 
 追加 `--pipeline-memory-order dependencies` 时，只在原 RAW 已证明旧值全部消费者结束后复用，避免为省槽位新增等待；预算不足明确拒绝。默认 `source` 保持按源码串行生命周期规划。两种容量模型均不等同最短执行时间，联合 makespan 选择仍需成本和执行证书。

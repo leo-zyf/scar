@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 workspace生命期主链已实现：当前F4源循环和Gray–Scott显式四步组合分别生成6节点/14边、10节点/26边的ROOT/共享LOOP_REGION资源图，正文各存1份；本轮私有read覆盖均证明，固定地址/容量不冒充不变内容。源码分配请求分别8→2、16→4，数组payload预算不变但生命期延长。C++20/ABI1实际运行逐位一致，默认回退、零次不读输入、改callee、错shape/count和已提交2步后只续跑2步验证通过。首次lowering因clone被内联丢失7个SIMD循环，4步9.85→12.19ms；保留单步编译边界后恢复7个SIMD循环，重测原9.849ms/workspace9.852ms（7对/warmup2，区间重叠），无可确认收益，not profitable to enable。负结果和编译诊断保留，无整程序加速比。报告：`artifacts/baseline/workspace-lifetime.json`。旧循环proof的producer pin过期已从原ProgramBuild重建；旧compact因guard抽公共core而指纹失效，未绕过校验。下一步把资源生命期方案并入统一成本选择，并补原入口交付；不强行开启该用例的外提。
+
 2026-11-16 成本选择主链：新增 `calibrate-copy-window → choose-copy-window → compile-copy-choice`。原/融合窗口各用一个规范化计时cut，AB/BA交替、7对样本/warmup2，计时外重置与逐元素核验。真实原窗口median333215ns、融合543896ns，采样范围不重叠；规则据此保留ORIGINAL，融合在本组件条件下not profitable。两份成本表均22个条件组件+1源marker，融合缺证据字段已按真实FactRef解除，其余上下文残差/资源未知保留；不把组件范围当整程序保证。所选C++20/ABI1实际构建、独立冷读和原方法逐位验证/回退通过；三个合成策略分支仅测模型逻辑，未伪作实测。未重新标定旧组件、未运行完整目标或测新整程序加速比。报告：`artifacts/baseline/copy-window-cost-choice.json`。下一步继续有界联合规划，并优先推进共享循环内私有workspace生命期外提，而非强行启用无收益的循环融合。
 
 2026-11-16 继续推进：`prepare-window-rewrite` 已生成可独立重推的真实替换图；两SNAPSHOT合为一个可展开COPY区域，31→30任务、76→74时间事件，原8值/12物化/6存储槽及204项硬件库存引用不变。就绪事件、success-fence、外部依赖和CPU占用通过完整映射重接；只删除已证明的内部源序边，不丢弃其他约束。成本23组中融合项重新UNKNOWN，保留21项原条件组件证据与控制marker，不拿旧复制成本和冒充融合成本。新C++20/ABI1独立schema消费这份图/成本/资源/证书；真实区域与原Python/原C++逐位一致，原方法native3、guard回退2、默认NO_OP回退1，版本/事件映射篡改拒绝。来源冷读通过，4项IR检查通过；本轮未测性能，无新加速比或全局最优结论。报告：`artifacts/baseline/g5-certified-copy-rewrite.json`。下一步将替换区域的成本证据接入统一选择，再扩展有界联合调度；当前证书只证明该局部变换及其C++实现，三阶段通用覆盖尚未完成。

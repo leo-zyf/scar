@@ -1,0 +1,37 @@
+@ORIGINAL_SOURCE@
+
+// Workspace-lifetime adapter only. The original run/table/getter above are
+// unchanged. The clone below differs only in its explicit private-pool port
+// and removal of the one original pool declaration/allocation block.
+namespace {
+@WORKSPACE_RUN@
+}
+
+extern "C" SCAR_EXPORT_V1 const char *scar_workspace_plan_sha256_v1() {
+    return "@EXECUTION_SHA256@";
+}
+
+extern "C" SCAR_EXPORT_V1 int32_t scar_workspace_repeat_stateful_v1(
+    const scar_stateful_table_v1 *table, const scar_array_v1 *arrays,
+    uint64_t array_count, const scar_scalar_v1 *scalars, uint64_t scalar_count,
+    const scar_provider_v1 *providers, uint64_t provider_count,
+    uint64_t repetitions, uint64_t *completed) {
+    if (!completed) return 1;
+    *completed = 0;
+    // An empty original loop observes none of its unused arguments.
+    if (repetitions == 0) return 0;
+    if (repetitions != @TRIP_COUNT@ULL) return 1;
+@PARENT_TABLE_GUARD@
+    // Original pure ABI/shape/alias/provider/payload preflight before malloc.
+    // Every iteration retains these same checks inside run_with_workspace.
+@PREFLIGHT@
+@ALLOCATION@
+    for (uint64_t step = 0; step < repetitions; ++step) {
+        const int32_t status = run_with_workspace(arrays, array_count, scalars,
+            scalar_count, providers, provider_count, slots);
+        if (status) return status;
+        // The failed iteration never commits; successful prefixes stay visible.
+        *completed = step + 1;
+    }
+    return 0;
+}

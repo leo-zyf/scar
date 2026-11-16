@@ -49,7 +49,18 @@ def guarded_stateful_loop(original,artifact,*,exclusive_inputs=False,trial=False
     the retained source positional/keyword layout, not its new signature.
     """
     if type(artifact)is not NativeStatefulRepeat:raise TypeError('compact stateful-repeat trial artifact required')
-    contract=validate_contract(artifact.loop_contract);step_contract=contract['step_contract']
+    contract=validate_contract(artifact.loop_contract)
+    return _guarded_stateful_loop_core(original,artifact,contract,
+        exclusive_inputs=exclusive_inputs,trial=trial)
+
+
+def _guarded_stateful_loop_core(original,artifact,contract,*,exclusive_inputs=False,trial=False):
+    """Shared live source/argument/progress guards after profile admission.
+
+    Public factories own their distinct artifact type and contract validation.
+    This core does not admit either profile or manufacture a runtime contract.
+    """
+    step_contract=contract['step_contract']
     if type(original)is not FunctionType:raise ValueError('ordinary original caller function required')
     stats=dict(native_calls=0,fallback_calls=0,reasons={},native_step_calls=0,
         fallback_step_calls=0,original_loop_calls=0,partial_native_prefixes=0)
