@@ -43,11 +43,15 @@ def _raw(receipt):
         raise ValueError('original cost raw/tool/source receipt differs')
 
 
-def _implementation():
+def _implementation(model_replays=()):
     root=Path(__file__).resolve().parents[1]
     names=('optimization/stateful_cost_rebase.py','optimization/stateful_cpu_choices.py',
-        'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py',
-        'codegen/cpu_instruction_cost.py','codegen/cpu_instruction_cost_replay.py')
+        'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py')
+    schemas={r['schema']for r in model_replays}
+    if schemas:
+        names+=('codegen/cpu_instruction_cost.py','codegen/cpu_instruction_cost_replay.py')
+    if 'scar.cpu-parallel-instruction-cost-projection-replay'in schemas:
+        names+=('codegen/cpu_parallel_instruction_cost.py','codegen/cpu_parallel_instruction_cost_replay.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 
@@ -166,13 +170,17 @@ def _component_dependencies(facts,domain,candidate):
         identity=semantic_sha256(reference['artifact'])
         if identity not in checked:
             additional=frozenset()
-            if document.get('source_model',{}).get('schema')=='scar.cpu-instruction-cost-model':
-                # The sole supported fitted-model extension replays actual
+            schema=document.get('source_model',{}).get('schema')
+            if schema in('scar.cpu-instruction-cost-model','scar.cpu-parallel-instruction-cost-model'):
+                # The supported fitted-model adapters replay actual
                 # source/plan/placement, compiler assembly, natural loops,
                 # MCA outputs and every projected component. A schema or
                 # hash alone cannot discharge these dependencies.
-                from scar.codegen.cpu_instruction_cost_replay import verify_instruction_projection
-                replay=verify_instruction_projection(domain,candidate,reference['artifact']['uri'])
+                if schema=='scar.cpu-instruction-cost-model':
+                    from scar.codegen.cpu_instruction_cost_replay import verify_instruction_projection as verify
+                else:
+                    from scar.codegen.cpu_parallel_instruction_cost_replay import verify_parallel_instruction_projection as verify
+                replay=verify(domain,candidate,reference['artifact']['uri'])
                 if replay['projection']!=reference['artifact']:
                     raise ValueError('instruction projection differs from original component facts')
                 instruction_replays[identity]=replay
@@ -232,7 +240,8 @@ def _replay(source_profile,source_domain,target_domain,candidate):
     proof=dict(schema=PROOF,schema_version=1,source_profile=original_ref,source_domain=source_ref,target_domain=target_ref,
         candidate_id=candidate,source_context=source_context,target_context=target_context,
         domain_value_identity_sha256=semantic_sha256(_domain_value(source)),context_rebindings=changes,
-        supported_model_dependencies=dependencies,reader_implementation=_implementation(),
+        supported_model_dependencies=dependencies,
+        reader_implementation=_implementation(dependencies.get('instruction_model_replays',())),
         new_measurements_collected=False,duration_reestimated=False,physical_optimality_proven=False)
     proof['id']='stateful-cost-rebase:'+semantic_sha256(proof)
     return proof,original,cost

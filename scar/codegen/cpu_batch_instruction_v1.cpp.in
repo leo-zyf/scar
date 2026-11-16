@@ -1,0 +1,138 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "scar_abi_v1.h"
+#include <algorithm>
+#include <bit>
+#include <cerrno>
+#include <cfenv>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <new>
+#include <sched.h>
+#include <unistd.h>
+#include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#pragma STDC FENV_ACCESS ON
+namespace {
+constexpr size_t minimum_cpu_slots=@CPU_SLOTS@;
+constexpr int32_t affinity_guard_status=4;
+constexpr int floating_flags=FE_DIVBYZERO|FE_INVALID|FE_OVERFLOW|FE_UNDERFLOW;
+@AFFINITY_CLASS@
+@FLOATING_CLASS@
+using Clock=std::chrono::steady_clock;
+double now(){return std::chrono::duration<double,std::nano>(Clock::now().time_since_epoch()).count();}
+void fence(const void *p){asm volatile("" : : "g"(p) : "memory");}
+int tid(){
+#ifdef _OPENMP
+return omp_get_thread_num();
+#else
+return 0;
+#endif
+}
+int team_size(){
+#ifdef _OPENMP
+return omp_get_num_threads();
+#else
+return 1;
+#endif
+}
+struct Mask{int32_t workers,reserved;const int32_t *cpu_ids;};
+struct Layout{int64_t rows,cols,strides[8],offsets[8];int32_t groups[8],loads;};
+struct Args{int64_t rows,cols;double *inputs[8],*output;double scalars[128];};
+bool valid_mask(const Mask *m){
+    if(!m||!m->cpu_ids||m->workers<1||m->workers>@MAX_WORKERS@||m->reserved)return false;
+#ifdef _OPENMP
+    if(m->workers<2)return false;
+#else
+    if(m->workers!=1)return false;
+#endif
+    for(int i=0;i<m->workers;++i){
+        if(m->cpu_ids[i]<0||m->cpu_ids[i]>=@CPU_SLOTS@)return false;
+        for(int j=0;j<i;++j)if(m->cpu_ids[i]==m->cpu_ids[j])return false;
+    }
+    return true;
+}
+@CANONICAL_FUNCTIONS@
+using Kernel=void(*)(const Args &);
+constexpr Kernel kernels[]={@CANONICAL_POINTERS@};
+constexpr int required_loads[]={@CANONICAL_LOADS@};
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_batch_instruction_probe_v1(int32_t primitive,const Layout *layout,const Mask *mask,
+    uint64_t repetitions,uint64_t warmup,uint64_t batch,double *samples,uint64_t *checksum,int32_t *observed_cpus){
+    if(!valid_mask(mask)||!layout||!samples||!checksum||!observed_cpus||primitive<0||
+        primitive>=int(sizeof(kernels)/sizeof(Kernel))||!repetitions||repetitions>10000||
+        warmup>10000||!batch||batch>1024)return 1;
+    const int workers=mask->workers;const auto &l=*layout;
+    if(l.rows<1||l.cols<1||l.loads!=required_loads[primitive]||__int128(l.rows)*l.cols>4*1024*1024)return 1;
+    uint64_t sizes[8]={};std::unique_ptr<double[]> bases[8];
+    for(int i=0;i<l.loads;++i){
+        if(l.groups[i]<0||l.groups[i]>=8||l.strides[i]<l.cols||l.offsets[i]<0)return 1;
+        const __int128 size=__int128(l.rows-1)*l.strides[i]+l.offsets[i]+l.cols;
+        if(size>PTRDIFF_MAX/8)return 1;sizes[l.groups[i]]=std::max(sizes[l.groups[i]],static_cast<uint64_t>(size));
+    }
+    uint64_t bytes=0;for(auto n:sizes)bytes+=n*8;if(bytes>128*1024*1024)return 7;
+    for(int i=0;i<8;++i)if(sizes[i]){bases[i].reset(new(std::nothrow)double[sizes[i]]);if(!bases[i])return 5;}
+    std::unique_ptr<double[]> output(new(std::nothrow)double[l.rows*l.cols]());if(!output)return 5;
+    Args a{};a.rows=l.rows;a.cols=l.cols;a.output=output.get();
+    for(int i=0;i<8;++i)a.inputs[i]=bases[i].get();
+    for(int i=0;i<128;++i)a.scalars[i]=0.625+double(i%5)/32;
+    ThreadAffinity caller;for(int i=0;i<workers;++i)if(!caller.contains(mask->cpu_ids[i]))return 4;
+    FloatingScope caller_environment;if(!caller_environment.begin())return 3;
+    fenv_t execution;if(std::fegetenv(&execution)!=0)return 3;
+    observed_cpus[0]=sched_getcpu();std::vector<double> elapsed(workers);uint32_t guard=0,ready_guard=0;uint64_t sink=0;
+    #pragma omp parallel num_threads(workers) reduction(|:guard) reduction(^:sink)
+    {
+        const int worker=tid();ThreadAffinity affinity;FloatingScope environment;
+        const bool ready=team_size()==workers&&affinity.bind(mask->cpu_ids[worker]);
+        const bool fp_ready=environment.begin(&execution);observed_cpus[2+worker]=sched_getcpu();
+        #pragma omp atomic update
+        ready_guard|=static_cast<uint32_t>(!ready||!fp_ready);
+        #pragma omp barrier
+        if(!ready_guard){
+            for(int group=0;group<8;++group){
+                #pragma omp for schedule(static)
+                for(uint64_t i=0;i<sizes[group];++i)bases[group][i]=1.25+double(i%8)/64;
+            }
+            for(uint64_t iteration=0;iteration<repetitions+warmup;++iteration){
+                fence(&a);
+                #pragma omp barrier
+                const double start=now();
+                for(uint64_t step=0;step<batch;++step){kernels[primitive](a);fence(a.output);}
+                elapsed[worker]=now()-start;
+                #pragma omp barrier
+                #pragma omp master
+                if(iteration>=warmup)samples[iteration-warmup]=*std::max_element(elapsed.begin(),elapsed.end())/batch;
+                #pragma omp barrier
+            }
+            #pragma omp for schedule(static)
+            for(int64_t i=0;i<l.rows*l.cols;++i)sink^=std::bit_cast<uint64_t>(output[i]);
+        }
+        guard|=static_cast<uint32_t>(!ready||!fp_ready||std::fetestexcept(floating_flags));
+        guard|=static_cast<uint32_t>(!environment.restore());
+        const bool kept=affinity.bound(),restored=affinity.restore();guard|=static_cast<uint32_t>(!kept||!restored);
+    }
+    guard|=ready_guard;guard|=static_cast<uint32_t>(std::fetestexcept(floating_flags));
+    const bool fp_restored=caller_environment.restore(),affinity_restored=caller.restore_original();
+    observed_cpus[1]=sched_getcpu();*checksum=sink;
+    return guard||!fp_restored||!affinity_restored?3:0;
+}
+extern "C" SCAR_EXPORT_V1 int32_t scar_batch_partition_witness_v1(int64_t rows,const Mask *mask,
+    int64_t *first,int64_t *counts,int32_t *observed){
+    if(!valid_mask(mask)||rows<1||rows>1000000||!first||!counts||!observed)return 1;
+    const int workers=mask->workers;uint32_t guard=0;
+    #pragma omp parallel num_threads(workers) reduction(|:guard)
+    {
+        const int worker=tid();ThreadAffinity affinity;const bool ok=team_size()==workers&&affinity.bind(mask->cpu_ids[worker]);
+        int64_t start=rows,count=0;
+        #pragma omp for schedule(static)
+        for(int64_t row=0;row<rows;++row){start=std::min(start,row);++count;}
+        first[worker]=start;counts[worker]=count;observed[worker]=sched_getcpu();
+        const bool kept=affinity.bound(),restored=affinity.restore();guard|=static_cast<uint32_t>(!ok||!kept||!restored);
+    }
+    return guard?4:0;
+}
