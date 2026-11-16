@@ -2,7 +2,11 @@
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
-最新主链：`compile-caller-pipeline --pipeline-workers N` 自动发布原 caller 的参数替换/数据图，重放 pool 生命周期，生成 RAW/WAR/WAW、实际 CPU 与静态 wave 计划，再交既有 ABI1 算子/C++20 host。每个 leaf 单核，wave 内 CPU 不重叠；全部 worker join 后才能推进或回退。语义依赖图没有硬化 wave 的额外 barrier。
+最新主链：`compile-stateful-loop` 将原 F4 共享循环、精确 CALL/参数接线和已准入 stateful step 连至资源计划与原 C++20 repeat adapter。写入数组显式携带 `(iteration, local_epoch)` 内容，固定引用不当成固定内容。普通入口显式验证 native1/提交4步，状态逐位一致；原生执行完成1步后失败时，只恢复剩余3步，绝不重跑已提交前缀。报告在 `artifacts/current/experiments/stateful-loop-v1/`。
+
+该 profile 限定每轮一个普通 global CALL、固定参数和无中间观察；保留每步分配、线程组和提交边界，尚未外提 workspace/team。成本 UNKNOWN、默认 NO_OP，无新性能或最优性结论。
+
+此前的 `compile-caller-pipeline --pipeline-workers N` 自动发布原 caller 的参数替换/数据图，重放 pool 生命周期，生成 RAW/WAR/WAW、实际 CPU 与静态 wave 计划，再交既有 ABI1 算子/C++20 host。每个 leaf 单核，wave 内 CPU 不重叠；全部 worker join 后才能推进或回退。语义依赖图没有硬化 wave 的额外 barrier。
 
 真实 fork/join：3 CALL、5值、41条公共关系、10个资源任务；前两步 CPU0/1，第三步等待两者。冷读、native、浮点溢出回退、舍入/affinity恢复，以及普通入口 compact 交付均已非计时验证。耗时全为 UNKNOWN，wave 只是合法执行预览，默认仍 NO_OP；没有最优性能或加速比结论。报告在 `artifacts/current/experiments/pipeline-waves-v1/`。
 
@@ -28,10 +32,12 @@
 
 - 有序正文 92 节点/317 条关系；caller 接口 43 条路由、7 条输入路径、2 个独立内联 Frame，360 条投影边双向可查。
 - 生命期为 7 个输入、4 个局部内容 epoch、25 次直接使用、13 条条件关系。局部 last use、外部对象生命期和正常出口所需内容分开。
-- 自动连接 1 个共享循环、2 层原 CALL、1 条 world carry/backedge：2 个数组条件 carry、1 个字段有 caller 重写路径，其余4个标量保留不变性边界。18 条定义/匹配路径关系双向可查，58 个 effect 前沿具体保留。
+- 自动连接 1 个共享循环、2 层原 CALL、1 条 world carry/backedge：2 个数组条件 carry、1 个字段有 caller 重写路径，其余4个标量保留不变性边界。18 条定义/匹配路径关系双向可查。最新原 CALL 窗口以配对控制栈和互斥分支证据排除4个无关操作，effect 前沿58→55；剩余未知效果不自动清除。主链已持久化并独立冷读，未重跑目标程序。
 - world 不是数组内容版本，Frame 不是运行时 InvocationID，引用路径相同不证明跨调用内容相同；循环不逐次展开，不授权释放外部存储或无条件外提。
 
 上述表均为分片 typed 记录及 ID/FactRef 引用，读回重放原源码和接口，未保存 Tensor 数值。
+
+stateful 类型推导改为固定两遍原 F4：先收集数组读写要求，再严格建图，修复先出现 `state * factor` 时错误锁定 scalar 的问题。原 Gray–Scott 区域重建 digest 一致，不修改 testcase。
 
 ### 区间规划进入 compile-build
 
@@ -58,7 +64,7 @@ CPU/cache 足迹也已有结构化推导：共享缓存域、SMT、按 storage �
 
 ## 接下来仍需开发
 
-1. 建图：已能在闭合 caller 内替换形参内容根并连接共享 leaf；继续把有写入的条件 state-path 推进为跨调用逻辑值/版本，扩大 callback、对象协议与外部算子效果摘要。相同引用仍不证明跨激活内容相同。
+1. 建图：已连接封闭状态循环的参数化内容递推；继续补有写入的条件 state-path、callback、对象协议与外部算子效果摘要，再扩大原循环替换证明。相同引用仍不证明跨激活内容相同。
 2. 化简：已有纯数组多区域 CPU waves 与 pool hazard 约束；继续补联合内存/放置/就绪调度、NUMA、多进程和成本事实。当前固定 pool/显式 CPU 预览不是全程序 makespan 优化，未支持 MPI 或 GPU offload。
 3. 交付：扩大可降低的数据类型、控制/对象和外部接口，统一更多已准入 artifact。当前不是任意 Python 的独立 C++ 主程序；Sunfish/Cirq 未获得完整编译闭环，当前也没有 GPU/LeWM 新验证。
 

@@ -19,6 +19,8 @@ Control、数据依赖、状态版本、别名和资源映射是不同关系，�
 
 实现为 `compiler/ordered_planning_graph.py`；C0消费时独立重建原source/body/activation/lifetime/loop各层，逐typed表及公共图关系核验。未知效果保留具体field/frontier，不能自动当纯或dead。
 
+`source_selected_call_window` 在无回边的 wrapper 内，用原 CALL/RETURN 配对栈及同次条件求值的互斥分支证据界定效果窗口；它只排除无法与选定 CALL 共现的操作，不把保留效果改成 must/pure。typed 窗口随 loop-transfer 分片保存并冷读重推。
+
 硬件由独立 `TargetHardwareGraph` 保全平台库存和连接，软件图只引用它。资源存在、访问约束、后端能力、实际使用分别表达；只保留可由程序/优化后端管理的资源抽象，不把不可控制的OS内部实现展开为优化节点。
 
 ## 2. 优化与资源计划
@@ -42,6 +44,8 @@ C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间
 `final_entry_capsule`为loop/stateful提供同一个最终准入核心，profile adapter复用原compact loader、ELF与guard。构建侧固定payload和源码ledger，4KiB slot保成本/验证角色，运行端不重放庞大源码图或benchmark原始证据。
 
 当前只导出UNMEASURED验证slot，默认NO_OP，显式验证仍保完整区域回退。源码/默认值/实际callee、observer、输入metadata/bounds及必要状态分别守卫；私有结果不提前发布。入口及兼容/I/O仍由Python执行，尚非任意程序的独立C++主程序。
+
+状态循环另走 `stateful_loop_frontend → stateful_loop_schedule → compile-stateful-loop → stateful_loop_runtime`。先证明原 F4 一轮的 CALL/控制/None 返回，再存一份 step 和 `(i,e)` 内容递推，独立重放后复用既有 stateful/repeat ABI1。compact trial 显式准入，`completed=k` 后只执行原 Python 后缀，并按原参数布局重新查找每轮 callee；保留每步分配与提交，不假定整循环可以整体回退。默认入口不导入 NumPy/guard、不加载 ELF；安装 wrapper 不提前求值延迟注解。
 
 ## 存储与并行
 
