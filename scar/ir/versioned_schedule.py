@@ -111,6 +111,30 @@ class TemporalScopeKind(str, Enum):
     LOOP = 'LOOP'
 
 
+class TemporalIterationSelector(str, Enum):
+    FIRST = 'FIRST'
+    LAST_NORMAL = 'LAST_NORMAL'
+
+
+class TemporalPathCondition(str, Enum):
+    NORMAL_COMPLETE = 'NORMAL_COMPLETE'
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalIterationSelection:
+    loop_scope: str
+    selector: TemporalIterationSelector
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalContentCarry:
+    """before[i] supplies after[i+d] content; their logical values are distinct."""
+    before: str
+    after: str
+    iteration_distance: int = 1
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
 class TemporalDurationBasis(str, Enum):
     UNKNOWN = 'UNKNOWN'
     DECLARED_MODEL = 'DECLARED_MODEL'
@@ -153,6 +177,9 @@ class TemporalScope:
     trip_count: int | None = None
     trip_count_symbol: str | None = None
     source_refs: tuple[dict[str, Any], ...] = ()
+    iteration_local_values: tuple[str, ...] = ()
+    iteration_local_materializations: tuple[str, ...] = ()
+    content_carries: tuple[TemporalContentCarry, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +224,8 @@ class TemporalConstraint:
     iteration_distance: int = 0
     loop_scope: str | None = None
     source_refs: tuple[dict[str, Any], ...] = ()
+    before_iteration: TemporalIterationSelection | None = None
+    after_iteration: TemporalIterationSelection | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +241,7 @@ class TemporalModel:
     tick_denominator: int | None = None
     clock_domain: str | None = None
     source_refs: tuple[dict[str, Any], ...] = ()
+    path_condition: TemporalPathCondition | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +314,17 @@ def _overlap(left, right):
         and right.offset_bytes < left.offset_bytes + left.nbytes)
 
 
+def _iteration_extensions(model):
+    return model is not None and (model.path_condition is not None
+        or any(scope.iteration_local_values or scope.iteration_local_materializations or scope.content_carries
+               for scope in model.scopes)
+        or any(edge.before_iteration is not None or edge.after_iteration is not None for edge in model.constraints))
+
+
+def _schedule_version(schedule):
+    return 2 if schedule.temporal is None else 4 if _iteration_extensions(schedule.temporal) else 3
+
+
 def _validate_temporal_model(model, schedule):
     if type(model) is not TemporalModel or type(model.mode) is not TemporalMode:
         raise ValueError('one typed temporal model and provenance mode required')
@@ -295,6 +336,12 @@ def _validate_temporal_model(model, schedule):
     tasks = {task.id: task for task in schedule.tasks}
     slots = {slot.id: slot for slot in schedule.storage_slots}
     materials = {material.id: material for material in schedule.materializations}
+    values = {value.id: value for value in schedule.values}
+    indexed = _iteration_extensions(model)
+    if model.path_condition is not None and type(model.path_condition) is not TemporalPathCondition:
+        raise ValueError('typed temporal path condition required')
+    if indexed and (model.path_condition is not TemporalPathCondition.NORMAL_COMPLETE or schedule.executable):
+        raise ValueError('indexed loop bounds require an explicitly normal-complete non-executable schedule')
     _refs(model.source_refs)
     if type(model.resource_capacities) is not dict or any(
             not _text(key) or value is not None and not _integer(value)
@@ -308,6 +355,7 @@ def _validate_temporal_model(model, schedule):
     roots = [scope for scope in scopes.values() if scope.kind is TemporalScopeKind.ROOT]
     if len(roots) != 1 or roots[0].id != schedule.call_scope or roots[0].parent is not None:
         raise ValueError('one root temporal scope matching the original call scope required')
+    local_values, local_materials, content_carries = {}, {}, []
     for scope in scopes.values():
         _refs(scope.source_refs)
         if type(scope.kind) is not TemporalScopeKind:
@@ -328,6 +376,37 @@ def _validate_temporal_model(model, schedule):
         elif any(value is not None for value in (
                 scope.iteration_symbol, scope.trip_count, scope.trip_count_symbol)):
             raise ValueError('iteration metadata belongs only to a symbolic loop scope')
+        _identities(scope.iteration_local_values, values, 'iteration-local logical value')
+        _identities(scope.iteration_local_materializations, materials, 'iteration-local materialization')
+        if (scope.iteration_local_values or scope.iteration_local_materializations or scope.content_carries
+                ) and scope.kind is not TemporalScopeKind.LOOP:
+            raise ValueError('iteration-local templates belong only to a loop scope')
+        for identity in scope.iteration_local_values:
+            if identity in local_values:
+                raise ValueError('one iteration-local logical value cannot belong to multiple loops')
+            local_values[identity] = scope.id
+        for identity in scope.iteration_local_materializations:
+            if identity in local_materials or materials[identity].value not in scope.iteration_local_values:
+                raise ValueError('iteration-local materialization needs its logical value in the same unique loop')
+            local_materials[identity] = scope.id
+        if type(scope.content_carries) is not tuple or any(type(carry) is not TemporalContentCarry for carry in scope.content_carries):
+            raise ValueError('typed content-carry tuple required')
+        destinations = set()
+        for carry in scope.content_carries:
+            _refs(carry.source_refs)
+            if (carry.before not in scope.iteration_local_materializations
+                    or carry.after not in scope.iteration_local_materializations
+                    or carry.after in destinations or not _integer(carry.iteration_distance)
+                    or carry.iteration_distance == 0 or not carry.source_refs):
+                raise ValueError('content carry needs unique loop-local material endpoints, positive distance and source evidence')
+            before, after = materials[carry.before], materials[carry.after]
+            producer = tasks.get(before.ready_task)
+            if (producer is None or producer.kind is not VersionedTaskKind.COMMIT
+                    or carry.before not in producer.writes or not after.external_ready or after.ready_task is not None
+                    or before.region != after.region or slots[before.region.slot].ownership != 'EXTERNAL'):
+                raise ValueError('content carry must connect an external COMMIT to the next external input region')
+            destinations.add(carry.after)
+            content_carries.append((scope.id, carry))
     scope_ancestors = {}
     for identity in scopes:
         chain = set()
@@ -450,13 +529,18 @@ def _validate_temporal_model(model, schedule):
             ready_owners[identity] = activity.id
             bound(activity.completion, identity)
         task_activities[activity.task].append(activity)
-    # Original task dependencies remain true completion dependencies. Temporal
-    # metadata cannot erase the source data/storage safety checked above.
-    for task in tasks.values():
-        for dependency in task.depends_on:
-            for before in task_activities[dependency]:
-                for after in task_activities[task.id]:
-                    bound(before.completion, after.start)
+    for identity, owner in local_values.items():
+        producer = values[identity].producer
+        if producer is not None and any(owner not in scope_ancestors[a.scope] for a in task_activities[producer]):
+            raise ValueError('iteration-local logical producer escapes its declared loop')
+    for identity, owner in local_materials.items():
+        if any(event.materialization == identity and owner not in scope_ancestors[event.scope]
+               for event in events.values()):
+            raise ValueError('iteration-local readiness escapes its declared loop')
+        for task in tasks.values():
+            if identity in (*task.reads, *task.writes) and any(
+                    owner not in scope_ancestors[a.scope] for a in task_activities[task.id]):
+                raise ValueError('iteration-local materialization use escapes its declared loop')
     exported = {materials[name].region.slot for task in tasks.values()
                 if task.kind is VersionedTaskKind.EXPORT for name in task.reads}
     physical = set()
@@ -505,6 +589,8 @@ def _validate_temporal_model(model, schedule):
             physical.add(slot.id)
         bound(occupancy.start, occupancy.end)
     periodic = 0
+    indexed_boundary_count = 0
+    selected_boundaries = set()
     for constraint in constraints.values():
         _refs(constraint.source_refs)
         if (type(constraint.kind) is not TemporalConstraintKind or constraint.before not in events
@@ -514,6 +600,34 @@ def _validate_temporal_model(model, schedule):
                     or constraint.max_delay_ticks < constraint.min_delay_ticks)
                 or not _integer(constraint.iteration_distance)):
             raise ValueError('temporal constraint requires valid event IDs, bounds and iteration distance')
+        selections = (constraint.before_iteration, constraint.after_iteration)
+        if any(selection is not None for selection in selections):
+            if (sum(selection is not None for selection in selections) != 1
+                    or constraint.iteration_distance or constraint.loop_scope is not None
+                    or constraint.kind is TemporalConstraintKind.LOOP_CARRIED or not constraint.source_refs):
+                raise ValueError('selected loop boundary needs one sourced endpoint and no relative iteration constraint')
+            before_selected = constraint.before_iteration is not None
+            selection = selections[0 if before_selected else 1]
+            if (type(selection) is not TemporalIterationSelection
+                    or type(selection.selector) is not TemporalIterationSelector
+                    or selection.selector is not (TemporalIterationSelector.LAST_NORMAL if before_selected
+                        else TemporalIterationSelector.FIRST)):
+                raise ValueError('only outside-to-FIRST and LAST_NORMAL-to-outside loop boundaries are supported')
+            scope = scopes.get(selection.loop_scope)
+            selected = events[constraint.before if before_selected else constraint.after]
+            outside = events[constraint.after if before_selected else constraint.before]
+            if (scope is None or scope.kind is not TemporalScopeKind.LOOP
+                    or not _integer(scope.trip_count) or scope.trip_count == 0 or scope.trip_count_symbol is not None
+                    or scope.id not in scope_ancestors[selected.scope]
+                    or any(scopes[key].kind is TemporalScopeKind.LOOP and key not in scope_ancestors[scope.id]
+                           for key in scope_ancestors[selected.scope])
+                    or outside.scope == scope.id or outside.scope not in scope_ancestors[scope.id]):
+                raise ValueError('selected endpoint needs a positive fixed loop and an outside ancestor endpoint')
+            selected_boundaries.add((constraint.before, constraint.after))
+            indexed_boundary_count += 1
+            # FIRST/LAST refer to distinct instances. Treating them as ordinary
+            # single-iteration DBM edges would silently conflate i=0 and i=N-1.
+            continue
         if constraint.loop_scope is not None:
             scope = scopes.get(constraint.loop_scope)
             if (scope is None or scope.kind is not TemporalScopeKind.LOOP
@@ -528,6 +642,31 @@ def _validate_temporal_model(model, schedule):
             if constraint.kind is TemporalConstraintKind.LOOP_CARRIED:
                 raise ValueError('loop-carried dependency needs a positive iteration distance')
             bound(constraint.before, constraint.after, constraint.min_delay_ticks, constraint.max_delay_ticks)
+    # Preserve ordinary completion dependencies within each iteration. Crossing
+    # a repeated scope needs explicit selected completion-to-start endpoints;
+    # never add a second, unqualified copy of that indexed relation.
+    loop_ancestors = {identity: {key for key in ancestors if scopes[key].kind is TemporalScopeKind.LOOP}
+                      for identity, ancestors in scope_ancestors.items()}
+    for task in tasks.values():
+        for dependency in task.depends_on:
+            for before in task_activities[dependency]:
+                for after in task_activities[task.id]:
+                    if indexed and loop_ancestors[before.scope] != loop_ancestors[after.scope]:
+                        if (before.completion, after.start) not in selected_boundaries:
+                            raise ValueError('cross-loop task dependency needs its exact selected completion-to-start boundary')
+                    else:
+                        bound(before.completion, after.start)
+    completions = {activity.completion for activity in activities.values()}
+    for scope, carry in content_carries:
+        if not any(edge.kind is TemporalConstraintKind.LOOP_CARRIED
+                and edge.loop_scope == scope and edge.iteration_distance == carry.iteration_distance
+                and edge.before in completions
+                and events[edge.before].kind is TemporalEventKind.COMPLETION
+                and events[edge.before].task == materials[carry.before].ready_task
+                and events[edge.after].kind is TemporalEventKind.READY
+                and events[edge.after].materialization == carry.after
+                for edge in constraints.values()):
+            raise ValueError('content carry needs matching COMMIT-completion to input-READY iteration constraint')
     # Difference-bound feasibility only; no timestamps are chosen or optimized.
     # A zero-delay cycle is equality, not automatically an invalid DAG cycle.
     distance = {name: 0 for name in (*events, anchor)}
@@ -568,6 +707,12 @@ def _validate_temporal_model(model, schedule):
         summary['source_control_milestones'] = len(control_milestones)
         summary['executable_activities_without_execution_demand'] = len(
             set(activities) - control_milestones - occupied_activities)
+    if indexed:
+        summary.update(path_condition=model.path_condition.value,
+            indexed_boundary_constraints=indexed_boundary_count, indexed_bounds_feasibility_proven=False,
+            iteration_local_values=len(local_values), iteration_local_materializations=len(local_materials),
+            materialization_carry_count=len(content_carries),
+            task_dependency_interpretation='SAME_ITERATION_COMPLETION_WITH_EXPLICIT_FIRST_LAST_BOUNDARIES')
     return summary
 
 
@@ -881,7 +1026,7 @@ def validate_versioned_schedule(schedule):
         raise ValueError('fixed storage capacities exceed declared region budget')
     if schedule.executable and (schedule.budget_bytes is None or not schedule.budget_scope or not schedule.budget_refs):
         raise ValueError('executable fixed-storage plan needs an explicit budget scope and original budget reference')
-    summary = dict(schema_version=2 if schedule.temporal is None else 3,
+    summary = dict(schema_version=_schedule_version(schedule),
         tasks=len(tasks), logical_values=len(values), materializations=len(materials),
         storage_slots=len(slots), topological_order=order, executable=schedule.executable,
         fixed_capacity_bytes=total, overwrite_happens_before_verified=True, external_commit_fenced=True)
@@ -895,22 +1040,48 @@ def schedule_document(schedule):
     value = encode(schedule)
     if schedule.temporal is None:
         value.pop('temporal')
-    return dict(schema='scar.resource-schedule', schema_version=2 if schedule.temporal is None else 3, **value)
+    elif _schedule_version(schedule) == 3:
+        temporal = value['temporal']
+        temporal.pop('path_condition')
+        for scope in temporal['scopes']:
+            scope.pop('iteration_local_values'); scope.pop('iteration_local_materializations')
+            scope.pop('content_carries')
+        for edge in temporal['constraints']:
+            edge.pop('before_iteration'); edge.pop('after_iteration')
+    return dict(schema='scar.resource-schedule', schema_version=_schedule_version(schedule), **value)
 
 
 def schedule_from_dict(document):
     value = dict(document)
     schema, version = value.pop('schema', None), value.pop('schema_version', None)
-    if schema != 'scar.resource-schedule' or type(version) is not int or version not in (2, 3):
+    if schema != 'scar.resource-schedule' or type(version) is not int or version not in (2, 3, 4):
         raise ValueError('unsupported versioned resource schedule schema')
     if version == 2:
         if 'temporal' in value:
             raise ValueError('legacy v2 schedule must not carry temporal fields')
         value['temporal'] = None
     elif value.get('temporal') is None:
-        raise ValueError('v3 resource schedule requires an explicit temporal model')
+        raise ValueError('temporal resource schedule requires an explicit temporal model')
+    if version == 3:
+        temporal = dict(value['temporal'])
+        if 'path_condition' in temporal:
+            raise ValueError('v3 resource schedule cannot carry v4 path fields')
+        temporal['path_condition'] = None
+        temporal['scopes'] = [dict(scope) for scope in temporal['scopes']]
+        temporal['constraints'] = [dict(edge) for edge in temporal['constraints']]
+        for scope in temporal['scopes']:
+            if any(key in scope for key in ('iteration_local_values', 'iteration_local_materializations', 'content_carries')):
+                raise ValueError('v3 resource schedule cannot carry v4 iteration templates')
+            scope.update(iteration_local_values=[], iteration_local_materializations=[], content_carries=[])
+        for edge in temporal['constraints']:
+            if 'before_iteration' in edge or 'after_iteration' in edge:
+                raise ValueError('v3 resource schedule cannot carry selected iteration endpoints')
+            edge.update(before_iteration=None, after_iteration=None)
+        value['temporal'] = temporal
     result = decode(VersionedResourceSchedule, value)
     validate_versioned_schedule(result)
+    if _schedule_version(result) != version:
+        raise ValueError('resource schedule version differs from its explicit temporal semantics')
     return result
 
 
@@ -918,6 +1089,7 @@ validate_schedule = validate_versioned_schedule
 __all__ = ['VersionedLogicalValue', 'StorageSlot', 'StorageRegion', 'VersionedMaterialization',
     'VersionedTask', 'VersionedTaskKind', 'OrderConstraint', 'VersionedResourceSchedule',
     'TemporalMode', 'TemporalEventKind', 'TemporalScopeKind', 'TemporalDurationBasis',
+    'TemporalIterationSelector', 'TemporalIterationSelection', 'TemporalPathCondition', 'TemporalContentCarry',
     'TemporalOccupancyKind', 'TemporalConstraintKind', 'TemporalEvent', 'TemporalScope',
     'TemporalActivity', 'TemporalOccupancy', 'TemporalConstraint', 'TemporalModel', 'validate_temporal_model',
     'CPU_CAPABILITIES', 'schedule_document', 'schedule_from_dict', 'validate_schedule', 'validate_versioned_schedule']

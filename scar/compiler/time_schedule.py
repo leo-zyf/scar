@@ -13,11 +13,11 @@ SCHEMA = 'scar.semantic-time-preparation'
 
 
 def time_schedule_reference(path):
-    """Route the two source-replayed time formats before strict artifact read."""
+    """Route admitted time formats before their independent source replay."""
     from scar.ir.execution_recipe import _bytes, _json
     path = Path(path).resolve()
     schema = _json(_bytes(path)).get('schema')
-    if schema not in (SCHEMA, 'scar.implementation-time-preparation'):
+    if schema not in (SCHEMA, 'scar.implementation-time-preparation', 'scar.workspace-time-preparation'):
         raise ValueError('a supported source-replayed time preparation required')
     return artifact_reference(path, schema)
 
@@ -113,6 +113,9 @@ def prepare_time_schedule(kind, source, out, *, loop_reference=None):
 
 def read_time_schedule(path):
     reference = time_schedule_reference(path)
+    if reference['schema'] == 'scar.workspace-time-preparation':
+        from scar.compiler.project_workspace_time import read_workspace_time
+        return read_workspace_time(path)
     if reference['schema'] == 'scar.implementation-time-preparation':
         from scar.compiler.refine_time_envelope import read_implementation_time
         return read_implementation_time(path)

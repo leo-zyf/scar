@@ -101,7 +101,7 @@ def schedule_document(schedule) -> dict:
 
 
 def schedule_from_dict(document) -> ResourceSchedule:
-    if document.get("schema") == "scar.resource-schedule" and document.get("schema_version") in (2, 3):
+    if document.get("schema") == "scar.resource-schedule" and document.get("schema_version") in (2, 3, 4):
         from scar.ir.versioned_schedule import schedule_from_dict as versioned_from_dict
         return versioned_from_dict(document)
     document = dict(document)

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 共享循环已接统一时间/资源图：显式v4增加FIRST/LAST_NORMAL端点、`(i,local_epoch)`值/物化模板及COMMIT→下一轮输入的数据carry，v2/v3原字节不变。`project-workspace-time → bind-time-resources → view-graph`在原F4循环与Gray显式组合冷读通过，分别13活动/35事件/2私有slot/1 carry、24/64/4/2；正文只存一份，分配/逆序释放在ROOT，输入finite guard的数组读取及helper退出/progress均入图。新画布连原204资源/477连接，原C++入口仍完成4步。当前仅正常完成路径，失败/FFI时间未建模；13/24个服务时长和CPU执行域仍未知，不据此求数值最短调度。验收：`artifacts/baseline/workspace-indexed-time.json`。下一层补同源执行域与循环成本，再将联合计划转为C++执行证书；三阶段通用覆盖尚未完成，无新加速比。
+
 2026-11-16 原入口交付已补通：`export-workspace-loop → run-stateful-loop` 共用轻量runtime，明确区分原分配与workspace配置；原F4/资源证明在导出端重放，原ELF不改。真实冷进程运行原入口，C++完成4步、stdout/状态逐位一致；默认无CDLL、零次不读输入、已提交2步后只续跑2步通过。阻断所有compiler/analysis/IR/planner/codegen导入和外部图读取仍成功；compact约62KB，composition拒绝冒充原循环。有限median选择抽为公共接口并接回原copy主链，真实成本重放仍选ORIGINAL；未新测性能或启用外提。验收：`artifacts/baseline/workspace-compact-runtime.json`。三阶段通用覆盖仍未完成，下一层集中接共享循环的最后使用/释放到统一时间资源IR，再补同源成本及联合规划，复用现有C++交付。
 
 2026-11-16 workspace生命期主链已实现：当前F4源循环和Gray–Scott显式四步组合分别生成6节点/14边、10节点/26边的ROOT/共享LOOP_REGION资源图，正文各存1份；本轮私有read覆盖均证明，固定地址/容量不冒充不变内容。源码分配请求分别8→2、16→4，数组payload预算不变但生命期延长。C++20/ABI1实际运行逐位一致，默认回退、零次不读输入、改callee、错shape/count和已提交2步后只续跑2步验证通过。首次lowering因clone被内联丢失7个SIMD循环，4步9.85→12.19ms；保留单步编译边界后恢复7个SIMD循环，重测原9.849ms/workspace9.852ms（7对/warmup2，区间重叠），无可确认收益，not profitable to enable。负结果和编译诊断保留，无整程序加速比。报告：`artifacts/baseline/workspace-lifetime.json`。旧循环proof的producer pin过期已从原ProgramBuild重建；旧compact因guard抽公共core而指纹失效，未绕过校验。下一步把资源生命期方案并入统一成本选择，并补原入口交付；不强行开启该用例的外提。

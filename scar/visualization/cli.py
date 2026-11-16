@@ -40,6 +40,8 @@ def main(argv=None):
         from scar.compiler.time_schedule import read_time_schedule
         receipt=read_time_schedule(args.time_schedule)
         projection=project_schedule(read_artifact(receipt['schedule']))
+        if hardware is None and receipt.get('target') is not None:
+            hardware=Path(receipt['target']['uri']).parent
     result=write_view_bundle(projection,args.out,title=args.title,hardware=hardware)
     print(json.dumps(dict(entry=result['entry'],parts=result['parts'],
         graph_data_bytes=result['graph_data_bytes'],resource_stats=result['resource_stats'],

@@ -23,13 +23,30 @@ def _derive(time_reference):
         ready = read_artifact(inputs['ready'])
         target = ready['target']
         context['caller_affinity_cpu_ids'] = ready['caller_affinity_cpu_ids']
-    else:
+    elif receipt['source_kind'] == 'stateful_workspace':
+        preparation = read_artifact(receipt['source'])
+        if ((preparation.get('schema'), preparation.get('schema_version'))
+                != ('scar.workspace-preparation', 1)
+                or preparation.get('workspace_plan') != receipt['workspace_plan']):
+            raise ValueError('workspace time must retain its exact source preparation and shared workspace plan')
+        target = receipt['target']
+        plan = read_artifact(preparation['step_plan'])
+        # The shared capacity lifetime is already in the v4 source graph.
+        # This selected compute domain proves nothing about the caller's
+        # outer allocator/releaser or an unknown per-iteration host service.
+        context['recipe_binding_cpu_ids'] = plan['resource_binding']['cpu_ids']
+        context['source_refs'] = (*context['source_refs'],
+            {'artifact': receipt['source'], 'locator': '#/step_plan'},
+            {'artifact': receipt['workspace_plan'], 'locator': '#/slots'})
+    elif receipt['source_kind'] == 'stateful_recipe':
         recipe = read_artifact(receipt['source'])
         target = recipe['artifacts']['target_snapshot']
         plan = read_artifact(recipe['artifacts']['stage_plan'])
         # This is a chosen compute domain. Host allocations/guards may execute
         # before pinning and must not be assigned to it without source evidence.
         context['recipe_binding_cpu_ids'] = plan['resource_binding']['cpu_ids']
+    else:
+        raise ValueError('unsupported original temporal resource source')
     context['target_reference'] = target
     read_artifact(target)
     projection = derive_temporal_resources(schedule, Path(target['uri']).parent,

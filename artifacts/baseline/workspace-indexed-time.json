@@ -1,0 +1,181 @@
+{
+  "Implemented": {
+    "body_exit_after_helper_cleanup_and_progress": true,
+    "commands": [
+      "project-workspace-time",
+      "bind-time-resources",
+      "view-graph"
+    ],
+    "explicit_materialization_content_carries": true,
+    "iteration_cost_occurrences_retained": true,
+    "loop_first_last_selectors": true,
+    "per_iteration_guard_array_reads": true,
+    "root_storage_lifetimes": true,
+    "schema_version": 4
+  },
+  "Inferred": {
+    "semantic_graph_supports_once_vs_repeated_accounting": true,
+    "statement": "The graph is a source-backed normal-path requirement, not a physically feasible or optimal timed schedule"
+  },
+  "Observed": {
+    "existing_native_entry_committed_steps": 4,
+    "graphs": [
+      {
+        "boundary_constraints": 10,
+        "case": "source-loop",
+        "content_carries": 1,
+        "events": 35,
+        "exact_numa_placements": 0,
+        "iterations_unrolled": 0,
+        "owned_slots": 2,
+        "retained_budget_bytes": 33554432,
+        "schedule_bytes": 242153,
+        "source_authority": "ORIGINAL_SOURCE_LOOP_PLAN_BOUND",
+        "tasks": 13,
+        "unknown_durations": 13,
+        "unknown_execution_demands": 13
+      },
+      {
+        "boundary_constraints": 14,
+        "case": "scientific",
+        "content_carries": 2,
+        "events": 64,
+        "exact_numa_placements": 0,
+        "iterations_unrolled": 0,
+        "owned_slots": 4,
+        "retained_budget_bytes": 33554432,
+        "schedule_bytes": 491224,
+        "source_authority": "EXPLICIT_FIXED_INPUT_COMPOSITION",
+        "tasks": 24,
+        "unknown_durations": 24,
+        "unknown_execution_demands": 24
+      }
+    ],
+    "hardware_inventory": {
+      "connections": 477,
+      "resources": 204
+    },
+    "viewer_graph_data_bytes": 2567076,
+    "viewer_parts": 27
+  },
+  "Proposed": [
+    "PROVE_IMPLEMENTATION_EXECUTION_CPU_DOMAINS_FROM_ORIGINAL_CONTROL_PATH",
+    "QUALIFY_ONCE_AND_PER_ITERATION_COMPONENT_COSTS_WITH_RESIDUALS",
+    "JOINT_CPU_MEMORY_TIME_PLAN_THEN_SOURCE_BOUND_CPP_EXECUTION_CERTIFICATE"
+  ],
+  "Rejected": [
+    "UNQUALIFIED_CROSS_SCOPE_EVENT_EDGE_AS_LAST_ITERATION",
+    "ADDRESS_EQUALITY_AS_CONTENT_CARRY",
+    "ALLOCATION_OR_RELEASE_MULTIPLIED_BY_TRIP_COUNT",
+    "UNKNOWN_SERVICE_TIME_AS_ZERO",
+    "FIXED_INPUT_COMPOSITION_AS_ORIGINAL_CALLER_LOOP_PROOF",
+    "STRUCTURAL_VALIDATION_AS_INDEXED_NUMERIC_FEASIBILITY"
+  ],
+  "Verified": {
+    "all_view_edges_keep_endpoints": true,
+    "both_resource_publications_independently_cold_read": true,
+    "content_carry_requires_source_and_matching_time_backedge": true,
+    "cpp20_abi1_entry_still_runs": true,
+    "earlier_legacy_temporal_checks_passed": 4,
+    "iteration_unroll_count": 0,
+    "new_aggregate_ir_test_passed": true,
+    "old_v2_v3_wire_bytes_unchanged": true,
+    "source_and_native_byte_replay": true,
+    "typed_graph_storage_alias_fence_and_readiness_checks": true,
+    "viewer_root_storage_and_loop_body_separated": true
+  },
+  "all_three_stages_complete": false,
+  "artifacts": {
+    "integration.json": {
+      "sha256": "55b43b9eccd2a0c626fdd8cad119638dde1760f197e2260df25058194e7e3526",
+      "size_bytes": 173,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/integration.json"
+    },
+    "native-entry.json": {
+      "sha256": "026af594f22d32faac97de2402d38052152bf2fadbad7f3dd96e4fba0fe64e84",
+      "size_bytes": 1722,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/native-entry.json"
+    },
+    "scientific-resources/resources.json": {
+      "sha256": "e40d29151204aa9e4073b13e9a0e421b83ff627feb51d11271dda2ae4462c5a8",
+      "size_bytes": 41163,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/scientific-resources/resources.json"
+    },
+    "scientific-resources/result.json": {
+      "sha256": "64f7b27d6e8a039505b4b630b1197d8c3b7ce674eea3bdc78f829b3ffe67f366",
+      "size_bytes": 1304,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/scientific-resources/result.json"
+    },
+    "scientific/result.json": {
+      "sha256": "c4912957f4e5bcc226b118e256e94bbb0ce0688465834326a83d5d8858a07da6",
+      "size_bytes": 5086,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/scientific/result.json"
+    },
+    "scientific/schedule.json": {
+      "sha256": "f79fc939af2d072ffb66cd0028d2706170c1a5d77def31c51c5b2ffaa1e02224",
+      "size_bytes": 491224,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/scientific/schedule.json"
+    },
+    "source-loop-resources/resources.json": {
+      "sha256": "af08f5bc07e293de7b25fd8ebd5fc7e29541eb7647658d716802edc1e57bbf63",
+      "size_bytes": 24884,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/source-loop-resources/resources.json"
+    },
+    "source-loop-resources/result.json": {
+      "sha256": "f0b3a27196a17e04ff3d8c8928c81d0e0e8dddd7c0dbabb9c604ac79ef44cd76",
+      "size_bytes": 1306,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/source-loop-resources/result.json"
+    },
+    "source-loop/result.json": {
+      "sha256": "536bd3c9869f53b902c5ebebebd0560325ffc81ca51103e37d91836f30134437",
+      "size_bytes": 4830,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/source-loop/result.json"
+    },
+    "source-loop/schedule.json": {
+      "sha256": "3ced9629e88b0aa5a0cd440e5e122636dc32cbd65ef2148880a974e77593309a",
+      "size_bytes": 242153,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/source-loop/schedule.json"
+    },
+    "verification.json": {
+      "sha256": "f356b28566438c34ca71abfb940aab29ab28f0beff342f73c322e18e56a5f95b",
+      "size_bytes": 822,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/verification.json"
+    },
+    "view/result.json": {
+      "sha256": "407993d6dda61a957c508fc1562be607937b587a7ff8bc0103987c0aa6beb3e7",
+      "size_bytes": 5737,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-time-v1/view/result.json"
+    }
+  },
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "limitations": {
+    "failure_path_timing_modeled": false,
+    "indexed_numeric_bounds_feasibility_proven": false,
+    "new_graph_consumed_as_executable_cpp_plan": false,
+    "path_condition": "NORMAL_COMPLETE",
+    "python_packing_lock_and_ffi_modeled": false,
+    "resource_capacity_feasibility_proven": false
+  },
+  "native_math_or_libraries_modified": false,
+  "new_native_compilation": false,
+  "new_performance_measurement": false,
+  "original_workload_source_modified": false,
+  "physical_optimality_proven": false,
+  "schema": "scar.workspace-indexed-time-acceptance",
+  "schema_version": 1,
+  "source_sha256": {
+    "scar/analysis/workspace_time.py": "10975ca4d3eb6a59839e7653d3ad5ee1d8b7411cbfffebb380556af81af46416",
+    "scar/cli.py": "60038ccbd1521f68182aa802be2d866623008bdc5fa86e00a6baff7d2f6b1c74",
+    "scar/compiler/bind_time_resources.py": "e5d588839654690cd7ea084107916378f9654f44d1963ceca63cbe9f00a0ba81",
+    "scar/compiler/project_workspace_time.py": "04adcde2913dc753748022045dedbb957e205c10d3c853120632fc8b5b71747c",
+    "scar/compiler/time_schedule.py": "17674fa28175a68501d0e215a4145cf2fd39ce48bc93779567a25e38f66c40c2",
+    "scar/ir/versioned_schedule.py": "50a5a7ec5747e80637b00e259c9fb87810dc7c2627c5ac32a49c77b8023bd25f",
+    "scar/optimization/schedule.py": "7aea55ca2696a82e07fa1bcada5bb876614320779a02711e6e6890b3759300d5",
+    "scar/visualization/adapters.py": "71988c858c29f588aadeb99bb81c1edc5f07b9f31db565a341a997d6b5ede3db",
+    "scar/visualization/cli.py": "b9b421cd701cdda8c187aa664e7aee8e6aa822a836d7a2abe9b0f47682bb8825",
+    "tests/unit/test_workspace_temporal_ir.py": "883d1e65e314b33fb8e83b1af0a9811dde31a346bc3f2741046f30613bd088e9"
+  },
+  "status": "VERIFIED_NORMAL_COMPLETION_SOURCE_AND_RESOURCE_PROJECTION",
+  "whole_program_speedup": null
+}
