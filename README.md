@@ -7,11 +7,20 @@ State · Control · Action · Resource：面向Python程序的宏观编译器。
 当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
 已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
 完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
-主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 1000 步当前完整入口 A/B：原版11.136s、显式单线程C++版本3.939s，**2.8271×**（1组预热、3组交替测量的中位数）。完整CPU域自动选择仍缺native成本；另两项只有基线，详见 [当前状态](docs/STATUS.md)。
+主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 1000 步已验证的完整入口 A/B：原版11.136s、显式单线程C++版本3.939s，**2.8271×**（1组预热、3组交替测量的中位数）。本轮有序状态区域成本域为49个KNOWN（含原执行）/58个UNRESOLVED，仍NO_OP；另两项只有基线，详见 [当前状态](docs/STATUS.md)。
 LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
 后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
 
 ## 使用
+
+从已有主build自动展开有序内容子图、接通原caller接口并独立读回；正文与循环保持共享，输出按typed表分片：
+
+```bash
+scar inspect-ordered-activations --build /path/to/program-build --out /path/to/ordered-graph
+scar read-ordered-activations /path/to/ordered-graph/region-0/interfaces --out /path/to/cold-replay.json
+```
+
+当前该接口保存有条件的数据、world和控制依赖；通过图读回不等于已证明跨调用内容不变或可以reuse。每轮的层次、验收与缺口见[当前状态](docs/STATUS.md)。
 
 有序数组状态区域：从原 F4 自动发现字段读、求值、切片写入，再规划 barrier/临时存储并生成 C++20；当前需要显式形状、CPU 和数组 payload 预算。源程序不修改，产物尚未测量时不自动启用。
 

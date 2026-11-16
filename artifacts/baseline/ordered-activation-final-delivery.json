@@ -1,0 +1,193 @@
+{
+  "final_delivery": {
+    "correctness_pairs_validated": true,
+    "decision": "NO_OP",
+    "fallback_calls": 0,
+    "native_calls": 8,
+    "performance": {
+      "baseline": {
+        "max_ns": 221159457,
+        "median_ns": 220020090,
+        "min_ns": 217669387,
+        "samples_ns": [
+          217669387,
+          221159457,
+          220020090
+        ],
+        "stdev_ns": 1779726.119369588
+      },
+      "gain_fraction": -0.7913669338104534,
+      "optimized": {
+        "max_ns": 397376098,
+        "median_ns": 394136714,
+        "min_ns": 383835545,
+        "samples_ns": [
+          397376098,
+          383835545,
+          394136714
+        ],
+        "stdev_ns": 7070528.822889016
+      },
+      "speedup": 0.5582329232084682
+    },
+    "positive_release_observed": false,
+    "reason": "NOT_PROFITABLE",
+    "repetitions": 3,
+    "result": {
+      "schema": "scar.final-caller-delivery-acceptance",
+      "sha256": "7f81a19923d527023e7ee618e09aca03e1997d725fa007675bc2d4fd87aa62ac",
+      "size_bytes": 5212,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/final-caller-delivery-v1/result.json"
+    },
+    "scope": "UNCHANGED_PYTHON_ENTRY_VS_SINGLE_CPP_CALLER_IMPLEMENTATION_THROUGH_FINAL_COMPACT_CAPSULE_ADMISSION",
+    "slot_bytes": 4096,
+    "status": "REJECTED",
+    "warmup_pairs": 1
+  },
+  "graph": {
+    "automatic_region_discovery": true,
+    "cold_replay": {
+      "schema": "scar.ordered-activation-independent-replay",
+      "sha256": "09d1bd60f6f947b13e1119bca969778232c1052672d516617ce39666fe0dfa6a",
+      "size_bytes": 4013,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/ordered-activation-v1/independent-cold-replay.json"
+    },
+    "cold_replay_seconds": 27.657495723979082,
+    "limits": [
+      "SUPPORTED_ORDERED_ARRAY_PROFILE_ONLY",
+      "CONDITIONAL_INTERFACES_NOT_RUNTIME_INVOCATIONS",
+      "NO_GLOBAL_CONTENT_VERSION_EQUALITY_OR_TRANSFORMATION_AUTHORITY"
+    ],
+    "publication": {
+      "schema": "scar.ordered-activation-graph-catalog",
+      "sha256": "07359b99b7b87889076c97e8e1c34cc5143f5d095277602812f51fb8b5310367",
+      "size_bytes": 49750,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/ordered-activation-v1/automatic-current/result.json"
+    },
+    "publication_seconds": 31.482147297996562,
+    "status": "VERIFIED",
+    "summary": {
+      "bindings": 1,
+      "boundary_ports": 6,
+      "call_contexts_are_alternative_implementations": true,
+      "inline": {
+        "boundaries": 0,
+        "distinct_frames": 2,
+        "distinct_queries": 2,
+        "inline_origins": 32,
+        "runtime_invocations_created": 0,
+        "source_contexts_are_conditional": true,
+        "target_executed": false,
+        "transformation_authorized": false
+      },
+      "input_boundaries": 0,
+      "input_routes": 7,
+      "logical_content_version_equality_proven": false,
+      "route_kinds": {
+        "COMPLETION": 2,
+        "CONTAINS": 6,
+        "CONTROL_FLOW": 3,
+        "ENVIRONMENT": 2,
+        "IMPLEMENTATION": 2,
+        "PROJECTION": 14,
+        "STATE_INPUT": 9,
+        "STATE_INTERFACE": 3,
+        "STATE_OUTPUT": 2
+      },
+      "routes": 43,
+      "runtime_invocations_created": 0,
+      "schema": "scar.ordered-region-matched-activation",
+      "target_executed": false,
+      "transformation_authorized": false
+    },
+    "validation": {
+      "abstract_context_prefix": "OPEN_NOT_A_RUNTIME_STACK",
+      "bidirectional_missing": 0,
+      "frontier_queries": {},
+      "iterations_unrolled": false,
+      "parametric_routes": 43,
+      "projected_edges": 360,
+      "runtime_invocation_proven": false
+    }
+  },
+  "layer_order": {
+    "delivery": [
+      "C0 plan admission",
+      "C1 C++20 lowering",
+      "C2 guarded runtime package",
+      "C3 final-entry correctness and clean A/B"
+    ],
+    "graph": [
+      "G0 source context",
+      "G1 syntax and scope",
+      "G2 local ports",
+      "G3 matched cross-layer interfaces",
+      "G4 runtime and hardware evidence"
+    ],
+    "optimization": [
+      "O0 source admission",
+      "O1 structural legality",
+      "O2 resource cost coverage",
+      "O3 finite-domain choice",
+      "O4 replay and NO_OP"
+    ]
+  },
+  "lewm_speedup_verified": false,
+  "new_math_backends_added": false,
+  "next_layers": [
+    {
+      "layer": "G3",
+      "status": "PROPOSED",
+      "task": "derive content identity and validity across calls from original state/effects"
+    },
+    {
+      "layer": "O2",
+      "status": "IMPLEMENTED",
+      "task": "shared canonical packs and independent sampling for remaining 104 CPU contexts; full-domain batch acceptance pending"
+    },
+    {
+      "layer": "C3",
+      "status": "PROPOSED",
+      "task": "apply only a complete qualified cost choice then measure a profitable supported workload through final delivery"
+    }
+  ],
+  "parallel_cost": {
+    "choice": {
+      "schema": "scar.stateful-cpu-choice",
+      "sha256": "7c825df6e4b9ee2221adbbc5ba2e9a223f334e02481fdc715c90adb271897b95",
+      "size_bytes": 2901260,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/parallel-instruction-cost-v1/full-domain-current/choice/choice.json"
+    },
+    "cost_status_counts": {
+      "KNOWN": 3,
+      "UNRESOLVED": 104
+    },
+    "decision": "NO_OP",
+    "model": {
+      "schema": "scar.stateful-cpu-cost-profile",
+      "sha256": "d1767f4bce33094d57f9a8310af1408072b6cdbd34aacc406325a1119721642b",
+      "size_bytes": 12770,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/parallel-instruction-cost-v1/complete-cpu0-3-model/profile.json"
+    },
+    "projection": {
+      "schema": "scar.stateful-resource-calibration",
+      "sha256": "33bb370d50cb9b25d04d393041a327250f7a96b1ec22682a4f156cb6c27c0df9",
+      "size_bytes": 101049,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/parallel-instruction-cost-v1/components-cpu0-3/observations.json"
+    },
+    "scope": "ONE_ORIGINAL_METHOD_CALL_SITE_FORWARD_MODEL_NOT_WHOLE_ENTRY_SPEEDUP",
+    "status": "VERIFIED",
+    "strict_replay": {
+      "schema": "scar.parallel-model-rebase-validation",
+      "sha256": "d7b5bc73594da909ba896b53f5df9a8ad28b588adbe259874504a37262be3b73",
+      "size_bytes": 436,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/parallel-instruction-cost-v1/strict-rebase-validation.json"
+    },
+    "whole_domain_qualified": false
+  },
+  "parent_commit": "0ace93a2",
+  "schema": "scar.layered-activation-cost-final-delivery-gate",
+  "schema_version": 1,
+  "target_specific_optimization_rules_added": false,
+  "whole_system_complete": false
+}

@@ -1,0 +1,186 @@
+{
+  "evidence": {
+    "admission": {
+      "schema": "scar.admitted-cpu-domain-batch-plan",
+      "sha256": "c15f29af2c31d39bd3ad49c9bb73a32da8d8dfad15db9224ca425ef2c57e2e11",
+      "size_bytes": 1229850,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/admitted-current/result.json"
+    },
+    "aux_pilot_replay": {
+      "schema": "scar.cpu-batch-pilot-auxiliary-replay",
+      "sha256": "12807f2296bacfc6bff21bd3b4f4ccb8c2b9af042df95fa40ff12720b91c19e4",
+      "size_bytes": 5258,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/pilot-aux-replay.json"
+    },
+    "choice": {
+      "schema": "scar.stateful-cpu-choice",
+      "sha256": "5ee0113b16cad4e4a527923d44d9422ee586a082fe6e8cfbef49f5bc36472e25",
+      "size_bytes": 4246944,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/admitted-current/choice/choice.json"
+    },
+    "design": {
+      "schema": "scar.cpu-domain-batch-design",
+      "sha256": "dda26b28b3c3ae5337811d827ec14e76813ad5b7d245b0edfb2f5b67315eb164",
+      "size_bytes": 88682,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/design/design.json"
+    },
+    "residuals": {
+      "schema": "scar.cpu-domain-batch-residual-diagnostics",
+      "sha256": "e39ed66d05f14476cf9dd97604fb306503d15324d66107274cc8f17ebee1b39f",
+      "size_bytes": 197860,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/residual-diagnostics-final/result.json"
+    },
+    "sampling": {
+      "schema": "scar.cpu-domain-batch-result",
+      "sha256": "783c95f6e5e8c40acedf6def1855c000da8785c585e1a94645ac64d27e8fd021",
+      "size_bytes": 295921,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/runs/result.json"
+    }
+  },
+  "implementations": [
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "757eeb0c718ed2833f0f652912bb7cbd03a62518bf36d66fc566c977596f0028",
+      "size_bytes": 32728,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_instruction_cost.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "4015887239259bf11334ac9f36a79d79c8376fe98a88b9720a03cf23a5b71253",
+      "size_bytes": 6473,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_instruction_v1.cpp.in"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "1a14d5810b0d4ae72d8a8dd5af57e2caf77743f7e290e723c5285eaebf6f6587",
+      "size_bytes": 15815,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_instruction_replay.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "9d6bc26dcb15947fe2a4bf8d5eb7d9828221d9b4fe97bb1d3955f8565b913872",
+      "size_bytes": 29606,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_boundary_resource.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "b2100cf01dfeb8e5c7a70d21a81e237e55ab223a2542e843d71db6eba417b25d",
+      "size_bytes": 17966,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_boundary_resource_replay.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "6aad20ab78ba4dd1c3e1451107198f268867de705ff0ca6af17fee8f4a528e1c",
+      "size_bytes": 13270,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_cost_diagnostics.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "71c07b6252fc9dfa6a8b2190092c0f51ecc2e22f334425912c199481141dfb58",
+      "size_bytes": 8689,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/calibrate_cpu_domain_batch.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "5b8bab134a24e9c73a23edaf248d9eb470d2110dd6d3323234ed31382bf912a2",
+      "size_bytes": 10619,
+      "uri": "/home/zyf/AAA/scar/scar/optimization/stateful_batch_cost.py"
+    }
+  ],
+  "implemented": {
+    "explicit_replay_session": true,
+    "fresh_child_per_mask": true,
+    "independent_raw_per_context": true,
+    "old_profiles_also_strictly_replayed": true,
+    "per_context_holdout": true,
+    "shared_canonical_compiler_packs": true,
+    "source_and_mca_replay_not_target_trials": true
+  },
+  "inferred": [
+    "A prediction farther than20% from every retained repeat cannot be made admissible merely by choosing another one of those3 samples.",
+    "Large repeatable residuals support insufficient model scope for those canonical cases;3 repeats do not establish hardware causality or confidence bounds.",
+    "MEMORY/MCA dominance labels identify which declared proxy won max(), not a measured physical bottleneck.",
+    "NUMA and SMT group differences are descriptive associations; allocation is UNBOUND and the host was not isolated."
+  ],
+  "next": {
+    "C3": "validate only admitted implementations and use final-path clean A/B for profitability",
+    "G3": "cross-call logical content identity from original alias/write/effect facts",
+    "O2": "explain stable parallel-model residuals then freeze a corrected model and qualify fresh holdouts",
+    "O3": "select only after remaining options have admitted costs or justified exclusion"
+  },
+  "no_new_target_speedup_claim": true,
+  "not_established": [
+    "physical causes of residuals",
+    "arbitrary CPU-subset optimality",
+    "wall-clock performance of any target variant",
+    "statistical confidence or theoretical bounds"
+  ],
+  "observed": {
+    "all_child_exit_zero": true,
+    "complete_new_profiles": 46,
+    "controller_reused_two_previously_completed_pilot_records": true,
+    "final_controller_wall_seconds": 558.8105399019842,
+    "fixed_policy": {
+      "batch": 4,
+      "maximum_holdout_relative_error": 0.2,
+      "old_mask_times_reused": false,
+      "one_fresh_process_per_mask": true,
+      "repetitions": 3,
+      "retry_failed_contexts": false,
+      "sequential_sampling": true,
+      "target_variant_trials": false,
+      "warmup": 1
+    },
+    "maximum_child_peak_rss_kib": 102384,
+    "new_cpu_contexts": 104,
+    "retained_artifacts_bytes": 235789933,
+    "summed_all_104_child_wall_seconds": 573.5465930471837,
+    "target_variants_ranked": false,
+    "target_workload_executed": false,
+    "unresolved_new_profiles": 58
+  },
+  "parent_commit": "0ace93a2",
+  "physical_optimality_proven": false,
+  "rejected": {
+    "all_failures_are_noise": false,
+    "details": {
+      "consumed_backing_groups": [
+        2
+      ],
+      "contexts": 104,
+      "controller_wall_seconds": 558.8105399019842,
+      "independent_holdout_records": 3328,
+      "maximum_child_peak_rss_kib": 102384,
+      "stable_rejected_records": 46,
+      "statuses": {
+        "COMPLETE": 46,
+        "UNKNOWN": 58
+      },
+      "summed_observed_calibration_seconds": 130.88354656199226,
+      "target_backing_group_records": 1664,
+      "target_backing_group_rejected_records": 102,
+      "unknown_contexts_with_rejected_prediction_more_than_20_percent_from_every_repeat": 41,
+      "unknown_contexts_with_stable_rejected_record": 31,
+      "unknown_contexts_without_any_rejected_prediction_more_than_20_percent_from_every_repeat": 17
+    },
+    "fixed_holdout_error_threshold": 0.2,
+    "unknown_costs_filled_with_zero": false
+  },
+  "schema": "scar.layered-cpu-domain-batch-gate",
+  "schema_version": 1,
+  "status": "VERIFIED_PARTIAL_COST_DOMAIN",
+  "verified": {
+    "complete_cost_domain": false,
+    "decision": "NO_OP",
+    "deployment_authorized": false,
+    "new_profile_replays": 46,
+    "retained_profile_replays": 2,
+    "selected_id": null,
+    "strict_readback_seconds": 289.3506661609863,
+    "whole_domain_cost_status": {
+      "KNOWN": 49,
+      "UNRESOLVED": 58
+    }
+  },
+  "whole_system_complete": false
+}
