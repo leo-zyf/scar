@@ -2,9 +2,11 @@
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
-最新增量贯通了标准 ndarray C-order copy：原 F4 识别及完整 CALL 来源 → 内容模板/独立物化图 → 内部 copy 转发并保留最终 fresh 输出 → C++20/ABI1 → 跨函数 compact guard 与原函数回退。`compile-region --catalog` 自动发布 typed `value-templates` 分片，冷读重做源及优化器推导、实际核对公共图双向连接；输入变化不会复用旧值。
+最新主链：`compile-caller-pipeline --pipeline-workers N` 自动发布原 caller 的参数替换/数据图，重放 pool 生命周期，生成 RAW/WAR/WAW、实际 CPU 与静态 wave 计划，再交既有 ABI1 算子/C++20 host。每个 leaf 单核，wave 内 CPU 不重叠；全部 worker join 后才能推进或回退。语义依赖图没有硬化 wave 的额外 barrier。
 
-6个真实静态区域与跨函数 caller 已做非计时 native 验收；自定义 copy 的副作用、输入修改和输出修改均保持合同。新增能力的正常完成合同不承诺保留内部 allocation 失败序列；F/K或动态 order 仍明确拒绝。报告在 `artifacts/current/experiments/array-copy-v1/`。规则及 runtime SHA 随实现更新，下面较早 gate 的 receipt 保留为历史证据，不能自动给当前版本授权；当前未测加速比、未自动部署。
+真实 fork/join：3 CALL、5值、41条公共关系、10个资源任务；前两步 CPU0/1，第三步等待两者。冷读、native、浮点溢出回退、舍入/affinity恢复，以及普通入口 compact 交付均已非计时验证。耗时全为 UNKNOWN，wave 只是合法执行预览，默认仍 NO_OP；没有最优性能或加速比结论。报告在 `artifacts/current/experiments/pipeline-waves-v1/`。
+
+此前也已贯通标准 ndarray C-order copy 的内容转发与独立物化，报告在 `array-copy-v1/`。规则/runtime SHA 更新后的旧 receipt 仅保留历史证据，不能授权当前实现；这些封闭区域的正常完成合同不承诺内部 allocator/异常序列一致。
 
 ## 分层顺序
 
@@ -56,8 +58,8 @@ CPU/cache 足迹也已有结构化推导：共享缓存域、SMT、按 storage �
 
 ## 接下来仍需开发
 
-1. 建图：已区分区域内参数化内容模板与物化；继续把条件 state-path 关系推进为可证明的跨调用逻辑值/版本，扩大 callback、对象协议与外部算子接口的效果摘要。当前未证明的行为有具体前沿。
-2. 化简：扩大结构规则和实现域，完善27个未决区间所需的模型事实；再接多区域资源调度、搬运/就绪/生命期、NUMA 与多进程。当前单 warm method 方案选择不是全程序 makespan 优化，未支持 MPI 或 GPU offload。
+1. 建图：已能在闭合 caller 内替换形参内容根并连接共享 leaf；继续把有写入的条件 state-path 推进为跨调用逻辑值/版本，扩大 callback、对象协议与外部算子效果摘要。相同引用仍不证明跨激活内容相同。
+2. 化简：已有纯数组多区域 CPU waves 与 pool hazard 约束；继续补联合内存/放置/就绪调度、NUMA、多进程和成本事实。当前固定 pool/显式 CPU 预览不是全程序 makespan 优化，未支持 MPI 或 GPU offload。
 3. 交付：扩大可降低的数据类型、控制/对象和外部接口，统一更多已准入 artifact。当前不是任意 Python 的独立 C++ 主程序；Sunfish/Cirq 未获得完整编译闭环，当前也没有 GPU/LeWM 新验证。
 
 当前首先补核心能力与接口，之后才恢复新路径的性能准入。历史 A/B、失败模型和诊断材料保持原样，详见既有 baseline JSON；不将它们改写为当前版本结果。

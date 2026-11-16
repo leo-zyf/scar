@@ -7,6 +7,8 @@ SCAR 是宏观编译器：用有类型、可展开的图统一表示程序及硬
 
 数组区域另有定义期的 `ArrayValueTemplate`：内容模板是本区域输入版本的参数化函数，不是运行时 LogicalValueID 或跨调用缓存键。标准 ndarray C-order copy 可以与输入具有相同内容模板，但仍各有独立 ValueID 和 fresh 物化要求；slice 是 view，不能混为 copy。原 F4 CALL/receiver/参数/world 保留来源；编译入口把这些关系接入公共图，冷读重新执行源准入和结构推导。只有封闭类型/效果和稳定输入合同成立时才能转发内部 copy，最终独立输出仍须生成。
 
+`CallerValueProjection` 按原 actual/formal 路由替换共享 leaf 的内容根，连接 `Value → CALL → fresh Result`；world 单独连状态接口，不参与内容相等判定。每个 CALL 保留原 Frame/FactRef，递归展开引用共享正文，不能把原 F4 Frame 直接套进另一个模板 namespace。资源计划另从数据边与 pool 复用推导 RAW/WAR/WAW；静态 wave 是它的执行细化，不能冒充源码必需顺序或最优时间表。
+
 ## 五类核心实体
 
 统一查询使用`ProgramView`与既有`ProgramDependencyGraph`。源码ID由原unit、编译/绑定profile、template和原Step/Region/完整Port限定，不随查询函数或展开顺序改变；节点投影保双向来源，不重新生成操作语义。

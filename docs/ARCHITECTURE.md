@@ -32,6 +32,8 @@ Control、数据依赖、状态版本、别名和资源映射是不同关系，�
 
 CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保留SMT、对齐未知和层级。访问足迹不等于峰值驻留或缓存失效率；指令调度模型也不能替代这一层。多区域异步/跨设备联合调度仍需继续开发。
 
+闭合数组 caller 已接入 `caller_pipeline_values → pipeline_schedule → pipeline_parallel_v1`：复用原参数/返回和共享 leaf，先推导数据依赖及 pool 的全部旧消费者 WAR，再生成有界 CPU waves。现有 v2 typed task graph 保留分配、就绪、成功 fence、释放及 fresh export；每任务使用原硬件线程引用。时间保持 UNKNOWN，独立 exact solver 尚未替它建立物理最优性。
+
 ## 3. C++20与运行交付
 
 C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间选择共用 `selected_stateful_lowering`，再经原 `ExecutionRecipe` / task graph进入既有C++20代码生成；算子与stateful ABI均为v1。接口未知时保留原执行。

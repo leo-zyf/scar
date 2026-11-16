@@ -1,0 +1,226 @@
+{
+  "automatic_deployment": false,
+  "evidence": {
+    "final_entry": {
+      "schema": "scar.pipeline-waves-final-entry-correctness",
+      "sha256": "a46a2bfdb2fed7a721d2697b1accf57e46b4c0200aba442c70cdc4c7fdc53866",
+      "size_bytes": 3636,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/final-entry-correctness.json"
+    },
+    "independent_replay": {
+      "schema": "scar.pipeline-waves-main-chain-replay",
+      "sha256": "8a48aaaeb0faab24c2d80ba0710bec4eb0a4e4a37cef2866e2683874e4e0472f",
+      "size_bytes": 2949,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/main-chain-replay.json"
+    },
+    "main_compile": {
+      "schema": "scar.caller-matched-pipeline-lowering",
+      "sha256": "160e9375e0de0f070e089e4c654ac279b1604ecad81856c2c3e3264e1c4b8728",
+      "size_bytes": 4806,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/compiled-main/result.json"
+    },
+    "native_correctness": {
+      "schema": "scar.pipeline-waves-native-correctness",
+      "sha256": "46d7ba7ea2caf5976302cb2432b230a13ecb5d754b6f2dfe795fb8a0aea149d7",
+      "size_bytes": 3914,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/native-correctness.json"
+    },
+    "original_source_proof": {
+      "schema": "scar.caller-matched-array-pipeline-proof",
+      "sha256": "76e92ef7fb7c3ac6aca47bf600ee5a1f35bf42a24a016ce4e56fbb6038e29a8d",
+      "size_bytes": 535765,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/compiled-main/proof.json"
+    },
+    "resource_plan": {
+      "schema": "scar.pipeline-resource-plan",
+      "sha256": "eb7004395d412e7a174c4a647dd3a87fdac513f520bf3c6f380d75de03b7a082",
+      "size_bytes": 72622,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/compiled-main/compiled/pipeline-0/resource-plan.json"
+    },
+    "source_program": {
+      "schema": "scar.program-build",
+      "sha256": "a82fa1f20b8067ab6d0f798270cefa200b591735b1e9f3a45e944a1ec45eee8f",
+      "size_bytes": 12284,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/program-build/manifest.json"
+    },
+    "source_values": {
+      "schema": "scar.caller-pipeline-values",
+      "sha256": "356f2caa270c488b53e26a90884f6228e8cf0758687834455c92aa5c774203d0",
+      "size_bytes": 4640,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-waves-v1/compiled-main/program-values/result.json"
+    }
+  },
+  "formal_checks": {
+    "command": "python -m pytest -q tests/unit/test_pipeline_schedule.py",
+    "missing_war_rejected_by_existing_v2_validator": true,
+    "passed": 2
+  },
+  "implementation": {
+    "scar/analysis/caller_pipeline_values.py": "236cf2b34c7d00ab6add6b2600be5ffbb61026a8ecb1e9c738c90cd284befa2f",
+    "scar/codegen/pipeline.py": "2c3588ab537c72e37f11ab38d9dc08190c1b0ce8de90809cd43c867cdfc3f0be",
+    "scar/codegen/pipeline_parallel_v1.cpp.in": "463531b74e7ba2020c6f08dbc73a080f536e4a211d3fd2a692b9c664b8ddc092",
+    "scar/compiler/caller_pipeline.py": "61582b6e48df5dfee1e385afadc34cfc40577ac34090f2dd2dabcde1a17dfa94",
+    "scar/compiler/caller_pipeline_runtime.py": "a30fa70956ef0e2a2b9312ae9e1f123f4c621028ecdd8e3609db184ffa5934c4",
+    "scar/compiler/compile_caller_pipeline.py": "3cd7ad3acb929f85584a85b10513b3483bb13594ed9116a9fa3f4a35d32d9b0b",
+    "scar/compiler/compile_pipeline.py": "d43d12a12d99ea9f5908c001550006ef748da3087e423f9733045200ad574671",
+    "scar/ir/program/caller_pipeline_values.py": "1257290c829974ded182a974a858ab5a0f19f49b49d533cf9f60148a42b4dea4",
+    "scar/optimization/pipeline_schedule.py": "edc3362960b6fd78247edda72dad640106b26ce3b4fac8931ade702e8b9892b1",
+    "scar/runtime/caller_pipeline_guard.py": "f85e529ff16ce929190e74ade371d0328186da2b0d7677caeadee5175fb50b0e"
+  },
+  "objective": "Develop modeling, hardware-aware graph simplification/planning, and C++20 delivery before new speed experiments.",
+  "performance_measured": false,
+  "physical_worker_overlap_timing_observed": false,
+  "release_exported": false,
+  "remaining": [
+    "Mutable cross-call content versions, callbacks/object protocols and wider source/operator coverage.",
+    "Joint storage/placement/implementation choice and actual-ready scheduling beyond fixed-pool waves; no global makespan optimum.",
+    "More C++ control/data/external interfaces; current entry and compatibility I/O still use Python.",
+    "MPI/GPU offload not implemented; no new LeWM/GPU verification; Sunfish/Cirq full compilation remains incomplete."
+  ],
+  "schema": "scar.three-stage-pipeline-wave-gate",
+  "schema_version": 1,
+  "speedup_claimed": false,
+  "stages": {
+    "delivery": {
+      "actual_single_cpu_leaf_bindings": [
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          0
+        ]
+      ],
+      "compact_compiler_imports_forbidden": true,
+      "complete_rounding_and_flags_restored": {
+        "bitwise_equal_to_original_in_same_mode": true,
+        "caller_sticky_flags_after": 33,
+        "caller_sticky_flags_before": 33,
+        "complete_caller_flags_preserved": true,
+        "mode": "FE_DOWNWARD_LINUX_X86_64",
+        "mode_value": 1024,
+        "rounding_preserved": true
+      },
+      "cpp_standard": 20,
+      "default": {
+        "fallback_calls": 1,
+        "native_calls": 0,
+        "reasons": {
+          "NO_OP_cost_unknown_no_candidate_measurement": 1
+        }
+      },
+      "entry_explicit_native_calls": 1,
+      "entry_fallback_calls": 0,
+      "finite_input_worker_overflow": {
+        "actual_failed_source_call_index": 1,
+        "actual_native_status": 103,
+        "external_inputs_unchanged": true,
+        "final_wave_not_dispatched_private_output_untouched": true,
+        "guarded_native_last_status": 103,
+        "returned_original_output_bitwise_equal": true,
+        "source_inputs_finite": true,
+        "whole_caller_fallback_calls": 1,
+        "worker_join_policy": "ALL_STARTED_JTHREADS_JOINED_BEFORE_FAILURE_PUBLICATION"
+      },
+      "fresh_and_nonaliasing": true,
+      "full_python_entry_lowered_to_standalone_cpp": false,
+      "mathematical_backend_added": false,
+      "native_validation": {
+        "fallback_calls": 1,
+        "native_calls": 5,
+        "reasons": {
+          "native_private_output_guard_declined": 1
+        }
+      },
+      "operator_abi_version": 1,
+      "original_entry_outputs_equal": true,
+      "original_source_and_elf_unchanged": true,
+      "readonly_input_aliasing_verified": true,
+      "same_abi_tables_reused": true,
+      "status": "IMPLEMENTED_VERIFIED"
+    },
+    "modeling": {
+      "actual_formal_and_returns_from_original_source_proof": true,
+      "caller_input_content_substitution": true,
+      "raw_unoptimized_leaf_not_fabricated": true,
+      "runtime_logical_versions_created": 0,
+      "shared_leaf_definitions_not_cloned": true,
+      "source_bound_macro_graph": {
+        "calls": 3,
+        "content_templates": 5,
+        "field_frontiers": 0,
+        "fresh_call_results": 3,
+        "input_shapes": {
+          "x": [
+            8,
+            8
+          ],
+          "y": [
+            8,
+            8
+          ]
+        },
+        "leaf_representation": "OPTIMIZED_SHARED_LEAF_AND_REPLAYED_SOURCE_OPERATION_MAP_NOT_COMPLETE_RAW_LEAF",
+        "nodes": 13,
+        "physical_allocations_observed": 0,
+        "relations": 41,
+        "runtime_logical_versions_created": 0,
+        "scope": "PARAMETRIC_CONTENT_FOR_ONE_CLOSED_CALLER_ACTIVATION",
+        "source_bodies_copied": 0,
+        "source_proof_replayed": true,
+        "target_executed": false,
+        "transformation_authorized": false,
+        "values": 5
+      },
+      "status": "IMPLEMENTED_VERIFIED",
+      "tensor_values_recorded": false,
+      "world_not_part_of_content_equality": true
+    },
+    "planning": {
+      "all_durations_unknown": true,
+      "all_previous_slot_consumers_precede_reuse": true,
+      "allocation_policy": "FIRST_FEASIBLE_EXECUTOR_UNRANKED_EXPLICIT_VALIDATION_PREVIEW",
+      "call_cpu_ids": {
+        "call:0": 0,
+        "call:1": 1,
+        "call:2": 0
+      },
+      "execution_family": "DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1",
+      "incremental_budget_bytes": 1048576,
+      "incremental_payload_bytes": 1536,
+      "input_backing_extent": "UNKNOWN",
+      "makespan_optimized": false,
+      "model_optimum_proven": false,
+      "numa_memory_policy": "UNBOUND",
+      "physical_optimality_proven": false,
+      "readonly_input_aliasing_allowed": true,
+      "requested_cpu_width": 2,
+      "source_raw_data_dependencies": {
+        "call:0": [],
+        "call:1": [],
+        "call:2": [
+          "call:0",
+          "call:1"
+        ]
+      },
+      "status": "IMPLEMENTED_VERIFIED_LEGAL_PREVIEW",
+      "tasks": 10,
+      "typed_v2_happens_before_verified": true,
+      "wave_barriers_not_hardcoded_in_base_dependency_graph": true,
+      "waves": [
+        [
+          "call:0",
+          "call:1"
+        ],
+        [
+          "call:2"
+        ]
+      ]
+    }
+  },
+  "status": "VERIFIED_CLOSED_CALLER_DAG_CPU_WAVES_NOT_GENERAL_COMPLETION",
+  "three_stages_globally_complete": false,
+  "workload_specific_rule_added": false
+}
