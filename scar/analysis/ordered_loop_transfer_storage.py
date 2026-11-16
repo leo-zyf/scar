@@ -20,6 +20,7 @@ from scar.analysis.read_ordered_activations import (_header as _activation_heade
     _read_tables as _activation_tables)
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import ordered_loop_transfer as R
+from scar.ir.program import source_selected_call_window as W
 from scar.ir.program.dependencies import DependencyEdge
 from scar.ir.execution_recipe import artifact_reference,read_artifact
 from scar.ir.record_codec import encode,decode
@@ -36,13 +37,15 @@ _FIELDS={'schema','schema_version','lifetime_publication','activation_publicatio
 def _pins():
     from scar.analysis import (ordered_loop_transfer,source_loop_dependencies,source_value_flow,
         source_reference_slice,source_namespace_interfaces,source_call_view,normal_graph,normal_output,
-        read_ordered_lifetimes,ordered_region_lifetime)
+        read_ordered_lifetimes,ordered_region_lifetime,source_selected_call_window)
+    from scar.ir.program import source_selected_call_window as W
     from scar.ir import record_codec
     modules=(('storage',__import__(__name__,fromlist=['__file__'])),('transfer',ordered_loop_transfer),
         ('transfer_types',R),('loop_interfaces',source_loop_dependencies),('value_flow',source_value_flow),
         ('reference_paths',source_reference_slice),('namespace_interfaces',source_namespace_interfaces),
         ('original_call_interfaces',source_call_view),('normal_edges',normal_graph),('table_writer',normal_output),
-        ('codec',record_codec),('lifetime_replayer',read_ordered_lifetimes))
+        ('codec',record_codec),('lifetime_replayer',read_ordered_lifetimes),
+        ('selected_call_window',source_selected_call_window),('selected_call_window_types',W))
     return dict(rules={name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in modules},
         parent_lifetime=ordered_region_lifetime._pins())
 
@@ -66,6 +69,7 @@ def _edges(provider):
 def _rows(provider):
     return dict(loops=(R.OrderedLoopInterface,provider.loops),roots=(R.OrderedLoopRootRoute,provider.root_routes),
         transfers=(R.OrderedLoopInputTransfer,provider.transfers),writes=(R.OrderedLoopCallerWrite,provider.caller_writes),
+        selected_windows=(W.OrderedWrapperCallWindow,provider.selected_windows),
         frontiers=(R.OrderedLoopEffectFrontier,provider.frontiers),edges=(DependencyEdge,_edges(provider)))
 
 

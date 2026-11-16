@@ -14,10 +14,12 @@ from scar.analysis.source_loop_dependencies import loop_dependencies,_enclosed
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_value_flow import project_value_flow
+from scar.analysis.source_selected_call_window import derive_selected_call_window
 from scar.ir.program import ordered_loop_transfer as R,normal_links as F,normal_graph as G
 from scar.ir.program import normal_targets as T,source_productions as P
 from scar.ir.program.model import ValueKind,ValueType
 from scar.ir.program.providers import ProviderFactReference
+from scar.ir.program.source_selected_call_window import OrderedWrapperCallWindow
 from scar.ir.program.dependencies import (DependencyEdge as Edge,DependencyEvidence as Evidence,
     DependencyCondition as Condition,DependencyKind as K,DependencyMeaning as Meaning,
     DependencyStrength as Strength,DependencyNeighborhood as Neighborhood,DependencyFrontier as Frontier,
@@ -62,7 +64,7 @@ class OrderedLoopTransferProvider:
     def __init__(self,lifetime,*,register=True,max_call_depth=8):
         lifetime.check();self.lifetime=lifetime;self.activation=lifetime.activation
         self.ordered=lifetime.ordered;self.view=lifetime.view;self.providers=self.activation.providers
-        self.loops=[];self.root_routes=[];self.caller_writes=[];self.frontiers=[];self.transfers=[]
+        self.loops=[];self.root_routes=[];self.caller_writes=[];self.frontiers=[];self.transfers=[];self.selected_windows=[]
         self.in_index=defaultdict(list);self.out_index=defaultdict(list);self._edges=[]
         self._graphs={};self._slicers={};self._slices={};self._flows={};self._loop_data={};self._scope_functions={}
         self._roots={};self._contexts={};self._limits=max_call_depth
@@ -78,6 +80,7 @@ class OrderedLoopTransferProvider:
             self._walk(bi,((binding.provider,binding.unit,binding.ordinal),),frozenset())
         self.loops=tuple(self.loops);self.root_routes=tuple(self.root_routes)
         self.caller_writes=tuple(self.caller_writes);self.frontiers=tuple(self.frontiers);self.transfers=tuple(self.transfers)
+        self.selected_windows=tuple(self.selected_windows)
         self.check()
         if register:self.view.register(self)
 
@@ -264,6 +267,14 @@ class OrderedLoopTransferProvider:
             hop,(_,function),_=self._hop(key);source=self.view.unit(hop.unit)
             flow,_=self._body(hop.unit,function)
             operations=[op for op in flow.operations if depth or op.entry in inside]
+            if depth>0:
+                window=derive_selected_call_window(self.providers[hop.provider],hop.unit,hop.ordinal)
+                self.selected_windows.append(OrderedWrapperCallWindow(loop,depth,window))
+                excluded={row.operation.port for row in window.exclusions}
+                operations=[op for op in operations if op.entry not in excluded]
+                for boundary in window.boundaries:
+                    frontiers.append(len(self.frontiers));self.frontiers.append(R.OrderedLoopEffectFrontier(loop,None,
+                        'SELECTED_WRAPPER_WINDOW_'+boundary.reason,boundary.operation,window.original_call))
             sites={op.entry for op in operations}
             for i,attribute in enumerate(source.facts.attributes):
                 if attribute.action not in(F.AttributeAction.SET,F.AttributeAction.DELETE):continue
@@ -350,6 +361,9 @@ class OrderedLoopTransferProvider:
             original_control_backedges=sum(len(l.control_backedges)for l in self.loops),
             roles=dict(Counter(t.role.value for t in self.transfers)),caller_attribute_writes=len(self.caller_writes),
             effect_frontiers=len(self.frontiers),conditional_relations=len(self._edges),
+            selected_wrapper_windows=len(self.selected_windows),
+            excluded_wrapper_operations=sum(len(w.window.exclusions)for w in self.selected_windows),
+            selected_window_boundaries=sum(len(w.window.boundaries)for w in self.selected_windows),
             structural_call_loop_membership_rederived=True,unconditional_content_recurrence_proven=False,
             global_logical_versions_created=0,iterations_unrolled=False,target_executed=False,
             transformation_authorized=False)
