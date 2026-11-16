@@ -102,6 +102,10 @@ scar compile-workspace-guards --preparation GUARDS/result.json --out GUARD_NATIV
 
 共享循环的局部硬件模型可用 `scar plan-workspace-windows --refinement REFINEMENT/result.json --out WINDOWS` 构建，`--check WINDOWS/result.json` 独立重放。它复用原窗口/冲突分析和求解器，只在同一符号迭代内规划，保留数据端口、carry、FIRST/LAST 与外层工作区寿命；未知边界不计为零，也不拼成完整物理时间表。当前域为已知 CPU 绑定和原固定 pool，平局保留原序；融合提示尚无共享循环 lowering，不能直接交给 standalone backend。无已选变换时交付端引用原 C++ 蓝图，不重复编译。共用规则文件更新后，旧 standalone 窗口收据需重新发布，基础 native 与独立 compact 交付不受这次分析重构影响。
 
+跨轮 shadow 驻留使用 `scar workspace-shadow --refinement REFINEMENT/result.json --out RESIDENCY` 生成 ROI 副本证明，再用 `scar workspace-shadow --preparation RESIDENCY/result.json --out RESIDENT_CPP` 编译。首轮完整 snapshot，后续仅复制成功 COMMIT 区域的补集；所有有限性检查、算术、provider 与提交仍保留。原源码循环可导出 compact；固定输入组合仍不获得 caller 替换权限。同步 CPU Q 明确要求借用端口无返回后延迟写，此条件不是已静态证明的 provider 属性，默认仍 NO_OP。`--check RESULT.json` 重放准备或构建结果。finite-guard 与 residency 变体共用构建/导出核心，各自绑定计划和新 controller ID。
+
+`scar benchmark-shadow-residency --original ORIGINAL_WORKSPACE --variant RESIDENT_CPP --inputs INPUTS.json --out AB` 在独立进程进行固定 N4、warmup2、7 对交替 A/B；INPUTS 保存一次 `.npy` 输入及精确 scalar。加载、重置和核验均在时钟外；计时范围为 raw ABI 调用及返回，包含四步 native 控制与计算，不是完整科学程序。真实 Gray–Scott 区域一次测得原 median 9.754001ms、驻留版本 8.763597ms（1.113×）；完整输入/配置、范围与方差见 `artifacts/current/experiments/workspace-shadow-v1/benchmark/`，不能据此宣称整程序收益或自动部署。
+
 已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
 
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。

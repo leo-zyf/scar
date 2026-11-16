@@ -37,7 +37,8 @@ def run_stateful_loop_entry(entry,argv,*,bundle,expected_admission_sha256,
         admitted_resource_plan=dict(
             workspace_allocations_hoisted=contract.get('workspace_allocations_hoisted',False),
             team_setup_hoisted=contract.get('team_setup_hoisted',False),
-            input_finite_scans_reused=contract.get('input_finite_scans_reused',False)),
+            input_finite_scans_reused=contract.get('input_finite_scans_reused',False),
+            shadow_snapshots_reused=contract.get('shadow_snapshots_reused',False)),
         loop_statistics=[]if scope is None else[dict(row['stats'])for row in scope.bindings],
         deployment_gate=gate,native_libraries_loaded=scope is not None,
         performance_measured=False,release_authority=False,whole_program_cpp=False)

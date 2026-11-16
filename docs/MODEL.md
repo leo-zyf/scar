@@ -21,6 +21,8 @@ CPU 依赖就绪执行共享同一语义/存储 DAG：每个任务固定到显�
 
 `FINITE_CONTENT` 等是附着于内容版本/ROI 的条件属性，不是内容身份。属性图用原表达式的操作数边、影子初始化、ROI 写入和已证明的 COMMIT→下一轮输入 carry 传递性质；未知 provider 会截断相关推理。有限输入经过封闭算术且原严格 FP/事务检查成功时，可证明下一版本仍有限，替代后续重复输入扫描；该结论既不复用数值，也不跨调用持有属性，不能单凭成功 COMMIT 推出。
 
+COMMIT 的逐字节复制还可建立 `shadow[ROI] == external[ROI]` 的副本关系，即使数值已变化或尚未证明有限。关系仅覆盖被复制区域；在源写集、持有槽生命期、carry 和同步/无后写合同成立时，下一轮可保留该 ROI，只重新复制补集以重建完整 snapshot。补集不能直接视为相等。Provider 借用端口在返回后不再访问属于显式外部 Q，不从 NoPyAPI 或返回状态推出；新调用仍从完整 snapshot 开始。
+
 ## 五类核心实体
 
 统一查询使用`ProgramView`与既有`ProgramDependencyGraph`。源码ID由原unit、编译/绑定profile、template和原Step/Region/完整Port限定，不随查询函数或展开顺序改变；节点投影保双向来源，不重新生成操作语义。

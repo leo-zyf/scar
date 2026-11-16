@@ -24,7 +24,9 @@ WORKSPACE_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_REPEAT_ABI1'
 WORKSPACE_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_REPEAT_ABI1_V1'
 GUARD_REUSE_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_FINITE_REUSE_ABI1'
 GUARD_REUSE_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_FINITE_REUSE_ABI1_V1'
-_WORKSPACE_PROFILES=(WORKSPACE_PROFILE,GUARD_REUSE_PROFILE)
+SHADOW_RESIDENCY_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_SHADOW_RESIDENCY_ABI1'
+SHADOW_RESIDENCY_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_SHADOW_RESIDENCY_ABI1_V1'
+_WORKSPACE_PROFILES=(WORKSPACE_PROFILE,GUARD_REUSE_PROFILE,SHADOW_RESIDENCY_PROFILE)
 TRUST='EXPLICIT_EXPECTED_ADMISSION_SHA256_FROM_ORIGINAL_SOURCE_LOOP_EXPORTER_NOT_SIGNATURES'
 
 
@@ -36,7 +38,7 @@ def validate_contract(value):
     _need(type(value)is dict and(value.get('schema'),value.get('schema_version'))==(SCHEMA,1)
         and (value['profile'],value['execution_family'])in(
             (PROFILE,FAMILY),(WORKSPACE_PROFILE,WORKSPACE_FAMILY),
-            (GUARD_REUSE_PROFILE,GUARD_REUSE_FAMILY))
+            (GUARD_REUSE_PROFILE,GUARD_REUSE_FAMILY),(SHADOW_RESIDENCY_PROFILE,SHADOW_RESIDENCY_FAMILY))
         and value['cost_status']=='UNKNOWN'and value['deployment_authorized']is False
         and value['trial_only']is True,'explicit unmeasured stateful loop contract required')
     _source(value['source']);_source(value['step_source'])
@@ -98,6 +100,27 @@ def validate_contract(value):
     else:
         _need('guard_reuse'not in value and value.get('input_finite_scans_reused',False)is False,
             'original profiles cannot silently reuse input finite guards')
+    if value['profile']==SHADOW_RESIDENCY_PROFILE:
+        residency=value.get('shadow_residency');arrays=sum(r['kind']=='array'for r in step['inputs'])
+        _need(type(residency)is dict and set(residency)=={'residency_plan_sha256',
+            'parent_execution_plan_sha256','input_array_indices','policy'}
+            and _digest(residency['residency_plan_sha256'])and _digest(residency['parent_execution_plan_sha256'])
+            and type(residency['input_array_indices'])is list and residency['input_array_indices']
+            and all(type(i)is int and 0<=i<arrays for i in residency['input_array_indices'])
+            and residency['input_array_indices']==sorted(set(residency['input_array_indices'])) and count>1
+            and residency['policy']=='FIRST_FULL_SNAPSHOT_THEN_REFRESH_COMMITTED_ROI_COMPLEMENT'
+            and value.get('shadow_snapshots_reused')is True
+            and 'SYNCHRONOUS_CPU_EXECUTION'in value['external_assumptions']
+            and 'PROVIDER_BORROWED_PORT_ACCESSES_COMPLETE_ON_RETURN_NO_DELAYED_POSTCOMMIT_WRITERS'in value['external_assumptions'],
+            'shadow residency requires an exact ROI plan and explicit synchronous borrowed-port contract')
+        execution=dict(schema='scar.workspace-shadow-residency-execution-plan',schema_version=1,
+            parent_execution_plan_sha256=residency['parent_execution_plan_sha256'],
+            residency_plan_sha256=residency['residency_plan_sha256'])
+        _need(sha256(_json_bytes(execution)).hexdigest()==value['workspace']['execution_plan_sha256'],
+            'shadow residency and parent controller must identify the execution plan')
+    else:
+        _need('shadow_residency'not in value and value.get('shadow_snapshots_reused',False)is False,
+            'other profiles cannot silently reuse shadow contents')
     _need(native['stateful_abi_version']==native['repeat_abi_version']==1
         and native['symbol']==('scar_workspace_repeat_stateful_v1'if workspace else'scar_repeat_stateful_v1'),
         'profile-matched original stateful/repeat ABI1 required')
