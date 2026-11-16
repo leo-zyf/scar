@@ -71,9 +71,12 @@ def _sources(pipeline):
 
 def _memory(pipeline, memory_plan):
     report = verify_pipeline_memory(pipeline, memory_plan)
-    _require(not pipeline.frontiers and report["status"] == "OPTIMAL_WITHIN_FIXED_POOL_MODEL" and
+    complete_profiles={('scar.pipeline-memory-plan',1,'OPTIMAL_WITHIN_FIXED_POOL_MODEL'),
+        ('scar.pipeline-partial-order-memory-plan',1,'OPTIMAL_WITHIN_RAW_PARTIAL_ORDER_POOL_MODEL')}
+    _require(not pipeline.frontiers and(report.get('schema'),report.get('schema_version'),report['status'])in complete_profiles and
              report["budget_satisfied"] is True and not report["frontier"] and
-             report["search_budget_exhausted"] is False and report["memory_policy"] == "UNBOUND",
+             report["search_budget_exhausted"] is False and report['assignment']is not None
+             and report["memory_policy"] == "UNBOUND",
              "pipeline requires a complete feasible fixed-pool memory plan")
     _require(report["pipeline_sha256"] == pipeline_digest(pipeline), "pipeline memory source receipt differs")
     for row in report["values"]:

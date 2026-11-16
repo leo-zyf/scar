@@ -213,7 +213,11 @@ def _task_graph(pipeline,memory,predecessors,waves,call_cpu_ids,resource_refs):
 def plan_pipeline_schedule(pipeline,memory_plan,target,*,cpu_ids,input_graph=None):
     pipeline=validate_pipeline(pipeline);_closed(pipeline)
     memory=verify_pipeline_memory(pipeline,memory_plan)
-    _need(not memory['frontier'] and memory['budget_satisfied'] and memory['assignment']is not None,
+    complete_profiles={('scar.pipeline-memory-plan',1,'OPTIMAL_WITHIN_FIXED_POOL_MODEL'),
+        ('scar.pipeline-partial-order-memory-plan',1,'OPTIMAL_WITHIN_RAW_PARTIAL_ORDER_POOL_MODEL')}
+    _need((memory.get('schema'),memory.get('schema_version'),memory['status'])in complete_profiles
+        and memory['search_budget_exhausted']is False and not memory['frontier']
+        and memory['budget_satisfied']is True and memory['assignment']is not None,
         'complete original fixed-pool lifetime/shape/budget plan required')
     graph,snapshot,cpus,affinity,bindings=_target(target,cpu_ids)
     if input_graph is not None:read_artifact(input_graph,json_document=False)
