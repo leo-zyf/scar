@@ -25,7 +25,7 @@ def lower_stateful_choices(choice_path, out, *, plan_only=False):
     """Verify the full recorded domain; plan or compile its selected CPU only."""
     from scar.optimization.stateful_cpu_choices import (
         verify_stateful_cpu_choices, selected_stateful_plan)
-    from scar.optimization.stateful_recipe import make_stateful_recipe, verify_stateful_recipe
+    from scar.compiler.selected_stateful_lowering import lower_selected_stateful
 
     _require(type(plan_only) is bool, 'plan_only must be an exact boolean')
     choice_path = Path(choice_path).absolute()
@@ -88,21 +88,9 @@ def lower_stateful_choices(choice_path, out, *, plan_only=False):
 
     # The standard producer replays sources, effects, slots, target receipts,
     # provider and compiler context. Nonselected plans are never persisted here.
-    recipe = make_stateful_recipe(region, plan, out=directory / 'recipe')
-    recipe = verify_stateful_recipe(recipe)
-    capability = recipe['implementation']['backend_capability_record']
-    _require(semantic_sha256(capability) == context['backend']['descriptor_sha256'],
-             'recipe implementation/compiler/provider differs from the selected cost model')
-    graph = recipe['task_graph']
-    _require(graph['schema_version'] == 2 and graph['executable'] is True,
-             'public executable stateful v2 task graph required')
-    result.update(model_selected_native=True, execution='EXISTING_TRANSACTIONAL_CPU_STATEFUL_RECIPE',
-        status='MODEL_SELECTED_PLAN_ONLY', recipe_id=recipe_id(recipe),
-        recipe=artifact_reference(directory / 'recipe/recipe.json', recipe['schema']),
-        task_graph_sha256=semantic_sha256(graph), selected_binding=plan['resource_binding'],
-        payload={key: plan[key] for key in ('external_array_bytes', 'workspace_payload_bytes',
-            'total_region_array_payload_bytes', 'memory_budget_bytes', 'budget_scope')},
-        solver_scope=dict(status=solver['status'], optimality=solver.get('optimality'),
+    result.update(lower_selected_stateful(region,plan,directory,
+        backend_descriptor_sha256=context['backend']['descriptor_sha256'],plan_only=plan_only))
+    result.update(solver_scope=dict(status=solver['status'], optimality=solver.get('optimality'),
             gap_ticks=solver['gap_ticks'], optimality_scope=domain['enumeration']['optimality_scope']),
         selected_model=dict(duration_ticks=variant['profile']['estimate']['duration_ticks'],
             tick_seconds=variant['profile']['estimate']['tick_seconds'],
@@ -110,19 +98,6 @@ def lower_stateful_choices(choice_path, out, *, plan_only=False):
             assumptions=variant['profile']['derivation']['assumptions'],
             evidence=dict(artifact=choice_ref, locator=f'#/variants/{index}/profile'),
             uncertainty_scope='RETAINED_MODEL_DERIVATION_NOT_TARGET_MEASUREMENT_OR_PHYSICAL_PROOF'))
-    if not plan_only:
-        from scar.codegen.recipe import build_recipe
-        lowered = build_recipe(recipe, directory / 'lowered')
-        report = lowered.report
-        _require(report['recipe_id'] == result['recipe_id']
-            and report['stateful_abi_version'] == 1
-            and report['backend_capability_record'] == capability,
-            'compiled artifact differs from selected recipe/ABI/backend capability')
-        result.update(status='COMPILED_UNMEASURED', compiled_variant_count=1,
-            native_directory=str(lowered.native_directory), artifact=report,
-            lowering_receipt=artifact_reference(directory / 'lowered/lowering-receipt.json',
-                'scar.execution-recipe-lowering'),
-            stateful_abi_version=1, operator_abi_version=1, cxx_standard=20)
     _require(sha256(choice_path.read_bytes()).hexdigest() == choice_ref['sha256'],
              'upstream choice changed during lowering')
     _write(directory / 'lowering.json', result)

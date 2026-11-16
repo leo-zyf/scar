@@ -14,7 +14,7 @@ import time
 def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
                   loop_trip_count=None,loop_inputs=None,prepare_stateful_validation=False,stateful_cpu_threads=1,
                   loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
-                  loop_max_threads=None):
+                  loop_max_threads=None,stateful_interval_plans=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -31,15 +31,30 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     loop_ref=document.get('loop_dependencies')
     if loop_ref is not None:read_artifact(loop_ref)
     no_op_profiles={} if no_op_profiles is None else no_op_profiles
+    stateful_interval_plans={} if stateful_interval_plans is None else stateful_interval_plans
+    if not isinstance(stateful_interval_plans,dict):raise ValueError('interval plans require a region-id to plan mapping')
+    if any(not isinstance(value,(str,Path,dict)) for value in stateful_interval_plans.values()):
+        raise ValueError('each region interval plan must be an original plan path or ArtifactRef')
     identifiers={row['region_id'] for row in document['regions']}
     if set(no_op_profiles)-identifiers:raise ValueError('NO_OP profiles must name retained original regions')
+    if set(stateful_interval_plans)-identifiers:raise ValueError('interval plans must name retained original regions')
+    if set(stateful_interval_plans)&set(no_op_profiles):
+        raise ValueError('one region cannot consume both an interval plan and scalar NO_OP profiles')
     started=time.monotonic();out.mkdir(parents=True);rows=[]
     for index,original in enumerate(document['regions']):
         directory=out/('region-'+str(index));directory.mkdir()
         row=dict(region_id=original['region_id'],selected_for_use=False,validation='NOT_EXECUTED')
+        graph=original.get('program_graph')
+        if graph is not None:
+            from scar.compiler.ordered_planning_graph import admit_ordered_planning_graph
+            row['program_graph']=graph
+            row['program_graph_admission']=admit_ordered_planning_graph(graph,
+                program=document['program'],region=original['region'],out=directory/'graph-admission.json')
         projection=project_stateful_dependencies(original['region'],out=directory/'dependencies')
         row['dependencies']=artifact_reference(directory/'dependencies/dependencies.json',projection['schema'])
         if original['status']!='HARDWARE_DOMAIN_BUILT':
+            if original['region_id'] in stateful_interval_plans:
+                raise ValueError('interval-plan region needs its retained original hardware domain')
             row.update(status=original['status'],reason='input constraints required before hardware planning')
             rows.append(row);continue
         domain=_domain(original['domain'])
@@ -48,6 +63,44 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
         target=domain['target_snapshot'];hardware=document['hardware']
         if (target['uri'],target['sha256'],target['size_bytes'])!=(hardware['path'],hardware['sha256'],hardware['bytes']):
             raise ValueError('planning domain differs from the program hardware snapshot')
+        interval_value=stateful_interval_plans.get(original['region_id'])
+        if interval_value is not None:
+            from scar.compiler.lower_stateful_bounds import lower_stateful_bounds
+            from scar.compiler.stateful_domain_equivalence import retain_stateful_domain_equivalence
+            if isinstance(interval_value,(str,Path)):
+                interval_path=Path(interval_value).resolve()
+                if interval_path.is_dir():interval_path/='result.json'
+                interval_ref=artifact_reference(interval_path,'scar.stateful-interval-choice-plan')
+            elif isinstance(interval_value,dict):
+                interval_ref=interval_value;interval_path=Path(interval_ref['uri'])
+                if interval_ref.get('schema')!='scar.stateful-interval-choice-plan':
+                    raise ValueError('retained interval-choice plan ArtifactRef required')
+            else:raise ValueError('interval plans must contain original plan paths or ArtifactRefs')
+            interval=read_artifact(interval_ref)
+            main_domain=artifact_reference(original['domain'],'scar.stateful-cpu-domain')
+            equivalence=retain_stateful_domain_equivalence(interval['original_domain'],main_domain,
+                directory/'domain-equivalence.json')
+            # This existing lowering owns complete source/fact/interval replay.
+            # Do not run scalar calibration/choice or an unranked preview here.
+            lowered=lower_stateful_bounds(interval_path,directory/'interval-lowering',plan_only=plan_only)
+            if lowered['upstream_plan']!=interval_ref or lowered['domain']!=interval['original_domain']:
+                raise ValueError('verified interval lowering differs from the retained source plan/domain')
+            read_artifact(interval_ref);bounds=read_artifact(interval['source_bounds_artifact'])
+            row.update(status=lowered['status'],planning_route='VERIFIED_INTERVAL_PLAN',
+                domain=main_domain,interval_source_domain=interval['original_domain'],
+                interval_plan=interval_ref,interval_choice=interval['interval_choice'],
+                interval_lowering=artifact_reference(directory/'interval-lowering/lowering.json',lowered['schema']),
+                domain_equivalence=equivalence,lowering=str(directory/'interval-lowering/lowering.json'),
+                native_directory=lowered['native_directory'],candidate_count=len(domain['candidates']),
+                complete_cost_profiles=bounds['counts']['previously_complete_options']-1,
+                cost_domain_complete=False,interval_choice_complete=interval['status']=='FINITE_MODEL_OPTIMAL',
+                interval_status=interval['status'],selected_candidate_id=interval['selected_candidate_id'],
+                remaining_cost_frontier=interval['remaining_frontier'],
+                partial_options_strictly_dominated=interval['prior_partial_options_strictly_dominated'],
+                scalar_calibration_and_choice_consumed=False,
+                caller_loop_proof='NOT_ESTABLISHED_BY_PER_CALL_TRANSFER',
+                automatic_caller_replacement_authorized=False)
+            rows.append(row);continue
         profiles=build_stateful_cpu_profiles(domain,calibrations,out=directory/'costs')
         choice=choose_stateful_cpu(directory/'planning',domain=original['domain'],
             cost_profiles=profiles['cost_profiles'],
@@ -115,6 +168,7 @@ def main(argv=None):
     parser.add_argument('--domains',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--calibration',action='append',default=[])
     parser.add_argument('--no-op-profiles',help='JSON mapping region IDs to same-boundary original-call profiles')
+    parser.add_argument('--stateful-interval-plans',help='JSON mapping exact region IDs to retained interval-choice plan paths or ArtifactRefs')
     loops=parser.add_mutually_exclusive_group()
     loops.add_argument('--loop-trip-count',type=int,help='declared common trip count for retained invariant loops')
     loops.add_argument('--loop-inputs',help='JSON mapping original loop IDs to input_shapes/trip_count/budget constraints')
@@ -135,7 +189,8 @@ def main(argv=None):
         loop_cpu_threads=args.loop_cpu_threads,loop_cpu_model=args.loop_cpu_model,
         loop_calibrations=args.loop_calibration,
         loop_no_op_profiles=None if args.loop_no_op_profiles is None else json.loads(Path(args.loop_no_op_profiles).read_bytes()),
-        loop_max_threads=args.loop_max_threads)
+        loop_max_threads=args.loop_max_threads,
+        stateful_interval_plans=None if args.stateful_interval_plans is None else json.loads(Path(args.stateful_interval_plans).read_bytes()))
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],
