@@ -217,6 +217,8 @@ class StatefulDependencyProvider:
         if not rows and point.namespace!=self.namespace:return Neighborhood()
         self.check(point)
         if point.context is not None:
+            activation=getattr(self,'activation_provider',None)
+            if activation is not None and activation.accepts_context(point):return Neighborhood()
             # No interface maps a selected F4 call stack to this abstract
             # ordered activation yet. Contextualizing just one endpoint
             # would create a different edge in the reverse neighborhood.
