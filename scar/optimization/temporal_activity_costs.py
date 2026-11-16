@@ -106,7 +106,7 @@ def project_unknown_activity_costs(schedule, resources, *, source_refs=(), reaso
 
 def project_stateful_activity_costs(schedule, resources, recipe, domain, candidate_id,
                                     calibrations, *, source_refs=(), boundary_calibrations=(),
-                                    dag_calibrations=()):
+                                    dag_calibrations=(), scope_schedule_ref=None):
     """Map exact stage occurrences and whole-pool signatures, preserving holes.
 
     The caller replays the recipe and G2 resource publication. Domain/source,
@@ -117,9 +117,12 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
     original = semantic_sha256(recipe['task_graph'])
     actual = semantic_sha256(schedule_document(replace(schedule, temporal=None)))
     if actual != original:
-        from scar.analysis.implementation_envelope import derive_stateful_envelope
+        if 'implementation_scope_cleanup' in schedule.proof:
+            from scar.analysis.implementation_scope import derive_stateful_scope_envelope as refine
+        else:
+            from scar.analysis.implementation_envelope import derive_stateful_envelope as refine
         from scar.ir.versioned_schedule import schedule_from_dict
-        refined = derive_stateful_envelope(schedule_from_dict(recipe['task_graph']), recipe)
+        refined = refine(schedule_from_dict(recipe['task_graph']), recipe)
         if actual != semantic_sha256(schedule_document(refined)):
             raise ValueError('cost activities must retain the original recipe graph or its source-replayed implementation refinement')
     if encode(resources.target) != recipe['artifacts']['target_snapshot']:
@@ -154,7 +157,7 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
     mapping = []
     for term in evaluation['components']:
         source = term['source_ref']
-        selected = []
+        selected = []; release_order_delta = False
         if source is not None:
             selected = [task for task in schedule.tasks
                         if task.attrs.get('source_stage_ref', {}).get('pointer') == source['pointer']]
@@ -165,6 +168,10 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
             selected = [task for task in schedule.tasks if task.kind is kind]
             slots = [name for task in selected for name in (task.allocates if kind is K.ALLOCATE else task.releases)]
             expected = [row['id'] for row in actual_plan['workspace_slots']]
+            if (kind is K.RELEASE and recipe['control'].get('pool_release_order')
+                    == 'CPP_STD_ARRAY_REVERSE_DESTRUCTION'):
+                expected.reverse()
+                release_order_delta = len(expected) > 1
             if (slots != expected or term['parameters'] != dict(capacities=[
                     row['capacity_bytes'] for row in actual_plan['workspace_slots']])):
                 raise ValueError('collective pool cost must match the exact original slot group')
@@ -206,8 +213,12 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
                 component_refs=(reference,), charge_keys=(occurrence,),
                 coverage=CostCoverage.COMPONENT_ONLY,
                 conditions=(*conditions, 'CANONICAL_SAMPLE_RANGE_IS_NOT_A_GUARANTEED_TARGET_BOUND',
-                    'ACTUAL_IMPLEMENTATION_DISPATCH_AND_DATA_REGIME_HAVE_NOT_BEEN_VALIDATED'),
-                missing_terms=('UNVALIDATED_IMPLEMENTATION_DELTA_AND_UNMAPPED_OUTER_ENVELOPE',))
+                    'ACTUAL_IMPLEMENTATION_DISPATCH_AND_DATA_REGIME_HAVE_NOT_BEEN_VALIDATED',
+                    *(('CANONICAL_FORWARD_POOL_RELEASE_IS_COLLECTIVE_NOT_SOURCE_REVERSE_ORDER_EQUIVALENCE',)
+                      if release_order_delta else ())),
+                missing_terms=('UNVALIDATED_IMPLEMENTATION_DELTA_AND_UNMAPPED_OUTER_ENVELOPE',
+                    *(('SOURCE_CPP_REVERSE_POOL_RELEASE_ORDER_AND_ALLOCATOR_STATE_DELTA_NOT_VALIDATED',)
+                      if release_order_delta else ())))
         grouped.append(row)
         mapping.append(dict(subject=subject, activities=identities, task_ids=[task.id for task in selected],
             source_term=term['id'], component=term['component'], count=term['count'],
@@ -229,6 +240,12 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
         from scar.optimization.stage_dag_activity_costs import project_stage_dag_activity_costs
         table, dag_derivation = project_stage_dag_activity_costs(table, schedule, resources,
             domain=domain, candidate_id=candidate_id, calibrations=dag_calibrations)
+    accounting = None
+    if 'implementation_scope_cleanup' in schedule.proof:
+        from scar.optimization.scope_accounting import project_scope_accounting
+        table, accounting = project_scope_accounting(table, schedule, resources, recipe, demand,
+            mapping=mapping, boundary_derivation=boundary_derivation, dag_derivation=dag_derivation,
+            scope_schedule_ref=scope_schedule_ref)
     summary = validate_activity_cost_table(table, schedule, resources)
     derivation = dict(protocol='EXACT_STATEFUL_CANONICAL_COMPONENT_SIGNATURES', candidate_id=candidate_id,
         demand_context=demand['context'], resource_context=demand['resource_context'], mapping=mapping,
@@ -241,4 +258,6 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
         derivation['boundary_cuts'] = boundary_derivation
     if dag_derivation is not None:
         derivation['stage_dag'] = dag_derivation
+    if accounting is not None:
+        derivation['scope_accounting'] = accounting
     return table, derivation

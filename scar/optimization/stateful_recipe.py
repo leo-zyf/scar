@@ -27,6 +27,7 @@ from .hardware import _target_materials
 from .resource_solver import semantic_sha256
 
 PROFILE = 'cpu-stateful-array-region-v1'
+CPP_POOL_RELEASE_ORDER = 'CPP_STD_ARRAY_REVERSE_DESTRUCTION'
 
 
 def _ref(role,pointer): return dict(artifact_role=role,pointer=pointer)
@@ -122,7 +123,7 @@ def _final_commit_proofs(region,plan):
     return proofs
 
 
-def _graph(region,plan,boundary,snapshot):
+def _graph(region,plan,boundary,snapshot,*,physical_release_order=False):
     from scar.ir.versioned_schedule import (VersionedLogicalValue as Value,StorageSlot,
         StorageRegion,VersionedMaterialization as Material,VersionedTask as Task,
         VersionedTaskKind as Kind,OrderConstraint,VersionedResourceSchedule)
@@ -246,7 +247,8 @@ def _graph(region,plan,boundary,snapshot):
             depends_on=tuple(dependencies),capability=mapped[1],resource_refs=refs,source_refs=tuple(source_refs),
             world_before=world_before,world_after=world_after,attrs=attrs))
         if kind=='SCALAR': scalar_producers[stage['root_expr']]=identifier
-    for row in plan['workspace_slots']:
+    release_slots = reversed(plan['workspace_slots']) if physical_release_order else plan['workspace_slots']
+    for row in release_slots:
         add_task(Task('release:'+row['id'],Kind.RELEASE,depends_on=(tasks[-1].id,),releases=(row['id'],),
             capability='CPU_RELEASE',attrs=dict(logical_last_use_ref=_ref('stage_plan','#/values'),
                 physical_release='ONLY_AFTER_ALL_ORIGINAL_EXTERNAL_COMMITS_COMPLETE')))
@@ -257,10 +259,13 @@ def _graph(region,plan,boundary,snapshot):
             allocation_never_establishes_readiness=True,logical_release_is_not_physical_free=True,
             transaction_ref=_ref('stage_plan','#/transaction'),source_epochs_ref=_ref('stage_plan','#/state_epochs'),
             final_root_commit_identity=identity_proofs,
+            **(dict(pool_release_order=CPP_POOL_RELEASE_ORDER,
+                physical_release_slot_order=[row['id'] for row in reversed(plan['workspace_slots'])])
+                if physical_release_order else {}),
             physical_slots_are_not_logical_values=True,whole_program_makespan_optimized=False),executable=True)
 
 
-def _assemble(region,plan,artifacts):
+def _assemble(region,plan,artifacts,*,physical_release_order=False):
     from .schedule import schedule_document
     boundary=build_stateful_boundary(region,plan)
     binding,snapshot,inventory,target_artifacts=_target(plan)
@@ -305,6 +310,7 @@ def _assemble(region,plan,artifacts):
         provider_partition='SERIAL_ORIGINAL_NUMPY_STRIDED_LOOP_ROWS',
         transaction='ALL_PRIVATE_COMPUTE_AND_RESTORATION_SUCCEED_BEFORE_EXTERNAL_ROI_COMMIT',
         iteration_expansion=False,shared_body_instances=1)
+    if physical_release_order: control['pool_release_order']=CPP_POOL_RELEASE_ORDER
     implementation=dict(family=capability['family'],backend_inputs=dict(region='region',plan='stage_plan'),
         backend_capability_record=capability,source_artifact_roles=source_roles,
         document_sha256=dict(region=semantic_sha256(read_artifact(artifacts['region'])),
@@ -320,7 +326,7 @@ def _assemble(region,plan,artifacts):
     obligations += [dict(id='external:'+str(i),status='EXTERNAL_ASSUMPTION',detail=item)
                     for i,item in enumerate(plan['external_assumptions'])]
     return make_recipe(PROFILE,semantic_boundary=boundary,control=control,
-        task_graph=schedule_document(_graph(region,plan,boundary,snapshot)),resources=resources,
+        task_graph=schedule_document(_graph(region,plan,boundary,snapshot,physical_release_order=physical_release_order)),resources=resources,
         implementation=implementation,artifacts=artifacts,obligations=obligations)
 
 
@@ -344,7 +350,7 @@ def make_stateful_recipe(region,plan,*,source_artifacts=(),cpu_hierarchy=None,ou
     if cpu_hierarchy is not None:
         artifacts['cpu_hierarchy']=(artifact_reference(cpu_hierarchy,'scar.cpu-hierarchy')
             if isinstance(cpu_hierarchy,(str,Path)) else encode(cpu_hierarchy))
-    recipe=_assemble(region,plan,artifacts);write_recipe(recipe,out/'recipe.json')
+    recipe=_assemble(region,plan,artifacts,physical_release_order=True);write_recipe(recipe,out/'recipe.json')
     return recipe
 
 
@@ -360,7 +366,10 @@ def _parts(recipe):
 def verify_stateful_recipe(value):
     recipe=read_recipe(value) if isinstance(value,(str,Path)) else validate_recipe(value)
     if recipe['profile']!=PROFILE: raise ValueError('supported stateful recipe profile required')
-    expected=_assemble(*_parts(recipe),recipe['artifacts'])
+    release_order=recipe['control'].get('pool_release_order')
+    if 'pool_release_order' in recipe['control'] and release_order!=CPP_POOL_RELEASE_ORDER:
+        raise ValueError('unsupported stateful physical pool release order')
+    expected=_assemble(*_parts(recipe),recipe['artifacts'],physical_release_order=release_order==CPP_POOL_RELEASE_ORDER)
     if semantic_sha256(recipe)!=semantic_sha256(expected):
         raise ValueError('stateful recipe differs from complete source/epoch/slot/transaction replay')
     return recipe

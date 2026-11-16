@@ -14,7 +14,8 @@ from pathlib import Path
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode
 from scar.ir.temporal_resources import ResourceProjection, projection_document
-from scar.ir.versioned_schedule import schedule_document, validate_versioned_schedule
+from scar.ir.versioned_schedule import (VersionedTaskKind, TemporalDurationBasis,
+    TemporalOccupancyKind, schedule_document, validate_versioned_schedule)
 
 SCHEMA = 'scar.activity-cost-table'
 EFFECT_SCOPE = 'MODELED_EXISTING_CPU_SCHEDULE_ACTIVITIES_NOT_COMPLETE_CALL'
@@ -24,6 +25,7 @@ class CostBasis(str, Enum):
     UNKNOWN = 'UNKNOWN'
     DECLARED_COMPONENT_MODEL = 'DECLARED_COMPONENT_MODEL'
     OBSERVED_SCOPE = 'OBSERVED_SCOPE'
+    SOURCE_CONTROL_MILESTONE = 'SOURCE_CONTROL_MILESTONE'
 
 
 class IntervalKind(str, Enum):
@@ -124,7 +126,8 @@ def validate_activity_cost_table(table, schedule, resource_projection):
           and table.target == resource_projection.target, 'cost table source/resource/target identity differs')
     activities = {row.id: row for row in schedule.temporal.activities}
     subjects, covered, charged = set(), set(), set()
-    known = complete = empirical = 0
+    known = complete = empirical = markers = 0
+    tasks = {row.id: row for row in schedule.tasks}
     for row in table.costs:
         _need(type(row.subject) is str and row.subject and row.subject not in subjects, 'unique original cost subject required')
         subjects.add(row.subject)
@@ -144,6 +147,40 @@ def validate_activity_cost_table(table, schedule, resource_projection):
         if row.basis is CostBasis.UNKNOWN:
             _need(row.estimate_ticks is None and row.interval is None and bool(row.missing_terms)
                   and row.coverage is CostCoverage.COMPONENT_ONLY, 'UNKNOWN must retain missing terms and no numeric cost')
+            continue
+        if row.basis is CostBasis.SOURCE_CONTROL_MILESTONE:
+            source_proof = schedule.proof.get('implementation_scope_cleanup', {})
+            _need(type(source_proof) is dict, 'original scope source proof record required')
+            certificate = source_proof.get('milestone', {})
+            _need(source_proof.get('schema') == 'scar.stateful-implementation-scope-proof'
+                  and source_proof.get('schema_version') == 1
+                  and type(certificate) is dict and len(row.activities) == 1
+                  and certificate.get('basis') == 'SOURCE_PROVEN_ZERO_ADDITIONAL_SERVICE'
+                  and certificate.get('no_additional_emitted_fence_statement') is True
+                  and certificate.get('following_precommit_text_is_comments_only') is True
+                  and certificate.get('measurement_claimed') is False,
+                  'one source-certified control milestone activity required')
+            temporal_activity = activities[row.activities[0]]
+            _need(temporal_activity.duration_basis is TemporalDurationBasis.SOURCE_CONTROL_MILESTONE
+                  and (temporal_activity.duration_lower_ticks, temporal_activity.duration_upper_ticks) == (0, 0)
+                  and not any(occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND
+                              and occupancy.activity == temporal_activity.id
+                              for occupancy in schedule.temporal.occupancies),
+                  'source cost milestone must match zero additional temporal service without execution demand')
+            task = tasks[temporal_activity.task]
+            restore = tasks.get(certificate.get('restore_task_id'))
+            _need(task.kind is VersionedTaskKind.SUCCESS_FENCE and task.id == certificate.get('task_id')
+                  and restore is not None and restore.kind is VersionedTaskKind.IMPLEMENTATION_PHASE
+                  and restore.attrs.get('phase_kind') == 'CALLER_RESTORE',
+                  'source milestone must retain the original success fence and restore phase')
+            _need(type(row.estimate_ticks) is int and row.estimate_ticks == 0 and row.interval is None
+                  and row.coverage is CostCoverage.COMPLETE_SUBJECT and not row.missing_terms
+                  and row.conditions and row.component_refs and not row.charge_keys,
+                  'source milestone is nonadditive control, not a measured numeric component')
+            _need(any(ref.artifact.schema == 'scar.resource-schedule'
+                      and ref.locator == '#/proof/implementation_scope_cleanup/milestone'
+                      for ref in row.component_refs), 'original source milestone certificate FactRef required')
+            markers += 1; complete += 1
             continue
         _need(row.basis is CostBasis.DECLARED_COMPONENT_MODEL,
               'OBSERVED_SCOPE requires an independent whole-scope reader; canonical components are not scope observations')
@@ -167,12 +204,15 @@ def validate_activity_cost_table(table, schedule, resource_projection):
                   'component estimate must lie inside its empirical interval')
             empirical += 1
     _need(covered == set(activities), 'every original activity must have exactly one cost subject, including UNKNOWN')
-    return dict(subjects=len(subjects), activities=len(activities), known_component_subjects=known,
-        complete_subjects=complete, unknown_subjects=len(subjects)-known, empirical_intervals=empirical,
+    summary = dict(subjects=len(subjects), activities=len(activities), known_component_subjects=known,
+        complete_subjects=complete, unknown_subjects=len(subjects)-known-markers, empirical_intervals=empirical,
         unmapped_terms=len(table.unmapped_terms), original_activity_coverage_complete=True,
         whole_scope_cost_closed=False, source_component_semantics_replayed_by_this_validator=False,
         mathematical_bounds_verified=False, physical_optimality_proven=False,
         solver_authorized=False, execution_authorized=False)
+    if markers:
+        summary['source_control_milestones'] = markers
+    return summary
 
 
 __all__ = ['SCHEMA', 'EFFECT_SCOPE', 'CostBasis', 'IntervalKind', 'CostCoverage', 'CostInterval',

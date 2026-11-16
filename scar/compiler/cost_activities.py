@@ -10,6 +10,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.temporal_resources import projection_from_dict
 from scar.optimization.schedule import schedule_from_dict
 from scar.optimization.resource_solver import semantic_sha256
+from scar.optimization.boundary_activity_costs import boundary_calibration_reference
 from scar.optimization.temporal_activity_costs import (project_stateful_activity_costs,
     project_unknown_activity_costs)
 
@@ -39,7 +40,7 @@ def _derive(resource_reference, domain_reference, candidate_id, calibration_refs
         *({'artifact': ref, 'locator': '#/components'} for ref in calibration_refs))
     table, derivation = project_stateful_activity_costs(schedule, resources, recipe, domain,
         candidate_id, [ref['uri'] for ref in calibration_refs], source_refs=source_refs,
-        boundary_calibrations=boundary_refs, dag_calibrations=dag_refs)
+        boundary_calibrations=boundary_refs, dag_calibrations=dag_refs, scope_schedule_ref=time['schedule'])
     for ref in (resource_reference, domain_reference, *calibration_refs, *boundary_refs, *dag_refs):
         read_artifact(ref)
     return table, derivation, schedule, resources
@@ -59,8 +60,7 @@ def prepare_activity_costs(resources, out, *, domain=None, candidate_id=None, ca
                   if domain is not None else None)
     calibration_refs = [artifact_reference(Path(path).resolve(), 'scar.stateful-resource-calibration')
                         for path in calibrations]
-    boundary_refs = [artifact_reference(Path(path).resolve(), 'scar.stateful-boundary-cut-calibration')
-                     for path in boundary_calibrations]
+    boundary_refs = [boundary_calibration_reference(path) for path in boundary_calibrations]
     dag_refs = [artifact_reference(Path(path).resolve(), 'scar.stateful-stage-dag-calibration')
                 for path in dag_calibrations]
     table, derivation, schedule, projection = _derive(reference, domain_ref, candidate_id,

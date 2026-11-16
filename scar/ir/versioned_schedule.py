@@ -115,6 +115,7 @@ class TemporalDurationBasis(str, Enum):
     UNKNOWN = 'UNKNOWN'
     DECLARED_MODEL = 'DECLARED_MODEL'
     OBSERVED = 'OBSERVED'
+    SOURCE_CONTROL_MILESTONE = 'SOURCE_CONTROL_MILESTONE'
 
 
 class TemporalOccupancyKind(str, Enum):
@@ -384,6 +385,7 @@ def _validate_temporal_model(model, schedule):
             bound(parent.entry, scope.entry)
             bound(scope.exit, parent.exit)
     task_activities = defaultdict(list)
+    control_milestones = set()
     ready_owners = {}
     pairs = set()
     for activity in activities.values():
@@ -409,6 +411,18 @@ def _validate_temporal_model(model, schedule):
         if activity.duration_basis is TemporalDurationBasis.UNKNOWN:
             if lower is not None or upper is not None:
                 raise ValueError('UNKNOWN duration must not silently carry a numeric estimate')
+        elif activity.duration_basis is TemporalDurationBasis.SOURCE_CONTROL_MILESTONE:
+            scope_proof = schedule.proof.get('implementation_scope_cleanup', {})
+            marker = scope_proof.get('milestone', {})
+            if (model.mode not in (TemporalMode.SEMANTIC, TemporalMode.PLANNED)
+                    or (lower, upper) != (0, 0) or not activity.source_refs
+                    or tasks[activity.task].kind is not VersionedTaskKind.SUCCESS_FENCE
+                    or scope_proof.get('schema') != 'scar.stateful-implementation-scope-proof'
+                    or marker.get('task_id') != activity.task
+                    or marker.get('basis') != 'SOURCE_PROVEN_ZERO_ADDITIONAL_SERVICE'
+                    or marker.get('no_additional_emitted_fence_statement') is not True):
+                raise ValueError('zero additional service needs the original source-proven control milestone')
+            control_milestones.add(activity.id)
         elif (not activity.source_refs or lower is None and upper is None
                 or activity.duration_basis is TemporalDurationBasis.DECLARED_MODEL
                     and model.mode is not TemporalMode.PLANNED
@@ -464,6 +478,7 @@ def _validate_temporal_model(model, schedule):
         if occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND:
             activity = activities.get(occupancy.activity)
             if (activity is None or occupancy.storage_slot is not None or occupancy.continues_after_scope
+                    or occupancy.activity in control_milestones
                     or occupancy.units is not None and (not _integer(occupancy.units) or occupancy.units == 0)
                     or occupancy.scope != activity.scope
                     or any(events[name].task != activity.task for name in (occupancy.start, occupancy.end))):
@@ -530,14 +545,14 @@ def _validate_temporal_model(model, schedule):
     owned = {slot.id for slot in slots.values() if slot.ownership == 'SCHEDULE'}
     occupied_activities = {occupancy.activity for occupancy in occupancies.values()
                           if occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND}
-    return dict(mode=model.mode.value, events=len(events), activities=len(activities),
+    summary = dict(mode=model.mode.value, events=len(events), activities=len(activities),
         scopes=len(scopes), loop_scopes=sum(scope.kind is TemporalScopeKind.LOOP for scope in scopes.values()),
         symbolic_iteration_constraints=periodic, iterations_unrolled=0,
         occupancies=len(occupancies), physical_slots_counted_once=len(physical),
         physical_slot_coverage_complete=physical == owned,
         activity_task_coverage_complete={activity.task for activity in activities.values()} == set(tasks),
         activities_without_execution_demand=len(set(activities) - occupied_activities),
-        execution_demand_coverage_complete=set(activities) <= occupied_activities,
+        execution_demand_coverage_complete=set(activities) - control_milestones <= occupied_activities,
         unbound_materialization_ready_events=sum(event.kind is TemporalEventKind.READY
             and event.materialization is not None and event.task is not None
             and event.id not in ready_owners for event in events.values()),
@@ -549,6 +564,11 @@ def _validate_temporal_model(model, schedule):
                                      and occupancy.units is None for occupancy in occupancies.values()),
         same_iteration_bounds_consistent=True, periodic_feasibility_proven=False,
         resource_capacity_feasibility_proven=False, execution_authorized_by_temporal_model=False)
+    if control_milestones:
+        summary['source_control_milestones'] = len(control_milestones)
+        summary['executable_activities_without_execution_demand'] = len(
+            set(activities) - control_milestones - occupied_activities)
+    return summary
 
 
 def validate_temporal_model(model, schedule):

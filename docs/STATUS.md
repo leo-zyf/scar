@@ -16,6 +16,8 @@ G3c2 已贯通：`calibrate-boundary-cuts` 用真实 shared guard→compiler ada
 
 G3c3 已验：`calibrate-stage-dag` 从原 renderer 的只读入口快照构造有序/共享/typed-constant/物理槽别名完整子图键，源码身份只留引用；数学AST不改，捕获全文须逐字等于原renderer。原body直接进入C++20 canonical组件采样，明确承认拓扑特化及片段已编译，未执行完整目标；3组件各7样本/warmup2约3.79s，CPU/FP恢复且冷读成功。`cost-activities --dag-calibration`仅替换3个UNKNOWN，既有19组数值原样；30活动/23subject现22个条件估计，仅`success:precommit`未计时。2项结构检查通过，源码改引用使观测记录6.35MB降至115539B且结构键不变。见 `artifacts/baseline/g3c3-stage-dag.json`。下一G3c4按原源码范围核成功门槛/旧组合term收费归属、资源需求单位及模型残差；不将虚拟fence或原unmapped诊断粗暴当成额外物理耗时，不提前宣称全调用成本或最优部署。
 
+G3c4 来源/账本子层已验，资源适用条件仍未闭合：`--scope-cleanup` 补上commit后、pool释放前的helper析构；源证书把无独立语句的成功门槛标为控制milestone，移除其虚构CPU占用。另修正SCAR原recipe建模缺陷：新recipe的pool释放为C++数组逆序3→2→1→0，旧收据仅历史模式重放，不授权现代多release时序；数值后端和目标未改，不算性能提升。新7-native-cut标定及完整recipe→time→hardware→cost冷读通过，31活动/24subject为23个条件估计+1源marker，18个原term均有收费归属，数值未知0；15份既有primitive/DAG数值证据复用，释放顺序差异仍保残差。源规则分离units/CPU位置：12个完整串行服务可证单位1，18个服务内部需求、28个CPU域和NUMA驻留仍未知；不拿caller参与1充当总资源。2项scope检查、2项旧G2回归通过，报告 `artifacts/baseline/g3c4-scope-accounting.json`。接下来做带残差的成本组时间投影与闭合窗口/opaque边界合同，再接局部规划；整scope资源可行性、物理成本闭合和全程序最优性仍未证明。
+
 可视化支线：`view-graph` 已接第一阶段 ProgramBuild 原查询接口及版本化任务图，离线无限画布按分片展开/收缩，保原 frame、MAY/条件和证据，循环不逐次展开；布局单独保存。真实 Gray 导出8个程序片段（426节点/469边）及204资源/477连接的原库存，端点/深度/时间限制均明确，不冒充全程序覆盖。浏览器已验展开79→124→收起79、资源分组13→157、缩放/筛选/保存及零网络请求；未运行目标程序。完成这项后继续G3c2，不扩展GUI产品或提前进入新backend。
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。

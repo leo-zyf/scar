@@ -7,6 +7,8 @@ actual target call latency. Existing numeric primitive subjects remain intact.
 from dataclasses import replace
 import math
 import statistics
+import json
+from pathlib import Path
 
 from scar.ir.activity_costs import (ActivityCost, CostBasis, CostCoverage,
     CostInterval, IntervalKind, validate_activity_cost_table)
@@ -16,8 +18,24 @@ from scar.ir.versioned_schedule import VersionedTaskKind as K
 from scar.optimization.resource_solver import semantic_sha256
 
 SCHEMA = 'scar.stateful-boundary-cut-calibration'
+SCOPE_SCHEMA = 'scar.stateful-scope-boundary-calibration'
 CUTS = ('outer_enter', 'native_enter', 'metadata_ready', 'capture_ready',
         'binding_ready', 'worker_checked', 'restore_ready', 'outer_return')
+SCOPE_CUTS = (*CUTS[:-1], 'helper_cleanup_ready', CUTS[-1])
+
+
+def boundary_calibration_reference(value):
+    if type(value) is dict:
+        reference = value
+    else:
+        path = Path(value).resolve()
+        schema = json.loads(path.read_bytes()).get('schema')
+        if schema not in (SCHEMA, SCOPE_SCHEMA):
+            raise ValueError('original legacy or scope boundary calibration schema required')
+        reference = artifact_reference(path, schema)
+    if reference.get('schema') not in (SCHEMA, SCOPE_SCHEMA):
+        raise ValueError('original legacy or scope boundary calibration reference required')
+    return reference
 
 
 def _strings(value, name):
@@ -46,19 +64,28 @@ def project_boundary_activity_costs(table, schedule, resources, *, domain, candi
         if activity.task in by_task:
             raise ValueError('boundary cut adapter needs one synchronous lifecycle per original task')
         by_task[activity.task] = activity.id
+    modern = 'implementation_scope_cleanup' in schedule.proof
+    cuts = SCOPE_CUTS if modern else CUTS
+    expected_schema = SCOPE_SCHEMA if modern else SCHEMA
     costs = list(table.costs); mappings = []; facts = []; residuals = []; seen = set()
     for value in calibrations:
-        reference = value if type(value) is dict else artifact_reference(value, SCHEMA)
+        reference = boundary_calibration_reference(value)
+        if reference['schema'] != expected_schema:
+            raise ValueError('legacy mixed-helper boundary samples and helper-separated scope graphs cannot be interchanged')
         identity = semantic_sha256(reference)
         if identity in seen:
             raise ValueError('one boundary calibration publication cannot be charged twice')
         seen.add(identity)
-        document = read_boundary_cuts(reference, domain=domain, candidate_id=candidate_id)
-        if (document.get('schema'), document.get('schema_version')) != (SCHEMA, 1):
+        if modern:
+            from scar.compiler.calibrate_scope_boundary import read_scope_boundary_calibration
+            document = read_scope_boundary_calibration(reference, domain=domain, candidate_id=candidate_id)
+        else:
+            document = read_boundary_cuts(reference, domain=domain, candidate_id=candidate_id)
+        if (document.get('schema'), document.get('schema_version')) != (expected_schema, 1):
             raise ValueError('source-replayed boundary cut calibration required')
         if document['resource_context'] != stateful_resource_context(domain, candidate_id):
             raise ValueError('boundary cuts differ from the original candidate resource context')
-        if tuple(document['cuts']) != CUTS:
+        if tuple(document['cuts']) != cuts:
             raise ValueError('original shared monotonic boundary cut order differs')
         conditions = _strings(document['conditions'], 'applicability conditions')
         missing = _strings(document['missing_terms'], 'residual terms')
@@ -70,12 +97,12 @@ def project_boundary_activity_costs(table, schedule, resources, *, domain, candi
             if type(sample_id) is not str or not sample_id or sample_id in sample_ids:
                 raise ValueError('unique shared boundary sample identity required')
             sample_ids.add(sample_id)
-            if (type(timestamps) is not list or len(timestamps) != len(CUTS)
+            if (type(timestamps) is not list or len(timestamps) != len(cuts)
                     or any(type(t) is not int or t < 0 for t in timestamps)
                     or any(a > b for a, b in zip(timestamps, timestamps[1:]))):
                 raise ValueError('one original monotonic integer cut vector required per sample')
         phases = document['phases']
-        if type(phases) is not list or len(phases) != len(CUTS) - 1:
+        if type(phases) is not list or len(phases) != len(cuts) - 1:
             raise ValueError('one exclusive phase per adjacent original cut pair required')
         phase_ids = set(); covered_kinds = set(); phase_rows = []
         for index, phase in enumerate(phases):
@@ -83,7 +110,7 @@ def project_boundary_activity_costs(table, schedule, resources, *, domain, candi
             if type(phase_id) is not str or not phase_id or phase_id in phase_ids:
                 raise ValueError('unique original boundary phase identity required')
             phase_ids.add(phase_id)
-            if (phase['start'], phase['end']) != CUTS[index:index+2]:
+            if (phase['start'], phase['end']) != cuts[index:index+2]:
                 raise ValueError('boundary samples must retain contiguous exclusive cut intervals')
             kinds = _strings(phase['phase_kinds'], 'implementation phase kinds')
             if covered_kinds.intersection(kinds):
@@ -126,14 +153,16 @@ def project_boundary_activity_costs(table, schedule, resources, *, domain, candi
             target_activity_observed=False, samplewise_cut_differences=True,
             median_subtraction_used=False, residual_terms=missing))
         facts.append(dict(artifact=reference, locator='#/phases'))
-        residuals.append(dict(source=reference, kind='CANONICAL_BOUNDARY_MODEL_RESIDUAL',
+        residuals.append(dict(source=reference, kind=('CANONICAL_SCOPE_BOUNDARY_MODEL_RESIDUAL' if modern
+            else 'CANONICAL_BOUNDARY_MODEL_RESIDUAL'),
             missing_terms=list(missing), cost_charged=False))
     result = replace(table, costs=tuple(costs), source_refs=(*table.source_refs, *facts),
                      unmapped_terms=(*table.unmapped_terms, *residuals))
     summary = validate_activity_cost_table(result, schedule, resources)
-    return result, dict(protocol='SOURCE_REPLAYED_EXCLUSIVE_CANONICAL_BOUNDARY_CUTS',
+    return result, dict(protocol=('SOURCE_REPLAYED_EXCLUSIVE_SCOPE_BOUNDARY_CUTS' if modern
+        else 'SOURCE_REPLAYED_EXCLUSIVE_CANONICAL_BOUNDARY_CUTS'),
         mapping=mappings, summary=summary, existing_known_subjects_preserved=True,
         complete_call_cost=False, native_execution_authorized=False)
 
 
-__all__ = ['project_boundary_activity_costs']
+__all__ = ['project_boundary_activity_costs', 'boundary_calibration_reference']

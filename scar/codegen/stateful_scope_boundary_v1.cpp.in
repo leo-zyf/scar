@@ -1,0 +1,18 @@
+@ORIGINAL_PREFIX@
+// Canonical scope observer. The original metadata/capture/bind/check/restore
+// fragments are unchanged. Pool/scans/DAG/commit remain skipped; clocks and
+// thread-local stores remain instrumentation, without subtraction.
+@RUN_HEADER@
+    boundary_cuts.fill(0);
+    recorded_cut_count = 0;
+    if (!record_cut(0)) return 3;
+@METADATA_TO_CAPTURE@
+    {
+@CAPTURE_THROUGH_RESTORE@
+    }
+    // Normal-success reverse RAII: FloatingScope, then ThreadAffinity. There
+    // is no pool here; its separate allocation/release work remains excluded.
+    if (!record_cut(6)) return 3;
+    return 0;
+}
+@ORIGINAL_SUFFIX@

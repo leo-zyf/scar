@@ -25,6 +25,29 @@ def _cpu_ids(value,field):
     return tuple(value)
 
 
+def _scope_domains(schedule,graph,target_ref):
+    """Replay new source-scoped domains; absence keeps legacy behavior exact."""
+    from scar.analysis.scope_demands import SCHEMA,derive_serial_scope_demands
+    proofs=[(i,row)for i,row in enumerate(schedule.temporal.source_refs)if row.get('schema')==SCHEMA]
+    if not proofs:return None
+    if len(proofs)!=1:raise ValueError('one original serial scope demand proof required')
+    ordinal,proof=proofs[0]
+    if (proof.get('schema_version')!=1 or proof.get('target')!=target_ref
+            or type(proof.get('recipe'))is not dict):
+        raise ValueError('serial scope demand recipe/target provenance differs')
+    recipe=read_artifact(proof['recipe'])
+    if (recipe.get('recipe_id')!=proof.get('recipe_id')
+            or recipe.get('artifacts',{}).get('target_snapshot')!=target_ref
+            or recipe['artifacts'].get('stage_plan')!=proof.get('stage_plan')):
+        raise ValueError('serial scope demand proof is not this original recipe/target')
+    if derive_serial_scope_demands(schedule,recipe,graph)!=schedule:
+        raise ValueError('serial scope demands differ from complete source replay')
+    rows=proof.get('occupancies')
+    if type(rows)is not list or len({row['occupancy']for row in rows})!=len(rows):
+        raise ValueError('unique source scope execution domains required')
+    return ordinal,proof,{row['occupancy']:row for row in rows}
+
+
 def derive_temporal_resources(schedule,target,*,source_context):
     """Return one typed binding per original occupancy, with guarded domains."""
     validate_versioned_schedule(schedule)
@@ -47,6 +70,7 @@ def derive_temporal_resources(schedule,target,*,source_context):
     if type(refs)not in(list,tuple)or any(type(row)is not dict for row in refs):
         raise ValueError('source_refs must retain original reference dictionaries')
     refs=tuple(encode(refs));digest=semantic_sha256(schedule_document(schedule))
+    scope_domains=_scope_domains(schedule,graph,target_ref)
     reference=lambda row:H.TargetResourceRef(snapshot,row.id)
     unresolved=[]
     def frontier(field,reason,**facts):unresolved.append(dict(field=field,reason=reason,**facts))
@@ -86,14 +110,39 @@ def derive_temporal_resources(schedule,target,*,source_context):
         if occupancy.kind is K.EXECUTION_DEMAND:
             index=len(executions);record=by_wire.get(occupancy.resource)
             exact=record if type(record)is H.HardwareThread else None
-            candidates=(exact,)if exact is not None else caller_threads if record is None else()
+            domain_source=None
+            if scope_domains is None:
+                candidates=(exact,)if exact is not None else caller_threads if record is None else()
+            else:
+                proof_ordinal,proof,domains=scope_domains
+                if occupancy.id not in domains:raise ValueError('execution occupancy lacks its source scope domain')
+                domain=domains[occupancy.id];cpu_ids=_cpu_ids(domain['cpu_ids'],'scope.cpu_ids')
+                if domain['resource']!=occupancy.resource or domain['units']!=occupancy.units:
+                    raise ValueError('execution demand differs from source scope proof')
+                if domain['exact_cpu_id']is not None:
+                    if (exact is None or exact.cpu_id!=domain['exact_cpu_id']
+                            or cpu_ids!=(exact.cpu_id,)):
+                        raise ValueError('source selected scope CPU identity differs')
+                elif exact is not None:raise ValueError('unknown source scope cannot acquire an exact CPU')
+                candidates=tuple(threads[cpu]for cpu in(cpu_ids or())
+                    if cpu in threads and threads[cpu].online is not False)
+                if cpu_ids is not None and len(candidates)!=len(cpu_ids):
+                    raise ValueError('source scope CPU domain is missing/offline in original target')
+                domain_source=dict(kind='SOURCE_REPLAYED_EXECUTION_CPU_DOMAIN',
+                    source_schedule_sha256=digest,locator='#/temporal/source_refs/'+str(proof_ordinal)
+                        +'/occupancies/'+str(proof['occupancies'].index(domain)),
+                    domain_state=domain['domain_state'],recipe=proof['recipe'],
+                    original_caller_mask_not_selected_mask=True,
+                    actual_thread_execution_proven=False,global_reservation=False)
             if exact is not None and exact.online is False:
                 frontier('executions/'+str(index),'SOURCE_SELECTED_CPU_OFFLINE_IN_TARGET_SNAPSHOT')
             if record is not None and exact is None:
                 frontier('executions/'+str(index),'EXECUTION_RESOURCE_IS_NOT_A_CPU_HARDWARE_THREAD',
                     original_resource=occupancy.resource)
             if exact is None and not candidates:
-                frontier('executions/'+str(index)+'/candidate_threads','ORIGINAL_CALLER_CPU_DOMAIN_UNSPECIFIED')
+                reason=('OPAQUE_SCOPE_CPU_DOMAIN_UNPROVEN'if scope_domains is not None
+                    and domain['domain_state']=='OPAQUE_UNKNOWN'else'ORIGINAL_CALLER_CPU_DOMAIN_UNSPECIFIED')
+                frontier('executions/'+str(index)+'/candidate_threads',reason)
             if occupancy.units is None:
                 frontier('executions/'+str(index)+'/units','ORIGINAL_EXECUTION_DEMAND_UNITS_UNKNOWN')
             core_rows=tuple(r for r in resources if type(r)is H.CpuCore
@@ -110,6 +159,7 @@ def derive_temporal_resources(schedule,target,*,source_context):
                 numa_memory_candidates=tuple(str(row.id)for executor in executors for _,row in access.get(executor,())),
                 smt_sibling_cpu_ids={str(t.id):t.thread_siblings for t in candidates},
                 actual_thread_execution_proven=False,exclusive_physical_core_reservation=False)
+            if domain_source is not None:source=(*source,encode(domain_source))
             executions.append(ExecutionBinding(occupancy.id,occupancy.resource,
                 None if exact is None else reference(exact),tuple(reference(r)for r in core_rows),
                 tuple(reference(r)for r in candidates),occupancy.units,(*source,encode(topology))))
@@ -136,6 +186,11 @@ def derive_temporal_resources(schedule,target,*,source_context):
             size_bytes=connections['bytes'],decoded_sha256=connections['decoded_sha256']),
         memory_access_relations=memory_relations,
         source_budget_interpretation='PRESERVE_ORIGINAL_SCOPE_NOT_RSS_OR_NEW_AVAILABLE_MEMORY_BUDGET')
+    if scope_domains is not None:
+        ordinal,proof,_=scope_domains
+        context['serial_scope_cpu_domains']=dict(source_schedule_sha256=digest,
+            locator='#/temporal/source_refs/'+str(ordinal),recipe=proof['recipe'],
+            global_caller_context_is_not_per_scope_domain_authority=True)
     result=ResourceProjection(snapshot,digest,tuple(executions),tuple(storages),
         OriginalBudget(schedule.budget_bytes,schedule.budget_scope,deepcopy(schedule.budget_refs)),
         tuple(unresolved),(*refs,encode(context)))
