@@ -1,8 +1,9 @@
 """Attach one source-proven stateful loop at an ordinary import boundary.
 
-Default execution remains Python. Explicit validation executes the unchanged
-transactional step ABI through its admitted C++ control adapter, without any
-compiler, planner or graph import at runtime.
+Default execution remains Python. Explicit validation executes the admitted
+C++ control adapter with per-step transactions. The contract distinguishes
+original per-step allocation from outer-loop workspace ownership. Neither
+profile imports the compiler, planner or graph at runtime.
 """
 import argparse
 import json
@@ -32,6 +33,10 @@ def run_stateful_loop_entry(entry,argv,*,bundle,expected_admission_sha256,
     execution=(_execute(entry,argv,scope,'ordinary_import_stateful_loop_boundary')if scope is not None
         else run_original_script(entry,argv))
     return dict(schema='scar.stateful-loop-entry-execution',schema_version=1,execution=execution,
+        admitted_profile=contract['profile'],
+        admitted_resource_plan=dict(
+            workspace_allocations_hoisted=contract.get('workspace_allocations_hoisted',False),
+            team_setup_hoisted=contract.get('team_setup_hoisted',False)),
         loop_statistics=[]if scope is None else[dict(row['stats'])for row in scope.bindings],
         deployment_gate=gate,native_libraries_loaded=scope is not None,
         performance_measured=False,release_authority=False,whole_program_cpp=False)

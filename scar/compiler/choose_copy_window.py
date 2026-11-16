@@ -35,7 +35,7 @@ def _report(reference, artifacts, choice, context):
     return dict(schema=SCHEMA, schema_version=1, calibration=reference,
         rewrite=context['rewrite_reference'], **artifacts,
         implementations={name:artifact_reference(root/name,'scar.python-source') for name in
-            ('compiler/choose_copy_window.py','optimization/copy_window_choice.py')},
+            ('compiler/choose_copy_window.py','optimization/copy_window_choice.py','planner/choice.py')},
         selected_variant=choice['selected_variant'], decision=choice['decision'],
         scope='FINITE_FIXED_CPU_CANONICAL_COPY_WINDOW_COMPONENT_MODEL',
         target_program_executed=False, native_compiled=False, whole_scope_optimality_proven=False,

@@ -20,6 +20,8 @@ SCHEMA='scar.stateful-loop-runtime-contract'
 ADMISSION='scar.stateful-loop-runtime-admission'
 PROFILE='UNMEASURED_TRIAL_STATEFUL_REPEAT_ABI1'
 FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_REPEAT_ABI1_V1'
+WORKSPACE_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_REPEAT_ABI1'
+WORKSPACE_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_REPEAT_ABI1_V1'
 TRUST='EXPLICIT_EXPECTED_ADMISSION_SHA256_FROM_ORIGINAL_SOURCE_LOOP_EXPORTER_NOT_SIGNATURES'
 
 
@@ -29,7 +31,8 @@ def _need(condition,message):
 
 def validate_contract(value):
     _need(type(value)is dict and(value.get('schema'),value.get('schema_version'))==(SCHEMA,1)
-        and value['profile']==PROFILE and value['execution_family']==FAMILY
+        and (value['profile'],value['execution_family'])in(
+            (PROFILE,FAMILY),(WORKSPACE_PROFILE,WORKSPACE_FAMILY))
         and value['cost_status']=='UNKNOWN'and value['deployment_authorized']is False
         and value['trial_only']is True,'explicit unmeasured stateful loop contract required')
     _source(value['source']);_source(value['step_source'])
@@ -54,8 +57,26 @@ def validate_contract(value):
         and len({pair[0]for pair in call['keyword_parameters']})==len(call['keyword_parameters']),
         'original positional/keyword CALL syntax required')
     native=value['native']
+    workspace=value['profile']==WORKSPACE_PROFILE
+    if workspace:
+        scope=value.get('workspace')
+        _need(type(scope)is dict and set(scope)=={'plan_sha256','execution_plan_sha256','slot_capacities_bytes'}
+            and _digest(scope['plan_sha256'])and _digest(scope['execution_plan_sha256'])
+            and type(scope['slot_capacities_bytes'])is list and len(scope['slot_capacities_bytes'])<=4096
+            and all(type(cap)is int and cap>=0 and cap%8==0 for cap in scope['slot_capacities_bytes'])
+            and sum(scope['slot_capacities_bytes'])==step['memory']['workspace_payload_bytes']
+            and value.get('workspace_allocations_hoisted')is True
+            and value.get('team_setup_hoisted')is False
+            and value.get('workspace_or_team_setup_hoisted')is True,
+            'workspace profile requires exact plan/capacities and allocation-only hoisting')
+    else:
+        _need('workspace'not in value and value.get('workspace_or_team_setup_hoisted')is False
+            and value.get('workspace_allocations_hoisted',False)is False
+            and value.get('team_setup_hoisted',False)is False,
+            'original repeat profile cannot carry workspace or hoisted setup')
     _need(native['stateful_abi_version']==native['repeat_abi_version']==1
-        and native['symbol']=='scar_repeat_stateful_v1','original stateful/repeat ABI1 required')
+        and native['symbol']==('scar_workspace_repeat_stateful_v1'if workspace else'scar_repeat_stateful_v1'),
+        'profile-matched original stateful/repeat ABI1 required')
     for row in(native['base'],native['repeat']):
         _need(type(row)is dict and Path(row['library']).name==row['library']
             and row['library']not in('runtime.json','admission.json','export-report.json')
@@ -131,6 +152,9 @@ class NativeStatefulRepeat:
         if repetitions==0:
             result=dict(requested=0,completed=0,native_calls=0,status=0)
             self._report['last_execution']=result;return dict(result)
+        if self._contract['profile']==WORKSPACE_PROFILE and repetitions!=self._contract['trip_count']:
+            self._report['last_execution']=dict(requested=repetitions,completed=0,native_calls=0,status=None)
+            raise RepeatGuardFailure(repetitions,0,None,'count differs from exact workspace plan')
         progress=ctypes.c_uint64();status=None
         def invoke(*args):
             nonlocal status
@@ -152,13 +176,14 @@ def _admit(bundle,expected_admission_sha256):
     directory=Path(bundle).resolve();raw=_small_raw(directory/'admission.json');admission=_json(raw)
     _need(sha256(raw).hexdigest()==expected_admission_sha256
         and(admission.get('schema'),admission.get('schema_version'))==(ADMISSION,1)
-        and admission['trust_policy']==TRUST and admission['profile']==PROFILE
+        and admission['trust_policy']==TRUST and admission['profile']in(PROFILE,WORKSPACE_PROFILE)
         and admission['runtime_implementation_sha256']==implementation_sha256(),
         'original unmeasured loop producer/runtime admission differs')
     raw=_small_raw(directory/'runtime.json')
     _need(sha256(raw).hexdigest()==admission['runtime_sha256'],'loop runtime contract bytes differ')
     contract=validate_contract(_json(raw));native=contract['native']
-    _need(native==admission['native'],'loop native bytes/ABI differ from admission')
+    _need(native==admission['native']and admission['profile']==contract['profile'],
+        'loop native bytes/ABI/profile differ from admission')
     members={'runtime.json','admission.json',native['base']['library'],native['repeat']['library']}
     _need(members<={p.name for p in directory.iterdir()}<=members|{'export-report.json'},
         'unexpected stateful loop compact bundle members')
@@ -183,7 +208,12 @@ def load(bundle,*,expected_admission_sha256):
     directory,contract,admission=_admit(bundle,expected_admission_sha256)
     native=contract['native']
     base=_base(directory,contract['step_contract'])
-    library=ctypes.CDLL(str(directory/native['repeat']['library']));run=library.scar_repeat_stateful_v1
+    library=ctypes.CDLL(str(directory/native['repeat']['library']))
+    if contract['profile']==WORKSPACE_PROFILE:
+        getter=library.scar_workspace_plan_sha256_v1;getter.argtypes=[];getter.restype=ctypes.c_char_p
+        _need(getter()==contract['workspace']['execution_plan_sha256'].encode(),
+            'workspace embedded execution plan differs from compact contract')
+    run=getattr(library,native['symbol'])
     run.argtypes=[ctypes.POINTER(step_runtime._Table),ctypes.POINTER(_Array),ctypes.c_uint64,
         ctypes.POINTER(step_runtime._Scalar),ctypes.c_uint64,ctypes.POINTER(step_runtime._Provider),ctypes.c_uint64,
         ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint64)]
@@ -193,4 +223,4 @@ def load(bundle,*,expected_admission_sha256):
 
 
 __all__=['load','inspect_bundle','validate_contract','implementation_sha256','NativeStatefulRepeat','RepeatGuardFailure',
-    'SCHEMA','ADMISSION','PROFILE','FAMILY','TRUST']
+    'SCHEMA','ADMISSION','PROFILE','FAMILY','WORKSPACE_PROFILE','WORKSPACE_FAMILY','TRUST']

@@ -67,9 +67,11 @@ scar compile-copy-choice --choice CHOICE/result.json --out CHOICE_TRIAL
 ```bash
 scar prepare-workspace --loop-build SOURCE_LOOP/result.json --out WORKSPACE
 scar compile-workspace --preparation WORKSPACE/result.json --out WORKSPACE_NATIVE
+scar export-workspace-loop --native WORKSPACE_NATIVE --out WORKSPACE_RUNTIME
+scar run-stateful-loop --bundle WORKSPACE_RUNTIME --admission-sha256 EXPORT_SHA --report RUN.json --validate-only --exclusive-inputs -- ENTRY.py
 ```
 
-准备端重放原 F4 循环/单步证明，检查本轮所有私有读取均由本轮写入覆盖；图保留一份 LOOP_REGION 正文，外层持有固定容量，每轮内容仍有独立版本。C++ 保留单步编译边界及每轮 guard、计算、FP/CPU 还原和提交，只移动私有分配/释放。原函数可通过 `scar.compiler.stateful_workspace_runtime.guarded_workspace_loop` 显式试验接入，失败只续跑未提交后缀，默认 NO_OP。`prepare-workspace --recipe RECIPE --trip-count N` 则仅生成固定输入的显式调用组合，不授权替换未经证明的原调用循环。减少分配请求不保证更快；当前均未自动启用。
+准备端重放原 F4 循环/单步证明，检查本轮所有私有读取均由本轮写入覆盖；图保留一份 LOOP_REGION 正文，外层持有固定容量，每轮内容仍有独立版本。C++ 保留单步编译边界及每轮 guard、计算、FP/CPU 还原和提交，只移动私有分配/释放。导出命令返回 `expected_admission_sha256`，作为上面 `EXPORT_SHA`；运行端只读取 compact 合同、动态库和原程序源码，不加载分析器或大图。省略 `--validate-only` 时仍执行原程序，显式试验失败只续跑未提交后缀。`prepare-workspace --recipe RECIPE --trip-count N` 仅生成固定输入的显式调用组合，不授权替换未经证明的原调用循环，也不能导出为原入口替换包。减少分配请求不保证更快；当前均未自动启用。
 
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
 

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 原入口交付已补通：`export-workspace-loop → run-stateful-loop` 共用轻量runtime，明确区分原分配与workspace配置；原F4/资源证明在导出端重放，原ELF不改。真实冷进程运行原入口，C++完成4步、stdout/状态逐位一致；默认无CDLL、零次不读输入、已提交2步后只续跑2步通过。阻断所有compiler/analysis/IR/planner/codegen导入和外部图读取仍成功；compact约62KB，composition拒绝冒充原循环。有限median选择抽为公共接口并接回原copy主链，真实成本重放仍选ORIGINAL；未新测性能或启用外提。验收：`artifacts/baseline/workspace-compact-runtime.json`。三阶段通用覆盖仍未完成，下一层集中接共享循环的最后使用/释放到统一时间资源IR，再补同源成本及联合规划，复用现有C++交付。
+
 2026-11-16 workspace生命期主链已实现：当前F4源循环和Gray–Scott显式四步组合分别生成6节点/14边、10节点/26边的ROOT/共享LOOP_REGION资源图，正文各存1份；本轮私有read覆盖均证明，固定地址/容量不冒充不变内容。源码分配请求分别8→2、16→4，数组payload预算不变但生命期延长。C++20/ABI1实际运行逐位一致，默认回退、零次不读输入、改callee、错shape/count和已提交2步后只续跑2步验证通过。首次lowering因clone被内联丢失7个SIMD循环，4步9.85→12.19ms；保留单步编译边界后恢复7个SIMD循环，重测原9.849ms/workspace9.852ms（7对/warmup2，区间重叠），无可确认收益，not profitable to enable。负结果和编译诊断保留，无整程序加速比。报告：`artifacts/baseline/workspace-lifetime.json`。旧循环proof的producer pin过期已从原ProgramBuild重建；旧compact因guard抽公共core而指纹失效，未绕过校验。下一步把资源生命期方案并入统一成本选择，并补原入口交付；不强行开启该用例的外提。
 
 2026-11-16 成本选择主链：新增 `calibrate-copy-window → choose-copy-window → compile-copy-choice`。原/融合窗口各用一个规范化计时cut，AB/BA交替、7对样本/warmup2，计时外重置与逐元素核验。真实原窗口median333215ns、融合543896ns，采样范围不重叠；规则据此保留ORIGINAL，融合在本组件条件下not profitable。两份成本表均22个条件组件+1源marker，融合缺证据字段已按真实FactRef解除，其余上下文残差/资源未知保留；不把组件范围当整程序保证。所选C++20/ABI1实际构建、独立冷读和原方法逐位验证/回退通过；三个合成策略分支仅测模型逻辑，未伪作实测。未重新标定旧组件、未运行完整目标或测新整程序加速比。报告：`artifacts/baseline/copy-window-cost-choice.json`。下一步继续有界联合规划，并优先推进共享循环内私有workspace生命期外提，而非强行启用无收益的循环融合。

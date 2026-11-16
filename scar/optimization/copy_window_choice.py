@@ -15,6 +15,7 @@ from scar.ir.temporal_resources import projection_document, projection_from_dict
 from scar.ir.versioned_schedule import TemporalOccupancyKind as O, schedule_document
 from scar.optimization.fused_copy_graph import verify_fused_copy_graph
 from scar.optimization.resource_solver import semantic_sha256
+from scar.planner.choice import FiniteMedianOption, choose_finite_medians
 
 SCHEMA = 'scar.copy-window-choice'
 CALIBRATION_SCHEMA = 'scar.copy-window-calibration'
@@ -185,9 +186,21 @@ def choose_copy_window(original_schedule, original_resources, original_table,
     summaries = dict(original=validate_activity_cost_table(original_costs, original_schedule, original_resources),
                      fused=validate_activity_cost_table(replacement_costs, rewritten_schedule, rewritten_resources))
     original_stat, fused_stat = stats['original'], stats['fused']
-    selected_variant = 'FUSED' if fused_stat['median_ns'] < original_stat['median_ns'] else 'ORIGINAL'
+    comparison_scope = 'ONE_COMPLETE_CANONICAL_COPY_WINDOW'
+    comparison_context = dict(calibration=calibration_reference, certificate_sha256=cert_sha,
+                              resource_context=encode(context))
+    finite_choice = choose_finite_medians([
+        FiniteMedianOption('ORIGINAL', comparison_scope, comparison_context,
+                          original_stat['median_ns'], original_row.component_refs),
+        FiniteMedianOption('FUSED', comparison_scope, comparison_context,
+                          fused_stat['median_ns'], fused_row.component_refs)],
+        original_id='ORIGINAL', scope=comparison_scope, context=comparison_context,
+        tick_numerator=1, tick_denominator=1_000_000_000)
+    _need(finite_choice['status'] == 'FINITE_MODEL_MINIMUM',
+          'complete reader-qualified canonical window medians required for copy choice')
+    selected_variant = finite_choice['selected_id']
     decision = ('TRIAL_REWRITE_WITHIN_COMPONENT_MODEL' if selected_variant == 'FUSED' else
-                'KEEP_ORIGINAL_ON_TIE' if fused_stat['median_ns'] == original_stat['median_ns'] else
+                'KEEP_ORIGINAL_ON_TIE' if len(finite_choice['tied_minimum_ids']) > 1 else
                 'KEEP_ORIGINAL_WITHIN_COMPONENT_MODEL')
     separation = ('FUSED_RANGE_BELOW_ORIGINAL' if fused_stat['max_ns'] < original_stat['min_ns'] else
                   'ORIGINAL_RANGE_BELOW_FUSED' if original_stat['max_ns'] < fused_stat['min_ns'] else
@@ -209,7 +222,8 @@ def choose_copy_window(original_schedule, original_resources, original_table,
             residuals=list(row.missing_terms), physical_window_latency=None))
     choice = dict(schema=SCHEMA, schema_version=1, selected_variant=selected_variant, decision=decision,
         objective='MINIMIZE_RETAINED_CANONICAL_COMPLETE_WINDOW_MEDIAN_NS_AT_ONE_FIXED_CPU',
-        alternatives=alternatives, empirical_separation=separation, summaries=summaries,
+        alternatives=alternatives, finite_choice=finite_choice,
+        empirical_separation=separation, summaries=summaries,
         inputs=dict(calibration=calibration_reference, rewrite=encode(rewrite), certificate_sha256=cert_sha,
             parent_schedule_sha256=old_sha, rewritten_schedule_sha256=new_sha,
             parent_resource_projection_sha256=old_resource_sha, rewritten_resource_projection_sha256=new_resource_sha,
