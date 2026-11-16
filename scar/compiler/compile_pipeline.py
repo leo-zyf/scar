@@ -14,14 +14,19 @@ def _write(path, value):
 
 def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, input_metadata_path=None,
                       input_shapes=None, target=None, cpu_threads=None, memory_budget_bytes=None,
-                      search_budget=100000, strategy_mode='auto', pipeline_workers=None, source_graph=None):
+                      search_budget=100000, strategy_mode='auto', pipeline_workers=None, source_graph=None,
+                      pipeline_dispatch='waves'):
     if strategy_mode not in ('auto', 'pool'):
         raise ValueError('pipeline strategy must be auto or pool')
+    if pipeline_dispatch not in ('waves','ready'):
+        raise ValueError('pipeline dispatch must be waves or ready')
+    if pipeline_dispatch=='ready'and pipeline_workers is None:
+        raise ValueError('dependency-ready dispatch requires an explicit pipeline CPU allocation')
     if pipeline_workers is not None:
         if type(pipeline_workers) is not int or pipeline_workers < 1:
             raise ValueError('pipeline workers must be a positive explicit CPU allocation')
         if cpu_threads not in (None, 1):
-            raise ValueError('dependency-wave execution requires serial leaf operators')
+            raise ValueError('dependency-based execution requires serial leaf operators')
         cpu_threads = 1
     if pipeline_path is not None:
         if source is not None or catalog is not None:
@@ -72,11 +77,11 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             memory = plan_pipeline_memory(pipeline, input_shapes=shapes,
                 memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
             row['selected_strategy'] = ('PRESERVE_CALLS_HOST_POOL' if pipeline_workers is None
-                else 'DEPENDENCY_WAVES_HOST_POOL')
+                else 'DEPENDENCY_READY_HOST_POOL'if pipeline_dispatch=='ready'else 'DEPENDENCY_WAVES_HOST_POOL')
         memory_path = folder / 'memory-plan.json'
         _write(memory_path, memory)
         row.update(memory_plan=str(memory_path), input_shape_evidence=shape_evidence)
-        if memory.get('frontier') or not memory['budget_satisfied']:
+        if memory.get('frontier') or not memory['budget_satisfied'] or memory.get('search_budget_exhausted',False):
             row.update(status=memory['status'], target_program_executed=False)
             rows.append(row)
             continue
@@ -111,8 +116,11 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             if not candidates:
                 raise ValueError('no executor satisfies the explicit pipeline CPU allocation')
             parallel_binding = candidates[0]
-            from scar.optimization.pipeline_schedule import plan_pipeline_schedule
-            execution_schedule = plan_pipeline_schedule(pipeline, memory, target,
+            if pipeline_dispatch=='ready':
+                from scar.optimization.pipeline_ready_schedule import plan_pipeline_ready_schedule as planner
+            else:
+                from scar.optimization.pipeline_schedule import plan_pipeline_schedule as planner
+            execution_schedule = planner(pipeline, memory, target,
                 cpu_ids=parallel_binding.cpu_ids, input_graph=source_graph)
             schedule_path = folder / 'resource-plan.json'
             _write(schedule_path, execution_schedule)
@@ -149,13 +157,14 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
         row.update(status='COMPILED_UNMEASURED', artifact=str(folder / 'native'),
             backend=artifact.report, unique_operator_artifacts=len(shared),
             cpu_allocation_policy=('CALLER_EXPLICIT_THREAD_COUNT_FIRST_FEASIBLE_EXECUTOR_UNRANKED'
-                if execution_schedule is None else 'EXPLICIT_PIPELINE_WIDTH_FEASIBLE_EXECUTOR_AND_DEPENDENCY_WAVES_UNRANKED'))
+                if execution_schedule is None else 'EXPLICIT_PIPELINE_WIDTH_FEASIBLE_EXECUTOR_AND_DEPENDENCY_READY_UNRANKED'
+                if pipeline_dispatch=='ready'else 'EXPLICIT_PIPELINE_WIDTH_FEASIBLE_EXECUTOR_AND_DEPENDENCY_WAVES_UNRANKED'))
         rows.append(row)
     report = dict(schema='scar.pipeline-compiler-build', schema_version=1, pipelines=rows,
         rejections=rejected, original_f4_discovery=pipeline_path is None,
         whole_program_compiled=False, first_stage_complete=False, selected_for_use=False,
         cost_scope='PIPELINE_GRAPH_AND_PAYLOAD_OPTIMIZATION_TIME_UNCALIBRATED', strategy_mode=strategy_mode,
-        pipeline_workers=pipeline_workers)
+        pipeline_workers=pipeline_workers,pipeline_dispatch=pipeline_dispatch)
     _write(out / 'result.json', report)
     return report
 
@@ -173,7 +182,9 @@ def main():
     parser.add_argument('--target')
     parser.add_argument('--cpu-threads', type=int)
     parser.add_argument('--pipeline-workers', type=int,
-        help='explicit dependency-wave CPU allocation preview; each leaf uses one CPU')
+        help='explicit CPU allocation preview; each leaf uses one CPU')
+    parser.add_argument('--pipeline-dispatch',choices=('waves','ready'),default='waves',
+        help='dispatch by whole waves or actual dependency readiness; neither predicts optimal time')
     parser.add_argument('--memory-budget-bytes', type=int)
     parser.add_argument('--search-budget', type=int, default=100000)
     parser.add_argument('--strategy', dest='strategy_mode', choices=('auto', 'pool'), default='auto',
@@ -182,7 +193,8 @@ def main():
     result = compile_pipelines(args.out, source=args.source, catalog=args.catalog,
         pipeline_path=args.pipeline, input_metadata_path=args.inputs, input_shapes=args.shape,
         target=args.target, cpu_threads=args.cpu_threads, memory_budget_bytes=args.memory_budget_bytes,
-        search_budget=args.search_budget, strategy_mode=args.strategy_mode, pipeline_workers=args.pipeline_workers)
+        search_budget=args.search_budget, strategy_mode=args.strategy_mode, pipeline_workers=args.pipeline_workers,
+        pipeline_dispatch=args.pipeline_dispatch)
     print(json.dumps(dict(pipelines=len(result['pipelines']),
         statuses=[row['status'] for row in result['pipelines']], result=str(Path(args.out) / 'result.json'))))
 

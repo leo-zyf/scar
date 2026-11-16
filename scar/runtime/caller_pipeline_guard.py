@@ -34,6 +34,7 @@ _GETTRACE=sys.gettrace;_GETPROFILE=sys.getprofile
 _MONITOR=getattr(sys,'monitoring',None)
 _MONITOR_APIS=None if _MONITOR is None else (_MONITOR.get_tool,_MONITOR.get_events,_MONITOR.get_local_events)
 _PARALLEL_FAMILY='DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1'
+_PARALLEL_FAMILIES=(_PARALLEL_FAMILY,'DEPENDENCY_READY_CPU_SERIAL_LEAVES_V1')
 
 
 def _need(condition,detail):
@@ -90,18 +91,18 @@ def validate_contract(value):
         and cpu['os']=='linux'and cpu['architecture']=='x86_64'and cpu['pointer_bits']==64
         and cpu['byteorder']=='little'and cpu['required_isa']=='BASELINE_X86_64','original supported CPU binding required')
     parallel=('execution_family'in native,'execution_schedule_sha256'in native,'execution_schedule_receipt'in native)
-    _need(all(parallel)or not any(parallel),'complete optional dependency-wave control contract required')
+    _need(all(parallel)or not any(parallel),'complete optional dependency control contract required')
     if all(parallel):
         receipt=native['execution_schedule_receipt']
-        _need(native['execution_family']==_PARALLEL_FAMILY and _hash(native['execution_schedule_sha256'])
+        _need(native['execution_family']in _PARALLEL_FAMILIES and _hash(native['execution_schedule_sha256'])
             and type(receipt)is dict and set(receipt)=={'path','sha256','bytes'}
             and type(receipt['path'])is str and Path(receipt['path']).is_absolute()
             and _hash(receipt['sha256'])and type(receipt['bytes'])is int and receipt['bytes']>0,
-            'original dependency-wave schedule identity/producer receipt required')
+            'original dependency schedule identity/producer receipt required')
         _need(all(row.get('cpu_threads')==1 and type(row.get('cpu_threads'))is int
             and type(row.get('cpu_ids'))is list and len(row['cpu_ids'])==1
             and row['cpu_ids'][0]in ids for row in operators),
-            'dependency-wave operators require their exact single-CPU placement')
+            'dependency operators require their exact single-CPU placement')
     memory=value['memory']
     _need(memory['policy']=='UNBOUND'and memory['scope']=='INCREMENTAL_PAYLOAD_WORKSPACE_CAPACITIES_PLUS_FRESH_FINAL'
         and all(type(memory[key])is int and 0<=memory[key]<=sys.maxsize for key in('workspace_bytes','final_bytes','peak_bytes','budget_bytes'))
@@ -222,10 +223,10 @@ def load(bundle,*,expected_admission_sha256):
             ('scar_pipeline_memory_sha256_v1',native['memory_plan_sha256'])):
         getter=getattr(host,symbol);getter.argtypes=[];getter.restype=ctypes.c_char_p
         _need(getter()==digest.encode(),'caller host embedded plan/memory differs')
-    if native.get('execution_family')==_PARALLEL_FAMILY:
+    if native.get('execution_family')in _PARALLEL_FAMILIES:
         getter=host.scar_pipeline_schedule_sha256_v1;getter.argtypes=[];getter.restype=ctypes.c_char_p
         _need(getter()==native['execution_schedule_sha256'].encode(),
-            'caller host embedded dependency-wave schedule differs')
+            'caller host embedded dependency schedule differs')
     run=host.scar_pipeline_run_v1
     run.argtypes=[ctypes.POINTER(_Array),ctypes.c_uint64,ctypes.POINTER(_Array),ctypes.POINTER(_TablePointer),
         ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint64)];run.restype=ctypes.c_int32
@@ -275,7 +276,7 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
     def fallback(reason,args,kwargs):
         stats['fallback_calls']+=1;stats['reasons'][reason]=stats['reasons'].get(reason,0)+1
         return original(*args,**kwargs)
-    @wraps(original)
+    @wraps(original,assigned=('__module__','__name__','__qualname__','__doc__'))
     def call(*args,**kwargs):
         if measure_candidate is not True:return fallback('NO_OP_cost_unknown_no_candidate_measurement',args,kwargs)
         if exclusive_inputs is not True or threading.active_count()!=1:
@@ -307,6 +308,12 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
         except GuardFailure:return fallback('native_private_output_guard_declined',args,kwargs)
         stats['native_calls']+=1
         return result
+    if getattr(original,'__annotate__',None)is not None:
+        def annotate(format):
+            from annotationlib import Format,get_annotations
+            return original.__annotations__ if format==Format.VALUE else get_annotations(original,format=format)
+        call.__annotate__=annotate
+    else:call.__annotations__=original.__annotations__
     call.scar_stats=stats;call.scar_artifact=artifact;call.scar_runtime_contract=deepcopy(contract)
     return call
 

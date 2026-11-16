@@ -45,14 +45,16 @@ def run_caller_entry(entry, argv, *, bundle, expected_admission_sha256,
         default_no_op=measure_candidate is not True,
         native_libraries_loaded=scope is not None,import_attachment_enabled=scope is not None,
         mode='MEASUREMENT_ONLY'if measure_candidate else 'ORIGINAL_NO_OP',
-        full_program_cpp=False,whole_program_performance_proven=False)
+        performance_measured=False,full_program_cpp=False,whole_program_performance_proven=False)
 
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bundle',required=True);parser.add_argument('--admission-sha256',required=True)
     parser.add_argument('--exclusive-inputs',action='store_true')
-    parser.add_argument('--measure-candidate',action='store_true');parser.add_argument('--report')
+    parser.add_argument('--measure-candidate','--validate-only',action='store_true',
+        help='explicit guarded execution for validation; no timing or deployment approval')
+    parser.add_argument('--report')
     parser.add_argument('command',nargs=argparse.REMAINDER)
     args=parser.parse_args(argv);command=args.command[1:]if args.command[:1]==['--']else args.command
     if not command:parser.error('an unchanged Python entry is required after --')
