@@ -4,6 +4,8 @@
 
 当前严格按层推进：L1 原图/资源输入 → L2 成本与约束投影 → L3 联合求解 → L4 执行证书 → L5 C++ → L6 原入口。L2 源码主链已验：16项时长和11项控制占用默认 UNKNOWN，2560B增量pool与external分账，矛盾shape拒绝，禁止solver/codegen。L3 `solve-pipeline-temporal` 已重放显式有限域：声明模型的两布局得21/13 ticks，五CALL顺序例得13并匹配下界；UNKNOWN case保留并阻止闭域选择，独立域收据防裁剪。上述ticks均非测量。报告在 `pipeline-solver-order-v1/l2-acceptance.json`、`l3-acceptance.json`。L4以后仍须逐层验收，试做文件不算完成。
 
+L4 已验：`refine-pipeline-temporal` 消费整个已闭合原域，输出 CPU0 的 C→A→E 与 CPU1 的 B→D；未知域拒绝，篡改顺序拒绝。证书保原引用，不复制大正文，只兑现计算顺序，不声称完整控制时间线或原生13ticks。后续进入 L5，再验原生执行是否真正服从证书，见 `l4-acceptance.json`。
+
 最新主链：`compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready --pipeline-memory-order dependencies` 将原 RAW 图、逻辑值生命周期和内存分配一起规划。仅当原 RAW 已证明旧 producer 和所有 consumers 严格先于新 writer 时复用，禁止覆盖当前调用输入；因此不为复用新增先后关系。原 source-order pool 和新 partial-order pool 使用不同 schema，均独立重放来源、形状、分配、完整搜索与预算。
 
 真实源码用例的增量 payload 从1536B变为2048B，解除无关 B→C 等待；1536B预算下新策略被正确拒绝。冷读、C++20、compact 和原入口均通过，正常/输入变化/只读别名结果逐位一致，溢出保留私有结果并回退一次。原 host 的独立 ABI 握手确认 B 未结束时 C 已启动；该诊断不构成数学/source 准入或性能证据。报告在 `artifacts/current/experiments/pipeline-partial-order-v1/`。

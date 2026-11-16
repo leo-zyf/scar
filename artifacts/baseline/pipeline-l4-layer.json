@@ -1,0 +1,63 @@
+{
+  "checks": {
+    "lane_order": {
+      "0": [
+        "C",
+        "A",
+        "E"
+      ],
+      "1": [
+        "B",
+        "D"
+      ]
+    },
+    "unit_tests": 1,
+    "unknown_domain_rejected": true,
+    "whole_original_domain_replayed": true,
+    "wrong_lane_order_rejected": true,
+    "zero_tick_topological_ties_checked": true
+  },
+  "evidence": {
+    "acceptance": {
+      "schema": "scar.pipeline-l4-main-acceptance",
+      "sha256": "35645dc8d352881bfb3c535cb71328c8fddf10fede40b7a2805ea0f0e4fbdb0c",
+      "size_bytes": 511,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l4-acceptance.json"
+    },
+    "certificate": {
+      "schema": "scar.pipeline-execution-refinement",
+      "sha256": "172d371573aabc463cf67ae1c55d9a9c446ef6c36207733fad504afe7755f767",
+      "size_bytes": 6822,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l4-order-refinement/certificate.json"
+    },
+    "publication": {
+      "schema": "scar.pipeline-execution-refinement-publication",
+      "sha256": "6d22a5eccd7033634b4d5fea2b4ae3730556a4c4485bed05fcd92fa2b33e1624",
+      "size_bytes": 1047,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l4-order-refinement/result.json"
+    },
+    "unknown_rejection": {
+      "schema": "scar.pipeline-l4-incomplete-domain-rejection",
+      "sha256": "054ca9375fedca1a921b777495943b4140590dc02f85e15410a105e8131d4c9e",
+      "size_bytes": 359,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l4-negative.json"
+    }
+  },
+  "full_model_timeline_implemented": false,
+  "implementation": {
+    "scar/cli.py": "719c39d22fabe0f724bcf64378681adb47777138c36179d8a7fd20d6eab3c911",
+    "scar/compiler/refine_pipeline_temporal.py": "48cbd13e4995c11364ab558562f800b5357e1dbff25256c81928f012fa269119",
+    "scar/optimization/pipeline_execution_refinement.py": "3d7f905b91baa5526c9277925b5b0c46a92b34eac25d87219aef9c202d7b14cf"
+  },
+  "implemented_contract": "MODEL_COMPUTE_ORDER_ONLY_EXISTING_HOST_ENVELOPE",
+  "later_layers_accepted": false,
+  "layer": "L4",
+  "native_compiled": false,
+  "next_layer": "L5_CPP_LOWERING",
+  "performance_measured": false,
+  "runtime_order_executed": false,
+  "schema": "scar.pipeline-l4-layer-gate",
+  "schema_version": 1,
+  "status": "ACCEPTED",
+  "three_stages_globally_complete": false
+}
