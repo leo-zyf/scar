@@ -22,6 +22,9 @@ PROFILE='UNMEASURED_TRIAL_STATEFUL_REPEAT_ABI1'
 FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_REPEAT_ABI1_V1'
 WORKSPACE_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_REPEAT_ABI1'
 WORKSPACE_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_REPEAT_ABI1_V1'
+GUARD_REUSE_PROFILE='UNMEASURED_TRIAL_STATEFUL_WORKSPACE_FINITE_REUSE_ABI1'
+GUARD_REUSE_FAMILY='ORDERED_TRANSACTIONAL_STATEFUL_WORKSPACE_FINITE_REUSE_ABI1_V1'
+_WORKSPACE_PROFILES=(WORKSPACE_PROFILE,GUARD_REUSE_PROFILE)
 TRUST='EXPLICIT_EXPECTED_ADMISSION_SHA256_FROM_ORIGINAL_SOURCE_LOOP_EXPORTER_NOT_SIGNATURES'
 
 
@@ -32,7 +35,8 @@ def _need(condition,message):
 def validate_contract(value):
     _need(type(value)is dict and(value.get('schema'),value.get('schema_version'))==(SCHEMA,1)
         and (value['profile'],value['execution_family'])in(
-            (PROFILE,FAMILY),(WORKSPACE_PROFILE,WORKSPACE_FAMILY))
+            (PROFILE,FAMILY),(WORKSPACE_PROFILE,WORKSPACE_FAMILY),
+            (GUARD_REUSE_PROFILE,GUARD_REUSE_FAMILY))
         and value['cost_status']=='UNKNOWN'and value['deployment_authorized']is False
         and value['trial_only']is True,'explicit unmeasured stateful loop contract required')
     _source(value['source']);_source(value['step_source'])
@@ -57,7 +61,7 @@ def validate_contract(value):
         and len({pair[0]for pair in call['keyword_parameters']})==len(call['keyword_parameters']),
         'original positional/keyword CALL syntax required')
     native=value['native']
-    workspace=value['profile']==WORKSPACE_PROFILE
+    workspace=value['profile']in _WORKSPACE_PROFILES
     if workspace:
         scope=value.get('workspace')
         _need(type(scope)is dict and set(scope)=={'plan_sha256','execution_plan_sha256','slot_capacities_bytes'}
@@ -74,6 +78,26 @@ def validate_contract(value):
             and value.get('workspace_allocations_hoisted',False)is False
             and value.get('team_setup_hoisted',False)is False,
             'original repeat profile cannot carry workspace or hoisted setup')
+    if value['profile']==GUARD_REUSE_PROFILE:
+        reuse=value.get('guard_reuse')
+        arrays=sum(row['kind']=='array'for row in step['inputs'])
+        _need(type(reuse)is dict and set(reuse)=={'property_plan_sha256',
+            'parent_execution_plan_sha256','input_array_indices','policy'}
+            and _digest(reuse['property_plan_sha256'])and _digest(reuse['parent_execution_plan_sha256'])
+            and arrays>0 and type(reuse['input_array_indices'])is list
+            and all(type(i)is int for i in reuse['input_array_indices'])
+            and reuse['input_array_indices']==list(range(arrays)) and count>1 and not step['providers']
+            and reuse['policy']=='FIRST_INPUT_SCAN_THEN_SUCCESS_FINITE_PROPERTY_INDUCTION'
+            and value.get('input_finite_scans_reused')is True,
+            'finite-reuse profile requires the exact property plan and guarded input set')
+        execution=dict(schema='scar.workspace-guard-reuse-execution-plan',schema_version=1,
+            parent_execution_plan_sha256=reuse['parent_execution_plan_sha256'],
+            property_plan_sha256=reuse['property_plan_sha256'])
+        _need(sha256(_json_bytes(execution)).hexdigest()==value['workspace']['execution_plan_sha256'],
+            'finite property and parent controller must identify the new execution plan')
+    else:
+        _need('guard_reuse'not in value and value.get('input_finite_scans_reused',False)is False,
+            'original profiles cannot silently reuse input finite guards')
     _need(native['stateful_abi_version']==native['repeat_abi_version']==1
         and native['symbol']==('scar_workspace_repeat_stateful_v1'if workspace else'scar_repeat_stateful_v1'),
         'profile-matched original stateful/repeat ABI1 required')
@@ -152,7 +176,7 @@ class NativeStatefulRepeat:
         if repetitions==0:
             result=dict(requested=0,completed=0,native_calls=0,status=0)
             self._report['last_execution']=result;return dict(result)
-        if self._contract['profile']==WORKSPACE_PROFILE and repetitions!=self._contract['trip_count']:
+        if self._contract['profile']in _WORKSPACE_PROFILES and repetitions!=self._contract['trip_count']:
             self._report['last_execution']=dict(requested=repetitions,completed=0,native_calls=0,status=None)
             raise RepeatGuardFailure(repetitions,0,None,'count differs from exact workspace plan')
         progress=ctypes.c_uint64();status=None
@@ -176,7 +200,7 @@ def _admit(bundle,expected_admission_sha256):
     directory=Path(bundle).resolve();raw=_small_raw(directory/'admission.json');admission=_json(raw)
     _need(sha256(raw).hexdigest()==expected_admission_sha256
         and(admission.get('schema'),admission.get('schema_version'))==(ADMISSION,1)
-        and admission['trust_policy']==TRUST and admission['profile']in(PROFILE,WORKSPACE_PROFILE)
+        and admission['trust_policy']==TRUST and admission['profile']in(PROFILE,*_WORKSPACE_PROFILES)
         and admission['runtime_implementation_sha256']==implementation_sha256(),
         'original unmeasured loop producer/runtime admission differs')
     raw=_small_raw(directory/'runtime.json')
@@ -209,7 +233,7 @@ def load(bundle,*,expected_admission_sha256):
     native=contract['native']
     base=_base(directory,contract['step_contract'])
     library=ctypes.CDLL(str(directory/native['repeat']['library']))
-    if contract['profile']==WORKSPACE_PROFILE:
+    if contract['profile']in _WORKSPACE_PROFILES:
         getter=library.scar_workspace_plan_sha256_v1;getter.argtypes=[];getter.restype=ctypes.c_char_p
         _need(getter()==contract['workspace']['execution_plan_sha256'].encode(),
             'workspace embedded execution plan differs from compact contract')

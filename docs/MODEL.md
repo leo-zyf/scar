@@ -19,6 +19,8 @@ CPU 依赖就绪执行共享同一语义/存储 DAG：每个任务固定到显�
 
 封闭状态循环用一份共享 step 和内容坐标 `(数组输入根, iteration i, local_epoch e)` 表达递推：本轮最后成功提交的内容连接下一轮入口；只读数组和固定 scalar 是受 guard 约束的 live-in。该坐标不是运行时 LogicalVersion，不因对象引用未变就判为循环不变量。原源码循环证明、参数接线、资源计划和运行时准入分开，只有独立重放后才可用原 C++ repeat adapter 替换控制。
 
+`FINITE_CONTENT` 等是附着于内容版本/ROI 的条件属性，不是内容身份。属性图用原表达式的操作数边、影子初始化、ROI 写入和已证明的 COMMIT→下一轮输入 carry 传递性质；未知 provider 会截断相关推理。有限输入经过封闭算术且原严格 FP/事务检查成功时，可证明下一版本仍有限，替代后续重复输入扫描；该结论既不复用数值，也不跨调用持有属性，不能单凭成功 COMMIT 推出。
+
 ## 五类核心实体
 
 统一查询使用`ProgramView`与既有`ProgramDependencyGraph`。源码ID由原unit、编译/绑定profile、template和原Step/Region/完整Port限定，不随查询函数或展开顺序改变；节点投影保双向来源，不重新生成操作语义。
