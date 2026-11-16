@@ -1,0 +1,205 @@
+{
+  "Implemented": {
+    "actual_plan_and_native_plan_both_retained": true,
+    "canonical_copy_raw_samples_reused_by_exact_context_and_geometry": true,
+    "cli": "project-workspace-demands",
+    "existing_cost_cli_extended": "cost-activities",
+    "once_and_iteration_cost_ledger": true,
+    "profile": "SOURCE_ADMITTED_SERIAL_WORKSPACE_NORMAL_PATH",
+    "provider_kills_forward_placement": true,
+    "restore_kills_selected_placement": true,
+    "successful_bind_establishes_fact": true
+  },
+  "Inferred": {
+    "component_subtotal_is_physical_lower_bound": false,
+    "costs": "CONDITIONAL_COMPONENT_MODELS_NOT_OBSERVED_ACTIVITY_LATENCIES",
+    "selected_cpu_domains": "CONDITIONAL_SOURCE_FACTS_NOT_RUNTIME_OBSERVATIONS"
+  },
+  "Observed": {
+    "generated_models": [
+      {
+        "case": "source-loop",
+        "component_model_subtotal_ticks": 0,
+        "cost_subjects": 11,
+        "exact_thread_demands": 3,
+        "known_components": 0,
+        "pool_accounting": {
+          "original_body_pool_subjects_retained": false,
+          "original_per_iteration_allocation_events": 8,
+          "original_per_iteration_release_events": 8,
+          "outer_allocation_events": 2,
+          "outer_allocation_task_occurrences": 2,
+          "outer_pool_subjects_charged_once": true,
+          "outer_release_events": 2,
+          "outer_release_task_occurrences": 2,
+          "physical_slots_multiplied_by_trip_count": false,
+          "pool_cost_split_by_slot": false
+        },
+        "serial_stage_demands": 3,
+        "total_duration_ticks": null,
+        "unknown_cost_subjects": 11,
+        "unknown_cpu_domains": 10,
+        "unknown_execution_units": 10
+      },
+      {
+        "case": "scientific",
+        "component_model_subtotal_ticks": 1569872,
+        "cost_subjects": 18,
+        "exact_thread_demands": 2,
+        "known_components": 2,
+        "pool_accounting": {
+          "original_body_pool_subjects_retained": false,
+          "original_per_iteration_allocation_events": 16,
+          "original_per_iteration_release_events": 16,
+          "outer_allocation_events": 4,
+          "outer_allocation_task_occurrences": 4,
+          "outer_pool_subjects_charged_once": true,
+          "outer_release_events": 4,
+          "outer_release_task_occurrences": 4,
+          "physical_slots_multiplied_by_trip_count": false,
+          "pool_cost_split_by_slot": false
+        },
+        "serial_stage_demands": 8,
+        "total_duration_ticks": null,
+        "unknown_cost_subjects": 16,
+        "unknown_cpu_domains": 22,
+        "unknown_execution_units": 16
+      }
+    ],
+    "new_component_measurements": false,
+    "new_cpu_observations": false
+  },
+  "Proposed": [
+    "ADMIT_REMAINING_IMPLEMENTATION_PHASE_COST_AND_RESOURCE_CONTRACTS_AT_MATCHING_SCOPE",
+    "JOINT_CPU_MEMORY_TIME_PLANNING_WITH_EXPLICIT_UNCERTAINTY",
+    "REPLAY_CHOSEN_PLAN_INTO_EXISTING_CPP20_EXECUTION_CERTIFICATE_AND_DELIVERY"
+  ],
+  "Rejected": [
+    "SELECTED_PLAN_MASK_AS_OUTER_OR_POST_RESTORE_EXECUTION_PROOF",
+    "FINAL_BOUND_CHECK_AS_PROVIDER_AFFINITY_PRESERVATION",
+    "CALLER_PARTICIPATION_ONE_AS_WHOLE_SCOPE_THREAD_COUNT",
+    "CANONICAL_DIFFERENT_GEOMETRY_AS_APPLICABLE_TARGET_COST",
+    "REPEATED_PHYSICAL_PLAN_FILES_AS_DISTINCT_SEMANTIC_PLANS",
+    "UNKNOWN_ITERATION_RESIDUALS_AS_EQUAL_OR_ZERO"
+  ],
+  "Verified": {
+    "both_complete_source_resource_cost_chains_cold_replayed": true,
+    "commit_scope_units_and_placement_not_fabricated": true,
+    "each_iteration_residual_keeps_distinct_i": true,
+    "identical_plan_bytes_at_two_uris_rechecked_in_full": true,
+    "no_backward_inference_from_final_bound_guard": true,
+    "original_task_events_values_materials_and_slot_lifetimes_unchanged": true,
+    "pool_costs_grouped_once_not_split_or_multiplied_by_slots": true,
+    "selected_thread_and_executor_inventory_containment_checked": true,
+    "shape_4_by_5_did_not_consume_515_by_515_facts": true,
+    "source_fragment_and_probe_library_header_pins_checked": true,
+    "unknown_costs_not_imputed_as_zero": true
+  },
+  "all_three_stages_complete": false,
+  "artifacts": {
+    "integration.json": {
+      "sha256": "eb66d45ad9738c72aa4fb60bde2960e86dd03e70de77c0b7dd4311b73b205aab",
+      "size_bytes": 370,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/integration.json"
+    },
+    "scientific-costs/costs.json": {
+      "sha256": "999711a622c055b2a3f56e881fed05e88d4050f1faf0333d029a26c9e65e0203",
+      "size_bytes": 14945,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific-costs/costs.json"
+    },
+    "scientific-costs/derivation.json": {
+      "sha256": "bf37cefce390f0a85aaca67e9e1a5a4bbac28c8c75d1efdc9cc7fd7a0d9c6e16",
+      "size_bytes": 19854,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific-costs/derivation.json"
+    },
+    "scientific-costs/result.json": {
+      "sha256": "56f1d94c7e2c154c7b033341697f32d913cf9aeff7c32ec8ccb5dfa6ba747fe3",
+      "size_bytes": 2348,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific-costs/result.json"
+    },
+    "scientific-resources/resources.json": {
+      "sha256": "fc9d9360e82ad52f38ddfe10c0bf9f7cdfc64b56766c80bbd88220d5ae9af438",
+      "size_bytes": 80358,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific-resources/resources.json"
+    },
+    "scientific-resources/result.json": {
+      "sha256": "09e28fe8315ab86d34c066ca0f708dd273f5be42cbb309fb8085ea59b7abb747",
+      "size_bytes": 1317,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific-resources/result.json"
+    },
+    "scientific/result.json": {
+      "sha256": "f6df0ab23a75a4d57c907d02495c70c38504985587ab7f4c18f51612dc3899bb",
+      "size_bytes": 5248,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific/result.json"
+    },
+    "scientific/schedule.json": {
+      "sha256": "469891b388f9d71a8d549f3a13b7efcffd7e45db40e4e926c96c93a49ff3442a",
+      "size_bytes": 558011,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/scientific/schedule.json"
+    },
+    "source-loop-costs/costs.json": {
+      "sha256": "2383184c3ec9191686e4294784b9e52a5c8620954a916ad444d536b4f2afe8fb",
+      "size_bytes": 9221,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop-costs/costs.json"
+    },
+    "source-loop-costs/derivation.json": {
+      "sha256": "55566c3a1b28affd17029ce7e7f0e3ef461b0483ea0a0447c0b552396b651dee",
+      "size_bytes": 13541,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop-costs/derivation.json"
+    },
+    "source-loop-costs/result.json": {
+      "sha256": "45b6064212eac970e80d82bf61b0aa6beff7310d029973533fca6e8c51b3e80f",
+      "size_bytes": 2350,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop-costs/result.json"
+    },
+    "source-loop-resources/resources.json": {
+      "sha256": "e409a6528fac583cf57b4d914c89f355eb0fd064bcec1e7155cee49aeac180bb",
+      "size_bytes": 50254,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop-resources/resources.json"
+    },
+    "source-loop-resources/result.json": {
+      "sha256": "5952ebefa46dc9cb33d0dc12aec6a6b847d703dfe67daaa5a4b8f2ca9fb835be",
+      "size_bytes": 1319,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop-resources/result.json"
+    },
+    "source-loop/result.json": {
+      "sha256": "3a34cfd662df6403ade6f4a929877aafbec8f7337fa427eec84c821949a97d4a",
+      "size_bytes": 4993,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop/result.json"
+    },
+    "source-loop/schedule.json": {
+      "sha256": "af4e96bddd338dbb98e40a7e6b0da429d653b95763a36c241e4151795a4a7fbd",
+      "size_bytes": 297007,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/source-loop/schedule.json"
+    },
+    "verification.json": {
+      "sha256": "2b829e12e0009ac5a55e2c808f0acc1d5a920f172775c73c38c15042d9941dad",
+      "size_bytes": 1096,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-demands-v1/verification.json"
+    }
+  },
+  "complete_loop_cost": false,
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "new_native_compilation": false,
+  "new_performance_measurement": false,
+  "new_target_or_native_execution": false,
+  "original_workload_sources_modified": false,
+  "physical_optimality_proven": false,
+  "pure_source_checks_by_agents": true,
+  "pure_structure_check_by_cost_agent": true,
+  "schema": "scar.workspace-demands-cost-acceptance",
+  "schema_version": 1,
+  "source_sha256": {
+    "scar/analysis/temporal_resources.py": "05c613e28568f4b20230d1984c4c0e8771bcafeeada4735a1117ed0c291fdc4a",
+    "scar/analysis/workspace_demands.py": "99509e01e62b4de814a48ad956c8bccb02898e50c6835b95a443613fe3b36251",
+    "scar/analysis/workspace_source.py": "2557f59ffda03ed276869d9b0bfca3ea3682e711b53f08e667895a6d865eca71",
+    "scar/cli.py": "cdc5be87f72386b877696417e5d2a4a69fcc09a7ee2356ac81538d92e56a6a1b",
+    "scar/compiler/cost_activities.py": "7aae9cd6b1f10f0268e81bc05b79e4e9c6c517f279784d48d2ec42328a663e55",
+    "scar/compiler/project_workspace_demands.py": "5019492315e9966f0082f65f0fa50c6a74beb4395357f71155efe64f75ab0f84",
+    "scar/compiler/time_schedule.py": "82a7cd15242c50762ac933cd681445dba01880dd0284eeeb5ac82ac07791e4ae",
+    "scar/optimization/workspace_costs.py": "2ee38080026203abdc2d18cd3f3ad443205ea83d006411e85a4dee3de5a99708"
+  },
+  "status": "VERIFIED_CONDITIONAL_SOURCE_DOMAINS_AND_LOOP_COMPONENT_COSTS",
+  "whole_program_speedup": null
+}

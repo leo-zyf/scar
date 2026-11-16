@@ -17,7 +17,8 @@ def time_schedule_reference(path):
     from scar.ir.execution_recipe import _bytes, _json
     path = Path(path).resolve()
     schema = _json(_bytes(path)).get('schema')
-    if schema not in (SCHEMA, 'scar.implementation-time-preparation', 'scar.workspace-time-preparation'):
+    if schema not in (SCHEMA, 'scar.implementation-time-preparation', 'scar.workspace-time-preparation',
+                      'scar.workspace-demand-time-preparation'):
         raise ValueError('a supported source-replayed time preparation required')
     return artifact_reference(path, schema)
 
@@ -113,6 +114,9 @@ def prepare_time_schedule(kind, source, out, *, loop_reference=None):
 
 def read_time_schedule(path):
     reference = time_schedule_reference(path)
+    if reference['schema'] == 'scar.workspace-demand-time-preparation':
+        from scar.compiler.project_workspace_demands import read_workspace_demands
+        return read_workspace_demands(path)
     if reference['schema'] == 'scar.workspace-time-preparation':
         from scar.compiler.project_workspace_time import read_workspace_time
         return read_workspace_time(path)

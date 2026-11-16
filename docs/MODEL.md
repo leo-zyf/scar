@@ -7,6 +7,8 @@ SCAR 是宏观编译器：用有类型、可展开的图统一表示程序及硬
 
 共享循环的时间/存储图使用显式 v4：ROOT 持有一次分配和末次释放，LOOP 保留一份 `(i, local_epoch)` 正文，跨层约束选择 FIRST 或 LAST_NORMAL。`TemporalContentCarry` 另将本轮 COMMIT 的物化连接到后续迭代的输入；它需要原来源和对应时序回边，不能由地址不变推得。当前仅建正常完成路径，失败恢复合同仍引用原提交游标；索引约束的结构合法不等于数值调度可行，更不授权执行。v2/v3 原有序列化不变。
 
+执行域是沿已准入源控制路径传播的条件事实：每轮成功绑核建立 selected 域，未知 provider 使其失效，restore 只向后生效；调用者参与一个线程不等于整个调用只使用一个线程。循环成本另存 once/iteration 出现次数：外层 pool 不乘 N，逐轮残差保留各自的 i，组件采样范围不充当物理保证界。
+
 数组区域另有定义期的 `ArrayValueTemplate`：内容模板是本区域输入版本的参数化函数，不是运行时 LogicalValueID 或跨调用缓存键。标准 ndarray C-order copy 可以与输入具有相同内容模板，但仍各有独立 ValueID 和 fresh 物化要求；slice 是 view，不能混为 copy。原 F4 CALL/receiver/参数/world 保留来源；编译入口把这些关系接入公共图，冷读重新执行源准入和结构推导。只有封闭类型/效果和稳定输入合同成立时才能转发内部 copy，最终独立输出仍须生成。
 
 `CallerValueProjection` 按原 actual/formal 路由替换共享 leaf 的内容根，连接 `Value → CALL → fresh Result`；world 单独连状态接口，不参与内容相等判定。每个 CALL 保留原 Frame/FactRef，递归展开引用共享正文，不能把原 F4 Frame 直接套进另一个模板 namespace。资源计划另从数据边与 pool 复用推导 RAW/WAR/WAW；静态 wave 是它的执行细化，不能冒充源码必需顺序或最优时间表。

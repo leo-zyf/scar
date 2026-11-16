@@ -48,6 +48,28 @@ def _scope_domains(schedule,graph,target_ref):
     return ordinal,proof,{row['occupancy']:row for row in rows}
 
 
+def _workspace_domains(schedule,graph,target_ref):
+    """Replay workspace domains from the exact original untimed-cost baseline."""
+    from scar.analysis.workspace_demands import SCHEMA,derive_workspace_demands
+    from scar.ir.versioned_schedule import schedule_from_dict
+    proofs=[(i,row)for i,row in enumerate(schedule.temporal.source_refs)if row.get('schema')==SCHEMA]
+    if not proofs:return None
+    if len(proofs)!=1:raise ValueError('one original workspace CPU demand proof required')
+    ordinal,proof=proofs[0]
+    if proof.get('schema_version')!=1 or proof.get('target')!=target_ref:
+        raise ValueError('workspace source demand target/version differs')
+    parent=schedule_from_dict(read_artifact(proof['parent_schedule']))
+    step_plan=read_artifact(proof['stage_plan']);native=read_artifact(proof['native_manifest'])
+    replay=derive_workspace_demands(parent,step_plan,native,
+        native_reference=proof['native_manifest'],cpp_reference=proof['cpp_source'],
+        workspace_plan_reference=proof['workspace_plan'],parent_schedule_reference=proof['parent_schedule'],target=graph)
+    if replay!=schedule:raise ValueError('workspace CPU domains differ from complete original source replay')
+    rows=proof.get('occupancies')
+    if type(rows)is not list or len({row['occupancy']for row in rows})!=len(rows):
+        raise ValueError('unique workspace source execution domains required')
+    return ordinal,proof,{row['occupancy']:row for row in rows}
+
+
 def derive_temporal_resources(schedule,target,*,source_context):
     """Return one typed binding per original occupancy, with guarded domains."""
     validate_versioned_schedule(schedule)
@@ -71,6 +93,10 @@ def derive_temporal_resources(schedule,target,*,source_context):
         raise ValueError('source_refs must retain original reference dictionaries')
     refs=tuple(encode(refs));digest=semantic_sha256(schedule_document(schedule))
     scope_domains=_scope_domains(schedule,graph,target_ref)
+    workspace_domains=_workspace_domains(schedule,graph,target_ref)
+    if scope_domains is not None and workspace_domains is not None:
+        raise ValueError('standalone and workspace source CPU-domain authorities cannot be combined')
+    if workspace_domains is not None:scope_domains=workspace_domains
     reference=lambda row:H.TargetResourceRef(snapshot,row.id)
     unresolved=[]
     def frontier(field,reason,**facts):unresolved.append(dict(field=field,reason=reason,**facts))
@@ -131,9 +157,12 @@ def derive_temporal_resources(schedule,target,*,source_context):
                 domain_source=dict(kind='SOURCE_REPLAYED_EXECUTION_CPU_DOMAIN',
                     source_schedule_sha256=digest,locator='#/temporal/source_refs/'+str(proof_ordinal)
                         +'/occupancies/'+str(proof['occupancies'].index(domain)),
-                    domain_state=domain['domain_state'],recipe=proof['recipe'],
+                    domain_state=domain['domain_state'],
                     original_caller_mask_not_selected_mask=True,
                     actual_thread_execution_proven=False,global_reservation=False)
+                if workspace_domains is None:domain_source['recipe']=proof['recipe']
+                else:domain_source.update(native_manifest=proof['native_manifest'],
+                    workspace_plan=proof['workspace_plan'],parent_schedule=proof['parent_schedule'])
             if exact is not None and exact.online is False:
                 frontier('executions/'+str(index),'SOURCE_SELECTED_CPU_OFFLINE_IN_TARGET_SNAPSHOT')
             if record is not None and exact is None:
@@ -188,9 +217,15 @@ def derive_temporal_resources(schedule,target,*,source_context):
         source_budget_interpretation='PRESERVE_ORIGINAL_SCOPE_NOT_RSS_OR_NEW_AVAILABLE_MEMORY_BUDGET')
     if scope_domains is not None:
         ordinal,proof,_=scope_domains
-        context['serial_scope_cpu_domains']=dict(source_schedule_sha256=digest,
-            locator='#/temporal/source_refs/'+str(ordinal),recipe=proof['recipe'],
+        domain_context=dict(source_schedule_sha256=digest,
+            locator='#/temporal/source_refs/'+str(ordinal),
             global_caller_context_is_not_per_scope_domain_authority=True)
+        if workspace_domains is None:
+            domain_context['recipe']=proof['recipe'];context['serial_scope_cpu_domains']=domain_context
+        else:
+            domain_context.update(native_manifest=proof['native_manifest'],
+                workspace_plan=proof['workspace_plan'],parent_schedule=proof['parent_schedule'])
+            context['workspace_scope_cpu_domains']=domain_context
     result=ResourceProjection(snapshot,digest,tuple(executions),tuple(storages),
         OriginalBudget(schedule.budget_bytes,schedule.budget_scope,deepcopy(schedule.budget_refs)),
         tuple(unresolved),(*refs,encode(context)))

@@ -17,6 +17,71 @@ from scar.optimization.temporal_activity_costs import (project_stateful_activity
 SCHEMA = 'scar.activity-cost-preparation'
 
 
+def _workspace_costs(schedule, resources, time, time_reference, resource_reference, domain_reference,
+                     candidate_id, calibration_refs, boundary_refs, dag_refs):
+    from scar.optimization.workspace_costs import derive_workspace_costs
+    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import stateful_resource_context, component_key
+    from scar.optimization.temporal_activity_costs import _samples
+    from scar.optimization.stateful_recipe import stateful_backend_capability
+    if boundary_refs or dag_refs:
+        raise ValueError('standalone boundary/DAG clocks cannot be assigned to shared-loop phases')
+    preparation = read_artifact(time['source'])
+    plan_reference = preparation['step_plan']
+    plan = read_artifact(plan_reference)
+    # The admitted base may retain a byte-identical plan at another URI.
+    # Keep both provenance paths, using the CPU proof's actual base reference
+    # only after rechecking its complete content against the preparation.
+    original_plan_reference = plan_reference
+    domains = [row for row in schedule.temporal.source_refs
+               if row.get('schema') == 'scar.workspace-cpu-demand-source-proof']
+    if domains:
+        if len(domains) != 1 or read_artifact(domains[0]['stage_plan']) != plan:
+            raise ValueError('source workspace CPU proof and preparation step plans differ')
+        plan_reference = domains[0]['stage_plan']
+    refs = ({'artifact':resource_reference,'locator':'#/time_schedule'},
+            {'artifact':original_plan_reference,'locator':'#'},
+            {'artifact':plan_reference,'locator':'#'},
+            {'artifact':artifact_reference(Path(__file__).resolve(),'scar.python-source'),'locator':'#'},
+            {'artifact':artifact_reference(Path(__file__).resolve().parents[1]/'optimization/workspace_costs.py',
+                 'scar.python-source'),'locator':'#'})
+    primitive = None
+    if domain_reference is None:
+        if candidate_id is not None or calibration_refs:
+            raise ValueError('canonical workspace components require an original domain and candidate')
+    else:
+        if not candidate_id:
+            raise ValueError('canonical workspace component context requires its original candidate')
+        domain = _domain(read_artifact(domain_reference))
+        context = stateful_resource_context(domain, candidate_id)
+        documents = []
+        session = dict(sources={}, validated_probes=set(), statistics={})
+        for reference in calibration_refs:
+            document = read_artifact(reference)
+            # Qualify exact original samples and compiled-probe bytes once per
+            # source. Foreign contexts remain diagnostics, never usable facts.
+            if document['resource_context'] == context:
+                for index, row in enumerate(document['components']):
+                    if row['component'] == 'ROW_COPY_STAGE':
+                        term = dict(component=row['component'],parameters=row['parameters'],
+                            key=component_key(row['component'],row['parameters']))
+                        _samples(dict(artifact=reference,locator='#/components/'+str(index)),term,session)
+            documents.append(dict(reference=reference,document=document))
+        primitive = dict(domain=domain,candidate_id=candidate_id,actual_step_plan=plan,
+            actual_step_plan_reference=plan_reference,actual_backend=stateful_backend_capability(plan),
+            calibrations=documents)
+        refs = (*refs,{'artifact':domain_reference,'locator':'#/backend_capabilities/serial'},
+                *({'artifact':reference,'locator':'#/components'} for reference in calibration_refs))
+    table, accounting = derive_workspace_costs(schedule, resources, primitive_evidence=primitive,
+        workspace_time_ref=time_reference,
+        workspace_plan_ref=time['workspace_plan'], source_refs=refs)
+    for reference in (resource_reference,*([] if domain_reference is None else [domain_reference]),*calibration_refs):
+        read_artifact(reference)
+    derivation = dict(protocol='SOURCE_QUALIFIED_WORKSPACE_ONCE_AND_INDEXED_PRIMITIVE_COSTS',
+        workspace_accounting=accounting, summary=validate_activity_cost_table(table,schedule,resources))
+    return table, derivation, schedule, resources
+
+
 def _derive(resource_reference, domain_reference, candidate_id, calibration_refs, boundary_refs=(), dag_refs=()):
     resource_receipt = read_resource_bindings(resource_reference['uri'])
     if resource_receipt != read_artifact(resource_reference):
@@ -25,6 +90,9 @@ def _derive(resource_reference, domain_reference, candidate_id, calibration_refs
     time = read_artifact(resource_receipt['time_schedule'])
     schedule = schedule_from_dict(read_artifact(time['schedule']))
     refs = ({'artifact': resource_reference, 'locator': '#/time_schedule'},)
+    if time['source_kind'] == 'stateful_workspace':
+        return _workspace_costs(schedule, resources, time, resource_receipt['time_schedule'], resource_reference, domain_reference,
+            candidate_id, calibration_refs, boundary_refs, dag_refs)
     if domain_reference is None:
         if candidate_id is not None or calibration_refs or boundary_refs or dag_refs:
             raise ValueError('canonical facts require an explicit original domain and candidate')
