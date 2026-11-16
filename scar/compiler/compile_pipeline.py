@@ -15,11 +15,13 @@ def _write(path, value):
 def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, input_metadata_path=None,
                       input_shapes=None, target=None, cpu_threads=None, memory_budget_bytes=None,
                       search_budget=100000, strategy_mode='auto', pipeline_workers=None, source_graph=None,
-                      pipeline_dispatch='waves'):
+                      pipeline_dispatch='waves',pipeline_memory_order='source'):
     if strategy_mode not in ('auto', 'pool'):
         raise ValueError('pipeline strategy must be auto or pool')
     if pipeline_dispatch not in ('waves','ready'):
         raise ValueError('pipeline dispatch must be waves or ready')
+    if pipeline_memory_order not in ('source','dependencies'):
+        raise ValueError('pipeline memory order must be source or dependencies')
     if pipeline_dispatch=='ready'and pipeline_workers is None:
         raise ValueError('dependency-ready dispatch requires an explicit pipeline CPU allocation')
     if pipeline_workers is not None:
@@ -60,7 +62,7 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             rows.append(row)
             continue
         strategy = None
-        if strategy_mode == 'auto' and pipeline_workers is None:
+        if strategy_mode == 'auto' and pipeline_workers is None and pipeline_memory_order=='source':
             from scar.optimization.pipeline_strategy import plan_pipeline_strategy
             strategy = plan_pipeline_strategy(pipeline, input_shapes=shapes,
                 memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
@@ -73,14 +75,18 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
                 continue
             memory = strategy['selected_memory_plan']
         else:
-            from scar.optimization.pipeline_memory import plan_pipeline_memory
-            memory = plan_pipeline_memory(pipeline, input_shapes=shapes,
+            if pipeline_memory_order=='dependencies':
+                from scar.optimization.pipeline_partial_order_memory import plan_pipeline_partial_order_memory as memory_planner
+            else:
+                from scar.optimization.pipeline_memory import plan_pipeline_memory as memory_planner
+            memory = memory_planner(pipeline, input_shapes=shapes,
                 memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
             row['selected_strategy'] = ('PRESERVE_CALLS_HOST_POOL' if pipeline_workers is None
                 else 'DEPENDENCY_READY_HOST_POOL'if pipeline_dispatch=='ready'else 'DEPENDENCY_WAVES_HOST_POOL')
         memory_path = folder / 'memory-plan.json'
         _write(memory_path, memory)
-        row.update(memory_plan=str(memory_path), input_shape_evidence=shape_evidence)
+        row.update(memory_plan=str(memory_path), input_shape_evidence=shape_evidence,
+            memory_order_policy=pipeline_memory_order)
         if memory.get('frontier') or not memory['budget_satisfied'] or memory.get('search_budget_exhausted',False):
             row.update(status=memory['status'], target_program_executed=False)
             rows.append(row)
@@ -164,7 +170,8 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
         rejections=rejected, original_f4_discovery=pipeline_path is None,
         whole_program_compiled=False, first_stage_complete=False, selected_for_use=False,
         cost_scope='PIPELINE_GRAPH_AND_PAYLOAD_OPTIMIZATION_TIME_UNCALIBRATED', strategy_mode=strategy_mode,
-        pipeline_workers=pipeline_workers,pipeline_dispatch=pipeline_dispatch)
+        pipeline_workers=pipeline_workers,pipeline_dispatch=pipeline_dispatch,
+        pipeline_memory_order=pipeline_memory_order)
     _write(out / 'result.json', report)
     return report
 
@@ -185,6 +192,8 @@ def main():
         help='explicit CPU allocation preview; each leaf uses one CPU')
     parser.add_argument('--pipeline-dispatch',choices=('waves','ready'),default='waves',
         help='dispatch by whole waves or actual dependency readiness; neither predicts optimal time')
+    parser.add_argument('--pipeline-memory-order',choices=('source','dependencies'),default='source',
+        help='reuse by source intervals or only original RAW happens-before; neither predicts fastest memory placement')
     parser.add_argument('--memory-budget-bytes', type=int)
     parser.add_argument('--search-budget', type=int, default=100000)
     parser.add_argument('--strategy', dest='strategy_mode', choices=('auto', 'pool'), default='auto',
@@ -194,7 +203,7 @@ def main():
         pipeline_path=args.pipeline, input_metadata_path=args.inputs, input_shapes=args.shape,
         target=args.target, cpu_threads=args.cpu_threads, memory_budget_bytes=args.memory_budget_bytes,
         search_budget=args.search_budget, strategy_mode=args.strategy_mode, pipeline_workers=args.pipeline_workers,
-        pipeline_dispatch=args.pipeline_dispatch)
+        pipeline_dispatch=args.pipeline_dispatch,pipeline_memory_order=args.pipeline_memory_order)
     print(json.dumps(dict(pipelines=len(result['pipelines']),
         statuses=[row['status'] for row in result['pipelines']], result=str(Path(args.out) / 'result.json'))))
 

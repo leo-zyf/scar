@@ -17,7 +17,7 @@ from scar.ir.execution_recipe import artifact_reference
 def compile_caller_pipeline(program, out, *, caller_unit=None, function_ordinal=None,
         provider_name=None, interface_ordinals=None, proof=None, input_shapes,
         target=None, cpu_threads=1, memory_budget_bytes, runtime_out=None,pipeline_workers=None,
-        pipeline_dispatch='waves'):
+        pipeline_dispatch='waves',pipeline_memory_order='source'):
     program=Path(program).resolve()
     if program.is_file():program=program.parent
     with BuildSession(program)as session:
@@ -48,7 +48,7 @@ def compile_caller_pipeline(program, out, *, caller_unit=None, function_ordinal=
         result=lower_caller_pipeline(selected,out,view=session.view,provider=provider,
             input_shapes=input_shapes,target=target,cpu_threads=cpu_threads,
             memory_budget_bytes=memory_budget_bytes,pipeline_workers=pipeline_workers,
-            pipeline_dispatch=pipeline_dispatch)
+            pipeline_dispatch=pipeline_dispatch,pipeline_memory_order=pipeline_memory_order)
         result['program']=artifact_reference(program/'manifest.json','scar.program-build')
         result['provider']=name
         if runtime_out is not None:
@@ -76,6 +76,7 @@ def main(argv=None):
     parser.add_argument('--target');parser.add_argument('--cpu-threads',type=int,default=1)
     parser.add_argument('--pipeline-workers',type=int,help='explicit CPU allocation; leaves remain serial')
     parser.add_argument('--pipeline-dispatch',choices=('waves','ready'),default='waves')
+    parser.add_argument('--pipeline-memory-order',choices=('source','dependencies'),default='source')
     parser.add_argument('--runtime-out',help='export the same ELF files and a compact validation-only runtime contract')
     parser.add_argument('--memory-budget-bytes',type=int,required=True)
     args=parser.parse_args(argv)
@@ -84,7 +85,8 @@ def main(argv=None):
         interface_ordinals=None if args.interface_ordinal is None else tuple(args.interface_ordinal),
         proof=args.proof,input_shapes=args.input_shapes,target=args.target,
         cpu_threads=args.cpu_threads,memory_budget_bytes=args.memory_budget_bytes,runtime_out=args.runtime_out,
-        pipeline_workers=args.pipeline_workers,pipeline_dispatch=args.pipeline_dispatch)
+        pipeline_workers=args.pipeline_workers,pipeline_dispatch=args.pipeline_dispatch,
+        pipeline_memory_order=args.pipeline_memory_order)
     print(json.dumps(result,sort_keys=True,indent=2));return 0
 
 

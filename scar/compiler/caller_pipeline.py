@@ -305,7 +305,8 @@ def read_caller_pipeline_proof(path,*,view,provider):
 
 
 def lower_caller_pipeline(proof,out,*,view,provider,input_shapes,target,cpu_threads,memory_budget_bytes,
-                          strategy_mode='pool',pipeline_workers=None,pipeline_dispatch='waves'):
+                          strategy_mode='pool',pipeline_workers=None,pipeline_dispatch='waves',
+                          pipeline_memory_order='source'):
     """Replay source/value interfaces before the shared C++20 pipeline compiler."""
     from scar.compiler.compile_pipeline import compile_pipelines
     from scar.ir.execution_recipe import artifact_reference
@@ -319,7 +320,8 @@ def lower_caller_pipeline(proof,out,*,view,provider,input_shapes,target,cpu_thre
     write_pipeline(proof.pipeline,out/'pipeline.json')
     result=compile_pipelines(out/'compiled',pipeline_path=out/'pipeline.json',input_shapes=input_shapes,
         target=target,cpu_threads=cpu_threads,memory_budget_bytes=memory_budget_bytes,strategy_mode=strategy_mode,
-        pipeline_workers=pipeline_workers,source_graph=value_reference,pipeline_dispatch=pipeline_dispatch)
+        pipeline_workers=pipeline_workers,source_graph=value_reference,pipeline_dispatch=pipeline_dispatch,
+        pipeline_memory_order=pipeline_memory_order)
     report=dict(schema='scar.caller-matched-pipeline-lowering',schema_version=1,proof=reference,
         original_f4_and_matched_interface_replayed_before_lowering=True,
         pipeline=artifact_reference(out/'pipeline.json','scar.array-pipeline-plan'),program_values=value_reference,
