@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 两端并行推进已验：workspace边界探针在两套源配置各采7组/warmup2，每组N4的30切点完整保留；仅编译/运行canonical检查、分配、绑核、恢复与释放片段，未运行目标数学DAG。6个完整UNKNOWN组接入后，原循环11subject中6有条件组件，Gray18中8有条件组件（原2copy未动），仍5/10未知且总时长None。另一条旧L4计算顺序证书已接C++20真实构建与compact入口：固定5调用声明成本例的输出一致、CPU0按C→A→E/CPU1按B→D启动；default无CDLL、runtime无compiler/大图依赖，输入变更与fresh输出检查通过。仅落实compute-order，尚未落实完整时间表，也不是新v4全图规划；声明模型不冒充实测。验收：`artifacts/baseline/workspace-boundary-and-pipeline-delivery.json`。下一步接v4计划执行证书，并针对已有成本证据分析可避免的循环检查；三阶段尚未全部完成，无新加速比。
+
 2026-11-16 执行域与循环成本接线已验：`project-workspace-demands → bind-time-resources → cost-activities` 复用原v4数据/时间图，按当前C++源码的 bind→body→restore传播条件CPU事实。原循环3个阶段可推导CPU0，Gray前2个snapshot可推导CPU0；provider后即便后续操作封闭也不追认位置，COMMIT/分配/释放整体需求仍未知。真实原语只匹配Gray两项copy组件（18 subject中2有条件估计、16未知）；4×5输入未误用515×515事实。pool各作一个outer UNKNOWN group，仅计一次，逐轮残差不合并，总时长仍None。两条完整source/resource/cost独立冷读通过，无新目标运行、标定、C++生成或加速比。报告：`artifacts/baseline/workspace-demands-costs.json`。下一层补余下实施阶段的同范围成本及资源合同，再做联合时间规划与C++执行证书；三阶段仍未全部完成。
 
 2026-11-16 共享循环已接统一时间/资源图：显式v4增加FIRST/LAST_NORMAL端点、`(i,local_epoch)`值/物化模板及COMMIT→下一轮输入的数据carry，v2/v3原字节不变。`project-workspace-time → bind-time-resources → view-graph`在原F4循环与Gray显式组合冷读通过，分别13活动/35事件/2私有slot/1 carry、24/64/4/2；正文只存一份，分配/逆序释放在ROOT，输入finite guard的数组读取及helper退出/progress均入图。新画布连原204资源/477连接，原C++入口仍完成4步。当前仅正常完成路径，失败/FFI时间未建模；13/24个服务时长和CPU执行域仍未知，不据此求数值最短调度。验收：`artifacts/baseline/workspace-indexed-time.json`。下一层补同源执行域与循环成本，再将联合计划转为C++执行证书；三阶段通用覆盖尚未完成，无新加速比。

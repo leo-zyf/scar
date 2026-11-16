@@ -19,6 +19,7 @@ from scar.optimization.resource_solver import semantic_sha256
 
 SCHEMA = 'scar.stateful-boundary-cut-calibration'
 SCOPE_SCHEMA = 'scar.stateful-scope-boundary-calibration'
+WORKSPACE_SCHEMA = 'scar.workspace-boundary-calibration'
 CUTS = ('outer_enter', 'native_enter', 'metadata_ready', 'capture_ready',
         'binding_ready', 'worker_checked', 'restore_ready', 'outer_return')
 SCOPE_CUTS = (*CUTS[:-1], 'helper_cleanup_ready', CUTS[-1])
@@ -30,10 +31,10 @@ def boundary_calibration_reference(value):
     else:
         path = Path(value).resolve()
         schema = json.loads(path.read_bytes()).get('schema')
-        if schema not in (SCHEMA, SCOPE_SCHEMA):
+        if schema not in (SCHEMA, SCOPE_SCHEMA, WORKSPACE_SCHEMA):
             raise ValueError('original legacy or scope boundary calibration schema required')
         reference = artifact_reference(path, schema)
-    if reference.get('schema') not in (SCHEMA, SCOPE_SCHEMA):
+    if reference.get('schema') not in (SCHEMA, SCOPE_SCHEMA, WORKSPACE_SCHEMA):
         raise ValueError('original legacy or scope boundary calibration reference required')
     return reference
 

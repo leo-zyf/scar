@@ -35,6 +35,7 @@ _DIRECTORY = Path(__file__).resolve().parent
 _TablePointer = ctypes.POINTER(cpp._Table)
 PARALLEL_FAMILY = 'DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1'
 READY_FAMILY = 'DEPENDENCY_READY_CPU_SERIAL_LEAVES_V1'
+SOLVER_ORDER_FAMILY = 'SOLVER_ORDER_CPU_SERIAL_LEAVES_V1'
 
 
 def _digest(raw):
@@ -48,7 +49,8 @@ def _json_bytes(value):
 def pipeline_implementation_sha256():
     files = [{"path": name, "sha256": _digest((_DIRECTORY / name).read_bytes())}
              for name in ("pipeline.py", "pipeline_v1.cpp.in", "pipeline_parallel_v1.cpp.in",
-                          "pipeline_ready.py", "pipeline_ready_v1.cpp.in", "kernel_v1.cpp.in", "scar_abi_v1.h")]
+                          "pipeline_ready.py", "pipeline_ready_v1.cpp.in", "pipeline_solver_order.py",
+                          "kernel_v1.cpp.in", "scar_abi_v1.h")]
     return semantic_sha256(files)
 
 
@@ -133,28 +135,33 @@ def _operator_receipt(call, operator):
 
 
 def _admit_execution_schedule(pipeline, memory, operators, report):
+    if isinstance(report,(str,Path)):
+        report=json.loads(Path(report).read_bytes())
     report=json.loads(json.dumps(report,allow_nan=False))
+    _require(type(report)is dict,'explicit pipeline execution report required')
     if report.get('execution_family')==READY_FAMILY:
         from scar.optimization.pipeline_ready_schedule import verify_pipeline_ready_schedule as verify
     elif report.get('execution_family')==PARALLEL_FAMILY:
         from scar.optimization.pipeline_schedule import verify_pipeline_schedule as verify
+    elif report.get('execution_family')==SOLVER_ORDER_FAMILY:
+        from scar.optimization.pipeline_execution_refinement import verify_pipeline_execution_refinement as verify
     else:raise ValueError('unsupported explicit pipeline execution family')
     targets=set()
     for call,operator in zip(pipeline.calls,operators):
         binding=operator.plan.resource_binding
         _require(binding is not None and operator.plan.cpu_threads==1 and len(binding.cpu_ids)==1,
-                 'dependency waves require explicitly bound single-CPU ABI1 operators')
+                 'parallel pipeline control requires explicitly bound single-CPU ABI1 operators')
         _require(binding.cpu_ids==(report['call_cpu_ids'][call.id],),
                  'operator CPU binding differs from its scheduled caller task')
         targets.add((str(Path(binding.target_path).resolve()),binding.target_sha256))
-    _require(len(targets)==1,'one original hardware snapshot required for dependency waves')
+    _require(len(targets)==1,'one original hardware snapshot required for parallel pipeline control')
     path,digest=next(iter(targets))
     _require(report['target']['uri']==str(Path(path)/'result.json')and report['target']['sha256']==digest,
-             'dependency-wave target differs from operator bindings')
+             'pipeline execution target differs from operator bindings')
     replay=verify(pipeline,memory,path,report)
     _require(replay==report
              and report['requires_serial_leaf_operators']is True,
-             'exact verified dependency-wave execution schedule required')
+             'exact verified pipeline execution schedule required')
     return report
 
 
@@ -222,6 +229,9 @@ def _source(pipeline, memory, operators, execution_schedule=None):
     if execution_schedule['execution_family']==READY_FAMILY:
         from .pipeline_ready import render_ready_source
         return render_ready_source(source,pipeline,memory,execution_schedule)
+    if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY:
+        from .pipeline_solver_order import render_solver_order_source
+        return render_solver_order_source(source,pipeline,memory,execution_schedule)
     return _parallel_source(source,pipeline,memory,execution_schedule)
 
 
@@ -288,7 +298,12 @@ class PipelineArtifact:
 
 
 def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
-    """Compile a host dispatcher over explicitly supplied ABI-1 leaf artifacts."""
+    """Compile an ABI-1 host; execution_schedule may be a report or its JSON path.
+
+    A solver-order certificate is independently replayed against its complete
+    original finite domain. Only compute lane order is implemented; its model
+    timestamps are never used as native timing or deployment authority.
+    """
     pipeline = read_pipeline(pipeline) if isinstance(pipeline, (str, Path)) else pipeline_from_dict(document(pipeline))
     memory = _memory(pipeline, memory_plan)
     _sources(pipeline)
@@ -358,9 +373,17 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
             execution_schedule_sha256=semantic_sha256(execution_schedule),
             execution=('ONE_PYTHON_ENTRY_CPP_DEPENDENCY_READY_CPU_LANES_ABI1_SERIAL_OPERATORS'
                 if execution_schedule['execution_family']==READY_FAMILY else
+                'ONE_PYTHON_ENTRY_CPP_SOLVER_ORDER_FIXED_CPU_LANES_ABI1_SERIAL_OPERATORS'
+                if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY else
                 'ONE_PYTHON_ENTRY_CPP_DEPENDENCY_WAVES_JOINED_ABI1_SERIAL_OPERATORS'),
             failure_policy='JOIN_ALL_STARTED_WORKERS_WITHHOLD_OUTPUT_THEN_ORIGINAL_CALLER_ONCE',
             floating_environment='SAVE_CALLER_COPY_FULL_ENV_TO_WORKERS_HOLD_AND_RESTORE_ALL_SCOPES')
+        if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY:
+            metadata.update(implementation_scope='MODEL_SOLUTION_COMPUTE_ORDER_ONLY',
+                full_model_timeline_implemented=False,
+                task_model_makespan_is_native_runtime_prediction=False,
+                native_host_optimality_proven=False,
+                existing_host_envelope=execution_schedule['existing_host_envelope'])
     (directory / "artifact.json").write_bytes(_json_bytes(metadata))
     return load(directory)
 
@@ -390,14 +413,23 @@ def load(out):
         operators.append(operator)
     parallel_fields=('execution_family'in metadata,'execution_schedule_sha256'in metadata,
                      'execution_schedule'in metadata['files'])
-    _require(all(parallel_fields)or not any(parallel_fields),'incomplete dependency-wave metadata')
+    _require(all(parallel_fields)or not any(parallel_fields),'incomplete parallel pipeline metadata')
     execution_schedule=None
     if all(parallel_fields):
-        _require(metadata['execution_family']in(PARALLEL_FAMILY,READY_FAMILY),'unsupported pipeline control family')
+        _require(metadata['execution_family']in(PARALLEL_FAMILY,READY_FAMILY,SOLVER_ORDER_FAMILY),
+                 'unsupported pipeline control family')
         execution_schedule=_admit_execution_schedule(pipeline,memory,operators,
             json.loads((directory/metadata['files']['execution_schedule']).read_bytes()))
-        _require(metadata['execution_schedule_sha256']==semantic_sha256(execution_schedule),
-                 'dependency-wave schedule semantic identity differs')
+        _require(metadata['execution_family']==execution_schedule['execution_family']
+                 and metadata['execution_schedule_sha256']==semantic_sha256(execution_schedule),
+                 'pipeline execution family or schedule semantic identity differs')
+        if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY:
+            _require(metadata.get('implementation_scope')=='MODEL_SOLUTION_COMPUTE_ORDER_ONLY'
+                     and metadata.get('full_model_timeline_implemented')is False
+                     and metadata.get('task_model_makespan_is_native_runtime_prediction')is False
+                     and metadata.get('native_host_optimality_proven')is False
+                     and metadata.get('existing_host_envelope')==execution_schedule['existing_host_envelope'],
+                     'solver-order artifact must retain the original host envelope and compute-only scope')
     source = _source(pipeline, memory, operators,execution_schedule).encode()
     _require(source == (directory / metadata["files"]["source"]).read_bytes(),
              "pipeline host source differs from call/operator/memory bindings")

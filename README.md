@@ -80,6 +80,10 @@ scar view-graph --time-schedule WORKSPACE_TIME/result.json --out WORKSPACE_VIEW
 
 `project-workspace-demands` 当前只细化单线程 C++ 源路径：成功 bind 后才推导选定 CPU，provider 使后续位置知识失效，restore 后的 COMMIT 不沿用选定 CPU。成本命令默认保留 UNKNOWN；可追加 `--domain DOMAIN --candidate ID --calibration PRIMITIVE_JSON`，严格匹配来源、CPU、形状与布局后接入条件组件。外层 pool 计一次、正文按迭代计费，未知残差与完整时长仍保留，不把组件和当成整程序时间。
 
+边界组件可用 `scar calibrate-workspace-boundary --time-schedule WORKSPACE_DEMANDS/result.json --out BOUNDARY --repetitions 7 --warmup 2` 采集，再给成本命令追加 `--boundary-calibration BOUNDARY/observations.json`。微型探针保留实际检查、分配、绑核和恢复片段，跳过目标 DAG、COMMIT 和 provider；每份保留逐迭代原切点及未映射间隙，计时开销与实现差异仍为残差。
+
+已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
+
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
 
 追加 `--pipeline-memory-order dependencies` 时，只在原 RAW 已证明旧值全部消费者结束后复用，避免为省槽位新增等待；预算不足明确拒绝。默认 `source` 保持按源码串行生命周期规划。两种容量模型均不等同最短执行时间，联合 makespan 选择仍需成本和执行证书。

@@ -24,8 +24,8 @@ def _workspace_costs(schedule, resources, time, time_reference, resource_referen
     from scar.optimization.stateful_cpu_model import stateful_resource_context, component_key
     from scar.optimization.temporal_activity_costs import _samples
     from scar.optimization.stateful_recipe import stateful_backend_capability
-    if boundary_refs or dag_refs:
-        raise ValueError('standalone boundary/DAG clocks cannot be assigned to shared-loop phases')
+    if dag_refs:
+        raise ValueError('standalone DAG clocks cannot be assigned to shared-loop phases')
     preparation = read_artifact(time['source'])
     plan_reference = preparation['step_plan']
     plan = read_artifact(plan_reference)
@@ -75,7 +75,16 @@ def _workspace_costs(schedule, resources, time, time_reference, resource_referen
     table, accounting = derive_workspace_costs(schedule, resources, primitive_evidence=primitive,
         workspace_time_ref=time_reference,
         workspace_plan_ref=time['workspace_plan'], source_refs=refs)
-    for reference in (resource_reference,*([] if domain_reference is None else [domain_reference]),*calibration_refs):
+    if boundary_refs:
+        from scar.compiler.calibrate_workspace_boundary import _read_workspace_boundary, SCHEMA as BOUNDARY
+        from scar.optimization.workspace_boundary_costs import apply_workspace_boundary_costs
+        if any(reference['schema'] != BOUNDARY for reference in boundary_refs):
+            raise ValueError('only matching workspace boundary cuts can price shared-loop phases')
+        evidence = [dict(reference=reference,
+            document=_read_workspace_boundary(reference,qualified_time=time)) for reference in boundary_refs]
+        table, accounting = apply_workspace_boundary_costs(table,accounting,schedule,resources,evidence,
+            source_refs=tuple(dict(artifact=reference,locator='#/statistics') for reference in boundary_refs))
+    for reference in (resource_reference,*([] if domain_reference is None else [domain_reference]),*calibration_refs,*boundary_refs):
         read_artifact(reference)
     derivation = dict(protocol='SOURCE_QUALIFIED_WORKSPACE_ONCE_AND_INDEXED_PRIMITIVE_COSTS',
         workspace_accounting=accounting, summary=validate_activity_cost_table(table,schedule,resources))
