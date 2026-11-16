@@ -7,18 +7,20 @@ retained F0 bytes supplies code identity only. No target code is executed.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import math
 from pathlib import Path
 from types import CodeType
+from types import SimpleNamespace
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_reference_slice import source_port, ReferenceSlicer
 from scar.analysis.static_query import _Fragments
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
+from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes, copy_semantics
 from scar.ir.program import source_productions as P, normal_links as F, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.normal_targets import Body
@@ -45,6 +47,17 @@ class _Scalar:
 @dataclass(frozen=True)
 class _Slice:
     bounds: tuple
+
+
+@dataclass(frozen=True)
+class _ArrayCopyMethod:
+    receiver: _Array
+    receiver_port: object
+    method_port: object
+    attribute_fact: object
+    selector: P.SlotRef
+    world_before: object
+    world_after: object
 
 
 class GraphRegionRejected(ValueError):
@@ -79,6 +92,14 @@ class _GraphLowerer:
         self.by_id, self.active = {}, set()
         self.operations = {source_port(self.facts, row.result).port: row for row in self.facts.operations}
         self.constants = {source_port(self.facts, row.value).port: row.literal for row in self.facts.constants}
+        self.array_method_facts = defaultdict(list)
+        self.array_call_facts = defaultdict(list)
+        for ordinal, row in enumerate(getattr(self.facts, 'attributes', ())):
+            if row.action is F.AttributeAction.GET:
+                self.array_method_facts[source_port(self.facts, row.value).port].append((ordinal, row))
+        for ordinal, row in enumerate(getattr(self.facts, 'calls', ())):
+            self.array_call_facts[source_port(self.facts, row.result).port].append((ordinal, row))
+        self.copy_fact_slicer = None
         self.names = defaultdict(list)
         for row in self.facts.names:
             self.names[source_port(self.facts, row.value).port, row.write].append(row.namespace)
@@ -119,6 +140,10 @@ class _GraphLowerer:
 
     def action(self, context, step, args, origin):
         ins = step.instruction
+        if ins.action is P.LanguageActionKind.ATTRIBUTE_GET:
+            return self.array_copy_method(context, step, args, origin)
+        if ins.action is P.LanguageActionKind.CALL and args and type(args[0]) is _ArrayCopyMethod:
+            return self.array_copy_call(context, step, args, origin)
         if ins.action in (P.LanguageActionKind.BINARY, P.LanguageActionKind.UNARY):
             operation = self.operations.get(context.result(step).port)
             if operation is None or operation.selector.value not in _OPS:
@@ -151,6 +176,68 @@ class _GraphLowerer:
             return (self.emit('slice', origin, (base.id,), {'bounds': bounds}), _WORLD)
         _reject('UNSUPPORTED_ACTION', ins.action.value+' is outside the pure-array profile', origin)
 
+    def copy_fact(self, table, ordinal):
+        if self.copy_fact_slicer is None:
+            self.copy_fact_slicer = ReferenceSlicer(SimpleNamespace(fact_store=self.source.material.fact_store))
+        return self.copy_fact_slicer.fact(self.facts, table, ordinal)
+
+    def array_copy_method(self, context, step, args, origin):
+        """Select an original method GET under the exact ndarray contract."""
+        normal = [c for c in step.completions if c.kind is C.FALLTHROUGH]
+        if (len(args) != 2 or type(args[0]) is not _Array or len(normal) != 1
+                or len(normal[0].types) != 2 or not step.instruction.selectors
+                or type(step.instruction.selectors[0]) is not P.SlotRef):
+            _reject('ARRAY_METHOD_PROFILE', 'method lookup requires an original ndarray ATTRIBUTE_GET ABI', origin)
+        result = context.result(step); before, after = context.worlds(step)
+        matches = [(ordinal, fact) for ordinal, fact in self.array_method_facts.get(result.port, ())
+            if source_port(self.facts, fact.receiver) == context.value(step.arguments[0])
+            and source_port(self.facts, fact.world) == before
+            and source_port(self.facts, fact.result_world) == after]
+        if len(matches) != 1:
+            _reject('ARRAY_METHOD_FACT_MISMATCH', 'method GET lacks one exact original receiver/result/world fact', origin)
+        ordinal, fact = matches[0]
+        if fact.name != 'copy':
+            _reject('UNSUPPORTED_ARRAY_METHOD', 'only exact ndarray.copy is admitted by this array profile', origin)
+        value = _ArrayCopyMethod(args[0], context.value(step.arguments[0]), result,
+            self.copy_fact('attributes', ordinal), step.instruction.selectors[0], before, after)
+        return (value, _WORLD)
+
+    def array_copy_call(self, context, step, args, origin):
+        """Retain copy allocation/value effects and original CALL provenance."""
+        matches = self.array_call_facts.get(context.result(step).port, ())
+        if len(matches) != 1:
+            _reject('ARRAY_COPY_CALL_FACT', 'copy CALL lacks one original fixed-argument fact', origin)
+        ordinal, fact = matches[0]
+        if fact.positional_pack is not None or fact.keyword_pack is not None:
+            _reject('ARRAY_COPY_ARGUMENT_PACK', 'ndarray.copy needs explicit original order arguments', origin)
+        expected = (source_port(self.facts, fact.callee),
+            *(source_port(self.facts, i) for i in fact.positional),
+            *(source_port(self.facts, i) for _, i in fact.keywords), source_port(self.facts, fact.world))
+        actual = tuple(context.value(value) for value in step.arguments)
+        normal = [c for c in step.completions if c.kind is C.FALLTHROUGH]
+        before, after = context.worlds(step)
+        if (actual != expected or len(args) != len(expected) or len(normal) != 1
+                or len(normal[0].types) != 2 or after != source_port(self.facts, fact.result_world)):
+            _reject('ARRAY_COPY_CALL_ABI', 'copy callee/arguments/worlds differ from original F4 CALL', origin)
+        positional, keywords = len(fact.positional), tuple(name for name, _ in fact.keywords)
+        if (positional, keywords) not in ((0, ()), (1, ()), (0, ('order',))):
+            _reject('ARRAY_COPY_ORDER', 'only copy(), copy(\'C\') and copy(order=\'C\') are supported', origin)
+        if len(args) == 3 and (type(args[1]) is not _Scalar or type(args[1].value) is not str or args[1].value != 'C'):
+            _reject('ARRAY_COPY_ORDER', 'copy order must be the original exact constant C', origin)
+        method = args[0]
+        provenance = dict(copy_semantics(), input_expression=method.receiver.node,
+            source_value_scope='ORIGINAL_EXPR_UNDER_SELECTED_REGION_INPUT_CONTENT_STABILITY',
+            call_fact=encode(self.copy_fact('calls', ordinal)), attribute_fact=encode(method.attribute_fact),
+            receiver=encode(method.receiver_port), attribute_result=encode(method.method_port),
+            selector=encode(method.selector), callee=encode(source_port(self.facts, fact.callee)),
+            result=encode(source_port(self.facts, fact.result)),
+            positional=[encode(source_port(self.facts, i)) for i in fact.positional],
+            keywords=[dict(name=name, value=encode(source_port(self.facts, i))) for name, i in fact.keywords],
+            attribute_world_before=encode(method.world_before), attribute_world_after=encode(method.world_after),
+            world_before=encode(before), world_after=encode(after))
+        return (self.emit('copy', dict(origin, copy_contract=provenance),
+            (method.receiver.node,), copy_attributes()), _WORLD)
+
     def construct(self, context, step, args, evaluated, origin):
         ins = step.instruction
         if ins.construction is P.ConstructionKind.LITERAL:
@@ -172,8 +259,8 @@ class _GraphLowerer:
             if literal is None:
                 _reject('LITERAL_FACT_MISSING', 'literal has no admitted original constant fact', origin)
             value = literal.to_python()
-            if value is not None and type(value) not in (int,float):
-                _reject('UNSUPPORTED_CONSTANT', 'only numeric literals and slice None are admitted', origin)
+            if value is not None and type(value) not in (int,float,str):
+                _reject('UNSUPPORTED_CONSTANT', 'only numeric, copy-order string literals and slice None are admitted', origin)
             return (_Scalar(value, origin), _WORLD)
         if ins.construction is P.ConstructionKind.SLICE:
             bounds = []
@@ -393,7 +480,10 @@ def discover_graph_regions(catalog, source=None) -> tuple[list[ArrayRegion], lis
                 reference = SourceRef(model['path'], raw_digest,
                     code.co_qualname, span['line'], span['column'], key, (identity, *origins))
                 region_id = 'graph-array-region:'+sha256((unit+'\0'+function.body.wire+'\0'+key).encode()).hexdigest()[:24]
-                regions.append(ArrayRegion(region_id, reference, function.parameter_names, nodes, output))
+                region = ArrayRegion(region_id, reference, function.parameter_names, nodes, output)
+                if any(node.op == 'copy' for node in nodes):
+                    region = replace(region, assumptions=tuple(dict.fromkeys((*region.assumptions, *COPY_REQUIRED_GUARDS))))
+                regions.append(region)
             except GraphRegionRejected as error:
                 rejected.append(dict(base, qualname=candidates[0].co_qualname if len(candidates)==1 else name,
                     code=error.code, reason=error.code, detail=error.detail, origin=error.origin))

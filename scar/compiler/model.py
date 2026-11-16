@@ -10,7 +10,7 @@ from pathlib import Path
 
 SCHEMA='scar.execution-plan'
 PROFILE='cpu-array-region-v1'
-OPS=frozenset(('input','const','slice','add','sub','mul','div','neg'))
+OPS=frozenset(('input','const','slice','add','sub','mul','div','neg','copy'))
 
 @dataclass(frozen=True)
 class SourceRef:
