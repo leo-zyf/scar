@@ -28,17 +28,30 @@ def compile_window_trial(preparation, out, *, window=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('--windows'); source.add_argument('--check')
+    source.add_argument('--windows'); source.add_argument('--rewrite'); source.add_argument('--check')
     parser.add_argument('--out'); parser.add_argument('--window')
     args = parser.parse_args(argv)
     if args.check:
         if args.out or args.window:
             parser.error('check only consumes an existing trial artifact')
-        artifact = load_window_order_trial(args.check)
+        path = Path(args.check).resolve()
+        metadata = path/'artifact.json' if path.is_dir() else path
+        schema = json.loads(metadata.read_bytes()).get('schema')
+        if schema == 'scar.native-certified-window-fusion':
+            from scar.codegen.window_order import load_certified_window_fusion
+            artifact = load_certified_window_fusion(args.check)
+        else:
+            artifact = load_window_order_trial(args.check)
     else:
         if not args.out:
             parser.error('compilation requires --out')
-        artifact = compile_window_trial(args.windows, args.out, window=args.window)
+        if args.rewrite:
+            if args.window:
+                parser.error('a replacement graph already identifies its exact source window')
+            from scar.codegen.window_order import build_certified_window_fusion
+            artifact = build_certified_window_fusion(args.rewrite, args.out)
+        else:
+            artifact = compile_window_trial(args.windows, args.out, window=args.window)
     report = artifact.report
     print(json.dumps(dict(source=str(artifact.directory/report['files']['source']),
         library=str(artifact.directory/report['files']['library']), control_kind=report['control_kind'],

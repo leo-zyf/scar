@@ -46,10 +46,11 @@ scar compile-build --domains DOMAINS --stateful-interval-plans REGION_TO_INTERVA
 ```bash
 scar project-activity-time --costs COSTS/result.json --out TIME
 scar plan-closed-windows --activity-time TIME/result.json --out WINDOWS
-scar compile-window-trial --windows WINDOWS/result.json --out TRIAL
+scar prepare-window-rewrite --windows WINDOWS/result.json --out REWRITE
+scar compile-window-trial --rewrite REWRITE/result.json --out TRIAL
 ```
 
-这条路径保留未知残差、原存储生命期及外部边界；自动发现同形状、独立 raw-copy 循环的融合方案，并独立重放后生成 C++20/ABI1。仅在唯一可试验窗口时自动定位，否则须给 `--window`。当前融合成本未测，试验产物默认 NO_OP，不构成全图选优或部署；三个命令都可用 `--check` 冷读相应产物。
+这条路径保留未知残差、原存储生命期及外部边界；自动发现同形状、独立 raw-copy 循环，生成真正的替换任务图，重接其就绪/时间/硬件关系，再由同一证书生成 C++20/ABI1。仅在唯一可试验窗口时自动定位，否则在准备替换图时给 `--window`。融合减少循环控制，保留原数据复制；新成本重新标为 UNKNOWN，默认 NO_OP，不构成全图选优或部署。各命令均支持 `--check`；旧 `compile-window-trial --windows` 保留为直接方案试验接口。
 
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
 

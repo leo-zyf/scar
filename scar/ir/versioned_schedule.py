@@ -624,7 +624,28 @@ def validate_versioned_schedule(schedule):
                 raise ValueError('release references physical slots only')
         elif task.releases:
             raise ValueError('only RELEASE may release storage')
-        if task.kind in (K.SNAPSHOT, K.COPY) and (len(task.reads) != 1 or len(task.writes) != 1):
+        if task.capability == 'CPU_HOST_COPY_REGION' and task.kind is not K.COPY:
+            raise ValueError('host copy region must have the explicit COPY task kind')
+        if task.kind is K.COPY and task.capability == 'CPU_HOST_COPY_REGION':
+            pairs = task.attrs.get('copy_pairs')
+            children = task.attrs.get('child_task_ids')
+            shape = task.attrs.get('shape')
+            if (len(task.reads) < 2 or len(task.reads) != len(task.writes)
+                    or task.attrs.get('stage_kind') != 'FUSED_SNAPSHOT_ROOT'
+                    or task.attrs.get('dtype') != 'float64'
+                    or type(shape) not in (list, tuple) or len(shape) != 2
+                    or any(type(n) is not int or n <= 0 for n in shape)
+                    or type(children) not in (list, tuple) or len(children) != len(task.reads)
+                    or any(not _text(child) or child == task.id for child in children)
+                    or len(set(children)) != len(children)
+                    or type(pairs) not in (list, tuple) or len(pairs) != len(children)
+                    or any(type(pair) is not dict or set(pair) != {'read', 'write', 'source_task'}
+                        or pair != dict(read=source, write=target, source_task=child)
+                        for pair, source, target, child in zip(pairs, task.reads, task.writes, children))
+                    or task.world_before or task.world_after or task.validates
+                    or task.allocates or task.releases or not task.source_refs):
+                raise ValueError('fused host copy requires exact independent raw-copy ports and shared domain')
+        elif task.kind in (K.SNAPSHOT, K.COPY) and (len(task.reads) != 1 or len(task.writes) != 1):
             raise ValueError('snapshot/copy requires one real source and destination')
         if task.kind in (K.STATE_WRITE, K.COMMIT) and (not task.reads or not task.writes):
             raise ValueError('state transition requires prior data/state and a new materialized version')
@@ -774,11 +795,23 @@ def validate_versioned_schedule(schedule):
                         raise ValueError('overlapping old-version consumer must happen-before slot overwrite')
     for task in tasks.values():
         if task.kind in (K.SNAPSHOT, K.COPY):
-            source, target = materials[task.reads[0]], materials[task.writes[0]]
-            if source.value != target.value or source.region.nbytes != target.region.nbytes:
-                raise ValueError('snapshot/copy must preserve logical identity and represented extent')
-            if slots[target.region.slot].ownership != 'SCHEDULE' or _overlap(source.region, target.region):
-                raise ValueError('snapshot/copy needs separate private destination storage')
+            for read, write in zip(task.reads, task.writes):
+                source, target = materials[read], materials[write]
+                if source.value != target.value or source.region.nbytes != target.region.nbytes:
+                    raise ValueError('snapshot/copy must preserve logical identity and represented extent')
+                if slots[target.region.slot].ownership != 'SCHEDULE' or _overlap(source.region, target.region):
+                    raise ValueError('snapshot/copy needs separate private destination storage')
+            if task.capability == 'CPU_HOST_COPY_REGION':
+                regions = [materials[key].region for key in (*task.reads, *task.writes)]
+                extent = task.attrs['shape'][0] * task.attrs['shape'][1] * 8
+                if any(region.nbytes != extent or slots[region.slot].device != 'cpu' for region in regions):
+                    raise ValueError('fused host copies must retain concrete CPU float64 extents')
+                sources = [materials[key].region for key in task.reads]
+                destinations = [materials[key].region for key in task.writes]
+                if (any(_overlap(target, source) for target in destinations for source in sources)
+                        or any(_overlap(left, right) for i, left in enumerate(destinations)
+                            for right in destinations[i+1:])):
+                    raise ValueError('fused host copies require disjoint private writes and no cross-copy alias')
         elif task.kind in (K.STATE_WRITE, K.COMMIT):
             for identity in task.writes:
                 destination = materials[identity]

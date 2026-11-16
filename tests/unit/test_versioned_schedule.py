@@ -103,3 +103,37 @@ def test_final_commit_materializes_one_existing_value_without_inventing_a_produc
                     for m in schedule.materializations)
     with pytest.raises(ValueError, match='full-result materialization'):
         validate_schedule(replace(schedule, materializations=partial))
+
+
+def test_fused_copy_preserves_logical_values_and_rejects_cross_copy_alias():
+    values = (V('left'), V('right'))
+    slots = (StorageSlot('external:0', 'host', 16, 'EXTERNAL'),
+        StorageSlot('external:1', 'host', 16, 'EXTERNAL'),
+        StorageSlot('private', 'host', 32, allocated_by='allocate', released_by='release'))
+    materials = (M('in:0', 'left', StorageRegion('external:0', 0, 16), 0, external_ready=True),
+        M('in:1', 'right', StorageRegion('external:1', 0, 16), 0, external_ready=True),
+        M('out:0', 'left', StorageRegion('private', 0, 16), 0, 'fused'),
+        M('out:1', 'right', StorageRegion('private', 16, 16), 1, 'fused'))
+    fused = T('fused', K.COPY, ('in:0', 'in:1'), ('out:0', 'out:1'), ('allocate',),
+        capability='CPU_HOST_COPY_REGION', source_refs=({'source': 'two-private-raw-copies'},),
+        attrs=dict(stage_kind='FUSED_SNAPSHOT_ROOT', dtype='float64', shape=[1, 2],
+            child_task_ids=['copy:0', 'copy:1'], copy_pairs=[
+                dict(read='in:0', write='out:0', source_task='copy:0'),
+                dict(read='in:1', write='out:1', source_task='copy:1')]))
+    schedule = S('copy-region', values, materials, slots, (
+        T('allocate', K.ALLOCATE, allocates=('private',), capability='CPU_ALLOCATE'), fused,
+        T('release', K.RELEASE, depends_on=('fused',), releases=('private',), capability='CPU_RELEASE')))
+    assert validate_schedule(schedule)['tasks'] == 3
+    assert schedule_from_dict(schedule_document(schedule)) == schedule
+    # Two destination versions cannot be concurrently produced in overlapping
+    # storage, even if their logical IDs and source inputs differ.
+    overlapping = tuple(replace(m, region=StorageRegion('private', 8, 16)) if m.id == 'out:1' else m
+        for m in materials)
+    with pytest.raises(ValueError, match='unordered producers|disjoint private writes'):
+        validate_schedule(replace(schedule, materializations=overlapping))
+    corrupted = replace(fused, attrs={**fused.attrs,
+        'copy_pairs': list(reversed(fused.attrs['copy_pairs']))})
+    with pytest.raises(ValueError, match='exact independent raw-copy ports'):
+        validate_schedule(replace(schedule, tasks=(schedule.tasks[0], corrupted, schedule.tasks[-1])))
+    with pytest.raises(ValueError, match='generic COPY/device transfer'):
+        validate_schedule(replace(schedule, executable=True))
