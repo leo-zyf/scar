@@ -17,12 +17,15 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
     started=time.perf_counter();out=Path(out).absolute()
     if out.exists():raise ValueError('fresh compiler output required')
     out.mkdir(parents=True)
+    template_source=None
     if catalog is None:
         regions,rejections=discover_regions(source)
         discovery='SOURCE_ARRAY_PROFILE'
     else:
-        from .graph_frontend import discover_graph_regions
-        regions,rejections=discover_graph_regions(catalog,source=source)
+        from scar.analysis.program_view import ProgramView
+        from scar.analysis.array_value_templates import ArrayTemplateSource
+        template_source=ArrayTemplateSource(ProgramView(catalog),source)
+        regions,rejections=template_source.regions,template_source.rejections
         discovery='ORIGINAL_F4_GRAPH'
     current=Path(source).resolve();source_digest=sha256(current.read_bytes()).hexdigest()
     admitted=[]
@@ -36,12 +39,28 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
     threads=(1 if target is not None else min(4,capacity)) if cpu_threads is None else cpu_threads
     (out/'graph.json').write_text(json.dumps(dict(schema='scar.optimization-regions',schema_version=1,
         discovery=discovery,regions=[asdict(r) for r in regions],rejections=rejections),indent=2,allow_nan=False)+'\n')
+    if template_source is not None:
+        from scar.ir.execution_recipe import artifact_reference
+        from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
+        graph_artifact=ProviderArtifact(**artifact_reference(out/'graph.json','scar.optimization-regions'))
     publications=[]
     for ordinal,region in enumerate(regions):
-        plan=optimize_region(region,memory_budget_bytes=memory_budget_bytes,cpu_threads=threads)
+        provider=None
+        if template_source is None:
+            plan=optimize_region(region,memory_budget_bytes=memory_budget_bytes,cpu_threads=threads)
+        else:
+            reference=ProviderFactReference(graph_artifact,'#/regions/'+str(ordinal))
+            # Admission and optimization share this source session. Templates
+            # describe structure, never a selected executor or runtime cache.
+            plan,provider=template_source.analyze(reference,memory_budget_bytes=memory_budget_bytes,cpu_threads=threads)
         folder=out/f'region-{ordinal}';folder.mkdir()
         row=dict(region=region.id,qualname=region.source.qualname,source=asdict(region.source),
             proof=plan.proof,cost=plan.cost,selected=False)
+        if provider is not None:
+            from scar.analysis.array_value_templates import publish_array_templates
+            templates=publish_array_templates(provider,folder/'value-templates')
+            row['value_templates']=str(folder/'value-templates/result.json')
+            row['value_template_summary']=templates['summary']
         from scar.optimization.demand import analyze_region_demand
         demand=analyze_region_demand(plan)
         (folder/'demand.json').write_text(json.dumps(demand,indent=2,allow_nan=False)+'\n')

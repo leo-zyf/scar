@@ -4,6 +4,7 @@ from dataclasses import replace
 import os
 
 from scar.compiler.model import ArrayRegion, ExecutionPlan, OPS
+from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, validate_copy_attributes, copy_semantics
 from .graph import numeric_value, ordered_nodes, simplify, value_kinds
 
 
@@ -32,6 +33,9 @@ def _profile_reasons(region, nodes):
             or any(not isinstance(p, str) or not p for p in region.parameters)):
         reasons.append("invalid_parameter_bindings")
     by_id = {node.id: node for node in nodes}
+    kinds = value_kinds(nodes)
+    if any(node.op == "copy" for node in nodes) and not set(COPY_REQUIRED_GUARDS).issubset(region.assumptions):
+        reasons.append("missing_exact_copy_and_source_stability_contract")
     input_parameters = []
     for node in nodes:
         if node.op not in OPS:
@@ -42,7 +46,8 @@ def _profile_reasons(region, nodes):
             continue
         expected = ({"name"} if node.op == "input" else {"value"}
                     if node.op == "const" else {"bounds"}
-                    if node.op == "slice" else set())
+                    if node.op == "slice" else {"order", "contract"}
+                    if node.op == "copy" else set())
         accepted_input_attrs = (node.op == "input" and set(node.attrs) in
                                 ({"name"}, {"name", "index"}))
         if set(node.attrs) != expected and not accepted_input_attrs:
@@ -59,6 +64,11 @@ def _profile_reasons(region, nodes):
             input_parameters.append(name)
         elif node.op == "const" and not numeric_value(node.attrs["value"]):
             reasons.append(f"unsupported_numeric_literal:{node.id}")
+        elif node.op == "copy":
+            try:validate_copy_attributes(node.attrs)
+            except ValueError:reasons.append(f"unsupported_copy_contract:{node.id}")
+            if kinds[node.inputs[0]] != "array":
+                reasons.append(f"copy_requires_array_value:{node.id}")
         elif node.op == "slice":
             bounds = node.attrs["bounds"]
             valid_bounds = (isinstance(bounds, (list, tuple)) and len(bounds) == 2
@@ -89,7 +99,7 @@ def _dependency_closure(nodes, output):
 def _classify(nodes):
     kinds = value_kinds(nodes)
     setup, body, descriptors, loads = [], [], [], []
-    consumers = {i for n in nodes if n.op in _ARITHMETIC for i in n.inputs}
+    consumers = {i for n in nodes if n.op in (_ARITHMETIC | {"copy"}) for i in n.inputs}
     for node in nodes:
         if kinds[node.id] == "scalar" or node.op in ("input", "slice"):
             setup.append(node.id)
@@ -117,15 +127,16 @@ def _cost(original, optimized, output, memory_budget):
     optimized_kinds = value_kinds(optimized)
     array_ops = [n for n in original if n.op in _ARITHMETIC
                  and original_kinds[n.id] == "array"]
+    array_copies = [n for n in original if n.op == "copy" and original_kinds[n.id] == "array"]
     baseline_reads = sum(original_kinds[i] == "array"
-                         for n in array_ops for i in n.inputs)
+                         for n in (*array_ops, *array_copies) for i in n.inputs)
     by_id = {n.id: n for n in optimized}
-    loads = {i for n in optimized if n.op in _ARITHMETIC
+    loads = {i for n in optimized if n.op in (_ARITHMETIC | {"copy"})
              and optimized_kinds[n.id] == "array" for i in n.inputs
              if by_id[i].op in ("input", "slice")}
     if by_id[output].op in ("input", "slice"):
         loads.add(output)
-    allocations = len(array_ops)
+    allocations = len(array_ops) + len(array_copies)
     resource_benefit = allocations > 1
     can_fit_nonempty = memory_budget is None or memory_budget >= 8
     decision = ("proposed" if resource_benefit and can_fit_nonempty
@@ -134,7 +145,7 @@ def _cost(original, optimized, output, memory_budget):
                if resource_benefit else ["no_full_array_intermediate_to_eliminate"])
     if not can_fit_nonempty:
         reasons.append("memory_budget_cannot_fit_one_nonempty_float64_output")
-    return {
+    result = {
         "status": "ESTIMATED", "decision": decision,
         "implementation": "cpu_2d_scalar_dag" if decision == "proposed" else "original",
         "reason": reasons,
@@ -161,6 +172,18 @@ def _cost(original, optimized, output, memory_budget):
         "measurement": "No measured runtime or speedup; backend selection is a proposal "
                        "requiring clean-process A/B validation.",
     }
+    if array_copies:
+        result.update(
+            baseline_copy_materializations=len(array_copies),
+            baseline_copy_logical_reads_per_output_element=len(array_copies),
+            baseline_copy_logical_writes_per_output_element=len(array_copies),
+            retained_final_copy_nodes=[n.id for n in optimized if n.op == "copy" and n.id == output],
+            copy_work_scope="STATIC_EQUAL_SHAPE_LOGICAL_WORK_NOT_PHYSICAL_TRANSFER_OR_RUNTIME",
+            copy_work=[dict(source_expr=n.id,operand=n.inputs[0],labels=["MEM", "XFER", "REP"],
+                allocation_count=1,logical_reads_per_element=1,logical_writes_per_element=1,
+                physical_transfer="UNKNOWN_NOT_RUNTIME_OBSERVED",may_raise="CONDITIONAL_NUMPY_OR_ALLOCATION_FAILURE",
+                value_relation="SAME_CONTENT_UNDER_SOURCE_STABILITY_NOT_SAME_OBJECT_OR_STORAGE") for n in array_copies])
+    return result
 
 
 def _unsupported(region, reasons, *, retained=(), cpu_threads=1, cpu_capacity=None):
@@ -215,7 +238,8 @@ def optimize_region(region: ArrayRegion, *, memory_budget_bytes=None,
                                      for node_id in dead_array_ops],
                             cpu_threads=cpu_threads, cpu_capacity=cpu_capacity)
 
-    graph = simplify(nodes, region.output)
+    has_copy = any(node.op == "copy" for node in nodes)
+    graph = simplify(nodes, region.output, forward_exact_copies=has_copy)
     if graph.retained_constant_operations:
         return _unsupported(region, ["unlowerable_constant_operation:" + item["id"]
                                      for item in graph.retained_constant_operations],
@@ -260,8 +284,24 @@ def optimize_region(region: ArrayRegion, *, memory_budget_bytes=None,
         "retained_constant_operations": graph.retained_constant_operations,
         **_classify(graph.nodes),
     }
+    if has_copy or set(COPY_REQUIRED_GUARDS).issubset(region.assumptions):
+        proof["copy_value_forwarding"] = dict(
+            rule="EXACT_C_ORDER_COPY_VALUE_FORWARDING_IN_CLOSED_STABLE_INPUT_PROFILE",
+            forwarded_source_nodes=[row["id"] for row in graph.eliminated_nodes
+                if row["reason"] == "exact_copy_value_forwarding"],
+            final_fresh_output_required=True,final_copy_boundary_preserved=any(
+                n.op == "copy" and n.id == graph.output for n in graph.nodes),
+            source_object_or_storage_identity_reused=False,input_or_output_cached=False,
+            logical_version_across_calls_inferred=False,operand_order_preserved=True,
+            original_internal_allocation_failure_sequence_preserved=False,
+            final_allocation_failure_policy="EXISTING_FRESH_OUTPUT_ALLOCATION_AND_FALLBACK_CONTRACT",
+            equivalence_scope="NORMAL_COMPLETION_NOT_FULL_EXCEPTION_OR_ALLOCATOR_CALLBACK_SEQUENCE",
+            original_copy_semantics=copy_semantics())
+        proof["runtime_guards"] += [guard for guard in COPY_REQUIRED_GUARDS if guard not in proof["runtime_guards"]]
+        proof["legality"]["external_assumptions"] += ["ARRAY_INPUT_CONTENT_STABLE_DURING_REGION"]
     return ExecutionPlan(region=optimized, cpu_threads=cpu_threads,
-                         passes=("constant_folding", "common_subexpression_elimination",
+                         passes=(("exact_copy_value_forwarding",) if has_copy else ()) +
+                                ("constant_folding", "common_subexpression_elimination",
                                  "dead_code_elimination", "invariant_setup_classification",
                                  "elementwise_region_coalescing", "resource_planning"),
                          proof=proof, cost=cost)

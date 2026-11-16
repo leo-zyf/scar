@@ -13,7 +13,7 @@ import operator
 from scar.compiler.model import ArrayRegion, Expr
 
 
-_ARITY = {"input": 0, "const": 0, "slice": 1, "neg": 1,
+_ARITY = {"input": 0, "const": 0, "slice": 1, "copy": 1, "neg": 1,
           "add": 2, "sub": 2, "mul": 2, "div": 2}
 _ARITHMETIC = {"add": operator.add, "sub": operator.sub,
                "mul": operator.mul, "div": operator.truediv,
@@ -111,10 +111,16 @@ class SimplifiedGraph:
     retained_constant_operations: list[dict]
 
 
-def simplify(nodes: tuple[Expr, ...], output: str) -> SimplifiedGraph:
-    """Fold scalar constants, eliminate identical DAG nodes, then close DCE."""
+def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False) -> SimplifiedGraph:
+    """Simplify values; exact-copy forwarding requires a closed-profile caller.
+
+    A final copy stays a materialization boundary, so a forwarded input can
+    never become the returned Python object. Materializing copies are excluded
+    from ordinary CSE even when this explicit forwarding permission is absent.
+    """
     aliases, constants, representatives = {}, {}, {}
     rewritten, reasons, folded, retained = [], {}, [], []
+    original_kinds = value_kinds(nodes)
     for source in nodes:
         inputs = tuple(aliases[i] for i in source.inputs)
         node = Expr(source.id, source.op, inputs, dict(source.attrs))
@@ -124,7 +130,16 @@ def simplify(nodes: tuple[Expr, ...], output: str) -> SimplifiedGraph:
         elif node.op in _ARITHMETIC and all(i in constants for i in inputs):
             node = Expr(node.id, "const", attrs={"value": value})
             folded.append(node.id)
+        if node.op == "copy" and forward_exact_copies and source.id != output:
+            from scar.compiler.array_copy_contract import validate_copy_attributes
+            validate_copy_attributes(node.attrs)
+            if original_kinds[source.inputs[0]] == "array":
+                aliases[source.id] = inputs[0]
+                reasons[source.id] = "exact_copy_value_forwarding"
+                continue
         key = (node.op, node.inputs, canonical_value(node.attrs))
+        if node.op == "copy":
+            key += ("distinct_materialization", node.id)
         if key in representatives:
             aliases[source.id] = representatives[key]
             reasons[source.id] = "common_subexpression"

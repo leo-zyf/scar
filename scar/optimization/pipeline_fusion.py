@@ -12,11 +12,12 @@ import json
 from scar.compiler.model import ArrayRegion,Expr,document as leaf_document
 from scar.compiler.pipeline_model import PipelinePlan,document as pipeline_document,validate_pipeline
 from scar.compiler.validation import validate_region
+from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS
 
 
 SCHEMA='scar.pipeline-fusion'
 _ARITHMETIC=frozenset(('add','sub','mul','div','neg'))
-_ALLOWED=_ARITHMETIC|{'input','const'}
+_ALLOWED=_ARITHMETIC|{'input','const','copy'}
 
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
@@ -57,7 +58,8 @@ def fuse_pipeline_region(pipeline):
     Shared leaf plans stay in the original PipelinePlan. A certificate uses
     their immutable document hashes and JSON pointers, never copies their
     graphs or invents global bindings. Every original call must contribute its
-    arithmetic to the final dependency closure; dead calls are never erased.
+    arithmetic/materialization to the final dependency closure; dead calls are
+    never erased just because they contain no arithmetic instructions.
     """
     try:
         validate_pipeline(pipeline);wire=pipeline_document(pipeline)
@@ -84,7 +86,7 @@ def fuse_pipeline_region(pipeline):
                     'SLICE_OR_NON_ELEMENTWISE_OPERATION',call_id=call.id,operation=node.op)
     if certificate['frontiers']:return None,certificate
 
-    nodes=[];values={};arithmetic_by_call=[]
+    nodes=[];values={};arithmetic_by_call=[];copies_by_call=[];copy_sources=[]
     for index,(parameter,value) in enumerate(zip(pipeline.parameters,pipeline.input_values,strict=True)):
         identity='fused:input:'+str(index)
         nodes.append(Expr(identity,'input',(),dict(name=parameter,index=index)))
@@ -92,7 +94,7 @@ def fuse_pipeline_region(pipeline):
     certificate['input_map']=dict(values)
     for index,(call,call_wire) in enumerate(zip(pipeline.calls,wire['calls'],strict=True)):
         parameters=dict(zip(call.plan.region.parameters,call.inputs,strict=True))
-        mapping={};arithmetic=[]
+        mapping={};arithmetic=[];copies=[]
         for ordinal,node in enumerate(call.plan.region.nodes):
             if node.op=='input':
                 mapping[node.id]=values[parameters[node.attrs['name']]]
@@ -101,6 +103,7 @@ def fuse_pipeline_region(pipeline):
                 nodes.append(Expr(identity,node.op,tuple(mapping[value] for value in node.inputs),deepcopy(node.attrs)))
                 mapping[node.id]=identity
                 if node.op in _ARITHMETIC:arithmetic.append(identity)
+                if node.op=='copy':copies.append(identity)
         values[call.output]=mapping[call.plan.region.output]
         source_mapping={}
         for expression,route in call.plan.proof.get('source_operation_map',{}).items():
@@ -119,6 +122,20 @@ def fuse_pipeline_region(pipeline):
             expr_map=mapping,source_expr_map=source_mapping,output_value=call.output,
             output_expr=values[call.output]))
         arithmetic_by_call.append(arithmetic)
+        copies_by_call.append(copies)
+        source_copies=[dict(expression=expression,route=deepcopy(route)) for expression,route
+            in call.plan.proof.get('source_operation_map',{}).items()
+            if isinstance(route,dict) and route.get('source_op')=='copy']
+        if copies and not source_copies:
+            _frontier(certificate,'calls.'+str(index)+'.source_operation_map',
+                'ORIGINAL_COPY_WORK_MAPPING_REQUIRED',call_id=call.id)
+        if source_copies:
+            if call.plan.cost.get('baseline_copy_materializations')!=len(source_copies):
+                _frontier(certificate,'calls.'+str(index)+'.cost',
+                    'ORIGINAL_COPY_WORK_ACCOUNTING_DIFFERS',call_id=call.id)
+            copy_sources.append(dict(call_id=call.id,leaf_plan_ref='#/leaf_plans/'+plan_id,
+                source_copies=source_copies,source_copy_materializations=len(source_copies),
+                represented_copy_expressions=copies))
     certificate['value_map']=dict(values)
     if certificate['frontiers']:return None,certificate
     by_id={node.id:node for node in nodes};needed=set();pending=[values[pipeline.output]]
@@ -131,11 +148,25 @@ def fuse_pipeline_region(pipeline):
         if missing:
             _frontier(certificate,'calls.'+str(index),'ORIGINAL_CALL_ARITHMETIC_OUTSIDE_FINAL_DEPENDENCY',
                 call_id=call.id,expressions=missing)
+        missing_copies=[identity for identity in copies_by_call[index] if identity not in needed]
+        if missing_copies:
+            _frontier(certificate,'calls.'+str(index),'ORIGINAL_CALL_MATERIALIZATION_OUTSIDE_FINAL_DEPENDENCY',
+                call_id=call.id,expressions=missing_copies)
     if certificate['frontiers']:return None,certificate
+    assumptions=('EXACT_NUMPY_NDARRAY_FLOAT64_CPU_2D','FRESH_OUTPUT','NO_INPUT_WRITES',
+         'ORIGINAL_PIPELINE_CALLEE_GUARDS_REQUIRED','ORIGINAL_PIPELINE_SHAPE_OBLIGATIONS_REQUIRED')
+    if copy_sources:
+        assumptions+=tuple(guard for guard in COPY_REQUIRED_GUARDS if guard not in assumptions)
+        certificate['copy_work']=dict(source_calls=copy_sources,
+            original_materialization_count=sum(row['source_copy_materializations'] for row in copy_sources),
+            represented_copy_expression_count=sum(len(row) for row in copies_by_call),
+            labels=['MEM','XFER','REP'],logical_value_not_object_or_storage_equivalence=True,
+            actual_physical_transfer='UNKNOWN_NOT_RUNTIME_OBSERVED',
+            equivalence_scope='NORMAL_COMPLETION_NOT_INTERNAL_ALLOCATION_FAILURE_SEQUENCE',
+            final_fresh_output_required=True,profitability_proven=False)
     region=ArrayRegion('fused-pipeline:'+certificate['pipeline_sha256'][:24],pipeline.source,
         pipeline.parameters,tuple(nodes),values[pipeline.output],
-        ('EXACT_NUMPY_NDARRAY_FLOAT64_CPU_2D','FRESH_OUTPUT','NO_INPUT_WRITES',
-         'ORIGINAL_PIPELINE_CALLEE_GUARDS_REQUIRED','ORIGINAL_PIPELINE_SHAPE_OBLIGATIONS_REQUIRED'))
+        assumptions)
     validate_region(region)
     certificate.update(supported=True,status='GUARDED_FULL_PIPELINE_FUSION_CANDIDATE',
         region_sha256=fusion_region_digest(region),region_id=region.id,

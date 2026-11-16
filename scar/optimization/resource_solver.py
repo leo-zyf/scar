@@ -67,6 +67,12 @@ def _shape_instantiation(plan, input_shapes):
                                tuple(max(0, stop - start) for start, stop, _ in
                                      (slice(*bounds).indices(extent) for bounds, extent in
                                       zip(node.attrs["bounds"], parent))))
+        elif node.op == "copy":
+            parent = shapes[node.inputs[0]]
+            shapes[node.id] = parent
+            if parent is None:
+                issues.append({"field": f"input_shapes.operation.{node.id}",
+                               "reason": "exact ndarray copy requires an array operand"})
         else:
             operands = [shapes[key] for key in node.inputs]
             if any(shape is unknown for shape in operands):
