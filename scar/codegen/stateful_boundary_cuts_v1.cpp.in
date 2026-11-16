@@ -1,0 +1,80 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "stateful_abi_v1.h"
+#include <array>
+#include <bit>
+#include <cerrno>
+#include <cfenv>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <new>
+#include <sched.h>
+#include <time.h>
+#include <unistd.h>
+#pragma STDC FENV_ACCESS ON
+
+namespace {
+static_assert(sizeof(double) == 8 && sizeof(intptr_t) == 8);
+constexpr int planned_cpu_ids[] = {@CPU_IDS@};
+constexpr size_t minimum_cpu_slots = @CPU_SLOTS@;
+@FLOATING_FLAGS@
+constexpr int32_t affinity_guard_status = SCAR_CPU_AFFINITY_GUARD_V1;
+@AFFINITY_CLASS@
+@FLOATING_CLASS@
+@ARRAY_HELPERS@
+
+thread_local std::array<uint64_t, 6> boundary_cuts{};
+thread_local uint64_t recorded_cut_count = 0;
+bool record_cut(size_t index) noexcept {
+    if (index != recorded_cut_count || index >= boundary_cuts.size()) return false;
+    timespec value{};
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0 || value.tv_sec < 0 ||
+        value.tv_nsec < 0 || value.tv_nsec >= 1000000000L) return false;
+    const uint64_t seconds = static_cast<uint64_t>(value.tv_sec);
+    const uint64_t nanos = static_cast<uint64_t>(value.tv_nsec);
+    if (seconds > (std::numeric_limits<uint64_t>::max() - nanos) / UINT64_C(1000000000)) return false;
+    const uint64_t timestamp = seconds * UINT64_C(1000000000) + nanos;
+    if (index && timestamp < boundary_cuts[index-1]) return false;
+    boundary_cuts[index] = timestamp;
+    recorded_cut_count = index + 1;
+    return true;
+}
+
+// Canonical observer, not the target array/scalar program. Skipped pool, scans,
+// DAG and commits remain excluded. Clocks/stores are retained instrumentation.
+int32_t run(const scar_array_v1 *arrays, uint64_t array_count,
+            const scar_scalar_v1 *scalars, uint64_t scalar_count,
+            const scar_provider_v1 *providers, uint64_t provider_count) {
+    boundary_cuts.fill(0);
+    recorded_cut_count = 0;
+    if (!record_cut(0)) return 3;
+@METADATA_PREFIX@
+    if (!record_cut(1)) return 3;
+@CAPTURE_AND_SCALAR@
+@NUMERIC_DECLARATIONS@
+    if (!record_cut(2)) return 3;
+@SERIAL_BIND@
+    if (!record_cut(3)) return 3;
+@SERIAL_BOUNDCHECK@
+    if (!record_cut(4)) return 3;
+@RESTORE_AND_CHECKS@
+    if (!record_cut(5)) return 3;
+    // Affinity/FENV RAII destruction and FFI return follow this last cut.
+    return 0;
+}
+const scar_stateful_table_v1 table = {1, sizeof(scar_stateful_table_v1),
+    @ARRAY_COUNT@, @SCALAR_COUNT@, @PROVIDER_COUNT@, &run,
+    "@REGION_SHA256@", "@PLAN_SHA256@", "@CONTRACT_SHA256@"};
+}
+
+extern "C" SCAR_EXPORT_V1 const scar_stateful_table_v1 *scar_get_stateful_table_v1() { return &table; }
+extern "C" SCAR_EXPORT_V1 int32_t scar_boundary_cut_read_v1(uint64_t *out, uint64_t count) {
+    if (out == nullptr || count != boundary_cuts.size() || recorded_cut_count != boundary_cuts.size()) return 1;
+    for (size_t i = 0; i < boundary_cuts.size(); ++i) out[i] = boundary_cuts[i];
+    return 0;
+}

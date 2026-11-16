@@ -1,0 +1,99 @@
+{
+  "schema": "scar.g3c2-boundary-cut-acceptance",
+  "schema_version": 1,
+  "status": "VERIFIED_EXCLUSIVE_CANONICAL_BOUNDARY_MODELS",
+  "observations": {
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-boundary-cuts/observations.json",
+    "sha256": "bfdf50b47b79a0eb51c26b4ef73ead46ed52628982a081cab02c1da6ebbf1be3",
+    "size_bytes": 46952,
+    "schema": "scar.stateful-boundary-cut-calibration"
+  },
+  "costs": {
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-cut-costs/result.json",
+    "sha256": "2f9eeb7259db363ffc744ad880e54ad2ee913b995757cddc045f311eca38ef2b",
+    "size_bytes": 2669,
+    "schema": "scar.activity-cost-preparation"
+  },
+  "cold_boundary_source_replay": "PASSED",
+  "cold_source_time_resource_cost_replay": "PASSED",
+  "before_summary": {
+    "activities": 30,
+    "complete_subjects": 0,
+    "empirical_intervals": 12,
+    "execution_authorized": false,
+    "known_component_subjects": 12,
+    "mathematical_bounds_verified": false,
+    "original_activity_coverage_complete": true,
+    "physical_optimality_proven": false,
+    "solver_authorized": false,
+    "source_component_semantics_replayed_by_this_validator": false,
+    "subjects": 24,
+    "unknown_subjects": 12,
+    "unmapped_terms": 3,
+    "whole_scope_cost_closed": false
+  },
+  "after_summary": {
+    "activities": 30,
+    "complete_subjects": 0,
+    "empirical_intervals": 19,
+    "execution_authorized": false,
+    "known_component_subjects": 19,
+    "mathematical_bounds_verified": false,
+    "original_activity_coverage_complete": true,
+    "physical_optimality_proven": false,
+    "solver_authorized": false,
+    "source_component_semantics_replayed_by_this_validator": false,
+    "subjects": 23,
+    "unknown_subjects": 4,
+    "unmapped_terms": 4,
+    "whole_scope_cost_closed": false
+  },
+  "samplewise_exclusive_interval_partition": true,
+  "phases": 7,
+  "sample_count": 7,
+  "warmup": 2,
+  "canonical_experiment_seconds": 3.0048790510045364,
+  "runtime_stats": {
+    "fallback_calls": 0,
+    "native_calls": 9,
+    "reasons": {}
+  },
+  "caller_affinity_restored": true,
+  "native_cpp20_probe_compiled": true,
+  "operator_abi": 1,
+  "actual_compiler_wrapper_used": true,
+  "original_numeric_subjects_preserved": 12,
+  "unique_original_activity_coverage": 30,
+  "wholecall_and_leaf_double_charging": false,
+  "wholecall_median_subtraction": false,
+  "implementation_and_data_regime_residuals": [
+    "TARGET_IMPLEMENTATION_AND_DATA_REGIME_DELTA_NOT_VALIDATED",
+    "INSTRUMENTATION_PERTURBATION_NOT_BOUNDED",
+    "POST_PROVIDER_AFFINITY_AND_FLOATING_STATE_NOT_REPRODUCED_BY_EMPTY_DAG"
+  ],
+  "directed_tests": {
+    "passed": 2,
+    "elapsed_seconds": 1.05
+  },
+  "code_sha256": {
+    "scar/compiler/calibrate_boundary_cuts.py": "b67f334bc245e2bb81eae526353dc017ef22030a01ba4bf7bb3ab7abb3988344",
+    "scar/codegen/boundary_cuts.py": "48d841f2929ad9084d0018dfb5994978b016823b94a0beb261361ed838b1c75d",
+    "scar/codegen/stateful_boundary_cuts_v1.cpp.in": "cc2437a8025f8df4f40b391efe28194af441b8bb5e15734511940b6a1edc52f8",
+    "scar/compiler/cost_activities.py": "ac4fcd7a5f9d6fe700aeb644fa16de124c988f38cc530e11773d56aca69bfd4f",
+    "scar/optimization/boundary_activity_costs.py": "a9abd60a86e2855b9877c1e6b87390e609dd2c16d9e2e60c522416ceab4d74b2",
+    "scar/optimization/temporal_activity_costs.py": "9c4a4c147ee395674af55495c2b5105ef97652cc660734835fae37aebe73b254",
+    "tests/unit/test_boundary_cuts.py": "520ee396f831bc76c46fa6346c3ece131130ad10861b97c726dd6462640e020f",
+    "scar/cli.py": "c821c4a5d9a964b32e5a1895dd565eccc0d27acef68d69f7600abe2743071d62"
+  },
+  "target_program_executed": false,
+  "target_variants_ranked": false,
+  "performance_measured": false,
+  "speedup": null,
+  "complete_call_cost": false,
+  "solver_authorized": false,
+  "deployment_authorized": false,
+  "next_layers": [
+    "G3C3_TOPOLOGY_PRESERVING_FUSED_DAG_AND_TAGGED_SCALAR_COMPONENTS",
+    "G3C4_RESIDUAL_AND_RESOURCE_APPLICABILITY_CLOSURE_BEFORE_G4"
+  ]
+}
