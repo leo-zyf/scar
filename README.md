@@ -1,404 +1,64 @@
 # SCAR
 
-State · Control · Action · Resource：面向Python程序的宏观编译器。
+**State · Control · Action · Resource**：面向 Python 程序的宏观编译器。
 
-目标流程：**统一程序/资源图 → 结构与硬件感知化简 → C++20宿主执行代码**。
-算子实现通过版本化接口接入官方高性能库或外部算子生成agent，支持单算子、通信及融合区域。
-当前并行开发建图、图化简与规划、C++20代码交付；静态优先，软件边界到算子接口。
-已具备共享控制/数据/状态图、跨函数与容器传播及生成式算子接口接线；仍需补完整资源映射和外部接口。
-完整程序建模尚未完成；已贯通受约束的 CPU 数组区域编译，没有LeWM加速比结论。
-主测试组为 Sunfish、Gray–Scott、Cirq。真实 Gray–Scott 512×512 / 1000 步已验证的完整入口 A/B：原版11.136s、显式单线程C++版本3.939s，**2.8271×**（1组预热、3组交替测量的中位数）。本轮有序状态区域成本域为49个KNOWN（含原执行）/58个UNRESOLVED，仍NO_OP；另两项只有基线，详见 [当前状态](docs/STATUS.md)。
-LeWM 是外部 testcase；通用规则不按业务名称选择处理方式。
-后端基线为C++20、算子ABI v1、执行计划schema v1（资源绑定用v2），配置见`pyproject.toml`。
-
-## 使用
-
-从已有主build自动展开有序内容子图、接通原caller接口并独立读回；正文与循环保持共享，输出按typed表分片：
-
-```bash
-scar inspect-ordered-activations --build /path/to/program-build --out /path/to/ordered-graph
-scar read-ordered-activations /path/to/ordered-graph/region-0/interfaces --out /path/to/cold-replay.json
+```text
+静态源码 + 必要动态绑定 + 硬件库存
+→ 有类型、可展开的程序/资源图
+→ 结构化简、成本区间及资源计划
+→ C++20 / 算子 ABI1
+→ 原入口、guard 和完整区域回退
 ```
 
-当前该接口保存有条件的数据、world和控制依赖；通过图读回不等于已证明跨调用内容不变或可以reuse。每轮的层次、验收与缺口见[当前状态](docs/STATUS.md)。
+当前优先完成三阶段核心开发，暂停新增性能实验。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
+LeWM、Sunfish、Gray–Scott、Cirq 都是外部 testcase，分析规则不按业务名称选择优化。
 
-有序数组状态区域：从原 F4 自动发现字段读、求值、切片写入，再规划 barrier/临时存储并生成 C++20；当前需要显式形状、CPU 和数组 payload 预算。源程序不修改，产物尚未测量时不自动启用。
-
-```bash
-scar compile-stateful --source /path/to/program.py --catalog /path/to/catalog --shape 515 515 --target /path/to/target-hardware --cpu-threads 4 --memory-budget-bytes 33554432 --out /path/to/compiled-state
-```
-
-已保留的原 F4 区域可用 `--region REGION.json` 代替 `--source/--catalog`，避免重复目录加载。运行边界为 `scar.compiler.stateful_runtime.install_stateful_regions`；成本选择与合法性分开，未测产物仅可显式 trial。原 NumPy provider 精确绑定版本/二进制，无跨版本 ABI 保证。
-
-共享执行图与原入口交付：
+## 使用现有环境
 
 ```bash
-scar recipe plan-stateful --region REGION.json --plan STAGE_PLAN.json --out /path/to/recipe
-scar recipe estimate --recipe /path/to/recipe/recipe.json --out /path/to/estimate.json
-scar recipe lower --recipe /path/to/recipe/recipe.json --out /path/to/lowered
-scar export-stateful-runtime --artifact /path/to/lowered/native --selection SELECTION.json --out /path/to/bundle
-scar run --bundle /path/to/bundle --admission-sha256 PRODUCER_PIN --exclusive-inputs --memory-budget-bytes 33554432 --reuse-count 5000 --deployment-plan COST_PLAN.json --report /path/to/run.json -- /path/to/entry.py [arguments]
-```
-
-缺少成本计划时保留原执行；`--measure-candidate` 显式测候选，不表示部署盈利。公共资源图 v2 保状态版本、独立 storage slot、就绪与提交屏障；缺任务成本继续 UNKNOWN。轻量包仍需要原源码、Python/NumPy 和系统库，尚非独立 C++ 主程序。
-
-三阶段区域闭环（CPU、精确 float64 二维 ndarray；其他输入回到原执行）：
-
-```bash
-scar compile-region /path/to/program.py --catalog /path/to/catalog --cpu-threads 4 --out /path/to/compiled
-scar benchmark-region /path/to/compiled/region-0/native --out /path/to/compiled/benchmark.json
-```
-
-有catalog时直接降低原F4操作和端口；F0编译仅恢复CodeID，不重新用AST选择表达式语义。
-硬件规划按模型推导；动态只补静态不能确定的输入字段，实测用于原语成本校准及最终验收：
-
-```bash
-scar compile-region /path/to/program.py --catalog /path/to/catalog --target /path/to/hardware --cpu-threads 4 --memory-budget-bytes 8388608 --out /path/to/preview
-scar observe-region-inputs --plan /path/to/preview/region-0/plan.json --out /path/to/inputs --max-seconds 60 --stop-when-collected -- python /path/to/entry.py
-scar calibrate-cpu --plan /path/to/preview/region-0/plan.json --inputs /path/to/inputs/inputs.json --out /path/to/calibration
-scar plan-resources /path/to/preview/region-0/resource-plan.json --plan /path/to/preview/region-0/plan.json --inputs /path/to/inputs/inputs.json --profile /path/to/calibration/profile.json --out /path/to/planning.json
-scar lower-resources --plan /path/to/preview/region-0/plan.json --resources /path/to/preview/region-0/resource-plan.json --planning /path/to/planning.json --out /path/to/native
-scar benchmark-region /path/to/native --inputs /path/to/inputs/inputs.json --out /path/to/benchmark.json
-```
-
-这些命令的输出路径须尚不存在。预览计划须声明增量内存预算，不能将硬件总内存当可用预算。
-输入采集要求 CPython 的 `sys.monitoring`，只对完整 CodeID 匹配的普通函数启用局部进入事件；
-最多记录两次 shape/dtype/strides 等元数据，不记录数组内容。`--stop-when-collected` 会中断本次启动的子程序，
-所得结果只覆盖执行前缀；省略该参数则让原程序继续。采集不加载原生库、不应用变换，也不是性能测量。
-原语校准可用 `cpu-cost` 可选依赖（SciPy），不运行或排名目标程序的多个实现版本。
-成本 profile 限定硬件快照、CPU 集合、编译器及完整参数、runtime 指纹、形状与布局；
-当前是有效仿射模型，不能推导物理最优、实际 DRAM 流量或 cache miss。
-
-固定线程参数当前只生成未排名的可行分配预览；未指定时，硬件分配缺代价模型则报告`PLANNING_REQUIRED`，不编译多版本比时。
-`plan-resources --model COSTS.json`接显式任务成本；资源容量、CPU需求和切片输出大小从原计划推导，未知成本或预算不补零。
-求解器当前只覆盖固定放置、非抢占任务和增量内存预算；模型最优不等于物理最优，联合放置/搬运/融合仍未完成。
-资源任务图区分分配、值就绪和导出；C++已消费同步CPU三任务的 timed 计划，逐调用守卫 shape/layout/字节预算/CPU 绑定。
-它按依赖执行，不等待预测 tick；未实现的 copy/wait 或 NUMA 页放置继续拒绝。
-
-未指定线程数的硬件预览会输出未绑定的 `plan.json`，可自动构造 CPU 实现域并正向选择：
-
-```bash
-scar choose-cpu --plan /path/to/unbound/plan.json --target /path/to/hardware --inputs /path/to/inputs/inputs.json --cpu-pool 0 1 2 3 4 5 6 7 --max-threads 8 --calibrate-missing --out /path/to/cpu-choice
-scar lower-cpu-choices --choices /path/to/cpu-choice/choice/choice.json --out /path/to/chosen-native
-```
-
-可重复传 `--profile FILE` 复用已有成本。缺失且未要求校准的实现保留为前沿，不能删除后宣称完整域最优。
-校准只运行规范原语；模型选择完成后仅编译所选目标实现，最终是否采用仍由正确性和 A/B 验收决定。
-当前域是给定 CPU 池中每 executor 的前缀 CPU 集合及 1/2 的幂/上限线程数，不是所有物理实现；NUMA 页未绑定。
-
-原 F4 中只调用已准入数组函数的直线子图，可自动组成多区域 pipeline：
-
-```bash
-scar compile-pipeline --source /path/to/program.py --catalog /path/to/catalog --out /path/to/discovery
-scar observe-region-inputs --plan /path/to/discovery/pipeline-0/pipeline.json --out /path/to/inputs -- python /path/to/entry.py
-scar compile-pipeline --pipeline /path/to/discovery/pipeline-0/pipeline.json --inputs /path/to/inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --out /path/to/pipeline-build
-scar benchmark-pipeline /path/to/pipeline-build/pipeline-0/native --inputs /path/to/inputs/inputs.json --out /path/to/pipeline-benchmark.json
-```
-
-默认 `--strategy auto` 在满足契约时将完整 elementwise 子图融合为单 kernel，以减少材料化；不满足时保原调用与 pool。
-`--strategy pool` 显式保留原调用划分。预算先在选定表示上判定，原 pool 不可行不代表合法改图后也不可行。
-原调用和 callee guards 始终保留，融合证书与后续算子图优化映射分开验证，不重关联浮点运算。
-C++ host/pool 路径按已验证的 last-use 复用槽位，融合路径不分配中间 workspace，最终输出都独立新建；
-输入与实际 global callee 由运行边界守卫。`scar.compiler.pipeline_runtime.install_pipeline` 可在测量通过后安装，
-传入完整 benchmark 报告作为 `selection`；`trial=True` 仅用于受控验收。
-线程数目前是显式未排名配置，表示选择的目标是增量 payload，整体时间尚未建模；不声称最优调度、NUMA 放置或实际传输。
-
-共享循环主链已接入：原 F4 的 `range(count)`、局部 carry 读写与 world 回边组成一个可展开循环节点，正文只存一份。当前 native profile 限单个形状保持的数组 carry、纯 elementwise pipeline。
-
-```bash
-scar compile-loop --source /path/to/program.py --catalog /path/to/catalog --out /path/to/loop-preview
-scar observe-region-inputs --plan /path/to/loop-preview/loop-0/loop.json --out /path/to/loop-inputs --stop-when-collected -- python /path/to/entry.py
-scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --out /path/to/loop-build
-```
-
-可对已绑定的 body plan 校准独立 SSE2 原语，再由硬件模型选择向量链布局。校准不执行目标程序或其变体：
-
-```bash
-scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --plan-only --out /path/to/bound-plan
-scar calibrate-loop-primitives --plan /path/to/bound-plan/loop-0/execution-plan.json --out /path/to/primitive-profile
-scar compile-loop --loop /path/to/loop-preview/loop-0/loop.json --inputs /path/to/loop-inputs/inputs.json --target /path/to/hardware --cpu-threads 8 --memory-budget-bytes 12582912 --simd-profile /path/to/primitive-profile/profile.json --out /path/to/simd-loop-build
-```
-
-布局按原 DAG 的 last-use、SSE2 two-address 复用、寄存器预算和有来源的依赖/吞吐代理选链数；只编译选中布局。v2 artifact 附 layout 和实际 ELF 的 ISA/栈审计，loop ABI 仍为 1，旧无 layout 的 v1 可读。代理成本不是纯指令延迟或整程序耗时预测，抽象向量存储预算不是实际线程栈上限。
-
-同一份上层 execution recipe 现在可贯通语义边界、任务/资源图、估价和 C++ 降低：
-
-```bash
-scar recipe plan-loop --loop LOOP.json --strategy STRATEGY.json --plan BOUND_PLAN.json --layout LAYOUT.json --cpu-hierarchy CPU_HIERARCHY.json --out /path/to/recipe
-scar recipe estimate --recipe /path/to/recipe/recipe.json --out /path/to/estimate.json
-scar recipe lower --recipe /path/to/recipe/recipe.json --out /path/to/lowered
-```
-
-输入来自现有静态循环发现及 plan-only 流程；layout/cache sidecar 可省略。recipe 引用原组件，不复制循环正文或展开迭代，完整保留未选资源。语义边界不随 CPU 数改变；recipe ID 还绑定资源、后端实现、编译器和布局。估计与 lowering 收据引用同一 ID。缺真实 temporal 成本时输出 UNKNOWN，编译仅取得待测产物；不是自动部署资格，也不表示全程序时序已求解。降低产物在 `lowered/native/`，继续使用下述导出及运行入口。
-
-部署前一次性准入原 proof，再导出小运行包；完整 IR、profile、硬件档案和模板不进入运行进程：
-
-```bash
-scar export-loop-runtime --artifact /path/to/simd-loop-build/loop-0/native --selection /path/to/measured-result.json --out /path/to/runtime-bundle
-```
-
-```bash
-scar inspect-entry --entry /path/to/application.py --contract /path/to/runtime-bundle/runtime.json --out /path/to/entry-map.json
-scar run --bundle /path/to/runtime-bundle --admission-sha256 TRUSTED_SHA256 --exclusive-inputs --memory-budget-bytes BYTES --deployment-plan /path/to/cost-plan.json --report /path/to/execution.json -- /path/to/application.py [arguments]
-```
-
-`inspect-entry` 静态解析有界本地导入候选；`run` 在普通目标模块自然导入完成后安装守卫，无需 testcase 手写导入/替换，也不改应用源码。不支持的 loader、入口自身定义的目标函数等保留原路径。`--measure-candidate` 可替代 `--deployment-plan` 测量已准入候选，但不代表成本已批准。无成本计划时默认 NO_OP。
-
-pin 必须来自调用者信任的构建记录，loader 不从包内 report 自行取信；哈希不等于签名。运行包保 library/ABI、原应用源码与嵌套 globals、实际函数 builtins、shape/count/owner、CPU/ISA/fenv 等守卫。仍依赖 Python/NumPy、原应用源码和系统共享库，尚非独立 C++ 程序。手动嵌入仍可用轻量 `scar.runtime.native_loop.load` 和 `scar.runtime.loop_guard.install_loop`。
-
-部署成本可先在元数据上门控：`scar plan-deployment --profile PROFILE --context CONTEXT --reuse-count N --cpu-ids 0 1 --memory-budget-bytes BYTES --out REPORT`。完整 scope 观测只在其原 scope/count 回放；组件模型必须分别有来源的加载、安装及调用成本。缺失值保持 NO_OP，不从 warm/fresh median 差值推导 setup。正向结果仅 `LOAD_NATIVE_CANDIDATE`，不能替代准入和动态守卫。
-
-外部调用可按原 F4 code/offset 轻量补位，再自动挂到统一图：
-
-```bash
-scar observe-call-bindings --source /path/to/entry.py --entry main --catalog /path/to/catalog --out /path/to/call-targets -- python /path/to/entry.py
-scar build --entry /path/to/entry.py --catalog /path/to/catalog --target /path/to/hardware --call-bindings /path/to/call-targets --out /path/to/unified
-```
-
-每个位点默认只留一次实际 callable 元数据，局部 CALL 事件不采集 operands 或数组数值。`BuildSession.view` 通过 `CALL_TARGET` 条件 MAY 边查询独立观察句柄；它不是 InvocationKey，不能证明 callee 进入、完成、effects 或未来分派。
-
-循环仅观察一次入口，保存数组元数据、精确整数次数及真实嵌套 callable CodeID，不保存数组数值。规划先证明各元素互不依赖，再把时间递推放入元素局部的 C++20 循环；不 unroll，也不按次数复制 IR。只读初值、写独立最终数组，无中间数组 workspace。这是增量 payload 下界，不是时间或物理最优证明；CPU 数量仍显式指定。
-
-原入口、正文及各自 globals 中的叶函数均需匹配；次数变化、零次/负次数、布局或浮点守卫失配时执行原循环一次。正常启用需要该 artifact 的正确性与测量收据。
-
-未测量的编译产物默认不选用。Python API `install_regions(module, artifacts, exclusive_inputs=True, selection=report)`
-仅在已测计划及输入 shape/layout 范围内使用原生代码；`trial=True` 只用于受控 A/B。
-契约要求同步 CPU 执行及无外部并发写入；这些不是由 ndarray 类型推断的全局事实。
-前端自动扫描函数，不按业务名称选区域；图保留源码版本、CodeID 与原 F2 occurrence 引用。
-当前支持切片、常量和基础算术，拒绝未知状态/调用；C++20 拥有区域循环，Python保留其他程序行为。
-
-正式前端按层构建局部图，不运行目标程序：
-
-```bash
-scar frontend /path/to/source-root --out /path/to/frontend --jobs 8
-scar build --entry /path/to/entry.py --catalog /path/to/frontend/catalog --cache-root /path/to/frontend --out /path/to/build
-```
-
-`frontend` 顺序执行源码→词法→AST→作用域/绑定→共享区域模板→局部接口→调用参数/返回接口；三类独立模板可并行。
-每层检查原报告再推进，失败保留具体阶段。`local_declarations_complete` 只表示所选源码的局部声明图完成。
-已有采集可追加 `--trace TRACE --project-root ORIGINAL_ROOT` 离线接线；随后 `build` 使用同一目录的观察接口。
-已有F0–F3模型可用 `frontend ROOT --source-model MODEL --source FILE --out FRESH` 从F4继续；原source ID和分片保持，当前源字节先核对，F4仍执行收集与独立验证。
-同一分析索引同时发布共享的类型/原生调用边界和独立观察表；有native companion时保原ABI字段，无companion时明确未记录。
-边界可展开到实际Python回调的共享代码/body；普通入口与可挂起body分开，恢复位置和参数来源没有证据时保留未决字段。
-编译器插入的生成器创建、类构造CALL单独接回原协议操作及其参数/状态/结果，不套普通函数ABI；共享正文不代表已证明实际激活或generator恢复实例。
-可选 `scar trace --resumptions --project-root ROOT --out TRACE -- python app.py` 记录真实首次进入、恢复、yield 和最终完成，以同一激活连接原 InvocationID，不保存帧或 payload。
-`scar source-resumptions --interfaces OBSERVED_FUNCTION_INTERFACES --metadata TRACE/resumption-meta.PID.json --out FRESH` 将边界接回原正文端口；委托驱动的继续执行不等于已完成规范化恢复，接线表尚待纳入统一 build。
-动态生成的代码可用 `scar trace --compile-events --project-root ROOT --out TRACE -- python app.py` 保留限额内编译文本与执行代码指纹。
-带此采集的 `frontend --trace TRACE --project-root ROOT` 会自动匹配兼容编译配方、生成局部F0–F4图并接回调用；只编译，不执行保存的文本。
-同文件名的不同代码用完整CodeID区分，编译选项多解保留；原始编译请求、创建环境与参数值不由代码相等推出。
-有trace时还会自动寻找外部文件及官方frozen源码，以完整CodeID验证后并行降低局部图；不导入目标模块。
-最终catalog路径在frontend报告中；用 `scar build --entry ENTRY --trace TRACE --cache-root FRONTEND --out BUILD` 自动选取该目录及接口。
-
-统一入口优先组合与入口源码匹配的 F4 catalog、调用/状态接口和资源材料；没有材料时建立源码、函数/循环子图和跨函数连接：
-
-```bash
-scar build --entry /path/to/entry.py --trace /path/to/trace --out /path/to/fresh-build --jobs 4
-scar build --entry /path/to/entry.py --trace /path/to/trace --body-scope observed --target /path/to/target --out /path/to/fresh-build --jobs 8
-scar build-query /path/to/fresh-build --action expand
-scar build-query /path/to/fresh-build --action select --file model.py
-scar build-query /path/to/fresh-build --action inputs
-scar build-query /path/to/fresh-build --action resources
-scar build-query /path/to/fresh-build --action dependencies --file model.py --entry forward --node program_value:ORIGINAL_ID
-```
-
-已提取的状态区域可按硬件产生 CPU 域，再将可信成本选择交给同一 C++20 后端：
-
-```bash
-scar choose-stateful-cpu --region REGION.json --target HARDWARE --shape 515 515 --memory-budget-bytes 33554432 --out PLAN
-scar choose-stateful-cpu --domain PLAN/domain/domain.json --cost-profiles PROFILES.json --no-op-profile ORIGINAL.json --out CHOICE
-scar lower-stateful-choices --choices CHOICE/choice/choice.json --out NATIVE
-```
-
-省略 `--target` 时自动发现平台硬件。成本不足保留原执行，完整声明模型只降低选中的一个实现；编译不授权部署，也不证明物理全局最优。已有区域正文仅按 artifact 引用共享，不为每个 CPU mask 复制。
-
-可直接从已准入的统一程序图发现区域并规划，复用同一会话的原 F4 正文和全部硬件：
-
-```bash
-scar plan-build --build PROGRAM_BUILD --shape 515 515 --memory-budget-bytes 33554432 --out DOMAINS
-scar choose-stateful-cpu --domain DOMAINS/region-0/domain/domain.json --out CHOICE
-```
-
-`plan-build` 当前为受支持的状态数组区域生成规划域，其余函数保留具体拒绝原因。输入 shape 是显式约束；局部绑定的 frame-isolation 投影保留未解除的 Q，引用稳定不能证明数组内容不变。
-
-状态区域原执行成本可独立采集，再按区域ID将输出的`forward-cost/profile.json`写入`ORIGINAL_COSTS.json`映射：
-
-```bash
-scar observe-original-stateful-cost --domain DOMAINS/region-0/domain/domain.json --build PROGRAM_BUILD --out ORIGINAL --warmup 1 --repetitions 3 -- ENTRY.py ARGS
-scar compile-build --domains DOMAINS --no-op-profiles ORIGINAL_COSTS.json --plan-only --out COST_ADMISSION
-scar rebase-stateful-cost --profile ORIGINAL/forward-cost/profile.json --source-domain OLD/domain.json --target-domain NEW/domain.json --out REBASED
-```
-
-计时只覆盖每个新进程首个匹配method的原调用，输入/源码/provider检查在计时外；不记录数组内容，不加载native变体。它提供同边界NO_OP成本，最终加速比仍需干净完整入口A/B。缺native成本继续保留原执行。
-
-重绑定会重放双域、原成本和支持的依赖，只接受同值物料/证据引用的变化；原测量和推导保持不变，未知模型不自动迁移。
-
-循环外提已有原 F4 → 依赖闭包 → C++20 验证入口：
-
-```bash
-scar frontend tests/workloads --source tests/workloads/licm_program.py --jobs 4 --out FRONTEND
-scar compile-invariant-loop --catalog FRONTEND/catalog --source tests/workloads/licm_program.py --memory-budget-bytes 33554432 --out LICM
-```
-
-当前支持普通函数的固定 `range` 循环：循环体将一个纯数组函数的结果赋回 carry，其他数组实参只读。carry 由原绑定写入推导，外提节点由输入依赖闭包推导；输出保留原调用、回边和参数映射证据。生成 C++ 沿用算子 ABI v1；验证包装器另检查原 callable/range 和输入条件。非正次数保原输入别名，失败不暴露私有中间结果。该入口只编译供验证，尚不自动部署，也不覆盖一般自适应循环。
-
-`scar compile-build --domains DOMAINS --calibration RESOURCE_OBSERVATIONS --out PIPELINE` 可复用已有区域/硬件域，串联依赖查询、全部 CPU 配置的前向成本和已选方案降低。`--calibration` 可重复传入；缺失或被拒绝的成本仍阻止选择。
-
-统一三阶段入口现在还支持原图自动发现的纯数组循环。shape/count 是输入约束，carry 与外提节点由图推导：
-
-```bash
-scar build --entry ENTRY.py --catalog FRONTEND/catalog --out PROGRAM
-scar plan-build --build PROGRAM --shape 256 256 --memory-budget-bytes 33554432 --out DOMAINS
-scar compile-build --domains DOMAINS --loop-trip-count 400 --out COMPILED
-scar validate-build --pipeline COMPILED --out VALIDATION -- ENTRY.py --size 256 --steps 400
-scar run-build --pipeline COMPILED --deployment VALIDATION/deployment.json --exclusive-inputs -- ENTRY.py --size 256 --steps 400
-```
-
-资源计划比较重算、物化和逐元素时间融合，保留全部硬件图。除了单个 leaf，统一入口还支持经原 F4 证明的多层纯函数组合；其独立 proof 保留每条函数全局调用路径，运行时逐条守卫。`compile-build --loop-cpu-threads 2` 可生成显式 CPU 团队的 OpenMP 实现，按确定的行分区并行，保留每个元素的原运算顺序；这个显式参数不代表最佳线程数。
-
-运行包复用同一份 ELF，正常执行不加载编译器/图。成本门严格绑定已测入口与实现，不匹配时回原程序。兼容入口和 I/O 仍由 Python 执行；这不是整个程序已转为纯 C++。
-
-可对全部已准入源码的模块初始化和函数 CALL 做一次有限观察，再连回同一图；每个调用点达到预算后停止记录，不逐次展开循环：
-
-```bash
-scar observe-call-bindings --all-sources --catalog FRONTEND/catalog --out CALLS -- python ENTRY.py ARGS
-scar build --entry ENTRY.py --catalog FRONTEND/catalog --call-bindings CALLS --out PROGRAM
-scar inspect-bounded-interfaces --build PROGRAM --out INTERFACES
-# 可按原unit/query索引逐个查询；未选项仍保留其原证据与边界
-scar inspect-bounded-interfaces --build PROGRAM --call-query UNIT:ORDINAL --out ONE_INTERFACE
-```
-
-捕获到的 Python CodeID 以完整 descriptor 匹配原 F4 共享函数正文。统一建图随后复用签名绑定器，建立带匹配 caller frame 的条件参数、环境、world 和正常返回接口；属性 GET 还可提供标准实例方法绑定的条件 receiver 路径。当前默认参数由 pre-call world 下的逻辑槽表达，pack 保留投影，deferred 调用不冒充普通函数返回。这些关系不代替实际接收者、内容版本、纯性或调用完成证明。未准入的库正文保留为具体边界，不据一次观察删除其他路径。采集不启用全局 profile，也不记录 Tensor 数值。`inspect-bounded-interfaces` 从同一主图查询这些连接，报告使用共享引用表。
-
-观察源码目录现在使用 v4 合同：检查全部字节收据并保留完整目录，外部 UnitFacts/辅助接口按需交给原严格 reader 校验。`scar inspect-catalog-admission --catalog CATALOG --out AUDIT` 可核对冷状态并验证一次实际接口读取。旧 v3 需显式运行 `scar reissue-observed-catalog --prior OLD --out NEW --expected-prior-implementation-sha256 PRIOR_SHA256`，原始子图和报告保持不变；尚未按需解码的接口不会被当成已验证或不存在。
-
-外部正文回接同时索引保留的编译filename，通过原body scope、C3 constant path和完整CodeID确认；快照存放路径不同不会直接导致“目录外”。查询按原CALL和scope准入，声明的全部接口与本次实际展开的接口分开记录。
-
-主图查询按原region展开，反向索引补齐跨区生产者、消费者和调用方；函数、循环正文仍共享一份。state/content请求随区域登记，显式`project_unit`/`ensure_all`保留全量路径。图表schema v3用`template + region + local ordinal`引用原始边；未查询的状态邻接保留明确边界，不能当作无依赖。
-
-同一主图还可自动发现受支持的有序数组区域、接入内容epoch/切片描述，以及应用有条件的内建槽引用定理；这些分析不执行目标程序：
-
-```bash
-scar inspect-stateful-graph --build PROGRAM --out ORDERED_GRAPHS
-scar inspect-content-forwarding --build PROGRAM --out SLOT_PROOFS
-```
-
-前者从原源码重新推导区域，不将局部epoch当成全局逻辑版本；后者按原控制路径自动匹配写后读，分别保存静态事实、运行时检查和外部假设。未建立activation接口的caller context保留边界，两类产物均不授权直接改写。
-
-原caller-matched接口可进入既有C++20 pipeline，当前只生成验证预览：
-
-```bash
-scar compile-caller-pipeline --build PROGRAM --unit ORIGINAL_UNIT --function-ordinal 0 --provider bounded_call_interfaces:0 --input-shapes '{"payload":[8,8],"fixed":[8,8]}' --cpu-threads 1 --memory-budget-bytes 33554432 --out CALLER_PREVIEW --runtime-out CALLER_BUNDLE
-scar run-caller-pipeline --bundle CALLER_BUNDLE --admission-sha256 EXPORT_PIN --exclusive-inputs --measure-candidate --report TRIAL.json -- ENTRY.py ARGS
-```
-
-降低前重新核验原CALL顺序、ABI和纯数组叶；运行包只读紧凑合同和相同ELF，检查当前普通函数/callee/source/default/输入及observer。成本未知时默认NO_OP且不加载ELF，显式`--measure-candidate`仅用于验证，不授权部署。默认值、pack、隐式receiver及开放效果继续拒绝。
-
-CPU 成本可从预先固定的独立原语获得，再由统一编译链机械投影和选择：
-
-```bash
-scar calibrate-temporal-cpu --target HARDWARE --cpu-masks '0;0,1;0,1,2,3' --shape 256 256 --trip-count 400 --out RESOURCE_COSTS
-scar compile-build --domains DOMAINS --loop-trip-count 400 --loop-cpu-model --loop-max-threads 4 --loop-calibration RESOURCE_COSTS/result.json --loop-no-op-profiles ORIGINAL_COSTS.json --out COMPILED
-```
-
-原语不接受目标源码/DAG，只测固定家族；投影须匹配匿名有序值依赖、shape/count、完整 CPU mask 和后端版本。计时组合是显式模型假设。缺任何可行配置或同边界原执行成本时保留 `NO_OP`；完整时按模型选择准确的 CPU mask，随后仍须完整入口验证。当前此成本入口支持直接纯数组循环，组合区域明确保留成本模型边界。
-
-同边界原执行成本可从有限的原函数调用取得：先用 `compile-build --loop-cpu-model --plan-only` 输出原 CPU 域，再运行下述采集并把 `profile.json` 按原 loop ID 写入 `ORIGINAL_COSTS.json`。它只观察原函数，不执行候选，不记录数组数值，函数内部不插桩。这个 wrapper 边界计时用于成本模型；最终性能仍由干净 `validate-build` 测量。
-
-```bash
-scar observe-original-loop-cost --domain PREVIEW/loops/loop-0/cpu-domain.json --build PROGRAM --proof DOMAINS/invariant-loop-0/proof.json --out ORIGINAL -- ENTRY.py ARGS
-```
-
-省略 `--loop-max-threads` 时，域覆盖所有受支持的每 NUMA 线程数及 SMT 代表 mask；显式 cap 只缩小声明域，不证明全平台最优。多份独立校准可以重复传入，已有上下文可复用；批量投影共享一次已验证原观测索引。成本计划留在构建端，紧凑运行端不读源码图或完整成本计划。
-
-组合区域也可跨已准入模块的普通 `from … import … as …` 函数链发现；解析使用原 F4 namespace/import/export 事实。`--source` 限制结果根，不丢弃已准入依赖；歧义目标、递归及未知效果保留具体前沿。组合 proof 独立重放实际调用路径，融合数据图不冒充原 Python callable。
-
-复合 CPU 域与直接调用域分开。已有数学/团队/分配组件可以按相同上下文复用，额外的函数全局路径和源码版本检查另用数字化 guard geometry 校准。先做 `compile-build --loop-cpu-model --plan-only`，取得 `composite-loops/loop-0/guard-profile.json`；它只有结构和字节数，不包含目标源码、函数名或计算 DAG：
-
-```bash
-scar calibrate-temporal-cpu --guard-profile PREVIEW/composite-loops/loop-0/guard-profile.json --out GUARD_COSTS
-```
-
-将 `GUARD_COSTS/result.json` 与已有数学校准重复传入 `--loop-calibration`，使用原复合循环的 NO_OP profile，即可走相同自动选择和 C++20 交付链。两个 proof/schema 不互相强转；深层实际绑定、CodeID、defaults或源码变化会回退原循环。
-
-状态数组区域可先生成一个供验证的明确 CPU 配置，完整成本域缺口仍保留。外部 testcase 只负责输入/输出/状态和 episode 验证；核心导出再次核对原区域、计划、C++ 身份和样本：
-
-```bash
-scar compile-build --domains DOMAINS --prepare-stateful-validation --stateful-cpu-threads 1 --out COMPILED
-scar finalize-stateful-candidate --pipeline COMPILED --candidate COMPILED/region-0/validation-candidate --validation REGIONAL_VALIDATION --out FINALIZED
-scar validate-build --pipeline FINALIZED --out VALIDATION -- ENTRY.py ARGS
-scar run-build --pipeline FINALIZED --deployment VALIDATION/deployment.json --exclusive-inputs -- ENTRY.py ARGS
-```
-
-`REGIONAL_VALIDATION` 需要实际区域/轨迹/状态、stdout/文件以及至少三组配对计时记录。区域验证不冒充完整入口成本，后者由 `validate-build` 独立测量；任意程序的全部隐藏副作用等价仍不能只靠 stdout 比较证明。
-
-无 trace 时可省略 `--trace`。`--catalog` 选择 F4 局部声明或 context catalog，`--cache-root` 指定接口材料目录；
-`--model` 显式选择旧 source model，`--source-root` 增加依赖源码根。
-新源码构建的 `--body-scope observed` 根据完整运行 CodeID 选择正文，并自动准入 trace 涉及的外部源码文件；保留其余源码声明，不扫描整个依赖安装目录、不证明未观察路径为死代码。
-该模式默认直接连接运行中的实际调用，跳过全局静态目标求解；`--call-binding static` 可显式恢复静态求解。
-已有 source model 可用 `--model MODEL --call-binding observed` 接新 trace。`build` 默认自动发现当前平台并保存到 `OUT/hardware`；`--target` 可复用明确指定的独立硬件快照。硬件发现不按 workload、CPU affinity 或 CUDA 可见性删设备；库存、访问限制、后端支持和实际资源使用分别保存。
-
-硬件图包含 CPU package/core/SMT/ISA、NUMA DRAM、共享缓存、PCIe 端点/互连、加速器、物理磁盘及文件系统 backing、网卡/RDMA。控制与监测接口在完整 PCI 台账中保留并聚合为边界；发现显示设备不推断可执行 CUDA 或独立显存。可用预算与带宽成本仍需独立证据。单独采集：`python -m scar.analysis.target_graph --out FRESH --path /path/to/input`。
-`manifest.json` 引用原正文和关系分片；资源按原操作/区域延迟接线，观察依据独立保存。
-入口源码树及显式依赖根的 YAML 自动进入现有配置材料解析器；不执行 tag、插值或 Hydra 组合。
-`gaps.json` 保留局部缺口、跨层前沿、未接运行资源及查询截断。
-`workflow_complete` 只表示构建/存储/读回流程通过，`first_stage_complete` 当前始终为 false。
-候选 GPU、文件和 SSD/NVMe 关系带条件；它们不是实际 dispatch、存储身份或物理复制证据。
-
-Python 中用 `BuildSession(build_path)` 共享一次查询会话的 catalog/代码/关系缓存。
-`session.view` 提供原 `get/expand/producers/consumers/explain`。
-`source_region_ref` 可先连接原声明的函数正文；`get/expand` 再读取和核验正文，循环与函数仍共享原 ID。
-F4 构建的观察选择保留原 trace 与调用接口的 run scope，`attach_trace()` 返回已接入材料摘要；
-静态调用 frame 不是动态 invocation。旧 model 构建继续通过 `observed_scopes/observed_ports` 查询独立观察调用域。
-F4 自动按需建立实际调用 scope：原共享端口加 run/InvocationKey，同一 caller 内重复 CALL 再加 attempt 锚点。
-参数、数据返回、环境和 world 状态关系引用原图，不复制正文；结构共享不授予内容版本相等。
-实际调用 provider 的 `scoped(scope, original)`、`body(scope)` 和 `shared(point)` 支持 scope 内正文查询与原点审计。
-内部条件和循环回边保留，不因一次进入证据推导实际分支或迭代内容；caller attempt 始终单独表示。
-
-```bash
-source ~/miniconda3/etc/profile.d/conda.sh
 conda activate lewm
-cd ~/AAA/scar
-python -B -m scar.cli static /path/to/program --out /path/to/model --phase bodies --jobs 4
+python -m scar --help
 ```
 
-静态入口不导入或运行目标。按需 CALL 采集和离线连接用法见开发说明。
-已有函数/循环展开、跨分片依赖查询、有限属性推理；存在节点不代表依赖或效果已闭合。
+使用已有环境，不升级 PyTorch/CUDA。安装入口需要时可用 `python -m pip install --no-deps -e .`。以下命令的输出目录应为新目录。
 
-已有 F4 图与 facts6 后，先按单元并行投影接口，再跨单元接线：
+## 三阶段主链
+
+先用已有形式前端逐层处理源码，再建立统一图。动态目标不确定时，可按原 CALL 位置作有限观察；不逐次展开循环或保存 Tensor 数值。
 
 ```bash
-python -B -m scar.analysis.source_interface_build --facts /path/to/facts --out /path/to/interfaces --jobs 48
-python -B -m scar.analysis.normal_targets --facts /path/to/facts --interfaces /path/to/interfaces --entry /path/to/entry.py --out /path/to/targets
+scar frontend /path/to/program --jobs 8 --out FRONTEND
+scar observe-call-bindings --all-sources --catalog FRONTEND/catalog --out CALLS -- python ENTRY.py [arguments]
+scar build --entry ENTRY.py --catalog FRONTEND/catalog --call-bindings CALLS --out PROGRAM
+scar plan-build --build PROGRAM --shape ROWS COLS --memory-budget-bytes BYTES --out DOMAINS
+scar compile-build --domains DOMAINS --stateful-interval-plans REGION_TO_INTERVAL_PLAN.json --out COMPILED
 ```
 
-摘要沿用原函数/循环/状态端口；不导入目标，也不按调用或迭代展开正文。
+`observe-call-bindings` 是必要动态绑定的可选步骤；纯静态 build 可省略 `--call-bindings`。shape/预算必须来自声明或观测，不凭模型名称猜测。
+`--stateful-interval-plans` 按精确 region ID 选择已有区间计划；也可使用 `--calibration` 等已准入模型输入。未决计划保留 NO_OP，`--plan-only` 只保存计划。
 
-已有局部声明或 context catalog 后，可独立分析整个源树的调用声明，无需等待入口求解队列收敛：
+`plan-build` 自动保存正文、caller 接口、局部内容 epoch、生命期和共享循环 carry。`compile-build` 独立重放后消费，并校验同源硬件域的 URI 别名；未知成本不冒充零时长。标量与区间计划共用原 C++ lowering。
+
+## 交付与非计时验证
+
+已有 compact stateful C++ 产物和 DIRECT/COMPOSITE whole-loop 产物使用同一个最终交付核心。准备与运行保持同一原环境；payload/slot SHA 来自 prepare 输出。
 
 ```bash
-python -B -m scar.cli call-declarations --catalog CONTEXT_CATALOG --source-root /path/to/program --out FRESH_CALLS --jobs 4
-python -B -m scar.cli native-bindings --calls FRESH_CALLS --bindings GENERATED_BINDING_DECLARATIONS --out FRESH_BINDINGS --jobs 4
-python -B -m scar.cli native-interfaces --named FRESH_BINDINGS --out FRESH_NATIVE --jobs 4
-python -B -m scar.cli resource-graph --native FRESH_NATIVE --target TARGET_HARDWARE --out FRESH_RESOURCES
-python -B -m scar.cli name-flow --declared FRESH_CALLS --unit SOURCE_UNIT --out FRESH_NAME_FLOW --jobs 4
+scar prepare-stateful-delivery --pipeline READY_PIPELINE.json --out CAPSULE -- ENTRY.py [arguments]
+scar run-stateful-delivery --capsule CAPSULE --slot CAPSULE/validation.slot --payload-sha256 PAYLOAD_SHA --slot-sha256 SLOT_SHA --report CAPSULE/run.json --exclusive-inputs --validate-only -- ENTRY.py [arguments]
 ```
 
-每个源码单元独立存储。原调用、scope、参数和循环不复制；完整符号匹配保留所有候选overload。
-声明图不代表scope已执行；参数类型、当前namespace、parser接受及实际dispatch仍需各自依据。
-`name-flow`在共享控制流上计算词法槽位的may到达定义；新正常路径视图与原声明分开，未知效果保留。
-资源图共享已有硬件库存，连接原生值的类型与源码依赖，不把设备候选当成实际placement。
+whole-loop 对应 `prepare-loop-delivery` / `run-loop-delivery`。省略 `--validate-only` 保留原执行。当前交付槽为 UNMEASURED，不使用旧性能收据授权新路径，也不导出 RELEASE。
+已有 native ABI、源/状态/形状/预算 guard 与失败后的整区域回退保留；运行端无需 compiler、IR、planner 或 g++。
 
-## 文档
+## 模型与开发状态
 
-- [模型](docs/MODEL.md)：实体、身份、边、可展开结构与正确性约束。
-- [流程](docs/ARCHITECTURE.md)：形式前端、建图流水线及动静分工。
-- [开发用法](docs/DEVELOPMENT.md)：命令、查询接口和工作区约定。
-- [当前状态](docs/STATUS.md)：真实结果、缺口与下一步。
+图用共享正文、强类型记录、ID/FactRef 引用和分片表存储；循环和函数可以继续展开，静态模板、动态调用、逻辑内容与物理 storage 分开。
+硬件库存保留完整平台，存在、可访问、后端支持和实际使用分别表达。当前单区域 CPU 方案选择尚非全程序联合调度。
 
-当前CPU形式前端及建图证据在 `artifacts/current/experiments/cpu-*-current/formal/`，
-精简验收摘要见 `artifacts/baseline/formal-frontend-results.json`；已有源码/查询材料仍共享原分片。
-大产物不提交 Git，只保留一份正在开发的源码。
+- [模型](docs/MODEL.md)：实体、端口、状态、版本、循环和证据。
+- [架构](docs/ARCHITECTURE.md)：分层组件与交接。
+- [当前状态](docs/STATUS.md)：实际验收、范围与未完成项。
+- [开发与查询](docs/DEVELOPMENT.md)：形式前端、接口和工作区约定；更多命令见 `scar --help`。
 
-当前 CPU 主测试程序位于项目外、与 `le-wm` 同级：`sunfish`（一般程序）、`gray-scott`（PDE）、`cirq`（量子电路模拟）。
-外部入口及命令、10 秒至 10 分钟的实测负载见 `artifacts/baseline/cpu-workloads.json`；测试程序的运行成功与完整建图验收分别报告。
-该清单的 `current_run` 指向本轮结果；原始记录在 `artifacts/current/experiments/real-cpu-suite-v1/`。
+真实 testcase 在项目外；`tests/workloads` 仅保留小型编译回归。大产物留在 `artifacts/current`，精简验收报告在 `artifacts/baseline`。只维护当前工作区源码，版本历史由 Git 保存。

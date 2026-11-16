@@ -1,436 +1,47 @@
 # SCAR 宏观编译器架构
 
-三个主阶段并行开发，各自验收：建模建图、图化简与规划、C++20代码交付。
-实体和关系定义见 [MODEL](MODEL.md)，实测范围与剩余缺口见 [STATUS](STATUS.md)。
-LeWM 是外部 testcase；通用规则由语言协议、原端口和证据派发，不按业务名称选择。
+三个阶段共享原始身份与证据，分层开发：建模建图 → 结构/资源规划 → C++20交付。完整类型见[MODEL](MODEL.md)，实际范围见[STATUS](STATUS.md)。
 
-## 当前实施顺序
+## 1. 前端与统一图
 
-正式源码前端现由 `scar frontend` 按原材料依赖调度：F0源码/字节 → F1词法 → F2 AST →
-F3符号、字段角色、上下文、声明、绑定及编译器对应 → F4表达式/语句/根模板 → 模板连接、facts、局部接口。
-F0–F3依次推进；F4独立域共享总worker预算，完成必要的原规则重放后才接线。
-新局部声明目录直接引用这些分片，无需先运行全局namespace solver；前端继续派生调用声明和参数/返回接口，
-可选读取已有trace补实际code选择。`ProgramView`、调用声明、
-动态code对应和统一build共用此目录。它不提供实际dispatch、动态exec选择或效果证明。
+形式前端按材料依赖推进：F0源码字节/版本 → F1词法 → F2语法 → F3作用域/绑定/声明 → F4操作、值、world及控制端口。AST只用于语言前端，后续使用有类型图。
+局部函数、循环和区域正文共享；跨模块调用通过原actual/formal、返回、world和匹配Frame接线。静态不能确定的目标可由有限动态CodeID选择补充，观察结果不代表未执行分支也已证明。
 
-当前按主链优先推进：先贯通统一入口、局部图、跨层连接、资源接口和存储查询，再依据全链缺口集中补齐。
-`scar build --entry ENTRY --trace TRACE_DIR --out OUT` 调度现有分析器。匹配 F4 catalog 时，在同一 `ProgramView` 接入
-普通/compiled/返回函数、观察选择、exec、函数创建、native、构造协议、配置、局部状态和资源适配器；
-各适配器保原端口与条件，按需加载。`BuildSession` 统一选择、展开、依赖、资源和读回查询。
-缺 F4 材料时使用原 `ProgramDependencySession` 路线，复用 worker 池建立源码与共享 body，再发布跨函数关系。有 catalog 时保留原材料，只读复用；
-必要的增量建图在新输出中进行。查询会话共享原图/代码/关系缓存，预算耗尽作为前沿，不变成空依赖。
-manifest 引用原分片，`relationships.json` 索引跨层分片，`observed.json` 单独保存调用域，
-`resources.json.gz` 保存入口的类型化符号资源投影，其余 body 按需派生；没有复制原正文或展开迭代。
-`catalog-graph-state` 复用单元并行盘点，在每个 unit 分片内保存完整节点/边及状态表，
-不重跑 F0–F4。统一 build 的 `coverage.json` 分别引用目录图覆盖、实际正文进入和资源观察；
-`entry-query.json` 保留为有界导航示例，不再充当图覆盖分母。
-观测绑定层按实际代码进入选择函数的局部读取槽，复用函数数据流并沿匹配控制/循环回边求解。
-其版本仍带激活与执行发生参数，不是 Tensor 内容身份。查询载入保存的版本关系，检查类型、收据
-和原节点引用，不重复固定点；`scar state-view --read` 保留独立源重放。全目录辅助正文接口及其重推
-由 `frontend --verify-body-interfaces` 显式请求；规范 F4 与观测正文接口仍照常建立。
-状态表 schema 2 将同函数的控制拓扑写入 `controls`，轨迹引用本地定义位集池；
-分析规则收据与存储编码收据分开。schema 1 继续可读，`state-view --read` 按格式选择独立重推器。
-`configuration.json` 引用自动发现并经现有 YAML parser 准入的配置表示图；未知 tag、插值、组合及运行端口绑定继续留前沿。
-资源需求与候选分开：F4 的 CPU/host representation 需求带执行条件，不代表 tensor backing；GPU/设备内存及存储候选
-复用原 native 转换/类型接口和硬件快照。结构、声明及编译请求不制造独立运行需求。旧路线保留 Behavior 的条件候选。
-实际事件仍需原采集证据，`.to()` 不授物理复制。
-`--resource-scopes` 为可选的实际 CALL 边界通道：72 字节 BEGIN/完成记录先采集，
-后端按原 CALL、线程和 syscall 顺序连接。`scar frontend --trace …` 自动发现该通道，
-在同一索引生成调用、正文和资源材料；`scar build` 按 schema 与原输入收据接入。
-动态范围与 OS 工作保存在证据表，源码绑定按 unit 分片；图中只放共享接口及原状态/资源引用。
-这不是全局 FD 表或时间配对，也不把范围包围关系升级为内容、就绪或独占因果证明。
-两个验收节点分别是流程可建/存/读/查并列出前沿，以及正常推理关键依赖/资源边界闭合。
-前者由 `workflow_complete` 表示，后者保留 `first_stage_complete=false`；当前没有真实推理覆盖完成结论。
+公共接口为 `ProgramView` / `ProgramDependencyGraph`：`get`、`original`、`expand`、`incoming/outgoing` 与来源解释。Operation、Value、StateLocation、Region、Resource是核心实体；Use/control等辅助端点有明确role，Contract与Measurement保留独立来源。
+Control、数据依赖、状态版本、别名和资源映射是不同关系，不能将world carry当数组内容phi，也不能把相同storage或引用路径当相同逻辑内容。
 
-第一阶段按以下五层推进；既有局部原型不代表整层通过。以`run_inference.py`及已存推理配置验收相关依赖；不强求排除孤立文件，也不把一次未执行作为删图依据。
+`plan-build`在同一个原 `BuildSession` 自动接入有序数组profile：
 
-| 层 | 输入→输出 | 验收 |
-|---|---|---|
-| 1 统一接口 | 已验F4材料/旧core→同一类型化节点、端口及依赖查询 | 身份双向可追；原边/类型/调用路径不丢；不重造指令语言或遍历器 |
-| 2 局部状态 | 原控制/名字/效果→局部读写版本与来源 | 循环保共享回边；绑定、对象、内容版本分开；缺规则不冒充UNKNOWN |
-| 3 跨层接线 | 原定义及接口→参数/返回/捕获、配置/导入、构造/算子关系 | 每个相关调用有接口或字段级未决目标；新材料先过前两层 |
-| 4 资源/事实 | 值/状态/外部动作→设备内存、存储及执行证据 | 读权重/数据、计算、搬运/同步、保存输出接到具体端口；候选与Observed分开 |
-| 5 全图验收 | 上述关系→统一分片、查询及覆盖报告 | 正常推理链可追；无漏建构造、无未解释断边或预算截断；动态未知逐字段列出 |
+- 原源码重放的正文、显式读写和局部内容epoch。
+- 精确原CALL选择的caller/内联ABI与Frame链。
+- 输入直接使用、局部last use、正常出口必需版本。
+- 原共享循环/header/backedge与受条件约束的state-path carry。
 
-统一接口复用`ProgramDependencyGraph`：F4适配投影到既有类型ID，保原Step/Region/Port和完整G.Edge；旧N1图按原representation路由。`get/expand/producers/consumers/explain`使用同一接口，不伪造canonical正文。
-五类实体之外，Use和控制端口是辅助角色：`kind=None`表示“非独立实体”，不是未知节点。操作原始类型仍来自封存的F4 instruction，不能按label猜效果。
-②已完成884单元完整接口盘点并补齐正常路径的2处callback环境tuple投影；C2绑定、内容、namespace/注解及196个native单元共用查询，gcrl63条局部链保持。四类异常状态缺项按既定范围暂缓，效果/实例选择仍开放；正常接口门通过不代表全图通过。目录盘点只存小报告、缺规则与收据，原正文共享，修正按指令类型选择受影响单元，不重复全域工作。
-③的基础源函数桥已实现：581单元条件接口由SourceFunctionCallProvider接到统一懒查询，按需求单元加载，实际执行caller frame的push/匹配pop；frame包含原call、callee Use/value和目标body Region。默认值创建及deferred/resume、捕获/构造/native转换仍有边界。条件字符串本身不执行上下文匹配；原callee/descriptor/namespace未决字段继续保留，不授实际dispatch。内容投影及native声明不授物理槽、LogicalVersion或效果闭合。
-创建接口再由884单元原F.Function与F4 factory提取，保实际creator scope、初始operand和表达式源的区别。当前default通过callable＋pre-call world选择逻辑slot，不把初始表达式搬到caller；捕获env通过原relay选择已有canonical binding地址，不读cell内容。CALL_TARGET是带frame的BODY入口；统一expand不再同时暴露core的裸callee。同unit调用还核caller code_scope，创建/实例/内容的未决不能合并。
-返回函数另保过去的creator引用栈，不把它当当前caller的父栈。多个封存小叶通过集合引用原行；有界查询只索引这些source接口，不扫历史调用，不将contextual seed或derived接口放宽为通用候选。完全相同的来源推导不重复追加，不同条件/creator仍分支。静态构建共享子图；按缺口选择的轻量动态采集只补本次callee/code/closure选择，不能替代正文、循环或未观察路径建模。
-native桥复用已有参数转换、返回包装及196个canonical接口。源函数/native调用共用原callsite与caller scope解析；Frame另保原NamedMatch选择，进入与返回双向匹配。转换、pack聚合、默认表达式、包装和world依赖不授对象/storage身份；接口存在不授parser接受、override或runtime dispatch。源码转换分片懒加载，不再复制一份native图。
-构造/descriptor桥再把原协议端口、当前callable/default槽及source连接接入；材料reader只重验原site/stage/Fn ABI，不深层重跑旧namespace solver。SOURCE_INIT不转发data返回，OBJECT_INIT/RETURN_FOREIGN显式接续world。CONTAINS补原call的接口值展开，未解原前沿不因此成为已选目标。所有调用适配器先按unit批量准备所需原模板，再接局部端口；实例/frame与body继续共享。
-CFG边是CONTROL_FLOW，区别于控制依赖CONTROL；完整CallSite/path及completion保原映射。普通walk不证明调用/返回已匹配或节点实际执行。
-每批变更做必要检查和一次主链验收后提交；维护现有文档，不新增逐门文档。后续形式细节是已有材料协议，本轮入口以此表为准。
+实现为 `compiler/ordered_planning_graph.py`；C0消费时独立重建原source/body/activation/lifetime/loop各层，逐typed表及公共图关系核验。未知效果保留具体field/frontier，不能自动当纯或dead。
 
-## 三个主阶段与后端决定
+硬件由独立 `TargetHardwareGraph` 保全平台库存和连接，软件图只引用它。资源存在、访问约束、后端能力、实际使用分别表达；只保留可由程序/优化后端管理的资源抽象，不把不可控制的OS内部实现展开为优化节点。
 
-SCAR以Python程序为输入，在统一图上处理程序依赖及硬件映射；不是仅产生源码修改建议的工具。
+## 2. 优化与资源计划
 
-| 主阶段 | 产物与职责 |
-|---|---|
-| 1 建图 | 自动建立控制、值、状态、效果及资源图；静态优先，真实未知保留到字段/关系。软件展开至算子/外部动作接口，保留接口转换；不继续展开CPython解释器或算子kernel内部。 |
-| 2 化简与规划 | 一类是结构化简：常量传播、无效依赖消除、循环不变量外提、复用等；另一类是hardware-aware：分批/分块、流水、驻留、buffer生命周期、搬运/计算重叠、并发与算子实现选择。两类可迭代影响，均服从Q与资源约束，并以M估价。 |
-| 3 落实代码 | 从优化后的执行计划生成C++宿主调度代码，调用算子后端；交付代码/库、计划与必要的Python入口及显式兼容调用。完成正确性验证和独立性能测量。 |
+先建立输入、状态、输出与效果合同，再选择可替换区域。现有结构规则包括循环不变量切分、融合/物化选择、buffer及有序事务计划；重复外观本身不能授权复用。
 
-**统一后端为C++20**（`-std=c++20`）；不规划Rust后端。算子插件ABI版本为1，执行计划schema版本为1，
-两者独立于C++语言标准管理；版本基线位于`pyproject.toml [tool.scar.codegen]`。
-构建时继承现有Torch CMake target的编译/链接ABI，不自行猜测或覆盖`_GLIBCXX_USE_CXX11_ABI`。
-第一版优先交付Python可加载的C++库；可完整降低的程序区域后续可形成独立可执行产物。
-Python是输入和兼容边界，不承担默认的优化后调度循环；SCAR当前前端用Python实现不改变这个目标。
+`plan-build`保存原region/proof与硬件域；数据保持原FactRef、源digest、shape、预算、ABI和guard条件。执行recipe显式表示分配、计算、复制、就绪/屏障及提交；这些任务不是源码语义图的替代品。
 
-宏观执行计划显式描述循环、依赖、分块、buffer放置/寿命、队列、异步完成及外部效果顺序。
-逻辑batch/候选数量与执行分块分开：物理分块受等价性/RNG/归约契约约束，不能随意更改算法输入规模。
-目标资源图包含CPU、DRAM、加速卡及设备内存、磁盘/存储与连接；容量、带宽、延迟及并发约束参与规划。
-未知资源属性保留符号量，不根据算子名字猜一次GPU执行或数据搬运。
+成本接口分为完整点成本与区间。`stateful_cost_bounds`从已核验必需component重算下界，未知项保留非负无穷区间；`interval_choices`核同contract/scope/tick，严格支配才排除，未决项不消失。它是显式模型的比较，不是物理执行时间定理。
+`compile-build --stateful-interval-plans`通过严格域等价与原fact重放接入这一路，旧的标量选择继续受支持。
 
-算子后端采用可注册接口：官方高性能库及外部算子生成agent均可提供单算子、通信算子或融合区域实现。
-接口需声明支持的操作/类型/布局/设备、读写/alias/RNG及数值契约、workspace、执行/传输代价与可调用产物。
-C++宿主通过版本化C函数表接入插件（仍是C++后端），传递描述符、buffer、stream/event与所有权契约；
-不把第三方C++类布局作为长期插件ABI。宏观编译器选择区域边界和调度，算子后端负责区域内部高性能实现。
-当前 CPU 数组区域 profile 已按该基线实现版本化计划、C++20循环及ABI v1；它不是整程序降低完成。
-`scar.compiler.model` 是阶段间交接契约，`scar.optimization` 消费带来源的表达式图，
-`scar.codegen` 只消费经验证的执行计划。常量/视图描述符外提，数组内容每次调用、每个元素重新读取。
-CPU并行度受进程亲和性约束；新输出缓冲区有预算与生命周期约束，原生浮点异常转交原NumPy路径。
-编译资格、契约合法性和实测选用分开；无收益选择NO_OP，已测收益只对对应计划和shape/layout生效。
+CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保留SMT、对齐未知和层级。访问足迹不等于峰值驻留或缓存失效率；指令调度模型也不能替代这一层。多区域异步/跨设备联合调度仍需继续开发。
 
-构建与部署已有独立接口：`export-loop-runtime` 在构建端完整准入原 loop/layout/profile/ELF，再输出小 runtime contract、admission 与原 library。原生 loader 不导入 compiler/optimization/analysis/codegen/IR，不重渲染模板、调用 objdump 或读取 proof 档案。安装时核源码/实际环境，调用时保数组、次数、CPU/fenv/回退守卫；明确的 producer admission pin 不充当数字签名。成本门控可在加载前处理，并不授权跳过准入。当前仍有 Python 入口与 fallback，完整 standalone C++ 交付尚未完成。
+## 3. C++20与运行交付
 
-`scar run` 经轻量 dispatcher 接入原脚本；元数据成本门可导入纯 stdlib 的 deployment cost/gate，执行器不导入 compiler/analysis/codegen/IR。静态 entry inspection 只提供本地候选；scoped 普通 loader 在目标模块初始化结束后装配已准入边界，供自然 from-import 使用，退出撤销装配。成本拒绝不加载 native，继续原入口。入口自己定义的目标、custom loader、循环初始化与未知别名覆盖仍保明确前沿。
+C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间选择共用 `selected_stateful_lowering`，再经原 `ExecutionRecipe` / task graph进入既有C++20代码生成；算子与stateful ABI均为v1。接口未知时保留原执行。
 
-资源规划主链现为原F4/值来源→符号工作量→硬件资源约束→materialization/ready/分配生命周期任务图→模型求解。
-实际调用视图以原端口加 run/InvocationKey 表示；caller 内重复 CALL 加原 attempt 锚点。
-共享正文不展开为调用副本，原 GP→实例的发现关系只是结构边，不冒充数据生产或内容相等。
-静态不能确定的输入 shape/layout 可由完整 CodeID 选中的局部进入事件补充，最多两次元数据后关闭；不采数值。
-固定放置求解器使用时间代价、资源容量与增量内存预算；未知成本逐字段保留，不编译目标程序多版本做黑盒排名。
-`calibrate-cpu` 在同硬件/编译器/runtime/guard 上下文测规范原语；`predict_region_costs` 将原图工作量代入有效仿射成本，
-`plan-resources` 再求解，`lower-resources` 重核证据并降低。校准的秩与留出误差单列，缓存与 NUMA 假设不伪装为已证事实。
-`choose-cpu` 从未绑定原计划与硬件约束生成有限 CPU 家族，用同上下文原语成本比较一个同步调用的完整三任务成本；
-`lower-cpu-choices` 重放全部域和合同，只降低选中绑定。原 Python NO_OP 仍合法，模型选择不等于部署验收。
-该辅助比较图不取代原程序图；typed IO/materialization 仍由各原任务图与收据引用，位置固定，不暗增 COPY。
-同步CPU后端已执行allocation→compute→export的 timed 计划；shape、连续布局、输出字节预算及CPU绑定逐调用检查。
-预测 tick 不用于睡眠；源码和硬件收据在build/load核对，其他 timed 形态仍不支持。
+运行产物按原合同区分：普通数组caller、DIRECT/COMPOSITE whole-loop、stateful事务区域。不同profile不互相强制转换，不因表面输入相似而借用证明。
+`final_entry_capsule`为loop/stateful提供同一个最终准入核心，profile adapter复用原compact loader、ELF与guard。构建侧固定payload和源码ledger，4KiB slot保成本/验证角色，运行端不重放庞大源码图或benchmark原始证据。
 
-### 第二阶段分层：跨资源规划，局部编译器降低（Proposed）
+当前只导出UNMEASURED验证slot，默认NO_OP，显式验证仍保完整区域回退。源码/默认值/实际callee、observer、输入metadata/bounds及必要状态分别守卫；私有结果不提前发布。入口及兼容/I/O仍由Python执行，尚非任意程序的独立C++主程序。
 
-SCAR 保留程序/状态/效果/循环的高层图，并与整机资源图结合。LLVM/GCC 负责局部机器代码；
-它们不替代跨 Python 调用、CPU/GPU、DRAM/设备内存、存储、搬运及流水的宏观规划。
-未被当前程序使用的设备仍在资源域；库存、可分配预算、实时可用性和实际使用分开。
-SCAR 的决策单位是操作、区域、循环或 pipeline stage：是否执行/复用、执行次数、融合/分块、
-执行位置与并发方式、数据表示/驻留/生命周期、搬运和同步。SIMD 是可委托的后端能力之一；
-现有手写 SSE2 原型保留用于验证，后续优先统一上层 execution recipe，不继续扩写机器指令选择、寄存器分配或通用向量化器。
+## 存储与并行
 
-| 层 | 输入 → 输出 | 不变量 |
-|---|---|---|
-| A 分析 | 原图 → 依赖/alias/effects、shape、loop carry、liveness、资源能力与来源 | 不修改程序；未知字段有明确前沿；证据不因变换被覆盖 |
-| B 逻辑变换 | 原图＋分析 → 合法 region/loop 变换图及前后关系 | 源/值/状态/效果/Q 可追溯；保留共享循环，不按迭代复制正文 |
-| C 执行组织与放置 | 合法图＋全部可用资源/实现能力 → 分块、融合、materialization、placement、transfer、并发的参数化计划 | CPU/GPU/存储共同参与；新复制/预取任务须有必要性、所有权和 ready/order 约束 |
-| D 目标细化与联合选择 | 参数化计划＋能力/预算/有来源成本 → 明确 CPU team/SIMD/NUMA 或 GPU batch/block/stream 等执行 recipe | 成本描述实际将生成的结构；峰值内存、链路/执行器竞争、数值与同步约束共同满足 |
-| E 物化交接 | 已选 recipe → bound 执行计划，供第三阶段 C++20/backend lowering | 只交付受支持实现；语义合法、资源可行、预计收益、实测收益是不同状态 |
-
-C/D 需反馈：融合影响寄存器/缓存或 GPU occupancy，分块影响搬运和 pipeline；不能先固定 placement 再把它称联合最优。
-逻辑 batch 与物理 microbatch 分开，RNG、归约顺序及算法输入规模仍受 Q 约束。
-图节点数量并非性能目标；有效的分块、prefetch 或异步 copy 可能增加执行节点。
-process/MPI、GPU offload 和存储流水只有具备相应实现/分区/通信/effect/cost 合同时才可执行，不能由资源存在推导合法性。
-
-每个 pass 计划统一返回 `PassResult(input_ir_id, output_ir_id, relation, required_analyses,
-preserved, invalidated, obligations, frontiers)`。分析以 IR 版本、作用域和相关 target/profile/Q 版本为键；
-默认变换后失效，逐步允许显式 preservation。独立 region 可并行，pass 不任意修改兄弟作用域或共享全局可变分析。
-合法变换、成本计划和最终物化分开；同一 recipe 应同时支持成本估计与代码生成，避免估计一种结构却生成另一种。
-
-现状：已有 SSA/def-use/CFG/dom、显式 state 流、共享 loop 端口和局部 profile；
-通用 AA/ModRef/clobber、循环递推/迭代距离分析及上述 PassManager 尚未完成。
-`optimizer`/`loop_strategy`/`loop_layout`/`loop_workers` 仍混合多层责任，`passes` 字符串不代表已有管理器。
-上层交接已先贯通 `recipe_boundary → loop_recipe → recipe estimate/codegen`：资源独立的语义边界、
-task ready/ownership、全部库存、条件化 CPU cache/SMT/NUMA sidecar 和已选 binding 明确分开。
-同 recipe ID 绑定完整 backend capability/编译上下文，估价和 lowering 消费同份计划；
-共享合法性提到 compiler.loop_admission，新分析不再调用 codegen 私有准入。
-当前只覆盖已准入 CPU temporal 区域；worker cost/choice 适配层已有，真实多 worker 校准、
-自动 binding 选择及全程序跨 CPU/GPU/内存/存储的联合时序求解仍未打通。
-
-下一节点：先提取共享分析/合法性与 PassResult；再把既有 temporal/SIMD/worker 决策改成显式 recipe，
-补独立并行原语校准并只降低所选绑定；随后扩 CPU NUMA/缓存/进程及设备/存储放置能力，保持同一跨资源协议。
-
-参考：[LLVM 分析与 pass 管理](https://llvm.org/docs/NewPassManager.html)、
-[VPlan](https://llvm.org/docs/VectorizationPlan.html)、[向量化合法性/成本](https://llvm.org/docs/Vectorizers.html)、
-[MLIR 分层操作与 pass](https://mlir.llvm.org/docs/PassManagement/)、
-[保留高层结构与逐步 bufferization](https://mlir.llvm.org/docs/Bufferization/)。
-另一个已准入 profile 是原 F4 直线数组调用 pipeline：共享 leaf plans，值边引用各调用 producer。
-固定 pool 规划根据 shape、consumer 与 last-use 分配槽，区分逻辑释放与物理持有；最终输出不复用 workspace。
-C++ 宿主用一次入口 FFI 调度已有 ABI1 算子并持有私有 pool，Python 不逐算子调度。
-实际 global callee 的 CodeID/source/函数状态在入口边界守卫；未知控制/调用不能借此 profile 跨越。
-该 profile 的内存目标与 CPU 显式分配不等于已校准的整体时间模型，原 leaf Python 边界成本不能直接相加当宿主成本。
-`pipeline_fusion`从原值边机械替换 leaf 形参，生成 raw region 与独立证书；`pipeline_strategy`逐原DAG及raw/优化后图重放shape，
-在保原pool与完整融合两种表示中按payload选用，再交单算子后端或原宿主。原图超预算时仍先检查合法改图，不能提前宣告整个程序不可行。
-融合产物保原完整pipeline，运行边界继续检查全部callee；后端分别核raw证书、既有optimizer映射及实际bound operator，只有最终选中的表示进入编译。
-跨区域结构变换、放置、搬运与调度的联合优化仍是下一层，当前不声称物理最优或完整硬件调度。
-
-## 形式阶段与顺序
-
-材料准入保持前层类型/身份与转换不变量。每层先固定输入域和转换规则，再检查必需关系；三阶段通过契约并行，后层原型不能代替前层验收；
-功能样例通过不能证明前层完备。当前 Python 前端按本机 CPython 3.14.7 的版本化接口核对。
-
-这里的“层”是形式转换，不是功能分组。每层固定为
-`L = (输入类型域, 输出类型域, 转换规则, 不变量, 错误域, 资源上限)`：
-输入必须来自前层已验材料；合法构造逐类有规则，规则的前提、字段来源和输出引用明确。
-输出必须是有效结果、带位置/原因的错误或预算前沿之一；未实现规则不能转成未知值继续放行。
-验收分别核对规则域闭合、实例逐项守恒、非法引用/越界/预算拒绝及原输入保持。
-实例覆盖不能替代规则覆盖，构造数量相等也不能替代逐字段和逐边核对。
-通过只限声明的语言/profile与材料域，不冒称对任意 Python 程序的全部行为已获数学证明。
-字段本身运行时不确定仍可保存符号量/UNKNOWN；这与转换规则缺失是不同状态。
-
-连接层的机械分母来自`ProductionInstruction`联合类型、可达Enum和C3正式catalog，
-不是测试程序出现过的类型，也不是producer已经输出的边。C1的Owner、Scope、EvaluationRegion分类现使用封闭Enum；
-源码router仍可传合法字符串，存储wire仍是同一字符串，未知分类拒绝。
-`source_connection_contracts`独立遍历指令字段类型，为每个region引用声明入口关系或控制目的地角色；
-新增类型/字段漏规则会阻止准入。环境协议区分handle引用及五类正文入口，保原scope、形参、当前world与完成接口。
-`scar frontend`在模板组合前运行该检查，按原材料声明的unit和SHA读取，不按磁盘上碰巧存在的文件计数。
-局部规则与边通过，只授予局部连接验收；实际dispatch、root/import路径、resume实例、状态和资源闭合必须分别核对。
-后续顺序是：完整协议域→统一入口/出口ABI→静态与动态证据接合→逐端口关系闭合→统一图读回。
-不再按某个程序缺一条边就单独新增一条业务规则，也不以CALL匹配率代替上述验收。
-
-F3 内部也遵守这个标准：B 的域是全部484个官方字段槽；C1 是其上下文属性路由；
-C2a 是原名字端口的声明归约；C2b 是34条规则与8类环境接口的条件查询；
-C3-T 是113类构造/484字段的模板投影；C3-S 是29类原贡献、14类事实和4类变换的求解。
-F3-D 只组合原引用：`B端口→D声明/C2b接口→S来源→slot→投影→A原行`，
-并独立连接语言隐式需求。COPY传递来源；KEEP_PARENT仅表示保留已有编译槽，不授予flags因果；
-DELETE不能抹去先前投影路径；无来源、忽略、脱离及预算停止分别保原因。
-它必须核完全部原端口（包括无名字贡献端口）、隐式需求、投影和逆边，再提供有界查询；
-保存材料的交叉审计不等于strict fresh组合验收。当前两者已在声明profile与866源范围通过；F4仍须先固定自己的类型与产生规则。
-
-
-| 阶段 | 封闭输入 → 机械输出 | 验收对象 |
-|---|---|---|
-| F0 材料 | 原始bytes、来源/版本 → 原字节blob、编码结果或结构化错误 | SHA/长度/精确还原；不调用lexer/parser |
-| F1 词法 | F0材料 → 官方全部token字段/exact_type、源码区间与gap、EOF或错误前缀 | 与官方流逐项相等；源码覆盖并集+gap无漏无重分区 |
-| F2 语法 | 同源词法输入、固定parser参数 → 完整constructor/有序字段/子节点槽/带类型标量/坐标 | 无损还原官方AST，含None、空列表及字段存在性 |
-| F3 绑定 | F2 occurrence及官方symtable → scope树、全部名字来源字段的角色/绑定关系 | 全scope/symbol/namespace链及名字字段分母；不按名称+行号猜 |
-| F4 规范IR | F2/F3及版本化语言规则 → Operation/Value/StateLocation/Region/Resource、CFG/SSA/完成端口 | 每个语法类别×上下文有构造规则，控制/状态/效果约束成立 |
-| F5 接线 | 原定义和端口、静态契约及可选运行事实 → 跨区域/函数/库/资源关系 | 原端口、条件与作用域逐项对应，动态仅补实际选择 |
-| F6 推理与发布 | 已连接关系 → 条件固定点事实、分片及完整覆盖清单 | 来源可重验；字段未知、预算前沿与缺实现分开 |
-
-每层都须对其全部输入给出有效记录、准确StageError或BudgetFrontier；失败不能改名为UNKNOWN或悄悄跳过。
-记录实例覆盖与实现规则覆盖分别核查；新发现材料仍从已验收前层进入，不能绕过前层。
-F1/F2使用官方前端，不重造Python lexer/parser；AST是语法输入，最终程序图仍可共享、成环和展开。
-F0当前是独立命令，旧static入口不能视为已经自动执行它；现有AST目录计数不证明F1/F2通过。
-F0的V1解释规则忽略codec警告（原bytes保留），不继承调用方warnings-as-error；
-串行解释或spawn进程隔离，避免共享warning过滤器相互干扰。
-F1固定官方token表和实现指纹，通过显式CRLF/CR→LF视图调用generate_tokens，不增加末尾换行。
-原生行列、原decoded字符区间及view UTF-8字节区间分开；虚拟EOF不裁剪，gap不全是trivia。
-string/line以共享精确文本引用存储；相同文本引用不代表同一源位置，原token extent另存。
-TOKENIZED、TOKENIZER_ERROR、BUDGET_STOPPED、UPSTREAM_DECODING_ERROR分开；真ENDMARKER并确认耗尽才算EOF。
-词法warnings单独记录；spawn进程隔离过滤器。budget前缀不覆盖当前模型，fresh读取逐字段重放。
-F2用官方compile的ONLY_AST|TYPE_COMMENTS，dont_inherit=True、optimize=0及当前feature版本；
-记录parser实现、完整结构化schema、整数位数/递归限制和literal预算，不执行bytecode。
-按parent/field/list occurrence存平面局部ID表，保声明字段/属性的显式presence；None、空列表、缺失分别记录。
-精确literal保IEEE位与代理码点，预算超限不是语法错误；还原使用官方类__new__并逐字段核对。
-语法表不是最终依赖图，也不授予scope合法性；新occurrence身份不冒充旧ast.walk SourceID。
-
-C3 到运行代码的对应使用编译器构造图而非源码树直接父子关系：每种原角色具有明确命名/位置规则，沿原父作用域和 LOAD_CONST 槽匹配，INLINED 共享父代码，detached 保持无代码投影。候选还须与捕获的完整代码描述符相等；这只证明代码正文对应，不证明 callable 实例、捕获环境或参数内容。编译器生成正文引用原 recipe 的五类入口，不能伪造成普通函数事实。
-
-正文连接先沿已有模板边收集有限依赖闭包，再批量准入计划；连接和存储读回可共用一次已校验的索引。原端口和材料校验不省略，也不展开动态迭代。
-
-集合类元数据（源码单元、对应候选）按原 ID 规范排序；事件和操作端口保持原顺序。发布读回复用一次准入的索引，重读输出与输入收据、核对存储 guard，再查询入口；独立会话重放另行保留，不在发布时重复执行全量分析。
-
-Python/OS 采集与 Torch 原生证据分开：未采集 Torch 时仍可凭原 exec、文件创建、nonce 与归档绑定进程/线程。计划的 ETO/Kineto 文件明确 absent；不能将它解释为没有 GPU 工作。原始 OS 工作分片是证据，需经过来源/采集器筛选才进入程序图。
-
-## F4的形式顺序
-
-当前按用户要求采用NORMAL_SUCCESS范围推进：应用报错与异常引用清理暂缓，先生成LeWM正常控制/数据/状态图。既有异常端口材料保留，不扩其证明范围；for的迭代耗尽属于正常控制协议。
-
-F4-A先闭合输入/输出结构语法：官方13 ASDL域、113构造/484槽引用，以及canonical IR的205记录/733字段、18 ID、60枚举。
-目录按原类型和字段引用共享；exact shape检查拒未登记子类、伪枚举成员、错误ID、循环值和预算前沿，不生成程序图。
-F4-B再定义`构造×原字段×C1上下文 → 操作家族/有序端口/完成与状态签名`，使用F2/F3原引用，不重解析或按name+line接线。
-实现顺序为B1有限端口签名代数与接口匹配，B2完整家族目录/原参数来源/状态及源码产生规则，最后版本化根和强制reader接入。
-B1允许显式类型、拼接、参数引用、重复、有限选择和异质类型向量；只核端口形状，不授家族身份、源码对应或效果证明。
-接源码前，先以原F2 fields/list重放旧SourceAtom的BFS身份公式，并核全源ID/kind/完整reference集合；这是身份层，绝不是求值顺序。
-旧SG不存在的source-only输入单独处置，保留其F2/F3，不捏造旧ID域。桥接内核不parse；strict读者仍重验F2上游。
-执行产生规则必须另按语言规则定义；symtable/compiler拓扑的visitor顺序不能当执行边（如decorators/defaults、DictComp key/value）。
-产生规则的输入语法为`SourceProductionPlan`，与canonical执行图分开：v25含69种有限步骤，源码槽、namespace端口、区域参数及结果引用分别有类型。
-隐式字面值复用已有`PythonLiteral`精确编码，不断言相同值具有同一对象身份或发生了分配。
-`ApplyPythonProtocol`复用已有88种协议及签名，参数必须显式绑定，输入/完成端口强制核验；不把协议名当作效果证明。
-区域共享，不按调用/迭代复制；循环显式分不变量前缀与携带值后缀。异常完成通过payload＋captures接入handler参数，不冒用normal结果边。
-模板接线还核局部world顺序：包括内嵌调用操作数，已由正常结果更新的world不得退回旧输入；只读操作保留当前world，循环state不能放入不变量前缀。这项依赖约束不声称已理解所有native效果或引用清理。
-引用值端口仍需声明借用、持有、转交及消费责任，并接正常/异常清理；值可用或端口类型一致不证明寿命正确。清理关系沿原REF及完成边，复用现有FRAME协议，native效果未知则保持开放。
-迭代循环的`IterationCondition`连接advance和exhaustion predicate；元素只进入body临时端口，当前world替换携带端口，不增添伪造的item回边。
-引用端口不变不表示对象内容不变；iterator/container的内容版本仍由state边表达，不能直接据此reuse。
-当前只核记录、归属、有序值引用及部分接口；cleanup/resume完整控制语义、逐构造求值规则和效果仍须后续重放，不能由shape验收替代。
-Operation.label仍有旧派发消费者、名义类型字符串及分散协议签名，须显式收紧；结构通过不授opcode/效果/变换正确性。
-F4-C由已验产生规则生成层次控制/数据/状态边，操作和区域复用原SourceProductionPlan；NORMAL_SUCCESS下先接主路径，之后进入F5跨调用/资源连接。扁平N1适配与完整异常清理另行推进。
-当前F4-A及全域模板接口已验收，F4-C正常路径边表已生成；完整效果与异常清理另列。`max_visits`只限前置shape遍历；构造器核验复用原验证器，不冒称总步骤预算。
-
-F4-B继续按原字段识别、局部产生规则、原材料重放的顺序推进。当前28类表达式规则只生成局部recipe，child仍是带用途/状态接口的原槽义务；
-不把未实现的构造变成OPAQUE成功节点。短路/条件/比较保分支区域，异常出口汇总前面所有步骤，不能只抄最后一步。
-状态域/异常ABI由显式profile提供，效果及实际state来源尚未证明。先闭合剩余构造/上下文规则，再进入F4-C；不以局部recipe计数代替规范图覆盖。
-Call区分普通参数与展开参数；唯一位置实参为星号表达式时保留至最终调用，其余星号和keyword连续组按协议顺序处理。
-keyword/Starred是受父Call字段约束的描述符，不是独立求值节点；规则不重放method/super/builtin编译优化，也不据此断言物理分配次数。
-Starred也可归属显示/赋值目标；解包在写目标前完成，Dict的覆盖更新与Call的重复键拒绝分开。容器与字符串规则分文件维护，仍共用同一输入语法。
-f-string先转换再求格式说明；模板插值只捕获值和转换标记，使用独立构造，不复用立即格式化操作。
-同步推导式的首个iter在外层求值/取iterator，然后进入原C1局部namespace；每个for子句一份共享循环模板，过滤短路，DictComp先key后value。
-局部scope激活、逃逸cell保活及物理inlining/清理仍是合同义务；不回滚walrus等外层写入。async clauses及惰性GeneratorExp仍有显式规则前沿。
-
-暂停规则按三个小步推进，不跨层：①先验source recipe的handoff／normal与raise恢复端口；②消费原C1 owner产生yield规则并对照静态compiler；③再补委托驱动的await／yield-from及惰性body。
-source recipe v2的SuspendExecution显式导出值和world，恢复端口输入新world及保存值；禁止保存旧STATE，所有恢复完成取并集。NEXT/close的driver准入与规范化、frame/exception context保活仍须后续产生规则证明。
-v3为await/yield-from增加显式delegate端口和4种有限运行时协议签名；SEND同时给出完成判别、值及world，异常另走ABI。委托恢复端口接收driver处理后的结果/异常，不等同于原始throw请求；driver内部绑定仍是后层义务。
-Await/YieldFrom的局部规则已接入一份共享SEND循环；普通SEND错误直接传播，只有挂起后的driver完成异常进入CLEANUP_THROW分支。RepeatCondition表示无条件控制边，不造True求值；空完成接口可表达没有正常/异常出口的循环。
-recipe v4把代码声明、环境/cell引用及后续激活分开：DeferRegion不执行body，body入口显式接收环境、原序已准入参数和新world；捕获沿原C2b活跃转交hop，包括仅为内层转交的cell，不提前读值。参数沿PARAMETER_INTERFACE声明及resolution接原binding，不冒充普通STORE；初始默认值显式指向原创建时表达式。原序参数/捕获不冒充native布局，调用准入与物理frame/closure映射另行证明。
-Lambda及同步/异步GeneratorExp规则已接通原F3接口；生成器仅在创建时求首个iterator，body/过滤/内层循环在DEFERRED区域，共用推导式循环模板且不造容器。
-recipe v5增加GET_ASYNC_ITERATOR、GET_ASYNC_NEXT及StopAsyncIteration匹配的有限签名；GET_ASYNC_NEXT返回已取得的await迭代器，不再重复acquisition。异步推进在advance区域复用共享SEND循环，只有advance的StopAsyncIteration代表耗尽；target/filter/body的异常继续传播。
-异步属性沿原C1求值owner传播：eager comprehension会使外层求值异步，创建惰性generator不会；首个iter仍按原创建阶段归属。异步generator的元素使用ASYNC_YIELD，与内部AWAIT分开。
-语句规则另按同一typed recipe生成：7类linear语句保RHS单次求值、原序写入、正常路径临时引用释放及RETURN出口；global/nonlocal只保编译声明关系。
-recipe v6增加原F2 `SourceLoopTarget`，局部子图可以导出外层循环完成端口，不造本地假父节点。suite按原序接STATEMENT child，正常完成才接下一语句；没有正常前驱的尾部仍保原slot disposition。If取分支完成接口并集；For/While/AsyncFor各保一份循环模板，iterator引用是invariant，world由backedge携带，item只进当前body。耗尽才进else，break绕过else；嵌套循环else中的跳转接仍活跃的外层循环。
-`source_statement_interfaces.py`在原F2上机械归约各语句的may-completion上界，定义body不内联；try/finally的完成替换及with的异常抑制影响接口。上界不是可达性证明，也不代表child实现已经接通。27类局部语句规则已接接口，含函数、类、类型别名、with、try及try-star；Match及其余清理仍须闭合后才发布CFG/SSA。
-recipe v7先固定三类接口，再接AugAssign/AnnAssign/Assert/Raise。增强赋值保存一次地址、读旧值、求RHS、原地运算后写回；其target由父语句处理。没有RHS的注解只检查必要地址分量，不造get/set或多余slice/tuple；原C1决定局部抑制、字符串化发布或延迟登记。延迟annotation请求body仍是独立child义务。assert保目标编译选项的符号输入，不能照分析进程的优化flags删除检查；失败分支才求message。raise按exc/cause顺序求值，再规范化并导出异常ABI。
-v8区分ImportRequest/ImportMember/ImportStar，三种接口先验再接产生规则。原F3投影依据导出已知请求名、成员名、from-list和相对层级；bind继续引用原namespace write port。普通点路径绑定head，dotted-as沿IMPORT_FROM路径逐层取成员；普通from-member保私有名改写，点路径分量不改写。star保动态namespace写效果，不捏造静态名字集合。请求不等于实际初始化或I/O；importer/frame/registry实现和清理仍未证明，不能据此删除import。
-v9区分函数创建、annotation factory、decorator调用和generator/coroutine异常翻译。创建按decorator表达式→defaults→annotation factory/函数对象→逆序decorator→原name write port；body单独激活，正常fallthrough转RETURN None，escaping StopIteration在用户handler之后翻译。Lambda/GeneratorExp共用此退出路径。docstring保编译元数据；注解按CPython的args→posonlyargs等原顺序形成延迟请求接口，不提前求值。
-v10显式激活原TYPE_PARAMETERS scope：外层defaults只求一次并传入工厂；bound/default捕获原lazy evaluator，不提前运行；逐项create→set default→bind，最后构造参数tuple并关联原function引用。绑定使用原TYPE_PARAMETER_INTERFACE而非伪造Store。工厂传递的是逻辑source输入，非隐藏tuple/dict的native ABI。所有instruction统一带类型标签，避免同字段形状的create/set/bind在存储中混淆。
-v11的类定义把callback模板交给实际选择的builder，不直接调用类体；入口显式接环境、builder提供的namespace和新world。初始化拥有docstring等namespace动作，只有body正常完成才进入收尾，返回class cell或None而非类对象。类与普通调用共用base/star/keyword组装规则；泛型base先创建、后接到用户bases末端。类型别名保存原TYPE_ALIAS evaluator和名字来源，声明不求值；泛型定义复用原type-parameter工厂。namespace内部操作、builder准入及lazy请求body仍待展开，不能据此授予完整效果或native证明。
-v12将with清理表示为完成路由，移除未使用且未闭合的CleanupControl占位。每个withitem一份嵌套模板：先求manager、按type-special规则取exit再取enter，成功进入后才保护as写入和后续manager/body。正常/return/break/continue调用exit(None,None,None)，忽略其返回值并保持原完成；异常路径安装handled exception，调用exit后才判断抑制，所有退出/真假判断/await失败都经恢复路由。参数取exception当前traceback，重抛不伪造新raise位置；native frame/lasti与引用清理仍须证明。async enter/exit分别标记await准入上下文，再复用共享SEND模板。may-completion也包含as写入及后续enter失败被抑制后的正常路径。
-v13将try body、按序catch type测试、handler、else与共享finalbody分别接线。else只接body正常出口，其异常不进同级handler；匹配/初始绑定失败恢复旧异常。异常名字沿原write port绑定，人工None写入后由原CLEAR_ON_HANDLER_EXIT贡献授权删除，不伪造Del port。正常handler出口先恢复再清名，异常出口先清名再恢复。`SHARED`调用可从词法子区域复用祖先所拥有的模板，强制同activation/namespace及显式端口；finally正常完成保留pending值并替换world，非正常完成覆盖pending结果。编译器提供的DefineLiteral不制造分配或异常边。上述仍不证明native frame、引用寿命或完整效果。
-v14将except*的原异常、remaining和accumulated list分开：每个catch type都顺序求值/校验，SplitExceptionGroup条件更新handled状态；不能因remaining为None跳过后续type。仅body异常收集后继续，初始绑定/清名/split错误直接离开分派；每个clause不恢复旧handled值。最后将remaining（可为None）加入list，再按原异常及当前元数据MergeExceptionGroup；整个分派的正常/异常出口统一恢复旧状态。ReferenceIsNone是无world的身份判定；PrepareReraise只消费异常引用和当前world，旧traceback不再作为输入。流程依据固定[bytecodes](https://github.com/python/cpython/blob/v3.14.7/Python/bytecodes.c)、[ceval](https://github.com/python/cpython/blob/v3.14.7/Python/ceval.c)及[exceptions](https://github.com/python/cpython/blob/v3.14.7/Objects/exceptions.c)，native实现/效果仍未获证。
-v15区分VALUE与CONDITION，修正先求短路对象再truth导致的重复__bool__。条件BoolOp/Not/IfExp/比较链沿原字段传递控制决策；其余表达式委托同occurrence的VALUE模板后truth一次，NamedExpr不能改为给目标绑定布尔量。if/while/assert、IfExp.test及推导式filter接CONDITION；InvertCondition只翻转已准入的布尔决策。材料v3在原分区后流式保存按请求生成的上下文变体，依occurrence/purpose做有限工作队列；每源每材料域只生成一次，跨域canonical合并仍待F4-C。依据固定CPython codegen_jump_if，未授frame/效果证明。
-v16接Match及八类pattern。PATTERN区域的成功端口按原捕获顺序返回引用，失败端口仅返回world；整个模式成功后再写namespace，guard为假不撤销写入。OR和case后续路径共享模板，guard复用CONDITION；九类native边界按原字段重新推导端口，native实现及引用寿命仍待证明。
-v17接Module/Interactive/Expression根，入口显式接已准入globals、locals和world，不假定两映射相同。模块注解callable经[annotation placeholder展开](https://github.com/python/cpython/blob/v3.14.7/Python/flowgraph.c)在用户语句前创建；请求body另计义务。STORE_NAME与STORE_GLOBAL的mapping/dict语义分开，future注解setup保留已有值，docstring受目标编译选项控制；交互Expr显式显示，普通常量Expr不制造求值。外部准入、native/frame及引用清理仍未获证。
-v18将BuildFunctionAnnotations/BuildLazyExpression接到DEFERRED请求模板，不以创建边调用body。入口显式接捕获环境、format和新world，保原F3 scope及活跃cell转交；format比较/异常、按序求注解、最后建dict及星号单项unpack各自接线。future字符串从原F2子树经固定编译器的受控wrapper推导，不执行目标，临时query编号不改原ID。材料v4单列request模板/字符串，不再把已展开的函数请求计为整块child占位；scope汇总、准入、native/frame/引用清理仍待完成。
-v19删除整块class namespace init/final边界，按原F3 resolution表示隐式nameop，另以class-owned binding表示protocol cell。qualname、first line、static-attribute tuple及编译选项按源码规则推导；frame/capture物理传递不由logical binding存在替代。泛型tuple来自callback创建，body正常完成才发布static attrs/cell；class注解callable仍为待展开汇总请求。这里的self识别只重放固定CPython metadata规则，不推断对象类型或优化机会。
-v20结合原C2 FREE resolution与C3 compiler FREE事实补齐无显式读写的捕获需求，包括仅转交的中间scope。补充边以源单元内`(scope,binding)`共享键和parent引用存储，保留原F3整数hop；入口另列owned_cells逻辑要求。输入新增原C3材料SHA，不把逻辑cell要求当作物理frame布局、分配或效果证明。
-v21将模块/类变量注解的创建动作接到DEFERRED请求体。静态查询从原F2槽恢复临时AST，以不与原编译常量冲突的标记获取三个优化级别的登记顺序、私有key及conditional index；保留try/else/except的编译顺序和finally重复登记，各表达式仍引用同一原槽。未执行目标。被原编译单元裁掉的类另保源码模板，显式标记emitted_in_original_unit=False；投影只放宽其外层控制，保该类子树，不把投影的frame/capture布局当作证据。隐式capture可引用原C2需求，不强求公开symtable存在FREE项；登记来源/native路径选择、准入及引用清理仍待证明。
-v22将PublishAnnotation降为源码描述符，展开条件登记的namespace查找/PySet_Add及future字符串/当前mapping写入；无条件class声明不制造运行步骤。AnnotationStateAccess显式区分写入端LOAD_NAME、请求端LOAD_GLOBAL与原class protocol binding。重复源码的编号保留完整编译参数域，单值折叠；ReadCompilationAnnotationIndex没有runtime world输入，不是实际执行的选择器，native上下文绑定仍未证明。不可达模板投影保留被放宽控制表达式里的原绑定，避免丢失walrus/nonlocal等静态关系。
-v23由source_compilation_contexts静态查询原代码的登记生产位置。临时tuple标记保原表达式/符号影响；常量路径只提出对应，原owner指令、布局、异常/位置表、非code常量和子项元数据逐项一致后才授权。记录原代码指纹及lookup/index/insert/discard偏移，不把查询代码当原代码、不按name/line接线。AddAnnotationIndex携完整参数/位置证据，literal单值也保来源；bind接口可按精确原代码上下文返回唯一登记。未保留owner、已证owner但无该写入、布局未证三者分开；共享region调用端的上下文传播仍是后续义务。
-v24增加参数化上下文接口表。按原F3代码owner生成区域端口，按有限入口引用规则生成带类型的边；调用位置用step ID及字段/tuple序号区分。source matcher强制从原材料重建整表，拒绝漏边、错端口和错上下文；shape reader仍允许无源码的接口样本不带此表。声明与执行、循环模板与迭代、逻辑接口与native实例化分别验收，后者未由本表证明。
-v25为源码recipe增加显式状态/异常profile，补五类core步骤的端口合同。固定签名在shape层检查，变长参数在source层从原字段推导；保留独立的shape检查与source-count检查标记，未证明完整参数来源。tuple布局明确区分三种产生规则；没有源码产生规则的预留枚举不放行。旧无profile接口样本只授结构证明，不能经source matcher进入源码规则材料。
-前两步的局部规则已通过：Yield由原C1 owner区分普通／异步形式，bare yield导出None，嵌套定义header仍归外层执行owner。静态compiler只作独立规则对照，不以bytecode位置接源码身份。
-后续语句／定义／cleanup规则闭合后才进入F4-C；每步先验类型/接口，再接源码规则，再在原材料独立重放，不以节点存在或局部计数授予全层完成。
-
-## F3的形式边界
-
-源码名字/求值角色、compiler block与runtime frame分别表示；三者没有固定一一对应。
-公开symtable会移除内联comprehension表、重挂子表、共享annotation表，不能直接作为源码scope树。
-原生id是已释放C AST的历史地址；namespace按名字派生的stdlib视图也不是绑定证明。
-
-严格顺序为：F3-A保全官方原序symbols/整数flags/varnames/children及profile/error/budget；
-F3-B按全部constructor×field×context声明名字角色；F3-C建立源码scope/phase和名字→namespace接口，
-再以显式投影witness对应编译器视图；F3-D全量fresh验收。前步未通过不新增后步实现。
-名字角色按语法类别派发；属性名、keyword标签、import路径、常量文本不能当局部变量读取。
-词法存储绑定与实际值/运行类选择分开；缺静态规则不是动态UNKNOWN，未知值也不抹掉已知端口。
-
-继续复用官方前端；现成scope库仅在已验证能力内复用。LibCST1.9.0的walrus实测反例与
-Ruff对class-cell的显式近似表明不能把工具输出无条件升格为优化事实；不按name/line或ast.walk猜接线。
-依据：[CPython](https://github.com/python/cpython/blob/v3.14.7/Python/symtable.c)、
-[LibCST](https://github.com/Instagram/LibCST/blob/v1.9.0/libcst/metadata/scope_provider.py)、
-[Ruff](https://github.com/astral-sh/ruff/blob/main/crates/ruff_python_semantic/src/scope.rs)。
-
-F3-A已实现类型化编译器视图与独立材料store；显式flags、原序参数/符号/children和别名均可fresh重验。
-编译器补入free symbols的顺序受Python hash上下文影响；profile保有效指纹，worker与parent必须相同。
-完整转录保原序，不能用排序掩盖差异；分析进程固定PYTHONHASHSEED，不能靠启动后改env假装生效。
-原生compiler错误、adapter协议错误、资源与预算分别处理；外部store摘要需由fresh事实重新计算校核。
-collect-only保留原模型，只写新分片并绑定必需四种源码收据；无关manifest元数据变化不使其失效。
-
-F3-B以113个constructor的196个field和288个attribute建立484条共享规则。
-全槽按ABSENT/None/空列表/有值分区计数；名字、属性标签、keyword标签、import规格分别分类。
-增量赋值、仅注解、普通赋值、walrus等使用原父字段和ctx选择角色，不声称运行时读写。
-实例只存F2槽引用、角色和必要上下文；字面量、文本、坐标仍只在F2保存，catalog每store一份。
-`SyntaxRoleView`一次建立父槽索引，查询任意原槽，包括不落稀疏port的字段；循环查询不重复扫AST。
-schema未覆盖则拒绝；预算停止不发布部分角色表。F3-B通过也不代表scope/名字存储绑定完成。
-
-F3-C按以下形式产物逐层实现和验收；C1/C2/C3-T/C3-S已按声明范围通过，F3-D也已完成声明范围组合验收，不能以旧图计数跳过后层形式验收：
-
-| 层 | 输入 → 输出 | 通过条件 |
-|---|---|---|
-| C1 属性路由 | F2/F3-B原槽 → SourceScope、EvaluationRegion、共享SlotContext及private策略 | 157个child字段和全部484槽规则闭合，866源/全部port归属可独立重验 |
-| C2 词法接口 | C1归属及整scope声明 → name-key、local/cell/globals/builtins/class-mapping查询或绑定接口 | 16个lexical字段/15类全覆盖；无名字、wildcard、派生binder分别计数；不冒充实际dict/StorageID |
-| C3 编译器投影 | 原源码接口及F3-A → 直接/内联/共享/省略/合成关系witness | 原引用、参数序、symbol贡献及重挂关系逐项对账，不按name+line或地址猜，不要求scope/table双射 |
-
-C1先做结构owner/env路由，再按归属汇总yield/await，最后派生触发条件；nested def的defaults/decorators仍可能属于外层。
-source scope、求值region、compiler block、runtime frame分别表示；类可见annotation、future字符串化、选择性mangling需显式规则。
-公开symtable丢失部分源结构，仅作已证明投影后的校核；C2不能直接把其混合flags当每个Name的存储地址。
-依据为上述pinned symtable及同版[codegen](https://github.com/python/cpython/blob/v3.14.7/Python/codegen.c)，不执行目标。
-
-C1字段路由的封闭分区为50特殊selector、12描述符、95继承child字段；其余327槽为payload metadata。
-metadata自身不求值，但继承所属操作上下文；表达式被annotation策略抑制是另一轴，不能遇nested lambda就解除。
-共享ContextState分别引用求值owner、源码environment、region、private策略和声明路由；原结构owner沿F2父槽查询。
-实例只保存scope/region/private记录及发生变化的SlotRef边界；任意槽或原B端口由共同view查询，不复制AST或逐槽上下文。
-参数/默认值/注解、typeparam name/bound/default可在同一节点内分属不同上下文；选择性mangling保原group/位置，C1不计算名字key。
-
-C2内部先验收C2a名字投影和整scope声明账本，再实现C2b条件查询与捕获传播；C2全层要求两者完成。
-C2a覆盖16个lexical字段/15类及所有原B端口disposition；global/nonlocal先汇总，walrus贡献先归入接收scope。
-有效名按SYMBOL_VISIT_PROJECTION归一并intern，SELECTIVE按原typeparam访问前缀；这不是已验证的codegen地址。
-声明、候选写/删、参数接口、directives及cleanup分开保留，未知运行值不妨碍确定逻辑声明；SUPPRESSED保源码模板而不授实际效果。
-C3内部严格分两步：C3-T先完成compiler模板构造/附着、future detach与comp splice，并逐边对应公开图；
-C3-S随后重放名字贡献、合成参数、符号合并与传播，核原整数位与varnames，T未验收不开发S。
-T的身份为原occurrence＋固定语法role；没有source scope的空header annotation仍有原Def.args依据。
-source scope、求值region、compiler template及public row分别引用，只有类型/名称/行号相同不足以接线。
-T只验type/name/lineno/nested/children；symbol_origin_projection与parameter_projection明确NOT_COMPUTED_IN_C3T。
-S以(原模板,有效NameKey)建立compiler slot，先重放原标量名字贡献与参数，再沿原附着树求解scope、inline合并/删除、cell及free转发。
-raw contribution保源C2a引用或真实原槽；SymbolFact是带低位mask、独立scope code及前置事实引用的版本化DAG，不记录每次set插入。
-PUBLIC符号与参数位置逐原F3-A序号投影，合成/relay无source port仍有固定规则来源；detached/ignored/merged/deleted均有明确处置。
-
-C2b将class mapping、local/typeparam slot、closure及class-protocol cell分域，分别输出读计划、写/删目标和共享capture父链。
-ROOT_GLOBALS只指根环境模板；非根使用各自ENV_GLOBALS/BUILTINS参数，不据源码相同断言运行字典相同。
-class prepared mapping与captured class-dict namespace分开；mapping miss与其他异常分开，非局部写不能写回class mapping。
-内层global、逃到root的walrus和语言隐式协议均保来源；隐式需求逐原region/anchor保存analysis_visibility，不能用共享scope首个region概括。
-SUPPRESSED源码参与、future detached模板及实际执行保持分轴；cell_required仅表示已建跨source-scope捕获义务，不反推合成compiler cell不存在。
-这些是SOURCE_NAMESPACE_TEMPLATES，不授实际cell布局、compiler projection或运行地址。
-
-## 共享子图与可组合接口
-
-源码 AST/CST 是识别输入；执行依赖由可共享、可成环的规范图表示。
-模块、函数、类体使用各自的原主体身份；未建主体保留缺口。
-分支、循环和异常保留控制结构、合流及适用出口。
-每个定义主体保存一份，调用与循环迭代引用它，不复制函数或按迭代展开节点。
-循环视图引用原成员、header 参数、初始边和回边；它不另造一份 CFG。
-
-接口必须保留输入、环境、正常/异常等完成的 payload 与前后状态。
-数据返回、引用返回和状态返回分别连接；引用相同不证明可变内容不变。
-每条关系携带原 namespace/typed ID、上下文、条件与证据；缺边不证明无依赖。
-字段可以是已知、符号值、候选或 UNKNOWN；一个字段未知不能抹掉整个节点。
-区域 cut 只描述输入、消费者、状态、效果与资源，不授权替换区域。
-
-## 静态模板与动态实例
-
-静态侧建立子图和可组合端口；动态侧观察实际选择，再对应到原端口。
-两者按事实是否可静态确定分工，不按文件边界分工：跨文件的已知关系直接静态连接，
-同一文件里的不确定分派也保留条件或补充观测。文件负责材料、版本、存储与构建调度；
-函数、类、循环等 Region 才是共享结构和可展开接口的单位。
-运行绑定必须限定 run scope、process/thread、InvocationKey、attempt 及事件锚点。
-静态 context 是接口选择；None、闭合栈和 Open 后缀有不同含义，均不是 Invocation。
-同一调用点的不同 attempt、同一函数的不同激活不能因共用模板而合并。
-
-[call_operands.py](../scar/trace/call_operands.py) 复用 CALL 事件采集；
-[python_call_targets.py](../scar/trace/python_call_targets.py) 记录实际 callable，
-[code_snapshot.py](../scar/trace/code_snapshot.py) 提供完整代码身份及指令位置。
-采集仅保存必要原事实；静态对应、接口建图和推理在离线侧完成。
-代码对应核完整 CodeID、编译路径、解释器 profile 和原位置；名称或行号只用于筛选。
-有历史源码指纹时必须核对；没有时可静态建立当前源码子图，但运行对应只授权匹配的 Code 作用域。
-子函数匹配不证明父模块执行、factory 创建来源、globals/defaults/closure 内容或兄弟定义的运行版本。
-实际类对象的调用证据不证明它来自某条类声明；创建来源须另有证据。
-一次观察只限定该运行事实，未覆盖路径与未知状态继续保留。
-
-## 分片存储与统一读取
-
-artifacts/current/static/ 是唯一当前程序模型；源码/主体/关系按分片保存。
-每片附 stored/decoded SHA 与原 ID 引用，跨片引用不复制原图。
-共同 reader 共享有界缓存、校核原收据；原输入稳定期间复用解码结果。
-增补缺失主体保持已有主体和关系原样；旧关系仍只覆盖其原输入范围。
-无图诊断不是已完成主体；仅fresh读取确认原收据内无图/端口、源身份不变，才允许补建并保留诊断输入。
-既有规范/partial图不走此替换口；实际支持尚缺时报告static rule，不消耗无效的补建请求。
-artifacts/current/queries/ 保存派生查询证据，不是第二份权威程序。
-形式阶段模型更新先同步全部分片、目录与manifest，切换目录并同步父目录后才清旧owned片；报告先完整落盘再发布。
-两个rename仍有可恢复窗口。恢复包按原SHA读回，前端材料与图身份不因恢复而重建或猜填。
-材料登记可在固定历史F3-D验收摘要下复用原七层收据：逐原字节复制、核父链与当前profile，不重签历史证明。
-运输登记与新语义重放分开；原strict reader不放宽，旧图和证明范围不因登记扩大。
-
-## 已有后层能力与当前开发边界
-
-已具备源码层、局部规范图、共同依赖查询、部分条件属性推理和循环边界查询。
-真实 CEM 的81个CALL实例及9条函数接口已接入共同图的显式观测端口查询，静态邻接不变。
-实例端口引用原点及run/Invocation/attempt/事件作用域；只有实际选中的return形成返回接口。
-参数未定不丢入口/状态/返回；ABI布局保留条件备选、默认值义务和pack依赖，不猜receiver或容器身份。
-对应 owner 是 [program_observed_dependencies.py](../scar/analysis/program_observed_dependencies.py)。
-选中 CEM 循环的边界查询已在原预算内完成；这不证明状态、效果、资源或整个程序闭合。
-
-可证明的线性编译栈来源已接原cleanup返回；跨跳转合流继续保留候选，不按None猜来源。
-这些是已有局部结果，不证明完整执行图闭合。F0至F3及全域源码模板已在声明范围验收；当前按NORMAL_SUCCESS进入F5跨函数、库与资源接线，应用异常和引用清理暂不阻塞。
-不得把裸 context=None 的观测边注册为全局事实；当前正常路径图不授予保持异常行为的变换许可。
-Python→native/runtime/kernel、Tensor 属性、alias/effects 与资源连接仍需按实际缺口补齐。
-第一阶段只有在实体、结构、连接、属性和覆盖均经核查后才完成。
+源码单元、共享正文、关系、状态及资源材料各自分片，typed记录用ID与FactRef连接。manifest是引用目录，不能仅靠其hash证明语义；reader按原材料和当前规则重推。按需展开不复制每次调用或循环迭代。
+前端与独立子图可按单元并行，共享有界worker预算；动态采集只保必要事件，离线分析负责接线。模型推导、观测、成本、合法性与部署权限分开记录，避免把采集干扰当目标性能。

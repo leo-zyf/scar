@@ -1,0 +1,666 @@
+{
+  "full_objective_complete": false,
+  "implementation_files": [
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "5e49c4f4a1dcc455e1cec34a99d42d7191d187961f42a5167ab18927087cfc37",
+      "size_bytes": 22169,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/ordered_loop_transfer.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "9980bf9375a7bcb447377e5ddfb7d502fa0e80f5470dfef139bb57363c06c123",
+      "size_bytes": 16418,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/ordered_loop_transfer_storage.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "bc140ec7c6b84ad9490dec4c86f05026d23b63d9a9bcb5639c1a0487d5ffa60a",
+      "size_bytes": 16777,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/ordered_region_lifetime.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "c43b609274c4f5e7723b2429a2ed731ef796eebd2d3757f8ffda68258fe8af94",
+      "size_bytes": 9534,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/read_ordered_lifetimes.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "f9d8c7e432485130d3c410d19c94afe70bb940b35504121b63be76cee5a8ee94",
+      "size_bytes": 166277,
+      "uri": "/home/zyf/AAA/scar/scar/cli.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "e6ab088ee54f862564802d070fa0fa2bd0cb194b31b3301e863c3ddf22f8a122",
+      "size_bytes": 10090,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_batch_loop_diagnostics.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "c9d1188fead056f92906fcaee5c56f81930475ee1eaa5b487e64346cb7c730ca",
+      "size_bytes": 5803,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_layout_diagnostics.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "1b0da72a136ac0ab17070968bded3243266347b11ca9073c4759e31e01c4de6f",
+      "size_bytes": 12297,
+      "uri": "/home/zyf/AAA/scar/scar/codegen/cpu_layout_probe.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "661fdf64803c203a34658e9a2915c9c01494b758aac27ffbac39d71607ce4dce",
+      "size_bytes": 15881,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/compile_build.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "a8f51a11d9c98da23870c2211c395b6b699d547db1e372cf171903cc4f7bee14",
+      "size_bytes": 4730,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/compiled_loop_capsule.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "e5969beb3506f2b7416e3c8ca9e9c461ca577ec06d123979d03a98c3c9f5c9d2",
+      "size_bytes": 1185,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/compiled_stateful_capsule.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "251562c1dff2a25bf6403d34a08134679960a5076ab7b73186e149e8625f3d48",
+      "size_bytes": 6186,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/lower_stateful_bounds.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "ae944b5c1f059fd6f386d8e138ede8cee4859e86b785ad7c1c944f732ac79b5d",
+      "size_bytes": 6606,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/lower_stateful_choices.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "3761a0d6418a72ad061e1a8f2f46b03a1c03e93cf064e9d0bcd0ca0933683eee",
+      "size_bytes": 6864,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/ordered_planning_graph.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "dad64b3a5e4feec86c1101d47b84e76e389916021e0e25dd0ada56e84f7866bb",
+      "size_bytes": 12923,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/plan_build.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "401a16d8cfa46824f2ea64b4e41851d5958195cae755865d529ea2df6b5d5bf2",
+      "size_bytes": 10333,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/plan_stateful_bounds.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "76aa9efb51c4e5c1530b43b1f20e3842ec34bfe6dc037f31b52425195c5b49a9",
+      "size_bytes": 2410,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/selected_stateful_lowering.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "239f5c07bfa9e7c428b8286e040c40d192f09e89cc6147d65e8951c430bb23c7",
+      "size_bytes": 4603,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/stateful_domain_equivalence.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "79b9866cde3e4ff11660716d71fd9c2ab82640bfb6291ef133f2d6871ce8ca9c",
+      "size_bytes": 1007,
+      "uri": "/home/zyf/AAA/scar/scar/entrypoint.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "c355201f74145d92ee6fe63b3de1dcc9d33c02da21d510ead01dca3398352f94",
+      "size_bytes": 3006,
+      "uri": "/home/zyf/AAA/scar/scar/ir/program/ordered_loop_transfer.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "0d84d05c35ce509da717fe91ea1b200b8953cdf4fdcff752d9fb6495602b971b",
+      "size_bytes": 2005,
+      "uri": "/home/zyf/AAA/scar/scar/ir/program/ordered_region_lifetime.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "92469f34bbbbd1a72bb178fcbc5c54979438398b73e0c255eedaa5e4ebe9106f",
+      "size_bytes": 11541,
+      "uri": "/home/zyf/AAA/scar/scar/optimization/cpu_stage_footprint.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "c8e4ea92c7ab58951ed2cd96f417d7f6b02abf4f73423088b1d1e0dfdb5c1e78",
+      "size_bytes": 8467,
+      "uri": "/home/zyf/AAA/scar/scar/optimization/interval_choices.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "16b3630b17dc49ec1c8106082b376a7125196a976d8aed0358f532ebc570de29",
+      "size_bytes": 18740,
+      "uri": "/home/zyf/AAA/scar/scar/optimization/stateful_cost_bounds.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "39bf8d2e9c1f2873fbc4d499991d07a170a996cd9b4522de1eeafbec71f48f16",
+      "size_bytes": 6507,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/compiled_loop_capsule.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "c412947aa72156e6f7eace2a1885fcc899a9e197cad55a609c8f20dfa7c1c974",
+      "size_bytes": 6327,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/compiled_stateful_capsule.py"
+    },
+    {
+      "schema": "scar.validation-raw",
+      "sha256": "37a8eef9c4d40de49311102caa03c476bc946b5d9ee535162da4725ddfac1ad1",
+      "size_bytes": 6427,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/final_entry_capsule.py"
+    }
+  ],
+  "implementation_scope": [
+    "ORIGINAL_F4_PROGRAM_GRAPH_AND_SOURCE_REFERENCES",
+    "CPU_FLOAT64_RANK2_ARRAY_REGIONS",
+    "DIRECT_AND_COMPOSITE_FIXED_LOOPS",
+    "ORDERED_TRANSACTIONAL_STATEFUL_REGIONS",
+    "CPP20_NATIVE_ABI1_WITH_PYTHON_COMPATIBILITY_ENTRY"
+  ],
+  "no_workload_name_optimization_rules_added": true,
+  "parent_commit": "0b252877",
+  "schema": "scar.layered-cpu-core-implementation-gate",
+  "schema_version": 1,
+  "stages": {
+    "delivery": {
+      "deployment_authorized": false,
+      "existing_math_backends_reused": true,
+      "final_core": "scar/runtime/final_entry_capsule.py",
+      "full_program_cpp": false,
+      "host_language": "C++20",
+      "loop_cases": [
+        {
+          "case": "default-no-op",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "f2e72049fc7057b2bbe2633117b84a884d51e50afd142e5453ae2e3fd393b955",
+            "size_bytes": 1567,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/whole-loop-delivery-current-v1/default-no-op.json"
+          },
+          "source_context_stable": true,
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 0,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        },
+        {
+          "case": "explicit-validation",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "3986fcc581964fb00a51b24674dfedd4971684ff42fda88e40032c114544a815",
+            "size_bytes": 2138,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/whole-loop-delivery-current-v1/explicit-validation.json"
+          },
+          "source_context_stable": true,
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 1,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        },
+        {
+          "case": "changed-entry-count",
+          "old_scope_rejected": true,
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "51fc02af3055617536eea924c472273ce20389b129bbe194fe86b1c606755c8b",
+            "size_bytes": 1588,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/whole-loop-delivery-current-v1/changed-count.json"
+          },
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 0,
+            "reasons": {}
+          }
+        },
+        {
+          "case": "runtime-with-compiler-graph-imports-forbidden",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "3986fcc581964fb00a51b24674dfedd4971684ff42fda88e40032c114544a815",
+            "size_bytes": 2138,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/whole-loop-delivery-current-v1/runtime-only.json"
+          },
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 1,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        }
+      ],
+      "loop_cost_status": "UNMEASURED",
+      "operator_abi": 1,
+      "performance_measured": false,
+      "release_exported": false,
+      "stateful": {
+        "schema": "scar.stateful-final-capsule-protocol-validation",
+        "sha256": "97215cf930a4e857dd5d87c70a881acefa38aaf427d0ac847bf5fc2a82ef220c",
+        "size_bytes": 4968,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-final-delivery-v1/validation.json"
+      },
+      "stateful_abi": 1,
+      "stateful_cases": [
+        {
+          "case": "default-no-op",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "77838cdbb941a5c63a0dea4c0089c253f93425ab608ffecd069c4d71657c59d4",
+            "size_bytes": 1672,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-final-delivery-v1/default-no-op.json"
+          },
+          "required_entry_state_and_output_files_equal": true,
+          "source_context_stable": true,
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 0,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        },
+        {
+          "case": "explicit-validation",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "97601d74317c560622ae7630b0ac642e02078a1c13c00d21fd59fb1b6aaee2d3",
+            "size_bytes": 2043,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-final-delivery-v1/explicit-validation.json"
+          },
+          "required_entry_state_and_output_files_equal": true,
+          "source_context_stable": true,
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 4,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        },
+        {
+          "case": "runtime-with-compiler-graph-imports-forbidden",
+          "report": {
+            "schema": "scar.final-entry-capsule-execution",
+            "sha256": "97601d74317c560622ae7630b0ac642e02078a1c13c00d21fd59fb1b6aaee2d3",
+            "size_bytes": 2043,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-final-delivery-v1/runtime-only.json"
+          },
+          "statistics": {
+            "fallback_calls": 0,
+            "native_calls": 4,
+            "reasons": {}
+          },
+          "stdout_equal": true
+        }
+      ],
+      "stateful_cost_status": "UNMEASURED",
+      "stateful_single_transaction": {
+        "array_bindings_retained": true,
+        "required_input_state_equal": true,
+        "required_state_fields": [
+          {
+            "dtype": "float64",
+            "id": "input:0",
+            "kind": "array",
+            "path": [
+              "self",
+              "u"
+            ],
+            "sha256": "e2398669f88e46798ee71f97358a5bc4153044f56e4f64a18a5dece54897876d",
+            "shape": [
+              515,
+              515
+            ]
+          },
+          {
+            "dtype": "float64",
+            "id": "input:1",
+            "kind": "array",
+            "path": [
+              "self",
+              "v"
+            ],
+            "sha256": "6ab1ea728ae9c038527521b0592c4267f39fc3fdadbdb14f37d149369ee5476c",
+            "shape": [
+              515,
+              515
+            ]
+          },
+          {
+            "id": "input:2",
+            "kind": "scalar",
+            "path": [
+              "self",
+              "fa"
+            ],
+            "sha256": "62c129034f9a01e9c7a44903e449d062a1ba5416733c314145543b3ed394a67d"
+          },
+          {
+            "id": "input:3",
+            "kind": "scalar",
+            "path": [
+              "self",
+              "F"
+            ],
+            "sha256": "a888fe9e2469182b8e3e3bca241d3189dc144349bc2d0ac64c56c444276e9763"
+          },
+          {
+            "id": "input:4",
+            "kind": "scalar",
+            "path": [
+              "self",
+              "dt"
+            ],
+            "sha256": "ea0954be860b6493ecae382d36763b13fa3297d62334e769c729bdb26fba4d5d"
+          },
+          {
+            "id": "input:5",
+            "kind": "scalar",
+            "path": [
+              "self",
+              "fs"
+            ],
+            "sha256": "09c99a992eedd736a1738f6d7f9b2d6079e065f7ef609742df4ba81898381cbc"
+          },
+          {
+            "id": "input:6",
+            "kind": "scalar",
+            "path": [
+              "self",
+              "kappa"
+            ],
+            "sha256": "bb1a364b44db63819dccae493a7d0cf92a7015ead0d9a92e48c643320aa064ca"
+          }
+        ],
+        "return_value_is_none": true,
+        "statistics": {
+          "fallback_calls": 0,
+          "native_calls": 1,
+          "reasons": {}
+        }
+      },
+      "status": "VERIFIED_UNMEASURED",
+      "whole_loop": {
+        "schema": "scar.compiled-loop-final-capsule-protocol-validation",
+        "sha256": "270d641147cbc3cdeca8a683b1e6c600a1773503ef59e22f58998d4ce9d6a74f",
+        "size_bytes": 3404,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/whole-loop-delivery-current-v1/validation.json"
+      },
+      "whole_loop_fallback": {
+        "case": "deep-global-binding-after-admission",
+        "changed_leaf_calls": 1000,
+        "inputs_unchanged": true,
+        "original_loop_calls": 1,
+        "outputs_bitwise_equal": true,
+        "source_files_modified": false,
+        "statistics": {
+          "fallback_calls": 1,
+          "native_calls": 0,
+          "reasons": {
+            "composite_original_global_callable_or_range_changed": 1
+          }
+        }
+      },
+      "whole_method_fallback": {
+        "case": "callee-binding-changed-after-first-native-method",
+        "fallback_calls_delta": 1,
+        "native_calls_delta": 0,
+        "original_callee_calls": 2,
+        "original_method_calls": 1,
+        "reasons": {
+          "nested callee changed": 1
+        },
+        "required_state_equal": true,
+        "return_value_is_none": true
+      }
+    },
+    "graph": {
+      "automatic": true,
+      "entry": "plan-build",
+      "global_logical_value_identity_proven": false,
+      "graph_validation": {
+        "interfaces": {
+          "abstract_context_prefix": "OPEN_NOT_A_RUNTIME_STACK",
+          "bidirectional_missing": 0,
+          "frontier_queries": {},
+          "iterations_unrolled": false,
+          "parametric_routes": 43,
+          "projected_edges": 360,
+          "runtime_invocation_proven": false
+        },
+        "lifetimes": {
+          "bidirectional_missing": 0,
+          "conditional_edges": 13
+        },
+        "loop_transfers": {
+          "bidirectional_missing": 0,
+          "conditional_edges": 18,
+          "definition_edges": 9,
+          "matched_call_path_edges": 9
+        }
+      },
+      "loops_unrolled": false,
+      "planning": {
+        "schema": "scar.program-optimization-domains",
+        "sha256": "fd785178c93491d02098b8a472b502bb8a7cceca66fc30d1e6dad66b4126a296",
+        "size_bytes": 53141,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/domains-with-loop-state/result.json"
+      },
+      "public_graph": {
+        "schema": "scar.ordered-program-planning-graph",
+        "sha256": "ae447f625f882d28d1a05734f9fbf53f384207675aedf35aafbad8ee0ec42bd6",
+        "size_bytes": 6662,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/domains-with-loop-state/region-0/program-graph/result.json"
+      },
+      "source_graph": {
+        "schema": "scar.program-build",
+        "sha256": "b02bd4d8e9cba4f2d881141d708646f6c732858ec2aad1fe5c34877f5c7b49f1",
+        "size_bytes": 12475,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/content-lineage-v1/program-final/manifest.json"
+      },
+      "status": "VERIFIED_SUPPORTED_PROFILE",
+      "summary": {
+        "body": {
+          "caller_loop_recurrence_proven": false,
+          "dependency_kinds": {
+            "ALIAS_DESCRIPTOR_SOURCE": 14,
+            "ARRAY_CONTENT_READ": 14,
+            "OPERAND_DESCRIPTOR": 14,
+            "OPERAND_VALUE": 35,
+            "ORIGINAL_ACTION_ORDER": 25,
+            "PRODUCES_IMMUTABLE_VALUE": 24,
+            "PRODUCES_ORDERED_CONTENT_VERSION": 2,
+            "READ_MODIFY_WRITE": 2,
+            "SCALAR_INPUT_VALUE": 7,
+            "STORAGE_REFERENCE": 6,
+            "WRITE_DESTINATION_REFERENCE": 2
+          },
+          "global_logical_versions_proven": false,
+          "kinds": {
+            "ALIAS_DESCRIPTOR": 20,
+            "EVALUATE": 24,
+            "IMMUTABLE_EVALUATED_VALUE": 31,
+            "INPUT_PORT": 7,
+            "LITERAL": 3,
+            "ORDERED_ARRAY_CONTENT_VERSION": 4,
+            "ORDERED_ARRAY_WRITE": 2
+          },
+          "nodes": 92,
+          "original_region": {
+            "schema": "scar.stateful-array-region",
+            "sha256": "b75654ed94c9213be3e93e01bd9bafa94f5b69e5c6ef8a16a15bc1658666d481",
+            "size_bytes": 2802135,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/domains-with-loop-state/region-0/region.json"
+          },
+          "relations": 317,
+          "schema": "scar.stateful-ordered-content.v1",
+          "source_derivation_replayed": true,
+          "target_executed": false,
+          "transformation_authorized": false
+        },
+        "interfaces": {
+          "bindings": 1,
+          "boundary_ports": 6,
+          "call_contexts_are_alternative_implementations": true,
+          "inline": {
+            "boundaries": 0,
+            "distinct_frames": 2,
+            "distinct_queries": 2,
+            "inline_origins": 32,
+            "runtime_invocations_created": 0,
+            "source_contexts_are_conditional": true,
+            "target_executed": false,
+            "transformation_authorized": false
+          },
+          "input_boundaries": 0,
+          "input_routes": 7,
+          "logical_content_version_equality_proven": false,
+          "route_kinds": {
+            "COMPLETION": 2,
+            "CONTAINS": 6,
+            "CONTROL_FLOW": 3,
+            "ENVIRONMENT": 2,
+            "IMPLEMENTATION": 2,
+            "PROJECTION": 14,
+            "STATE_INPUT": 9,
+            "STATE_INTERFACE": 3,
+            "STATE_OUTPUT": 2
+          },
+          "routes": 43,
+          "runtime_invocations_created": 0,
+          "schema": "scar.ordered-region-matched-activation",
+          "target_executed": false,
+          "transformation_authorized": false
+        },
+        "lifetimes": {
+          "array_write_actions": 2,
+          "arrays_required_at_normal_exit": 2,
+          "conditional_relations": 13,
+          "cross_call_content_identity_proven": false,
+          "direct_use_roles": {
+            "ARRAY_CONTENT_READ": 14,
+            "READ_MODIFY_WRITE": 2,
+            "SCALAR_VALUE_READ": 7,
+            "WRITE_DESTINATION_REFERENCE": 2
+          },
+          "epochs": 4,
+          "external_storage_release_authorized": false,
+          "global_logical_versions_created": 0,
+          "inputs": 7,
+          "loop_recurrence_proven": false,
+          "physical_allocation_or_commit_timing_proven": false,
+          "scope": "ONE_SELECTED_GUARDED_REGION_ACTIVATION",
+          "stability": {
+            "ARRAY_CONTENT_HAS_ORDERED_WRITES": 2,
+            "SELECTED_SCALAR_VALUE_FIXED": 5
+          },
+          "target_executed": false,
+          "transformation_authorized": false,
+          "uses": 25
+        },
+        "loop_transfers": {
+          "caller_attribute_writes": 1,
+          "conditional_relations": 9,
+          "effect_frontiers": 58,
+          "global_logical_versions_created": 0,
+          "input_transfers": 7,
+          "iterations_unrolled": false,
+          "original_call_hops": 2,
+          "original_control_backedges": 1,
+          "original_world_carries": 1,
+          "roles": {
+            "CALLER_REWRITTEN_FIELD": 1,
+            "LOOP_LIVE_IN_ROOT_SELECTED_VALUE_UNPROVEN": 4,
+            "ORDERED_ARRAY_CONTENT_CARRY": 2
+          },
+          "root_routes": 1,
+          "shared_loops": 1,
+          "structural_call_loop_membership_rederived": true,
+          "target_executed": false,
+          "transformation_authorized": false,
+          "unconditional_content_recurrence_proven": false
+        }
+      },
+      "target_executed_for_static_graph": false
+    },
+    "optimization": {
+      "decision": "NO_OP",
+      "domain_equivalence": {
+        "schema": "scar.stateful-domain-equivalence",
+        "sha256": "0f6575ee9ff9c2fc33acad73894bcff8cf5fc792a8a17d33db5ab78025384a96",
+        "size_bytes": 46210,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/compiled-final-core/region-0/domain-equivalence.json"
+      },
+      "exact_region_route": "VERIFIED_INTERVAL_PLAN",
+      "graph_admission": {
+        "schema": "scar.ordered-program-planning-graph-admission",
+        "sha256": "0e3bd1406cf8ace0fa5adc7183fcf4492ce78a63bc2033b58d18e34518b83021",
+        "size_bytes": 7477,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/compiled-final-core/region-0/graph-admission.json"
+      },
+      "interval_plan": {
+        "schema": "scar.stateful-interval-choice-plan",
+        "sha256": "d0b0338e4b06a428a8ebad9ba762ff220d7d1bec3f98109f2f1b0c6888bc7d46",
+        "size_bytes": 7472,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/interval-main/result.json"
+      },
+      "main": {
+        "schema": "scar.program-compiler-pipeline",
+        "sha256": "264b0baddbc9bac3fff6571a5e90fab16dec1f01f1dd1802d75e957e9a9e5840",
+        "size_bytes": 53878,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-core-v1/compiled-final-core/result.json"
+      },
+      "original_options": 107,
+      "partial_unknown_exclusions": 31,
+      "physical_optimality_proven": false,
+      "remaining_frontier": 27,
+      "retained_options": 107,
+      "selected_interval_branch_scope": "STATIC_INTERFACE_REVIEW_ONLY_REAL_CURRENT_DOMAIN_IS_UNRESOLVED",
+      "shared_scalar_c1_positive_native_check": {
+        "declared_test_model_not_hardware_cost": true,
+        "passed": 1,
+        "performance_evidence": false,
+        "test": "tests/unit/test_lower_stateful_choices.py"
+      },
+      "source_and_hardware_geometry": {
+        "schema": "scar.cpu-stage-footprint-case-comparison",
+        "sha256": "2ffe9132250e9a9574b748bb4a41ed458fc8732b2b418945a8e31e4aeca67bd3",
+        "size_bytes": 58482,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/full-cpu-domain-batch-v1/cache-footprint-w19/result.json"
+      },
+      "status": "INTERFACE_VERIFIED_MODEL_FRONTIER_RETAINED",
+      "total_strict_exclusions": 79,
+      "unknown_duration_imputed": false
+    }
+  },
+  "status": "SUPPORTED_CPU_CORE_PATHS_CONNECTED_AND_VERIFIED",
+  "still_required": [
+    "CROSS_CALL_LOGICAL_VALUE_IDENTITY_AND_EFFECT_CLOSURE",
+    "FURTHER_STRUCTURAL_SIMPLIFICATION_AND_NON_ARRAY_PYTHON_LOWERING",
+    "REMAINING_MODEL_COST_FRONTIERS",
+    "MULTI_REGION_HARDWARE_SCHEDULE_AND_TRANSFERS",
+    "NUMA_MULTIPROCESS_AND_MPI_IMPLEMENTATIONS",
+    "GPU_VALIDATION_AND_OPERATOR_OFFLOAD",
+    "FULL_SUNFISH_AND_CIRQ_COMPILER_COVERAGE",
+    "FINAL_COST_ADMISSION_WHEN_PERFORMANCE_WORK_RESUMES"
+  ],
+  "user_direction": {
+    "core_development_before_performance": true,
+    "no_new_performance_runs_after_direction": true
+  }
+}
