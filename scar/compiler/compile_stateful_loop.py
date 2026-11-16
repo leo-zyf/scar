@@ -7,7 +7,7 @@ from scar.ir.execution_recipe import artifact_reference
 
 
 def compile_stateful_loop(program,out,*,caller_unit,function_ordinal,interface_ordinal,
-        provider_name=None,step_reference,input_shapes,trip_count,memory_budget_bytes,
+        provider_name=None,step_reference=None,input_shapes,trip_count,memory_budget_bytes,
         cpu_threads=1,runtime_out=None,plan_only=False):
     from scar.analysis.build import BuildSession
     from scar.analysis.source_call_view import SourceFunctionCallProvider
@@ -25,12 +25,19 @@ def compile_stateful_loop(program,out,*,caller_unit,function_ordinal,interface_o
             and(provider_name is None or name==provider_name)]
         if len(choices)!=1:raise ValueError('select one original source-call provider for the loop')
         name,provider=choices[0]
-        original=build_stateful_loop(session.view,provider,caller_unit=caller_unit,
-            function_ordinal=function_ordinal,interface_ordinal=interface_ordinal,step_reference=step_reference)
         target=session.report.get('target')
         if target is None:raise ValueError('original program hardware snapshot required')
         hardware=Path(target['path']).parent
         out.mkdir(parents=True)
+        discovery=None
+        if step_reference is None:
+            from .stateful_loop_discovery import derive_stateful_loop_step,publish_discovered_step
+            selected=derive_stateful_loop_step(session.view,provider,caller_unit=caller_unit,
+                function_ordinal=function_ordinal,interface_ordinal=interface_ordinal)
+            step_reference=publish_discovered_step(selected,out/'discovered-step.json')
+            discovery=selected.evidence
+        original=build_stateful_loop(session.view,provider,caller_unit=caller_unit,
+            function_ordinal=function_ordinal,interface_ordinal=interface_ordinal,step_reference=step_reference)
         proof_reference=write_stateful_loop_proof(original,out/'proof.json')
         plan=plan_stateful_loop(original,hardware,input_shapes=input_shapes,trip_count=trip_count,
             memory_budget_bytes=memory_budget_bytes,cpu_threads=cpu_threads)
@@ -39,6 +46,9 @@ def compile_stateful_loop(program,out,*,caller_unit,function_ordinal,interface_o
         report=dict(schema='scar.stateful-loop-compiler-build',schema_version=1,
             program=artifact_reference(program/'manifest.json','scar.program-build'),
             provider=name,original_loop_proof=proof_reference,loop_plan=plan_reference,
+            original_step=step_reference,step_discovery=discovery,
+            step_origin=('AUTOMATIC_ORIGINAL_CALL_TARGET_DISCOVERY'if discovery is not None
+                else 'EXPLICIT_RETAINED_ORIGINAL_STEP'),
             hardware=target,source_replayed=True,source_loop_body_instances=1,iterations_unrolled=False,
             cost_status='UNKNOWN',selected_for_use=False,deployment_authorized=False,
             workspace_or_team_setup_hoisted=False,native_math_changed=False,
@@ -73,7 +83,7 @@ def main(argv=None):
     parser.add_argument('--build',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--unit',required=True);parser.add_argument('--function-ordinal',type=int,required=True)
     parser.add_argument('--interface-ordinal',type=int,required=True);parser.add_argument('--provider')
-    parser.add_argument('--step',required=True,help='retained source-bound stateful region JSON')
+    parser.add_argument('--step',help='optional retained step JSON; otherwise derive from the original selected CALL')
     parser.add_argument('--input-shapes',type=json.loads,required=True)
     parser.add_argument('--trip-count',type=int,required=True);parser.add_argument('--cpu-threads',type=int,default=1)
     parser.add_argument('--memory-budget-bytes',type=int,required=True)
