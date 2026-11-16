@@ -218,6 +218,9 @@ def plan_pipeline_memory(pipeline, *, input_shapes, memory_budget_bytes, search_
 def verify_pipeline_memory(pipeline, report):
     """Pure replay of source, shapes, lifetimes, assignments and budget proof."""
     value = loads(Path(report).read_bytes()) if isinstance(report, (str, Path)) else deepcopy(report)
+    if value.get('schema')=='scar.pipeline-partial-order-memory-plan':
+        from .pipeline_partial_order_memory import verify_pipeline_partial_order_memory
+        return verify_pipeline_partial_order_memory(pipeline,value)
     if (value.get('schema'), value.get('schema_version')) != ('scar.pipeline-memory-plan', 1):
         raise ValueError('versioned pipeline memory plan required')
     expected = plan_pipeline_memory(pipeline, input_shapes=value['input_shapes'],
