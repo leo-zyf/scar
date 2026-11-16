@@ -322,6 +322,10 @@ def solve_resource_schedule(schedule: ResourceSchedule | VersionedResourceSchedu
     durations, demands, capacities, memory_caps, allocation_model, unresolved = _problem(
         schedule, task_costs, task_placements, resource_capacities,
         memory_capacities, materialization_sizes, memory_locations)
+    if isinstance(schedule, VersionedResourceSchedule) and schedule.temporal is not None:
+        unresolved.append({"field": "temporal", "reason":
+            "explicit event, occupancy and recurrence constraints require a temporal solver adapter; "
+            "the legacy task-only solver must not silently discard them"})
     if model_instantiation is not None:
         if not isinstance(model_instantiation, Mapping):
             unresolved.append({"field": "model_instantiation", "reason": "explicit shape/source receipt must be a mapping"})

@@ -1,5 +1,9 @@
 # 当前状态
 
+当前按 G1→G6 落实时间模型：G1 同一 IR 的事件/活动/占用/约束 → G2 真实资源域映射 → G3 有来源的成本区间 → G4 放置/并发/内存/时间联合规划 → G5 C++ 执行证书 → G6 原入口正确性与 clean A/B。以下旧 L2–L4 结果只是已有有限声明模型的证据，不代表 G2–G6 已完成；未提交的旧 C++ solver-order 试作暂不扩展。
+
+G1 已验：v3 时间字段及 `scar time-schedule` 接入现有 IR，v2 字段与哈希保持不变。CPU pipeline 为 16 tasks/41 events/5 owned slots；真实 Gray–Scott 为 20/54/4；状态循环保留一份 9-task 正文、27 events 及 distance=1 依赖。三份保存图均通过独立来源重放，Gray 原 F4 主链另经32.69s冷读确认；7项定向检查通过。耗时/服务需求未知项保留 UNKNOWN，旧求解器不得丢弃新约束；没有新目标执行、标定、加速比或部署授权。验收：`artifacts/baseline/g1-semantic-time.json`。下一步 G2 将活动/占用映射到已有真实硬件域和显式预算。
+
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
 当前严格按层推进：L1 原图/资源输入 → L2 成本与约束投影 → L3 联合求解 → L4 执行证书 → L5 C++ → L6 原入口。L2 源码主链已验：16项时长和11项控制占用默认 UNKNOWN，2560B增量pool与external分账，矛盾shape拒绝，禁止solver/codegen。L3 `solve-pipeline-temporal` 已重放显式有限域：声明模型的两布局得21/13 ticks，五CALL顺序例得13并匹配下界；UNKNOWN case保留并阻止闭域选择，独立域收据防裁剪。上述ticks均非测量。报告在 `pipeline-solver-order-v1/l2-acceptance.json`、`l3-acceptance.json`。L4以后仍须逐层验收，试做文件不算完成。

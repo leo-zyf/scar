@@ -42,6 +42,7 @@ stateful_region_schema_version = 1
 stateful_stage_plan_schema_version = 1
 stateful_operator_abi_version = 1
 versioned_resource_schedule_schema_version = 2
+temporal_resource_schedule_schema_version = 3
 target_hardware_graph_schema_version = 2
 stateful_runtime_contract_schema_version = 1
 operator_calling_convention = "c_function_table"

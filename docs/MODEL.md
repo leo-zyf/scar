@@ -467,6 +467,10 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 
 整体优化目标是依赖及资源约束下的完成时间：数据/状态/顺序前驱必须满足，live allocations 受容量约束，执行器与通道受并发约束。不同设备不自动意味独立；物理任务图可因分块、预取或异步搬运增加节点。循环保持结构化控制，不按毫秒或迭代完全展开。算法与计算精度不变，允许设备实现固有浮点差异是当前全局意向；现有严格 CPU profile 保其较强的顺序、fenv、finite 及逐位验证合同，没有擅自放宽或加入量化、近似或删减迭代。
 
+时间直接附在既有 `VersionedResourceSchedule.temporal`，有显式时间时使用 v3；未附加时保留原 v2 字段与哈希。`TemporalEvent` 表示开始、提交返回、完成、数据就绪和 scope 边界；`TemporalActivity` 连接实际工作，`TemporalOccupancy` 表示执行需求或一份物理 slot 的占用区间，`TemporalConstraint` 表示 `after[i+d] - before[i]` 的上下界。父 scope 只是容器，不重复计算子活动成本；函数可递归包含 scope，循环保留一份参数化正文和正迭代距离，不逐次展开。
+
+SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代表数据就绪，提交返回与设备完成没有固定先后；就绪事件绑定实际生产活动。`time-schedule` 从原 CPU 任务图机械生成这些关系，保留不同预算范围，外部存储不虚构分配/释放；导出存储在 scope 退出后继续存活。循环适配先重放原源码证明，并匹配完整 step 内容，正文中的值、slot 均为逐迭代模板，不授权跨迭代复用。当前资源可行性、循环周期和物理耗时均未被证明，旧 task-only solver 对显式 temporal 返回 UNRESOLVED，不能忽略新增约束继续选优。
+
 `StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
 参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
 

@@ -5,7 +5,7 @@ LogicalVersions or content-equality proofs. This bounded CPU lowering contract
 does not replace the program IR or admit generic/device transfers.
 """
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -89,6 +89,129 @@ class OrderConstraint:
     source_refs: tuple[dict[str, Any], ...] = ()
 
 
+class TemporalMode(str, Enum):
+    SEMANTIC = 'SEMANTIC'
+    PLANNED = 'PLANNED'
+    OBSERVED = 'OBSERVED'
+
+
+class TemporalEventKind(str, Enum):
+    START = 'START'
+    SUBMISSION_RETURN = 'SUBMISSION_RETURN'
+    COMPLETION = 'COMPLETION'
+    READY = 'READY'
+    SCOPE_ENTRY = 'SCOPE_ENTRY'
+    SCOPE_EXIT = 'SCOPE_EXIT'
+
+
+class TemporalScopeKind(str, Enum):
+    ROOT = 'ROOT'
+    COMPOSITE = 'COMPOSITE'
+    LOOP = 'LOOP'
+
+
+class TemporalDurationBasis(str, Enum):
+    UNKNOWN = 'UNKNOWN'
+    DECLARED_MODEL = 'DECLARED_MODEL'
+    OBSERVED = 'OBSERVED'
+
+
+class TemporalOccupancyKind(str, Enum):
+    EXECUTION_DEMAND = 'EXECUTION_DEMAND'
+    PHYSICAL_SLOT_BYTES = 'PHYSICAL_SLOT_BYTES'
+
+
+class TemporalConstraintKind(str, Enum):
+    CAUSAL = 'CAUSAL'
+    READINESS = 'READINESS'
+    RESOURCE_ORDER = 'RESOURCE_ORDER'
+    STORAGE_LIFETIME = 'STORAGE_LIFETIME'
+    LOOP_CARRIED = 'LOOP_CARRIED'
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalEvent:
+    id: str
+    kind: TemporalEventKind
+    scope: str
+    task: str | None = None
+    materialization: str | None = None
+    timestamp_ticks: int | None = None
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalScope:
+    id: str
+    kind: TemporalScopeKind
+    entry: str
+    exit: str
+    parent: str | None = None
+    iteration_symbol: str | None = None
+    trip_count: int | None = None
+    trip_count_symbol: str | None = None
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalActivity:
+    id: str
+    task: str
+    scope: str
+    start: str
+    completion: str
+    submission_return: str | None = None
+    ready_events: tuple[str, ...] = ()
+    duration_basis: TemporalDurationBasis = TemporalDurationBasis.UNKNOWN
+    duration_lower_ticks: int | None = None
+    duration_upper_ticks: int | None = None
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalOccupancy:
+    id: str
+    kind: TemporalOccupancyKind
+    resource: str
+    start: str
+    end: str
+    scope: str
+    units: int | None = None
+    activity: str | None = None
+    storage_slot: str | None = None
+    continues_after_scope: bool = False
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalConstraint:
+    """after[i + iteration_distance] - before[i] lies in the stated bounds."""
+    id: str
+    before: str
+    after: str
+    kind: TemporalConstraintKind
+    min_delay_ticks: int = 0
+    max_delay_ticks: int | None = None
+    iteration_distance: int = 0
+    loop_scope: str | None = None
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalModel:
+    mode: TemporalMode
+    events: tuple[TemporalEvent, ...]
+    activities: tuple[TemporalActivity, ...]
+    occupancies: tuple[TemporalOccupancy, ...]
+    constraints: tuple[TemporalConstraint, ...]
+    scopes: tuple[TemporalScope, ...]
+    resource_capacities: dict[str, int | None] = field(default_factory=dict)
+    tick_numerator: int | None = None
+    tick_denominator: int | None = None
+    clock_domain: str | None = None
+    source_refs: tuple[dict[str, Any], ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
 class VersionedResourceSchedule:
     region_id: str
@@ -105,6 +228,7 @@ class VersionedResourceSchedule:
     proof: dict[str, Any] = field(default_factory=dict)
     unresolved: tuple[dict[str, Any], ...] = ()
     executable: bool = False
+    temporal: TemporalModel | None = None
 
 
 CPU_CAPABILITIES = {
@@ -156,6 +280,280 @@ def _overlap(left, right):
     return (left.slot == right.slot and left.nbytes and right.nbytes
         and left.offset_bytes < right.offset_bytes + right.nbytes
         and right.offset_bytes < left.offset_bytes + left.nbytes)
+
+
+def _validate_temporal_model(model, schedule):
+    if type(model) is not TemporalModel or type(model.mode) is not TemporalMode:
+        raise ValueError('one typed temporal model and provenance mode required')
+    events = _unique(model.events, TemporalEvent, 'temporal event')
+    activities = _unique(model.activities, TemporalActivity, 'temporal activity')
+    occupancies = _unique(model.occupancies, TemporalOccupancy, 'temporal occupancy')
+    constraints = _unique(model.constraints, TemporalConstraint, 'temporal constraint')
+    scopes = _unique(model.scopes, TemporalScope, 'temporal scope')
+    tasks = {task.id: task for task in schedule.tasks}
+    slots = {slot.id: slot for slot in schedule.storage_slots}
+    materials = {material.id: material for material in schedule.materializations}
+    _refs(model.source_refs)
+    if type(model.resource_capacities) is not dict or any(
+            not _text(key) or value is not None and not _integer(value)
+            for key, value in model.resource_capacities.items()):
+        raise ValueError('temporal resource capacities must be nonnegative integers or UNKNOWN')
+    tick = (model.tick_numerator, model.tick_denominator)
+    if tick != (None, None) and any(type(value) is not int or value <= 0 for value in tick):
+        raise ValueError('temporal tick_seconds requires a positive rational pair or UNKNOWN')
+    if model.clock_domain is not None and not _text(model.clock_domain):
+        raise ValueError('temporal clock domain must be a nonempty name or UNKNOWN')
+    roots = [scope for scope in scopes.values() if scope.kind is TemporalScopeKind.ROOT]
+    if len(roots) != 1 or roots[0].id != schedule.call_scope or roots[0].parent is not None:
+        raise ValueError('one root temporal scope matching the original call scope required')
+    for scope in scopes.values():
+        _refs(scope.source_refs)
+        if type(scope.kind) is not TemporalScopeKind:
+            raise ValueError('typed temporal scope kind required')
+        if scope is not roots[0] and scope.parent not in scopes:
+            raise ValueError('non-root temporal scope needs its original containing scope')
+        if (scope.entry not in events or scope.exit not in events or scope.entry == scope.exit
+                or events[scope.entry].kind is not TemporalEventKind.SCOPE_ENTRY
+                or events[scope.exit].kind is not TemporalEventKind.SCOPE_EXIT
+                or events[scope.entry].scope != scope.id or events[scope.exit].scope != scope.id):
+            raise ValueError('scope entry/exit must be distinct correctly owned boundary events')
+        if scope.kind is TemporalScopeKind.LOOP:
+            if (not _text(scope.iteration_symbol)
+                    or scope.trip_count is not None and not _integer(scope.trip_count)
+                    or scope.trip_count_symbol is not None and not _text(scope.trip_count_symbol)
+                    or scope.trip_count is not None and scope.trip_count_symbol is not None):
+                raise ValueError('loop scope needs a symbolic iteration variable and one optional trip count')
+        elif any(value is not None for value in (
+                scope.iteration_symbol, scope.trip_count, scope.trip_count_symbol)):
+            raise ValueError('iteration metadata belongs only to a symbolic loop scope')
+    scope_ancestors = {}
+    for identity in scopes:
+        chain = set()
+        current = identity
+        while current is not None:
+            if current in chain:
+                raise ValueError('temporal containment contains a cycle')
+            chain.add(current)
+            current = scopes[current].parent
+        scope_ancestors[identity] = chain
+    # Each edge means time(after) >= time(before) + lower. Upper bounds add
+    # the inverse inequality. Positive-distance recurrences are not unrolled
+    # or mistaken for same-iteration cycles.
+    edges = []
+
+    def bound(before, after, lower=0, upper=None):
+        edges.append((before, after, lower))
+        if upper is not None:
+            edges.append((after, before, -upper))
+
+    known_times = 0
+    anchor = object()
+    for event in events.values():
+        _refs(event.source_refs)
+        if type(event.kind) is not TemporalEventKind or event.scope not in scopes:
+            raise ValueError('typed event kind and containing temporal scope required')
+        if event.task is not None and event.task not in tasks:
+            raise ValueError('temporal event references an unknown original task')
+        if event.kind in (TemporalEventKind.SCOPE_ENTRY, TemporalEventKind.SCOPE_EXIT):
+            if event.task is not None or event.materialization is not None:
+                raise ValueError('scope boundaries are containers, not additional original work')
+        elif event.kind is TemporalEventKind.READY:
+            if event.materialization is None and event.task is None:
+                raise ValueError('ready event needs its original task or materialization')
+        elif event.task is None:
+            raise ValueError('task lifecycle event requires its original task ID')
+        if event.materialization is not None:
+            material = materials.get(event.materialization)
+            if (event.kind is not TemporalEventKind.READY or material is None
+                    or event.task != material.ready_task):
+                raise ValueError('data readiness must name its actual materialization producer')
+        if event.timestamp_ticks is not None:
+            if (not _integer(event.timestamp_ticks) or model.mode is TemporalMode.SEMANTIC
+                    or model.clock_domain is None or not event.source_refs
+                    or model.mode is TemporalMode.OBSERVED and tick == (None, None)):
+                raise ValueError('known timestamps need one declared/observed clock and original evidence')
+            bound(anchor, event.id, event.timestamp_ticks, event.timestamp_ticks)
+            known_times += 1
+        scope = scopes[event.scope]
+        bound(scope.entry, event.id)
+        bound(event.id, scope.exit)
+    for scope in scopes.values():
+        if scope.parent is not None:
+            parent = scopes[scope.parent]
+            bound(parent.entry, scope.entry)
+            bound(scope.exit, parent.exit)
+    task_activities = defaultdict(list)
+    ready_owners = {}
+    pairs = set()
+    for activity in activities.values():
+        _refs(activity.source_refs)
+        if activity.task not in tasks or activity.scope not in scopes:
+            raise ValueError('temporal activity must belong to an original task and containing scope')
+        for name, kind in ((activity.start, TemporalEventKind.START),
+                           (activity.completion, TemporalEventKind.COMPLETION)):
+            event = events.get(name)
+            if (event is None or event.kind is not kind or event.task != activity.task
+                    or event.scope != activity.scope):
+                raise ValueError('activity start/completion events must match its original task and scope')
+        pair = (activity.start, activity.completion)
+        if pair in pairs:
+            raise ValueError('duplicate activity would count the same task lifecycle twice')
+        pairs.add(pair)
+        if type(activity.duration_basis) is not TemporalDurationBasis:
+            raise ValueError('typed temporal duration basis required')
+        lower, upper = activity.duration_lower_ticks, activity.duration_upper_ticks
+        if any(value is not None and not _integer(value) for value in (lower, upper)) or (
+                upper is not None and upper < (lower or 0)):
+            raise ValueError('duration bounds must be ordered nonnegative integers or UNKNOWN')
+        if activity.duration_basis is TemporalDurationBasis.UNKNOWN:
+            if lower is not None or upper is not None:
+                raise ValueError('UNKNOWN duration must not silently carry a numeric estimate')
+        elif (not activity.source_refs or lower is None and upper is None
+                or activity.duration_basis is TemporalDurationBasis.DECLARED_MODEL
+                    and model.mode is not TemporalMode.PLANNED
+                or activity.duration_basis is TemporalDurationBasis.OBSERVED
+                    and (model.mode is not TemporalMode.OBSERVED or tick == (None, None)
+                         or model.clock_domain is None)):
+            raise ValueError('duration evidence must match the temporal model provenance mode')
+        bound(activity.start, activity.completion, lower or 0, upper)
+        if activity.submission_return is not None:
+            event = events.get(activity.submission_return)
+            if (event is None or event.kind is not TemporalEventKind.SUBMISSION_RETURN
+                    or event.task != activity.task or event.scope != activity.scope):
+                raise ValueError('submission-return event must match its original activity')
+            # Completion may precede API return for a short asynchronous task.
+            # Submission return is not a data-readiness dependency.
+            bound(activity.start, event.id)
+        _identities(activity.ready_events, events, 'activity ready event')
+        for identity in activity.ready_events:
+            event = events[identity]
+            if (event.kind is not TemporalEventKind.READY or event.task != activity.task
+                    or event.scope != activity.scope):
+                raise ValueError('activity ready event must match its actual producer')
+            if identity in ready_owners:
+                raise ValueError('ready event must identify one producing activity, not every phase of a task')
+            ready_owners[identity] = activity.id
+            bound(activity.completion, identity)
+        task_activities[activity.task].append(activity)
+    # Original task dependencies remain true completion dependencies. Temporal
+    # metadata cannot erase the source data/storage safety checked above.
+    for task in tasks.values():
+        for dependency in task.depends_on:
+            for before in task_activities[dependency]:
+                for after in task_activities[task.id]:
+                    bound(before.completion, after.start)
+    exported = {materials[name].region.slot for task in tasks.values()
+                if task.kind is VersionedTaskKind.EXPORT for name in task.reads}
+    physical = set()
+    demands = set()
+    resource_kinds = {}
+    for occupancy in occupancies.values():
+        _refs(occupancy.source_refs)
+        if (type(occupancy.kind) is not TemporalOccupancyKind or occupancy.scope not in scopes
+                or occupancy.resource not in model.resource_capacities
+                or occupancy.start not in events or occupancy.end not in events
+                or type(occupancy.continues_after_scope) is not bool):
+            raise ValueError('occupancy needs typed resource, scope and endpoint declarations')
+        previous_kind = resource_kinds.setdefault(occupancy.resource, occupancy.kind)
+        if previous_kind is not occupancy.kind:
+            raise ValueError('one temporal resource cannot mix execution units and physical-slot bytes')
+        if any(occupancy.scope not in scope_ancestors[events[identity].scope]
+               for identity in (occupancy.start, occupancy.end)):
+            raise ValueError('occupancy endpoints escape their declared containing scope')
+        if occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND:
+            activity = activities.get(occupancy.activity)
+            if (activity is None or occupancy.storage_slot is not None or occupancy.continues_after_scope
+                    or occupancy.units is not None and (not _integer(occupancy.units) or occupancy.units == 0)
+                    or occupancy.scope != activity.scope
+                    or any(events[name].task != activity.task for name in (occupancy.start, occupancy.end))):
+                raise ValueError('execution demand must reference one original activity, never free/zero units')
+            key = (activity.id, occupancy.resource)
+            if key in demands:
+                raise ValueError('duplicate activity/resource occupation would double-count work')
+            demands.add(key)
+        else:
+            slot = slots.get(occupancy.storage_slot)
+            start, end = events[occupancy.start], events[occupancy.end]
+            if (slot is None or slot.ownership != 'SCHEDULE' or slot.id in physical
+                    or occupancy.activity is not None or type(occupancy.units) is not int
+                    or occupancy.units != slot.capacity_bytes
+                    or start.task != slot.allocated_by or start.kind is not TemporalEventKind.START):
+                raise ValueError('physical-slot bytes must count one actual owned allocation exactly once')
+            if occupancy.continues_after_scope:
+                if (slot.released_by is not None or slot.id not in exported
+                        or end.kind is not TemporalEventKind.SCOPE_EXIT or end.scope != occupancy.scope):
+                    raise ValueError('retained exported storage must explicitly continue after its scope boundary')
+            elif (slot.released_by is None or end.task != slot.released_by
+                    or end.kind is not TemporalEventKind.COMPLETION):
+                raise ValueError('storage lifetime ends only at its actual release completion, not an invented free')
+            physical.add(slot.id)
+        bound(occupancy.start, occupancy.end)
+    periodic = 0
+    for constraint in constraints.values():
+        _refs(constraint.source_refs)
+        if (type(constraint.kind) is not TemporalConstraintKind or constraint.before not in events
+                or constraint.after not in events or not _integer(constraint.min_delay_ticks)
+                or constraint.max_delay_ticks is not None and (
+                    not _integer(constraint.max_delay_ticks)
+                    or constraint.max_delay_ticks < constraint.min_delay_ticks)
+                or not _integer(constraint.iteration_distance)):
+            raise ValueError('temporal constraint requires valid event IDs, bounds and iteration distance')
+        if constraint.loop_scope is not None:
+            scope = scopes.get(constraint.loop_scope)
+            if (scope is None or scope.kind is not TemporalScopeKind.LOOP
+                    or any(scope.id not in scope_ancestors[events[name].scope]
+                           for name in (constraint.before, constraint.after))):
+                raise ValueError('iteration constraint endpoints must belong to the same enclosing loop')
+        if constraint.iteration_distance:
+            if constraint.kind is not TemporalConstraintKind.LOOP_CARRIED or constraint.loop_scope is None:
+                raise ValueError('positive iteration distance requires an explicit loop-carried constraint')
+            periodic += 1
+        else:
+            if constraint.kind is TemporalConstraintKind.LOOP_CARRIED:
+                raise ValueError('loop-carried dependency needs a positive iteration distance')
+            bound(constraint.before, constraint.after, constraint.min_delay_ticks, constraint.max_delay_ticks)
+    # Difference-bound feasibility only; no timestamps are chosen or optimized.
+    # A zero-delay cycle is equality, not automatically an invalid DAG cycle.
+    distance = {name: 0 for name in (*events, anchor)}
+    for step in range(len(distance)):
+        changed = False
+        for before, after, lower in edges:
+            candidate = distance[before] + lower
+            if candidate > distance[after]:
+                distance[after] = candidate
+                changed = True
+        if not changed:
+            break
+    else:
+        raise ValueError('same-iteration temporal bounds are inconsistent')
+    owned = {slot.id for slot in slots.values() if slot.ownership == 'SCHEDULE'}
+    occupied_activities = {occupancy.activity for occupancy in occupancies.values()
+                          if occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND}
+    return dict(mode=model.mode.value, events=len(events), activities=len(activities),
+        scopes=len(scopes), loop_scopes=sum(scope.kind is TemporalScopeKind.LOOP for scope in scopes.values()),
+        symbolic_iteration_constraints=periodic, iterations_unrolled=0,
+        occupancies=len(occupancies), physical_slots_counted_once=len(physical),
+        physical_slot_coverage_complete=physical == owned,
+        activity_task_coverage_complete={activity.task for activity in activities.values()} == set(tasks),
+        activities_without_execution_demand=len(set(activities) - occupied_activities),
+        execution_demand_coverage_complete=set(activities) <= occupied_activities,
+        unbound_materialization_ready_events=sum(event.kind is TemporalEventKind.READY
+            and event.materialization is not None and event.task is not None
+            and event.id not in ready_owners for event in events.values()),
+        task_dependency_interpretation='ORIGINAL_FULL_TASK_COMPLETION_TO_DEPENDENT_TASK_PHASE_STARTS',
+        known_timestamps=known_times,
+        unknown_durations=sum(activity.duration_basis is TemporalDurationBasis.UNKNOWN
+                              for activity in activities.values()),
+        unknown_execution_demands=sum(occupancy.kind is TemporalOccupancyKind.EXECUTION_DEMAND
+                                     and occupancy.units is None for occupancy in occupancies.values()),
+        same_iteration_bounds_consistent=True, periodic_feasibility_proven=False,
+        resource_capacity_feasibility_proven=False, execution_authorized_by_temporal_model=False)
+
+
+def validate_temporal_model(model, schedule):
+    """Check typed time facts against original tasks without authorizing execution."""
+    validate_versioned_schedule(replace(schedule, temporal=None))
+    return _validate_temporal_model(model, schedule)
 
 
 def validate_versioned_schedule(schedule):
@@ -412,20 +810,34 @@ def validate_versioned_schedule(schedule):
         raise ValueError('fixed storage capacities exceed declared region budget')
     if schedule.executable and (schedule.budget_bytes is None or not schedule.budget_scope or not schedule.budget_refs):
         raise ValueError('executable fixed-storage plan needs an explicit budget scope and original budget reference')
-    return dict(schema_version=2, tasks=len(tasks), logical_values=len(values), materializations=len(materials),
+    summary = dict(schema_version=2 if schedule.temporal is None else 3,
+        tasks=len(tasks), logical_values=len(values), materializations=len(materials),
         storage_slots=len(slots), topological_order=order, executable=schedule.executable,
         fixed_capacity_bytes=total, overwrite_happens_before_verified=True, external_commit_fenced=True)
+    if schedule.temporal is not None:
+        summary['temporal'] = _validate_temporal_model(schedule.temporal, schedule)
+    return summary
 
 
 def schedule_document(schedule):
     validate_versioned_schedule(schedule)
-    return dict(schema='scar.resource-schedule', schema_version=2, **encode(schedule))
+    value = encode(schedule)
+    if schedule.temporal is None:
+        value.pop('temporal')
+    return dict(schema='scar.resource-schedule', schema_version=2 if schedule.temporal is None else 3, **value)
 
 
 def schedule_from_dict(document):
     value = dict(document)
-    if (value.pop('schema', None), value.pop('schema_version', None)) != ('scar.resource-schedule', 2):
+    schema, version = value.pop('schema', None), value.pop('schema_version', None)
+    if schema != 'scar.resource-schedule' or type(version) is not int or version not in (2, 3):
         raise ValueError('unsupported versioned resource schedule schema')
+    if version == 2:
+        if 'temporal' in value:
+            raise ValueError('legacy v2 schedule must not carry temporal fields')
+        value['temporal'] = None
+    elif value.get('temporal') is None:
+        raise ValueError('v3 resource schedule requires an explicit temporal model')
     result = decode(VersionedResourceSchedule, value)
     validate_versioned_schedule(result)
     return result
@@ -434,4 +846,7 @@ def schedule_from_dict(document):
 validate_schedule = validate_versioned_schedule
 __all__ = ['VersionedLogicalValue', 'StorageSlot', 'StorageRegion', 'VersionedMaterialization',
     'VersionedTask', 'VersionedTaskKind', 'OrderConstraint', 'VersionedResourceSchedule',
+    'TemporalMode', 'TemporalEventKind', 'TemporalScopeKind', 'TemporalDurationBasis',
+    'TemporalOccupancyKind', 'TemporalConstraintKind', 'TemporalEvent', 'TemporalScope',
+    'TemporalActivity', 'TemporalOccupancy', 'TemporalConstraint', 'TemporalModel', 'validate_temporal_model',
     'CPU_CAPABILITIES', 'schedule_document', 'schedule_from_dict', 'validate_schedule', 'validate_versioned_schedule']
