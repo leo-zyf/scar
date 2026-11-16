@@ -33,6 +33,7 @@ from . import cpp
 GuardFailure = cpp.GuardFailure
 _DIRECTORY = Path(__file__).resolve().parent
 _TablePointer = ctypes.POINTER(cpp._Table)
+PARALLEL_FAMILY = 'DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1'
 
 
 def _digest(raw):
@@ -45,7 +46,8 @@ def _json_bytes(value):
 
 def pipeline_implementation_sha256():
     files = [{"path": name, "sha256": _digest((_DIRECTORY / name).read_bytes())}
-             for name in ("pipeline.py", "pipeline_v1.cpp.in", "scar_abi_v1.h")]
+             for name in ("pipeline.py", "pipeline_v1.cpp.in", "pipeline_parallel_v1.cpp.in",
+                          "kernel_v1.cpp.in", "scar_abi_v1.h")]
     return semantic_sha256(files)
 
 
@@ -126,7 +128,58 @@ def _operator_receipt(call, operator):
             "source_code_key": call.callee.source.code_key, "files": files}
 
 
-def _source(pipeline, memory, operators):
+def _admit_execution_schedule(pipeline, memory, operators, report):
+    from scar.optimization.pipeline_schedule import verify_pipeline_schedule
+    report=json.loads(json.dumps(report,allow_nan=False))
+    targets=set()
+    for call,operator in zip(pipeline.calls,operators):
+        binding=operator.plan.resource_binding
+        _require(binding is not None and operator.plan.cpu_threads==1 and len(binding.cpu_ids)==1,
+                 'dependency waves require explicitly bound single-CPU ABI1 operators')
+        _require(binding.cpu_ids==(report['call_cpu_ids'][call.id],),
+                 'operator CPU binding differs from its scheduled caller task')
+        targets.add((str(Path(binding.target_path).resolve()),binding.target_sha256))
+    _require(len(targets)==1,'one original hardware snapshot required for dependency waves')
+    path,digest=next(iter(targets))
+    _require(report['target']['uri']==str(Path(path)/'result.json')and report['target']['sha256']==digest,
+             'dependency-wave target differs from operator bindings')
+    replay=verify_pipeline_schedule(pipeline,memory,path,report)
+    _require(replay==report and report['execution_family']==PARALLEL_FAMILY
+             and report['requires_serial_leaf_operators']is True,
+             'exact verified dependency-wave execution schedule required')
+    return report
+
+
+def _parallel_source(serial_source,pipeline,memory,report):
+    marker='extern "C" SCAR_EXPORT_V1 const char *scar_pipeline_plan_sha256_v1()'
+    _require(serial_source.count(marker)==1,'original ABI1 descriptor/plan helpers required')
+    prefix=serial_source.split(marker,1)[0]
+    # Reuse the existing native affinity implementation verbatim. This is a
+    # control adapter around unchanged ABI1 mathematical operators.
+    kernel=(_DIRECTORY/'kernel_v1.cpp.in').read_text()
+    affinity='class ThreadAffinity {'+kernel.split('class ThreadAffinity {',1)[1].split('};\n#endif',1)[0]+'};'
+    indexes={call.id:i for i,call in enumerate(pipeline.calls)}
+    offsets=[0];flat=[]
+    for wave in report['waves']:
+        flat.extend(indexes[name]for name in wave);offsets.append(len(flat))
+    dependencies=['    {{'+','.join('1'if other.id in report['call_predecessors'][call.id]else'0'
+        for other in pipeline.calls)+'}},'for call in pipeline.calls]
+    values={
+        'PLAN_AND_DESCRIPTOR_HELPERS':prefix,'AFFINITY_IMPLEMENTATION':affinity,
+        'CPU_SLOTS':str(max(report['cpu_ids'])+1),
+        'CALL_COUNT':str(len(pipeline.calls)),'WAVE_COUNT':str(len(report['waves'])),
+        'CALL_CPUS':','.join(str(report['call_cpu_ids'][call.id])for call in pipeline.calls),
+        'WAVE_OFFSETS':','.join(map(str,offsets)),'WAVE_CALLS':','.join(map(str,flat)),
+        'CALL_PREDECESSORS':'\n'.join(dependencies),
+        'PIPELINE_SHA256':pipeline_digest(pipeline),'MEMORY_SHA256':semantic_sha256(memory),
+        'EXECUTION_SCHEDULE_SHA256':semantic_sha256(report),
+    }
+    source=(_DIRECTORY/'pipeline_parallel_v1.cpp.in').read_text()
+    for name,value in values.items():source=source.replace('@'+name+'@',value)
+    return source
+
+
+def _source(pipeline, memory, operators, execution_schedule=None):
     values = memory["values"]
     indices = {value["id"]: index for index, value in enumerate(values)}
     slots = {slot["id"]: index for index, slot in enumerate(memory["workspace_slots"])}
@@ -157,7 +210,7 @@ def _source(pipeline, memory, operators):
     source = (_DIRECTORY / "pipeline_v1.cpp.in").read_text()
     for key, value in replacements.items():
         source = source.replace("@" + key + "@", value)
-    return source
+    return _parallel_source(source,pipeline,memory,execution_schedule)if execution_schedule is not None else source
 
 
 @dataclass
@@ -171,10 +224,15 @@ class PipelineArtifact:
     _operators: tuple
     _tables: object
     _output_shape: tuple
+    _execution_schedule: dict|None = None
 
     @property
     def memory_plan(self):
         return json.loads(json.dumps(self._memory))
+
+    @property
+    def execution_schedule(self):
+        return None if self._execution_schedule is None else json.loads(json.dumps(self._execution_schedule))
 
     @property
     def report(self):
@@ -196,6 +254,8 @@ class PipelineArtifact:
         for parameter, array in zip(self.pipeline.parameters, arrays):
             if array.shape != tuple(self._memory["input_shapes"][parameter]):
                 raise GuardFailure("pipeline input shape differs from memory plan")
+            if self._execution_schedule is not None and not array.flags.c_contiguous:
+                raise GuardFailure('dependency-wave input layout must match its C-contiguous resource plan')
         try:
             output = np.empty(self._output_shape, dtype=np.float64)
         except (MemoryError, ValueError, OverflowError) as error:
@@ -209,13 +269,13 @@ class PipelineArtifact:
             reasons = {10: "pointer/alias admission", 11: "shape/layout admission", 12: "payload budget",
                        13: "workspace lifetime/alias", 14: "operator ABI/source binding", 15: "workspace allocation",
                        101: "operator pointer/rank/bounds", 102: "operator shape", 103: "operator floating-point/nonfinite",
-                       104: "operator CPU affinity"}
+                       104: "operator CPU affinity",16:'worker creation or floating environment'}
             where = f" at call {failed.value}" if failed.value != 2**64 - 1 else ""
             raise GuardFailure("pipeline " + reasons.get(status, f"status {status}") + where)
         return output
 
 
-def build(pipeline, out, *, memory_plan, operators):
+def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
     """Compile a host dispatcher over explicitly supplied ABI-1 leaf artifacts."""
     pipeline = read_pipeline(pipeline) if isinstance(pipeline, (str, Path)) else pipeline_from_dict(document(pipeline))
     memory = _memory(pipeline, memory_plan)
@@ -229,13 +289,16 @@ def build(pipeline, out, *, memory_plan, operators):
         _compatible(call, operator, memory)
         loaded.append(operator)
     bindings = [_operator_receipt(call, operator) for call, operator in zip(pipeline.calls, loaded)]
-    source = _source(pipeline, memory, loaded)
+    if execution_schedule is not None:
+        execution_schedule=_admit_execution_schedule(pipeline,memory,loaded,execution_schedule)
+    source = _source(pipeline, memory, loaded,execution_schedule)
+    compiler_options=(*cpp.COMPILER_OPTIONS,*(()if execution_schedule is None else('-pthread',)))
     header = (_DIRECTORY / "scar_abi_v1.h").read_bytes()
     fingerprint = pipeline_implementation_sha256()
     compiler = shlex.split(os.environ.get("CXX", "g++"))
     _require(bool(compiler) and shutil.which(compiler[0]) is not None, "pipeline C++20 compiler unavailable")
     build_id = _digest(source.encode() + header + _json_bytes(bindings) + fingerprint.encode() +
-                       _json_bytes(compiler) + _json_bytes(list(cpp.COMPILER_OPTIONS)))
+                       _json_bytes(compiler) + _json_bytes(list(compiler_options)))
     directory = Path(out).resolve(); directory.mkdir(parents=True, exist_ok=True)
     (directory / "pipeline.json").write_bytes(_json_bytes(document(pipeline)))
     (directory / "memory-plan.json").write_bytes(_json_bytes(memory))
@@ -244,7 +307,7 @@ def build(pipeline, out, *, memory_plan, operators):
     library = directory / ("pipeline_" + build_id[:20] + ".so")
     fd, temporary = tempfile.mkstemp(prefix=".pipeline-", suffix=".so", dir=directory); os.close(fd)
     try:
-        process = subprocess.run([*compiler, *cpp.COMPILER_OPTIONS, str(directory / "pipeline.cpp"),
+        process = subprocess.run([*compiler, *compiler_options, str(directory / "pipeline.cpp"),
                                   "-o", temporary, "-lm"], capture_output=True, text=True)
         if process.returncode:
             raise RuntimeError("pipeline C++20 compilation failed:\n" + process.stderr.strip())
@@ -254,12 +317,15 @@ def build(pipeline, out, *, memory_plan, operators):
     version = subprocess.run([*compiler, "--version"], capture_output=True, text=True).stdout.splitlines()
     files = {"pipeline": "pipeline.json", "memory_plan": "memory-plan.json", "source": "pipeline.cpp",
              "abi_header": "scar_abi_v1.h", "library": library.name}
+    if execution_schedule is not None:
+        files['execution_schedule']='execution-schedule.json'
+        (directory/files['execution_schedule']).write_bytes(_json_bytes(execution_schedule))
     metadata = {
         "schema": "scar.native-array-pipeline", "schema_version": 1, "pipeline_abi_version": 1,
         "backend": "cpp", "build_id": build_id, "pipeline_sha256": pipeline_digest(pipeline),
         "memory_plan_sha256": semantic_sha256(memory), "pipeline_implementation_sha256": fingerprint,
         "files": files, "sha256": {key: _digest((directory / name).read_bytes()) for key, name in files.items()},
-        "operators": bindings, "compiler": compiler, "compiler_options": list(cpp.COMPILER_OPTIONS),
+        "operators": bindings, "compiler": compiler, "compiler_options": list(compiler_options),
         "compiler_version": version[0] if version else "unknown",
         "workspace_bytes": memory["total_workspace_bytes"], "final_bytes": memory["final_bytes"],
         "incremental_payload_bytes": memory["peak_allocation_bytes"], "memory_budget_bytes": memory["memory_budget_bytes"],
@@ -275,6 +341,12 @@ def build(pipeline, out, *, memory_plan, operators):
         "cost_scope": "LEAF_KERNEL_ABI_ONLY_PIPELINE_HOST_OVERHEAD_UNCALIBRATED",
         "duration_predicted": False, "physical_optimality_proven": False, "deployment_authorized": False,
     }
+    if execution_schedule is not None:
+        metadata.update(execution_family=PARALLEL_FAMILY,
+            execution_schedule_sha256=semantic_sha256(execution_schedule),
+            execution='ONE_PYTHON_ENTRY_CPP_DEPENDENCY_WAVES_JOINED_ABI1_SERIAL_OPERATORS',
+            failure_policy='JOIN_ALL_STARTED_WORKERS_WITHHOLD_OUTPUT_THEN_ORIGINAL_CALLER_ONCE',
+            floating_environment='SAVE_CALLER_COPY_FULL_ENV_TO_WORKERS_HOLD_AND_RESTORE_ALL_SCOPES')
     (directory / "artifact.json").write_bytes(_json_bytes(metadata))
     return load(directory)
 
@@ -302,7 +374,17 @@ def load(out):
         _require(_operator_receipt(call, operator) == binding, "operator source/call binding differs")
         pointers.append(operator._library.scar_get_operator_table_v1())
         operators.append(operator)
-    source = _source(pipeline, memory, operators).encode()
+    parallel_fields=('execution_family'in metadata,'execution_schedule_sha256'in metadata,
+                     'execution_schedule'in metadata['files'])
+    _require(all(parallel_fields)or not any(parallel_fields),'incomplete dependency-wave metadata')
+    execution_schedule=None
+    if all(parallel_fields):
+        _require(metadata['execution_family']==PARALLEL_FAMILY,'unsupported pipeline control family')
+        execution_schedule=_admit_execution_schedule(pipeline,memory,operators,
+            json.loads((directory/metadata['files']['execution_schedule']).read_bytes()))
+        _require(metadata['execution_schedule_sha256']==semantic_sha256(execution_schedule),
+                 'dependency-wave schedule semantic identity differs')
+    source = _source(pipeline, memory, operators,execution_schedule).encode()
     _require(source == (directory / metadata["files"]["source"]).read_bytes(),
              "pipeline host source differs from call/operator/memory bindings")
     identity = _digest(source + (directory / metadata["files"]["abi_header"]).read_bytes() +
@@ -314,13 +396,17 @@ def load(out):
                            ("scar_pipeline_memory_sha256_v1", metadata["memory_plan_sha256"])):
         getter = getattr(library, name); getter.argtypes = []; getter.restype = ctypes.c_char_p
         _require(getter() == expected.encode(), "native pipeline embedded source/memory receipt differs")
+    if execution_schedule is not None:
+        getter=library.scar_pipeline_schedule_sha256_v1;getter.argtypes=[];getter.restype=ctypes.c_char_p
+        _require(getter()==metadata['execution_schedule_sha256'].encode(),
+                 'native pipeline embedded execution schedule differs')
     run = library.scar_pipeline_run_v1
     run.argtypes = [ctypes.POINTER(cpp._Array), ctypes.c_uint64, ctypes.POINTER(cpp._Array),
                     ctypes.POINTER(_TablePointer), ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
     run.restype = ctypes.c_int32
     final = next(value for value in memory["values"] if value["id"] == pipeline.output)
     return PipelineArtifact(pipeline, directory, memory, metadata, library, run, tuple(operators),
-                            (_TablePointer * len(pointers))(*pointers), tuple(final["shape"]))
+                            (_TablePointer * len(pointers))(*pointers), tuple(final["shape"]),execution_schedule)
 
 
 __all__ = ["PipelineArtifact", "GuardFailure", "build", "load", "pipeline_implementation_sha256"]

@@ -1,6 +1,6 @@
 """Discover original F4 call pipelines, plan their buffers, and lower to C++20."""
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -14,9 +14,15 @@ def _write(path, value):
 
 def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, input_metadata_path=None,
                       input_shapes=None, target=None, cpu_threads=None, memory_budget_bytes=None,
-                      search_budget=100000, strategy_mode='auto'):
+                      search_budget=100000, strategy_mode='auto', pipeline_workers=None, source_graph=None):
     if strategy_mode not in ('auto', 'pool'):
         raise ValueError('pipeline strategy must be auto or pool')
+    if pipeline_workers is not None:
+        if type(pipeline_workers) is not int or pipeline_workers < 1:
+            raise ValueError('pipeline workers must be a positive explicit CPU allocation')
+        if cpu_threads not in (None, 1):
+            raise ValueError('dependency-wave execution requires serial leaf operators')
+        cpu_threads = 1
     if pipeline_path is not None:
         if source is not None or catalog is not None:
             raise ValueError('read a pipeline plan or discover from source/catalog')
@@ -49,7 +55,7 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             rows.append(row)
             continue
         strategy = None
-        if strategy_mode == 'auto':
+        if strategy_mode == 'auto' and pipeline_workers is None:
             from scar.optimization.pipeline_strategy import plan_pipeline_strategy
             strategy = plan_pipeline_strategy(pipeline, input_shapes=shapes,
                 memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
@@ -65,7 +71,8 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             from scar.optimization.pipeline_memory import plan_pipeline_memory
             memory = plan_pipeline_memory(pipeline, input_shapes=shapes,
                 memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
-            row['selected_strategy'] = 'PRESERVE_CALLS_HOST_POOL'
+            row['selected_strategy'] = ('PRESERVE_CALLS_HOST_POOL' if pipeline_workers is None
+                else 'DEPENDENCY_WAVES_HOST_POOL')
         memory_path = folder / 'memory-plan.json'
         _write(memory_path, memory)
         row.update(memory_plan=str(memory_path), input_shape_evidence=shape_evidence)
@@ -93,16 +100,39 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
         from scar.optimization.hardware import propose_cpu_placements, bind_cpu_placement
         from scar.optimization.schedule import build_region_schedule
         shared = {}
+        execution_schedule = None
+        parallel_binding = None
+        if pipeline_workers is not None:
+            # Explicit feasible allocation for validation, not a prediction
+            # that maximum worker count minimizes physical execution time.
+            candidates = propose_cpu_placements(pipeline.calls[0].plan, target,
+                memory_budget_bytes=memory_budget_bytes, max_threads=pipeline_workers)
+            candidates = [binding for binding in candidates if len(binding.cpu_ids) == pipeline_workers]
+            if not candidates:
+                raise ValueError('no executor satisfies the explicit pipeline CPU allocation')
+            parallel_binding = candidates[0]
+            from scar.optimization.pipeline_schedule import plan_pipeline_schedule
+            execution_schedule = plan_pipeline_schedule(pipeline, memory, target,
+                cpu_ids=parallel_binding.cpu_ids, input_graph=source_graph)
+            schedule_path = folder / 'resource-plan.json'
+            _write(schedule_path, execution_schedule)
+            row['execution_schedule'] = str(schedule_path)
+            row['pipeline_workers'] = pipeline_workers
 
-        def operator_for(plan):
-            digest = sha256(json.dumps(document(plan), sort_keys=True, allow_nan=False).encode()).hexdigest()
+        def operator_for(plan, call_id=None):
+            binding = (None if execution_schedule is None else
+                replace(parallel_binding, cpu_ids=(execution_schedule['call_cpu_ids'][call_id],)))
+            digest = sha256(json.dumps(dict(plan=document(plan),
+                binding=None if binding is None else asdict(binding)), sort_keys=True, allow_nan=False).encode()).hexdigest()
             if digest not in shared:
-                candidates = propose_cpu_placements(plan, target,
-                    memory_budget_bytes=memory_budget_bytes, max_threads=cpu_threads)
-                candidates = [binding for binding in candidates if len(binding.cpu_ids) == cpu_threads]
-                if not candidates:
-                    raise ValueError('no executor satisfies the explicitly requested CPU allocation')
-                bound = bind_cpu_placement(plan, candidates[0])
+                if binding is None:
+                    candidates = propose_cpu_placements(plan, target,
+                        memory_budget_bytes=memory_budget_bytes, max_threads=cpu_threads)
+                    candidates = [candidate for candidate in candidates if len(candidate.cpu_ids) == cpu_threads]
+                    if not candidates:
+                        raise ValueError('no executor satisfies the explicitly requested CPU allocation')
+                    binding = candidates[0]
+                bound = bind_cpu_placement(plan, binding)
                 shared[digest] = build_leaf(bound, folder / 'operators' / ('operator-' + str(len(shared))),
                     resource_schedule=build_region_schedule(bound, target))
             return shared[digest]
@@ -113,16 +143,19 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             operator = operator_for(fused_execution_plan(pipeline, strategy))
             artifact = build_fused(pipeline, folder / 'native', strategy=strategy, operator=operator)
         else:
-            operators = {call.id: operator_for(call.plan) for call in pipeline.calls}
-            artifact = build_pipeline(pipeline, folder / 'native', memory_plan=memory, operators=operators)
+            operators = {call.id: operator_for(call.plan, call.id) for call in pipeline.calls}
+            options = {} if execution_schedule is None else dict(execution_schedule=execution_schedule)
+            artifact = build_pipeline(pipeline, folder / 'native', memory_plan=memory, operators=operators, **options)
         row.update(status='COMPILED_UNMEASURED', artifact=str(folder / 'native'),
             backend=artifact.report, unique_operator_artifacts=len(shared),
-            cpu_allocation_policy='CALLER_EXPLICIT_THREAD_COUNT_FIRST_FEASIBLE_EXECUTOR_UNRANKED')
+            cpu_allocation_policy=('CALLER_EXPLICIT_THREAD_COUNT_FIRST_FEASIBLE_EXECUTOR_UNRANKED'
+                if execution_schedule is None else 'EXPLICIT_PIPELINE_WIDTH_FEASIBLE_EXECUTOR_AND_DEPENDENCY_WAVES_UNRANKED'))
         rows.append(row)
     report = dict(schema='scar.pipeline-compiler-build', schema_version=1, pipelines=rows,
         rejections=rejected, original_f4_discovery=pipeline_path is None,
         whole_program_compiled=False, first_stage_complete=False, selected_for_use=False,
-        cost_scope='PIPELINE_GRAPH_AND_PAYLOAD_OPTIMIZATION_TIME_UNCALIBRATED', strategy_mode=strategy_mode)
+        cost_scope='PIPELINE_GRAPH_AND_PAYLOAD_OPTIMIZATION_TIME_UNCALIBRATED', strategy_mode=strategy_mode,
+        pipeline_workers=pipeline_workers)
     _write(out / 'result.json', report)
     return report
 
@@ -139,6 +172,8 @@ def main():
     shapes.add_argument('--shape', type=int, nargs=2)
     parser.add_argument('--target')
     parser.add_argument('--cpu-threads', type=int)
+    parser.add_argument('--pipeline-workers', type=int,
+        help='explicit dependency-wave CPU allocation preview; each leaf uses one CPU')
     parser.add_argument('--memory-budget-bytes', type=int)
     parser.add_argument('--search-budget', type=int, default=100000)
     parser.add_argument('--strategy', dest='strategy_mode', choices=('auto', 'pool'), default='auto',
@@ -147,7 +182,7 @@ def main():
     result = compile_pipelines(args.out, source=args.source, catalog=args.catalog,
         pipeline_path=args.pipeline, input_metadata_path=args.inputs, input_shapes=args.shape,
         target=args.target, cpu_threads=args.cpu_threads, memory_budget_bytes=args.memory_budget_bytes,
-        search_budget=args.search_budget, strategy_mode=args.strategy_mode)
+        search_budget=args.search_budget, strategy_mode=args.strategy_mode, pipeline_workers=args.pipeline_workers)
     print(json.dumps(dict(pipelines=len(result['pipelines']),
         statuses=[row['status'] for row in result['pipelines']], result=str(Path(args.out) / 'result.json'))))
 

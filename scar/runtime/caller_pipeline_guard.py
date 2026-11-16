@@ -33,6 +33,7 @@ _RANGE=range
 _GETTRACE=sys.gettrace;_GETPROFILE=sys.getprofile
 _MONITOR=getattr(sys,'monitoring',None)
 _MONITOR_APIS=None if _MONITOR is None else (_MONITOR.get_tool,_MONITOR.get_events,_MONITOR.get_local_events)
+_PARALLEL_FAMILY='DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1'
 
 
 def _need(condition,detail):
@@ -88,6 +89,19 @@ def validate_contract(value):
     _need(type(ids)is list and ids and len(set(ids))==len(ids)and all(type(i)is int and 0<=i<2**20 for i in ids)
         and cpu['os']=='linux'and cpu['architecture']=='x86_64'and cpu['pointer_bits']==64
         and cpu['byteorder']=='little'and cpu['required_isa']=='BASELINE_X86_64','original supported CPU binding required')
+    parallel=('execution_family'in native,'execution_schedule_sha256'in native,'execution_schedule_receipt'in native)
+    _need(all(parallel)or not any(parallel),'complete optional dependency-wave control contract required')
+    if all(parallel):
+        receipt=native['execution_schedule_receipt']
+        _need(native['execution_family']==_PARALLEL_FAMILY and _hash(native['execution_schedule_sha256'])
+            and type(receipt)is dict and set(receipt)=={'path','sha256','bytes'}
+            and type(receipt['path'])is str and Path(receipt['path']).is_absolute()
+            and _hash(receipt['sha256'])and type(receipt['bytes'])is int and receipt['bytes']>0,
+            'original dependency-wave schedule identity/producer receipt required')
+        _need(all(row.get('cpu_threads')==1 and type(row.get('cpu_threads'))is int
+            and type(row.get('cpu_ids'))is list and len(row['cpu_ids'])==1
+            and row['cpu_ids'][0]in ids for row in operators),
+            'dependency-wave operators require their exact single-CPU placement')
     memory=value['memory']
     _need(memory['policy']=='UNBOUND'and memory['scope']=='INCREMENTAL_PAYLOAD_WORKSPACE_CAPACITIES_PLUS_FRESH_FINAL'
         and all(type(memory[key])is int and 0<=memory[key]<=sys.maxsize for key in('workspace_bytes','final_bytes','peak_bytes','budget_bytes'))
@@ -208,6 +222,10 @@ def load(bundle,*,expected_admission_sha256):
             ('scar_pipeline_memory_sha256_v1',native['memory_plan_sha256'])):
         getter=getattr(host,symbol);getter.argtypes=[];getter.restype=ctypes.c_char_p
         _need(getter()==digest.encode(),'caller host embedded plan/memory differs')
+    if native.get('execution_family')==_PARALLEL_FAMILY:
+        getter=host.scar_pipeline_schedule_sha256_v1;getter.argtypes=[];getter.restype=ctypes.c_char_p
+        _need(getter()==native['execution_schedule_sha256'].encode(),
+            'caller host embedded dependency-wave schedule differs')
     run=host.scar_pipeline_run_v1
     run.argtypes=[ctypes.POINTER(_Array),ctypes.c_uint64,ctypes.POINTER(_Array),ctypes.POINTER(_TablePointer),
         ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint64)];run.restype=ctypes.c_int32

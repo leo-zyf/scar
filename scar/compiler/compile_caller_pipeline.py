@@ -16,7 +16,7 @@ from scar.ir.execution_recipe import artifact_reference
 
 def compile_caller_pipeline(program, out, *, caller_unit=None, function_ordinal=None,
         provider_name=None, interface_ordinals=None, proof=None, input_shapes,
-        target=None, cpu_threads=1, memory_budget_bytes, runtime_out=None):
+        target=None, cpu_threads=1, memory_budget_bytes, runtime_out=None,pipeline_workers=None):
     program=Path(program).resolve()
     if program.is_file():program=program.parent
     with BuildSession(program)as session:
@@ -46,7 +46,7 @@ def compile_caller_pipeline(program, out, *, caller_unit=None, function_ordinal=
             target=Path(material['path']).parent
         result=lower_caller_pipeline(selected,out,view=session.view,provider=provider,
             input_shapes=input_shapes,target=target,cpu_threads=cpu_threads,
-            memory_budget_bytes=memory_budget_bytes)
+            memory_budget_bytes=memory_budget_bytes,pipeline_workers=pipeline_workers)
         result['program']=artifact_reference(program/'manifest.json','scar.program-build')
         result['provider']=name
         if runtime_out is not None:
@@ -57,7 +57,8 @@ def compile_caller_pipeline(program, out, *, caller_unit=None, function_ordinal=
                 Path(out)/'compiled/pipeline-0/native',runtime_out,proof=selected,
                 view=session.view,provider=provider,proof_reference=result['proof'])
             result['caller_matched_live_runtime_guard_adapter_implemented']=True
-            result['runtime_guard_scope']='COMPACT_POOLED_HOST_VALIDATION_ONLY_COST_UNKNOWN'
+            result['runtime_guard_scope']=('COMPACT_POOLED_HOST_VALIDATION_ONLY_COST_UNKNOWN'
+                if pipeline_workers is None else 'COMPACT_DEPENDENCY_WAVES_HOST_VALIDATION_ONLY_COST_UNKNOWN')
         path=Path(out).resolve()/'result.json'
         path.write_text(json.dumps(result,sort_keys=True,indent=2,allow_nan=False)+'\n')
         return result
@@ -70,6 +71,7 @@ def main(argv=None):
     parser.add_argument('--provider');parser.add_argument('--interface-ordinal',type=int,action='append')
     parser.add_argument('--proof');parser.add_argument('--input-shapes',type=json.loads,required=True)
     parser.add_argument('--target');parser.add_argument('--cpu-threads',type=int,default=1)
+    parser.add_argument('--pipeline-workers',type=int,help='explicit CPU wave allocation; leaves remain serial')
     parser.add_argument('--runtime-out',help='export the same ELF files and a compact validation-only runtime contract')
     parser.add_argument('--memory-budget-bytes',type=int,required=True)
     args=parser.parse_args(argv)
@@ -77,7 +79,8 @@ def main(argv=None):
         function_ordinal=args.function_ordinal,provider_name=args.provider,
         interface_ordinals=None if args.interface_ordinal is None else tuple(args.interface_ordinal),
         proof=args.proof,input_shapes=args.input_shapes,target=args.target,
-        cpu_threads=args.cpu_threads,memory_budget_bytes=args.memory_budget_bytes,runtime_out=args.runtime_out)
+        cpu_threads=args.cpu_threads,memory_budget_bytes=args.memory_budget_bytes,runtime_out=args.runtime_out,
+        pipeline_workers=args.pipeline_workers)
     print(json.dumps(result,sort_keys=True,indent=2));return 0
 
 

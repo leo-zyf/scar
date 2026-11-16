@@ -40,6 +40,7 @@ def export_caller_pipeline_runtime(native_directory,out,*,proof_reference,view,p
     if out.exists():raise ValueError('fresh compact caller runtime bundle required')
     # Validate the whole supported footprint before publishing any bundle.
     operators=artifact._operators;cpus=set();targets=[]
+    execution_schedule=artifact.execution_schedule
     for operator in operators:
         binding=operator.plan.resource_binding
         if operator.timed_admission is not None or binding is None or not binding.cpu_ids:
@@ -63,6 +64,8 @@ def export_caller_pipeline_runtime(native_directory,out,*,proof_reference,view,p
     for call,operator in zip(proof.pipeline.calls,operators):
         row=retain(operator.library_path,'operator')
         row.update(plan_sha256=operator.report['plan_sha256'],input_count=len(call.plan.region.parameters))
+        if execution_schedule is not None:
+            row.update(cpu_ids=list(operator.plan.resource_binding.cpu_ids),cpu_threads=operator.plan.cpu_threads)
         native_operators.append(row)
     memory=artifact.memory_plan;final=next(row for row in memory['values']if row['id']==proof.pipeline.output)
     callees={}
@@ -97,6 +100,13 @@ def export_caller_pipeline_runtime(native_directory,out,*,proof_reference,view,p
         contract['array_copy_contract']=runtime_copy_contract()
         contract['runtime_guards']['ndarray_copy_descriptor_and_input_type']='EACH_CALL'
         contract['external_assumptions'].append('ARRAY_INPUT_CONTENT_STABLE_DURING_REGION')
+    if execution_schedule is not None:
+        contract['native'].update(execution_family=identity['execution_family'],
+            execution_schedule_sha256=identity['execution_schedule_sha256'],
+            execution_schedule_receipt=_receipt(native_directory/identity['files']['execution_schedule']))
+        contract['cpu']['ids']=list(execution_schedule['cpu_ids'])
+        contract['runtime_guards'].update(dependency_schedule_embedding='LOAD',
+            worker_cpu_binding_full_fenv_restore_and_join='NATIVE_EACH_CALL')
     validate_contract(contract);runtime_raw=_json(contract)
     admission=dict(schema=ADMISSION,schema_version=1,trust_policy=TRUST,
         runtime_sha256=sha256(runtime_raw).hexdigest(),native=contract['native'],
@@ -120,6 +130,9 @@ def export_caller_pipeline_runtime(native_directory,out,*,proof_reference,view,p
         cpp_host_abi_version=1,operator_abi_version=1,live_guard_adapter_implemented=True,
         cost_status='UNKNOWN',automatic_deployment_authorized=False,default_backend='NO_OP',
         target_program_executed=False,numerical_backend_added=False)
+    if execution_schedule is not None:
+        report.update(execution_family=identity['execution_family'],
+            execution_schedule_sha256=identity['execution_schedule_sha256'])
     (out/'export-report.json').write_bytes(_json(report))
     return report
 

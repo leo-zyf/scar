@@ -305,20 +305,24 @@ def read_caller_pipeline_proof(path,*,view,provider):
 
 
 def lower_caller_pipeline(proof,out,*,view,provider,input_shapes,target,cpu_threads,memory_budget_bytes,
-                          strategy_mode='pool'):
-    """Replay before invoking the existing C++20 pipeline compiler unchanged."""
+                          strategy_mode='pool',pipeline_workers=None):
+    """Replay source/value interfaces before the shared C++20 pipeline compiler."""
     from scar.compiler.compile_pipeline import compile_pipelines
     from scar.ir.execution_recipe import artifact_reference
-    proof=validate_caller_pipeline_proof(proof,view=view,provider=provider)
     out=Path(out).resolve()
     if out.exists():raise ValueError('fresh caller pipeline lowering output required')
     out.mkdir(parents=True);reference=write_caller_pipeline_proof(proof,out/'proof.json')
+    from scar.analysis.caller_pipeline_values import publish_caller_values
+    values,proof=publish_caller_values(reference,out/'program-values',view=view,provider=provider,
+        proof=proof,input_shapes=input_shapes)
+    value_reference=artifact_reference(out/'program-values/result.json',values['schema'])
     write_pipeline(proof.pipeline,out/'pipeline.json')
     result=compile_pipelines(out/'compiled',pipeline_path=out/'pipeline.json',input_shapes=input_shapes,
-        target=target,cpu_threads=cpu_threads,memory_budget_bytes=memory_budget_bytes,strategy_mode=strategy_mode)
+        target=target,cpu_threads=cpu_threads,memory_budget_bytes=memory_budget_bytes,strategy_mode=strategy_mode,
+        pipeline_workers=pipeline_workers,source_graph=value_reference)
     report=dict(schema='scar.caller-matched-pipeline-lowering',schema_version=1,proof=reference,
         original_f4_and_matched_interface_replayed_before_lowering=True,
-        pipeline=artifact_reference(out/'pipeline.json','scar.array-pipeline-plan'),
+        pipeline=artifact_reference(out/'pipeline.json','scar.array-pipeline-plan'),program_values=value_reference,
         compiler=artifact_reference(out/'compiled/result.json',result['schema']),
         cpp_artifacts_compiled=sum(row['status']=='COMPILED_UNMEASURED'for row in result['pipelines']),
         new_numerical_backend=False,selected_for_use=False,transformation_authorized=False,
