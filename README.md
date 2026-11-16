@@ -41,6 +41,16 @@ scar compile-build --domains DOMAINS --stateful-interval-plans REGION_TO_INTERVA
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
+已有来源核验的 standalone 串行区域成本可继续进入局部时间规划与 C++ 试验：
+
+```bash
+scar project-activity-time --costs COSTS/result.json --out TIME
+scar plan-closed-windows --activity-time TIME/result.json --out WINDOWS
+scar compile-window-trial --windows WINDOWS/result.json --out TRIAL
+```
+
+这条路径保留未知残差、原存储生命期及外部边界；自动发现同形状、独立 raw-copy 循环的融合方案，并独立重放后生成 C++20/ABI1。仅在唯一可试验窗口时自动定位，否则须给 `--window`。当前融合成本未测，试验产物默认 NO_OP，不构成全图选优或部署；三个命令都可用 `--check` 冷读相应产物。
+
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
 
 追加 `--pipeline-memory-order dependencies` 时，只在原 RAW 已证明旧值全部消费者结束后复用，避免为省槽位新增等待；预算不足明确拒绝。默认 `source` 保持按源码串行生命周期规划。两种容量模型均不等同最短执行时间，联合 makespan 选择仍需成本和执行证书。

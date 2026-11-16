@@ -84,7 +84,8 @@ def prepare_activity_costs(resources, out, *, domain=None, candidate_id=None, ca
     return report
 
 
-def read_activity_costs(path):
+def replay_activity_costs(path):
+    """Cold-replay once and return the retained table plus its source inputs."""
     reference = artifact_reference(Path(path).resolve(), SCHEMA)
     report = read_artifact(reference)
     if (report.get('schema'), report.get('schema_version')) != (SCHEMA, 1):
@@ -105,11 +106,16 @@ def read_activity_costs(path):
         expected['boundary_calibrations'] = boundary_refs
     if dag_refs:
         expected['dag_calibrations'] = dag_refs
-    if (table != replay or report != expected or semantic_sha256(read_artifact(report['derivation'])) != semantic_sha256(dict(
+    saved_derivation = read_artifact(report['derivation'])
+    if (table != replay or report != expected or semantic_sha256(saved_derivation) != semantic_sha256(dict(
             schema='scar.activity-cost-derivation', schema_version=1, **derivation))):
         raise ValueError('activity costs differ from original source/resource/component replay')
     read_artifact(reference)
-    return report
+    return report, table, saved_derivation, schedule, resources
+
+
+def read_activity_costs(path):
+    return replay_activity_costs(path)[0]
 
 
 def main(argv=None):
