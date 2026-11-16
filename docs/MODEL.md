@@ -473,6 +473,8 @@ SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代
 
 `bind-time-resources` 以占用 ID 连接原硬件图，不再复制一张执行图：`ExecutionBinding` 区分精确线程与有来源的候选线程，`core_refs` 保留共享物理核关系，不从 SMT 数目推出吞吐或核独占；`StorageBinding` 每份 owned slot 一条，HOST 候选域不等于页驻留。`OriginalBudget` 原样保留预算和统计范围，库存总容量不变成可用预算。选定计算 CPU 集合不证明分配/guard 等宿主活动的线程绑定；源信息不足时域和需求仍为 UNKNOWN。所有引用带原 snapshot，未使用设备与连接仍由完整原硬件图保留。
 
+`cost-activities` 用 `ActivityCostTable` 引用同一时间图和资源投影；每个原活动恰归一个计费 subject。原整池标定对应一组 allocation/release，不能均摊或按 slot 数重复乘；同一 canonical 样本可供不同真实工作 occurrence 估价，occurrence 不能重复计费。现 CPU 组件桥重放原 recipe/task 图、阶段、形状、完整硬件/后端 context 和原样本统计，将 canonical 样本标为条件组件模型，其 min/max 仅为经验范围。整调用观测不拆成 leaf 成本；没有独立活动端点的 guard、输入扫描、team setup/restore 等保留 unmapped，不能伪装成 duration UNKNOWN 的既有节点或塞入 fence。全部 subject 有证据仍不自动证明完整调用闭合，更不授权 solver、C++ 或物理最优性。
+
 `StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
 参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
 

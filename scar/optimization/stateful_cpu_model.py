@@ -178,13 +178,35 @@ def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
 
 def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     """Internal composition within an already admitted domain session."""
+    result=_evaluate_stateful_cpu_components(domain,candidate_id,calibrations)
+    demand=result['demand'];context=demand['context'];sources=result['source_calibrations']
+    evaluated=result['components'];issues=result['unresolved'];total=result['known_component_sum_ns']
+    rejected_calibrations=result['rejected_calibrations']
+    return _write_stateful_cpu_model(demand,context,sources,evaluated,issues,total,rejected_calibrations,out)
+
+
+def evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
+    """Replay component provenance without publishing another profile or model.
+
+    Consumers may map these occurrence-specific terms to execution activities;
+    canonical timings remain conditional models, not observed task durations.
+    """
+    return _evaluate_stateful_cpu_components(_domain(domain),candidate_id,calibrations)
+
+
+def _evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
     demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[];rejected={}
+    inapplicable=[]
     rejected_calibrations=[]
     for value in calibrations:
         document,source=_profile(value)
         if document.get('schema')!='scar.stateful-resource-calibration' or document.get('schema_version')!=1:
             raise ValueError('stateful independent resource calibration required')
-        if semantic_sha256(document['resource_context'])!=semantic_sha256(demand['resource_context']): continue
+        if semantic_sha256(document['resource_context'])!=semantic_sha256(demand['resource_context']):
+            inapplicable.append(dict(source=source,reason='ORIGINAL_RESOURCE_CONTEXT_MISMATCH',
+                offered_context_sha256=semantic_sha256(document['resource_context']),
+                required_context_sha256=semantic_sha256(demand['resource_context'])))
+            continue
         # The complete source document is retained through matching FactRefs.
         artifact=artifact_reference(source['path'],document['schema']) if source['kind']=='PATH' else None
         if artifact is None: raise ValueError('retained calibration JSON path required')
@@ -232,6 +254,12 @@ def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
         else:total+=record['duration_ns']*term['count']
         evaluated.append(dict(**term,status=('MODEL_REJECTED' if proposals else 'UNKNOWN')
             if record is None else 'SOURCED_EFFECTIVE_COMPONENT',measurement=record,rejected_estimates=proposals))
+    return dict(demand=demand,source_calibrations=sources,components=evaluated,unresolved=issues,
+        known_component_sum_ns=total,rejected_calibrations=rejected_calibrations,
+        inapplicable_calibrations=inapplicable)
+
+
+def _write_stateful_cpu_model(demand,context,sources,evaluated,issues,total,rejected_calibrations,out):
     out=Path(out).absolute()
     if out.exists(): raise ValueError('fresh stateful CPU model output required')
     report=dict(schema='scar.stateful-cpu-model',schema_version=1,context=context,demand=demand,
@@ -326,5 +354,5 @@ def wrap_original_call_cost(domain,observation,*,out):
     _save(out/'profile.json',profile);return str(out/'profile.json')
 
 
-__all__=['component_key','stateful_resource_context','stateful_cpu_demand','predict_stateful_cpu_model',
+__all__=['component_key','stateful_resource_context','stateful_cpu_demand','predict_stateful_cpu_model','evaluate_stateful_cpu_components',
     'build_stateful_cpu_profiles','wrap_original_call_cost']

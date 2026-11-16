@@ -1,0 +1,150 @@
+{
+  "audits": {
+    "component-activity-map.json": {
+      "schema": "scar.canonical-component-activity-source-audit",
+      "sha256": "3edc09d7a0cee51d2c041a2e4350c85e7327c71ec3a5f5abba4ddee6086e0f02",
+      "size_bytes": 50768,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/component-activity-map.json"
+    },
+    "execution-scope-audit.json": {
+      "schema": "scar.execution-scope-audit",
+      "sha256": "7fa44d434afc01463357983307d5697096a850169e05a6f523bf2a6545d2fc6b",
+      "size_bytes": 72809,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/execution-scope-audit.json"
+    },
+    "negative-admission.json": {
+      "schema": "scar.activity-cost-negative-admission",
+      "sha256": "735d38f2ec31b2beaea0080214f4ab1ce11542f6de65ccb4e790ca9c4121d73c",
+      "size_bytes": 731,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/negative-admission.json"
+    }
+  },
+  "calibration": {
+    "schema": "scar.stateful-resource-calibration",
+    "sha256": "37cf3f6db0b495f0300229232416bae2f714eccaf7693f72635e42261a9ec889",
+    "size_bytes": 64340,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-calibration/observations.json"
+  },
+  "candidate_id": "cpu-6f0a2e28f9de80b427ff",
+  "canonical_workload_only": true,
+  "cases": [
+    {
+      "case": "gray-costs",
+      "cold_replay": "PASSED",
+      "receipt": {
+        "schema": "scar.activity-cost-preparation",
+        "sha256": "ff007e276b51982cf0fb663ae9ab631533bb41a4b78774ab0124a75a4d262bac",
+        "size_bytes": 2321,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-costs/result.json"
+      },
+      "summary": {
+        "activities": 20,
+        "complete_subjects": 0,
+        "empirical_intervals": 10,
+        "execution_authorized": false,
+        "known_component_subjects": 10,
+        "mathematical_bounds_verified": false,
+        "original_activity_coverage_complete": true,
+        "physical_optimality_proven": false,
+        "solver_authorized": false,
+        "source_component_semantics_replayed_by_this_validator": false,
+        "subjects": 14,
+        "unknown_subjects": 4,
+        "unmapped_terms": 5,
+        "whole_scope_cost_closed": false
+      }
+    },
+    {
+      "case": "loop-inapplicable-costs",
+      "cold_replay": "PASSED",
+      "receipt": {
+        "schema": "scar.activity-cost-preparation",
+        "sha256": "980642a5fdb900c2ad0463011be672cc0e749b21d888b98835f44e338740a90b",
+        "size_bytes": 2342,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/loop-inapplicable-costs/result.json"
+      },
+      "summary": {
+        "activities": 9,
+        "complete_subjects": 0,
+        "empirical_intervals": 0,
+        "execution_authorized": false,
+        "known_component_subjects": 0,
+        "mathematical_bounds_verified": false,
+        "original_activity_coverage_complete": true,
+        "physical_optimality_proven": false,
+        "solver_authorized": false,
+        "source_component_semantics_replayed_by_this_validator": false,
+        "subjects": 7,
+        "unknown_subjects": 7,
+        "unmapped_terms": 4,
+        "whole_scope_cost_closed": false
+      }
+    },
+    {
+      "case": "pipeline-unknown-costs",
+      "cold_replay": "PASSED",
+      "receipt": {
+        "schema": "scar.activity-cost-preparation",
+        "sha256": "2d96cc82890f6de49e5703cc39c9c57d1eddf099357f0572fc46e93ecd7df6b9",
+        "size_bytes": 1774,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/pipeline-unknown-costs/result.json"
+      },
+      "summary": {
+        "activities": 16,
+        "complete_subjects": 0,
+        "empirical_intervals": 0,
+        "execution_authorized": false,
+        "known_component_subjects": 0,
+        "mathematical_bounds_verified": false,
+        "original_activity_coverage_complete": true,
+        "physical_optimality_proven": false,
+        "solver_authorized": false,
+        "source_component_semantics_replayed_by_this_validator": false,
+        "subjects": 16,
+        "unknown_subjects": 16,
+        "unmapped_terms": 0,
+        "whole_scope_cost_closed": false
+      }
+    }
+  ],
+  "code_sha256": {
+    "scar/compiler/cost_activities.py": "bdaa41d36dbfaa31da836947e2e246fdffa4e69ec570ae1e10c3635efd1feae2",
+    "scar/ir/activity_costs.py": "2e08c8abb69e2f78e099a36d265d6ed3de04dabb5fe4f1e63ced7127c5ff5cee",
+    "scar/optimization/stateful_cpu_model.py": "b227e12cc881dc7efb92a8c275286f3c8a123b4c5336553d6e9a578590b6c4b9",
+    "scar/optimization/temporal_activity_costs.py": "46187a2001afdea59e9e3043584be4028c3fc093f9dcfee1a059ef37cf46d265",
+    "tests/unit/test_activity_costs.py": "5baa13acd48ea2bb1019db825b9e1b82f6c7c527baa2e478d568ce6cd3996230"
+  },
+  "directed_tests": {
+    "command": "/home/zyf/miniconda3/envs/lewm/bin/python -m pytest -q tests/unit/test_activity_costs.py tests/unit/test_stateful_cpu_model.py tests/unit/test_stateful_calibration_independence.py",
+    "elapsed_seconds": 2.2,
+    "failed": 0,
+    "passed": 4
+  },
+  "measured_signatures": 10,
+  "missing_signatures": 4,
+  "next_layer": "G3B_MODELED_IMPLEMENTATION_ENVELOPE_PHASES_BEFORE_MORE_COST_CLOSURE",
+  "optimization_variant_compiled": false,
+  "physical_optimality_proven": false,
+  "repetitions": 7,
+  "schema": "scar.g3a-activity-component-acceptance",
+  "schema_version": 1,
+  "selected_cpu_ids": [
+    0
+  ],
+  "solver_authorized": false,
+  "speedup": null,
+  "statements": [
+    "SAMPLE_RANGE_IS_EMPIRICAL_NOT_A_GUARANTEED_BOUND",
+    "CANONICAL_COST_IS_CONDITIONAL_MODEL_NOT_OBSERVED_TARGET_ACTIVITY",
+    "POOL_COST_NOT_SPLIT_OR_MULTIPLIED_BY_SLOT_COUNT",
+    "FULL_SOURCE_TASK_GRAPH_TARGET_BACKEND_AND_RESOURCE_CONTEXT_REPLAYED",
+    "UNKNOWN_SUBJECT_NUMBERS_REMAIN_NONE",
+    "NO_PARENT_AND_LEAF_DOUBLE_CHARGE",
+    "NO_CROSS_CONTEXT_REUSE"
+  ],
+  "status": "VERIFIED_COMPONENT_BRIDGE_NOT_CLOSED_G3",
+  "target_performance_measured": false,
+  "target_program_executed": false,
+  "warmup": 2,
+  "whole_call_cost_closed": false
+}
