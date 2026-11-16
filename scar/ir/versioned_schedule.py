@@ -22,6 +22,7 @@ class VersionedTaskKind(str, Enum):
     RELEASE = 'RELEASE'
     COPY = 'COPY'
     EXPORT = 'EXPORT'
+    IMPLEMENTATION_PHASE = 'IMPLEMENTATION_PHASE'
 
 
 @dataclass(frozen=True, slots=True)
@@ -609,6 +610,22 @@ def validate_versioned_schedule(schedule):
             raise ValueError('state transition requires prior data/state and a new materialized version')
         if task.kind is K.COMPUTE and not task.writes and task.capability != 'CPU_SCALAR_SETUP':
             raise ValueError('compute requires outputs, except explicit scalar setup without array payload')
+        if task.kind is K.IMPLEMENTATION_PHASE:
+            attrs = task.attrs
+            if (schedule.executable or task.capability != 'CPU_IMPLEMENTATION_PHASE'
+                    or task.writes or task.allocates or task.releases or task.validates
+                    or not task.source_refs or not _text(attrs.get('phase_kind'))
+                    or attrs.get('actor') not in ('CALLER_UNBOUND', 'SELECTED_TEAM', 'WORKER')
+                    or attrs.get('failure_domain') not in ('PRECOMMIT', 'POSTCOMMIT')):
+                raise ValueError('source-backed non-executable implementation phase cannot write or own payload work')
+            if any(not (type(value) is bool or type(value) is str and value == 'UNKNOWN')
+                   for value in (attrs.get('may_fail'), attrs.get('blocks'))):
+                raise ValueError('phase may_fail and blocks must be explicit bool or UNKNOWN')
+            effects = attrs.get('phase_effects')
+            if type(effects) not in (tuple, list) or not effects or any(not _text(value) for value in effects):
+                raise ValueError('implementation phase effects must be explicit nonempty strings')
+            if attrs['failure_domain'] == 'POSTCOMMIT' and attrs['may_fail'] is not False:
+                raise ValueError('normal-only postcommit implementation phase cannot fail or permit fallback')
         if task.kind in (K.SUCCESS_FENCE, K.EXPORT) and task.writes:
             raise ValueError('fence/export cannot modify values or external state')
         if task.kind is K.EXPORT and not task.reads:
@@ -784,7 +801,8 @@ def validate_versioned_schedule(schedule):
                             or source.region.nbytes != destination.region.nbytes):
                         raise ValueError('value-preserving commit needs a ready private full-result materialization and profile identity proof')
 
-    precommit = {t.id for t in tasks.values() if t.kind in _PRECOMMIT}
+    precommit = {t.id for t in tasks.values() if t.kind in _PRECOMMIT or
+                 t.kind is K.IMPLEMENTATION_PHASE and t.attrs['failure_domain'] == 'PRECOMMIT'}
     fences = []
     for task in tasks.values():
         if task.kind is K.SUCCESS_FENCE:

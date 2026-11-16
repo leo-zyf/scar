@@ -475,6 +475,8 @@ SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代
 
 `cost-activities` 用 `ActivityCostTable` 引用同一时间图和资源投影；每个原活动恰归一个计费 subject。原整池标定对应一组 allocation/release，不能均摊或按 slot 数重复乘；同一 canonical 样本可供不同真实工作 occurrence 估价，occurrence 不能重复计费。现 CPU 组件桥重放原 recipe/task 图、阶段、形状、完整硬件/后端 context 和原样本统计，将 canonical 样本标为条件组件模型，其 min/max 仅为经验范围。整调用观测不拆成 leaf 成本；没有独立活动端点的 guard、输入扫描、team setup/restore 等保留 unmapped，不能伪装成 duration UNKNOWN 的既有节点或塞入 fence。全部 subject 有证据仍不自动证明完整调用闭合，更不授权 solver、C++ 或物理最优性。
 
+`refine-time-envelope` 将既有 standalone stateful CPU 执行器的实际边界细化到同一 VRS；`IMPLEMENTATION_PHASE` 保留固定源版本、actor 资格域和明确 effects，允许读原外部输入，不准写 Tensor 或冒充 payload 分配/释放。所有 PRECOMMIT phase 进入原成功 fence，POSTCOMMIT 只描述不可回退的正常状态交接；派生图不可执行。原数据、slot、旧 HB 不变，函数/循环仍使用原 scope。当前实施范围限定 compiler artifact 与共享 stateful guard，不覆盖 compact runtime 或 repeat adapter。新增有限性扫描可接已有 canonical 组件；非连续 guard/setup 或不匹配后缀的组合成本继续 unmapped，不能以 scope 父成本与 leaf 累加。
+
 `StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
 参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
 

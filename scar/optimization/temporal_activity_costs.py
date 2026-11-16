@@ -113,8 +113,15 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
     """
     from scar.optimization.stateful_cpu_model import evaluate_stateful_cpu_components
     from scar.optimization.stateful_cpu_choices import _family
-    if (semantic_sha256(schedule_document(replace(schedule, temporal=None))) != semantic_sha256(recipe['task_graph'])
-            or encode(resources.target) != recipe['artifacts']['target_snapshot']):
+    original = semantic_sha256(recipe['task_graph'])
+    actual = semantic_sha256(schedule_document(replace(schedule, temporal=None)))
+    if actual != original:
+        from scar.analysis.implementation_envelope import derive_stateful_envelope
+        from scar.ir.versioned_schedule import schedule_from_dict
+        refined = derive_stateful_envelope(schedule_from_dict(recipe['task_graph']), recipe)
+        if actual != semantic_sha256(schedule_document(refined)):
+            raise ValueError('cost activities must retain the original recipe graph or its source-replayed implementation refinement')
+    if encode(resources.target) != recipe['artifacts']['target_snapshot']:
         raise ValueError('cost activities and resources must retain the complete original recipe task graph and target')
     evaluation = evaluate_stateful_cpu_components(domain, candidate_id, calibrations)
     demand = evaluation['demand']
@@ -160,6 +167,14 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
             if (slots != expected or term['parameters'] != dict(capacities=[
                     row['capacity_bytes'] for row in actual_plan['workspace_slots']])):
                 raise ValueError('collective pool cost must match the exact original slot group')
+        elif term['component'] == 'INPUT_FINITE_SCAN_SERIAL':
+            selected = [task for task in schedule.tasks
+                        if task.kind is K.IMPLEMENTATION_PHASE
+                        and task.attrs.get('phase_kind') == 'INPUT_FINITE_SCAN_SERIAL'
+                        and activities_by_task[task.id] not in represented
+                        and term['parameters'] == dict(
+                            rows=actual_plan['input_shapes'][task.attrs['input_id']][0],
+                            cols=actual_plan['input_shapes'][task.attrs['input_id']][1])][:1]
         if not selected:
             unmapped.append(dict(term=term['id'], component=term['component'],
                 original_source=term['source_ref'], measurement=term['measurement'],

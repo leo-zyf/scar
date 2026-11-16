@@ -12,6 +12,16 @@ from scar.optimization.resource_solver import semantic_sha256
 SCHEMA = 'scar.semantic-time-preparation'
 
 
+def time_schedule_reference(path):
+    """Route the two source-replayed time formats before strict artifact read."""
+    from scar.ir.execution_recipe import _bytes, _json
+    path = Path(path).resolve()
+    schema = _json(_bytes(path)).get('schema')
+    if schema not in (SCHEMA, 'scar.implementation-time-preparation'):
+        raise ValueError('a supported source-replayed time preparation required')
+    return artifact_reference(path, schema)
+
+
 def _loop_context(reference, schedule, region_reference):
     from scar.analysis.build import BuildSession
     from scar.compiler.project_pipeline_temporal import _provider
@@ -102,7 +112,10 @@ def prepare_time_schedule(kind, source, out, *, loop_reference=None):
 
 
 def read_time_schedule(path):
-    reference = artifact_reference(Path(path).resolve(), SCHEMA)
+    reference = time_schedule_reference(path)
+    if reference['schema'] == 'scar.implementation-time-preparation':
+        from scar.compiler.refine_time_envelope import read_implementation_time
+        return read_implementation_time(path)
     receipt = read_artifact(reference)
     if (receipt.get('schema'), receipt.get('schema_version')) != (SCHEMA, 1):
         raise ValueError('semantic time receipt required')

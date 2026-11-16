@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from scar.compiler.time_schedule import read_time_schedule, SCHEMA as TIME_SCHEMA
+from scar.compiler.time_schedule import read_time_schedule, time_schedule_reference
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.schedule import schedule_from_dict
 
@@ -59,7 +59,7 @@ def _summary(projection):
 
 def prepare_resource_bindings(time_schedule, out):
     from scar.ir.temporal_resources import projection_document
-    reference = artifact_reference(Path(time_schedule).resolve(), TIME_SCHEMA)
+    reference = time_schedule_reference(time_schedule)
     projection = _derive(reference)
     directory = Path(out).resolve()
     directory.mkdir(parents=True, exist_ok=False)
