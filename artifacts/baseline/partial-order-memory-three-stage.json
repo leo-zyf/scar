@@ -1,0 +1,271 @@
+{
+  "automatic_deployment_authorized": false,
+  "default_backend": "NO_OP",
+  "evidence": {
+    "compact_export": {
+      "schema": "scar.caller-pipeline-runtime-export",
+      "sha256": "80ed678e820fc55a2c610ee3f650e4c0b324c9066a2307f9520225f18e1473a1",
+      "size_bytes": 2180,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/runtime/export-report.json"
+    },
+    "entry_correctness": {
+      "schema": "scar.pipeline-partial-order-final-entry-correctness",
+      "sha256": "467bd4f8208d5bc170c6a96a011d9ffe8af1525d2fd22e4d0d390d8672d10dde",
+      "size_bytes": 962,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/final-entry-correctness.json"
+    },
+    "independent_replay": {
+      "schema": "scar.pipeline-partial-order-main-chain-replay",
+      "sha256": "210f1178ad91ec01d11ce727d6dd8a5743f0927d7e9aa265128d0b217e82e206",
+      "size_bytes": 3962,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/main-chain-replay.json"
+    },
+    "low_budget_memory": {
+      "schema": "scar.pipeline-partial-order-memory-plan",
+      "sha256": "0926630ed3f33c41a6847c136b4ef2f87c0afa577bf1956c831518ce31560246",
+      "size_bytes": 11891,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/low-budget-memory.json"
+    },
+    "main_compile": {
+      "schema": "scar.caller-matched-pipeline-lowering",
+      "sha256": "a8135a7fbcce3b5b938d81ec34773860527fef4c1e0f89f6ed4c6ee13c947d19",
+      "size_bytes": 4880,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/result.json"
+    },
+    "native_correctness": {
+      "schema": "scar.pipeline-partial-order-native-correctness",
+      "sha256": "c9522ab29fbd65aa644cdcffc99feceacc677adf683d635d57830224ba1b7e86",
+      "size_bytes": 729,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/native-correctness.json"
+    },
+    "new_memory_plan": {
+      "schema": "scar.pipeline-partial-order-memory-plan",
+      "sha256": "37d9bd8ef88ed7ddc0a8a00ac7ec58571d1c4bf4595a7e4f9fce1595da2bdbaa",
+      "size_bytes": 11890,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/compiled/pipeline-0/memory-plan.json"
+    },
+    "new_resource_plan": {
+      "schema": "scar.pipeline-ready-resource-plan",
+      "sha256": "3c477a4b1a777ad4117d4e331f65670407ae96fc9fc76d27289ea299be5cf68b",
+      "size_bytes": 83760,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/compiled/pipeline-0/resource-plan.json"
+    },
+    "original_reference_flow": {
+      "schema": "scar.pipeline-partial-order-original-reference-flow",
+      "sha256": "c2a6c5df7b7a24b698055b45ef4859e0b50898a5a115d37151322cf22db7de91",
+      "size_bytes": 90412,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/source-raw.json"
+    },
+    "preflight_model_only": {
+      "schema": "scar.pipeline-partial-order-declared-topology-preflight",
+      "sha256": "f70ff919b637fa2e1c23ce0c1541a87e3be2e0aeaf7678ea39ea4e2491099853",
+      "size_bytes": 1844,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/preflight.json"
+    },
+    "source_inputs": {
+      "schema": "scar.pipeline-partial-order-source-fixture",
+      "sha256": "b89a5f12dc14f857ab2c7afcb0367d61907b0c1927f2e68656f4ae8e5c1c1b69",
+      "size_bytes": 4918,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/source-info.json"
+    },
+    "source_order_memory": {
+      "schema": "scar.pipeline-memory-plan",
+      "sha256": "10cb0f3bbc43bc8d04c03ebf231a194ff0ee82d5b9ea2e4fedffe06d801bc048",
+      "size_bytes": 10031,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/source-order-memory.json"
+    },
+    "source_proof": {
+      "schema": "scar.caller-matched-array-pipeline-proof",
+      "sha256": "78d25ad595eba6befe6a2fcfe500ac74e5dea3f6387a22ca4716d05f87b57a09",
+      "size_bytes": 733693,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/proof.json"
+    },
+    "source_values": {
+      "schema": "scar.caller-pipeline-values",
+      "sha256": "fac540f055ee19e8c70c21c50e77166f2f3578839855cf56572c717599d8a7af",
+      "size_bytes": 4649,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/program-values/result.json"
+    },
+    "storage_scheduler_only_native_handshake": {
+      "schema": "scar.pipeline-partial-order-storage-ready-native-abi-handshake",
+      "sha256": "4f060ddbc57ed3b12d654d5075bfc95e9d96a8a0348f5cb43d52565835be39c8",
+      "size_bytes": 3470,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/partial-order-handshake.json"
+    }
+  },
+  "formal_checks": {
+    "budget_and_unknown_shape_legacy_regressions": true,
+    "command": "python -B -m pytest -q tests/unit/test_pipeline_partial_order_memory.py tests/unit/test_pipeline_memory.py",
+    "passed": 5,
+    "source_and_pool_tamper_rejected": true
+  },
+  "generated_cpp_source": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-partial-order-v1/compiled-main/compiled/pipeline-0/native/pipeline.cpp",
+  "implementation": {
+    "scar/codegen/pipeline.py": "5fe0fbec26d82b2f3360702ecae3c51a6c9ffaeb1f78a4c070100506cd0aadae",
+    "scar/compiler/caller_pipeline.py": "9efb5ef6e8c00353e4364399201c95e5e77b107f7762003cb6da1d28b3e3cef5",
+    "scar/compiler/compile_caller_pipeline.py": "8d862c7da63b3d06567188dc43eb2f42f36a9210b4af5413202449c0b8402562",
+    "scar/compiler/compile_pipeline.py": "48414b305aa1f18d99bb9221e79a4e8d115ce58c179a3df70def72dbf4c9c698",
+    "scar/optimization/pipeline_memory.py": "8cfd090a0f39a0a8ff782c6d9af95f57c314affbc4198ec13e41163a87d771a1",
+    "scar/optimization/pipeline_partial_order_memory.py": "0361d635f6201cfa49adfe820a0c048ceafe0f38ef0da3e5d475653e45ca64da",
+    "scar/optimization/pipeline_ready_schedule.py": "0e951f790ba7420aac1289e795ec8bb5bd936027d82aafeb15b0c6784f7c7ab4",
+    "scar/optimization/pipeline_schedule.py": "1ce76e0b2c129475c0ad76a666cfb551c1cc32d32f428acdb58679aaf9da4d05"
+  },
+  "next_planning_bridge": {
+    "existing_solver": "scar.optimization.resource_solver.solve_resource_schedule",
+    "objective": "MINIMIZE_WHOLE_REGION_MAKESPAN_UNDER_EXPLICIT_RESOURCE_AND_STORAGE_CAPACITIES",
+    "remaining": [
+      "Complete sourced durations for every task, including dispatch/allocation/fence/release; unknown cannot become zero.",
+      "Map original SCHEDULE slot capacities to the exact incremental payload budget, retaining external slots outside that budget.",
+      "Treat distinct storage layouts as an outer finite domain because layouts change slots and dependencies.",
+      "Carry a solver-selected execution refinement into C++; current lowest-index READY policy does not implement arbitrary solver order."
+    ],
+    "solver_makespan_optimum_is_not_physical_or_delivery_optimum": true,
+    "v2_task_graph_already_supported": true
+  },
+  "objective": "Unify original dataflow, partial-order lifetimes, bounded storage assignment and actual C++ readiness without erasing true hazards.",
+  "performance_measured": false,
+  "release_exported": false,
+  "schema": "scar.partial-order-memory-three-stage-gate",
+  "schema_version": 1,
+  "speedup_claimed": false,
+  "stages": {
+    "delivery": {
+      "actual_independent_writer_started_before_old_consumer_finished": true,
+      "bitwise_outputs_equal": true,
+      "cpp_standard": 20,
+      "default_entry_native_calls": 0,
+      "explicit_entry_native_calls": 1,
+      "finite_input_overflow": {
+        "failed_source_call": 2,
+        "original_fallback_calls": 1,
+        "private_final_untouched": true,
+        "status": 103
+      },
+      "fresh_outputs": true,
+      "guarded_native_calls": 3,
+      "host_abi_version": 1,
+      "host_template_changed": false,
+      "inputs_unchanged": true,
+      "mathematical_backend_added": false,
+      "no_sleep_or_artificial_timing_used": true,
+      "numerical_cases": [
+        "normal",
+        "readonly input aliasing",
+        "changed inputs",
+        "finite-input overflow with original fallback"
+      ],
+      "operator_abi_version": 1,
+      "original_entry_result_digest_equal": true,
+      "original_overflow_fallback_calls": 1,
+      "scheduler_diagnostic_is_not_source_or_leaf_admission": true,
+      "solver_selected_timeline_executed": false,
+      "status": "IMPLEMENTED_VERIFIED_WITHIN_ORIGINAL_ABI1_HOST_PROFILE",
+      "storage_scheduler_handshake_events": {
+        "A_finished": 1,
+        "B_finished": 5,
+        "B_started": 2,
+        "C_finished": 4,
+        "C_started": 3,
+        "D_started": 6
+      },
+      "whole_program_standalone_cpp": false
+    },
+    "modeling": {
+      "logical_values_not_storage_slots": true,
+      "original_f4_call_argument_reference_flow_rederived": true,
+      "original_hardware_snapshot": {
+        "schema": "scar.target-hardware-graph",
+        "sha256": "7ae291c8509831fe19c9780bc5969e48cd86c44d81bcda6ef850d9e95e252dd8",
+        "size_bytes": 8704,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-entry-v1/program-build/hardware/result.json"
+      },
+      "raw_topology_from_source_not_tensor_values": true,
+      "source_index_last_use_not_partial_order_lifetime_authority": true,
+      "source_summary": {
+        "calls": 4,
+        "content_templates": 6,
+        "field_frontiers": 0,
+        "fresh_call_results": 4,
+        "input_shapes": {
+          "x": [
+            8,
+            8
+          ],
+          "y": [
+            8,
+            8
+          ]
+        },
+        "leaf_representation": "OPTIMIZED_SHARED_LEAF_AND_REPLAYED_SOURCE_OPERATION_MAP_NOT_COMPLETE_RAW_LEAF",
+        "nodes": 16,
+        "physical_allocations_observed": 0,
+        "relations": 52,
+        "runtime_logical_versions_created": 0,
+        "scope": "PARAMETRIC_CONTENT_FOR_ONE_CLOSED_CALLER_ACTIVATION",
+        "source_bodies_copied": 0,
+        "source_proof_replayed": true,
+        "target_executed": false,
+        "transformation_authorized": false,
+        "values": 6
+      },
+      "status": "IMPLEMENTED_VERIFIED_WITHIN_CLOSED_ARRAY_CALLER_PROFILE"
+    },
+    "planning": {
+      "additional_payload_bytes": 512,
+      "all_storage_evidence_and_hazards_retained": true,
+      "bounded_search_complete": true,
+      "clique_bound_does_not_claim_maximum": true,
+      "clique_bound_max_seeds": 16,
+      "cpu_bindings": {
+        "call:0": 0,
+        "call:1": 1,
+        "call:2": 0,
+        "call:3": 1
+      },
+      "current_input_not_overwritten": true,
+      "extra_source_order_storage_wait_removed": true,
+      "interference_graph_weighted_coloring": true,
+      "low_budget_bytes": 1536,
+      "low_budget_codegen_admission_rejected": true,
+      "low_budget_proven_infeasible_under_new_policy": true,
+      "optimality_scope": "SOURCE_RAW_PARTIAL_ORDER_PREALLOCATED_HOST_UNBOUND_PAYLOAD_POOL_ONLY",
+      "partial_order_incremental_payload_bytes": 2048,
+      "partial_order_predecessors": {
+        "call:0": [],
+        "call:1": [
+          "call:0"
+        ],
+        "call:2": [],
+        "call:3": [
+          "call:1",
+          "call:2"
+        ]
+      },
+      "partial_order_workspace_slots": 3,
+      "physical_optimality_proven": false,
+      "raw_closure_bitsets": true,
+      "reuse_requires_old_producer_and_all_consumers_strict_raw_ancestors": true,
+      "schema": "scar.pipeline-partial-order-memory-plan",
+      "source_order_incremental_payload_bytes": 1536,
+      "source_order_predecessors": {
+        "call:0": [],
+        "call:1": [
+          "call:0"
+        ],
+        "call:2": [
+          "call:0",
+          "call:1"
+        ],
+        "call:3": [
+          "call:1",
+          "call:2"
+        ]
+      },
+      "source_order_workspace_slots": 2,
+      "status": "IMPLEMENTED_VERIFIED_WITHIN_RAW_ONLY_FIXED_CAPACITY_POOL_MODEL",
+      "time_cost_status": "UNKNOWN"
+    }
+  },
+  "three_stages_globally_complete": false,
+  "whole_program_makespan_optimized": false
+}

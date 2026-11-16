@@ -29,6 +29,8 @@ Control、数据依赖、状态版本、别名和资源映射是不同关系，�
 
 `plan-build`保存原region/proof与硬件域；数据保持原FactRef、源digest、shape、预算、ABI和guard条件。执行recipe显式表示分配、计算、复制、就绪/屏障及提交；这些任务不是源码语义图的替代品。
 
+联合规划的目标是最短完工时间：先确认语义依赖与可替换边界，再确定实现/存储/资源域，随后约束开始时间、容量和数据就绪，最后把选定时间表落实为可验证执行证书。现有 `resource_solver` 可搜索 v2 task 图；完整 task 成本、外层存储布局域和 solver-order 到 runtime 的桥接仍需接通，UNKNOWN 时长不得补零。
+
 成本接口分为完整点成本与区间。`stateful_cost_bounds`从已核验必需component重算下界，未知项保留非负无穷区间；`interval_choices`核同contract/scope/tick，严格支配才排除，未决项不消失。它是显式模型的比较，不是物理执行时间定理。
 `compile-build --stateful-interval-plans`通过严格域等价与原fact重放接入这一路，旧的标量选择继续受支持。
 
@@ -37,6 +39,8 @@ CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保�
 闭合数组 caller 已接入 `caller_pipeline_values → pipeline_schedule → pipeline_parallel_v1`：复用原参数/返回和共享 leaf，先推导数据依赖及 pool 的全部旧消费者 WAR，再生成有界 CPU waves。现有 v2 typed task graph 保留分配、就绪、成功 fence、释放及 fresh export；每任务使用原硬件线程引用。时间保持 UNKNOWN，独立 exact solver 尚未替它建立物理最优性。
 
 可选的 `pipeline_ready_schedule → pipeline_ready_v1` 使用相同 RAW/WAR/WAW 和固定 pool，在每 CPU lane 上扫描已就绪任务；CPU 互斥是容量约束，不变成永久语义边。完成即通知真正后继，最终 export/回退前才统一 join；失败停止领取，保留所有运行中任务的存储。原 caller 编译与 compact runtime 共用既有 ABI1，未添加数值后端，也不把可执行计划等同最快计划。
+
+`pipeline_partial_order_memory` 从原 RAW 传递闭包构造逻辑值干涉图，以有界精确 coloring 求固定槽容量和。复用须由旧 producer 与全部 consumers 到新 writer 的严格 RAW happens-before 证明；source-index last-use 仅作诊断。该模型保留并行自由度，可能比 source-order pool 占用更多 payload；完整、搜索耗尽和预算不可能分开记录。统一 memory reader 按独立 schema 重放，ready/wave/C++ 准入核对对应完整状态，原 ABI、模板和私有输出回退不变。
 
 ## 3. C++20与运行交付
 

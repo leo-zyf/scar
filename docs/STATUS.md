@@ -2,9 +2,11 @@
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
-最新主链：`compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 直接消费真实 RAW/WAR/WAW 和原硬件绑定；每个 CPU lane 领取已就绪任务，不再等待整 wave。四 CALL 原图有6值/52条公共关系；源码证明、资源计划独立冷读、C++20、compact 和原入口均已贯通。单项结构检查保留池复用 WAR，真实 host 的原子握手证明后继 C 在无关 B 结束前启动；该诊断不构成数学/source 准入或性能证据。报告在 `artifacts/current/experiments/pipeline-ready-v1/`。
+最新主链：`compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready --pipeline-memory-order dependencies` 将原 RAW 图、逻辑值生命周期和内存分配一起规划。仅当原 RAW 已证明旧 producer 和所有 consumers 严格先于新 writer 时复用，禁止覆盖当前调用输入；因此不为复用新增先后关系。原 source-order pool 和新 partial-order pool 使用不同 schema，均独立重放来源、形状、分配、完整搜索与预算。
 
-原数学叶子的正常、输入变化、只读别名与溢出回退均已验证；完整浮点环境和调用方 affinity 恢复，原入口输出一致。CPU lane 采用显式未排名分配，成本 UNKNOWN、默认 NO_OP，不宣称联合内存/放置最优。
+真实源码用例的增量 payload 从1536B变为2048B，解除无关 B→C 等待；1536B预算下新策略被正确拒绝。冷读、C++20、compact 和原入口均通过，正常/输入变化/只读别名结果逐位一致，溢出保留私有结果并回退一次。原 host 的独立 ABI 握手确认 B 未结束时 C 已启动；该诊断不构成数学/source 准入或性能证据。报告在 `artifacts/current/experiments/pipeline-partial-order-v1/`。
+
+此前的 ready 执行已去掉整 wave barrier，完整浮点环境和调用方 affinity 恢复通过，见 `pipeline-ready-v1/`。CPU lane 仍是显式未排名分配；新 coloring 只证明 RAW-only 固定池模型内最省容量，不证明最快。成本 UNKNOWN、默认 NO_OP。
 
 `compile-stateful-loop` 现在可省略 `--step`：沿原 CALL/body/CodeID 自动找到唯一状态区域，再独立重放共享循环和参数接线。自动发现至 C++ repeat adapter、compact 和原入口四步已验证，报告在 `stateful-loop-auto-v1/`。写入数组显式携带 `(iteration, local_epoch)` 内容，固定引用不当成固定内容；此前已验证完成1步后失败只恢复剩余3步，不重跑已提交前缀，见 `stateful-loop-v1/`。
 
@@ -69,7 +71,7 @@ CPU/cache 足迹也已有结构化推导：共享缓存域、SMT、按 storage �
 ## 接下来仍需开发
 
 1. 建图：已连接封闭状态循环的参数化内容递推；继续补有写入的条件 state-path、callback、对象协议与外部算子效果摘要，再扩大原循环替换证明。相同引用仍不证明跨激活内容相同。
-2. 化简：已有纯数组多区域 CPU waves/依赖就绪执行与完整 pool hazard 约束；继续补联合内存/放置选择、NUMA、多进程和成本事实。当前固定 pool/显式 CPU 预览不是全程序 makespan 优化，未支持 MPI 或 GPU offload。
+2. 化简：已有两种有明确等待/容量权衡的 pool 模型。现有 `resource_solver` 已支持 v2 图和最短 makespan，但 ready 主链仍缺完整 task 成本、精确预算映射及 solver 顺序到 C++ 的执行证书；必须先接通这些，再进行联合内存/放置/时间选择。NUMA、多进程、MPI 和 GPU offload 尚未完成。
 3. 交付：扩大可降低的数据类型、控制/对象和外部接口，统一更多已准入 artifact。当前不是任意 Python 的独立 C++ 主程序；Sunfish/Cirq 未获得完整编译闭环，当前也没有 GPU/LeWM 新验证。
 
 当前首先补核心能力与接口，之后才恢复新路径的性能准入。历史 A/B、失败模型和诊断材料保持原样，详见既有 baseline JSON；不将它们改写为当前版本结果。
