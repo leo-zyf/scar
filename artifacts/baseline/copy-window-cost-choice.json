@@ -1,0 +1,422 @@
+{
+  "Implemented": {
+    "cli": [
+      "calibrate-copy-window",
+      "choose-copy-window",
+      "compile-copy-choice"
+    ],
+    "cpp_standard": 20,
+    "evidence_gap_lineage": {
+      "calibration_resampled": false,
+      "discharged_only_calibration_evidence_gap": true,
+      "new_native_source_equal_to_pre_lineage_fix": true,
+      "remaining_residuals_and_source_records_preserved": true,
+      "schema": "scar.copy-choice-lineage-check",
+      "schema_version": 1
+    },
+    "fixed_cpu_alternatives": 2,
+    "old_component_costs_summed": false,
+    "operator_abi": 1,
+    "original_and_replacement_cost_summaries": {
+      "fused": {
+        "activities": 30,
+        "complete_subjects": 1,
+        "empirical_intervals": 22,
+        "execution_authorized": false,
+        "known_component_subjects": 22,
+        "mathematical_bounds_verified": false,
+        "original_activity_coverage_complete": true,
+        "physical_optimality_proven": false,
+        "solver_authorized": false,
+        "source_component_semantics_replayed_by_this_validator": false,
+        "source_control_milestones": 1,
+        "subjects": 23,
+        "unknown_subjects": 0,
+        "unmapped_terms": 6,
+        "whole_scope_cost_closed": false
+      },
+      "original": {
+        "activities": 31,
+        "complete_subjects": 1,
+        "empirical_intervals": 22,
+        "execution_authorized": false,
+        "known_component_subjects": 22,
+        "mathematical_bounds_verified": false,
+        "original_activity_coverage_complete": true,
+        "physical_optimality_proven": false,
+        "solver_authorized": false,
+        "source_component_semantics_replayed_by_this_validator": false,
+        "source_control_milestones": 1,
+        "subjects": 23,
+        "unknown_subjects": 0,
+        "unmapped_terms": 5,
+        "whole_scope_cost_closed": false
+      }
+    },
+    "selected_native_variant": "ORIGINAL",
+    "target_variant_black_box_search": false,
+    "whole_window_clock_cuts": true
+  },
+  "Inferred": {
+    "component_model_selected_variant": "ORIGINAL",
+    "decision": "KEEP_ORIGINAL_WITHIN_COMPONENT_MODEL",
+    "empirical_separation": "ORIGINAL_RANGE_BELOW_FUSED",
+    "physical_ranges_are_guarantees": false,
+    "unmodeled_residuals_cancelled": false,
+    "whole_program_speedup_inferred": false
+  },
+  "Observed": {
+    "caller_affinity_and_rounding_restored": true,
+    "clock": {
+      "api": "clock_gettime",
+      "clock_id": "CLOCK_MONOTONIC",
+      "unit": "ns"
+    },
+    "compiler": {
+      "argv": [
+        "g++"
+      ],
+      "identity": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "options": [
+        "-std=c++20",
+        "-O3",
+        "-shared",
+        "-fPIC",
+        "-fvisibility=hidden",
+        "-fno-fast-math",
+        "-ffp-contract=off",
+        "-frounding-math",
+        "-ftrapping-math"
+      ]
+    },
+    "complete_target_entry_executed": false,
+    "fusion_over_original_median_ratio": 1.632267454946506,
+    "fusion_status": "NOT_PROFITABLE_IN_THIS_CANONICAL_COMPONENT_CONTEXT",
+    "output_bitwise_checked_after_each_component": true,
+    "probe_build_and_sample_seconds": 1.0366023249807768,
+    "probe_component_invocations": 18,
+    "raw_paired_ns": [
+      {
+        "fused_ns": 556546,
+        "order": [
+          "ORIGINAL",
+          "FUSED"
+        ],
+        "original_ns": 332886
+      },
+      {
+        "fused_ns": 543896,
+        "order": [
+          "FUSED",
+          "ORIGINAL"
+        ],
+        "original_ns": 333376
+      },
+      {
+        "fused_ns": 543145,
+        "order": [
+          "ORIGINAL",
+          "FUSED"
+        ],
+        "original_ns": 340699
+      },
+      {
+        "fused_ns": 552385,
+        "order": [
+          "FUSED",
+          "ORIGINAL"
+        ],
+        "original_ns": 332844
+      },
+      {
+        "fused_ns": 553594,
+        "order": [
+          "ORIGINAL",
+          "FUSED"
+        ],
+        "original_ns": 333122
+      },
+      {
+        "fused_ns": 542873,
+        "order": [
+          "FUSED",
+          "ORIGINAL"
+        ],
+        "original_ns": 333215
+      },
+      {
+        "fused_ns": 542302,
+        "order": [
+          "ORIGINAL",
+          "FUSED"
+        ],
+        "original_ns": 340207
+      }
+    ],
+    "repetitions": 7,
+    "resource_context": {
+      "compiler": {
+        "argv": [
+          "g++"
+        ],
+        "identity": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+        "options": [
+          "-std=c++20",
+          "-O3",
+          "-shared",
+          "-fPIC",
+          "-fvisibility=hidden",
+          "-fno-fast-math",
+          "-ffp-contract=off",
+          "-frounding-math",
+          "-ftrapping-math"
+        ]
+      },
+      "cpu_ids": [
+        0
+      ],
+      "exact_thread_refs": [
+        {
+          "resource": {
+            "kind": "target_resource",
+            "value": "cpu-thread/0",
+            "wire": "target_resource:cpu-thread/0"
+          },
+          "snapshot": {
+            "schema": "scar.target-hardware-graph",
+            "sha256": "0f5b5c95e4be6c4135d3428ba061238f7261b0f614fd7a71c83c3b17632ad583",
+            "size_bytes": 8695,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-entry-v1/program/hardware/result.json"
+          }
+        }
+      ],
+      "provider_runtime": {
+        "API_stability": "EXPERIMENTAL_EXACT_NUMPY_VERSION_AND_BINARY_PIN",
+        "capsule_abi": "numpy_1.24_ufunc_call_info",
+        "dtype_signature": [
+          "float64",
+          "float64",
+          "float64"
+        ],
+        "execution": "ORIGINAL_NUMPY_UFUNC_STRIDED_LOOP_SERIAL_PROVIDER_STAGE",
+        "fixed_strides": [
+          8,
+          0,
+          8
+        ],
+        "loaded_binary": {
+          "bytes": 10624953,
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/numpy/_core/_multiarray_umath.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "27bd88fd60f4b9fcd5c938572e9b9e3df0aed9cfed4888e57d94c516b45512b7"
+        },
+        "ndarray_c_abi": 33554432,
+        "numpy_version": "2.5.2",
+        "requires_pyapi": false
+      },
+      "target_snapshot": {
+        "schema": "scar.target-hardware-graph",
+        "sha256": "0f5b5c95e4be6c4135d3428ba061238f7261b0f614fd7a71c83c3b17632ad583",
+        "size_bytes": 8695,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-entry-v1/program/hardware/result.json"
+      }
+    },
+    "source_fragments_compiled_and_executed": true,
+    "statistics": {
+      "fused": {
+        "max_ns": 556546,
+        "median_ns": 543896,
+        "min_ns": 542302,
+        "stdev_ns": 6089.5526772927915
+      },
+      "original": {
+        "max_ns": 340699,
+        "median_ns": 333215,
+        "min_ns": 332844,
+        "stdev_ns": 3600.9095015141993
+      }
+    },
+    "warmup": 2
+  },
+  "Proposed": {
+    "legality_and_cost_not_yet_proven": true,
+    "next": "HOIST_PRIVATE_WORKSPACE_LIFETIME_WITHIN_SOURCE_PROVEN_SHARED_STATE_LOOP"
+  },
+  "Rejected": {
+    "automatic_runtime_selection": "NO_FULL_CALL_OR_TARGET_PROFITABILITY_EVIDENCE",
+    "fused_copy_window": "HIGHER_CANONICAL_COMPONENT_MEDIAN_THAN_ORIGINAL",
+    "physical_or_global_optimum": "UNKNOWN_CONTEXT_RESIDUALS_AND_UNEXPLORED_RESOURCE_PLANS"
+  },
+  "Verified": {
+    "bitwise_equal_original_python_and_selected_cpp": true,
+    "calibration_source_and_raw_statistics_replayed": true,
+    "choice_cold_replay": true,
+    "default_method": {
+      "no_unmeasured_native_selection": true,
+      "stats": {
+        "fallback_calls": 1,
+        "native_calls": 0,
+        "reasons": {
+          "no_measured_selection_for_stateful_plan": 1
+        }
+      }
+    },
+    "direct_guards": [
+      {
+        "case": "shape",
+        "inputs_unchanged": true,
+        "rejected_before_commit": true
+      },
+      {
+        "case": "alias",
+        "inputs_unchanged": true,
+        "rejected_before_commit": true
+      },
+      {
+        "case": "provider",
+        "inputs_unchanged": true,
+        "rejected_before_commit": true
+      }
+    ],
+    "guarded_method_trial": {
+      "bitwise_equal_to_original": true,
+      "changed_callee_falls_back_once": true,
+      "changed_shape_falls_back_once": true,
+      "stats": {
+        "fallback_calls": 2,
+        "native_calls": 3,
+        "reasons": {
+          "instance shadows a discovered callee": 1,
+          "native_precommit_guard:stateful array shape/layout/writeability differs": 1
+        }
+      }
+    },
+    "independent_native_choice_loader_replayed": true,
+    "input_cases": 2,
+    "native_region_calls": 15,
+    "numpy": "2.5.2",
+    "original_cpp_source_unchanged_by_lineage_correction": true,
+    "original_python_region_calls": 15,
+    "selected_cpp_compiled": true,
+    "steps_per_case": 3,
+    "synthetic_policy_branches": {
+      "checks": [
+        {
+          "case": "lower_fused",
+          "decision": "TRIAL_REWRITE_WITHIN_COMPONENT_MODEL",
+          "selected_variant": "FUSED"
+        },
+        {
+          "case": "lower_original",
+          "decision": "KEEP_ORIGINAL_WITHIN_COMPONENT_MODEL",
+          "selected_variant": "ORIGINAL"
+        },
+        {
+          "case": "tie_original",
+          "decision": "KEEP_ORIGINAL_ON_TIE",
+          "selected_variant": "ORIGINAL"
+        }
+      ],
+      "deployment_authorized": false,
+      "native_compiled": false,
+      "native_executed": false,
+      "schema": "scar.copy-window-policy-check",
+      "schema_version": 1,
+      "status": "VERIFIED_DECLARED_SYNTHETIC_POLICY_ONLY",
+      "synthetic_numbers_are_physical_evidence": false
+    }
+  },
+  "all_three_stages_complete": false,
+  "artifacts": {
+    "calibration": {
+      "sha256": "f40fad659624afe76cf2aec81d118d484af608ff62e20825664571cc86ddc529",
+      "size_bytes": 20255,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-calibration/observations.json"
+    },
+    "choice": {
+      "sha256": "f8590d7852917c658c7e379a41577bbc2b2492210b3ce73ca2bbdbea65b479ff",
+      "size_bytes": 29494,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-choice/choice.json"
+    },
+    "choice_preparation": {
+      "sha256": "7c079169517d46180de39cba2d598fedee2fc8eac5d021e5a2c4072f70c6c11a",
+      "size_bytes": 2462,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-choice/result.json"
+    },
+    "lineage_check": {
+      "sha256": "4aaa3a720d415beb3ce35b4696843892a0891efe25df67ed270eafdb94540d9e",
+      "size_bytes": 272,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-choice-lineage-check.json"
+    },
+    "lineage_correction": {
+      "sha256": "7c22e523fe1a887ce49f31ac2c62db3f275c97330a0f11304207539891d9f6bb",
+      "size_bytes": 381,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-choice-lineage-correction.json"
+    },
+    "native_trial": {
+      "sha256": "1f3a29d953e30229230ed3058cac07acd2cb9ddda1744af4e625f7579dd7eb1b",
+      "size_bytes": 3883,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-choice-native/artifact.json"
+    },
+    "original_costs": {
+      "sha256": "2507c85f3f6098d82aa2b8739d61dfbd2e05d21018a3b56b28f6ea1fba8900eb",
+      "size_bytes": 55135,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-choice/original_costs.json"
+    },
+    "probe_library": {
+      "sha256": "8715fa474a3a71e22515f7dcd44fbdec34c30eaee96bcc5dffdae3feac2a5cde",
+      "size_bytes": 22104,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-calibration/native/copy_window_probe.so"
+    },
+    "probe_source": {
+      "sha256": "697c4f2ad19e5a4c40460434fa5eee3dd7f6ab37190df0b944ce2b2e455080f6",
+      "size_bytes": 11906,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-calibration/native/probe.cpp"
+    },
+    "replacement_costs": {
+      "sha256": "5253c506f1cdd46715f797f562728d04b2a6a8b24b6bcd8461bb89c1beb095f7",
+      "size_bytes": 57136,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-choice/replacement_costs.json"
+    },
+    "selected_cpp": {
+      "sha256": "43933cfe6969a427d8b9e2b8d94fceabb6b2cd338a609315496fcf900dbafe4f",
+      "size_bytes": 14648,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-choice-native/native/stateful.cpp"
+    },
+    "synthetic_policy_checks": {
+      "sha256": "a66063392dcc45a16e161270fbe19b910088aebd58a1766982d45dac47608ecf",
+      "size_bytes": 682,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-window-policy-check.json"
+    },
+    "validation": {
+      "sha256": "c82eb967c6ae114d4f651dabfaab6ffb87c80b3996d1b364e8a5432c4b2bc15e",
+      "size_bytes": 1672760,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-copy-choice-validation.json"
+    },
+    "validation_source": {
+      "sha256": "74917e6d6332268f5322ff22c9dea2ae3a0c7d5ad835df77d055b18ed2ba2ba8",
+      "size_bytes": 7573,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/validate-copy-choice.py"
+    }
+  },
+  "canonical_component_performance_measured": true,
+  "clean_whole_program_benchmark_performed": false,
+  "default_runtime_decision": "NO_OP",
+  "deployment_authorized": false,
+  "physical_optimality_proven": false,
+  "schema": "scar.copy-window-cost-choice-acceptance",
+  "schema_version": 1,
+  "source_sha256": {
+    "README.md": "8ad9afac2dc8578e9e3dc5b00b98988c654082ed82adb7f7de27b20c0da328fa",
+    "docs/STATUS.md": "3feb45ed76436196568a16bd58b6b6fc0d2a0b05f6031b3d9868fde8a2bf1d0d",
+    "scar/cli.py": "af1a03fddc8478ad94b242d89ee903cb2701ec848ae7b76e71785ab2201c57e5",
+    "scar/codegen/copy_choice.py": "d982552a3bfeb723b4ea7a0da1dadf1885a19c7237077350cd2a524f164358fc",
+    "scar/codegen/copy_window_probe.py": "701d3a40d744d52814409c120e7ac5203c0d962a205d2fdc12e7371aa35e5213",
+    "scar/codegen/copy_window_probe_v1.cpp.in": "28ae164ee880362229b74f0f5049ad0489710ad61cce1cb9bc554fe39d65f58d",
+    "scar/compiler/calibrate_copy_window.py": "6ea2b44fe89af8caa7d4888c82cfdec469ef873d3f1d7f8373d62c06e2f11568",
+    "scar/compiler/choose_copy_window.py": "e50857904be86a18aef1ded9aa0fdc3a9eb00161f6976f7c938e974d21949dab",
+    "scar/compiler/compile_copy_choice.py": "861a97eb62266f114cae7c95ab90d6f6062c0a4632068a8fefcdfe53f5488a19",
+    "scar/optimization/copy_window_choice.py": "4562760cbf1f79bfccb1a21d3ecc8357e8234116210f8e090e4a48adff83e97d"
+  },
+  "status": "VERIFIED_CANONICAL_COMPONENT_CHOICE_AND_NATIVE_REGION_TRIAL",
+  "whole_program_speedup": null
+}

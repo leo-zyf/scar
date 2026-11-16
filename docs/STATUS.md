@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 成本选择主链：新增 `calibrate-copy-window → choose-copy-window → compile-copy-choice`。原/融合窗口各用一个规范化计时cut，AB/BA交替、7对样本/warmup2，计时外重置与逐元素核验。真实原窗口median333215ns、融合543896ns，采样范围不重叠；规则据此保留ORIGINAL，融合在本组件条件下not profitable。两份成本表均22个条件组件+1源marker，融合缺证据字段已按真实FactRef解除，其余上下文残差/资源未知保留；不把组件范围当整程序保证。所选C++20/ABI1实际构建、独立冷读和原方法逐位验证/回退通过；三个合成策略分支仅测模型逻辑，未伪作实测。未重新标定旧组件、未运行完整目标或测新整程序加速比。报告：`artifacts/baseline/copy-window-cost-choice.json`。下一步继续有界联合规划，并优先推进共享循环内私有workspace生命期外提，而非强行启用无收益的循环融合。
+
 2026-11-16 继续推进：`prepare-window-rewrite` 已生成可独立重推的真实替换图；两SNAPSHOT合为一个可展开COPY区域，31→30任务、76→74时间事件，原8值/12物化/6存储槽及204项硬件库存引用不变。就绪事件、success-fence、外部依赖和CPU占用通过完整映射重接；只删除已证明的内部源序边，不丢弃其他约束。成本23组中融合项重新UNKNOWN，保留21项原条件组件证据与控制marker，不拿旧复制成本和冒充融合成本。新C++20/ABI1独立schema消费这份图/成本/资源/证书；真实区域与原Python/原C++逐位一致，原方法native3、guard回退2、默认NO_OP回退1，版本/事件映射篡改拒绝。来源冷读通过，4项IR检查通过；本轮未测性能，无新加速比或全局最优结论。报告：`artifacts/baseline/g5-certified-copy-rewrite.json`。下一步将替换区域的成本证据接入统一选择，再扩展有界联合调度；当前证书只证明该局部变换及其C++实现，三阶段通用覆盖尚未完成。
 
 2026-11-16：可视化已交付，回到三阶段主链。新增 `project-activity-time` 保留原31活动/24成本组、未知残差和保守存储生命期；`plan-closed-windows` 从原图机械抽出2个窗口，首窗的固定CPU条件模型已解，但与原序打平，第二窗保留依赖/资源缺口。独立的通用规则自动提出同迭代域、无读写冲突的raw-copy循环融合；`compile-window-trial` 已将真实Gray–Scott区域的两套循环融合为一套并编译为C++20/ABI1，原读写语句、内存池、CPU和事务边界不变。两输入场景各3步与原Python/原C++逐位一致，shape/alias/provider守卫和原方法wrapper回退另验；来源时间图、局部计划均独立冷读通过。仅为显式区域试验，融合成本UNMEASURED、默认NO_OP，无新加速比、整程序C++或全局最优结论。报告：`artifacts/baseline/g4-local-window-fusion.json`。下一层先补替换区域的成本接口和执行证书，再扩展联合CPU/内存/时间规划；不把局部条件模型当作完整v3求解。
