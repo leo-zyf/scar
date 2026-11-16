@@ -1,0 +1,189 @@
+{
+  "alternative_layouts_solved": false,
+  "cases": [
+    {
+      "budget_bytes": 33554432,
+      "case": "source-loop",
+      "content_carries": 1,
+      "independent_cold_reader_passed": true,
+      "iterations_unrolled": 0,
+      "local_models": [
+        {
+          "component_model_baseline_ticks": null,
+          "component_model_makespan_ticks": null,
+          "frontier": [
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:0"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:1"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:2"
+            },
+            {
+              "reason": "NO_SOURCE_PROVEN_REORDERABLE_OPERATION_PAIR"
+            }
+          ],
+          "status": "UNRESOLVED_LOCAL_MODEL",
+          "tasks": [
+            "stage:0",
+            "stage:1",
+            "stage:2"
+          ]
+        }
+      ],
+      "owned_payload_bytes": 320,
+      "result": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-windows-v1/source-loop/result.json",
+      "root_slot_physical_lifetimes": 2,
+      "shared_body_count": 1,
+      "summary": {
+        "control_fusion_proposals": 0,
+        "deployment_authorized": false,
+        "local_models_solved": 0,
+        "physical_optimality_proven": false,
+        "selected_transforms": 0,
+        "structural_reorder_windows": 0,
+        "unresolved_windows": 1,
+        "whole_scope_physical_latency": null,
+        "windows": 1
+      },
+      "total_payload_bytes": 480
+    },
+    {
+      "budget_bytes": 33554432,
+      "case": "scientific",
+      "content_carries": 2,
+      "independent_cold_reader_passed": true,
+      "iterations_unrolled": 0,
+      "local_models": [
+        {
+          "component_model_baseline_ticks": 392468,
+          "component_model_makespan_ticks": 392468,
+          "frontier": [],
+          "status": "KEEP_ORIGINAL_ON_COMPONENT_MODEL_TIE",
+          "tasks": [
+            "stage:0",
+            "stage:1"
+          ]
+        },
+        {
+          "component_model_baseline_ticks": null,
+          "component_model_makespan_ticks": null,
+          "frontier": [
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:3"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:3"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:4"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:4"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:5"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:5"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:6"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:6"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:7"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:7"
+            },
+            {
+              "reason": "NO_UNSPLIT_SINGLE_ACTIVITY_COMPONENT_COST",
+              "task": "stage:8"
+            },
+            {
+              "reason": "EXACT_LOCAL_EXECUTION_RESOURCE_DEMAND_UNKNOWN",
+              "task": "stage:8"
+            },
+            {
+              "reason": "NO_SOURCE_PROVEN_REORDERABLE_OPERATION_PAIR"
+            }
+          ],
+          "status": "UNRESOLVED_LOCAL_MODEL",
+          "tasks": [
+            "stage:3",
+            "stage:4",
+            "stage:5",
+            "stage:6",
+            "stage:7",
+            "stage:8"
+          ]
+        }
+      ],
+      "owned_payload_bytes": 8454304,
+      "result": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-windows-v1/scientific/result.json",
+      "root_slot_physical_lifetimes": 4,
+      "shared_body_count": 1,
+      "summary": {
+        "control_fusion_proposals": 1,
+        "deployment_authorized": false,
+        "local_models_solved": 1,
+        "physical_optimality_proven": false,
+        "selected_transforms": 0,
+        "structural_reorder_windows": 1,
+        "unresolved_windows": 1,
+        "whole_scope_physical_latency": null,
+        "windows": 2
+      },
+      "total_payload_bytes": 12697904
+    }
+  ],
+  "code_sha256": {
+    "scar/analysis/closed_windows.py": "11d78c66e7c1b3af11cbd6a3bddf62a0722a78ae0c31fa7746c07c7d66828788",
+    "scar/analysis/workspace_closed_windows.py": "42bd26385d51e78d6269116343bc8dbdc8a10ad530d4d9b22ac1bb9dcae91024",
+    "scar/cli.py": "4fe7b2a3b3900cd18b64c572b23630e0c14e7f2323da8c83258181c4c96e2f96",
+    "scar/compiler/plan_workspace_windows.py": "001b2cefccfd17c76655bda3f9aff5d7758824e72af631a054fc5391baef6f81",
+    "scar/optimization/workspace_window_models.py": "9c9ff3a30612e9a550a15d5c8fbd3161acf657c91ab16b4299c97073c4db0ee7"
+  },
+  "compiler_handoff": "RETAIN_PINNED_PARENT_CPP_BLUEPRINT_WITHOUT_RECOMPILATION",
+  "current_domain": "ORIGINAL_FIXED_CPU_AND_ORIGINAL_BORROWED_POOL_ONLY",
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "existing_solver_reused": true,
+  "full_numeric_timeline_planned": false,
+  "multi_cpu_options_cost_qualified": false,
+  "native_compiled": false,
+  "next": "PROVE_COMMIT_ROI_REPLICA_EQUALITY_FOR_CROSS_ITERATION_SHADOW_RESIDENCY_THEN_EXPAND_LAYOUT_CPU_DOMAIN",
+  "old_standalone_window_receipts_require_republication": true,
+  "parent_data_and_temporal_graphs_unchanged": true,
+  "performance_measured": false,
+  "physical_optimality_proven": false,
+  "prior_finite_reuse_compact_metadata_still_admitted": true,
+  "root_storage_lifetimes_unchanged": true,
+  "schema": "scar.workspace-closed-window-acceptance",
+  "schema_version": 1,
+  "selected_transforms": 0,
+  "source_rule_sha_changed": true,
+  "speedup": null,
+  "standalone_common_core_regression": "/home/zyf/AAA/scar/artifacts/current/experiments/workspace-windows-v1/standalone-regression.json",
+  "status": "VERIFIED_SHARED_ITERATION_WINDOW_EXTRACTION_AND_LOCAL_MODELS",
+  "target_program_executed": false,
+  "unknown_anchor_services_not_priced_zero": true
+}

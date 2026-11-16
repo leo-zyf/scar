@@ -100,6 +100,8 @@ scar compile-workspace-guards --preparation GUARDS/result.json --out GUARD_NATIV
 
 `PROVEN_CONDITIONAL` 要求首次输入扫描、封闭算术、每步严格 FP 成功、完整影子与 ROI/COMMIT/carry 证明；有未闭合 provider 时输出 `REJECTED` 并保留原执行。新 compact profile 明确标识扫描复用，C++ 首轮仍扫描，后续仅在前一步成功后跳过；scalar、CPU/FENV、事务和失败后缀检查不变。属性不跨调用缓存，不表示数据数值相同，也不把原复合 preflight 成本直接当作新版本成本。两端支持 `--check`；新运行包仍使用 `run-stateful-loop` 显式验证，默认 NO_OP。runtime 版本更新后，旧 compact 包需从原 native 重新导出。
 
+共享循环的局部硬件模型可用 `scar plan-workspace-windows --refinement REFINEMENT/result.json --out WINDOWS` 构建，`--check WINDOWS/result.json` 独立重放。它复用原窗口/冲突分析和求解器，只在同一符号迭代内规划，保留数据端口、carry、FIRST/LAST 与外层工作区寿命；未知边界不计为零，也不拼成完整物理时间表。当前域为已知 CPU 绑定和原固定 pool，平局保留原序；融合提示尚无共享循环 lowering，不能直接交给 standalone backend。无已选变换时交付端引用原 C++ 蓝图，不重复编译。共用规则文件更新后，旧 standalone 窗口收据需重新发布，基础 native 与独立 compact 交付不受这次分析重构影响。
+
 已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
 
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。

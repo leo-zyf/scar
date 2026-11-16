@@ -112,6 +112,21 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
     repeating the F4 frontend, CPU cost domain, or scope-demand derivation.
     """
     recipe, plan, activities, contracts = _admit(schedule, resources, recipe)
+    return project_closed_windows(schedule, resources, plan=plan, activities=activities, contracts=contracts,
+        external_assumptions=recipe['semantic_boundary'].get('external_assumptions', ()),
+        assumption_source=dict(parent_document='recipe', source_ref='#/semantic_boundary/external_assumptions'),
+        source_source=dict(recipe_id=recipe['recipe_id'], artifacts=deepcopy(recipe['artifacts']),
+            source_scope=deepcopy(schedule.proof['implementation_scope_cleanup'])),
+        source_documents=dict(recipe=dict(recipe_id=recipe['recipe_id'])), source_refs=source_refs)
+
+
+def project_closed_windows(schedule, resources, *, plan, activities, contracts, external_assumptions,
+        assumption_source, source_source, source_documents, scope=None, source_refs=()):
+    """Project admitted source contracts through the one shared window core.
+
+    ``scope`` limits window/anchor membership, not the parent data/storage graph.
+    The entry adapter owns source/inventory admission before calling this core.
+    """
     _need(type(source_refs) in (list, tuple) and all(type(r) is dict for r in source_refs),
           'source references must retain original qualified receipt dictionaries')
     tasks = {t.id: t for t in schedule.tasks}; positions = {t.id: i for i, t in enumerate(schedule.tasks)}
@@ -135,10 +150,9 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
     for i, edge in enumerate(schedule.temporal.constraints):
         for task_id in {events[edge.before].task, events[edge.after].task} - {None}:
             task_constraints[task_id].append(i)
-    assumptions = recipe['semantic_boundary'].get('external_assumptions', ())
     required_inputs = [dict(condition=value, authority='ORIGINAL_EXTERNAL_ASSUMPTION', proven=False,
-        parent_document='recipe', source_ref='#/semantic_boundary/external_assumptions/'+str(i))
-        for i, value in enumerate(assumptions)]
+        parent_document=assumption_source['parent_document'], source_ref=assumption_source['source_ref']+'/'+str(i))
+        for i, value in enumerate(external_assumptions)]
 
     def demand_refs(task):
         return [dict(occupancy=o.id, parent_document='resources',
@@ -179,6 +193,10 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
         for right in ordered[i+1:]:
             for row in hazards(left, right):
                 all_hazards.append(dict(before=left.id, after=right.id, **row))
+    if scope is not None:
+        _need(scope in {s.id for s in schedule.temporal.scopes}, 'original containing scope required')
+        ordered = [task for task in ordered if activities[task.id].scope == scope]
+    local_positions = {t.id: i for i, t in enumerate(ordered)}
 
     def semantic_predecessors(task):
         result = {materials[m].ready_task for m in task.reads if materials[m].ready_task is not None}
@@ -257,6 +275,7 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
                   'original source serial bind phase differs')
             proven.append(dict(condition='SCAR_SYNCHRONOUS_CALLING_TID_BIND_COMPLETED_ON_NORMAL_RETURN',
                 source_ref='#/source_contracts/serial_bind', authority='EXACT_SOURCE_STATEMENT_AND_HELPER'))
+        proven.extend(deepcopy(contracts.get('anchor_proofs', {}).get(task.id, ())))
         provider = task.attrs.get('stage_kind') == 'PROVIDER'
         if provider:
             required.extend([dict(condition='PROVIDER_INTERNAL_HELPERS_QUIESCENT_AND_PORTS_NOT_RETAINED',
@@ -286,7 +305,7 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
         inputs = [m for m in read_ids if materials[m].ready_task not in members]
         outputs = [m for m in write_ids if any(c not in members for c in consumers[m])]
         slot_ids = list(dict.fromkeys(materials[m].region.slot for m in (*read_ids, *write_ids)))
-        left_index, right_index = positions[group[0].id]-1, positions[group[-1].id]+1
+        left_index, right_index = local_positions[group[0].id]-1, local_positions[group[-1].id]+1
         left = ordered[left_index].id if left_index >= 0 else None
         right = ordered[right_index].id if right_index < len(ordered) else None
         pairs = [pair(a, b) for i, a in enumerate(group) for b in group[i+1:]]
@@ -313,15 +332,14 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
             pairs=pairs, frontiers=frontiers,
             original_source_order_preserved=True, complete_lowering_authority=False))
     result = dict(schema=SCHEMA, schema_version=1,
-        source=dict(recipe_id=recipe['recipe_id'], source_refs=encode(tuple(source_refs)),
+        source=dict(**source_source, source_refs=encode(tuple(source_refs)),
             schedule_sha256=semantic_sha256(schedule_document(schedule)),
-            resources_sha256=semantic_sha256(projection_document(resources)), target=encode(resources.target),
-            artifacts=deepcopy(recipe['artifacts']), source_scope=deepcopy(schedule.proof['implementation_scope_cleanup'])),
+            resources_sha256=semantic_sha256(projection_document(resources)), target=encode(resources.target)),
         source_contracts=contracts, windows=windows, anchors=anchors,
         parent_documents=dict(schedule=dict(semantic_sha256=semantic_sha256(schedule_document(schedule))),
             resources=dict(semantic_sha256=semantic_sha256(projection_document(resources)),
                 source_refs=encode(resources.source_refs)),
-            recipe=dict(recipe_id=recipe['recipe_id'])),
+            **source_documents),
         original_storage_hazards=all_hazards,
         original_constraints=dict(order_constraint_count=len(schedule.order_constraints),
             temporal_constraint_count=len(schedule.temporal.constraints),
@@ -340,4 +358,4 @@ def derive_closed_windows(schedule, resources, recipe, *, source_refs=()):
     return result
 
 
-__all__ = ['SCHEMA', 'derive_closed_windows']
+__all__ = ['SCHEMA', 'derive_closed_windows', 'project_closed_windows']
