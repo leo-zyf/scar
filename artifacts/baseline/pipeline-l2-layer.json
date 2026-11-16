@@ -1,0 +1,68 @@
+{
+  "checks": {
+    "command": "python -B -m pytest -q tests/unit/test_pipeline_temporal_projection.py",
+    "declared_example_not_measured": true,
+    "default_unknown_control_occupations": 11,
+    "default_unknown_durations": 16,
+    "external_descriptor_span_bytes_excluded": 1024,
+    "scheduled_slot_bytes": 2560,
+    "solver_and_codegen_forbidden": true,
+    "source_shape_conflict_rejected": true,
+    "unit_tests": 2
+  },
+  "evidence": {
+    "accounting": {
+      "schema": "scar.pipeline-l2-projection-accounting-check",
+      "sha256": "0f27feb415f15a337f442b89a7dd09b5624dbc39fe0f78ec41e0575802f734e5",
+      "size_bytes": 3104,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-projection-accounting.json"
+    },
+    "declared_example": {
+      "schema": "scar.pipeline-temporal-model-projection",
+      "sha256": "45d2a938722d12464c0c729b249bd5544b24c55697bdbba78dc64f8fdb15b42b",
+      "size_bytes": 25182,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-declared/projection.json"
+    },
+    "inputs": {
+      "schema": "scar.pipeline-temporal-inputs",
+      "sha256": "c4b9ad4df50b1ae55bcc052179c982cda3ffd72c49cf1811d328e106d60f58c0",
+      "size_bytes": 1647,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-inputs/inputs.json"
+    },
+    "main": {
+      "schema": "scar.pipeline-l2-source-projection-acceptance",
+      "sha256": "e23da140ccdd3beed1ea4d01eab23337f964394032b58987ace7a51c3ee12f55",
+      "size_bytes": 1436,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-acceptance.json"
+    },
+    "source": {
+      "schema": "scar.pipeline-l2-source-admission-check",
+      "sha256": "43130aeef2f0ad14e786f7e3680371eab928947140e21a88f201fa1b9daf9e62",
+      "size_bytes": 3510,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-source-acceptance.json"
+    },
+    "unknown": {
+      "schema": "scar.pipeline-temporal-model-projection",
+      "sha256": "70d986e7025bb6916532599b3edc80bce70acfaf3ecda80d8272b0bb72b54e57",
+      "size_bytes": 20207,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-solver-order-v1/l2-inputs/projection.json"
+    }
+  },
+  "implementation": {
+    "scar/cli.py": "db1c9a59d7c979b207aa3683db654ef6ffd20754cfab4bdd880489d8d7ad0bc1",
+    "scar/compiler/project_pipeline_temporal.py": "83001f2247f1af84cd01aa9d20a723927c8e548befffcc5df384c89c7359828a",
+    "scar/optimization/pipeline_temporal_model.py": "bd93e4fbd0404e5ae4da0c9a19c9c3e51d151057011c58a2d3592e4c934e258c"
+  },
+  "later_layers_accepted": false,
+  "layer": "L2",
+  "native_compiled": false,
+  "next_layer": "L3_EXPLICIT_MAKESPAN_SOLVING",
+  "performance_measured": false,
+  "schema": "scar.pipeline-l2-layer-gate",
+  "schema_version": 1,
+  "scope": "ORIGINAL_CLOSED_ARRAY_CALLER_SOURCE_RESOURCE_AND_COST_PROJECTION",
+  "solver_invoked": false,
+  "status": "ACCEPTED",
+  "target_program_executed": false,
+  "three_stages_globally_complete": false
+}
