@@ -71,7 +71,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.compiler.invariant_loop_frontend import discover_invariant_loops,write_invariant_loop_proof
     from scar.compiler.pipeline_loop_frontend import (discover_pipeline_invariant_loops,
         write_composite_invariant_loop_proof)
-    from scar.analysis.stateful_dependencies import project_stateful_dependencies
+    from scar.compiler.ordered_planning_graph import retain_ordered_planning_graph
     from scar.analysis.source_loop_dependencies import attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
@@ -105,12 +105,16 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         for index,region in enumerate(regions):
             folder=out/('region-'+str(index));folder.mkdir()
             path=folder/'region.json';write_stateful(region,path)
-            dependencies=project_stateful_dependencies(path,out=folder/'dependencies')
+            public_graph,dependencies=retain_ordered_planning_graph(session,path,folder/'program-graph')
+            (folder/'dependencies').mkdir()
+            (folder/'dependencies/dependencies.json').write_text(json.dumps(dependencies,
+                indent=2,sort_keys=True,allow_nan=False)+'\n')
             shapes=({value.id:list(shape) for value in region.inputs if value.kind=='array'}
                 if shape is not None else input_shapes.get(region.id))
             row=dict(region_id=region.id,source_code_key=region.source.code_key,
                 region=str(path),source_unit_scope='DECLARED_FUNCTION_PROFILE_NOT_RUNTIME_REACHABILITY',
                 dependencies=artifact_reference(folder/'dependencies/dependencies.json',dependencies['schema']),
+                program_graph=public_graph,
                 selected_for_use=False,lowering_authorized=False)
             if shapes is None:
                 row.update(status='INPUT_SHAPES_REQUIRED')
