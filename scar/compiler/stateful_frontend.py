@@ -99,9 +99,11 @@ def _declarations(original, resolver):
 
 
 class _StateLowerer(_GraphLowerer):
-    def __init__(self, original, function, resolver, syntax, imports, members, leaves):
+    def __init__(self, original, function, resolver, syntax, imports, members, leaves,
+                 *, array_paths=()):
         super().__init__(original, function, resolver, syntax=syntax)
         self.imports, self.members, self.leaves = imports, members, leaves
+        self.array_paths = frozenset(array_paths)
         self.actions, self.inputs, self.epochs, self.callees, self.providers = [], {}, {}, [], []
         self.call_facts = {source_port(self.facts, row.result).port: row for row in self.facts.calls}
         self.attributes = {source_port(self.facts, row.value).port: row for row in self.facts.attributes
@@ -154,7 +156,8 @@ class _StateLowerer(_GraphLowerer):
             return self.emit_value('slice', value.origin, (base.node,),
                 dict(bounds=[list(axis) for axis in value.bounds], semantics='ALIAS_DESCRIPTOR'))
         if isinstance(value, _Path):
-            row = self.input(value, 'array' if array or value.path in self.inputs and self.inputs[value.path].kind == 'array' else 'scalar')
+            row = self.input(value, 'array' if array or value.path in self.array_paths
+                or value.path in self.inputs and self.inputs[value.path].kind == 'array' else 'scalar')
             epoch = self.epochs[row.id] if row.kind == 'array' else None
             return self.emit_value('input', dict(value.origin, storage_epoch=epoch),
                 attrs=dict(name=row.id, kind=row.kind, epoch=epoch))
@@ -405,6 +408,51 @@ class _StateLowerer(_GraphLowerer):
         return tuple(self.inputs.values()), tuple(self.nodes), tuple(self.actions), tuple(self.callees), tuple(self.providers), tuple(self.origins)
 
 
+class _KindConstraintLowerer(_StateLowerer):
+    """Collect F4 array requirements; every temporary expression is discarded.
+
+    An unconstrained numeric path is a soft scalar *candidate*, not a scalar
+    fact. A later array read/write/provider can therefore constrain it before
+    the strict second interpretation starts. Unknown control/calls retain the
+    ordinary rejections. There is no retry/fixed-point loop or source parsing.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.required_array_paths = set()
+
+    def input(self, value, kind):
+        if kind == 'array':
+            self.required_array_paths.add(value.path)
+            old = self.inputs.get(value.path)
+            if old is not None and old.kind == 'scalar':
+                self.inputs[value.path] = replace(old, kind='array')
+                self.epochs[old.id] = 0
+                # Keep collection traversal coherent when it subsequently
+                # inspects the kind of an earlier numeric expression. These
+                # provisional nodes never escape this pass or its validator.
+                for index, node in enumerate(self.nodes):
+                    if node.op == 'input' and node.attrs['name'] == old.id:
+                        updated = replace(node, attrs=dict(name=old.id, kind='array', epoch=0))
+                        self.nodes[index] = updated
+                        self.by_id[node.id] = updated
+        return super().input(value, kind)
+
+    def numeric(self, value, *, array=False):
+        if isinstance(value, _Value):
+            node = self.by_id[value.node]
+            if array and node.op == 'input' and node.attrs['kind'] == 'scalar':
+                row = next(row for row in self.inputs.values() if row.id == node.attrs['name'])
+                self.input(_Path(row.path, row.origins[0]), 'array')
+            kind = self.kind(value.node)
+            if array and kind != 'array':
+                # An array-only composite operand may have an array path
+                # established later by a write. Do not guess which operand
+                # is array; the final strict pass must resolve or reject it.
+                return _Value(value.node, 'array')
+            return _Value(value.node, kind)
+        return super().numeric(value, array=array)
+
+
 def discover_stateful_regions(catalog, source=None):
     view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
     units = tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(view.catalog.units_for_source(str(Path(source).absolute())) or ()))
@@ -437,7 +485,11 @@ def discover_stateful_regions(catalog, source=None):
             reference = metadata.get(function.template)
             if reference is None: continue
             try:
-                inputs, nodes, actions, callees, providers, origins = _StateLowerer(original, function, resolver, syntax, imports, members, leaves).lower()
+                arguments = (original, function, resolver, syntax, imports, members, leaves)
+                constraints = _KindConstraintLowerer(*arguments)
+                constraints.lower()
+                inputs, nodes, actions, callees, providers, origins = _StateLowerer(
+                    *arguments, array_paths=constraints.required_array_paths).lower()
                 identifier = 'stateful-region:' + sha256((unit + '\0' + function.body.wire + '\0' + reference.code_key).encode()).hexdigest()[:24]
                 region = StatefulRegion(identifier, replace(reference, origins=(*reference.origins, *origins)), function.parameter_names,
                     inputs, nodes, actions, callees, providers,
