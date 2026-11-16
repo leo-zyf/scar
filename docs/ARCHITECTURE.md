@@ -32,9 +32,11 @@ Control、数据依赖、状态版本、别名和资源映射是不同关系，�
 成本接口分为完整点成本与区间。`stateful_cost_bounds`从已核验必需component重算下界，未知项保留非负无穷区间；`interval_choices`核同contract/scope/tick，严格支配才排除，未决项不消失。它是显式模型的比较，不是物理执行时间定理。
 `compile-build --stateful-interval-plans`通过严格域等价与原fact重放接入这一路，旧的标量选择继续受支持。
 
-CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保留SMT、对齐未知和层级。访问足迹不等于峰值驻留或缓存失效率；指令调度模型也不能替代这一层。多区域异步/跨设备联合调度仍需继续开发。
+CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保留SMT、对齐未知和层级。访问足迹不等于峰值驻留或缓存失效率；指令调度模型也不能替代这一层。联合放置和跨设备调度仍需继续开发。
 
 闭合数组 caller 已接入 `caller_pipeline_values → pipeline_schedule → pipeline_parallel_v1`：复用原参数/返回和共享 leaf，先推导数据依赖及 pool 的全部旧消费者 WAR，再生成有界 CPU waves。现有 v2 typed task graph 保留分配、就绪、成功 fence、释放及 fresh export；每任务使用原硬件线程引用。时间保持 UNKNOWN，独立 exact solver 尚未替它建立物理最优性。
+
+可选的 `pipeline_ready_schedule → pipeline_ready_v1` 使用相同 RAW/WAR/WAW 和固定 pool，在每 CPU lane 上扫描已就绪任务；CPU 互斥是容量约束，不变成永久语义边。完成即通知真正后继，最终 export/回退前才统一 join；失败停止领取，保留所有运行中任务的存储。原 caller 编译与 compact runtime 共用既有 ABI1，未添加数值后端，也不把可执行计划等同最快计划。
 
 ## 3. C++20与运行交付
 
@@ -45,7 +47,7 @@ C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间
 
 当前只导出UNMEASURED验证slot，默认NO_OP，显式验证仍保完整区域回退。源码/默认值/实际callee、observer、输入metadata/bounds及必要状态分别守卫；私有结果不提前发布。入口及兼容/I/O仍由Python执行，尚非任意程序的独立C++主程序。
 
-状态循环另走 `stateful_loop_frontend → stateful_loop_schedule → compile-stateful-loop → stateful_loop_runtime`。先证明原 F4 一轮的 CALL/控制/None 返回，再存一份 step 和 `(i,e)` 内容递推，独立重放后复用既有 stateful/repeat ABI1。compact trial 显式准入，`completed=k` 后只执行原 Python 后缀，并按原参数布局重新查找每轮 callee；保留每步分配与提交，不假定整循环可以整体回退。默认入口不导入 NumPy/guard、不加载 ELF；安装 wrapper 不提前求值延迟注解。
+状态循环另走 `stateful_loop_discovery → stateful_loop_frontend → stateful_loop_schedule → compile-stateful-loop → stateful_loop_runtime`。由原 CALL/body/完整 CodeID 自动发现唯一 step，独立证明原 F4 一轮的 CALL/控制/None 返回，再存一份 step 和 `(i,e)` 内容递推；降低前再次重放，复用既有 stateful/repeat ABI1。compact trial 显式准入，`completed=k` 后只执行原 Python 后缀，并按原参数布局重新查找每轮 callee；保留每步分配与提交，不假定整循环可以整体回退。默认入口不导入 NumPy/guard、不加载 ELF；安装 wrapper 不提前求值延迟注解。
 
 ## 存储与并行
 

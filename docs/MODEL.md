@@ -9,6 +9,8 @@ SCAR 是宏观编译器：用有类型、可展开的图统一表示程序及硬
 
 `CallerValueProjection` 按原 actual/formal 路由替换共享 leaf 的内容根，连接 `Value → CALL → fresh Result`；world 单独连状态接口，不参与内容相等判定。每个 CALL 保留原 Frame/FactRef，递归展开引用共享正文，不能把原 F4 Frame 直接套进另一个模板 namespace。资源计划另从数据边与 pool 复用推导 RAW/WAR/WAW；静态 wave 是它的执行细化，不能冒充源码必需顺序或最优时间表。
 
+CPU 依赖就绪执行共享同一语义/存储 DAG：每个任务固定到显式 CPU lane，同 lane 容量为1；真正前驱完成才可领取，其他 lane 的无关任务无需先完成。领取次序是可执行资源策略，不新增数据依赖或永久 lane 顺序边；完成/消费者计数/slot 版本经同步发布，失败时等待所有已运行任务结束后才能释放私有存储和回退。
+
 封闭状态循环用一份共享 step 和内容坐标 `(数组输入根, iteration i, local_epoch e)` 表达递推：本轮最后成功提交的内容连接下一轮入口；只读数组和固定 scalar 是受 guard 约束的 live-in。该坐标不是运行时 LogicalVersion，不因对象引用未变就判为循环不变量。原源码循环证明、参数接线、资源计划和运行时准入分开，只有独立重放后才可用原 C++ repeat adapter 替换控制。
 
 ## 五类核心实体
