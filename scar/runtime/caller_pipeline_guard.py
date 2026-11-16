@@ -50,7 +50,8 @@ def _source(value):
 
 def implementation_sha256():
     root=Path(__file__).resolve().parents[1]
-    names=('runtime/caller_pipeline_guard.py','runtime/native_loop.py','runtime/stateful_guard.py','trace/code_snapshot.py')
+    names=('runtime/caller_pipeline_guard.py','runtime/native_loop.py','runtime/stateful_guard.py',
+        'runtime/array_copy_guard.py','trace/code_snapshot.py')
     rows=[(name,sha256((root/name).read_bytes()).hexdigest())for name in names]
     return sha256(json.dumps(rows,separators=(',',':')).encode()).hexdigest()
 
@@ -98,6 +99,10 @@ def validate_contract(value):
         and value['defaults_policy']=='NO_DEFAULT_PARAMETERS'
         and value['input_writes']is False and value['fresh_output']is True,
         'guarded unmeasured caller profile required')
+    if 'array_copy_contract' in value:
+        from .array_copy_guard import runtime_copy_contract
+        _need(value['array_copy_contract']==runtime_copy_contract(),
+            'exact ndarray C-order copy runtime contract required')
     return value
 
 
@@ -127,6 +132,10 @@ class NativeCallerPipeline:
     def run(self,*arrays):
         contract=self._contract;_cpu_available(contract['cpu']['ids'])
         if len(arrays)!=len(contract['parameters']):raise GuardFailure('caller native array count differs')
+        if 'array_copy_contract'in contract:
+            from .array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            try:guard_copy_inputs(arrays)
+            except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         import numpy as np
         descriptors=[]
         for name,array in zip(contract['parameters'],arrays):
@@ -265,6 +274,9 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
                     raise ValueError('original global callee binding/default/code changed')
             bound=signature.bind(*args,**kwargs);bound.apply_defaults()
             arrays=[bound.arguments[name]for name in contract['parameters']]
+            if 'array_copy_contract'in contract:
+                from .array_copy_guard import guard_copy_inputs
+                guard_copy_inputs(arrays)
             import numpy as np
             for name,value in zip(contract['parameters'],arrays):
                 if (type(value)is not np.ndarray or value.dtype!=np.dtype('float64')or not value.dtype.isnative

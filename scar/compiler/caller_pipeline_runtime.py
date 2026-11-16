@@ -91,6 +91,12 @@ def export_caller_pipeline_runtime(native_directory,out,*,proof_reference,view,p
             'FLOATING_STATUS_FLAGS_NOT_OBSERVABLE_PROGRAM_OUTPUT'],
         cost_status='UNKNOWN',automatic_deployment_authorized=False,
         execution_policy='NO_OP_UNLESS_EXPLICIT_CANDIDATE_MEASUREMENT')
+    if any('EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in call.plan.region.assumptions
+           for call in proof.pipeline.calls):
+        from scar.runtime.array_copy_guard import runtime_copy_contract
+        contract['array_copy_contract']=runtime_copy_contract()
+        contract['runtime_guards']['ndarray_copy_descriptor_and_input_type']='EACH_CALL'
+        contract['external_assumptions'].append('ARRAY_INPUT_CONTENT_STABLE_DURING_REGION')
     validate_contract(contract);runtime_raw=_json(contract)
     admission=dict(schema=ADMISSION,schema_version=1,trust_policy=TRUST,
         runtime_sha256=sha256(runtime_raw).hexdigest(),native=contract['native'],

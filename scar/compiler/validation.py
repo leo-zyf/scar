@@ -3,6 +3,7 @@ import math
 import os
 from pathlib import Path
 from .model import ExecutionPlan,ArrayRegion,CpuPlacement,PROFILE,OPS
+from .array_copy_contract import COPY_REQUIRED_GUARDS,validate_copy_attributes
 
 class InvalidPlan(ValueError):pass
 
@@ -17,10 +18,10 @@ def validate_region(region):
     required={'EXACT_NUMPY_NDARRAY_FLOAT64_CPU_2D','FRESH_OUTPUT','NO_INPUT_WRITES'}
     if not required.issubset(region.assumptions):raise InvalidPlan('missing guarded array/effect contract')
     by_id={};scalar={};parameters=[]
-    arities={'input':0,'const':0,'slice':1,'neg':1,'add':2,'sub':2,'mul':2,'div':2}
+    arities={'input':0,'const':0,'slice':1,'neg':1,'copy':1,'add':2,'sub':2,'mul':2,'div':2}
     for node in region.nodes:
         if node.op not in OPS or not node.id or node.id in by_id:raise InvalidPlan('unknown operation or duplicate ID')
-        fields={'input':{'name'},'const':{'value'},'slice':{'bounds'}}.get(node.op,set())
+        fields={'input':{'name'},'const':{'value'},'slice':{'bounds'},'copy':{'order','contract'}}.get(node.op,set())
         if not isinstance(node.attrs,dict) or (set(node.attrs)!=fields and not
                 (node.op=='input' and set(node.attrs)=={'name','index'})):
             raise InvalidPlan('unsupported operation attributes')
@@ -43,6 +44,12 @@ def validate_region(region):
                     or any(not isinstance(p,(list,tuple)) or len(p)!=2 or any(v is not None and
                         (type(v)is not int or abs(v)>2**63-1) for v in p) for p in bounds)):
                 raise InvalidPlan('only unit-step 2D input/view slices supported')
+            scalar[node.id]=False
+        elif node.op=='copy':
+            try:validate_copy_attributes(node.attrs)
+            except ValueError as error:raise InvalidPlan(str(error))from error
+            if scalar[node.inputs[0]] or not set(COPY_REQUIRED_GUARDS)<=set(region.assumptions):
+                raise InvalidPlan('ndarray copy requires an array and exact descriptor/source-stability guards')
             scalar[node.id]=False
         else:scalar[node.id]=all(scalar[i] for i in node.inputs)
         by_id[node.id]=node

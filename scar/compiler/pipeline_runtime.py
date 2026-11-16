@@ -82,6 +82,11 @@ def guarded_pipeline_function(original, artifact, *, exclusive_inputs=False, sel
             return fallback('call_signature', args, kwargs)
         bound.apply_defaults()
         values = [bound.arguments[name] for name in pipeline.parameters]
+        if any('EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in call.plan.region.assumptions
+               for call in pipeline.calls):
+            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            try:guard_copy_inputs(values)
+            except CopyGuardFailure as error:return fallback(str(error),args,kwargs)
         if not trial:
             if (not selection or selection.get('decision') != 'TRANSFORM_UNDER_CONTRACT'
                     or any(selection.get('artifact', {}).get(key) != identity[key]

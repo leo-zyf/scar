@@ -119,7 +119,11 @@ def _leaf(view,body,source_callable,resolver,identities):
     nodes,output,origins=_GraphLowerer(source,function,resolver,syntax=identities[body.unit][1]).lower()
     reference=_reference(view,body.unit,function,origins,identities)
     identifier='graph-array-region:'+sha256((body.unit+'\0'+function.body.wire+'\0'+reference.code_key).encode()).hexdigest()[:24]
-    return function,prepare_pipeline_leaf(optimize_region(ArrayRegion(identifier,reference,function.parameter_names,nodes,output)))
+    region=ArrayRegion(identifier,reference,function.parameter_names,nodes,output)
+    if any(node.op=='copy'for node in nodes):
+        from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS
+        region=replace(region,assumptions=tuple(dict.fromkeys((*region.assumptions,*COPY_REQUIRED_GUARDS))))
+    return function,prepare_pipeline_leaf(optimize_region(region))
 
 
 def _global_name(facts,callee):

@@ -176,6 +176,11 @@ class FusedPipelineArtifact:
         import numpy as np
         if len(arrays) != len(self.pipeline.parameters):
             raise GuardFailure("fused pipeline input count differs")
+        if any('EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in call.plan.region.assumptions
+               for call in self.pipeline.calls):
+            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            try:guard_copy_inputs(arrays)
+            except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         for parameter, array in zip(self.pipeline.parameters, arrays):
             if (type(array) is not np.ndarray or array.shape != tuple(self._memory["input_shapes"][parameter])
                     or not array.flags.c_contiguous):

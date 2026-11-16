@@ -33,7 +33,7 @@ COMPILER_OPTIONS = (
 )
 _DIRECTORY = Path(__file__).resolve().parent
 _BINARY_OPS = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
-_ARITY = {"input": 0, "const": 0, "slice": 1, "neg": 1,
+_ARITY = {"input": 0, "const": 0, "slice": 1, "neg": 1, "copy": 1,
           **dict.fromkeys(_BINARY_OPS, 2)}
 
 
@@ -68,7 +68,8 @@ def runtime_implementation_sha256() -> str:
     planning can compare it with the implementation a profile actually timed.
     """
     files = [{"path": filename, "sha256": _digest((_DIRECTORY / filename).read_bytes())}
-             for filename in ("cpp.py", "kernel_v1.cpp.in", "scar_abi_v1.h", "timed.py")]
+             for filename in ("cpp.py", "kernel_v1.cpp.in", "scar_abi_v1.h", "timed.py",
+                              "../runtime/array_copy_guard.py")]
     return _digest(json.dumps(files, sort_keys=True, separators=(",", ":")).encode())
 
 
@@ -104,7 +105,8 @@ def _supported(plan: ExecutionPlan) -> dict[str, bool]:
     for node in plan.region.nodes:
         if node.id in nodes or node.op not in _ARITY or len(node.inputs) != _ARITY[node.op]:
             raise ValueError(f"unsupported or malformed expression {node.id!r}")
-        allowed = {"input": {"name", "index"}, "const": {"value"}, "slice": {"bounds"}}.get(node.op, set())
+        allowed = {"input": {"name", "index"}, "const": {"value"}, "slice": {"bounds"},
+                   "copy": {"order", "contract"}}.get(node.op, set())
         if not isinstance(node.attrs, dict) or set(node.attrs) - allowed:
             raise ValueError(f"unsupported expression attributes for {node.op!r}")
         if any(source not in nodes for source in node.inputs):
@@ -203,7 +205,7 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
     # are never read speculatively. A scalar local preserves each DAG operation.
     needed = {plan.region.output}
     for node in plan.region.nodes:
-        if node.op in (*_BINARY_OPS, "neg"):
+        if node.op in (*_BINARY_OPS, "neg", "copy"):
             needed.add(node.id)
             needed.update(node.inputs)
     # valid_array has proved every input's full reachable offset interval in
@@ -239,6 +241,10 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
             expression = scalar_values[node.id]
         elif node.op == "neg":
             expression = f"-{value_names[node.inputs[0]]}"
+        elif node.op == "copy":
+            # Forward only the scalar value. The existing ABI writes every
+            # result into its private fresh C-order output, never the input.
+            expression = value_names[node.inputs[0]]
         else:
             left, right = (value_names[source] for source in node.inputs)
             expression = f"{left} {_BINARY_OPS[node.op]} {right}"
@@ -459,6 +465,10 @@ class CppArtifact:
         import numpy as np
         if len(arrays) != len(self.plan.region.parameters):
             raise GuardFailure("C++ input count does not match region parameters")
+        if 'EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in self.plan.region.assumptions:
+            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            try:guard_copy_inputs(arrays)
+            except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         descriptors = [_descriptor(array) for array in arrays]
         guards = self._timed_admission["must_guard"] if self._timed_admission is not None else None
         if guards is not None:
