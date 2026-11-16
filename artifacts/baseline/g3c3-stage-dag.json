@@ -1,0 +1,169 @@
+{
+  "schema": "scar.g3c3-stage-dag-acceptance",
+  "schema_version": 1,
+  "status": "VERIFIED_SOURCE_FAITHFUL_CANONICAL_STAGE_MODELS",
+  "observations": {
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-stage-dag-ref/observations.json",
+    "sha256": "54312e0b9cdd7fb199d2b12ba605fdc2e334267fec91cc76c89d31a590a29cb5",
+    "size_bytes": 115539,
+    "schema": "scar.stateful-stage-dag-calibration"
+  },
+  "costs": {
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-dag-costs-ref/result.json",
+    "sha256": "074a4e6c266225d77c5a5af0f2d3e8f84db9d0d96909c250c9fa1a546a9ac2ab",
+    "size_bytes": 3004,
+    "schema": "scar.activity-cost-preparation"
+  },
+  "source_capture": {
+    "schema": "scar.stateful-stage-source-capture",
+    "sha256": "d3ba908985869610ccde7f0ad0fece237f1b74045c50aac3f05b32e437421060",
+    "size_bytes": 52115,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/activity-cost-v1/gray-stage-dag-ref/source-capture.json"
+  },
+  "cold_original_source_and_native_fragment_replay": "PASSED",
+  "cold_time_resource_full_cost_replay": "PASSED",
+  "legacy_g3c2_cost_receipt_replay": "PASSED_UNCHANGED_TABLE_SHA",
+  "full_cpp_equal_to_original_renderer": true,
+  "mathematical_renderer_ast_preserved": true,
+  "capture_stages": 9,
+  "components": [
+    {
+      "stage_index": 4,
+      "component": "FUSED_SCALAR_DAG_ROW_STAGE_V2",
+      "key": "4e600636e24092b0607cd087419d63d7de83553f6da2b07cbf347380c8a884c7",
+      "nodes": 23,
+      "backing_groups": 3,
+      "statistics": {
+        "max_ns": 700927,
+        "median_ns": 365635,
+        "min_ns": 358950,
+        "stdev_ns": 158608.13369898844
+      },
+      "placement": {
+        "caller_cpu_after": 0,
+        "caller_cpu_before": 4,
+        "exact_caller_affinity_restored": true,
+        "selected_cpu": 0
+      }
+    },
+    {
+      "stage_index": 6,
+      "component": "TAGGED_SCALAR_DAG_SETUP_STAGE_V2",
+      "key": "04f00d2eab312f319c109888d6587bce41bbcbb8d814bc4a39105a51b7dc791f",
+      "nodes": 3,
+      "backing_groups": 0,
+      "statistics": {
+        "max_ns": 25,
+        "median_ns": 24,
+        "min_ns": 20,
+        "stdev_ns": 1.9518001458970664
+      },
+      "placement": {
+        "caller_cpu_after": 0,
+        "caller_cpu_before": 0,
+        "exact_caller_affinity_restored": true,
+        "selected_cpu": 0
+      }
+    },
+    {
+      "stage_index": 7,
+      "component": "FUSED_SCALAR_DAG_ROW_STAGE_V2",
+      "key": "daf085cb2b84e5e669f406f87d7a731b3d3914b0efebe2652f73641b9752d08a",
+      "nodes": 21,
+      "backing_groups": 3,
+      "statistics": {
+        "max_ns": 352245,
+        "median_ns": 337355,
+        "min_ns": 336770,
+        "stdev_ns": 6765.462536540524
+      },
+      "placement": {
+        "caller_cpu_after": 0,
+        "caller_cpu_before": 0,
+        "exact_caller_affinity_restored": true,
+        "selected_cpu": 0
+      }
+    }
+  ],
+  "repetitions": 7,
+  "warmup": 2,
+  "canonical_experiment_seconds": 3.78713247703854,
+  "observations_bytes": 115539,
+  "source_reference_compaction": {
+    "previous_bytes": 6352904,
+    "current_bytes": 115539,
+    "structural_keys_unchanged": true
+  },
+  "before_summary": {
+    "activities": 30,
+    "complete_subjects": 0,
+    "empirical_intervals": 19,
+    "execution_authorized": false,
+    "known_component_subjects": 19,
+    "mathematical_bounds_verified": false,
+    "original_activity_coverage_complete": true,
+    "physical_optimality_proven": false,
+    "solver_authorized": false,
+    "source_component_semantics_replayed_by_this_validator": false,
+    "subjects": 23,
+    "unknown_subjects": 4,
+    "unmapped_terms": 4,
+    "whole_scope_cost_closed": false
+  },
+  "after_summary": {
+    "activities": 30,
+    "complete_subjects": 0,
+    "empirical_intervals": 22,
+    "execution_authorized": false,
+    "known_component_subjects": 22,
+    "mathematical_bounds_verified": false,
+    "original_activity_coverage_complete": true,
+    "physical_optimality_proven": false,
+    "solver_authorized": false,
+    "source_component_semantics_replayed_by_this_validator": false,
+    "subjects": 23,
+    "unknown_subjects": 1,
+    "unmapped_terms": 5,
+    "whole_scope_cost_closed": false
+  },
+  "prior_numeric_subjects_preserved": 19,
+  "unique_original_activities": 30,
+  "unknown_original_tasks": [
+    "success:precommit"
+  ],
+  "source_identity_in_primitive_key": false,
+  "ordered_operands_and_fanout_preserved": true,
+  "body_source_copied_verbatim": true,
+  "component_topology_specialized": true,
+  "target_fragment_compiled": true,
+  "full_target_program_executed": false,
+  "target_variants_ranked": false,
+  "whole_target_call_measured": false,
+  "complete_call_cost": false,
+  "solver_authorized": false,
+  "deployment_authorized": false,
+  "speedup": null,
+  "residuals": [
+    "TARGET_DATA_SCALAR_TAG_AND_FLOATING_EXCEPTION_REGIME_NOT_VALIDATED",
+    "WHOLE_FUNCTION_COMPILATION_REGISTER_VECTOR_AND_MEMORY_CONTEXT_DELTA",
+    "POST_PROVIDER_AFFINITY_FLOATING_STATE_AND_INTERFERENCE_DELTA",
+    "INSTRUMENTATION_PERTURBATION_NOT_BOUNDED"
+  ],
+  "directed_tests": {
+    "passed": 2,
+    "elapsed_seconds": 1.19
+  },
+  "code_sha256": {
+    "scar/codegen/stateful_stage_capture.py": "f3b165781d901a836a9af163df63c217f427aec95c35fd2ad9320acf025f93c3",
+    "scar/codegen/stateful_stage_probe.py": "63b612cdb8b706367fcd3741e1b9e48cfaed9eafb195437ff9a3b64bbc15d74e",
+    "scar/codegen/stateful_stage_probe_v1.cpp.in": "19d6c92835e2fb8d5a5607b0059029bbbb78a3444c82c9d2d47b2867b6d5f242",
+    "scar/compiler/calibrate_stage_dag.py": "c1ec322dce3aee5fe857a4740e3318b3d5794bcbf5919005b32ca3d9a926f862",
+    "scar/optimization/stateful_stage_signature.py": "4070b4793233ff85c10d53ccdb7a2f0b51a1ae22fd26059013b772a0a8f0d434",
+    "scar/optimization/stage_dag_activity_costs.py": "c9ff00ba5df48cdb88f1af085f3411bbe642d07d46a74eb5b1c868d18ec33066",
+    "scar/optimization/temporal_activity_costs.py": "d8faf41ef97b24ac5b4f26705e3eb38c62524eebdd824a1bae1901afba0d3b99",
+    "scar/compiler/cost_activities.py": "f47ba1a58d7cbda6a679b897ffedad8b87f2c0669fc83cb1d45f74600ef5b8e8",
+    "scar/cli.py": "732c26ad15eee6b2d189dfb6990a927c97643e8154099a8ea0464dcb809df49f",
+    "tests/unit/test_stateful_stage_dag.py": "f60832ef825322ff174967eaa9bd860b9b25387e7d2bb842e6efea128e0e9d7a"
+  },
+  "next": "G3C4_SOURCE_RANGE_OWNERSHIP_RESOURCE_UNITS_AND_MODEL_RESIDUAL_APPLICABILITY"
+}

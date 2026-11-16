@@ -105,7 +105,8 @@ def project_unknown_activity_costs(schedule, resources, *, source_refs=(), reaso
 
 
 def project_stateful_activity_costs(schedule, resources, recipe, domain, candidate_id,
-                                    calibrations, *, source_refs=(), boundary_calibrations=()):
+                                    calibrations, *, source_refs=(), boundary_calibrations=(),
+                                    dag_calibrations=()):
     """Map exact stage occurrences and whole-pool signatures, preserving holes.
 
     The caller replays the recipe and G2 resource publication. Domain/source,
@@ -223,6 +224,11 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
         from scar.optimization.boundary_activity_costs import project_boundary_activity_costs
         table, boundary_derivation = project_boundary_activity_costs(table, schedule, resources,
             domain=domain, candidate_id=candidate_id, calibrations=boundary_calibrations)
+    dag_derivation = None
+    if dag_calibrations:
+        from scar.optimization.stage_dag_activity_costs import project_stage_dag_activity_costs
+        table, dag_derivation = project_stage_dag_activity_costs(table, schedule, resources,
+            domain=domain, candidate_id=candidate_id, calibrations=dag_calibrations)
     summary = validate_activity_cost_table(table, schedule, resources)
     derivation = dict(protocol='EXACT_STATEFUL_CANONICAL_COMPONENT_SIGNATURES', candidate_id=candidate_id,
         demand_context=demand['context'], resource_context=demand['resource_context'], mapping=mapping,
@@ -233,4 +239,6 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
         pool_cost_split_or_multiplied_by_slot_count=False, summary=summary)
     if boundary_derivation is not None:
         derivation['boundary_cuts'] = boundary_derivation
+    if dag_derivation is not None:
+        derivation['stage_dag'] = dag_derivation
     return table, derivation

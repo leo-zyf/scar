@@ -14,6 +14,8 @@ G3c1 已验：`refine-time-envelope --bind-serial-demands` 静态重放 bind→�
 
 G3c2 已贯通：`calibrate-boundary-cuts` 用真实 shared guard→compiler adapter→StatefulArtifact.run 接原模板片段构成的 canonical no-op；同一整数 CLOCK_MONOTONIC 将每次调用分成7个连续排他区间，返回尾段合并两原phase，保留RAII/FFI/插桩及空DAG的适用残差。真实7样本/warmup2约3.00s、native9/fallback0、affinity恢复；`cost-activities --boundary-calibration` 独立重放原片段/编译来源和逐样本cut，仅替换UNKNOWN，不动12个既有primitive成本。Gray的30个活动仍各覆盖一次，23个计费组中19有条件估计、4未知（两个fused DAG、一个tagged scalar、一个成功检查）；全部仍非完整成本。2项定向检查和冷读通过；验收 `artifacts/baseline/g3c2-boundary-cuts.json`。当前继续G3c3/G3c4，尚不授权联合solver、部署或新加速比。
 
+G3c3 已验：`calibrate-stage-dag` 从原 renderer 的只读入口快照构造有序/共享/typed-constant/物理槽别名完整子图键，源码身份只留引用；数学AST不改，捕获全文须逐字等于原renderer。原body直接进入C++20 canonical组件采样，明确承认拓扑特化及片段已编译，未执行完整目标；3组件各7样本/warmup2约3.79s，CPU/FP恢复且冷读成功。`cost-activities --dag-calibration`仅替换3个UNKNOWN，既有19组数值原样；30活动/23subject现22个条件估计，仅`success:precommit`未计时。2项结构检查通过，源码改引用使观测记录6.35MB降至115539B且结构键不变。见 `artifacts/baseline/g3c3-stage-dag.json`。下一G3c4按原源码范围核成功门槛/旧组合term收费归属、资源需求单位及模型残差；不将虚拟fence或原unmapped诊断粗暴当成额外物理耗时，不提前宣称全调用成本或最优部署。
+
 可视化支线：`view-graph` 已接第一阶段 ProgramBuild 原查询接口及版本化任务图，离线无限画布按分片展开/收缩，保原 frame、MAY/条件和证据，循环不逐次展开；布局单独保存。真实 Gray 导出8个程序片段（426节点/469边）及204资源/477连接的原库存，端点/深度/时间限制均明确，不冒充全程序覆盖。浏览器已验展开79→124→收起79、资源分组13→157、缩放/筛选/保存及零网络请求；未运行目标程序。完成这项后继续G3c2，不扩展GUI产品或提前进入新backend。
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
