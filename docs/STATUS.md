@@ -12,6 +12,8 @@ G3b 已贯通 standalone Gray 的“原图→实施阶段→时间→资源→�
 
 G3c1 已验：`refine-time-envelope --bind-serial-demands` 静态重放 bind→闭合代码→restore；provider 的 affinity 保持合同缺失时立即失效，不用最终检查倒推。Gray 只证明前两个 SNAPSHOT 的CPU0单位需求，其后维持UNKNOWN，原任务/数据/时间边界不变；真实三链冷读与2项定向检查通过，报告：`artifacts/baseline/g3c1-serial-affinity.json`。继续顺序是 G3c2 排他边界时钟cut及明确残差 → G3c3 fused-DAG/tagged-scalar缺项 → G3c4 全范围成本和资源适用条件验收；完成前不开放G4/G5。
 
+可视化支线：`view-graph` 已接第一阶段 ProgramBuild 原查询接口及版本化任务图，离线无限画布按分片展开/收缩，保原 frame、MAY/条件和证据，循环不逐次展开；布局单独保存。真实 Gray 导出8个程序片段（426节点/469边）及204资源/477连接的原库存，端点/深度/时间限制均明确，不冒充全程序覆盖。浏览器已验展开79→124→收起79、资源分组13→157、缩放/筛选/保存及零网络请求；未运行目标程序。完成这项后继续G3c2，不扩展GUI产品或提前进入新backend。
+
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 
 当前严格按层推进：L1 原图/资源输入 → L2 成本与约束投影 → L3 联合求解 → L4 执行证书 → L5 C++ → L6 原入口。L2 源码主链已验：16项时长和11项控制占用默认 UNKNOWN，2560B增量pool与external分账，矛盾shape拒绝，禁止solver/codegen。L3 `solve-pipeline-temporal` 已重放显式有限域：声明模型的两布局得21/13 ticks，五CALL顺序例得13并匹配下界；UNKNOWN case保留并阻止闭域选择，独立域收据防裁剪。上述ticks均非测量。报告在 `pipeline-solver-order-v1/l2-acceptance.json`、`l3-acceptance.json`。L4以后仍须逐层验收，试做文件不算完成。

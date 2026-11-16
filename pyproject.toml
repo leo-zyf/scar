@@ -27,6 +27,7 @@ py-modules = ["sitecustomize"]
 "scar.codegen" = ["*.h", "*.in"]
 "scar.trace" = ["*.c"]
 "scar" = ["native/*.cpp"]
+"scar.visualization" = ["assets/*", "assets/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
