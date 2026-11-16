@@ -471,6 +471,8 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 
 SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代表数据就绪，提交返回与设备完成没有固定先后；就绪事件绑定实际生产活动。`time-schedule` 从原 CPU 任务图机械生成这些关系，保留不同预算范围，外部存储不虚构分配/释放；导出存储在 scope 退出后继续存活。循环适配先重放原源码证明，并匹配完整 step 内容，正文中的值、slot 均为逐迭代模板，不授权跨迭代复用。当前资源可行性、循环周期和物理耗时均未被证明，旧 task-only solver 对显式 temporal 返回 UNRESOLVED，不能忽略新增约束继续选优。
 
+`bind-time-resources` 以占用 ID 连接原硬件图，不再复制一张执行图：`ExecutionBinding` 区分精确线程与有来源的候选线程，`core_refs` 保留共享物理核关系，不从 SMT 数目推出吞吐或核独占；`StorageBinding` 每份 owned slot 一条，HOST 候选域不等于页驻留。`OriginalBudget` 原样保留预算和统计范围，库存总容量不变成可用预算。选定计算 CPU 集合不证明分配/guard 等宿主活动的线程绑定；源信息不足时域和需求仍为 UNKNOWN。所有引用带原 snapshot，未使用设备与连接仍由完整原硬件图保留。
+
 `StatefulRegion` 是从原 F4/UnitFacts 提取的受约束数组状态区域，保留 SourceRef、原 step/value/world 来源。
 参数及接收者字段路径的 array/scalar kind 是运行时守卫的候选约束，不是静态已知值；未知调用、控制和效果仍阻止该 profile 准入。
 

@@ -2,7 +2,9 @@
 
 当前按 G1→G6 落实时间模型：G1 同一 IR 的事件/活动/占用/约束 → G2 真实资源域映射 → G3 有来源的成本区间 → G4 放置/并发/内存/时间联合规划 → G5 C++ 执行证书 → G6 原入口正确性与 clean A/B。以下旧 L2–L4 结果只是已有有限声明模型的证据，不代表 G2–G6 已完成；未提交的旧 C++ solver-order 试作暂不扩展。
 
-G1 已验：v3 时间字段及 `scar time-schedule` 接入现有 IR，v2 字段与哈希保持不变。CPU pipeline 为 16 tasks/41 events/5 owned slots；真实 Gray–Scott 为 20/54/4；状态循环保留一份 9-task 正文、27 events 及 distance=1 依赖。三份保存图均通过独立来源重放，Gray 原 F4 主链另经32.69s冷读确认；7项定向检查通过。耗时/服务需求未知项保留 UNKNOWN，旧求解器不得丢弃新约束；没有新目标执行、标定、加速比或部署授权。验收：`artifacts/baseline/g1-semantic-time.json`。下一步 G2 将活动/占用映射到已有真实硬件域和显式预算。
+G1 已验：v3 时间字段及 `scar time-schedule` 接入现有 IR，v2 字段与哈希保持不变。CPU pipeline 为 16 tasks/41 events/5 owned slots；真实 Gray–Scott 为 20/54/4；状态循环保留一份 9-task 正文、27 events 及 distance=1 依赖。三份保存图均通过独立来源重放，Gray 原 F4 主链另经32.69s冷读确认；7项定向检查通过。耗时/服务需求未知项保留 UNKNOWN，旧求解器不得丢弃新约束；没有新目标执行、标定、加速比或部署授权。验收：`artifacts/baseline/g1-semantic-time.json`。
+
+G2 资源接线已验，尚有显式未决字段：`bind-time-resources` 将每个占用 ID 接入原 snapshot；pipeline 的5个计算活动精确绑定原线程，其余11个需求单位仍未知，候选域保留56线程/28共享物理核。Gray/状态循环没有借用所选计算 CPU 冒充宿主活动的绑定。三源分别5/4/2份 owned slot 各计一次，HOST 候选按 CPU_ALLOCATE 合同推出，原预算保留；未证明页驻留、可用 RAM 或吞吐。三源独立冷读及9项定向检查通过，报告：`artifacts/baseline/g2-temporal-resources.json`。接下来补 G3 的活动资源需求和有来源的真实成本区间，再接联合求解；G4–G6 未完成，无本轮新加速比。
 
 当前优先完成三阶段核心开发；暂停新增性能实验。已在受支持的 CPU 数组、循环和事务区域贯通主链，**通用覆盖尚未完成**。不能把正确回退、单个区域编译或历史性能记录当作整个系统已经完成。
 

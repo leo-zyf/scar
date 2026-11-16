@@ -1,0 +1,202 @@
+{
+  "cases": [
+    {
+      "case": "pipeline",
+      "independent_cold_source_time_target_replay": "PASSED",
+      "inventory_counts": {
+        "CacheDomain": 86,
+        "CpuCore": 28,
+        "CpuExecutor": 2,
+        "CpuPackage": 2,
+        "DiscoveredAccelerator": 1,
+        "HardwareBoundary": 2,
+        "HardwareThread": 56,
+        "MemoryDomain": 2,
+        "NetworkInterface": 7,
+        "PciFunction": 13,
+        "StorageDevice": 4,
+        "StorageEndpoint": 1
+      },
+      "projection": {
+        "schema": "scar.temporal-resource-projection",
+        "sha256": "94e12505e38ffa5d1ae0be7f30891b8bbce545fe8f2d596048f60636da680000",
+        "size_bytes": 608284,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/pipeline-resources/resources.json"
+      },
+      "receipt": {
+        "schema": "scar.temporal-resource-preparation",
+        "sha256": "8442ed8d3f1f72937c1616eed1e02dbbe66db4aa98a6eb87aedbb6ac8ba01e4f",
+        "size_bytes": 1319,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/pipeline-resources/result.json"
+      },
+      "summary": {
+        "cost_model_available": false,
+        "exact_memory_residency_proven": false,
+        "exact_thread_binding_count": 5,
+        "execution_authorized": false,
+        "execution_binding_count": 16,
+        "occupancy_binding_coverage_complete": true,
+        "original_budget_bytes": 1049600,
+        "original_budget_scope": "ENCODED_FORMAL_EXTERNAL_PAYLOAD_PLUS_ORIGINAL_INCREMENTAL_PIPELINE_PAYLOAD",
+        "physical_slot_payload_bytes": 2560,
+        "referenced_candidate_thread_count": 56,
+        "referenced_core_group_count": 28,
+        "reported_memory_capacity_is_available_budget": false,
+        "resource_capacity_feasibility_proven": false,
+        "schema": "scar.temporal-resource-projection",
+        "smt_core_groups_imply_exclusive_execution": false,
+        "source_activity_demand_coverage_complete": true,
+        "storage_binding_count": 5,
+        "thread_count_implies_throughput": false,
+        "unknown_thread_domains": 0,
+        "unknown_units": 11,
+        "unresolved_slotplacement": 5
+      }
+    },
+    {
+      "case": "gray",
+      "independent_cold_source_time_target_replay": "PASSED",
+      "inventory_counts": {
+        "CacheDomain": 86,
+        "CpuCore": 28,
+        "CpuExecutor": 2,
+        "CpuPackage": 2,
+        "DiscoveredAccelerator": 1,
+        "HardwareBoundary": 2,
+        "HardwareThread": 56,
+        "MemoryDomain": 2,
+        "NetworkInterface": 7,
+        "PciFunction": 13,
+        "StorageDevice": 4,
+        "StorageEndpoint": 1
+      },
+      "projection": {
+        "schema": "scar.temporal-resource-projection",
+        "sha256": "e103f8c2893f0cf17c0839a007b3fdbd71dbfe40aabd5b24acd94cac3a1d78d9",
+        "size_bytes": 35488,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/gray-resources/resources.json"
+      },
+      "receipt": {
+        "schema": "scar.temporal-resource-preparation",
+        "sha256": "696c127b8b6baafc439a585b3076adc4399d92e92a7601234517ba1e45eb8a13",
+        "size_bytes": 1298,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/gray-resources/result.json"
+      },
+      "summary": {
+        "cost_model_available": false,
+        "exact_memory_residency_proven": false,
+        "exact_thread_binding_count": 0,
+        "execution_authorized": false,
+        "execution_binding_count": 20,
+        "occupancy_binding_coverage_complete": true,
+        "original_budget_bytes": 33554432,
+        "original_budget_scope": "ALL_REGION_ARRAY_PAYLOAD_EXTERNAL_STATE_PLUS_FIXED_WORKSPACE",
+        "physical_slot_payload_bytes": 8454304,
+        "referenced_candidate_thread_count": 0,
+        "referenced_core_group_count": 0,
+        "reported_memory_capacity_is_available_budget": false,
+        "resource_capacity_feasibility_proven": false,
+        "schema": "scar.temporal-resource-projection",
+        "smt_core_groups_imply_exclusive_execution": false,
+        "source_activity_demand_coverage_complete": true,
+        "storage_binding_count": 4,
+        "thread_count_implies_throughput": false,
+        "unknown_thread_domains": 20,
+        "unknown_units": 20,
+        "unresolved_slotplacement": 4
+      }
+    },
+    {
+      "case": "loop",
+      "independent_cold_source_time_target_replay": "PASSED",
+      "inventory_counts": {
+        "CacheDomain": 86,
+        "CpuCore": 28,
+        "CpuExecutor": 2,
+        "CpuPackage": 2,
+        "DiscoveredAccelerator": 1,
+        "HardwareBoundary": 2,
+        "HardwareThread": 56,
+        "MemoryDomain": 2,
+        "NetworkInterface": 7,
+        "PciFunction": 13,
+        "StorageDevice": 4,
+        "StorageEndpoint": 1
+      },
+      "projection": {
+        "schema": "scar.temporal-resource-projection",
+        "sha256": "b1b005762fbe7ba99fbb8627a66bb5eac28fa02113ab6472a4659989ca51dfa2",
+        "size_bytes": 19450,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/loop-resources/resources.json"
+      },
+      "receipt": {
+        "schema": "scar.temporal-resource-preparation",
+        "sha256": "321097d1a40cbdafaa83c805107c9de0d6617f37bbeca7460cb3c4154e93111a",
+        "size_bytes": 1294,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/time-adaptation-v1/loop-resources/result.json"
+      },
+      "summary": {
+        "cost_model_available": false,
+        "exact_memory_residency_proven": false,
+        "exact_thread_binding_count": 0,
+        "execution_authorized": false,
+        "execution_binding_count": 9,
+        "occupancy_binding_coverage_complete": true,
+        "original_budget_bytes": 1048576,
+        "original_budget_scope": "ALL_REGION_ARRAY_PAYLOAD_EXTERNAL_STATE_PLUS_FIXED_WORKSPACE",
+        "physical_slot_payload_bytes": 320,
+        "referenced_candidate_thread_count": 0,
+        "referenced_core_group_count": 0,
+        "reported_memory_capacity_is_available_budget": false,
+        "resource_capacity_feasibility_proven": false,
+        "schema": "scar.temporal-resource-projection",
+        "smt_core_groups_imply_exclusive_execution": false,
+        "source_activity_demand_coverage_complete": true,
+        "storage_binding_count": 2,
+        "thread_count_implies_throughput": false,
+        "unknown_thread_domains": 9,
+        "unknown_units": 9,
+        "unresolved_slotplacement": 2
+      }
+    }
+  ],
+  "code_sha256": {
+    "scar/analysis/temporal_resources.py": "edc3296ffbda529319c407bda90c20401b345d53d7181c19421261f7a5264224",
+    "scar/cli.py": "82d4c4dab401273903cfd65fdf02b0ecf9234cb696c658ad0291f5cf85dacb02",
+    "scar/compiler/bind_time_resources.py": "7721fd02f9b60fc1ada3fcd6617b3df611ee7d8016b350793400d5f88fc857ec",
+    "scar/ir/temporal_resources.py": "a9f8fffa0d0ac4e2b45fa7dbd5ce496dc1233605ff64188a8c07839f3108d4b0",
+    "tests/unit/test_temporal_resources.py": "4250f029fb02849834068bd5384eaf3b3a8030f4f6ab7e43dd4db3358b935961"
+  },
+  "deployment_authorized": false,
+  "directed_tests": {
+    "command": "/home/zyf/miniconda3/envs/lewm/bin/python -m pytest -q tests/unit/test_temporal_resources.py tests/unit/test_temporal_schedule.py tests/unit/test_versioned_schedule.py",
+    "failed": 0,
+    "passed": 9
+  },
+  "native_compiled": false,
+  "next_gate": "G3_CLOSE_RESOURCE_PROFILES_AND_SOURCED_REAL_COST_INTERVALS_BEFORE_JOINT_SOLVING",
+  "open_fields": [
+    "UNKNOWN_HOST_SERVICE_UNITS",
+    "RECIPE_HOST_THREAD_DOMAINS_NOT_CAPTURED",
+    "MEMORY_ACCESS_POLICY_CONDITIONS_NOT_DISCHARGED",
+    "NO_EXPLICIT_NUMA_PAGE_PLACEMENT",
+    "NO_SOURCED_TASK_DURATION_INTERVALS"
+  ],
+  "performance_measured": false,
+  "physical_optimality_proven": false,
+  "rules": [
+    "EXACT_CPU_ID_IS_FROM_ORIGINAL_OCCUPANCY_AND_TARGET_SNAPSHOT",
+    "SMT_CORE_IS_CONTENTION_GROUP_NOT_AN_EXCLUSIVE_CAPACITY_OR_THROUGHPUT_PROOF",
+    "CPU_ALLOCATE_CONTRACT_NOT_LOCATION_LABEL_PROVES_HOST_CANDIDATES",
+    "ONE_OWNED_SLOT_BINDING_INDEPENDENT_OF_NUMBER_OF_VERSIONS_AND_CANDIDATE_MEMORIES",
+    "RECIPE_SELECTED_CPU_SET_IS_NOT_HOST_CONTROL_BINDING_AUTHORITY",
+    "REPORTED_TOTAL_MEMORY_IS_NOT_AVAILABLE_BUDGET"
+  ],
+  "schema": "scar.g2-temporal-resource-acceptance",
+  "schema_version": 1,
+  "scope": "SOURCE_BOUND_HARDWARE_AND_ORIGINAL_BUDGET_PROJECTION_ONLY",
+  "solver_invoked": false,
+  "speedup": null,
+  "status": "VERIFIED_MAPPING_WITH_EXPLICIT_OPEN_FIELDS",
+  "target_program_executed": false
+}
