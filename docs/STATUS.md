@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-16 v4执行桥已验：新增 `refine-workspace-execution → compile-workspace-refinement`，把共享正文、FIRST/LAST容量生命期、逐轮content carry、CPU域和有条件成本映射到source-bound证书，再用原backend重新构建C++20/ABI1。原循环13活动/2slot、Gray24/4均通过独立冷读；新源码/controller与证书逐项一致，原入口stdout/状态逐位相同，runtime无建图依赖、default无CDLL、部分提交2步后只续跑2步；Gray新区域C++四步与Python/原C++逐位相同，composition不导出caller替换包。离线画布另经真实浏览器展开18→37→收起18及资源切换验证。报告：`artifacts/baseline/workspace-execution-refinement.json`。这只接通已有workspace变换的三阶段交付，未补齐5/10个未知成本或全图数值规划，无新加速比。下一层先补封闭区域的稳定元数据/finite属性传递，opaque provider合同不足时保留检查，再推进v4联合资源时间规划。
+
 2026-11-16 两端并行推进已验：workspace边界探针在两套源配置各采7组/warmup2，每组N4的30切点完整保留；仅编译/运行canonical检查、分配、绑核、恢复与释放片段，未运行目标数学DAG。6个完整UNKNOWN组接入后，原循环11subject中6有条件组件，Gray18中8有条件组件（原2copy未动），仍5/10未知且总时长None。另一条旧L4计算顺序证书已接C++20真实构建与compact入口：固定5调用声明成本例的输出一致、CPU0按C→A→E/CPU1按B→D启动；default无CDLL、runtime无compiler/大图依赖，输入变更与fresh输出检查通过。仅落实compute-order，尚未落实完整时间表，也不是新v4全图规划；声明模型不冒充实测。验收：`artifacts/baseline/workspace-boundary-and-pipeline-delivery.json`。下一步接v4计划执行证书，并针对已有成本证据分析可避免的循环检查；三阶段尚未全部完成，无新加速比。
 
 2026-11-16 执行域与循环成本接线已验：`project-workspace-demands → bind-time-resources → cost-activities` 复用原v4数据/时间图，按当前C++源码的 bind→body→restore传播条件CPU事实。原循环3个阶段可推导CPU0，Gray前2个snapshot可推导CPU0；provider后即便后续操作封闭也不追认位置，COMMIT/分配/释放整体需求仍未知。真实原语只匹配Gray两项copy组件（18 subject中2有条件估计、16未知）；4×5输入未误用515×515事实。pool各作一个outer UNKNOWN group，仅计一次，逐轮残差不合并，总时长仍None。两条完整source/resource/cost独立冷读通过，无新目标运行、标定、C++生成或加速比。报告：`artifacts/baseline/workspace-demands-costs.json`。下一层补余下实施阶段的同范围成本及资源合同，再做联合时间规划与C++执行证书；三阶段仍未全部完成。

@@ -13,7 +13,7 @@ def main(argv=None):
     inputs=parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--build',help='first-stage ProgramBuild directory or manifest')
     inputs.add_argument('--projection',help='retained bounded ProgramView projection')
-    inputs.add_argument('--schedule',help='retained v2/v3 task graph JSON')
+    inputs.add_argument('--schedule',help='retained v2/v3/v4 task graph JSON')
     inputs.add_argument('--time-schedule',help='source-replayed time preparation receipt')
     parser.add_argument('--out',required=True)
     parser.add_argument('--hardware',help='retained target graph directory; inferred for a ProgramBuild')
