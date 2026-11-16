@@ -1,0 +1,142 @@
+{
+  "delivery": {
+    "automatic_deployment": false,
+    "caller_cpu_ids": [
+      0
+    ],
+    "caller_default": {
+      "fallback_calls": 1,
+      "native_calls": 0,
+      "reasons": {
+        "NO_OP_cost_unknown_no_candidate_measurement": 1
+      }
+    },
+    "caller_operators": 2,
+    "caller_validation": {
+      "fallback_calls": 2,
+      "native_calls": 3,
+      "reasons": {
+        "live_source_abi_or_input_guard_declined": 2
+      }
+    },
+    "compiler_ir_analysis_imports_forbidden_during_compact_execution": true,
+    "cpp_standard": 20,
+    "custom_copy_callbacks_preserved": true,
+    "input_changes_recomputed": true,
+    "main_native_calls": 18,
+    "main_regions_native_compiled": 6,
+    "numpy_1x_executed": false,
+    "numpy_runtime": "2.5.2",
+    "operator_abi_version": 1,
+    "output_changes_isolated": true,
+    "status": "IMPLEMENTED_AND_VERIFIED",
+    "whole_python_program_independently_lowered_to_cpp": false
+  },
+  "evidence": {
+    "caller_correctness": {
+      "schema": "scar.ndarray-copy-caller-compact-validation",
+      "sha256": "51f2740b89ad3ecbd2f6bc84e210b34442e66c479657add81d9be4c9e4f04ec6",
+      "size_bytes": 3461,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/array-copy-v1/caller-validation-current.json"
+    },
+    "caller_lowering": {
+      "schema": "scar.caller-matched-pipeline-lowering",
+      "sha256": "aaf8f519400b4d85affab286b019e6f6f6ba8d27cd04db6267113dfa2bb70468",
+      "size_bytes": 4293,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/array-copy-v1/caller-compiled-current/result.json"
+    },
+    "main_build": {
+      "schema": "scar.compiler-build",
+      "sha256": "f76c4f618eef92b17d4c5f4ccd988b8895792296ac2aef1e9c353f3275c0b0cc",
+      "size_bytes": 700892,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/array-copy-v1/compiled-main-current/result.json"
+    },
+    "main_correctness": {
+      "schema": "scar.array-copy-main-chain-validation",
+      "sha256": "38ad2f63cb04a421e4b8a2737277f75bcecd9428767ebf1843757d4e96722b4d",
+      "size_bytes": 5974,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/array-copy-v1/main-chain-validation-current.json"
+    },
+    "single_region_correctness": {
+      "schema": "scar.ndarray-copy-native-validation",
+      "sha256": "28d88ed40665d4e2172afa8af8df1dc09daf6f23e81e1a9a2658351a7854dede",
+      "size_bytes": 1923,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/array-copy-v1/native-validation-current.json"
+    }
+  },
+  "focused_checks": {
+    "command": "python -m pytest -q tests/unit/test_array_copy_frontend.py tests/unit/test_copy_value_forwarding.py tests/unit/test_cpp_copy_contract.py",
+    "passed": 4
+  },
+  "implementation": {
+    "scar/analysis/array_value_templates.py": "019651c70c073f6958d29be4a22c2e846e07adb98f32348b38a83fe9abc0f396",
+    "scar/codegen/cpp.py": "43bf9d2175624e4d5c8c2497f60c52439557e7450c00052b1e1bf00a60e32ad1",
+    "scar/codegen/fused_pipeline.py": "67b63b58d7ba21928962ac812babc8f815649bded3732343c3adafbe5516af6d",
+    "scar/codegen/pipeline.py": "314e8c177fc803ce9bede2ee599a7f0d2629e3feb6e28a3d25d7bb9485685e45",
+    "scar/compiler/array_copy_contract.py": "705174f271ac0124a56b447022a7a96aad8d9a4bfc49b595a28ff58b033816ce",
+    "scar/compiler/caller_pipeline.py": "da020d1d64d86d8269aa4d213cacacc0d8c32ef67286e4f869fb2b9883947676",
+    "scar/compiler/caller_pipeline_runtime.py": "df50b801d23952cf4ff033c8f55c701285f4e8e28db16104ab5bdbebd0400283",
+    "scar/compiler/graph_frontend.py": "fe30f4f9b4bf422f3c2860e1ea9e32a2cd10448d83e04da47d3436739945b594",
+    "scar/compiler/model.py": "dc3af4de656612be6135a9ae3d8ff2bd1c8d2296db79315f4655ee1952a572d2",
+    "scar/compiler/pipeline.py": "0ec55b0e5aaed8697df6f2c9a92d9691eb5fa4a41c8acb1cac396435f394917b",
+    "scar/compiler/pipeline_runtime.py": "a235ebc26deb06fd7881611a09184d7f604e49f825b143986258dcb79cdeefb3",
+    "scar/compiler/runtime.py": "a9a0c7c825d314d91fc5c844c6a958213eb5924fd8c39f10a111f173916fbc6c",
+    "scar/compiler/validation.py": "912aa2f2bbb210fdbe4b850370885bc85ad69a82e30439e08cf23a5ea9edd62e",
+    "scar/ir/program/array_value_templates.py": "4b3d00c4ab30a1f308e8ce32a40456deaa6eb57fcb4cd2d269504478e3e82dae",
+    "scar/optimization/graph.py": "bcc9e0755a92f4f37b638f5d2f09f0d9dd6ec18c185167645152fedff61d12f1",
+    "scar/optimization/optimizer.py": "8e20f92ea02ae654d30dd007cb3edd6041a97e911036993364808b59477a0e12",
+    "scar/optimization/pipeline_fusion.py": "5bae1159d36a1e502dee801ca3d8bcb8b62e67d8e99bf63f90472f8a61981420",
+    "scar/optimization/resource_solver.py": "2359916c2b42964af45895836df31ccc112442a3d6e94bf44cdf0aeb7e71b150",
+    "scar/runtime/array_copy_guard.py": "041beb1fc02ae30f962555ef0b976a98c6002124ada3a1f764f8b046083df26b",
+    "scar/runtime/caller_pipeline_guard.py": "029068de9dceadbd05f59995d1f0bfd7dc5b3134d2d6328cd15fb55c1e534fef"
+  },
+  "modeling": {
+    "array_contents_recorded": false,
+    "cold_read_checks_public_bidirectional_adjacency": true,
+    "cold_read_rederives_source_and_optimizer": true,
+    "original": "SOURCE_BOUND_F4_OPERATIONS_PORTS_WORLDS_AND_FACTREFS",
+    "original_region_artifact_admitted_once": true,
+    "parameterized_content_distinct_from_object_storage_and_materialization": true,
+    "regions": 6,
+    "runtime_logical_versions_created": 0,
+    "source_copy_values_separate_but_content_template_equal": true,
+    "source_discovery_once": true,
+    "status": "IMPLEMENTED_AND_VERIFIED",
+    "typed_graph_relations": 65
+  },
+  "new_numerical_backend": false,
+  "next_layers": [
+    "Match parametric value templates to original caller/state paths without inferring cross-call identity from references.",
+    "Extend legal structural simplification and multi-region execution/storage/readiness scheduling from original hardware resources.",
+    "Extend shared C++20 lowering and compact guarded delivery to more control/data/external interfaces."
+  ],
+  "performance_measured": false,
+  "remaining_scope": [
+    "General Python coverage is incomplete.",
+    "GPU/LeWM not newly verified.",
+    "Sunfish/Cirq not fully compiled.",
+    "MPI/GPU offload and whole-program hardware makespan planning are not implemented."
+  ],
+  "request": "COMPLETE_CORE_DEVELOPMENT_BEFORE_NEW_PERFORMANCE_EXPERIMENTS",
+  "schema": "scar.three-stage-array-content-gate",
+  "schema_version": 1,
+  "simplification": {
+    "arithmetic_reassociation": false,
+    "contract": "NORMAL_COMPLETION_OF_EXACT_CPU_NUMPY_FLOAT64_RANK2_WITH_STABLE_EXCLUSIVE_INPUTS",
+    "final_fresh_output_preserved": true,
+    "nested_copy_retained_count": 1,
+    "nested_copy_source_count": 2,
+    "optimal_hardware_choice_proven": false,
+    "original_internal_allocation_exception_sequence_preserved": false,
+    "physical_transfer_observed": false,
+    "rule": "EXACT_COPY_VALUE_FORWARDING",
+    "runtime_guards_not_discharged_by_static_graph": true,
+    "source_copy_work_accounted_separately": true,
+    "status": "IMPLEMENTED_AND_VERIFIED",
+    "unknown_custom_state_and_rng_not_assumed_pure": true
+  },
+  "speedup_claimed": false,
+  "status": "VERIFIED_WITHIN_CLOSED_PROFILE_NOT_GENERAL_COMPLETION",
+  "three_stages_globally_complete": false,
+  "workload_specific_rule_added": false
+}
