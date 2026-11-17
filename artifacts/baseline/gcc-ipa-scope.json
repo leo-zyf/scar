@@ -1,0 +1,177 @@
+{
+  "audited_scar_commit": "d9d5005786f291dd2adb85aa7988b63812b9c9a6",
+  "checks": {
+    "mutable_referent_load_still_inside_loop": true,
+    "read_write_calls_still_inside_loop": true,
+    "stable_call_hoisted_without_full_inlining": true,
+    "three_layer_const_summaries_propagated": true,
+    "three_noinline_function_bodies_retained": true,
+    "unknown_effect_call_not_hoisted": true,
+    "zero_trip_condition_preserved": true
+  },
+  "command": [
+    "gcc",
+    "-O3",
+    "-fno-fast-math",
+    "-ffp-contract=off",
+    "-fdump-ipa-pure-const-details",
+    "-fdump-ipa-modref-details",
+    "-fdump-tree-lim-details",
+    "-fdump-tree-optimized",
+    "-S",
+    "ipa-scope.c",
+    "-o",
+    "ipa-scope.s"
+  ],
+  "compile_only_new_experiment_count": 1,
+  "compiler": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "date": "2026-11-17",
+  "evidence": {
+    "assembly": {
+      "schema": "scar.assembly-source",
+      "sha256": "a3247648e0aed0fac8279f02f213266144bc4bc8dcaed7334ff67884ba301e58",
+      "size_bytes": 3969,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.s"
+    },
+    "lim": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "3f4a8f5346b01b277a8ea384924d3ac2b41ab4c003cca51886d6596ef5d15b93",
+      "size_bytes": 6273,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.c.141t.lim2"
+    },
+    "modref": {
+      "schema": "scar.gcc-ipa-dump",
+      "sha256": "ef8231761ac3e68aa4ff0062eed7f15dd3b0f09452622d235692f7e60500b240",
+      "size_bytes": 27497,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.c.087i.modref"
+    },
+    "optimized": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "f711b9b91b2c7f6dd66a88e61858ebcabf76dcc808fa8474224c9a8d4df3ee32",
+      "size_bytes": 6522,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.c.254t.optimized"
+    },
+    "pure_const": {
+      "schema": "scar.gcc-ipa-dump",
+      "sha256": "4594b73d07e035df91aaf0624a856ad8891d132f3bf2ddf1b1218677156a09b9",
+      "size_bytes": 20528,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.c.086i.pure-const"
+    },
+    "source": {
+      "schema": "scar.c-source",
+      "sha256": "2d21084b0f7f826bd517ae52356f46dfc40180f27439a3000db85cba26069c76",
+      "size_bytes": 995,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/ipa-scope.c"
+    }
+  },
+  "limitations": [
+    "C compiler evidence does not prove Python or tensor semantics",
+    "constant pointer or stable object identity does not imply stable referent contents",
+    "UNKNOWN callee effects are retained; no purity inference from one observed dispatch",
+    "GCC relative costs are not nanoseconds or proof of globally fastest schedule"
+  ],
+  "new_backend": false,
+  "new_optimization_implemented": false,
+  "no_target_execution": true,
+  "official_sources": [
+    {
+      "topic": "IPA summaries, propagation and transforms",
+      "url": "https://gcc.gnu.org/onlinedocs/gccint/IPA.html"
+    },
+    {
+      "topic": "actual/formal jump functions",
+      "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/ipa-prop.h"
+    },
+    {
+      "topic": "mod/ref and escape propagation",
+      "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/ipa-modref.cc"
+    },
+    {
+      "topic": "maximum legal motion versus profitable motion",
+      "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc"
+    },
+    {
+      "topic": "pass order and cleanup",
+      "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def"
+    }
+  ],
+  "performance_measured": false,
+  "prior_evidence_reused": {
+    "schema": "scar.gcc-o3-study",
+    "sha256": "6675285c922c0635dd19a51dafa85ec05c9839b7cf9c3ef6e200cabd8acd77ee",
+    "size_bytes": 16627,
+    "uri": "/home/zyf/AAA/scar/artifacts/baseline/gcc-o3-study.json"
+  },
+  "results": {
+    "changing_referent": {
+      "call_basic_blocks": {
+        "read_parameter": [
+          3
+        ],
+        "write_parameter": [
+          3
+        ]
+      },
+      "calls_inside_loop": {
+        "read_parameter": true,
+        "write_parameter": true
+      },
+      "loop_body_basic_blocks": [
+        3,
+        6
+      ]
+    },
+    "stable_chain": {
+      "call_basic_blocks": {
+        "layer3": [
+          5
+        ]
+      },
+      "calls_inside_loop": {
+        "layer3": false
+      },
+      "loop_body_basic_blocks": [
+        3,
+        6
+      ]
+    },
+    "unknown_callee": {
+      "call_basic_blocks": {
+        "opaque": [
+          3
+        ]
+      },
+      "calls_inside_loop": {
+        "opaque": true
+      },
+      "loop_body_basic_blocks": [
+        3,
+        6
+      ]
+    }
+  },
+  "scar_audit": {
+    "existing": [
+      "exact actual/formal/environment/world interfaces",
+      "CFG dominator/postdominator and state-access records",
+      "one strict array-carry LICM profile",
+      "one fusion PassSpec plus actual successor graph and refreshed use-def",
+      "constructive resource calendars plus independent schedule verification"
+    ],
+    "missing": [
+      "callee-summary propagation across recursive call components for optimization",
+      "shared no-clobber plus must-execute movement legality consumed by current LICM",
+      "general pass/analysis dependency invalidation beyond manually replayed controllers"
+    ],
+    "ordered_next": [
+      "attach revision/root-bound code-motion legality to existing LICM without expanding its supported transform domain",
+      "compose argument/environment and read/write/escape summaries along existing admitted CALL routes; recursive components use conservative fixed points",
+      "expand nested region transformations only after these dependencies close; recompute post-rewrite demands and complete-boundary cost before resource scheduling"
+    ]
+  },
+  "schema": "scar.gcc-ipa-scope-study",
+  "schema_version": 1,
+  "source_text": "#include <stddef.h>\n\n/* Keep call boundaries to distinguish summaries from textual inlining. */\nstatic __attribute__((noinline)) unsigned layer8(unsigned k) { return k * 3U + 7U; }\nstatic __attribute__((noinline)) unsigned layer5(unsigned k) { return layer8(k); }\nstatic __attribute__((noinline)) unsigned layer3(unsigned k) { return layer5(k); }\n\nvoid stable_chain(unsigned *out, const unsigned *input, size_t n, unsigned k) {\n    for (size_t i = 0; i < n; ++i) out[i] = input[i] + layer3(k);\n}\n\nstatic __attribute__((noinline)) unsigned read_parameter(const unsigned *p) { return *p; }\nstatic __attribute__((noinline)) void write_parameter(unsigned *p) { *p += 1U; }\n\nvoid changing_referent(unsigned *out, size_t n, unsigned *p) {\n    for (size_t i = 0; i < n; ++i) {\n        out[i] = read_parameter(p);\n        write_parameter(p);\n    }\n}\n\nextern unsigned opaque(unsigned k);\nvoid unknown_callee(unsigned *out, size_t n, unsigned k) {\n    for (size_t i = 0; i < n; ++i) out[i] = opaque(k);\n}\n",
+  "speedup": null,
+  "status": "OBSERVED_COMPILE_INSPECTION"
+}

@@ -27,6 +27,8 @@
 
 已有C实证：未知alias生成带检查的双路径；有`restrict`契约时省去该检查，成本阈值随之改变。两次常量返回均可折叠，但volatile状态写仍保留。因此Python常量传播与删除import须分别证明值和初始化effects，单次动态观测不能替代。原始材料：`artifacts/baseline/gcc-o3-study.json`；依据：[GCC13.3选项](https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html)、[依赖/alias](https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html)、[LICM源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc)、[成本源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-vect-loop.cc)、[pass顺序](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def)。
 
+跨层摘要补充实证：保留三层`noinline`函数，GCC13.3仍沿调用图传播const摘要，把稳定调用移到循环外；同一指针指向的内容每轮被写时，读取留在循环内；未知effects的外部调用也保留。仅编译、未运行或测加速，见`artifacts/baseline/gcc-ipa-scope.json`。借鉴[IPA](https://gcc.gnu.org/onlinedocs/gccint/IPA.html)的“局部摘要→调用边参数替换→跨过程传播→改写”，不是把全部函数内联展开。SCAR已有实形参/environment/world接线及CFG/state记录，但尚未形成供优化使用的递归调用分量摘要；当前LICM仅支持严格array-carry域。下一项结构工作先让现有LICM消费绑定revision/root的no-clobber、执行条件和异常合法性结果，再沿原CALL路由组合参数依赖、读写/escape摘要，最后扩展嵌套region；未解决的调用effects保UNKNOWN。`macro_pass.PassSpec`目前仅单fusion使用，不能称通用pass管理器；现有后继图的use-def重算也不能代替跨region分析失效。逻辑工作量弱支配不等于CFG支配或时间收益。
+
 下一轮集中顺序：flags、shape、正文已确认一致；先处理已识别的独立函数/真实阶段组、wrapper+trial、前驱数据及分配/触页条件，冻结可转用成本模型，再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
 
 入口动静接线现已实测：原短driver的有界CALL目标采集接入既有ProgramBuild，`scar entry-calls --program PROGRAM --out FRESH_JSON`生成入口条件投影，`--check JSON`独立冷验；共享body、loop/递归引用不unroll。当前2个入口可达单元、10条件接口、8共享body、66原typed参数/环境/world路由；按path/SHA/CodeID自动见证同一native源。旧303条是236个lazy视图、18个depth预算、17个effect、13个resource、19个材料/覆盖问题，不能当303个语义失败。构造协议及外部Python源码仍未接全。
