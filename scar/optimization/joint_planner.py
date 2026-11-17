@@ -25,6 +25,13 @@ def _frontiers(problem, baseline_only):
         for route in edge.transfers:
             if not _known(route.cost):
                 result.append(dict(edge=edge.id,option=route.id,reason='INCOMPLETE_TRANSFER_COST'))
+    baselines={op.id:op.baseline_option for op in problem.operations}
+    for activity in problem.activities:
+        reachable=not activity.when or not baseline_only or any(baselines[c.operation]==c.option for c in activity.when)
+        if reachable and not _known(activity.cost):
+            result.append(dict(activity=activity.id,reason='INCOMPLETE_CONTEXT_ACTIVITY_COST',
+                when=[dict(operation=c.operation,option=c.option)for c in activity.when],
+                missing_terms=list(activity.cost.missing_terms)))
     return result
 
 
@@ -47,13 +54,15 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
     clock=time.monotonic();frontiers=_frontiers(p,baseline_only)
     durations=[m.cost.estimate_ns for o in p.operations for m in o.options if _known(m.cost)]
     durations.extend(t.cost.estimate_ns for e in p.data_edges for t in e.transfers if _known(t.cost))
-    horizon=max(1,sum(durations))
+    durations.extend(a.cost.estimate_ns for a in p.activities if _known(a.cost))
+    horizon=max(1,sum(durations)+sum(c.minimum_ns for c in p.timing_constraints))
     weight=len(p.operations)+1
     if horizon*weight>=2**52:raise ValueError('planning horizon exceeds exact integer reporting range; use a coarser scoped model')
     model=cp_model.CpModel();resources={r.id:r for r in p.resources};ops={o.id:o for o in p.operations}
     starts={o.id:model.new_int_var(0,horizon,'start:'+o.id)for o in p.operations}
     ends={o.id:model.new_int_var(0,horizon,'end:'+o.id)for o in p.operations}
     choices={};holds={r.id:[]for r in p.resources};demands={r.id:[]for r in p.resources}
+    activity_starts={};activity_ends={};activity_presence={};true=model.new_constant(1)
     routes=[];source_uses={};output_leases=[]
     def occupy(resource,interval,units):
         if units:holds[resource].append(interval);demands[resource].append(units)
@@ -68,6 +77,13 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         model.add(result==value).only_enforce_if(active)
         model.add(result==0).only_enforce_if(active.Not())
         return result
+    def condition(when,name):
+        if not when:return true
+        bits=[choices[c.operation,c.option]for c in when]
+        if len(bits)==1:return bits[0]
+        result=model.new_bool_var(name)
+        model.add_max_equality(result,bits)
+        return result
     for op in p.operations:
         bits=[]
         for mode in op.options:
@@ -79,6 +95,30 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
             for pool,nbytes in mode.workspace_bytes.items():occupy(pool,interval,nbytes)
         model.add_exactly_one(bits)
         for predecessor in op.predecessors:model.add(starts[op.id]>=ends[predecessor])
+    for activity in p.activities:
+        start=model.new_int_var(0,horizon,'activity-start:'+activity.id)
+        end=model.new_int_var(0,horizon,'activity-end:'+activity.id)
+        active=condition(activity.when,'activity-presence:'+activity.id)
+        activity_starts[activity.id]=start;activity_ends[activity.id]=end;activity_presence[activity.id]=active
+        model.add(start==0).only_enforce_if(active.Not())
+        model.add(end==0).only_enforce_if(active.Not())
+        if not _known(activity.cost):
+            model.add(active==0);continue
+        if activity.duration_kind=='WAIT_TAIL':
+            # Wait is elapsed latency, not an interval of busy CPU service.
+            model.add(end>=start+activity.cost.estimate_ns).only_enforce_if(active)
+        else:
+            interval=model.new_optional_interval_var(start,activity.cost.estimate_ns,end,active,activity.id)
+            for resource,units in activity.demands.items():occupy(resource,interval,units)
+    endpoints={name:dict(START=start,END=ends[name])for name,start in starts.items()}
+    endpoints.update({name:dict(START=start,END=activity_ends[name])for name,start in activity_starts.items()})
+    for constraint in p.timing_constraints:
+        active=conjunction([condition(constraint.when,'constraint-condition:'+constraint.id),
+            activity_presence.get(constraint.before,true),activity_presence.get(constraint.after,true)],
+            'constraint-presence:'+constraint.id)
+        delta=endpoints[constraint.after][constraint.after_endpoint]-endpoints[constraint.before][constraint.before_endpoint]
+        model.add(delta>=constraint.minimum_ns).only_enforce_if(active)
+        if constraint.maximum_ns is not None:model.add(delta<=constraint.maximum_ns).only_enforce_if(active)
     for edge in p.data_edges:
         producers=[None]if edge.producer is None else ops[edge.producer].options
         for producer in producers:
@@ -129,13 +169,14 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         if nbytes:occupy(pool,model.new_interval_var(0,horizon,horizon,'reserved:'+pool),nbytes)
     for resource in p.resources:
         if holds[resource.id]:model.add_cumulative(holds[resource.id],demands[resource.id],resource.capacity)
-    finish=model.new_int_var(0,horizon,'makespan');model.add_max_equality(finish,list(ends.values()))
+    finish=model.new_int_var(0,horizon,'makespan');model.add_max_equality(finish,[*ends.values(),*activity_ends.values()])
     changes=sum(bit for (name,mode),bit in choices.items()if mode!=ops[name].baseline_option)
     model.minimize(finish*weight+changes)
     solver=cp_model.CpSolver();solver.parameters.max_time_in_seconds=float(max_seconds)
     solver.parameters.num_search_workers=workers;solver.parameters.random_seed=0
     status=solver.solve(model);feasible=status in(cp_model.OPTIMAL,cp_model.FEASIBLE)
-    result=dict(schema=PLAN_SCHEMA,schema_version=1,problem_sha256=digest(p),
+    extended=bool(p.activities or p.timing_constraints)
+    result=dict(schema=PLAN_SCHEMA,schema_version=2 if extended else 1,problem_sha256=digest(p),
         status=('OPTIMAL_WITHIN_MODEL'if status==cp_model.OPTIMAL and not frontiers else
                 'FEASIBLE_PARTIAL_DOMAIN'if feasible and frontiers else'FEASIBLE_WITHIN_MODEL'if feasible else
                 'UNRESOLVED'if frontiers or status==cp_model.UNKNOWN else'INFEASIBLE_WITHIN_MODEL'),
@@ -150,9 +191,13 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         solver=dict(name='OR_TOOLS_CP_SAT',version=version('ortools'),max_seconds=max_seconds,workers=workers),
         elapsed_seconds=time.monotonic()-clock,target_program_executed=False,execution_authorized=False,
         deployment_authorized=False,default_backend='NO_OP')
+    if extended:result['activities']=[]
     if not feasible:return result
     result['selected']=[dict(operation=o.id,option=m.id,start_ns=solver.value(starts[o.id]),end_ns=solver.value(ends[o.id]))
                         for o in p.operations for m in o.options if solver.value(choices[o.id,m.id])]
+    if extended:
+        result['activities']=[dict(activity=a.id,start_ns=solver.value(activity_starts[a.id]),end_ns=solver.value(activity_ends[a.id]))
+            for a in p.activities if solver.value(activity_presence[a.id])]
     result['transfers']=[dict(edge=e.id,option=t.id,source_memory=t.source_memory,destination_memory=t.destination_memory,
         start_ns=solver.value(start),end_ns=solver.value(end))for e,t,bit,start,end in routes if solver.value(bit)]
     total=solver.value(finish);lower=total if status==cp_model.OPTIMAL else max(0,floor(solver.best_objective_bound/weight))
@@ -187,6 +232,25 @@ def _timeline(p,plan):
                       for pool,nbytes in mode.workspace_bytes.items()if nbytes)
     for name,(row,_)in selected.items():
         require(all(selected[d][0]['end_ns']<=row['start_ns']for d in ops[name].predecessors),'source/effect dependency violated')
+    def present(when):return not when or any(selected[c.operation][1].id==c.option for c in when)
+    actual={};expected={a.id:a for a in p.activities if present(a.when)}
+    auxiliary=plan.get('activities',[])
+    require(type(auxiliary)is list and len(auxiliary)==len(expected),'conditional activity coverage differs')
+    for row in auxiliary:
+        require(type(row)is dict and set(row)=={'activity','start_ns','end_ns'},'activity wire fields differ')
+        name=row['activity'];require(name in expected and name not in actual,'conditional activity absent or duplicated')
+        phase=expected[name];interval(row);duration=row['end_ns']-row['start_ns']
+        require(_known(phase.cost)and(duration>=phase.cost.estimate_ns if phase.duration_kind=='WAIT_TAIL'
+            else duration==phase.cost.estimate_ns),'activity duration lacks qualified context estimate')
+        actual[name]=row
+        execution.extend((r,row['start_ns'],row['end_ns'],u)for r,u in phase.demands.items())
+    points={name:dict(START=row['start_ns'],END=row['end_ns'])for name,(row,_)in selected.items()}
+    points.update({name:dict(START=row['start_ns'],END=row['end_ns'])for name,row in actual.items()})
+    for constraint in p.timing_constraints:
+        if not present(constraint.when)or constraint.before not in points or constraint.after not in points:continue
+        delta=points[constraint.after][constraint.after_endpoint]-points[constraint.before][constraint.before_endpoint]
+        require(delta>=constraint.minimum_ns and(constraint.maximum_ns is None or delta<=constraint.maximum_ns),
+            'conditional event dependency violated: '+constraint.id)
     transfers={}
     for row in plan['transfers']:
         require(type(row)is dict and set(row)=={'edge','option','source_memory','destination_memory','start_ns','end_ns'},'transfer wire fields differ')
@@ -229,7 +293,8 @@ def verify_execution_plan(problem,plan):
     optimality claim. Source-qualified publishers must replay those separately.
     """
     p=validate_problem(problem)
-    if plan.get('schema')!=PLAN_SCHEMA or plan.get('schema_version')!=1 or plan.get('problem_sha256')!=digest(p):
+    extended=bool(p.activities or p.timing_constraints)
+    if plan.get('schema')!=PLAN_SCHEMA or plan.get('schema_version')!=(2 if extended else 1) or plan.get('problem_sha256')!=digest(p):
         raise ValueError('execution plan belongs to a different typed problem')
     if not plan.get('selected'):raise ValueError('no feasible execution plan to verify')
     if plan['frontiers']!=_frontiers(p,plan['baseline_only'])or plan['domain_complete']!=(not bool(plan['frontiers'])):
@@ -240,7 +305,8 @@ def verify_execution_plan(problem,plan):
         raise ValueError('known-subdomain bounds cannot claim bounds on unknown alternatives')
     execution,leases=_timeline(p,plan)
     if plan['memory_leases']!=leases:raise ValueError('memory leases differ from selected value lifetimes')
-    finish=max([r['end_ns']for r in plan['selected']]+[r['end_ns']for r in plan['transfers']])
+    finish=max([r['end_ns']for r in plan['selected']]+[r['end_ns']for r in plan['transfers']]
+        +[r['end_ns']for r in plan.get('activities',[])])
     if plan['makespan_ns']!=finish:raise ValueError('completion time differs from actual selected schedule')
     resources={r.id:r for r in p.resources};events={r:[]for r in resources}
     for r,start,end,units in execution:

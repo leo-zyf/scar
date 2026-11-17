@@ -1,0 +1,194 @@
+{
+  "actual_selected_thread_set": [
+    0
+  ],
+  "affinity_restored": true,
+  "all_native_source_bytes_reconstructed": true,
+  "automatic_profitability_decision_implemented": false,
+  "clean_benchmark": {
+    "baseline_over_selected": 0.024201671033624982,
+    "batch": 32,
+    "compiler_options": [
+      "-std=c++20",
+      "-O3",
+      "-shared",
+      "-fPIC",
+      "-fvisibility=hidden",
+      "-fno-fast-math",
+      "-ffp-contract=off",
+      "-frounding-math",
+      "-ftrapping-math",
+      "-pthread"
+    ],
+    "deployment_authorized": false,
+    "host_cost_model": "DECLARED_EXAMPLE_NOT_CALIBRATED_FROM_THIS_BENCHMARK",
+    "instrumentation": false,
+    "native_compiler": [
+      "g++"
+    ],
+    "numpy": "2.5.2",
+    "profitable": false,
+    "python": "3.14.7",
+    "repetitions": 9,
+    "samples_ns_per_call": {
+      "baseline": [
+        7239.21875,
+        9663.78125,
+        9464.25,
+        9686.84375,
+        9922.46875,
+        8727.59375,
+        8592.96875,
+        9710.84375,
+        9495.0
+      ],
+      "selected_cpp": [
+        382955.90625,
+        385670.03125,
+        395604.90625,
+        406637.625,
+        388972.28125,
+        385185.78125,
+        393698.5,
+        392328.28125,
+        406005.59375
+      ]
+    },
+    "scope": "ORIGINAL_PYTHON_REGION_CALL_VS_GUARDED_CPP_REGION_CALL_NOT_WHOLE_PROGRAM",
+    "summary": {
+      "baseline": {
+        "max_ns": 9922.46875,
+        "median_ns": 9495.0,
+        "min_ns": 7239.21875,
+        "stdev_ns": 852.8188575369428
+      },
+      "selected_cpp": {
+        "max_ns": 406637.625,
+        "median_ns": 392328.28125,
+        "min_ns": 382955.90625,
+        "stdev_ns": 8622.2918786001
+      }
+    },
+    "warmup": 3
+  },
+  "cpp_source": {
+    "schema": "scar.cpp-source",
+    "sha256": "42f169b1eb16dd9d45ba4ce1eebbfa9957d65bee01de03ddb833f46fbc820059",
+    "size_bytes": 20351,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/expensive/native/pipeline.cpp"
+  },
+  "date": "2026-11-17",
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "directed_unit_checks": {
+    "async_arrival_equality_case_rerun_passed": true,
+    "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_joint_planner.py",
+    "elapsed_seconds": 1.05,
+    "passed": 9
+  },
+  "evidence": {
+    "cheap_preparation": {
+      "schema": "scar.pipeline-implementation-preparation",
+      "sha256": "154eaef234017adbf0e16894977af274e42ba89311018de9bb85cc65a917c998",
+      "size_bytes": 3330,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/cheap/preparation.json"
+    },
+    "directed_checks": {
+      "schema": "scar.pipeline-lifecycle-directed-checks",
+      "sha256": "a08354cec3d3e91625b27579a24c606c5a0b6924796b77c5b991e42c47070c4d",
+      "size_bytes": 439,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/directed-checks.json"
+    },
+    "expensive_compiler_result": {
+      "schema": "scar.pipeline-implementation-compiler-build",
+      "sha256": "00225dcb5593a86baa78523a549212c6c6a1671ac464ecfcd2fdb4824b102eec",
+      "size_bytes": 1220,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/expensive/result.json"
+    },
+    "source_validation_and_clean_benchmark": {
+      "schema": "scar.pipeline-lifecycle-source-validation",
+      "sha256": "3880cd9fcd442994a48632b9a1e632fea7282d261040a4cf38cbc6ef60526e38",
+      "size_bytes": 2663,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/validation.json"
+    },
+    "unknown_preparation": {
+      "schema": "scar.pipeline-implementation-preparation",
+      "sha256": "4218388fb0ef2289a0308ff9460b541baf97299515b5e2cb63d129a78eef4e74",
+      "size_bytes": 2820,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-lifecycle-v1/unknown-qualified/preparation.json"
+    }
+  },
+  "hardware": {
+    "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+    "platform": "Linux-6.17.0-29-generic-x86_64-with-glibc2.39",
+    "retained_snapshot": {
+      "schema": "scar.target-hardware-graph",
+      "sha256": "7ae291c8509831fe19c9780bc5969e48cd86c44d81bcda6ef850d9e95e252dd8",
+      "size_bytes": 8704,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-entry-v1/program-build/hardware/result.json"
+    }
+  },
+  "inputs_unchanged": true,
+  "models": {
+    "cheap": {
+      "domain": "ALL_DECLARED_IMPLEMENTATION_OPTIONS",
+      "host_basis": "DECLARED_ALGORITHM_EXAMPLE_NOT_MEASUREMENT",
+      "model_makespan_ns": 58476,
+      "physical_optimality_proven": false,
+      "selected_cpu_ids": [
+        0,
+        1
+      ],
+      "selected_host_activities": 10
+    },
+    "expensive": {
+      "domain": "ALL_DECLARED_IMPLEMENTATION_OPTIONS",
+      "host_basis": "DECLARED_ALGORITHM_EXAMPLE_NOT_MEASUREMENT",
+      "model_makespan_ns": 1067725,
+      "physical_optimality_proven": false,
+      "selected_cpu_ids": [
+        0
+      ],
+      "selected_host_activities": 6
+    }
+  },
+  "original_v1_document_and_digest_preserved": true,
+  "predecessor_commit": "f926abc7",
+  "remaining": [
+    "COMPLETE_HOST_BOUNDARY_EVIDENCE_AND_PHYSICAL_DEMANDS",
+    "SOURCE_PYTHON_NO_OP_WHOLE_REGION_ALTERNATIVE_AND_COMPARABLE_BOUNDARY_COST",
+    "QUALIFIED_HOST_FORECASTS_BEYOND_DECLARED_FIXED_COEFFICIENTS",
+    "GENERAL_ENTRY_DELIVERY_AND_EXTERNAL_CPU_WORKLOAD_ACCEPTANCE"
+  ],
+  "review_fixes": [
+    "HOST_FORECAST_BOUND_TO_DESCRIPTOR_AND_DISPATCH_POLICY_SOURCE",
+    "ACTIVE_WORKER_SUBSET_AND_LANE_ORDER_INVARIANCE_EXPLICIT_MODEL_ASSUMPTION",
+    "SINGLE_CONFIGURATION_EMPIRICAL_HOST_PROFILE_REMAINS_UNKNOWN"
+  ],
+  "schema": "scar.pipeline-lifecycle-acceptance",
+  "schema_version": 1,
+  "source_cases": [
+    {
+      "case": "independent",
+      "output_bitwise_equal": true,
+      "output_sha256": "16bd241f2cf923d020d2f18c4abbf203905143ad48ba63f91e0b02df4e80ee2c",
+      "shape": [
+        8,
+        8
+      ]
+    },
+    {
+      "case": "readonly_alias",
+      "output_bitwise_equal": true,
+      "output_sha256": "a940176b7e5a1b8187bddf87da6fec8348d7f23c825bafd1bee2059c31d54ce8",
+      "shape": [
+        8,
+        8
+      ]
+    }
+  ],
+  "source_math_and_executor_changed": false,
+  "source_scope": "FIVE_CALL_CPU_NUMPY_SOURCE_REGION_8_BY_8_NOT_EXTERNAL_WHOLE_PROGRAM",
+  "status": "VERIFIED_CONDITIONAL_MODEL_TO_NATIVE_NOT_COMPLETE_THREE_STAGE_SYSTEM",
+  "unknown_host_costs_not_imputed": true
+}

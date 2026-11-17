@@ -38,19 +38,20 @@ def _sources(reference):
 
 
 def _producer():
-    from scar.optimization import pipeline_implementation, joint_planner, implementation_costs
+    from scar.optimization import pipeline_implementation, joint_planner, implementation_costs,pipeline_lifecycle
     from scar.ir import implementation_plan
     return {str(Path(module.__file__).resolve()): sha256(Path(module.__file__).read_bytes()).hexdigest()
-        for module in (pipeline_implementation, joint_planner, implementation_plan, implementation_costs)}
+        for module in (pipeline_implementation, joint_planner, implementation_plan, implementation_costs,pipeline_lifecycle)}
 
 
 def prepare_pipeline_implementation(inputs, out, *, cpu_ids, cost_model=None, cost_profile_ref=None,
-        max_seconds=30, workers=4, compile_native=False):
+        max_seconds=30, workers=4, compile_native=False,host_lifecycle=False,host_cost_profile_ref=None):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs, INPUTS
     reference = _reference(inputs, INPUTS)
     model_ref = None if cost_model is None else _reference(cost_model, COST_SCHEMA)
     from scar.optimization.implementation_costs import SCHEMA as PROFILE_SCHEMA
     profile_ref = None if cost_profile_ref is None else _reference(cost_profile_ref, PROFILE_SCHEMA)
+    host_ref = None if host_cost_profile_ref is None else _reference(host_cost_profile_ref, PROFILE_SCHEMA)
     if model_ref is not None and profile_ref is not None:
         raise ValueError('cost model and cost profile are mutually exclusive')
     model = None if model_ref is None else read_artifact(model_ref)
@@ -59,32 +60,44 @@ def prepare_pipeline_implementation(inputs, out, *, cpu_ids, cost_model=None, co
         raise ValueError('fresh joint pipeline output required')
     with open_temporal_inputs(reference) as (pipeline, memory, _, target):
         problem = build_pipeline_problem(pipeline, memory, target, cpu_ids=cpu_ids,
-            cost_model=model, cost_profile_ref=profile_ref, source_refs=_sources(reference))
+            cost_model=model, cost_profile_ref=profile_ref, source_refs=_sources(reference),
+            host_lifecycle=host_lifecycle,host_cost_profile_ref=host_ref)
         execution = solve_implementations(problem, max_seconds=max_seconds, workers=workers)
         certificate = None
         if execution['selected'] and execution['domain_complete']:
             certificate = refine_pipeline_implementation(pipeline, memory, target, problem, execution)
         directory.mkdir(parents=True)
+        from scar.optimization.pipeline_lifecycle import lifecycle_cost_contexts
+        host_contexts=lifecycle_cost_contexts(problem)if host_lifecycle else {}
+        leaf_contexts={key:value for key,value in cost_contexts(problem).items()if key not in host_contexts}
+        scope=('ABI1_AND_COMPLETE_TASK_WRAPPER_PLUS_HOST_LIFECYCLE_POINT_MODEL'if host_lifecycle
+            else'ABI1_LEAF_SERVICE_ONLY_HOST_ENVELOPE_UNCALIBRATED')
         contexts = dict(schema='scar.pipeline-implementation-cost-contexts', schema_version=1,
             pipeline_sha256=pipeline_digest(pipeline),
             memory_plan_sha256=semantic_sha256(memory), target=problem_document(problem)['target'],
-            contexts=cost_contexts(problem), cost_scope='ABI1_LEAF_SERVICE_ONLY_HOST_ENVELOPE_UNCALIBRATED',
+            contexts=cost_contexts(problem), cost_scope=scope,
             cost_model_template=dict(schema=COST_SCHEMA, schema_version=1,
                 pipeline_sha256=pipeline_digest(pipeline),
                 memory_plan_sha256=semantic_sha256(memory), target=problem_document(problem)['target'],
                 costs={key:dict(context=context, estimate_ns=None, lower_ns=None, upper_ns=None,
                     basis='DECLARED_MODEL', missing_terms=['DECLARE_EXACT_CONTEXT_POINT_ESTIMATE'])
-                    for key,context in cost_contexts(problem).items()}))
+                    for key,context in leaf_contexts.items()}))
+        if host_lifecycle:
+            contexts['host_cost_profile_template']=dict(schema=PROFILE_SCHEMA,schema_version=1,
+                entries={key:dict(query=dict(scope=context['scope'],context=context),
+                    basis='UNKNOWN',estimate_ns=None,lower_ns=None,upper_ns=None,
+                    missing_terms=['NO_QUALIFIED_HOST_FORECAST_FOR_EXACT_CONTEXT'],
+                    conditions=['TEMPLATE_IS_NOT_A_MEASUREMENT_OR_FORECAST'])for key,context in host_contexts.items()})
         # Every file is an original reference; no embedded tensor data is saved.
         report = dict(schema=SCHEMA, schema_version=1, inputs=reference, cpu_ids=list(cpu_ids),
-            cost_model=model_ref, cost_profile=profile_ref,
+            cost_model=model_ref, cost_profile=profile_ref,host_lifecycle=host_lifecycle,host_cost_profile=host_ref,
             problem=_write(directory/'problem.json', problem_document(problem)),
             cost_contexts=_write(directory/'cost-contexts.json', contexts),
             execution_plan=_write(directory/'execution-plan.json', execution),
             certificate=None if certificate is None else _write(directory/'certificate.json', certificate),
             producer_pins=_producer(), solver_status=execution['status'],
-            implementation_scope='SELECTED_CPU_PLACEMENT_AND_COMPUTE_LANE_ORDER_ONLY',
-            cost_scope='ABI1_LEAF_SERVICE_ONLY_HOST_ENVELOPE_UNCALIBRATED',
+            implementation_scope=('SELECTED_WORKERS_AND_SOURCE_HOST_LIFECYCLE_ORDER'if host_lifecycle
+                else'SELECTED_CPU_PLACEMENT_AND_COMPUTE_LANE_ORDER_ONLY'),cost_scope=scope,
             model_makespan_is_native_runtime_prediction=False, physical_optimality_proven=False,
             target_program_executed=False, performance_measured=False, deployment_authorized=False,
             default_backend='NO_OP')
@@ -119,7 +132,8 @@ def open_pipeline_implementation(preparation):
     execution = read_artifact(report['execution_plan'])
     with open_temporal_inputs(report['inputs']) as (pipeline, memory, _, target):
         problem = build_pipeline_problem(pipeline, memory, target, cpu_ids=report['cpu_ids'],
-            cost_model=model, cost_profile_ref=report['cost_profile'], source_refs=_sources(report['inputs']))
+            cost_model=model, cost_profile_ref=report['cost_profile'], source_refs=_sources(report['inputs']),
+            host_lifecycle=report.get('host_lifecycle',False),host_cost_profile_ref=report.get('host_cost_profile'))
         if digest(problem) != digest(saved_problem):
             raise ValueError('problem differs from original source, cost contexts, target or physical pool')
         contexts = read_artifact(report['cost_contexts'])
@@ -144,6 +158,8 @@ def main(argv=None):
     parser.add_argument('--cpu-ids', help='explicit comma separated original CPU IDs')
     costs = parser.add_mutually_exclusive_group()
     costs.add_argument('--cost-model'); costs.add_argument('--cost-profile')
+    parser.add_argument('--host-lifecycle',action='store_true',help='model conditional worker startup, completion and join')
+    parser.add_argument('--host-cost-profile',help='exact-context future host/task-wrapper cost profile; observations are not accepted')
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--max-seconds', type=float, default=30)
     parser.add_argument('--workers', type=int, default=4)
@@ -165,7 +181,8 @@ def main(argv=None):
         result = prepare_pipeline_implementation(args.inputs, args.out,
             cpu_ids=[int(value) for value in args.cpu_ids.split(',')], cost_model=args.cost_model,
             cost_profile_ref=args.cost_profile,
-            max_seconds=args.max_seconds, workers=args.workers, compile_native=args.compile)
+            max_seconds=args.max_seconds, workers=args.workers, compile_native=args.compile,
+            host_lifecycle=args.host_lifecycle,host_cost_profile_ref=args.host_cost_profile)
     print(json.dumps(result, sort_keys=True))
     return 0
 

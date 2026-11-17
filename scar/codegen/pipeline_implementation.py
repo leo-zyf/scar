@@ -44,9 +44,11 @@ def _json(value):
 
 def implementation_sha256():
     from scar.optimization import pipeline_implementation
+    from scar.codegen import pipeline_lifecycle
     return semantic_sha256(dict(original_host=original.pipeline_implementation_sha256(),
         renderer=_hash(Path(__file__).read_bytes()),
-        selected_certificate=_hash(Path(pipeline_implementation.__file__).read_bytes())))
+        selected_certificate=_hash(Path(pipeline_implementation.__file__).read_bytes()),
+        lifecycle_delivery=_hash(Path(pipeline_lifecycle.__file__).read_bytes())))
 
 
 def render_implementation_source(serial_source, pipeline, memory, certificate):
@@ -151,6 +153,10 @@ def build(preparation, out):
             operators.append(operator)
         bindings = [original._operator_receipt(call, operator) for call,operator in zip(pipeline.calls, operators)]
         source = _source(pipeline, memory, operators, certificate)
+        lifecycle_receipt=None
+        if problem.activities:
+            from scar.codegen.pipeline_lifecycle import lifecycle_delivery_proof
+            lifecycle_receipt=lifecycle_delivery_proof(pipeline,memory,problem,execution,certificate,source)
         header = (_DIRECTORY/'scar_abi_v1.h').read_bytes()
         compiler = shlex.split(os.environ.get('CXX', 'g++'))
         _require(compiler and shutil.which(compiler[0]), 'original compiler unavailable')
@@ -190,6 +196,7 @@ def build(preparation, out):
             default_backend='NO_OP', automatic_caller_installation_supported=False,
             failure_policy='JOIN_ALL_STARTED_WORKERS_WITHHOLD_OUTPUT_THEN_EXTERNAL_CALLER_FALLBACK',
             existing_host_envelope=certificate['existing_host_envelope'])
+        if lifecycle_receipt is not None:metadata['host_lifecycle']=lifecycle_receipt
         (directory/'artifact.json').write_bytes(_json(metadata))
         return _instance(directory, metadata, pipeline, memory, operators, certificate)
 
@@ -230,6 +237,12 @@ def load(out):
                 'actual leaf is not the chosen call/CPU implementation')
             operators.append(operator)
         source = _source(pipeline, memory, operators, certificate)
+        lifecycle_receipt=None
+        if problem.activities:
+            from scar.codegen.pipeline_lifecycle import lifecycle_delivery_proof
+            lifecycle_receipt=lifecycle_delivery_proof(pipeline,memory,problem,execution,certificate,source)
+        _require(metadata.get('host_lifecycle')==lifecycle_receipt,
+            'conditional worker lifecycle source receipt differs')
         _require(source == (directory/metadata['files']['source']).read_bytes()
             and _json(document(pipeline)) == (directory/metadata['files']['pipeline']).read_bytes()
             and _json(memory) == (directory/metadata['files']['memory_plan']).read_bytes()

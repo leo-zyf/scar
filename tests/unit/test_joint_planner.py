@@ -4,6 +4,7 @@ Numbers are algorithm examples, never physical calibration or source admission.
 The pure solver consumes already admitted source/legality references upstream.
 """
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,7 @@ pytest.importorskip('ortools', reason='joint planning uses the optional scar[pla
 
 from scar.ir.implementation_plan import (CostEstimate, ImplementationOption,
     PlanningDataEdge, PlanningOperation, PlanningProblem, PlanningResource, TransferOption)
+from scar.ir.implementation_plan import ImplementationChoice, PlanningActivity, PlanningTimingConstraint
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.joint_planner import solve_implementations, verify_execution_plan
 
@@ -174,3 +176,49 @@ def test_independent_verifier_rejects_numeric_resource_memory_and_materializatio
         if row['operation'] == 'C': row.update(start_ns=5, end_ns=12)
     mutant['makespan_ns'] = 12
     with pytest.raises(ValueError): verify_execution_plan(problem, mutant)
+
+
+def _timing(name,before,first,after,last,*,minimum=0,maximum=None,when=()):
+    return PlanningTimingConstraint(name,before,first,after,last,minimum,maximum,when,_REFS)
+
+
+def test_conditional_worker_cost_changes_placement_and_unused_workers_are_absent():
+    problem=_problem((_operation('region',_option('cpu0',20),_option('cpu1',1)),))
+    choice=(ImplementationChoice('region','cpu1'),)
+    problem=replace(problem,activities=(PlanningActivity('start_cpu1',_cost(30),{},_REFS,choice),),
+        timing_constraints=(_timing('ready','start_cpu1','END','region','START',when=choice),))
+    result,rows=_solve(problem)
+    assert rows['region']['option']=='cpu0' and result['makespan_ns']==20
+    assert result['activities']==[] and result['schema_version']==2
+    mutant=deepcopy(result);mutant['activities']=[dict(activity='start_cpu1',start_ns=0,end_ns=30)]
+    with pytest.raises(ValueError):verify_execution_plan(problem,mutant)
+    problem=replace(problem,activities=(replace(problem.activities[0],cost=_cost(None,missing=('NO_START_COST',))),))
+    result,rows=_solve(problem)
+    assert rows['region']['option']=='cpu0' and result['domain_complete'] is False
+    assert result['model_lower_bound_ns'] is None and result['relative_gap'] is None
+
+
+def test_async_entry_can_precede_submission_return_and_join_wait_is_not_extra_compute():
+    problem=_problem((_operation('compute',_option('cpu0',10)),))
+    problem=replace(problem,activities=(
+        PlanningActivity('submit',_cost(20),{},_REFS),
+        PlanningActivity('entry_latency',_cost(2),{},_REFS),
+        PlanningActivity('join',_cost(3),{},_REFS,duration_kind='WAIT_TAIL')),
+        timing_constraints=(
+            _timing('same_origin','submit','START','entry_latency','START',maximum=0),
+            _timing('entry_ready','entry_latency','END','compute','START'),
+            _timing('caller_arrives','submit','END','join','START',maximum=0),
+            _timing('worker_finished','compute','END','join','END',minimum=3)))
+    result,rows=_solve(problem)
+    phases={row['activity']:row for row in result['activities']}
+    assert result['makespan_ns']==23
+    assert phases['entry_latency']['end_ns']<phases['submit']['end_ns']
+    assert rows['compute']['start_ns']<phases['submit']['end_ns']
+    assert phases['join']['end_ns']==max(phases['join']['start_ns'],rows['compute']['end_ns'])+3
+    # A long worker stretches join; it does not become another fixed CPU job.
+    long=replace(problem,operations=(_operation('compute',_option('cpu0',50)),))
+    result,rows=_solve(long);phases={row['activity']:row for row in result['activities']}
+    assert result['makespan_ns']==55 and phases['join']['end_ns']-phases['join']['start_ns']>3
+    mutant=deepcopy(result)
+    next(row for row in mutant['activities']if row['activity']=='join')['end_ns']=rows['compute']['end_ns']
+    with pytest.raises(ValueError):verify_execution_plan(long,mutant)

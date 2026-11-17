@@ -27,6 +27,8 @@ scar model-pipeline-host --observations HOST_OBSERVATIONS/observations.json --ou
 `joint-plan` 同时选择实现、数据位置转换与资源受限时间区间；独立检查依赖、搬运和存储峰值。源生产端负责完整源码/合法性重放。`joint-pipeline` 将选中的 CPU 绑定和资源顺序真正编入 C++20/ABI1；孤立 service 样本缺少并发证据时采用逻辑互斥并落实到运行顺序。模型时间仅覆盖 ABI1 service，不包括外围分配、线程启动、派发和 join，不是整程序时延或加速比。`joint-capacity` 保留未知成本，次数参数不授予原循环替换权；完整声明模型仅供显式试验，默认仍 NO_OP。
 
 `profile-pipeline-host` 对已准入 native 的实际线程启动、分配、计算、发布、join 和释放做有界观测；不改原算术或派发策略。`model-pipeline-host` 离线重放源码及样本，输出原值/存储关联的时间图、硬件投影和逐活动成本表；`--check HOST_MODEL/result.json` 独立重放。观测成本保留插桩影响，不作为未来 clean service 预测；join 等待不重复计入 CPU 工作。未知 Python 外围、物理 CPU 需求及驻留位置继续保留，尚不授权完整时延规划。
+
+`joint-pipeline --host-lifecycle` 进一步建立按所选 CPU 条件存在的启动、入场、退出、join 和清理活动，并将 ABI 与完整调用包装成本分开查询。`cost-contexts.json` 导出宿主预测模板；通过 `--host-cost-profile FORECAST.json --compile` 可显式验证完整已知点模型及其 C++ 线程集合。当前支持声明或解析预测，单配置实测样本保留 UNKNOWN；跨 worker 子集和 lane 顺序的固定系数仍是模型假设。原 Python 整调用成本、自动盈利选择和宿主物理 CPU 需求尚未闭合，默认 NO_OP。
 LeWM、Sunfish、Gray–Scott、Cirq 都是外部 testcase，分析规则不按业务名称选择优化。
 
 ## 使用现有环境

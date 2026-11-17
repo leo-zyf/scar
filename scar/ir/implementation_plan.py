@@ -80,6 +80,41 @@ class PlanningDataEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationChoice:
+    operation: str
+    option: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningActivity:
+    """Conditional service; WAIT_TAIL may include waiting without CPU demand.
+
+    Its cost predicts the tail after readiness, not the whole wait interval.
+    Endpoint constraints express readiness; UNKNOWN never implies a zero tail.
+    """
+    id: str
+    cost: CostEstimate
+    demands: dict[str, int]
+    source_refs: tuple[dict, ...]
+    when: tuple[ImplementationChoice, ...] = ()
+    duration_kind: str = 'FIXED'
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningTimingConstraint:
+    """Endpoint delay active when its OR condition and both endpoints exist."""
+    id: str
+    before: str
+    before_endpoint: str
+    after: str
+    after_endpoint: str
+    minimum_ns: int = 0
+    maximum_ns: int | None = None
+    when: tuple[ImplementationChoice, ...] = ()
+    source_refs: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class PlanningProblem:
     target: ProviderArtifact
     source_refs: tuple[dict, ...]
@@ -90,10 +125,20 @@ class PlanningProblem:
     normal_completion_only: bool = True
     assumptions: tuple[str, ...] = ()
     reserved_memory: dict[str, int] = field(default_factory=dict)
+    activities: tuple[PlanningActivity, ...] = ()
+    timing_constraints: tuple[PlanningTimingConstraint, ...] = ()
+
+
+def _problem_payload(problem):
+    value = encode(problem)
+    for name in ('activities', 'timing_constraints'):
+        if not value[name]: value.pop(name)
+    return value
 
 
 def digest(value):
-    return sha256(json.dumps(encode(value),sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+    payload = _problem_payload(value) if type(value) is PlanningProblem else encode(value)
+    return sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
 def _need(condition, message):
@@ -122,6 +167,13 @@ def validate_problem(problem):
         _need(c.estimate_ns is None or (c.lower_ns is None or c.lower_ns<=c.estimate_ns)
               and (c.upper_ns is None or c.estimate_ns<=c.upper_ns), 'estimate outside its stated range')
         _need(c.basis!='UNKNOWN' or c.estimate_ns is None, 'UNKNOWN is not a point estimate')
+    def references(refs):
+        _need(refs and all(type(ref) is dict and bool(ref) for ref in refs),
+              'complete nonempty source reference dictionaries required')
+    def condition(choices):
+        _need(len(set(choices)) == len(choices) and all(choice.operation in ops
+            and choice.option in {m.id for m in ops[choice.operation].options} for choice in choices),
+            'conditions must name distinct original implementation choices')
     demands(p.reserved_memory,True)
     for op in p.operations:
         _need(op.id and op.source_refs and len(set(op.predecessors))==len(op.predecessors)
@@ -132,6 +184,26 @@ def validate_problem(problem):
             _need(m.id and m.lowering and m.proof_refs, 'implementation lowering and legality references required')
             demands(m.demands);demands(m.workspace_bytes,True);cost(m.cost)
             _need(set(m.input_locations.values())|set(m.output_locations.values())<=pools, 'material locations must name explicit memory pools')
+    activities={a.id:a for a in p.activities}
+    _need(len(activities)==len(p.activities) and not set(activities)&set(ops),
+          'auxiliary activity IDs must be unique and distinct from operation IDs')
+    for activity in p.activities:
+        _need(bool(activity.id), 'nonempty auxiliary activity ID required')
+        references(activity.source_refs); demands(activity.demands); cost(activity.cost); condition(activity.when)
+        _need(activity.duration_kind in ('FIXED','WAIT_TAIL')
+            and (activity.duration_kind!='WAIT_TAIL' or not activity.demands),
+            'WAIT_TAIL intervals may stretch and cannot claim whole-interval resource demand')
+    constraints={c.id:c for c in p.timing_constraints}
+    _need(len(constraints)==len(p.timing_constraints), 'unique timing constraint IDs required')
+    nodes=set(ops)|set(activities)
+    for constraint in p.timing_constraints:
+        _need(constraint.id and constraint.before in nodes and constraint.after in nodes
+            and constraint.before_endpoint in ('START','END') and constraint.after_endpoint in ('START','END'),
+            'timing endpoints must name original operations or auxiliary activities and START/END')
+        _need(type(constraint.minimum_ns) is int and constraint.minimum_ns>=0
+            and (constraint.maximum_ns is None or type(constraint.maximum_ns) is int
+                and constraint.maximum_ns>=constraint.minimum_ns), 'nonnegative ordered timing bounds required')
+        references(constraint.source_refs); condition(constraint.when)
     edges={e.id:e for e in p.data_edges};values={}
     _need(len(edges)==len(p.data_edges), 'unique data edges required')
     _need(len({(e.value,e.consumer)for e in p.data_edges})==len(p.data_edges), 'one value port per consumer is required')
@@ -168,14 +240,23 @@ def validate_problem(problem):
 
 
 def problem_document(problem):
-    return dict(schema=SCHEMA,schema_version=1,**encode(validate_problem(problem)))
+    problem=validate_problem(problem)
+    return dict(schema=SCHEMA,schema_version=2 if problem.activities or problem.timing_constraints else 1,
+                **_problem_payload(problem))
 
 
 def problem_from_dict(document):
     value=dict(document)
-    _need(value.pop('schema',None)==SCHEMA and value.pop('schema_version',None)==1, 'unsupported planning problem schema')
+    version=value.pop('schema_version',None)
+    _need(value.pop('schema',None)==SCHEMA and type(version) is int and version in (1,2),
+          'unsupported planning problem schema')
+    extension=('activities','timing_constraints')
+    _need(version!=1 or not set(extension)&set(value), 'v1 planning problems cannot carry conditional activities or timing')
+    _need(version!=2 or any(value.get(name) for name in extension), 'v2 planning problem requires a nonempty extension')
+    for name in extension: value.setdefault(name,[])
     return validate_problem(decode(PlanningProblem,value))
 
 
 __all__=['CostEstimate','PlanningResource','ImplementationOption','PlanningOperation','TransferOption',
-         'PlanningDataEdge','PlanningProblem','validate_problem','problem_document','problem_from_dict','digest','SCHEMA','PLAN_SCHEMA']
+         'PlanningDataEdge','ImplementationChoice','PlanningActivity','PlanningTimingConstraint',
+         'PlanningProblem','validate_problem','problem_document','problem_from_dict','digest','SCHEMA','PLAN_SCHEMA']

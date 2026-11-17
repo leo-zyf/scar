@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 条件worker生命周期已贯通 source→v2规划→C++20/ABI1：5原调用、10条件host活动、34端点约束；低启动成本声明模型选2 worker，高成本选1 worker，生成源码实际只启动选中CPU。完整task保ABI+wrapper，join等待可伸长，未选活动不存在；原v1 wire/digest不变，单配置实测宿主成本继续UNKNOWN。实际native冷重放通过，独立/只读别名输入与原函数逐位一致。8×8区域干净call-boundary计时（warmup3、9组×32）：原Python median9.495µs，C++392.328µs，not profitable，默认NO_OP；非科学程序整入口或模型准确性结论。验收：`artifacts/baseline/pipeline-lifecycle.json`。接下来按层补：第一阶段接完整host边界证据；第二阶段加入原Python/NO_OP整区域实现与同范围成本及可验证宿主预测；第三阶段延续证书到原入口/guard/fallback，并在闭合范围定期A/B，不将声明模型时间当实测加速比。
+
 2026-11-17 原 pipeline host envelope 已接回值/存储/硬件/时间主图：32任务、55活动、157事件，保留分配、异步创建、原ABI、发布、join及释放；5物理槽/2560B各计一次。7次保留观测（warmup2）中32活动可重算插桩区间，23活动成本仍未知；5 ABI绑定原选CPU，39项物理执行需求未知。离线源码、硬件投影及成本重放通过且禁止CDLL，无新目标执行。观测≠未来service成本，等待≠busy CPU；没有整调用预测或新加速比。验收：`artifacts/baseline/pipeline-host-envelope.json`。下一层是按已选worker生成条件启动/退出活动，补可用于预测的宿主成本和并发条件，再接联合规划，不能将本轮区间直接喂作固定服务时间。
 
 2026-11-17 统一实现规划主链已接通：原区域/软硬件来源→实现与位置选择→精确上下文成本查询→CP-SAT→独立资源/依赖/物化检查→C++20/ABI1。5-call源图的10个CPU service组件完成7样本/warmup2的C++内部标定（40.45s，非整目标版本搜索），共享2560B pool只计一次；孤立样本施加逻辑串行约束，并将该资源顺序与原依赖分别落实到C++。选中CPU为1/0/0/0/1，原函数与native在独立输入及只读别名输入下逐位一致。58,465ns只是service点模型完成时间，host启动/分配/派发/join、并发带宽和整程序性能尚未闭合。通用7项关键检查已覆盖并行、启动成本、预算、搬运、共享物化和UNKNOWN域；未知域不得报告已知子域的零gap。缓冲策略亦已进入同一接口，默认UNKNOWN保持原执行；声明模型选择仅允许显式验证，不冒充实测。验收：`artifacts/baseline/joint-implementation-planning.json`。当前下一层集中补host envelope成本和可校验的并发条件，再扩大联合规划域；不新增零散detector/backend。

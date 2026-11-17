@@ -45,7 +45,8 @@ def _compiler():
 
 
 def build_pipeline_problem(pipeline, memory_plan, target, *, cpu_ids,
-        cost_model=None, cost_profile_ref=None, source_refs=()):
+        cost_model=None, cost_profile_ref=None, source_refs=(),
+        host_lifecycle=False, host_cost_profile_ref=None):
     """Derive all call/CPU choices; missing exact-context estimates stay UNKNOWN.
 
     Source refs must be qualified by the caller's original F4 replay. This
@@ -57,6 +58,8 @@ def build_pipeline_problem(pipeline, memory_plan, target, *, cpu_ids,
     _, snapshot, cpus, _, hardware = _target(target, cpu_ids)
     _need(bool(source_refs), 'original source input references required')
     _need(cost_model is None or cost_profile_ref is None, 'cost model and empirical profile are mutually exclusive')
+    _need(type(host_lifecycle)is bool and(host_lifecycle or host_cost_profile_ref is None),
+        'host costs require the explicit source lifecycle model')
     compiler = _compiler()
     model = cost_model
     if model is not None:
@@ -123,7 +126,7 @@ def build_pipeline_problem(pipeline, memory_plan, target, *, cpu_ids,
             tuple(options), call.id+'@cpu:'+str(baseline_cpu)))
     if model is not None:
         _need(set(model['costs']) == seen_costs, 'cost model contains extra or nonmatching call/CPU contexts')
-    return validate_problem(PlanningProblem(ProviderArtifact(**snapshot), tuple(source_refs),
+    problem=validate_problem(PlanningProblem(ProviderArtifact(**snapshot), tuple(source_refs),
         tuple(resources), tuple(operations), (), assumptions=(
             'ORIGINAL_F4_CALLER_AND_LEAF_PURITY_REPLAY_REQUIRED',
             'EXACT_READONLY_C_CONTIGUOUS_F64_INPUTS_STABLE_DURING_REGION',
@@ -133,11 +136,20 @@ def build_pipeline_problem(pipeline, memory_plan, target, *, cpu_ids,
                 if cost_profile_ref is not None else
                 'DECLARED_OR_UNKNOWN_COST_MODEL_THREAD_CAPACITIES_NOT_EMPIRICAL_CONCURRENCY_EVIDENCE')),
         reserved_memory={pool: memory['peak_allocation_bytes']}))
+    if host_lifecycle:
+        from scar.optimization.pipeline_lifecycle import attach_pipeline_lifecycle
+        problem=attach_pipeline_lifecycle(problem,pipeline,memory,
+            cost_profile_ref=host_cost_profile_ref,source_refs=tuple(source_refs))
+    return problem
 
 
 def cost_contexts(problem):
-    return {mode.cost.context: mode.parameters['context']
+    contexts={mode.parameters.get('leaf_service_cost',{}).get('context',mode.cost.context):mode.parameters['context']
         for operation in problem.operations for mode in operation.options}
+    if problem.activities:
+        from scar.optimization.pipeline_lifecycle import lifecycle_cost_contexts
+        contexts.update(lifecycle_cost_contexts(problem))
+    return contexts
 
 
 def refine_pipeline_implementation(pipeline, memory, target, problem, execution):
@@ -186,7 +198,7 @@ def refine_pipeline_implementation(pipeline, memory, target, problem, execution)
         ready = {name for name in calls if name not in done and union[name] <= done}
         _need(bool(ready), 'lane order and true predecessors form a cycle')
         done.update(ready)
-    return dict(schema=CERT_SCHEMA, schema_version=1, execution_family=FAMILY,
+    certificate=dict(schema=CERT_SCHEMA, schema_version=1, execution_family=FAMILY,
         problem_sha256=digest(problem), execution_plan_sha256=semantic_sha256(execution),
         pipeline_sha256=pipeline_digest(pipeline), memory_plan_sha256=semantic_sha256(memory), target=snapshot,
         cpu_ids=cpus, call_cpu_ids={name: options[name].parameters['cpu_id'] for name in calls},
@@ -203,6 +215,17 @@ def refine_pipeline_implementation(pipeline, memory, target, problem, execution)
         full_model_timeline_implemented=False, model_makespan_is_native_runtime_prediction=False,
         native_host_optimality_proven=False, existing_host_envelope='ALL_POOL_SLOTS_PREALLOCATED_JOIN_ALL_BEFORE_EXPORT',
         cost_scope=SCOPE, deployment_authorized=False, default_backend='NO_OP')
+    if problem.activities:
+        from scar.optimization.pipeline_lifecycle import lifecycle_cost_contexts
+        certificate.update(implementation_scope='SELECTED_WORKERS_AND_SOURCE_HOST_LIFECYCLE_ORDER',
+            cost_scope='ABI1_AND_COMPLETE_TASK_WRAPPER_PLUS_HOST_LIFECYCLE_POINT_MODEL',
+            host_lifecycle=dict(problem_sha256=digest(problem),
+                selected_activities=execution['activities'],
+                contexts_sha256=semantic_sha256(lifecycle_cost_contexts(problem)),
+                selected_worker_cpu_ids=cpus,
+                caller_worker_physical_cpu_demands_proven=False,
+                model_timestamps_are_runtime_guarantees=False))
+    return certificate
 
 
 __all__ = ['build_pipeline_problem', 'cost_contexts', 'refine_pipeline_implementation',
