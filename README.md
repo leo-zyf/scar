@@ -10,9 +10,19 @@
 → 原入口、guard 和完整区域回退
 ```
 
-当前优先完成三阶段核心开发，暂停新增性能实验。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
+当前优先完成三阶段核心开发，定期在同一完整边界验证。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
 
-统一实现规划原型现可执行。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
+主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
+
+```bash
+scar macro-pipeline --inputs INPUTS.json --out UNKNOWN
+scar macro-pipeline --inputs INPUTS.json --cost-profile PROFILE.json --compile --out SELECTED
+scar macro-pipeline --check SELECTED/preparation.json
+```
+
+`INPUTS.json` 沿用已有 source/value/memory/hardware 输入；`PROFILE.json` 沿用 `scar.deployment-cost-profile`，绑定完整 warm 受保护调用、shape、CPU 可用域及实现版本。声明组件模型与真实整调用观测分开，尚无自动解析成本生产器。原 CPU affinity 继承而非绑核，不创建 worker；显式试验可用 `scar.compiler.macro_pipeline.install(module, SELECTED/result.json, trial=True, exclusive_inputs=True)` 受控接入并恢复原函数。它不是整程序或 compact 自动交付。验收见 `artifacts/baseline/macro-fusion-pass.json`。
+
+以下联合求解接口保留作局部补充，不是主线每次必须经过的步骤。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
 
 ```bash
 scar joint-plan --problem PROBLEM.json --out PLAN.json

@@ -39,7 +39,7 @@ def _hardware(session, ready=None):
 
 
 @contextmanager
-def open_temporal_inputs(reference):
+def open_temporal_inputs(reference, *, include_source=False):
     """Replay original source/value routes, pool and CPU plan before L2 use."""
     from scar.analysis.build import BuildSession
     from scar.analysis.caller_pipeline_values import read_caller_values
@@ -63,7 +63,7 @@ def open_temporal_inputs(reference):
         source_values = read_artifact(raw['source_values'])
         if source_values['original_proof'] != raw['proof']:
             raise ValueError('source value publication differs from selected proof')
-        read_caller_values(raw['source_values']['uri'], view=session.view, provider=provider)
+        caller_values=read_caller_values(raw['source_values']['uri'], view=session.view, provider=provider)
         memory = verify_pipeline_memory(proof.pipeline, read_artifact(raw['memory']))
         if source_values['input_shapes'] != memory['input_shapes']:
             raise ValueError('source value and memory specialization shapes differ')
@@ -72,7 +72,10 @@ def open_temporal_inputs(reference):
             raise ValueError('ready input graph differs from original source values')
         target = _hardware(session, ready)
         verify_pipeline_ready_schedule(proof.pipeline, memory, target, ready)
-        yield proof.pipeline, memory, ready, target
+        if include_source:
+            yield proof.pipeline,memory,ready,target,proof,caller_values.projection,raw
+        else:
+            yield proof.pipeline, memory, ready, target
         read_artifact(reference)
 
 

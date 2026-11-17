@@ -1,8 +1,12 @@
 # 当前状态
 
-2026-11-17 GCC方法论已做本机实证：GCC13.3的-Q选项、pass顺序、初始GIMPLE/SSA、LICM明细和最终IR已保存。闭合C例子出现内联、不变量外提、重复/死计算消除、16字节vector；未知外部调用保留并阻断该循环向量化，未运行测试程序或测加速比。O2/very-cheap与O3/dynamic成本差异及默认线程数1已核；合理外延为复用现有图的宏观pass，不另造SSA/CFG，不把GCC直接当Python语义证明。先接已有fusion的requires→合法性→预测收益→改写→失效/验证，再补跨层资源规则。生产代码本轮未改。记录：`artifacts/baseline/gcc-o3-study.json`。
+2026-11-17 GCC方法论已接首条源码区域pass：`macro-pipeline` 重放原F4/GlobalPort及硬件来源，投影5个原CALL到既有v2 OIR，明确原Python/NO_OP和已有FULL_FUSION。requires、条件Q、完整受保护调用成本、5项失效账本及独立重放已接通，不新增后端或全局求解。声明正模型可构建C++20/ABI1、受控安装原模块函数并恢复；独立与只读别名逐位一致，dtype/callee/CPU域变化回退。原执行无native guards，成本未知/负模型不构建或加载库。一次序列化tuple/list重放问题已修，当前材料独立冷读通过。
 
-2026-11-17 已暂停上一轮新接口编码并完成解析/构造式规划调研，三个拟建模块均尚未落盘。主线改为语义化简、工作/数据移动需求和容量界、解析组织、资源日历构造、证书与C++；少量组件标定用于有效吞吐/边界开销/重叠条件，不默认整版本黑盒调优。已有OIR、融合后端和求解器保留，求解器可作局部补充/校验；构造引擎尚未实现。具体逐层任务见DEVELOPMENT，文献与适用边界见 `artifacts/baseline/constructive-planning-research.json`。仍未完成三阶段。
+实测该8×8源码例子：warmup3、9次交替顺序、每样本1次完整受保护调用，原NumPy median13.584µs[min8.998,max15.444]、融合111.705µs[min109.358,max137.556]，not profitable。实际完整边界证据已使pass选KEEP且跳过native；声明正模型不当作加速证据。无worker/绑核，仍有guard/ABI等调用开销。仅小源码区域，非科学程序整入口或LeWM；无新加速结论。新全图重写、自动分析缓存失效重算、解析组件成本与资源日历构造均未完成，现有C1 compact亦未接新融合交付。验收：`artifacts/baseline/macro-fusion-pass.json`。
+
+GCC13.3本机实证保留：-Q选项、pass顺序、GIMPLE/SSA、LICM及最终IR；闭合C例子发生内联、外提、重复/死计算消除和16字节vector，未知外部调用保留。O2/very-cheap与O3/dynamic成本差异及默认线程数1已核，不把GCC当Python语义证明。记录：`artifacts/baseline/gcc-o3-study.json`。
+
+2026-11-17 解析/构造式规划调研已完成。主线为语义化简、工作/数据移动需求和容量界、解析组织、资源日历构造、证书与C++；少量组件标定用于有效吞吐/边界开销/重叠条件，不默认整版本黑盒调优。已有OIR、融合后端和求解器保留，求解器可作局部补充/校验；首条pass已实现，构造引擎尚未实现。具体逐层任务见DEVELOPMENT，文献与适用边界见 `artifacts/baseline/constructive-planning-research.json`。仍未完成三阶段。
 
 2026-11-17 性能归因定位了主链架构缺口：现joint producer只生成固定CALL的CPU选项，source original/fusion/caller直串行不在该域，NO_OP仅为部署默认。相同进程、warmup3、9组×32的8×8干净对照：原NumPy7.687µs，五ABI单worker299.995µs，复用既有融合后端101.155µs；两种C++均不盈利，不自动启用。独立输入与只读别名逐位一致；另9次host插桩确认启动及task包装显著，ABI区间包含自身guard，不能称纯数学时间。源码正常路径有10份affinity scope（host与leaf双层），这些是源码API次数、非syscall trace。未改数学/后端。下一轮以composite region覆盖及实现选择为主链，再接每种实现的硬件/完整边界成本和交付；不继续仅调CPU排列。报告：`artifacts/baseline/pipeline-architecture-diagnosis.json`。
 
