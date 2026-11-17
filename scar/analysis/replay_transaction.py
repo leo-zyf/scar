@@ -25,8 +25,8 @@ _HOOK_ATTEMPTED = False
 _PROBE = None
 _SEEN = None
 _POPEN_TYPE = subprocess.Popen
-_POPEN_INIT = _POPEN_TYPE.__init__.__code__
-_POPEN_EXECUTE = _POPEN_TYPE._execute_child.__code__
+_POPEN_INIT = getattr(getattr(_POPEN_TYPE, '__init__', None), '__code__', None)
+_POPEN_EXECUTE = getattr(getattr(_POPEN_TYPE, '_execute_child', None), '__code__', None)
 _MUTATION_EVENTS = frozenset(('os.remove', 'os.rename', 'os.rmdir', 'os.mkdir',
     'os.truncate', 'os.chmod', 'os.chown', 'os.utime', 'os.link', 'os.symlink'))
 
@@ -69,6 +69,8 @@ class _Capture:
 
 def _popen_frame(code, descriptor=None):
     """Find the actual stdlib Popen owner; unrelated FDs cannot borrow approval."""
+    if code is None:
+        return None
     frame = sys._getframe()
     try:
         while frame is not None:

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 GCC反馈已接真实科学区域：实际C++的9个非COMMIT阶段关联原action/expr、GCC诊断及共同Problem；raw/投影用gzip保留，冷check不调用compiler/native。成本用途门禁已贯通：旧1,423,927ns在显式声明分析选1，在要求合格时间时保数值并加5项未解、选0；两条prepare+独立check均通过。完整函数与孤立标定的两个主计算stage都已向量化，但GCC相对准备/尾部成本不同；不能作为ns归因或加速比。三阶段仍未完成。材料：`artifacts/baseline/gcc-lowering-feedback.json`。
+
 2026-11-17 离线分析已去除同一冷事务内的重复硬件解码/拓扑与entry cost推导。冻结代码四新进程ABBA，各模式2样本、warmup0，median42.3199→26.3717s（1.60475×），7份模型正文完全相同；命中/退出仍核文件，新事务独立冷验，原严格codec未改。真实stateful无成本/旧声明及fusion声明三条prepare+check均通过，成本未知和旧预测未合格状态不变。16项定向回归通过；未运行目标、新编译或加载native。这是分析器收益，非目标加速；三阶段仍未完成。材料：`artifacts/baseline/replay-mainline.json`。
 
 2026-11-17 真实科学stateful区域已自动进入既有SemanticGraph：7输入、54表达式、26有序动作；24个evaluate与Expr共operation，无重复执行节点。实际C++的11 stages、私有slots与CPU阶段引用由原source_action_ids/expression_stages接通；两次write各对应private write+commit，原动作仍26。caller world exit原F4证据有歧义，保持字段frontier，未消除全程序gaps。`plan-controlled-region`按单activation可控资源合同保严格全入口与可控域两份problem；真实259的计入payload3203376B（borrowed1073296+private2130080）受33554432B预算，CPU0只覆盖私有执行阶段，caller/commit不指定core。无成本不补0；显式旧DECLARED profile仅作条件分析，不能升级时间/物理/部署资格。canonical guard两配置的唯一新采样已完成，入口配对差中位7085ns，非旧预测误差归因或新加速比。三阶段仍未完成。材料：`artifacts/baseline/controlled-scientific-region.json`。

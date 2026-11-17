@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.implementation_plan import problem_document, digest, validate_problem
+from scar.ir.implementation_plan import CostEstimate, problem_document, digest, validate_problem
+from scar.ir.record_codec import decode
 from scar.optimization.resource_solver import semantic_sha256
 
 SCHEMA = 'scar.controlled-region-preparation'
@@ -21,7 +22,9 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'optimization/stateful_entry_cost.py', 'optimization/region_implementation.py',
     'optimization/constructive_planner.py', 'optimization/joint_planner.py',
     'analysis/replay_transaction.py', 'analysis/target_graph.py',
-    'optimization/hardware.py', 'ir/record_batch.py')
+    'optimization/hardware.py', 'ir/record_batch.py', 'optimization/entry_cost_use.py',
+    'compiler/collect_native_optimization.py', 'compiler/native_lowering_view.py',
+    'analysis/gcc_optimization.py', 'analysis/gcc_cost_features.py')
 
 
 def _pins():
@@ -89,19 +92,63 @@ def _stateful_stage_binding(region, graph, contract):
         timing_qualified=False, runtime_execution_observed_now=False, deployment_authorized=False)
 
 
-def _derive(kind, admission, profiles):
+def _compiler_annotations(reference, contract, graph, correspondence):
+    from scar.compiler.collect_native_optimization import check_gcc_optimization, read_gcc_feedback
+    from scar.analysis.gcc_cost_features import project_gcc_vector_costs
+    feedback = check_gcc_optimization(reference)
+    subject = feedback['subject']
+    if type(subject) is not dict or subject.get('kind') != 'STATEFUL_NATIVE_LOWERING':
+        raise ValueError('source-bound actual stateful lowering feedback required')
+    view = subject['view']
+    if (view['native_manifest'] != contract['implementation']['native_manifest']
+            or view['identity']['build_id'] != contract['implementation']['build_id']
+            or view['identity']['region_sha256'] != graph['region_sha256']):
+        raise ValueError('compiler feedback belongs to another admitted native/source region')
+    projection = read_gcc_feedback(feedback['files']['feedback'])
+    stage_by_index = {row['index']:row for row in correspondence['stages']}
+    rows = []
+    for stage in view['stages']:
+        bound = stage_by_index[stage['index']]
+        if bound['stage'] != stage['id'] or bound['kind'] != stage['kind']:
+            raise ValueError('compiler stage map differs from admitted source-native correspondence')
+        span_indices = {index for index, span in enumerate(projection['stage_spans'])
+            if span['id'] == 'stage:'+str(stage['index'])}
+        diagnostics = [index
+            for index, diagnostic in enumerate(projection['diagnostics'])
+            if span_indices.intersection(diagnostic['stage_span_indices'])]
+        rows.append(dict(stage=stage['id'], index=stage['index'], source_operations=bound['source_operations'],
+            source_expressions=bound['source_expressions'], diagnostic_indices=diagnostics,
+            association='DIAGNOSTIC_CITES_STAGE_SOURCE_NOT_EXECUTION_OR_REWRITE_PROOF',
+            coverage='CITED' if diagnostics else 'NO_CITATION_NOT_DEAD_WORK_PROOF'))
+    return dict(schema='scar.source-native-compiler-annotations', schema_version=1,
+        semantic_graph_revision=graph['graph_revision'], compiler_collection=reference,
+        native_manifest=view['native_manifest'], compiler_record=feedback['files']['record'],
+        projection=feedback['files']['feedback'], stages=rows,
+        compiler_cost_features=project_gcc_vector_costs(reference),
+        diagnostic_index_base='ZERO_BASED_IN_SHARED_PROJECTION_DIAGNOSTICS',
+        omitted_stage_kinds=view['omitted_stage_kinds'], duration_model_derived=False,
+        compiler_counts_are_runtime_observations=False, timing_qualification_granted=False,
+        resource_obligations_discharged=False, original_semantic_dependencies_rewritten=False)
+
+
+def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
+            compiler_feedback=None):
     from scar.analysis.replay_transaction import replay_transaction
     # A prepare and its independent check deliberately start separate scopes.
     # No cached validation document crosses this source-admission boundary.
     with replay_transaction():
-        return _derive_body(kind, admission, profiles)
+        return _derive_body(kind, admission, profiles, cost_use=cost_use, cost_qualification=cost_qualification,
+            compiler_feedback=compiler_feedback)
 
 
-def _derive_body(kind, admission, profiles):
+def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
+                 compiler_feedback=None):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission)
-    entry = correspondence = None
+    entry = correspondence = entry_use = annotations = None
+    if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
+        raise ValueError('explicit cost-use contract required')
     if kind == 'STATEFUL_SPECIALIZATION':
         from scar.compiler.stateful_model import stateful_from_dict
         from scar.analysis.stateful_semantic_graph import derive_stateful_semantic_graph
@@ -114,16 +161,27 @@ def _derive_body(kind, admission, profiles):
         graph = derive_stateful_semantic_graph(region, input_shapes=spec['input_shapes'],
             source_refs=refs, source_proof=contract['cold_admission']['report'])
         correspondence = _stateful_stage_binding(region, graph, contract)
+        if compiler_feedback is not None:
+            annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
         identity = contract['identity']
         offers = tuple(dict(artifact=reference, locator='#') for reference in profiles)
         entry = derive_stateful_entry_cost(identity['domain']['uri'], identity['candidate_id'], offers)
         strict = project_stateful_entry_implementation(identity['domain']['uri'], identity['candidate_id'],
             entry, profiles=offers)
+        from scar.optimization.entry_cost_use import admit_entry_cost_for_use
+        entry_use = admit_entry_cost_for_use(entry, use=cost_use,
+            qualification_ref=cost_qualification,
+            native_manifest_ref=contract['implementation']['native_manifest'])
+        operation = strict.operations[0]
+        strict = replace(strict, operations=(replace(operation, options=(replace(operation.options[0],
+            cost=decode(CostEstimate, entry_use['active_cost'])),)),))
         graph_binding = dict(schema=graph['schema'], semantic_sha256=semantic_sha256(graph),
             graph_revision=graph['graph_revision'], root=graph['root'],
             execution_members=deepcopy(graph['projection']['execution_members']),
             correspondence_sha256=semantic_sha256(correspondence))
     elif kind == 'PIPELINE_FUSION':
+        if cost_use != 'EXPLICIT_DECLARED_ANALYSIS' or cost_qualification is not None or compiler_feedback is not None:
+            raise ValueError('qualified entry-cost use currently requires a stateful source admission')
         from scar.optimization.region_implementation import project_region_implementation
         if profiles:
             raise ValueError('fusion costs must retain the source macro preparation profile')
@@ -141,12 +199,21 @@ def _derive_body(kind, admission, profiles):
         raise ValueError('known source-admitted resource kind required')
     operation = strict.operations[0]; mode = operation.options[0]
     parameters = deepcopy(mode.parameters); parameters['source_semantic_graph'] = graph_binding
+    if entry_use is not None:
+        parameters['cost_use'] = dict(use=entry_use['use'], report_sha256=semantic_sha256(entry_use),
+            timing_qualified=entry_use['timing_qualified'],
+            qualification_reference=entry_use['qualification_reference'],
+            native_manifest=contract['implementation']['native_manifest'])
+    if annotations is not None:
+        parameters['compiler_annotations'] = dict(semantic_sha256=semantic_sha256(annotations),
+            compiler_collection=compiler_feedback, timing_qualification_granted=False)
     strict = validate_problem(replace(strict, operations=(replace(operation,
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
     controlled, projection = project_controlled_region(strict, contract)
     return dict(contract=contract, source_graph=graph, correspondence=correspondence,
-        entry_cost=entry, strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
+        entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
+        strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 
 
@@ -154,9 +221,12 @@ def _without_elapsed(value):
     return {key:row for key,row in value.items() if key != 'elapsed_seconds'}
 
 
-def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan):
-    return dict(schema=SCHEMA, schema_version=1, kind=kind, admission=reference,
+def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
+              cost_use, cost_qualification, compiler_feedback):
+    return dict(schema=SCHEMA, schema_version=2, kind=kind, admission=reference,
         entry_profiles=list(profiles), max_seconds=max_seconds, files=files, producer_pins=_pins(),
+        cost_use=cost_use, cost_qualification=cost_qualification,
+        compiler_feedback=compiler_feedback,
         strict_status=strict_plan['status'], controlled_status=plan['status'],
         strict_problem_sha256=digest(strict), controlled_problem_sha256=digest(controlled),
         controlled_feasibility_is_not_whole_process_feasibility=True,
@@ -165,15 +235,19 @@ def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled,
         native_loaded=False, compiled=False, deployment_authorized=False, default_backend='NO_OP')
 
 
-def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30):
+def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
+            cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None, compiler_feedback=None):
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     reference = _reference(admission)
     profiles = tuple(_reference(path) for path in entry_profiles)
+    qualification = None if cost_qualification is None else _reference(cost_qualification)
+    feedback = None if compiler_feedback is None else _reference(compiler_feedback)
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh controlled region output required')
-    documents, strict, controlled = _derive(kind, reference, profiles)
+    documents, strict, controlled = _derive(kind, reference, profiles,
+        cost_use=cost_use, cost_qualification=qualification, compiler_feedback=feedback)
     strict_plan = construct_implementations(strict, max_seconds=max_seconds)
     plan = construct_implementations(controlled, max_seconds=max_seconds)
     verification = verify_execution_plan(controlled, plan) if plan['selected'] else None
@@ -183,16 +257,19 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30):
     directory.mkdir(parents=True)
     files = {key:None if value is None else _write(directory/(key.replace('_','-')+'.json'), value)
         for key,value in documents.items()}
-    report = _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan)
+    report = _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
+        cost_use, qualification, feedback)
     _write(directory/'preparation.json', report)
     return report
 
 
 def check(preparation):
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
-    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 1) or saved['producer_pins'] != _pins():
+    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 2) or saved['producer_pins'] != _pins():
         raise ValueError('controlled region producer or schema differs')
-    documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'])
+    documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
+        cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
+        compiler_feedback=saved['compiler_feedback'])
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     for name, problem in (('strict_plan', strict), ('controlled_plan', controlled)):
@@ -209,7 +286,8 @@ def check(preparation):
             for key,value in documents.items())):
         raise ValueError('controlled source graph, resources, costs or plan differ from cold replay')
     if saved != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
-            saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan']):
+            saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan'],
+            saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback']):
         raise ValueError('controlled preparation summary changed its original qualification')
     return saved
 
@@ -218,6 +296,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--kind', choices=('PIPELINE_FUSION', 'STATEFUL_SPECIALIZATION'))
     parser.add_argument('--admission'); parser.add_argument('--entry-profile', action='append', default=[])
+    parser.add_argument('--cost-use', choices=('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'),
+        default='EXPLICIT_DECLARED_ANALYSIS')
+    parser.add_argument('--cost-qualification', help='retained entry-cost qualification for the requested timing use')
+    parser.add_argument('--compiler-feedback', help='source-bound GCC optimization collection result')
     parser.add_argument('--out'); parser.add_argument('--check'); parser.add_argument('--max-seconds',type=float,default=30)
     args = parser.parse_args(argv)
     if args.check:
@@ -227,7 +309,8 @@ def main(argv=None):
     elif not args.kind or not args.admission or not args.out:
         parser.error('--kind, --admission and --out required')
     else:
-        saved = prepare(args.kind, args.admission, args.out, entry_profiles=args.entry_profile,max_seconds=args.max_seconds)
+        saved = prepare(args.kind, args.admission, args.out, entry_profiles=args.entry_profile,max_seconds=args.max_seconds,
+            cost_use=args.cost_use, cost_qualification=args.cost_qualification, compiler_feedback=args.compiler_feedback)
         result = dict(preparation=_reference(Path(args.out)/'preparation.json'),
             strict_status=saved['strict_status'], controlled_status=saved['controlled_status'],
             native_loaded=False, deployment_authorized=False)

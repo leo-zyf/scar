@@ -27,7 +27,11 @@
 
 已有C实证：未知alias生成带检查的双路径；有`restrict`契约时省去该检查，成本阈值随之改变。两次常量返回均可折叠，但volatile状态写仍保留。因此Python常量传播与删除import须分别证明值和初始化effects，单次动态观测不能替代。原始材料：`artifacts/baseline/gcc-o3-study.json`；依据：[GCC13.3选项](https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html)、[依赖/alias](https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html)、[LICM源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc)、[成本源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-vect-loop.cc)、[pass顺序](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def)。
 
-下一轮集中顺序：先补真实科学区域canonical与实际lowering的compiler/内联/shape边界差异，冻结可转用成本模型；再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
+下一轮集中顺序：flags、shape、正文已确认一致；先处理已识别的独立函数/真实阶段组、wrapper+trial、前驱数据及分配/触页条件，冻结可转用成本模型，再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
+
+GCC反馈已接主链：`scar native-optimization --native ARTIFACT_JSON --stage-capture CAPTURE_JSON --out FRESH`只重编一份已保留C++，沿原compiler/flags/headers加`-fsave-optimization-record`；不加载分析ELF。`--check FRESH/result.json`只读重推原source/body行区间与诊断投影，禁止compiler/native仍通过；自洽篡改span并重算projection也被拒绝。raw GCC记录和派生投影均gzip保存，正文按JSON pointer引用；地址型pass ID只在该record内有效。`scar gcc-cost-features --collection RESULT --out FRESH_JSON`提取受支持GCC13.3的相对成本字段；它们不是ns，不合并不同版本，不授予计时资格。无诊断不证明死工作。
+
+`plan-controlled-region --compiler-feedback RESULT`已把同manifest的9个非COMMIT阶段接回原action/expr及Problem参数；两个COMMIT未纳入此source-map profile，原图/效果/依赖不改。preparation现为schema2，独立check明确拒绝旧schema1。`--cost-use EXPLICIT_DECLARED_ANALYSIS`保原条件分析；`--cost-use QUALIFIED_TARGET_TIMING --cost-qualification RECEIPT`必须冷重放原model/holdout/policy并绑定实际native源码和plan。旧1,423,927ns分析仍可生成条件计划；同一数值请求合格时间用途时追加missing_terms，实际选择0，保持原政策及NO_OP。GCC注释不能解除这些义务。报告：`artifacts/baseline/gcc-lowering-feedback.json`。
 
 首条pass现已贯通：`pipeline_region_pass`投影原CALL/GlobalPort及conditional Q；`macro_pass`复用已有成本gate与OIR，记录requires/selection/invalidates；`pipeline_fusion_delivery`交已有无worker/绑核的融合C++；`macro_pipeline`全源重放及受控模块接入。真实8×8受保护调用成本判KEEP，不加载库；正声明模型仅验REWRITE链。`model-pipeline-cost`已继续接通原source occurrence需求、有效仿射系数与完整入口成本，缺证据不补零。`macro-pipeline`现另外发布`semantic/revision.json`、before/after图、分析及实际融合body；冷读重放选中OIR和原F4，原图/公共边界/Q/UNKNOWN effects不变，重算use-def、源码顺序及静态last-use。旧revision或另一region的分析、错误body引用均拒绝；成本、物理寿命、调度与native绑定仍列未解，不拿旧五CALL计划套新composite。无通用分析缓存，未重写整程序。材料：`artifacts/baseline/semantic-region-revision.json`。下一层先从后继图重建实现需求与同边界成本，再重建硬件时序及交付绑定。
 
