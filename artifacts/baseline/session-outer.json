@@ -1,0 +1,194 @@
+{
+  "all_three_stages_complete": false,
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "evidence": {
+    "activation-check.json": {
+      "sha256": "ce61676e3cb2c33c33780262fc97d56802cd40b51fc47547f80d2a29a0837826",
+      "size_bytes": 562,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/activation-check.json"
+    },
+    "bundle/scope-export.json": {
+      "sha256": "294b408ebff177080057b511ff1fa34fc5178e775a1e20e9fed6e1efad5563f4",
+      "size_bytes": 702,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/bundle/scope-export.json"
+    },
+    "development-notes.json": {
+      "sha256": "5a1fd1efd7a736a5d3c022657558945ef740985f01a236538776cb806d2a3aa0",
+      "size_bytes": 308,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/development-notes.json"
+    },
+    "entry.py": {
+      "sha256": "b6ff8278da9afeb9d8ec2d742aabd98c85a2b9b8f7228920e30ab0ec3b805d6c",
+      "size_bytes": 1002,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/entry.py"
+    },
+    "io-effect-validation.json": {
+      "sha256": "a37f1b43f9d37c1d1a36eacf013fb2ca88d09ea45932d7ff008b88d1beabcaf6",
+      "size_bytes": 1481,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/io-effect-validation.json"
+    },
+    "isolation.json": {
+      "sha256": "0236cede40f6cc233f58c33e9933223484def4e609f86ab37b366ee6afd08bfb",
+      "size_bytes": 348,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/isolation.json"
+    },
+    "isolation.py": {
+      "sha256": "3289812a85c4a591660fb1cb77270f591be3475da9956fb7b0b84b1e93100d8e",
+      "size_bytes": 1999,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/isolation.py"
+    },
+    "preparation/result.json": {
+      "sha256": "c6300cb5cbe7edb57a926ccb07ea021de5fc69d7c805bfe3766a4e36da87dce4",
+      "size_bytes": 3020,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/preparation/result.json"
+    },
+    "side-effect-entry.py": {
+      "sha256": "90cf8343320d99fcc31e51b8375a64b45dc9af3d3bc28a127ea6024a065c1c4d",
+      "size_bytes": 1047,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/side-effect-entry.py"
+    },
+    "validate-entry.py": {
+      "sha256": "4fccb2711dd9b4e4f976a21218770af0c327c368818fbe8ed08600b0f18cdfb5",
+      "size_bytes": 2415,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/validate-entry.py"
+    },
+    "validate-side-effect.py": {
+      "sha256": "04694b6f33e921dbf57c00625468b468b9b79ef52f527131624954199f9f9eb8",
+      "size_bytes": 1657,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/validate-side-effect.py"
+    },
+    "validation.json": {
+      "sha256": "9d5e82793a7a3cbf5db10055d71c978599dac6fd6f04085d582dfd654617459d",
+      "size_bytes": 6699,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-outer-v1/validation.json"
+    }
+  },
+  "external_workload_source_modified": false,
+  "implementation_sha256": {
+    "analysis/session_scalar_flow.py": "c01e1b2f1990908c119c0a2d14e59c7ae25ae1246a667dc7c19cfd7eb171885d",
+    "cli.py": "74f0ddbc37d2c58000159b693ff6568eb7d614e0d54925fdee868456651031c2",
+    "compiler/session_outer.py": "99e96c2cf120a628a339c02213cb5f5c6fddaad0f86265f5d1d130d2a565453b",
+    "optimization/session_activation.py": "f7b4b834c55785587c1e3fd2ea544ffff2eb719b6ece5020ab364bba2895e43e",
+    "optimization/session_outer.py": "7908396315cf9f01d10b2f7f395fc85f4152e4a44ea49749450867194ffd7cd7",
+    "runtime/session_scope.py": "ce9de450af81226298187d4b7a8ca3f8c280b34b62503df2edc42e1a42ebdac6"
+  },
+  "lewm_run": false,
+  "next": [
+    {
+      "invariants": [
+        "All private reads dominated by current-step writes/full snapshots from original workspace proof",
+        "Invalidate all content correspondence and clear Python input references before host resumes",
+        "No private double buffer pointer escapes into user or provider after synchronous return",
+        "Keep budgeted capacity as a separate resource lifetime; no I/O quiescence claim",
+        "Every step still rechecks source/provider/inputs and fully snapshots external arrays",
+        "Source fallback and outer exit destroy retained capacity; failed cleanup quarantines it"
+      ],
+      "priority": 1,
+      "task": "PRIVATE_CAPACITY_REUSE_WITH_FRESH_CONTENT"
+    },
+    {
+      "note": "Do not equate a fewer-allocation request count with wall-clock improvement.",
+      "priority": 2,
+      "task": "CONNECT_CAPACITY_PLAN_TO_CURRENT_TIME_RESOURCE_COST_AND_NATIVE_CONTROLLER"
+    },
+    {
+      "note": "Reuse existing source graph, keep actual changing values and future effects distinct.",
+      "priority": 3,
+      "task": "STRENGTHEN_LOOP_FIELD_VERSION_AND_CONDITIONAL_RETURN_GUARD_PROOFS"
+    }
+  ],
+  "schema": "scar.session-outer-acceptance",
+  "schema_version": 1,
+  "stages": {
+    "delivery": {
+      "actual_stdout_consumer_input_writes": 4,
+      "automatic_unchanged_entry": true,
+      "backend": "C++20",
+      "builds_unavailable_at_runtime": true,
+      "default_no_cdll": true,
+      "expected_admission_sha256": "4731014495f6cdbcf0e873784e4300cae061cff5986ec37dbc34f6cf5952bb39",
+      "independent_native_guards_rechecked_each_leaf": true,
+      "mutated_input_case_native_calls": 4,
+      "native_math_source_changed": false,
+      "native_recompiled": false,
+      "operator_abi_version": 1,
+      "original_loop_and_host_functions_executed": true,
+      "print_or_unknown_host_functions_patched": false,
+      "source_case_native_calls": [
+        4,
+        4,
+        0
+      ],
+      "source_case_png_files": [
+        1,
+        2,
+        1
+      ]
+    },
+    "modeling": {
+      "automatic_outer_discovery": true,
+      "edges": 1811,
+      "effect_profile_closed": false,
+      "field_writes": 1,
+      "function_ordinal": 1,
+      "interned_ports": 1946,
+      "kinds_are_conditional_not_runtime_values": true,
+      "lexical_joins": 7,
+      "loop_unrolled": false,
+      "multiwriter_type_joins": 2,
+      "object_or_content_identity_inferred_from_type_join": false,
+      "operations": 78,
+      "original_control_backedges": 1,
+      "shared_loops": 1,
+      "source_calls": [
+        {
+          "query": 48,
+          "role": "NESTED_CALLER"
+        },
+        {
+          "query": 47,
+          "role": "ORIGINAL_HOST_CALL"
+        },
+        {
+          "query": 50,
+          "role": "ORIGINAL_HOST_CALL"
+        },
+        {
+          "query": 49,
+          "role": "ORIGINAL_HOST_CALL"
+        }
+      ],
+      "source_unit": "9e331850d559dabf91635adc",
+      "type_fixed_point_reached": true
+    },
+    "planning": {
+      "activation_separate_from_lease_instances": true,
+      "complete_resource_feasibility_proven": false,
+      "dynamic_kernel_count": null,
+      "numeric_global_schedule_solved": false,
+      "opaque_host_quiescence_assumed": false,
+      "original_hardware_and_private_capacity_references_retained": true,
+      "original_host_lookup_and_effects_preserved": true,
+      "policy": "FRESH_ISOLATED_NATIVE",
+      "retention_authorized": false,
+      "taint_cleared": false,
+      "total_service_ticks": null
+    }
+  },
+  "status": "VERIFIED_ORIGINAL_OUTER_CONTROL_AND_ISOLATED_NATIVE_LEAVES",
+  "validation": {
+    "cases": [
+      "normal",
+      "frequent_io",
+      "other_branch"
+    ],
+    "independent_original_and_trial_processes": true,
+    "movie_render_path_tested": false,
+    "performance_measured": false,
+    "real_file_outputs": true,
+    "source_io_callback_mutations_equal": true,
+    "speedup": null,
+    "state_return_stdout_and_png_bytes_equal": true
+  }
+}

@@ -31,6 +31,8 @@ caller 的覆盖分母来自完整原生产操作，不是 CALL 计数。`Guarde
 
 动态 session 的生命周期与固定次数 VRS 分开投影：`SessionLifetime` 以 session instance 为参数，create/destroy 各一次，step/invalidate 为任意有限序列；invalidate 只丢内容对应，不释放容量。它引用原 kernel 的硬件证据和共享正文，不把旧 FIRST/LAST 或 N4 控制冒充新 session 事件。外层 CPU、服务时长和额外元数据容量仍独立未知，不据此声称完整资源可行性或数值最优调度。
 
+`SessionScalarFlow` 另在原端口上计算有限 scalar kind 不动点。多 writer 的词法槽只合并类型，不合并对象、数值或逻辑版本；引用路径仅经有来源的 reference transport 传播。原循环回边、条件、字段 payload 与格式化操作均保留；外部调用的返回 kind 和入口类型仍是待检查条件。`SessionOuter` 将此源图接到嵌套 caller，host 效应未闭合时选择独立 leaf 交付，而非把整个计算区域拒绝。`SessionActivation` 区分一个外层 activation 与任意多个短 lease：每个 leaf 完整快照/检查/计算后销毁，原 host 调用处没有跨调用保留。未知效应不被声明纯或 quiescent，类型推导也不授予内容复用或全局调度权限。
+
 ## 五类核心实体
 
 统一查询使用`ProgramView`与既有`ProgramDependencyGraph`。源码ID由原unit、编译/绑定profile、template和原Step/Region/完整Port限定，不随查询函数或展开顺序改变；节点投影保双向来源，不重新生成操作语义。

@@ -96,7 +96,10 @@ class SessionScope:
         self.bindings, self.frontier, self.activations = [], [], []
         self.seen, self.suspended, self.finished = set(), 0, False
         self.stats = dict(caller_calls=0, copy_calls=0, barrier_calls=0, tainted_kernel_calls=0,
-                          fresh_kernel_calls=0, retention_eligible_kernel_calls=0, guard_rejections=0)
+                          fresh_kernel_calls=0, retention_eligible_kernel_calls=0, guard_rejections=0,
+                          isolated_kernel_attempts=0, isolated_native_calls=0,
+                          isolated_original_fallback_calls=0, isolated_kernel_reasons={})
+        self.unqualified_kernel_policy = 'ORIGINAL'
         self.rows, self.sources = {}, set()
         if not self.active:
             return
@@ -104,6 +107,9 @@ class SessionScope:
               and type(spec.get('schema_version')) is int and spec['schema_version'] == 1
               and type(spec.get('boundaries')) is list, 'producer-admitted compact session scope required')
         self.spec = deepcopy(spec)
+        self.unqualified_kernel_policy = self.spec.get('unqualified_kernel_policy', 'ORIGINAL')
+        _need(self.unqualified_kernel_policy in ('ORIGINAL', 'FRESH_ISOLATED_NATIVE'),
+              'unsupported unqualified kernel policy')
         for row in self.spec['boundaries']:
             _need(type(row) is dict and type(row.get('id')) is str and row['id'] not in self.rows
                   and row.get('role') in _ROLES and row.get('descriptor') in ('FUNCTION', 'METHOD', 'STATICMETHOD')
@@ -258,15 +264,51 @@ class SessionScope:
                 stats['fallback_calls'] += 1
                 stats['reasons'][reason] = stats['reasons'].get(reason, 0)+1
                 return original(*args, **kwargs)
+            def isolated(reason, args, kwargs):
+                self.stats['isolated_kernel_attempts'] += 1
+                self.stats['fresh_kernel_calls'] += 1
+                reasons = self.stats['isolated_kernel_reasons']
+                reasons[reason] = reasons.get(reason, 0)+1
+                previous_native = guarded.scar_stats['native_calls']
+                previous_fallbacks = guarded.scar_stats['fallback_calls']
+                try:
+                    try:
+                        self.session.release('isolated_kernel_entry')
+                    except Exception:
+                        return original_fallback('isolated_kernel_entry_cleanup_failed', args, kwargs)
+                    if not exact_kernel_metadata(args, kwargs):
+                        return original_fallback('function_metadata_not_exact', args, kwargs)
+                    return guarded(*args, **kwargs)
+                finally:
+                    self.stats['isolated_native_calls'] += guarded.scar_stats['native_calls']-previous_native
+                    fallbacks = guarded.scar_stats['fallback_calls']-previous_fallbacks
+                    self.stats['isolated_original_fallback_calls'] += fallbacks
+                    if fallbacks:
+                        self._lose('isolated_kernel_original_fallback', taint=True)
+                    try:
+                        self.session.release('isolated_kernel_exit')
+                    except Exception:
+                        self._lose('isolated_kernel_exit_cleanup_failed')
             def call(*args, **kwargs):
                 if not self.active or threading.get_ident() != self.owner:
                     return original(*args, **kwargs)
+                keep = None
+                if self.unqualified_kernel_policy == 'FRESH_ISOLATED_NATIVE':
+                    if self.suspended:
+                        self.stats['tainted_kernel_calls'] += 1
+                        return isolated('suspended_unknown_call', args, kwargs)
+                    if any(frame['tainted'] for frame in self.activations):
+                        self.stats['tainted_kernel_calls'] += 1
+                        return isolated('tainted_activation', args, kwargs)
+                    keep = self._can_keep(row['id'])
+                    if not keep:
+                        return isolated('unscoped_or_unclosed_caller', args, kwargs)
                 if not exact_kernel_metadata(args, kwargs):
                     return original_fallback('function_metadata_not_exact', args, kwargs)
                 if self.suspended or any(frame['tainted'] for frame in self.activations):
                     self.stats['tainted_kernel_calls'] += 1
                     return original_fallback('tainted_or_unknown_caller', args, kwargs)
-                keep = self._can_keep(row['id'])
+                keep = self._can_keep(row['id']) if keep is None else keep
                 try:
                     if keep:
                         self.stats['retention_eligible_kernel_calls'] += 1
@@ -452,7 +494,8 @@ class SessionScope:
     @property
     def report(self):
         return dict(schema='scar.workspace-session-scope-execution', schema_version=1,
-            statistics=dict(self.stats), installed_bindings=len(self.bindings), frontier=list(self.frontier),
+            statistics=deepcopy(self.stats), installed_bindings=len(self.bindings), frontier=list(self.frontier),
+            unqualified_kernel_policy=self.unqualified_kernel_policy,
             preservation_scope='SOURCE_CLOSED_LIVE_CALLER_ACTIVATIONS_ONLY',
             source_call_coverage_proven_by_installer=False, arbitrary_internal_writes_intercepted=False,
             default_backend='NO_OP', deployment_authorized=False)

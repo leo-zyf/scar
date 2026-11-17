@@ -129,6 +129,16 @@ scar run-workspace-session --bundle SCOPED_RUNTIME --admission-sha256 EXPORT_SHA
 
 caller 分解复用原 F4 操作和数据/控制边，唯一 formal 绑定只传递引用路径，不证明内容不变。直接 method lookup 必须由当前 descriptor、接收者和字段类型 guard 兑现；未知调用使当前 activation 持续失效，保留其原执行。已接通原 Gray–Scott `update()` 的29项生产操作；外围 `integrate()` 尚未闭合，因此每次最外 caller 入场失效、退出释放，不跨外部间隙保留副本。动态 lease 图保留原硬件和固定容量，次数/时长未知时不冒充固定循环时间表，也不授予全局调度或盈利结论。省略 `--validate-only` 保留原执行，不加载 native。
 
+外层共享循环可以继续接入条件标量流及独立 kernel 交付：
+
+```bash
+scar session-outer --nested CALLERS/result.json --out OUTER
+scar session-outer --export OUTER/result.json --out OUTER_RUNTIME
+scar run-workspace-session --bundle OUTER_RUNTIME --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs --report RUN.json -- ENTRY.py
+```
+
+静态阶段用有限类型不动点表示循环变量，保留原控制回边、字段写和未知 host 调用，循环不展开。完整 host 效应尚未闭合时，新显式策略只执行已有独立源合同的 leaf：完整输入快照、原检查和计算后即释放，taint 不清除。打印、绘图、文件保存继续原执行，不遮罩 `print`，也不假设未知调用返回后无延迟访问。真实 Gray–Scott `integrate()` 已对比状态、stdout 和 PNG；这是完整原控制路径上的有界 leaf 交付，仍非整程序 C++、跨 host 驻留或全局最短调度。
+
 已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
 
 闭合数组 caller 可通过 `compile-caller-pipeline --pipeline-workers N --pipeline-dispatch ready` 使用原数据依赖和 pool 复用约束，按实际完成情况派发后继；显式 CPU 分配不代表最快方案。对应 `run-caller-pipeline --validate-only --exclusive-inputs` 只验证执行，不采集性能或授权部署。
