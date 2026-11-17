@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 后继图→需求→硬件/时间Problem→既有C++验证候选已接`plan-semantic-region`。F4五调用样例实际after只有1个composite；原7次/3584B逻辑分配变为1次/512B，原eager、raw body与优化lowering分别记账。原完整hardware snapshot与两typed物理义务保留：strict UNRESOLVED；显式logical声明模型可构造1ms计划，该值不是实测。C++20/ABI1实际编译/构建时ABI admission有记录；独立冷检查禁止CDLL通过，默认安装保原函数且不加载，显式独占输入验证下3次native与1次dtype回退均逐位一致并恢复绑定。分析记录排序不稳定已修。成本兼容检查另机械证出canonical/真实harness的trial配置不同，记录级未知仍保留；future v2采样协议和通用无文件验证已接CLI，6反例拒绝，未执行新holdout/未改旧预测。三阶段仍未完成；下一层集中补真实科学后继区域、匹配上下文成本及可控资源资格。材料：`artifacts/baseline/semantic-successor-mainline.json`。
+
 2026-11-17 GCC O3方法继续落实到真实图改写：复核本机13.3的O2/O3选项及既有GIMPLE/LICM/alias-vectorization材料；不以重复试跑寻找版本。`macro-pipeline`在原F4冷重放后，把选中OIR实际应用到已有SemanticGraph，5个CALL子节点变1个composite（含root共6→2定义，slots17→5），保公共边界、Q及UNKNOWN effects。新节点可追溯原图并展开实际融合body；重算use-def/源码顺序/静态last-use，拒绝旧图分析、错误region及错误body。KEEP逐字保图。完整prepare+独立check分别约16.65s/16.24s，均禁CDLL；REWRITE只用明确声明的结构验收模型，不是实测成本或部署资格。未新增后端/加速比，未重写全程序；下一层是从后继图重建需求、成本、资源时序和交付绑定。材料：`artifacts/baseline/semantic-region-revision.json`。
 
 2026-11-17 完整方法成本出口已实现：`model-stateful-activity-cost`冷重放现有activity/resource/scope账本，只支持已证明串行的standalone方法，24个最终subject覆盖31活动各计一次；旧coarse条目不再累加，collective pool不按slot乘，唯一source milestone为0。保留COMPONENT_ONLY与全部转用残差，原whole_call_cost_closed=false不改；新条件DECLARED点预测1,423,927ns已接共同CostEstimate和实现IR，逻辑规划可用，物理资格仍独立未解。删掉V2 DAG证据会因3个UNKNOWN拒绝发布；禁CDLL冷重放及3项相关回归通过。

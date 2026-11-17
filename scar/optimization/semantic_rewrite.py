@@ -151,7 +151,8 @@ def analyze_static_region(graph, root):
         consumers=sorted(key.wire for key in consumers),
         last_use='REGION_EXIT' if slot.slot_id in public_outputs else
             max((positions[key] for key in consumers),default=None),
-        no_consumer_does_not_prove_dead=True) for slot,producers,consumers in facts]
+        no_consumer_does_not_prove_dead=True) for slot,producers,consumers in
+            sorted(facts,key=lambda row:row[0].slot_id.wire)]
     return dict(schema='scar.semantic-region-analysis',schema_version=1,
         revision=semantic_sha256(graph.to_dict()),root=root.as_dict(),
         operation_order=[key.wire for key in order],data_use_def=rows,

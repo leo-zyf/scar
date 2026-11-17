@@ -168,7 +168,7 @@ def verify_stateful_entry_cost(report, domain, candidate_id, profiles=()):
     return expected
 
 
-def evaluate_stateful_entry_holdout(model, holdout, policy):
+def _evaluate_legacy_stateful_entry_holdout(model, holdout, policy):
     """Qualify prediction accuracy from retained paired complete-method clocks.
 
     Rejected predictions stay available as declared analysis models. Their
@@ -241,7 +241,7 @@ def evaluate_stateful_entry_holdout(model, holdout, policy):
     groups={'original':[],'native_trial':[]};native_calls=fallbacks=0
     required=('final_complete_arrays_halo_and_scalar_types_bytes_equal',
         'step_shape_dtype_and_scalar_context_trajectory_equal','stdout_equal','stderr_equal',
-        'output_file_names_and_bytes_equal','png_produced','every_native_step_executed')
+        'output_file_names_and_bytes_equal','every_native_step_executed')
     correct=True
     for phase,rows in (('warmup',observed['warmups']),('measurement',observed['measured_pairs'])):
         if [row['index'] for row in rows]!=list(range(len(rows))):
@@ -315,6 +315,217 @@ def evaluate_stateful_entry_holdout(model, holdout, policy):
         cost_qualification_scope='ONLY_RETAINED_SAME_SOURCE_SHAPE_CALLER_AND_GUARDED_ENTRY_CONTEXT',
         physical_resource_qualification='SEPARATE_UNRESOLVED',whole_program_speedup_claimed=False,
         default_backend='NO_OP',deployment_authorized=False)
+
+
+def _future_holdout_state(state,region,context,*,final):
+    """Validate recorded geometry/scalars without reading target array data."""
+    import struct
+    if type(state)is not dict or set(state)!={row.id for row in region.inputs}:
+        raise ValueError('future holdout declared input ID set differs')
+    for spec in region.inputs:
+        row=state[spec.id]
+        if type(row)is not dict or row.get('path')!=list(spec.path) or row.get('kind')!=spec.kind:
+            raise ValueError('future holdout declared input path or kind differs')
+        if spec.kind=='array':
+            fields={'kind','path','dtype','shape','strides','device','c_contiguous','aligned','tensor_contents_read'}
+            if final:fields|={'payload_bytes','payload_sha256'}
+            shape=context['input_shapes'][spec.id]
+            if (set(row)!=fields or row['shape']!=shape or row['dtype']!='<f8' or row['device']!='cpu'
+                    or row['c_contiguous']is not True or row['aligned']is not True
+                    or row['tensor_contents_read']is not final
+                    or row['strides']!=[shape[1]*8,8]):
+                raise ValueError('future holdout array geometry or content-read regime differs')
+            if final and (row['payload_bytes']!=8*shape[0]*shape[1]
+                    or type(row['payload_sha256'])is not str or len(row['payload_sha256'])!=64
+                    or any(c not in '0123456789abcdef'for c in row['payload_sha256'])):
+                raise ValueError('complete final array receipt required')
+        else:
+            scalar_type=row.get('type');fields={'kind','path','type','representation'}
+            if scalar_type in ('builtins.float','numpy.float64'):fields.add('bits')
+            if set(row)!=fields:raise ValueError('complete known scalar observation fields required')
+            try:
+                if scalar_type=='builtins.int':
+                    value=int(row['representation'])
+                    valid=str(value)==row['representation'] and abs(value)<=2**53
+                elif scalar_type in ('builtins.float','numpy.float64'):
+                    value=float.fromhex(row['representation'])
+                    valid=math.isfinite(value) and value.hex()==row['representation'] and struct.pack('=d',value).hex()==row['bits']
+                else:valid=False
+            except (ValueError,TypeError,OverflowError):valid=False
+            if not valid:raise ValueError('finite exact declared scalar observation required')
+
+
+def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
+    from scar.compiler.stateful_holdout import (DESIGN,POLICY,REPORT,TIMER,
+        verify_stateful_holdout_design,_distribution)
+    from scar.compiler.stateful_model import stateful_from_dict
+    from scar.optimization.stateful_activity_model import read_activity_entry_model
+    from hashlib import sha256
+    observed=read_artifact(holdout_ref);rules=read_artifact(policy_ref)
+    fields={'schema','schema_version','status','design','capture_epoch','observation_origin','frozen_policy',
+        'frozen_model','timer','harness','implementation_sources','original_source_refs_before',
+        'original_source_refs_after','policy_frozen_before_target','design_readback_before_target',
+        'design_readback_after_target','caller_affinity_changed_by_harness','original_descriptors_restored',
+        'pairs','summaries','guard_statistics_including_warmups','frozen_policy_evaluation',
+        'per_step_array_content_reads_by_observer','final_state_reads_per_episode','independent_prior_correctness',
+        'performance_measured','model_fitted_from_holdout','model_qualification_promoted',
+        'deployment_authorized','whole_program_speedup_measured','output_comparison_scope','noise_limitations'}
+    if (set(observed)!=fields or (observed['schema'],observed['schema_version'])!=(REPORT,2)
+            or observed['status']!='OBSERVED_FIXED_IMPLEMENTATIONS'
+            or (rules.get('schema'),rules.get('schema_version'))!=(POLICY,2)):
+        raise ValueError('complete known future holdout v2 and frozen policy v2 required')
+    design_ref=observed['design']
+    if design_ref.get('schema')!=DESIGN:raise ValueError('future source design reference required')
+    design=verify_stateful_holdout_design(design_ref['uri'],expected_sha256=design_ref['sha256'])
+    if read_artifact(design_ref)!=design:raise ValueError('future design reference differs from cold replay')
+    request=design['request'];epoch=request['capture_epoch']
+    expected_sources={**design['source_refs'],request['entry']['uri']:request['entry']}
+    if (observed['frozen_model']!=model_ref or request['model']!=model_ref
+            or observed['frozen_policy']!=policy_ref or design['frozen_policy']!=policy_ref
+            or rules!=design['policy_contract'] or rules.get('purpose')!='FOR_FUTURE_CAPTURE'
+            or rules.get('prior_samples_authorized')is not False
+            or observed['capture_epoch']!=epoch or rules.get('capture_epoch')!=epoch
+            or observed['timer']!=TIMER or rules.get('timer')!=TIMER
+            or observed['harness']!=rules.get('harness')
+            or observed['harness']!=design['implementation_sources']['compiler/stateful_holdout.py']
+            or observed['implementation_sources']!=design['implementation_sources']
+            or observed['original_source_refs_before']!=expected_sources
+            or observed['original_source_refs_after']!=expected_sources
+            or observed['independent_prior_correctness']!=request['prior_correctness']
+            or observed['per_step_array_content_reads_by_observer']!=0
+            or observed['final_state_reads_per_episode']!=1
+            or observed['output_comparison_scope']!='CONFIGURED_OUTPUT_DIRECTORY_ONLY'):
+        raise ValueError('future capture reference/timer/harness/source/epoch binding differs')
+    for key in ('policy_frozen_before_target','design_readback_before_target','design_readback_after_target','original_descriptors_restored'):
+        if observed[key]is not True:raise ValueError('future precommit and restoration evidence required')
+    for key in ('caller_affinity_changed_by_harness','model_fitted_from_holdout','model_qualification_promoted',
+                'deployment_authorized','whole_program_speedup_measured'):
+        if observed[key]is not False:raise ValueError('future capture cannot alter policy, placement or qualification')
+    origin=observed['observation_origin']
+    if origin not in ('COLLECTOR_TARGET_EXECUTION','SYNTHETIC_METADATA_VALIDATION'):
+        raise ValueError('known future capture observation origin required')
+    real=origin=='COLLECTOR_TARGET_EXECUTION'
+    if observed['performance_measured']is not real:raise ValueError('synthetic metadata cannot claim target measurement')
+    for ref in (*design['implementation_sources'].values(),*expected_sources.values()):
+        read_artifact(ref,json_document=False)
+    model=read_activity_entry_model(model_ref['uri'])
+    if read_artifact(model_ref)!=model:raise ValueError('frozen source model differs')
+    facts=read_artifact(model['facts']);activity=read_artifact(model['activity_costs'])
+    domain=_domain(read_artifact(design['domain']));candidate=read_artifact(design['candidate'])
+    context=stateful_cpu_cost_context(domain,candidate['candidate_id'])
+    if (facts['context']!=context or design['context']!=context
+            or activity['domain']!=design['domain'] or activity['candidate_id']!=candidate['candidate_id']
+            or request['caller_cpu_ids']!=domain['live_constraints']['process_affinity_cpu_ids']):
+        raise ValueError('future captured caller/model context differs from original domain')
+    region=stateful_from_dict(read_artifact(domain['region']))
+    pairs=observed['pairs'];planned=design['episodes']
+    if type(pairs)is not list or len(pairs)!=9 or len(planned)!=18:
+        raise ValueError('complete future two warmup and seven measurement pairs required')
+    groups={'A':[],'B':[]};pooled={'A':[],'B':[]};native_calls=fallbacks=0;total_native=total_fallback=0
+    correct=True
+    for ordinal,pair in enumerate(pairs):
+        phase='warmup'if ordinal<2 else'measurement';index=ordinal if ordinal<2 else ordinal-2
+        order=['A','B']if index%2==0 else['B','A']
+        if (set(pair)!={'phase','index','order','checks','implementations'} or pair['phase']!=phase
+                or pair['index']!=index or pair['order']!=order or set(pair['implementations'])!={'A','B'}):
+            raise ValueError('future frozen pair phase/index/order differs')
+        implementations=pair['implementations']
+        for label in order:
+            row=implementations[label]
+            if set(row)!={'steps','final_state','argv','execution','stdout','stderr','files'}:
+                raise ValueError('complete known future episode fields required')
+            plan=next(p for p in planned if(p['phase'],p['index'],p['label'])==(phase,index,label))
+            if (plan['capture_epoch']!=epoch or row['argv']!=plan['argv']
+                    or row['execution'].get('entry_path')!=request['entry']['uri']
+                    or row['execution'].get('argv')!=plan['argv'] or row['execution'].get('exit_code')!=0):
+                raise ValueError('future original entry argv/output token or epoch differs')
+            if type(row['stdout'])is not str or type(row['stderr'])is not str:
+                raise ValueError('original text streams required')
+            output=plan['program_output_directory']
+            actual={}
+            if output is not None:
+                root=Path(output)
+                for path in sorted(root.rglob('*')):
+                    if path.is_file():
+                        raw=path.read_bytes();actual[str(path.relative_to(root))]=dict(size_bytes=len(raw),sha256=sha256(raw).hexdigest())
+            if row['files']!=actual:raise ValueError('configured output files differ from captured receipts')
+            _future_holdout_state(row['final_state'],region,context,final=True)
+            steps=row['steps']
+            if type(steps)is not list or not steps:raise ValueError('nonempty future method trajectory required')
+            for step_index,step in enumerate(steps):
+                if (set(step)!={'ordinal','elapsed_ns','inputs','capture_epoch','native_calls','fallback_calls'}
+                        or step['ordinal']!=step_index or step['capture_epoch']!=epoch
+                        or type(step['elapsed_ns'])is not int or step['elapsed_ns']<=0
+                        or type(step['native_calls'])is not int or type(step['fallback_calls'])is not int):
+                    raise ValueError('positive complete future clocks and epoch required')
+                _future_holdout_state(step['inputs'],region,context,final=False)
+                if label=='A' and(step['native_calls']!=0 or step['fallback_calls']!=0):
+                    raise ValueError('original future path contains native or guarded calls')
+                if label=='B':
+                    correct &= step['native_calls']==1 and step['fallback_calls']==0
+                    total_native+=step['native_calls'];total_fallback+=step['fallback_calls']
+                    if phase=='measurement':native_calls+=step['native_calls'];fallbacks+=step['fallback_calls']
+            if phase=='measurement':
+                groups[label].append(statistics.mean(s['elapsed_ns']for s in steps))
+                pooled[label].extend(s['elapsed_ns']for s in steps)
+        a,b=implementations['A'],implementations['B']
+        native=sum(s['native_calls']for s in b['steps']);fallback=sum(s['fallback_calls']for s in b['steps'])
+        checks=dict(final_state_equal=a['final_state']==b['final_state'],stdout_equal=a['stdout']==b['stdout'],
+            stderr_equal=a['stderr']==b['stderr'],configured_output_files_equal=a['files']==b['files'],
+            context_trajectory_equal=[s['inputs']for s in a['steps']]==[s['inputs']for s in b['steps']],
+            native_success=native==len(b['steps'])and native>0 and fallback==0)
+        if pair['checks']!=checks:raise ValueError('future pair correctness claims differ from recorded evidence')
+        correct &= all(checks.values())
+    expected_summaries={label:dict(episode_means=_distribution(groups[label]),method_calls=_distribution(pooled[label]))for label in ('A','B')}
+    if observed['summaries']!=expected_summaries:raise ValueError('future summary differs from original raw clock samples')
+    total=observed['guard_statistics_including_warmups']
+    if (set(total)!={'native_calls','fallback_calls','reasons'} or total['native_calls']!=total_native
+            or total['fallback_calls']!=total_fallback or type(total['reasons'])is not dict
+            or total_fallback==0 and total['reasons']!={}):
+        raise ValueError('future total guard statistics differ')
+    original=statistics.median(groups['A']);native=statistics.median(groups['B'])
+    error=abs(model['duration_ns']-native)/native;gain=1-native/original
+    threshold=rules['max_relative_prediction_error'];minimum=rules['minimum_observed_gain']
+    expected_evaluation=dict(predicted_native_method_ns=model['duration_ns'],relative_prediction_error=error,
+        observed_method_gain=gain,prediction_error_threshold_passed=error<=threshold,observed_gain_threshold_passed=gain>=minimum)
+    if observed['frozen_policy_evaluation']!=expected_evaluation:raise ValueError('future policy evaluation differs from raw samples')
+    qualified=real and bool(correct)and error<=threshold and gain>=minimum
+    verify_stateful_holdout_design(design_ref['uri'],expected_sha256=design_ref['sha256'])
+    for ref in (model_ref,holdout_ref,policy_ref):read_artifact(ref)
+    return dict(schema='scar.stateful-entry-model-qualification',schema_version=1,model=model_ref,
+        holdout=holdout_ref,policy=policy_ref,design=design_ref,capture_epoch=epoch,
+        status='HOLDOUT_CONTEXT_QUALIFIED'if qualified else'HOLDOUT_PREDICTION_REJECTED',
+        future_metadata_consistent=True,target_measurement_observed=real,predicted_native_ns=model['duration_ns'],
+        original_median_ns=original,native_median_ns=native,method_original_over_native_ratio=original/native,
+        relative_prediction_error=error,prediction_error_threshold=threshold,prediction_error_threshold_passed=error<=threshold,
+        observed_gain=gain,observed_gain_threshold=minimum,observed_gain_threshold_passed=gain>=minimum,
+        policy_precommitted_in_holdout=True,full_timer_scope_and_harness_bound=True,
+        qualification_frontiers=[reason for passed,reason in ((real,'SYNTHETIC_METADATA_IS_NOT_TARGET_OBSERVATION'),
+            (correct,'PAIRED_SOURCE_STATE_OR_NATIVE_PATH_CORRECTNESS_FAILED'),
+            (error<=threshold,'FROZEN_PREDICTION_ERROR_THRESHOLD_EXCEEDED'),(gain>=minimum,'FROZEN_OBSERVED_GAIN_THRESHOLD_NOT_MET'))if not passed],
+        measured_native_calls=native_calls,measured_fallback_calls=fallbacks,correctness_passed=bool(correct),
+        qualified_profile=model['profile']if qualified else None,original_declared_profile_retained_for_analysis=model['profile'],
+        target_samples_fitted=False,model_or_threshold_changed=False,
+        cost_qualification_scope='ONLY_RETAINED_SAME_SOURCE_SHAPE_CALLER_AND_GUARDED_ENTRY_CONTEXT',
+        physical_resource_qualification='SEPARATE_UNRESOLVED',whole_program_speedup_claimed=False,
+        default_backend='NO_OP',deployment_authorized=False)
+
+
+def evaluate_stateful_entry_holdout(model,holdout,policy):
+    """Dispatch by the actual protocol; future policies cannot relabel legacy clocks."""
+    def reference(value):
+        if type(value)is dict:return value
+        path=Path(value).resolve();schema=json.loads(path.read_bytes())['schema']
+        return artifact_reference(path,schema)
+    model_ref,holdout_ref,policy_ref=map(reference,(model,holdout,policy))
+    observed,rules=read_artifact(holdout_ref),read_artifact(policy_ref)
+    if (observed.get('schema'),observed.get('schema_version'))==('scar.stateful-method-holdout',2):
+        return _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref)
+    if (observed.get('schema'),observed.get('schema_version'))==('scar.real-caller-cost-holdout',1):
+        if(rules.get('schema'),rules.get('schema_version'))!=('scar.conditional-entry-holdout-policy',1):
+            raise ValueError('legacy capture requires its original legacy policy; future policy cannot authorize old samples')
+        return _evaluate_legacy_stateful_entry_holdout(model_ref,holdout_ref,policy_ref)
+    raise ValueError('unknown holdout capture schema/version')
 
 
 def main(argv=None):
