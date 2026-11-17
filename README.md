@@ -41,6 +41,8 @@ scar compile-build --domains DOMAINS --stateful-interval-plans REGION_TO_INTERVA
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
+本机现有入口：`artifacts/current/experiments/graph-viewer-v1/program/index.html`；共享循环及时间/资源视图：`artifacts/current/experiments/workspace-time-v1/view/index.html`。画布按需加载子图，循环只保留一份正文；完整覆盖范围见各自收据。
+
 已有来源核验的 standalone 串行区域成本可继续进入局部时间规划与 C++ 试验：
 
 ```bash
@@ -105,6 +107,16 @@ scar compile-workspace-guards --preparation GUARDS/result.json --out GUARD_NATIV
 跨轮 shadow 驻留使用 `scar workspace-shadow --refinement REFINEMENT/result.json --out RESIDENCY` 生成 ROI 副本证明，再用 `scar workspace-shadow --preparation RESIDENCY/result.json --out RESIDENT_CPP` 编译。首轮完整 snapshot，后续仅复制成功 COMMIT 区域的补集；所有有限性检查、算术、provider 与提交仍保留。原源码循环可导出 compact；固定输入组合仍不获得 caller 替换权限。同步 CPU Q 明确要求借用端口无返回后延迟写，此条件不是已静态证明的 provider 属性，默认仍 NO_OP。`--check RESULT.json` 重放准备或构建结果。finite-guard 与 residency 变体共用构建/导出核心，各自绑定计划和新 controller ID。
 
 `scar benchmark-shadow-residency --original ORIGINAL_WORKSPACE --variant RESIDENT_CPP --inputs INPUTS.json --out AB` 在独立进程进行固定 N4、warmup2、7 对交替 A/B；INPUTS 保存一次 `.npy` 输入及精确 scalar。加载、重置和核验均在时钟外；计时范围为 raw ABI 调用及返回，包含四步 native 控制与计算，不是完整科学程序。真实 Gray–Scott 区域一次测得原 median 9.754001ms、驻留版本 8.763597ms（1.113×）；完整输入/配置、范围与方差见 `artifacts/current/experiments/workspace-shadow-v1/benchmark/`，不能据此宣称整程序收益或自动部署。
+
+跨独立调用持有工作区的显式 session 原型：
+
+```bash
+scar workspace-session --residency RESIDENCY/result.json --program PROGRAM --out SESSION
+scar workspace-session --preparation SESSION/result.json --out SESSION_CPP
+python -m scar.compiler.inspect_workspace_session SESSION_CPP/result.json
+```
+
+准备端从原 F4 自动发现复制写集，保留整数索引降维和逐条读写顺序，证明哪些写入与驻留 ROI 不相交；C++20/ABI1 提供 create/step/invalidate/destroy。轻量运行端 `scar.runtime.native_workspace_session.load` 默认不加载动态库；显式 `trial=True` 后可在受控调用范围执行，每步读取新 scalar，绑定变化或未知写入使副本失效，原函数回退前释放 session。现已在原 Gray–Scott `update()` 的受控接入中验证轨迹逐位一致，但尚未自动证明完整 caller 的写集覆盖或替换 `integrate()`；CALL 观察也不捕获直接数组写入。新 session 未测性能，不沿用固定四步的加速比。共享 guard 更新后，旧 compact 包需重新导出。
 
 已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
 

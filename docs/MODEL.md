@@ -23,6 +23,10 @@ CPU 依赖就绪执行共享同一语义/存储 DAG：每个任务固定到显�
 
 COMMIT 的逐字节复制还可建立 `shadow[ROI] == external[ROI]` 的副本关系，即使数值已变化或尚未证明有限。关系仅覆盖被复制区域；在源写集、持有槽生命期、carry 和同步/无后写合同成立时，下一轮可保留该 ROI，只重新复制补集以重建完整 snapshot。补集不能直接视为相等。Provider 借用端口在返回后不再访问属于显式外部 Q，不从 NoPyAPI 或返回状态推出；新调用仍从完整 snapshot 开始。
 
+显式 `WorkspaceSession` 将该关系扩展为跨单步调用的有主线程 lease：create 为 DIRTY，成功 COMMIT 才建立 ROI 副本对应；未知效应、重叠写、对象/descriptor 变化或失败使关系失效。每步 scalar 重新读取，固定地址不证明内容相同。只有调用范围内全部相关效应受约束时，才可把此原语接到真实 caller；原固定 N 次组合并不授予这项权限，当前 caller 覆盖仍未证明。
+
+`ArrayCopyEffects` 另以原 F4 操作、formal 根和 epoch 解释索引复制：整数轴改变可见 rank，但物理 ROI 仍保留二维坐标；view 创建与后续读取分开，复制按源顺序读取当前内容并推进目标版本。写集与驻留 ROI 不相交只证明几何兼容，还需实际参数/根绑定和普通 ndarray 协议 guard。局部 CALL 证据仅将实际 callable 对回原源码端口，不表示所有写入或属性协议均已捕获；因此不能单独授权 session 延寿。
+
 ## 五类核心实体
 
 统一查询使用`ProgramView`与既有`ProgramDependencyGraph`。源码ID由原unit、编译/绑定profile、template和原Step/Region/完整Port限定，不随查询函数或展开顺序改变；节点投影保双向来源，不重新生成操作语义。

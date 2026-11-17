@@ -86,7 +86,7 @@ def _same_function_state(fn,state):
             and tuple((key,id(value)) for key,value in (fn.__kwdefaults__ or {}).items())==state[2])
 
 
-def guarded_stateful_function(original,artifact,*,owner=None,exclusive_inputs=False,selection=None,trial=False):
+def guarded_stateful_function(original,artifact,*,owner=None,exclusive_inputs=False,selection=None,trial=False,on_fallback=None):
     import numpy as np
     contract=validate_contract(artifact.contract,require_selection=False)
     _function(contract['source'],original)
@@ -107,6 +107,8 @@ def guarded_stateful_function(original,artifact,*,owner=None,exclusive_inputs=Fa
         provider_targets[provider['id']]=np.power
 
     def fallback(reason,args,kwargs):
+        if on_fallback is not None:
+            on_fallback(reason)
         stats['fallback_calls']+=1; stats['reasons'][reason]=stats['reasons'].get(reason,0)+1
         return original(*args,**kwargs)
 
