@@ -1,0 +1,250 @@
+{
+  "actual_compiler_version_queries": 18,
+  "all_three_stages_complete": false,
+  "analysis_timing_is_not_AB_or_target_performance": true,
+  "base_commit": "2e2edf544adadd75fb663e96939f28534fc90de8",
+  "capability": "LIVE_OWNER_PID_THREAD_REPLAY_SCOPE_SESSION_AND_FILE_VERSIONS_NOT_SERIALIZABLE_BOOLEAN",
+  "compiled": false,
+  "counter_instrumented_metadata_seconds": {
+    "check": 68.14906195399817,
+    "prepare": 68.19666255702032
+  },
+  "date": "2026-11-17",
+  "default_backend": "NO_OP",
+  "distinct_entry_native_program_sessions_remain_distinct": true,
+  "effects": {
+    "accesses": 18,
+    "actions": 26,
+    "dependencies": {
+      "IMMUTABLE_VALUE_DEPENDENCE": 25,
+      "ORIGINAL_ACTION_ORDER": 25,
+      "RAW": 7,
+      "WAR": 23,
+      "WAW": 1
+    },
+    "epoch_transitions": [
+      {
+        "action_id": "a13",
+        "epoch_after": 1,
+        "epoch_before": 0,
+        "input_id": "input:0",
+        "source_ref": {
+          "locator": "#/actions/13",
+          "region_sha256": "ae5f3ef4aa3be15c8eba4387c68fadfdf3e4bebf0a1a05fbb62ffba1cf55e7cb"
+        }
+      },
+      {
+        "action_id": "a25",
+        "epoch_after": 1,
+        "epoch_before": 0,
+        "input_id": "input:1",
+        "source_ref": {
+          "locator": "#/actions/25",
+          "region_sha256": "ae5f3ef4aa3be15c8eba4387c68fadfdf3e4bebf0a1a05fbb62ffba1cf55e7cb"
+        }
+      }
+    ],
+    "expressions": 54,
+    "logical_epoch_is_not_global_storage_or_content_identity": true,
+    "original_order_retained": true,
+    "physical_alias_proof": false,
+    "semantic_native_bindings": 80
+  },
+  "entry": {
+    "schema": "scar.bounded-entry-calls",
+    "sha256": "bf6dcb4af934e657bcdeac0c1b5448c055719fe3e9be5ce3391f3f2b82c1866a",
+    "size_bytes": 770599,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scoped-admission-mainline-v1/entry-calls.json"
+  },
+  "expanded_source_summary_core_sha256": "d390133d7dee80b10e4d45887caf21b86ca791dab2c2660be8e892ef9a13a44a",
+  "full_method_cost": {
+    "basis": "UNKNOWN",
+    "missing_terms": [
+      "NO_ADMITTED_EXACT_CONTEXT_WHOLE_METHOD_CALL_PROFILE"
+    ]
+  },
+  "gcc_review": {
+    "O2_vector_model": "very-cheap",
+    "O3_vector_model": "dynamic",
+    "automatic_parallel_threads": 1,
+    "compiler": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "compiler_heuristics_do_not_prove_global_optimality": true,
+    "compiler_relative_costs_are_not_nanoseconds": true,
+    "no_duplicate_compile_or_target_benchmark_for_this_review": true,
+    "options_current_equal_retained": true,
+    "original_receipt_payload_bytes": 200546,
+    "original_receipts_verified": 21,
+    "primary_sources": [
+      {
+        "topic": "O3 defaults and guarded vector profitability",
+        "url": "https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html"
+      },
+      {
+        "topic": "Virtual memory use-def and alias oracle",
+        "url": "https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html"
+      },
+      {
+        "topic": "Local summaries, propagation and transformation",
+        "url": "https://gcc.gnu.org/onlinedocs/gccint/IPA.html"
+      },
+      {
+        "topic": "Ordered passes, required properties and bookkeeping",
+        "url": "https://gcc.gnu.org/onlinedocs/gccint/Pass-manager.html"
+      },
+      {
+        "git_blob_sha": "28813f11b99acb526982276ba2cb3557d7a12f62",
+        "topic": "Outermost legal movement and execution preservation",
+        "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc#L755"
+      },
+      {
+        "git_blob_sha": "8bb2e3ff1c8201e28f5b260082f1db522d158ef4",
+        "topic": "Check/setup/body/tail target costs and calculated trip threshold",
+        "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-vect-loop.cc#L4078"
+      },
+      {
+        "git_blob_sha": "c9a8f19747b2b4ee27c8f99802638db2164109ba",
+        "topic": "Loop rewrites, cleanup and immediate if-conversion/vectorization order",
+        "url": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def#L245"
+      }
+    ],
+    "retained_ipa": {
+      "schema": "scar.gcc-ipa-scope-study",
+      "sha256": "fcc4f65a0d630174fb7fb163c68a2cab0594ad2f5864ea2660e7fb6fc7645aeb",
+      "size_bytes": 7143,
+      "uri": "/home/zyf/AAA/scar/artifacts/baseline/gcc-ipa-scope.json"
+    },
+    "retained_study": {
+      "schema": "scar.gcc-o3-compiler-study",
+      "sha256": "6675285c922c0635dd19a51dafa85ec05c9839b7cf9c3ef6e200cabd8acd77ee",
+      "size_bytes": 16627,
+      "uri": "/home/zyf/AAA/scar/artifacts/baseline/gcc-o3-study.json"
+    },
+    "status": "OBSERVED_DOCUMENT_SOURCE_AND_RETAINED_COMPILER_EVIDENCE_REVIEW"
+  },
+  "immutable_original_materials_unchanged": true,
+  "implementation": "IMPLEMENTED",
+  "logical_fact_materials": {
+    "missing_logical_uri_is_not_missing_fact_material": true,
+    "original_logical_refs_preserved": true,
+    "physical_and_catalog_receipts_verified": true,
+    "resolver": "scar.analysis.source_fact_materials.FactMaterialResolver",
+    "setup_failures_corrected": [
+      "READONLY_MAPPINGPROXY_JSON_FINGERPRINT",
+      "LOGICAL_FACT_URI_NOT_DIRECT_FILESYSTEM_PATH"
+    ],
+    "unknown_receipt_rejected": true
+  },
+  "metadata_tests": {
+    "entry_admission": {
+      "reported_by": "owning_agent",
+      "result": "ONE_FOCUSED_METADATA_TEST_PASSED",
+      "source": {
+        "schema": "scar.python-test",
+        "sha256": "331a9dd79649ec0f3544d71445a872f95fb2052244a3dd7e6efb7602c84aec6c",
+        "size_bytes": 7735,
+        "uri": "/home/zyf/AAA/scar/tests/unit/test_entry_admission.py"
+      }
+    },
+    "source_summary_binding": {
+      "reported_by": "owning_agent",
+      "result": "ONE_FOCUSED_METADATA_TEST_PASSED",
+      "source": {
+        "schema": "scar.python-test",
+        "sha256": "26a1b9f2ef01f54ee90dbb6c5a3a165498096d18988ee9e76db6347c8005071b",
+        "size_bytes": 14042,
+        "uri": "/home/zyf/AAA/scar/tests/unit/test_source_summary_binding.py"
+      }
+    },
+    "stateful_region_effects": {
+      "reported_by": "owning_agent",
+      "result": "ONE_FOCUSED_METADATA_TEST_PASSED",
+      "source": {
+        "schema": "scar.python-test",
+        "sha256": "9780524fa11de6054b1a8e6d702842339b16f246a320125f71d1a1ea014a5ae0",
+        "size_bytes": 5257,
+        "uri": "/home/zyf/AAA/scar/tests/unit/test_stateful_region_effects.py"
+      }
+    }
+  },
+  "new_backend_added": false,
+  "next_ordered_connections": [
+    {
+      "step": 1,
+      "task": "Bind exact CALL/Frame/actual-formal/environment/world route and all intervening calls/writes to source-to-destination motion window"
+    },
+    {
+      "step": 2,
+      "task": "Derive window and backedge no-clobber using visible region access facts plus sound alias/layout evidence; never replace UNKNOWN with NONE"
+    },
+    {
+      "step": 3,
+      "task": "Prove must-execute or safe speculation and let existing zero-trip/FP/failure/fresh-output guards consume proof"
+    },
+    {
+      "step": 4,
+      "task": "Rewrite graph revision, invalidate affected analyses, rebuild same-boundary costs and controllable-resource calendars, then lower through existing C++20 ABI1"
+    }
+  ],
+  "per_derivation_actual_counts": {
+    "check": {
+      "entry": 1,
+      "native": 1,
+      "sessions": [
+        "/home/zyf/AAA/scar/artifacts/current/experiments/scientific-mainline-v1/program",
+        "/home/zyf/AAA/scar/artifacts/current/experiments/first-stage-entry-bridge-v1/program"
+      ],
+      "witness": 1
+    },
+    "prepare": {
+      "entry": 1,
+      "native": 1,
+      "sessions": [
+        "/home/zyf/AAA/scar/artifacts/current/experiments/scientific-mainline-v1/program",
+        "/home/zyf/AAA/scar/artifacts/current/experiments/first-stage-entry-bridge-v1/program"
+      ],
+      "witness": 1
+    }
+  },
+  "preparation": {
+    "schema": "scar.controlled-region-preparation",
+    "sha256": "7faceae130213642418789a6f3bfe595b670c48af04315862d14954b2b1916c2",
+    "size_bytes": 10981,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scoped-admission-mainline-v1/planned/preparation.json"
+  },
+  "previous_duplicate_call_counts": {
+    "entry_projection_derivations": 3,
+    "sessions_distinct_program_case": 5,
+    "source_witnesses": 2,
+    "specialization_checks": 2,
+    "status": "INFERRED_FROM_SOURCE_CALL_SITES_NOT_TIMED"
+  },
+  "schema": "scar.scoped-admission-mainline-checkpoint",
+  "schema_version": 1,
+  "selected_transformations": 0,
+  "separate_independent_cold_check": true,
+  "session_identity": "FULL_PROGRAM_ARTIFACT_URI_SHA_SIZE_SCHEMA_NOT_SAME_ENTRY_HASH",
+  "source_effects": {
+    "schema": "scar.source-region-effect-binding",
+    "sha256": "825856dadea4ecc0d4e65372965f4a5e8ad4b92c0039b5acba1b6204844af716",
+    "size_bytes": 303744,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scoped-admission-mainline-v1/planned/source-region-effects.json"
+  },
+  "source_summary": {
+    "schema": "scar.interprocedural-summary",
+    "sha256": "0eeb9e291f77c9d86cb1ab16e8c45b1955e31a270d7b65fb6a95859aa636f840",
+    "size_bytes": 13713451,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scoped-admission-mainline-v1/summary.json"
+  },
+  "source_summary_semantics_unchanged": true,
+  "speedup": null,
+  "status": "VERIFIED_SOURCE_EFFECT_PROJECTION_AND_SCOPED_ADMISSION_REUSE_NOT_TRANSFORM_AUTHORIZATION",
+  "strict_decoder_unchanged_sha256": "0954c05e53a6dcb31f449461db71c63fdcdd9f95a9c053424d86bf5217a89ef3",
+  "target_executed": false,
+  "target_native_loaded": false,
+  "verification": {
+    "schema": "scar.scoped-admission-mainline-verification",
+    "sha256": "c6007a26a9713091439b3eb936c6f6462e197d82ea13d39412c231440b086e93",
+    "size_bytes": 3601,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scoped-admission-mainline-v1/verification.json"
+  }
+}

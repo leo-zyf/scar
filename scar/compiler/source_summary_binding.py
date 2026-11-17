@@ -40,53 +40,57 @@ def _entry_source(session, program):
     return reference
 
 
-def derive_stateful_source_summary_binding(summary, specialization, *, entry_calls):
+def derive_stateful_source_summary_binding(summary, specialization, *, entry_calls, _context=None):
     """Cold-replay path/ArtifactRef inputs; never import or execute the target.
 
     Different ProgramBuild receipts may describe the same entry/source version.
     Both are retained and checked; their identity is never inferred from names.
     """
-    from scar.analysis.build import BuildSession
-    from scar.analysis.bounded_entry_calls import derive_entry_source_witness
-    from scar.analysis.interprocedural_summary import verify_interprocedural_summary
-    from scar.compiler.native_lowering_view import derive_stateful_lowering_view
-    from scar.compiler.stateful_candidate import check_observed_specialization
+    from scar.analysis.bounded_entry_calls import _derive_entry_source_witness_admitted
+    from scar.analysis.interprocedural_summary import _verified_interprocedural_summary
+    from scar.compiler.admission_context import AdmissionContext
     from scar.compiler.stateful_model import stateful_from_dict, stateful_digest
 
+    if _context is None:
+        with AdmissionContext() as context:
+            return derive_stateful_source_summary_binding(summary,specialization,
+                entry_calls=entry_calls,_context=context)
+    _need(type(_context) is AdmissionContext, 'original live AdmissionContext required')
+    _context.validate()
     summary_ref = _ref(summary)
     specialization_ref = _ref(specialization, 'scar.observed-stateful-specialization')
     calls_ref = _ref(entry_calls, 'scar.bounded-entry-calls')
     retained_summary = read_artifact(summary_ref)
     calls = read_artifact(calls_ref)
-    admission = check_observed_specialization(specialization_ref)
+    for reference in (summary_ref,specialization_ref,calls_ref):_context.watch(reference)
+    materials = _context.stateful(specialization_ref)
+    admission = materials['admission']
     _need(admission['native_metadata_verified'] is True, 'source-admitted native validation candidate required')
-    specialized = read_artifact(specialization_ref)
-    candidate = read_artifact(specialized['candidate'])
-    region = stateful_from_dict(read_artifact(specialized['source_region']))
-    view = derive_stateful_lowering_view(candidate['native_artifact'])
+    specialized = materials['specialization'];candidate = materials['candidate']
+    region = stateful_from_dict(materials['region']);view = materials['view']
     _need(candidate['region'] == specialized['source_region']
         and candidate['program'] == specialized['program']
         and view['identity']['region_sha256'] == stateful_digest(region),
         'native lowering, candidate and original stateful region differ')
-    with BuildSession(Path(calls['program']['uri']).parent) as session:
-        checked = verify_interprocedural_summary(session, retained_summary)
+    session = _context.program(calls['program'])
+    with _verified_interprocedural_summary(session,retained_summary,entry_calls=calls) as (checked,entry_admission):
         _need(checked == retained_summary, 'source summary verifier did not return the complete retained report')
         _need(checked['entry_projection'] == dict(sha256=semantic_sha256(calls),
             program=calls['program'], producer=calls['producer']),
             'source summary belongs to another original entry projection')
         entry_source = _entry_source(session, calls['program'])
         source = region.source
-        witness = derive_entry_source_witness(session, calls,
+        witness = _derive_entry_source_witness_admitted(session, entry_admission,
             path=source.path, sha256=source.sha256, code_key=source.code_key)
         _need(witness['witnessed'] is True and witness['program'] == calls['program'],
             'native source lacks an original conditional entry/source witness')
         _need(witness['requested_source'] == dict(path=str(Path(source.path).absolute()),
             sha256=source.sha256, code_key=source.code_key), 'entry witness changed the native source identity')
+        _context._watch_tree(checked,_program=calls['program'])
     if specialized['program'] == calls['program']:
         native_entry_source = entry_source
     else:
-        with BuildSession(Path(specialized['program']['uri']).parent) as native_session:
-            native_entry_source = _entry_source(native_session, specialized['program'])
+        native_entry_source = _entry_source(_context.program(specialized['program']),specialized['program'])
     _need(native_entry_source == entry_source,
         'native admission and summary do not share the same original entry/source version')
 
@@ -141,14 +145,15 @@ def derive_stateful_source_summary_binding(summary, specialization, *, entry_cal
             specialized['candidate'], specialized['program'], calls['program'], entry_source,
             specialized['source_region'], witness['source'], result['producer_source']):
         read_artifact(reference, json_document=False)
+    _context._watch_tree(result,_program=calls['program']);_context._producers();_context.validate()
     return json.loads(json.dumps(result, sort_keys=True, allow_nan=False))
 
 
-def verify_stateful_source_summary_binding(binding, summary, specialization, *, entry_calls):
+def verify_stateful_source_summary_binding(binding, summary, specialization, *, entry_calls, _context=None):
     """Recompute the complete conditional binding, including both cold parents."""
     retained = (read_artifact(_ref(binding, SCHEMA)) if isinstance(binding, (str, Path))
         or type(binding) is dict and 'uri' in binding else binding)
-    expected = derive_stateful_source_summary_binding(summary, specialization, entry_calls=entry_calls)
+    expected = derive_stateful_source_summary_binding(summary, specialization, entry_calls=entry_calls,_context=_context)
     _need(expected == retained, 'stateful source summary binding differs from cold replay')
     return expected
 

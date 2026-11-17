@@ -164,33 +164,16 @@ def _fusion(parent):
             native_manifest_source_and_plan_replayed=True,native_library_loaded_now=False))
 
 
-def _stateful(parent):
-    from scar.compiler.stateful_candidate import check_observed_specialization
-    from scar.compiler.stateful_model import read_stateful,stateful_digest
-    from scar.codegen import stateful,cpp
-    admission=check_observed_specialization(parent)
-    _need(admission['native_metadata_verified']is True,'compiled source-admitted stateful candidate required')
-    specialization=read_artifact(parent);candidate=read_artifact(specialization['candidate'])
-    domain=read_artifact(specialization['domain']);native=read_artifact(candidate['native_artifact'])
-    members=_members(candidate['native_artifact'],native)
+def _stateful(parent,context):
+    from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
+    from scar.compiler.model import CpuPlacement
+    materials=context.stateful(parent)
+    admission=materials['admission'];specialization=materials['specialization'];candidate=materials['candidate']
+    domain=materials['domain'];native=materials['native'];members=materials['members']
     directory=Path(candidate['native_artifact']['uri']).parent
-    region=read_stateful(directory/native['files']['region'])
-    region,plan,placement=stateful._admit(region,directory/native['files']['plan'])
-    _need(plan['cpu_threads']==1 and native['cpu_threads']==1,'parent-admitted standalone serial stateful backend required')
-    contract=dict(region_sha256=stateful_digest(region),plan_sha256=semantic_sha256(plan),provider_runtime=native['provider_runtime'])
-    rendered=stateful._source(region,plan,placement,contract).encode()
-    _need(rendered==read_artifact(members['source'],json_document=False)
-        and native['implementation_sha256']==stateful.implementation_sha256()
-        and native['contract_sha256']==semantic_sha256(contract)
-        and native['compiler']['options']==list(cpp.COMPILER_OPTIONS),
-        'stateful source, runtime implementation, contract or compiler flags differ')
-    headers={name:read_artifact(members[name],json_document=False)for name in ('stateful_abi_v1.h','scar_abi_v1.h')}
-    expected_id=semantic_sha256(dict(source=sha256(rendered).hexdigest(),headers={name:sha256(raw).hexdigest()for name,raw in headers.items()},
-        compiler=native['compiler']['argv'],identity=native['compiler']['identity'],options=native['compiler']['options'],
-        implementation_sha256=native['implementation_sha256'],contract=contract))
-    _need(expected_id==native['build_id'],'stateful build identity differs from exact source/header/flags')
-    provider=native['provider_runtime']['loaded_binary'];provider_ref=_file(provider['path'],'scar.numpy-native-provider-binary')
-    _need(provider_ref['sha256']==provider['sha256']and provider_ref['size_bytes']==provider['bytes'],'original provider binary stamp differs')
+    region=stateful_from_dict(materials['region']);plan=materials['plan'];binding=materials['placement']
+    placement=CpuPlacement(**{**binding,'cpu_ids':tuple(binding['cpu_ids']),'evidence':tuple(binding.get('evidence',()))})
+    provider_ref=materials['provider_binary']
     stage_plan=artifact_reference(directory/native['files']['plan'],'scar.stateful-stage-plan')
     inputs=[]
     for index,row in enumerate(region.inputs):
@@ -249,12 +232,19 @@ def _stateful(parent):
             report=admission,native_manifest_source_and_plan_replayed=True,native_library_loaded_now=False))
 
 
-def derive_controlled_resource_contract(kind,admission):
+def derive_controlled_resource_contract(kind,admission,*,_context=None):
     """Cold-admit the parent and extract scoped control; never CDLL or compile."""
     schema={PIPELINE_FUSION:'scar.semantic-region-build',STATEFUL_SPECIALIZATION:'scar.observed-stateful-specialization'}
     _need(kind in schema,'supported source-admitted native backend kind required')
+    from scar.compiler.admission_context import AdmissionContext
+    if kind==STATEFUL_SPECIALIZATION and _context is None:
+        with AdmissionContext() as context:
+            return derive_controlled_resource_contract(kind,admission,_context=context)
+    if _context is not None:
+        _need(type(_context)is AdmissionContext,'original live AdmissionContext required')
+        _context.validate()
     parent=_reference(admission,schema[kind])
-    value=_fusion(parent)if kind==PIPELINE_FUSION else _stateful(parent)
+    value=_fusion(parent)if kind==PIPELINE_FUSION else _stateful(parent,_context)
     result=dict(schema=SCHEMA,schema_version=1,kind=kind,parent_admission=parent,
         scope='SCOPED_SYNCHRONOUS_NATIVE_REGION_NORMAL_SUCCESS_UNDER_ORIGINAL_Q',**value,
         unmodeled_context=[dict(field=field,status='UNMODELED_CONTEXT',required_for_this_scoped_contract=False)
@@ -267,11 +257,14 @@ def derive_controlled_resource_contract(kind,admission):
             default_backend='NO_OP'),
         producer=artifact_reference(Path(__file__).resolve(),'scar.implementation-source'))
     read_artifact(parent)
+    if _context is not None:
+        program=read_artifact(parent)['program']if kind==STATEFUL_SPECIALIZATION else None
+        _context._watch_tree(result,_program=program);_context._producers();_context.validate()
     return deepcopy(result)
 
 
-def verify_controlled_resource_contract(contract,kind,admission):
-    expected=derive_controlled_resource_contract(kind,admission)
+def verify_controlled_resource_contract(contract,kind,admission,*,_context=None):
+    expected=derive_controlled_resource_contract(kind,admission,_context=_context)
     _need(contract==expected,'controlled native-region resource contract differs from complete parent/source replay')
     return expected
 

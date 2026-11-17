@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 已收尾作用域内材料复用和源读写投影：真实科学入口prepare及独立check各开2个不同ProgramBuild session，entry推导、source witness、native准入各1次；原摘要展开内容SHA不变。logical FactRef经原resolver核physical/catalog链，未改原引用。54表达式/26动作有18访问、RAW7/WAR23/WAW1，80来源关联全接既有semantic/native阶段；原序与物理alias UNKNOWN保留，未授权移动。3项定向metadata测试及真实冷验通过，无目标执行/新编译。带计数的prepare68.20s/check68.15s不是A/B或目标性能。复核GCC13.3源码、实际O2/O3选项与21份旧收据后，下一层集中打通移动窗口→alias/no-clobber→must-execute/安全提前求值，再重建后继图成本和资源时序；不新增后端。完整三阶段仍未完成，完整调用成本UNKNOWN/默认NO_OP。材料：`artifacts/baseline/scoped-admission-mainline.json`。
+
 2026-11-17 跨函数条件MAY摘要已接真实Gray–Scott入口：复用原F4与有界目标观察，8共享body/49CALL/9条件目标，formal/environment/world分开，CALL输出切边后经原routes替换，SCC有限集合固定点不展开递归；保control selector、receiver/key地址依赖及未知callee已知输入。来源SHA/CodeID+原body/point/definition绑定实际native，54表达式+26动作的80个来源投影全部接原F4和11native stages（投影非新增执行节点），两次stateful写保留。CLI及共同Problem接入schema3；真实独立冷验通过，无target/native/编译，whole-call成本仍UNKNOWN/NO_OP。依赖/unknown事实按ID共享，报告44.25→13.71MB，展开事实哈希完全一致；3项metadata验证通过。完整三阶段仍未完成，下一层补可用于移动证明的精确effect/alias摘要和同session重复冷准入复用。材料：`artifacts/baseline/source-summary-mainline.json`。
 
 2026-11-17 共享循环移动分析已贯通现有三阶段主链：`array_motion`绑定原body/interface版本，统一依赖、structural invariant及可移动placement；source F4重发现适配接入`invariant_build`，CPU计划、匿名成本需求及串/并行C++均消费同一规则，优化后DAG独立重推并拒绝旧分析。3项metadata验证通过；按当前规则重发既有generic样例ProgramBuild后，原F4→计划→C++20/ABI1实际编译和冷load通过，4次native逐位一致，输入变化、输出污染、只读别名、零/负trip无native及callee变更回退均通过；自洽伪造source route被冷重放拒绝。旧材料不改，未测性能或升级部署资格。当前仍为严格array-carry域，通用MemorySSA移动及递归调用摘要尚缺，三阶段未全面完成。材料：`artifacts/baseline/unified-motion-mainline.json`。

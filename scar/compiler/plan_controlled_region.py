@@ -28,7 +28,11 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'analysis/bounded_entry_calls.py', 'codegen/native_stage_group.py',
     'optimization/native_stage_context.py', 'compiler/calibrate_native_groups.py',
     'optimization/cost_context_compatibility.py', 'analysis/source_function_summary.py',
-    'analysis/interprocedural_summary.py', 'compiler/source_summary_binding.py')
+    'analysis/interprocedural_summary.py', 'compiler/source_summary_binding.py',
+    'compiler/admission_context.py', 'compiler/stateful_candidate.py',
+    'analysis/stateful_region_effects.py', 'analysis/stateful_dependencies.py',
+    'analysis/source_fact_materials.py',
+    'optimization/stateful_schedule.py', 'compiler/stateful_model.py')
 
 
 def _pins():
@@ -135,19 +139,29 @@ def _compiler_annotations(reference, contract, graph, correspondence):
         resource_obligations_discharged=False, original_semantic_dependencies_rewritten=False)
 
 
-def _entry_origin(reference, region):
-    from scar.analysis.build import BuildSession
-    from scar.analysis.bounded_entry_calls import derive_entry_source_witness
-    projection = read_artifact(reference)
-    with BuildSession(Path(projection['program']['uri']).parent) as session:
-        source = region.source
-        witness = derive_entry_source_witness(session, projection,
-            path=source.path, sha256=source.sha256, code_key=source.code_key)
-    if not witness['witnessed']:
+def _entry_origin_document(reference, witness, source):
+    if (witness['witnessed'] is not True or witness['requested_source']!=dict(
+            path=str(Path(source.path).absolute()),sha256=source.sha256,code_key=source.code_key)):
         raise ValueError('native source code has no witnessed conditional entry link in this projection')
     return dict(schema='scar.controlled-entry-source-origin', schema_version=1,
         entry_projection=reference, witness=witness,
         proves_source_code_origin_only=True, whole_entry_legality_or_state_identity_proven=False)
+
+
+def _entry_origin(reference, region, *, _context=None):
+    from scar.analysis.build import BuildSession
+    from scar.analysis.bounded_entry_calls import derive_entry_source_witness
+    projection = read_artifact(reference)
+    def derive(session):
+        source = region.source
+        return derive_entry_source_witness(session, projection,
+            path=source.path, sha256=source.sha256, code_key=source.code_key)
+    if _context is None:
+        with BuildSession(Path(projection['program']['uri']).parent) as session:
+            witness=derive(session)
+    else:
+        witness=derive(_context.program(projection['program']))
+    return _entry_origin_document(reference,witness,region.source)
 
 
 def _group_context(reference, contract, correspondence, compiler_feedback):
@@ -252,6 +266,38 @@ def _summary_native_correspondence(reference, binding, region, graph, correspond
         transformation_authorized=False, cost_or_timing_inferred=False)
 
 
+def _region_effect_binding(region, input_shapes, reference, graph, correspondence):
+    from scar.analysis.stateful_region_effects import derive_stateful_region_effects
+    analysis=derive_stateful_region_effects(region,input_shapes=input_shapes)
+    actions={row['action']:row['operation'] for row in graph['projection']['actions']}
+    expressions={row['expression']:row['operation'] for row in graph['projection']['expressions']}
+    if (analysis['region_sha256']!=graph['region_sha256'] or
+            [row['id'] for row in analysis['actions']]!=[row.id for row in region.actions] or
+            set(expressions)!={row['id'] for row in analysis['expressions']}):
+        raise ValueError('region effects differ from the original source graph')
+    positions={row.id:index for index,row in enumerate(region.actions)}
+    dependencies=[]
+    for index, dependency in enumerate(analysis['dependencies']):
+        before,after=dependency['before'],dependency['after']
+        if before not in actions or after not in actions or positions[before]>=positions[after]:
+            raise ValueError('effect dependency contradicts retained original action order')
+        dependencies.append(dict(effect_dependency='#/analysis/dependencies/'+str(index),
+            kind=dependency['kind'],before=actions[before],after=actions[after]))
+    bindings=[]
+    for table,mapping in (('actions',actions),('expressions',expressions)):
+        for index,row in enumerate(analysis[table]):
+            operation=mapping[row['id']]
+            bindings.append(dict(effect='#/analysis/'+table+'/'+str(index),semantic_operation=operation,
+                native_stages=[stage['stage'] for stage in correspondence['stages']
+                    if operation in stage['source_operations' if table=='actions' else 'source_expressions']]))
+    return dict(schema='scar.source-region-effect-binding',schema_version=1,region=reference,
+        semantic_graph_revision=graph['graph_revision'],analysis=analysis,bindings=bindings,
+        semantic_dependencies=dependencies,original_source_order_retained=True,
+        source_association_is_not_physical_alias_proof=True,
+        runtime_guards_discharged=False,effects_closed_for_whole_python_function=False,
+        transformation_or_parallelization_authorized=False,cost_or_timing_inferred=False)
+
+
 def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
             compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
     from scar.analysis.replay_transaction import replay_transaction
@@ -265,10 +311,20 @@ def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS',
 
 def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
                  compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
+    from scar.compiler.admission_context import AdmissionContext
+    with AdmissionContext() as context:
+        return _derive_in_context(kind, admission, profiles, cost_use=cost_use,
+            cost_qualification=cost_qualification, compiler_feedback=compiler_feedback,
+            entry_calls=entry_calls, native_group_observations=native_group_observations,
+            source_summary=source_summary, _context=context)
+
+
+def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualification,
+                      compiler_feedback, entry_calls, native_group_observations, source_summary, _context):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
-    contract = derive_controlled_resource_contract(kind, admission)
-    entry = correspondence = entry_use = annotations = origin = group_context = summary_binding = summary_correspondence = None
+    contract = derive_controlled_resource_contract(kind, admission, _context=_context)
+    entry = correspondence = entry_use = annotations = origin = group_context = summary_binding = summary_correspondence = effects = None
     if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
         raise ValueError('explicit cost-use contract required')
     if kind == 'STATEFUL_SPECIALIZATION':
@@ -283,15 +339,18 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
         graph = derive_stateful_semantic_graph(region, input_shapes=spec['input_shapes'],
             source_refs=refs, source_proof=contract['cold_admission']['report'])
         correspondence = _stateful_stage_binding(region, graph, contract)
-        if entry_calls is not None:
-            origin = _entry_origin(entry_calls, region)
+        effects=_region_effect_binding(region,spec['input_shapes'],spec['source_region'],graph,correspondence)
         if source_summary is not None:
             if entry_calls is None:
                 raise ValueError('source summary binding requires its original entry CALL projection')
             from scar.compiler.source_summary_binding import derive_stateful_source_summary_binding
-            summary_binding = derive_stateful_source_summary_binding(source_summary, admission, entry_calls=entry_calls)
+            summary_binding = derive_stateful_source_summary_binding(source_summary, admission,
+                entry_calls=entry_calls, _context=_context)
+            origin = _entry_origin_document(entry_calls,summary_binding['entry_witness'],region.source)
             summary_correspondence = _summary_native_correspondence(source_summary,
                 summary_binding, region, graph, correspondence)
+        elif entry_calls is not None:
+            origin = _entry_origin(entry_calls, region, _context=_context)
         if compiler_feedback is not None:
             annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
         if native_group_observations is not None:
@@ -353,6 +412,10 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
             semantic_sha256=semantic_sha256(summary_binding), conditional_may_dependencies_only=True,
             correspondence_sha256=semantic_sha256(summary_correspondence),
             source_effect_or_timing_qualification_granted=False)
+    if effects is not None:
+        parameters['source_region_effects']=dict(semantic_sha256=semantic_sha256(effects),
+            analysis_id=effects['analysis']['id'],physical_alias_proof=False,
+            source_order_retained=True,runtime_guards_discharged=False)
     strict = validate_problem(replace(strict, operations=(replace(operation,
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
@@ -361,6 +424,7 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
         entry_source_origin=origin, native_group_context=group_context, source_summary_binding=summary_binding,
         source_summary_correspondence=summary_correspondence,
+        source_region_effects=effects,
         strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 

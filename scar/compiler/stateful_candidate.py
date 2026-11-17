@@ -59,7 +59,7 @@ def prepare_stateful_candidate(program,domain,out,*,cpu_threads=1):
     return report
 
 
-def check_observed_specialization(value):
+def check_observed_specialization(value, *, _session=None):
     """Cold-replay source, observed shapes and recipe without loading native.
 
     This admits a validation preview only. Cost, physical resource closure and
@@ -98,7 +98,12 @@ def check_observed_specialization(value):
             or report['input_shapes']!=shapes or report['shape_evidence']!=evidence
             or domain['request']['input_shapes']!=shapes):
         raise ValueError('observed source/shape/domain/program hardware differs')
-    with BuildSession(Path(report['program']['uri']).parent) as session:
+    from contextlib import nullcontext
+    if _session is not None:
+        from scar.compiler.admission_context import require_admission_session
+        require_admission_session(_session,report['program'])
+    scope=(BuildSession(Path(report['program']['uri']).parent)if _session is None else nullcontext(_session))
+    with scope as session:
         found,_=discover_stateful_regions(session.view,source=region.source.path)
         if sum(item.id==region.id and stateful_digest(item)==stateful_digest(region) for item in found)!=1:
             raise ValueError('observed specialization differs from original F4 rediscovery')
@@ -145,6 +150,7 @@ def check_observed_specialization(value):
             native_files+=1
     for reference in (value,report['program'],report['inputs'],report['source_region'],report['domain']):
         read_artifact(reference)
+    if _session is not None:require_admission_session(_session,report['program'])
     return dict(schema='scar.observed-stateful-specialization-check',schema_version=1,
         specialization=value,region_id=region.id,input_shapes=shapes,
         original_F4_replayed_now=True,observations=evidence['observations'],

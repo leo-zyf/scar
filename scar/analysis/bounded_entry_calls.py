@@ -5,20 +5,245 @@ an invocation graph. A selected source body exposes its static CALL templates;
 observations select guarded ABI alternatives without closing future dispatch.
 """
 from collections import Counter, defaultdict, deque
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from hashlib import sha256
 import hashlib
 import json
+import os
 from pathlib import Path
+from threading import get_ident
 
 from scar.analysis.source_call_view import Flow, source_call_site
 from scar.analysis.source_reference_slice import source_port
 from scar.ir.program.dependencies import context_push, DependencyKind
-from scar.ir.program.providers import ProviderArtifact
-from scar.ir.record_codec import encode
+from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
+from scar.ir.record_codec import decode, encode
 
 
 SCHEMA = 'scar.bounded-entry-calls'
+_ACTIVE_ADMISSIONS = ContextVar('scar_active_entry_admissions', default=())
+
+
+class EntryAdmission:
+    """Nonserializable capability owned by one live entry replay interval."""
+    __slots__ = ('_session', '_owner', '_view', '_catalog', '_pid', '_thread', '_transaction',
+        '_registry', '_nonce', '_projection', '_digest', '_versions', '_references',
+        '_state', '_closed', '_invalid', '_fact_resolver', '_fact_routes', '_fact_producer')
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError('entry admission requires an actual entry replay factory')
+
+    def __setattr__(self, name, value):
+        raise TypeError('entry admission handles are immutable')
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError('entry admission cannot be serialized')
+
+    def __copy__(self):
+        raise TypeError('entry admission cannot be copied')
+
+    def __deepcopy__(self, memo):
+        raise TypeError('entry admission cannot be copied')
+
+
+def _metadata_json(value):
+    """Detach readonly JSON containers without dropping/coercing metadata."""
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError('entry metadata fingerprint requires original JSON string keys')
+        return {key:_metadata_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_json(item) for item in value]
+    return value
+
+
+def _resolve_fact_artifact(catalog, reference, *, resolver=None, locators=()):
+    """Verify an exact logical/physical receipt through the original resolver.
+
+    The unit-field anchor validates bare artifacts without replacing any
+    published FactRef. Additional original locators are verified in the same
+    physical decode. Unknown receipts never fall back to filename guessing.
+    """
+    from scar.analysis.source_fact_materials import FactMaterialResolver, FACTS
+
+    artifact = reference if type(reference) is ProviderArtifact else decode(ProviderArtifact, reference)
+    if artifact.schema != FACTS:
+        raise ValueError('original source fact artifact required')
+    if resolver is None:
+        resolver = FactMaterialResolver(catalog)
+    elif resolver.catalog is not catalog:
+        raise ValueError('source fact material resolver belongs to another catalog owner')
+    route = resolver.route(ProviderFactReference(artifact, '#/unit'))
+    anchor = '#/records/0/unit' if route.format == 'COMPILE_CONTEXT_F4_JSONL' else '#/unit'
+    references = tuple(ProviderFactReference(artifact, locator)
+        for locator in dict.fromkeys((anchor, *locators)))
+    if resolver.verify(references) != (route,):
+        raise ValueError('source fact artifact differs from its original catalog route')
+    return resolver, route
+
+
+def _entry_reference_materials(admission, reference):
+    if reference['schema'] != 'scar.source-facts-unit':
+        return (reference,)
+    key = _canonical(reference)
+    route = admission._fact_routes.get(key)
+    if route is None:
+        from scar.analysis import source_fact_materials
+        resolver, route = _resolve_fact_artifact(admission._catalog, reference,
+            resolver=admission._fact_resolver)
+        object.__setattr__(admission, '_fact_resolver', resolver)
+        admission._fact_routes[key] = route
+        if admission._fact_producer is None:
+            object.__setattr__(admission, '_fact_producer',
+                _artifact(source_fact_materials.__file__, 'scar.python-producer'))
+    else:
+        resolver = admission._fact_resolver
+        resolver.validate_catalog()
+        artifact = decode(ProviderArtifact, reference)
+        if resolver.route(ProviderFactReference(artifact, '#/unit')) != route:
+            raise ValueError('source fact artifact original route changed')
+    # These are the real files selected by SourceFactStore.unit_parent, not
+    # the collection-relative logical URI retained in original evidence.
+    return (*tuple(encode(item) for item in (*route.catalogs, route.physical)),
+        admission._fact_producer)
+
+
+def _entry_parent_materials(owner):
+    """Check existing guards and enumerate their original file dependencies."""
+    from scar.analysis import build
+
+    if json.loads((owner.path/'manifest.json').read_bytes()) != owner.report:
+        raise ValueError('entry admission ProgramBuild manifest changed')
+    owner.catalog.fact_store.validate_parents()
+    owner.catalog.interface_store.validate_parents()
+    paths = {owner.path/'manifest.json', Path(__file__).resolve()}
+    expected = {}
+    for name, digest in owner.report['rules'].items():
+        path = (Path(build.__file__).parent/name).resolve()
+        paths.add(path); expected[str(path)] = digest, None
+    for receipt in owner._admitted.values():
+        path = Path(receipt['path']).absolute()
+        paths.add(path); expected[str(path)] = receipt['sha256'], receipt['bytes']
+    for source in owner.view.units.values():
+        source.check()
+        paths.update(Path(path).absolute() for path in source._guard)
+        for path, raw in source.material._parents.items():
+            path = Path(path).absolute()
+            paths.add(path); expected[str(path)] = sha256(raw).hexdigest(), len(raw)
+    for name, provider in owner.providers.items():
+        if not name.startswith('bounded_call_bindings:'):
+            continue
+        provider.check()
+        for path, raw in provider.materials.items():
+            path = Path(path).absolute()
+            paths.add(path); expected[str(path)] = sha256(raw).hexdigest(), len(raw)
+        paths.update(Path(path).absolute() for path in provider.body_index._guard)
+    state = _canonical(_metadata_json(dict(report=owner.report, catalog=owner.catalog.report,
+        models=owner.catalog.fact_store.model_units, fact_rows=owner.catalog.fact_store.rows)))
+    return paths, expected, state
+
+
+def _check_entry_admission(session, admission):
+    from scar.analysis.replay_transaction import current_transaction, _file_version
+
+    if (type(admission) is not EntryAdmission or admission._session is not session
+            or getattr(session, '_f4', None) is not admission._owner
+            or admission._owner.closed or admission._closed
+            or getattr(session, '_scar_entry_admissions', None) is not admission._registry
+            or admission._registry.get(admission._nonce) is not admission):
+        raise ValueError('entry admission needs its exact live owner session')
+    if (os.getpid() != admission._pid or get_ident() != admission._thread
+            or current_transaction() is not admission._transaction
+            or not any(value is admission for value in _ACTIVE_ADMISSIONS.get())):
+        raise ValueError('entry admission left its owner thread or active replay context')
+    if admission._invalid:
+        raise ValueError('entry admission was invalidated by changed parent material')
+    try:
+        owner = admission._owner
+        if sha256(admission._projection.encode()).hexdigest() != admission._digest:
+            raise ValueError('entry admission projection digest changed')
+        if owner.view is not admission._view or owner.catalog is not admission._catalog:
+            raise ValueError('entry admission original view/catalog owner changed')
+        paths, expected, state = _entry_parent_materials(owner)
+        if admission._state is not None and state != admission._state:
+            raise ValueError('entry admission original parent metadata changed in memory')
+        object.__setattr__(admission, '_state', state)
+        for reference in admission._references:
+            for material in _entry_reference_materials(admission, reference):
+                path = Path(material['uri']).absolute()
+                paths.add(path); expected[str(path)] = material['sha256'], material['size_bytes']
+        for path in sorted(paths, key=str):
+            version = _file_version(path)
+            prior = admission._versions.get(version[0])
+            wanted = expected.get(version[0])
+            if (prior is not None and prior != version or wanted is not None and
+                    (version[1] != wanted[0] or wanted[1] is not None and version[2] != wanted[1])):
+                raise ValueError('entry admission dependency version changed: '+version[0])
+            admission._versions[version[0]] = version
+            if admission._transaction is not None:
+                admission._transaction.watch(version[0], version[1], version[2])
+    except BaseException:
+        object.__setattr__(admission, '_invalid', True)
+        raise
+
+
+def _entry_projection(session, admission):
+    _check_entry_admission(session, admission)
+    return json.loads(admission._projection)
+
+
+def _entry_admission_dependencies(session, admission, references):
+    """Extend a live interval with producers/materials verified by its consumer."""
+    _check_entry_admission(session, admission)
+    for reference in references:
+        if reference not in admission._references:
+            admission._references.append(dict(reference))
+    _check_entry_admission(session, admission)
+
+
+@contextmanager
+def _admit_entry_calls(session, report=None):
+    """Replay once, then lend only the genuinely registered owner capability."""
+    from scar.analysis.replay_transaction import current_transaction
+
+    entry = derive_bounded_entry_calls(session)
+    if report is not None and _canonical(entry) != _canonical(report):
+        raise ValueError('bounded entry query differs from original ProgramBuild providers')
+    registry = getattr(session, '_scar_entry_admissions', None)
+    if registry is None:
+        registry = {}; session._scar_entry_admissions = registry
+    admission = object.__new__(EntryAdmission)
+    values = dict(_session=session, _owner=session._f4, _view=session._f4.view,
+        _catalog=session._f4.catalog, _pid=os.getpid(), _thread=get_ident(), _transaction=current_transaction(),
+        _registry=registry, _nonce=object(), _projection=_canonical(entry),
+        _digest=sha256(_canonical(entry).encode()).hexdigest(), _versions={},
+        _references=[dict(entry['program']), dict(entry['producer'])], _state=None,
+        _closed=False, _invalid=False, _fact_resolver=None, _fact_routes={}, _fact_producer=None)
+    for name, value in values.items():
+        object.__setattr__(admission, name, value)
+    registry[admission._nonce] = admission
+    token = _ACTIVE_ADMISSIONS.set((*_ACTIVE_ADMISSIONS.get(), admission))
+    failed = False
+    try:
+        _check_entry_admission(session, admission)
+        yield admission
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            if not (failed and admission._invalid):
+                _check_entry_admission(session, admission)
+        except BaseException:
+            if not failed:
+                raise
+        finally:
+            registry.pop(admission._nonce, None)
+            object.__setattr__(admission, '_closed', True)
+            _ACTIVE_ADMISSIONS.reset(token)
 
 
 def _canonical(value):
@@ -292,6 +517,21 @@ def verify_bounded_entry_calls(session, report):
 
 
 def derive_entry_source_witness(session, report, *, path, sha256, code_key):
+    """Independently admit the entry before producing its source witness."""
+    with _admit_entry_calls(session, report) as admission:
+        return _derive_entry_source_witness_admitted(session, admission,
+            path=path, sha256=sha256, code_key=code_key)
+
+
+def _derive_entry_source_witness_admitted(session, admission, *, path, sha256, code_key):
+    """Reuse only an actual live admission; no serialized verification flag."""
+    report = _entry_projection(session, admission)
+    result = _source_witness(session, report, path=path, sha256=sha256, code_key=code_key)
+    _entry_admission_dependencies(session, admission, (result['source'],))
+    return result
+
+
+def _source_witness(session, report, *, path, sha256, code_key):
     """Bind an exact source CodeID to an admitted conditional entry interface.
 
     A matching name is never sufficient. Original attempt membership, the
@@ -299,7 +539,6 @@ def derive_entry_source_witness(session, report, *, path, sha256, code_key):
     agree. This proves static source correspondence, not an invocation or any
     runtime argument/content, effect or future dispatch property.
     """
-    verify_bounded_entry_calls(session, report)
     source_path = Path(path).absolute()
     source_bytes = source_path.read_bytes()
     if hashlib.sha256(source_bytes).hexdigest() != sha256:

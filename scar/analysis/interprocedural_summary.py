@@ -5,6 +5,7 @@ lattice and call-graph SCCs summarize recursion without inlining, invocation
 identities, value equality, effect closure, or future-dispatch claims.
 """
 from collections import defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 import json
 
@@ -409,16 +410,16 @@ def _compose(functions, entry):
 
 def derive_interprocedural_summary(session, entry_calls=None):
     """Replay one admitted entry projection, then reuse that session's view."""
-    from scar.analysis.bounded_entry_calls import derive_bounded_entry_calls, verify_bounded_entry_calls
-    from scar.analysis.build import BuildSession
+    from scar.analysis.bounded_entry_calls import _admit_entry_calls
 
-    if not isinstance(session, BuildSession) or session._f4 is None or session._f4.closed:
-        raise TypeError('an open original F4 BuildSession is required')
-    if entry_calls is None:
-        entry = derive_bounded_entry_calls(session)
-    else:
-        verify_bounded_entry_calls(session, entry_calls)
-        entry = deepcopy(entry_calls)
+    with _admit_entry_calls(session, entry_calls) as admission:
+        return _derive_interprocedural_summary_admitted(session, admission)
+
+
+def _derive_interprocedural_summary_admitted(session, admission):
+    from scar.analysis.bounded_entry_calls import _entry_projection, _entry_admission_dependencies
+
+    entry = _entry_projection(session, admission)
     result = _compose(_collect(session._f4.view, entry), entry)
     result.update(schema=SCHEMA, schema_version=1,
         scope='CONDITIONAL_SELECTED_SOURCE_TARGET_MAY_DEPENDENCIES',
@@ -437,15 +438,32 @@ def derive_interprocedural_summary(session, entry_calls=None):
             transformation_authorized=False, scheduling_authorized=False,
             cost_or_timing_inferred=False, target_executed=False))
     result['id'] = 'interprocedural-summary:'+semantic_sha256(result)
+    _entry_admission_dependencies(session, admission,
+        (result['producer'], *(row['local']['producer'] for row in result['functions']),
+         *(reference for row in result['functions'] for reference in row['local']['source_refs'])))
     return result
 
 
 def verify_interprocedural_summary(session, report):
     """Recompute from the same original admission, including every CALL route."""
-    expected = derive_interprocedural_summary(session)
-    if _canonical(expected) != _canonical(report):
-        raise ValueError('interprocedural summary differs from original entry and source-route replay')
-    return deepcopy(expected)
+    with _verified_interprocedural_summary(session, report) as (expected, _):
+        return expected
+
+
+@contextmanager
+def _verified_interprocedural_summary(session, report, *, entry_calls=None):
+    """Lend a genuine entry capability across summary and witness consumers.
+
+    The public verifier remains cold. Only this active context can reuse the
+    session's already replayed entry, and its exit rechecks original material.
+    """
+    from scar.analysis.bounded_entry_calls import _admit_entry_calls
+
+    with _admit_entry_calls(session, entry_calls) as admission:
+        expected = _derive_interprocedural_summary_admitted(session, admission)
+        if _canonical(expected) != _canonical(report):
+            raise ValueError('interprocedural summary differs from original entry and source-route replay')
+        yield deepcopy(expected), admission
 
 
 __all__ = ['derive_interprocedural_summary', 'verify_interprocedural_summary',
