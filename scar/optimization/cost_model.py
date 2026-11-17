@@ -98,6 +98,117 @@ def cost_feature_units():
     return deepcopy(_UNITS)
 
 
+def evaluate_sourced_affine(*, context, context_evidence, features, feature_units,
+                            intercept, coefficients):
+    """Evaluate one declared seconds model from exact, context-bound demand.
+
+    This shared evaluator has no target, loader or timing side effects.  The
+    caller owns scope coverage and non-overlap.  Coefficients are effective
+    model parameters, including when independently calibrated; they are never
+    promoted to observed end-to-end time or physical lower/upper bounds.
+    """
+    from .deployment_cost import _fact, _number, _digest
+
+    frontier, terms, cache, artifacts, anchors = [], [], {}, {}, set()
+
+    def issue(field, reason):
+        frontier.append(dict(field=field, reason=reason))
+
+    def read(reference):
+        key = _digest(reference)
+        if key not in cache:
+            cache[key] = _fact(reference)
+        artifacts[_digest(reference['artifact'])] = deepcopy(reference['artifact'])
+        return cache[key]
+
+    if not isinstance(context_evidence, (list, tuple)) or not context_evidence:
+        issue('context_evidence', 'matching original context evidence required')
+    else:
+        for index, reference in enumerate(context_evidence):
+            try:
+                value, artifact = read(reference)
+                if _digest(value) != _digest(context):
+                    raise ValueError('complete cost context differs')
+                anchors.add(artifact)
+            except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
+                issue('context_evidence.'+str(index), str(error))
+
+    def parameter(record, field, unit):
+        start = len(frontier)
+        if not isinstance(record, Mapping):
+            issue(field, 'sourced coefficient required; unknown is not zero')
+            return None
+        if set(record)-{'value', 'unit', 'basis', 'evidence', 'zero_basis'}:
+            issue(field, 'unsupported coefficient fields')
+        value = _number(record.get('value'))
+        if value is None or record.get('unit') != unit:
+            issue(field, 'finite nonnegative coefficient in '+unit+' required')
+        if record.get('basis') != 'DECLARED_MODEL':
+            issue(field+'.basis', 'effective model parameter must be DECLARED_MODEL')
+        if value == 0 and not (isinstance(record.get('zero_basis'), str)
+                               and record['zero_basis'].strip()):
+            issue(field+'.zero_basis', 'zero requires an explicit sourced justification')
+        references = record.get('evidence')
+        if not isinstance(references, (list, tuple)) or not references:
+            issue(field+'.evidence', 'original coefficient evidence required')
+        else:
+            for index, reference in enumerate(references):
+                try:
+                    source, artifact = read(reference)
+                    if artifact not in anchors:
+                        raise ValueError('coefficient source lacks matching original context')
+                    if (not isinstance(source, Mapping) or _number(source.get('value')) != value
+                            or source.get('unit') != unit or source.get('basis') != 'DECLARED_MODEL'):
+                        raise ValueError('original coefficient value/unit/basis differs')
+                    if value == 0 and source.get('zero_basis') != record.get('zero_basis'):
+                        raise ValueError('original zero justification differs')
+                except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
+                    issue(field+'.evidence.'+str(index), str(error))
+        return value if len(frontier) == start else None
+
+    if not isinstance(features, Mapping):
+        issue('features', 'exact static demand mapping required'); features = {}
+    if not isinstance(feature_units, Mapping) or set(feature_units) != set(features):
+        issue('feature_units', 'one declared unit per demand feature required')
+        feature_units = {} if not isinstance(feature_units, Mapping) else feature_units
+    if not isinstance(coefficients, Mapping):
+        issue('coefficients', 'explicit model coefficient mapping required'); coefficients = {}
+    for key in set(coefficients)-set(features):
+        issue('coefficients.'+str(key), 'unknown demand feature')
+    constant = parameter(intercept, 'intercept', 'seconds/call')
+    total = constant if constant is not None else Fraction(0)
+    if constant is not None:
+        terms.append(dict(feature='protected_entry_overhead', count=1,
+            coefficient=deepcopy(intercept), contribution_seconds=_ratio(constant)))
+    for key, count in features.items():
+        if type(count) is not int or count < 0:
+            issue('features.'+key, 'exact nonnegative demand required; unknown is not zero')
+            continue
+        if count == 0 and key not in coefficients:
+            continue
+        unit = feature_units.get(key)
+        if not isinstance(unit, str) or not unit:
+            issue('feature_units.'+key, 'nonempty demand unit required'); continue
+        value = parameter(coefficients.get(key), 'coefficients.'+key, 'seconds/'+unit)
+        if value is not None:
+            contribution = count*value
+            total += contribution
+            terms.append(dict(feature=key, count=count, count_unit=unit,
+                coefficient=deepcopy(coefficients[key]), contribution_seconds=_ratio(contribution)))
+    try:
+        seconds = float(total)
+        if not math.isfinite(seconds):
+            raise OverflowError('nonfinite effective estimate')
+    except OverflowError:
+        issue('value_seconds', 'model estimate cannot be represented as finite seconds')
+        seconds = None
+    complete = not frontier
+    return dict(status='ESTIMATED_UNDER_PROFILE_CONTRACT' if complete else 'UNRESOLVED',
+        value_seconds=seconds if complete else None, exact_seconds=_ratio(total) if complete else None,
+        terms=terms, frontier=frontier, source_artifacts=list(artifacts.values()),
+        target_program_executed=False, observed_total=False, physical_bounds_proven=False)
+
+
 def predict_region_costs(plan, schedule, profile, *, input_shapes, backend_context=None):
     """Estimate ticks from sourced coefficients under an exact profile contract.
 
@@ -350,4 +461,4 @@ def predict_region_costs(plan, schedule, profile, *, input_shapes, backend_conte
         unknown=dict(actual_dram_bytes=None, cache_misses=None, actual_duration_seconds=None))
 
 
-__all__ = ['predict_region_costs', 'features_for_demand', 'cost_feature_units']
+__all__ = ['predict_region_costs', 'features_for_demand', 'cost_feature_units', 'evaluate_sourced_affine']

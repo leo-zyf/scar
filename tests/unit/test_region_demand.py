@@ -29,6 +29,8 @@ def test_exact_cse_work_and_retained_eager_baseline_do_not_predict_dram_or_time(
     assert demand['total_work']['arithmetic']['add']['total']=='1 * output_elements'
     assert demand['baseline']['reference']=='RETAINED_OPTIMIZER_SOURCE_DAG'
     assert demand['baseline']['array_allocations_per_call']==3
+    assert demand['baseline']['arithmetic_per_output_element']==dict(add=2,sub=0,mul=1,div=0,neg=0)
+    assert not any(demand['baseline']['scalar_arithmetic_per_call'].values())
     assert demand['baseline']['cumulative_intermediate_allocation_bytes']['per_output_element']==16
     assert demand['baseline']['logical_payload_transfer_bytes']['per_output_element']==56
     assert demand['fused']['logical_payload_transfer_bytes']['per_output_element']==16

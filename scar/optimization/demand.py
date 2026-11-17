@@ -40,6 +40,48 @@ def _quantity(coefficient, unit):
     return dict(per_output_element=coefficient, total=f'{coefficient} * output_elements', unit=unit)
 
 
+def _source_arithmetic(plan, kinds, baseline, retained):
+    """Count source occurrences through the optimizer's kind-preserving map.
+
+    CSE may map two source operations to one array expression; both original
+    occurrences count. Constant folding keeps scalar kind. An absent source
+    target does not establish kind and remains unknown, never assumed dead.
+    Parent source replay, rather than this summary, admits the original map.
+    """
+    arrays, scalars = Counter(), Counter()
+    unknown = set()
+    mapping = plan.proof.get('source_operation_map') if retained else None
+    if not retained:
+        for node in plan.region.nodes:
+            if node.op in _ARITHMETIC:
+                (arrays if kinds[node.id] == 'array' else scalars)[node.op] += 1
+        basis = 'CURRENT_REGION_DAG_EAGER_MODEL'
+    elif not isinstance(mapping, dict) or not mapping:
+        unknown.update(_ORDER)
+        basis = 'SOURCE_OPERATION_CLASSIFICATION_UNAVAILABLE'
+    else:
+        for source, row in mapping.items():
+            if not isinstance(row, dict) or row.get('source_op') not in _ARITHMETIC:
+                continue
+            op, target = row['source_op'], row.get('optimized_node')
+            if target is None:
+                unknown.add(op)
+            elif target not in kinds:
+                raise ValueError('source arithmetic target is absent from current DAG: '+source)
+            else:
+                (arrays if kinds[target] == 'array' else scalars)[op] += 1
+        basis = 'SOURCE_OCCURRENCES_THROUGH_KIND_PRESERVING_OPTIMIZER_MAP'
+    if not unknown:
+        copies = baseline.get('baseline_copy_materializations', 0)
+        if (type(copies) is not int or copies < 0
+                or sum(arrays.values())+copies != baseline['baseline_array_allocations']):
+            raise ValueError('source arithmetic/copy counts differ from retained eager allocations')
+    return dict(arithmetic_per_output_element={op:None if op in unknown else arrays[op] for op in _ORDER},
+        scalar_arithmetic_per_call={op:None if op in unknown else scalars[op] for op in _ORDER},
+        arithmetic_basis=basis,
+        arithmetic_is_logical_source_work_not_emitted_machine_instructions=True)
+
+
 def analyze_region_demand(plan) -> dict:
     """Expose per-element work, per-call setup and missing hardware cost facts.
 
@@ -75,6 +117,7 @@ def analyze_region_demand(plan) -> dict:
     allocations = baseline['baseline_array_allocations']
     if allocations < 1:
         raise ValueError('fresh array computation requires at least one eager output allocation')
+    source_arithmetic = _source_arithmetic(plan, kinds, baseline, retained)
 
     provenance = graph_value_sources(plan)
     operations = [dict(expression=node.id, op=node.op, operands=list(node.inputs),
@@ -128,6 +171,7 @@ def analyze_region_demand(plan) -> dict:
             logical_output_allocations=1, region_invocations=1,
             scope='Logical binding/descriptor/scalar setup; machine instructions and setup time remain unknown.'),
         baseline=dict(reference='RETAINED_OPTIMIZER_SOURCE_DAG' if retained else 'CURRENT_REGION_DAG_EAGER_MODEL',
+            **source_arithmetic,
             accounting_authority='optimizer._cost', array_allocations_per_call=allocations,
             view_descriptors_per_call=baseline['baseline_view_descriptors'],
             cumulative_array_allocation_bytes=_quantity(baseline['baseline_allocation_bytes_per_output_element'], 'bytes'),

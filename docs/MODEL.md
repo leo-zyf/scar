@@ -489,6 +489,8 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 
 宏观pass复用既有v2 OIR，不建立另一套SSA/CFG。原ProgramOperationID经namespace与FactRef投影成独立OperationDefinitionID，显式表保一一对应；GlobalPort是源码依赖端口，不伪装运行时LogicalVersion。完整区域保输入/结果/world边界与未知效果，native资格仅在原Q和live guards下成立；原Python/NO_OP自身无native guard。`FULL_FUSION`的delta移除原CALL定义、引入组合操作，既有fusion产生实际优化表达式图；此投影不改写原ProgramGraph。pass的requires绑定来源revision，改写后旧pool/liveness、leaf成本、资源时序及native身份须失效；目前保存账本，由交付端重放重建，不宣称通用缓存管理器。成本比较覆盖相同warm受保护调用；allowed CPU mask是成本适用域，继承caller执行不等于绑核或独占预留。
 
+`PipelineDemand`分别组合原逐CALL eager、逐leaf native与最终fusion工作；原source occurrence经优化映射保型分类，多个原操作映到同一CSE target仍计多次，缺失target的分类保UNKNOWN，并与原array allocations/copies交叉核对。每个CALL按原value→formal路由实例化shape，循环外层次数不外推。逻辑算术、逻辑读写、累计分配与峰值/实际DRAM区分；静态需求不包含完整guard/FFI等耗时。`pipeline-forward-coefficient-profile`绑定同一context/demand及系数原证据，完整入口残项与已列feature服务的无重叠是显式模型假设；共享affine evaluator用有理数求和，派生秒仍标DECLARED_MODEL并交既有deployment gate。缺项不产生有效总成本，完整边界观测也不相减伪造组件。
+
 自动入口另绑定 entry 源版本、逐字 argv、runner 实现及 launch policy。成本资源必须等于实际 native 合同规定的 CPU 与新增输出 payload，不以成本文件自报的较小需求替代。导入候选不是实际 loader 证据；普通目标模块完成加载后才安装源码/环境守卫。已安装边界的调用计数与所有可能别名的覆盖度分开；测得一次 native 不证明整个程序只有一次调用。
 
 `scar.execution-recipe/v1` 是上层执行组织的交接件：semantic_boundary、control、typed task_graph、全部库存与已选 resources、后端 implementation/capability、原 artifacts 和 obligations。估价与选择不写回 recipe，按同一 recipe_id 独立引用；降低重放同份结构并核真实 compiler/ABI/layout/implementation。ID 是版本关联，不代替合法性或执行授权。现有 cpu-temporal-loop-v1 保一份共享正文与每坐标严格 time carry；分配只准备存储，完整计算完成才令最终值就绪。局部端口 label 不是原 ValueID/LogicalVersion/StorageID，原图端口和来源仍以引用保留。全调用成本不擅自拆成 allocation/compute/export 时长，缺项不补 0。

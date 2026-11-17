@@ -1,8 +1,12 @@
 # 当前状态
 
+2026-11-17 正向需求/成本层已贯通：`model-pipeline-cost` 全源重放后机械组合原逐CALL eager与native/fused需求，复用现有单区域分析、shape权威及FactRef校验。原算术按source occurrence经保型映射恢复，CSE不会把原两次乘法误数一次。8×8例原/融合均448次逻辑算术；逻辑读写8192→1536B，累计payload分配3584→512B，不是DRAM或耗时。完整入口残项单独列出，由明确无重叠的有效模型覆盖；无系数保持UNKNOWN/KEEP，不默认为零。
+
+两组显式DECLARED系数分别算出KEEP/REWRITE，正模型已交既有macro pass及C++20/ABI1；完整源码/需求/系数冷重放通过，独立输入、共享输入别名、同buffer改内容后三次native均与原函数逐位一致。所有系数为算法验收声明，尚未自动标定，不代表真实性能预测或新加速比。物理流量、cache、完整组件标定和资源日历构造仍未完成；C1 fused compact缺口保持。验收 `artifacts/baseline/pipeline-forward-model.json`。接下来先取得独立组件证据并校验预测适用域，再推进构造时序，不回到整版本黑盒排名。
+
 2026-11-17 GCC方法论已接首条源码区域pass：`macro-pipeline` 重放原F4/GlobalPort及硬件来源，投影5个原CALL到既有v2 OIR，明确原Python/NO_OP和已有FULL_FUSION。requires、条件Q、完整受保护调用成本、5项失效账本及独立重放已接通，不新增后端或全局求解。声明正模型可构建C++20/ABI1、受控安装原模块函数并恢复；独立与只读别名逐位一致，dtype/callee/CPU域变化回退。原执行无native guards，成本未知/负模型不构建或加载库。一次序列化tuple/list重放问题已修，当前材料独立冷读通过。
 
-实测该8×8源码例子：warmup3、9次交替顺序、每样本1次完整受保护调用，原NumPy median13.584µs[min8.998,max15.444]、融合111.705µs[min109.358,max137.556]，not profitable。实际完整边界证据已使pass选KEEP且跳过native；声明正模型不当作加速证据。无worker/绑核，仍有guard/ABI等调用开销。仅小源码区域，非科学程序整入口或LeWM；无新加速结论。新全图重写、自动分析缓存失效重算、解析组件成本与资源日历构造均未完成，现有C1 compact亦未接新融合交付。验收：`artifacts/baseline/macro-fusion-pass.json`。
+实测该8×8源码例子：warmup3、9次交替顺序、每样本1次完整受保护调用，原NumPy median13.584µs[min8.998,max15.444]、融合111.705µs[min109.358,max137.556]，not profitable。实际完整边界证据已使pass选KEEP且跳过native；声明正模型不当作加速证据。无worker/绑核，仍有guard/ABI等调用开销。仅小源码区域，非科学程序整入口或LeWM；无新加速结论。新全图重写、自动分析缓存失效重算、真实组件标定与资源日历构造均未完成，现有C1 compact亦未接新融合交付。验收：`artifacts/baseline/macro-fusion-pass.json`。
 
 GCC13.3本机实证保留：-Q选项、pass顺序、GIMPLE/SSA、LICM及最终IR；闭合C例子发生内联、外提、重复/死计算消除和16字节vector，未知外部调用保留。O2/very-cheap与O3/dynamic成本差异及默认线程数1已核，不把GCC当Python语义证明。记录：`artifacts/baseline/gcc-o3-study.json`。
 

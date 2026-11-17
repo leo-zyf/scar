@@ -1,0 +1,280 @@
+{
+  "all_three_stages_complete": false,
+  "date": "2026-11-17",
+  "evidence": {
+    "deployment_profile": {
+      "schema": "scar.deployment-cost-profile",
+      "sha256": "ecde74974a9d8a77ae4f0aad380d9f2b413ecab106b6412b558c2ecd03146fc9",
+      "size_bytes": 610953,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/positive/profile.json"
+    },
+    "forward_prediction": {
+      "schema": "scar.pipeline-forward-cost-prediction",
+      "sha256": "500202b4b96cdc2af71d60c0ad4149c2981f188eb0c2d495e4e017259d46212d",
+      "size_bytes": 1318109,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/positive/prediction.json"
+    },
+    "native_build": {
+      "schema": "scar.macro-pipeline-build",
+      "sha256": "cd61f20ce6b4b2bf4385e8b7d96d22c031e33499256a9652d253a928e3015001",
+      "size_bytes": 929,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/native-positive/result.json"
+    },
+    "native_verification": {
+      "schema": "scar.pipeline-forward-native-verification",
+      "sha256": "81d15a04463ccfa77d40e129516b64434a9ee4a5fa77f63dece922704b44853e",
+      "size_bytes": 868,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/native-verification.json"
+    },
+    "negative": {
+      "schema": "scar.pipeline-forward-model-build",
+      "sha256": "e3cb84b9271f2b6f77771ee85c07a1f77f18f46ca45805157bbec6b102ac07a1",
+      "size_bytes": 5076,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/negative/result.json"
+    },
+    "negative_coefficients": {
+      "schema": "scar.pipeline-forward-coefficient-profile",
+      "sha256": "567a825fe1a7f7ac0ba3b252c5ea52a1a47a6b60e75da253ec83bff1970b966d",
+      "size_bytes": 626685,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/declared-negative.json"
+    },
+    "positive": {
+      "schema": "scar.pipeline-forward-model-build",
+      "sha256": "d029ae24dc1c4150158e5bdf248e6b6ae8157698601151731c928a8bb02ad726",
+      "size_bytes": 5079,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/positive/result.json"
+    },
+    "positive_coefficients": {
+      "schema": "scar.pipeline-forward-coefficient-profile",
+      "sha256": "4baa6f2e76693d517a927605d3eda62e345d2a482097c7a3f443a0ccc4d37594",
+      "size_bytes": 626685,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/declared-positive.json"
+    },
+    "source_demand": {
+      "schema": "scar.pipeline-demand",
+      "sha256": "6672d1a62e0c372e0e0427477146b068bbff386888156fa2d57cf236cd32e7b9",
+      "size_bytes": 60994,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/positive/demand.json"
+    },
+    "unknown": {
+      "schema": "scar.pipeline-forward-model-build",
+      "sha256": "913d64090e4e6a48eb772e0f024cbfe5fc08761196ec345a608fce1f640600f1",
+      "size_bytes": 4846,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/unknown-current/result.json"
+    }
+  },
+  "implementation_sha256": {
+    "scar/compiler/model_pipeline_cost.py": "a2f92b4877a64fcf95c6124147260a3a40f85cb7f5374fcc2167bd574a2c05f7",
+    "scar/optimization/cost_model.py": "fe41c3d2ac6b7dc1923df48f25fe4fcadb048d0b859398548ba563ba4cc3d737",
+    "scar/optimization/demand.py": "bd5b6c53a96afd9c33fdf0c62b79a6bb6a410bb7dbaf704b76ce6237d673b738",
+    "scar/optimization/pipeline_demand.py": "6b4ecd494a75cdf0480297935d29d6145e6cd8fe5a524e9fa93eaef701dcf8bd",
+    "scar/optimization/pipeline_forward_cost.py": "53d7733a1c226b39091c81f30242b8e9b7d56ccbfe5bf472246f0811ac7ad504"
+  },
+  "implemented": {
+    "coefficient_basis": "DECLARED_MODEL",
+    "coefficients_directly_sourced_and_context_bound": true,
+    "command": "scar model-pipeline-cost",
+    "complete_entry_overhead_mandatory": true,
+    "existing_authorities_reused": [
+      "demand.analyze_region_demand",
+      "optimizer._cost",
+      "resource_solver._shape_instantiation",
+      "deployment_cost._fact/_number/_digest",
+      "deployment_cost.plan_deployment"
+    ],
+    "feature_service_overlap": "EXPLICIT_DISJOINT_EFFECTIVE_MODEL_ASSUMPTION",
+    "layers": [
+      "ORIGINAL_F4_SOURCE_AND_PORT_REPLAY",
+      "SHAPE_INSTANTIATED_SOURCE_AND_NATIVE_DEMAND",
+      "SOURCED_COMPLETE_ENTRY_EFFECTIVE_MODEL",
+      "EXISTING_DEPLOYMENT_COST_GATE",
+      "EXISTING_OIR_PASS",
+      "EXISTING_CPP20_ABI1"
+    ],
+    "new_backend": false,
+    "original_baseline_is_per_CALL_not_eager_fused_DAG": true,
+    "solver_invoked": false,
+    "source_occurrences_preserved_across_CSE": true,
+    "unknown_features_or_coefficients_are_not_zero": true,
+    "workload_variant_search": false,
+    "zero_values_need_sourced_zero_basis": true
+  },
+  "limitations": [
+    "COEFFICIENTS_ARE_DECLARED_ALGORITHM_ACCEPTANCE_PARAMETERS_NOT_INDEPENDENTLY_CALIBRATED",
+    "FULL_ENTRY_OVERHEAD_VS_FEATURE_SERVICES_NONOVERLAP_IS_A_MODEL_ASSUMPTION",
+    "ACTUAL_DRAM_CACHE_TRAFFIC_AND_MACHINE_INSTRUCTION_COUNTS_UNKNOWN",
+    "SOURCE_PEAK_PAYLOAD_UPPER_BOUND_IS_NOT_EXACT_PYTHON_OBJECT_LIFETIME",
+    "NO_CONSTRUCTIVE_RESOURCE_CALENDAR_YET",
+    "NO_GENERAL_CANONICAL_GRAPH_MUTATION_OR_ANALYSIS_CACHE",
+    "FUSED_COMPACT_RUNTIME_AND_WHOLE_PROGRAM_CPP_NOT_COMPLETE",
+    "GENERAL_SCIENTIFIC_PROGRAM_COVERAGE_NOT_ESTABLISHED_BY_THIS_SOURCE_FIXTURE"
+  ],
+  "next": [
+    "INDEPENDENT_COMPONENT_CALIBRATION_WITH_EXACT_SCOPE_AND_APPLICABILITY",
+    "PREDICTION_VALIDATION_AGAINST_CLEAN_COMPLETE_CALL_WITHOUT_SCOPE_SUBTRACTION",
+    "CONSTRUCTIVE_RESOURCE_TIME_CALENDAR_AND_INDEPENDENT_CERTIFICATE",
+    "REAL_SCIENTIFIC_REGION_AND_COMPACT_FUSED_DELIVERY"
+  ],
+  "observed": {
+    "cumulative_allocation_bytes_before": 3584,
+    "fused_arithmetic_total": 448,
+    "fused_output_bytes": 512,
+    "logical_payload_bytes_after": 1536,
+    "logical_payload_bytes_before": 8192,
+    "new_performance_measurements": false,
+    "physical_DRAM_traffic_observed": false,
+    "prior_complete_scope_performance_evidence": {
+      "schema": "scar.macro-fusion-pass-acceptance",
+      "sha256": "62e3efccc1ecd289b0b48d3fb4b34fb1f63ec6d8083e5c986515de8ee39ad734",
+      "size_bytes": 8648,
+      "uri": "/home/zyf/AAA/scar/artifacts/baseline/macro-fusion-pass.json"
+    },
+    "source_arithmetic_total": 448,
+    "static_fused_features": {
+      "arithmetic.add": 256,
+      "arithmetic.div": 0,
+      "arithmetic.mul": 128,
+      "arithmetic.neg": 0,
+      "arithmetic.sub": 64,
+      "fused_array_allocations": 1,
+      "fused_input_bindings": 2,
+      "fused_logical_payload_bytes": 1536,
+      "fused_output_bytes": 512,
+      "native_region_calls": 1,
+      "output_elements": 64
+    },
+    "static_source_features": {
+      "arithmetic.add": 256,
+      "arithmetic.div": 0,
+      "arithmetic.mul": 128,
+      "arithmetic.neg": 0,
+      "arithmetic.sub": 64,
+      "array_allocations": 7,
+      "cumulative_allocation_bytes": 3584,
+      "logical_payload_bytes": 8192,
+      "output_elements": 64,
+      "python_leaf_calls": 5,
+      "python_region_calls": 1
+    }
+  },
+  "parent_commit": "0b50f019b007a5e8ce3d5aa85e223d0dafd3a19a",
+  "previous_goal_turn_classification": "PROGRESS",
+  "recovered_development_failure": {
+    "correction": "Freeze shared producers before fresh source/model publication; no source identity guard weakened.",
+    "reason": "Producer source SHA changed during concurrent first publication; independent replay rejected it."
+  },
+  "rejected": [
+    "LOGICAL_BYTES_AS_PHYSICAL_DRAM_TRAFFIC",
+    "POST_CSE_WORK_AS_ORIGINAL_PYTHON_WORK",
+    "LEAF_COMPUTE_OR_ABI_COST_AS_COMPLETE_ENTRY",
+    "UNKNOWN_OR_UNSOURCED_ZERO_COEFFICIENT",
+    "DECLARED_PARAMETERS_AS_OBSERVED_ACCELERATION",
+    "OPAQUE_RSS_OR_PYTHON_LIVENESS_AS_PROVEN"
+  ],
+  "schema": "scar.pipeline-forward-model-acceptance",
+  "schema_version": 1,
+  "status": "VERIFIED_STATIC_SOURCE_DEMAND_AND_DECLARED_FORWARD_MODEL_BRIDGE",
+  "verified": {
+    "CDLL_forbidden_during_model_preparation_and_replay": true,
+    "actual_native": {
+      "alias_input_numpy_writeable_flag": true,
+      "bitwise_equal_independent_shared_alias_and_changed_contents": true,
+      "build": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/native-positive/result.json",
+      "coefficient_basis": "DECLARED_MODEL_NOT_CALIBRATED",
+      "default_is_original_callable": true,
+      "input_contents_changed_between_calls": true,
+      "native_calls": 3,
+      "output_sha256": [
+        "25ff954661f197b3b78ea6d0612e70dd9ea0e10423b6fed4cfb30d5651203843",
+        "3ef10082fcf25b82fa1025adeaf9f394ef72ca06cd3ba6fecfb1f9ebcd8f02e5",
+        "8784be8df355b066a9ca249c7751f80d348a5c4ce2549ba97f21e4b577979477"
+      ],
+      "performance_measured": false,
+      "schema": "scar.pipeline-forward-native-verification",
+      "schema_version": 1,
+      "stats": {
+        "fallback_calls": 0,
+        "native_calls": 3,
+        "reasons": {}
+      },
+      "whole_program_cpp": false
+    },
+    "declared_negative": {
+      "components": {
+        "native_load": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "native_per_call": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 8.2564e-05
+        },
+        "native_setup": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "original_one_time": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "original_per_call": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 1.6301e-05
+        }
+      },
+      "decision": "KEEP"
+    },
+    "declared_positive": {
+      "components": {
+        "native_load": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "native_per_call": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 3.564e-06
+        },
+        "native_setup": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "original_one_time": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 0.0
+        },
+        "original_per_call": {
+          "basis": "DECLARED_MODEL",
+          "unit": "seconds",
+          "value": 1.6301e-05
+        }
+      },
+      "decision": "REWRITE"
+    },
+    "focused_tests": {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_region_demand.py tests/unit/test_region_cost_model.py",
+      "passed": 6
+    },
+    "independent_full_F4_demand_coefficient_publication_replay": true,
+    "source_CSE_regression": {
+      "existing_test": "tests/unit/test_region_demand.py",
+      "optimized_add_per_element": 1,
+      "original_add_per_element": 2
+    },
+    "source_guard_and_entry_audit": {
+      "schema": "scar.pipeline-entry-source-audit",
+      "sha256": "b135be7700d00bc14a6f62c035cb31b3b9d04d9674747457cf995911982fc2cf",
+      "size_bytes": 23308,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-forward-model-v1/entry-audit.json"
+    },
+    "unknown_coefficients": "KEEP_WITH_EMPTY_COMPONENTS_NO_NATIVE_LOAD"
+  }
+}

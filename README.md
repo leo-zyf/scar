@@ -20,7 +20,18 @@ scar macro-pipeline --inputs INPUTS.json --cost-profile PROFILE.json --compile -
 scar macro-pipeline --check SELECTED/preparation.json
 ```
 
-`INPUTS.json` 沿用已有 source/value/memory/hardware 输入；`PROFILE.json` 沿用 `scar.deployment-cost-profile`，绑定完整 warm 受保护调用、shape、CPU 可用域及实现版本。声明组件模型与真实整调用观测分开，尚无自动解析成本生产器。原 CPU affinity 继承而非绑核，不创建 worker；显式试验可用 `scar.compiler.macro_pipeline.install(module, SELECTED/result.json, trial=True, exclusive_inputs=True)` 受控接入并恢复原函数。它不是整程序或 compact 自动交付。验收见 `artifacts/baseline/macro-fusion-pass.json`。
+`INPUTS.json` 沿用已有 source/value/memory/hardware 输入；`PROFILE.json` 沿用 `scar.deployment-cost-profile`，绑定完整 warm 受保护调用、shape、CPU 可用域及实现版本。原 CPU affinity 继承而非绑核，不创建 worker；显式试验可用 `scar.compiler.macro_pipeline.install(module, SELECTED/result.json, trial=True, exclusive_inputs=True)` 受控接入并恢复原函数。它不是整程序或 compact 自动交付。验收见 `artifacts/baseline/macro-fusion-pass.json`。
+
+完整入口的正向需求/成本桥接也已接通：
+
+```bash
+scar model-pipeline-cost --inputs INPUTS.json --out DEMAND
+scar model-pipeline-cost --inputs INPUTS.json --coefficient-profile COEFFICIENTS.json --out MODEL
+scar model-pipeline-cost --check MODEL/result.json
+scar macro-pipeline --inputs INPUTS.json --cost-profile MODEL/profile.json --compile --out SELECTED
+```
+
+第一条机械生成原逐CALL eager、逐leaf native和最终fused需求，以及全部成本未知的系数模板；不运行目标或加载库。原算术按source occurrence恢复，避免将CSE后的工作量误算成原工作。后续复用有来源的有效仿射模型与既有成本gate：完整入口开销及非零需求系数缺失时KEEP；逻辑字节不当作DRAM流量，声明参数不当作实测时间。当前尚缺自动组件标定，正模型仅用于链路验收，不授权部署。验收见 `artifacts/baseline/pipeline-forward-model.json`。
 
 以下联合求解接口保留作局部补充，不是主线每次必须经过的步骤。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
 
