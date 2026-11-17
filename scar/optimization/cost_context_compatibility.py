@@ -1,8 +1,9 @@
 """Metadata-only applicability checks for canonical stateful boundary costs.
 
-Source configuration is distinct from a recorded runtime configuration.  This
-module parses retained Python source; it never imports collectors, runtime
-guards, code generators or native artifacts, and never changes a cost value.
+Source configuration is distinct from a recorded runtime configuration. The
+legacy source check only parses retained Python. The native-group check also
+replays host lowering and retained GCC records; neither path invokes a compiler
+or loads native code, changes timings, or grants a qualified cost profile.
 """
 import argparse
 import ast
@@ -536,15 +537,115 @@ def verify_cost_compatibility(report, scope_observations, holdout, *, model=None
     return replay
 
 
+def compare_native_group_compilation(native_collection, group_observations):
+    """Compare GCC model fields at identical original stage-body locations.
+
+    Model versions remain a multiset. Equality is only about the reported GCC
+    scope, not machine code, physical latency, canonical data or cache state.
+    """
+    from collections import Counter
+    from scar.compiler.collect_native_optimization import check_gcc_optimization
+    from scar.compiler.calibrate_native_groups import check_native_group_observations
+    from scar.analysis.gcc_cost_features import project_gcc_vector_costs
+
+    native_ref, _ = _material(native_collection, 'scar.gcc-native-optimization-collection')
+    observations_ref, _ = _material(group_observations, 'scar.native-stage-group-calibration')
+    actual = check_gcc_optimization(native_ref)
+    observed = check_native_group_observations(observations_ref)
+    design = read_artifact(observed['design'])
+    compiler = read_artifact(observed['compiler_collection'])
+    subject = actual['subject']
+    if type(subject) is not dict or subject.get('kind') != 'STATEFUL_NATIVE_LOWERING':
+        raise ValueError('original native-view compiler collection required')
+    view = subject['view']; observer = design['observer']
+    if (view['native_manifest'] != observer['parent_view']['native_manifest']
+            or view['identity'] != observer['parent_view']['identity']
+            or view['compiler'] != compiler['compiler']):
+        raise ValueError('group observations refer to a different original native/compiler context')
+    left = project_gcc_vector_costs(native_ref)
+    right = read_artifact(observed['compiler_features'])
+    headers_match = {name:(r['sha256'], r['size_bytes']) for name,r in view['headers'].items()} == {
+        name:(r['sha256'], r['size_bytes']) for name,r in design['headers'].items()}
+    generator_match = left['observed_wire_header'] == right['observed_wire_header']
+    original_stages = {row['id']:row for row in view['stages']}
+    groups_stages = {row['id']:row for row in observer['stages']}
+    if set(original_stages) != set(groups_stages):
+        raise ValueError('group compilation does not preserve all original stage identities')
+
+    def models(document, stage):
+        rows = []
+        spans = stage['source_line_spans']
+        for index, block in enumerate(document['blocks']):
+            if stage['id'] not in block['stage_ids']:
+                continue
+            locations = []
+            for association in block['stage_associations']:
+                if association['stage_id'] != stage['id']:
+                    continue
+                for point in association['primary_locations']:
+                    matches = [s for s in spans if s['start_line'] <= point['line'] <= s['end_line']]
+                    if len(matches) != 1:
+                        return None, rows
+                    locations.append(dict(body_line_offset=point['line']-matches[0]['start_line'],
+                        column=point['column']))
+            if not locations or any(row['status'] == 'UNKNOWN' for row in block['features'].values()):
+                return None, rows
+            signature = dict(primary_body_locations=sorted(locations, key=lambda r:(r['body_line_offset'], r['column'] or 0)),
+                features={name:{key:value[key] for key in ('value','status','unit')}
+                    for name,value in block['features'].items()})
+            rows.append(dict(block_index=index, signature=signature, diagnostic_evidence=block['evidence']))
+        return Counter(json.dumps(row['signature'],sort_keys=True,allow_nan=False) for row in rows), rows
+
+    rows = []
+    for stage_id, original in original_stages.items():
+        instrumented = groups_stages[stage_id]
+        if (original['body_sha256'] != instrumented['body_sha256']
+                or original['source_action_ids'] != instrumented['source_action_ids']):
+            raise ValueError('group observer changed original body or source-action identity')
+        before, before_rows = models(left, original)
+        after, after_rows = models(right, instrumented)
+        status = ('UNKNOWN' if before is None or after is None or not before or not after else
+            'MATCH' if before == after and headers_match and generator_match else 'MISMATCH')
+        rows.append(dict(stage=stage_id, original_body_sha256=original['body_sha256'],
+            source_action_ids=original['source_action_ids'], relation=status,
+            actual_models=before_rows, observer_models=after_rows,
+            qualification='MULTISET_OF_SUPPORTED_GCC_MODEL_FIELDS_AT_BODY_RELATIVE_PRIMARY_LOCATIONS'))
+    counts = Counter(row['relation'] for row in rows)
+    return dict(schema=SCHEMA, schema_version=1, kind='ORIGINAL_NATIVE_TO_ORIGINAL_FRAME_GROUP_GCC_MODEL',
+        inputs=dict(native_collection=native_ref, group_observations=observations_ref),
+        checker_source=artifact_reference(__file__, 'scar.python-source'),
+        original_native=view['native_manifest'], original_identity=view['identity'],
+        observer_identity=observer['observer_identity'], compiler_headers_match=headers_match,
+        compiler_generator_match=generator_match, stages=rows,
+        result=dict(status='GCC_MODEL_FIELDS_DIFFER' if counts['MISMATCH'] else
+            'PARTIAL_GCC_MODEL_MATCH' if counts['MATCH'] and counts['UNKNOWN'] else
+            'GCC_MODEL_FIELDS_MATCH' if counts['MATCH'] else 'UNKNOWN_GCC_MODEL_CONTEXT',
+            matched_stages=counts['MATCH'], mismatched_stages=counts['MISMATCH'],
+            unknown_stages=counts['UNKNOWN'], automatic_cost_transfer_qualified=False, qualified_profile=None),
+        retained_missing_terms=deepcopy(observed['residuals']),
+        numerical_residual_attribution=None, cost_values_changed=False,
+        machine_code_identity_proven=False, target_latency_equivalence_proven=False,
+        stage_costs_summed=False, target_program_executed=False,
+        compiler_invoked=False, native_loaded=False, deployment_authorized=False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--scope-observations', required=True)
-    parser.add_argument('--holdout', required=True)
+    parser.add_argument('--scope-observations')
+    parser.add_argument('--holdout')
+    parser.add_argument('--native-collection')
+    parser.add_argument('--group-observations')
     parser.add_argument('--model')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
-    report = check_stateful_cost_compatibility(args.scope_observations, args.holdout, model=args.model)
-    verify_cost_compatibility(report, args.scope_observations, args.holdout, model=args.model)
+    if args.native_collection or args.group_observations:
+        if not args.native_collection or not args.group_observations or args.scope_observations or args.holdout or args.model:
+            parser.error('native group comparison requires only --native-collection and --group-observations')
+        report = compare_native_group_compilation(args.native_collection, args.group_observations)
+    else:
+        if not args.scope_observations or not args.holdout: parser.error('--scope-observations and --holdout required')
+        report = check_stateful_cost_compatibility(args.scope_observations, args.holdout, model=args.model)
+        verify_cost_compatibility(report, args.scope_observations, args.holdout, model=args.model)
     path = Path(args.out).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + '\n')

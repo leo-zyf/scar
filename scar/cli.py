@@ -480,6 +480,34 @@ def _query_body_execution(args) -> int:
 
 def main(argv=None) -> int:
     cli_argv = sys.argv[1:] if argv is None else list(argv)
+    if cli_argv and cli_argv[0] == 'entry-calls':
+        from scar.analysis.build import BuildSession
+        from scar.analysis.bounded_entry_calls import derive_bounded_entry_calls, verify_bounded_entry_calls
+        from scar.ir.execution_recipe import artifact_reference
+        entry_parser = argparse.ArgumentParser(prog='scar entry-calls',
+            description='Project original conditional entry CALL/source interfaces without executing the program.')
+        entry_parser.add_argument('--program', required=True)
+        entry_parser.add_argument('--out')
+        entry_parser.add_argument('--check')
+        entry_args = entry_parser.parse_args(cli_argv[1:])
+        if not entry_args.out and not entry_args.check:
+            entry_parser.error('--out or --check required')
+        with BuildSession(entry_args.program) as session:
+            if entry_args.check:
+                saved = json.loads(Path(entry_args.check).read_bytes())
+                verify_bounded_entry_calls(session, saved)
+                report = saved
+            else:
+                report = derive_bounded_entry_calls(session)
+                output = Path(entry_args.out).absolute()
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with output.open('x') as stream:
+                    json.dump(report, stream, sort_keys=True, indent=2, allow_nan=False)
+                    stream.write('\n')
+        print(json.dumps(dict(summary=report['summary'],
+            projection=artifact_reference(entry_args.check or output, report['schema']),
+            source_bodies_shared=True, runtime_dispatch_complete=False)))
+        return 0
     if cli_argv and cli_argv[0] == 'frontend':
         from scar.analysis.source_frontend import main as frontend_main
         return frontend_main(cli_argv[1:])
@@ -625,6 +653,7 @@ def main(argv=None) -> int:
         'check-cost-context': 'scar.optimization.cost_context_compatibility',
         'native-optimization': 'scar.compiler.collect_native_optimization',
         'gcc-cost-features': 'scar.analysis.gcc_cost_features',
+        'calibrate-native-groups': 'scar.compiler.calibrate_native_groups',
         'model-pipeline-cost': 'scar.compiler.model_pipeline_cost',
         'export-fused-runtime': 'scar.compiler.pipeline_fused_runtime',
         'calibrate-pipeline-corpus': 'scar.compiler.calibrate_pipeline_corpus',
@@ -717,6 +746,7 @@ def main(argv=None) -> int:
         return observed_graph_main(cli_argv[1:])
     parser = argparse.ArgumentParser(prog="scar")
     sub = parser.add_subparsers(dest="subcommand", required=True)
+    sub.add_parser('entry-calls', help='project or cold-check conditional entry CALL/source links (scar entry-calls --help)')
     sub.add_parser('frontend', help='run formal source layers through local graph declarations (scar frontend --help)')
     sub.add_parser('connection-contract', help='check all source instruction reference contracts (scar connection-contract --help)')
     sub.add_parser('body-interfaces', help='read all shared body entry/completion/resume interfaces')
@@ -841,6 +871,7 @@ def main(argv=None) -> int:
             ('check-cost-context', 'check field-level cost transfer compatibility from retained metadata and source evidence'),
             ('native-optimization', 'collect source-bound GCC optimization feedback without executing the generated code'),
             ('gcc-cost-features', 'project stage-bound GCC relative cost features without treating them as elapsed time'),
+            ('calibrate-native-groups', 'freeze and sample canonical stage groups in their original native frame'),
             ('model-pipeline-cost', 'derive source pipeline demands and a sourced forward protected-entry cost model'),
             ('export-fused-runtime', 'export one source-admitted fused operator into the compact guarded runtime'),
             ('calibrate-pipeline-corpus', 'fit and holdout-check complete guarded calls using canonical fixed-topology arithmetic'),

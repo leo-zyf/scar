@@ -29,6 +29,12 @@
 
 下一轮集中顺序：flags、shape、正文已确认一致；先处理已识别的独立函数/真实阶段组、wrapper+trial、前驱数据及分配/触页条件，冻结可转用成本模型，再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
 
+入口动静接线现已实测：原短driver的有界CALL目标采集接入既有ProgramBuild，`scar entry-calls --program PROGRAM --out FRESH_JSON`生成入口条件投影，`--check JSON`独立冷验；共享body、loop/递归引用不unroll。当前2个入口可达单元、10条件接口、8共享body、66原typed参数/环境/world路由；按path/SHA/CodeID自动见证同一native源。旧303条是236个lazy视图、18个depth预算、17个effect、13个resource、19个材料/覆盖问题，不能当303个语义失败。构造协议及外部Python源码仍未接全。
+
+同frame阶段组：`scar calibrate-native-groups --native ARTIFACT_JSON --out FRESH`先冻结design；`--run --design DESIGN --sha256 SHA`才编译、核一组canonical输出并采样；`--check OBSERVATIONS`只读重放。原完整run及真实前驱/scalar/slot版本、commit/逆序RAII都保留，仅组边界加clock，未生成saved-port代值。CPU0/259例2warm+7样本中，body组mean0.540264ms、预包装FFI窗口mean0.760542ms；是固定canonical输入、带插桩的联合窗口，无A/B或整方法预测。使用样本均值及精确均值分数，不加组件medians；两窗差只叫联合未归因耗时。`check-cost-context --native-collection RESULT --group-observations OBS --out JSON`机械核7阶段GCC模型字段相等、2阶段UNKNOWN，保数据/缓存/插桩残项。
+
+`plan-controlled-region --entry-calls JSON --native-group-observations OBS --compiler-feedback RESULT`已将同源见证和组上下文接到原source action/expr、时序及Problem身份；有实测component而无完整方法profile时仍保whole-call cost UNKNOWN/NO_OP。下一层集中补同边界caller/数据/allocator条件下的整方法模型，第一阶段则补构造及外部源码协议；不从GCC字段相等推导纳秒相等。验收：`artifacts/baseline/entry-native-frame-context.json`。
+
 GCC反馈已接主链：`scar native-optimization --native ARTIFACT_JSON --stage-capture CAPTURE_JSON --out FRESH`只重编一份已保留C++，沿原compiler/flags/headers加`-fsave-optimization-record`；不加载分析ELF。`--check FRESH/result.json`只读重推原source/body行区间与诊断投影，禁止compiler/native仍通过；自洽篡改span并重算projection也被拒绝。raw GCC记录和派生投影均gzip保存，正文按JSON pointer引用；地址型pass ID只在该record内有效。`scar gcc-cost-features --collection RESULT --out FRESH_JSON`提取受支持GCC13.3的相对成本字段；它们不是ns，不合并不同版本，不授予计时资格。无诊断不证明死工作。
 
 `plan-controlled-region --compiler-feedback RESULT`已把同manifest的9个非COMMIT阶段接回原action/expr及Problem参数；两个COMMIT未纳入此source-map profile，原图/效果/依赖不改。preparation现为schema2，独立check明确拒绝旧schema1。`--cost-use EXPLICIT_DECLARED_ANALYSIS`保原条件分析；`--cost-use QUALIFIED_TARGET_TIMING --cost-qualification RECEIPT`必须冷重放原model/holdout/policy并绑定实际native源码和plan。旧1,423,927ns分析仍可生成条件计划；同一数值请求合格时间用途时追加missing_terms，实际选择0，保持原政策及NO_OP。GCC注释不能解除这些义务。报告：`artifacts/baseline/gcc-lowering-feedback.json`。

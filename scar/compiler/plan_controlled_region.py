@@ -24,7 +24,10 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'analysis/replay_transaction.py', 'analysis/target_graph.py',
     'optimization/hardware.py', 'ir/record_batch.py', 'optimization/entry_cost_use.py',
     'compiler/collect_native_optimization.py', 'compiler/native_lowering_view.py',
-    'analysis/gcc_optimization.py', 'analysis/gcc_cost_features.py')
+    'analysis/gcc_optimization.py', 'analysis/gcc_cost_features.py',
+    'analysis/bounded_entry_calls.py', 'codegen/native_stage_group.py',
+    'optimization/native_stage_context.py', 'compiler/calibrate_native_groups.py',
+    'optimization/cost_context_compatibility.py')
 
 
 def _pins():
@@ -131,22 +134,64 @@ def _compiler_annotations(reference, contract, graph, correspondence):
         resource_obligations_discharged=False, original_semantic_dependencies_rewritten=False)
 
 
+def _entry_origin(reference, region):
+    from scar.analysis.build import BuildSession
+    from scar.analysis.bounded_entry_calls import derive_entry_source_witness
+    projection = read_artifact(reference)
+    with BuildSession(Path(projection['program']['uri']).parent) as session:
+        source = region.source
+        witness = derive_entry_source_witness(session, projection,
+            path=source.path, sha256=source.sha256, code_key=source.code_key)
+    if not witness['witnessed']:
+        raise ValueError('native source code has no witnessed conditional entry link in this projection')
+    return dict(schema='scar.controlled-entry-source-origin', schema_version=1,
+        entry_projection=reference, witness=witness,
+        proves_source_code_origin_only=True, whole_entry_legality_or_state_identity_proven=False)
+
+
+def _group_context(reference, contract, correspondence, compiler_feedback):
+    from scar.compiler.calibrate_native_groups import check_native_group_observations
+    from scar.optimization.cost_context_compatibility import compare_native_group_compilation
+    observations = check_native_group_observations(reference)
+    design = read_artifact(observations['design']); view = design['observer']['parent_view']
+    if view['native_manifest'] != contract['implementation']['native_manifest']:
+        raise ValueError('native group observations belong to another admitted native implementation')
+    stages = {row['index']:row for row in correspondence['stages']}
+    groups = [dict(index=group['index'], stage_indices=group['stage_indices'],
+        source_stages=[dict(stage=stages[index]['stage'],
+            source_operations=stages[index]['source_operations'],
+            source_expressions=stages[index]['source_expressions']) for index in group['stage_indices']],
+        begin_cut=group['begin_cut'], end_cut=group['end_cut']) for group in observations['group_layout']]
+    return dict(schema='scar.controlled-native-group-context', schema_version=1,
+        observations=reference, design=observations['design'],
+        stage_context=dict(artifact=observations['design'], locator='#/stage_context'),
+        native_manifest=view['native_manifest'], source_group_map=groups,
+        compiler_compatibility=None if compiler_feedback is None else
+            compare_native_group_compilation(compiler_feedback, reference),
+        statistics=dict(artifact=reference, locator='#/statistics'),
+        scope=design['timer'], retained_transfer_residuals=observations['residuals'],
+        component_mean_is_not_whole_method_cost=True,
+        complete_call_cost_inferred=False, cost_use_qualification_granted=False,
+        resource_obligations_discharged=False, target_samples_refitted=False)
+
+
 def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-            compiler_feedback=None):
+            compiler_feedback=None, entry_calls=None, native_group_observations=None):
     from scar.analysis.replay_transaction import replay_transaction
     # A prepare and its independent check deliberately start separate scopes.
     # No cached validation document crosses this source-admission boundary.
     with replay_transaction():
         return _derive_body(kind, admission, profiles, cost_use=cost_use, cost_qualification=cost_qualification,
-            compiler_feedback=compiler_feedback)
+            compiler_feedback=compiler_feedback, entry_calls=entry_calls,
+            native_group_observations=native_group_observations)
 
 
 def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-                 compiler_feedback=None):
+                 compiler_feedback=None, entry_calls=None, native_group_observations=None):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission)
-    entry = correspondence = entry_use = annotations = None
+    entry = correspondence = entry_use = annotations = origin = group_context = None
     if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
         raise ValueError('explicit cost-use contract required')
     if kind == 'STATEFUL_SPECIALIZATION':
@@ -161,8 +206,12 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
         graph = derive_stateful_semantic_graph(region, input_shapes=spec['input_shapes'],
             source_refs=refs, source_proof=contract['cold_admission']['report'])
         correspondence = _stateful_stage_binding(region, graph, contract)
+        if entry_calls is not None:
+            origin = _entry_origin(entry_calls, region)
         if compiler_feedback is not None:
             annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
+        if native_group_observations is not None:
+            group_context = _group_context(native_group_observations, contract, correspondence, compiler_feedback)
         identity = contract['identity']
         offers = tuple(dict(artifact=reference, locator='#') for reference in profiles)
         entry = derive_stateful_entry_cost(identity['domain']['uri'], identity['candidate_id'], offers)
@@ -180,7 +229,8 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
             execution_members=deepcopy(graph['projection']['execution_members']),
             correspondence_sha256=semantic_sha256(correspondence))
     elif kind == 'PIPELINE_FUSION':
-        if cost_use != 'EXPLICIT_DECLARED_ANALYSIS' or cost_qualification is not None or compiler_feedback is not None:
+        if (cost_use != 'EXPLICIT_DECLARED_ANALYSIS' or cost_qualification is not None
+                or compiler_feedback is not None or entry_calls is not None or native_group_observations is not None):
             raise ValueError('qualified entry-cost use currently requires a stateful source admission')
         from scar.optimization.region_implementation import project_region_implementation
         if profiles:
@@ -207,12 +257,19 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
     if annotations is not None:
         parameters['compiler_annotations'] = dict(semantic_sha256=semantic_sha256(annotations),
             compiler_collection=compiler_feedback, timing_qualification_granted=False)
+    if origin is not None:
+        parameters['entry_source_origin'] = dict(entry_projection=entry_calls,
+            semantic_sha256=semantic_sha256(origin), proves_source_code_origin_only=True)
+    if group_context is not None:
+        parameters['native_group_context'] = dict(observations=native_group_observations,
+            semantic_sha256=semantic_sha256(group_context), complete_call_cost_inferred=False)
     strict = validate_problem(replace(strict, operations=(replace(operation,
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
     controlled, projection = project_controlled_region(strict, contract)
     return dict(contract=contract, source_graph=graph, correspondence=correspondence,
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
+        entry_source_origin=origin, native_group_context=group_context,
         strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 
@@ -222,11 +279,12 @@ def _without_elapsed(value):
 
 
 def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-              cost_use, cost_qualification, compiler_feedback):
+              cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations):
     return dict(schema=SCHEMA, schema_version=2, kind=kind, admission=reference,
         entry_profiles=list(profiles), max_seconds=max_seconds, files=files, producer_pins=_pins(),
         cost_use=cost_use, cost_qualification=cost_qualification,
         compiler_feedback=compiler_feedback,
+        entry_calls=entry_calls, native_group_observations=native_group_observations,
         strict_status=strict_plan['status'], controlled_status=plan['status'],
         strict_problem_sha256=digest(strict), controlled_problem_sha256=digest(controlled),
         controlled_feasibility_is_not_whole_process_feasibility=True,
@@ -236,18 +294,22 @@ def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled,
 
 
 def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
-            cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None, compiler_feedback=None):
+            cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None, compiler_feedback=None,
+            entry_calls=None, native_group_observations=None):
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     reference = _reference(admission)
     profiles = tuple(_reference(path) for path in entry_profiles)
     qualification = None if cost_qualification is None else _reference(cost_qualification)
     feedback = None if compiler_feedback is None else _reference(compiler_feedback)
+    calls = None if entry_calls is None else _reference(entry_calls)
+    observed = None if native_group_observations is None else _reference(native_group_observations)
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh controlled region output required')
     documents, strict, controlled = _derive(kind, reference, profiles,
-        cost_use=cost_use, cost_qualification=qualification, compiler_feedback=feedback)
+        cost_use=cost_use, cost_qualification=qualification, compiler_feedback=feedback,
+        entry_calls=calls, native_group_observations=observed)
     strict_plan = construct_implementations(strict, max_seconds=max_seconds)
     plan = construct_implementations(controlled, max_seconds=max_seconds)
     verification = verify_execution_plan(controlled, plan) if plan['selected'] else None
@@ -258,7 +320,7 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     files = {key:None if value is None else _write(directory/(key.replace('_','-')+'.json'), value)
         for key,value in documents.items()}
     report = _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-        cost_use, qualification, feedback)
+        cost_use, qualification, feedback, calls, observed)
     _write(directory/'preparation.json', report)
     return report
 
@@ -269,7 +331,8 @@ def check(preparation):
         raise ValueError('controlled region producer or schema differs')
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
-        compiler_feedback=saved['compiler_feedback'])
+        compiler_feedback=saved['compiler_feedback'], entry_calls=saved['entry_calls'],
+        native_group_observations=saved['native_group_observations'])
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     for name, problem in (('strict_plan', strict), ('controlled_plan', controlled)):
@@ -287,7 +350,8 @@ def check(preparation):
         raise ValueError('controlled source graph, resources, costs or plan differ from cold replay')
     if saved != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
             saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan'],
-            saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback']):
+            saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback'],
+            saved['entry_calls'], saved['native_group_observations']):
         raise ValueError('controlled preparation summary changed its original qualification')
     return saved
 
@@ -300,6 +364,8 @@ def main(argv=None):
         default='EXPLICIT_DECLARED_ANALYSIS')
     parser.add_argument('--cost-qualification', help='retained entry-cost qualification for the requested timing use')
     parser.add_argument('--compiler-feedback', help='source-bound GCC optimization collection result')
+    parser.add_argument('--entry-calls', help='bounded conditional entry CALL projection')
+    parser.add_argument('--native-group-observations', help='frozen canonical native group observations; not a whole-call profile')
     parser.add_argument('--out'); parser.add_argument('--check'); parser.add_argument('--max-seconds',type=float,default=30)
     args = parser.parse_args(argv)
     if args.check:
@@ -310,7 +376,8 @@ def main(argv=None):
         parser.error('--kind, --admission and --out required')
     else:
         saved = prepare(args.kind, args.admission, args.out, entry_profiles=args.entry_profile,max_seconds=args.max_seconds,
-            cost_use=args.cost_use, cost_qualification=args.cost_qualification, compiler_feedback=args.compiler_feedback)
+            cost_use=args.cost_use, cost_qualification=args.cost_qualification, compiler_feedback=args.compiler_feedback,
+            entry_calls=args.entry_calls, native_group_observations=args.native_group_observations)
         result = dict(preparation=_reference(Path(args.out)/'preparation.json'),
             strict_status=saved['strict_status'], controlled_status=saved['controlled_status'],
             native_loaded=False, deployment_authorized=False)
