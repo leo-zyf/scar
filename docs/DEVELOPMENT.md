@@ -12,9 +12,22 @@
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
-传统编译器基线以本机GCC13.3为实证：统一GIMPLE/SSA/alias/IPA事实，经按序pass检查适用性与收益、重写、更新分析；不把O3解释为全程序最优搜索。SCAR最小pass协议复用原ProgramView、state版本/alias/控制及OIR，分别声明requires、legality/Q、profitability、transform、invalidates；固定顺序先接已有区域fusion，不先另造SSA/CFG或通用自动pass排序器。读写/别名摘要外延为Tensor版本、物化、设备/线程状态；收益变化量外延为copy/alloc/launch/bind/guard次数、字节和生命周期，借目标组件成本求获益阈值。未知effects不能借PGO或收益猜成pure；同样的条件不明时保原路径。GCC O3默认不自动多线程，SCAR也不应因指定CPU就默认起worker。依据和本机dump见 `artifacts/baseline/gcc-o3-study.json`。
+传统编译器方法以本机GCC13.3为基线；2026-11-17复核实际`-Q --help=optimizers`及15份已有dump/源码收据，全部相符。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
 
-GCC源码复核及一次补充编译明确了推进顺序：①复用现有值/内存版本、alias、执行条件及region摘要，给每条规则具体依赖；可由可靠谓词判定的不确定条件才生成guarded版本。②改写产出可消费的后继语义图，再更新受影响分析；已有fusion的闭合区域现已实现，通用全图/循环改写及分析缓存仍未完成。③按改写后的需求计算同边界成本和规模阈值，覆盖guard/分配/搬运/余数/启动成本；串行固定上下文可比较固定开销加N倍正文，并行异步仍须依赖与容量时序。④把选中区域交现有C++20/GCC或算子库，保留原入口。补充C例中别名未知会生成检查及双路径，运行收益阈值3；已有restrict契约时为2，均为编译器目标成本单位，非纳秒。返回值均可折叠为14，但带状态写的两次调用仍保留两次volatile写；常量值不授权删除效果。详见原研究记录followup，无新后端或加速比。
+| 顺序 | GCC机制 | SCAR对应及当前边界 |
+| --- | --- | --- |
+| 1 统一依赖事实 | GIMPLE、SSA、虚拟内存use/def、alias、函数摘要 | 复用ProgramView及值/状态版本、控制、effects；补跨层摘要，不能以同对象或相同采样值证明不变 |
+| 2 确定合法作用域 | LICM沿操作数/内存依赖求最外可移循环，并保执行条件 | 沿region端口与callee摘要求最大安全作用域；循环显式区分live-in、carried、exit。已有数组循环profile，通用嵌套region尚缺 |
+| 3 改写并更新分析 | 按序pass和有界清理；维护SSA/CFG等性质 | 已有闭合fusion的实际后继图、revision校验和use-def重算；仍缺跨循环/跨region的统一失效与重算，不把metadata缓存当作它 |
+| 4 计算适用域/收益 | target hooks估算正文、准备、余数和检查成本；求向量化阈值 | 从后继图推导算术、逻辑访问、分配、搬运及guard/launch数量，再接同边界组件模型。已有部分，完整上下文资格仍未闭合 |
+| 5 组织资源与时间 | 目标相关lowering及调度 | 扩到CPU/GPU/显式存储/链路日历，联合考虑并行、搬运和生命周期。已有构造式planner与独立verifier；真实异构全入口未贯通 |
+| 6 生成实现 | RTL及机器后端 | SCAR输出已有C++20/ABI1或算子库调用，交GCC/库做SIMD等底层优化；源码数值契约继续约束lowering |
+
+串行固定上下文可算`ΔC(N)=Δsetup+Δguard+Δalloc+Δmove+N·Δbody+Δtail(N)`，由`ΔC<0`求规模阈值；并行/异步用依赖和容量日历计算makespan，不能把所有服务时间直接相加。系数必须注明目标、compiler/flags、shape/layout和边界；GCC相对成本单位不是纳秒，逻辑读写字节也不是DRAM流量。少量组件标定用于建立/校验模型；不默认整版本黑盒竞速。下界及可行时序分别报告，未达到下界不声称最优。
+
+已有C实证：未知alias生成带检查的双路径；有`restrict`契约时省去该检查，成本阈值随之改变。两次常量返回均可折叠，但volatile状态写仍保留。因此Python常量传播与删除import须分别证明值和初始化effects，单次动态观测不能替代。原始材料：`artifacts/baseline/gcc-o3-study.json`；依据：[GCC13.3选项](https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html)、[依赖/alias](https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html)、[LICM源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc)、[成本源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-vect-loop.cc)、[pass顺序](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def)。
+
+下一轮集中顺序：先补真实科学区域canonical与实际lowering的compiler/内联/shape边界差异，冻结可转用成本模型；再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
 
 首条pass现已贯通：`pipeline_region_pass`投影原CALL/GlobalPort及conditional Q；`macro_pass`复用已有成本gate与OIR，记录requires/selection/invalidates；`pipeline_fusion_delivery`交已有无worker/绑核的融合C++；`macro_pipeline`全源重放及受控模块接入。真实8×8受保护调用成本判KEEP，不加载库；正声明模型仅验REWRITE链。`model-pipeline-cost`已继续接通原source occurrence需求、有效仿射系数与完整入口成本，缺证据不补零。`macro-pipeline`现另外发布`semantic/revision.json`、before/after图、分析及实际融合body；冷读重放选中OIR和原F4，原图/公共边界/Q/UNKNOWN effects不变，重算use-def、源码顺序及静态last-use。旧revision或另一region的分析、错误body引用均拒绝；成本、物理寿命、调度与native绑定仍列未解，不拿旧五CALL计划套新composite。无通用分析缓存，未重写整程序。材料：`artifacts/baseline/semantic-region-revision.json`。下一层先从后继图重建实现需求与同边界成本，再重建硬件时序及交付绑定。
 
