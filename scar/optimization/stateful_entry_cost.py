@@ -5,7 +5,10 @@ under the original profile contract does not establish whole-entry physical
 CPU demands, memory residency, source admission or deployment permission.
 """
 from copy import deepcopy
+import json
+import math
 from pathlib import Path
+import statistics
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import CostEstimate
@@ -74,6 +77,12 @@ def derive_stateful_entry_cost(domain, candidate_id, profiles=()):
     for index, profile in enumerate(profiles):
         cost, issues, document = _cost(profile, context)
         issues = list(issues)
+        if cost is not None and document.get('derivation', {}).get('basis') == 'SOURCE_ACCOUNTED_SERIAL_ACTIVITY_POINT_MODEL':
+            from scar.optimization.stateful_activity_model import verify_activity_entry_profile
+            try:
+                verify_activity_entry_profile(document)
+            except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
+                issues.append('source-accounted activity entry model replay failed: ' + str(error))
         if cost is not None:
             if cost['tick_seconds'] != 1e-9:
                 issues.append('whole-call profile must use the existing integer-nanosecond writer convention')
@@ -159,4 +168,171 @@ def verify_stateful_entry_cost(report, domain, candidate_id, profiles=()):
     return expected
 
 
-__all__ = ['SCHEMA', 'SCOPE', 'derive_stateful_entry_cost', 'verify_stateful_entry_cost']
+def evaluate_stateful_entry_holdout(model, holdout, policy):
+    """Qualify prediction accuracy from retained paired complete-method clocks.
+
+    Rejected predictions stay available as declared analysis models. Their
+    raw profiles are not returned as qualified inputs for automatic selection.
+    This never changes the frozen prediction, threshold or target samples.
+    """
+    from scar.optimization.stateful_activity_model import read_activity_entry_model
+    def reference(value, schema):
+        return value if type(value) is dict else artifact_reference(Path(value).resolve(), schema)
+    model_ref=reference(model,'scar.stateful-activity-entry-model')
+    holdout_ref=reference(holdout,'scar.real-caller-cost-holdout')
+    policy_ref=reference(policy,'scar.conditional-entry-holdout-policy')
+    model=read_activity_entry_model(model_ref['uri'])
+    if read_artifact(model_ref)!=model:raise ValueError('frozen model differs during source replay')
+    observed,rules=read_artifact(holdout_ref),read_artifact(policy_ref)
+    if observed.get('schema_version')!=1 or rules.get('schema_version')!=1:
+        raise ValueError('supported holdout and frozen policy versions required')
+    facts=read_artifact(model['facts']);activity=read_artifact(model['activity_costs'])
+    binding=observed['frozen_model_binding'];protocol=observed['protocol']
+    if (rules['frozen_model']!=model_ref or observed['frozen_model']!=model_ref
+            or rules['predicted_native_method_ns']!=model['duration_ns']
+            or rules['policy_frozen_before_holdout'] is not True
+            or rules['no_fit_or_threshold_adjustment_from_holdout'] is not True
+            or observed['model_fitted_or_updated_from_holdout'] is not False
+            or binding['facts']!=model['facts'] or binding['activity_costs']!=model['activity_costs']
+            or binding['domain']!=activity['domain'] or binding['candidate_id']!=activity['candidate_id']
+            or protocol['method_scope']['call_scope']!=SCOPE
+            or protocol['method_scope']['boundary']!=facts['context']['scope']['boundary']
+            or protocol['caller_cpu_ids']!=read_artifact(activity['domain'])['live_constraints']['process_affinity_cpu_ids']
+            or protocol['per_step_array_content_reads_by_observer']!=0
+            or protocol['caller_affinity_changed_by_harness'] is not False):
+        raise ValueError('holdout differs from frozen model, policy, source domain or method boundary')
+    for name in ('harness','correctness_helpers'):
+        read_artifact(observed[name],json_document=False)
+    prior=read_artifact(observed['prior_independent_full_trajectory_validation'])
+    specialization=read_artifact(observed['specialization'])
+    candidate=read_artifact(specialization['candidate'])
+    native_metadata=read_artifact(observed['native_artifact'])
+    if (prior['status']!='PASSED_EXPLICIT_NATIVE_TRIAL'
+            or prior['specialization']!=observed['specialization']
+            or prior['native_artifact']!=observed['native_artifact']
+            or candidate['native_artifact']!=observed['native_artifact']
+            or candidate['candidate_id']!=binding['candidate_id']
+            or candidate['program']!=binding['program']
+            or candidate['program']!=specialization['program']
+            or specialization['domain']!=binding['domain']
+            or specialization['input_shapes']!=facts['context']['input_shapes']
+            or specialization['region_sha256']!=facts['context']['region_sha256']
+            or native_metadata['region_sha256']!=facts['context']['region_sha256']
+            or read_artifact(binding['program'])['entry']!=observed['entry']['uri']):
+        raise ValueError('holdout candidate, entry and independent correctness evidence differ')
+    read_artifact(observed['entry'],json_document=False)
+    from scar.compiler.stateful_model import stateful_from_dict
+    domain=read_artifact(activity['domain'])
+    region=stateful_from_dict(read_artifact(domain['region']))
+    before,after=observed['original_source_refs_before'],observed['original_source_refs_after']
+    source_hashes={row.path:row.sha256 for row in (region.source,*(callee.source for callee in region.callees))}
+    source_hashes[observed['entry']['uri']]=observed['entry']['sha256']
+    if before!=after or set(before)!=set(source_hashes):
+        raise ValueError('complete original source version set changed during holdout')
+    for path,reference in before.items():
+        if reference['uri']!=path or reference['sha256']!=source_hashes[path]:
+            raise ValueError('holdout source versions differ from original region and entry')
+        read_artifact(reference,json_document=False)
+    count,warmup=rules['implementation_pairs'],rules['warmup_pairs']
+    if (type(count) is not int or count<3 or type(warmup) is not int or warmup<1
+            or protocol['measured_pairs']!=count or protocol['warmup_pairs']!=warmup
+            or len(observed['measured_pairs'])!=count or len(observed['warmups'])!=warmup):
+        raise ValueError('complete frozen paired sample and warmup counts required')
+    groups={'original':[],'native_trial':[]};native_calls=fallbacks=0
+    required=('final_complete_arrays_halo_and_scalar_types_bytes_equal',
+        'step_shape_dtype_and_scalar_context_trajectory_equal','stdout_equal','stderr_equal',
+        'output_file_names_and_bytes_equal','png_produced','every_native_step_executed')
+    correct=True
+    for phase,rows in (('warmup',observed['warmups']),('measurement',observed['measured_pairs'])):
+        if [row['index'] for row in rows]!=list(range(len(rows))):
+            raise ValueError('unique ordered pair indices required')
+        for pair in rows:
+            if pair['order']!=(['A','B'] if pair['index']%2==0 else ['B','A']):
+                raise ValueError('frozen alternating pair order differs')
+            a,b=pair['original']['steps'],pair['native_trial']['steps']
+            if not a or len(a)!=len(b):raise ValueError('matching nonempty complete method trajectories required')
+            for steps in (a,b):
+                if [row['ordinal'] for row in steps]!=list(range(len(steps))):
+                    raise ValueError('complete consecutive method ordinals required')
+                for step in steps:
+                    inputs=step['inputs']
+                    if set(inputs)!={row.id for row in region.inputs}:
+                        raise ValueError('holdout declared input ID set differs')
+                    for spec in region.inputs:
+                        current=inputs[spec.id]
+                        if current['path']!=list(spec.path) or current['kind']!=spec.kind:
+                            raise ValueError('holdout declared input path or kind differs')
+                        if spec.kind=='array' and (current['shape']!=facts['context']['input_shapes'][spec.id]
+                                or current['dtype']!='<f8' or current['device']!='cpu'
+                                or current['c_contiguous'] is not True or current['tensor_contents_read'] is not False):
+                            raise ValueError('holdout array geometry or measurement regime differs')
+            if any(row['guard_statistics']['native_calls']!=0 or row['guard_statistics']['fallback_calls']!=0 for row in a):
+                raise ValueError('original timing path contains guarded or native calls')
+            correct &= all(pair['comparison'].get(key) is True for key in required)
+            for key,steps in (('original',a),('native_trial',b)):
+                if any(type(row['elapsed_ns']) is not int or row['elapsed_ns']<=0 for row in steps):
+                    raise ValueError('positive original integer method clock samples required')
+                if phase=='measurement':groups[key].append(statistics.mean(row['elapsed_ns'] for row in steps))
+            correct &= [row['inputs'] for row in a]==[row['inputs'] for row in b]
+            for step in b:
+                stats=step['guard_statistics']
+                correct &= stats['native_calls']==1 and stats['fallback_calls']==0
+                if phase=='measurement':
+                    native_calls+=stats['native_calls'];fallbacks+=stats['fallback_calls']
+    original=statistics.median(groups['original']);native=statistics.median(groups['native_trial'])
+    error=abs(model['duration_ns']-native)/native;gain=1-native/original
+    threshold,minimum=rules['max_relative_prediction_error'],rules['minimum_observed_gain']
+    if any(type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<1
+           for value in (threshold,minimum)):
+        raise ValueError('finite frozen relative-error and gain thresholds in [0,1) required')
+    if rules['relative_error_denominator']!='OBSERVED_NATIVE_MEDIAN_OF_SEVEN_EPISODE_MEAN_METHOD_DURATIONS':
+        raise ValueError('frozen prediction error metric differs')
+    # Legacy samples can retain useful observations without receiving a new
+    # policy retroactively. A future capture must bind all three before work.
+    policy_bound=(observed.get('frozen_policy')==policy_ref
+        and observed.get('policy_frozen_before_target') is True)
+    timer_bound=(rules.get('method_scope')==protocol['method_scope']
+        and rules.get('holdout_harness')==observed['harness'])
+    qualified=correct and error<=threshold and policy_bound and timer_bound
+    for ref in (model_ref,holdout_ref,policy_ref):read_artifact(ref)
+    return dict(schema='scar.stateful-entry-model-qualification',schema_version=1,
+        model=model_ref,holdout=holdout_ref,policy=policy_ref,
+        status='HOLDOUT_CONTEXT_QUALIFIED' if qualified else 'HOLDOUT_PREDICTION_REJECTED',
+        predicted_native_ns=model['duration_ns'],original_median_ns=original,native_median_ns=native,
+        method_original_over_native_ratio=original/native,relative_prediction_error=error,
+        prediction_error_threshold=threshold,prediction_error_threshold_passed=error<=threshold,
+        policy_precommitted_in_holdout=policy_bound,full_timer_scope_and_harness_bound=timer_bound,
+        qualification_frontiers=[reason for passed,reason in (
+            (correct,'PAIRED_SOURCE_STATE_OR_NATIVE_PATH_CORRECTNESS_FAILED'),
+            (error<=threshold,'FROZEN_PREDICTION_ERROR_THRESHOLD_EXCEEDED'),
+            (policy_bound,'POLICY_REFERENCE_NOT_BOUND_BEFORE_TARGET_IN_CAPTURE'),
+            (timer_bound,'FULL_TIMER_SCOPE_OR_HARNESS_NOT_BOUND_IN_FROZEN_POLICY')) if not passed],
+        observed_gain=gain,observed_gain_threshold=minimum,observed_gain_threshold_passed=gain>=minimum,
+        measured_native_calls=native_calls,measured_fallback_calls=fallbacks,correctness_passed=bool(correct),
+        qualified_profile=model['profile'] if qualified else None,
+        original_declared_profile_retained_for_analysis=model['profile'],
+        target_samples_fitted=False,model_or_threshold_changed=False,
+        cost_qualification_scope='ONLY_RETAINED_SAME_SOURCE_SHAPE_CALLER_AND_GUARDED_ENTRY_CONTEXT',
+        physical_resource_qualification='SEPARATE_UNRESOLVED',whole_program_speedup_claimed=False,
+        default_backend='NO_OP',deployment_authorized=False)
+
+
+def main(argv=None):
+    import argparse
+    parser=argparse.ArgumentParser(description='Evaluate a frozen stateful entry model against an independent holdout')
+    for name in ('model','holdout','policy','out'):parser.add_argument('--'+name,required=True)
+    args=parser.parse_args(argv)
+    report=evaluate_stateful_entry_holdout(args.model,args.holdout,args.policy)
+    with Path(args.out).open('x') as stream:
+        json.dump(report,stream,sort_keys=True,indent=2,allow_nan=False);stream.write('\n')
+    print(json.dumps({key:report[key] for key in ('status','relative_prediction_error',
+        'method_original_over_native_ratio','qualified_profile','deployment_authorized')},sort_keys=True))
+    return 0
+
+
+__all__ = ['SCHEMA', 'SCOPE', 'derive_stateful_entry_cost', 'verify_stateful_entry_cost',
+           'evaluate_stateful_entry_holdout']
+
+
+if __name__=='__main__':
+    raise SystemExit(main())

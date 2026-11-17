@@ -1,5 +1,9 @@
 # 当前状态
 
+2026-11-17 完整方法成本出口已实现：`model-stateful-activity-cost`冷重放现有activity/resource/scope账本，只支持已证明串行的standalone方法，24个最终subject覆盖31活动各计一次；旧coarse条目不再累加，collective pool不按slot乘，唯一source milestone为0。保留COMPONENT_ONLY与全部转用残差，原whole_call_cost_closed=false不改；新条件DECLARED点预测1,423,927ns已接共同CostEstimate和实现IR，逻辑规划可用，物理资格仍独立未解。删掉V2 DAG证据会因3个UNKNOWN拒绝发布；禁CDLL冷重放及3项相关回归通过。
+
+冻结模型后，真实原driver默认259规格做warmup2对/7对AB–BA，每对4次方法调用；计时内无hash/复制/trace，保留caller原0–55 CPU mask。原方法episode均值的median1.97499775ms[min1.8855935,max2.3318435,var0.0213078030ms²]，native1.05520175ms[min0.9159615,max1.62088875,var0.0575503260ms²]，方法范围1.87168×；28次measured native/0fallback，全部9对最终state/scalar/PNG/stdout一致。预测比实测高34.9436%，超过事前20%阈值；`validate-stateful-entry-model`独立由原样本重算，返回qualified_profile=null，未改模型/阈值、未拟合或重跑，默认NO_OP。本次legacy采样只绑定model，未携带政策引用及完整timer/harness预绑定；评估器亦将这两项列为未解，事后放宽到90%仍不会qualified。原采样/模型/政策均未改。局部收益已观测，不能当整程序或LeWM加速。下一层先固定统一采样design，再定位canonical→组合执行的上下文残差、用新独立样本校验，并补caller CPU契约与scoped内存资格；三阶段仍未完成。材料：`artifacts/baseline/activity-entry-cost.json`。
+
 2026-11-17 真实科学入口继续贯通：只给 Gray–Scott 原 `run_simulation.py` 补做 F0–F4，再按引用合入原计算模块材料（fact正文复制0B，3个接口worker），当前规则下重发入口ProgramBuild。两次有界原边界元数据观测自动给出两输入259×259，不保tensor数值/地址、不固定5个scalar；`specialize-stateful`已按原F4精确重发现及硬件领域生成C++20/ABI1。真实driver `-T 2`显式trial的4次调用均native、0回退；逐次pre/post及完整entry后的数组（含halo）/scalar类型与字节、stdout/stderr和PNG逐字节一致，源码不变。新增`check-stateful-specialization`冷重放原F4/观测/recipe/6个native文件，禁CDLL通过，错shape和伪造selected拒绝；12项相关现有回归通过。未测目标A/B或视频、未部署。
 
 改写区域和stateful完整入口已投影到共同实现IR；资源未解义务独立于时间成本，非空时用problem v3，旧v1/v2 wire/digest保留。真实259的NO_OP及两个CPU候选分别保留成本UNKNOWN、caller CPU与opaque memory/residency义务，strict规划诚实UNRESOLVED；无OIR selection时不声称有source delta。成本与计划均绑定实际编译domain，不沿用旧515模型或另一发布路径的context。当前ProgramBuild仍有303个来源/接线缺口，catalog全图物化未闭合，三阶段未完成。同规格canonical scope-boundary、源码stage-DAG V2（4/6/7）及原语标定已串行完成，均warm2/7样本；仅组件证据，完整入口成本未闭合。下一层接现有activity成本聚合出口及guard路径残项，再接资源资格与成本决策。材料：`artifacts/baseline/scientific-mainline.json`。
