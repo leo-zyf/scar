@@ -10,6 +10,8 @@
 验收顺序：A 契约/ID与计划校验 → B 各阶段独立可执行 → C 真实科学区域贯通 → D 正确性/清洁A/B与NO_OP决策。
 结果按 Observed/Implemented/Verified/Rejected 区分；不以区域加速代替整程序加速，也不以局部闭环代替第一阶段完成。
 
+当前主链纠偏（2026-11-17）：先开放执行结构，再排硬件时间。五CALL固定ready骨架的CPU选优不代表源区域最优；NO_OP须成为实际实现选项。下一轮集中三个交接：①从原图提取composite输入/输出/world与覆盖范围，复用既有v2区域/候选结构表达原Python、现成fusion和保留CALL实现；②每种实现展开自己的分配/计算/搬运/同步图，按同一完整入口边界估价，先判可替换和收益，再联合放置/调度；③将唯一选中证书交已有C++/fusion/compact路径，内部可借用的guard/affinity/fenv必须由闭合合同证明，单worker串行应包含caller直执行方案。验收先要求8×8原NumPy能赢并不加载native，再用真实科学区域检查正收益；基于源码推导与有界标定，不做大量整版本黑盒排名。诊断见 `artifacts/baseline/pipeline-architecture-diagnosis.json`。
+
 F5可增量接入经过完整前端的新源码，不重建旧图：先用
 `scar.analysis.source_file_seed.seed_source_file(path, namespace_root, out, module=None)`建原路径单源seed，
 再运行`python -B -m scar.analysis.source_dependency_frontend --model <seed> --explicit-seed --out <fresh-frontend>`，
