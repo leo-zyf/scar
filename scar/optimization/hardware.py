@@ -10,7 +10,7 @@ from hashlib import sha256
 import os
 from pathlib import Path
 
-from scar.analysis.target_graph import TargetHardwareGraph, _resources
+from scar.analysis.target_graph import TargetHardwareGraph
 from scar.compiler.model import CpuPlacement, ExecutionPlan
 from scar.compiler.validation import validate_plan, validate_resource_binding
 from scar.ir.program import target_hardware as H
@@ -25,24 +25,30 @@ def _artifact(path, schema):
 
 
 def _target_materials(target):
+    from scar.analysis.replay_transaction import current_transaction
     path = target.path if isinstance(target, TargetHardwareGraph) else target
     snapshot = _artifact(Path(path) / "result.json", "scar.target-hardware-graph")
+    transaction = current_transaction()
+    if transaction is not None:
+        transaction.watch(snapshot.uri, snapshot.sha256, snapshot.size_bytes)
+        return transaction.memo('scar.hardware.target-materials/v1',
+            (snapshot.uri, snapshot.sha256, snapshot.size_bytes, str(Path(path).absolute())),
+            lambda: _read_target_materials(path, snapshot))
+    return _read_target_materials(path, snapshot)
+
+
+def _read_target_materials(path, snapshot):
+    from scar.analysis.replay_transaction import current_transaction
     graph = TargetHardwareGraph(path)
-    resources, connections, paths = graph.resources(), graph.connections(), graph.paths()
-    inventory = _artifact(graph.report["inventory"]["uri"], "scar.target-inventory")
-    for source in graph.inventory["sources"]:
-        text = source.get("text")
-        if text is not None and sha256(text.encode()).hexdigest() != source["sha256"]:
-            raise ValueError("retained target source receipt differs")
-    # Reconstruct only compact descriptions from retained JSON. No hardware
-    # probing, graph writing, source-program loading, or workload execution.
-    expected_resources, expected_connections, expected_paths = _resources(graph.inventory, inventory)
-    if (len({r.id for r in resources}) != len(resources)
-            or {r.id: r for r in resources} != {r.id: r for r in expected_resources}
-            or connections != tuple(expected_connections) or paths != tuple(expected_paths)):
-        raise ValueError("target resources/topology differ from retained inventory")
+    resources, connections = graph.resources(), graph.connections()
+    # The reader already replays retained sources, every typed table and the
+    # complete inventory topology (including v2 platform metadata). Repeating
+    # that reconstruction here supplies no additional source authority.
     if snapshot != _artifact(graph.path / "result.json", snapshot.schema):
         raise ValueError("target snapshot changed while reading")
+    transaction = current_transaction()
+    if transaction is not None:
+        graph._watch_materials(transaction)
     return graph, snapshot, resources, connections
 
 

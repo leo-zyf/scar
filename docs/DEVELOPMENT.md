@@ -22,7 +22,7 @@ GCC源码复核及一次补充编译明确了推进顺序：①复用现有值/�
 
 真实科学区域的可控域入口：`scar plan-controlled-region --kind STATEFUL_SPECIALIZATION --admission SPECIALIZATION/result.json --out FRESH`自动cold-admit原F4/已编译candidate，建立既有SemanticGraph及source→native stages→private slots/硬件引用，默认未知时间保持UNRESOLVED。`--entry-profile PROFILE`只接明确提供的条件分析成本，不能把旧预测变为合格；`--check FRESH/preparation.json`独立重放。另支持`--kind PIPELINE_FUSION --admission REGION_BUILD/result.json`。原全入口义务另存，不把CPU0私有阶段绑定扩大到guards/commit，不把payload预算当RSS/可用物理RAM。`calibrate-guard-regime`只比较同一已有canonical probe的两guard配置；本轮2warm+7对测量的入口差中位7085ns、完整canonical调用差中位6274ns，不归因旧误差、不导出component/profile资格。下一层先使canonical编译/内联/shape上下文匹配真实lowering，再冻结新的成本模型；不重跑旧模型碰阈值。验收见`artifacts/baseline/controlled-scientific-region.json`。
 
-离线分析自身的瓶颈已单次profile定位：同一`_derive`有63次硬件材料重放、1987次table读取、122621次decode，以及两遍完整entry cost推导；F4 cold admission仅一次。插桩142.218s是分析器时间，非目标性能；17次compiler版本查询仅0.076s，准备/重放会执行`g++ --version`身份核验，未新编译。下一轮优先在一次冷事务内共享已验硬件decoded tables及domain/plan/profile结果，减少重复tag/递归校验；新事务与独立check必须重新验证版本及内容，不加全局信任cache或`verified=True`绕过。profile依据在同份验收报告中引用。
+离线分析的重复重放已在单次冷事务内合并：硬件表/拓扑和entry cost共享已验结果，逐行仍走原严格decoder，原`record_codec.py`未改。命中和成功退出均核对传递文件内容；返回副本、32项上限、独立check新开冷事务。可选Python audit只观察纯metadata工厂的文件读取，不是目标采集器或native I/O跟踪器；非文件live条件由调用方key绑定，支持域外不复用。冻结实现的四新进程ABBA中，各模式2样本、warmup0，分析median42.3199→26.3717s（1.60475×），7份模型正文完全相同；无目标执行、native加载或新编译。默认未知成本仍拒绝选择，旧DECLARED预测仍未合格。该收益仅为SCAR离线分析器，见`artifacts/baseline/replay-mainline.json`。
 
 当前实现进展：完整入口canonical回归已代替手填参数做第一次真实校验，TRAIN与canonical/target holdout分开，rank/SVD/误差可查；系数为DECLARED有效模型，不复用旧工具的scope中位数差。构造式时序已接原source producer及C++：关键路径优先、局部实现/route选择、整数端点传播、有限容量冲突加调度序边；原语义边不变，独立验证，不证明全局最优。compact fused已接原C1 guard与普通入口，独立scope UNKNOWN，不用macro模型授权。
 

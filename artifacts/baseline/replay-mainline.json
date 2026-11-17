@@ -1,0 +1,134 @@
+{
+  "date": "2026-11-17",
+  "evidence": {
+    "batch_decode": {
+      "schema": "scar.record-batch-cpu-micro",
+      "sha256": "c527433e96f70cdd7746d1ad5b534237821164e36a72e6c335ca198f8c4fa563",
+      "size_bytes": 2434,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/record-batch-v1/result.json"
+    },
+    "benchmark": {
+      "schema": "scar.offline-replay-benchmark-verification",
+      "sha256": "b061b7f77de6d0941249da2ae988f3c968f34cba5361c256be8d688da12a321e",
+      "size_bytes": 3737,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/replay-mainline-v1/final/verification.json"
+    },
+    "hardware": {
+      "schema": "scar.hardware-replay-transaction-verification",
+      "sha256": "89175943aa312f01334bd8be34ac844843641f948c9b81f14640c7291769d052",
+      "size_bytes": 2109,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/hardware-replay-transaction-v1/verification.json"
+    },
+    "integration": {
+      "schema": "scar.replay-mainline-integration-verification",
+      "sha256": "273f9d9bf06e1a437f912b3ba80435f76e19eed8341d5e7370e60c4c967e47cf",
+      "size_bytes": 1815,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/replay-mainline-v1/final/integration/verification.json"
+    }
+  },
+  "limits": [
+    "Two samples per mode establish a bounded analyzer comparison, not a general speed guarantee.",
+    "Python audit observes requested pure metadata factories, not arbitrary native or preopened-descriptor I/O.",
+    "Live environment and identity inputs remain part of the reviewed caller key.",
+    "Cache lifetime is one synchronous owner-thread replay; independent checks rebuild cold."
+  ],
+  "measurement": {
+    "cprofile_enabled": false,
+    "median_ratio": 1.6047484401074965,
+    "protocol": "FOUR_FRESH_PROCESSES_ABBA",
+    "repetitions_per_mode": 2,
+    "statistics": {
+      "transaction": {
+        "max_seconds": 26.396938501042314,
+        "median_seconds": 26.371672307519475,
+        "min_seconds": 26.346406113996636,
+        "n": 2,
+        "sample_variance_seconds2": 0.0012767610702670903,
+        "samples_seconds": [
+          26.396938501042314,
+          26.346406113996636
+        ]
+      },
+      "uncached": {
+        "max_seconds": 42.431218077021185,
+        "median_seconds": 42.31989999851794,
+        "min_seconds": 42.208581920014694,
+        "n": 2,
+        "sample_variance_seconds2": 0.024783429203309452,
+        "samples_seconds": [
+          42.208581920014694,
+          42.431218077021185
+        ]
+      }
+    },
+    "warmup": 0
+  },
+  "native_loaded": false,
+  "new_native_compilation": false,
+  "new_workload_speedup_claim": null,
+  "observed_integration": {
+    "fusion-declared": {
+      "controlled": "FEASIBLE_WITHIN_MODEL",
+      "estimate_ns": 1000000,
+      "preparation": {
+        "schema": "scar.controlled-region-preparation",
+        "sha256": "eca78e0bee8f4b1bf24a84593a2f473ae43636791d4a37e48932c8f1bdab6f15",
+        "size_bytes": 5118,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/replay-mainline-v1/final/integration/fusion-declared/preparation.json"
+      },
+      "seconds": 29.43258667702321,
+      "selected": 1,
+      "strict": "UNRESOLVED"
+    },
+    "stateful-declared": {
+      "controlled": "FEASIBLE_WITHIN_MODEL",
+      "estimate_ns": 1423927,
+      "preparation": {
+        "schema": "scar.controlled-region-preparation",
+        "sha256": "2c4156f8b195380cf4c1818934143231151806ef2833ba72ca783ab269ca9f04",
+        "size_bytes": 6063,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/replay-mainline-v1/final/integration/stateful-declared/preparation.json"
+      },
+      "seconds": 49.820699019008316,
+      "selected": 1,
+      "strict": "UNRESOLVED"
+    },
+    "stateful-no-cost": {
+      "controlled": "UNRESOLVED",
+      "estimate_ns": null,
+      "preparation": {
+        "schema": "scar.controlled-region-preparation",
+        "sha256": "a0b41b70f7d5031acb75014c371ff9fe9612e2f5917ac2f1fd50cb9f0113e58e",
+        "size_bytes": 5395,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/replay-mainline-v1/final/integration/stateful-no-cost/preparation.json"
+      },
+      "seconds": 40.73244413995417,
+      "selected": 0,
+      "strict": "UNRESOLVED"
+    }
+  },
+  "qualification": {
+    "all_three_stages_complete": false,
+    "default_unknown_cost_is_not_zero": true,
+    "legacy_forecast_still_unqualified": true,
+    "new_qualified_forecasts": false,
+    "whole_program_coverage_complete": false
+  },
+  "schema": "scar.offline-replay-mainline-checkpoint",
+  "schema_version": 1,
+  "scope": "SCAR_ANALYZER_METADATA_REPLAY_NOT_WORKLOAD_PERFORMANCE",
+  "status": "IMPLEMENTED_AND_VERIFIED",
+  "target_executed": false,
+  "verified": {
+    "all_seven_model_documents_equal": true,
+    "cache_max_entries": 32,
+    "content_checked_on_hit_and_successful_exit": true,
+    "detached_results": true,
+    "focused_tests_passed": 16,
+    "independent_cold_scopes": true,
+    "record_codec_sha256": "0954c05e53a6dcb31f449461db71c63fdcdd9f95a9c053424d86bf5217a89ef3",
+    "source_admission_not_skipped": true,
+    "strict_decoder_unchanged": true,
+    "target_source_untouched": true
+  }
+}

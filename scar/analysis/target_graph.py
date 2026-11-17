@@ -16,7 +16,7 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.program import target_hardware as H
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
-from scar.ir.record_codec import encode,decode
+from scar.ir.record_codec import encode
 
 
 def _artifact(path,schema):
@@ -132,7 +132,22 @@ def build_target_graph(out,paths=(),*,inventory=None):
 
 class TargetHardwareGraph:
     def __init__(self,path):
-        self.path=Path(path).absolute();self.report=json.loads((self.path/'result.json').read_bytes())
+        from scar.analysis.replay_transaction import current_transaction
+        self.path=Path(path).absolute()
+        raw=(self.path/'result.json').read_bytes()
+        self._snapshot=ProviderArtifact(str(self.path/'result.json'),sha256(raw).hexdigest(),
+            len(raw),'scar.target-hardware-graph')
+        transaction=current_transaction()
+        if transaction is None:
+            self.report,self.inventory=self._validated_materials(raw)
+        else:
+            transaction.watch(self._snapshot.uri,self._snapshot.sha256,self._snapshot.size_bytes)
+            self.report,self.inventory=transaction.memo('scar.target-graph.validated-materials/v1',
+                (str(self.path),self._snapshot.sha256,self._snapshot.size_bytes),
+                lambda:self._validated_materials(raw))
+
+    def _validated_materials(self,raw):
+        self.report=json.loads(raw)
         if self.report['schema']!='scar.target-hardware-graph' or self.report['schema_version'] not in (1,2):raise ValueError('target graph version differs')
         receipt=self.report['inventory'];raw=Path(receipt['uri']).read_bytes()
         if len(raw)!=receipt['size_bytes'] or sha256(raw).hexdigest()!=receipt['sha256']:raise ValueError('target inventory receipt differs')
@@ -155,14 +170,45 @@ class TargetHardwareGraph:
                 raise ValueError('target availability or constraints differ from retained inventory')
             if self.report['platform_coverage']!=platform_coverage(self.inventory,nodes):
                 raise ValueError('target hardware coverage differs from retained inventory')
+        current=(self.path/'result.json').read_bytes()
+        if len(current)!=self._snapshot.size_bytes or sha256(current).hexdigest()!=self._snapshot.sha256:
+            raise ValueError('target snapshot changed while reading')
+        from scar.analysis.replay_transaction import current_transaction
+        transaction=current_transaction()
+        if transaction is not None:self._watch_materials(transaction)
+        return self.report,self.inventory
+
+    def _watch_materials(self,transaction):
+        """Guard every byte dependency even when validated derived data is reused."""
+        transaction.watch(self._snapshot.uri,self._snapshot.sha256,self._snapshot.size_bytes)
+        receipt=self.report['inventory']
+        transaction.watch(receipt['uri'],receipt['sha256'],receipt['size_bytes'])
+        tables=[*self.report['nodes'].values(),self.report['connections'],self.report['paths']]
+        tables.extend(self.report[name] for name in ('availability','constraints') if name in self.report)
+        for receipt in tables:
+            transaction.watch(self.path/receipt['path'],receipt['sha256'],receipt['bytes'])
 
     def table(self,receipt,cls):
-        payload=(self.path/receipt['path']).read_bytes()
+        from scar.analysis.replay_transaction import current_transaction
+        path=self.path/receipt['path']
+        transaction=current_transaction()
+        if transaction is None:
+            return self._decode_table(path,receipt,cls)
+        transaction.watch(path,receipt['sha256'],receipt['bytes'])
+        return transaction.memo('scar.target-graph.decoded-table/v1',
+            (str(path),json.dumps(receipt,sort_keys=True,separators=(',',':')),cls),
+            lambda:self._decode_table(path,receipt,cls))
+
+    @staticmethod
+    def _decode_table(path,receipt,cls):
+        from scar.ir.record_batch import decode_records
+        payload=path.read_bytes()
         if len(payload)!=receipt['bytes'] or sha256(payload).hexdigest()!=receipt['sha256']:raise ValueError('target table differs')
         raw=gzip.decompress(payload)
         if len(raw)!=receipt['decoded_bytes'] or sha256(raw).hexdigest()!=receipt['decoded_sha256'] or raw.count(b'\n')!=receipt['records']:
             raise ValueError('decoded target table differs')
-        return tuple(decode(cls,json.loads(line),record_tags=H.TARGET_RECORD_TAGS) for line in raw.splitlines())
+        return tuple(decode_records(cls,(json.loads(line) for line in raw.splitlines()),
+            record_tags=H.TARGET_RECORD_TAGS))
 
     def resources(self):
         return tuple(row for table in self.report['nodes'].values() for row in self.table(table,H.TargetResource))

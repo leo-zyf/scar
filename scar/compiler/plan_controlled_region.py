@@ -19,7 +19,9 @@ SCHEMA = 'scar.controlled-region-preparation'
 _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resources.py',
     'analysis/stateful_semantic_graph.py', 'optimization/controlled_region_planning.py',
     'optimization/stateful_entry_cost.py', 'optimization/region_implementation.py',
-    'optimization/constructive_planner.py', 'optimization/joint_planner.py')
+    'optimization/constructive_planner.py', 'optimization/joint_planner.py',
+    'analysis/replay_transaction.py', 'analysis/target_graph.py',
+    'optimization/hardware.py', 'ir/record_batch.py')
 
 
 def _pins():
@@ -88,6 +90,14 @@ def _stateful_stage_binding(region, graph, contract):
 
 
 def _derive(kind, admission, profiles):
+    from scar.analysis.replay_transaction import replay_transaction
+    # A prepare and its independent check deliberately start separate scopes.
+    # No cached validation document crosses this source-admission boundary.
+    with replay_transaction():
+        return _derive_body(kind, admission, profiles)
+
+
+def _derive_body(kind, admission, profiles):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission)

@@ -5,13 +5,21 @@ under the original profile contract does not establish whole-entry physical
 CPU demands, memory residency, source admission or deployment permission.
 """
 from copy import deepcopy
+from hashlib import sha256
 import json
 import math
+import os
 from pathlib import Path
+import shlex
+import shutil
 import statistics
+import struct
+import subprocess
+import sys
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import CostEstimate
+from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
 from scar.optimization.deployment_cost import _digest
 from scar.optimization.implementation_costs import CostQuery, query_key
@@ -23,6 +31,7 @@ from scar.optimization.stateful_cpu_choices import (
 SCHEMA = 'scar.stateful-entry-cost'
 SCOPE = 'ONE_ORIGINAL_METHOD_CALL_SITE'
 _DOMAIN_SCHEMA = 'scar.stateful-cpu-domain'
+_PATH_TYPES = (Path, type(Path()))
 
 
 def _refs(rows):
@@ -45,7 +54,160 @@ def _domain_material(value):
     return _domain(value), reference
 
 
+def _entry_json_tree(value):
+    """Inspect exact builtin containers only, without custom object protocols."""
+    pending, active = [(value, False)], set()
+    while pending:
+        current, leaving = pending.pop()
+        kind = type(current)
+        if leaving:
+            active.remove(id(current))
+        elif current is None or kind in (bool, int, str):
+            continue
+        elif kind is float:
+            if not math.isfinite(current):
+                return False
+        elif kind in (dict, list):
+            if id(current) in active:
+                return False
+            if kind is dict and any(type(key) is not str for key in current):
+                return False
+            active.add(id(current))
+            pending.append((current, True))
+            pending.extend((item, False) for item in (current.values() if kind is dict else current))
+        else:
+            return False
+    return True
+
+
+def _entry_cacheable_input(value, *, domain=False):
+    if type(value) is str or type(value) in _PATH_TYPES:
+        return True
+    if not domain and type(value) is ProviderFactReference:
+        artifact = value.artifact
+        return (type(artifact) is ProviderArtifact and type(value.locator) is str
+            and all(type(item) is str for item in (artifact.uri, artifact.sha256, artifact.schema))
+            and type(artifact.size_bytes) is int)
+    return _entry_json_tree(value)
+
+
+def _entry_input_key(value, *, domain=False):
+    """Bind the original representation without changing admission semantics."""
+    if type(value) is str or type(value) in _PATH_TYPES:
+        path = Path(value).resolve() if domain else Path(value).absolute()
+        if domain and path.is_dir():
+            path = path/'domain.json'
+        raw = path.read_bytes()
+        return dict(kind='DOMAIN_PATH' if domain else 'PROFILE_PATH', path=str(path),
+            sha256=sha256(raw).hexdigest(), size_bytes=len(raw))
+    # Only the exact SCAR FactReference is materialized for a profile key.
+    # Domain ArtifactRefs/FactReferences remain subject to the original reader.
+    if not domain and type(value) is ProviderFactReference:
+        artifact = value.artifact
+        return dict(kind='PROFILE_FACT_REFERENCE', content=dict(locator=value.locator,
+            artifact=dict(uri=artifact.uri, sha256=artifact.sha256,
+                size_bytes=artifact.size_bytes, schema=artifact.schema)))
+    return dict(kind='INLINE', content=value)
+
+
+def _entry_live_key():
+    """Recheck cheap live inputs which a file-read capture cannot observe."""
+    import numpy as np
+    from scar.codegen import cpp
+    from numpy._core import _multiarray_umath
+    from scar.runtime.compiled_deployment import thread_environment
+    command = shlex.split(os.environ.get('CXX', 'g++'))
+    if not command or not shutil.which(command[0]):
+        raise ValueError('C++20 compiler unavailable')
+    identity = subprocess.run([*command, '--version'], capture_output=True,
+        text=True, check=True).stdout.splitlines()[0]
+    return dict(affinity=sorted(os.sched_getaffinity(0)), environment=dict(os.environ),
+        thread_environment=thread_environment(), cwd=str(Path.cwd().resolve()),
+        compiler=dict(command=command, executable=shutil.which(command[0]), identity=identity,
+            options=list(cpp.COMPILER_OPTIONS)),
+        runtime=dict(platform=sys.platform, byteorder=sys.byteorder, maxsize=sys.maxsize,
+            pointer_bits=8*struct.calcsize('P'), python=sys.version,
+            numpy_version=np.__version__, ndarray_c_abi=int(_multiarray_umath._get_ndarray_c_version()),
+            numpy_power_identity=id(np.power), original_power_identity=id(_multiarray_umath.power),
+            ufunc_type_identity=id(np.ufunc)),
+        callables=[id(value) for value in (_domain, _cost, stateful_cpu_cost_context,
+            _digest, query_key, encode, CostEstimate, _derive_stateful_entry_cost_uncached)])
+
+
+def _entry_implementation_key(transaction):
+    paths = {Path(__file__).resolve(), Path(sys.modules[CostEstimate.__module__].__file__).resolve()}
+    for fn in (_domain, _cost, stateful_cpu_cost_context, _digest, query_key, encode):
+        paths.add(Path(fn.__code__.co_filename).resolve())
+    result = []
+    for path in sorted(paths):
+        raw = path.read_bytes(); digest = sha256(raw).hexdigest()
+        transaction.watch(path, digest, len(raw))
+        result.append(dict(path=str(path), sha256=digest, size_bytes=len(raw)))
+    return result
+
+
+def _watch_entry_implementations(transaction):
+    """Capture lazy-imported Python implementation dependencies as well as data.
+
+    Already imported code need not open its source while executing.  Watching
+    loaded SCAR source modules here keeps such implementation changes from
+    being hidden by the result memo.  This runs inside its read capture.
+    """
+    root = Path(__file__).resolve().parents[1]
+    paths = set()
+    for name, module in tuple(sys.modules.items()):
+        if name != 'scar' and not name.startswith('scar.'):
+            continue
+        filename = getattr(module, '__file__', None)
+        if filename is None:
+            continue
+        path = Path(filename).resolve()
+        if path.suffix == '.py' and path.is_relative_to(root):
+            paths.add(path)
+    for path in sorted(paths):
+        raw = path.read_bytes()
+        transaction.watch(path, sha256(raw).hexdigest(), len(raw))
+
+
 def derive_stateful_entry_cost(domain, candidate_id, profiles=()):
+    """Replay once per cold transaction; retain the original uncached API.
+
+    Reuse is confined to a successful Python metadata read capture.  The
+    transaction rechecks its complete captured dependencies on hits and exit;
+    callers cannot supply a flag asserting prior verification.
+    """
+    from scar.analysis.replay_transaction import current_transaction
+    transaction = current_transaction()
+    if (transaction is None or type(profiles) not in (tuple, list) or type(candidate_id) is not str
+            or not _entry_cacheable_input(domain, domain=True)
+            or not all(_entry_cacheable_input(value) for value in profiles)):
+        return _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles)
+    try:
+        inputs = dict(domain=_entry_input_key(domain, domain=True), candidate_id=candidate_id,
+            profiles=[_entry_input_key(value) for value in profiles],
+            live=_entry_live_key())
+        # Test serializability before enrolling implementation dependencies.
+        _digest(inputs)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ImportError, subprocess.SubprocessError):
+        # Unsupported key representations keep their former error/UNKNOWN
+        # behavior instead of acquiring a new cache-admission policy.
+        return _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles)
+    # Transaction integrity errors must propagate, never fall back around a
+    # changed source dependency and return an apparently successful report.
+    inputs['implementation'] = _entry_implementation_key(transaction)
+    key = _digest(inputs)
+
+    def factory():
+        _watch_entry_implementations(transaction)
+        result = _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles)
+        _watch_entry_implementations(transaction)
+        return result
+
+    return transaction.memo('stateful-entry-cost/v1', key, factory, capture_reads=True,
+        identity_queries=(tuple(inputs['live']['compiler']['command']+['--version']),))
+
+
+def _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles=()):
     """Replay existing whole-call cost admission without timing or loading code.
 
     Profiles may contain entries for other candidates; those remain rejected

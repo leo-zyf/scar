@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 离线分析已去除同一冷事务内的重复硬件解码/拓扑与entry cost推导。冻结代码四新进程ABBA，各模式2样本、warmup0，median42.3199→26.3717s（1.60475×），7份模型正文完全相同；命中/退出仍核文件，新事务独立冷验，原严格codec未改。真实stateful无成本/旧声明及fusion声明三条prepare+check均通过，成本未知和旧预测未合格状态不变。16项定向回归通过；未运行目标、新编译或加载native。这是分析器收益，非目标加速；三阶段仍未完成。材料：`artifacts/baseline/replay-mainline.json`。
+
 2026-11-17 真实科学stateful区域已自动进入既有SemanticGraph：7输入、54表达式、26有序动作；24个evaluate与Expr共operation，无重复执行节点。实际C++的11 stages、私有slots与CPU阶段引用由原source_action_ids/expression_stages接通；两次write各对应private write+commit，原动作仍26。caller world exit原F4证据有歧义，保持字段frontier，未消除全程序gaps。`plan-controlled-region`按单activation可控资源合同保严格全入口与可控域两份problem；真实259的计入payload3203376B（borrowed1073296+private2130080）受33554432B预算，CPU0只覆盖私有执行阶段，caller/commit不指定core。无成本不补0；显式旧DECLARED profile仅作条件分析，不能升级时间/物理/部署资格。canonical guard两配置的唯一新采样已完成，入口配对差中位7085ns，非旧预测误差归因或新加速比。三阶段仍未完成。材料：`artifacts/baseline/controlled-scientific-region.json`。
 
 2026-11-17 后继图→需求→硬件/时间Problem→既有C++验证候选已接`plan-semantic-region`。F4五调用样例实际after只有1个composite；原7次/3584B逻辑分配变为1次/512B，原eager、raw body与优化lowering分别记账。原完整hardware snapshot与两typed物理义务保留：strict UNRESOLVED；显式logical声明模型可构造1ms计划，该值不是实测。C++20/ABI1实际编译/构建时ABI admission有记录；独立冷检查禁止CDLL通过，默认安装保原函数且不加载，显式独占输入验证下3次native与1次dtype回退均逐位一致并恢复绑定。分析记录排序不稳定已修。成本兼容检查另机械证出canonical/真实harness的trial配置不同，记录级未知仍保留；future v2采样协议和通用无文件验证已接CLI，6反例拒绝，未执行新holdout/未改旧预测。三阶段仍未完成；下一层集中补真实科学后继区域、匹配上下文成本及可控资源资格。材料：`artifacts/baseline/semantic-successor-mainline.json`。
