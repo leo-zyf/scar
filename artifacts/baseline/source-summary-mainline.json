@@ -1,0 +1,204 @@
+{
+  "all_three_stages_complete": false,
+  "analyzer_measurement": {
+    "compiler_version_queries": 12,
+    "not_target_performance": true,
+    "scope": "SOURCE_SUMMARY_CLI_COLD_CHECK_PLUS_INDEPENDENT_CHECK_OF_EXISTING_PREPARATION",
+    "wall_seconds": 126.202563593979
+  },
+  "checks": {
+    "expanded_semantic_core_identical": true,
+    "independent_cold_planner_check_passed": true,
+    "no_purity_inference_from_empty_accesses": true,
+    "no_source_body_iteration_or_recursion_unroll": true,
+    "real_source_summary_cli_passed": true,
+    "source_and_inputs_unchanged": true,
+    "source_may_graph_to_existing_semantic_and_native_stages_connected": true,
+    "source_summary_in_problem_identity": true,
+    "unknown_cost_record_preserved": true
+  },
+  "date": "2026-11-17",
+  "evidence": {
+    "driver": {
+      "schema": "scar.integration-script",
+      "sha256": "3167dbad629f3c7ce37818a9a34b9b5be5eda56e05e2b46259c654fb9b84f6e0",
+      "size_bytes": 6415,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/integrate.py"
+    },
+    "normalization": {
+      "schema": "scar.source-summary-normalization-verification",
+      "sha256": "b7cb824806514d7c9e3da8d83e24e1f9a515778302d240dcc453c5f553552273",
+      "size_bytes": 935,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/normalization.json"
+    },
+    "normalization_before": {
+      "schema": "scar.source-summary-normalization-baseline",
+      "sha256": "64bf5b42824794aa68a0ebb61d96d5f67c76ad9bd3b2520dc9a53b52539a51e2",
+      "size_bytes": 946,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/normalization-before.json"
+    },
+    "preparation": {
+      "schema": "scar.controlled-region-preparation",
+      "sha256": "cd5f30f5f11ca8f62acf7bb642f2ae36f8962c9ef884b39fbd47442ebf520cb3",
+      "size_bytes": 9866,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/planned/preparation.json"
+    },
+    "source_binding": {
+      "schema": "scar.stateful-source-summary-binding",
+      "sha256": "1efe9c9941ae5684238b43187af74f45c6ae840547db9f02476768bad292ef12",
+      "size_bytes": 21482,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/planned/source-summary-binding.json"
+    },
+    "source_native_correspondence": {
+      "schema": "scar.source-summary-native-correspondence",
+      "sha256": "70298b0f395f5dc634d6c5a07e923cfbe568de742fbfffe66351bfe4262b86c5",
+      "size_bytes": 174809,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/planned/source-summary-correspondence.json"
+    },
+    "summary": {
+      "schema": "scar.interprocedural-summary",
+      "sha256": "20af85c62bb2cd86568d9009781e246e245b99a24231770d8d5c926f130776e1",
+      "size_bytes": 13713451,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/summary.json"
+    },
+    "verification": {
+      "schema": "scar.source-summary-mainline-verification",
+      "sha256": "2de7ef1dd223edd8db0b26bcb96f31f710910884142cf73fe8efafe2c28c840b",
+      "size_bytes": 2596,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/source-summary-mainline-v1/verification.json"
+    }
+  },
+  "focused_checks": [
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_source_function_summary.py",
+      "owner": "schedule_audit",
+      "passed": 1
+    },
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_interprocedural_summary.py",
+      "owner": "lifecycle_cost_audit",
+      "passed": 1
+    },
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_source_summary_binding.py",
+      "owner": "delivery_audit",
+      "passed": 1
+    }
+  ],
+  "harness_note": "UNKNOWN_COST_ESTIMATE_RECORD_HAS_NULL_ESTIMATE_NOT_NULL_RECORD",
+  "implementation": {
+    "analysis/interprocedural_summary.py": {
+      "schema": "scar.python-source",
+      "sha256": "57028fc8e9832d5ec5b196780b2fe70aa514a3235a6036bcb3c7289976c52ad2",
+      "size_bytes": 24676,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/interprocedural_summary.py"
+    },
+    "analysis/source_function_summary.py": {
+      "schema": "scar.python-source",
+      "sha256": "093c33614e86c1e5ef28208fd238c138c976543cafe247510781793f6b10eb5b",
+      "size_bytes": 19804,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/source_function_summary.py"
+    },
+    "cli.py": {
+      "schema": "scar.python-source",
+      "sha256": "466c25d0b415a2171a1902377e7a3086e3eec4c6892f41341766eba662f0d2dc",
+      "size_bytes": 182569,
+      "uri": "/home/zyf/AAA/scar/scar/cli.py"
+    },
+    "compiler/plan_controlled_region.py": {
+      "schema": "scar.python-source",
+      "sha256": "0fde0cacc4fee6b09c38902f733ddc9c38af2c5e1458b9969dbb590a9022cb37",
+      "size_bytes": 33012,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/plan_controlled_region.py"
+    },
+    "compiler/source_summary_binding.py": {
+      "schema": "scar.python-source",
+      "sha256": "dd90ec31f1ee93c1cdfeb830b8e8ef3026a144295a2e5ad53a0f8f83b75bb2e5",
+      "size_bytes": 9549,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/source_summary_binding.py"
+    }
+  },
+  "native_loaded": false,
+  "native_manifest": {
+    "schema": "scar.native-stateful-artifact",
+    "sha256": "db6fce8b81b32a0495ceae87ec106160a3bf0efed45730356eed5f5f4088536a",
+    "size_bytes": 3070,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scientific-mainline-v1/specialized-current/candidate/lowered/native/artifact.json"
+  },
+  "new_backend_added": false,
+  "new_native_compiled": false,
+  "next_order": [
+    "REUSE_SESSION_OWNED_VALIDATED_ENTRY_AND_NATIVE_MATERIAL_WITHOUT_CALLER_BOOLEAN_CREDENTIALS",
+    "CLOSE_SELECTED_SOURCE_ACCESS_AND_ALIAS_EFFECTS_FOR_GENERAL_MOVEMENT_PROOFS",
+    "QUALIFY_MATCHED_COMPLETE_CALL_COST_AND_CONSTRUCT_RESOURCE_TIMETABLE",
+    "CONSUME_THE_SAME_PROVEN_PLAN_IN_EXISTING_CPP20_BACKENDS"
+  ],
+  "observed_counts": {
+    "bound_native_source_functions": 1,
+    "calls": 49,
+    "conditional_targets": 9,
+    "functions": 8,
+    "mapped_source_association_rows": 80,
+    "native_stages": 11,
+    "native_stateful_writes": 2,
+    "recursive_sccs": 0,
+    "source_association_rows": 80,
+    "tokens": 508
+  },
+  "performance_speedup": null,
+  "planning": {
+    "controlled_status": "UNRESOLVED",
+    "cost_basis": "UNKNOWN",
+    "cost_missing_terms": [
+      "NO_ADMITTED_EXACT_CONTEXT_WHOLE_METHOD_CALL_PROFILE"
+    ],
+    "default_backend": "NO_OP",
+    "preparation_schema_version": 3,
+    "selected_transformations": 0,
+    "strict_status": "UNRESOLVED"
+  },
+  "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+  "schema": "scar.source-summary-checkpoint",
+  "schema_version": 1,
+  "scope_limits": [
+    "CONDITIONAL_MAY_DEPENDENCIES_NOT_EXACT_VALUE_EQUALITY_OR_MUTATION_PROOF",
+    "SOURCE_ACCESS_LEDGER_NOT_CLOSED_EFFECT_OR_PURITY_SUMMARY",
+    "BOUNDED_TARGETS_DO_NOT_ENUMERATE_FUTURE_DISPATCH",
+    "SOURCE_ASSOCIATIONS_ARE_PROJECTIONS_NOT_ADDITIONAL_EXECUTION_NODES",
+    "GENERAL_MEMORYSSA_CODE_MOTION_COMPLETE_CALL_COST_AND_HETEROGENEOUS_ENTRY_SCHEDULING_REMAIN"
+  ],
+  "source_entry": {
+    "schema": "scar.python-source",
+    "sha256": "69c6515ae5f081be50e5285995edf84c4d92e0ff3ac121622b97178fb5c5d5c6",
+    "size_bytes": 1993,
+    "uri": "/home/zyf/AAA/gray-scott/python/run_simulation.py"
+  },
+  "source_program": {
+    "schema": "scar.program-build",
+    "sha256": "42c4b31886f784755da1f6c505d0b8eae7e64073bdd464c053552e25fedf96e3",
+    "size_bytes": 13998,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/first-stage-entry-bridge-v1/program/manifest.json"
+  },
+  "static_replay_audit": {
+    "counts_are_source_call_sites_not_measured_cost_attribution": true,
+    "direct_build_sessions": 5,
+    "entry_projection_derivations": 3,
+    "local_summary_scc_compositions": 1,
+    "native_specialization_check_calls": 2,
+    "same_native_source_witness_derivations": 2,
+    "scope": "ONE_COMPLETE_STATEFUL_DERIVATION_WITH_SUMMARY_AND_DIFFERENT_PROGRAM_REFS_EXCLUDING_OPTIONAL_GCC_GROUP_BRANCHES"
+  },
+  "status": "IMPLEMENTED_AND_REAL_SOURCE_COLD_VERIFIED",
+  "storage": {
+    "after_json_bytes": 13713451,
+    "before_json_bytes": 44251433,
+    "dependency_sets": 223,
+    "expanded_semantic_core_sha256": "d390133d7dee80b10e4d45887caf21b86ca791dab2c2660be8e892ef9a13a44a",
+    "original_source_materials_deleted": false,
+    "reduction_fraction": 0.6901015386326586,
+    "superseded_derived_report_removed": true,
+    "tensor_values_collected": false,
+    "unknown_facts": 422
+  },
+  "target_executed": false
+}

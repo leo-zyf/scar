@@ -480,6 +480,40 @@ def _query_body_execution(args) -> int:
 
 def main(argv=None) -> int:
     cli_argv = sys.argv[1:] if argv is None else list(argv)
+    if cli_argv and cli_argv[0] == 'source-summary':
+        from scar.analysis.build import BuildSession
+        from scar.analysis.interprocedural_summary import (
+            derive_interprocedural_summary, verify_interprocedural_summary)
+        from scar.ir.execution_recipe import artifact_reference
+        summary_parser = argparse.ArgumentParser(prog='scar source-summary',
+            description='Compose source function dependencies over original conditional CALL routes; no target execution.')
+        summary_parser.add_argument('--program')
+        summary_parser.add_argument('--entry-calls')
+        summary_parser.add_argument('--out')
+        summary_parser.add_argument('--check')
+        summary_args = summary_parser.parse_args(cli_argv[1:])
+        if summary_args.check:
+            if summary_args.out or summary_args.entry_calls:
+                summary_parser.error('--check replays its own source inputs; --out/--entry-calls are separate')
+            report = json.loads(Path(summary_args.check).read_bytes())
+            program = summary_args.program or str(Path(report['entry_projection']['program']['uri']).parent)
+            with BuildSession(program) as session:
+                verify_interprocedural_summary(session, report)
+            output = Path(summary_args.check)
+        else:
+            if not summary_args.program or not summary_args.out:
+                summary_parser.error('--program and --out required')
+            entry = None if summary_args.entry_calls is None else json.loads(Path(summary_args.entry_calls).read_bytes())
+            with BuildSession(summary_args.program) as session:
+                report = derive_interprocedural_summary(session, entry)
+            output = Path(summary_args.out).absolute()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open('x') as stream:
+                json.dump(report, stream, sort_keys=True, indent=2, allow_nan=False); stream.write('\n')
+        print(json.dumps(dict(summary=artifact_reference(output, report['schema']),
+            functions=len(report['functions']), source_bodies_shared=True,
+            target_executed=False, transformation_authorized=False)))
+        return 0
     if cli_argv and cli_argv[0] == 'entry-calls':
         from scar.analysis.build import BuildSession
         from scar.analysis.bounded_entry_calls import derive_bounded_entry_calls, verify_bounded_entry_calls
@@ -747,6 +781,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="scar")
     sub = parser.add_subparsers(dest="subcommand", required=True)
     sub.add_parser('entry-calls', help='project or cold-check conditional entry CALL/source links (scar entry-calls --help)')
+    sub.add_parser('source-summary', help='compose and cold-check source function dependencies (scar source-summary --help)')
     sub.add_parser('frontend', help='run formal source layers through local graph declarations (scar frontend --help)')
     sub.add_parser('connection-contract', help='check all source instruction reference contracts (scar connection-contract --help)')
     sub.add_parser('body-interfaces', help='read all shared body entry/completion/resume interfaces')

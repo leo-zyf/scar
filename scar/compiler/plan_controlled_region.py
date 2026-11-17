@@ -27,7 +27,8 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'analysis/gcc_optimization.py', 'analysis/gcc_cost_features.py',
     'analysis/bounded_entry_calls.py', 'codegen/native_stage_group.py',
     'optimization/native_stage_context.py', 'compiler/calibrate_native_groups.py',
-    'optimization/cost_context_compatibility.py')
+    'optimization/cost_context_compatibility.py', 'analysis/source_function_summary.py',
+    'analysis/interprocedural_summary.py', 'compiler/source_summary_binding.py')
 
 
 def _pins():
@@ -175,23 +176,99 @@ def _group_context(reference, contract, correspondence, compiler_feedback):
         resource_obligations_discharged=False, target_samples_refitted=False)
 
 
+def _summary_native_correspondence(reference, binding, region, graph, correspondence):
+    """Join exact original F4 ports to semantic operations and native stages.
+
+    These are source associations, not runtime storage/version equalities.
+    Shared evaluate/Expr projections keep the same semantic operation ID.
+    """
+    summary = read_artifact(reference)
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    def step_key(point):
+        if not isinstance(point, dict) or 'port' not in point:
+            return None
+        port = point['port']
+        return point['unit'], canonical(port['template']), port['owner']['wire']
+    operations, values, accesses = {}, {}, {}
+    for index, function in enumerate(summary['functions']):
+        local = function['local']; base = '#/functions/'+str(index)+'/local/'
+        for ordinal, operation in enumerate(local['operation_classifications']):
+            operations.setdefault(step_key(operation['entry']), []).append(dict(
+                artifact=reference, locator=base+'operation_classifications/'+str(ordinal)))
+        for ordinal, dependency in enumerate(local['port_dependencies']):
+            values.setdefault(canonical(dependency['port']), []).append(dict(
+                artifact=reference, locator=base+'port_dependencies/'+str(ordinal)))
+        for table in ('reads', 'writes'):
+            for ordinal, access in enumerate(local[table]):
+                # A receiver or RHS producer is not the access operation.
+                key = step_key(access.get('result_world'))
+                if key is not None:
+                    accesses.setdefault(key, []).append(dict(artifact=reference,
+                        locator=base+table+'/'+str(ordinal)))
+    def unique(rows):
+        return [row for _, row in sorted({canonical(row):row for row in rows}.items())]
+    source_region = binding['region']; rows = []
+    expression_origins = {}
+    for index, origin in enumerate(region.source.origins):
+        if origin.get('expression') is not None:
+            expression_origins.setdefault(origin['expression'], []).append((origin,
+                dict(artifact=source_region, locator='#/source/origins/'+str(index))))
+    for kind, projected in (('EXPRESSION', graph['projection']['expressions']),
+                            ('ACTION', graph['projection']['actions'])):
+        for index, projection in enumerate(projected):
+            identifier = projection['expression' if kind=='EXPRESSION' else 'action']
+            if kind=='ACTION' and region.actions[index].id!=identifier:
+                raise ValueError('summary source association lost original action order')
+            origins = (expression_origins.get(identifier, []) if kind=='EXPRESSION' else
+                [(origin, dict(artifact=source_region, locator='#/actions/'+str(index)+'/origins/'+str(i)))
+                    for i,origin in enumerate(region.actions[index].origins)])
+            op_refs, value_refs, access_refs, origin_refs = [], [], [], []
+            unresolved_results = 0
+            for origin, origin_ref in origins:
+                if origin.get('kind')!='original_f4' or not all(key in origin for key in ('unit','template','step')):
+                    continue
+                key = origin['unit'], canonical(origin['template']), origin['step']
+                op_refs.extend(operations.get(key, [])); access_refs.extend(accesses.get(key, []))
+                origin_refs.append(origin_ref)
+                for result in origin.get('results', []):
+                    matched = values.get(canonical(result), [])
+                    value_refs.extend(matched); unresolved_results += int(not matched)
+            # Correspondence stores semantic IDs; source IDs are joined
+            # through the already admitted projection, never by source names.
+            stages = [stage['stage'] for stage in correspondence['stages']
+                if projection['operation'] in stage['source_expressions' if kind=='EXPRESSION' else 'source_operations']]
+            rows.append(dict(kind=kind, source_id=identifier, semantic_operation=projection['operation'],
+                native_stages=stages, original_origins=unique(origin_refs),
+                source_operations=unique(op_refs), result_dependencies=unique(value_refs),
+                explicit_accesses=unique(access_refs), unassociated_result_ports=unresolved_results,
+                status='MAPPED_ORIGINAL_SOURCE_MAY_FACTS' if op_refs or value_refs else 'UNRESOLVED_SOURCE_ASSOCIATION'))
+    return dict(schema='scar.source-summary-native-correspondence', schema_version=1,
+        summary=reference, region=source_region, region_sha256=graph['region_sha256'],
+        semantic_graph_revision=graph['graph_revision'], native_manifest=binding['native_manifest'],
+        entries=rows, mapped_entries=sum(row['status']=='MAPPED_ORIGINAL_SOURCE_MAY_FACTS' for row in rows),
+        source_association_only=True, normal_completion_projection_only=True,
+        action_and_expression_rows_are_shared_operation_projections=True,
+        runtime_value_or_storage_identity_proven=False, effects_closed=False,
+        transformation_authorized=False, cost_or_timing_inferred=False)
+
+
 def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-            compiler_feedback=None, entry_calls=None, native_group_observations=None):
+            compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
     from scar.analysis.replay_transaction import replay_transaction
     # A prepare and its independent check deliberately start separate scopes.
     # No cached validation document crosses this source-admission boundary.
     with replay_transaction():
         return _derive_body(kind, admission, profiles, cost_use=cost_use, cost_qualification=cost_qualification,
             compiler_feedback=compiler_feedback, entry_calls=entry_calls,
-            native_group_observations=native_group_observations)
+            native_group_observations=native_group_observations, source_summary=source_summary)
 
 
 def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-                 compiler_feedback=None, entry_calls=None, native_group_observations=None):
+                 compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission)
-    entry = correspondence = entry_use = annotations = origin = group_context = None
+    entry = correspondence = entry_use = annotations = origin = group_context = summary_binding = summary_correspondence = None
     if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
         raise ValueError('explicit cost-use contract required')
     if kind == 'STATEFUL_SPECIALIZATION':
@@ -208,6 +285,13 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
         correspondence = _stateful_stage_binding(region, graph, contract)
         if entry_calls is not None:
             origin = _entry_origin(entry_calls, region)
+        if source_summary is not None:
+            if entry_calls is None:
+                raise ValueError('source summary binding requires its original entry CALL projection')
+            from scar.compiler.source_summary_binding import derive_stateful_source_summary_binding
+            summary_binding = derive_stateful_source_summary_binding(source_summary, admission, entry_calls=entry_calls)
+            summary_correspondence = _summary_native_correspondence(source_summary,
+                summary_binding, region, graph, correspondence)
         if compiler_feedback is not None:
             annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
         if native_group_observations is not None:
@@ -230,7 +314,8 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
             correspondence_sha256=semantic_sha256(correspondence))
     elif kind == 'PIPELINE_FUSION':
         if (cost_use != 'EXPLICIT_DECLARED_ANALYSIS' or cost_qualification is not None
-                or compiler_feedback is not None or entry_calls is not None or native_group_observations is not None):
+                or compiler_feedback is not None or entry_calls is not None or native_group_observations is not None
+                or source_summary is not None):
             raise ValueError('qualified entry-cost use currently requires a stateful source admission')
         from scar.optimization.region_implementation import project_region_implementation
         if profiles:
@@ -263,13 +348,19 @@ def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALY
     if group_context is not None:
         parameters['native_group_context'] = dict(observations=native_group_observations,
             semantic_sha256=semantic_sha256(group_context), complete_call_cost_inferred=False)
+    if summary_binding is not None:
+        parameters['source_function_summary'] = dict(summary=source_summary,
+            semantic_sha256=semantic_sha256(summary_binding), conditional_may_dependencies_only=True,
+            correspondence_sha256=semantic_sha256(summary_correspondence),
+            source_effect_or_timing_qualification_granted=False)
     strict = validate_problem(replace(strict, operations=(replace(operation,
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
     controlled, projection = project_controlled_region(strict, contract)
     return dict(contract=contract, source_graph=graph, correspondence=correspondence,
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
-        entry_source_origin=origin, native_group_context=group_context,
+        entry_source_origin=origin, native_group_context=group_context, source_summary_binding=summary_binding,
+        source_summary_correspondence=summary_correspondence,
         strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 
@@ -279,12 +370,12 @@ def _without_elapsed(value):
 
 
 def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-              cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations):
-    return dict(schema=SCHEMA, schema_version=2, kind=kind, admission=reference,
+              cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations, source_summary):
+    return dict(schema=SCHEMA, schema_version=3, kind=kind, admission=reference,
         entry_profiles=list(profiles), max_seconds=max_seconds, files=files, producer_pins=_pins(),
         cost_use=cost_use, cost_qualification=cost_qualification,
         compiler_feedback=compiler_feedback,
-        entry_calls=entry_calls, native_group_observations=native_group_observations,
+        entry_calls=entry_calls, native_group_observations=native_group_observations, source_summary=source_summary,
         strict_status=strict_plan['status'], controlled_status=plan['status'],
         strict_problem_sha256=digest(strict), controlled_problem_sha256=digest(controlled),
         controlled_feasibility_is_not_whole_process_feasibility=True,
@@ -295,7 +386,7 @@ def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled,
 
 def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
             cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None, compiler_feedback=None,
-            entry_calls=None, native_group_observations=None):
+            entry_calls=None, native_group_observations=None, source_summary=None):
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     reference = _reference(admission)
@@ -304,12 +395,13 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     feedback = None if compiler_feedback is None else _reference(compiler_feedback)
     calls = None if entry_calls is None else _reference(entry_calls)
     observed = None if native_group_observations is None else _reference(native_group_observations)
+    summary = None if source_summary is None else _reference(source_summary)
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh controlled region output required')
     documents, strict, controlled = _derive(kind, reference, profiles,
         cost_use=cost_use, cost_qualification=qualification, compiler_feedback=feedback,
-        entry_calls=calls, native_group_observations=observed)
+        entry_calls=calls, native_group_observations=observed, source_summary=summary)
     strict_plan = construct_implementations(strict, max_seconds=max_seconds)
     plan = construct_implementations(controlled, max_seconds=max_seconds)
     verification = verify_execution_plan(controlled, plan) if plan['selected'] else None
@@ -320,19 +412,19 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     files = {key:None if value is None else _write(directory/(key.replace('_','-')+'.json'), value)
         for key,value in documents.items()}
     report = _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-        cost_use, qualification, feedback, calls, observed)
+        cost_use, qualification, feedback, calls, observed, summary)
     _write(directory/'preparation.json', report)
     return report
 
 
 def check(preparation):
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
-    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 2) or saved['producer_pins'] != _pins():
+    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 3) or saved['producer_pins'] != _pins():
         raise ValueError('controlled region producer or schema differs')
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
         compiler_feedback=saved['compiler_feedback'], entry_calls=saved['entry_calls'],
-        native_group_observations=saved['native_group_observations'])
+        native_group_observations=saved['native_group_observations'], source_summary=saved['source_summary'])
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     for name, problem in (('strict_plan', strict), ('controlled_plan', controlled)):
@@ -351,7 +443,7 @@ def check(preparation):
     if saved != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
             saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan'],
             saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback'],
-            saved['entry_calls'], saved['native_group_observations']):
+            saved['entry_calls'], saved['native_group_observations'], saved['source_summary']):
         raise ValueError('controlled preparation summary changed its original qualification')
     return saved
 
@@ -365,6 +457,7 @@ def main(argv=None):
     parser.add_argument('--cost-qualification', help='retained entry-cost qualification for the requested timing use')
     parser.add_argument('--compiler-feedback', help='source-bound GCC optimization collection result')
     parser.add_argument('--entry-calls', help='bounded conditional entry CALL projection')
+    parser.add_argument('--source-summary', help='cold-replayable source function dependency summary')
     parser.add_argument('--native-group-observations', help='frozen canonical native group observations; not a whole-call profile')
     parser.add_argument('--out'); parser.add_argument('--check'); parser.add_argument('--max-seconds',type=float,default=30)
     args = parser.parse_args(argv)
@@ -377,7 +470,8 @@ def main(argv=None):
     else:
         saved = prepare(args.kind, args.admission, args.out, entry_profiles=args.entry_profile,max_seconds=args.max_seconds,
             cost_use=args.cost_use, cost_qualification=args.cost_qualification, compiler_feedback=args.compiler_feedback,
-            entry_calls=args.entry_calls, native_group_observations=args.native_group_observations)
+            entry_calls=args.entry_calls, native_group_observations=args.native_group_observations,
+            source_summary=args.source_summary)
         result = dict(preparation=_reference(Path(args.out)/'preparation.json'),
             strict_status=saved['strict_status'], controlled_status=saved['controlled_status'],
             native_loaded=False, deployment_authorized=False)

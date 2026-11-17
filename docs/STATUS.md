@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 跨函数条件MAY摘要已接真实Gray–Scott入口：复用原F4与有界目标观察，8共享body/49CALL/9条件目标，formal/environment/world分开，CALL输出切边后经原routes替换，SCC有限集合固定点不展开递归；保control selector、receiver/key地址依赖及未知callee已知输入。来源SHA/CodeID+原body/point/definition绑定实际native，54表达式+26动作的80个来源投影全部接原F4和11native stages（投影非新增执行节点），两次stateful写保留。CLI及共同Problem接入schema3；真实独立冷验通过，无target/native/编译，whole-call成本仍UNKNOWN/NO_OP。依赖/unknown事实按ID共享，报告44.25→13.71MB，展开事实哈希完全一致；3项metadata验证通过。完整三阶段仍未完成，下一层补可用于移动证明的精确effect/alias摘要和同session重复冷准入复用。材料：`artifacts/baseline/source-summary-mainline.json`。
+
 2026-11-17 共享循环移动分析已贯通现有三阶段主链：`array_motion`绑定原body/interface版本，统一依赖、structural invariant及可移动placement；source F4重发现适配接入`invariant_build`，CPU计划、匿名成本需求及串/并行C++均消费同一规则，优化后DAG独立重推并拒绝旧分析。3项metadata验证通过；按当前规则重发既有generic样例ProgramBuild后，原F4→计划→C++20/ABI1实际编译和冷load通过，4次native逐位一致，输入变化、输出污染、只读别名、零/负trip无native及callee变更回退均通过；自洽伪造source route被冷重放拒绝。旧材料不改，未测性能或升级部署资格。当前仍为严格array-carry域，通用MemorySSA移动及递归调用摘要尚缺，三阶段未全面完成。材料：`artifacts/baseline/unified-motion-mainline.json`。
 
 2026-11-17 入口→native→阶段组上下文已接通：有界原driver捕获51目标，条件入口投影为2unit/10接口/8共享body/66原typed路由，源码SHA+CodeID自动见证实际native源。原303条主要为lazy视图/预算，非303个语义失败。新observer保全部原source字节及真实前后阶段，canonical两数组与原native逐位一致；2warm/7样本body组mean0.540264ms、预包装FFI mean0.760542ms（非A/B/整方法）。7阶段GCC模型字段匹配、2未知；独立冷读、两错误来源/映射拒绝及4项回归通过。来源和实测component已入共同Problem，但整方法cost仍UNKNOWN，默认NO_OP；全三阶段未完成。材料：`artifacts/baseline/entry-native-frame-context.json`。
