@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 GCC方法论已做本机实证：GCC13.3的-Q选项、pass顺序、初始GIMPLE/SSA、LICM明细和最终IR已保存。闭合C例子出现内联、不变量外提、重复/死计算消除、16字节vector；未知外部调用保留并阻断该循环向量化，未运行测试程序或测加速比。O2/very-cheap与O3/dynamic成本差异及默认线程数1已核；合理外延为复用现有图的宏观pass，不另造SSA/CFG，不把GCC直接当Python语义证明。先接已有fusion的requires→合法性→预测收益→改写→失效/验证，再补跨层资源规则。生产代码本轮未改。记录：`artifacts/baseline/gcc-o3-study.json`。
+
 2026-11-17 已暂停上一轮新接口编码并完成解析/构造式规划调研，三个拟建模块均尚未落盘。主线改为语义化简、工作/数据移动需求和容量界、解析组织、资源日历构造、证书与C++；少量组件标定用于有效吞吐/边界开销/重叠条件，不默认整版本黑盒调优。已有OIR、融合后端和求解器保留，求解器可作局部补充/校验；构造引擎尚未实现。具体逐层任务见DEVELOPMENT，文献与适用边界见 `artifacts/baseline/constructive-planning-research.json`。仍未完成三阶段。
 
 2026-11-17 性能归因定位了主链架构缺口：现joint producer只生成固定CALL的CPU选项，source original/fusion/caller直串行不在该域，NO_OP仅为部署默认。相同进程、warmup3、9组×32的8×8干净对照：原NumPy7.687µs，五ABI单worker299.995µs，复用既有融合后端101.155µs；两种C++均不盈利，不自动启用。独立输入与只读别名逐位一致；另9次host插桩确认启动及task包装显著，ABI区间包含自身guard，不能称纯数学时间。源码正常路径有10份affinity scope（host与leaf双层），这些是源码API次数、非syscall trace。未改数学/后端。下一轮以composite region覆盖及实现选择为主链，再接每种实现的硬件/完整边界成本和交付；不继续仅调CPU排列。报告：`artifacts/baseline/pipeline-architecture-diagnosis.json`。

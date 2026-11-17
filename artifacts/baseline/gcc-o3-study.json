@@ -1,0 +1,167 @@
+{
+  "automatic_parallel_threads": "1",
+  "checks": {
+    "helper_call_present_before_and_absent_after": true,
+    "loop_invariant_motion_explicit_report": true,
+    "no_thread_runtime_calls_emitted": true,
+    "opaque_call_blocks_vectorization": true,
+    "opaque_function_retained": true,
+    "repeated_rhs_no_longer_has_separate_v": true,
+    "unavailable_body_blocks_inlining": true,
+    "unused_multiply_removed": true,
+    "vectorization_reported": true
+  },
+  "compiler": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "conclusions": [
+    "O3_USES_ANALYSIS_GATED_TRANSFORMS_AND_TARGET_COSTS_NOT_WHOLE_PROGRAM_BENCHMARK_SEARCH",
+    "PASS_MANAGER_MAINTAINS_PROPERTIES_BUT_PASSES_OWN_SEMANTIC_AND_PROFITABILITY_CHECKS",
+    "MEMORY_SSA_PLUS_ALIAS_ORACLE_PREVENT_UNSAFE_MOVEMENT",
+    "CLOSED_BODY_CAN_BE_INLINED_AND_OPTIMIZED_OPAQUE_CALL_REMAINS",
+    "DYNAMIC_VECTOR_COST_MEANS_SIZE_DEPENDENT_RUNTIME_PATH_CHOICE_NOT_ONLINE_RACING"
+  ],
+  "date": "2026-11-17",
+  "evidence": {
+    "assembly": {
+      "schema": "scar.assembly-source",
+      "sha256": "2b7832354b3379b09db9915dc8fec9d028172559fce127880717825fdb0cea76",
+      "size_bytes": 2059,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3.s"
+    },
+    "flags_O2": {
+      "schema": "scar.gcc-options-dump",
+      "sha256": "7fc2e38011e89721fdb1114a717b11527183522c49e7cffae642e121fbdbae71",
+      "size_bytes": 11447,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O2-flags.txt"
+    },
+    "flags_O3": {
+      "schema": "scar.gcc-options-dump",
+      "sha256": "9ae3d65663532c2a0683dfc8f4a1a7b2a4cfd4625587eb56b4171884370a9e27",
+      "size_bytes": 11431,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3-flags.txt"
+    },
+    "initial_gimple": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "41863bf4df81c93c64aacf52843456800a6baeb5133c00fd8a0715833f69c34d",
+      "size_bytes": 1147,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3.c.006t.gimple"
+    },
+    "licm": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "53644b6fb9772a2a6607f1bd867526c25a15858de9373499e87af75b4067859b",
+      "size_bytes": 3106,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3.c.141t.lim2"
+    },
+    "optimization_report": {
+      "schema": "scar.gcc-optimization-report",
+      "sha256": "c2c4a5f01f0bf2e816199c9a950007f82a572f06149cac57a854565e2f0b79c2",
+      "size_bytes": 3212,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3-optimization.txt"
+    },
+    "optimized": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "bf43ffd1ccb04454acaf5368925b67153ba3081cdb02f5c04d4b7b1b8ea5e5b4",
+      "size_bytes": 2855,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3.c.254t.optimized"
+    },
+    "passes": {
+      "schema": "scar.gcc-pass-dump",
+      "sha256": "3104c5798a7392982ca6dbbc072010c3555886701ade294b2fe79257ff0adee1",
+      "size_bytes": 22293,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3-passes.txt"
+    },
+    "probe": {
+      "schema": "scar.c-source",
+      "sha256": "94c174f93d771202f208272afb6c0ef964c31227318aa2882ccaa82ee91492b4",
+      "size_bytes": 553,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/probe.c"
+    },
+    "ssa": {
+      "schema": "scar.gcc-gimple-dump",
+      "sha256": "be9f78533c63edf203736d95119baa2159a92402df677ed4f2375ed31cf1e672",
+      "size_bytes": 1909,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/gcc-o3-study-v1/O3.c.021t.ssa"
+    }
+  },
+  "experiment_flags": [
+    "-O3",
+    "-fno-fast-math",
+    "-ffp-contract=off"
+  ],
+  "extra_O3_flags": {
+    "-fgcse-after-reload": "[enabled]",
+    "-fipa-cp-clone": "[enabled]",
+    "-floop-interchange": "[enabled]",
+    "-floop-unroll-and-jam": "[enabled]",
+    "-fpeel-loops": "[enabled]",
+    "-fpredictive-commoning": "[enabled]",
+    "-fsplit-loops": "[enabled]",
+    "-fsplit-paths": "[enabled]",
+    "-ftree-loop-distribution": "[enabled]",
+    "-ftree-partial-pre": "[enabled]",
+    "-funroll-completely-grow-size": "[enabled]",
+    "-funswitch-loops": "[enabled]",
+    "-fvect-cost-model=[unlimited|dynamic|cheap|very-cheap]": "dynamic",
+    "-fversion-loops-for-strides": "[enabled]"
+  },
+  "fast_associative_math": "[disabled]",
+  "official_sources": {
+    "alias": "https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html",
+    "options": "https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html",
+    "pass_manager": "https://gcc.gnu.org/onlinedocs/gccint/Pass-manager.html",
+    "pass_protocol": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/gcc/tree-pass.h",
+    "tree_ssa": "https://gcc.gnu.org/onlinedocs/gccint/Tree-SSA-passes.html",
+    "vector_profitability": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/gcc/tree-vect-loop.cc"
+  },
+  "options_query_scope": "INSTALLED_GCC_DEFAULT_C_TARGET_AT_O3",
+  "pass_dumps": [
+    "O3.c.181t.lim4",
+    "O3.c.006t.gimple",
+    "O3.c.021t.ssa",
+    "O3.c.141t.lim2",
+    "O3.c.254t.optimized"
+  ],
+  "probe_contract": [
+    "C_RESTRICT_POINTERS",
+    "LOCAL_HELPER_VISIBLE",
+    "NO_SPECIAL_FENV_ACCESS_DECLARATION"
+  ],
+  "program_executed": false,
+  "scar_extension": {
+    "existing_facts": [
+      "ProgramView/use-def",
+      "StateVersionValue/StateAccess",
+      "ReferenceValue.targets",
+      "loop/control/dominance",
+      "v2 OIR",
+      "proof ledger"
+    ],
+    "first_pass": "ADAPT_EXISTING_FUSION_TO_SAME_SOURCE_REGION_BOUNDARY_AND_EXISTING_CPP_LOWERER",
+    "macro_deltas": [
+      "transfer_requests_and_bytes",
+      "alloc_free_count_and_live_bytes",
+      "thread_launch_join",
+      "affinity_bind_check_restore",
+      "guard_count_and_scope"
+    ],
+    "minimal_pass_fields": [
+      "name/version/scope",
+      "requires",
+      "applicability",
+      "legality/Q",
+      "profitability",
+      "transform",
+      "invalidates"
+    ],
+    "native_cost_model_is_not_physical_optimality_proof": true,
+    "no_new_SSA_or_CFG": true,
+    "python_tensor_semantic_facts_still_required": true
+  },
+  "schema": "scar.gcc-o3-compiler-study",
+  "schema_version": 1,
+  "source_level_findings_not_python_legality_proofs": true,
+  "source_text": "#include <stddef.h>\nstatic double factor(double a) { return a * 2.0 + 1.0; }\nvoid closed_region(double *restrict out, const double *restrict x, size_t n, double a) {\n    for (size_t i = 0; i < n; ++i) {\n        double k = factor(a);\n        double u = x[i] * k;\n        double v = x[i] * k;\n        double unused = x[i] * 13.0;\n        out[i] = u + v;\n    }\n}\nextern double external_operation(double);\nvoid opaque_region(double *restrict out, const double *restrict x, size_t n) {\n    for (size_t i = 0; i < n; ++i) out[i] = external_operation(x[i]);\n}\n",
+  "status": "VERIFIED_COMPILER_MECHANISM_NOT_SCAR_PASS_IMPLEMENTATION",
+  "test_is_compile_inspection_not_performance_measurement": true,
+  "vector_cost_O2": "very-cheap",
+  "vector_cost_O3": "dynamic"
+}
