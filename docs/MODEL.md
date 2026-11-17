@@ -501,6 +501,8 @@ SEMANTIC / PLANNED / OBSERVED 分开，未知时长不是 0。分配完成不代
 
 `cost-activities` 用 `ActivityCostTable` 引用同一时间图和资源投影；每个原活动恰归一个计费 subject。原整池标定对应一组 allocation/release，不能均摊或按 slot 数重复乘；同一 canonical 样本可供不同真实工作 occurrence 估价，occurrence 不能重复计费。现 CPU 组件桥重放原 recipe/task 图、阶段、形状、完整硬件/后端 context 和原样本统计，将 canonical 样本标为条件组件模型，其 min/max 仅为经验范围。整调用观测不拆成 leaf 成本；没有独立活动端点的 guard、输入扫描、team setup/restore 等保留 unmapped，不能伪装成 duration UNKNOWN 的既有节点或塞入 fence。全部 subject 有证据仍不自动证明完整调用闭合，更不授权 solver、C++ 或物理最优性。
 
+选定 pipeline 的 host envelope 复用同一 VRS：caller、worker 和原 ABI 通过事件连接；异步创建的提交返回与 worker 入场可交错，发布释放由 PRE/POST 观测包围，join 等待不是固定 CPU 服务。`ResourceProjection` 只绑定原证据授权的线程和存储候选，逻辑 worker/mutex token 不冒充 CPU。`OBSERVED_SCOPE` 每项引用一个活动的确切端点、原样本及统计证明，表示插桩片段观测；不得直接提升为未来 clean service、数学上下界或完整调用成本。pool 只计一次，符号成员不额外计费，未知外围仍保留。
+
 `refine-time-envelope` 将既有 standalone stateful CPU 执行器的实际边界细化到同一 VRS；`IMPLEMENTATION_PHASE` 保留固定源版本、actor 资格域和明确 effects，允许读原外部输入，不准写 Tensor 或冒充 payload 分配/释放。所有 PRECOMMIT phase 进入原成功 fence，POSTCOMMIT 只描述不可回退的正常状态交接；派生图不可执行。原数据、slot、旧 HB 不变，函数/循环仍使用原 scope。当前实施范围限定 compiler artifact 与共享 stateful guard，不覆盖 compact runtime 或 repeat adapter。新增有限性扫描可接已有 canonical 组件；非连续 guard/setup 或不匹配后缀的组合成本继续 unmapped，不能以 scope 父成本与 leaf 累加。
 
 `--bind-serial-demands` 对同图执行前向 affinity 状态推理：原串行 bind 成功后为 BOUND，闭合的自生成代码保持；遇无保持合同的 opaque/provider 则 UNKNOWN，不能从末尾检查成功倒推历史。仅已证明区间内的活动取得原 HardwareThread 的单位需求，其余不变。该记录是有来源的静态资格，非 CPU 运行观测、独占资源预留或 Tensor 内容版本；任务、数据、时长、事件和依赖不变，重复推导幂等。

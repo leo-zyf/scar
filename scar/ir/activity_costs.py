@@ -126,7 +126,7 @@ def validate_activity_cost_table(table, schedule, resource_projection):
           and table.target == resource_projection.target, 'cost table source/resource/target identity differs')
     activities = {row.id: row for row in schedule.temporal.activities}
     subjects, covered, charged = set(), set(), set()
-    known = complete = empirical = markers = 0
+    known = complete = empirical = markers = observed_scopes = 0
     tasks = {row.id: row for row in schedule.tasks}
     for row in table.costs:
         _need(type(row.subject) is str and row.subject and row.subject not in subjects, 'unique original cost subject required')
@@ -182,8 +182,31 @@ def validate_activity_cost_table(table, schedule, resource_projection):
                       for ref in row.component_refs), 'original source milestone certificate FactRef required')
             markers += 1; complete += 1
             continue
-        _need(row.basis is CostBasis.DECLARED_COMPONENT_MODEL,
-              'OBSERVED_SCOPE requires an independent whole-scope reader; canonical components are not scope observations')
+        if row.basis is CostBasis.OBSERVED_SCOPE:
+            proofs=[r for r in table.source_refs if r.get('schema')=='scar.observed-activity-cost-proof'
+                    and r.get('schema_version')==1 and r.get('subject')==row.subject]
+            _need(len(proofs)==1 and len(row.activities)==1,
+                  'observed cost needs one source-linked single-activity scope proof')
+            proof=proofs[0];activity=activities[row.activities[0]]
+            _need(proof.get('activities')==list(row.activities)
+                  and proof.get('start_event')==activity.start and proof.get('completion_event')==activity.completion
+                  and proof.get('scope')==activity.scope and proof.get('samples_locator')=='#/samples'
+                  and type(proof.get('sample_count')) is int and proof['sample_count']>=3
+                  and proof.get('interpretation')=='INSTRUMENTED_SCOPE_OBSERVATION_NOT_INTRINSIC_SERVICE',
+                  'observed cost must preserve its exact activity/event/scope and sample interpretation')
+            _need(row.coverage is CostCoverage.COMPLETE_SUBJECT and not row.missing_terms
+                  and row.interval is not None and row.interval.kind is IntervalKind.EMPIRICAL_PREDICTION
+                  and {'OBSERVED_SCOPE_NOT_FUTURE_SERVICE_ESTIMATE','NONADDITIVE_ACROSS_THREADS'}<=set(row.conditions)
+                  and any(encode(ref.artifact)==proof.get('observation') and ref.locator=='#/samples'
+                          for ref in row.component_refs),
+                  'scope observation is neither a clean service model nor a complete enclosing call cost')
+            _need(proof.get('statistics')==dict(estimate_ticks=row.estimate_ticks,
+                  lower_ticks=row.interval.lower_ticks,upper_ticks=row.interval.upper_ticks),
+                  'observed activity statistics differ from retained scope proof')
+            observed_scopes+=1
+        else:
+            _need(row.basis is CostBasis.DECLARED_COMPONENT_MODEL,
+                  'numeric costs require a declared component model or independently read observed scope')
         _need(type(row.estimate_ticks) is int and row.estimate_ticks >= 0 and row.component_refs
               and row.charge_keys and row.conditions, 'numeric component cost needs source facts, occurrence keys and conditions')
         if row.coverage is CostCoverage.COMPLETE_SUBJECT:
@@ -212,6 +235,8 @@ def validate_activity_cost_table(table, schedule, resource_projection):
         solver_authorized=False, execution_authorized=False)
     if markers:
         summary['source_control_milestones'] = markers
+    if observed_scopes:
+        summary['observed_scope_subjects'] = observed_scopes
     return summary
 
 
