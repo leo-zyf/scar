@@ -24,17 +24,10 @@ _RANGE=range
 _AUTHORITY='ORIGINAL_F4_COMPOSITE_FUSION_AND_FUNCTION_GLOBAL_ROUTE_REPLAY'
 
 
-def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resource_binding=None,
-        execution_specialization=None,parallel=None):
-    """Replay source/fusion/routes, then lower the existing derived Expr DAG."""
-    from scar.compiler.temporal_invariant_loop import build_temporal_invariant_loop
-    if parallel is not None and type(parallel) is not bool:
-        raise ValueError('parallel requires an exact boolean or placement-derived None')
-    workers=1 if resource_binding is None else len(resource_binding.cpu_ids)
-    parallel=workers>1 if parallel is None else parallel
-    if parallel and resource_binding is None:raise ValueError('parallel composite requires an explicit retained CPU placement')
-    if not parallel and workers!=1:raise ValueError('serial composite requires exactly one planned CPU')
-    proof=validate_composite_invariant_loop_proof(proof,catalog=catalog)
+def _loop_interface(proof,*,execution_specialization=None,source_motion=None):
+    """One interface for preview and lowering; source admission stays separate."""
+    if type(proof) is not CompositeInvariantLoopProof:
+        raise ValueError('separate original composite proof required')
     interface=dict(proof_kind=proof.profile,original_composite_f4_proof=asdict(proof),
         carry_parameter=proof.carry_parameter,
         readonly_parameters=[name for name in proof.body.parameters if name!=proof.carry_parameter],
@@ -53,6 +46,27 @@ def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resou
             raise ValueError('exact composite shape/count/contiguous-layout specialization required')
         interface['execution_specialization']=dict(input_shapes={name:list(shape) for name,shape in spec['input_shapes'].items()},
             trip_count=spec['trip_count'],input_layout=spec['input_layout'])
+    if source_motion is not None:
+        from scar.ir.execution_recipe import _reference
+        reference=_reference(source_motion)
+        if reference['schema']!='scar.source-composite-loop-motion':
+            raise ValueError('separate composite source movement reference required')
+        interface['source_motion']=reference
+    return interface
+
+
+def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resource_binding=None,
+        execution_specialization=None,parallel=None,source_motion=None):
+    """Replay source/fusion/routes, then lower the existing derived Expr DAG."""
+    from scar.compiler.temporal_invariant_loop import build_temporal_invariant_loop
+    if parallel is not None and type(parallel) is not bool:
+        raise ValueError('parallel requires an exact boolean or placement-derived None')
+    workers=1 if resource_binding is None else len(resource_binding.cpu_ids)
+    parallel=workers>1 if parallel is None else parallel
+    if parallel and resource_binding is None:raise ValueError('parallel composite requires an explicit retained CPU placement')
+    if not parallel and workers!=1:raise ValueError('serial composite requires exactly one planned CPU')
+    proof=validate_composite_invariant_loop_proof(proof,catalog=catalog)
+    interface=_loop_interface(proof,execution_specialization=execution_specialization,source_motion=source_motion)
     builder=build_temporal_invariant_loop
     if parallel:
         from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop
@@ -92,6 +106,8 @@ def guarded_composite_invariant_loop(original,artifact,proof,*,exclusive_inputs=
     loop exactly once. Only exact FunctionType.__globals__ dictionaries are
     traversed; no custom attribute lookup is performed on application objects.
     """
+    from scar.compiler.invariant_loop_runtime import _require_source_movement_binding
+    _require_source_movement_binding(artifact,'scar.source-composite-loop-motion')
     if type(proof) is not CompositeInvariantLoopProof:
         raise SourceMismatch('separate original composite loop proof required')
     _function(original,proof.source)

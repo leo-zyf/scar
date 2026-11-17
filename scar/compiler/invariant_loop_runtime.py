@@ -17,12 +17,29 @@ from scar.optimization.resource_solver import semantic_sha256
 _RANGE=range
 
 
+def _require_source_movement_binding(artifact,schema):
+    """Construction check for evidence already consumed by the native loader.
+
+    This does not replay F4 or turn runtime guards into movement authority.
+    An unbound conditional micro artifact remains available through run().
+    """
+    plan=artifact.plan;reference=plan['loop_interface'].get('source_motion')
+    binding=plan.get('execution_movement_binding')
+    if (type(reference)is not dict or reference.get('schema')!=schema
+            or type(binding)is not dict or binding.get('schema')!='scar.temporal-source-movement-binding'
+            or type(binding.get('schema_version'))is not int or binding['schema_version']!=1
+            or binding.get('source_motion')!=reference
+            or binding.get('source_body_sha256')!=plan['body_sha256']):
+        raise SourceMismatch('original caller requires consumed source movement evidence')
+
+
 def guarded_invariant_loop(original,artifact,proof,*,exclusive_inputs=False,trial=False):
     """Admit a source-derived loop for validation; deployment cost is separate.
 
     No import-time or user-provided node list selects hoisted expressions.
     Trial mode permits correctness/A-B validation, not automatic deployment.
     """
+    _require_source_movement_binding(artifact,'scar.source-loop-motion')
     if type(original) is not FunctionType or original.__closure__ or code_key(original.__code__)!=proof.source.code_key:
         raise SourceMismatch('original ordinary loop callable differs from F4 interface')
     leaf=original.__globals__.get(proof.leaf_global_name)

@@ -31,8 +31,11 @@ def _sources():
     return [_receipt(p) for p in (Path(__file__),Path(cpp.__file__),
         Path(cpp.__file__).with_name('kernel_v1.cpp.in'),Path(cpp.__file__).with_name('scar_abi_v1.h'),
         Path(__file__).with_name('invariant_loop.py'),
+        Path(__file__).with_name('pipeline_loop_frontend.py'),
         Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py',
-        Path(__file__).resolve().parents[1]/'analysis'/'array_motion_legality.py')]
+        Path(__file__).resolve().parents[1]/'analysis'/'array_motion_legality.py',
+        Path(__file__).resolve().parents[1]/'analysis'/'array_call_effects.py',
+        Path(__file__).resolve().parents[1]/'analysis'/'composite_call_effect_binding.py')]
 
 
 def _execution_plan(body,budget,binding):
@@ -48,22 +51,43 @@ def _source_movement_gate(body,interface):
     from scar.analysis.array_motion_legality import verify_array_motion_legality
     from scar.ir.execution_recipe import read_artifact,_reference
     reference=_reference(interface['source_motion']);motion=read_artifact(reference)
-    if (motion.get('schema'),motion.get('schema_version'))!=('scar.source-loop-motion',2) or type(motion['schema_version'])is not int:
+    family=(motion.get('schema'),motion.get('schema_version'))
+    families={('scar.source-loop-motion',2):('original_f4_proof','source-loop-motion:'),
+        ('scar.source-composite-loop-motion',1):('original_composite_f4_proof','source-composite-loop-motion:')}
+    if (type(motion.get('schema'))is not str or type(motion.get('schema_version'))is not int
+            or family not in families):
         raise ValueError('current source-motion movement certificate required')
-    if motion.get('id')!='source-loop-motion:'+semantic_sha256({key:value for key,value in motion.items()if key!='id'}):
+    proof_key,prefix=families[family]
+    if {key for key in ('original_f4_proof','original_composite_f4_proof')if key in interface}!={proof_key}:
+        raise ValueError('distinct original direct or composite source proof required')
+    if motion.get('id')!=prefix+semantic_sha256({key:value for key,value in motion.items()if key!='id'}):
         raise ValueError('source-motion content identity differs')
-    original=interface.get('original_f4_proof')
-    proof=read_artifact(motion['proof']);proof={key:value for key,value in proof.items()if key not in ('schema','schema_version')}
+    original=interface[proof_key];proof=read_artifact(motion['proof']);query={};extra={}
+    if proof_key=='original_composite_f4_proof':
+        from scar.compiler.pipeline_loop_frontend import _read_composite_invariant_loop_materials,COMPOSITE_PROOF_SCHEMA
+        from scar.analysis.array_call_effects import verify_composite_call_effects
+        if motion['proof']['schema']!=COMPOSITE_PROOF_SCHEMA:
+            raise ValueError('composite source movement requires its separate original proof receipt')
+        typed_proof,proof_ref=_read_composite_invariant_loop_materials(motion['proof']['uri'])
+        if proof_ref!=motion['proof']:
+            raise ValueError('composite original proof receipt changed during material replay')
+        proof=asdict(typed_proof)
+        effects=verify_composite_call_effects(motion['callee_effects'],typed_proof)
+        query=dict(callee_effects=effects,callee_binding=motion['callee_binding'])
+        extra=dict(callee_effects_sha256=semantic_sha256(effects),
+            callee_binding_sha256=semantic_sha256(motion['callee_binding']))
+    else:
+        proof={key:value for key,value in proof.items()if key not in ('schema','schema_version')}
     canonical=dict(carry_parameter=interface['carry_parameter'],
         readonly_parameters=[name for name in body.parameters if name!=interface['carry_parameter']],
-        original_f4_proof=original)
+        **{proof_key:original})
     if (original is None or semantic_sha256(proof)!=semantic_sha256(original)
             or motion['proof_id']!=proof['id'] or motion['proof_sha256']!=semantic_sha256(proof)
             or motion['body_sha256']!=semantic_sha256(asdict(body))
             or motion['canonical_interface_sha256']!=semantic_sha256(canonical)):
         raise ValueError('source-motion proof/body/canonical interface differs from native input')
     legality=verify_array_motion_legality(motion['movement_legality'],body,
-        carry_parameter=interface['carry_parameter'],loop_interface=canonical,source_window=motion['source_window'])
+        carry_parameter=interface['carry_parameter'],loop_interface=canonical,source_window=motion['source_window'],**query)
     roots={row['expression']:row for row in legality['roots']}
     if (legality['status']!='CONDITIONAL'
             or legality['array_motion_sha256']!=semantic_sha256(motion['array_motion'])
@@ -83,7 +107,7 @@ def _source_movement_gate(body,interface):
         source_window_sha256=semantic_sha256(motion['source_window']),
         canonical_interface_sha256=motion['canonical_interface_sha256'],source_body_sha256=motion['body_sha256'],
         source_invariant_roots=sorted(roots),stable_formal_inputs=stable,
-        source_window_replay_required=True,source_replacement_authorized=False)
+        source_window_replay_required=True,source_replacement_authorized=False,**extra)
 
 
 def _execution_movement_binding(body,execution,interface,budget,motion):
@@ -155,6 +179,7 @@ def _source(plan,execution):
             expression=f'read_value(static_cast<const unsigned char *>(inputs[{index}].data) + row * static_cast<ptrdiff_t>(inputs[{index}].strides[0]) + col * static_cast<ptrdiff_t>(inputs[{index}].strides[1]), nonfinite_input)'
         elif node.op=='const':expression=float(node.attrs['value']).hex()
         elif node.op=='neg':expression='-'+names[node.inputs[0]]
+        elif node.op=='copy':expression=names[node.inputs[0]]
         else:expression=f'{names[node.inputs[0]]} {cpp._BINARY_OPS[node.op]} {names[node.inputs[1]]}'
         line=f'            const double {name} = {expression};'
         if placement=='PRE_TEMPORAL_LOOP':

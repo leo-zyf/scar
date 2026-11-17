@@ -8,9 +8,9 @@ def compile_composite_invariant_build(document,out,*,loop_trip_count=None,loop_i
         plan_only=False,loop_cpu_threads=None,cpu_cost_model=False,loop_calibrations=(),
         loop_no_op_profiles=None,loop_max_threads=None):
     from scar.analysis.build import BuildSession,_check
-    from scar.compiler.pipeline_loop_frontend import (read_composite_invariant_loop_proof,
+    from scar.compiler.pipeline_loop_frontend import (read_composite_invariant_loop_motion,
         validate_composite_invariant_loop_links)
-    from scar.compiler.composite_invariant_loop import build_composite_invariant_loop
+    from scar.compiler.composite_invariant_loop import build_composite_invariant_loop,_loop_interface
     from scar.compiler.model import CpuPlacement
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.composite_invariant_schedule import (plan_composite_invariant_loop_schedule,
@@ -30,7 +30,7 @@ def compile_composite_invariant_build(document,out,*,loop_trip_count=None,loop_i
         for index,spec in enumerate(specs):
             directory=out/('loop-'+str(index));directory.mkdir()
             read_artifact(spec['proof'])
-            proof=read_composite_invariant_loop_proof(spec['proof']['uri'],catalog=session.view)
+            proof,source_motion=read_composite_invariant_loop_motion(spec['proof']['uri'],catalog=session.view)
             if spec['id']!=proof.id or spec['hardware']!=document['hardware']:
                 raise ValueError('composite proof/hardware differs from retained program domain')
             validate_composite_invariant_loop_links(proof,spec,document['loop_dependencies'])
@@ -41,6 +41,20 @@ def compile_composite_invariant_build(document,out,*,loop_trip_count=None,loop_i
                 nested_global_guard_count=len(proof.nested_callee_guards),
                 source_loop_authority='ORIGINAL_F4_COMPOSITION_AND_GLOBAL_ROUTES_REPLAYED',
                 native_directory=None,selected_for_use=False,whole_program_compiled=False)
+            motion_path=directory/'source-motion.json'
+            motion_path.write_text(json.dumps(source_motion,indent=2,sort_keys=True)+'\n')
+            row['source_motion']=artifact_reference(motion_path,source_motion['schema'])
+            legality=source_motion['movement_legality']
+            if legality['status']!='CONDITIONAL':
+                row.update(status='ORIGINAL_COMPOSITE_LOOP_RETAINED',selected_kind='NO_OP',
+                    selection_scope='SOURCE_MOVEMENT_LEGALITY',source_legality_status=legality['status'],
+                    unresolved_roots=[item['expression'] for item in legality['roots']if item['status']!='CONDITIONAL'],
+                    source_blockers=[*legality['source_window_effects']['blockers'],
+                        *(dict(blocker,expression=item['expression'],property=field)
+                            for item in legality['roots']for field in ('data_available','no_clobber','execution','effects')
+                            for blocker in item[field]['blockers'])],
+                    reason='original composite window does not justify all required invariant placements')
+                rows.append(row);continue
             if shape is None or count is None:
                 row.update(status='COMPOSITE_LOOP_INPUT_CONSTRAINTS_REQUIRED',missing=[name for name,value in
                     (('input_shapes',shape),('trip_count',count)) if value is None]);rows.append(row);continue
@@ -104,15 +118,30 @@ def compile_composite_invariant_build(document,out,*,loop_trip_count=None,loop_i
                 performance_qualified=False,physical_optimality_proven=False)
             if schedule['selected_kind']!='REGISTER_TEMPORAL_FUSION':
                 row.update(status='ORIGINAL_COMPOSITE_LOOP_RETAINED');rows.append(row);continue
-            if plan_only:row.update(status='MODEL_SELECTED_COMPOSITE_LOOP_PLAN_ONLY');rows.append(row);continue
             binding=dict(schedule['resource_binding']);binding['cpu_ids']=tuple(binding['cpu_ids'])
             binding['evidence']=tuple(binding.get('evidence',()))
             specialization=dict(input_shapes=shape,trip_count=count,input_layout='C_CONTIGUOUS')
+            replayed,fresh_motion=read_composite_invariant_loop_motion(spec['proof']['uri'],catalog=session.view)
+            if (semantic_sha256(asdict(replayed))!=semantic_sha256(asdict(proof))
+                    or semantic_sha256(fresh_motion)!=semantic_sha256(read_artifact(row['source_motion']))):
+                raise ValueError('composite movement changed between original F4 admission and lowering')
+            interface=_loop_interface(proof,execution_specialization=specialization,source_motion=row['source_motion'])
+            from scar.compiler.temporal_invariant_loop import _plan as preview_plan
+            if parallel:
+                from scar.compiler.parallel_temporal_invariant import _plan as preview_plan
+            preview,_=preview_plan(proof.body,proof.carry_parameter,interface,effective,CpuPlacement(**binding))
+            consumed=preview['execution_movement_binding']
+            if consumed is None:raise ValueError('main composite build requires consumed source movement legality')
+            movement_path=directory/'movement-binding.json'
+            movement_path.write_text(json.dumps(consumed,indent=2,sort_keys=True)+'\n')
+            row['movement_binding']=artifact_reference(movement_path,consumed['schema'])
+            if plan_only:row.update(status='MODEL_SELECTED_COMPOSITE_LOOP_PLAN_ONLY');rows.append(row);continue
             artifact=build_composite_invariant_loop(proof,directory/'native',catalog=session.view,
                 memory_budget_bytes=effective,resource_binding=CpuPlacement(**binding),
-                execution_specialization=specialization,parallel=True if parallel else None)
+                execution_specialization=specialization,parallel=True if parallel else None,source_motion=row['source_motion'])
             if (artifact.plan['loop_interface']['execution_specialization']!=specialization
                     or artifact.plan['memory_budget_bytes']!=effective
+                    or artifact.plan['execution_movement_binding']!=consumed
                     or semantic_sha256(artifact.plan['execution_plan']['resource_binding'])!=semantic_sha256(schedule['resource_binding'])):
                 raise ValueError('composite native specialization differs from selected resource schedule')
             from scar.compiler.export_composite_temporal_invariant import export_composite_temporal_invariant

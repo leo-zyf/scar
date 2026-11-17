@@ -9,7 +9,7 @@ from .export_temporal_invariant import _json,_receipt,_source
 
 def export_composite_temporal_invariant(native,out,*,schedule_path,proof_reference,catalog):
     from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop
-    from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_proof,COMPOSITE_PROOF_SCHEMA
+    from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_motion,COMPOSITE_PROOF_SCHEMA
     from scar.optimization.composite_invariant_schedule import verify_composite_invariant_loop_schedule
     from scar.optimization.resource_solver import semantic_sha256
     from scar.ir.execution_recipe import read_artifact
@@ -17,8 +17,13 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     if proof_reference['schema']!=COMPOSITE_PROOF_SCHEMA:
         raise ValueError('separate composite proof reference required; v1 cast is not admission')
     proof_document=read_artifact(proof_reference)
-    proof=read_composite_invariant_loop_proof(proof_reference['uri'],catalog=catalog)
+    proof,source_motion=read_composite_invariant_loop_motion(proof_reference['uri'],catalog=catalog)
     native=Path(native).resolve();manifest=json.loads((native/'artifact.json').read_bytes())
+    raw_plan=json.loads((native/'plan.json').read_bytes())
+    motion_ref=raw_plan['loop_interface'].get('source_motion')
+    if (motion_ref is None or source_motion['proof']!=proof_reference
+            or semantic_sha256(read_artifact(motion_ref))!=semantic_sha256(source_motion)):
+        raise ValueError('composite export requires its compiled current source movement certificate')
     parallel=manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
     if parallel:
         from scar.compiler.parallel_temporal_invariant import load_parallel_temporal_invariant_loop
@@ -26,6 +31,11 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     else:
         artifact=load_temporal_invariant_loop(native)
     interface=artifact.plan['loop_interface']
+    consumed=artifact.plan.get('execution_movement_binding')
+    if (consumed is None or interface.get('source_motion')!=motion_ref
+            or consumed['source_motion']!=motion_ref
+            or consumed['source_motion_sha256']!=semantic_sha256(source_motion)):
+        raise ValueError('composite export source movement was not consumed by the compiled plan')
     if (interface.get('proof_kind')!=proof.profile or interface.get('synthetic_body_is_original_callable') is not False
             or semantic_sha256(interface.get('original_composite_f4_proof'))!=semantic_sha256(asdict(proof))
             or semantic_sha256(interface.get('root_callee_source'))!=semantic_sha256(asdict(proof.root_callee_source))
@@ -64,11 +74,13 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     sources=(proof.source,proof.root_callee_source,*(source for guard in proof.nested_callee_guards
         for source in (guard.owner_source,guard.target_source)))
     evidence=[_receipt(artifact.directory/'artifact.json'),_receipt(artifact.directory/'plan.json'),
-        schedule_receipt,_receipt(proof_reference['uri']),*[_receipt(source.path) for source in sources],
+        schedule_receipt,_receipt(proof_reference['uri']),_receipt(motion_ref['uri']),*[_receipt(source.path) for source in sources],
         *artifact.report['generators']]
     for reference in proof_document['compositions']:
         read_artifact(reference);evidence.append(_receipt(reference['uri']))
     native_bytes=(artifact.directory/'temporal.so').read_bytes();digest=sha256(native_bytes).hexdigest()
+    if digest!=artifact.report['library']['sha256'] or len(native_bytes)!=artifact.report['library']['bytes']:
+        raise ValueError('composite native library changed after source admission')
     guards=[dict(owner_source=_source(g.owner_source),lookup_name=g.lookup_name,
         target_source=_source(g.target_source),global_path=list(g.global_path),lookup_semantics=g.lookup_semantics)
         for g in proof.nested_callee_guards]
@@ -105,6 +117,7 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     for receipt in evidence:
         if _receipt(receipt['path'])!=receipt:raise ValueError('composite export evidence changed during admission')
     read_artifact(proof_reference)
+    read_artifact(motion_ref,json_document=False)
     for reference in proof_document['compositions']:read_artifact(reference,json_document=False)
     out=Path(out).resolve()
     if out.exists() or out.is_relative_to(artifact.directory):raise ValueError('fresh separate composite bundle directory required')

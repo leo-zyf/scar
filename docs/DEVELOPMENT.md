@@ -12,7 +12,7 @@
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
-传统编译器方法以本机GCC13.3为基线；2026-11-17再次查询`-Q --help=optimizers`，与保留的O2/O3结果逐字相同，21份既有源码/dump收据的SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
+传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
 
 | 顺序 | GCC机制 | SCAR对应及当前边界 |
 | --- | --- | --- |
@@ -25,17 +25,23 @@
 
 串行固定上下文可算`ΔC(N)=Δsetup+Δguard+Δalloc+Δmove+N·Δbody+Δtail(N)`，由`ΔC<0`求规模阈值；并行/异步用依赖和容量日历计算makespan，不能把所有服务时间直接相加。系数必须注明目标、compiler/flags、shape/layout和边界；GCC相对成本单位不是纳秒，逻辑读写字节也不是DRAM流量。少量组件标定用于建立/校验模型；不默认整版本黑盒竞速。下界及可行时序分别报告，未达到下界不声称最优。
 
+当前落实顺序：①保留已贯通的array/composite源码effects、控制与移动证明；②从实际后继图重建计算/搬运/分配需求及生命期，父子摘要不重复收费；③冻结真实科学区域同调用边界、数据前驱、allocator和CPU上下文的成本模型并独立验证；④按依赖与容量构造时序，将同份证书交现有C++20后端。外提会延长值的存活期，并行会引入启动/同步及带宽竞争，均在②③重新计入；合法外提不直接等于收益。验收材料为后继图/需求、合格成本或明确残差、独立时序证书和实际lowering，不能只保存“建议优化”。前三层未闭合时原路径仍保留，不通过增加backend绕过。
+
 已有C实证：未知alias生成带检查的双路径；有`restrict`契约时省去该检查，成本阈值随之改变。两次常量返回均可折叠，但volatile状态写仍保留。因此Python常量传播与删除import须分别证明值和初始化effects，单次动态观测不能替代。原始材料：`artifacts/baseline/gcc-o3-study.json`；依据：[GCC13.3选项](https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html)、[依赖/alias](https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html)、[LICM源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-ssa-loop-im.cc)、[成本源码](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/tree-vect-loop.cc)、[pass顺序](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/passes.def)。
 
 跨层摘要补充实证：保留三层`noinline`函数，GCC13.3仍沿调用图传播const摘要，把稳定调用移到循环外；同一指针指向的内容每轮被写时，读取留在循环内；未知effects的外部调用也保留。仅编译、未运行或测加速，见`artifacts/baseline/gcc-ipa-scope.json`。借鉴[IPA](https://gcc.gnu.org/onlinedocs/gccint/IPA.html)的“局部摘要→调用边参数替换→跨过程传播→改写”，不要求展开全部函数。SCAR现已实现条件MAY依赖的SCC组合，但effects/alias/termination并未闭合；当前LICM仍仅支持严格array-carry域。`macro_pass.PassSpec`目前仅单fusion使用，不能称通用pass管理器；现有后继图的use-def重算也不能代替跨region分析失效。逻辑工作量弱支配不等于CFG支配或时间收益。
 
-本轮源码审查把下一步限定为三个连接，先补证明、再扩外提域：①由原CALL/Frame、实形参/environment/world及经过的调用，界定候选原位置到目标位置的完整窗口；②将该窗口内和回边上的reads/writes与alias查询组合为no-clobber结论，单次region局部epoch与不同input ID均不证明物理不相交；③由支配/控制路径给出must-execute或可安全提前执行的事实，交现有零trip、FP/失败和fresh-output guards消费。MAY依赖为空不能充当pure，guard并集不能充当must-execute。上述结果必须绑定原revision/region；改写后重推受影响分析，再从后继图重建需求和成本。缓存已验证材料只是避免重复读验，不能替代这些证明。
+源码移动证明分为三个连接：①由原CALL/Frame、实形参/environment/world及经过的调用，界定候选原位置到目标位置的完整窗口；②将该窗口内和回边上的reads/writes与alias查询组合为no-clobber结论，单次region局部epoch与不同input ID均不证明物理不相交；③由支配/控制路径给出must-execute或可安全提前执行的事实，交现有零trip、FP/失败和fresh-output guards消费。MAY依赖为空不能充当pure，guard并集不能充当must-execute。上述结果必须绑定原revision/region；改写后重推受影响分析，再从后继图重建需求和成本。缓存已验证材料只是避免重复读验，不能替代这些证明。以下记录其分步落实；当前有界array/composite已接通，任意Python域仍未闭合。
 
 三个连接现已在既有array-carry域接通：`source_motion_window`查询原F4共享loop的完整normal窗口、进入body后的匹配recipe控制路径及单独的DATA反向slice；异常排除逐项保留，normal事实不冒充异常/终止证明。`array_motion_legality`将原loop/CALL/actual/world与body精确绑定，沿匹配RETURN/CALL把actual追至唯一原lexical READ；不跨primitive、不按变量名猜测，不把引用传递当内容身份。真实首probe发现direct-ID比较误报未知，补原15条DATA边后`fixed`经5边接通；只读输入互alias允许，写入/额外opaque CALL仍阻挡。data slice预算缺口只影响data字段，不擦除已知control/effect。
 
 `read_invariant_loop_motion`现发布schema2及canonical source interface、完整window和逐root legality；lowering附加shape/authority不能改变canonical接口。`invariant_build`在规划前保留未闭合域的NO_OP，C0/导出独立冷重推来源；native interface只携source-motion Ref，plan保存约2KB的实际optimized-node binding，发射时重验优化DAG及每PRE节点formal依赖，不套原node IDs。低层无来源micro仍仅conditional，不能导出替换caller。真实4次native与原函数逐位一致，旧fallback保持；真实科学2循环9窗口中7个条件必经、2个有可绕过路径，未由此授pure/复用。三项metadata检查及独立cold check通过，不是性能验收。原科学stateful ELF/模型未改；旧temporal产物因generator版本需重建，不绕过pin。下一层将该窗口接口接入已准入跨函数routes与可闭合的effect摘要，再重建同边界成本与资源日历；不把此窄域当通用MemorySSA或整程序编译完成。材料：`artifacts/baseline/motion-legality-mainline.json`。
 
-GCC源码依据更具体为：`tree-ssa-loop-im.cc:755`的`determine_max_movement`同时约束最外作用域与执行保留；`tree-vect-loop.cc:4078`的`vect_estimate_min_profitable_iters`在成本中计alias/alignment/trip检查，随后以准备/主体/收尾成本计算阈值，源码约4450–4616行；`passes.def`在循环改写间穿插清理，并要求if-conversion后紧接vectorize。SCAR合理外延为同一图上的可控资源、存储和链路需求及容量日历；GCC目标相对成本不能直接换算完整Python调用耗时，局部最便宜实现也不保证联合时序最快。资源计划改变布局、并发或调用边界时，要使相应成本适用域失效，不能沿用旧组件表。
+上述跨函数连接已在原COMPOSITE路径实现。`array_call_effects`由既有ArrayRegion/ExecutionPlan和PipelinePlan重算条件effects，callee摘要按source/body共享，逐CALL保参数、返回、层次及静态multiplicity；读取中间结果与其input provenance分开。pipeline read_formals是callee边界的传递footprint，不是wrapper新增load；父子summary不能再相加成访问量或时间。输入返回/view不能假fresh，input-write/read已知事实仍保留；frees/allocatorcallback/失败顺序按scope保UNKNOWN。`composite_call_effect_binding`复用原SourceFunctionComponents/namespace resolver/signature binder，逐原F4 CALL核actual/formal/environment/world及全部global路径，不造callee或运行目标。
+
+`read_composite_invariant_loop_motion`发布独立`scar.source-composite-loop-motion/v1`，typed proof与direct严格分开，纯材料读取仍不授F4；source authority来自完整rediscovery。`array_motion_legality`显式区分两个proof key，消费effect/source binding并核outer CALL原端口；C0重算typed材料及effects，actual optimized DAG保持独立binding。原composite build/plan_only/export必须消费证书，未解保NO_OP；export先cold replay再load，并核原ELF bytes。两caller facade仅检查loader已消费的短Ref/绑定，不每call读source graph；无证书micro只可直接run。已有exact-copy合同的标量表达复用cpp规则，未新设backend。3源unit/5函数/4调用/4守卫的真实原链已编译，5次native（其中普通入口1次）验证一致，普通入口结果bytes SHA/stdout/stderr相同，深层callee变化回退；counter伪造即使重算全部报告ID仍拒绝。集成脚本一度误用tuple/list直接比较，改为原canonical hash后复用已完成ELF，不为此重编或复跑性能。direct源重放/生成另metadata验证，无新加速比。下一步集中真实CPU科学区域同边界cost和可控硬件条件；任意Python/callee闭合、递归effects以及完整程序C++仍未完成。材料：`artifacts/baseline/composite-effect-mainline.json`。
+
+GCC源码定位以固定`releases/gcc-13.3.0`版本及函数名为准：`tree-ssa-loop-im.cc`的`determine_max_movement`同时约束最外作用域与执行保留；`tree-vect-loop.cc`的`vect_estimate_min_profitable_iters`计alias/alignment/trip检查及准备/主体/收尾成本，计算收益阈值；`passes.def`在循环改写间穿插清理，并要求if-conversion后紧接vectorize。SCAR合理外延为同一图上的可控资源、存储和链路需求及容量日历；GCC目标相对成本不能直接换算完整Python调用耗时，局部最便宜实现也不保证联合时序最快。资源计划改变布局、并发或调用边界时，要使相应成本适用域失效，不能沿用旧组件表。
 
 该结构工作的首段已实现：`array_motion.derive_array_motion/verify_array_motion`在既有ArrayRegion上统一依赖与placement，不创造新SSA/CFG；body和interface改动必须重推，常量算术或view阻挡的根不获移动。`read_invariant_loop_motion/verify_invariant_loop_motion`通过原F4完整重发现附source CALL/参数/lexical写/control证据；`invariant_build`自动发布`source-motion.json`。CPU计划保完整分析与未履行Q，匿名成本图用相同placement且不把source IDs放入primitive key；temporal生成器对实际optimized region另derive并verify，parallel复用。原F4/runtime/外部写入条件仍分开，此查询不是通用MemorySSA证明。当前按原样例贯通并完成4次native正确性验证；下一段集中实现沿原CALL路由的可组合依赖/读写摘要，再接一般移动证明，不新增后端。验收：`artifacts/baseline/unified-motion-mainline.json`。
 

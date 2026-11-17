@@ -160,13 +160,22 @@ def _bind(body, carry, interface, window, motion):
     payload = {key:value for key,value in window.items() if key!='id'}
     if window.get('id') != semantic_sha256(payload):
         raise ValueError('source motion window content identity differs')
-    proof = interface.get('original_f4_proof')
+    proof_keys = [key for key in ('original_f4_proof','original_composite_f4_proof') if key in interface]
+    if len(proof_keys)!=1:
+        raise ValueError('one distinct original direct or composite source proof required')
+    proof_kind = 'DIRECT' if proof_keys[0]=='original_f4_proof' else 'COMPOSITE'
+    proof = interface[proof_keys[0]]
     if (type(proof) is not dict or semantic_sha256(proof.get('body'))!=motion['body_sha256']
             or proof.get('carry_parameter')!=carry
             or type(proof.get('parameter_map')) is not dict
             or set(proof['parameter_map'])!=set(body.parameters)
             or any(name not in proof.get('parameters', ()) for name in proof['parameter_map'].values())):
         raise ValueError('original loop proof must bind this exact body, carry and parameter map')
+    if proof_kind=='COMPOSITE' and (
+            proof.get('profile')!='ORIGINAL_F4_COMPOSITE_ARRAY_LOOP_V1'
+            or proof.get('body_identity')!='DERIVED_FUSED_DAG_NOT_A_NEW_PYTHON_CALLABLE'
+            or proof.get('transformation_authorized') is not False):
+        raise ValueError('separate original composite body/composition contract required')
     origins = proof.get('origins', [])
     identities = [row for row in proof['source'].get('origins', []) if row.get('kind')=='source_identity']
     if (len(identities)!=1 or identities[0].get('unit')!=window['unit']
@@ -221,14 +230,74 @@ def _bind(body, carry, interface, window, motion):
             or edge['transition']!='BACKEDGE' or edge['kind']!='CONTROL'
             for edge in window['loop']['control_backedges']):
         raise ValueError('original loop backedges are required in the motion window')
-    return proof, dict(call=call_index, loop=loop_index, carry=carry_index)
+    return proof, dict(call=call_index, loop=loop_index, carry=carry_index), proof_kind
 
 
-def derive_array_motion_legality(body, *, carry_parameter, loop_interface, source_window):
+def _composite_callee_contract(proof, window, effects, binding):
+    """Join conditional callee facts; source authority stays with cold replay.
+
+    The typed-material effect verifier belongs to the lowering/controller.
+    This query checks its supplied identity and original CALL coordinates,
+    never treating a status flag as permission to replace original source.
+    """
+    if (type(effects) is not dict or effects.get('schema')!='scar.composite-call-effects'
+            or type(effects.get('schema_version')) is not int or effects['schema_version']!=1
+            or type(binding) is not dict or binding.get('schema')!='scar.composite-call-effect-binding'
+            or type(binding.get('schema_version')) is not int or binding['schema_version']!=1):
+        raise ValueError('distinct composite effect summary and original source binding required')
+    proof_sha=semantic_sha256(proof);body_sha=semantic_sha256(proof['body'])
+    if (effects.get('proof_sha256')!=proof_sha or binding.get('proof_sha256')!=proof_sha
+            or effects.get('body_sha256')!=body_sha or binding.get('body_sha256')!=body_sha
+            or binding.get('callee_effects_sha256')!=semantic_sha256(effects)
+            or _canonical(effects.get('root_source'))!=_canonical(proof['root_callee_source'])
+            or _canonical(binding.get('root_source'))!=_canonical(proof['root_callee_source'])
+            or _canonical(binding.get('source'))!=_canonical(proof['source'])):
+        raise ValueError('composite effects, source binding and exact original proof differ')
+    wanted='composite-call-effect-binding:'+semantic_sha256({key:value for key,value in binding.items() if key!='id'})
+    if binding.get('id')!=wanted:
+        raise ValueError('composite source effect binding content identity differs')
+    outer=binding['outer_call'];selected=window['selected_call']
+    fields=(('entry','entry'),('callee_port','callee'),('positional','positional'),
+        ('keywords','keywords'),('result','result'),('world_before','world_before'),('world_after','world_after'))
+    if any(_canonical(outer.get(left))!=_canonical(selected.get(right)) for left,right in fields):
+        raise ValueError('composite outer CALL does not match the original movement window')
+    original=[row for row in proof['origins'] if row.get('kind')=='original_f4'
+        and row.get('role')=='invariant_array_leaf_call']
+    if len(original)!=1 or _origin_coordinate(outer['source_origin'])!=_origin_coordinate(original[0]):
+        raise ValueError('composite outer CALL source occurrence differs from its original proof')
+    blockers=[]
+    def missing(reason, document, locator):
+        blockers.append(dict(reason=reason, source_refs=[dict(
+            document_sha256=semantic_sha256(document),locator=locator)]))
+    if effects['status']!='CONDITIONAL':
+        missing('COMPOSITE_CALLEE_EFFECT_SUMMARY_UNRESOLVED',effects,'#/status')
+    if binding['status']!='CONDITIONAL' or binding['frontier']:
+        missing('COMPOSITE_CALLEE_SOURCE_COVERAGE_UNRESOLVED',binding,'#/frontier')
+    writes=effects['input_writes'];fresh=effects['fresh_result']
+    if writes['status']!='CONDITIONAL_NONE' or writes['blockers']:
+        missing('COMPOSITE_CALLEE_INPUT_WRITES_UNRESOLVED',effects,'#/input_writes')
+    if fresh['status']!='CONDITIONAL_FRESH' or fresh['blockers']:
+        missing('COMPOSITE_CALLEE_FRESH_RESULT_UNRESOLVED',effects,'#/fresh_result')
+    return dict(status='UNRESOLVED' if blockers else 'CONDITIONAL',
+        proof_sha256=proof_sha,body_sha256=body_sha,callee_effects_sha256=semantic_sha256(effects),
+        callee_binding_sha256=semantic_sha256(binding),source_window_sha256=semantic_sha256(window),
+        input_writes=deepcopy(writes),fresh_result=deepcopy(fresh),blockers=blockers,
+        caller_exposed_effects=deepcopy(effects['caller_exposed_effects']),
+        shared_summaries_do_not_omit_call_occurrences=True,
+        full_python_effects_closed=False,original_source_replay_required=True,
+        source_replacement_authorized=False)
+
+
+def derive_array_motion_legality(body, *, carry_parameter, loop_interface, source_window,
+                                callee_effects=None, callee_binding=None):
     """Check source correspondence and expose precise remaining obligations."""
     motion = derive_array_motion(body, carry_parameter=carry_parameter, loop_interface=loop_interface)
     window = json.loads(_canonical(source_window))
-    proof, witness_indices = _bind(body, carry_parameter, loop_interface, window, motion)
+    proof, witness_indices, proof_kind = _bind(body, carry_parameter, loop_interface, window, motion)
+    if proof_kind=='DIRECT' and (callee_effects is not None or callee_binding is not None):
+        raise ValueError('direct source proof cannot borrow composite effect/source bindings')
+    callee_contract=(_composite_callee_contract(proof,window,callee_effects,callee_binding)
+        if proof_kind=='COMPOSITE' else None)
     window_sha = semantic_sha256(window)
     proof_sha = semantic_sha256(proof)
 
@@ -283,6 +352,8 @@ def derive_array_motion_legality(body, *, carry_parameter, loop_interface, sourc
             binding_identity_is_content_stability=False))
 
     operations, clobber_blockers, execution_blockers = [], list(coverage_blockers), list(coverage_blockers)
+    if callee_contract is not None:
+        clobber_blockers.extend(deepcopy(callee_contract['blockers']))
     original_ops = {_origin_coordinate(row):row for row in proof['origins']
         if row.get('kind')=='original_f4' and all(key in row for key in ('unit','template','step'))}
     selected_entry = window['selected_call']['entry']
@@ -301,7 +372,9 @@ def derive_array_motion_legality(body, *, carry_parameter, loop_interface, sourc
             reason = 'OPERATION_NOT_IN_RETAINED_STRICT_LOOP_PROOF'
         if type(instruction) is P.ApplyLanguageAction:
             if instruction.action is P.LanguageActionKind.CALL and operation['entry']==selected_entry:
-                selected_count += 1; role = 'SELECTED_CLOSED_ARRAY_CALL_UNDER_RUNTIME_IDENTITY_GUARDS'
+                selected_count += 1
+                role = ('SELECTED_COMPOSED_ARRAY_CALL_UNDER_ORIGINAL_CALLEE_EFFECT_AND_RUNTIME_Q'
+                    if callee_contract is not None else 'SELECTED_CLOSED_ARRAY_CALL_UNDER_RUNTIME_IDENTITY_GUARDS')
                 ports = [value['value'] for value in operation['inputs']]
                 selected = window['selected_call']
                 if ports != [selected['callee'], *selected['positional'], selected['world_before']]:
@@ -416,7 +489,8 @@ def derive_array_motion_legality(body, *, carry_parameter, loop_interface, sourc
     result = dict(schema=SCHEMA, schema_version=1, body_sha256=motion['body_sha256'],
         producer=artifact_reference(__file__, 'scar.python-producer'),
         loop_interface_sha256=motion['loop_interface_sha256'], source_window_sha256=window_sha,
-        source_window_id=window['id'], original_f4_proof_sha256=proof_sha,
+        source_window_id=window['id'], source_proof_sha256=proof_sha,
+        source_proof_kind=proof_kind,composed_callee_contract=callee_contract,
         array_motion_sha256=semantic_sha256(motion), carry_parameter=carry_parameter,
         stable_formal_inputs=stable, input_bindings=input_bindings, roots=roots, data_scope_blockers=reference_blockers,
         source_window_effects=dict(status='UNRESOLVED' if clobber_blockers else 'CONDITIONAL_NO_INPUT_CLOBBERS',
@@ -440,9 +514,11 @@ def derive_array_motion_legality(body, *, carry_parameter, loop_interface, sourc
     return result
 
 
-def verify_array_motion_legality(report, body, *, carry_parameter, loop_interface, source_window):
+def verify_array_motion_legality(report, body, *, carry_parameter, loop_interface, source_window,
+                                callee_effects=None, callee_binding=None):
     expected = derive_array_motion_legality(body, carry_parameter=carry_parameter,
-        loop_interface=loop_interface, source_window=source_window)
+        loop_interface=loop_interface, source_window=source_window,
+        callee_effects=callee_effects,callee_binding=callee_binding)
     if _canonical(report)!=_canonical(expected):
         raise ValueError('array motion legality differs from exact body/interface/source-window replay')
     return deepcopy(expected)
