@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 已暂停上一轮新接口编码并完成解析/构造式规划调研，三个拟建模块均尚未落盘。主线改为语义化简、工作/数据移动需求和容量界、解析组织、资源日历构造、证书与C++；少量组件标定用于有效吞吐/边界开销/重叠条件，不默认整版本黑盒调优。已有OIR、融合后端和求解器保留，求解器可作局部补充/校验；构造引擎尚未实现。具体逐层任务见DEVELOPMENT，文献与适用边界见 `artifacts/baseline/constructive-planning-research.json`。仍未完成三阶段。
+
 2026-11-17 性能归因定位了主链架构缺口：现joint producer只生成固定CALL的CPU选项，source original/fusion/caller直串行不在该域，NO_OP仅为部署默认。相同进程、warmup3、9组×32的8×8干净对照：原NumPy7.687µs，五ABI单worker299.995µs，复用既有融合后端101.155µs；两种C++均不盈利，不自动启用。独立输入与只读别名逐位一致；另9次host插桩确认启动及task包装显著，ABI区间包含自身guard，不能称纯数学时间。源码正常路径有10份affinity scope（host与leaf双层），这些是源码API次数、非syscall trace。未改数学/后端。下一轮以composite region覆盖及实现选择为主链，再接每种实现的硬件/完整边界成本和交付；不继续仅调CPU排列。报告：`artifacts/baseline/pipeline-architecture-diagnosis.json`。
 
 2026-11-17 条件worker生命周期已贯通 source→v2规划→C++20/ABI1：5原调用、10条件host活动、34端点约束；低启动成本声明模型选2 worker，高成本选1 worker，生成源码实际只启动选中CPU。完整task保ABI+wrapper，join等待可伸长，未选活动不存在；原v1 wire/digest不变，单配置实测宿主成本继续UNKNOWN。实际native冷重放通过，独立/只读别名输入与原函数逐位一致。8×8区域干净call-boundary计时（warmup3、9组×32）：原Python median9.495µs，C++392.328µs，not profitable，默认NO_OP；非科学程序整入口或模型准确性结论。验收：`artifacts/baseline/pipeline-lifecycle.json`。接下来按层补：第一阶段接完整host边界证据；第二阶段加入原Python/NO_OP整区域实现与同范围成本及可验证宿主预测；第三阶段延续证书到原入口/guard/fallback，并在闭合范围定期A/B，不将声明模型时间当实测加速比。

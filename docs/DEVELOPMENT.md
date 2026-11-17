@@ -10,7 +10,11 @@
 验收顺序：A 契约/ID与计划校验 → B 各阶段独立可执行 → C 真实科学区域贯通 → D 正确性/清洁A/B与NO_OP决策。
 结果按 Observed/Implemented/Verified/Rejected 区分；不以区域加速代替整程序加速，也不以局部闭环代替第一阶段完成。
 
-当前主链纠偏（2026-11-17）：先开放执行结构，再排硬件时间。五CALL固定ready骨架的CPU选优不代表源区域最优；NO_OP须成为实际实现选项。下一轮集中三个交接：①从原图提取composite输入/输出/world与覆盖范围，复用既有v2区域/候选结构表达原Python、现成fusion和保留CALL实现；②每种实现展开自己的分配/计算/搬运/同步图，按同一完整入口边界估价，先判可替换和收益，再联合放置/调度；③将唯一选中证书交已有C++/fusion/compact路径，内部可借用的guard/affinity/fenv必须由闭合合同证明，单worker串行应包含caller直执行方案。验收先要求8×8原NumPy能赢并不加载native，再用真实科学区域检查正收益；基于源码推导与有界标定，不做大量整版本黑盒排名。诊断见 `artifacts/baseline/pipeline-architecture-diagnosis.json`。
+当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
+
+后续逐层验收：①需求推导：从原图、Q、shape和版本计算运算量、必需物化/搬运、live footprint及假设，严格区分逻辑访问与实际跨层流量；②组织构造：先复用既有fusion/不变量/容量规则，用解析成本推导串行/并行、驻留、chunk及buffer范围；③时序构造：关键路径优先，在CPU/GPU/链路和存储日历上放入ready任务，同时输出同域下界与可行模型成本；④交付：重放OIR覆盖/依赖/寿命证书后交已有C++，闭合合同内才共享guard/affinity/fenv，生成一个选中版本，再做正确性与完整边界A/B。规则数组链和独立均匀流水线优先做精确推导；一般图保留模型gap，确有必要时只对竞争子图局部求解。测得min/max不升级数学界，未知成本不补零。先验8×8选择原执行且不加载native，再接真实科学区域；不承诺由硬件名牌算出任意程序唯一实际最优。
+
+研究依据： [DaCe/SDFG](https://htor.inf.ethz.ch/publications/img/dace-sc19.pdf) 的控制/数据/搬运分层，[Halide 2016](https://graphics.cs.cmu.edu/projects/halidesched/mullapudi16_halidesched.pdf) 的边界分析与解析分组，[MLIR bufferization](https://mlir.llvm.org/docs/Bufferization/) 的先tensor变换后存储规划，[Hong–Kung](https://www.eecs.harvard.edu/~htk/publication/1981-stoc-hong-kung.pdf) 与 [Roofline](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2008/Archive/EECS-2008-134.pdf) 的数据移动/性能界，以及 [HEFT](https://disco.ethz.ch/courses/fs14/seminar/paper/Jochen/4.pdf) 的构造式调度。Halide贪心/HEFT启发式并非全局最优证明；借鉴机制不等于直接替换SCAR前端。研究记录 `artifacts/baseline/constructive-planning-research.json`；实测诊断 `artifacts/baseline/pipeline-architecture-diagnosis.json`。
 
 F5可增量接入经过完整前端的新源码，不重建旧图：先用
 `scar.analysis.source_file_seed.seed_source_file(path, namespace_root, out, module=None)`建原路径单源seed，
