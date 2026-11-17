@@ -63,7 +63,7 @@ def _elf(reference, symbols):
     return raw
 
 
-def inspect_workspace_session(compiled_report):
+def inspect_workspace_session(compiled_report, *, with_context=False):
     from scar.compiler.workspace_session import replay_session, NATIVE
     from scar.codegen.workspace_session import render_workspace_session
     from scar.compiler.export_stateful import project_stateful_contract
@@ -146,7 +146,7 @@ def inspect_workspace_session(compiled_report):
     _elf(base_library_ref, ('scar_get_stateful_table_v1',))
     _need(mapping['execution_plan_sha256'].encode() in raw, 'session ELF lacks the independently derived plan constant')
     read_artifact(reference); read_artifact(prep_ref); read_artifact(native_ref)
-    return dict(schema=SCHEMA, schema_version=1, status='SOURCE_AND_ARTIFACT_COLD_REPLAY_PASSED',
+    result = dict(schema=SCHEMA, schema_version=1, status='SOURCE_AND_ARTIFACT_COLD_REPLAY_PASSED',
         compiled=reference, preparation=prep_ref, session_plan=prep['session_plan'], native=native_ref,
         source=source_ref, library=library_ref, headers=header_refs, original_base_manifest=base_ref,
         original_base_library=base_library_ref, runtime=runtime_ref, admission=admission_ref,
@@ -159,6 +159,8 @@ def inspect_workspace_session(compiled_report):
         machine_code_semantics_proven=False, compiler_invoked=False, native_libraries_loaded=False,
         target_program_executed=False, performance_measured=False,
         checker=artifact_reference(Path(__file__).resolve(), 'scar.python-source'))
+    return (result, dict(preparation=prep, plan=plan, effects=effects, original=context,
+                         residency=residency, native=metadata, compact=contract)) if with_context else result
 
 
 def main(argv=None):

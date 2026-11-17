@@ -19,5 +19,8 @@ def main(argv=None):
     if arguments and arguments[0] == 'run-stateful-delivery':
         from scar.runtime.compiled_stateful_capsule import main as run
         return run(arguments[1:])
+    if arguments and arguments[0] == 'run-workspace-session':
+        from scar.runtime.session_scope_bundle import main as run
+        return run(arguments[1:])
     from scar.cli import main as commands
     return commands(arguments)

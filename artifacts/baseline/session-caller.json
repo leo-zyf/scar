@@ -1,0 +1,233 @@
+{
+  "all_three_stages_complete": false,
+  "evidence": {
+    "bundle/scope-export.json": {
+      "sha256": "765acbc72f056490f8fa842072a967898474b618ffb3037ec94c7863869578be",
+      "size_bytes": 720,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/bundle/scope-export.json"
+    },
+    "entry.py": {
+      "sha256": "a6664df4f881458b8e069d16acac40e0b13f3076cf899bcbdaf12ee8922a8288",
+      "size_bytes": 2038,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/entry.py"
+    },
+    "isolation.json": {
+      "sha256": "8a868db4c06434e2873117392b6c22d9da04cb79ef31680f29b767ff95bb6bf1",
+      "size_bytes": 410,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/isolation.json"
+    },
+    "isolation.py": {
+      "sha256": "a050f32840f1604bba3389ac98af53d83aee0caa36ff708464533a62cc70a27a",
+      "size_bytes": 2029,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/isolation.py"
+    },
+    "preparation/profiles.json": {
+      "sha256": "715d7eac8c76722d689cc37509cfd43cb4c2a99a8fc72aea236acdb236074725",
+      "size_bytes": 28552,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/preparation/profiles.json"
+    },
+    "preparation/result.json": {
+      "sha256": "9fa785fe31f2420578ebc306108ba0de5e33056f27fe8f6cd2d04ffcb1aed0df",
+      "size_bytes": 3175,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/preparation/result.json"
+    },
+    "validate-entry.py": {
+      "sha256": "754e9e920ea571638e813ee753fc1eb7be24e28686d48dbc92df56493a555a34",
+      "size_bytes": 2279,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/validate-entry.py"
+    },
+    "validation-notes.json": {
+      "sha256": "9de61f2836ec4ce484d2de88e8ea2887cbda7c4a24fb1f6687c61388222a81c3",
+      "size_bytes": 783,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/validation-notes.json"
+    },
+    "validation.json": {
+      "sha256": "844cadc0a97b3b14d0d9053664ba88fa408fbcd5c406710f858c46fccedf4d47",
+      "size_bytes": 6854,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-caller-v1/validation.json"
+    }
+  },
+  "implementation_sha256": {
+    "analysis/session_caller_effects.py": "7a6c320edff5cc44affbf5041fdb8bb7f9fe242cf38fe95d88bbdf21c28dbd78",
+    "cli.py": "d112e12534c168c83abd4657e4cb2b0e646136439fbe4e58cf7787ca59999409",
+    "compiler/inspect_workspace_session.py": "603aecc9fbbb827e517bb3e9faec300508d638bdadf44fbf804c5e897b19c668",
+    "compiler/session_lifetime.py": "5d3f0e1683bca461ba57fc7fa2ca71baac0cc2e8c2cde0168440c2bdda119aec",
+    "compiler/session_scope.py": "d2eeeb3a4e55f9aa23086826542ed0e0abf0b2e1ca18329f599859e37bd80dbc",
+    "entrypoint.py": "8a64074a74dbc63c13b4384bf9fa31aeee5e8671360fed1655ae7680b66dd545",
+    "optimization/session_caller.py": "90033d6295e83be74e9875db525f22d80812eba44da73d3c4bf396715843afb0",
+    "optimization/session_lifetime.py": "26ea07b189540dc8dc1e3de03a778b949644bf86f0ee51fcb1a35d58bba715f3",
+    "runtime/session_scope.py": "28c2d52496ee8aa1e2f3c867f5192e5d422fe25357040633acb24506a4f4774c",
+    "runtime/session_scope_bundle.py": "19d04ba45ff57738cabc5647b1a9914afc79d264e9267b9af8d78eac3fbed614"
+  },
+  "lewm_run": false,
+  "next": [
+    {
+      "detail": "Represent scalar phi/carry and original local writers without equating changing values or unrolling loops.",
+      "stage": 1,
+      "task": "OUTER_LOOP_TYPED_CARRY_AND_FIELD_VERSIONS"
+    },
+    {
+      "detail": "Use explicit invalidation sites, original hardware capacity and same-scope costs; keep unknown residuals.",
+      "stage": 2,
+      "task": "COMPOSE_KNOWN_WRITES_AND_UNKNOWN_IO_WITH_LEASE_LIFETIME"
+    },
+    {
+      "detail": "Extend resident lifetime only inside source-covered outer activation, then validate original trajectory and measure clean cost.",
+      "stage": 3,
+      "task": "INSTALL_OR_LOWER_THE_CERTIFIED_OUTER_CONTROL_SCOPE"
+    }
+  ],
+  "preserved": [
+    "ORIGINAL_TESTCASE_SOURCE",
+    "ORIGINAL_MATH_RENDERER",
+    "ORIGINAL_NATIVE_ABI_AND_ELFS",
+    "ORIGINAL_CALLER_BRANCHES_AND_RETURN"
+  ],
+  "resource_lifetime_public_receipt": {
+    "sha256": "69807a847a109b5044b42a1414e179b8d6f0e92b0ce926c1433e432a74731fd8",
+    "size_bytes": 5216,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-lifetime-v1/public/result.json"
+  },
+  "schema": "scar.session-caller-acceptance",
+  "schema_version": 1,
+  "stages": {
+    "delivery": {
+      "backend": "C++20",
+      "cross_activation_residency_authorized": false,
+      "custom_default_mapping_callbacks": 0,
+      "default_no_cdll": true,
+      "exact_function_and_callee_metadata_required": true,
+      "instance_shadow_rejected": true,
+      "manual_class_method_patches": false,
+      "normal_updates_creates": 4,
+      "normal_updates_native_calls": 4,
+      "normal_updates_releases": 4,
+      "normal_updates_resident_calls": 0,
+      "numerical_native_recompiled": false,
+      "numerical_source_changed": false,
+      "operator_abi_version": 1,
+      "outer_entry_invalidates_and_exit_releases": true,
+      "runtime_buildtime_imports_absent": true,
+      "scoped_admission_sha256": "62de8d247974b695bfd31831d47603152cb802f29aa919fbc9e2c413719a98cf",
+      "source_caller_control_retained": true,
+      "status": "VERIFIED_ORIGINAL_ENTRY_AUTOMATIC_IMPORT_INSTALLATION",
+      "unclosed_kernel_released_before_caller_resumes": true,
+      "unknown_call_taints_until_outer_exit": true
+    },
+    "modeling": {
+      "automatic_source_caller_discovery": true,
+      "call_roles": [
+        {
+          "query": 44,
+          "role": "COPY"
+        },
+        {
+          "query": 43,
+          "role": "COPY"
+        },
+        {
+          "query": 46,
+          "role": "BARRIER"
+        },
+        {
+          "query": 45,
+          "role": "KERNEL"
+        }
+      ],
+      "closed_conditional_callers": 1,
+      "complete_operation_denominator": 29,
+      "original_control_edges_preserved": true,
+      "runtime_guard_paths": [
+        [
+          "self"
+        ],
+        [
+          "self",
+          "dt"
+        ],
+        [
+          "self",
+          "second_order"
+        ],
+        [
+          "self",
+          "u"
+        ],
+        [
+          "self",
+          "v"
+        ],
+        [
+          "time"
+        ]
+      ],
+      "source_function_ordinal": 2,
+      "source_unit": "9e331850d559dabf91635adc",
+      "status": "VERIFIED_SOURCE_OBLIGATIONS_AND_GUARDED_REFERENCE_PATHS",
+      "unobserved_branch_retained": true,
+      "world_not_used_for_value_equality": true
+    },
+    "simplification": {
+      "array_payload_bytes": 8454304,
+      "array_slots": 4,
+      "default_backend": "NO_OP",
+      "duration_ticks": null,
+      "extra_metadata_bytes": null,
+      "fixed_N4_used_as_dynamic_session_count": false,
+      "full_resource_feasibility_proven": false,
+      "global_schedule_solved": false,
+      "invalidation_releases_capacity": false,
+      "original_body_activity_references": 15,
+      "outer_cpu_domain": null,
+      "representation": "TYPED_DYNAMIC_SESSION_LIFECYCLE_NOT_VRS",
+      "status": "CONDITIONAL_EFFECT_AND_DYNAMIC_LEASE_LIFETIME_CONNECTED",
+      "step_count": null
+    }
+  },
+  "status": "VERIFIED_AUTOMATIC_BOUNDED_CALLER_INSTALLATION",
+  "target_repository_modified": false,
+  "validation": {
+    "full_episode_or_integrate_tested": false,
+    "independent_original_and_trial_processes": true,
+    "new_speedup": null,
+    "performance_measured": false,
+    "scenarios": [
+      {
+        "native_calls": 4,
+        "resident_calls": 0,
+        "scenario": "normal",
+        "stdout_and_trajectory_digests_equal": true
+      },
+      {
+        "native_calls": 4,
+        "resident_calls": 0,
+        "scenario": "changed_inputs",
+        "stdout_and_trajectory_digests_equal": true
+      },
+      {
+        "native_calls": 2,
+        "resident_calls": 0,
+        "scenario": "unknown_branch",
+        "stdout_and_trajectory_digests_equal": true
+      },
+      {
+        "native_calls": 0,
+        "resident_calls": 0,
+        "scenario": "instance_shadow",
+        "stdout_and_trajectory_digests_equal": true
+      },
+      {
+        "native_calls": 4,
+        "resident_calls": 0,
+        "scenario": "direct_kernel",
+        "stdout_and_trajectory_digests_equal": true
+      },
+      {
+        "native_calls": 0,
+        "resident_calls": 0,
+        "scenario": "custom_defaults",
+        "stdout_and_trajectory_digests_equal": true
+      }
+    ]
+  }
+}

@@ -23,9 +23,13 @@ CPU 依赖就绪执行共享同一语义/存储 DAG：每个任务固定到显�
 
 COMMIT 的逐字节复制还可建立 `shadow[ROI] == external[ROI]` 的副本关系，即使数值已变化或尚未证明有限。关系仅覆盖被复制区域；在源写集、持有槽生命期、carry 和同步/无后写合同成立时，下一轮可保留该 ROI，只重新复制补集以重建完整 snapshot。补集不能直接视为相等。Provider 借用端口在返回后不再访问属于显式外部 Q，不从 NoPyAPI 或返回状态推出；新调用仍从完整 snapshot 开始。
 
-显式 `WorkspaceSession` 将该关系扩展为跨单步调用的有主线程 lease：create 为 DIRTY，成功 COMMIT 才建立 ROI 副本对应；未知效应、重叠写、对象/descriptor 变化或失败使关系失效。每步 scalar 重新读取，固定地址不证明内容相同。只有调用范围内全部相关效应受约束时，才可把此原语接到真实 caller；原固定 N 次组合并不授予这项权限，当前 caller 覆盖仍未证明。
+显式 `WorkspaceSession` 将该关系扩展为跨单步调用的有主线程 lease：create 为 DIRTY，成功 COMMIT 才建立 ROI 副本对应；未知效应、重叠写、对象/descriptor 变化或失败使关系失效。每步 scalar 重新读取，固定地址不证明内容相同。只有调用范围内全部相关效应受约束时，才可把此原语接到真实 caller；原固定 N 次组合和该原语本身都不授予这项权限。
 
 `ArrayCopyEffects` 另以原 F4 操作、formal 根和 epoch 解释索引复制：整数轴改变可见 rank，但物理 ROI 仍保留二维坐标；view 创建与后续读取分开，复制按源顺序读取当前内容并推进目标版本。写集与驻留 ROI 不相交只证明几何兼容，还需实际参数/根绑定和普通 ndarray 协议 guard。局部 CALL 证据仅将实际 callable 对回原源码端口，不表示所有写入或属性协议均已捕获；因此不能单独授权 session 延寿。
+
+caller 的覆盖分母来自完整原生产操作，不是 CALL 计数。`GuardedSessionCaller` 沿原 DATA 边和唯一 formal 的词法写/读传递引用路径，另保原 world 和控制边；普通属性、标量协议和临时释放分别附带类型/保留条件，未知 source method 则由事前失效及持续到外层退出的 taint 覆盖。直接 lookup route 必须同时匹配实际 receiver、无实例影子和安装的 descriptor；同 CodeID 本身不够。当前只闭合有界普通 method profile，cleanup、loop、resume 等仍保前沿。安装层保留原 caller 控制与返回，最外入场丢弃旧副本事实、退出释放，尚不授权跨 activation 驻留。
+
+动态 session 的生命周期与固定次数 VRS 分开投影：`SessionLifetime` 以 session instance 为参数，create/destroy 各一次，step/invalidate 为任意有限序列；invalidate 只丢内容对应，不释放容量。它引用原 kernel 的硬件证据和共享正文，不把旧 FIRST/LAST 或 N4 控制冒充新 session 事件。外层 CPU、服务时长和额外元数据容量仍独立未知，不据此声称完整资源可行性或数值最优调度。
 
 ## 五类核心实体
 

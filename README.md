@@ -116,7 +116,18 @@ scar workspace-session --preparation SESSION/result.json --out SESSION_CPP
 python -m scar.compiler.inspect_workspace_session SESSION_CPP/result.json
 ```
 
-准备端从原 F4 自动发现复制写集，保留整数索引降维和逐条读写顺序，证明哪些写入与驻留 ROI 不相交；C++20/ABI1 提供 create/step/invalidate/destroy。轻量运行端 `scar.runtime.native_workspace_session.load` 默认不加载动态库；显式 `trial=True` 后可在受控调用范围执行，每步读取新 scalar，绑定变化或未知写入使副本失效，原函数回退前释放 session。现已在原 Gray–Scott `update()` 的受控接入中验证轨迹逐位一致，但尚未自动证明完整 caller 的写集覆盖或替换 `integrate()`；CALL 观察也不捕获直接数组写入。新 session 未测性能，不沿用固定四步的加速比。共享 guard 更新后，旧 compact 包需重新导出。
+准备端从原 F4 自动发现复制写集，保留整数索引降维和逐条读写顺序，证明哪些写入与驻留 ROI 不相交；C++20/ABI1 提供 create/step/invalidate/destroy。轻量运行端 `scar.runtime.native_workspace_session.load` 默认不加载动态库；显式 `trial=True` 后可在受控调用范围执行，每步读取新 scalar，绑定变化或未知写入使副本失效，原函数回退前释放 session。最初的受控 Gray–Scott `update()` 接入已验证轨迹逐位一致；原语本身不证明外围 caller 的全部效应，CALL 观察也不捕获直接数组写入。新 session 未测性能，不沿用固定四步的加速比。共享 guard 更新后，旧 compact 包需重新导出。
+
+现在可从原图自动推导支持的 caller guard 和安装位置，并从普通导入入口接入，无需手工改类方法：
+
+```bash
+scar session-lifetime --session SESSION_CPP/result.json --resources WORKSPACE_RESOURCES/result.json --out LEASE
+scar session-scope --session SESSION_CPP/result.json --lifetime LEASE/projection.json --out CALLERS
+scar session-scope --export CALLERS/result.json --out SCOPED_RUNTIME
+scar run-workspace-session --bundle SCOPED_RUNTIME --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs --report RUN.json -- ENTRY.py
+```
+
+caller 分解复用原 F4 操作和数据/控制边，唯一 formal 绑定只传递引用路径，不证明内容不变。直接 method lookup 必须由当前 descriptor、接收者和字段类型 guard 兑现；未知调用使当前 activation 持续失效，保留其原执行。已接通原 Gray–Scott `update()` 的29项生产操作；外围 `integrate()` 尚未闭合，因此每次最外 caller 入场失效、退出释放，不跨外部间隙保留副本。动态 lease 图保留原硬件和固定容量，次数/时长未知时不冒充固定循环时间表，也不授予全局调度或盈利结论。省略 `--validate-only` 保留原执行，不加载 native。
 
 已有完整有限模型证书可通过 `scar compile-pipeline-refinement --certificate REFINEMENT/certificate.json --out COMPILED` 构建 C++20 并导出 compact 包，再用 `run-caller-pipeline --bundle COMPILED/bundle --admission-sha256 EXPORT_SHA --validate-only --exclusive-inputs -- ENTRY.py` 验证。当前只落实计算调用的 CPU lane 顺序与原依赖，沿用原初始化、内存和 join 保护；模型分配时间、释放时间及 makespan 不作为原生运行保证，默认仍 NO_OP。
 
