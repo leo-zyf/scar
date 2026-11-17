@@ -20,6 +20,10 @@ GCC源码复核及一次补充编译明确了推进顺序：①复用现有值/�
 
 后继图主入口：`scar plan-semantic-region --macro-preparation PREPARATION --out FRESH`冷重放原F4/实际after图，区分原eager、raw composite、optimized lowering三种需求，再接既有共同Problem和构造式planner。`--logical-analysis`只做显式逻辑分析；`--compile-validation`仅构建已有融合C++验证候选，不借逻辑计划授物理/部署资格；`--check FRESH/result.json`独立核新图/需求/硬件引用/计划/生成CPP及native字节，不打开ELF。显式构建仍沿原backend加载库并检查ABI，报告单列；运行必须显式trial并保原guards/fallback，默认原函数。5CALL样例已验证native3、dtype回退1，strict两个资源义务仍未解，非真实科学整入口加速。分析记录现按slot ID排序，落盘重读后可直接重算比较。材料：`artifacts/baseline/semantic-successor-mainline.json`。
 
+真实科学区域的可控域入口：`scar plan-controlled-region --kind STATEFUL_SPECIALIZATION --admission SPECIALIZATION/result.json --out FRESH`自动cold-admit原F4/已编译candidate，建立既有SemanticGraph及source→native stages→private slots/硬件引用，默认未知时间保持UNRESOLVED。`--entry-profile PROFILE`只接明确提供的条件分析成本，不能把旧预测变为合格；`--check FRESH/preparation.json`独立重放。另支持`--kind PIPELINE_FUSION --admission REGION_BUILD/result.json`。原全入口义务另存，不把CPU0私有阶段绑定扩大到guards/commit，不把payload预算当RSS/可用物理RAM。`calibrate-guard-regime`只比较同一已有canonical probe的两guard配置；本轮2warm+7对测量的入口差中位7085ns、完整canonical调用差中位6274ns，不归因旧误差、不导出component/profile资格。下一层先使canonical编译/内联/shape上下文匹配真实lowering，再冻结新的成本模型；不重跑旧模型碰阈值。验收见`artifacts/baseline/controlled-scientific-region.json`。
+
+离线分析自身的瓶颈已单次profile定位：同一`_derive`有63次硬件材料重放、1987次table读取、122621次decode，以及两遍完整entry cost推导；F4 cold admission仅一次。插桩142.218s是分析器时间，非目标性能；17次compiler版本查询仅0.076s，准备/重放会执行`g++ --version`身份核验，未新编译。下一轮优先在一次冷事务内共享已验硬件decoded tables及domain/plan/profile结果，减少重复tag/递归校验；新事务与独立check必须重新验证版本及内容，不加全局信任cache或`verified=True`绕过。profile依据在同份验收报告中引用。
+
 当前实现进展：完整入口canonical回归已代替手填参数做第一次真实校验，TRAIN与canonical/target holdout分开，rank/SVD/误差可查；系数为DECLARED有效模型，不复用旧工具的scope中位数差。构造式时序已接原source producer及C++：关键路径优先、局部实现/route选择、整数端点传播、有限容量冲突加调度序边；原语义边不变，独立验证，不证明全局最优。compact fused已接原C1 guard与普通入口，独立scope UNKNOWN，不用macro模型授权。
 
 后续逐层验收：①扩到真实科学caller的需求/完整成本证据，严格区分逻辑访问与实际跨层流量；②将已有结构delta产生的区域接到共同硬件/时间投影，避免只规划固定CALL骨架；③扩展前补不同shape/位置/并发和循环周期模型的适用域证据，再构造CPU/链路/存储日历；④同份证书接已有C++/compact，并在真实程序的完整同范围边界校验。测得min/max不升级数学界，未知成本不补零，不承诺由硬件名牌算出任意程序唯一实际最优。
