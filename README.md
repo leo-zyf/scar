@@ -11,6 +11,18 @@
 ```
 
 当前优先完成三阶段核心开发，暂停新增性能实验。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
+
+统一实现规划原型现可执行。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
+
+```bash
+scar joint-plan --problem PROBLEM.json --out PLAN.json
+scar joint-pipeline --inputs INPUTS.json --cpu-ids 0,1 --out UNKNOWN
+scar calibrate-pipeline-services --preparation UNKNOWN/preparation.json --out COSTS
+scar joint-pipeline --inputs INPUTS.json --cpu-ids 0,1 --cost-profile COSTS/profile.json --compile --out SELECTED
+scar joint-capacity --preparation CAPACITY/result.json --steps 4 --epochs 1 --out CAPACITY_PLAN
+```
+
+`joint-plan` 同时选择实现、数据位置转换与资源受限时间区间；独立检查依赖、搬运和存储峰值。源生产端负责完整源码/合法性重放。`joint-pipeline` 将选中的 CPU 绑定和资源顺序真正编入 C++20/ABI1；孤立 service 样本缺少并发证据时采用逻辑互斥并落实到运行顺序。模型时间仅覆盖 ABI1 service，不包括外围分配、线程启动、派发和 join，不是整程序时延或加速比。`joint-capacity` 保留未知成本，次数参数不授予原循环替换权；完整声明模型仅供显式试验，默认仍 NO_OP。
 LeWM、Sunfish、Gray–Scott、Cirq 都是外部 testcase，分析规则不按业务名称选择优化。
 
 ## 使用现有环境

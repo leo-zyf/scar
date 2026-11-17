@@ -98,8 +98,14 @@ class SessionScope:
         self.stats = dict(caller_calls=0, copy_calls=0, barrier_calls=0, tainted_kernel_calls=0,
                           fresh_kernel_calls=0, retention_eligible_kernel_calls=0, guard_rejections=0,
                           isolated_kernel_attempts=0, isolated_native_calls=0,
-                          isolated_original_fallback_calls=0, isolated_kernel_reasons={})
+                          isolated_original_fallback_calls=0, isolated_kernel_reasons={},
+                          capacity_kernel_attempts=0, capacity_native_calls=0,
+                          capacity_original_fallback_calls=0, capacity_forgets=0,
+                          capacity_retained_intervals=0, capacity_created=0, capacity_freed=0,
+                          capacity_cleanup_failures=0)
         self.unqualified_kernel_policy = 'ORIGINAL'
+        self.capacity_policy = None
+        self.capacity_baseline = None
         self.rows, self.sources = {}, set()
         if not self.active:
             return
@@ -108,7 +114,8 @@ class SessionScope:
               and type(spec.get('boundaries')) is list, 'producer-admitted compact session scope required')
         self.spec = deepcopy(spec)
         self.unqualified_kernel_policy = self.spec.get('unqualified_kernel_policy', 'ORIGINAL')
-        _need(self.unqualified_kernel_policy in ('ORIGINAL', 'FRESH_ISOLATED_NATIVE'),
+        _need(self.unqualified_kernel_policy in ('ORIGINAL', 'FRESH_ISOLATED_NATIVE',
+              'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT'),
               'unsupported unqualified kernel policy')
         for row in self.spec['boundaries']:
             _need(type(row) is dict and type(row.get('id')) is str and row['id'] not in self.rows
@@ -119,6 +126,17 @@ class SessionScope:
                   'ordinary source boundary ID/path/role required')
             self.rows[row['id']] = row
             self.sources.add(Path(row['source']['path']).resolve())
+        if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
+            policy = self.spec.get('capacity_policy')
+            _need(type(policy) is dict and type(policy.get('proof_id')) is str and bool(policy['proof_id'])
+                  and policy.get('admission') == 'PRODUCER_PROVEN_PRIVATE_CAPACITY_ONLY'
+                  and policy.get('external_roots_retained') is False and policy.get('content_reuse') is False
+                  and type(policy.get('outer_boundary_ids')) is list
+                  and all(type(key) is str and key in self.rows and self.rows[key]['role'] == 'CALLER'
+                          for key in policy['outer_boundary_ids']),
+                  'producer-pinned private-capacity-only scope admission required')
+            self.capacity_policy = policy
+            self.capacity_baseline = self._capacity_counts()
         self.source = next(iter(self.sources), Path('.').resolve())
 
     def _lose(self, reason, *, taint=False):
@@ -130,6 +148,8 @@ class SessionScope:
         except Exception as error:
             self.active = False
             self.frontier.append('session_cleanup_failed:'+type(error).__name__)
+        finally:
+            self._sync_capacity_counts()
 
     def _invalidate(self, reason):
         try:
@@ -138,6 +158,57 @@ class SessionScope:
         except Exception:
             self._lose('session_invalidation_failed', taint=True)
             return False
+
+    def _forget_capacity(self, reason):
+        try:
+            self.session.invalidate(reason)
+            self.stats['capacity_forgets'] += 1
+            return True
+        except Exception:
+            self.stats['capacity_cleanup_failures'] += 1
+            self._lose('capacity_content_invalidation_failed', taint=True)
+            self.active = False
+            return False
+        finally:
+            self.session.bindings = ()
+            self._sync_capacity_counts()
+
+    def _capacity_outer(self):
+        if not self.activations or self.capacity_policy is None:
+            return False
+        from .stateful_guard import _ordinary
+        frame = self.activations[0]; row = frame['row']; owner = frame['receiver_owner']
+        try:
+            if (row['id'] not in self.capacity_policy['outer_boundary_ids'] or owner is None
+                    or not self._live(row) or not _raw_metadata(frame['original'])
+                    or list(frame['signature'].parameters) != row['parameters']):
+                return False
+            bound = frame['signature'].bind(*frame['args'], **frame['kwargs']); bound.apply_defaults()
+            receiver = bound.arguments[next(iter(frame['signature'].parameters))]
+            return type(receiver) is owner and row['attribute'] not in _ordinary(receiver)
+        except (ValueError, TypeError, KeyError, AttributeError, OSError):
+            return False
+
+    def _capacity_counts(self):
+        stats = self.session.stats
+        return stats['creates'], stats['releases']
+
+    def _sync_capacity_counts(self):
+        if self.capacity_baseline is not None:
+            creates, frees = self._capacity_counts()
+            self.stats['capacity_created'] = creates-self.capacity_baseline[0]
+            self.stats['capacity_freed'] = frees-self.capacity_baseline[1]
+
+    def _release_capacity(self, reason):
+        try:
+            self.session.release(reason)
+        except Exception:
+            self.stats['capacity_cleanup_failures'] += 1
+            self._lose('capacity_release_failed', taint=True)
+            self.active = False
+        finally:
+            self.session.bindings = ()
+            self._sync_capacity_counts()
 
     def _live(self, row):
         from .stateful_guard import _function, _same_function_state
@@ -289,9 +360,38 @@ class SessionScope:
                         self.session.release('isolated_kernel_exit')
                     except Exception:
                         self._lose('isolated_kernel_exit_cleanup_failed')
+            def capacity(args, kwargs):
+                self.stats['capacity_kernel_attempts'] += 1
+                self.stats['fresh_kernel_calls'] += 1
+                previous_native = guarded.scar_stats['native_calls']
+                previous_fallbacks = guarded.scar_stats['fallback_calls']
+                try:
+                    if not self._forget_capacity('capacity_kernel_entry'):
+                        return original_fallback('capacity_kernel_entry_failed', args, kwargs)
+                    if not exact_kernel_metadata(args, kwargs):
+                        return original_fallback('function_metadata_not_exact', args, kwargs)
+                    return guarded(*args, **kwargs)
+                finally:
+                    native = guarded.scar_stats['native_calls']-previous_native
+                    fallbacks = guarded.scar_stats['fallback_calls']-previous_fallbacks
+                    self.stats['capacity_native_calls'] += native
+                    self.stats['capacity_original_fallback_calls'] += fallbacks
+                    if native and not fallbacks:
+                        retained = self._forget_capacity('capacity_kernel_exit') and self._capacity_outer()
+                    else:
+                        retained = False
+                        self._lose('capacity_kernel_original_fallback', taint=True)
+                        self.session.bindings = ()
+                    if retained:
+                        self.stats['capacity_retained_intervals'] += 1
+                    else:
+                        self._release_capacity('capacity_kernel_exit_release')
+                    self._sync_capacity_counts()
             def call(*args, **kwargs):
                 if not self.active or threading.get_ident() != self.owner:
                     return original(*args, **kwargs)
+                if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
+                    return capacity(args, kwargs)
                 keep = None
                 if self.unqualified_kernel_policy == 'FRESH_ISOLATED_NATIVE':
                     if self.suspended:
@@ -339,9 +439,13 @@ class SessionScope:
                         and row['id'] not in self.activations[-1]['row'].get('allowed_call_roles', ())):
                     self._lose('unadmitted_nested_caller', taint=True)
                 if outer:
-                    self._invalidate('outer_caller_entry')
+                    if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
+                        self._forget_capacity('outer_caller_entry')
+                    else:
+                        self._invalidate('outer_caller_entry')
                 try:
-                    closed = self._closed(row, original, signature, args, kwargs, receiver_owner)
+                    closed = (False if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT'
+                              else self._closed(row, original, signature, args, kwargs, receiver_owner))
                 except (ValueError, TypeError, KeyError, AttributeError, OSError):
                     self.stats['guard_rejections'] += 1; closed = False
                 frame = dict(row=row, original=original, signature=signature, args=args, kwargs=kwargs,
@@ -352,15 +456,26 @@ class SessionScope:
                 finally:
                     self.activations.pop()
                     if outer:
-                        try:
-                            self.session.release('outer_caller_exit')
-                        except Exception:
-                            self._lose('outer_caller_exit_cleanup_failed')
+                        if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
+                            self._release_capacity('outer_caller_exit')
+                        else:
+                            try:
+                                self.session.release('outer_caller_exit')
+                            except Exception:
+                                self._lose('outer_caller_exit_cleanup_failed')
         elif row['role'] == 'COPY':
             def call(*args, **kwargs):
                 if not self.active or threading.get_ident() != self.owner:
                     return original(*args, **kwargs)
                 self.stats['copy_calls'] += 1
+                if self.unqualified_kernel_policy == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
+                    self._forget_capacity('capacity_copy_entry')
+                    try:
+                        return original(*args, **kwargs)
+                    finally:
+                        self._forget_capacity('capacity_copy_exit')
+                        if not self._capacity_outer():
+                            self._release_capacity('capacity_copy_unscoped_exit')
                 try:
                     _need(self._can_keep(row['id']) and self._live(row), 'copy outside a closed live caller')
                     bound = signature.bind(*args, **kwargs); bound.apply_defaults()
@@ -465,6 +580,10 @@ class SessionScope:
                     self.session.close()
                 except Exception as error:
                     self.frontier.append('session_close_failed:'+type(error).__name__)
+                finally:
+                    if self.capacity_policy is not None:
+                        self.session.bindings = ()
+                    self._sync_capacity_counts()
 
     @contextmanager
     def install(self):
@@ -496,7 +615,9 @@ class SessionScope:
         return dict(schema='scar.workspace-session-scope-execution', schema_version=1,
             statistics=deepcopy(self.stats), installed_bindings=len(self.bindings), frontier=list(self.frontier),
             unqualified_kernel_policy=self.unqualified_kernel_policy,
-            preservation_scope='SOURCE_CLOSED_LIVE_CALLER_ACTIVATIONS_ONLY',
+            capacity_policy_proof_id=None if self.capacity_policy is None else self.capacity_policy['proof_id'],
+            preservation_scope=('PRIVATE_CAPACITY_ONLY_SOURCE_BOUND_OUTER_NO_CONTENT_OR_EXTERNAL_ROOT_REFS'
+                if self.capacity_policy is not None else 'SOURCE_CLOSED_LIVE_CALLER_ACTIVATIONS_ONLY'),
             source_call_coverage_proven_by_installer=False, arbitrary_internal_writes_intercepted=False,
             default_backend='NO_OP', deployment_authorized=False)
 

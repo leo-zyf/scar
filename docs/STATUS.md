@@ -1,5 +1,9 @@
 # 当前状态
 
+2026-11-17 统一实现规划主链已接通：原区域/软硬件来源→实现与位置选择→精确上下文成本查询→CP-SAT→独立资源/依赖/物化检查→C++20/ABI1。5-call源图的10个CPU service组件完成7样本/warmup2的C++内部标定（40.45s，非整目标版本搜索），共享2560B pool只计一次；孤立样本施加逻辑串行约束，并将该资源顺序与原依赖分别落实到C++。选中CPU为1/0/0/0/1，原函数与native在独立输入及只读别名输入下逐位一致。58,465ns只是service点模型完成时间，host启动/分配/派发/join、并发带宽和整程序性能尚未闭合。通用7项关键检查已覆盖并行、启动成本、预算、搬运、共享物化和UNKNOWN域；未知域不得报告已知子域的零gap。缓冲策略亦已进入同一接口，默认UNKNOWN保持原执行；声明模型选择仅允许显式验证，不冒充实测。验收：`artifacts/baseline/joint-implementation-planning.json`。当前下一层集中补host envelope成本和可校验的并发条件，再扩大联合规划域；不新增零散detector/backend。
+
+私有容量复用本轮同时验收：4槽/8,454,304B，13次私有读取由当前步写入覆盖；每步前后清内容事实和动态输入强引用、仍完整snapshot。真实Gray外层3组原版/试验的状态/stdout/PNG一致，native4/5/3、容量创建1/1/2；重绑数组及时释放，fallback结束epoch。运行端隔离验证通过，默认无CDLL。它是有条件合法的容量变换，未测本方案整入口加速比；原provider同步借用Q继续显式保留。
+
 2026-11-17 外层原控制链已接通：自动发现原共享循环，78操作/1811边/1946interned ports；7词法join中t/s两项多writer按类型不动点合并，保1回边与dt字段写，不展开。`session-outer` 将源图→activation/lease覆盖→compact入口接通；效应未闭合只允独立leaf guards后fresh C++计算，计算前后销毁，taint不清、无新增I/O quiescence假设。原Gray `integrate()` 的正常/频繁I/O/另一分支三个独立原版与试验进程，返回、状态、stdout与PNG逐字节一致，native分别4/4/0。另 stdout sink四次原地改输入仍与原版一致、native4；未遮罩print或替换原host函数。完整外层入口隔离运行禁用建图/优化包仍native4并保存真实PNG，default无CDLL。验收：`artifacts/baseline/session-outer.json`。次数/时长/host容量仍未知，不宣称驻留收益或全局最优。下一层优先证明仅复用私有容量、清输入引用和内容事实、每步仍full snapshot的策略，再接资源占用与同范围成本；不借机假定未知I/O纯。
 
 2026-11-17 caller 自动接入主链已验：原 F4 的完整操作账本→引用路径/类型约束与直接lookup证明→compact scope→原导入入口自动安装/恢复；Gray `update()` 29项操作闭合为有条件profile，保未观测分支的原调用及失效barrier，不按业务名选择。6组独立原版/自动入口的逐步状态摘要、时间与stdout一致：正常/改输入native4，切分支native2，实例影子与自定义defaults元数据native0，unscoped kernel native4且逐次释放；dict override callback0。运行端禁用全部建图/优化导入仍native4，default无CDLL。动态session资源投影另接原15项body证据、4槽/8,454,304B，保未知次数/时长/outer CPU与额外metadata，不伪装固定N4/VRS。外围 `integrate()` 未闭合，每次最外caller退出释放，暂无跨caller驻留收益或新加速比。验收：`artifacts/baseline/session-caller.json`。下一层优先补原循环的词法carry/类型不动点、字段版本及未知I/O边界，再将外层scope寿命与成本接入规划；保持现C++算术正文和轻量运行端。

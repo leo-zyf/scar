@@ -1,0 +1,238 @@
+{
+  "Implemented": {
+    "causality_and_resource_memory_checks_independent": true,
+    "cp_sat_joint_modes_locations_transfers_start_times": true,
+    "cpp_standard": 20,
+    "empirical_context_profile_drives_cpu_choice": true,
+    "exact_scope_cost_queries": true,
+    "external_source_changed": false,
+    "isolated_service_context_has_explicit_serial_resource": true,
+    "operator_abi": 1,
+    "optimization_rules_use_workload_names": false,
+    "original_hardware_and_source_references_retained": true,
+    "resource_order_lowered_to_cpp": true,
+    "source_pool_bytes_counted_once": 2560,
+    "typed_region_implementation_options": true
+  },
+  "Inferred": {
+    "physical_optimality_proven": false,
+    "whole_call_speedup": null,
+    "whole_program_performance_predicted": false
+  },
+  "Observed": {
+    "actual_operator_cpus": [
+      [
+        1
+      ],
+      [
+        0
+      ],
+      [
+        0
+      ],
+      [
+        0
+      ],
+      [
+        1
+      ]
+    ],
+    "calls_per_batch": 64,
+    "canonical_outputs_bitwise_equal": true,
+    "canonical_services": 10,
+    "component_probe_seconds": 40.45092522300547,
+    "original_source_and_selected_native_cases": [
+      {
+        "bitwise_equal": true,
+        "inputs_unchanged": true,
+        "output_sha256": "ce566aed29efb56e593c739e721fc5d9bd9674e087e1bba9b764f064df8914eb",
+        "scenario": "independent_inputs"
+      },
+      {
+        "bitwise_equal": true,
+        "inputs_unchanged": true,
+        "output_sha256": "8514a27fbde9825f71c493f99e24e70d984280c69f512b903f3c2c9e74dabe60",
+        "scenario": "aliased_readonly_inputs"
+      }
+    ],
+    "runtime_build_time_and_solver_imports_blocked": true,
+    "samples_per_service": 7,
+    "scientific_capacity_creates": 1,
+    "scientific_capacity_releases": 1,
+    "scientific_content_reuse_calls": 0,
+    "scientific_native_calls": 4,
+    "selected_scientific_entry_stdout_state_png_equal": true,
+    "warmup_batches": 2
+  },
+  "Rejected": {
+    "component_service_time_as_whole_program_latency": true,
+    "declared_capacity_costs_as_measurements": true,
+    "isolated_measurements_as_concurrent_guarantees": true,
+    "unknown_cost_as_zero": true
+  },
+  "Verified": {
+    "declared_capacity_model_export_policy_matches_selection": true,
+    "model_domain_complete": true,
+    "model_gap": 0.0,
+    "model_lower_bound_ns": 58465,
+    "model_makespan_ns": 58465,
+    "model_scope": "ISOLATED_ABI1_TASK_SERVICE_POINT_MODEL",
+    "source_and_cpp_load_cold_replayed": true,
+    "tests": {
+      "correction": "UNKNOWN_OPTION_DOMAIN_MUST_NOT_REPORT_KNOWN_SUBDOMAIN_LOWER_BOUND_OR_ZERO_GAP",
+      "corrective_rerun_passed": 1,
+      "final_distinct_cases_passed": 7,
+      "initial_run_failed": 1,
+      "initial_run_passed": 6,
+      "optional_dependency_guard_added_after_checks": true,
+      "whole_suite_rerun": false
+    },
+    "unknown_capacity_costs_no_export": true
+  },
+  "all_three_stages_generally_complete": false,
+  "default_backend": "NO_OP",
+  "deployment_authorized": false,
+  "evidence": {
+    "artifacts/current/experiments/capacity-implementation-v1/cli-declared/result.json": {
+      "sha256": "72004cfb550c88c81208135e849f8e653aea2a5f7ab5c38c936dd7dc28aa7e3a",
+      "size_bytes": 8665,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/capacity-implementation-v1/cli-declared/result.json"
+    },
+    "artifacts/current/experiments/capacity-implementation-v1/cli-dependency-failure.json": {
+      "sha256": "bb82d634bcd188fdb1baf7b77a8c1fe1d63eaa43ffd2f91e79c9a985959f81e9",
+      "size_bytes": 597,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/capacity-implementation-v1/cli-dependency-failure.json"
+    },
+    "artifacts/current/experiments/capacity-implementation-v1/cli-unknown/result.json": {
+      "sha256": "d3d19f0db376ed7242f126cbb8f2cb320eb5d85979e77621a4a4ed4aa4b938b3",
+      "size_bytes": 4711,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/capacity-implementation-v1/cli-unknown/result.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/calibration/profile.json": {
+      "sha256": "8da169aeab5bedf218f37fe98863cee0f4f72508d7ac4cdd64502d63f609354b",
+      "size_bytes": 246125,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/calibration/profile.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/calibration/result.json": {
+      "sha256": "5ace86c0d24e03e57b3d3c975dc6ef47effb0848ada198a9e1e94cfb2711a9d4",
+      "size_bytes": 2613,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/calibration/result.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/scientific-validation.json": {
+      "sha256": "329989df93bd5fd87d839abbe1d48a91bbb04743e4f5b7403896d7513f091470",
+      "size_bytes": 726,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/scientific-validation.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/certificate.json": {
+      "sha256": "aaaf77295f0f3fab3672fba53156d47db419db22375677712200dc4c194a3a05",
+      "size_bytes": 3292,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/certificate.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/execution-plan.json": {
+      "sha256": "c1907c6c1009f46cfbbc56917e982a79f1dfb9f38ff1e68f4abbaadb40cc7572",
+      "size_bytes": 2068,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/execution-plan.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/native/artifact.json": {
+      "sha256": "35d7cccb396a0b22ee363c5d0e964b766eaa6eac308754bb5ffc8f6618177d76",
+      "size_bytes": 13744,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/native/artifact.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/native/pipeline.cpp": {
+      "sha256": "d83d22b0e54c29b06487f9a0cd6872b3642d4efd3006c45491b797e7d7094257",
+      "size_bytes": 20353,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/native/pipeline.cpp"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/preparation.json": {
+      "sha256": "8a670204e818daaca3887cb08c56e6d9e5b6f89da9084825838f1e97a53e27e9",
+      "size_bytes": 2883,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/preparation.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/selected/result.json": {
+      "sha256": "b4e678f745727a4dc6e03b10163c4fb1035005d7baaede5fd3343fea2965ab76",
+      "size_bytes": 1239,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/selected/result.json"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/session-isolated-entry.py": {
+      "sha256": "4eab70eb65c780752c2097e27f4edccfaa6b00e6360b47ecb8f89ecb3206bb56",
+      "size_bytes": 605,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/session-isolated-entry.py"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/validate-native.py": {
+      "sha256": "4b6bc69699fb068be5dd3100047251a4ac8800273a9c805b354b9439dc22c251",
+      "size_bytes": 2530,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/validate-native.py"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/validate-selected-session.py": {
+      "sha256": "0bdb0c5b14ed820db89be41e566fe35327d66790f42f870a8eec48c04a1de782",
+      "size_bytes": 1950,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/validate-selected-session.py"
+    },
+    "artifacts/current/experiments/joint-implementation-v1/validation.json": {
+      "sha256": "a3cb04bf899a55325dec8cc40bdb1f95613a6d0fe6dbd66685faada42416f696",
+      "size_bytes": 1554,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/joint-implementation-v1/validation.json"
+    },
+    "artifacts/current/experiments/session-capacity-v1/isolation.json": {
+      "sha256": "3167d8f355493f4e916eba9c31ae2f4ef818023b48dcae31c232a318a2321aff",
+      "size_bytes": 389,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-capacity-v1/isolation.json"
+    },
+    "artifacts/current/experiments/session-capacity-v1/preparation/result.json": {
+      "sha256": "697c720e0ee201cd55a1b6808590e5f28d2ae74b82e3b7546ffa38d713eb02f1",
+      "size_bytes": 4225,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-capacity-v1/preparation/result.json"
+    },
+    "artifacts/current/experiments/session-capacity-v1/validation.json": {
+      "sha256": "d91dcee6a6c404dad466a565f09db47924315a2298ea85d8b1bf0cc80aa67ed2",
+      "size_bytes": 8102,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/session-capacity-v1/validation.json"
+    }
+  },
+  "implementation_sha256": {
+    "pyproject.toml": "3f6896785d4b3ac969a7490b143f6ed973f3400a44fd51984f897a7f7b758368",
+    "scar/analysis/session_capacity_proof.py": "20160bcf89ebbbc2c345ed6a089b5efcc43f06fa833a5f357aadad29dcdbe0bd",
+    "scar/cli.py": "354e8101cf3c59d6313a131c767ee76eb2dd3be18add3c5c439db02c1de9ddb0",
+    "scar/codegen/pipeline_implementation.py": "42dd35ab0f663f62e5fdfe9d171fe2896102a26524fd7014e5249348108ddb4b",
+    "scar/compiler/calibrate_pipeline_services.py": "4b576ce699724e72969f5256d46a99cbb4c8ad5d63735a3d8eb22ab6a6732dc7",
+    "scar/compiler/compile_pipeline_implementation.py": "ef58a04f3241f86a3e9e97a1c5db57548a1941f14bffff865a3baa8ca00199d9",
+    "scar/compiler/plan_capacity_implementation.py": "6a714055bf3137ec36d96c95c2fc56f0855cc4711cf3f256a8d219395ae73af4",
+    "scar/compiler/plan_implementations.py": "6d031da2208b7bc520f20766adad04c24161be5ceae2d189eb3de9810b989408",
+    "scar/compiler/session_capacity.py": "b1ab9f2d847023d778374ae41dbfa47e6f1cdc4fbf4eb4ccddc923d4ab8f08e1",
+    "scar/ir/implementation_plan.py": "5995a5dc5a8d793bc5d98732d1e92fac65100c551d3d52f045a92c95873d0491",
+    "scar/optimization/capacity_implementation.py": "e57a0d5be456d6a2e2b60b347db2c2b4930c8324981060a2e29af0f9e0e4581d",
+    "scar/optimization/implementation_costs.py": "8dd974d635dd2403963ca7d7be8bae6edbe1cf0a26dd6a2a8f1cdec36a8172ff",
+    "scar/optimization/joint_planner.py": "35ee726c6d86017b34f44733b4a8a83bd4a4a46270cdf894da7b278bd58f5516",
+    "scar/optimization/pipeline_implementation.py": "f9c47f3b2761ed0e1475ea67c5274f3d3fad496923cd41f2acd05fb4129c2ef7",
+    "scar/optimization/session_capacity.py": "268525bbd88ab9cf3dad8308d425a10f66ff5668afde9f95a061d735c9ebcdfe",
+    "scar/runtime/session_scope.py": "c22acb1aa1b3de6f8185f46c36ee261fdcbb8ff69c53763312aea7e897b8cf8f",
+    "tests/unit/test_joint_planner.py": "b24667a4f8e1c11319d54801a51ac929f7568cbd1adbd9e7ebfd173568943f9d"
+  },
+  "remaining": [
+    "MODEL_AND_MEASURE_HOST_SETUP_ALLOCATION_DISPATCH_JOIN_IN_MATCHING_SCOPE",
+    "QUALIFY_SHARED_BANDWIDTH_AND_CONCURRENT_SERVICE_MODELS_BEFORE_RELAXING_ISOLATION",
+    "EXPAND_HARDWARE_IMPLEMENTATIONS_AND_SAFE_REGION_COMPOSITION",
+    "WHOLE_SCOPE_CORRECTNESS_AND_CLEAN_AB_BEFORE_AUTOMATIC_DEPLOYMENT"
+  ],
+  "research_basis": [
+    {
+      "name": "Unity",
+      "url": "https://www.usenix.org/conference/osdi22/presentation/unger"
+    },
+    {
+      "name": "Alpa",
+      "url": "https://www.usenix.org/conference/osdi22/presentation/zheng-lianmin"
+    },
+    {
+      "name": "StarPU",
+      "url": "https://starpu.gitlabpages.inria.fr/features.html"
+    },
+    {
+      "name": "CP-SAT scheduling",
+      "url": "https://github.com/google/or-tools/blob/stable/ortools/sat/docs/scheduling.md"
+    }
+  ],
+  "schema": "scar.joint-implementation-planning-acceptance",
+  "schema_version": 1,
+  "status": "VERIFIED_BOUNDED_SOURCE_COST_PLANNING_CPP_CHAIN"
+}
