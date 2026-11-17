@@ -5,6 +5,7 @@ regions are not duplicated and repeated bodies need not be unrolled. Durations
 are estimates, while capacities and causal dependencies are hard constraints.
 """
 from dataclasses import dataclass, field
+from copy import deepcopy
 from hashlib import sha256
 import json
 
@@ -35,6 +36,14 @@ class PlanningResource:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceObligation:
+    """Unresolved physical/resource qualification, separate from known time."""
+    field: str
+    reason: str
+    source_refs: tuple[dict, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ImplementationOption:
     id: str
     lowering: str
@@ -45,6 +54,7 @@ class ImplementationOption:
     output_locations: dict[str, str]
     cost: CostEstimate
     parameters: dict
+    unresolved_resources: tuple[ResourceObligation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +141,9 @@ class PlanningProblem:
 
 def _problem_payload(problem):
     value = encode(problem)
+    for operation in value['operations']:
+        for option in operation['options']:
+            if not option['unresolved_resources']: option.pop('unresolved_resources')
     for name in ('activities', 'timing_constraints'):
         if not value[name]: value.pop(name)
     return value
@@ -138,6 +151,11 @@ def _problem_payload(problem):
 
 def digest(value):
     payload = _problem_payload(value) if type(value) is PlanningProblem else encode(value)
+    if type(value) is ImplementationOption and not payload['unresolved_resources']:
+        payload.pop('unresolved_resources')
+    if type(value) is PlanningOperation:
+        for option in payload['options']:
+            if not option['unresolved_resources']: option.pop('unresolved_resources')
     return sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
@@ -184,6 +202,9 @@ def validate_problem(problem):
             _need(m.id and m.lowering and m.proof_refs, 'implementation lowering and legality references required')
             demands(m.demands);demands(m.workspace_bytes,True);cost(m.cost)
             _need(set(m.input_locations.values())|set(m.output_locations.values())<=pools, 'material locations must name explicit memory pools')
+            for obligation in m.unresolved_resources:
+                _need(bool(obligation.field) and bool(obligation.reason), 'resource obligation field and reason required')
+                references(obligation.source_refs)
     activities={a.id:a for a in p.activities}
     _need(len(activities)==len(p.activities) and not set(activities)&set(ops),
           'auxiliary activity IDs must be unique and distinct from operation IDs')
@@ -241,22 +262,29 @@ def validate_problem(problem):
 
 def problem_document(problem):
     problem=validate_problem(problem)
-    return dict(schema=SCHEMA,schema_version=2 if problem.activities or problem.timing_constraints else 1,
+    obligations=any(mode.unresolved_resources for op in problem.operations for mode in op.options)
+    return dict(schema=SCHEMA,schema_version=3 if obligations else 2 if problem.activities or problem.timing_constraints else 1,
                 **_problem_payload(problem))
 
 
 def problem_from_dict(document):
-    value=dict(document)
+    value=deepcopy(document)
     version=value.pop('schema_version',None)
-    _need(value.pop('schema',None)==SCHEMA and type(version) is int and version in (1,2),
+    _need(value.pop('schema',None)==SCHEMA and type(version) is int and version in (1,2,3),
           'unsupported planning problem schema')
     extension=('activities','timing_constraints')
     _need(version!=1 or not set(extension)&set(value), 'v1 planning problems cannot carry conditional activities or timing')
     _need(version!=2 or any(value.get(name) for name in extension), 'v2 planning problem requires a nonempty extension')
+    options=[mode for op in value['operations'] for mode in op['options']]
+    _need(version==3 or not any('unresolved_resources' in mode for mode in options),
+          'resource obligations require planning problem schema v3')
+    _need(version!=3 or any(mode.get('unresolved_resources') for mode in options),
+          'v3 planning problem requires nonempty resource obligations')
+    for mode in options: mode.setdefault('unresolved_resources',[])
     for name in extension: value.setdefault(name,[])
     return validate_problem(decode(PlanningProblem,value))
 
 
-__all__=['CostEstimate','PlanningResource','ImplementationOption','PlanningOperation','TransferOption',
+__all__=['CostEstimate','PlanningResource','ResourceObligation','ImplementationOption','PlanningOperation','TransferOption',
          'PlanningDataEdge','ImplementationChoice','PlanningActivity','PlanningTimingConstraint',
          'PlanningProblem','validate_problem','problem_document','problem_from_dict','digest','SCHEMA','PLAN_SCHEMA']

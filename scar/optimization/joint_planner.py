@@ -8,10 +8,15 @@ from math import floor
 import time
 
 from scar.ir.implementation_plan import validate_problem, digest, PLAN_SCHEMA
+from scar.ir.record_codec import encode
 
 
 def _known(cost):
     return cost.estimate_ns is not None and cost.basis!='UNKNOWN' and not cost.missing_terms
+
+
+def _qualified_mode(mode):
+    return _known(mode.cost) and not mode.unresolved_resources
 
 
 def _frontiers(problem, baseline_only):
@@ -21,6 +26,11 @@ def _frontiers(problem, baseline_only):
             if (not baseline_only or mode.id==op.baseline_option)and not _known(mode.cost):
                 result.append(dict(operation=op.id,option=mode.id,reason='INCOMPLETE_CONTEXT_COST',
                                    missing_terms=list(mode.cost.missing_terms)))
+            if not baseline_only or mode.id==op.baseline_option:
+                for obligation in mode.unresolved_resources:
+                    result.append(dict(operation=op.id,option=mode.id,
+                        reason='UNRESOLVED_RESOURCE_OBLIGATION',field=obligation.field,
+                        resource_reason=obligation.reason,source_refs=encode(obligation.source_refs)))
     for edge in problem.data_edges:
         for route in edge.transfers:
             if not _known(route.cost):
@@ -88,7 +98,7 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         bits=[]
         for mode in op.options:
             bit=model.new_bool_var(op.id+':'+mode.id);choices[op.id,mode.id]=bit;bits.append(bit)
-            if not _known(mode.cost)or baseline_only and mode.id!=op.baseline_option:
+            if not _qualified_mode(mode)or baseline_only and mode.id!=op.baseline_option:
                 model.add(bit==0);continue
             interval=model.new_optional_interval_var(starts[op.id],mode.cost.estimate_ns,ends[op.id],bit,mode.id)
             for resource,units in mode.demands.items():occupy(resource,interval,units)
@@ -224,7 +234,8 @@ def _timeline(p,plan):
         require(row['operation']in ops and row['operation']not in selected,'selection operation differs or duplicates')
         op=ops[row['operation']];modes=[m for m in op.options if m.id==row['option']]
         require(len(modes)==1,'selected implementation absent from original domain');mode=modes[0];interval(row)
-        require(_known(mode.cost)and row['end_ns']-row['start_ns']==mode.cost.estimate_ns,'selected duration lacks exact context estimate')
+        require(_qualified_mode(mode)and row['end_ns']-row['start_ns']==mode.cost.estimate_ns,
+            'selected duration or resource qualification is unresolved')
         require(not plan['baseline_only']or mode.id==op.baseline_option,'baseline report selected a replacement')
         selected[op.id]=(row,mode)
         execution.extend((r,row['start_ns'],row['end_ns'],u)for r,u in mode.demands.items())

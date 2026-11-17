@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 import time
 
 from scar.ir.implementation_plan import PLAN_SCHEMA, digest, validate_problem
-from scar.optimization.joint_planner import _frontiers, _known, _timeline, verify_execution_plan
+from scar.optimization.joint_planner import _frontiers, _known, _qualified_mode, _timeline, verify_execution_plan
 
 
 class _Stopped(Exception):
@@ -356,7 +356,7 @@ def construct_implementations(problem, *, baseline_only=False, max_repairs=10000
             if blocked:
                 if not activity.when: raise _Stopped('UNAVAILABLE_UNCONDITIONAL_ACTIVITY', activity=activity.id)
                 forbidden.update((c.operation, c.option) for c in activity.when)
-        choices = {o.id:[m for m in o.options if _known(m.cost)
+        choices = {o.id:[m for m in o.options if _qualified_mode(m)
             and (not baseline_only or m.id == o.baseline_option) and (o.id, m.id) not in forbidden
             and (not m.cost.estimate_ns or all(units <= capacities[r]
                 for r, units in {**m.demands, **m.workspace_bytes}.items()))] for o in problem.operations}

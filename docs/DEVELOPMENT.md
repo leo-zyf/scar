@@ -22,6 +22,8 @@ GCC源码复核及一次补充编译明确了下一层顺序：①复用现有�
 
 后续逐层验收：①扩到真实科学caller的需求/完整成本证据，严格区分逻辑访问与实际跨层流量；②将已有结构delta产生的区域接到共同硬件/时间投影，避免只规划固定CALL骨架；③扩展前补不同shape/位置/并发和循环周期模型的适用域证据，再构造CPU/链路/存储日历；④同份证书接已有C++/compact，并在真实程序的完整同范围边界校验。测得min/max不升级数学界，未知成本不补零，不承诺由硬件名牌算出任意程序唯一实际最优。
 
+真实stateful边界复用同一流程：`scar observe-region-inputs --plan REGION --out OBS -- ORIGINAL_COMMAND`只记录声明input.path的元数据；`scar specialize-stateful --program PROGRAM --inputs OBS/inputs.json --out FRESH --memory-budget-bytes B --compile`按观测shape重放原F4并生成显式单worker验证候选；`scar check-stateful-specialization --specialization FRESH/result.json`独立冷读，不加载native。scalar每次读新值，metadata不是不变性证明。`stateful_entry_cost`与`region_implementation`接原完整入口scope到共同IR；物理资源义务独立于cost，logical分析不授权lowering。真实driver验证见科学主链checkpoint，当前仍默认NO_OP，未生成完整程序C++或自动部署。
+
 研究依据： [DaCe/SDFG](https://htor.inf.ethz.ch/publications/img/dace-sc19.pdf) 的控制/数据/搬运分层，[Halide 2016](https://graphics.cs.cmu.edu/projects/halidesched/mullapudi16_halidesched.pdf) 的边界分析与解析分组，[MLIR bufferization](https://mlir.llvm.org/docs/Bufferization/) 的先tensor变换后存储规划，[Hong–Kung](https://www.eecs.harvard.edu/~htk/publication/1981-stoc-hong-kung.pdf) 与 [Roofline](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2008/Archive/EECS-2008-134.pdf) 的数据移动/性能界，以及 [HEFT](https://disco.ethz.ch/courses/fs14/seminar/paper/Jochen/4.pdf) 的构造式调度。Halide贪心/HEFT启发式并非全局最优证明；借鉴机制不等于直接替换SCAR前端。研究记录 `artifacts/baseline/constructive-planning-research.json`；实测诊断 `artifacts/baseline/pipeline-architecture-diagnosis.json`。
 
 F5可增量接入经过完整前端的新源码，不重建旧图：先用

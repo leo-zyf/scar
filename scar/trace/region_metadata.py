@@ -47,7 +47,8 @@ class RegionMetadataCollector:
             if self.plan_path is None or self.out is None:raise ValueError('plan and output directory required')
             self.plan=read_input_boundary(self.plan_path);self.source=self.plan.source
             self.observer=InputMetadataObserver(max_calls_per_code=self.plan.max_calls,
-                scalar_parameters=self.plan.scalar_parameters)
+                scalar_parameters=self.plan.scalar_parameters,stateful_inputs=self.plan.stateful_inputs,
+                region_id=self.plan.region_id,region_sha256=self.plan.region_sha256)
             self.parameters=self.plan.parameters
             if (not Path(self.source.path).is_absolute()
                     or re.fullmatch(r'[0-9a-f]{64}',self.source.sha256) is None
@@ -83,7 +84,10 @@ class RegionMetadataCollector:
     def _after_fork(self):
         try:
             self.pid=os.getpid();self.observer=InputMetadataObserver(max_calls_per_code=self.plan.max_calls if self.plan else 2,
-                scalar_parameters=self.plan.scalar_parameters if self.plan else ())
+                scalar_parameters=self.plan.scalar_parameters if self.plan else (),
+                stateful_inputs=self.plan.stateful_inputs if self.plan else (),
+                region_id=self.plan.region_id if self.plan else None,
+                region_sha256=self.plan.region_sha256 if self.plan else None)
             self.callbacks=0;self.errors=[];self.closed=False;self.stopped=False;self._busy=False
             self.window_flushed=False;self.fork_resets+=1;self.status='WAITING'
             if self._owns_tool():

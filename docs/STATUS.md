@@ -1,5 +1,9 @@
 # 当前状态
 
+2026-11-17 真实科学入口继续贯通：只给 Gray–Scott 原 `run_simulation.py` 补做 F0–F4，再按引用合入原计算模块材料（fact正文复制0B，3个接口worker），当前规则下重发入口ProgramBuild。两次有界原边界元数据观测自动给出两输入259×259，不保tensor数值/地址、不固定5个scalar；`specialize-stateful`已按原F4精确重发现及硬件领域生成C++20/ABI1。真实driver `-T 2`显式trial的4次调用均native、0回退；逐次pre/post及完整entry后的数组（含halo）/scalar类型与字节、stdout/stderr和PNG逐字节一致，源码不变。新增`check-stateful-specialization`冷重放原F4/观测/recipe/6个native文件，禁CDLL通过，错shape和伪造selected拒绝；12项相关现有回归通过。未测目标A/B或视频、未部署。
+
+改写区域和stateful完整入口已投影到共同实现IR；资源未解义务独立于时间成本，非空时用problem v3，旧v1/v2 wire/digest保留。真实259的NO_OP及两个CPU候选分别保留成本UNKNOWN、caller CPU与opaque memory/residency义务，strict规划诚实UNRESOLVED；无OIR selection时不声称有source delta。成本与计划均绑定实际编译domain，不沿用旧515模型或另一发布路径的context。当前ProgramBuild仍有303个来源/接线缺口，catalog全图物化未闭合，三阶段未完成。同规格canonical scope-boundary、源码stage-DAG V2（4/6/7）及原语标定已串行完成，均warm2/7样本；仅组件证据，完整入口成本未闭合。下一层接现有activity成本聚合出口及guard路径残项，再接资源资格与成本决策。材料：`artifacts/baseline/scientific-mainline.json`。
+
 2026-11-17 三条主链继续落地：①`joint-plan/joint-pipeline`默认构造式规划，复用原typed problem、容量/搬运/共享存储寿命和独立verifier；v2条件启动、端点等式与WAIT_TAIL保留。真实source→构造→证书→C++已在禁OR-Tools进程中逐位验证；有限RAM/RAM→HBM仅为typed声明模型验证，不是实际GPU搬运。贪心可能死路，保UNKNOWN/domain gap，不声称最快。②融合C1 v2只带一个原ELF，无host、不pin；在禁止compiler/IR/analysis/planner/codegen导入且不读外部图JSON的进程中native3与原函数一致，实际普通导入入口的stdout也相同，default无CDLL。新scope成本仍UNKNOWN，旧compact运行实现pin变更需重导。
 
 ③真实canonical完整入口标定已取得数据：6 TRAIN、2混合holdout、1真实源区域holdout，warmup3/9次、4并行编译任务且计时前join。仅TRAIN拟合的两侧basis秩均4，冻结目标误差原Python10.16%/融合1.62%；目标实测median10.365/99.495µs，预测9.312/101.111µs，判断KEEP且不加载native。是小源码区域、固定shape与warm边界的有效模型，不是独立组件成本或科学程序加速。发布曾因共享dict引用导致digest变化，已改不可变快照/按落盘观测离线拟合；保留原样本，无重采样或放松校验。报告 `artifacts/baseline/constructive-corpus-compact.json`。

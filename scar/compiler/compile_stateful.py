@@ -11,7 +11,7 @@ def _write(path, value):
 
 def compile_stateful(out, *, source=None, catalog=None, region_path=None,
                      input_shapes=None, shape=None, target=None, cpu_threads=None,
-                     memory_budget_bytes=None, plan_only=False):
+                     memory_budget_bytes=None, plan_only=False,input_metadata_path=None):
     from .stateful_model import read_stateful, write_stateful, stateful_digest
     if region_path is not None:
         if source is not None or catalog is not None:
@@ -22,8 +22,8 @@ def compile_stateful(out, *, source=None, catalog=None, region_path=None,
             raise ValueError('stateful discovery requires original source and F4 catalog')
         from .stateful_frontend import discover_stateful_regions
         regions, rejected = discover_stateful_regions(catalog, source=source)
-    if input_shapes is not None and shape is not None:
-        raise ValueError('choose named input shapes or a common array shape')
+    if sum(value is not None for value in (input_shapes,shape,input_metadata_path))>1:
+        raise ValueError('choose observed metadata, named input shapes or a common array shape')
     folder = Path(out).absolute()
     folder.mkdir(parents=True, exist_ok=False)
     bindings = None
@@ -39,6 +39,10 @@ def compile_stateful(out, *, source=None, catalog=None, region_path=None,
             selected_for_use=False, target_program_executed=False)
         rows.append(row)
         shapes = input_shapes
+        if input_metadata_path is not None:
+            from .input_metadata import stateful_shapes_from_metadata
+            shapes,evidence=stateful_shapes_from_metadata(input_metadata_path,region)
+            row.update(shape_evidence=evidence,shape_authority=evidence['shape_authority'])
         if shape is not None:
             shapes = {value.id: list(shape) for value in region.inputs if value.kind == 'array'}
         if shapes is None:
@@ -60,7 +64,7 @@ def compile_stateful(out, *, source=None, catalog=None, region_path=None,
             memory_budget_bytes=memory_budget_bytes, resource_binding=binding)
         _write(directory / 'schedule.json', plan)
         row.update(schedule=str(directory / 'schedule.json'),
-            shape_authority='CALLER_DECLARATION_RUNTIME_GUARDED',
+            shape_authority=row.get('shape_authority','CALLER_DECLARATION_RUNTIME_GUARDED'),
             cpu_allocation_policy='CALLER_EXPLICIT_THREAD_COUNT_FIRST_FEASIBLE_EXECUTOR_UNRANKED')
         if plan.get('frontier') or plan.get('frontiers') or plan.get('budget_satisfied') is False:
             row['status'] = 'STATEFUL_PLAN_UNRESOLVED'
@@ -90,6 +94,7 @@ def main():
     shapes = parser.add_mutually_exclusive_group()
     shapes.add_argument('--shape', nargs=2, type=int)
     shapes.add_argument('--input-shapes', help='JSON object mapping discovered array input IDs to shapes')
+    shapes.add_argument('--inputs',help='source-matched observed stateful input-path metadata; runtime guards remain required')
     parser.add_argument('--target')
     parser.add_argument('--cpu-threads', type=int)
     parser.add_argument('--memory-budget-bytes', type=int)
@@ -98,7 +103,8 @@ def main():
     shapes = json.loads(Path(args.input_shapes).read_text()) if args.input_shapes else None
     report = compile_stateful(args.out, source=args.source, catalog=args.catalog,
         region_path=args.region, input_shapes=shapes, shape=args.shape, target=args.target,
-        cpu_threads=args.cpu_threads, memory_budget_bytes=args.memory_budget_bytes, plan_only=args.plan_only)
+        cpu_threads=args.cpu_threads, memory_budget_bytes=args.memory_budget_bytes, plan_only=args.plan_only,
+        input_metadata_path=args.inputs)
     print(json.dumps(dict(regions=len(report['regions']),
         statuses=[row['status'] for row in report['regions']], result=str(Path(args.out) / 'result.json'))))
 
