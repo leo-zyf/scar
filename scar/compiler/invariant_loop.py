@@ -14,6 +14,7 @@ import subprocess
 from scar.compiler.model import ArrayRegion,ExecutionPlan,Expr,region_from_dict
 from scar.compiler.pipeline_model import prepare_pipeline_leaf
 from scar.compiler.validation import validate_region
+from scar.analysis.array_motion import derive_array_motion
 from scar.codegen import cpp
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.resource_solver import semantic_sha256
@@ -43,16 +44,14 @@ def plan_invariant_loop(body,*,carry_parameter,loop_interface,memory_budget_byte
         raise ValueError('explicit incremental array payload budget required')
     if type(hoist_invariants) is not bool:
         raise ValueError('hoist_invariants requires an exact boolean diagnostic placement policy')
-    nodes={n.id:n for n in body.nodes};dependencies={};uses={key:[] for key in nodes}
-    for node in body.nodes:
-        dependencies[node.id]=({node.attrs['name']} if node.op=='input' else
-            set().union(*(dependencies[k] for k in node.inputs)))
-        for key in node.inputs:uses[key].append(node.id)
-    invariant={n.id for n in body.nodes if n.op not in ('input','const') and dependencies[n.id]
-        and carry_parameter not in dependencies[n.id]}
-    roots=[n.id for n in body.nodes if n.id in invariant and
-        (n.id==body.output or any(consumer not in invariant for consumer in uses[n.id]))]
+    motion=derive_array_motion(body,carry_parameter=carry_parameter,loop_interface=loop_interface)
+    nodes={n.id:n for n in body.nodes}
+    dependencies=motion['dependencies']
+    invariant=set(motion['invariant_nodes'])
+    roots=list(motion['invariant_roots'])
     if not roots:raise ValueError('no nonconstant loop-invariant array computation reaches varying work')
+    if any(motion['placements'][key]['status']!='CONDITIONAL' for key in roots):
+        raise ValueError('loop-invariant roots have unresolved movement dependencies')
     if body.output in invariant:raise ValueError('fully invariant body output requires separate fresh-result loop contract')
     inferred_roots=list(roots)
     if not hoist_invariants:roots=[]
@@ -86,7 +85,7 @@ def plan_invariant_loop(body,*,carry_parameter,loop_interface,memory_budget_byte
         body_sha256=semantic_sha256(asdict(body)),carry_parameter=carry_parameter,
         loop_interface=loop_interface,source_replacement_authorized=False,
         authority='CONDITIONAL_ON_ORIGINAL_CALLER_F4_AND_RUNTIME_ADMISSION',
-        dependencies={key:sorted(value) for key,value in dependencies.items()},
+        dependencies=dependencies,motion_analysis=motion,
         hoist_invariants=hoist_invariants,inferred_invariant_roots=inferred_roots,
         placement_policy='AUTOMATIC_DEPENDENCY_DERIVED_LICM' if hoist_invariants else
             'DIAGNOSTIC_ONLY_SAME_NATIVE_HOST_WITH_ALL_BODY_WORK_INSIDE_LOOP',

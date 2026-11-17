@@ -339,6 +339,69 @@ def read_invariant_loop_proof(path,*,catalog):
     return matches[0]
 
 
+def read_invariant_loop_motion(path,*,catalog):
+    """Join motion facts to one independently replayed original source loop.
+
+    The ArrayRegion query alone has no source authority.  This adapter first
+    uses the existing full F4 rediscovery, then retains the original CALL,
+    lexical write and loop-control witnesses.  Array contents and live
+    callable dispatch remain runtime obligations; a stable binding does not
+    establish an immutable referent.
+    """
+    from scar.analysis.array_motion import derive_array_motion
+    from scar.ir.execution_recipe import artifact_reference
+    from scar.optimization.resource_solver import semantic_sha256
+
+    proof=read_invariant_loop_proof(path,catalog=catalog)
+    interface=dict(carry_parameter=proof.carry_parameter,
+        readonly_parameters=[name for name in proof.body.parameters if name!=proof.carry_parameter],
+        original_f4_proof=asdict(proof))
+    motion=derive_array_motion(proof.body,carry_parameter=proof.carry_parameter,loop_interface=interface)
+    roles={row['role']:row for row in proof.origins if row.get('kind')=='original_f4'
+        and row.get('role') in ('builtin_range','lexical_carry_write',
+            'invariant_array_leaf_call','single_shared_invariant_loop')}
+    call=roles['invariant_array_leaf_call']
+    report=dict(schema='scar.source-loop-motion',schema_version=1,
+        proof=artifact_reference(path,PROOF_SCHEMA),proof_id=proof.id,
+        proof_sha256=semantic_sha256(asdict(proof)),body_sha256=motion['body_sha256'],
+        source_identity=dict(path=proof.source.path,sha256=proof.source.sha256,
+            code_key=proof.source.code_key),
+        array_motion=motion,
+        parameter_routes=[dict(leaf_formal=name,outer_parameter=proof.parameter_map[name],
+            original_actual=call['call_inputs'][index],
+            binding_role='CARRIED' if name==proof.carry_parameter else 'OUTER_LIVE_IN',
+            referent_content_invariance='CONDITIONAL_ON_EXACT_ARRAY_AND_NO_FOREIGN_WRITERS')
+            for index,name in enumerate(proof.body.parameters)],
+        source_witnesses=roles,
+        source_facts=dict(authority='FULL_ORIGINAL_F4_REDISCOVERY',
+            body_profile='ONE_RANGE_BODY_ONE_ADMITTED_ARRAY_CALL_ONE_LEXICAL_CARRY_WRITE',
+            source_actions_enumerated=True,opaque_source_actions=False,
+            input_writes='NONE_WITHIN_REPLAYED_ARRAY_PROFILE',
+            lexical_carry_write_is_input_storage_write=False,
+            positive_iteration_call='ONE_PER_ENTERED_BODY',
+            zero_trip='NO_BODY_EVALUATION_AND_ORIGINAL_CARRY_ALIAS',
+            bodies_shared=True,iterations_unrolled=False),
+        runtime_obligations=motion['conditional_obligations'],
+        runtime_obligations_discharged=False,source_replacement_authorized=False,
+        cost_qualified=False,selected_for_use=False)
+    report['id']='source-loop-motion:'+semantic_sha256(report)
+    return proof,report
+
+
+def verify_invariant_loop_motion(report,*,catalog):
+    """Cold source replay; no target execution or trusted proof markers."""
+    from scar.ir.execution_recipe import read_artifact
+    from scar.optimization.resource_solver import semantic_sha256
+
+    if type(report) is not dict or report.get('schema')!='scar.source-loop-motion':
+        raise ValueError('source loop motion report required')
+    read_artifact(report['proof'])
+    proof,expected=read_invariant_loop_motion(report['proof']['uri'],catalog=catalog)
+    if semantic_sha256(expected)!=semantic_sha256(report):
+        raise ValueError('source loop motion differs from original F4 replay')
+    return proof,expected
+
+
 def validate_invariant_loop_links(proof,spec,loopsref):
     """Join the retained loop/CALL facts to an already F4-replayed proof.
 

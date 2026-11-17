@@ -29,6 +29,8 @@
 
 跨层摘要补充实证：保留三层`noinline`函数，GCC13.3仍沿调用图传播const摘要，把稳定调用移到循环外；同一指针指向的内容每轮被写时，读取留在循环内；未知effects的外部调用也保留。仅编译、未运行或测加速，见`artifacts/baseline/gcc-ipa-scope.json`。借鉴[IPA](https://gcc.gnu.org/onlinedocs/gccint/IPA.html)的“局部摘要→调用边参数替换→跨过程传播→改写”，不是把全部函数内联展开。SCAR已有实形参/environment/world接线及CFG/state记录，但尚未形成供优化使用的递归调用分量摘要；当前LICM仅支持严格array-carry域。下一项结构工作先让现有LICM消费绑定revision/root的no-clobber、执行条件和异常合法性结果，再沿原CALL路由组合参数依赖、读写/escape摘要，最后扩展嵌套region；未解决的调用effects保UNKNOWN。`macro_pass.PassSpec`目前仅单fusion使用，不能称通用pass管理器；现有后继图的use-def重算也不能代替跨region分析失效。逻辑工作量弱支配不等于CFG支配或时间收益。
 
+该结构工作的首段已实现：`array_motion.derive_array_motion/verify_array_motion`在既有ArrayRegion上统一依赖与placement，不创造新SSA/CFG；body和interface改动必须重推，常量算术或view阻挡的根不获移动。`read_invariant_loop_motion/verify_invariant_loop_motion`通过原F4完整重发现附source CALL/参数/lexical写/control证据；`invariant_build`自动发布`source-motion.json`。CPU计划保完整分析与未履行Q，匿名成本图用相同placement且不把source IDs放入primitive key；temporal生成器对实际optimized region另derive并verify，parallel复用。原F4/runtime/外部写入条件仍分开，此查询不是通用MemorySSA证明。当前按原样例贯通并完成4次native正确性验证；下一段集中实现沿原CALL路由的可组合依赖/读写摘要，再接一般移动证明，不新增后端。验收：`artifacts/baseline/unified-motion-mainline.json`。
+
 下一轮集中顺序：flags、shape、正文已确认一致；先处理已识别的独立函数/真实阶段组、wrapper+trial、前驱数据及分配/触页条件，冻结可转用成本模型，再接规模阈值和同边界原路径比较；随后扩展嵌套region改写和时序。旧预测超阈值仍拒绝，不用GCC启发式替它授权，也不新增优化后端。
 
 入口动静接线现已实测：原短driver的有界CALL目标采集接入既有ProgramBuild，`scar entry-calls --program PROGRAM --out FRESH_JSON`生成入口条件投影，`--check JSON`独立冷验；共享body、loop/递归引用不unroll。当前2个入口可达单元、10条件接口、8共享body、66原typed参数/环境/world路由；按path/SHA/CodeID自动见证同一native源。旧303条是236个lazy视图、18个depth预算、17个effect、13个resource、19个材料/覆盖问题，不能当303个语义失败。构造协议及外部Python源码仍未接全。

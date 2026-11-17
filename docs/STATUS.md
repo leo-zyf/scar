@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 共享循环移动分析已贯通现有三阶段主链：`array_motion`绑定原body/interface版本，统一依赖、structural invariant及可移动placement；source F4重发现适配接入`invariant_build`，CPU计划、匿名成本需求及串/并行C++均消费同一规则，优化后DAG独立重推并拒绝旧分析。3项metadata验证通过；按当前规则重发既有generic样例ProgramBuild后，原F4→计划→C++20/ABI1实际编译和冷load通过，4次native逐位一致，输入变化、输出污染、只读别名、零/负trip无native及callee变更回退均通过；自洽伪造source route被冷重放拒绝。旧材料不改，未测性能或升级部署资格。当前仍为严格array-carry域，通用MemorySSA移动及递归调用摘要尚缺，三阶段未全面完成。材料：`artifacts/baseline/unified-motion-mainline.json`。
+
 2026-11-17 入口→native→阶段组上下文已接通：有界原driver捕获51目标，条件入口投影为2unit/10接口/8共享body/66原typed路由，源码SHA+CodeID自动见证实际native源。原303条主要为lazy视图/预算，非303个语义失败。新observer保全部原source字节及真实前后阶段，canonical两数组与原native逐位一致；2warm/7样本body组mean0.540264ms、预包装FFI mean0.760542ms（非A/B/整方法）。7阶段GCC模型字段匹配、2未知；独立冷读、两错误来源/映射拒绝及4项回归通过。来源和实测component已入共同Problem，但整方法cost仍UNKNOWN，默认NO_OP；全三阶段未完成。材料：`artifacts/baseline/entry-native-frame-context.json`。
 
 2026-11-17 GCC反馈已接真实科学区域：实际C++的9个非COMMIT阶段关联原action/expr、GCC诊断及共同Problem；raw/投影用gzip保留，冷check不调用compiler/native。成本用途门禁已贯通：旧1,423,927ns在显式声明分析选1，在要求合格时间时保数值并加5项未解、选0；两条prepare+独立check均通过。完整函数与孤立标定的两个主计算stage都已向量化，但GCC相对准备/尾部成本不同；不能作为ns归因或加速比。三阶段仍未完成。材料：`artifacts/baseline/gcc-lowering-feedback.json`。

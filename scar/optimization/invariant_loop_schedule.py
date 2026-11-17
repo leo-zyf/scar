@@ -137,6 +137,12 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
         original_f4_proof=asdict(proof))
     cut=plan_invariant_loop(proof.body, carry_parameter=proof.carry_parameter, loop_interface=interface,
         memory_budget_bytes=memory_budget_bytes)
+    motion=cut['motion_analysis']
+    if (motion['body_sha256'] != cut['body_sha256'] or
+            motion['loop_interface_sha256'] != semantic_sha256(interface) or
+            motion['carry_parameter'] != proof.carry_parameter):
+        raise ValueError('motion analysis must describe the original loop body and caller interface')
+    motion_sha256=semantic_sha256(motion)
     graph, snapshot, resources, connections=_target_materials(target)
     bindings=propose_cpu_allocations(graph, memory_budget_bytes=memory_budget_bytes, max_threads=1)
     if not bindings: raise ValueError('no retained CPU/host-memory allocation within current affinity')
@@ -158,8 +164,11 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
         hoisted_loads+elements*steps*sum(node['op']=='input' for node in residual),
         elements*(len(cut['hoisted_roots'])+steps) if steps else 0,
         len(cut['hoisted_roots'])+steps if steps else 0, len(cut['hoisted_roots'])+2 if steps else 0, nbytes))
-    invariants={node['id'] for node in nodes if node['op'] in _ARITHMETIC
-        and proof.carry_parameter not in cut['dependencies'][node['id']]}
+    structural_invariants={node['id'] for node in nodes if node['op'] in _ARITHMETIC
+        and node['id'] in motion['invariant_nodes']}
+    invariants={key for key in structural_invariants
+        if motion['placements'][key]['status']=='CONDITIONAL'
+        and motion['placements'][key]['temporal_placement']=='PRE_TEMPORAL_LOOP'}
     register={op:sum(elements*(1 if node['id'] in invariants else steps) for node in nodes if node['op']==op)
         if steps else 0 for op in _ARITHMETIC}
     variants.append(_work('REGISTER_TEMPORAL_FUSION', register, elements*input_loads if steps else 0,
@@ -189,8 +198,15 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
         status='STRUCTURAL_RESOURCE_DOMINANCE_UNDER_GUARDS' if selected=='REGISTER_TEMPORAL_FUSION' else
             'ORIGINAL_ZERO_TRIP_ALIAS' if not steps else 'INCREMENTAL_PAYLOAD_BUDGET_INFEASIBLE',
         profitability_status='UNPROVEN_NO_SOURCED_TIMING_MODEL', duration_seconds=None,
+        motion_analysis=deepcopy(motion), motion_analysis_sha256=motion_sha256,
+        conditional_legality=dict(status=motion['status'], motion_analysis_id=motion['id'],
+            motion_analysis_sha256=motion_sha256,
+            conditional_obligations=deepcopy(motion['conditional_obligations']),
+            obligations_discharged=False, source_loop_replacement_authorized=False),
+        structural_invariant_nodes=[node['id'] for node in nodes if node['id'] in structural_invariants],
         invariant_nodes=[node['id'] for node in nodes if node['id'] in invariants],
-        body_dependencies=cut['dependencies'], loop_unrolled=False, resource_schedule=schedule,
+        invariant_nodes_authority='CONDITIONAL_PRE_TEMPORAL_LOOP_PLACEMENTS_ONLY',
+        body_dependencies=deepcopy(motion['dependencies']), loop_unrolled=False, resource_schedule=schedule,
         required_contract=[*cut['Q'],'EXACT_C_CONTIGUOUS_INPUTS_AT_RUNTIME'], runtime_guards_required=True,
         cost_authority='STATIC_ORIGINAL_EXPR_DEPENDENCIES_DECLARED_SHAPE_AND_TRIP_COUNT',
         model_exclusions=['INPUT_FINITE_SCANS_AND_FP_GUARDS', 'DESCRIPTOR_ABI_AND_ALLOCATION_OVERHEAD',

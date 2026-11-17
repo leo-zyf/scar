@@ -7,7 +7,7 @@ from pathlib import Path
 def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None,plan_only=False,loop_cpu_threads=None,
         loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,loop_max_threads=None):
     from scar.analysis.build import BuildSession
-    from scar.compiler.invariant_loop_frontend import read_invariant_loop_proof,validate_invariant_loop_links
+    from scar.compiler.invariant_loop_frontend import read_invariant_loop_motion,validate_invariant_loop_links
     from scar.compiler.export_temporal_invariant import export_temporal_invariant
     from scar.compiler.temporal_invariant_loop import build_temporal_invariant_loop
     from scar.compiler.model import CpuPlacement
@@ -29,7 +29,7 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
         for index,spec in enumerate(specs):
             directory=out/('loop-'+str(index));directory.mkdir()
             read_artifact(spec['proof'])
-            proof=read_invariant_loop_proof(spec['proof']['uri'],catalog=session.view)
+            proof,source_motion=read_invariant_loop_motion(spec['proof']['uri'],catalog=session.view)
             if spec['id']!=proof.id or spec['hardware']!=document['hardware']:
                 raise ValueError('loop proof or hardware differs from the retained program domain')
             validate_invariant_loop_links(proof,spec,document['loop_dependencies'])
@@ -38,6 +38,9 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
             count=inputs.get('trip_count',loop_trip_count)
             row=dict(id=proof.id,proof=spec['proof'],source_loop_authority='ORIGINAL_F4_REPLAYED',
                 native_directory=None,selected_for_use=False,whole_program_compiled=False)
+            motion_path=directory/'source-motion.json'
+            motion_path.write_text(json.dumps(source_motion,indent=2,sort_keys=True)+'\n')
+            row['source_motion']=artifact_reference(motion_path,source_motion['schema'])
             if shape is None or count is None:
                 row.update(status='LOOP_INPUT_CONSTRAINTS_REQUIRED',missing=[name for name,value in
                     (('input_shapes',shape),('trip_count',count)) if value is None]);rows.append(row);continue

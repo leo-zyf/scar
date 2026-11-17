@@ -83,18 +83,21 @@ def temporal_resource_context(snapshot_sha256,executor_id,cpu_ids,caller_affinit
 
 
 def _anonymous_body(source_body,carry_parameter,budget):
+    from scar.analysis.array_motion import derive_array_motion
     execution=prepare_pipeline_leaf(optimize_region(source_body,memory_budget_bytes=budget))
-    body=execution.region; ordinals={}; dependencies={}; result=[]
+    body=execution.region; ordinals={}; result=[]
+    motion=derive_array_motion(body,carry_parameter=carry_parameter,
+        loop_interface=dict(carry_parameter=carry_parameter,
+            readonly_parameters=[name for name in body.parameters if name!=carry_parameter]))
     for index,node in enumerate(body.nodes):
         ordinals[node.id]=index
-        dependencies[node.id]=({node.attrs['name']} if node.op=='input' else
-            set().union(*(dependencies[key] for key in node.inputs)))
         attrs=deepcopy(node.attrs)
         if node.op=='input':
             attrs=dict(role='CARRY' if node.attrs['name']==carry_parameter else 'READONLY',
                 argument_index=body.parameters.index(node.attrs['name']))
         result.append(dict(op=node.op,inputs=[ordinals[key] for key in node.inputs],attrs=attrs,
-            placement='INVARIANT_PREHEADER' if carry_parameter not in dependencies[node.id] else 'TEMPORAL_BODY'))
+            placement='INVARIANT_PREHEADER' if motion['placements'][node.id]['temporal_placement']==
+                'PRE_TEMPORAL_LOOP' else 'TEMPORAL_BODY'))
     return dict(nodes=result,output=ordinals[body.output],argument_count=len(body.parameters),
         carry_argument_index=body.parameters.index(carry_parameter),source_ids_are_not_primitive_keys=True)
 
@@ -176,7 +179,8 @@ def _build_temporal_body_cpu_domain(source_body,carry_parameter,target,*,proof_i
     source=asdict(source_body.source);source['origins']=[]
     result=dict(schema='scar.temporal-cpu-domain',schema_version=1,proof_id=proof_id,
         proof_sha256=proof_sha256,source_loop_original_f4_replay_required=True,
-        body_sha256=semantic_sha256(asdict(source_body)),source_interface=dict(body_source=source,
+        body_sha256=semantic_sha256(asdict(source_body)),motion_analysis=cut['motion_analysis'],
+        source_interface=dict(body_source=source,
             parameters=list(source_body.parameters),carry_parameter=carry_parameter),
         target_path=str(graph.path),target_snapshot=encode(snapshot),
         all_resources=[encode(H.TargetResourceRef(snapshot,row.id)) for row in resources],

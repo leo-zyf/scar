@@ -14,6 +14,7 @@ import shlex
 import subprocess
 
 from scar.codegen import cpp
+from scar.analysis.array_motion import derive_array_motion,verify_array_motion
 from scar.compiler.model import document,plan_from_dict,region_from_dict
 from scar.compiler.pipeline_model import prepare_pipeline_leaf
 from scar.compiler.invariant_loop import plan_invariant_loop
@@ -29,7 +30,8 @@ def _receipt(path):
 def _sources():
     return [_receipt(p) for p in (Path(__file__),Path(cpp.__file__),
         Path(cpp.__file__).with_name('kernel_v1.cpp.in'),Path(cpp.__file__).with_name('scar_abi_v1.h'),
-        Path(__file__).with_name('invariant_loop.py'))]
+        Path(__file__).with_name('invariant_loop.py'),
+        Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py')]
 
 
 def _plan(body,carry_parameter,loop_interface,memory_budget_bytes,resource_binding):
@@ -41,7 +43,12 @@ def _plan(body,carry_parameter,loop_interface,memory_budget_bytes,resource_bindi
         validate_cpu_placement(resource_binding)
         if len(resource_binding.cpu_ids)!=1:raise ValueError('temporal invariant profile supports exactly one explicitly bound CPU')
         execution=bind_cpu_placement(execution,resource_binding)
+    # Existing optimization can fold/CSE nodes and change their IDs. Its exact
+    # body needs its own report; the source body's report remains in base.
+    execution_motion=derive_array_motion(execution.region,carry_parameter=carry_parameter,
+        loop_interface=loop_interface)
     base.update(schema='scar.temporal-invariant-loop-plan',execution_plan=document(execution),
+        execution_motion_analysis=execution_motion,
         representation='ONE_SHARED_SCALAR_DAG_PER_ELEMENT_WITH_NATIVE_COUNT_LOOP',
         physical_array_buffers=dict(final_output=1,full_invariant_buffers=0,carry_pingpong_buffers=0),
         memory_scope='ONE_FRESH_FINAL_INCREMENTAL_ARRAY_PAYLOAD_EXCLUDES_CALLER_INPUTS_AND_COMPILER_STACK',
@@ -57,13 +64,14 @@ def _plan(body,carry_parameter,loop_interface,memory_budget_bytes,resource_bindi
 def _source(plan,execution):
     # Keep the existing descriptor, pointer-bound, finite-load and optional
     # affinity implementations. Only the loop nesting/Expr placement changes.
+    motion=verify_array_motion(plan['execution_motion_analysis'],execution.region,
+        carry_parameter=plan['carry_parameter'],loop_interface=plan['loop_interface'])
     support=cpp._source(execution,cpp._supported(execution)).split('int32_t run(',1)[0]
-    body=execution.region;names={};deps={};pre=[];varying=[]
+    body=execution.region;names={};pre=[];varying=[]
     carry=plan['carry_parameter'];invariant_ops=0;variant_ops=0
     for i,node in enumerate(body.nodes):
-        dependencies=({node.attrs['name']} if node.op=='input' else set().union(*(deps[k] for k in node.inputs)))
-        deps[node.id]=dependencies
-        if node.op=='input' and node.attrs['name']==carry:
+        placement=motion['placements'][node.id]['temporal_placement']
+        if placement=='ITERATION_CARRY':
             names[node.id]='carry';continue
         name=names[node.id]='value'+str(i)
         if node.op=='input':
@@ -73,12 +81,14 @@ def _source(plan,execution):
         elif node.op=='neg':expression='-'+names[node.inputs[0]]
         else:expression=f'{names[node.inputs[0]]} {cpp._BINARY_OPS[node.op]} {names[node.inputs[1]]}'
         line=f'            const double {name} = {expression};'
-        if carry not in dependencies:
+        if placement=='PRE_TEMPORAL_LOOP':
             pre.append(line)
             invariant_ops+=int(node.op not in ('input','const'))
-        else:
+        elif placement=='ITERATION_BODY':
             varying.append('    '+line)
             variant_ops+=1
+        else:
+            raise ValueError('temporal emission requires a supported unified node placement: '+node.id)
     source=body.source
     carry_index=body.parameters.index(carry)
     affinity_start=affinity_end=''

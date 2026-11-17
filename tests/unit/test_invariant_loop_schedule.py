@@ -10,6 +10,7 @@ from scar.compiler.invariant_loop_frontend import InvariantLoopProof
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import decode
 from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule, verify_invariant_loop_schedule
+from scar.optimization.resource_solver import semantic_sha256
 
 
 def test_static_work_dominance_retains_hardware_and_unknown_profitability(hardware, tmp_path):
@@ -34,6 +35,18 @@ def test_static_work_dominance_retains_hardware_and_unknown_profitability(hardwa
     assert plan['status']=='STRUCTURAL_RESOURCE_DOMINANCE_UNDER_GUARDS'
     assert plan['profitability_status']=='UNPROVEN_NO_SOURCED_TIMING_MODEL'
     assert not plan['selected_for_use'] and not plan['physical_optimality_proven']
+    motion=plan['motion_analysis']; legality=plan['conditional_legality']
+    assert motion['body_sha256']==plan['body_sha256'] and motion['carry_parameter']=='state'
+    assert plan['motion_analysis_sha256']==semantic_sha256(motion)==legality['motion_analysis_sha256']
+    assert plan['body_dependencies']==motion['dependencies']
+    assert plan['structural_invariant_nodes']==plan['invariant_nodes']==['invariant']
+    assert motion['placements']['invariant']['status']=='CONDITIONAL'
+    assert motion['placements']['invariant']['temporal_placement']=='PRE_TEMPORAL_LOOP'
+    assert legality['status']==motion['status'] and legality['motion_analysis_id']==motion['id']
+    assert legality['conditional_obligations']==motion['conditional_obligations']
+    assert set(legality['conditional_obligations'])=={'source','runtime','external'}
+    assert all(item['status']=='UNRESOLVED' for items in legality['conditional_obligations'].values() for item in items)
+    assert not legality['obligations_discharged'] and not legality['source_loop_replacement_authorized']
     assert plan['resource_binding']['cpu_ids']==(0,) and plan['memory_policy']=='UNBOUND'
     assert len(plan['all_resources'])>1 and not plan['source_loop_replacement_authorized']
     variants={row['kind']:row for row in plan['variants']}
@@ -53,6 +66,9 @@ def test_static_work_dominance_retains_hardware_and_unknown_profitability(hardwa
     assert plan['resource_schedule']['proof']['physical_memory_bound_scope']=='PRIVATE_CONTIGUOUS_OUTPUT_PAYLOAD_ONLY'
     assert verify_invariant_loop_schedule(proof,hardware,plan)==plan
     forged=deepcopy(plan); forged['variants'][-1]['arithmetic_operations']['add']=0
+    with pytest.raises(ValueError,match='dependency/hardware replay'):
+        verify_invariant_loop_schedule(proof,hardware,forged)
+    forged=deepcopy(plan); forged['motion_analysis']['dependencies']['invariant']=['state']
     with pytest.raises(ValueError,match='dependency/hardware replay'):
         verify_invariant_loop_schedule(proof,hardware,forged)
     rejected=plan_invariant_loop_schedule(proof,hardware,input_shapes=shapes,trip_count=100,memory_budget_bytes=8)
