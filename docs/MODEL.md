@@ -491,6 +491,8 @@ F4ResourceApplicability区分NOT_APPLICABLE、COMPOSITE、DECLARATION_ONLY、HOS
 
 `PipelineDemand`分别组合原逐CALL eager、逐leaf native与最终fusion工作；原source occurrence经优化映射保型分类，多个原操作映到同一CSE target仍计多次，缺失target的分类保UNKNOWN，并与原array allocations/copies交叉核对。每个CALL按原value→formal路由实例化shape，循环外层次数不外推。逻辑算术、逻辑读写、累计分配与峰值/实际DRAM区分；静态需求不包含完整guard/FFI等耗时。`pipeline-forward-coefficient-profile`绑定同一context/demand及系数原证据，完整入口残项与已列feature服务的无重叠是显式模型假设；共享affine evaluator用有理数求和，派生秒仍标DECLARED_MODEL并交既有deployment gate。缺项不产生有效总成本，完整边界观测也不相减伪造组件。
 
+canonical完整入口模型以同shape/arity/拓扑的生成程序采样，原Python入口与完整保护入口分别计时；仅TRAIN拟合，冻结后检验混合程序和目标。低维basis需满秩，其余feature归入有效项并以有来源的zero_basis注明非物理零；截距不是独立测得guard成本。拟合保存SVD/condition和holdout误差，失败不发布可用参数。构造式planner复用原PlanningProblem和时间/存储verifier，新增资源序仅是计划约束；差分图处理START/END等式、条件活动和WAIT_TAIL，容量/leases不重复计费，UNKNOWN域保留。compact fused v2仍operator ABI1，不冒充pooled host ABI；原Q保引用，运行只需compact metadata/ELF，成本scope独立于compiler-assisted warm入口。
+
 自动入口另绑定 entry 源版本、逐字 argv、runner 实现及 launch policy。成本资源必须等于实际 native 合同规定的 CPU 与新增输出 payload，不以成本文件自报的较小需求替代。导入候选不是实际 loader 证据；普通目标模块完成加载后才安装源码/环境守卫。已安装边界的调用计数与所有可能别名的覆盖度分开；测得一次 native 不证明整个程序只有一次调用。
 
 `scar.execution-recipe/v1` 是上层执行组织的交接件：semantic_boundary、control、typed task_graph、全部库存与已选 resources、后端 implementation/capability、原 artifacts 和 obligations。估价与选择不写回 recipe，按同一 recipe_id 独立引用；降低重放同份结构并核真实 compiler/ABI/layout/implementation。ID 是版本关联，不代替合法性或执行授权。现有 cpu-temporal-loop-v1 保一份共享正文与每坐标严格 time carry；分配只准备存储，完整计算完成才令最终值就绪。局部端口 label 不是原 ValueID/LogicalVersion/StorageID，原图端口和来源仍以引用保留。全调用成本不擅自拆成 allocation/compute/export 时长，缺项不补 0。

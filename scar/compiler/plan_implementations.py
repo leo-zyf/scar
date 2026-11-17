@@ -1,4 +1,4 @@
-"""Solve a declared typed implementation domain; source producers own legality."""
+"""Construct a declared resource schedule; source producers own legality."""
 import argparse
 import json
 from pathlib import Path
@@ -14,6 +14,7 @@ def main(argv=None):
     parser.add_argument('--out');parser.add_argument('--check')
     parser.add_argument('--max-seconds',type=float,default=30)
     parser.add_argument('--workers',type=int,default=4)
+    parser.add_argument('--planner',choices=('constructive','solver'),default='constructive')
     parser.add_argument('--baseline-only',action='store_true')
     args=parser.parse_args(argv)
     problem_path=Path(args.problem).resolve()
@@ -22,10 +23,14 @@ def main(argv=None):
     if args.check:
         plan=json.loads(Path(args.check).read_bytes())
         print(json.dumps(verify_execution_plan(problem,plan),sort_keys=True));return 0
-    if not args.out:parser.error('--out is required for solving')
+    if not args.out:parser.error('--out is required for planning')
     output=Path(args.out).resolve()
     if output.exists():parser.error('fresh output path required')
-    plan=solve_implementations(problem,max_seconds=args.max_seconds,workers=args.workers,baseline_only=args.baseline_only)
+    if args.planner=='constructive':
+        from scar.optimization.constructive_planner import construct_implementations
+        plan=construct_implementations(problem,max_seconds=args.max_seconds,baseline_only=args.baseline_only)
+    else:
+        plan=solve_implementations(problem,max_seconds=args.max_seconds,workers=args.workers,baseline_only=args.baseline_only)
     # Pure solver input is a declared domain. A source-qualified producer must
     # independently replay original source/proof/backend facts before lowering.
     plan['input_problem']=reference

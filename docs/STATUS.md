@@ -1,5 +1,11 @@
 # 当前状态
 
+2026-11-17 三条主链继续落地：①`joint-plan/joint-pipeline`默认构造式规划，复用原typed problem、容量/搬运/共享存储寿命和独立verifier；v2条件启动、端点等式与WAIT_TAIL保留。真实source→构造→证书→C++已在禁OR-Tools进程中逐位验证；有限RAM/RAM→HBM仅为typed声明模型验证，不是实际GPU搬运。贪心可能死路，保UNKNOWN/domain gap，不声称最快。②融合C1 v2只带一个原ELF，无host、不pin；在禁止compiler/IR/analysis/planner/codegen导入且不读外部图JSON的进程中native3与原函数一致，实际普通导入入口的stdout也相同，default无CDLL。新scope成本仍UNKNOWN，旧compact运行实现pin变更需重导。
+
+③真实canonical完整入口标定已取得数据：6 TRAIN、2混合holdout、1真实源区域holdout，warmup3/9次、4并行编译任务且计时前join。仅TRAIN拟合的两侧basis秩均4，冻结目标误差原Python10.16%/融合1.62%；目标实测median10.365/99.495µs，预测9.312/101.111µs，判断KEEP且不加载native。是小源码区域、固定shape与warm边界的有效模型，不是独立组件成本或科学程序加速。发布曾因共享dict引用导致digest变化，已改不可变快照/按落盘观测离线拟合；保留原样本，无重采样或放松校验。报告 `artifacts/baseline/constructive-corpus-compact.json`。
+
+当前下一层：把结构改写后的区域接到共同的硬件/时序投影，在真实科学程序验证完整caller成本与计划；扩展模型适用域前先补对应证据。循环仍在上游共享模板表示，新构造器处理已闭合DAG区域；跨迭代时序、完整图重写/分析缓存及通用整程序C++仍未完成，不能把本轮局部闭环当作三阶段完成。
+
 2026-11-17 正向需求/成本层已贯通：`model-pipeline-cost` 全源重放后机械组合原逐CALL eager与native/fused需求，复用现有单区域分析、shape权威及FactRef校验。原算术按source occurrence经保型映射恢复，CSE不会把原两次乘法误数一次。8×8例原/融合均448次逻辑算术；逻辑读写8192→1536B，累计payload分配3584→512B，不是DRAM或耗时。完整入口残项单独列出，由明确无重叠的有效模型覆盖；无系数保持UNKNOWN/KEEP，不默认为零。
 
 两组显式DECLARED系数分别算出KEEP/REWRITE，正模型已交既有macro pass及C++20/ABI1；完整源码/需求/系数冷重放通过，独立输入、共享输入别名、同buffer改内容后三次native均与原函数逐位一致。所有系数为算法验收声明，尚未自动标定，不代表真实性能预测或新加速比。物理流量、cache、完整组件标定和资源日历构造仍未完成；C1 fused compact缺口保持。验收 `artifacts/baseline/pipeline-forward-model.json`。接下来先取得独立组件证据并校验预测适用域，再推进构造时序，不回到整版本黑盒排名。

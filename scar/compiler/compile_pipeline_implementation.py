@@ -37,15 +37,22 @@ def _sources(reference):
         dict(role='ORIGINAL_PHYSICAL_POOL_PLAN', artifact=raw['memory']))
 
 
-def _producer():
+def _producer(planner='solver'):
     from scar.optimization import pipeline_implementation, joint_planner, implementation_costs,pipeline_lifecycle
     from scar.ir import implementation_plan
+    modules=(pipeline_implementation,joint_planner,implementation_plan,implementation_costs,pipeline_lifecycle)
+    if planner=='constructive':
+        from scar.optimization import constructive_planner
+        modules=(*modules,constructive_planner)
+    elif planner!='solver':
+        raise ValueError('known constructive or solver planner required')
     return {str(Path(module.__file__).resolve()): sha256(Path(module.__file__).read_bytes()).hexdigest()
-        for module in (pipeline_implementation, joint_planner, implementation_plan, implementation_costs,pipeline_lifecycle)}
+        for module in modules}
 
 
 def prepare_pipeline_implementation(inputs, out, *, cpu_ids, cost_model=None, cost_profile_ref=None,
-        max_seconds=30, workers=4, compile_native=False,host_lifecycle=False,host_cost_profile_ref=None):
+        max_seconds=30, workers=4, compile_native=False,host_lifecycle=False,host_cost_profile_ref=None,
+        planner='constructive'):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs, INPUTS
     reference = _reference(inputs, INPUTS)
     model_ref = None if cost_model is None else _reference(cost_model, COST_SCHEMA)
@@ -62,7 +69,13 @@ def prepare_pipeline_implementation(inputs, out, *, cpu_ids, cost_model=None, co
         problem = build_pipeline_problem(pipeline, memory, target, cpu_ids=cpu_ids,
             cost_model=model, cost_profile_ref=profile_ref, source_refs=_sources(reference),
             host_lifecycle=host_lifecycle,host_cost_profile_ref=host_ref)
-        execution = solve_implementations(problem, max_seconds=max_seconds, workers=workers)
+        if planner=='constructive':
+            from scar.optimization.constructive_planner import construct_implementations
+            execution=construct_implementations(problem,max_seconds=max_seconds)
+        elif planner=='solver':
+            execution=solve_implementations(problem,max_seconds=max_seconds,workers=workers)
+        else:
+            raise ValueError('known constructive or solver planner required')
         certificate = None
         if execution['selected'] and execution['domain_complete']:
             certificate = refine_pipeline_implementation(pipeline, memory, target, problem, execution)
@@ -95,7 +108,7 @@ def prepare_pipeline_implementation(inputs, out, *, cpu_ids, cost_model=None, co
             cost_contexts=_write(directory/'cost-contexts.json', contexts),
             execution_plan=_write(directory/'execution-plan.json', execution),
             certificate=None if certificate is None else _write(directory/'certificate.json', certificate),
-            producer_pins=_producer(), solver_status=execution['status'],
+            producer_pins=_producer(planner), planner=planner, solver_status=execution['status'],
             implementation_scope=('SELECTED_WORKERS_AND_SOURCE_HOST_LIFECYCLE_ORDER'if host_lifecycle
                 else'SELECTED_CPU_PLACEMENT_AND_COMPUTE_LANE_ORDER_ONLY'),cost_scope=scope,
             model_makespan_is_native_runtime_prediction=False, physical_optimality_proven=False,
@@ -125,7 +138,7 @@ def open_pipeline_implementation(preparation):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs
     reference = _reference(preparation, SCHEMA)
     report = read_artifact(reference)
-    if report.get('schema_version') != 1 or report['producer_pins'] != _producer():
+    if report.get('schema_version') != 1 or report['producer_pins'] != _producer(report.get('planner','solver')):
         raise ValueError('joint pipeline producer implementation differs')
     model = None if report['cost_model'] is None else read_artifact(report['cost_model'])
     saved_problem = problem_from_dict(read_artifact(report['problem']))
@@ -163,6 +176,7 @@ def main(argv=None):
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--max-seconds', type=float, default=30)
     parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--planner',choices=('constructive','solver'),default='constructive')
     parser.add_argument('--check', help='preparation.json or compiler result.json')
     args = parser.parse_args(argv)
     if args.check:
@@ -182,7 +196,8 @@ def main(argv=None):
             cpu_ids=[int(value) for value in args.cpu_ids.split(',')], cost_model=args.cost_model,
             cost_profile_ref=args.cost_profile,
             max_seconds=args.max_seconds, workers=args.workers, compile_native=args.compile,
-            host_lifecycle=args.host_lifecycle,host_cost_profile_ref=args.host_cost_profile)
+            host_lifecycle=args.host_lifecycle,host_cost_profile_ref=args.host_cost_profile,
+            planner=args.planner)
     print(json.dumps(result, sort_keys=True))
     return 0
 

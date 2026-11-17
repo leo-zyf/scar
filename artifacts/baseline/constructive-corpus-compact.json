@@ -1,0 +1,298 @@
+{
+  "all_three_stages_complete": false,
+  "compact": {
+    "additional_external_assumptions": [],
+    "compact_JSON_unique_files": [
+      "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/bundle/admission.json",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/bundle/runtime.json"
+    ],
+    "cost_scope": "COMPACT_C1_FUSED_PROTECTED_CALL_ENTRY_TO_RETURN_WARM",
+    "cost_status": "UNKNOWN",
+    "cpu_inherited_not_pinned": true,
+    "default_CDLL_forbidden": true,
+    "direct_native_calls": 3,
+    "entry_default": {
+      "schema": "scar.caller-pipeline-entry-execution",
+      "sha256": "be91e39a207068dc00f32076213311b7bf54af7b1cf7058c18d4291934893f8d",
+      "size_bytes": 1488,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/entry-default.json"
+    },
+    "entry_trial": {
+      "schema": "scar.caller-pipeline-entry-execution",
+      "sha256": "9b890efcd96f40e1b27b13efe7ede0c9463675fb6495b2db1cb7a8dacfca6b84",
+      "size_bytes": 1684,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/entry-trial.json"
+    },
+    "export": {
+      "schema": "scar.caller-pipeline-runtime-export",
+      "sha256": "81c19874bfcbc58c955632a623d76bab7e03cd8f2e96ff9ea25195efc912014c",
+      "size_bytes": 4076,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/bundle/export-report.json"
+    },
+    "external_graph_JSON_reads": false,
+    "guard_fallback_cases": 3,
+    "heavy_compiler_and_graph_imports_blocked": true,
+    "host_and_workers_created": false,
+    "legacy_v1_contract_test_passed": true,
+    "macro_model_not_reused_as_compact_performance_authority": true,
+    "old_compact_packages_need_reexport_for_new_runtime_pin": true,
+    "ordinary_entry_native_calls": 3,
+    "ordinary_entry_stdout_identical": true,
+    "runtime_verification": {
+      "schema": "scar.fused-compact-runtime-verification",
+      "sha256": "edd994731968e1a68ce9ee746264837ab161c2d9e86223d54d8c533052eb571f",
+      "size_bytes": 1166,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fused-compact-v2/runtime-verification.json"
+    },
+    "source_effect_Q_preserved": true,
+    "unchanged_original_ELF": true
+  },
+  "constructive": {
+    "actual_native_outputs_bitwise_equal": true,
+    "call_cpu_ids": {
+      "call:0": 1,
+      "call:1": 0,
+      "call:2": 0,
+      "call:3": 0,
+      "call:4": 1
+    },
+    "domain_complete": true,
+    "execution_plan": {
+      "schema": "scar.implementation-execution-plan",
+      "sha256": "fb82919d539fbee4763e4fd83388b003343119ddb937f4732689bf4481bc915c",
+      "size_bytes": 6309,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/constructive-pipeline-v1/compiled/execution-plan.json"
+    },
+    "greedy_dead_end_means_UNRESOLVED_not_INFEASIBLE": true,
+    "model_lower_bound_ns": 58470,
+    "model_makespan_ns": 58476,
+    "model_optimality_proven": false,
+    "native_verification": {
+      "schema": "scar.constructive-pipeline-native-verification",
+      "sha256": "43f3db1d8a7d94d6e669a90a45157f156864f4bfdf9c891c326956c494a0fa25",
+      "size_bytes": 279,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/constructive-pipeline-v1/native-verification.json"
+    },
+    "physical_optimality_proven": false,
+    "solver_called": false,
+    "source_preparation": {
+      "schema": "scar.pipeline-implementation-preparation",
+      "sha256": "6966419a822f2e7fd5da5650acdcac2ec7a0369223411a565c4d1cb41e7f176d",
+      "size_bytes": 3520,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/constructive-pipeline-v1/compiled/preparation.json"
+    },
+    "status": "FEASIBLE_WITHIN_MODEL",
+    "typed_RAM_HBM_cases_are_declared_point_models_not_physical_transfers": true,
+    "typed_witnesses": {
+      "schema": "scar.constructive-typed-witness-verification",
+      "sha256": "a4509d6e89ed3fd49887001c71b780cfcdc4e4086c812fbec2e2bf86c2628451",
+      "size_bytes": 1951,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/constructive-pipeline-v1/typed-witness/verification.json"
+    }
+  },
+  "corpus": {
+    "CDLL_forbidden_during_final_selection": true,
+    "basis": [
+      "intercept",
+      "arithmetic.add",
+      "arithmetic.sub",
+      "arithmetic.mul"
+    ],
+    "calls_per_sample": 1,
+    "coefficients_basis": "CALIBRATED_DECLARED_MODEL_NOT_OBSERVED_COMPONENTS",
+    "collection_source_receipt": {
+      "schema": "scar.corpus-collection-source-receipt",
+      "sha256": "a01cf354b03d82d12f774e1febd7fe7e278190f08e4ad5b3bccebc6d1794a9e8",
+      "size_bytes": 356,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-corpus-v1/run/collection-producer.json"
+    },
+    "condition_numbers": {
+      "fused": 7.1176212934571454,
+      "original": 6.891780544506146
+    },
+    "final_output_release_outside_timer": true,
+    "fit": {
+      "schema": "scar.pipeline-corpus-cost-fit",
+      "sha256": "32a43d26dc321449c93c01c0b66cb108ede498164bc49b0b0ffce83d9a582e98",
+      "size_bytes": 619692,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-corpus-v1/model/fit.json"
+    },
+    "full_target_program": false,
+    "fused_entry": "SAME_SHARED_GUARDED_ENTRY_FACTORY_AS_PRODUCTION",
+    "holdouts": [
+      {
+        "absolute_error_ns": 1230.3747534516733,
+        "case_id": "mixed-0",
+        "observed_complete_call_median_ns": 14792,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 13561.625246548327,
+        "relative_error": 0.08317839057948034,
+        "role": "CANONICAL_HOLDOUT",
+        "side": "original"
+      },
+      {
+        "absolute_error_ns": 1499.6765285996007,
+        "case_id": "mixed-1",
+        "observed_complete_call_median_ns": 19245,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 17745.3234714004,
+        "relative_error": 0.07792551460637052,
+        "role": "CANONICAL_HOLDOUT",
+        "side": "original"
+      },
+      {
+        "absolute_error_ns": 1053.283037475343,
+        "case_id": "target-source",
+        "observed_complete_call_median_ns": 10365,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 9311.716962524657,
+        "relative_error": 0.10161920284373786,
+        "role": "TARGET_HOLDOUT",
+        "side": "original"
+      },
+      {
+        "absolute_error_ns": 1754.2385057471402,
+        "case_id": "mixed-0",
+        "observed_complete_call_median_ns": 102734,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 104488.23850574714,
+        "relative_error": 0.01707553979935698,
+        "role": "CANONICAL_HOLDOUT",
+        "side": "fused"
+      },
+      {
+        "absolute_error_ns": 2280.599137931029,
+        "case_id": "mixed-1",
+        "observed_complete_call_median_ns": 109559,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 107278.40086206897,
+        "relative_error": 0.02081617336714491,
+        "role": "CANONICAL_HOLDOUT",
+        "side": "fused"
+      },
+      {
+        "absolute_error_ns": 1615.6882183908165,
+        "case_id": "target-source",
+        "observed_complete_call_median_ns": 99495,
+        "parameters_refitted": false,
+        "passed": true,
+        "predicted_ns": 101110.68821839082,
+        "relative_error": 0.016238888571192687,
+        "role": "TARGET_HOLDOUT",
+        "side": "fused"
+      }
+    ],
+    "interleaved_AB_BA": true,
+    "internal_instrumentation": false,
+    "macro_selection": {
+      "schema": "scar.macro-pipeline-build",
+      "sha256": "34e4c1ae455001f1bf2d61d57e7df0a088c1a43247a3363a07131f1c16c4dd10",
+      "size_bytes": 619,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-corpus-v1/selected/result.json"
+    },
+    "no_scope_median_subtraction": true,
+    "observations": {
+      "schema": "scar.pipeline-corpus-observations",
+      "sha256": "37abdc08c7c025af23f4e11f09707cd1742ba79b5ae06f80b569c8cc541a1bf2",
+      "size_bytes": 627422,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-corpus-v1/run/observations.json"
+    },
+    "original_entry": "ACTUAL_ORIGINAL_PYTHON_CALLER_NOT_GUARDED_PROXY",
+    "parameters_refitted_on_holdout": false,
+    "profile": {
+      "schema": "scar.deployment-cost-profile",
+      "sha256": "d2822582cc792319a52dd06f40547fca737bf06dbe5d02ccef018c56aa0db362",
+      "size_bytes": 611582,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-corpus-v1/model/profile.json"
+    },
+    "publication_failure": "Mutable source_files alias changed digest after raw samples were saved; immutable copy plus refit from pinned disk samples repaired it without resampling or relaxed verification.",
+    "ranks": {
+      "fused": 4,
+      "original": 4
+    },
+    "repetitions": 9,
+    "result": "NOT_PROFITABLE_KEEP_ORIGINAL_NO_NATIVE_BUILD_OR_LOAD",
+    "reuse_count": 1,
+    "role_counts": {
+      "CANONICAL_HOLDOUT": 2,
+      "TARGET_HOLDOUT": 1,
+      "TRAIN": 6
+    },
+    "target_observed_speedup": 0.10417608925071611,
+    "unknown_physical_components_preserved": true,
+    "warmup": 3
+  },
+  "date": "2026-11-17",
+  "environment": {
+    "CPU": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+    "GPU_workload_executed": false,
+    "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "compiler_options": [
+      "-std=c++20",
+      "-O3",
+      "-shared",
+      "-fPIC",
+      "-fvisibility=hidden",
+      "-fno-fast-math",
+      "-ffp-contract=off",
+      "-frounding-math",
+      "-ftrapping-math"
+    ],
+    "numpy": "2.5.2",
+    "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]",
+    "thread_affinity_policy": "INHERIT_ALLOWED_MASK"
+  },
+  "implementation_sha256": {
+    "scar/compiler/calibrate_pipeline_corpus.py": "5600c78880f25987679c29a92de789e67fb85f91625436ecfdada679149b778d",
+    "scar/compiler/compile_pipeline_implementation.py": "a9fddfc32e4c82e1a475d7351ae9cba09ed28b070421fbc91bd291ea3f6e8deb",
+    "scar/compiler/pipeline_fused_runtime.py": "50223eff178b5298f9ab3dabd9906fb96d777419ade3f60b48c8227e5da1da1c",
+    "scar/compiler/pipeline_fusion_delivery.py": "4fb80d5e149d30620e6d4079a0a80d51a4c47fc2361ca159fe97daeb9ebbe417",
+    "scar/compiler/plan_implementations.py": "6014e380157d7a17093c5d35d5e5253582d1454f9c61005c3141f0987751a44f",
+    "scar/optimization/constructive_planner.py": "e14e3026768888c5824de57ec53d39a6356b8e3c7850ab9b1529804b4699ddf4",
+    "scar/optimization/pipeline_corpus_model.py": "08d66d111f47750f2e7e514cb4421a07e939ef9ed5f7b87bf7b325000f21a221",
+    "scar/runtime/caller_pipeline_guard.py": "5d3c3a3b665088cce3007194c0de03e3d8b6fa901025056de3c4032810753405"
+  },
+  "implemented": {
+    "canonical_build_jobs": 4,
+    "compact": "C1_V2_SINGLE_UNBOUND_OPERATOR_ABI1_NO_HOST",
+    "cost_model": "LOW_DIMENSIONAL_EFFECTIVE_NNLS_FROM_DIRECT_COMPLETE_CALL_TIMINGS",
+    "no_new_numerical_backend": true,
+    "planner_default": "CONSTRUCTIVE_CRITICAL_PATH_CAPACITY_CALENDARS",
+    "resources": "FINITE_CAPACITY_CALENDARS_WITH_ORIGINAL_STORAGE_AND_TRANSFER_TIMELINE",
+    "shared_guard_factory": true,
+    "solver": "EXPLICIT_OPTIONAL_PLANNER",
+    "time_constraints": "INTEGER_START_END_DIFFERENCE_PROPAGATION_WITH_V2_CONDITIONS_AND_WAIT_TAIL"
+  },
+  "limitations": [
+    "CONSTRUCTIVE_GREEDY_CHOICES_CAN_DEAD_END_WITHOUT_BACKTRACKING",
+    "FIXED_TOPOLOGY_SHAPE_AND_GUARD_CONTEXT_CANONICAL_MODEL_ONLY",
+    "OPAQUE_PHYSICAL_MEMORY_CACHE_AND_EXTERNAL_EFFECTS_NOT_RESOLVED",
+    "NEW_CONSTRUCTOR_CONSUMES_CLOSED_DAG_REGIONS_NOT_GENERAL_CYCLIC_PROGRAMS",
+    "CANONICAL_CALIBRATION_SOURCE_IS_NOT_PRODUCTION_F4_ADMISSION",
+    "GENERAL_SCIENTIFIC_PROGRAM_AND_WHOLE_PROGRAM_CPP_NOT_ESTABLISHED"
+  ],
+  "next": [
+    "PROJECT_STRUCTURAL_REGION_REWRITES_INTO_COMMON_HARDWARE_AND_TIME_MODEL",
+    "REAL_SCIENTIFIC_CALLER_COST_AND_END_TO_END_PLAN_VALIDATION",
+    "EVIDENCE_FOR_NEW_SHAPES_PLACEMENTS_AND_CONCURRENCY_BEFORE_MODEL_TRANSFER",
+    "STRUCTURED_LOOP_CROSS_ITERATION_SCHEDULING_AND_GENERAL_COMPACT_DELIVERY"
+  ],
+  "parent_commit": "74389651438eb4d372d03f86e2c393ec5b33e625",
+  "previous_goal_turn_classification": "PROGRESS",
+  "rejected": [
+    "KNOWN_SUBDOMAIN_ZERO_GAP_AS_FULL_UNKNOWN_DOMAIN_OPTIMALITY",
+    "DECLARED_RAM_HBM_TIMES_AS_GPU_MEASUREMENTS",
+    "FIT_INTERCEPT_AS_OBSERVED_GUARD_OR_ALLOCATOR_COMPONENT",
+    "NONBASIS_ZERO_COEFFICIENT_AS_FREE_PHYSICAL_SERVICE",
+    "CALIBRATED_MACRO_SCOPE_AS_COMPACT_SCOPE_COST",
+    "LOCAL_SOURCE_FIXTURE_AS_REAL_SCIENTIFIC_WHOLE_PROGRAM_SPEEDUP"
+  ],
+  "schema": "scar.constructive-corpus-compact-acceptance",
+  "schema_version": 1,
+  "status": "VERIFIED_CONSTRUCTIVE_PLANNING_CALIBRATED_ENTRY_MODEL_AND_COMPACT_FUSION_IN_SUPPORTED_REGIONS"
+}

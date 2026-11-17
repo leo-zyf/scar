@@ -31,9 +31,20 @@ scar model-pipeline-cost --check MODEL/result.json
 scar macro-pipeline --inputs INPUTS.json --cost-profile MODEL/profile.json --compile --out SELECTED
 ```
 
-第一条机械生成原逐CALL eager、逐leaf native和最终fused需求，以及全部成本未知的系数模板；不运行目标或加载库。原算术按source occurrence恢复，避免将CSE后的工作量误算成原工作。后续复用有来源的有效仿射模型与既有成本gate：完整入口开销及非零需求系数缺失时KEEP；逻辑字节不当作DRAM流量，声明参数不当作实测时间。当前尚缺自动组件标定，正模型仅用于链路验收，不授权部署。验收见 `artifacts/baseline/pipeline-forward-model.json`。
+第一条机械生成原逐CALL eager、逐leaf native和最终fused需求，以及全部成本未知的系数模板；不运行目标或加载库。原算术按source occurrence恢复，避免将CSE后的工作量误算成原工作。后续复用有来源的有效仿射模型与既有成本gate：完整入口开销及非零需求系数缺失时KEEP；逻辑字节不当作DRAM流量，声明参数不当作实测时间。验收见 `artifacts/baseline/pipeline-forward-model.json`。
 
-以下联合求解接口保留作局部补充，不是主线每次必须经过的步骤。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
+固定拓扑的 canonical 完整入口标定已可执行：
+
+```bash
+scar calibrate-pipeline-corpus --inputs INPUTS.json --out CALIBRATION --build-jobs 4
+scar calibrate-pipeline-corpus --observations CALIBRATION/observations.json --out REFIT
+```
+
+先并行编译、再串行计时；只用TRAIN拟合，混合canonical和真实源区域作冻结holdout。不相减不同scope的中位数，不将拟合截距称作独立guard/allocator时间。秩不满或holdout失败保持UNKNOWN；系数始终为有效 `DECLARED_MODEL`，不能外推到其他shape/CPU/guard版本。采样与离线拟合分离，模型发布在 `CALIBRATION/model/profile.json`；支持的原输入目前为等形、非空CPU二维数组。
+
+已选融合也可交付为不依赖建图器的compact运行包：`scar export-fused-runtime --build SELECTED/result.json --out COMPACT`。它复制原单operator ELF，沿用C++20/ABI1，继承CPU、不创建host/worker；使用已有 `run-caller-pipeline --bundle COMPACT --admission-sha256 PIN --exclusive-inputs --measure-candidate -- ENTRY.py` 显式验证。compact有独立成本scope且保持UNKNOWN，macro收益不授权其自动执行；runtime更新后旧compact包需要按原producer重导。
+
+以下规划接口默认使用关键路径与容量日历正向构造，不依赖求解器；`--planner solver`保留CP-SAT作显式局部补充。构造计划独立检查端点约束、搬运和存储峰值；贪心死路是UNRESOLVED，不证明不可行或全局最优。规划端可选安装 `scar[planning]`（OR-Tools 9.15.6755）；本机使用隔离的 `.venv-planner/bin/python`，交付运行端不依赖求解器。
 
 ```bash
 scar joint-plan --problem PROBLEM.json --out PLAN.json

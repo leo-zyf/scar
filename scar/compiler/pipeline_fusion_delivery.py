@@ -221,8 +221,20 @@ def select_fusion_callable(original, pass_report, *, artifact=None, trial=False,
     _need(region_document is not None and blueprint is not None and artifact is not None,
         'original region, fusion blueprint and actual artifact required for trial delivery')
     from scar.optimization.macro_pass import verify_fusion_pass
-    from scar.compiler.pipeline_runtime import guarded_pipeline_function
     verify_fusion_pass(pass_report, region_document, blueprint)
+    return _guarded_fusion_entry(original, artifact, blueprint,
+        exclusive_inputs=exclusive_inputs)
+
+
+def _guarded_fusion_entry(original, artifact, blueprint, *, exclusive_inputs):
+    """Shared entry for an admitted source producer or explicit calibration.
+
+    This private factory grants no cost or source permission. Production uses
+    select_fusion_callable above; calibration supplies generated canonical
+    arithmetic programs and never installs them into the target workload.
+    Keeping the factory shared makes the measured live boundary identical.
+    """
+    from scar.compiler.pipeline_runtime import guarded_pipeline_function
     _replay_embedded(artifact.pipeline, blueprint)
     _admit_artifact(artifact, blueprint)
     guarded = guarded_pipeline_function(original, artifact,

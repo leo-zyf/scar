@@ -16,7 +16,9 @@
 
 首条pass现已贯通：`pipeline_region_pass`投影原CALL/GlobalPort及conditional Q；`macro_pass`复用已有成本gate与OIR，记录requires/selection/invalidates；`pipeline_fusion_delivery`交已有无worker/绑核的融合C++；`macro_pipeline`全源重放及受控模块接入。真实8×8受保护调用成本判KEEP，不加载库；正声明模型仅验REWRITE链。`model-pipeline-cost`已继续接通原source occurrence需求、有效仿射系数与完整入口成本，缺证据不补零。当前失效只是显式账本，并无通用分析缓存；优化表达式图由既有fusion生成，不冒充新canonical全图。下一层集中补独立组件标定/预测校验及真实live-demand，再构造资源时序，不继续堆detector或后端。
 
-后续逐层验收：①需求推导：从原图、Q、shape和版本计算运算量、必需物化/搬运、live footprint及假设，严格区分逻辑访问与实际跨层流量；②组织构造：先复用既有fusion/不变量/容量规则，用解析成本推导串行/并行、驻留、chunk及buffer范围；③时序构造：关键路径优先，在CPU/GPU/链路和存储日历上放入ready任务，同时输出同域下界与可行模型成本；④交付：重放OIR覆盖/依赖/寿命证书后交已有C++，闭合合同内才共享guard/affinity/fenv，生成一个选中版本，再做正确性与完整边界A/B。规则数组链和独立均匀流水线优先做精确推导；一般图保留模型gap，确有必要时只对竞争子图局部求解。测得min/max不升级数学界，未知成本不补零。先验8×8选择原执行且不加载native，再接真实科学区域；不承诺由硬件名牌算出任意程序唯一实际最优。
+当前实现进展：完整入口canonical回归已代替手填参数做第一次真实校验，TRAIN与canonical/target holdout分开，rank/SVD/误差可查；系数为DECLARED有效模型，不复用旧工具的scope中位数差。构造式时序已接原source producer及C++：关键路径优先、局部实现/route选择、整数端点传播、有限容量冲突加调度序边；原语义边不变，独立验证，不证明全局最优。compact fused已接原C1 guard与普通入口，独立scope UNKNOWN，不用macro模型授权。
+
+后续逐层验收：①扩到真实科学caller的需求/完整成本证据，严格区分逻辑访问与实际跨层流量；②将已有结构delta产生的区域接到共同硬件/时间投影，避免只规划固定CALL骨架；③扩展前补不同shape/位置/并发和循环周期模型的适用域证据，再构造CPU/链路/存储日历；④同份证书接已有C++/compact，并在真实程序的完整同范围边界校验。测得min/max不升级数学界，未知成本不补零，不承诺由硬件名牌算出任意程序唯一实际最优。
 
 研究依据： [DaCe/SDFG](https://htor.inf.ethz.ch/publications/img/dace-sc19.pdf) 的控制/数据/搬运分层，[Halide 2016](https://graphics.cs.cmu.edu/projects/halidesched/mullapudi16_halidesched.pdf) 的边界分析与解析分组，[MLIR bufferization](https://mlir.llvm.org/docs/Bufferization/) 的先tensor变换后存储规划，[Hong–Kung](https://www.eecs.harvard.edu/~htk/publication/1981-stoc-hong-kung.pdf) 与 [Roofline](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2008/Archive/EECS-2008-134.pdf) 的数据移动/性能界，以及 [HEFT](https://disco.ethz.ch/courses/fs14/seminar/paper/Jochen/4.pdf) 的构造式调度。Halide贪心/HEFT启发式并非全局最优证明；借鉴机制不等于直接替换SCAR前端。研究记录 `artifacts/baseline/constructive-planning-research.json`；实测诊断 `artifacts/baseline/pipeline-architecture-diagnosis.json`。
 
