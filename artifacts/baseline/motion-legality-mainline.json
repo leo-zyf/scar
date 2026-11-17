@@ -1,0 +1,277 @@
+{
+  "actual_optimized_node_placements": {
+    "n0": {
+      "formal_dependencies": [
+        "payload"
+      ],
+      "placement": "ITERATION_CARRY"
+    },
+    "n1": {
+      "formal_dependencies": [
+        "fixed"
+      ],
+      "placement": "PRE_TEMPORAL_LOOP"
+    },
+    "n2": {
+      "formal_dependencies": [
+        "fixed"
+      ],
+      "placement": "PRE_TEMPORAL_LOOP"
+    },
+    "n3": {
+      "formal_dependencies": [
+        "fixed",
+        "payload"
+      ],
+      "placement": "ITERATION_BODY"
+    }
+  },
+  "all_three_stages_complete": false,
+  "automatic_deployment": false,
+  "base_commit": "1eafe938d9da8145bcf7a5a0cdf217ce69d6aaf5",
+  "bundle": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/bundle",
+  "bundle_export": {
+    "schema": "scar.temporal-invariant-runtime-export",
+    "sha256": "df2694351fe09fdb03147b3357e3a001556c268cbd93a3c366e34c57d6c035a6",
+    "size_bytes": 1476,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/bundle/export-report.json"
+  },
+  "canonical_interface_distinct_from_lowering_specialization": true,
+  "compiler": {
+    "argv": [
+      "g++"
+    ],
+    "identity": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "options": [
+      "-std=c++20",
+      "-O3",
+      "-shared",
+      "-fPIC",
+      "-fvisibility=hidden",
+      "-fno-fast-math",
+      "-ffp-contract=off",
+      "-frounding-math",
+      "-ftrapping-math",
+      "-fno-unroll-loops",
+      "-fno-peel-loops"
+    ]
+  },
+  "consumed_movement_binding": {
+    "schema": "scar.temporal-source-movement-binding",
+    "sha256": "020e5d826cbf7998d0205607b4d909384b7d9bdc5c9fceb012908d2a21dbcdb8",
+    "size_bytes": 2047,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/movement-binding.json"
+  },
+  "cpp_standard": 20,
+  "date": "2026-11-17",
+  "fully_rehashed_false_read_summary_rejected": true,
+  "general_memoryssa_legality_proven": false,
+  "generated_cpp": {
+    "schema": "scar.cxx20-source",
+    "sha256": "409d620e0d0a148413aa768d3cc9c82f58a7db3e48ccc9f241c8f21941586a6d",
+    "size_bytes": 9102,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/native/temporal.cpp"
+  },
+  "generated_cpp_observed": {
+    "emitted_arithmetic_per_element": {
+      "invariant_ops": 1,
+      "variant_ops": 1
+    },
+    "fixed_read_line": 200,
+    "invariant_multiply_line": 201,
+    "temporal_loop_line": 205,
+    "varying_add_line": 206
+  },
+  "implementation": {
+    "analysis/array_motion_legality.py": {
+      "schema": "scar.python-source",
+      "sha256": "5d8a9e77b2d23e88247cef6a10b1959d7a74137f435b73c6d1abf2bb1b572fc3",
+      "size_bytes": 29893,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/array_motion_legality.py"
+    },
+    "analysis/source_motion_window.py": {
+      "schema": "scar.python-source",
+      "sha256": "2f462d7e6528e5f34872fd1fdc0ce2c560d8c27eef8b70feee45a14a273e6a3b",
+      "size_bytes": 20042,
+      "uri": "/home/zyf/AAA/scar/scar/analysis/source_motion_window.py"
+    },
+    "compiler/export_temporal_invariant.py": {
+      "schema": "scar.python-source",
+      "sha256": "24cccf077a6c8475d57ce9f635bb2c3a4c87f4b2ce1f7ecb54653ce0c7cdd8e6",
+      "size_bytes": 9377,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/export_temporal_invariant.py"
+    },
+    "compiler/invariant_build.py": {
+      "schema": "scar.python-source",
+      "sha256": "d63dd8bef88f0b1f893aa277a70cf1bd3a7b80ac3d81b907d3d51a5a081c4d8f",
+      "size_bytes": 11508,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/invariant_build.py"
+    },
+    "compiler/invariant_loop_frontend.py": {
+      "schema": "scar.python-source",
+      "sha256": "d3b8767c26c34fc8579f9170e0f1a0398874b4b6360bad566f76f7dc46f22d84",
+      "size_bytes": 33762,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/invariant_loop_frontend.py"
+    },
+    "compiler/temporal_invariant_loop.py": {
+      "schema": "scar.python-source",
+      "sha256": "13804a39a04a116bf10502e98999bbdcdb5a0dcb11f451b00b98c4869eb51d23",
+      "size_bytes": 20652,
+      "uri": "/home/zyf/AAA/scar/scar/compiler/temporal_invariant_loop.py"
+    }
+  },
+  "independent_cold_source_check": true,
+  "live_and_external_guards_discharged_by_static_report": false,
+  "metadata_tests": [
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_source_motion_window.py",
+      "owner": "schedule_audit",
+      "passed": 1
+    },
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_array_motion_legality.py",
+      "owner": "lifecycle_cost_audit",
+      "passed": 1
+    },
+    {
+      "command": ".venv-planner/bin/python -m pytest -q tests/unit/test_temporal_invariant_loop.py -k source_movement_gate",
+      "owner": "delivery_audit",
+      "passed": 1
+    }
+  ],
+  "native": {
+    "schema": "scar.native-temporal-invariant-loop",
+    "sha256": "c234cf59f3642631cdbcaf5b197c643f6ca463a0574e6380ddb84177a6ddec6c",
+    "size_bytes": 318765,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/native/artifact.json"
+  },
+  "new_backend_added": false,
+  "no_op_kept_when_source_legality_unresolved": true,
+  "operator_abi": 1,
+  "ordered_next": [
+    "Compose admitted CALL target/argument/environment/world routes and per-callee reads/writes/escape effects into this existing window API; MAY dependencies alone are insufficient",
+    "Extend actual graph rewrites only when the complete crossed window and execution predicates close; retain originals for unresolved regions",
+    "Recompute same-boundary costs and hardware/time demands after graph revision; old component timings do not qualify the new scope",
+    "Lower certified chosen resource calendars through existing C++20/library interfaces; full arbitrary-program delivery remains incomplete"
+  ],
+  "original_source_and_program_materials_unchanged": true,
+  "performance_measured": false,
+  "physical_alias_disjointness_proven": false,
+  "program": {
+    "schema": "scar.program-build",
+    "sha256": "2795f4b0b1e05ff7800e9990735f9252c01dee6abdcdb760fb9de90722454ff4",
+    "size_bytes": 11289,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/unified-motion-mainline-v1/program/manifest.json"
+  },
+  "schema": "scar.motion-legality-mainline-checkpoint",
+  "schema_version": 1,
+  "scientific": {
+    "call_windows": 9,
+    "diagnostic_bytes_are_not_core_graph_size": true,
+    "diagnostic_query_bytes": 15976516,
+    "iterations_unrolled": false,
+    "loops": 2,
+    "missing": {
+      "NORMAL_ENTERED_BODY_PATH_AVOIDS_SELECTED_CALL": 2
+    },
+    "must_execute_statuses": {
+      "CONDITIONAL": 7,
+      "UNRESOLVED": 2
+    },
+    "normal_control_complete": true,
+    "program": {
+      "schema": "scar.program-build",
+      "sha256": "0edd4963a32265bf8a80fae51d2f6bd8a1cac0ae3f6f2516cbddf575318b54db",
+      "size_bytes": 12999,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/scientific-mainline-v1/program/manifest.json"
+    },
+    "purity_or_reuse_authorized_from_must_execute": false,
+    "source_program_executed_this_turn": false
+  },
+  "source": {
+    "schema": "scar.python-source",
+    "sha256": "4cdbf2d684bf8075304b6e8d74b5872e87fa30342f0a6252b10b34d2df605831",
+    "size_bytes": 607,
+    "uri": "/home/zyf/AAA/scar/tests/workloads/licm_program.py"
+  },
+  "source_input": {
+    "context_depth": 1,
+    "fixed_origin_trace": {
+      "content_identity_or_path_sensitive_equality_proven": false,
+      "primitive_operations_crossed": false,
+      "status": "CONDITIONAL_UNIQUE_LEXICAL_ORIGIN",
+      "visited_states": 6
+    },
+    "origin_count": 1,
+    "stable_formal_inputs": [
+      "fixed"
+    ],
+    "witness_transport_edges": 5
+  },
+  "source_motion": {
+    "schema": "scar.source-loop-motion",
+    "sha256": "71430b486d27db7790da0db16e8a402b8ebc36307ed0ce4a1a90d18b5cba3648",
+    "size_bytes": 510885,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/compiled/loop-0/source-motion.json"
+  },
+  "source_path_failures_resolved": [
+    "Actual CALL value is not identical to the wrapped lexical READ result port; restore original balanced DATA transport instead of guessing names",
+    "ARGUMENT use ports are not their producer RESULT ports; retain both and check original operands",
+    "Exhaustion and empty-else operations are checked directly by the existing source frontend; replay their precise original region and ABI",
+    "Reference-query budget uncertainty belongs to data fields; retain independent known control/no-clobber/effect facts"
+  ],
+  "source_root_legality": [
+    {
+      "expression": "n2",
+      "properties": {
+        "data_available": {
+          "blockers": [],
+          "status": "CONDITIONAL"
+        },
+        "effects": {
+          "blockers": [],
+          "status": "CONDITIONAL"
+        },
+        "execution": {
+          "blockers": [],
+          "status": "CONDITIONAL"
+        },
+        "no_clobber": {
+          "blockers": [],
+          "status": "CONDITIONAL"
+        }
+      },
+      "read_parameters": [
+        "fixed"
+      ],
+      "status": "CONDITIONAL"
+    }
+  ],
+  "source_window": {
+    "iterations_unrolled": false,
+    "loop_body_shared": true,
+    "operations": 28,
+    "reference_transport_scope": "SELECTED_CALL_VALUES_BACKWARD_ORIGINAL_DATA_SLICE_NOT_PRIMITIVE_OR_CONTENT_EQUIVALENCE",
+    "reference_transports": 15,
+    "structural_recipe_context_is_not_runtime_invocation": true,
+    "unknown_exception_and_termination_qualifications_retained": true
+  },
+  "speedup": null,
+  "status": "IMPLEMENTED_AND_VERIFIED_WITHIN_EXISTING_ORIGINAL_F4_ARRAY_CARRY_PROFILE",
+  "validation": {
+    "actual_native_calls": 4,
+    "changed_callee_fallback": true,
+    "default_original_retained": true,
+    "input_change_recomputed": true,
+    "output_mutation_isolated": true,
+    "outputs_bitwise_equal": true,
+    "readonly_input_alias": true,
+    "zero_negative_trip_original_alias_without_native": true
+  },
+  "verification": {
+    "schema": "scar.motion-legality-mainline-verification",
+    "sha256": "9b0d705f4b32bb4f6ba2e2377c37b759f0f49201a54b59d6a6455d3f88d63ffa",
+    "size_bytes": 10258,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/motion-legality-mainline-v1/verification.json"
+  }
+}

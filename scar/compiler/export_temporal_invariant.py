@@ -14,23 +14,33 @@ def _source(value):return {name:getattr(value,name) for name in ('path','sha256'
 
 def export_temporal_invariant(native_directory,out,*,schedule_path,proof_reference,catalog):
     from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop
-    from scar.compiler.invariant_loop_frontend import read_invariant_loop_proof
+    from scar.compiler.invariant_loop_frontend import read_invariant_loop_motion
     from scar.optimization.invariant_loop_schedule import verify_invariant_loop_schedule
     from scar.optimization.resource_solver import semantic_sha256
     from scar.ir.execution_recipe import read_artifact
     from scar.runtime.native_temporal_invariant import SCHEMA,ADMISSION,TRUST,validate_contract
     native_directory=Path(native_directory).resolve()
     native_manifest=json.loads((native_directory/'artifact.json').read_bytes())
+    read_artifact(proof_reference)
+    proof,source_motion=read_invariant_loop_motion(proof_reference['uri'],catalog=catalog)
+    raw_plan=json.loads((native_directory/'plan.json').read_bytes())
+    motion_ref=raw_plan['loop_interface'].get('source_motion')
+    if (motion_ref is None or source_motion['proof']!=proof_reference
+            or semantic_sha256(read_artifact(motion_ref))!=semantic_sha256(source_motion)):
+        raise ValueError('temporal export requires its compiled current source movement certificate')
     parallel=native_manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
     if parallel:
         from scar.compiler.parallel_temporal_invariant import load_parallel_temporal_invariant_loop
         artifact=load_parallel_temporal_invariant_loop(native_directory)
     else:
         artifact=load_temporal_invariant_loop(native_directory)
-    read_artifact(proof_reference)
-    proof=read_invariant_loop_proof(proof_reference['uri'],catalog=catalog)
     if semantic_sha256(asdict(proof))!=semantic_sha256(artifact.plan['loop_interface']['original_f4_proof']):
         raise ValueError('temporal export original F4 proof differs from compiled interface')
+    consumed=artifact.plan.get('execution_movement_binding')
+    if (consumed is None or artifact.plan['loop_interface'].get('source_motion')!=motion_ref
+            or consumed['source_motion']!=motion_ref
+            or consumed['source_motion_sha256']!=semantic_sha256(source_motion)):
+        raise ValueError('temporal export source movement was not consumed by the compiled plan')
     schedule_path=Path(schedule_path).resolve();schedule_raw=schedule_path.read_bytes()
     schedule_receipt=dict(path=str(schedule_path),sha256=sha256(schedule_raw).hexdigest(),bytes=len(schedule_raw))
     schedule=json.loads(schedule_raw)
@@ -61,7 +71,7 @@ def export_temporal_invariant(native_directory,out,*,schedule_path,proof_referen
         raise ValueError('temporal export requires exact compiled shape/count specialization')
     evidence=[_receipt(artifact.directory/'artifact.json'),_receipt(artifact.directory/'plan.json'),
         schedule_receipt,_receipt(proof_reference['uri']),_receipt(proof.source.path),
-        _receipt(proof.body.source.path),*artifact.report['generators']]
+        _receipt(proof.body.source.path),_receipt(motion_ref['uri']),*artifact.report['generators']]
     if cost_selected:
         for reference in [*schedule['resource_facts'],schedule['no_op_profile']]:
             read_artifact(reference);evidence.append(_receipt(reference['uri']))

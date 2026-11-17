@@ -88,3 +88,81 @@ def test_temporal_emitter_consumes_exact_optimized_motion_without_native_executi
             for node in execution.region.nodes),output=names[execution.region.output]))
     with pytest.raises(ValueError):_source(plan,changed)
     assert plan['source_replacement_authorized'] is False and plan['selected_for_use'] is False
+
+
+def test_source_movement_gate_binds_real_legality_and_emitted_placements(tmp_path, monkeypatch):
+    """Synthetic original records test consumption, without granting F4 authority."""
+    from copy import deepcopy
+    from dataclasses import asdict
+    import ctypes
+    import json
+    import subprocess
+    import pytest
+    from test_array_motion_legality import _strict_window_case
+    from scar.analysis.array_motion import derive_array_motion
+    from scar.analysis.array_motion_legality import derive_array_motion_legality
+    from scar.compiler.temporal_invariant_loop import _plan, _source
+    from scar.ir.execution_recipe import artifact_reference
+    from scar.optimization.resource_solver import semantic_sha256
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('source gate metadata test must not compile or load native code')
+
+    monkeypatch.setattr(subprocess,'Popen',forbidden)
+    monkeypatch.setattr(ctypes,'CDLL',forbidden)
+    body,canonical,window=_strict_window_case()
+    canonical['original_f4_proof']['id']='test:original-loop-proof'
+    proof_path=tmp_path/'proof.json'
+    proof_path.write_text(json.dumps(dict(schema='test.original-loop-proof',schema_version=1,
+        **canonical['original_f4_proof'])))
+    proof_ref=artifact_reference(proof_path,'test.original-loop-proof')
+    sequence=0
+
+    def source_interface(query, *, change=None):
+        nonlocal sequence
+        query=deepcopy(query)
+        query['id']=semantic_sha256({key:value for key,value in query.items()if key!='id'})
+        motion=derive_array_motion(body,carry_parameter='state',loop_interface=canonical)
+        legality=derive_array_motion_legality(body,carry_parameter='state',loop_interface=canonical,source_window=query)
+        report=dict(schema='scar.source-loop-motion',schema_version=2,proof=proof_ref,
+            proof_id=canonical['original_f4_proof']['id'],proof_sha256=semantic_sha256(canonical['original_f4_proof']),
+            body_sha256=semantic_sha256(asdict(body)),canonical_interface_sha256=semantic_sha256(canonical),
+            array_motion=motion,source_window=query,movement_legality=legality)
+        report['id']='source-loop-motion:'+semantic_sha256(report)
+        if change is not None:change(report)
+        path=tmp_path/('motion-'+str(sequence)+'.json');sequence+=1
+        path.write_text(json.dumps(report))
+        return dict(canonical,source_motion=artifact_reference(path,report['schema'])),report
+
+    interface,report=source_interface(window)
+    plan,execution=_plan(body,'state',interface,4096,None)
+    binding=plan['execution_movement_binding']
+    assert binding['source_motion']==interface['source_motion']
+    assert binding['source_motion_sha256']==semantic_sha256(report)
+    assert binding['source_window_replay_required'] and not binding['source_replacement_authorized']
+    assert not binding['source_F4_replayed_here'] and binding['runtime_guards_are_not_must_execute_proof']
+    assert binding['optimized_body_sha256']==semantic_sha256(asdict(execution.region))
+    raw,counts=_source(plan,execution)
+    assert counts==dict(invariant_ops=1,variant_ops=1)
+    assert b'for (uint64_t iteration=0; iteration<steps; ++iteration)'in raw
+    forged=deepcopy(plan)
+    selected=next(key for key,row in forged['execution_movement_binding']['node_placements'].items()
+        if row['placement']=='PRE_TEMPORAL_LOOP')
+    forged['execution_movement_binding']['node_placements'][selected]['placement']='ITERATION_BODY'
+    with pytest.raises(ValueError,match='placement'):_source(forged,execution)
+    wrong,_=source_interface(window,change=lambda row:row.update(id='source-loop-motion:'+'0'*64))
+    with pytest.raises(ValueError,match='content identity'):_plan(body,'state',wrong,4096,None)
+    blocked=deepcopy(window);blocked['must_execute']['status']='UNRESOLVED'
+    blocked['must_execute']['missing']=['SELECTED_CALL_CAN_BE_AVOIDED']
+    wrong,blocked_report=source_interface(blocked)
+    assert blocked_report['movement_legality']['source_window_effects']['status']=='CONDITIONAL_NO_INPUT_CLOBBERS'
+    assert blocked_report['movement_legality']['status']=='UNRESOLVED'
+    with pytest.raises(ValueError,match='unresolved'):_plan(body,'state',wrong,4096,None)
+    def wrong_canonical(row):
+        row['canonical_interface_sha256']='0'*64
+        row['id']='source-loop-motion:'+semantic_sha256({key:value for key,value in row.items()if key!='id'})
+
+    malformed,_=source_interface(window,change=wrong_canonical)
+    with pytest.raises(ValueError,match='canonical interface'):_plan(body,'state',malformed,4096,None)
+    conditional,_=_plan(body,'state',canonical,4096,None)
+    assert conditional['execution_movement_binding']is None and not conditional['source_replacement_authorized']

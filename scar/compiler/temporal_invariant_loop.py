@@ -4,7 +4,7 @@ Scalar locals express reuse across iterations; actual register assignment and
 spills remain the C++ compiler's responsibility. This conditional lowering
 requires the same original caller F4/runtime admission as invariant_loop.
 """
-from dataclasses import dataclass
+from dataclasses import asdict,dataclass
 import ctypes
 from hashlib import sha256
 import json
@@ -31,24 +31,95 @@ def _sources():
     return [_receipt(p) for p in (Path(__file__),Path(cpp.__file__),
         Path(cpp.__file__).with_name('kernel_v1.cpp.in'),Path(cpp.__file__).with_name('scar_abi_v1.h'),
         Path(__file__).with_name('invariant_loop.py'),
-        Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py')]
+        Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py',
+        Path(__file__).resolve().parents[1]/'analysis'/'array_motion_legality.py')]
+
+
+def _execution_plan(body,budget,binding):
+    execution=prepare_pipeline_leaf(optimize_region(body,memory_budget_bytes=budget))
+    if binding is not None:
+        validate_cpu_placement(binding)
+        execution=bind_cpu_placement(execution,binding)
+    return execution
+
+
+def _source_movement_gate(body,interface):
+    """Consume a source certificate; its original F4 replay remains external."""
+    from scar.analysis.array_motion_legality import verify_array_motion_legality
+    from scar.ir.execution_recipe import read_artifact,_reference
+    reference=_reference(interface['source_motion']);motion=read_artifact(reference)
+    if (motion.get('schema'),motion.get('schema_version'))!=('scar.source-loop-motion',2) or type(motion['schema_version'])is not int:
+        raise ValueError('current source-motion movement certificate required')
+    if motion.get('id')!='source-loop-motion:'+semantic_sha256({key:value for key,value in motion.items()if key!='id'}):
+        raise ValueError('source-motion content identity differs')
+    original=interface.get('original_f4_proof')
+    proof=read_artifact(motion['proof']);proof={key:value for key,value in proof.items()if key not in ('schema','schema_version')}
+    canonical=dict(carry_parameter=interface['carry_parameter'],
+        readonly_parameters=[name for name in body.parameters if name!=interface['carry_parameter']],
+        original_f4_proof=original)
+    if (original is None or semantic_sha256(proof)!=semantic_sha256(original)
+            or motion['proof_id']!=proof['id'] or motion['proof_sha256']!=semantic_sha256(proof)
+            or motion['body_sha256']!=semantic_sha256(asdict(body))
+            or motion['canonical_interface_sha256']!=semantic_sha256(canonical)):
+        raise ValueError('source-motion proof/body/canonical interface differs from native input')
+    legality=verify_array_motion_legality(motion['movement_legality'],body,
+        carry_parameter=interface['carry_parameter'],loop_interface=canonical,source_window=motion['source_window'])
+    roots={row['expression']:row for row in legality['roots']}
+    if (legality['status']!='CONDITIONAL'
+            or legality['array_motion_sha256']!=semantic_sha256(motion['array_motion'])
+            or legality['source_window_effects']['status']!='CONDITIONAL_NO_INPUT_CLOBBERS'
+            or len(roots)!=len(legality['roots']) or set(roots)!=set(motion['array_motion']['invariant_roots'])
+            or not roots or any(row['status']!='CONDITIONAL' for row in roots.values())
+            or legality['source_window_effects']['blockers']
+            or any(row[field]['status']!='CONDITIONAL' or row[field]['blockers'] for row in roots.values()
+                for field in ('data_available','no_clobber','execution','effects'))):
+        raise ValueError('source movement has unresolved roots or source-window blockers')
+    stable=legality['stable_formal_inputs']
+    if (type(stable)is not list or len(set(stable))!=len(stable)
+            or set(stable)-set(canonical['readonly_parameters'])):
+        raise ValueError('source movement stable formal input set differs from the original interface')
+    return dict(source_motion=reference,source_motion_id=motion['id'],
+        source_motion_sha256=semantic_sha256(motion),movement_legality_sha256=semantic_sha256(legality),
+        source_window_sha256=semantic_sha256(motion['source_window']),
+        canonical_interface_sha256=motion['canonical_interface_sha256'],source_body_sha256=motion['body_sha256'],
+        source_invariant_roots=sorted(roots),stable_formal_inputs=stable,
+        source_window_replay_required=True,source_replacement_authorized=False)
+
+
+def _execution_movement_binding(body,execution,interface,budget,motion):
+    if 'source_motion'not in interface:return None
+    admitted=_source_movement_gate(body,interface)
+    expected=_execution_plan(body,budget,execution.resource_binding)
+    if semantic_sha256(document(expected))!=semantic_sha256(document(execution)):
+        raise ValueError('movement binding requires exact existing optimized execution replay')
+    stable=set(admitted['stable_formal_inputs']);placements={}
+    for node in execution.region.nodes:
+        placement=motion['placements'][node.id]['temporal_placement']
+        dependencies=motion['dependencies'][node.id]
+        if placement=='PRE_TEMPORAL_LOOP' and not set(dependencies)<=stable:
+            raise ValueError('optimized preheader expression lacks source-window stable input evidence: '+node.id)
+        placements[node.id]=dict(placement=placement,formal_dependencies=dependencies)
+    return dict(schema='scar.temporal-source-movement-binding',schema_version=1,
+        **admitted,optimized_body_sha256=semantic_sha256(asdict(execution.region)),
+        execution_motion_sha256=semantic_sha256(motion),node_placements=placements,
+        optimized_node_ids_are_source_root_ids=False,legality='CONDITIONAL_ON_REPLAYED_SOURCE_WINDOW_AND_ORIGINAL_RUNTIME_Q',
+        runtime_guards_are_not_must_execute_proof=True,source_F4_replayed_here=False)
 
 
 def _plan(body,carry_parameter,loop_interface,memory_budget_bytes,resource_binding):
     base=plan_invariant_loop(body,carry_parameter=carry_parameter,loop_interface=loop_interface,
         memory_budget_bytes=memory_budget_bytes)
     original=region_from_dict(base['body'])
-    execution=prepare_pipeline_leaf(optimize_region(original,memory_budget_bytes=memory_budget_bytes))
+    execution=_execution_plan(original,memory_budget_bytes,resource_binding)
     if resource_binding is not None:
-        validate_cpu_placement(resource_binding)
         if len(resource_binding.cpu_ids)!=1:raise ValueError('temporal invariant profile supports exactly one explicitly bound CPU')
-        execution=bind_cpu_placement(execution,resource_binding)
     # Existing optimization can fold/CSE nodes and change their IDs. Its exact
     # body needs its own report; the source body's report remains in base.
     execution_motion=derive_array_motion(execution.region,carry_parameter=carry_parameter,
         loop_interface=loop_interface)
     base.update(schema='scar.temporal-invariant-loop-plan',execution_plan=document(execution),
         execution_motion_analysis=execution_motion,
+        execution_movement_binding=_execution_movement_binding(original,execution,loop_interface,memory_budget_bytes,execution_motion),
         representation='ONE_SHARED_SCALAR_DAG_PER_ELEMENT_WITH_NATIVE_COUNT_LOOP',
         physical_array_buffers=dict(final_output=1,full_invariant_buffers=0,carry_pingpong_buffers=0),
         memory_scope='ONE_FRESH_FINAL_INCREMENTAL_ARRAY_PAYLOAD_EXCLUDES_CALLER_INPUTS_AND_COMPILER_STACK',
@@ -66,11 +137,16 @@ def _source(plan,execution):
     # affinity implementations. Only the loop nesting/Expr placement changes.
     motion=verify_array_motion(plan['execution_motion_analysis'],execution.region,
         carry_parameter=plan['carry_parameter'],loop_interface=plan['loop_interface'])
+    movement=_execution_movement_binding(region_from_dict(plan['body']),execution,
+        plan['loop_interface'],plan['memory_budget_bytes'],motion)
+    if movement!=plan['execution_movement_binding']:
+        raise ValueError('native expression placement differs from source movement binding replay')
     support=cpp._source(execution,cpp._supported(execution)).split('int32_t run(',1)[0]
     body=execution.region;names={};pre=[];varying=[]
     carry=plan['carry_parameter'];invariant_ops=0;variant_ops=0
     for i,node in enumerate(body.nodes):
-        placement=motion['placements'][node.id]['temporal_placement']
+        placement=(motion['placements'][node.id]['temporal_placement']if movement is None else
+            movement['node_placements'][node.id]['placement'])
         if placement=='ITERATION_CARRY':
             names[node.id]='carry';continue
         name=names[node.id]='value'+str(i)

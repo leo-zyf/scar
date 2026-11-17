@@ -339,6 +339,33 @@ def read_invariant_loop_proof(path,*,catalog):
     return matches[0]
 
 
+def canonical_invariant_motion_interface(proof):
+    """Canonical source boundary, excluding lowering/runtime specializations.
+
+    This is only a projection of a typed proof. Its caller still owns original
+    F4 rediscovery; a serialized proof or this dictionary grants no authority.
+    """
+    if type(proof) is not InvariantLoopProof:
+        raise TypeError('original typed invariant loop proof required')
+    return dict(carry_parameter=proof.carry_parameter,
+        readonly_parameters=[name for name in proof.body.parameters if name!=proof.carry_parameter],
+        original_f4_proof=asdict(proof))
+
+
+def _motion_origin_entry(origin):
+    """Recover the original ENTER from its retained typed result coordinate."""
+    from scar.ir.record_codec import decode
+    from scar.ir.program.normal_targets import GlobalPort
+
+    results=[decode(GlobalPort, value) for value in origin['results']]
+    candidates=[value for value in results if value.unit==origin['unit']
+        and value.port.owner.wire==origin['step']]
+    if not candidates or len({(value.port.template,value.port.owner) for value in candidates})!=1:
+        raise ValueError('motion origin has no unique original step coordinate')
+    point=candidates[0]
+    return GlobalPort(point.unit,G.Port(point.port.template,point.port.owner,G.PortKind.ENTER))
+
+
 def read_invariant_loop_motion(path,*,catalog):
     """Join motion facts to one independently replayed original source loop.
 
@@ -349,24 +376,38 @@ def read_invariant_loop_motion(path,*,catalog):
     establish an immutable referent.
     """
     from scar.analysis.array_motion import derive_array_motion
+    from scar.analysis.array_motion_legality import derive_array_motion_legality
+    from scar.analysis.source_motion_window import derive_source_motion_window
     from scar.ir.execution_recipe import artifact_reference
     from scar.optimization.resource_solver import semantic_sha256
 
     proof=read_invariant_loop_proof(path,catalog=catalog)
-    interface=dict(carry_parameter=proof.carry_parameter,
-        readonly_parameters=[name for name in proof.body.parameters if name!=proof.carry_parameter],
-        original_f4_proof=asdict(proof))
+    interface=canonical_invariant_motion_interface(proof)
     motion=derive_array_motion(proof.body,carry_parameter=proof.carry_parameter,loop_interface=interface)
     roles={row['role']:row for row in proof.origins if row.get('kind')=='original_f4'
         and row.get('role') in ('builtin_range','lexical_carry_write',
             'invariant_array_leaf_call','single_shared_invariant_loop')}
     call=roles['invariant_array_leaf_call']
-    report=dict(schema='scar.source-loop-motion',schema_version=1,
+    identity=next(row for row in proof.source.origins if row.get('kind')=='source_identity')
+    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
+    source=view.unit(identity['unit'])
+    functions=[index for index,function in enumerate(source.facts.functions)
+        if function.template.occurrence==identity['occurrence']]
+    if len(functions)!=1:
+        raise ValueError('motion source identity lacks one original F4 function')
+    window=derive_source_motion_window(view,unit=identity['unit'],function_ordinal=functions[0],
+        loop_header=_motion_origin_entry(roles['single_shared_invariant_loop']),
+        call_entry=_motion_origin_entry(call))
+    legality=derive_array_motion_legality(proof.body,carry_parameter=proof.carry_parameter,
+        loop_interface=interface,source_window=window)
+    report=dict(schema='scar.source-loop-motion',schema_version=2,
         proof=artifact_reference(path,PROOF_SCHEMA),proof_id=proof.id,
         proof_sha256=semantic_sha256(asdict(proof)),body_sha256=motion['body_sha256'],
         source_identity=dict(path=proof.source.path,sha256=proof.source.sha256,
             code_key=proof.source.code_key),
         array_motion=motion,
+        source_window=window,movement_legality=legality,
+        canonical_interface_sha256=semantic_sha256(interface),
         parameter_routes=[dict(leaf_formal=name,outer_parameter=proof.parameter_map[name],
             original_actual=call['call_inputs'][index],
             binding_role='CARRIED' if name==proof.carry_parameter else 'OUTER_LIVE_IN',
@@ -393,8 +434,9 @@ def verify_invariant_loop_motion(report,*,catalog):
     from scar.ir.execution_recipe import read_artifact
     from scar.optimization.resource_solver import semantic_sha256
 
-    if type(report) is not dict or report.get('schema')!='scar.source-loop-motion':
-        raise ValueError('source loop motion report required')
+    if (type(report) is not dict or report.get('schema')!='scar.source-loop-motion'
+            or type(report.get('schema_version')) is not int or report['schema_version']!=2):
+        raise ValueError('current source loop motion report required')
     read_artifact(report['proof'])
     proof,expected=read_invariant_loop_motion(report['proof']['uri'],catalog=catalog)
     if semantic_sha256(expected)!=semantic_sha256(report):

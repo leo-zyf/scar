@@ -13,6 +13,7 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
     from scar.compiler.model import CpuPlacement
     from scar.ir.execution_recipe import read_artifact,artifact_reference
     from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule,verify_invariant_loop_schedule
+    from scar.optimization.resource_solver import semantic_sha256
     specs=document.get('invariant_loops',[])
     if not specs:return []
     supplied={} if loop_inputs is None else loop_inputs
@@ -41,6 +42,13 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
             motion_path=directory/'source-motion.json'
             motion_path.write_text(json.dumps(source_motion,indent=2,sort_keys=True)+'\n')
             row['source_motion']=artifact_reference(motion_path,source_motion['schema'])
+            legality=source_motion['movement_legality']
+            if legality['status']!='CONDITIONAL':
+                row.update(status='ORIGINAL_LOOP_RETAINED',selected_kind='NO_OP',
+                    selection_scope='SOURCE_MOVEMENT_LEGALITY',
+                    source_legality_status=legality['status'],
+                    reason='original source window does not justify all required invariant placements')
+                rows.append(row);continue
             if shape is None or count is None:
                 row.update(status='LOOP_INPUT_CONSTRAINTS_REQUIRED',missing=[name for name,value in
                     (('input_shapes',shape),('trip_count',count)) if value is None]);rows.append(row);continue
@@ -101,19 +109,35 @@ def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None
             if loop_cpu_model:row['selection_scope']='SOURCED_FORWARD_CPU_COMPONENT_MODEL'
             if schedule['selected_kind']!='REGISTER_TEMPORAL_FUSION':
                 row.update(status='ORIGINAL_LOOP_RETAINED');rows.append(row);continue
-            if plan_only:row.update(status='MODEL_SELECTED_LOOP_PLAN_ONLY');rows.append(row);continue
             binding=dict(schedule['resource_binding']);binding['cpu_ids']=tuple(binding['cpu_ids'])
             binding['evidence']=tuple(binding.get('evidence',()))
             interface=dict(original_f4_proof=asdict(proof),carry_parameter=proof.carry_parameter,
                 readonly_parameters=[p for p in proof.body.parameters if p!=proof.carry_parameter],
                 authority='ORIGINAL_F4_REPLAYED_WITH_RESOURCE_SCHEDULE',
-                execution_specialization=dict(input_shapes=shape,trip_count=count,input_layout='C_CONTIGUOUS'))
+                execution_specialization=dict(input_shapes=shape,trip_count=count,input_layout='C_CONTIGUOUS'),
+                source_motion=row['source_motion'])
+            # A stored report is not authority to cross a source window. Replay
+            # original F4 again after planning, before C0 or any compilation.
+            replayed,fresh_motion=read_invariant_loop_motion(spec['proof']['uri'],catalog=session.view)
+            if (semantic_sha256(asdict(replayed))!=semantic_sha256(asdict(proof))
+                    or semantic_sha256(fresh_motion)!=semantic_sha256(read_artifact(row['source_motion']))):
+                raise ValueError('source movement changed between original F4 admission and lowering')
             builder=build_temporal_invariant_loop
+            from scar.compiler.temporal_invariant_loop import _plan as preview_plan
             if threads is not None or loop_cpu_model:
-                from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop
+                from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop,_plan as preview_plan
                 builder=build_parallel_temporal_invariant_loop
+            preview,_=preview_plan(proof.body,proof.carry_parameter,interface,effective_budget,CpuPlacement(**binding))
+            consumed=preview['execution_movement_binding']
+            if consumed is None:raise ValueError('main invariant build requires consumed source movement legality')
+            movement_path=directory/'movement-binding.json'
+            movement_path.write_text(json.dumps(consumed,indent=2,sort_keys=True)+'\n')
+            row['movement_binding']=artifact_reference(movement_path,consumed['schema'])
+            if plan_only:row.update(status='MODEL_SELECTED_LOOP_PLAN_ONLY');rows.append(row);continue
             artifact=builder(proof.body,directory/'native',carry_parameter=proof.carry_parameter,
                 loop_interface=interface,memory_budget_bytes=effective_budget,resource_binding=CpuPlacement(**binding))
+            if artifact.plan['execution_movement_binding']!=consumed:
+                raise ValueError('compiled movement binding differs from the selected source plan')
             exported=export_temporal_invariant(directory/'native',directory/'bundle',schedule_path=path,
                 proof_reference=spec['proof'],catalog=session.view)
             row.update(status='MODEL_SELECTED_LOOP_COMPILED',native_directory=str(directory/'native'),
