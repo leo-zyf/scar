@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-17 GCC O3方法继续落实到真实图改写：复核本机13.3的O2/O3选项及既有GIMPLE/LICM/alias-vectorization材料；不以重复试跑寻找版本。`macro-pipeline`在原F4冷重放后，把选中OIR实际应用到已有SemanticGraph，5个CALL子节点变1个composite（含root共6→2定义，slots17→5），保公共边界、Q及UNKNOWN effects。新节点可追溯原图并展开实际融合body；重算use-def/源码顺序/静态last-use，拒绝旧图分析、错误region及错误body。KEEP逐字保图。完整prepare+独立check分别约16.65s/16.24s，均禁CDLL；REWRITE只用明确声明的结构验收模型，不是实测成本或部署资格。未新增后端/加速比，未重写全程序；下一层是从后继图重建需求、成本、资源时序和交付绑定。材料：`artifacts/baseline/semantic-region-revision.json`。
+
 2026-11-17 完整方法成本出口已实现：`model-stateful-activity-cost`冷重放现有activity/resource/scope账本，只支持已证明串行的standalone方法，24个最终subject覆盖31活动各计一次；旧coarse条目不再累加，collective pool不按slot乘，唯一source milestone为0。保留COMPONENT_ONLY与全部转用残差，原whole_call_cost_closed=false不改；新条件DECLARED点预测1,423,927ns已接共同CostEstimate和实现IR，逻辑规划可用，物理资格仍独立未解。删掉V2 DAG证据会因3个UNKNOWN拒绝发布；禁CDLL冷重放及3项相关回归通过。
 
 冻结模型后，真实原driver默认259规格做warmup2对/7对AB–BA，每对4次方法调用；计时内无hash/复制/trace，保留caller原0–55 CPU mask。原方法episode均值的median1.97499775ms[min1.8855935,max2.3318435,var0.0213078030ms²]，native1.05520175ms[min0.9159615,max1.62088875,var0.0575503260ms²]，方法范围1.87168×；28次measured native/0fallback，全部9对最终state/scalar/PNG/stdout一致。预测比实测高34.9436%，超过事前20%阈值；`validate-stateful-entry-model`独立由原样本重算，返回qualified_profile=null，未改模型/阈值、未拟合或重跑，默认NO_OP。本次legacy采样只绑定model，未携带政策引用及完整timer/harness预绑定；评估器亦将这两项列为未解，事后放宽到90%仍不会qualified。原采样/模型/政策均未改。局部收益已观测，不能当整程序或LeWM加速。下一层先固定统一采样design，再定位canonical→组合执行的上下文残差、用新独立样本校验，并补caller CPU契约与scoped内存资格；三阶段仍未完成。材料：`artifacts/baseline/activity-entry-cost.json`。

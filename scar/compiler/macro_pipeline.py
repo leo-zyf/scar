@@ -30,6 +30,8 @@ def _pins():
     root=Path(__file__).resolve().parents[1]
     names=('compiler/macro_pipeline.py','compiler/project_pipeline_temporal.py',
         'analysis/pipeline_region_pass.py','optimization/macro_pass.py',
+        'compiler/semantic_revision.py','analysis/source_pipeline_graph.py',
+        'optimization/semantic_rewrite.py',
         'optimization/deployment_cost.py','compiler/pipeline_fusion_delivery.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
@@ -49,7 +51,7 @@ def _derive(inputs,profile,cpus,budget,gain):
         report=run_fusion_pass(region,blueprint,cost_profile=None if profile is None else profile['uri'],
             available_cpu_ids=cpus,memory_budget_bytes=budget,minimum_gain=gain)
         report=json.loads(json.dumps(report,sort_keys=True,allow_nan=False))
-        return pipeline,region,blueprint,report,budget
+        return pipeline,region,blueprint,report,budget,values
 
 
 def _metadata(inputs,profile,cpus,budget,gain,files,decision):
@@ -71,7 +73,7 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
     cpus=sorted(os.sched_getaffinity(0))if available_cpu_ids is None else list(available_cpu_ids)
     output=Path(out).resolve()
     if output.exists():raise ValueError('fresh macro pipeline output required')
-    pipeline,region,blueprint,report,budget=_derive(reference,profile,cpus,memory_budget_bytes,minimum_gain)
+    pipeline,region,blueprint,report,budget,values=_derive(reference,profile,cpus,memory_budget_bytes,minimum_gain)
     output.mkdir(parents=True)
     context=dict(schema='scar.macro-pass-cost-context-publication',schema_version=1,
         context=report['cost_context'],complete_scope_reuse_count=1,
@@ -79,6 +81,9 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
         original_python_preserved_when_unknown=True)
     files=dict(region=_write(output/'region.json',region),blueprint=_write(output/'blueprint.json',blueprint),
         pass_report=_write(output/'pass.json',report),cost_context=_write(output/'cost-context.json',context))
+    from scar.compiler.semantic_revision import publish_fusion_revision
+    files['semantic_revision']=publish_fusion_revision(
+        pipeline,report['optimization_selection'],values,output/'semantic')
     metadata=_metadata(reference,profile,cpus,budget,minimum_gain,files,report['decision'])
     preparation=_write(output/'preparation.json',metadata)
     native=None
@@ -87,6 +92,7 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
         artifact=build_fusion_blueprint(pipeline,blueprint,output/'native')
         native=artifact_reference(artifact.directory/'artifact.json',artifact.report['schema'])
     result=dict(schema='scar.macro-pipeline-build',schema_version=1,preparation=preparation,
+        semantic_revision=files['semantic_revision'],
         decision=report['decision'],native_artifact=native,native_compiled=native is not None,
         whole_program_cpp=False,source_replacement='CONTROLLED_MODULE_ENTRY_ONLY',
         target_program_executed=False,performance_measured=False,deployment_authorized=False)
@@ -98,7 +104,7 @@ def check(preparation):
     reference=_reference(preparation,SCHEMA);saved=read_artifact(reference)
     if saved.get('schema_version')!=1 or saved['producer_pins']!=_pins():
         raise ValueError('macro pipeline producer differs')
-    pipeline,region,blueprint,report,budget=_derive(saved['inputs'],saved['cost_profile'],
+    pipeline,region,blueprint,report,budget,values=_derive(saved['inputs'],saved['cost_profile'],
         saved['available_cpu_ids'],saved['memory_budget_bytes'],saved['minimum_gain'])
     if any(read_artifact(saved['files'][name])!=value for name,value in
             (('region',region),('blueprint',blueprint),('pass_report',report))):
@@ -109,6 +115,9 @@ def check(preparation):
     if saved!=_metadata(saved['inputs'],saved['cost_profile'],saved['available_cpu_ids'],budget,
             saved['minimum_gain'],saved['files'],report['decision']):
         raise ValueError('macro pipeline preparation summary differs')
+    from scar.compiler.semantic_revision import check_fusion_revision
+    check_fusion_revision(saved['files']['semantic_revision'],pipeline,
+        report['optimization_selection'],values)
     return saved,pipeline,region,blueprint,report
 
 

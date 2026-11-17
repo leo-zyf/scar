@@ -1,0 +1,86 @@
+{
+  "compiler_reference": "GCC 13.3.0",
+  "gcc_study": "artifacts/baseline/gcc-o3-study.json",
+  "implemented": [
+    "Actual before/after existing SemanticGraph artifacts from source-qualified F4 projection",
+    "Selected OIR and exact fused ArrayRegion body replay",
+    "Public input/output/world slots and conditional Q/UNKNOWN effects retained",
+    "Original source graph and execution evidence unchanged",
+    "Expandable original body and actual lowered expression body by ArtifactRef",
+    "Source use-def/source-order/static last-use recomputed per successor revision and root",
+    "Edge indexing and heap topological order rather than repeated graph scans",
+    "Original KEEP path preserved and normal CLI/cold checker integrated"
+  ],
+  "native_compiled": false,
+  "native_load_forbidden": true,
+  "new_backend_added": false,
+  "new_speedup_claim": null,
+  "observed": {
+    "boundary_slots": 5,
+    "focused_regressions": {
+      "command": ".venv-planner/bin/python -B -m pytest -q tests/unit/test_pipeline_fusion.py",
+      "passed": 2
+    },
+    "metadata_prepare_plus_cold_check_seconds": {
+      "keep": 16.65080158901401,
+      "rewrite": 16.242041531018913
+    },
+    "negative_rejections": [
+      "STALE_REVISION",
+      "WRONG_REGION",
+      "WRONG_FUSION_BODY_REFERENCE"
+    ],
+    "note": "Counts include one enclosing root; five CALL children become one composite.",
+    "operation_definitions": [
+      6,
+      2
+    ],
+    "slots": [
+      17,
+      5
+    ]
+  },
+  "primary_sources": [
+    {
+      "topic": "Ordered passes and bookkeeping",
+      "url": "https://gcc.gnu.org/onlinedocs/gccint/Pass-manager.html"
+    },
+    {
+      "topic": "SSA changes require analysis updates",
+      "url": "https://gcc.gnu.org/onlinedocs/gccint/SSA.html"
+    },
+    {
+      "topic": "Memory effects and aliases constrain motion",
+      "url": "https://gcc.gnu.org/onlinedocs/gccint/Alias-analysis.html"
+    },
+    {
+      "topic": "Target-specific version/guard/body profitability",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/gcc/tree-vect-loop.cc"
+    }
+  ],
+  "remaining": [
+    "General whole-program, nested-region and loop rewrite composition",
+    "Successor implementation demand and physical allocation/lifetime replay",
+    "Qualified complete-boundary cost and threshold dispatch",
+    "Rebuilt hardware/time schedule and native artifact binding",
+    "Generic affected-analysis cache management"
+  ],
+  "schema": "scar.semantic-region-revision-checkpoint",
+  "schema_version": 1,
+  "source_cost_basis": "EXPLICIT_DECLARED_STRUCTURAL_FIXTURE_NOT_MEASURED_PERFORMANCE",
+  "source_pins": {
+    "analysis/source_pipeline_graph.py": "c77c42f9b8743b0da044a6540c1352622f642f6f09e8c117148b6bc4e0230825",
+    "compiler/macro_pipeline.py": "b4e26896b41dc833b58e025f2e2d72b9672b3c59ebcee8809572096ec29e4077",
+    "compiler/semantic_revision.py": "6eb9a64f2dbc77b2f1d03a8fb1a02ae148b62b80a43b2e5a5e95112b21070a4b",
+    "optimization/semantic_rewrite.py": "18d28c234443d65f28083deb7beffa36923f15a4f5daad849d5f777f85375a43"
+  },
+  "status": "IMPLEMENTED_AND_VERIFIED_CLOSED_REGION_SUCCESSOR_NOT_WHOLE_PROGRAM_OPTIMIZATION",
+  "target_program_executed": false,
+  "three_stages_complete": false,
+  "verification": {
+    "schema": "scar.semantic-revision-verification",
+    "sha256": "daa4758031d902e774ed4fbe284d42539ea155b5fd3c4e1b56735e789dc96636",
+    "size_bytes": 2880,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/semantic-revision-v1/final/verification.json"
+  }
+}
