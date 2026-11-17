@@ -14,7 +14,7 @@
 
 实测该8×8源码例子：warmup3、9次交替顺序、每样本1次完整受保护调用，原NumPy median13.584µs[min8.998,max15.444]、融合111.705µs[min109.358,max137.556]，not profitable。实际完整边界证据已使pass选KEEP且跳过native；声明正模型不当作加速证据。无worker/绑核，仍有guard/ABI等调用开销。仅小源码区域，非科学程序整入口或LeWM；无新加速结论。新全图重写、自动分析缓存失效重算、真实组件标定与资源日历构造均未完成，现有C1 compact亦未接新融合交付。验收：`artifacts/baseline/macro-fusion-pass.json`。
 
-GCC13.3本机实证保留：-Q选项、pass顺序、GIMPLE/SSA、LICM及最终IR；闭合C例子发生内联、外提、重复/死计算消除和16字节vector，未知外部调用保留。O2/very-cheap与O3/dynamic成本差异及默认线程数1已核，不把GCC当Python语义证明。记录：`artifacts/baseline/gcc-o3-study.json`。
+GCC13.3本机实证保留：-Q选项、pass顺序、GIMPLE/SSA、LICM及最终IR；闭合C例子发生内联、外提、重复/死计算消除和16字节vector，未知外部调用保留。源码复核及补充编译确认：未知alias可生成带检查双路径，示例运行收益阈值3、已有restrict契约时为2；常量返回不消除两次volatile状态写。目标成本单位不是纳秒，未运行目标或测加速。SCAR已有首条pass，但全图修订/通用分析失效重算/规模阈值分派仍有缺口；逐层任务收在DEVELOPMENT。记录：`artifacts/baseline/gcc-o3-study.json`。
 
 2026-11-17 解析/构造式规划调研已完成。主线为语义化简、工作/数据移动需求和容量界、解析组织、资源日历构造、证书与C++；少量组件标定用于有效吞吐/边界开销/重叠条件，不默认整版本黑盒调优。已有OIR、融合后端和求解器保留，求解器可作局部补充/校验；首条pass已实现，构造引擎尚未实现。具体逐层任务见DEVELOPMENT，文献与适用边界见 `artifacts/baseline/constructive-planning-research.json`。仍未完成三阶段。
 
