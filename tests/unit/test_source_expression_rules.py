@@ -1400,6 +1400,42 @@ def test_atomic_statement_addresses_world_and_terminal_completions(rules):
     assert len(operators)==13
 
 
+def test_source_assert_omission_checks_effects_and_original_world_arm():
+    from scar.analysis.source_assert_policy import AssertionEffectUnproven, SourceAssertions
+    from scar.analysis.source_namespace_interfaces import NamespacePlanView
+    from scar.analysis.source_statement_rules import SourceStatementRules
+
+    selected = _rules(_documents('assert 1 < 2, log()\nassert False and test(), "debug"\n'
+        'assert item is None, "debug"\nassert False, log()\nassert 1 / 0\n'
+        'assert item\nraise AssertionError("business failure")\n'))
+    source = selected.source
+    rules = SourceStatementRules(source, world=WORLD, exception_abi=ExceptionABI.EXCEPTION_WORLD)
+    assertions = SourceAssertions(source.context.syntax)
+    plans = [rules.build(occurrence) for occurrence in occurrences(selected, 'Assert')]
+    live_reference = object()
+
+    def prove(plan):
+        return assertions.prove_omission(NamespacePlanView('source-unit', plan), plan.root,
+            lambda _: live_reference)
+
+    _, unreachable = prove(plans[0])
+    assert unreachable['may_assertion_fail'] is False and unreachable['message_effects'] == 'UNREACHABLE'
+    omitted, failing = prove(plans[1])
+    assert failing['may_assertion_fail'] and failing['allowed_difference'] == 'ASSERTION_FAILURE_OMITTED'
+    assert prove(plans[2])[1]['may_assertion_fail']
+    for plan in plans[3:]:
+        with pytest.raises(AssertionEffectUnproven):
+            prove(plan)
+    raised = rules.build(occurrences(selected, 'Raise')[0])
+    assert prove(raised) is None
+    plan = plans[1]
+    with pytest.raises(AssertionEffectUnproven, match='admitted F2 syntax'):
+        prove(replace(plan, input=replace(plan.input, f2_sha256='0'*64)))
+    with pytest.raises(AssertionEffectUnproven, match='input world'):
+        prove(replace(plan, steps=tuple(replace(step, arguments=()) if step.region == omitted else step
+            for step in plan.steps)))
+
+
 def test_annotation_phases_and_compilation_options_are_static_not_runtime_guesses(rules):
     import dis
     from scar.analysis.source_statement_rules import SourceStatementRules

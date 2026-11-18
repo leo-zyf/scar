@@ -10,6 +10,18 @@
 验收顺序：A 契约/ID与计划校验 → B 各阶段独立可执行 → C 真实科学区域贯通 → D 正确性/清洁A/B与NO_OP决策。
 结果按 Observed/Implemented/Verified/Rejected 区分；不以区域加速代替整程序加速，也不以局部闭环代替第一阶段完成。
 
+本轮贯通顺序为源码作用域与效果 → 化简后继图与成本 → 同版本的 C++20 区域交付。
+
+| 阶段 | 本轮验收 | 下一验收 |
+| --- | --- | --- |
+| 建图 | 保留原 F4 接口及 `assert` 的执行分支。`compile-region --catalog C --assertion-policy omit-proven-debug` 仅在能证明条件及可达消息无额外可观察行为时使用原图的省略分支，并明确记录允许省略的 `AssertionError`。默认 `preserve`。 | 用外部 CPU 科学程序的实际入口绑定循环活入值、循环携带值和效果，记录尚未接通的调用及资源。 |
+| 化简与计划 | `model-pipeline-cost --macro-preparation M --out COST` 消费实际后继图与优化后 lowering，保留同一合同及目标硬件引用。成本缺失时保持 `KEEP`。 | 按同一受保护入口分离 guard、调度、分配及执行成本，用独立输入验证冻结参数，再用时序与容量约束选择合法放置。 |
+| 交付 | `plan-semantic-region --macro-preparation M --forward-model COST/result.json --compile-validation --out NATIVE` 核对同一候选后生成 C++20/ABI 1。`validate_call` 可在 `KEEP` 时显式隔离比较，普通调用保留原函数。 | 将通过成本资格和时序校验的计划用于真实入口，验收输出、可见状态和回退，再做清洁 A/B。 |
+
+断言政策和五调用 CPU 数组区域分别通过验收。真实 Gray-Scott 入口同时重建了源码图、投影了 `_euler`
+的 20 个内部任务，并用原驱动对比了原生试跑的状态轨迹、日志和输出文件。阶段门以各自的证据独立验收，
+完整入口成本仍须校准，运行选择保持 `KEEP`。记录和 C++ 路径见 `artifacts/baseline/three-stage-fusion-binding.json`。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

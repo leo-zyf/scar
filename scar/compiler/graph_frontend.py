@@ -15,6 +15,8 @@ from types import CodeType
 from types import SimpleNamespace
 
 from scar.analysis.program_view import ProgramView
+from scar.analysis.source_assert_policy import (PRESERVE, OMIT_PROVEN_DEBUG, SourceAssertions,
+    AssertionEffectUnproven, validate_assertion_policy)
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_reference_slice import source_port, ReferenceSlicer
@@ -84,9 +86,10 @@ def _origin(context, region, step=None, **extra):
 
 class _GraphLowerer:
     """Walk every action in a bounded straight-line body, including dead work."""
-    def __init__(self, source, function, resolver, *, syntax=None):
+    def __init__(self, source, function, resolver, *, syntax=None, source_assertions=None):
         self.source, self.function, self.resolver = source, function, resolver
         self.syntax = syntax
+        self.source_assertions = source_assertions
         self.facts = source.facts
         self.nodes, self.origins, self.locals = [], [], {}
         self.by_id, self.active = {}, set()
@@ -137,6 +140,29 @@ class _GraphLowerer:
         if len(namespaces) != 1 or namespaces[0] not in self.locals:
             _reject('UNBOUND_LOCAL', 'local read has no preceding parameter or assignment binding')
         return (self.locals[namespaces[0]], _WORLD)
+
+    def assertion_local(self, occurrence):
+        failure = 'name read has no original preceding lexical binding proof'
+        key = G.SourceTemplateKey(occurrence, P.ProductionPurpose.VALUE)
+        if key not in self.source.material.interfaces['nodes']:
+            raise AssertionEffectUnproven(failure)
+        context = self.resolver.plan(self.source.unit, key)
+        root = context.plan.root
+        region = context.regions[root]
+        if context.owner(root).owner != self.function.body_scope.owner or len(region.steps) != 2:
+            raise AssertionEffectUnproven(failure)
+        read, finish = (context.steps[step] for step in region.steps)
+        if (type(read.instruction) is not P.AccessBinding
+                or read.instruction.action is not P.BindingActionKind.READ
+                or read.arguments != (P.ProductionParameter(root, 0),)
+                or finish.instruction != P.TransferCompletion(C.FALLTHROUGH)
+                or finish.arguments != (P.ProductionResult(read.id, 0), P.ProductionResult(read.id, 1))):
+            raise AssertionEffectUnproven(failure)
+        try:
+            value, _ = self.binding(context, read, (_WORLD,))
+        except GraphRegionRejected as error:
+            raise AssertionEffectUnproven(failure) from error
+        return value.value if type(value) is _Scalar else value
 
     def action(self, context, step, args, origin):
         ins = step.instruction
@@ -292,6 +318,15 @@ class _GraphLowerer:
         values = {P.ProductionParameter(region_id, i): value for i, value in enumerate(parameters)}
         evaluated = {}
         try:
+            if self.source_assertions is not None:
+                try:
+                    omission = self.source_assertions.prove_omission(context, region_id, self.assertion_local)
+                except AssertionEffectUnproven as error:
+                    _reject('ASSERTION_EFFECT_UNPROVEN', str(error), _origin(context, region_id))
+                if omission is not None:
+                    omitted_region, proof = omission
+                    self.origins.append(proof)
+                    return self.run(context, omitted_region, parameters)
             for step_id in region.steps:
                 step = context.steps[step_id]; ins = step.instruction
                 origin = _origin(context, region_id, step,
@@ -440,8 +475,9 @@ def _metadata_span(syntax, occurrence):
     return {'line': attrs['lineno'].scalar.to_python()}
 
 
-def discover_graph_regions(catalog, source=None) -> tuple[list[ArrayRegion], list[dict]]:
+def discover_graph_regions(catalog, source=None, *, assertion_policy=PRESERVE) -> tuple[list[ArrayRegion], list[dict]]:
     """Lower requested admitted source bodies; retain every original ID in origins."""
+    validate_assertion_policy(assertion_policy)
     view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
     catalog = view.catalog
     units = (tuple(catalog.fact_store.rows) if source is None else
@@ -459,6 +495,7 @@ def discover_graph_regions(catalog, source=None) -> tuple[list[ArrayRegion], lis
         except (ValueError, KeyError, SyntaxError, OSError) as error:
             rejected.append(dict(unit=unit, code='SOURCE_IDENTITY_UNAVAILABLE', detail=str(error)))
             continue
+        assertions = SourceAssertions(syntax) if assertion_policy == OMIT_PROVEN_DEBUG else None
         for ordinal, function in enumerate(functions):
             name, span, lines = _metadata(syntax, function.template.occurrence)
             candidates = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
@@ -469,7 +506,7 @@ def discover_graph_regions(catalog, source=None) -> tuple[list[ArrayRegion], lis
                 if len(candidates) != 1:
                     _reject('CODE_IDENTITY_UNAVAILABLE', 'original function has no unique complete code identity')
                 code = candidates[0]
-                lowerer = _GraphLowerer(source_view, function, resolver,syntax=syntax)
+                lowerer = _GraphLowerer(source_view, function, resolver, syntax=syntax, source_assertions=assertions)
                 nodes, output, origins = lowerer.lower()
                 key = code_key(code)
                 identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',

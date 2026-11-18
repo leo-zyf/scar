@@ -43,11 +43,17 @@ def _document(value):
 
 def _materials(region_document, blueprint, demand):
     from scar.compiler.pipeline_model import pipeline_from_dict
-    from scar.optimization.pipeline_demand import verify_pipeline_demand
+    from scar.optimization.pipeline_demand import (
+        SUCCESSOR_SCHEMA, verify_pipeline_demand, verify_successor_pipeline_cost_demand,
+    )
 
     region, blueprint, demand = map(_document, (region_document, blueprint, demand))
     context = fusion_pass_cost_context(region, blueprint)
-    demand = verify_pipeline_demand(pipeline_from_dict(blueprint['pipeline']), blueprint, demand)
+    if demand.get('schema') == SUCCESSOR_SCHEMA:
+        demand = verify_successor_pipeline_cost_demand(region, blueprint, demand)
+        _need(context['Q'] == demand['Q'], 'published successor and complete entry cost require the same Q')
+    else:
+        demand = verify_pipeline_demand(pipeline_from_dict(blueprint['pipeline']), blueprint, demand)
     return region, blueprint, demand, context
 
 
@@ -161,6 +167,8 @@ def predict_pipeline_forward_cost(region_document, blueprint, demand, coefficien
         for name in ('optimization/pipeline_forward_cost.py', 'optimization/pipeline_demand.py',
                      'optimization/cost_model.py', 'optimization/deployment_cost.py',
                      'optimization/macro_pass.py')}
+    successor = ({'macro_preparation': deepcopy(demand['macro_preparation']),
+        'candidate_binding': deepcopy(demand['candidate_binding'])} if 'candidate_binding' in demand else {})
     return dict(schema=SCHEMA, schema_version=1,
         status='ESTIMATED_UNDER_PROFILE_CONTRACT' if complete else 'UNRESOLVED',
         prediction_available=complete, context=context, demand_sha256=_digest(demand),
@@ -181,7 +189,7 @@ def predict_pipeline_forward_cost(region_document, blueprint, demand, coefficien
         source_admission='QUALIFIED_PARENT_F4_REPLAY_REQUIRED', source_replay_performed=False,
         whole_scope_observed=False, coefficients_promoted_to_observed_components=False,
         scope_difference_used_as_component=False, physical_bounds_proven=False,
-        target_program_executed=False, native_loaded=False, deployment_authorized=False)
+        target_program_executed=False, native_loaded=False, deployment_authorized=False, **successor)
 
 
 def verify_pipeline_forward_cost(report, region_document, blueprint, demand, coefficient_profile):
@@ -209,13 +217,15 @@ def deployment_profile_for_prediction(prediction_ref, *, region_document, bluepr
 
     costs = {name:dict(value=record['value'], unit='seconds', basis='DECLARED_MODEL',
         evidence=[fact('#/components/' + name)]) for name, record in report['components'].items()}
+    successor = ({'macro_preparation': deepcopy(report['macro_preparation']),
+        'candidate_binding': deepcopy(report['candidate_binding'])} if 'candidate_binding' in report else {})
     return dict(schema='scar.deployment-cost-profile', schema_version=1, mode='COMPONENTS',
         context=deepcopy(report['context']), context_evidence=[fact('#/context')], costs=costs,
         model_assumptions=deepcopy(report['model_assumptions']),
         provenance=dict(prediction=deepcopy(reference), demand_sha256=report['demand_sha256'],
             coefficient_profile_sha256=report['coefficient_profile_sha256'],
             derived_component_basis='DECLARED_MODEL', whole_scope_observed=False,
-            source_demand_replayed=True, coefficient_evidence_replayed=True))
+            source_demand_replayed=True, coefficient_evidence_replayed=True, **successor))
 
 
 __all__ = ['SCHEMA', 'PROFILE_SCHEMA', 'coefficient_profile_skeleton',

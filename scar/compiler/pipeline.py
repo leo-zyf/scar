@@ -11,9 +11,14 @@ from .frontend import discover_regions
 from .model import write_plan
 from .validation import validate_plan
 
-def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_threads=None,target=None):
+def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_threads=None,target=None,
+                   assertion_policy='preserve'):
     from scar.optimization import optimize_region
     from scar.codegen import build
+    if assertion_policy not in ('preserve', 'omit-proven-debug'):
+        raise ValueError('unsupported assertion policy')
+    if catalog is None and assertion_policy != 'preserve':
+        raise ValueError('assertion omission requires an original F4 --catalog')
     started=time.perf_counter();out=Path(out).absolute()
     if out.exists():raise ValueError('fresh compiler output required')
     out.mkdir(parents=True)
@@ -24,7 +29,8 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
     else:
         from scar.analysis.program_view import ProgramView
         from scar.analysis.array_value_templates import ArrayTemplateSource
-        template_source=ArrayTemplateSource(ProgramView(catalog),source)
+        template_source=ArrayTemplateSource(ProgramView(catalog),source,
+            assertion_policy=assertion_policy)
         regions,rejections=template_source.regions,template_source.rejections
         discovery='ORIGINAL_F4_GRAPH'
     current=Path(source).resolve();source_digest=sha256(current.read_bytes()).hexdigest()
@@ -38,7 +44,8 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
     capacity=len(os.sched_getaffinity(0)) if hasattr(os,'sched_getaffinity') else (os.cpu_count() or 1)
     threads=(1 if target is not None else min(4,capacity)) if cpu_threads is None else cpu_threads
     (out/'graph.json').write_text(json.dumps(dict(schema='scar.optimization-regions',schema_version=1,
-        discovery=discovery,regions=[asdict(r) for r in regions],rejections=rejections),indent=2,allow_nan=False)+'\n')
+        discovery=discovery,assertion_policy=assertion_policy,
+        regions=[asdict(r) for r in regions],rejections=rejections),indent=2,allow_nan=False)+'\n')
     if template_source is not None:
         from scar.ir.execution_recipe import artifact_reference
         from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
@@ -55,7 +62,9 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
             plan,provider=template_source.analyze(reference,memory_budget_bytes=memory_budget_bytes,cpu_threads=threads)
         folder=out/f'region-{ordinal}';folder.mkdir()
         row=dict(region=region.id,qualname=region.source.qualname,source=asdict(region.source),
-            proof=plan.proof,cost=plan.cost,selected=False)
+            proof=plan.proof,cost=plan.cost,selected=False,
+            omitted_source_assertions=sum(origin.get('kind') == 'source_assertion_omission'
+                for origin in region.source.origins))
         if provider is not None:
             from scar.analysis.array_value_templates import publish_array_templates
             templates=publish_array_templates(provider,folder/'value-templates')
@@ -104,7 +113,8 @@ def compile_source(source,out,*,catalog=None,memory_budget_bytes=None,cpu_thread
             row.update(status='UNSUPPORTED',reason=str(error))
         publications.append(row)
     report=dict(schema='scar.compiler-build',schema_version=1,source=str(Path(source).absolute()),
-        catalog=None if catalog is None else str(Path(catalog).absolute()),discovery=discovery,regions=publications,
+        catalog=None if catalog is None else str(Path(catalog).absolute()),discovery=discovery,
+        assertion_policy=assertion_policy,regions=publications,
         rejected_functions=len(rejections),whole_program_compiled=False,first_stage_complete=False,
         hardware=dict(cpu_affinity_capacity=capacity,
             planned_cpu_threads=None if target is not None and cpu_threads is None else threads,
@@ -120,9 +130,11 @@ def main():
     parser.add_argument('--memory-budget-bytes',type=int)
     parser.add_argument('--cpu-threads',type=int,help='CPU workers; default min(4, available affinity)')
     parser.add_argument('--target',help='original hardware graph; cost-model planning or explicit CPU-allocation preview')
+    parser.add_argument('--assertion-policy', choices=('preserve', 'omit-proven-debug'), default='preserve',
+        help='retain source assertions or opt into proven debug assertion omission using --catalog')
     args=parser.parse_args();r=compile_source(args.source,args.out,catalog=args.catalog,
         memory_budget_bytes=args.memory_budget_bytes,cpu_threads=args.cpu_threads,
-        target=args.target)
+        target=args.target,assertion_policy=args.assertion_policy)
     print(json.dumps(dict(compiled=sum(x['status']=='COMPILED_UNMEASURED' for x in r['regions']),
         regions=len(r['regions']),seconds=r['seconds'],result=str(Path(args.out)/'result.json'))))
 

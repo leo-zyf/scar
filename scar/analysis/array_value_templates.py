@@ -58,10 +58,12 @@ def _fact(reference, documents):
 
 class ArrayTemplateSource:
     """One formal F4 discovery shared by every array region in this source."""
-    def __init__(self, view, source):
+    def __init__(self, view, source, *, assertion_policy='preserve'):
         from scar.compiler.graph_frontend import discover_graph_regions
         self.view = view;self.source = str(Path(source).resolve())
-        self.regions, self.rejections = discover_graph_regions(view, source=self.source)
+        self.assertion_policy = assertion_policy
+        self.regions, self.rejections = discover_graph_regions(
+            view, source=self.source, assertion_policy=assertion_policy)
         self._regions = {_digest(asdict(row)):row for row in self.regions}
         self._rules = _pins();self._documents = {}
 
@@ -223,11 +225,13 @@ class ArrayValueTemplateProvider:
 
 def _pins():
     from scar.compiler import graph_frontend,array_copy_contract
+    from scar.analysis import source_assert_policy
     from scar.optimization import graph,optimizer
     from scar.ir.program import array_value_templates
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('projection',__import__(__name__,fromlist=['__file__'])),('types',array_value_templates),
         ('source_lowering',graph_frontend),('copy_contract',array_copy_contract),
+        ('source_assert_policy',source_assert_policy),
         ('structure',graph),('optimizer',optimizer))}
 
 
@@ -252,7 +256,8 @@ def publish_array_templates(provider,out):
     tables = {name:write_table(out/(name+'.jsonl.gz'),rows) for name,rows in groups.items()}
     validation = _validate_public_graph(provider)
     report = dict(schema=SCHEMA,schema_version=1,original_region=encode(provider.reference),
-        source=provider.admission.source,configuration=provider.configuration,pins=_pins(),
+        source=provider.admission.source,assertion_policy=provider.admission.assertion_policy,
+        configuration=provider.configuration,pins=_pins(),
         tables=tables,summary=provider.summary(),graph_validation=validation,
         runtime_guards_discharged=False,transformation_authorized=False)
     provider.check()
@@ -265,9 +270,12 @@ def read_array_templates(path,view,*,admission=None):
     path = Path(path).resolve();raw = (path/'result.json').read_bytes();report = json.loads(raw)
     if (report.get('schema'),report.get('schema_version')) != (SCHEMA,1) or report['pins'] != _pins():
         raise ValueError('array value template schema or producing rules differ')
-    admission = ArrayTemplateSource(view,report['source']) if admission is None else admission
-    if admission.view is not view or admission.source != report['source']:
-        raise ValueError('array template source belongs to another program view')
+    policy = report.get('assertion_policy', 'preserve')
+    admission = (ArrayTemplateSource(view,report['source'],assertion_policy=policy)
+        if admission is None else admission)
+    if (admission.view is not view or admission.source != report['source']
+            or admission.assertion_policy != policy):
+        raise ValueError('array template source or assertion policy differs from admission')
     _,provider = admission.analyze(decode(ProviderFactReference,report['original_region']),
         **report['configuration'],register=False)
     if provider is None:raise ValueError('array template no longer has the closed supported operator profile')

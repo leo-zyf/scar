@@ -9,11 +9,13 @@ from copy import deepcopy
 
 from scar.compiler.model import document as plan_document, plan_from_dict
 from scar.compiler.pipeline_model import document as pipeline_document, pipeline_digest, validate_pipeline
+from scar.ir.execution_recipe import read_artifact
 from scar.optimization.demand import analyze_region_demand
 from scar.optimization.resource_solver import _shape_instantiation, semantic_sha256
 
 
 SCHEMA = 'scar.pipeline-demand'
+SUCCESSOR_SCHEMA = 'scar.pipeline-successor-cost-demand'
 _OPS = ('add', 'sub', 'mul', 'div', 'neg')
 _MISSING_SOURCE_WORK = ('The region demand has no qualified original source arithmetic classification; '
     'optimized/CSE arithmetic is not substituted for original eager work.')
@@ -248,4 +250,94 @@ def verify_pipeline_demand(pipeline, blueprint, report):
     return expected
 
 
-__all__ = ['SCHEMA', 'derive_pipeline_demand', 'verify_pipeline_demand']
+def derive_successor_pipeline_cost_demand(region, blueprint, preparation_ref):
+    """Project the published candidate demand into the protected-entry cost basis.
+
+    The controller cold-checks the parent once. This projection verifies the
+    bound artifact identities on each replay and does not analyze the CALLs or
+    re-derive a candidate graph. Keep the raw composite and lowering distinct.
+    """
+    from scar.compiler.macro_pipeline import SCHEMA as PREPARATION_SCHEMA
+    from scar.compiler.semantic_revision import SCHEMA as REVISION_SCHEMA
+    from scar.optimization.semantic_region_demand import SCHEMA as SEMANTIC_DEMAND_SCHEMA
+
+    parent = read_artifact(preparation_ref)
+    _need((parent['schema'], parent['schema_version']) == (PREPARATION_SCHEMA, 2),
+        'versioned macro preparation required for successor costing')
+    files = parent['files']
+    _need(region == read_artifact(files['region']) and blueprint == read_artifact(files['blueprint']),
+        'protected-entry region or blueprint differs from the published macro preparation')
+    revision_ref, demand_ref = files['candidate_revision'], files['candidate_demand']
+    _need(revision_ref is not None and demand_ref is not None,
+        'macro preparation has no qualified published fused successor to cost')
+    revision, semantic = read_artifact(revision_ref), read_artifact(demand_ref)
+    _need((revision['schema'], revision['schema_version'], revision['decision']) == (REVISION_SCHEMA, 1, 'REWRITE')
+        and (semantic['schema'], semantic['schema_version'], semantic['decision']) == (SEMANTIC_DEMAND_SCHEMA, 1, 'REWRITE'),
+        'versioned fused graph and its semantic demand required')
+    lowered = semantic['implementation_lowering_demand']
+    active = semantic['active']
+    qualification = region['qualification']
+    bounds = semantic['boundary']
+    _need(semantic['semantic_revision_sha256'] == semantic_sha256(revision)
+        and semantic['selected_region_sha256'] == revision['selected_region_sha256']
+        and semantic['graph_revision'] == active['graph_revision'] == revision['after_revision']
+        and semantic['root'] == active['root'] == revision['root']
+        and semantic['pipeline_sha256'] == blueprint['pipeline_sha256'] == qualification['pipeline_sha256']
+        and semantic['blueprint_sha256'] == semantic_sha256(blueprint)
+        and lowered['plan_sha256'] == blueprint['optimized_plan_sha256'] == semantic_sha256(blueprint['optimized_plan'])
+        and lowered['strategy_sha256'] == blueprint['strategy_sha256']
+        and semantic['input_shapes'] == qualification['input_shapes']
+        and semantic['output_shape'] == qualification['output_shape']
+        and bounds['Q'] == qualification['Q']
+        and bounds['required_runtime_guards'] == qualification['required_runtime_guards'],
+        'successor graph, implementation lowering, or guarded source contract differs')
+    raw_body = revision['files']['body']
+    raw_body_sha = semantic_sha256(read_artifact(raw_body))
+    _need(active['static_operation_count'] == len(active['operations']) == 1
+        and raw_body_sha == active['operations'][0]['body_plan_sha256'],
+        'successor demand must name the actual raw composite body')
+    binding = dict(candidate_revision=revision_ref, candidate_demand=demand_ref,
+        original_graph=revision['files']['before'], original_graph_revision=revision['before_revision'],
+        candidate_graph=revision['files']['after'], graph_revision=revision['after_revision'],
+        semantic_revision_sha256=semantic['semantic_revision_sha256'],
+        blueprint_sha256=semantic['blueprint_sha256'], pipeline_sha256=semantic['pipeline_sha256'],
+        raw_body=raw_body, raw_body_plan_sha256=raw_body_sha,
+        optimized_plan_sha256=lowered['plan_sha256'], strategy_sha256=lowered['strategy_sha256'])
+    source, native = semantic['source_baseline']['features'], lowered['features']
+    _need(source['region_body_evaluations'] == len(semantic['source_baseline']['operations'])
+        and native['region_body_evaluations'] == 1,
+        'protected entry requires the original CALL count and exactly one fused invocation')
+    original = dict(python_region_calls=1, python_leaf_calls=source['region_body_evaluations'],
+        output_elements=native['output_elements'],
+        **{name:source[name] for name in ('array_allocations', 'cumulative_allocation_bytes', 'logical_payload_bytes')},
+        **{name:value for name, value in source.items() if name.startswith('arithmetic.')})
+    fused = dict(native_region_calls=native['region_body_evaluations'],
+        output_elements=native['output_elements'], fused_array_allocations=native['array_allocations'],
+        fused_output_bytes=native['output_bytes'], fused_logical_payload_bytes=native['logical_payload_bytes'],
+        fused_input_bindings=native['input_bindings'],
+        **{name:value for name, value in native.items() if name.startswith('arithmetic.')})
+    frontier = deepcopy(semantic['frontier'])
+    _unknown_features(original, 'original.features', frontier, source=True)
+    _unknown_features(fused, 'fused.features', frontier)
+    return dict(schema=SUCCESSOR_SCHEMA, schema_version=1, macro_preparation=preparation_ref,
+        candidate_binding=binding, Q=deepcopy(bounds['Q']),
+        original=dict(features=original, feature_units=_units(original)),
+        fused=dict(features=fused, feature_units=_units(fused)),
+        source_refs=[dict(artifact=demand_ref, locator='#' + path) for path in (
+            '/source_baseline', '/active', '/implementation_lowering_demand', '/boundary/Q')],
+        accounting_authority='PUBLISHED_SOURCE_BASELINE_AND_IMPLEMENTATION_LOWERING_DEMAND',
+        runtime_boundary=deepcopy(semantic['runtime_boundary']), physical=deepcopy(semantic['physical']),
+        required_hardware_cost_fields=deepcopy(semantic['required_hardware_cost_fields']), frontier=frontier)
+
+
+def verify_successor_pipeline_cost_demand(region, blueprint, report):
+    _need(type(report) is dict and (report.get('schema'), report.get('schema_version')) == (SUCCESSOR_SCHEMA, 1),
+        'versioned successor protected-entry demand required')
+    expected = derive_successor_pipeline_cost_demand(region, blueprint, report['macro_preparation'])
+    _need(semantic_sha256(expected) == semantic_sha256(report),
+        'protected-entry demand differs from the published semantic successor')
+    return expected
+
+
+__all__ = ['SCHEMA', 'SUCCESSOR_SCHEMA', 'derive_pipeline_demand', 'verify_pipeline_demand',
+    'derive_successor_pipeline_cost_demand', 'verify_successor_pipeline_cost_demand']

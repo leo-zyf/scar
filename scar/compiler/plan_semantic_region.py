@@ -1,17 +1,17 @@
-"""Plan an actual semantic successor and bind its existing C++ lowering.
+"""Plan the cost-selected semantic graph and bind its existing C++ lowering.
 
-This is a source-admitted planning overlay, not a new graph or codegen family.
-Physical obligations remain independent of time. An explicit native validation
-build does not obtain deployment authority from a logical schedule.
+Physical obligations, logical planning, explicit native validation, and
+deployment authority are independently recorded.
 """
 import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
+import inspect
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import problem_document, digest, validate_problem
@@ -43,15 +43,86 @@ def _write(path, value):
     return artifact_reference(path, value['schema'])
 
 
-def _derive(parent, *, logical_analysis):
+def _forward_context(parent, model_reference):
+    from scar.compiler.model_pipeline_cost import check
+    from scar.compiler.semantic_revision import _selection
+
+    model, context = check(model_reference, include_macro_context=True)
+    if context is None or model['macro_preparation'] != parent:
+        raise ValueError('forward model must replay the same macro preparation')
+    saved, _, _, blueprint, _ = context
+    candidate = model['candidate_binding']
+    if (candidate['candidate_revision'] != saved['files']['candidate_revision']
+            or candidate['candidate_demand'] != saved['files']['candidate_demand']):
+        raise ValueError('forward model must use the published candidate graph and demand')
+    revision = read_artifact(candidate['candidate_revision'])
+    demand = read_artifact(candidate['candidate_demand'])
+    if (revision['decision'] != 'REWRITE'
+            or revision['after_revision'] != candidate['graph_revision']
+            or semantic_sha256(revision) != candidate['semantic_revision_sha256']
+            or demand['graph_revision'] != revision['after_revision']
+            or demand['implementation_lowering_demand']['plan_sha256']
+                != candidate['optimized_plan_sha256']
+                or candidate['optimized_plan_sha256'] != blueprint['optimized_plan_sha256']):
+        raise ValueError('forward cost differs from the actual candidate graph or lowering')
+    pass_report = read_artifact(model['files']['pass_report'])
+    selection, alternative, rewrite = _selection(pass_report['optimization_selection'])
+    if (model['decision'] != pass_report['decision'] or
+            (rewrite and (alternative.delta.as_dict() != revision['delta'] or
+                {key: value for key, value in selection.as_dict().items() if key != 'reason'} !=
+                {key: value for key, value in revision['selection'].items() if key != 'reason'}))):
+        raise ValueError('cost pass selects a different semantic rewrite')
+    binding = dict(model=model_reference, pass_report=model['files']['pass_report'],
+        decision=model['decision'], candidate_revision=candidate['candidate_revision'],
+        candidate_demand=candidate['candidate_demand'])
+    return context, pass_report, binding
+
+
+def _retain_original(saved, pipeline, report, *, output, reference):
+    """Reuse the parent before graph if newer cost evidence retracts a rewrite."""
+    from scar.compiler.project_pipeline_temporal import open_temporal_inputs
+    from scar.compiler.semantic_revision import _successor
+
+    original = read_artifact(saved['files']['semantic_revision'])['files']
+    with open_temporal_inputs(saved['inputs'], include_source=True) as (*_, values, _raw):
+        _, _, revision, _, _ = _successor(pipeline, report['optimization_selection'],
+            values, original['before'], None)
+    revision['files'] = dict(before=original['before'], after=original['before'], body=None,
+        before_analysis=original['before_analysis'], after_analysis=original['before_analysis'])
+    if output is not None:
+        reference = _write(output/'kept-revision.json', revision)
+    elif read_artifact(reference) != revision:
+        raise ValueError('new KEEP must retain the original source graph from the macro input')
+    return reference
+
+
+def _derive(parent, *, logical_analysis, model_reference=None, output=None, kept_revision=None):
     from scar.compiler.macro_pipeline import check
     from scar.optimization.semantic_region_demand import derive_semantic_region_demand
     from scar.optimization.region_implementation import project_region_implementation
 
-    saved, pipeline, region, blueprint, report = check(parent)
+    cost_binding = None
+    if model_reference is None:
+        saved, pipeline, region, blueprint, report = check(parent)
+        original_report = report
+    else:
+        context, report, cost_binding = _forward_context(parent, model_reference)
+        saved, pipeline, region, blueprint, original_report = context
+    if output is not None:
+        output.mkdir(parents=True)
     revision_ref = saved['files']['semantic_revision']
+    if cost_binding is not None:
+        if report['decision'] == 'REWRITE':
+            revision_ref = cost_binding['candidate_revision']
+        elif original_report['decision'] == 'REWRITE':
+            revision_ref = _retain_original(saved, pipeline, report,
+                output=output, reference=kept_revision)
     revision = read_artifact(revision_ref)
-    demand = derive_semantic_region_demand(revision, pipeline, report['optimization_selection'], blueprint)
+    demand = (read_artifact(cost_binding['candidate_demand'])
+        if cost_binding is not None and report['decision'] == 'REWRITE' else
+        derive_semantic_region_demand(revision, pipeline,
+            (original_report if revision_ref == saved['files']['semantic_revision']
+                else report)['optimization_selection'], blueprint))
     problem = project_region_implementation(region, blueprint, report, logical_analysis=logical_analysis)
     if len(problem.operations) != 1 or problem.operations[0].predecessors or problem.data_edges:
         raise ValueError('complete selected source region must project as one entry operation')
@@ -59,6 +130,8 @@ def _derive(parent, *, logical_analysis):
         semantic_revision=revision_ref, graph=revision['files']['after'],
         graph_revision=revision['after_revision'], root=revision['root'],
         selected_oir=deepcopy(revision['selection']), demand_sha256=semantic_sha256(demand))
+    if cost_binding is not None:
+        binding['forward_cost'] = cost_binding
     old = problem.operations[0]
     parameters = deepcopy(old.options[0].parameters)
     parameters.update(semantic_successor=binding,
@@ -76,18 +149,19 @@ def _derive(parent, *, logical_analysis):
     problem = validate_problem(replace(problem, source_refs=problem.source_refs+(binding,), operations=(operation,)))
     if problem_document(problem)['target'] != blueprint['target']:
         raise ValueError('successor planning lost the original hardware snapshot')
-    return saved, pipeline, region, blueprint, report, revision, demand, problem
+    return pipeline, region, blueprint, report, revision_ref, revision, demand, problem, cost_binding
 
 
-def _metadata(parent, *, logical_analysis, max_seconds, files, execution, problem):
-    return dict(schema=SCHEMA, schema_version=1, macro_preparation=parent,
+def _metadata(parent, *, logical_analysis, max_seconds, files, execution, problem, cost_binding):
+    return dict(schema=SCHEMA, schema_version=2, macro_preparation=parent,
         logical_analysis=logical_analysis, max_seconds=max_seconds, files=files,
         problem_sha256=digest(problem), solver_status=execution['status'], producer_pins=_pins(),
         actual_semantic_successor_consumed=True, old_call_schedule_reused=False,
         target_hardware=problem_document(problem)['target'],
         physical_feasibility_proven=False, execution_authorized=False,
         native_build_qualification='EXPLICIT_GUARDED_VALIDATION_ONLY',
-        performance_measured=False, deployment_authorized=False, default_backend='NO_OP')
+        performance_measured=False, deployment_authorized=False, default_backend='NO_OP',
+        forward_cost=cost_binding)
 
 
 def _native_metadata(artifact_ref, blueprint):
@@ -157,12 +231,14 @@ def _native_metadata(artifact_ref, blueprint):
     return artifact_reference(manifest, operator['schema'])
 
 
-def _native_binding(artifact_ref, blueprint, revision, demand, problem, execution):
+def _native_binding(artifact_ref, blueprint, revision_ref, revision, demand, problem, execution,
+        *, cost_binding, study_only):
     operator_ref = _native_metadata(artifact_ref, blueprint)
     lowering = demand['implementation_lowering_demand']
     if semantic_sha256(blueprint['optimized_plan']) != lowering['plan_sha256']:
         raise ValueError('native body is not the demand-qualified optimized lowering')
-    return dict(schema='scar.semantic-region-native-binding', schema_version=1,
+    return dict(schema='scar.semantic-region-native-binding', schema_version=2,
+        semantic_revision=revision_ref, forward_cost=cost_binding, study_only=study_only,
         graph_revision=revision['after_revision'], root=revision['root'],
         semantic_graph=revision['files']['after'], raw_semantic_body=revision['files']['body'],
         selected_oir=revision['selection'], demand_sha256=semantic_sha256(demand),
@@ -173,6 +249,7 @@ def _native_binding(artifact_ref, blueprint, revision, demand, problem, executio
         cpp_standard='c++20', operator_abi_version=1,
         execution=deepcopy(blueprint['execution']),
         planning_problem_sha256=digest(problem), planning_status=execution['status'],
+        planning_problem_is_candidate=not study_only,
         unresolved_resources_retained=True, logical_schedule_authorizes_native=False,
         cold_verification='MANIFEST_BYTES_PLAN_AND_CPP_ONLY_NO_CDLL_OR_ABI_GETTER',
         runtime_abi_admission_performed_by_cold_check=False,
@@ -181,7 +258,7 @@ def _native_binding(artifact_ref, blueprint, revision, demand, problem, executio
 
 
 def _build(preparation, decision, revision_ref, native, binding, compile_validation, status):
-    return dict(schema=BUILD, schema_version=1, preparation=preparation,
+    return dict(schema=BUILD, schema_version=2, preparation=preparation,
         decision=decision, semantic_revision=revision_ref,
         native_artifact=native, native_binding=binding, native_compiled=native is not None,
         native_library_loaded_at_build=native is not None,
@@ -191,38 +268,53 @@ def _build(preparation, decision, revision_ref, native, binding, compile_validat
         deployment_authorized=False, default_backend='NO_OP')
 
 
-def prepare(parent, out, *, logical_analysis=False, max_seconds=30, compile_validation=False):
+def _native_subject(revision_ref, revision, demand, cost_binding):
+    if revision['decision'] == 'REWRITE':
+        return revision_ref, revision, demand
+    reference = cost_binding['candidate_revision']
+    return reference, read_artifact(reference), read_artifact(cost_binding['candidate_demand'])
+
+
+def prepare(parent, out, *, logical_analysis=False, max_seconds=30, compile_validation=False,
+        forward_model=None):
     from scar.compiler.macro_pipeline import SCHEMA as PARENT
+    from scar.compiler.model_pipeline_cost import SCHEMA as COST
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
 
     reference = _reference(parent, PARENT)
+    model = None if forward_model is None else _reference(forward_model, COST)
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh semantic region planning output required')
-    saved, pipeline, region, blueprint, report, revision, demand, problem = _derive(
-        reference, logical_analysis=logical_analysis)
+    if type(compile_validation) is not bool:
+        raise ValueError('native validation compilation must be explicitly selected')
+    pipeline, _, blueprint, report, revision_ref, revision, demand, problem, cost_binding = _derive(
+        reference, logical_analysis=logical_analysis, model_reference=model, output=directory)
     execution = construct_implementations(problem, max_seconds=max_seconds)
     verification = verify_execution_plan(problem, execution) if execution['selected'] else None
-    directory.mkdir(parents=True)
-    files = dict(demand=_write(directory/'demand.json', demand),
+    study_only = report['decision'] == 'KEEP'
+    reuse_demand = cost_binding is not None and not study_only
+    files = dict(demand=(cost_binding['candidate_demand'] if reuse_demand else
+            _write(directory/'demand.json', demand)),
         problem=_write(directory/'problem.json', problem_document(problem)),
         execution_plan=_write(directory/'execution-plan.json', execution))
     if verification is not None:
         files['schedule_verification'] = _write(directory/'schedule-verification.json',
             dict(schema='scar.semantic-region-schedule-verification', schema_version=1, **verification))
     metadata = _metadata(reference, logical_analysis=logical_analysis, max_seconds=max_seconds,
-        files=files, execution=execution, problem=problem)
+        files=files, execution=execution, problem=problem, cost_binding=cost_binding)
     preparation = _write(directory/'preparation.json', metadata)
     native = binding = None
-    if compile_validation and report['decision'] == 'REWRITE':
+    if compile_validation and (not study_only or cost_binding is not None):
         from scar.compiler.pipeline_fusion_delivery import build_fusion_blueprint
         artifact = build_fusion_blueprint(pipeline, blueprint, directory/'native')
         native = artifact_reference(artifact.directory/'artifact.json', artifact.report['schema'])
         binding = _write(directory/'native-binding.json',
-            _native_binding(native, blueprint, revision, demand, problem, execution))
-    result = _build(preparation, report['decision'], saved['files']['semantic_revision'],
-        native, binding, compile_validation, execution['status'])
+            _native_binding(native, blueprint, *_native_subject(revision_ref, revision, demand,
+                cost_binding), problem, execution, cost_binding=cost_binding, study_only=study_only))
+    result = _build(preparation, report['decision'], revision_ref, native, binding,
+        compile_validation, execution['status'])
     _write(directory/'result.json', result)
     return result
 
@@ -231,13 +323,18 @@ def check(result):
     reference = _reference(result, BUILD)
     build = read_artifact(reference)
     saved = read_artifact(build['preparation'])
-    if ((build.get('schema'), build.get('schema_version')) != (BUILD, 1)
-            or (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 1)
+    if ((build.get('schema'), build.get('schema_version')) != (BUILD, 2)
+            or (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 2)
             or saved['producer_pins'] != _pins()):
         raise ValueError('semantic region planning version or producer differs')
-    parent, pipeline, region, blueprint, report, revision, demand, problem = _derive(
-        saved['macro_preparation'], logical_analysis=saved['logical_analysis'])
+    model = None if saved['forward_cost'] is None else saved['forward_cost']['model']
+    pipeline, region, blueprint, report, revision_ref, revision, demand, problem, cost_binding = _derive(
+        saved['macro_preparation'], logical_analysis=saved['logical_analysis'],
+        model_reference=model, kept_revision=build['semantic_revision'])
     files = saved['files']
+    study_only = report['decision'] == 'KEEP'
+    if cost_binding is not None and not study_only and files['demand'] != cost_binding['candidate_demand']:
+        raise ValueError('selected planning demand must reference the costed candidate demand')
     if read_artifact(files['demand']) != demand or read_artifact(files['problem']) != problem_document(problem):
         raise ValueError('successor demand or implementation problem differs from source replay')
     execution = read_artifact(files['execution_plan'])
@@ -254,39 +351,62 @@ def check(result):
                 {k:v for k,v in expected.items() if k != 'elapsed_seconds'}):
             raise ValueError('unresolved construction differs from the retained problem')
     if saved != _metadata(saved['macro_preparation'], logical_analysis=saved['logical_analysis'],
-            max_seconds=saved['max_seconds'], files=files, execution=execution, problem=problem):
+            max_seconds=saved['max_seconds'], files=files, execution=execution, problem=problem,
+            cost_binding=cost_binding):
         raise ValueError('successor planning summary differs')
-    if build != _build(build['preparation'], report['decision'], parent['files']['semantic_revision'],
+    if build != _build(build['preparation'], report['decision'], revision_ref,
             build['native_artifact'], build['native_binding'], build['compile_validation_requested'], execution['status']):
         raise ValueError('successor build lost its source selection or qualification')
+    requested = build['compile_validation_requested']
+    if (type(requested) is not bool or
+            (build['native_artifact'] is not None) != (requested and (not study_only or cost_binding is not None))):
+        raise ValueError('candidate exists only for an explicit source-qualified validation build')
     if build['native_artifact'] is not None:
-        if report['decision'] != 'REWRITE' or build['compile_validation_requested'] is not True:
-            raise ValueError('native build requires an explicitly requested source rewrite validation')
         if read_artifact(build['native_binding']) != _native_binding(
-                build['native_artifact'], blueprint, revision, demand, problem, execution):
+                build['native_artifact'], blueprint, *_native_subject(revision_ref, revision, demand,
+                    cost_binding), problem, execution, cost_binding=cost_binding, study_only=study_only):
             raise ValueError('native artifact differs from the actual semantic successor lowering')
     elif build['native_binding'] is not None:
         raise ValueError('native binding exists without an artifact')
     return build, pipeline, region, blueprint, report, revision, demand, problem, execution
 
 
+def _module_binding(module, pipeline):
+    name = pipeline.source.qualname
+    if type(module) is not ModuleType or '.' in name:
+        raise ValueError('direct source module function required for controlled validation')
+    return name, vars(module)[name]
+
+
+def _trial(original, build, region, blueprint, report, *, exclusive_inputs, allow_study=False):
+    if build['native_artifact'] is None:
+        raise ValueError('explicit validation trial requires a bound native artifact')
+    from scar.codegen.fused_pipeline import load
+    from scar.compiler.pipeline_fusion_delivery import (
+        _guarded_fusion_entry, select_fusion_callable,
+    )
+
+    if build['decision'] != 'REWRITE' and not allow_study:
+        raise ValueError('a cost-KEEP candidate may only run isolated validation')
+    artifact = load(Path(build['native_artifact']['uri']).parent)
+    if build['decision'] == 'REWRITE':
+        return select_fusion_callable(original, report, artifact=artifact, trial=True,
+            exclusive_inputs=exclusive_inputs, region_document=region, blueprint=blueprint)
+    # The public call reaches here only after replaying source, candidate graph,
+    # demand, cost and native binding. KEEP remains the active selection.
+    return _guarded_fusion_entry(original, artifact, blueprint,
+        exclusive_inputs=exclusive_inputs)
+
+
 @contextmanager
 def install(module, result, *, trial=False, exclusive_inputs=False):
-    """Install the checked candidate temporarily; default execution is original."""
+    """Install an explicitly trialed REWRITE temporarily; KEEP preserves Python."""
     build, pipeline, region, blueprint, report, *_ = check(result)
-    name = pipeline.source.qualname
-    if '.' in name:
-        raise ValueError('direct source module function required for controlled installation')
-    original = vars(module)[name]
-    selected = original
-    if trial and build['decision'] == 'REWRITE':
-        if build['native_artifact'] is None:
-            raise ValueError('explicit validation trial requires a bound native artifact')
-        from scar.codegen.fused_pipeline import load
-        from scar.compiler.pipeline_fusion_delivery import select_fusion_callable
-        artifact = load(Path(build['native_artifact']['uri']).parent)
-        selected = select_fusion_callable(original, report, artifact=artifact, trial=True,
-            exclusive_inputs=exclusive_inputs, region_document=region, blueprint=blueprint)
+    name, original = _module_binding(module, pipeline)
+    if not trial or build['decision'] == 'KEEP':
+        yield original
+        return
+    selected = _trial(original, build, region, blueprint, report, exclusive_inputs=exclusive_inputs)
     setattr(module, name, selected)
     try:
         yield selected
@@ -294,9 +414,59 @@ def install(module, result, *, trial=False, exclusive_inputs=False):
         setattr(module, name, original)
 
 
+def validate_call(module, result, args=(), kwargs=None, *, exclusive_inputs=False):
+    """Compare one original call against its bound C++ candidate without installation."""
+    if exclusive_inputs is not True:
+        raise ValueError('controlled validation requires explicit exclusive inputs')
+    import numpy as np
+
+    reference = _reference(result, BUILD)
+    build, pipeline, region, blueprint, report, *_ = check(reference)
+    _, original = _module_binding(module, pipeline)
+    kwargs = {} if kwargs is None else kwargs
+    bound = inspect.signature(original).bind(*args, **kwargs)
+    bound.apply_defaults()
+    values = [bound.arguments[name] for name in pipeline.parameters]
+    if any(type(value) is not np.ndarray or value.dtype != np.float64
+            or value.shape != tuple(blueprint['input_shapes'][name]) or not value.flags.c_contiguous
+            for name, value in zip(pipeline.parameters, values)):
+        raise ValueError('controlled validation requires the exact modeled ndarray inputs')
+    selected = _trial(original, build, region, blueprint, report,
+        exclusive_inputs=exclusive_inputs, allow_study=True)
+
+    def input_digests():
+        return tuple(sha256(memoryview(value)).digest() for value in values)
+
+    before = input_digests()
+    baseline = original(*args, **kwargs)
+    if before != input_digests():
+        raise ValueError('original call changed input bytes under its read-only contract')
+    candidate = selected(*args, **kwargs)
+    inputs_unchanged = before == input_digests()
+    matching_layout = (type(baseline) is np.ndarray and type(candidate) is np.ndarray
+        and baseline.shape == candidate.shape and baseline.dtype == candidate.dtype == np.float64
+        and baseline.flags.c_contiguous and candidate.flags.c_contiguous)
+    bitwise_equal = matching_layout and np.array_equal(baseline.view(np.uint8), candidate.view(np.uint8))
+    fresh_output = (matching_layout and baseline is not candidate
+        and not np.shares_memory(baseline, candidate)
+        and all(output is not value and not np.shares_memory(output, value)
+            for output in (baseline, candidate) for value in values))
+    stats = selected.scar_stats
+    return dict(schema='scar.semantic-region-call-validation', schema_version=1,
+        build=reference, native_binding=build['native_binding'],
+        decision=build['decision'], native_calls=stats['native_calls'],
+        fallback_calls=stats['fallback_calls'], fallback_reasons=deepcopy(stats['reasons']),
+        exact_output_bytes_match=bitwise_equal, inputs_unchanged=inputs_unchanged, fresh_output=fresh_output,
+        validated=(bool(bitwise_equal and inputs_unchanged and fresh_output)
+            and stats['native_calls'] == 1 and stats['fallback_calls'] == 0),
+        scope='ONE_GUARDED_SOURCE_REGION_CALL_UNDER_EXPLICIT_EXCLUSIVE_INPUT_ASSUMPTION',
+        performance_measured=False, deployment_authorized=False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--macro-preparation'); parser.add_argument('--out')
+    parser.add_argument('--forward-model', help='checked forward cost of this macro candidate')
     parser.add_argument('--logical-analysis', action='store_true')
     parser.add_argument('--max-seconds', type=float, default=30)
     parser.add_argument('--compile-validation', action='store_true')
@@ -305,12 +475,14 @@ def main(argv=None):
     if args.check:
         build, *_ = check(args.check)
         result = dict(source_and_successor_replayed=True, native_binding_checked=build['native_compiled'],
-            planning_status=build['planning_status'], deployment_authorized=False)
+            decision=build['decision'], planning_status=build['planning_status'],
+            deployment_authorized=False)
     elif not args.macro_preparation or not args.out:
         parser.error('--macro-preparation and --out are required')
     else:
         result = prepare(args.macro_preparation, args.out, logical_analysis=args.logical_analysis,
-            max_seconds=args.max_seconds, compile_validation=args.compile_validation)
+            max_seconds=args.max_seconds, compile_validation=args.compile_validation,
+            forward_model=args.forward_model)
     print(json.dumps(result, sort_keys=True)); return 0
 
 
