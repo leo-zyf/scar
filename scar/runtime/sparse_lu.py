@@ -4,28 +4,25 @@ import ctypes
 from pathlib import Path
 from threading import Lock
 from time import perf_counter_ns
-from types import BuiltinFunctionType
+from types import BuiltinFunctionType, ModuleType
 from weakref import finalize
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.runtime.sparse_lu_native import Timings as _Timings
+from scar.runtime.sparse_lu_native import SCHEMA, bind_symbolic_abi, read_native_manifest, validate_native_elf
 
 
-class _Timings(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_double) for name in ('ordering_s', 'etree_s', 'factor_s', 'solve_s')]
-
-    def measurements(self):
-        return {name: getattr(self, name) for name, _ in self._fields_}
+_TEMPLATE = Path(__file__).resolve().parents[1] / 'codegen' / 'sparse_lu_v1.cpp.in'
 
 
 class _Solver:
-    def __init__(self, library, provider, budget):
+    def __init__(self, library, original, budget):
         import numpy as np
         from numpy._core import _multiarray_umath
 
-        self.provider, self.base = provider, provider.gssv
+        self.provider, self.base = original.__self__, original
         self.ndarray, self.empty, self.isfinite = np.ndarray, np.empty, np.isfinite
-        if (type(self.base) is not BuiltinFunctionType or self.base.__self__ is not provider
-                or self.base.__name__ != 'gssv' or self.empty is not _multiarray_umath.empty
+        if (self.empty is not _multiarray_umath.empty
                 or type(self.empty) is not BuiltinFunctionType or self.isfinite is not _multiarray_umath.isfinite
                 or type(self.isfinite) is not np.ufunc):
             raise ValueError('original SuperLU and NumPy provider bindings required')
@@ -35,27 +32,13 @@ class _Solver:
             hits=0, structure_misses=0, numeric_failures=0, provider_mismatches=0, closed=False,
             analysis=None, last_solve=None, initial_reference_ns=None)
         self.disabled = False
-        pointer, integer = ctypes.c_void_p, ctypes.c_int
-        metrics, size = ctypes.POINTER(_Timings), ctypes.c_size_t
-        run_args = [integer, integer, pointer, pointer, pointer, pointer, pointer, metrics]
-        library.scar_superlu_abi_v1.restype = integer
-        if library.scar_superlu_abi_v1() != 1:
-            raise ValueError('SuperLU study ABI differs')
-        self.create = library.scar_superlu_symbolic_v1
-        self.create.argtypes = [integer, integer, pointer, pointer, size, metrics]
-        self.create.restype = pointer
-        self.bytes = library.scar_superlu_symbolic_bytes_v1
-        self.bytes.argtypes, self.bytes.restype = [pointer], size
-        self.destroy = library.scar_superlu_symbolic_destroy_v1
-        self.destroy.argtypes, self.destroy.restype = [pointer], None
-        self.solve = library.scar_superlu_symbolic_solve_v1
-        self.solve.argtypes, self.solve.restype = [pointer, *run_args], integer
-        self.control = library.scar_superlu_reference_v1
-        self.control.argtypes, self.control.restype = run_args, integer
+        abi = bind_symbolic_abi(library)
+        self.create, self.solve = abi.create, abi.solve
+        self.bytes, self.destroy, self.control = abi.bytes, abi.destroy, abi.control
         self.f64, self.i32 = np.dtype('float64'), np.dtype('int32')
 
     def _arguments(self, args, options):
-        if (self.provider.gssv is not self.base or type(args) is not tuple or len(args) != 7
+        if (vars(self.provider).get('gssv') is not self.base or type(args) is not tuple or len(args) != 7
                 or type(options) is not dict or len(options) != 1
                 or any(type(key) is not str for key in options) or 'ColPerm' not in options
                 or options['ColPerm'] is not None):
@@ -153,25 +136,31 @@ class _Solver:
             self.stats['closed'] = True
 
 
-def load_symbolic_solve(native_dir, *, budget_bytes=8 * 1024 * 1024):
-    """Load a guarded diagnostic callable. None requests the original wrapper."""
-    import scipy
-    from scipy.sparse.linalg._dsolve import _superlu
-    from scar.codegen.sparse_lu import SCHEMA, SOURCE
-
+def load_symbolic_solve(native_dir, *, budget_bytes=8 * 1024 * 1024, original=None):
+    """Load against a captured carrier and artifact reference, or a diagnostic directory."""
     if type(budget_bytes) is not int or not 0 < budget_bytes < (1 << (8 * ctypes.sizeof(ctypes.c_size_t))):
         raise ValueError('positive SuperLU study memory budget required')
-    directory = Path(native_dir).resolve()
-    manifest = read_artifact(artifact_reference(directory / 'artifact.json', SCHEMA))
-    if ((manifest['schema_version'], manifest['abi_version'], manifest['language'], manifest['scope'])
-            != (1, 1, 'c++20', 'EXPLICIT_STUDY')
-            or manifest['provider_version'] != scipy.__version__
-            or manifest['library']['uri'] != str(directory / 'sparse_lu.so')
+    reference = native_dir if type(native_dir) is dict else artifact_reference(
+        Path(native_dir).resolve() / 'artifact.json', SCHEMA)
+    manifest = read_native_manifest(reference)
+    directory = Path(reference['uri']).parent
+    if original is None:
+        import scipy
+        from scipy.sparse.linalg._dsolve import _superlu
+
+        if manifest['provider_version'] != scipy.__version__:
+            raise ValueError('SuperLU diagnostic provider version differs')
+        original = _superlu.gssv
+    provider = original.__self__ if type(original) is BuiltinFunctionType else None
+    if (type(provider) is not ModuleType
+            or original.__name__ != 'gssv' or vars(provider).get('gssv') is not original
+            or type(vars(provider).get('__file__')) is not str
+            or manifest['wheel'] != artifact_reference(provider.__file__, 'scar.provider-binary')
             or manifest['source']['uri'] != str(directory / 'sparse_lu.cpp')
-            or manifest['template'] != artifact_reference(SOURCE, 'scar.cpp-source')
-            or manifest['wheel'] != artifact_reference(_superlu.__file__, 'scar.provider-binary')
-            or read_artifact(manifest['source'], json_document=False) != SOURCE.read_bytes()):
+            or manifest['template'] != artifact_reference(_TEMPLATE, 'scar.cpp-source')
+            or manifest['source']['sha256'] != manifest['template']['sha256']):
         raise ValueError('SuperLU study artifact or provider differs')
-    for reference in (*manifest['vendor'], manifest['configuration'], manifest['blas'], manifest['library']):
-        read_artifact(reference, json_document=False)
-    return _Solver(ctypes.PyDLL(manifest['library']['uri']), _superlu, budget_bytes)
+    for dependency in (*manifest['vendor'], manifest['configuration'], manifest['source']):
+        read_artifact(dependency, json_document=False)
+    validate_native_elf(manifest)
+    return _Solver(ctypes.PyDLL(manifest['library']['uri']), original, budget_bytes)

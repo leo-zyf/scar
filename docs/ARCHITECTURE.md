@@ -48,7 +48,7 @@ CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保�
 
 C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间选择共用 `selected_stateful_lowering`，再经原 `ExecutionRecipe` / task graph进入既有C++20代码生成；算子与stateful ABI均为v1。接口未知时保留原执行。
 
-稀疏求解目前有一个绑定 SciPy 1.18.1 的算子适配。SCAR 识别工作负载实际绑定的 SuperLU 调用，规划符号步骤复用和跨轮调度，构建包含 SuperLU 源码的 C++20 产物并链接同一 OpenBLAS。原 SciPy 绑定用于比对及回退。此路径的构建与准入仍依赖该提供方的版本和 ABI。独立的 `cpu-cost` 可选组使用 `scipy.optimize` 拟合成本与求线性规划界限。
+稀疏求解适配面向 SciPy 1.18.1 的 SuperLU 算子合同。前端记录原调用与提供方 ELF，IR 保留符号状态和每轮数值输入，SCAR 后端根据该记录构建 C++20 产物并链接同一 OpenBLAS。运行端从原调用点接收经验证的 callable，供首次比对及回退。原生 ABI 装载只依赖产物与链接库，串行调用方和隔离 worker 共用声明。独立的 `cpu-cost` 可选组使用 `scipy.optimize` 拟合成本与求线性规划界限。
 
 运行产物按原合同区分：普通数组caller、DIRECT/COMPOSITE whole-loop、stateful事务区域。不同profile不互相强制转换，不因表面输入相似而借用证明。
 `final_entry_capsule`为loop/stateful提供同一个最终准入核心，profile adapter复用原compact loader、ELF与guard。构建侧固定payload和源码ledger，4KiB slot保成本/验证角色，运行端不重放庞大源码图或benchmark原始证据。

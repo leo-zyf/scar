@@ -79,12 +79,17 @@ def _observe_inputs(entry, recipe, prepare):
 class _OrderedOffers:
     def __init__(self, recipe, selection, serial_factory, allowed):
         self.recipe, self.selection, self.serial_factory, self.allowed = recipe, selection, serial_factory, allowed
+        self.original = None
         self.serial = self.pool = self.snapshot = None
         self.serial_unavailable = False
         self.pending = deque()
         self.next_index = 0
         self.started = False
         self.stats = dict(inputs_captured=False, matched=0, serial_calls=0, rejected=0, peak_window=0)
+
+    def activate(self, original):
+        self.original = original
+        return self
 
     def capture(self, values):
         try:
@@ -104,7 +109,7 @@ class _OrderedOffers:
             return
         policy = self.selection['workers']
         with _affinity(self.allowed):
-            self.pool = load_parallel_symbolic_solve(Path(self.selection['native']['uri']).parent,
+            self.pool = load_parallel_symbolic_solve(self.selection['native'], original=self.original,
                 worker_cpu_ids=policy['cpu_ids'], address_space_limit=policy['address_space_limit_bytes'],
                 budget_bytes=self.selection['symbolic_budget_bytes'])
         if self.pool.prepare(args, options):
@@ -142,7 +147,7 @@ class _OrderedOffers:
             return result
         if self.serial is None and not self.serial_unavailable:
             try:
-                self.serial = self.serial_factory()
+                self.serial = self.serial_factory(self.original)
             except (OSError, ImportError, TypeError, KeyError, ValueError, AttributeError):
                 self.serial_unavailable = True
         if self.serial is None:
@@ -221,7 +226,7 @@ def run(entry, argv, *, selection=None, sha256=None, exclusive=False, study_para
             if scope is not None and try_parallel:
                 recipe = read_artifact(plan['recipe'])
                 offers = _OrderedOffers(recipe, plan, scope.loader, broad)
-                scope.loader = lambda: offers
+                scope.loader = offers.activate
                 try:
                     with _observe_inputs(entry, recipe, offers.capture):
                         result = _execute(entry, argv, scope, reason)

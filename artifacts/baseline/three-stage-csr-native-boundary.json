@@ -1,0 +1,228 @@
+{
+  "implemented": {
+    "abi_helper": {
+      "schema": "scar.python-source",
+      "sha256": "cb00c2b038bc4c98dcdcad84492d3f1118d002de81d8980b72deb1dce30b42df",
+      "size_bytes": 2429,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/sparse_lu_native.py"
+    },
+    "abi_version": 1,
+    "blas": {
+      "schema": "scar.provider-binary",
+      "sha256": "2a5b4c1a6311873c59132b2ceaaf3c26258a17350b7cd27ea8782a47e3322981",
+      "size_bytes": 25094609,
+      "uri": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/scipy.libs/libscipy_openblas-5f890258.so"
+    },
+    "build": {
+      "schema": "scar.provider-isolated-plan-build",
+      "sha256": "065820aa474182be0ba298ad905acbb809e9d9670429a8c84ddce19312b74bba",
+      "size_bytes": 691,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/isolated-build.json"
+    },
+    "cpp_source": {
+      "schema": "scar.cpp-source",
+      "sha256": "f109718e392a73262b021df76fbfeb764ba37b0c644a6a77e4da501b27177d0b",
+      "size_bytes": 10299,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/plan/native/sparse_lu.cpp"
+    },
+    "language": "C++20",
+    "native_manifest": {
+      "schema": "scar.superlu-symbolic-study",
+      "sha256": "7d59918da42ba0ae5c2e9a211cfa99aec91a5f86f378e2a32dd8e9b81ef7470c",
+      "size_bytes": 15719,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/plan/native/artifact.json"
+    },
+    "same_elf_as_previous": true
+  },
+  "inferred": {
+    "parallel_cost": {
+      "schema": "scar.sparse-parallel-cost",
+      "sha256": "ed7628a65c68fada67aa46f01e7576bf27522a2b2354e3a5ca3732a756e43e1b",
+      "size_bytes": 9279,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-parallel/calibration/result.json"
+    },
+    "parallel_section_ns": 2160990874,
+    "parallel_section_upper_ns": 4078586419,
+    "serial_cost": {
+      "schema": "scar.sparse-symbolic-paired-cost",
+      "sha256": "ce49b5e186c7d19e0d9c0adf03184f9866f2af7315c1bb81c06ccb4fd46a73c0",
+      "size_bytes": 7437,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/cost/result.json"
+    },
+    "serial_model_ns": {
+      "native_upper": 5743268150,
+      "original_lower": 6589616016
+    }
+  },
+  "observed": {
+    "entry": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    },
+    "original_carrier": {
+      "schema": "scar.native-library-file",
+      "sha256": "4c6e5ce83997e8d086b9d3d65e697f53051610081589d69bd1629cd0d306df7c",
+      "size_bytes": 436617,
+      "uri": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/scipy/sparse/linalg/_dsolve/_superlu.cpython-314-x86_64-linux-gnu.so"
+    },
+    "original_f4_source": {
+      "schema": "scar.sparse-solve-scope",
+      "sha256": "1d21162af616895aa7c6833a67227a4567f48c5fd804c392962e64bcf4967974",
+      "size_bytes": 42725,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-solve-scope/source/scope-solve.json"
+    },
+    "parallel_ab": {
+      "affinity": [
+        42,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "measured_pairs": 3,
+      "metrics": {
+        "parallel": {
+          "max_ns": 2869680053,
+          "median_ns": 2866412030,
+          "min_ns": 2845547080,
+          "samples_ns": [
+            2869680053,
+            2866412030,
+            2845547080
+          ],
+          "variance_ns2": 171404416441626.34
+        },
+        "serial": {
+          "max_ns": 6958704794,
+          "median_ns": 6948661120,
+          "min_ns": 6939614742,
+          "samples_ns": [
+            6948661120,
+            6958704794,
+            6939614742
+          ],
+          "variance_ns2": 91190404616644
+        }
+      },
+      "reference": {
+        "schema": "scar.sparse-parallel-entry-validation",
+        "sha256": "87c80e9eb7629ea3e114895a0bfd40b126cfcf86b26626fba11023b13603fcbf",
+        "size_bytes": 6512,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-parallel/entry-ab/result.json"
+      },
+      "speedup": 2.4241668843400714,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+      "warmup_pairs": 1
+    },
+    "parallel_source": {
+      "schema": "scar.sparse-parallel-scope",
+      "sha256": "6c1e580b60c39cd87678b10c3121b4900d48fb8bd31c63bad4aa8e1267b5ca93",
+      "size_bytes": 279124,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-ordered/source/scope-parallel.json"
+    },
+    "serial_ab": {
+      "affinity": [
+        48
+      ],
+      "measured_pairs": 3,
+      "metrics": {
+        "native": {
+          "max_ns": 6965377640,
+          "median_ns": 6917955148,
+          "min_ns": 6896174662,
+          "samples_ns": [
+            6965377640,
+            6917955148,
+            6896174662
+          ],
+          "variance_ns2": 1252055746992457.2
+        },
+        "original": {
+          "max_ns": 8634981145,
+          "median_ns": 8634090735,
+          "min_ns": 8598276417,
+          "samples_ns": [
+            8598276417,
+            8634090735,
+            8634981145
+          ],
+          "variance_ns2": 438449210221201.3
+        }
+      },
+      "reference": {
+        "schema": "scar.sparse-solve-entry-validation",
+        "sha256": "4c4446c06062baffe84e3651efdcfda3304f9d152920747035f228e015f62c55",
+        "size_bytes": 12301,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/entry/result.json"
+      },
+      "speedup": 1.2480697764419793,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+      "warmup_pairs": 1
+    }
+  },
+  "proposed": {
+    "native_carrier_from_frontend": true,
+    "numeric_factorization_lifetime": "PER_SOLVE",
+    "ordered_parallel_workers": 8,
+    "symbolic_lifetime": "PER_ENTRY"
+  },
+  "rejected": {
+    "legacy_runtime_members_require_new_qualification": true,
+    "provider_contract": "CURRENT_SUPERLU_CSR_PROFILE",
+    "restricted_affinity_declined_before_entry": true
+  },
+  "schema": "scar.three-stage-csr-native-boundary",
+  "schema_version": 1,
+  "verified": {
+    "complete_ordered_publications": 512,
+    "exact_paired_scope": true,
+    "isolated_native_abi_probe": {
+      "schema": "scar.csr-native-probe-result",
+      "sha256": "44bc547e29f6be63d981c0eee6dbeb6a0b99b13934fbbbdb55250aa86153fca0",
+      "size_bytes": 1920,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/probe-new-elf.json"
+    },
+    "maximum_native_overlap": 8,
+    "parallel_release": {
+      "schema": "scar.sparse-parallel-entry-selection",
+      "sha256": "8df5bb8cdca16597c393b83fd540e1205c393c6fbbde4368d192b5eb011303ea",
+      "size_bytes": 6038,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-parallel/final/selection.json"
+    },
+    "parallel_runtime": {
+      "schema": "scar.sparse-parallel-entry-execution",
+      "sha256": "5f67deb52c4a27b9b0479f321250fe40c484c83579f1ec8b386c3e3975e120c5",
+      "size_bytes": 362557,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-parallel/final/selected.json"
+    },
+    "serial_release": {
+      "schema": "scar.sparse-direct-solve-launch",
+      "sha256": "5655dbc63561cc98554934dc65c5e0cc305b6b9f57f54080f7620c216f2d9008",
+      "size_bytes": 3092,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-provider-boundary/released/launch.json"
+    },
+    "worker_address_space_policy": {
+      "address_space_limit_bytes": 1073741824,
+      "cpu_ids": [
+        42,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "window": 8
+    },
+    "zero_native_fallbacks": true
+  }
+}

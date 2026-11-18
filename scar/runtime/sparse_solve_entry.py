@@ -34,18 +34,19 @@ class SparseSolveScope:
                 or self.revised.co_qualname != self.name or self.revised.co_freevars
                 or code_key(self.revised) != code['code_key']):
             raise ValueError('sealed solve callsite does not match its original boundary')
-        self.loader, self.candidate = loader, None
+        self.loader, self.candidate, self.original_carrier = loader, None, None
         self.active, self.bindings, self.frontier = True, [], []
         self.activation = dict(attempts=0, load_ns=None)
         self.kernel = None
 
-    def activate(self):
+    def activate(self, original):
         if self.activation['attempts']:
-            return self.candidate
+            return self.candidate if original is self.original_carrier else None
         self.activation['attempts'] = 1
+        self.original_carrier = original
         started = perf_counter_ns()
         try:
-            self.candidate = self.loader()
+            self.candidate = self.loader(original)
         except (OSError, ValueError, ImportError, KeyError, TypeError, AttributeError):
             self.frontier.append('SPARSE_NATIVE_PROVIDER_NOT_LOADED')
         finally:
@@ -70,7 +71,7 @@ class SparseSolveScope:
 
         def offer(carrier, args, options):
             if self.active and carrier is expected and not _observer_active():
-                candidate = self.candidate or self.activate()
+                candidate = self.candidate if self.original_carrier is expected else self.activate(expected)
                 if candidate is not None:
                     result = candidate(args, options)
                     if result is not None:
@@ -114,10 +115,10 @@ def admit(entry, argv, selection_path, expected_sha256, *, study, exclusive):
         native = selection['native']
         read_artifact(native)
 
-        def loader():
+        def loader(original):
             from scar.runtime.sparse_lu import load_symbolic_solve
 
-            return load_symbolic_solve(Path(native['uri']).parent, budget_bytes=selection['budget_bytes'])
+            return load_symbolic_solve(native, budget_bytes=selection['budget_bytes'], original=original)
 
         return SparseSolveScope(selection, loader), 'EXPLICIT_SPARSE_SOLVE_STUDY'
     except (OSError, ValueError, ImportError, TypeError, KeyError, EOFError):

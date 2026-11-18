@@ -102,18 +102,22 @@ def _problem(source, target, decomposition, budget_bytes, cost_ref=None, cost=No
         activities=activities, timing_constraints=constraints)
 
 
-def prepare(scope_path, out, *, cost_path=None, native_path=None, budget_bytes=8*1024*1024):
+def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source=None, blas=None,
+            jobs=4, budget_bytes=8*1024*1024):
     from scar.analysis.sparse_solve_scope import check_sparse_solve_scope
 
-    source_ref = artifact_reference(Path(scope_path).resolve(), SOURCE)
-    scope = check_sparse_solve_scope(source_ref)
+    if (superlu_source is None) != (blas is None) or (native_path is not None and superlu_source is not None):
+        raise ValueError('choose --native or both --superlu-source and --blas')
     if type(budget_bytes) is not int or budget_bytes <= 0:
         raise ValueError('positive native symbolic payload limit required')
+    source_ref = artifact_reference(Path(scope_path).resolve(), SOURCE)
+    scope = check_sparse_solve_scope(source_ref)
     entry = scope['entry']
     call = scope['source_call']
     source = call['source']
     original = read_artifact(source, json_document=False)
-    read_artifact(call['carrier']['library'], json_document=False)
+    carrier = call['carrier']['library']
+    read_artifact(carrier, json_document=False)
     site, code = seal_callsite(original, source['uri'], call['code_key'], call['source_span'],
         call['carrier']['name'], optimize=sys.flags.optimize)
     context = {**launch_context(entry['argv']), 'cpu_ids': entry['affinity']}
@@ -127,6 +131,19 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, budget_bytes=8
             raise ValueError('solver cost belongs to a different source or launch scope')
 
     directory = Path(out).resolve()
+    native = None
+    if native_path is not None or superlu_source is not None:
+        from scar.codegen.sparse_lu import PROVIDER_VERSION, build_symbolic_solve, validate_symbolic_solve
+
+        elf = read_artifact(scope['elf_evidence'])
+        if (elf['library'] != carrier
+                or elf['documentation']['matched_tag'] != f'scipy-v{PROVIDER_VERSION}'):
+            raise ValueError('original sparse call lacks the supported SuperLU provider version')
+        bundle = Path(native_path).resolve() if native_path is not None else directory / 'native'
+        if superlu_source is not None:
+            build_symbolic_solve(superlu_source, bundle, blas=blas, jobs=jobs, carrier=carrier)
+        native = artifact_reference(bundle / 'artifact.json', NATIVE)
+        validate_symbolic_solve(native, carrier)
     directory.mkdir(parents=True, exist_ok=True)
     source_scope = read_artifact(scope['source_scope'])
     count = source_scope['observed']['consumer_completions']
@@ -146,15 +163,13 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, budget_bytes=8
     result = dict(schema=PLAN, schema_version=1, source=source_ref,
         decomposition=decomposition, problem=problem_ref, plan=plan, cost=cost_ref,
         decision='KEEP', reason='NATIVE_SYMBOLIC_ENTRY_NOT_QUALIFIED')
-    if native_path is not None:
-        native = artifact_reference(Path(native_path).resolve()/'artifact.json', NATIVE)
-        read_artifact(native)
+    if native is not None:
         code_path = directory/'entry-code.bin'
         with code_path.open('xb') as stream:
             marshal.dump(code, stream)
         runtime = Path(__file__).resolve().parents[1]/'runtime'
         members = [artifact_reference(runtime/name, 'scar.python-source')
-                   for name in ('sparse_solve_entry.py', 'sparse_lu.py')]
+                   for name in ('sparse_solve_entry.py', 'sparse_lu.py', 'sparse_lu_native.py')]
         result['study'] = _write(directory/'selection.json', dict(schema=SELECTION, schema_version=1,
             entry=entry['source'], source=source_ref, explicit_study_only=True, decision='KEEP',
             callsite={**call, **site}, launch_context=context, native=native, budget_bytes=budget_bytes,
@@ -246,18 +261,26 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scope')
     parser.add_argument('--cost')
-    parser.add_argument('--native')
+    implementation = parser.add_mutually_exclusive_group()
+    implementation.add_argument('--native')
+    implementation.add_argument('--superlu-source')
+    parser.add_argument('--blas')
+    parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--out', required=True)
     parser.add_argument('--budget-bytes', type=int, default=8*1024*1024)
     parser.add_argument('--qualify-plan')
     parser.add_argument('--paired-cost')
     parser.add_argument('--validation')
     args = parser.parse_args(argv)
+    if bool(args.superlu_source) != bool(args.blas):
+        parser.error('--superlu-source and --blas must be supplied together')
+    if (args.native or args.superlu_source) and not args.scope:
+        parser.error('native implementation options require --scope')
     if args.qualify_plan and args.paired_cost and args.validation and not args.scope:
         output = qualify(args.qualify_plan, args.paired_cost, args.validation, args.out)
     elif args.scope and not any((args.qualify_plan, args.paired_cost, args.validation)):
         output = prepare(args.scope, args.out, cost_path=args.cost, native_path=args.native,
-            budget_bytes=args.budget_bytes)
+            superlu_source=args.superlu_source, blas=args.blas, jobs=args.jobs, budget_bytes=args.budget_bytes)
     else:
         parser.error('supply --scope or all of --qualify-plan, --paired-cost, --validation')
     print(json.dumps(output))

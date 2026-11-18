@@ -13,8 +13,10 @@ import sys
 from threading import Lock, get_ident
 from time import perf_counter_ns, thread_time_ns
 
-from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.runtime.sparse_lu import _Timings, load_symbolic_solve
+from scar.ir.execution_recipe import artifact_reference
+from scar.runtime.sparse_lu_native import (
+    SCHEMA, Timings, bind_symbolic_abi, read_native_manifest, validate_native_elf,
+)
 
 
 _MIB = 1024**2
@@ -72,10 +74,13 @@ class _Worker:
 
 
 class _ParallelSolver:
-    def __init__(self, native, cpus, limit, extra, budget):
-        self.manifest = artifact_reference(Path(native).resolve() / 'artifact.json', 'scar.superlu-symbolic-study')
-        self.serial = load_symbolic_solve(native, budget_bytes=budget)
-        self.blas = ctypes.CDLL(read_artifact(self.manifest)['blas']['uri'])
+    def __init__(self, native, cpus, limit, extra, budget, original=None):
+        from scar.runtime.sparse_lu import load_symbolic_solve
+
+        self.manifest = (native if type(native) is dict
+                         else artifact_reference(Path(native).resolve() / 'artifact.json', SCHEMA))
+        self.serial = load_symbolic_solve(self.manifest, budget_bytes=budget, original=original)
+        self.blas = ctypes.CDLL(read_native_manifest(self.manifest)['blas']['uri'])
         self.blas_threads = self.blas.scipy_openblas_get_num_threads
         if self.blas.scipy_openblas_get_parallel() != 1:
             raise ValueError('pthread OpenBLAS required in the original solve scope')
@@ -222,7 +227,7 @@ class _ParallelSolver:
 
 
 def load_parallel_symbolic_solve(native_dir, *, worker_cpu_ids, address_space_limit=None,
-        private_bytes_per_worker=64 * _MIB, budget_bytes=8 * _MIB):
+        private_bytes_per_worker=64 * _MIB, budget_bytes=8 * _MIB, original=None):
     """Load a bounded speculative pool for the admitted native CSR artifact."""
     if sys.platform != 'linux' or os.uname().machine != 'x86_64' or not os.confstr('CS_GNU_LIBC_VERSION'):
         raise ValueError('parallel SuperLU requires the audited Linux x86-64/glibc floating-control ABI')
@@ -232,7 +237,7 @@ def load_parallel_symbolic_solve(native_dir, *, worker_cpu_ids, address_space_li
             or type(private_bytes_per_worker) is not int or private_bytes_per_worker <= 0
             or address_space_limit is not None and (type(address_space_limit) is not int or address_space_limit <= 0)):
         raise ValueError('distinct available worker CPUs and positive SuperLU memory limits required')
-    return _ParallelSolver(native_dir, cpus, address_space_limit, private_bytes_per_worker, budget_bytes)
+    return _ParallelSolver(native_dir, cpus, address_space_limit, private_bytes_per_worker, budget_bytes, original)
 
 
 def _private_space_limit(limit, extra):
@@ -249,26 +254,13 @@ def _private_space_limit(limit, extra):
 
 
 def _native(manifest):
-    record = read_artifact(manifest)
-    for reference in (record['library'], record['blas']):
-        read_artifact(reference, json_document=False)
+    record = read_native_manifest(manifest)
+    validate_native_elf(record)
     blas = ctypes.CDLL(record['blas']['uri'])
     if blas.scipy_openblas_get_parallel() != 1 or blas.scipy_openblas_get_num_threads() != 1:
         raise ValueError('one-thread pthread OpenBLAS required in a sparse worker')
-    library = ctypes.CDLL(record['library']['uri'])
-    if library.scar_superlu_abi_v1() != 1:
-        raise ValueError('worker SuperLU ABI differs')
-    pointer, number = ctypes.c_void_p, ctypes.c_int
-    timing = ctypes.POINTER(_Timings)
-    create = library.scar_superlu_symbolic_v1
-    create.argtypes, create.restype = [number, number, pointer, pointer, ctypes.c_size_t, timing], pointer
-    apply = library.scar_superlu_symbolic_solve_v1
-    apply.argtypes, apply.restype = [pointer, number, number, *([pointer] * 5), timing], number
-    size = library.scar_superlu_symbolic_bytes_v1
-    size.argtypes, size.restype = [pointer], ctypes.c_size_t
-    destroy = library.scar_superlu_symbolic_destroy_v1
-    destroy.argtypes, destroy.restype = [pointer], None
-    return create, apply, size, destroy
+    abi = bind_symbolic_abi(ctypes.CDLL(record['library']['uri']))
+    return abi.create, abi.solve, abi.bytes, abi.destroy
 
 
 def _child(fd, cpu, limit, extra, budget, manifest):
@@ -280,7 +272,7 @@ def _child(fd, cpu, limit, extra, budget, manifest):
         baseline, cap = _private_space_limit(limit, extra)
         order, nnz, indices, offsets = connection.recv()
         index_buffer, offset_buffer = ctypes.create_string_buffer(indices), ctypes.create_string_buffer(offsets)
-        timing = _Timings()
+        timing = Timings()
         started = perf_counter_ns()
         handle = create(order, nnz, index_buffer, offset_buffer, budget, ctypes.byref(timing))
         if not handle:
@@ -294,7 +286,7 @@ def _child(fd, cpu, limit, extra, budget, manifest):
                 values, rhs = connection.recv()
                 data, load = ctypes.create_string_buffer(values), ctypes.create_string_buffer(rhs)
                 output = (ctypes.c_double * order)()
-                timing = _Timings()
+                timing = Timings()
                 started = perf_counter_ns()
                 cpu_started = thread_time_ns()
                 status = solve(handle, order, nnz, index_buffer, offset_buffer,
@@ -313,7 +305,7 @@ def _child(fd, cpu, limit, extra, budget, manifest):
 if __name__ == '__main__':
     descriptor, cpu_id, limit_bytes, extra_bytes, budget, path, fingerprint, length = sys.argv[1:]
     try:
-        manifest = dict(uri=path, sha256=fingerprint, size_bytes=int(length), schema='scar.superlu-symbolic-study')
+        manifest = dict(uri=path, sha256=fingerprint, size_bytes=int(length), schema=SCHEMA)
         _child(int(descriptor), int(cpu_id), int(limit_bytes), int(extra_bytes), int(budget), manifest)
     except (OSError, ValueError, EOFError, MemoryError):
         sys.exit(1)

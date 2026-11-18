@@ -84,6 +84,12 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 先用 `--scope SCOPE --native NATIVE --out STUDY` 生成试运行收据。`--qualify-plan STUDY/result.json --paired-cost COST --validation VALIDATION --out FINAL` 合并可重复核验的区域成本和完整入口对照。`python -m scar.runtime.sparse_solve_launch --launch FINAL/launch.json --launch-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 在匹配上下文时采用已发布的实现。
 
+使用 `--scope SCOPE --superlu-source SOURCE --blas ELF --out STUDY` 可由 SCAR 从源图记录直接构建同一 C++20 ABI。构建从图读取提供方 ELF 身份并检查动态链接关系。运行器按原调用点的绑定做首次比对。隔离 worker 按已封存的 ELF 和链接库装载原生 ABI。旧运行收据绑定旧适配器源码，需要用新产物和成本重新验收。
+
+新构建的 ELF 与历史产物逐字节一致。真实 512 轮入口的串行重新验收为 8.634 s → 6.918 s。另一次独立配对的串行与 8 worker 中位数为 6.949 s → 2.866 s。两组都保留原输出和错误流，正式并行 launch 验证了 512 次有序交付。记录见 `artifacts/baseline/three-stage-csr-native-boundary.json`。
+
+下一步复用 Gray–Scott 已使用的 `ExecutionRecipe`，把四个稀疏阶段、一次性与每轮状态的生命期、资源计划一起封存后交给 C++20 后端。验收要求同一任务图可从中端追到代码生成收据，阶段顺序、生命期或预算改变时由后端拒绝不匹配的降级。
+
 512 次有限元参数扫描的整程中位数从 8.649 s 降到 6.933 s，完整进程计时为 1 组热身和 3 组配对。选择收据仅适用于该源码、参数、环境和 CPU 亲和性。证据见 `artifacts/baseline/three-stage-csr-symbolic-solve.json`。
 
 ### 稀疏更新与求解的联合计划
