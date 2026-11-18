@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 数值合同与结构化简已接通。旧规划在最近舍入时把 `1.0 + 2⁻⁵³` 折成字面值，向上舍入时旧 native 静默差 1 ULP。现只静态折叠有界的整数负号、加、减、乘。浮点常量算术在 C++20 的调用方浮点环境保护内执行。四种舍入模式逐位验证通过，空数组上的标量除零进入回退。五调用的源码管线已发布融合后继图及重新推导的 use-def、静态末次使用和逻辑需求。8×8 输入的逻辑分配从 7 次降到 1 次，逻辑读写量从 8,192 B 降到 1,536 B，保持 448 次算术的操作数顺序。独立冷读验证通过，篡改需求后重新计算哈希仍被拒绝。当前执行决策为 `KEEP`，成本资格仍待闭合。另已统一 holdout 采集与验证的收益公式，之前 46.8% 的预测误差仍超出阈值。见 `artifacts/baseline/strict-fp-and-structural-fusion.json`。
+
 2026-11-18 完整入口成本已做新实测并拒绝：新增明确区分compiler adapter/compact、trial、owner与selection的成功路径协议；原ELF在canonical输入上完整调用2warm+7sample，均值919245ns。随后冻结原20%误差/5%收益政策及新模型，真实原入口2warm+7组AB/BA得单方法median(episode means)1967329→1727909.25ns（1.13856×）；预测误差46.8002%，不获资格。全部配对状态/文本/配置输出一致，36次native/0fallback。首调用与后续调用分布明显不同；scalar类型均float，不能归因整数tag或具体cache/NUMA分量，也不删除首调用。另暴露future验收器两种gain公式的浮点末位差异，该SCAR缺陷与模型拒绝独立。数据/模型/阈值原样保存；下一层修该验收缺陷，并按GCC方法优先补数值合同→实际图改写→重分析，不继续靠标定等待所有结构工作。报告：`artifacts/baseline/matched-entry-cost-mainline.json`。
 
 2026-11-18 原native任务图已进入共同规划器：`plan-controlled-region` schema4保留整调用问题，并发布可展开的内部problem/projection/plan。真实科学区域的20任务、12物化、6槽全部保留；9阶段联合观测只作一个计费组，对应12个规划操作，原执行工作未减少。219份来源见证重接为18条外部前驱；原72时间约束保留，42条新增关系绑定资源/就绪/覆盖顺序。20任务保caller参与，9阶段有原CPU0参与合同，commit/alloc/release不冒用该绑定；3,203,376B固定payload只计一次。独立冷读通过；无group观测入口另验20操作、全成本UNKNOWN；删除依赖后重算hash及重复计费均拒。prepare70.83s/check70.10s、峰值约406/399MiB，均为离线分析；禁止目标执行、编译及native加载。12个成本frontier保UNRESOLVED，完整调用与实际可执行时序仍未闭合，无新加速比。材料：`artifacts/baseline/controlled-native-task-mainline.json`。

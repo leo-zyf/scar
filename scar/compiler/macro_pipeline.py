@@ -31,7 +31,8 @@ def _pins():
     names=('compiler/macro_pipeline.py','compiler/project_pipeline_temporal.py',
         'analysis/pipeline_region_pass.py','optimization/macro_pass.py',
         'compiler/semantic_revision.py','analysis/source_pipeline_graph.py',
-        'optimization/semantic_rewrite.py',
+        'optimization/semantic_rewrite.py','optimization/semantic_region_demand.py',
+        'optimization/optimizer.py','optimization/graph.py',
         'optimization/deployment_cost.py','compiler/pipeline_fusion_delivery.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
@@ -55,13 +56,24 @@ def _derive(inputs,profile,cpus,budget,gain):
 
 
 def _metadata(inputs,profile,cpus,budget,gain,files,decision):
-    return dict(schema=SCHEMA,schema_version=1,inputs=inputs,cost_profile=profile,
+    return dict(schema=SCHEMA,schema_version=2,inputs=inputs,cost_profile=profile,
         available_cpu_ids=list(cpus),memory_budget_bytes=budget,minimum_gain=gain,
         files=files,decision=decision,producer_pins=_pins(),
         source_F4_and_value_routes_replayed=True,source_graph_unchanged=True,
         original_python_is_actual_alternative=True,global_solver_invoked=False,
         candidate_versions_benchmarked=False,target_program_executed=False,
         deployment_authorized=False,default_backend='NO_OP')
+
+
+def _structural_selection(region, report):
+    from scar.analysis.pipeline_region_pass import select_fusion_region
+
+    if not report['legality']['qualified']:
+        return None
+    if report['decision']=='REWRITE':
+        return report['optimization_selection']
+    return select_fusion_region(region, rewrite=True,
+        reason='Analyze the source-qualified fused graph under its original runtime guards.')
 
 
 def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_bytes=None,
@@ -84,6 +96,15 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
     from scar.compiler.semantic_revision import publish_fusion_revision
     files['semantic_revision']=publish_fusion_revision(
         pipeline,report['optimization_selection'],values,output/'semantic')
+    from scar.optimization.semantic_region_demand import derive_semantic_region_demand
+    selection=_structural_selection(region,report)
+    files.update(candidate_revision=None,candidate_demand=None)
+    if selection is not None:
+        candidate=(files['semantic_revision'] if report['decision']=='REWRITE' else
+            publish_fusion_revision(pipeline,selection,values,output/'candidate'))
+        demand=derive_semantic_region_demand(read_artifact(candidate),pipeline,selection,blueprint)
+        files.update(candidate_revision=candidate,
+            candidate_demand=_write(output/'candidate-demand.json',demand))
     metadata=_metadata(reference,profile,cpus,budget,minimum_gain,files,report['decision'])
     preparation=_write(output/'preparation.json',metadata)
     native=None
@@ -93,6 +114,7 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
         native=artifact_reference(artifact.directory/'artifact.json',artifact.report['schema'])
     result=dict(schema='scar.macro-pipeline-build',schema_version=1,preparation=preparation,
         semantic_revision=files['semantic_revision'],
+        candidate_revision=files['candidate_revision'],candidate_demand=files['candidate_demand'],
         decision=report['decision'],native_artifact=native,native_compiled=native is not None,
         whole_program_cpp=False,source_replacement='CONTROLLED_MODULE_ENTRY_ONLY',
         target_program_executed=False,performance_measured=False,deployment_authorized=False)
@@ -102,7 +124,7 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
 
 def check(preparation):
     reference=_reference(preparation,SCHEMA);saved=read_artifact(reference)
-    if saved.get('schema_version')!=1 or saved['producer_pins']!=_pins():
+    if saved.get('schema_version')!=2 or saved['producer_pins']!=_pins():
         raise ValueError('macro pipeline producer differs')
     pipeline,region,blueprint,report,budget,values=_derive(saved['inputs'],saved['cost_profile'],
         saved['available_cpu_ids'],saved['memory_budget_bytes'],saved['minimum_gain'])
@@ -118,6 +140,20 @@ def check(preparation):
     from scar.compiler.semantic_revision import check_fusion_revision
     check_fusion_revision(saved['files']['semantic_revision'],pipeline,
         report['optimization_selection'],values)
+    selection=_structural_selection(region,report)
+    candidate,demand_ref=(saved['files'][name] for name in ('candidate_revision','candidate_demand'))
+    if selection is None:
+        if candidate is not None or demand_ref is not None:
+            raise ValueError('unqualified structural fusion cannot publish a candidate revision')
+    else:
+        from scar.optimization.semantic_region_demand import verify_semantic_region_demand
+        if (candidate is None or demand_ref is None or report['decision']=='REWRITE'
+                and candidate!=saved['files']['semantic_revision']):
+            raise ValueError('candidate revision or selected fusion identity differs')
+        if report['decision']=='KEEP':
+            check_fusion_revision(candidate,pipeline,selection,values)
+        verify_semantic_region_demand(read_artifact(candidate),pipeline,selection,blueprint,
+            read_artifact(demand_ref))
     return saved,pipeline,region,blueprint,report
 
 

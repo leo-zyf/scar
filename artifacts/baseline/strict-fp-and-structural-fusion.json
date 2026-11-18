@@ -1,0 +1,198 @@
+{
+  "cost_policy_fix": {
+    "commit": "fa84ec5b",
+    "old_holdout_requalified": false,
+    "old_prediction_error": 0.4680015747354787,
+    "source_report": {
+      "schema": "scar.matched-entry-cost-mainline",
+      "sha256": "c4aa7489012a4b3acdf584a1905a15965c92ddc4a10fa260f3e23303a0d07916",
+      "size_bytes": 16287,
+      "uri": "/home/zyf/AAA/scar/artifacts/baseline/matched-entry-cost-mainline.json"
+    }
+  },
+  "created_at": "2026-11-18T02:10:36.527860+00:00",
+  "focused_tests": {
+    "includes_native_and_holdout_regressions": true,
+    "passed": 23
+  },
+  "fusion": {
+    "active_candidate_operation_count": 1,
+    "candidate_revision": {
+      "schema": "scar.semantic-region-revision",
+      "sha256": "e1c9d43243dac9f7dcce73347f9c9e1d5a9dcf0924406ae004529737900f7c5f",
+      "size_bytes": 19929,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/verified/candidate/revision.json"
+    },
+    "demand": {
+      "schema": "scar.semantic-region-demand",
+      "sha256": "97cbcf789bd7bc0bdc14d505fb83edc9d668026e32d12ede52c3c9b32bb72da5",
+      "size_bytes": 202769,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/verified/candidate-demand.json"
+    },
+    "fused_features": {
+      "arithmetic.add": 256,
+      "arithmetic.div": 0,
+      "arithmetic.mul": 128,
+      "arithmetic.neg": 0,
+      "arithmetic.sub": 64,
+      "array_allocations": 1,
+      "cumulative_allocation_bytes": 512,
+      "input_bindings": 2,
+      "logical_array_reads": 128,
+      "logical_array_writes": 64,
+      "logical_payload_bytes": 1536,
+      "output_bytes": 512,
+      "output_elements": 64,
+      "region_body_evaluations": 1
+    },
+    "independent_cold_check": true,
+    "logical_payload_cost_is_physical_traffic": false,
+    "lowering_features": {
+      "arithmetic.add": 256,
+      "arithmetic.div": 0,
+      "arithmetic.mul": 128,
+      "arithmetic.neg": 0,
+      "arithmetic.sub": 64,
+      "array_allocations": 1,
+      "cumulative_allocation_bytes": 512,
+      "input_bindings": 2,
+      "logical_array_reads": 128,
+      "logical_array_writes": 64,
+      "logical_payload_bytes": 1536,
+      "output_bytes": 512,
+      "output_elements": 64,
+      "region_body_evaluations": 1
+    },
+    "native_compiled": false,
+    "original_call_count": 5,
+    "original_revision": {
+      "schema": "scar.semantic-region-revision",
+      "sha256": "1922d33e344ad0bd9848391ace0e0872d2473f7f9aadb1b8aead4573a24163bd",
+      "size_bytes": 9168,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/verified/semantic/revision.json"
+    },
+    "preparation": {
+      "schema": "scar.macro-pipeline-preparation",
+      "sha256": "c998ff14ea3677aff7e89e82993b85c5a73a9fbd31b5948a9c055ab847c420ff",
+      "size_bytes": 4660,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/verified/preparation.json"
+    },
+    "runtime_decision": "KEEP",
+    "source_features": {
+      "arithmetic.add": 256,
+      "arithmetic.div": 0,
+      "arithmetic.mul": 128,
+      "arithmetic.neg": 0,
+      "arithmetic.sub": 64,
+      "array_allocations": 7,
+      "cumulative_allocation_bytes": 3584,
+      "logical_array_reads": 576,
+      "logical_array_writes": 448,
+      "logical_payload_bytes": 8192,
+      "output_elements": 320,
+      "region_body_evaluations": 5
+    },
+    "source_inputs": {
+      "schema": "scar.pipeline-temporal-inputs",
+      "sha256": "859736476317a5ddba1036f7d5ba2f58aaee1b87ac1ceaf92e94716ce6232b9b",
+      "size_bytes": 1619,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/inputs/inputs.json"
+    },
+    "verification": {
+      "schema": "scar.structural-fusion-verification",
+      "sha256": "f842f225f15d385ce208c4cbd36b9f78a0b45ff90756e4e471b679bf99194ee1",
+      "size_bytes": 205,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/verified/verification.json"
+    }
+  },
+  "gcc_reference": "https://gcc.gnu.org/onlinedocs/gcc-13.3.0/gcc/Optimize-Options.html",
+  "gcc_study": {
+    "schema": "scar.gcc-o3-study",
+    "sha256": "6675285c922c0635dd19a51dafa85ec05c9839b7cf9c3ef6e200cabd8acd77ee",
+    "size_bytes": 16627,
+    "uri": "/home/zyf/AAA/scar/artifacts/baseline/gcc-o3-study.json"
+  },
+  "implementation": {
+    "scar/codegen/cpp.py": "7b317aac9c222f72abfd77cb617492f8bc85de672cc2a23906da1bae37996cb1",
+    "scar/compiler/macro_pipeline.py": "e6b127ef46304a6238383382e5d94270ec2fd47b89844a86273f5a6b072f09f1",
+    "scar/compiler/temporal_invariant_loop.py": "dcec3f8db06cbd77d1df2082753438afbd81bcca825d17ca7dbf55f8c2c52865",
+    "scar/optimization/graph.py": "a776584671d3fd89b50bcb57cd910533e229972a65f4747dde5f60e1f0201561",
+    "scar/optimization/optimizer.py": "a7286918045571d2a93f524207ba1852bcc3f6bbf03a169c1d6bc91e0a655ad3"
+  },
+  "new_workload_speedup": null,
+  "precision": {
+    "compiled_modes": [
+      {
+        "caller_rounding_and_flags_preserved": true,
+        "expected_bits": "0x3ff0000000000000",
+        "mode": "NEAREST",
+        "native_bits": "0x3ff0000000000000",
+        "native_status": 0
+      },
+      {
+        "caller_rounding_and_flags_preserved": true,
+        "expected_bits": "0x3ff0000000000000",
+        "mode": "DOWNWARD",
+        "native_bits": "0x3ff0000000000000",
+        "native_status": 0
+      },
+      {
+        "caller_rounding_and_flags_preserved": true,
+        "expected_bits": "0x3ff0000000000001",
+        "mode": "UPWARD",
+        "native_bits": "0x3ff0000000000001",
+        "native_status": 0
+      },
+      {
+        "caller_rounding_and_flags_preserved": true,
+        "expected_bits": "0x3ff0000000000000",
+        "mode": "TOWARDZERO",
+        "native_bits": "0x3ff0000000000000",
+        "native_status": 0
+      }
+    ],
+    "compiler_options": [
+      "-std=c++20",
+      "-O3",
+      "-shared",
+      "-fPIC",
+      "-fvisibility=hidden",
+      "-fno-fast-math",
+      "-ffp-contract=off",
+      "-frounding-math",
+      "-ftrapping-math"
+    ],
+    "cpp": {
+      "schema": "scar.cpp-source",
+      "sha256": "d8f11feaa5914400cbc70291c16049e299785fb2031cd7bea9de3daa1c635929",
+      "size_bytes": 9101,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/verified-native-final/kernel.cpp"
+    },
+    "cpp_artifact": {
+      "schema": "scar.native-artifact",
+      "sha256": "def92bba8813d9e8c8b55104a8fa5de72649f89eab6593de47a3b738def6e6b0",
+      "size_bytes": 2593,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/verified-native-final/artifact.json"
+    },
+    "empty_output_divzero_guard_status": 3,
+    "fenv_restored": true,
+    "integer_true_division": "PYTHON_FALLBACK",
+    "legacy_folds_without_policy": "REBUILD_REQUIRED",
+    "old": {
+      "schema": "scar.fp-folding-correctness-micro",
+      "sha256": "e3f907b5f3a227b87125532f9801a35965e3120b9fa3803173710fe2df01a158",
+      "size_bytes": 3422,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/old-result.json"
+    },
+    "old_rounding_bug": "ONE_ULP_IN_FE_UPWARD_WHEN_FOLDED_IN_FE_TONEAREST",
+    "verified": {
+      "schema": "scar.strict-fp-native-verification",
+      "sha256": "05dac6aa2500cf2c34f1e67c0ef39f08c96ceb71683e317f6dbb53eb25a68e8b",
+      "size_bytes": 1304,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/final-result.json"
+    }
+  },
+  "schema": "scar.strict-fp-and-structural-fusion",
+  "schema_version": 1,
+  "whole_goal_complete": false
+}
