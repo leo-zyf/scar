@@ -92,7 +92,15 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 `--study STUDY/selection.json --cost COST --validation VALIDATION --out FINAL` 核对同一入口的节段成本和整程 A/B。`python -m scar.runtime.sparse_pipeline_launch --selection FINAL/selection.json --selection-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 从收据选择两个原生实现的组合。一次性加载在首轮时钟内，完整计划还记录进入和关闭作用域的成本。
 
-512 轮整程中位数为仅优化求解 6.944 s、联合 6.934 s。两组分布重叠，发布决策保持 `SOLVE_ONLY`。验收见 `artifacts/baseline/three-stage-csr-solve-composition.json`。下一轮先分析哪些跨轮依赖只约束结果发布，再用求解器的线程与内存约束建立并行时序。
+512 轮整程中位数为仅优化求解 6.944 s、联合 6.934 s。两组分布重叠，发布决策保持 `SOLVE_ONLY`。验收见 `artifacts/baseline/three-stage-csr-solve-composition.json`。
+
+### 稀疏求解的有序并行
+
+`plan_sparse_parallel --scope SCOPE --serial-launch SERIAL --cost COST --out STUDY` 绑定原循环、串行产物和同一核心组的成本。主线程从原函数入口获取一次私有快照，预测有界窗口内的数值任务。隔离进程在固定核上使用同一 C++ 求解后端，各自持有工作区。原 Python 继续执行数据准备、求解入口、状态码处理和摘要发布。每次到达原求解载体前，用实际参数和全量字节匹配后才交付最早发起的结果。
+
+`--study STUDY/selection.json --validation VALIDATION --out FINAL` 核验完成顺序、性能、CPU 分配和释放。`python -m scar.runtime.sparse_parallel_entry --selection FINAL/selection.json --selection-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 使用符合源码、环境和资源条件的已发布执行方式。每个 worker 受独立地址空间上限约束，原主线程和 worker 位于同一 NUMA 节点。
+
+512 轮完整入口的中位数为已优化串行 6.971 s、有序并行 3.263 s。1 组热身和 3 组独立配对中都验证了逐位一致的结果和三个并发原生任务。匹配的配置已发布为 `PARALLEL`。验收见 `artifacts/baseline/three-stage-csr-parallel-ordered.json`。下一轮用更大的核心组验证主线程发起能力、求解工作区和内存带宽的限制。
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
