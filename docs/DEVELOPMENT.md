@@ -130,6 +130,8 @@ C++20 调用方包含 `scar_sparse_provider_v1.hpp`，以包目录构造 `scar::
 
 `scar export-native-ordered-sparse --recipe ORDERED --provider NUMERIC --out PACKAGE` 重放配方并生成 C++20 可执行文件、`stream.json` 协议及 `scar_ordered_sparse_v1.hpp`。`PACKAGE/scar_ordered_sparse < INPUT > OUTPUT` 接收一份 CSR 结构和按序排列的原始数值帧。管道调用方应并行读写，并在末帧后关闭 stdin。每个 slot 绑定一个物理 CPU，数值执行交给同一 SuperLU/OpenBLAS，结果按提交顺序发布，首个失败结束发布。`--check PACKAGE` 可在移动后校验包。运行需要匹配配方的 Linux/glibc x86-64 资源与 cgroup v2。该入口接受已归一化的 CSR 请求，原应用的输入准备仍由原入口执行。
 
+加 `--detached` 可导出紧凑输入版本。调用方一次提供已准备的 CSR 模板、基础 RHS 和写入位置，每轮只提供序号与 binary64 缩放因子。`stream.json` 记录字段、保护条件和数据量，`detached-source.json` 记录入口参数和标量表达式的来源。worker 用现有 OpenBLAS `DOMATCOPY` 生成 RHS，更新矩阵中指定位置后调用 SuperLU。该版本适用于独立数值试验，原入口的归一化副作用和发布合同仍需单独验证。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

@@ -5,9 +5,12 @@ from struct import calcsize
 
 from .native_ordered_resources import SCHEMA as RESOURCE_PLAN
 from .resource_solver import semantic_sha256
+from .sparse_parallel_recipe import DETACHED as DETACHED_RECIPE
 
 
 SCHEMA = 'scar.native-ordered-stream'
+DETACHED_STREAM = 'scar.native-ordered-detached-stream'
+DETACHED_BLAS_SYMBOL = 'scipy_cblas_domatcopy'
 _HEADER = '<8s32s4I'
 _REQUEST = '<Q'
 _RESPONSE = '<QIi'
@@ -79,9 +82,60 @@ def project_native_ordered_stream(resource_plan, *, recipe_id=None):
             transport_ns=None, close_ns=None, whole_scope_ns=None))
 
 
-def validate_native_ordered_stream(resource_plan, projection, *, recipe_id=None):
+def validate_native_ordered_stream(resource_plan, projection, *, recipe_id=None, detached=None):
     """Replay wire metadata from the same resource plan; no cost is inferred."""
-    expected = project_native_ordered_stream(resource_plan, recipe_id=recipe_id)
+    expected = (project_native_ordered_stream(resource_plan, recipe_id=recipe_id) if detached is None
+        else project_native_detached_stream(resource_plan, detached, recipe_id=recipe_id))
     if semantic_sha256(expected) != semantic_sha256(projection):
         raise ValueError('native ordered wire projection differs from its resource plan')
     return expected
+
+
+def project_native_detached_stream(resource_plan, detached, *, recipe_id=None):
+    """Move prepared invariant operands to ingress and scalar-dependent work to workers."""
+    raw = project_native_ordered_stream(resource_plan, recipe_id=recipe_id)
+    header, sizes = raw['header'], raw['bytes']
+    n, nnz, count = (header[key] for key in ('size', 'nnz', 'count'))
+    window = resource_plan['dispatch']['window']
+    if (len(resource_plan['placement']['workers']) != window
+            or detached.get('schema') != DETACHED_RECIPE or detached.get('schema_version') != 1
+            or set(detached['roles']) != {'matrix', 'load', 'boundary', 'count'}):
+        raise ValueError('compact ingress requires the ordered recipe and its detached snapshot contract')
+
+    # Slot pairs are bounded by the number of rows. Worker request bytes exclude the sequence number.
+    fixed_input = sizes['header'] + sizes['common_structure'] + sizes['request_payload'] + calcsize('<I')
+    ticket, slot = calcsize('<Qd'), calcsize('<ii')
+    inherited_maximum = fixed_input - sizes['header'] + n * slot
+    pending_input = window * calcsize('<d')
+    pending_result = resource_plan['memory']['owner_pending_result_bound_bytes']
+    headroom = resource_plan['memory']['minimum_launch_headroom_bytes']
+    if inherited_maximum + pending_input + pending_result > (
+            headroom - resource_plan['memory']['worker_address_space_sum_bytes']):
+        raise ValueError('compact snapshot and pending payloads exceed the retained memory gate')
+
+    return dict(schema=DETACHED_STREAM, schema_version=1, recipe_id=raw['recipe_id'],
+        resource_plan_sha256=raw['resource_plan_sha256'], byte_order=raw['byte_order'], header=header,
+        source=dict(body_code_key=detached['body_code_key'], original_scope=detached['source'],
+            ingress_roles=detached['roles'], expression=detached['scale'], spans=detached['source_spans'],
+            contract='EXPLICIT_CALLER_PREPARED_SNAPSHOT_AND_SCALES', original_effects_closed=False),
+        input=dict(magic='SCARDSR1', structure=raw['input']['structure'],
+            template_values=dict(dtype='<f8', count=nnz, selected_rows='POSITIVE_ZERO'),
+            base_rhs=dict(dtype='<f8', count=n, range='FINITE_NORMAL_OR_SIGNED_ZERO_WITH_ABS_AT_MOST_DBL_MAX/2'),
+            slot_count=dict(format='<I', maximum=n), slots=dict(format='<ii', fields=['rhs_row', 'matrix_diagonal_slot'],
+                rows='SORTED_UNIQUE', slot='STORED_DIAGONAL_IN_SELECTED_ROW'),
+            request=dict(format='<Qd', fields=['seq', 'scale'], scale='BINARY64_1_INCLUSIVE_TO_2_EXCLUSIVE'),
+            sequence=raw['input']['sequence'], framing=raw['input']['framing']),
+        implementation=dict(placement='SAME_PINNED_PROCESS_COHORT', immutable_inputs='INHERITED_BEFORE_FORK',
+            matrix='WORKER_PRIVATE_TEMPLATE_PATCHED_AT_SELECTED_DIAGONALS',
+            rhs=dict(implementation=DETACHED_BLAS_SYMBOL, policy='SCALE_MASKED_BASE_OUT_OF_PLACE',
+                runtime='SAME_PROVIDER_LP64_SINGLE_THREAD_AND_DEFAULT_FP_ENVIRONMENT'),
+            solve='SAME_SUPERLU_ABI', publication='SAME_ORDERED_SUCCESS_PREFIX'),
+        output=raw['output'], terminal_kinds=raw['terminal_kinds'],
+        bytes=dict(input_fixed=fixed_input, selected_row_slot_pair=slot, ticket=ticket,
+            input_complete_base=fixed_input + count * ticket, input_complete_max=fixed_input + count * ticket + n * slot,
+            output_complete=sizes['output_complete'], raw_input_complete=sizes['input_complete'],
+            raw_request_bytes_per_worker=sizes['request_payload'], compact_request_bytes_per_worker=calcsize('<d')),
+        memory=dict(inherited_payload_bound_bytes=inherited_maximum, owner_pending_input_bound_bytes=pending_input,
+            owner_pending_result_bound_bytes=pending_result, worker_matrix_and_rhs_bytes=sizes['request_payload'],
+            provider_scratch_bound_bytes=None, minimum_launch_headroom_bytes=headroom, physical_residency_proven=False),
+        cost=raw['cost'])

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 有序稀疏导出新增 `--detached`。从原有限元入口捕获一次固定输入，worker 用 OpenBLAS `DOMATCOPY` 和 SuperLU 还原 512 轮数值步骤，所有结果逐位一致。输入由 102,873,156 B 减到 311,384 B。相同的 8 个 worker、各 1 次预热和 3 次交替实测均约 0.916 s，显式紧凑模式未取得可辨识的耗时收益。计时范围为独立 C++ 输入到输出，原应用准备和效果验证另计。见 `artifacts/baseline/native-ordered-detached.json`。
+
 2026-11-18 `export-native-ordered-sparse` 从配方生成可直接运行的 C++20 程序，调度和传输由 SCAR 生成，求解调用原生 SuperLU/OpenBLAS。移动产物后，用原有限元入口实际生成的 512 组矩阵值及 RHS 逐项对照，512 个结果按序逐位一致。错误配方、截断输入和非有限数均验证了拒绝及发布边界。范围为已归一化的 CSR 请求，流式边界尚无性能结论。见 `artifacts/baseline/native-ordered-stream.json`。
 
 2026-11-18 `export-native-ordered-sparse` 把有序执行配方编译成独立 C++20 调度，重用打包的 SuperLU/OpenBLAS。8 个进程实测各自使用配方指定的物理 CPU 与地址空间限制。512 次请求按序发布；两份重复输入的结果摘要均匹配原始记录，注入失败时只发布之前的成功前缀。独立 C++ 批次的 3 对中位数为 6.447→0.894 秒。数据范围为两份已封存输入交替运行，原 Python 入口的发布资格仍单独校验。见 `artifacts/baseline/native-ordered-sparse-cpp.json`。

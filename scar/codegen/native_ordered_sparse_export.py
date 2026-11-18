@@ -14,9 +14,10 @@ from scar.codegen.sparse_native_export import check_sparse_export
 from scar.ir.execution_recipe import SCHEMA as RECIPE, artifact_reference, read_artifact
 from scar.optimization.native_ordered_resources import SCHEMA as PLAN, project_native_ordered_resources
 from scar.optimization.native_ordered_stream import (
-    SCHEMA as STREAM, project_native_ordered_stream, validate_native_ordered_stream,
+    DETACHED_BLAS_SYMBOL, DETACHED_STREAM, SCHEMA as STREAM, project_native_detached_stream,
+    project_native_ordered_stream, validate_native_ordered_stream,
 )
-from scar.optimization.sparse_parallel_recipe import verify_sparse_parallel_recipe
+from scar.optimization.sparse_parallel_recipe import DETACHED as DETACHED_RECIPE, verify_sparse_parallel_recipe
 
 
 SCHEMA = 'scar.native-ordered-sparse-export'
@@ -25,7 +26,10 @@ _ORDERED_HEADER = 'scar_ordered_sparse_v1.hpp'
 _DISPATCH_HEADER = 'native_ordered_dispatch_v1.h'
 _DISPATCH_SOURCE = Path(__file__).with_name(_DISPATCH_HEADER + '.in')
 _ORDERED_SOURCE = Path(__file__).with_name('native_ordered_sparse_v1.h.in')
+_WIRE_SOURCE = Path(__file__).with_name('native_ordered_sparse_wire_v1.cpp.in')
 _MAIN_SOURCE = Path(__file__).with_name('native_ordered_sparse_main_v1.cpp.in')
+_DETACHED_MAIN = Path(__file__).with_name('native_ordered_sparse_detached_v1.cpp.in')
+_DETACHED_SOURCE = 'detached-source.json'
 _STREAM_PLAN = 'stream.json'
 _STREAM_MAIN = 'scar_ordered_sparse.cpp'
 _STREAM_EXECUTABLE = 'scar_ordered_sparse'
@@ -60,45 +64,57 @@ def _local(root, name, schema):
     return {**artifact_reference(path, schema), 'uri': name}
 
 
-def _render_main(stream):
+def _render_main(stream, plan):
     digest = stream['recipe_id'].removeprefix('recipe-v1:')
-    return _MAIN_SOURCE.read_text().replace('@SCAR_RECIPE_DIGEST@', digest).encode()
+    wire = _WIRE_SOURCE.read_text().replace('@SCAR_RECIPE_DIGEST@', digest).replace(
+        '@SCAR_INPUT_MAGIC@', stream['input']['magic']) + '\n'
+    if stream['schema'] == DETACHED_STREAM:
+        includes = ''.join(f'#include <{name}>\n' for name in (
+            'algorithm', 'cmath', 'cstring', 'iterator', 'memory', 'utility', 'dlfcn.h'))
+        tail = _DETACHED_MAIN.read_text().replace('@SCAR_OWNER_CPU@', str(plan['placement']['owner_cpu_id']))
+        return (includes + wire + tail.replace('@SCAR_BLAS_SCALE_SYMBOL@', DETACHED_BLAS_SYMBOL)).encode()
+    return (wire + _MAIN_SOURCE.read_text()).encode()
 
 
-def _write_stream(directory, plan):
-    stream = project_native_ordered_stream(plan)
+def _write_stream(directory, plan, stream):
     (directory / _STREAM_PLAN).write_text(json.dumps(stream, sort_keys=True, indent=2, allow_nan=False) + '\n')
-    (directory / _STREAM_MAIN).write_bytes(_render_main(stream))
+    (directory / _STREAM_MAIN).write_bytes(_render_main(stream, plan))
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
     if not compiler:
         raise ValueError('CXX must select an available C++20 compiler')
     version = subprocess.check_output([*compiler, '--version'], text=True).splitlines()[0]
     invocation = [*compiler, *_CXXFLAGS, _STREAM_MAIN, '-ldl', '-o', _STREAM_EXECUTABLE]
     subprocess.run(invocation, cwd=directory, check=True)
-    return dict(protocol=_local(directory, _STREAM_PLAN, STREAM),
+    return dict(protocol=_local(directory, _STREAM_PLAN, stream['schema']),
         source=_local(directory, _STREAM_MAIN, 'scar.cpp-source'),
         executable=_local(directory, _STREAM_EXECUTABLE, 'scar.native-executable-file'),
         compiler=dict(command=compiler, version=version, options=list(_CXXFLAGS)))
 
 
-def _check_stream(directory, plan, transport):
-    if (transport['protocol'] != _local(directory, _STREAM_PLAN, STREAM)
+def _check_stream(directory, plan, transport, detached=None):
+    schema = STREAM if detached is None else DETACHED_STREAM
+    if (transport['protocol'] != _local(directory, _STREAM_PLAN, schema)
             or transport['source'] != _local(directory, _STREAM_MAIN, 'scar.cpp-source')
             or transport['executable'] != _local(directory, _STREAM_EXECUTABLE, 'scar.native-executable-file')
             or transport['compiler']['options'] != list(_CXXFLAGS)
             or not os.access(directory / _STREAM_EXECUTABLE, os.X_OK)):
         raise ValueError('native stream executable or protocol differs from its receipt')
     protocol = read_artifact({**transport['protocol'], 'uri': str(directory / _STREAM_PLAN)})
-    validate_native_ordered_stream(plan, protocol)
-    if (directory / _STREAM_MAIN).read_bytes() != _render_main(protocol):
+    validate_native_ordered_stream(plan, protocol, detached=detached)
+    if (directory / _STREAM_MAIN).read_bytes() != _render_main(protocol, plan):
         raise ValueError('native stream entry differs from its recipe and protocol')
 
 
 @replay_transaction()
-def export_native_ordered(recipe, provider, out):
+def export_native_ordered(recipe, provider, out, *, detached=False):
     recipe_ref = artifact_reference(recipe, RECIPE)
     source = verify_sparse_parallel_recipe(read_artifact(recipe_ref))
     plan = project_native_ordered_resources(source)
+    source_ref = source['artifacts']['detached']
+    if detached:
+        protocol = project_native_detached_stream(plan, read_artifact(source_ref))
+    else:
+        protocol = project_native_ordered_stream(plan)
     provider = Path(provider).resolve(strict=True)
     native = check_sparse_export(provider)
     capability = source['implementation']['backend_capability_record']
@@ -126,14 +142,18 @@ def export_native_ordered(recipe, provider, out):
         (directory / _DISPATCH_HEADER).write_bytes(_DISPATCH_SOURCE.read_bytes())
         (directory / _ORDERED_HEADER).write_bytes(_render(plan, blas))
         (directory / 'plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2, allow_nan=False) + '\n')
-        stream = _write_stream(directory, plan)
-        manifest = dict(schema=SCHEMA, schema_version=2, recipe=recipe_ref, recipe_id=source['recipe_id'],
+        stream = _write_stream(directory, plan, protocol)
+        manifest = dict(schema=SCHEMA, schema_version=3 if detached else 2, recipe=recipe_ref, recipe_id=source['recipe_id'],
             numeric=_local(directory, 'numeric/artifact.json', native['schema']), blas_member=blas,
             plan=_local(directory, 'plan.json', PLAN), headers=[_local(directory, name, 'scar.cpp-header')
                 for name in (_ABI_HEADER, _DISPATCH_HEADER, _ORDERED_HEADER)],
-            caller_boundary='native CSR structure and one binary64 value/RHS frame per ordered request',
+            caller_boundary=('prepared CSR template, RHS base and one binary64 scale per ordered request' if detached
+                else 'native CSR structure and one binary64 value/RHS frame per ordered request'),
             failure='first failed request stops publication; original Python entry is separate',
             stream=stream, cost='unmeasured native stream boundary', deployment_authorized=False)
+        if detached:
+            (directory / _DETACHED_SOURCE).write_bytes(read_artifact(source_ref, json_document=False))
+            manifest['detached_source'] = _local(directory, _DETACHED_SOURCE, DETACHED_RECIPE)
         (directory / 'artifact.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         check_native_ordered_export(directory)
         if out.exists():
@@ -148,7 +168,8 @@ def check_native_ordered_export(path):
     verification = check_sparse_export(root / 'numeric')
     expected_headers = [_local(root, name, 'scar.cpp-header') for name in (_ABI_HEADER, _DISPATCH_HEADER, _ORDERED_HEADER)]
     version = manifest.get('schema_version')
-    if (version not in (1, 2) or ('stream' in manifest) != (version == 2) or manifest['deployment_authorized'] is not False
+    if (version not in (1, 2, 3) or ('stream' in manifest) != (version >= 2)
+            or ('detached_source' in manifest) != (version == 3) or manifest['deployment_authorized'] is not False
             or manifest['headers'] != expected_headers
             or manifest['numeric'] != _local(root, 'numeric/artifact.json', verification['schema'])
             or manifest['plan'] != _local(root, 'plan.json', PLAN)):
@@ -165,8 +186,14 @@ def check_native_ordered_export(path):
             or (root / _DISPATCH_HEADER).read_bytes() != _DISPATCH_SOURCE.read_bytes()
             or (root / _ORDERED_HEADER).read_bytes() != _render(plan, manifest['blas_member'])):
         raise ValueError('standalone C++ scheduling does not match its native plan')
-    if version == 2:
-        _check_stream(root, plan, manifest['stream'])
+    detached = None
+    if version == 3:
+        reference = manifest['detached_source']
+        if reference != _local(root, _DETACHED_SOURCE, DETACHED_RECIPE):
+            raise ValueError('compact export detached source differs from its receipt')
+        detached = read_artifact({**reference, 'uri': str(root / _DETACHED_SOURCE)})
+    if version >= 2:
+        _check_stream(root, plan, manifest['stream'], detached)
     return manifest
 
 
@@ -176,13 +203,14 @@ def main(argv=None):
     parser.add_argument('--provider')
     parser.add_argument('--out')
     parser.add_argument('--check')
+    parser.add_argument('--detached', action='store_true', help='export compact prepared inputs and scalar tickets')
     args = parser.parse_args(argv)
     export = (args.recipe, args.provider, args.out)
-    if args.check and not any(export):
+    if args.check and not any(export) and not args.detached:
         result = check_native_ordered_export(args.check)
         print(json.dumps(dict(verified=True, recipe_id=result['recipe_id'])))
     elif not args.check and all(export):
-        print(json.dumps(export_native_ordered(*export)))
+        print(json.dumps(export_native_ordered(*export, detached=args.detached)))
     else:
         parser.error('choose --check PACKAGE or supply --recipe, --provider and --out')
     return 0
