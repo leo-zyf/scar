@@ -32,7 +32,10 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'compiler/admission_context.py', 'compiler/stateful_candidate.py',
     'analysis/stateful_region_effects.py', 'analysis/stateful_dependencies.py',
     'analysis/source_fact_materials.py',
-    'optimization/stateful_schedule.py', 'compiler/stateful_model.py')
+    'optimization/stateful_schedule.py', 'compiler/stateful_model.py',
+    'analysis/controlled_native_time.py', 'optimization/controlled_native_tasks.py',
+    'optimization/native_group_costs.py', 'analysis/schedule_time.py',
+    'ir/versioned_schedule.py', 'ir/implementation_plan.py')
 
 
 def _pins():
@@ -177,7 +180,7 @@ def _group_context(reference, contract, correspondence, compiler_feedback):
             source_operations=stages[index]['source_operations'],
             source_expressions=stages[index]['source_expressions']) for index in group['stage_indices']],
         begin_cut=group['begin_cut'], end_cut=group['end_cut']) for group in observations['group_layout']]
-    return dict(schema='scar.controlled-native-group-context', schema_version=1,
+    report = dict(schema='scar.controlled-native-group-context', schema_version=1,
         observations=reference, design=observations['design'],
         stage_context=dict(artifact=observations['design'], locator='#/stage_context'),
         native_manifest=view['native_manifest'], source_group_map=groups,
@@ -188,6 +191,23 @@ def _group_context(reference, contract, correspondence, compiler_feedback):
         component_mean_is_not_whole_method_cost=True,
         complete_call_cost_inferred=False, cost_use_qualification_granted=False,
         resource_obligations_discharged=False, target_samples_refitted=False)
+    return report, observations, design
+
+
+def _native_task_expansion(controlled, contract, correspondence, context, observations, design):
+    """Refine the actual native recipe, without distributing whole-call cost.
+
+    The strict method remains a parent boundary.  This child problem consumes
+    original tasks and storage dependencies; it does not grant permission to
+    reorder an ELF which still executes its original stage sequence.
+    """
+    from scar.optimization.controlled_native_tasks import project_controlled_native_tasks
+    from scar.optimization.native_group_costs import derive_native_group_costs
+    costs = None if observations is None else derive_native_group_costs(observations, design)
+    groups = () if costs is None else costs['cost_groups']
+    problem, projection = project_controlled_native_tasks(controlled, contract,
+        correspondence, context, cost_groups=groups)
+    return problem_document(problem), projection, costs
 
 
 def _summary_native_correspondence(reference, binding, region, graph, correspondence):
@@ -325,6 +345,7 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission, _context=_context)
     entry = correspondence = entry_use = annotations = origin = group_context = summary_binding = summary_correspondence = effects = None
+    native_context = observations = group_design = None
     if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
         raise ValueError('explicit cost-use contract required')
     if kind == 'STATEFUL_SPECIALIZATION':
@@ -354,7 +375,9 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         if compiler_feedback is not None:
             annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
         if native_group_observations is not None:
-            group_context = _group_context(native_group_observations, contract, correspondence, compiler_feedback)
+            group_context, observations, group_design = _group_context(
+                native_group_observations, contract, correspondence, compiler_feedback)
+            native_context = group_design['stage_context']
         identity = contract['identity']
         offers = tuple(dict(artifact=reference, locator='#') for reference in profiles)
         entry = derive_stateful_entry_cost(identity['domain']['uri'], identity['candidate_id'], offers)
@@ -420,11 +443,20 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
     controlled, projection = project_controlled_region(strict, contract)
+    native_problem = native_projection = native_costs = None
+    if kind == 'STATEFUL_SPECIALIZATION':
+        if native_context is None:
+            from scar.optimization.native_stage_context import derive_native_stage_context
+            native_context = derive_native_stage_context(contract['implementation']['native_manifest'])
+        native_problem, native_projection, native_costs = _native_task_expansion(controlled, contract,
+            correspondence, native_context, observations, group_design)
     return dict(contract=contract, source_graph=graph, correspondence=correspondence,
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
         entry_source_origin=origin, native_group_context=group_context, source_summary_binding=summary_binding,
         source_summary_correspondence=summary_correspondence,
         source_region_effects=effects,
+        native_task_problem=native_problem, native_task_projection=native_projection,
+        native_task_costs=native_costs,
         strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 
@@ -435,7 +467,7 @@ def _without_elapsed(value):
 
 def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
               cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations, source_summary):
-    return dict(schema=SCHEMA, schema_version=3, kind=kind, admission=reference,
+    return dict(schema=SCHEMA, schema_version=4, kind=kind, admission=reference,
         entry_profiles=list(profiles), max_seconds=max_seconds, files=files, producer_pins=_pins(),
         cost_use=cost_use, cost_qualification=cost_qualification,
         compiler_feedback=compiler_feedback,
@@ -443,6 +475,8 @@ def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled,
         strict_status=strict_plan['status'], controlled_status=plan['status'],
         strict_problem_sha256=digest(strict), controlled_problem_sha256=digest(controlled),
         controlled_feasibility_is_not_whole_process_feasibility=True,
+        native_task_expansion_available=files.get('native_task_problem') is not None,
+        native_task_expansion_authorizes_reordering=False,
         cost_profiles_are_explicit_analysis_offers=True, timing_qualified=False,
         original_whole_entry_obligations_discharged=False, target_program_executed=False,
         native_loaded=False, compiled=False, deployment_authorized=False, default_backend='NO_OP')
@@ -470,6 +504,15 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     plan = construct_implementations(controlled, max_seconds=max_seconds)
     verification = verify_execution_plan(controlled, plan) if plan['selected'] else None
     documents.update(strict_plan=strict_plan, controlled_plan=plan)
+    if documents['native_task_problem'] is not None:
+        from scar.ir.implementation_plan import problem_from_dict
+        internal = problem_from_dict(documents['native_task_problem'])
+        internal_plan = construct_implementations(internal, max_seconds=max_seconds)
+        documents['native_task_plan'] = internal_plan
+        if internal_plan['selected']:
+            documents['native_task_schedule_verification'] = dict(
+                schema='scar.controlled-native-task-schedule-verification', schema_version=1,
+                **verify_execution_plan(internal, internal_plan))
     if verification is not None:
         documents['schedule_verification'] = dict(schema='scar.controlled-schedule-verification', schema_version=1, **verification)
     directory.mkdir(parents=True)
@@ -483,7 +526,7 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
 
 def check(preparation):
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
-    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 3) or saved['producer_pins'] != _pins():
+    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 4) or saved['producer_pins'] != _pins():
         raise ValueError('controlled region producer or schema differs')
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
@@ -491,12 +534,20 @@ def check(preparation):
         native_group_observations=saved['native_group_observations'], source_summary=saved['source_summary'])
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
-    for name, problem in (('strict_plan', strict), ('controlled_plan', controlled)):
+    problems = [('strict_plan', strict), ('controlled_plan', controlled)]
+    if documents['native_task_problem'] is not None:
+        from scar.ir.implementation_plan import problem_from_dict
+        problems.append(('native_task_plan', problem_from_dict(documents['native_task_problem'])))
+    for name, problem in problems:
         plan = read_artifact(saved['files'][name])
         if plan['selected']:
             verification = verify_execution_plan(problem, plan)
             if name == 'controlled_plan':
                 documents['schedule_verification'] = dict(schema='scar.controlled-schedule-verification',schema_version=1,**verification)
+            elif name == 'native_task_plan':
+                documents['native_task_schedule_verification'] = dict(
+                    schema='scar.controlled-native-task-schedule-verification', schema_version=1,
+                    **verification)
         elif _without_elapsed(plan) != _without_elapsed(construct_implementations(problem, max_seconds=saved['max_seconds'])):
             raise ValueError('unresolved controlled construction differs from its original scoped problem')
         documents[name] = plan
@@ -539,6 +590,8 @@ def main(argv=None):
         result = dict(preparation=_reference(Path(args.out)/'preparation.json'),
             strict_status=saved['strict_status'], controlled_status=saved['controlled_status'],
             native_loaded=False, deployment_authorized=False)
+    result['native_task_problem'] = saved['files'].get('native_task_problem')
+    result['native_task_plan'] = saved['files'].get('native_task_plan')
     print(json.dumps(result,sort_keys=True)); return 0
 
 
