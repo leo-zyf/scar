@@ -40,6 +40,24 @@ int integer(std::string_view text, int minimum, const char* field) {
     return parsed;
 }
 
+graph::WindowSelection parse_windows(std::string_view specification) {
+    graph::WindowSelection windows{};
+    int previous = -1;
+    for (;;) {
+        const auto delimiter = specification.find(',');
+        const int start = integer(specification.substr(0, delimiter), 0, "window start");
+        const auto index = static_cast<std::size_t>(start);
+        if (index >= graph::operation_count || !graph::legal_window_starts[index]
+                || (previous >= 0 && start - previous < 2)) {
+            throw std::invalid_argument("selected windows must be legal, ordered and disjoint");
+        }
+        windows[index] = true;
+        if (delimiter == std::string_view::npos) return windows;
+        specification.remove_prefix(delimiter + 1);
+        previous = start;
+    }
+}
+
 void check_launch(int caller, int worker) {
     cpu_set_t allowed;
     const bool pair = worker >= 0;
@@ -71,6 +89,26 @@ void check_inputs(const Inputs& inputs, const std::array<std::vector<unsigned ch
         }
     }
 }
+
+struct SampleInputs {
+    std::array<std::vector<float>, graph::input_count> backing;
+    std::array<std::vector<unsigned char>, graph::input_count> starting;
+    Inputs tensors;
+
+    explicit SampleInputs(char** paths) {
+        for (std::size_t i = 0; i < tensors.size(); ++i) {
+            const auto shape = graph::input_shapes[i];
+            const auto bytes = checked_bytes(shape);
+            backing[i] = read_tensor(paths[i], bytes);
+            starting[i].resize(bytes);
+            if (bytes != 0) std::memcpy(starting[i].data(), backing[i].data(), bytes);
+            tensors[i] = at::from_blob(backing[i].data(), at::IntArrayRef(shape.data(), shape.size()),
+                                      at::TensorOptions().device(at::kCPU).dtype(at::kFloat));
+        }
+    }
+
+    void check() const { check_inputs(tensors, starting); }
+};
 
 void check_outputs(const Inputs& inputs, const Outputs& serial, const Outputs& dual) {
     for (const auto* outputs : {&serial, &dual}) {
@@ -107,17 +145,26 @@ std::int64_t elapsed_ns(Clock::time_point start) {
     return duration;
 }
 
-std::pair<std::int64_t, Outputs> timed(const Inputs& inputs, graph::CpuPair& pair, bool serial) {
+std::pair<std::int64_t, Outputs> timed(const Inputs& inputs, graph::CpuPair& pair,
+                                      const graph::WindowSelection& windows, bool serial) {
     const auto start = Clock::now();
-    auto outputs = serial ? graph::run(inputs) : graph::run_parallel(inputs, pair);
+    auto outputs = serial ? graph::run(inputs) : graph::run_parallel(inputs, pair, windows);
     return {elapsed_ns(start), std::move(outputs)};
 }
 
-void emit(int caller, int worker, int warmup, int measurements, const std::vector<Sample>& samples,
-          const std::vector<Calibration>& calibration) {
+void emit_benchmark(int caller, int worker, int warmup, int measurements, const graph::WindowSelection& windows,
+                    const std::vector<Sample>& samples) {
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"measured_pairs\":" << measurements
               << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
-              << ",\"all_pairs_validated\":true,\"samples\":[";
+              << ",\"all_pairs_validated\":true,\"windows\":[";
+    bool comma = false;
+    for (std::size_t i = 0; i < windows.size(); ++i) {
+        if (!windows[i]) continue;
+        if (comma) std::cout << ',';
+        std::cout << i;
+        comma = true;
+    }
+    std::cout << "],\"samples\":[";
     for (std::size_t i = 0; i < samples.size(); ++i) {
         const auto& sample = samples[i];
         if (i != 0) std::cout << ',';
@@ -126,7 +173,12 @@ void emit(int caller, int worker, int warmup, int measurements, const std::vecto
                   << "],\"serial_ns\":" << sample.serial_ns << ",\"dual_ns\":" << sample.dual_ns
                   << ",\"bitwise_identical\":true,\"input_values_unchanged\":true,\"fresh_owned_outputs\":true}";
     }
-    std::cout << "],\"calibration\":{\"operation_samples_ns\":[";
+    std::cout << "]}\n";
+}
+
+void emit_calibration(int caller, int worker, int warmup, const std::vector<Calibration>& calibration) {
+    std::cout << "{\"warmup_pairs\":" << warmup << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
+              << ",\"calibration\":{\"operation_samples_ns\":[";
     for (std::size_t row = 0; row < calibration.size(); ++row) {
         if (row != 0) std::cout << ',';
         std::cout << '[';
@@ -144,30 +196,20 @@ void emit(int caller, int worker, int warmup, int measurements, const std::vecto
     std::cout << "]}}\n";
 }
 
-void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
+void benchmark(char** args, int caller, int worker, graph::CpuPair& pair, const graph::WindowSelection& windows) {
     const int warmup = integer(args[0], 3, "warmup count");
     const int measurements = integer(args[1], 3, "measurement count");
     if (measurements % 2 == 0) throw std::invalid_argument("benchmark requires an odd number of measured pairs");
 
-    std::array<std::vector<float>, graph::input_count> backing;
-    std::array<std::vector<unsigned char>, graph::input_count> starting;
-    Inputs inputs;
-    for (std::size_t i = 0; i < inputs.size(); ++i) {
-        const auto shape = graph::input_shapes[i];
-        const auto bytes = checked_bytes(shape);
-        backing[i] = read_tensor(args[2 + i], bytes);
-        starting[i].resize(bytes);
-        if (bytes != 0) std::memcpy(starting[i].data(), backing[i].data(), bytes);
-        inputs[i] = at::from_blob(backing[i].data(), at::IntArrayRef(shape.data(), shape.size()),
-                                  at::TensorOptions().device(at::kCPU).dtype(at::kFloat));
-    }
+    const SampleInputs data(args + 2);
+    const auto& inputs = data.tensors;
 
     // Check each variant once in isolation, then keep validation out of both timed calls in each pair.
     {
         const auto serial = graph::run(inputs);
-        check_inputs(inputs, starting);
-        const auto dual = graph::run_parallel(inputs, pair);
-        check_inputs(inputs, starting);
+        data.check();
+        const auto dual = graph::run_parallel(inputs, pair, windows);
+        data.check();
         check_outputs(inputs, serial, dual);
     }
     std::vector<Sample> samples;
@@ -175,9 +217,9 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
     const auto total = std::int64_t{warmup} + measurements;
     for (std::int64_t i = 0; i < total; ++i) {
         const bool serial_first = i % 2 == 0;
-        const auto first = timed(inputs, pair, serial_first);
-        const auto second = timed(inputs, pair, !serial_first);
-        check_inputs(inputs, starting);
+        const auto first = timed(inputs, pair, windows, serial_first);
+        const auto second = timed(inputs, pair, windows, !serial_first);
+        data.check();
         check_outputs(inputs, serial_first ? first.second : second.second,
                       serial_first ? second.second : first.second);
         if (i >= warmup) {
@@ -185,8 +227,22 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
                                serial_first ? second.first : first.first, serial_first});
         }
     }
+    check_caller(caller);
+    emit_benchmark(caller, worker, warmup, measurements, windows, samples);
+}
 
+void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
+    const int warmup = integer(args[0], 3, "warmup count");
+    const SampleInputs data(args + 1);
+    const auto& inputs = data.tensors;
     const auto calibration_reference = graph::run(inputs);
+    data.check();
+    for (int i = 1; i < warmup; ++i) {
+        const auto warmed = graph::run(inputs);
+        data.check();
+        check_outputs(inputs, calibration_reference, warmed);
+    }
+    pair.run([] {}, [] {});
     std::vector<Calibration> calibration;
     calibration.reserve(warmup);
     for (int i = 0; i < warmup; ++i) {
@@ -197,10 +253,10 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
             row.operations.at(operation) = elapsed_ns(start);
             return value;
         });
-        check_inputs(inputs, starting);
+        data.check();
         check_outputs(inputs, calibration_reference, observed);
         if (std::ranges::find(row.operations, 0) != row.operations.end()) {
-            throw std::runtime_error("benchmark did not observe every operation in the generated graph");
+            throw std::runtime_error("calibration did not observe every operation in the generated graph");
         }
         const auto start = Clock::now();
         pair.run([] {}, [] {});
@@ -208,21 +264,22 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
         calibration.push_back(row);
     }
     check_caller(caller);
-    emit(caller, worker, warmup, measurements, samples, calibration);
+    emit_calibration(caller, worker, warmup, calibration);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     const std::string_view mode = argc > 1 ? argv[1] : "";
-    const bool measure = mode == "--benchmark-pair";
-    const bool serial = mode == "--run-pair-serial";
+    const bool measure = mode == "--benchmark-windows";
+    const bool calibrating = mode == "--calibrate-windows";
     const bool caller_only = mode == "--run-serial";
-    if (!measure && !serial && !caller_only && mode != "--run-pair") return scar_native_file_main(argc, argv);
-    const auto expected = graph::input_count + (measure ? 6 : (caller_only ? 3 : 4) + graph::output_count);
+    if (!measure && !calibrating && !caller_only && mode != "--run-windows") return scar_native_file_main(argc, argv);
+    const auto expected = graph::input_count + (measure ? 7 : calibrating ? 5 : (caller_only ? 3 : 5) + graph::output_count);
     if (static_cast<std::size_t>(argc) != expected) {
-        std::fputs("usage: aten-graph --benchmark-pair <caller> <worker> <warmup> <odd-count> <input.f32>...\n"
-                   "       aten-graph --run-pair[-serial] <caller> <worker> <input.f32>... <new-output.f32>...\n"
+        std::fputs("usage: aten-graph --calibrate-windows <caller> <worker> <warmup> <input.f32>...\n"
+                   "       aten-graph --benchmark-windows <caller> <worker> <window-spec> <warmup> <odd-count> <input.f32>...\n"
+                   "       aten-graph --run-windows <caller> <worker> <window-spec> <input.f32>... <new-output.f32>...\n"
                    "       aten-graph --run-serial <caller> <input.f32>... <new-output.f32>...\n",
                    stderr);
         return 2;
@@ -230,6 +287,7 @@ int main(int argc, char** argv) {
     try {
         const int caller = integer(argv[2], 0, "caller CPU");
         const int worker = caller_only ? -1 : integer(argv[3], 0, "worker CPU");
+        const auto windows = calibrating || caller_only ? graph::WindowSelection{} : parse_windows(argv[4]);
         check_launch(caller, worker);
         at::set_num_threads(1);
         at::set_num_interop_threads(1);
@@ -240,11 +298,13 @@ int main(int argc, char** argv) {
         }
         graph::CpuPair pair(caller, worker);
         check_caller(caller);
-        if (measure) {
-            benchmark(argv + 4, caller, worker, pair);
+        if (calibrating) {
+            calibrate(argv + 4, caller, worker, pair);
+        } else if (measure) {
+            benchmark(argv + 5, caller, worker, pair, windows);
         } else {
-            return invoke(argv + 4, [&](const auto& inputs) {
-                auto result = serial ? graph::run(inputs) : graph::run_parallel(inputs, pair);
+            return invoke(argv + 5, [&](const auto& inputs) {
+                auto result = graph::run_parallel(inputs, pair, windows);
                 check_caller(caller);
                 return result;
             });

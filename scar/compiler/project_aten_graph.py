@@ -144,6 +144,8 @@ def project_aten_graph(build, capture, attempts, *, linkage, linkage_sha256, out
     native, source = records['native'], records['source']
     linked = verify_graph_capture_linkage(linkage, linkage_sha256, native)
     physical = recover_graph_input_metadata(capture, native)
+    if any(row['reason'] == 'NATIVE_INPUT_COMPANION_UNAVAILABLE' for row in physical['unresolved']):
+        raise ValueError('native graph projection requires the TorchOp Tensor input companion from trace --native-tensor-inputs')
     recipe, graph = project_recipe(source, native, physical)
     import torch
 

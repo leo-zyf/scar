@@ -121,7 +121,10 @@ def _trace(args) -> int:
     for key in ('SCAR_OS_CAPTURE_NONCE','SCAR_OS_CAPTURE_INTENT','SCAR_OS_CAPTURE_INTENT_SHA256'):
         env.pop(key,None)
     execution_evidence = getattr(args, "execution_evidence", False)
-    physical = getattr(args, "tensor_physical", False)
+    native_inputs = getattr(args, 'native_tensor_inputs', False)
+    if native_inputs and not execution_evidence:
+        raise SystemExit('--native-tensor-inputs requires --execution-evidence')
+    physical = getattr(args, "tensor_physical", False) or native_inputs
     if physical and not execution_evidence:
         raise SystemExit("--tensor-physical requires --execution-evidence")
     if torch_call_scopes and not execution_evidence:
@@ -216,6 +219,8 @@ def _trace(args) -> int:
             env['SCAR_EXECUTION_EVIDENCE'] = '1'
             if physical:
                 env['SCAR_TENSOR_PHYSICAL'] = '1'
+            if native_inputs:
+                env['SCAR_NATIVE_TENSOR_INPUTS'] = '1'
     if args.lines:
         env["SCAR_TRACE_LINES"] = "1"
     if args.resources:
@@ -1287,6 +1292,8 @@ def main(argv=None) -> int:
                        help='record bounded CPython native CALL scopes in the owned Torch trace; requires execution-evidence')
     trace.add_argument('--tensor-physical',action='store_true',
                        help='also export owned profiler marker Tensor metadata and allocation epochs after close; requires execution-evidence')
+    trace.add_argument('--native-tensor-inputs', action='store_true',
+                       help='retain boxed Tensor input geometry, dtype and layout for native graph projection; implies tensor-physical')
     trace.add_argument('--operand-capture',choices=('windows','instructions'),default='windows',
                        help='capture bounded call windows (default) or every project instruction')
     trace.add_argument('--project-root',help='source boundary for lightweight call-site recording; defaults to target cwd')

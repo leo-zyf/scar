@@ -76,16 +76,32 @@ def _render(recipe, operators, schedule=None):
     pair_include = '' if schedule is None else f'#include "{_PAIR_HEADER.name}"\n'
     pair_support = ''
     if schedule is not None:
-        first, second = schedule['pair_indices']
-        left, right = calls[first], calls[second]
-        parallel = [*ordered[:first], f'    at::Tensor {left[0]}, {right[0]};',
-                    f'    pair.run([&] {{ {left[0]} = {left[1]}; }},',
-                    f'             [&] {{ {right[0]} = {right[1]}; }});', *ordered[second + 1:]]
+        starts = {row['pair_indices'][0] for row in schedule['windows']}
+        legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
+        parallel = [f'    at::Tensor {value};' for value, _ in calls]
+        for i, (value, expr) in enumerate(calls):
+            indent = '    '
+            after_window = i - 1 in starts
+            if after_window:
+                parallel.append(f'    if (!windows[{i - 1}]) {{')
+                indent += '    '
+            if i in starts:
+                right, right_expr = calls[i + 1]
+                parallel.extend((f'{indent}if (windows[{i}]) {{',
+                    f'{indent}    pair.run([&] {{ {value} = {expr}; }},',
+                    f'{indent}             [&] {{ {right} = {right_expr}; }});', f'{indent}}} else {{',
+                    f'{indent}    {value} = {expr};', f'{indent}}}'))
+            else:
+                parallel.append(f'{indent}{value} = {expr};')
+            if after_window:
+                parallel.append('    }')
         parallel_calls = '\n'.join(parallel)
         timed_calls = '\n'.join(f'    const at::Tensor {value} = observe({i}, [&] {{ return {expr}; }});'
                                 for i, (value, expr) in enumerate(calls))
         pair_support = f'''
 inline constexpr std::size_t operation_count = {len(calls)};
+using WindowSelection = std::array<bool, operation_count>;
+inline constexpr WindowSelection legal_window_starts{{{legal}}};
 
 template <class Observer>
 inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Tensor> inputs, Observer&& observe) {{
@@ -94,8 +110,14 @@ inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Ten
     return {{{outputs}}};
 }}
 
-inline std::array<at::Tensor, output_count> run_parallel(std::span<const at::Tensor> inputs, CpuPair& pair) {{
+inline std::array<at::Tensor, output_count> run_parallel(
+        std::span<const at::Tensor> inputs, CpuPair& pair, const WindowSelection& windows) {{
     validate_inputs(inputs);
+    for (std::size_t i = 0; i < operation_count; ++i) {{
+        if (windows[i] && (!legal_window_starts[i] || (i > 0 && windows[i - 1]))) {{
+            throw std::invalid_argument("native graph has an unqualified or overlapping window");
+        }}
+    }}
 {parallel_calls}
     return {{{outputs}}};
 }}
@@ -163,10 +185,10 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     if any(item is not None for item in requested):
         if any(item is None for item in requested):
             raise ValueError('the CPU pair requires its contract, digest, target graph and two CPU IDs')
-        from scar.optimization.aten_native_schedule import propose_cpu_pair
+        from scar.optimization.aten_native_schedule import propose_cpu_windows
 
         _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
-        schedule = propose_cpu_pair(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
+        schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']
@@ -213,8 +235,8 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             compiler_command=command, source_replacement_authorized=False, performance_measured=False,
             files={path.name: _content(path) for path in sorted(stage.iterdir())})
         if schedule is not None:
-            receipt.update(cpu_pair=schedule, concurrency_contract=contract_receipt,
-                           implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_PAIR_TRIAL')
+            receipt.update(cpu_windows=schedule, concurrency_contract=contract_receipt,
+                           implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt
@@ -228,7 +250,7 @@ def main(argv=None):
     parser.add_argument('--linkage-sha256', required=True)
     parser.add_argument('--concurrency-contract')
     parser.add_argument('--concurrency-sha256')
-    parser.add_argument('--target', help='original target hardware graph for a CPU-pair trial')
+    parser.add_argument('--target', help='original target hardware graph for a CPU-window trial')
     parser.add_argument('--cpu', type=int, action='append', help='caller and worker IDs, in order')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)

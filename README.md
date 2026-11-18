@@ -26,9 +26,9 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar compile-aten-graph --recipe RECIPE.json --recipe-sha256 SHA256 --linkage LINKED/result.json --linkage-sha256 SHA256 --out NATIVE` 从声明的张量数据流直接生成 C++20。`scar.aten-native-recipe` v1 声明固定形状输入、精确算子签名、按顺序绑定的值和整数标量，以及输出 ID。`NATIVE/launch.sh` 按声明顺序接受原生字节序的 float32 输入文件和新输出路径，成功时报告输出形状。C++ 产物直接调用现有 LibTorch，运行依赖记录在 `artifact.json`。当前支持有序的独立 CPU 图，原 Python 区域替换单独准入。样例与实测见 [CPU 图验证](artifacts/baseline/aten-native-graph.json)。
 
-`scar project-aten-graph --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --linkage LINKED/result.json --linkage-sha256 SHA256 --out PROJECTED` 可从原始 F4 和同次采集自动生成上述配方。`LINKED` 使用同一采集和调用范围执行 `link-aten-capture` 生成。投影用精确 TorchOp 输入元数据确定 dtype、设备和布局，用 F4 路径核对内部依赖与原返回分量。原生回放由调用方提供实际输入值，原 Python 决策仍单独保留。见 [采集到 C++ 验证](artifacts/baseline/aten-capture-graph.json)。
+`scar project-aten-graph --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --linkage LINKED/result.json --linkage-sha256 SHA256 --out PROJECTED` 可从原始 F4 和同次采集自动生成上述配方。采集时追加 `--native-tensor-inputs`，`LINKED` 使用同一采集和调用范围执行 `link-aten-capture` 生成。投影用精确 TorchOp 输入元数据确定 dtype、设备和布局，用 F4 路径核对内部依赖与原返回分量。原生回放由调用方提供实际输入值，原 Python 决策仍单独保留。见 [采集到 C++ 验证](artifacts/baseline/aten-capture-graph.json)。
 
-为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。SCAR 从数据依赖找相邻独立的调用，并核对显式算子效果声明和拓扑。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间及交接开销预测方案，再用同一可执行文件配对验证。`PLAN/launch.sh` 固定实测输入及选定模式，串行模式只用调用线程。性能报告的范围是预热后的调用。见 [调度验证](artifacts/baseline/aten-native-schedule.json)。
+为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间和交接开销求出互不重叠的相邻窗口组合。独立进程只对选出的并行方案与串行基线配对验证。`PLAN/plan.json` 逐段验算核心占用，`PLAN/launch.sh` 固定输入和已选窗口。性能报告的范围是预热后的调用。见 [多窗口调度验证](artifacts/baseline/aten-native-multi-window.json)。
 
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 多窗口 CPU 时序已接通真实采集。新 PyTorch 用例恢复 9 个算子、18 个精确 Tensor 输入端口和 8 条依赖。独立校准后，规划器保留 2×2 窗口串行，选择两个 768×768 窗口并逐段验证核心占用。生成的 C++20 调用现有 LibTorch，三个返回值均与原 Python 逐字节一致。7 对预热、31 对实测的中位耗时为 49.599→24.890 ms。测量范围为预热后的独立原生图调用。见 `artifacts/baseline/aten-native-multi-window.json`。
+
 2026-11-18 生成的 ATen CPU 图已接通双核时序和 C++20 执行。规划器根据已声明的算子效果、图依赖、两个不同物理核心和独立测得的服务时间计算方案，再验证整次调用。2×2 保留串行，768×768 的独立声明用例选双核，最终匹配试验中位耗时从 24.961 ms 降至 14.459 ms，31 对均更快。测试只计预热后的原生调用。见 `artifacts/baseline/aten-native-schedule.json`。
 
 2026-11-18 已从同次 CPU 采集自动生成独立原生图。`project-aten-graph` 核对 6 个 Tensor 输入、2 条内部数据边、1 个原返回分量及外部算子链接来源。三次算子的 C++20 输出与原 Python 返回的第 0 项逐字节一致。不同采集的同摘要链接报告及 `add.out` 写入路径均被拒绝。原入口仍 `KEEP_ORIGINAL`。见 `artifacts/baseline/aten-capture-graph.json`。
