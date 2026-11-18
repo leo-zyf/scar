@@ -1,0 +1,198 @@
+{
+  "context": {
+    "argv": [
+      "512"
+    ],
+    "cpu_ids": [
+      48
+    ],
+    "cwd": "/home/zyf/AAA/scar",
+    "environment": {
+      "BLIS_NUM_THREADS": "1",
+      "GLIBC_TUNABLES": null,
+      "LD_LIBRARY_PATH": null,
+      "LD_PRELOAD": null,
+      "MALLOC_ARENA_MAX": null,
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OMP_PLACES": null,
+      "OMP_PROC_BIND": null,
+      "OPENBLAS_NUM_THREADS": "1",
+      "PYTHONHASHSEED": null,
+      "PYTHONOPTIMIZE": null,
+      "PYTHONPATH": "/home/zyf/AAA/scikit-fem:/home/zyf/AAA/scar"
+    },
+    "interpreter": {
+      "executable": "/home/zyf/AAA/scar/.venv-planner/bin/python",
+      "magic": "2b0e0d0a",
+      "name": "cpython",
+      "optimize": 0,
+      "version": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]"
+    }
+  },
+  "decision": {
+    "effect_coverage": "guarded observed native callsite only",
+    "existing_parallel_release_retained": true,
+    "full_program_cpp": false,
+    "input_preparation_and_postprocessing_cpp": false,
+    "native_compact_default": false
+  },
+  "execution_recipe": {
+    "schema": "scar.execution-recipe",
+    "sha256": "f930b74a04122e12383dda3ee80e36f0aa827dcea2585e13126116738e3b1623",
+    "size_bytes": 41803,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/protocol/recipe.json"
+  },
+  "implemented": {
+    "comparison": "EXACT_LIBC_MEMCMP_OF_TYPED_CONTIGUOUS_NDARRAYS",
+    "entry": {
+      "sha256": "5938d4c74b8d344b7c9d784af14469ddaea6d6f3a74d2fddb10cb2ce89b6d3d7",
+      "size_bytes": 11002,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/native_detached_entry.py"
+    },
+    "source_retained": "ordinary Python preparation, normalization, warnings/status branch and publishing",
+    "transport": {
+      "sha256": "797197dda0725549e39da24a4d14c370578f7f1ebe7c3483ffad2810a9d12e41",
+      "size_bytes": 7593,
+      "uri": "/home/zyf/AAA/scar/scar/runtime/native_detached_stream.py"
+    }
+  },
+  "launch_affinity": {
+    "admitted": [
+      42,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "original": [
+      48
+    ],
+    "python_execution": [
+      48
+    ]
+  },
+  "measured": {
+    "compact_over_existing_parallel": 1.009546448881715,
+    "comparison_only_medians_ns": {
+      "bytes": 30391861,
+      "libc_memcmp": 21157053,
+      "memoryview": 597835415
+    },
+    "cutoff_comparison": {
+      "sha256": "77b7756502151c07d30966643b78cb9c0ea1c3ace430ccc0932b156a45fbb118",
+      "size_bytes": 1101,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-detached-entry/entry-ab/exact-match-diagnostic.json"
+    },
+    "final_runs": {
+      "sha256": "5f9cdf0a3578fd007102306b7a7d9b3d2e7edaebf1969be982de420e514da014",
+      "size_bytes": 19874,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-detached-entry/entry-ab-memcmp/result.json"
+    },
+    "initial_compact_median_ns": 3321132779,
+    "initial_runs": {
+      "sha256": "afbf2e37ca8e7ce132435331e58fa11408c23e9d45984abeb76e8256d27d524a",
+      "size_bytes": 21495,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-detached-entry/entry-ab/result.json"
+    },
+    "metrics": {
+      "compact": {
+        "max_ns": 2873498766,
+        "median_ns": 2852103541,
+        "min_ns": 2847686392,
+        "samples_ns": [
+          2847686392,
+          2873498766,
+          2852103541
+        ],
+        "variance_ns2": 190590918267450.34
+      },
+      "original": {
+        "max_ns": 8542757476,
+        "median_ns": 8539746704,
+        "min_ns": 8479060669,
+        "samples_ns": [
+          8539746704,
+          8479060669,
+          8542757476
+        ],
+        "variance_ns2": 1291523802342076.2
+      },
+      "parallel": {
+        "max_ns": 2847259379,
+        "median_ns": 2825133548,
+        "min_ns": 2798522208,
+        "samples_ns": [
+          2825133548,
+          2847259379,
+          2798522208
+        ],
+        "variance_ns2": 595504608519900.4
+      }
+    },
+    "original_over_compact": 2.994192385107382,
+    "paired_repeats": 3,
+    "scope": "full entry process wall clock, from startup through Python application and any launcher receipt",
+    "warmups_per_variant": 1
+  },
+  "original": {
+    "schema": "scar.python-source",
+    "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+    "size_bytes": 1313,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+  },
+  "package": {
+    "schema": "scar.native-ordered-sparse-export",
+    "sha256": "2289f376be8a0b23ce368829a42e22aa2842ccacb9fc68e9c218895be3043ce1",
+    "size_bytes": 2971,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-ordered-detached/relocated/artifact.json"
+  },
+  "schema": "scar.native-detached-entry-milestone",
+  "schema_version": 1,
+  "selection": {
+    "compact": {
+      "schema": "scar.sparse-parallel-entry-selection",
+      "sha256": "5430c4a17894e5178d6c6ac0ed93cdb59af567584f064f6fcc6a195404cdf612",
+      "size_bytes": 6579,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selection.json"
+    },
+    "parallel": {
+      "schema": "scar.sparse-parallel-entry-selection",
+      "sha256": "5430c4a17894e5178d6c6ac0ed93cdb59af567584f064f6fcc6a195404cdf612",
+      "size_bytes": 6579,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selection.json"
+    }
+  },
+  "verified": {
+    "boundary_observation_scope": "INSTALLED_BINDINGS_ONLY_NO_COMPLETE_TOP_LEVEL_OR_ESCAPED_ALIAS_CALL_TRACE",
+    "common_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "common_stdout_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+    "comparator_rejected": [
+      "different_option",
+      "different_rhs_bit",
+      "different_signed_zero",
+      "unaligned_array"
+    ],
+    "exit_code": 0,
+    "installed_bindings": 1,
+    "invalid_package_sha": {
+      "sha256": "45ac241bbd9c1907272f1d16fe9fdaff80b2b5a94839e01515b2e242cf72994b",
+      "size_bytes": 967,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-detached-entry/entry-ab/bad-package-sha.json"
+    },
+    "invalid_package_sha_result": "KEEP",
+    "original_references_per_trial": 1,
+    "stream_completion": [
+      512,
+      4,
+      0
+    ],
+    "stream_input_bytes": 311384,
+    "substitutions_per_trial": 511
+  }
+}

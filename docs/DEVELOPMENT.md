@@ -132,6 +132,8 @@ C++20 调用方包含 `scar_sparse_provider_v1.hpp`，以包目录构造 `scar::
 
 加 `--detached` 可导出紧凑输入版本。调用方一次提供已准备的 CSR 模板、基础 RHS 和写入位置，每轮只提供序号与 binary64 缩放因子。`stream.json` 记录字段、保护条件和数据量，`detached-source.json` 记录入口参数和标量表达式的来源。worker 用现有 OpenBLAS `DOMATCOPY` 生成 RHS，更新矩阵中指定位置后调用 SuperLU。该版本适用于独立数值试验，原入口的归一化副作用和发布合同仍需单独验证。
 
+`python -m scar.runtime.native_detached_entry --exclusive-inputs --selection SELECTION --selection-sha256 SELECT_SHA --native-detached PACKAGE --native-detached-sha256 PACKAGE_SHA --report REPORT -- ENTRY ARGS` 可在完整原入口试用该产物。试验在原求解调用点校验来源、浮点控制和输入字节，首次结果由原载体返回。随后仅发布按序匹配的紧凑结果，失配后剩余调用由原载体执行。原应用继续执行归一化、状态处理和结果发布。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
