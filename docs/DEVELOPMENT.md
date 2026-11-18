@@ -86,6 +86,14 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 512 次有限元参数扫描的整程中位数从 8.649 s 降到 6.933 s，完整进程计时为 1 组热身和 3 组配对。选择收据仅适用于该源码、参数、环境和 CPU 亲和性。证据见 `artifacts/baseline/three-stage-csr-symbolic-solve.json`。
 
+### 稀疏更新与求解的联合计划
+
+`plan_sparse_pipeline --scope SCOPE --row-selection ROW --solve-launch SOLVE --out STUDY` 复验两个区域及其跨函数数据边。循环模板保留每轮的更新、原规范化和求解，以及跨轮完成顺序。两个 C++ 计划从首次使用持有到退出，预算检查计算同时占用的元数据。
+
+`--study STUDY/selection.json --cost COST --validation VALIDATION --out FINAL` 核对同一入口的节段成本和整程 A/B。`python -m scar.runtime.sparse_pipeline_launch --selection FINAL/selection.json --selection-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 从收据选择两个原生实现的组合。一次性加载在首轮时钟内，完整计划还记录进入和关闭作用域的成本。
+
+512 轮整程中位数为仅优化求解 6.944 s、联合 6.934 s。两组分布重叠，发布决策保持 `SOLVE_ONLY`。验收见 `artifacts/baseline/three-stage-csr-solve-composition.json`。下一轮先分析哪些跨轮依赖只约束结果发布，再用求解器的线程与内存约束建立并行时序。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
