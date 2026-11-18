@@ -88,7 +88,11 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 新构建的 ELF 与历史产物逐字节一致。真实 512 轮入口的串行重新验收为 8.634 s → 6.918 s。另一次独立配对的串行与 8 worker 中位数为 6.949 s → 2.866 s。两组都保留原输出和错误流，正式并行 launch 验证了 512 次有序交付。记录见 `artifacts/baseline/three-stage-csr-native-boundary.json`。
 
-下一步复用 Gray–Scott 已使用的 `ExecutionRecipe`，把四个稀疏阶段、一次性与每轮状态的生命期、资源计划一起封存后交给 C++20 后端。验收要求同一任务图可从中端追到代码生成收据，阶段顺序、生命期或预算改变时由后端拒绝不匹配的降级。
+稀疏路径也使用 Gray–Scott 的 `ExecutionRecipe` 封套。`recipe.json` 保存四个求解阶段的读写依赖、一次性与每轮状态、原状态码发布以及选定 CPU 和符号状态预算。降级前重放原作用域和规划问题，`lowering-receipt.json` 记录每个任务落到的 C++ ABI 或 Python 边界。区域测量和发布均引用同一 `recipe.json`。
+
+可用 `scar recipe estimate --recipe RECIPE --out ESTIMATE` 重放模型，或用 `scar recipe lower --recipe RECIPE --native NATIVE --out LOWERED` 核验另一个已构建的同合同产物。真实执行资格仍由原入口对照决定。
+
+同一 recipe 已获准用于 512 轮有限元入口。完整进程配对中位数为原路径 8.558 s、C++20 路径 6.922 s，发布入口验证了 1 次符号构建和 511 次命中。重算摘要后的生命期、依赖和预算篡改均被拒绝。Gray–Scott 的原 recipe 和四步状态、PNG 一并复验，见 `artifacts/baseline/three-stage-sparse-execution-recipe.json`。
 
 512 次有限元参数扫描的整程中位数从 8.649 s 降到 6.933 s，完整进程计时为 1 组热身和 3 组配对。选择收据仅适用于该源码、参数、环境和 CPU 亲和性。证据见 `artifacts/baseline/three-stage-csr-symbolic-solve.json`。
 

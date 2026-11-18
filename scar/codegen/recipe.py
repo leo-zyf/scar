@@ -179,10 +179,16 @@ def _build_stateful_recipe(recipe, out):
     return RecipeArtifact(native, directory, recipe, receipt, _raw_sha(path))
 
 
-def build_recipe(recipe, out):
+def build_recipe(recipe, out, *, source_root=None, native_dir=None, jobs=4):
     """Dispatch after envelope validation; each profile replays before building."""
     from scar.ir.execution_recipe import read_recipe, validate_recipe
     value = read_recipe(recipe) if isinstance(recipe, (str, Path)) else validate_recipe(recipe)
+    if value['profile'] == 'cpu-sparse-symbolic-solve-v1':
+        from .sparse_recipe import build_sparse_lowering
+
+        return build_sparse_lowering(value, out, source_root=source_root, native_dir=native_dir, jobs=jobs)
+    if source_root is not None or native_dir is not None:
+        raise ValueError('native provider inputs require the sparse symbolic solve profile')
     if value['profile'] == 'cpu-temporal-loop-v1': return _build_loop_recipe(value, out)
     if value['profile'] == 'cpu-stateful-array-region-v1': return _build_stateful_recipe(value, out)
     raise ValueError('unsupported execution recipe lowering profile')

@@ -7,8 +7,9 @@ from pathlib import Path
 from statistics import median
 import sys
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.sparse_solve_callsite import seal_callsite
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, read_artifact, write_recipe
 from scar.ir.implementation_plan import (CostEstimate, ImplementationChoice, ImplementationOption,
     PlanningActivity, PlanningOperation, PlanningProblem, PlanningResource, PlanningTimingConstraint, problem_document)
 from scar.ir.program.providers import ProviderArtifact
@@ -32,23 +33,6 @@ def _write(path, value):
         json.dump(value, stream, indent=2, sort_keys=True, allow_nan=False)
         stream.write('\n')
     return artifact_reference(path, value['schema'])
-
-
-def _stages(scope):
-    """Express what would be shared while preserving the original numeric algorithm."""
-    return (
-        dict(id='column-order', reads=['csr-structure', 'column-policy', 'transpose-mode'],
-             produces=['raw-column-permutation'], lifetime=scope, effect='OWNED_STRUCTURAL_METADATA'),
-        dict(id='preorder', reads=['csr-structure', 'raw-column-permutation'],
-             produces=['final-column-permutation', 'elimination-tree', 'column-slices'],
-             lifetime=scope, effect='OWNED_STRUCTURAL_METADATA'),
-        dict(id='numeric-factorization', reads=['csr-values', 'current-column-slices', 'elimination-tree',
-             'final-column-permutation', 'pivot-policy'], produces=['row-pivots', 'numeric-factors'],
-             lifetime='PER_CALL', effect='PER_CALL_WORKSPACE'),
-        dict(id='triangular-solve', reads=['right-hand-side', 'row-pivots', 'numeric-factors',
-             'final-column-permutation', 'transpose-mode'], produces=['solution', 'status'],
-             lifetime='PER_CALL', effect='RETAIN_ORIGINAL_STATUS_AND_WARNING_PATH'),
-    )
 
 
 def _problem(source, target, decomposition, budget_bytes, cost_ref=None, cost=None, *, paired=None, paired_ref=None):
@@ -102,9 +86,11 @@ def _problem(source, target, decomposition, budget_bytes, cost_ref=None, cost=No
         activities=activities, timing_constraints=constraints)
 
 
+@replay_transaction()
 def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source=None, blas=None,
             jobs=4, budget_bytes=8*1024*1024):
     from scar.analysis.sparse_solve_scope import check_sparse_solve_scope
+    from scar.optimization.sparse_solve_recipe import decomposition_stages, make_sparse_solve_recipe
 
     if (superlu_source is None) != (blas is None) or (native_path is not None and superlu_source is not None):
         raise ValueError('choose --native or both --superlu-source and --blas')
@@ -131,19 +117,6 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source
             raise ValueError('solver cost belongs to a different source or launch scope')
 
     directory = Path(out).resolve()
-    native = None
-    if native_path is not None or superlu_source is not None:
-        from scar.codegen.sparse_lu import PROVIDER_VERSION, build_symbolic_solve, validate_symbolic_solve
-
-        elf = read_artifact(scope['elf_evidence'])
-        if (elf['library'] != carrier
-                or elf['documentation']['matched_tag'] != f'scipy-v{PROVIDER_VERSION}'):
-            raise ValueError('original sparse call lacks the supported SuperLU provider version')
-        bundle = Path(native_path).resolve() if native_path is not None else directory / 'native'
-        if superlu_source is not None:
-            build_symbolic_solve(superlu_source, bundle, blas=blas, jobs=jobs, carrier=carrier)
-        native = artifact_reference(bundle / 'artifact.json', NATIVE)
-        validate_symbolic_solve(native, carrier)
     directory.mkdir(parents=True, exist_ok=True)
     source_scope = read_artifact(scope['source_scope'])
     count = source_scope['observed']['consumer_completions']
@@ -154,7 +127,7 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source
         raise ValueError('source target hardware graph changed')
     decomposition = _write(directory/'decomposition.json', dict(schema=DECOMPOSITION, schema_version=1,
         source=source_ref, original_call=call, observed_graph=scope['source_graph'], call_count=count,
-        cpu_ids=entry['affinity'], stages=_stages('ONE_SCOPED_ACTIVATION_WITH_EXACT_STRUCTURE_GUARD'),
+        cpu_ids=entry['affinity'], stages=decomposition_stages(),
         baseline_phase_costs_ns=None, value_changes_keep_factorization=True,
         candidate_uses_owned_structural_only=True, full_entry_timing_qualified=False))
     problem = _problem(source_ref, hardware, decomposition, budget_bytes, cost_ref, cost)
@@ -163,7 +136,21 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source
     result = dict(schema=PLAN, schema_version=1, source=source_ref,
         decomposition=decomposition, problem=problem_ref, plan=plan, cost=cost_ref,
         decision='KEEP', reason='NATIVE_SYMBOLIC_ENTRY_NOT_QUALIFIED')
-    if native is not None:
+    if native_path is not None or superlu_source is not None:
+        from scar.codegen.recipe import build_recipe
+
+        if native_path is None:
+            blas_ref = artifact_reference(Path(blas).resolve(), 'scar.provider-binary')
+        else:
+            prebuilt = artifact_reference(Path(native_path).resolve()/'artifact.json', NATIVE)
+            blas_ref = read_artifact(prebuilt)['blas']
+        recipe = make_sparse_solve_recipe(source_ref, decomposition, hardware, problem_ref, blas_ref=blas_ref)
+        execution_recipe = write_recipe(recipe, directory/'recipe.json')
+        lowering = build_recipe(directory/'recipe.json', directory, source_root=superlu_source,
+                                native_dir=native_path, jobs=jobs)
+        native = read_artifact(lowering)['native']
+        binding = dict(execution_recipe=execution_recipe, lowering=lowering)
+        result.update(binding)
         code_path = directory/'entry-code.bin'
         with code_path.open('xb') as stream:
             marshal.dump(code, stream)
@@ -174,7 +161,7 @@ def prepare(scope_path, out, *, cost_path=None, native_path=None, superlu_source
             entry=entry['source'], source=source_ref, explicit_study_only=True, decision='KEEP',
             callsite={**call, **site}, launch_context=context, native=native, budget_bytes=budget_bytes,
             runtime_members=members, entry_code=dict(artifact=artifact_reference(code_path, ENTRY_CODE),
-                interpreter=interpreter_context(), code_key=code_key(code))))
+                interpreter=interpreter_context(), code_key=code_key(code)), **binding))
     return _write(directory/'result.json', result)
 
 
@@ -215,6 +202,7 @@ def _entry_validation(benchmark, study, context, count, symbolic_bytes):
     return durations
 
 
+@replay_transaction()
 def qualify(plan_path, cost_path, validation_path, out):
     from scar.optimization.sparse_symbolic_cost import SCHEMA, check
 
@@ -224,6 +212,20 @@ def qualify(plan_path, cost_path, validation_path, out):
     study = read_artifact(study_ref)
     scope = read_artifact(previous['source'])
     decomposition = read_artifact(previous['decomposition'])
+    keys = ('execution_recipe', 'lowering')
+    binding = {key: previous[key] for key in keys if key in previous}
+    if binding or any(key in study for key in keys):
+        from scar.codegen.sparse_recipe import verify_sparse_lowering
+
+        if len(binding) != len(keys) or any(study.get(key) != binding[key] for key in keys):
+            raise ValueError('study does not bind the prepared execution recipe and lowering')
+        recipe = read_artifact(binding['execution_recipe'])
+        artifacts = recipe['artifacts']
+        if (artifacts['source_scope'] != study['source'] or study['source'] != previous['source']
+                or artifacts['decomposition'] != previous['decomposition']
+                or artifacts['problem'] != previous['problem']):
+            raise ValueError('execution recipe does not belong to the measured solver scope')
+        verify_sparse_lowering(binding['execution_recipe'], binding['lowering'], study['native'])
     budget = study['budget_bytes']
     count = decomposition['call_count']
     paired_ref = artifact_reference(Path(cost_path).resolve(), SCHEMA)
@@ -231,6 +233,7 @@ def qualify(plan_path, cost_path, validation_path, out):
     symbolic_bytes = paired['resource']['symbolic_retained_bytes']
     if (paired['solve_scope'] != previous['source'] or paired['source_scope'] != scope['source_scope']
             or paired['native'] != study['native'] or paired['runtime_adapter'] not in study['runtime_members']
+            or paired.get('execution_recipe') != binding.get('execution_recipe')
             or paired['context'] != study['launch_context'] or paired['budget_bytes'] != budget
             or not 0 < symbolic_bytes <= budget or paired['qualification']['all_bitwise'] is not True):
         raise ValueError('paired solver measurements differ from the C++ study or source scope')
@@ -254,7 +257,7 @@ def qualify(plan_path, cost_path, validation_path, out):
         entry=study['entry'], context=paired['context'], problem=problem_ref, plan=schedule_ref, cost=paired_ref,
         validation=validation_ref, median_ns=dict(original=median(original), native=median(native)),
         modeled_intervals_ns=dict(original_lower=original_floor, native_upper=native_ceiling),
-        decision='LOAD_NATIVE_CANDIDATE' if eligible else 'KEEP'))
+        decision='LOAD_NATIVE_CANDIDATE' if eligible else 'KEEP', **binding))
 
 
 def main(argv=None):

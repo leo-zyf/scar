@@ -10,6 +10,7 @@ from scar.analysis.bounded_entry_calls import (
 )
 from scar.analysis.build import BuildSession
 from scar.analysis.csr_topology_scope import SOURCE_SCOPE
+from scar.analysis.replay_transaction import current_transaction
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.dependencies import DependencyKind
@@ -240,6 +241,15 @@ def derive_sparse_solve_scope(source_scope, source_graph, native_observation, el
 
 def check_sparse_solve_scope(reference):
     """Independently replay the graph and compare the complete scope receipt."""
+    transaction = current_transaction()
+    if transaction is not None and 'uri' in reference:
+        key = tuple(reference[name] for name in ('uri', 'sha256', 'size_bytes', 'schema'))
+        return transaction.memo('scar.sparse-solve-scope/v1', key,
+            lambda: _check_sparse_solve_scope(reference), capture_reads=True)
+    return _check_sparse_solve_scope(reference)
+
+
+def _check_sparse_solve_scope(reference):
     doc = read_artifact(reference) if 'uri' in reference else reference
     _require((doc.get('schema'),doc.get('schema_version')) == (SCHEMA,1),'expected a sparse solve scope')
     expected = derive_sparse_solve_scope(*(doc[k] for k in ('source_scope','source_graph','native_observation','elf_evidence')))

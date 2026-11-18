@@ -1,0 +1,149 @@
+{
+  "implemented": {
+    "identical_previous_native_elf": true,
+    "lowering": {
+      "schema": "scar.execution-recipe-lowering",
+      "sha256": "04d3a8e3e38cfff881a73dc8c1f00e088b176a39a9f5cb77da59a363aca283e8",
+      "size_bytes": 12434,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan-final/lowering-receipt.json"
+    },
+    "native_abi_version": 1,
+    "native_library": {
+      "schema": "scar.native-library",
+      "sha256": "ac9549b960a4077349a55042cca5daba742ee3bd3d2a004b83b9e088cf1bde1f",
+      "size_bytes": 139584,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan/native/sparse_lu.so"
+    },
+    "recipe": {
+      "schema": "scar.execution-recipe",
+      "sha256": "3e376ce410822fec77482f4a1f76b6c8edce113709d0e51c710fbb7fd178dbbb",
+      "size_bytes": 42694,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan-final/recipe.json"
+    },
+    "recipe_id": "recipe-v1:55f85bf6206ed3f98d5b37386c2af5dbafce340f7b068283926a396fb7a5e877",
+    "task_graph_sha256": "ab01577819b2fae9f3f6a5bada038eabc256edc7d2e8b494d6987ee23e53b8cb"
+  },
+  "inferred": {
+    "numeric_workspace_bound_bytes": null,
+    "observed_scope_cost_bounds_ns": {
+      "native_upper": 5806927657,
+      "original_lower": 6573511649
+    },
+    "per_phase_duration_ns": null,
+    "replayable_cost": {
+      "schema": "scar.sparse-symbolic-paired-cost",
+      "sha256": "d083843b739274e462ada71b0b0bbcfc65367f658a947e5c1e562c2adef8f88c",
+      "size_bytes": 7690,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/cost/result.json"
+    },
+    "retained_metadata_capacity_bytes": 8388608
+  },
+  "observed": {
+    "clean_pairs": {
+      "schema": "scar.sparse-solve-entry-validation",
+      "sha256": "1ba89e813e02f7b8bdc5d73a45bfaa0812774256bd63d5c8ebd9dd7ac8da163a",
+      "size_bytes": 12230,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/entry/result.json"
+    },
+    "cpu_ids": [
+      48
+    ],
+    "fem_entry": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    },
+    "measured_wall_times_ns": {
+      "native": {
+        "max_ns": 6953052655,
+        "median_ns": 6921791185,
+        "min_ns": 6905062767,
+        "samples_ns": [
+          6953052655,
+          6905062767,
+          6921791185
+        ],
+        "variance_ns2": 593358137599361.4
+      },
+      "original": {
+        "max_ns": 8632049411,
+        "median_ns": 8558315504,
+        "min_ns": 8548079100,
+        "samples_ns": [
+          8548079100,
+          8558315504,
+          8632049411
+        ],
+        "variance_ns2": 2098747689628764.2
+      }
+    },
+    "measurement_pairs": 3,
+    "original_f4_scope": {
+      "schema": "scar.sparse-solve-scope",
+      "sha256": "1d21162af616895aa7c6833a67227a4567f48c5fd804c392962e64bcf4967974",
+      "size_bytes": 42725,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-solve-scope/source/scope-solve.json"
+    },
+    "warmup_pairs": 1
+  },
+  "proposed": {
+    "native_phases": [
+      "column-order",
+      "preorder",
+      "numeric-factorization",
+      "triangular-solve"
+    ],
+    "no_fast_math_or_numeric_kernel_change": true,
+    "shared_task_templates": 14,
+    "template_calls": 512
+  },
+  "rejected": {
+    "modified_properties": [
+      "lifetime",
+      "dependency",
+      "budget"
+    ],
+    "tamper": {
+      "schema": "scar.sparse-execution-recipe-tamper-check",
+      "sha256": "e6429de91068a87c2eba6f507c0a88ca8ea21b5a2120b98bc21b516cf5879db3",
+      "size_bytes": 3487,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/tamper-final/result.json"
+    }
+  },
+  "schema": "scar.three-stage-sparse-execution-recipe",
+  "schema_version": 1,
+  "verified": {
+    "actual_selected_run": {
+      "schema": "scar.entry-runner-execution",
+      "sha256": "3a412f9e5ddb8343accb7ad0ac175a3f167dd875c2163f86650fd724ca3c3064",
+      "size_bytes": 1837,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/released/selected.json"
+    },
+    "fallback_calls": 0,
+    "fem_speedup": 1.236430755459145,
+    "gray_real_state_and_png": {
+      "schema": "scar.real-entry-stateful-validation",
+      "sha256": "348d504e65705e440991c10b48d4a9928f8430e3448d622623ed5bf33d12351b",
+      "size_bytes": 47895,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/gray-entry/result.json"
+    },
+    "gray_recipe_cold_replay": {
+      "schema": "scar.gray-execution-recipe-cold-check",
+      "sha256": "8ee1b74fdfd90582640b9c8b7ed0a0a94c3ce2ae58d72bad54657694c077378e",
+      "size_bytes": 4174,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/gray-cold.json"
+    },
+    "launch": {
+      "schema": "scar.sparse-direct-solve-launch",
+      "sha256": "a17b4cd11369fbe3de36f6e3211706fad1111472d546df3dd9053ed031e8b214",
+      "size_bytes": 3639,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/released/launch.json"
+    },
+    "native_calls": 512,
+    "original_and_selected_streams_match": true,
+    "retained_symbolic_bytes": 168108,
+    "symbolic_builds": 1,
+    "symbolic_hits": 511
+  }
+}

@@ -29,6 +29,18 @@ def project(design_path, worker_paths):
                       design['harness'], carrier, native['source'], native['wheel'], native['library'],
                       native['blas']):
         read_artifact(reference, json_document=False)
+    binding = {}
+    if 'execution_recipe' in design:
+        from scar.optimization.sparse_solve_recipe import verify_sparse_solve_recipe
+
+        reference = design['execution_recipe']
+        recipe = verify_sparse_solve_recipe(read_artifact(reference))
+        if (recipe['artifacts']['source_scope'] != design['solve_scope']
+                or recipe['artifacts']['blas'] != native['blas']
+                or recipe['resources']['selected_cpu']['cpu_ids'] != design['context']['cpu_ids']
+                or recipe['resources']['memory']['explicit_budget_bytes'] != design['budget_bytes']):
+            raise ValueError('symbolic measurements do not use the recipe scope, hardware or budget')
+        binding['execution_recipe'] = reference
     refs = [artifact_reference(path, WORKER) for path in worker_paths]
     groups = design['groups']
     if (not groups or len(groups) != len(refs) or
@@ -101,7 +113,7 @@ def project(design_path, worker_paths):
                 qualification=dict(paired_section_only=True, all_bitwise=all_bitwise,
                                    preserved_both_inputs=all_unchanged, nonzero_info_or_rejected=misses,
                                    scopes_with_one_build_and_expected_hits=qualified_scopes,
-                                   full_entry_cost_ns=None, automatic_rewrite=False))
+                                   full_entry_cost_ns=None, automatic_rewrite=False), **binding)
 
 
 def check(path):
