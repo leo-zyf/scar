@@ -160,9 +160,32 @@ class _CompactOffers:
         return dict(self.stats, transport=None if self.transport is None else dict(self.transport.stats))
 
 
-def run(entry, argv, *, selection=None, sha256=None, package=None, package_sha256=None, exclusive=False):
+def _execute_study(entry, argv, scope, row_scope):
+    reason = 'EXPLICIT_COMPACT_SPARSE_SOLVE_STUDY'
+    if row_scope is None:
+        return _execute(entry, argv, scope, reason)
+
+    from scar.runtime.sparse_pipeline_entry import _install, _Pipeline
+
+    with _install(_Pipeline((row_scope, 'EXPLICIT_DEAD_RESULT_ITEM_STUDY'), (scope, reason))):
+        report = _execute(entry, argv, None, reason)
+    for binding in scope.bindings:
+        stats = binding['stats']
+        report['observed_boundary_calls'] += stats['native_calls'] + stats['fallback_calls']
+        report['statistics']['fallback_calls'] += stats['fallback_calls']
+    report['attachments'] = [dict(source=str(stage.source), module=binding['module_name'],
+        natural_import=binding['natural_import']) for stage in (row_scope, scope) for binding in stage.bindings]
+    report['installed_bindings'] = len(report['attachments'])
+    report['decision'] = 'GUARDED_ATTACHMENT' if report['attachments'] else 'NO_OP'
+    report['frontier'] = [*row_scope.frontier, *scope.frontier]
+    return report
+
+
+def run(entry, argv, *, selection=None, sha256=None, package=None, package_sha256=None, exclusive=False,
+        dead_item=None, dead_item_sha256=None):
     entry, argv = _arguments(entry, argv)
     offers = None
+    row_scope, row_reason = None, None
     reason = 'DETACHED_ORIGINAL_SELECTION_CHANGED'
     selected = _admit(entry, argv, selection, sha256, exclusive) if package and package_sha256 else None
     if selected is not None:
@@ -179,9 +202,16 @@ def run(entry, argv, *, selection=None, sha256=None, package=None, package_sha25
                     if scope is not None:
                         offers = _CompactOffers(selected, root, manifest, recipe, blas)
                         scope.loader = offers.activate
+                        if dead_item and dead_item_sha256:
+                            from scar.runtime.dead_result_item import admit
+
+                            try:
+                                row_scope = admit(dead_item, dead_item_sha256, selected, selection, sha256)
+                            except _FAILURES:
+                                row_reason = 'DEAD_ITEM_PLAN_OR_SOURCE_CHANGED'
                         try:
                             with _observe_inputs(entry, recipe, offers.capture):
-                                result = _execute(entry, argv, scope, 'EXPLICIT_COMPACT_SPARSE_SOLVE_STUDY')
+                                result = _execute_study(entry, argv, scope, row_scope)
                         finally:
                             offers.close()
     if offers is None:
@@ -192,6 +222,8 @@ def run(entry, argv, *, selection=None, sha256=None, package=None, package_sha25
     result['schema'] = 'scar.native-detached-entry-execution'
     result['selection_sha256'], result['package_sha256'] = sha256, package_sha256
     result['compact'] = None if offers is None else offers.receipt()
+    if dead_item:
+        result['dead_item'] = (dict(elided=0, reason=row_reason or reason) if row_scope is None else row_scope.receipt())
     result['applied'] = 'CPP_DETACHED' if offers is not None and offers.stats['matched'] else 'KEEP'
     return result
 
@@ -202,6 +234,8 @@ def main(argv=None):
     parser.add_argument('--selection-sha256')
     parser.add_argument('--native-detached', dest='package')
     parser.add_argument('--native-detached-sha256', dest='package_sha256')
+    parser.add_argument('--dead-item', help='explicit dead-result-item study under normal completion')
+    parser.add_argument('--dead-item-sha256')
     parser.add_argument('--exclusive-inputs', action='store_true')
     parser.add_argument('--report', type=Path)
     parser.add_argument('command', nargs=argparse.REMAINDER)
@@ -211,8 +245,11 @@ def main(argv=None):
         parser.error('original Python script required after --')
     if args.report and args.report.exists():
         parser.error('fresh report path required')
+    if bool(args.dead_item) != bool(args.dead_item_sha256):
+        parser.error('pass both the dead-item plan and its fingerprint')
     result = run(command[0], command[1:], selection=args.selection, sha256=args.selection_sha256,
-        package=args.package, package_sha256=args.package_sha256, exclusive=args.exclusive_inputs)
+        package=args.package, package_sha256=args.package_sha256, exclusive=args.exclusive_inputs,
+        dead_item=args.dead_item, dead_item_sha256=args.dead_item_sha256)
     if args.report:
         with args.report.open('x') as stream:
             json.dump(result, stream, indent=2, sort_keys=True)

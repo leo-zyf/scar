@@ -1,0 +1,151 @@
+{
+  "concrete_entry": {
+    "schema": "scar.python-source",
+    "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+    "size_bytes": 1313,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+  },
+  "decision": {
+    "automatic_application": false,
+    "full_program_cpp": false,
+    "measured_entry_speedup": false,
+    "remaining_contract": [
+      "NORMAL_COMPLETION",
+      "EXCLUSIVE_INPUTS",
+      "STABLE_PROVIDER_BINDINGS",
+      "NO_FRAME_OBSERVATION"
+    ]
+  },
+  "implemented": {
+    "compiler_preseals_python_glue": true,
+    "condition": "EXCLUSIVE_INPUTS_AND_NORMAL_COMPLETION",
+    "fixed_unused_slot": 2,
+    "native_compute_provider": "same OpenBLAS and SuperLU",
+    "plan": {
+      "schema": "scar.dead-result-item-plan",
+      "sha256": "34642922e0ff9815d9a90118aa08a8f2de7fbd861e2d8f88accb86d137069bdb",
+      "size_bytes": 16157,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/dead-result-item/sealed-plan.json"
+    },
+    "scope": "ONLY_SEALED_CALLSITE",
+    "source_normalization_and_result_publication": "original Python",
+    "source_spans": {
+      "call": [
+        505,
+        17,
+        505,
+        40
+      ],
+      "producer": [
+        434,
+        12,
+        434,
+        66
+      ]
+    }
+  },
+  "measured": {
+    "compact_over_dead_item": 0.9859015146832415,
+    "cpu_ids": [
+      42,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "first_runtime_compile_report": {
+      "sha256": "a3c137df0d6119e0743d96622da33cf50009cb165e5923e885a23e8929c5d4de",
+      "size_bytes": 25560,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/dead-result-item/entry-ab/result.json"
+    },
+    "full_process_report": {
+      "sha256": "d2aba63d663901001392fe7c1256cbe113be6b9de7bb3079a064f7105269ec2e",
+      "size_bytes": 25765,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/dead-result-item/entry-ab-sealed/result.json"
+    },
+    "metrics": {
+      "compact": {
+        "max_ns": 2847385836,
+        "median_ns": 2842252797,
+        "min_ns": 2839229242,
+        "samples_ns": [
+          2842252797,
+          2839229242,
+          2847385836
+        ],
+        "variance_ns2": 17003333315730.334
+      },
+      "dead_item": {
+        "max_ns": 2889917182,
+        "median_ns": 2882897282,
+        "min_ns": 2864259826,
+        "samples_ns": [
+          2882897282,
+          2889917182,
+          2864259826
+        ],
+        "variance_ns2": 175822279845445.34
+      },
+      "parallel": {
+        "max_ns": 2871107821,
+        "median_ns": 2841549667,
+        "min_ns": 2837381695,
+        "samples_ns": [
+          2871107821,
+          2841549667,
+          2837381695
+        ],
+        "variance_ns2": 338084672241396
+      }
+    },
+    "pairs": 3,
+    "released_parallel_over_dead_item": 0.9856576176826823,
+    "runtime_admission_after_ns": 31090022,
+    "runtime_admission_before_ns": 58740169,
+    "runtime_admission_diagnostic": {
+      "sha256": "f8ee8c649ed2b121dbe62701f2cb4d2715d58fd1aa3859fe4e1a4f458486f5c8",
+      "size_bytes": 119,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/dead-result-item/sealed-admission-times.json"
+    },
+    "scope": "wall clock of full-entry fresh process, including launch and receipt",
+    "warmups": 1
+  },
+  "observed": {
+    "instrumented_source": {
+      "sha256": "89b4ebeb85de63ab74b939fa4074e285c4d92163c40b216ed2d3d90153438f10",
+      "size_bytes": 12939,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/normalization-owner-diagnostic/result.json"
+    },
+    "provider_complement_calls": 512,
+    "provider_complement_inclusive_ns": 389249154,
+    "row_edit_calls": 512,
+    "row_edit_inclusive_ns": 617599502,
+    "warning": "instrumented owner diagnostic, separate from clean entry timing"
+  },
+  "schema": "scar.dead-result-item-milestone",
+  "schema_version": 1,
+  "source_selection": {
+    "schema": "scar.sparse-parallel-entry-selection",
+    "sha256": "5430c4a17894e5178d6c6ac0ed93cdb59af567584f064f6fcc6a195404cdf612",
+    "size_bytes": 6579,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selection.json"
+  },
+  "verified": {
+    "compact_native_results_per_launch": 511,
+    "dead_item_fallbacks_per_launch": 0,
+    "dead_producer_elisions_per_launch": 511,
+    "first_original_complement_calls_per_launch": 1,
+    "original_equivalent_process_output": true,
+    "original_solver_references_per_launch": 1,
+    "original_stdout_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+    "receipt": {
+      "sha256": "34038ba865de96614cc4fcd2d906347cf11ba723f1af910d45836af29b829d2f",
+      "size_bytes": 1795,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/dead-result-item/entry-ab-sealed/0-dead_item.json"
+    }
+  }
+}
