@@ -63,8 +63,12 @@ def _adjacencies(flow):
     return references, world
 
 
-def _original_calls(view, coordinates, scoped_calls):
-    pid = coordinates.target_process.pid
+class AtenSourceMatchError(ValueError):
+    """The observed attempts do not select one supported source body."""
+
+
+def original_aten_call_index(view, coordinates):
+    """Replay the original source and CALL operands once for a capture."""
     src_meta, = (row for row in coordinates.report['membership']
                  if row['artifact']['schema'] == 'scar.call-edge-meta.v1')
     # The coordinate binder and operand reader independently check this member.
@@ -74,14 +78,24 @@ def _original_calls(view, coordinates, scoped_calls):
         raise ValueError('original call metadata changed during source replay')
     root = json.loads(raw)['project_root']
     code = ObservedSourceCodeProvider(view, metadata_path.parent, root)
-    index = ObservedSourceCallsiteIndex(code)
-    attempted = {row['attempt'] for row in scoped_calls}
+    return ObservedSourceCallsiteIndex(code)
+
+
+def original_aten_call_bindings(index, coordinates):
+    """Index all alternatives by original attempt within the target process."""
+    pid = coordinates.target_process.pid
     bindings = defaultdict(list)
     for bound in index.bindings:
-        if bound.attempt.process_id == pid and bound.attempt.index in attempted:
+        if bound.attempt.process_id == pid:
             bindings[bound.attempt.index].append(bound)
-    if set(bindings) != attempted or any(len(rows) != 1 for rows in bindings.values()):
-        raise ValueError('selected native scope has no unique original F4 CALL')
+    return bindings
+
+
+def original_aten_calls(index, bindings, scoped_calls):
+    """Match one activation against exact original F4 and operand evidence."""
+    attempted = {row['attempt'] for row in scoped_calls}
+    if not attempted or any(len(bindings.get(attempt, ())) != 1 for attempt in attempted):
+        raise AtenSourceMatchError('selected native scope has no unique original F4 CALL')
 
     owners = {}
     for binding in scoped_calls:
@@ -89,8 +103,8 @@ def _original_calls(view, coordinates, scoped_calls):
         event = bound.attempt
         anchor = binding['operand']
         invocation = dict(process_id=event.process_id, thread_id=event.thread_id, invocation_id=event.invocation_id)
-        trace_file, = (row for row in code.trace.files
-                       if str(Path(code.trace.directory) / row.path) == event.anchor.path)
+        trace_file, = (row for row in index.codes.trace.files
+                       if str(Path(index.codes.trace.directory) / row.path) == event.anchor.path)
         if (binding['invocation'] != invocation or binding['site'] != encode(event.site)
                 or anchor['locator'] != f'#/lines/{event.anchor.line_number}'
                 or (anchor['artifact']['uri'], anchor['artifact']['sha256'], anchor['artifact']['size_bytes'])
@@ -99,11 +113,11 @@ def _original_calls(view, coordinates, scoped_calls):
         owners[event.index] = (invocation, bound)
     scopes = {(row.unit, row.owner.owner, inv['thread_id'], inv['invocation_id']) for inv, row in owners.values()}
     if len(scopes) != 1:
-        raise ValueError('one original caller activation required for regional planning')
+        raise AtenSourceMatchError('one original caller activation required for regional planning')
     rows = [owners[attempt][1] for attempt in sorted(owners)]
     if len({row.query for row in rows}) != len(rows):
-        raise ValueError('repeated source CALL requires a retained loop transfer interface')
-    return index, owners[rows[0].attempt.index][0], rows
+        raise AtenSourceMatchError('repeated source CALL requires a retained loop transfer interface')
+    return owners[rows[0].attempt.index][0], rows
 
 
 def _source_rows(unit, index, bindings):
@@ -180,7 +194,9 @@ def _return_points(flow, result, references):
 
 def project_aten_source_calls(view, capture):
     """Retain F4 references and state paths at original checked native scopes."""
-    index, invocation, bindings = _original_calls(view, capture.coordinates, capture.calls)
+    index = original_aten_call_index(view, capture.coordinates)
+    invocation, bindings = original_aten_calls(index, original_aten_call_bindings(index, capture.coordinates),
+                                               capture.calls)
     unit = view.unit(bindings[0].unit)
     functions = [(i, fn) for i, fn in enumerate(unit.facts.functions)
                  if fn.body_scope is not None and fn.body_scope.owner == bindings[0].owner.owner]

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 ATen 区域发现从真实 ODE 采集中识别出 `dynamics` 的四次激活并生成闭合配方。C++20 产物运行两组状态输入，均与原函数逐字节一致。计算入口由 LibTorch 提供。含旧签名和 `out=` 写入的采集保留原执行。见 `artifacts/baseline/aten-region-discovery.json`。
+
 2026-11-18 真实 torchdiffeq 0.2.5 RK4 CPU 入口通过了需求预测和完整进程验证。96 步矩阵 ODE 的原路径观察到 384 次 RHS，独立演化状态的热调用为 1.86×，A/B 前预测进程内为 1.58×。1 对预热、3 对实测的进程中位耗时从 12.164 s 降至 8.062 s，约 1.51×。每次守卫运行的 384 次 RHS 均进入 C++20 LibTorch，最终状态逐字节一致。求解器控制流沿用原实现。见 `artifacts/baseline/aten-ode-entry.json`。
 
 2026-11-18 原 Python ATen 试验已支持固定几何下的输入值变化。构建时用已安装的 ATen Meta 核对四个操作的形状和存储，并要求显式的无可见副作用重跑合同。运行时核对输入及中间结果，参考输入读取为 0 B。稠密随机值与稀疏值模式两组独立输入均逐字节一致，热函数分别为 1.32× 和 1.34×。完整新进程在稠密组仍 `KEEP_ORIGINAL`。见 `artifacts/baseline/aten-variable-input.json`。

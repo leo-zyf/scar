@@ -1,6 +1,6 @@
 """Recover ordered ATen root port observations inside original CALL scopes."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import islice
 
 from scar.ir.record_codec import encode
@@ -94,12 +94,32 @@ class ScopedAtenCapture:
     revision: str
 
 
-def read_scoped_aten_capture(coordinates, *, call_attempts, max_bytes=_MAX_BYTES, max_lines=_MAX_LINES):
-    """Replay original scope containment before loading the provider schema parser."""
+def _attempts(call_attempts):
     attempts = tuple(islice(call_attempts, LIMIT + 1))
     if (not attempts or len(attempts) > LIMIT or any(type(n) is not int or n < 1 for n in attempts)
             or len(set(attempts)) != len(attempts)):
         raise ValueError('select bounded unique positive original CALL attempts')
+    return attempts
+
+
+def _select_calls(capture, attempts):
+    scoped_calls = {row['attempt']: row for row in capture.calls}
+    calls = []
+    for attempt in attempts:
+        call = scoped_calls.get(attempt)
+        if call is None:
+            raise ValueError(f'CALL attempt {attempt} has no normally closed, joined operator scope')
+        calls.append(call)
+    return replace(capture, calls=tuple(calls))
+
+
+def read_scoped_aten_capture(coordinates, *, call_attempts=None, max_bytes=_MAX_BYTES, max_lines=_MAX_LINES):
+    """Replay original joined scopes once before loading the provider schema parser.
+
+    Without an explicit selection, return eligible observations in original
+    attempt order. The scope report retains the collector gaps and budget state.
+    """
+    attempts = None if call_attempts is None else _attempts(call_attempts)
     if any(type(n) is not int or n < 1 for n in (max_bytes, max_lines)):
         raise ValueError('scoped port byte and line budgets must be positive exact integers')
 
@@ -114,15 +134,11 @@ def read_scoped_aten_capture(coordinates, *, call_attempts, max_bytes=_MAX_BYTES
     importer = _load_importer(eto_path, kineto_path, max_bytes=max_bytes, provider_revision=revision)
     scopes = import_native_call_scopes(importer.finish(), manifest_path, coordinates,
                                        max_bytes=max_bytes, max_lines=max_lines)
-    scoped_calls = {row['attempt']: row for row in scopes['observations']}
-    calls = []
-    for attempt in attempts:
-        call = scoped_calls.get(attempt)
-        if (call is None or call['outcome'] != 'C_RETURN' or call['status'] != 'CLOSED_SCOPE_OBSERVED'
-                or not call['operators']):
-            raise ValueError(f'CALL attempt {attempt} has no normally closed, joined operator scope')
-        calls.append(call)
-    return ScopedAtenCapture(coordinates, importer, scopes, tuple(calls), revision)
+    calls = tuple(sorted((row for row in scopes['observations']
+                          if row['outcome'] == 'C_RETURN' and row['status'] == 'CLOSED_SCOPE_OBSERVED'
+                          and row['operators']), key=lambda row: row['attempt']))
+    capture = ScopedAtenCapture(coordinates, importer, scopes, calls, revision)
+    return capture if attempts is None else _select_calls(capture, attempts)
 
 
 def decode_scoped_aten_ports(capture):
