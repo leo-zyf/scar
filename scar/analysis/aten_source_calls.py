@@ -131,6 +131,53 @@ def _source_rows(unit, index, bindings):
     return rows
 
 
+def _call_slots(call):
+    yield from ((i, None, port) for i, port in enumerate(call['positional']))
+    yield from ((i, name, port) for i, (name, port) in enumerate(call['keywords']))
+
+
+def _formal_routes(unit, slicer, fn, rows, references):
+    if len(fn.formals) != len(fn.parameter_names) + 2:
+        raise ValueError('original function formals lack their environment/world boundaries')
+    routes = []
+    for ordinal, (name, local) in enumerate(zip(fn.parameter_names, fn.formals[1:-1], strict=True)):
+        formal = source_port(unit, local)
+        fact = encode(slicer.fact(unit, 'ports', local))
+        paths = _paths(formal.port, references)
+        for call in rows:
+            for slot, keyword, actual in _call_slots(call):
+                if actual.port in paths:
+                    routes.append(dict(formal_ordinal=ordinal, formal_name=name, formal=encode(formal),
+                        formal_fact=fact, after=call['attempt'], source_input=encode(actual),
+                        source_slot=dict(ordinal=slot, keyword=keyword), source_path=_witness(paths, actual.port)))
+    return routes
+
+
+def _return_points(flow, result, references):
+    """Find direct and fixed tuple element boundaries without conflating their identities."""
+    yield result, [], []
+    backward = defaultdict(list)
+    for start, destinations in references.items():
+        for end, evidence in destinations:
+            backward[end].append((start, evidence))
+    paths = _paths(result, backward)
+    for ordinal, op in enumerate(flow.operations):
+        instruction = op.instruction
+        if (type(instruction) is not P.ConstructValue
+                or instruction.construction is not P.ConstructionKind.TUPLE
+                or instruction.tuple_layout is not P.TupleConstructionLayout.ITEMS):
+            continue
+        outputs = [value.port for value in op.outputs if not _state(value.value_type)
+                   and value.port.completion is C.FALLTHROUGH]
+        if len(outputs) != 1 or outputs[0] not in paths:
+            continue
+        tail = list(reversed(_witness(paths, outputs[0])))
+        for i, item in enumerate(value for value in op.inputs if not _state(value.value_type)):
+            projection = dict(relation='F4_FIXED_TUPLE_ITEM', operation=ordinal,
+                              argument=item.port.ordinal, result=outputs[0].ordinal, component=i)
+            yield item.port, [i], [projection, *tail]
+
+
 def project_aten_source_calls(view, capture):
     """Retain F4 references and state paths at original checked native scopes."""
     index, invocation, bindings = _original_calls(view, capture.coordinates, capture.calls)
@@ -153,17 +200,28 @@ def project_aten_source_calls(view, capture):
         world_order.append(dict(before=before['attempt'], after=after['attempt'], path=_witness(paths, destination),
             source_refs=[before['source_call'], after['source_call']]))
 
-    routes = []
+    routes, return_routes = [], []
+    formal_routes = _formal_routes(unit.facts, index.slicer, fn, rows, references)
+    if fn.returns is None:
+        result, return_fact, return_points = None, None, ()
+    else:
+        return_site = source_port(unit.facts, fn.returns)
+        result = encode(return_site)
+        return_fact = encode(index.slicer.fact(unit.facts, 'ports', fn.returns))
+        return_points = tuple(_return_points(flow, return_site.port, references))
     for index_in_rows, before in enumerate(rows):
         paths = _paths(before['result'].port, references)
+        origin = encode(before['result'])
+        for point, component, tail in return_points:
+            if point in paths:
+                return_routes.append(dict(before=before['attempt'], source_result=origin, return_port=result,
+                    return_fact=return_fact, return_path=component, source_path=[*_witness(paths, point), *tail]))
         for after in rows[index_in_rows + 1:]:
-            slots = [(i, None, port) for i, port in enumerate(after['positional'])]
-            slots.extend((i, name, port) for i, (name, port) in enumerate(after['keywords']))
-            for ordinal, name, port in slots:
+            for ordinal, name, port in _call_slots(after):
                 if port.port not in paths:
                     continue
                 routes.append(dict(before=before['attempt'], after=after['attempt'],
-                    source_result=encode(before['result']), source_input=encode(port),
+                    source_result=origin, source_input=encode(port),
                     source_slot=dict(ordinal=ordinal, keyword=name), source_path=_witness(paths, port.port),
                     wrapper_mapping_proven=False, content_preserved=False, ready=False))
 
@@ -173,6 +231,8 @@ def project_aten_source_calls(view, capture):
         body_declaration=encode(index.slicer.fact(unit.facts, 'functions', function_index)),
         source_templates=encode(flow.source_templates), path_basis='REPLAYED_F4_BODY_VALUE_FLOW_ORDINALS',
         calls=encode(rows), world_order=world_order, data_routes=routes,
+        formal_routes=formal_routes, return_routes=return_routes,
+        boundary_path_status='POSSIBLE_F4_REFERENCE_ROUTES',
         source_normal_path_only=True, effects_established=False, transformation_authorized=False)
 
 

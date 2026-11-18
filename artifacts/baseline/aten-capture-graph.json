@@ -1,0 +1,140 @@
+{
+  "baseline_run": {
+    "path": "artifacts/current/experiments/aten-graph-capture-v1/baseline-clean.stdout",
+    "sha256": "ed68fcb717396266c601f04fda6249d10614c32222aad13698bda0df4120a488",
+    "size_bytes": 343
+  },
+  "cxx_standard": 20,
+  "device": "cpu",
+  "explicit_native_input_files": [
+    {
+      "path": "artifacts/current/experiments/aten-graph-capture-v1/input_0.f32",
+      "raw_hex": "0000803f000000400000404000008040",
+      "sha256": "ad73b9acd6e4a74b2f5bb5386658ce3bb146cd040a1867646ab3b973fb6632b1",
+      "size_bytes": 16
+    },
+    {
+      "path": "artifacts/current/experiments/aten-graph-capture-v1/input_1.f32",
+      "raw_hex": "0000a0400000c0400000e04000000041",
+      "sha256": "54bfe97475cf28afafa96643959c1db93e29b5436addb31ef8612549ce20da9c",
+      "size_bytes": 16
+    }
+  ],
+  "lewm_rerun": false,
+  "native_output": {
+    "path": "artifacts/current/experiments/aten-graph-capture-v1/output.f32",
+    "sha256": "4ab13c9758c5761e2a39c4b78ac810c14b7cd24ed231fc6d7ac70c870e0d8ac2",
+    "size_bytes": 16
+  },
+  "native_write_alias_replay_rejected": true,
+  "original_capture_attempts": [
+    37,
+    61,
+    68
+  ],
+  "original_entry": {
+    "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/fixture/subject.py",
+    "sha256": "fea5102c023369005c5878f0c1fbd1dcc279f94027df5651f92534a57ef84e82",
+    "size_bytes": 1080
+  },
+  "perf_measured": false,
+  "phases": [
+    {
+      "f4_return_paths": [
+        [
+          0
+        ]
+      ],
+      "observed_physical_tensor_input_slots": 6,
+      "phase": 1,
+      "static_formal_routes": 4
+    },
+    {
+      "exact_original_events": [
+        [
+          37,
+          30
+        ],
+        [
+          61,
+          41
+        ],
+        [
+          68,
+          52
+        ]
+      ],
+      "internal_data_dependencies": [
+        [
+          37,
+          68,
+          0
+        ],
+        [
+          61,
+          68,
+          1
+        ]
+      ],
+      "original_source_decision": "KEEP_ORIGINAL",
+      "phase": 2,
+      "world_order_retained": true
+    },
+    {
+      "executable": {
+        "path": "artifacts/current/experiments/aten-graph-capture-v1/generated/aten-native-graph",
+        "sha256": "2ac1cf5070814be42b44045fc58511afc96fb58fbd5d804c1b17a611de39e95b",
+        "size_bytes": 79384
+      },
+      "generated_cpp": {
+        "path": "artifacts/current/experiments/aten-graph-capture-v1/generated/graph.hpp",
+        "sha256": "fbeee56d8b3f7be9673ea3d9712d1375a106dbb0ca088c5152ffac6d1a76c292",
+        "size_bytes": 1826
+      },
+      "native_dependencies": {
+        "/lib64/ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libc10.so": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libc10.so",
+        "libcudart.so.13": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/nvidia/cu13/lib/libcudart.so.13",
+        "libcupti.so.13": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/nvidia/cu13/lib/libcupti.so.13",
+        "libdl.so.2": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+        "libgcc_s.so.1": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "libgomp.so.1": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libgomp.so.1",
+        "libm.so.6": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "libpthread.so.0": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+        "librt.so.1": "/usr/lib/x86_64-linux-gnu/librt.so.1",
+        "libstdc++.so.6": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+        "libtorch_cpu.so": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libtorch_cpu.so",
+        "libutil.so.1": "/usr/lib/x86_64-linux-gnu/libutil.so.1",
+        "linux-vdso.so.1": null
+      },
+      "operators": "EXISTING_LIBTORCH",
+      "ordered_recipe": {
+        "path": "artifacts/current/experiments/aten-graph-capture-v1/projected/recipe.json",
+        "sha256": "8ad9c088d5e3b5a8ba9c6be0b30132ec4e71af90f6fa9a41c421161c974b7c5c",
+        "size_bytes": 1058
+      },
+      "phase": 3
+    }
+  ],
+  "projected_output_matches_original_first_tuple_component_bitwise": true,
+  "projection": {
+    "path": "artifacts/current/experiments/aten-graph-capture-v1/projected/projection.json",
+    "sha256": "e67de5b7a7b3bfa8edde994f11e4633d8b8178c3221cecbd7055e7dd0f6c8eeb",
+    "size_bytes": 88434
+  },
+  "python_source_replacement_authorized": false,
+  "same_digest_foreign_capture_rejected": true,
+  "schema": "scar.aten-capture-graph-review",
+  "schema_version": 1,
+  "scope": "OBSERVED_OPERATOR_SEQUENCE_AS_STANDALONE_CPU_REPLAY",
+  "standalone_values": [
+    42.0,
+    56.0,
+    74.0,
+    96.0
+  ],
+  "untouched_original_other_component_shape": [
+    0
+  ]
+}

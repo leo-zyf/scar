@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 已从同次 CPU 采集自动生成独立原生图。`project-aten-graph` 核对 6 个 Tensor 输入、2 条内部数据边、1 个原返回分量及外部算子链接来源。三次算子的 C++20 输出与原 Python 返回的第 0 项逐字节一致。不同采集的同摘要链接报告及 `add.out` 写入路径均被拒绝。原入口仍 `KEEP_ORIGINAL`。见 `artifacts/baseline/aten-capture-graph.json`。
+
 2026-11-18 `compile-aten-graph` 已从声明的数据依赖直接生成 C++20 和原生输入输出入口。分叉汇合、双输出链、标量及空张量共四例与 PyTorch CPU 参考逐字节一致。运行只使用现有 LibTorch 算子和本机原生依赖。当前交付按声明顺序执行，原 Python 自动替换、硬件重排及性能提升仍待验证。见 `artifacts/baseline/aten-native-graph.json`。
 
 2026-11-18 独立 ATen 的实测选型已接 C++20 交付。冷重放核对原样本、成本、硬件和资源计划，再以显式 ABI1 适配器编译固定模式。2×2 产物在 CPU4 串行，768×768 产物在 CPU4/5 执行，两者与原串行区域逐位一致。错误启动掩码和环境在调用前被拒绝。交付验证范围为已声明的独立原生调用。见 `artifacts/baseline/aten-boundary-delivery.json`。
