@@ -23,6 +23,14 @@ _RUNTIME_GUARDS = [
 _EXTERNAL_ASSUMPTIONS = ["NO_FOREIGN_CONCURRENT_INPUT_WRITERS", "SYNCHRONOUS_CPU_EXECUTION"]
 
 
+def _numerical_policy():
+    return dict(planner_constant_folding="CLOSED_BOUNDED_INTEGER_NEG_ADD_SUB_MUL_ONLY",
+        floating_constant_arithmetic="PRESERVE_ORIGINAL_NODES_FOR_STRICT_RUNTIME_FENV",
+        division="DEFER_FLOAT_DIVISION_KEEP_PYTHON_FOR_INTEGER_TRUE_DIVISION",
+        planning_rounding_mode_is_runtime_authority=False,
+        reassociation=False, commutation=False, contraction=False)
+
+
 def _profile_reasons(region, nodes):
     reasons = []
     if not _REQUIRED_ASSUMPTIONS.issubset(region.assumptions):
@@ -186,7 +194,7 @@ def _cost(original, optimized, output, memory_budget):
     return result
 
 
-def _unsupported(region, reasons, *, retained=(), cpu_threads=1, cpu_capacity=None):
+def _unsupported(region, reasons, *, retained=(), deferred=(), cpu_threads=1, cpu_capacity=None):
     return ExecutionPlan(region=region, cpu_threads=cpu_threads, proof={
         "supported": False, "legal": False, "selected": False,
         "decision": "unsupported", "reasons": reasons,
@@ -196,6 +204,8 @@ def _unsupported(region, reasons, *, retained=(), cpu_threads=1, cpu_capacity=No
                       "reason": "preserved_unsupported_profile"} for node in region.nodes},
         "eliminated_nodes": [], "setup_nodes": [], "body_nodes": [],
         "retained_constant_operations": list(retained),
+        "deferred_constant_operations": list(deferred),
+        "numerical_policy": _numerical_policy(),
         "resource_allocation": {"status": "REQUESTED_UNSUPPORTED",
                                 "cpu_threads": cpu_threads,
                                 "available_cpu_affinity": cpu_capacity},
@@ -244,7 +254,15 @@ def optimize_region(region: ArrayRegion, *, memory_budget_bytes=None,
         return _unsupported(region, ["unlowerable_constant_operation:" + item["id"]
                                      for item in graph.retained_constant_operations],
                             retained=graph.retained_constant_operations,
+                            deferred=graph.deferred_constant_operations,
                             cpu_threads=cpu_threads, cpu_capacity=cpu_capacity)
+    required_live = _dependency_closure(graph.nodes, graph.output)
+    dead_deferred = [row['id'] for row in graph.deferred_constant_operations
+        if graph.source_operation_map[row['id']]['optimized_node'] not in required_live
+        and not row['dead_dependency_elimination_safe']]
+    if dead_deferred:
+        return _unsupported(region, ["dead_deferred_constant_arithmetic_may_raise:"+key for key in dead_deferred],
+            deferred=graph.deferred_constant_operations, cpu_threads=cpu_threads, cpu_capacity=cpu_capacity)
     optimized = replace(region, nodes=graph.nodes, output=graph.output)
     cost = _cost(nodes, graph.nodes, graph.output, memory_budget_bytes)
     cost.update(cpu_threads=cpu_threads, available_cpu_affinity=cpu_capacity,
@@ -282,6 +300,8 @@ def optimize_region(region: ArrayRegion, *, memory_budget_bytes=None,
         "eliminated_nodes": graph.eliminated_nodes,
         "folded_nodes": graph.folded_nodes,
         "retained_constant_operations": graph.retained_constant_operations,
+        "deferred_constant_operations": graph.deferred_constant_operations,
+        "numerical_policy": _numerical_policy(),
         **_classify(graph.nodes),
     }
     if has_copy or set(COPY_REQUIRED_GUARDS).issubset(region.assumptions):

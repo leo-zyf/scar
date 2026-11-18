@@ -83,6 +83,9 @@ def _supported(plan: ExecutionPlan) -> dict[str, bool]:
     # of shared structural policy, including when backends load separately.
     from scar.compiler.validation import validate_plan
     validate_plan(plan)
+    if plan.proof.get("folded_nodes") and plan.proof.get("numerical_policy", {}).get(
+            "planner_constant_folding") != "CLOSED_BOUNDED_INTEGER_NEG_ADD_SUB_MUL_ONLY":
+        raise ValueError("constant folding proof predates caller rounding support; rebuild the plan")
     if (plan.schema_version not in (1, 2) or plan.operator_abi_version != ABI_VERSION or
             plan.profile != PROFILE or plan.device != "cpu" or
             plan.buffer_policy != "fresh_output"):
@@ -102,6 +105,7 @@ def _supported(plan: ExecutionPlan) -> dict[str, bool]:
         raise ValueError("duplicate region parameters")
     scalar: dict[str, bool] = {}
     nodes = {}
+    scalar_integers = set()
     for node in plan.region.nodes:
         if node.id in nodes or node.op not in _ARITY or len(node.inputs) != _ARITY[node.op]:
             raise ValueError(f"unsupported or malformed expression {node.id!r}")
@@ -124,6 +128,8 @@ def _supported(plan: ExecutionPlan) -> dict[str, bool]:
                     (type(value) is int and abs(value) > 2**53) or not math.isfinite(value)):
                 raise ValueError("constants must be finite, exactly representable float64 scalars")
             scalar[node.id] = True
+            if type(value) is int:
+                scalar_integers.add(node.id)
         elif node.op == "slice":
             if nodes[node.inputs[0]].op not in ("input", "slice"):
                 raise ValueError("C++ slices must refer to an input or another slice")
@@ -136,8 +142,10 @@ def _supported(plan: ExecutionPlan) -> dict[str, bool]:
             scalar[node.id] = False
         else:
             scalar[node.id] = all(scalar[source] for source in node.inputs)
-            if scalar[node.id]:
-                raise ValueError("scalar-only operations must be folded before C++ lowering")
+            if scalar[node.id] and node.op == "copy":
+                raise ValueError("an exact materializing copy requires an array value")
+            if scalar[node.id] and all(source in scalar_integers for source in node.inputs):
+                raise ValueError("native scalar arithmetic requires floating operands after integer folding")
         nodes[node.id] = node
     if plan.region.output not in nodes or scalar[plan.region.output]:
         raise ValueError("C++ region output must be a rank-two array")
@@ -195,6 +203,8 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
             shape_lines.append(f"    const Shape {name}{{false, {lengths[0]}, {lengths[1]}}};")
             index, row, col = views[node.inputs[0]]
             views[node.id] = (index, f"({row} + {starts[0]})", f"({col} + {starts[1]})")
+        elif scalar[node.id]:
+            shape_lines.append(f"    const Shape {name}{{true, 0, 0}};")
         else:
             sources = [names[source] for source in node.inputs]
             if len(sources) == 2 and not any(scalar[source] for source in node.inputs):
@@ -213,7 +223,7 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
     # bounded ptrdiff_t row/column arithmetic in the hot loops.
     loads = [node for node in plan.region.nodes
              if node.id in needed and node.op in ("input", "slice")]
-    prelude = ["    if (output->shape[0] != 0 && output->shape[1] != 0) {"]
+    prelude = []
     for index in sorted({views[node.id][0] for node in loads}):
         prelude.extend((
             f"        const ptrdiff_t row_stride{index} = static_cast<ptrdiff_t>(inputs[{index}].strides[0]);",
@@ -230,6 +240,9 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
     prelude.append("        double *__restrict__ output_data = static_cast<double *>(output->data);")
     row_setup.append("            double *__restrict__ output_row = output_data + row * output->shape[1];")
     emitted = []
+    scalar_setup = []
+    scalar_operands = {source for node in plan.region.nodes
+                       if scalar[node.id] and node.op != "const" for source in node.inputs}
     value_names = {}
     for node in plan.region.nodes:
         if node.id not in needed:
@@ -250,15 +263,35 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
             expression = f"{left} {_BINARY_OPS[node.op]} {right}"
         name = f"v{len(value_names)}"
         value_names[node.id] = name
-        emitted.append(f"                const double {name} = {expression};")
+        if scalar_operands and scalar[node.id]:
+            # Preserve floating operations until execution under the caller's
+            # environment. The volatile store survives empty output loops.
+            # Keep scalar operands opaque to GCC's constant folder and
+            # inspect nonfinite results without doing another FP operation.
+            if node.op == "const":
+                if node.id in scalar_operands:
+                    scalar_setup.append(f"    const volatile double {name}_literal = {expression};")
+                    expression = f"{name}_literal"
+                scalar_setup.append(f"    const double {name} = {expression};")
+            else:
+                scalar_setup.extend((
+                    f"    const volatile double {name}_rounded = {expression};",
+                    f"    const double {name} = {name}_rounded;",
+                    f"    nonfinite_input |= static_cast<uint32_t>((std::bit_cast<uint64_t>({name}) & "
+                    "UINT64_C(0x7ff0000000000000)) == UINT64_C(0x7ff0000000000000));",
+                ))
+        else:
+            emitted.append(f"                const double {name} = {expression};")
     output_value = value_names[plan.region.output]
+    scalar_guard = "!nonfinite_input && " if scalar_operands else ""
+    prelude.insert(0, f"    if ({scalar_guard}output->shape[0] != 0 && output->shape[1] != 0) {{")
     emitted.append(f"                output_row[col] = {output_value};")
     row_loop = ["        for (int64_t row = 0; row < output->shape[0]; ++row) {",
                 *row_setup,
                 "            for (int64_t col = 0; col < output->shape[1]; ++col) {",
                 *emitted, "            }", "        }"]
     if plan.cpu_threads == 1:
-        loops = [*prelude, *row_loop, "    }"]
+        loops = [*scalar_setup, *prelude, *row_loop, "    }"]
     else:
         # OpenMP workers may retain an environment from an earlier invocation.
         # Save each worker's state, mask traps and clear flags, then explicitly
@@ -299,7 +332,7 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
             ] if binding is not None else []),
             "        }",
         ]
-        loops = [*prelude, *worker_start, *parallel_rows, *worker_end, "    }"]
+        loops = [*scalar_setup, *prelude, *worker_start, *parallel_rows, *worker_end, "    }"]
     template = (_DIRECTORY / "kernel_v1.cpp.in").read_text()
     affinity_start = []
     affinity_finish = []
@@ -385,7 +418,7 @@ def _output_shape(plan: ExecutionPlan, arrays) -> tuple[int, int]:
             sources = [shapes[source] for source in node.inputs if shapes[source] is not None]
             if any(shape != sources[0] for shape in sources[1:]):
                 raise GuardFailure("C++ array operands require identical shapes")
-            shapes[node.id] = sources[0]
+            shapes[node.id] = sources[0] if sources else None
     return shapes[plan.region.output]
 
 

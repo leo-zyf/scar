@@ -1,7 +1,6 @@
 """Focused pass, proof, provenance and resource tests for the CPU profile."""
 
 from dataclasses import replace
-import math
 
 import pytest
 
@@ -52,7 +51,7 @@ def test_structural_cse_handles_dict_and_list_attributes_without_reordering_oper
     assert len(optimize_region(ordered).region.nodes) == 5
 
 
-def test_constant_folding_follows_original_float_dag_and_preserves_python_zero_types():
+def test_constant_folding_defers_original_float_dag_and_preserves_python_zero_types():
     graph = region(
         Expr("x", "input", attrs={"name": "x"}),
         Expr("large", "const", attrs={"value": 1e16}),
@@ -67,9 +66,15 @@ def test_constant_folding_follows_original_float_dag_and_preserves_python_zero_t
     )
     plan = optimize_region(graph)
     constants = [n.attrs["value"] for n in plan.region.nodes if n.op == "const"]
-    assert constants == [1.0]
-    assert {"cancel", "left", "rounded", "right", "delta"}.issubset(
-        plan.proof["folded_nodes"])
+    assert constants == [1e16, -1e16, 1.0]
+    scalar_ids = {"cancel", "left", "rounded", "right", "delta"}
+    by_id = {node.id: node for node in plan.region.nodes}
+    assert all(by_id[node.id] == node for node in graph.nodes if node.id in scalar_ids)
+    assert not plan.proof["folded_nodes"]
+    assert {row["id"] for row in plan.proof["deferred_constant_operations"]} == scalar_ids
+    assert plan.proof["retained_constant_operations"] == []
+    assert plan.proof["numerical_policy"]["planner_constant_folding"] == "CLOSED_BOUNDED_INTEGER_NEG_ADD_SUB_MUL_ONLY"
+    assert plan.proof["numerical_policy"]["planning_rounding_mode_is_runtime_authority"] is False
 
     zeros = region(Expr("x", "input", attrs={"name": "x"}),
                    Expr("i", "const", attrs={"value": 0}),
@@ -82,7 +87,15 @@ def test_constant_folding_follows_original_float_dag_and_preserves_python_zero_t
     plan = optimize_region(zeros)
     values = [n.attrs["value"] for n in plan.region.nodes if n.op == "const"]
     assert any(type(v) is int and v == 0 for v in values)
-    assert any(type(v) is float and math.copysign(1, v) < 0 for v in values)
+    assert any(type(v) is float and v == 0.0 for v in values)
+    by_id = {node.id: node for node in plan.region.nodes}
+    assert by_id["nf"].op == "neg" and by_id["nf"].inputs == ("f",)
+    assert "ni" in plan.proof["folded_nodes"] and "nf" not in plan.proof["folded_nodes"]
+    assert {row["id"] for row in plan.proof["deferred_constant_operations"]} == {"nf"}
+    # Negation of the retained finite literal is exact in every rounding mode;
+    # verify its sign bit without asking the planner to evaluate that FP node.
+    import struct
+    assert struct.pack('>d', -by_id["f"].attrs["value"]).hex() == '8000000000000000'
 
 
 @pytest.mark.parametrize("op,a,b", [("div", 1.0, 0.0),
@@ -95,9 +108,19 @@ def test_exceptional_or_out_of_profile_constant_operations_retain_original_regio
                    Expr("unsafe", op, ("a", "b")),
                    Expr("sum", "add", ("x", "unsafe")))
     plan = optimize_region(graph)
-    assert plan.region is graph
-    assert plan.cost["decision"] == "unsupported"
-    assert plan.proof["retained_constant_operations"][0]["id"] == "unsafe"
+    if type(a) is int and type(b) is int and op != "div":
+        assert plan.region is graph
+        assert plan.cost["decision"] == "unsupported"
+        assert plan.proof["retained_constant_operations"][0]["id"] == "unsafe"
+    else:
+        assert plan.proof["supported"] is True
+        by_id = {node.id: node for node in plan.region.nodes}
+        assert by_id["unsafe"].op == op
+        assert tuple(by_id[key].attrs["value"] for key in by_id["unsafe"].inputs) == (a, b)
+        assert plan.proof["retained_constant_operations"] == []
+        assert [row["id"] for row in plan.proof["deferred_constant_operations"]] == ["unsafe"]
+        assert plan.proof["numerical_policy"]["floating_constant_arithmetic"] == "PRESERVE_ORIGINAL_NODES_FOR_STRICT_RUNTIME_FENV"
+        assert "FLOAT_STATUS_CLEAR_OR_FALLBACK_TO_ORIGINAL" in plan.proof["runtime_guards"]
 
 
 def test_dce_removes_dependency_closure_but_cannot_drop_potential_numpy_warnings():

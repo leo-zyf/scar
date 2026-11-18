@@ -5,7 +5,7 @@ JSON containers. Operand order and the exact type/sign of constants are part of
 the key; no associative or commutative arithmetic identities are used.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import heapq
 import math
 import operator
@@ -19,6 +19,7 @@ _ARITHMETIC = {"add": operator.add, "sub": operator.sub,
                "mul": operator.mul, "div": operator.truediv,
                "neg": operator.neg}
 MAX_EXACT_INTEGER = 2**53
+DEFERRED_FP_CONSTANT = "deferred_floating_point_constant_operation"
 
 
 def ordered_nodes(region: ArrayRegion) -> tuple[Expr, ...]:
@@ -89,11 +90,26 @@ def canonical_value(value):
 
 
 def constant_result(node, constants):
-    """Evaluate just one original scalar operation, never reassociating it."""
+    """Fold only bounded integer operations independent of the caller's fenv.
+
+    Operations with floating operands remain original DAG operations. Returning
+    DEFERRED_FP_CONSTANT is distinct from an unlowerable integer result.
+    """
     if node.op not in _ARITHMETIC or not all(i in constants for i in node.inputs):
         return None, None
+    values = tuple(constants[i] for i in node.inputs)
+    if any(type(value) not in (int, float) for value in values):
+        return None, "unsupported_constant_operand_type"
+    if node.op == "div" and all(type(value) is int for value in values):
+        # Casting the operands to double does not implement CPython integer
+        # true division in every caller rounding mode.
+        return None, "requires_python_integer_true_divide"
+    if any(type(value) is float for value in values):
+        return None, DEFERRED_FP_CONSTANT
+    if any(abs(value) > MAX_EXACT_INTEGER for value in values):
+        return None, "out_of_profile_integer_operand"
     try:
-        result = _ARITHMETIC[node.op](*(constants[i] for i in node.inputs))
+        result = _ARITHMETIC[node.op](*values)
     except (ArithmeticError, ValueError) as error:
         return None, type(error).__name__
     if not numeric_value(result):
@@ -109,6 +125,7 @@ class SimplifiedGraph:
     eliminated_nodes: list[dict]
     folded_nodes: list[str]
     retained_constant_operations: list[dict]
+    deferred_constant_operations: list[dict] = field(default_factory=list)
 
 
 def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False) -> SimplifiedGraph:
@@ -119,13 +136,24 @@ def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False
     from ordinary CSE even when this explicit forwarding permission is absent.
     """
     aliases, constants, representatives = {}, {}, {}
-    rewritten, reasons, folded, retained = [], {}, [], []
+    rewritten, reasons, folded, retained, deferred = [], {}, [], [], []
+    deferred_values = set()
     original_kinds = value_kinds(nodes)
     for source in nodes:
         inputs = tuple(aliases[i] for i in source.inputs)
         node = Expr(source.id, source.op, inputs, dict(source.attrs))
         value, refusal = constant_result(node, constants)
-        if refusal is not None:
+        if refusal == DEFERRED_FP_CONSTANT or (original_kinds[source.id] == "scalar"
+                and node.op in _ARITHMETIC and any(i in deferred_values for i in inputs)):
+            # Negating one finite literal only flips its sign; deleting that
+            # unused value requires no FP evaluation or default-rounding fact.
+            safe_dead_negation = (node.op == "neg" and inputs[0] in constants
+                and type(constants[inputs[0]]) is float and math.isfinite(constants[inputs[0]]))
+            deferred.append(dict(id=node.id, op=node.op,
+                reason=refusal or "depends_on_deferred_floating_point_operation",
+                dead_dependency_elimination_safe=safe_dead_negation))
+            deferred_values.add(node.id)
+        elif refusal is not None:
             retained.append({"id": node.id, "reason": refusal})
         elif node.op in _ARITHMETIC and all(i in constants for i in inputs):
             node = Expr(node.id, "const", attrs={"value": value})
@@ -154,7 +182,11 @@ def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False
     optimized_output = aliases[output]
     # Input bindings are part of the region signature even if their array data
     # are unused. Retaining these descriptors does not retain any array loads.
-    live, pending = set(), [optimized_output] + [n.id for n in rewritten if n.op == "input"]
+    # Potentially observable deferred FP work is not silently DCE'd. The
+    # profile caller must reject unreachable effectful operations until an
+    # appropriate effect-preserving lowering is available.
+    live, pending = set(), ([optimized_output] + [n.id for n in rewritten if n.op == "input"]
+        + [aliases[row['id']] for row in deferred if not row['dead_dependency_elimination_safe']])
     while pending:
         current = pending.pop()
         if current not in live:
@@ -175,7 +207,7 @@ def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False
             eliminated.append({"id": source.id, "reason": reason,
                                "replacement": replacement})
     return SimplifiedGraph(tuple(n for n in rewritten if n.id in live),
-                           optimized_output, mapping, eliminated, folded, retained)
+                           optimized_output, mapping, eliminated, folded, retained, deferred)
 
 
 def value_kinds(nodes):

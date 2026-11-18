@@ -40,6 +40,9 @@ def _sources():
 
 def _execution_plan(body,budget,binding):
     execution=prepare_pipeline_leaf(optimize_region(body,memory_budget_bytes=budget))
+    scalar = cpp._supported(execution)
+    if any(scalar[node.id] and node.op != 'const' for node in execution.region.nodes):
+        raise ValueError('temporal lowering requires a separate guarded scalar setup before the count loop')
     if binding is not None:
         validate_cpu_placement(binding)
         execution=bind_cpu_placement(execution,binding)
