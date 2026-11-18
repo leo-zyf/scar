@@ -1,0 +1,194 @@
+{
+  "implemented": {
+    "native": {
+      "schema": "scar.superlu-symbolic-study",
+      "sha256": "d595c4486671257cf21cd862a4c65d1345cd12c2974d5e42ba05c497e8088e45",
+      "size_bytes": 15689,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-superlu-symbolic/native/artifact.json"
+    },
+    "same_cxx20_abi1_solve": true,
+    "same_original_publication_order": true,
+    "selection": {
+      "schema": "scar.sparse-parallel-scaling-selection",
+      "sha256": "f6c18ba1515a4fda53b40a6a671a804d3e62f4f7dc4a36fee138ce1ba38947bb",
+      "size_bytes": 4126,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/final/selection.json"
+    }
+  },
+  "inferred": {
+    "sample_envelope_is_physical_bound": false,
+    "section_ns": {
+      "baseline": {
+        "estimate_ns": 2702461062,
+        "lower_ns": 2597451708,
+        "upper_ns": 4178878732
+      },
+      "expanded": {
+        "estimate_ns": 2248589328,
+        "lower_ns": 2050018498,
+        "upper_ns": 3715266256
+      }
+    },
+    "section_savings_ns": {
+      "estimate_ns": 453871734,
+      "lower_ns": -1117814548,
+      "upper_ns": 2128860234
+    },
+    "short_scope_savings_ns": {
+      "bound_kind": "observed_sample_envelope",
+      "estimate_ns": -602278247,
+      "lower_ns": -639320518,
+      "samples": 2,
+      "upper_ns": -565235976
+    }
+  },
+  "observed": {
+    "calibration": {
+      "schema": "scar.sparse-parallel-scaling-cost",
+      "sha256": "45bd5a092c7a896a15b0e7ea30f51ced49238fd47ccc6a22476f098881cc0a5d",
+      "size_bytes": 10147,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/cost/paired-result.json"
+    },
+    "comparison": {
+      "schema": "scar.sparse-parallel-scaling-validation",
+      "sha256": "19d18133d931f9a58d231685d3c14dd57dfc1b760c570aa7f86d7c939d0aab6b",
+      "size_bytes": 6575,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/entry-ab/result.json"
+    },
+    "complete_process_ns": {
+      "established": {
+        "max_ns": 3322757304,
+        "median_ns": 3282236474,
+        "min_ns": 3234109027,
+        "samples_ns": [
+          3234109027,
+          3322757304,
+          3282236474
+        ],
+        "variance_ns2": 1969450972282573
+      },
+      "expanded": {
+        "max_ns": 2908659805,
+        "median_ns": 2888199820,
+        "min_ns": 2880947914,
+        "samples_ns": [
+          2880947914,
+          2908659805,
+          2888199820
+        ],
+        "variance_ns2": 206525004938157
+      }
+    },
+    "measured_pairs": 3,
+    "memory_samples": {
+      "schema": "scar.sparse-worker-live-snapshots",
+      "sha256": "39804cdb57a4fd833c596f3da4ad23390aba0a44fdd574af70d140499ec06e95",
+      "size_bytes": 11386,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/final/selected-resources.json"
+    },
+    "observed_pss_sum_bytes": [
+      298980352,
+      154115072
+    ],
+    "pss_used_for_timing": false,
+    "warmup_pairs": 1
+  },
+  "proposed": {
+    "established": {
+      "address_space_limit_bytes": 1073741824,
+      "cpu_ids": [
+        49,
+        50,
+        51
+      ],
+      "window": 3
+    },
+    "expanded": {
+      "address_space_limit_bytes": 1073741824,
+      "cpu_ids": [
+        42,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "window": 8
+    },
+    "numa_node": 1,
+    "owner_cpu": 48,
+    "scope_source": {
+      "schema": "scar.sparse-parallel-scaling-scope",
+      "sha256": "2b0d5fc6c8185c831578b01f8f982b0f9ee448eb1945e3b19dc35ea850c567f5",
+      "size_bytes": 15389,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/source/scope-scaling.json"
+    }
+  },
+  "rejected": {
+    "exact_dram_bandwidth_bytes_per_second": null,
+    "exact_peak_native_scratch_bytes": null,
+    "general_cpu_count_optimality": false,
+    "short_scope_expansion": "Startup and cleanup offset the shorter steady section",
+    "whole_program_cpp": false
+  },
+  "schema": "scar.three-stage-csr-parallel-scaling",
+  "schema_version": 1,
+  "verified": {
+    "contexts": {
+      "changed-argv": {
+        "attempts": [],
+        "mode": "KEEP",
+        "peak_native_overlap": 0,
+        "report": {
+          "schema": "scar.sparse-parallel-scaling-execution",
+          "sha256": "cbe5fd086f9067179ab4d8ea3f7760b9dfa3b8b25f78d597261f9878bf165e9c",
+          "size_bytes": 968,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/final/changed-argv.json"
+        }
+      },
+      "narrow-affinity": {
+        "attempts": [
+          "EXPANDED",
+          "ESTABLISHED"
+        ],
+        "mode": "ESTABLISHED",
+        "peak_native_overlap": 3,
+        "report": {
+          "schema": "scar.sparse-parallel-scaling-execution",
+          "sha256": "229fd58d9bd81105dc300a5eb625aa3ebc011752553a7644eef34e871acb3beb",
+          "size_bytes": 361394,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/final/narrow-affinity.json"
+        }
+      },
+      "selected": {
+        "attempts": [
+          "EXPANDED"
+        ],
+        "mode": "EXPANDED",
+        "peak_native_overlap": 8,
+        "report": {
+          "schema": "scar.sparse-parallel-scaling-execution",
+          "sha256": "4a7009d9bf22a4d0aef8d1e21f84daa6d12b4611fad0d8793b9a98c5b47aa494",
+          "size_bytes": 362759,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-scaling/final/selected.json"
+        }
+      }
+    },
+    "entry": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    },
+    "fallback_calls_each_paired_run": 0,
+    "full_entry_fraction_time_saved": 0.12005126904210983,
+    "full_entry_speedup": 1.1364298450790706,
+    "iterations": 512,
+    "native_calls_each_paired_run": 512,
+    "output_bitwise_in_paired_calibration": true,
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e"
+  }
+}

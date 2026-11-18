@@ -80,7 +80,7 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 ### 稀疏求解的符号阶段
 
-`plan_sparse_solve` 将原 F4 调用绑定到实际 SuperLU 入口，分别表示列排序、符号预处理、数值分解和三角求解。前两步按精确 CSR 结构复用，后两步读取当次矩阵值和 RHS。C++20 产物独立构建自同版 SciPy 源码并链接原 BLAS。封存的替换只覆盖载体调用点，原 Python 状态码、警告与回退继续执行。
+`plan_sparse_solve` 将原 F4 调用绑定到实际 SuperLU 入口，分别表示列排序、符号预处理、数值分解和三角求解。前两步按精确 CSR 结构复用，后两步读取当次矩阵值和 RHS。SCAR 的 C++20 产物包含同版 SciPy 随附的 SuperLU 源码并链接原 OpenBLAS。封存的替换只覆盖载体调用点，原 Python 状态码、警告与回退继续执行。
 
 先用 `--scope SCOPE --native NATIVE --out STUDY` 生成试运行收据。`--qualify-plan STUDY/result.json --paired-cost COST --validation VALIDATION --out FINAL` 合并可重复核验的区域成本和完整入口对照。`python -m scar.runtime.sparse_solve_launch --launch FINAL/launch.json --launch-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 在匹配上下文时采用已发布的实现。
 
@@ -96,11 +96,13 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 ### 稀疏求解的有序并行
 
-`plan_sparse_parallel --scope SCOPE --serial-launch SERIAL --cost COST --out STUDY` 绑定原循环、串行产物和同一核心组的成本。主线程从原函数入口获取一次私有快照，预测有界窗口内的数值任务。隔离进程在固定核上使用同一 C++ 求解后端，各自持有工作区。原 Python 继续执行数据准备、求解入口、状态码处理和摘要发布。每次到达原求解载体前，用实际参数和全量字节匹配后才交付最早发起的结果。
+`plan_sparse_parallel --scope SCOPE --serial-launch SERIAL --cost COST --out STUDY` 绑定原循环、串行产物和同一核心组的成本。主线程从原函数入口获取一次私有快照，预测有界窗口内的数值任务。隔离进程在固定核上使用同一 C++ 求解产物，各自持有工作区。原 Python 继续执行数据准备、求解入口、状态码处理和摘要发布。每次到达原求解载体前，用实际参数和全量字节匹配后才交付最早发起的结果。
 
 `--study STUDY/selection.json --validation VALIDATION --out FINAL` 核验完成顺序、性能、CPU 分配和释放。`python -m scar.runtime.sparse_parallel_entry --selection FINAL/selection.json --selection-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 使用符合源码、环境和资源条件的已发布执行方式。每个 worker 受独立地址空间上限约束，原主线程和 worker 位于同一 NUMA 节点。
 
-512 轮完整入口的中位数为已优化串行 6.971 s、有序并行 3.263 s。1 组热身和 3 组独立配对中都验证了逐位一致的结果和三个并发原生任务。匹配的配置已发布为 `PARALLEL`。验收见 `artifacts/baseline/three-stage-csr-parallel-ordered.json`。下一轮用更大的核心组验证主线程发起能力、求解工作区和内存带宽的限制。
+512 轮完整入口的中位数为已优化串行 6.971 s、有序并行 3.263 s。1 组热身和 3 组独立配对中都验证了逐位一致的结果和三个并发原生任务。匹配的配置已发布为 `PARALLEL`。验收见 `artifacts/baseline/three-stage-csr-parallel-ordered.json`。
+
+`plan_sparse_parallel_scaling` 复用已发布的 C++20 产物，根据主线程供给能力和同一 NUMA 节点的可用核心确定扩容配置。发布收据由配对成本和整程对照共同验收。相同有限元入口在 3 和 8 个 worker 下的中位数分别为 3.282 s 和 2.888 s。`scar.runtime.sparse_parallel_scaling` 在核集合缩小后可选回 3 个 worker，参数超出原合同则保留原入口。证据见 `artifacts/baseline/three-stage-csr-parallel-scaling.json`。
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
