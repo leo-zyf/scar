@@ -136,9 +136,9 @@ def _observed(code):
         for tool in range(6) if monitor.get_tool(tool) is not None)
 
 
-def _safe_torch_context(torch):
+def _safe_torch_context(torch, *, allow_ambient_grad=False):
     c = torch._C
-    return (not torch.is_grad_enabled() and not torch.is_inference_mode_enabled()
+    return ((allow_ambient_grad or not torch.is_grad_enabled()) and not torch.is_inference_mode_enabled()
             and not c._is_any_autocast_enabled() and not c._are_functorch_transforms_active()
             and not c._len_torch_dispatch_stack() and not c._len_torch_function_stack()
             and c._get_torch_function_state().name == 'ENABLED' and not c._peek_should_skip_torch_function()
@@ -148,7 +148,7 @@ def _safe_torch_context(torch):
 
 def _torch_configuration(torch):
     c = torch._C
-    return (c._dispatch_tls_local_include_set(), c._dispatch_tls_local_exclude_set(),
+    return (torch.is_grad_enabled(), c._dispatch_tls_local_include_set(), c._dispatch_tls_local_exclude_set(),
             torch.get_float32_matmul_precision(), c._get_mkldnn_enabled(),
             torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled())
 
@@ -169,14 +169,20 @@ def _ready_inputs(inputs, shapes, lengths, torch):
 
 
 @contextmanager
-def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_inputs=False):
+def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_inputs=False,
+                              defer_context=False, allow_ambient_grad=False):
     """Yield trial counters while the exact module binding has a guarded candidate.
 
     The caller must hold exclusive read access to Tensor contents for the
-    duration of each call. The original remains the default execution path.
+    duration of each call. Deferred installation permits the application to
+    configure Torch before the first admitted call prepares the worker.
+    The ambient grad option keeps the caller's GradMode and admits only
+    plain Tensor inputs with no gradient requirement.
     """
     if exclusive_inputs is not True:
         raise ValueError('the ATen Python trial requires explicit exclusive inputs')
+    if type(defer_context) is not bool or type(allow_ambient_grad) is not bool:
+        raise ValueError('trial context options must be booleans')
     import torch
 
     directory = Path(trial_dir).resolve(strict=True)
@@ -191,11 +197,16 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     code = original.__code__
     cpus = tuple(manifest['cpus'])
     allowed_cpus = set(cpus)
-    if (len(cpus) != 2 or len(allowed_cpus) != 2 or os.sched_getaffinity(0) != allowed_cpus
-            or not _safe_torch_context(torch) or _observed(code)
-            or not getattr(sys, '_is_gil_enabled', lambda: True)()):
+    gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)
+    if len(cpus) != 2 or len(allowed_cpus) != 2 or not gil_enabled():
         raise ValueError('the live CPU, Python or Torch context differs from the ATen trial scope')
-    torch_config = _torch_configuration(torch)
+
+    def ready_context():
+        return (os.sched_getaffinity(0) == allowed_cpus and not _observed(code) and gil_enabled()
+                and _safe_torch_context(torch, allow_ambient_grad=allow_ambient_grad))
+
+    if not defer_context and not ready_context():
+        raise ValueError('the live CPU, Python or Torch context differs from the ATen trial scope')
     provider_class = torch._C._VariableFunctionsClass
     input_order = tuple(proof['input_order'])
     shapes = tuple(tuple(item['shape']) for item in manifest['recipe']['inputs'])
@@ -204,10 +215,14 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     if (len(input_order) != len(shapes) or len(receipts) != len(shapes)
             or tuple(row['size_bytes'] for row in receipts) != lengths):
         raise ValueError('the retained raw inputs differ from the graph ABI')
-    references = tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
-    extension = _extension(directory, manifest['extension'])
-    capsule = extension.prepare(*cpus)
-    native = extension.run
+    def prepare(configuration):
+        references = tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
+        extension = _extension(directory, manifest['extension'])
+        # Keep the two-argument ABI for existing trial binaries.
+        capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
+        return capsule, extension.run, references, configuration
+
+    prepared = None if defer_context else prepare(_torch_configuration(torch))
     windows = tuple(manifest['window_starts'])
     arguments = len(proof['parameters'])
     tensor_result = proof['return_kind'] == 'TENSOR'
@@ -215,6 +230,12 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     process = os.getpid()
     active = True
     stats = dict(native_calls=0, fallback_calls=0, fallback_reasons={})
+
+    def ready_bindings():
+        return (original.__code__ is code and original.__defaults__ is None and original.__kwdefaults__ is None
+                and namespace.get(torch_global) is torch and torch._C._VariableFunctionsClass is provider_class
+                and all(vars(torch).get(name) is descriptor.__func__ and vars(provider_class).get(name) is descriptor
+                        for name, descriptor in wrappers.items()))
 
     def fallback(reason, args, kwargs):
         stats['fallback_calls'] += 1
@@ -224,19 +245,32 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
 
     @wraps(original)
     def guarded(*args, **kwargs):
+        nonlocal prepared
         if not active or kwargs or len(args) != arguments:
             return fallback('CALL_ABI', args, kwargs)
-        if (os.getpid() != process or get_ident() != owner or os.sched_getaffinity(0) != allowed_cpus
-                or _observed(code) or not _safe_torch_context(torch) or _torch_configuration(torch) != torch_config):
+        if os.getpid() != process or get_ident() != owner or not ready_context():
             return fallback('RUNTIME_CONTEXT', args, kwargs)
-        if (original.__code__ is not code or original.__defaults__ is not None or original.__kwdefaults__ is not None
-                or namespace.get(torch_global) is not torch or torch._C._VariableFunctionsClass is not provider_class
-                or any(vars(torch).get(name) is not descriptor.__func__ or vars(provider_class).get(name) is not descriptor
-                       for name, descriptor in wrappers.items())):
+        configuration = _torch_configuration(torch)
+        if prepared is not None and configuration != prepared[3]:
+            return fallback('RUNTIME_CONTEXT', args, kwargs)
+        if not ready_bindings():
             return fallback('SOURCE_BINDING', args, kwargs)
         inputs = tuple(args[index] for index in input_order)
         if not _ready_inputs(inputs, shapes, lengths, torch):
             return fallback('TENSOR_ABI', args, kwargs)
+        if prepared is None:
+            try:
+                prepared = prepare(configuration)
+            except (ImportError, OSError, MemoryError, RuntimeError, ValueError):
+                return fallback('PREPARE', args, kwargs)
+            # Reference reads may release the GIL while the worker is being prepared.
+            if not ready_context() or _torch_configuration(torch) != configuration:
+                prepared = None
+                return fallback('RUNTIME_CONTEXT', args, kwargs)
+            if not ready_bindings():
+                prepared = None
+                return fallback('SOURCE_BINDING', args, kwargs)
+        capsule, native, references, _ = prepared
         try:
             result = native(capsule, inputs, windows, references)
         except (MemoryError, RuntimeError, ValueError):
@@ -247,6 +281,8 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         return result[0] if tensor_result else result
 
     name = proof['function']
+    if namespace.get(name) is not original:
+        raise ValueError('the source callable changed during trial installation')
     namespace[name] = guarded
     try:
         yield stats
@@ -254,8 +290,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         active = False
         if namespace.get(name) is guarded:
             namespace[name] = original
-        capsule = None
-        references = ()
+        prepared = None
 
 
 __all__ = ['install_aten_python_trial']

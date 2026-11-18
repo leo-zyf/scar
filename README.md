@@ -34,6 +34,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar build-aten-python-trial --help` 提供显式原 Python 函数接入。它核对函数 CodeID、直线算子依赖、声明的包装器效果及已验证的原生计划，生成借用 PyTorch Tensor 句柄的 C++20 扩展。`scar validate-aten-python-trial --trial TRIAL --trial-sha256 SHA256 --out VERIFIED` 在原模块临时安装入口，测量带守卫的完整函数调用并验证原路径回退。试验按记录的 CPU、Tensor ABI 和输入内容执行，退出时恢复原绑定。见 [原函数试验](artifacts/baseline/aten-python-trial.json)。
 
+`scar validate-aten-python-entry --trial TRIAL --trial-sha256 SHA256 --entry-function main --out VERIFIED -- ARGS '{output_dir}/result'` 分别在新进程运行原入口与守卫入口。准备工作线程的时机延至首次合格调用，应用可先配置 Torch。试验逐对核对返回值、梯度模式、标准输出及输出目录内容，并按进程总耗时决定是否保留原入口。`--allow-ambient-grad` 适用于保持调用方梯度模式、输入无需梯度的试验。见 [完整入口验证](artifacts/baseline/aten-python-entry.json)。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash

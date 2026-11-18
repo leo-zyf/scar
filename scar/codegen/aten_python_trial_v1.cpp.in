@@ -23,17 +23,18 @@ struct TrialPair {
     const pid_t pid;
     graph::CpuPair pair;
 
-    TrialPair(int caller, int worker) : pid(getpid()), pair(caller, worker, false) {}
+    TrialPair(int caller, int worker, bool allow_ambient_grad)
+        : pid(getpid()), pair(caller, worker, false, allow_ambient_grad) {}
 };
 
-void check_torch_context() {
+void check_torch_context(bool expected_grad_enabled) {
     using TorchFunction = at::impl::PythonTorchFunctionTLS;
-    if (at::GradMode::is_enabled() || c10::InferenceMode::is_enabled()
+    if (at::GradMode::is_enabled() != expected_grad_enabled || c10::InferenceMode::is_enabled()
             || at::autocast::is_autocast_enabled(at::kCPU)
             || c10::impl::TorchDispatchModeTLS::any_modes_set()
             || c10::impl::PythonDispatcherTLS::get_state() != nullptr
             || TorchFunction::stack_len() != 0 || TorchFunction::peek_skip_next() || at::hasCallbacks()) {
-        throw std::runtime_error("native trial requires no-grad and an ordinary unobserved ATen CPU context");
+        throw std::runtime_error("native trial requires its prepared grad mode and an ordinary unobserved ATen CPU context");
     }
 }
 
@@ -74,11 +75,13 @@ PyObject* translate_exception() {
 }
 
 PyObject* prepare(PyObject*, PyObject* arguments) {
-    PyObject *caller, *worker;
-    if (!PyArg_UnpackTuple(arguments, "prepare", 2, 2, &caller, &worker)) return nullptr;
+    PyObject *caller, *worker, *ambient_grad = Py_False;
+    if (!PyArg_UnpackTuple(arguments, "prepare", 2, 3, &caller, &worker, &ambient_grad)) return nullptr;
     try {
-        check_torch_context();
-        auto pair = std::make_unique<TrialPair>(cpu_index(caller), cpu_index(worker));
+        if (!PyBool_Check(ambient_grad)) throw std::invalid_argument("allow_ambient_grad requires an exact bool");
+        const bool allow_ambient_grad = ambient_grad == Py_True;
+        check_torch_context(allow_ambient_grad && at::GradMode::is_enabled());
+        auto pair = std::make_unique<TrialPair>(cpu_index(caller), cpu_index(worker), allow_ambient_grad);
         PyObject* capsule = PyCapsule_New(pair.get(), capsule_name, drop_pair);
         if (capsule) pair.release();
         return capsule;
@@ -112,7 +115,8 @@ PyObject* run(PyObject*, PyObject* arguments) {
     if (!prepared) return nullptr;
     try {
         if (prepared->pid != getpid()) throw std::runtime_error("native trial worker belongs to another process");
-        check_torch_context();
+        const bool grad_enabled = prepared->pair.prepared_grad_enabled();
+        check_torch_context(grad_enabled);
         if (!PyTuple_CheckExact(input_tuple) || PyTuple_GET_SIZE(input_tuple) != graph::input_count) {
             throw std::invalid_argument("native trial input tuple has the wrong arity");
         }
@@ -128,8 +132,8 @@ PyObject* run(PyObject*, PyObject* arguments) {
             }
             const auto& tensor = THPVariable_Unpack(item);
             if (!tensor.defined() || !tensor.has_storage() || tensor.key_set().has(c10::DispatchKey::Python)
-                    || tensor._fw_grad(0).defined() || tensor.storage_offset() != 0) {
-                throw std::invalid_argument("native trial requires a base-offset Tensor with ordinary storage and no forward AD");
+                    || tensor.requires_grad() || tensor._fw_grad(0).defined() || tensor.storage_offset() != 0) {
+                throw std::invalid_argument("native trial requires a base-offset Tensor with ordinary storage and no AD");
             }
             inputs[i] = tensor;
         }
@@ -148,6 +152,13 @@ PyObject* run(PyObject*, PyObject* arguments) {
             const auto placement = prepared->pair.place_caller();
             return graph::run_parallel(inputs, prepared->pair, windows);
         }();
+        if (grad_enabled) {
+            for (const auto& output : outputs) {
+                if (output.requires_grad() || output._fw_grad(0).defined()) {
+                    throw std::runtime_error("ambient-grad trial unexpectedly produced a differentiable Tensor");
+                }
+            }
+        }
         THPObjectPtr out(PyTuple_New(graph::output_count));
         if (!out) return nullptr;
         for (std::size_t i = 0; i < outputs.size(); ++i) {

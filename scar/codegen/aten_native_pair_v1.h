@@ -24,9 +24,14 @@ namespace scar_aten_graph {
 // independent operations that can access the same inputs read-only.
 class CpuPair {
 public:
-    CpuPair(int caller_cpu, int worker_cpu, bool pin_caller_for_lifetime = true)
+    CpuPair(int caller_cpu, int worker_cpu, bool pin_caller_for_lifetime = true,
+            bool allow_ambient_grad = false)
         : caller_thread_(pthread_self()), caller_cpu_(caller_cpu),
-          pin_caller_for_lifetime_(pin_caller_for_lifetime) {
+          pin_caller_for_lifetime_(pin_caller_for_lifetime),
+          prepared_grad_enabled_(at::GradMode::is_enabled()) {
+        if (prepared_grad_enabled_ && !allow_ambient_grad) {
+            throw std::runtime_error("native pair requires no grad by default");
+        }
         check_at_context();
         if (caller_cpu < 0 || caller_cpu >= CPU_SETSIZE
                 || worker_cpu < 0 || worker_cpu >= CPU_SETSIZE || caller_cpu == worker_cpu) {
@@ -77,7 +82,7 @@ public:
 
         explicit CallerPlacement(CpuPair& pair) : pair_(pair) {
             pair.check_caller_thread();
-            check_at_context();
+            pair.check_at_context();
             if (pair.pin_caller_for_lifetime_) {
                 check_cpu(pair.caller_cpu_);
                 return;
@@ -101,9 +106,12 @@ public:
 
     CallerPlacement place_caller() { return CallerPlacement(*this); }
 
+    bool prepared_grad_enabled() const noexcept { return prepared_grad_enabled_; }
+
     template <class L, class R>
     void run(L&& caller, R&& worker) {
         check_caller_thread();
+        check_grad_mode();
         check_cpu(caller_cpu_);
         auto invoke_worker = [&worker] { std::invoke(std::forward<R>(worker)); };
         {
@@ -120,6 +128,7 @@ public:
         std::exception_ptr caller_error;
         try {
             std::invoke(std::forward<L>(caller));
+            check_grad_mode();
             check_cpu(caller_cpu_);
         } catch (...) {
             caller_error = std::current_exception();
@@ -139,11 +148,17 @@ private:
         }
     }
 
-    static void check_at_context() {
+    void check_grad_mode() const {
+        if (at::GradMode::is_enabled() != prepared_grad_enabled_) {
+            throw std::runtime_error("native pair grad mode differs from its prepared context");
+        }
+    }
+
+    void check_at_context() const {
+        check_grad_mode();
         if (at::get_num_threads() != 1 || at::get_num_interop_threads() != 1
-                || at::GradMode::is_enabled() || c10::InferenceMode::is_enabled()
-                || std::fegetround() != FE_TONEAREST) {
-            throw std::runtime_error("native pair requires single-threaded ATen, no grad, and round-to-nearest");
+                || c10::InferenceMode::is_enabled() || std::fegetround() != FE_TONEAREST) {
+            throw std::runtime_error("native pair requires single-threaded ordinary ATen and round-to-nearest");
         }
     }
 
@@ -181,8 +196,10 @@ private:
                 lock.unlock();
                 std::exception_ptr failure;
                 try {
+                    check_grad_mode();
                     check_cpu(cpu);
                     dispatch(job);
+                    check_grad_mode();
                     check_cpu(cpu);
                 } catch (...) {
                     failure = std::current_exception();
@@ -218,6 +235,7 @@ private:
     pthread_t caller_thread_;
     int caller_cpu_;
     bool pin_caller_for_lifetime_;
+    const bool prepared_grad_enabled_;
     cpu_set_t original_mask_;
     std::fenv_t original_fp_;
     at::ThreadLocalState caller_state_;
