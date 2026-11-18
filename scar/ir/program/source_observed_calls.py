@@ -66,6 +66,29 @@ class ObservedSourceProtocolCallsite:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedPositionalReceiver:
+    """One recorded CALL's receiver layout under isolated frame-slot semantics.
+
+    The previous normal result flows through an original fast-local store
+    into one explicit operand. The recorded first formal and attribute-base
+    local identify the receiver, independently of a function's defaults.
+    """
+    producer_attempt: CallRecordAnchor
+    producer_handshake: CallRecordAnchor
+    producer_return: CallRecordAnchor
+    caller_entry: CallRecordAnchor
+    callee_entry: CallRecordAnchor
+    explicit_position: int
+    producer_store_offset: int
+    explicit_load_offset: int
+    receiver_load_offset: int
+    receiver_reference: str
+    explicit_reference: str
+    receiver_local: str
+    explicit_local: str
+
+
+@dataclass(frozen=True, slots=True)
 class ObservedSourceFunctionGroup:
     query: int
     code: ObservedSourceCodeLink
@@ -79,6 +102,9 @@ class ObservedSourceFunctionGroup:
     # Actual frame records prove body entry independently of the receiver's
     # weak identity or its explicit/implicit argument layout.
     body_entries: tuple[CallRecordAnchor, ...] = ()
+    # An ordered witness for each recorded observation in a recovered layout
+    # group. Other groups use the original target/entry protocol.
+    positional_receivers: tuple[ObservedPositionalReceiver, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

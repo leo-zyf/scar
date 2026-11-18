@@ -15,7 +15,12 @@ from .v2._validation import record_errors
 
 @lru_cache(maxsize=None)
 def _schema(cls):
-    return fields(cls), get_type_hints(cls)
+    names = tuple(item.name for item in fields(cls))
+    hints = {name: (hint, (get_origin(hint), get_args(hint)))
+             for name, hint in get_type_hints(cls).items()}
+    # Cache shapes at the field that declares them. Union equality ignores
+    # choice order, while decoding must try those choices in order.
+    return names, frozenset(names), hints
 
 
 def _record_tags(tags):
@@ -81,10 +86,18 @@ def decode(expected, value, *, record_tags=None):
     return _decode(expected, value, _record_tags(record_tags))
 
 
-def _decode(expected, value, tags):
-    origin, arguments = get_origin(expected), get_args(expected)
+def _decode(expected, value, tags, shape=None):
+    if expected is str or expected is int or expected is bool or expected is type(None):
+        if type(value) is not expected:
+            raise ValueError(f"expected {expected}, received {type(value)}")
+        return value
+    if expected is float:
+        if type(value) in (float, int) and math.isfinite(value):
+            return value
+        raise ValueError("expected finite numeric value")
     if expected is Any:
         return _encode(value, tags)
+    origin, arguments = (get_origin(expected), get_args(expected)) if shape is None else shape
     if origin in (Union, UnionType):
         for choice in arguments:
             try:
@@ -129,24 +142,22 @@ def _decode(expected, value, tags):
             raise ValueError("value-version wire mismatch")
         return result
     if is_dataclass(expected):
-        members, hints = _schema(expected)
+        names, field_names, hints = _schema(expected)
         tag = tags.get(expected)
-        field_names = {item.name for item in members}
-        expected_fields = field_names | ({tag[0]} if tag is not None else set())
-        if type(value) is not dict or set(value) != expected_fields:
+        expected_fields = field_names if tag is None else field_names | {tag[0]}
+        if type(value) is not dict or value.keys() != expected_fields:
             raise ValueError("typed record fields mismatch")
         if tag is not None and (type(value[tag[0]]) is not str or value[tag[0]] != tag[1]):
             raise ValueError("typed record discriminator mismatch")
-        result = expected(**{item.name: _decode(hints[item.name], value[item.name], tags)
-                             for item in members})
+        field_values = {}
+        for name in names:
+            hint, field_shape = hints[name]
+            field_values[name] = _decode(hint, value[name], tags, field_shape)
+        result = expected(**field_values)
         errors = record_errors(result, expected, expected.__name__)
         if errors:
             raise ValueError("; ".join(errors))
         return result
-    if expected is float:
-        if type(value) in (float, int) and math.isfinite(value):
-            return value
-        raise ValueError("expected finite numeric value")
     if type(value) is not expected:
         raise ValueError(f"expected {expected}, received {type(value)}")
     return value

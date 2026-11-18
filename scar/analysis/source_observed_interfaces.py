@@ -26,6 +26,8 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
+from scar.analysis.observed_positional_receiver import recover_positional_receiver
+from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
 from scar.ir.program import source_function_interfaces as I,normal_targets as T,source_productions as P
 from scar.ir.program import source_observed_calls as R
 from scar.ir.program.python_call_targets import PythonTargetKind
@@ -35,6 +37,7 @@ from scar.trace.code_snapshot import call_instruction
 
 
 SCHEMA='scar.source-observed-function-interfaces'
+VERSION=3
 TABLES=('groups','observation_frontiers','interfaces','queries','frontiers')
 GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
     'CURRENT_CALLABLE_SELECTS_RECORDED_SOURCE_CODE_TEMPLATE_AND_CALL_PROTOCOL',
@@ -48,6 +51,9 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 def _pins():
     from scar.analysis import source_observed_calls,source_observed_codes,source_compiled_code_profiles,source_observed_protocols
     from scar.analysis import source_function_connections,static_compilation,source_observed_materials,source_fact_materials
+    from scar.analysis import observed_positional_receiver,source_frame_binding_effects
+    from scar.ir import record_codec
+    from scar.trace import operand_bytecode
     from scar.ir.program import source_observed_codes as code_types
     return {**source_observed_codes.request_code_pins(),
         **{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
@@ -55,7 +61,9 @@ def _pins():
         ('callsite',source_observed_calls),('protocol_calls',source_observed_protocols),
         ('code',source_observed_codes),('compiler',source_compiled_code_profiles),
         ('binder',source_function_connections),('code_mapping',static_compilation),
-        ('fact_guard',source_observed_materials),('fact_routes',source_fact_materials),('code_types',code_types))}}
+        ('fact_guard',source_observed_materials),('fact_routes',source_fact_materials),('code_types',code_types),
+        ('positional_receiver',observed_positional_receiver),('frame_binding_contract',source_frame_binding_effects),
+        ('wire_codec',record_codec),('operand_bytecode',operand_bytecode))}}
 
 
 def _same_connection(interface,connection):
@@ -118,6 +126,32 @@ def _receiver_base(facts,callee):
     values=_ancestors(incoming,callee)
     bases={a.receiver for a in facts.attributes if a.action is AttributeAction.GET and a.value in values}
     return next(iter(bases)) if len(bases)==1 else None
+
+
+def _positional_receiver_sources(facts, call, witness):
+    """Require the replayed fast locals to be the original F4 source operands."""
+    from scar.analysis.source_field_interfaces import _ancestors
+    from scar.ir.program.normal_links import NamespaceKind
+
+    if (call.keywords or call.positional_pack is not None or call.keyword_pack is not None
+            or not 0 <= witness.explicit_position < len(call.positional)):
+        return False
+    receiver = _receiver_base(facts, call.callee)
+    if receiver is None:
+        return False
+    incoming = defaultdict(list)
+    for source, target in facts.aliases:
+        incoming[target].append(source)
+    for port, name in ((receiver, witness.receiver_local),
+            (call.positional[witness.explicit_position], witness.explicit_local)):
+        origins = _ancestors(incoming, port)
+        reads = {row.namespace for row in facts.names if not row.write and row.value in origins}
+        if len(reads) != 1:
+            return False
+        namespace, = reads
+        if namespace.kind is not NamespaceKind.LEXICAL or namespace.name != name:
+            return False
+    return True
 
 
 def _body_connection(mini,unit,function,invocation):
@@ -221,7 +255,7 @@ def _groups(parent,index,unit,*,original=None):
         for rows in by_code.values() for code in rows}
     frames={frame.invocation:frame for frame in index.codes.trace.entries}
     from scar.analysis.observed_function_interfaces import _known_receiver
-    grouped=defaultdict(list);frontiers=[];selected={};body_entries={}
+    grouped=defaultdict(list);frontiers=[];selected={};body_entries={};replayed={}
     for observation in index.bindings:
         if observation.unit!=unit:continue
         target=observation.target
@@ -240,8 +274,6 @@ def _groups(parent,index,unit,*,original=None):
                 # body. Only the world/environment/return interfaces are safe
                 # until argument layout is independently established below.
                 known=False
-                frontiers.append(R.ObservedSourceFunctionFrontier(observation,
-                    'OBSERVED_BODY_ENTRY_RETAINED_RECEIVER_IDENTITY_OPEN'))
             else:
                 frame=frames[entry.callee]
                 known=_known_receiver(target,entry)
@@ -250,12 +282,23 @@ def _groups(parent,index,unit,*,original=None):
                 if (not frame.parameters_complete or not frame.parameters or entry.receiver_reference.startswith('weak:')
                         and frame.parameters[0].ref!=entry.receiver_reference):
                     frontiers.append(R.ObservedSourceFunctionFrontier(observation,'OBSERVED_RECEIVER_FIRST_FORMAL_IDENTITY_NOT_RETAINED'));continue
-            key=observation.query,code.function_fact,known
+            witness = None
+            if not known:
+                witness = recover_positional_receiver(index, observation, frame)
+                if witness is not None and not _positional_receiver_sources(facts, facts.calls[observation.query], witness):
+                    witness = None
+                if witness is not None:
+                    replayed[observation.id,code.id] = witness
+                elif entry is None:
+                    frontiers.append(R.ObservedSourceFunctionFrontier(observation,
+                        'OBSERVED_BODY_ENTRY_RETAINED_RECEIVER_IDENTITY_OPEN'))
+            key=observation.query,code.function_fact,known,witness is not None
             grouped[key].append(observation);selected[key]=code
             body_entries[observation.id,code.id]=frame.anchor
     groups=[]
     for key,observations in grouped.items():
-        query,_,receiver_known=key;code=selected[key];call=facts.calls[query];offset=parent.catalog.fact_store.offsets[unit]
+        query,_,direct_receiver,replayed_receiver=key;code=selected[key];call=facts.calls[query];offset=parent.catalog.fact_store.offsets[unit]
+        receiver_known = direct_receiver or replayed_receiver
         if any(o.call!=index.slicer.fact(facts,'calls',query) or o.owner.owner not in original.queries[query].owners
                for o in observations):raise ValueError('observed group differs from original call/scope')
         fn_unit,local=index.slicer.local(code.function)
@@ -275,6 +318,8 @@ def _groups(parent,index,unit,*,original=None):
             'OBSERVED_BOUND_RECEIVER_SUPPLIES_FIRST_FORMAL',
             'SELECTED_BOUND_RECEIVER_IS_ORIGINAL_ATTRIBUTE_BASE',
             'ATTRIBUTE_BASE_CONTENT_AND_DESCRIPTOR_RECEIVER_IDENTITY_NOT_PROVEN')
+        if replayed_receiver:
+            guards = (*guards, 'OBSERVED_RECEIVER_LAYOUT_FROM_REPLAYED_POSITIONAL_OPERAND', *FRAME_REQUIRED_Q)
         connection=(None if receiver_known and receiver is None else
             connect(mini,mini.offsets[fn_unit.unit]+function.value,invocation,
                 None if receiver is None else offset+receiver,conditions=guards))
@@ -292,7 +337,8 @@ def _groups(parent,index,unit,*,original=None):
         matches=tuple(i for i,f in enumerate(original.interfaces) if f.query==query and _same_connection(f,connection))
         groups.append(R.ObservedSourceFunctionGroup(query,code,tuple(observations),connection,matches,
             tuple(sorted({p for choices in alternatives for p in choices})),proven,
-            tuple(body_entries[o.id,code.id] for o in observations)))
+            tuple(body_entries[o.id,code.id] for o in observations),
+            tuple(replayed[o.id,code.id] for o in observations) if replayed_receiver else ()))
     return tuple(groups),tuple(frontiers)
 
 
@@ -319,7 +365,9 @@ def _counts(graph,base,groups,frontiers):
     return dict(calls=graph.calls,interfaces=len(graph.interfaces),parent_interfaces=len(base.interfaces),
         derived_interfaces=len(graph.interfaces)-len(base.interfaces),observed_groups=len(groups),
         body_only_groups=sum(g.connection.binding is T.ArgumentBinding.NOT_MODELED for g in groups),
-        annotated_parent_groups=sum(bool(g.parent_interfaces) for g in groups),observation_frontiers=len(frontiers))
+        annotated_parent_groups=sum(bool(g.parent_interfaces) for g in groups),observation_frontiers=len(frontiers),
+        replayed_positional_receiver_groups=sum(bool(g.positional_receivers) for g in groups),
+        replayed_positional_receiver_observations=sum(len(g.positional_receivers) for g in groups))
 
 
 def build_observed_interfaces(parent,index,out):
@@ -343,7 +391,7 @@ def build_observed_interfaces(parent,index,out):
             shards[unit]=dict(path=_folder(unit),tables=tables,counts=_counts(graph,original,groups,frontiers))
     parent.validate();index.check()
     if pins!=_pins():raise ValueError('observed interface rules changed')
-    report=dict(schema=SCHEMA,schema_version=2,parent_path=str(parent.path),
+    report=dict(schema=SCHEMA,schema_version=VERSION,parent_path=str(parent.path),
         parent=encode(_artifact(parent.path/'result.json',parent.report['schema'])),catalog=str(parent.catalog.path),
         trace=index.codes.trace.directory,project_root=index.codes.trace.project_root,run_scope=index.codes.targets.source_sha256,
         # Preserve the input selection, including units with no code match.
@@ -355,7 +403,9 @@ def build_observed_interfaces(parent,index,out):
         selection=dict(mode='OBSERVED_CALLER_UNITS',units=list(selected),
             callers_without_parent=sorted(observed_units-parent.report['shards'].keys())),
         pins=pins,shards=shards,counts={k:sum(s['counts'][k] for s in shards.values()) for k in
-            ('calls','interfaces','parent_interfaces','derived_interfaces','observed_groups','body_only_groups','annotated_parent_groups','observation_frontiers')},
+            ('calls','interfaces','parent_interfaces','derived_interfaces','observed_groups','body_only_groups',
+            'annotated_parent_groups','observation_frontiers','replayed_positional_receiver_groups',
+            'replayed_positional_receiver_observations')},
         origin_domain='ORIGINAL_OBSERVED_FUNCTION_GROUP_RECORDS_NOT_NAMESPACE_ORIGIN_ORDINALS',
         source_bodies_copied=False,loops_unrolled=False,future_dispatch_proven=False,
         creator_instances_proven=False,cell_contents_proven=False,first_stage_complete=False)
@@ -363,20 +413,32 @@ def build_observed_interfaces(parent,index,out):
 
 
 class ObservedFunctionInterfaceStore:
-    def __init__(self,path):
+    def __init__(self,path,*,index=None):
         self.path=Path(path).absolute();self.raw=(self.path/'result.json').read_bytes();self.report=r=json.loads(self.raw)
-        if (r['schema'],r['schema_version'],r['pins'])!=(SCHEMA,2,_pins()):raise ValueError('observed interface schema or rules differ')
+        if (r['schema'],r['schema_version'],r['pins'])!=(SCHEMA,VERSION,_pins()):raise ValueError('observed interface schema or rules differ')
         self.parent=open_function_interfaces(r['parent_path']);self.catalog=self.parent.catalog
-        from scar.analysis.program_view import ProgramView
-        from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
-        from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
         from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
-        view=ProgramView(self.catalog)
-        profiles=tuple(CompiledCodeProfiles(self.catalog,u) for u in r['compiled_units'])
-        codes=ObservedSourceCodeProvider(view,r['trace'],r['project_root'],units=r['code_units'],
-            compiled=profiles,frame_budget=decode(CallEdgeBudget,r.get('frame_reader_budget',encode(CallEdgeBudget()))),
-            **r.get('target_reader_budget',{}))
-        self.index=ObservedSourceCallsiteIndex(codes,compiled=profiles)
+        if index is None:
+            from scar.analysis.program_view import ProgramView
+            from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
+            from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+
+            view=ProgramView(self.catalog)
+            profiles=tuple(CompiledCodeProfiles(self.catalog,u) for u in r['compiled_units'])
+            codes=ObservedSourceCodeProvider(view,r['trace'],r['project_root'],units=r['code_units'],
+                compiled=profiles,frame_budget=decode(CallEdgeBudget,r['frame_reader_budget']),
+                **r['target_reader_budget'])
+            index=ObservedSourceCallsiteIndex(codes,compiled=profiles)
+        elif type(index) is not ObservedSourceCallsiteIndex:
+            raise ValueError('in-process verification requires the existing strict callsite index')
+        self.index = index
+        codes = index.codes
+        if ((codes.view.catalog.path,codes.view.catalog.report) != (self.catalog.path,self.catalog.report)
+                or codes.trace.directory!=r['trace'] or codes.trace.project_root!=r['project_root']
+                or sorted(codes.selected_units)!=r['code_units'] or [p.unit for p in index.compiled]!=r['compiled_units']
+                or codes.target_reader_budget!=r['target_reader_budget']
+                or encode(codes.trace.frame_budget)!=r['frame_reader_budget']):
+            raise ValueError('observed interface index does not match the retained catalog and trace scope')
         observed_units={o.unit for o in self.index.bindings}
         expected_units=tuple(sorted(observed_units & self.parent.report['shards'].keys()))
         expected_selection=dict(mode='OBSERVED_CALLER_UNITS',units=list(expected_units),
@@ -459,12 +521,15 @@ def main():
     parser.add_argument('--target-max-rows',type=int,default=100_000)
     parser.add_argument('--frame-max-events',type=int,default=100_000)
     parser.add_argument('--out');parser.add_argument('--read')
+    parser.add_argument('--verify-written', action='store_true',
+        help='rederive the published shards using the already verified in-process trace index')
     parser.add_argument('--boundaries-out',help='also connect non-Python CALL interfaces using this same checked trace index')
     parser.add_argument('--activations-out',help='join every recorded body entry, including root/class/resume protocols')
     parser.add_argument('--graph-check-out',help='verify saved body graph with this same admitted index')
     parser.add_argument('--resource-scopes-out',help='join owned OS boundary markers with this same source/trace index')
     args=parser.parse_args()
     if args.read:
+        if args.verify_written:parser.error('--verify-written requires a new build')
         store=ObservedFunctionInterfaceStore(args.read)
         for unit in store.report['shards']:store.read_unit(unit)
         report=store.report
@@ -482,6 +547,9 @@ def main():
             frame_budget=replace(CallEdgeBudget(),max_events=args.frame_max_events))
         index=ObservedSourceCallsiteIndex(codes,compiled=profiles)
         report=build_observed_interfaces(parent,index,args.out)
+        if args.verify_written:
+            store=ObservedFunctionInterfaceStore(args.out,index=index)
+            for unit in store.report['shards']:store.read_unit(unit)
     if args.boundaries_out:
         from scar.analysis.source_observed_boundaries import build_boundaries
         build_boundaries(index,args.boundaries_out)
