@@ -1,0 +1,213 @@
+"""Admit contiguous float64 CSR arrays before calling the C++ region."""
+
+import ctypes
+import inspect
+from pathlib import Path
+import sys
+from types import BuiltinFunctionType, CodeType, FunctionType
+
+from scar.ir.execution_recipe import artifact_reference, read_artifact
+
+
+def _original_function(function, module, expected_code):
+    return (type(function) is FunctionType and function.__globals__ is vars(module)
+        and function.__closure__ is None and function.__code__ == expected_code)
+
+
+def _function_state(function):
+    return function.__code__, function.__defaults__, function.__kwdefaults__
+
+
+def _same_state(function, state):
+    return (function.__code__ is state[0] and function.__defaults__ is state[1]
+        and function.__kwdefaults__ is state[2])
+
+
+def _ranges(arrays):
+    return [(array.__array_interface__['data'][0], array.nbytes) for array in arrays]
+
+
+def _overlaps(left, right):
+    start, length = left
+    other, other_length = right
+    return bool(length and other_length and start < other+other_length and other < start+length)
+
+
+def _provider():
+    import numpy as np
+    from numpy._core import fromnumeric, multiarray, shape_base
+    from numpy._core.overrides import _ArrayFunctionDispatcher
+    import scipy
+    from scipy import sparse
+    from scipy.sparse import _base, _compressed, _csr, _data, _matrix, _sparsetools, _sputils
+
+    if scipy.__version__ != '1.18.1' or np.__version__ != '2.5.2':
+        raise ValueError('CSR diagonal behavior requires the SciPy 1.18.1 / NumPy 2.5.2 provider profile')
+    source_modules = (_base, _compressed, _csr, _data, _matrix, _sputils, fromnumeric, shape_base)
+    codes = {}
+    for module in source_modules:
+        path = Path(module.__file__)
+        pending = [compile(path.read_bytes(), str(path), 'exec', dont_inherit=True, optimize=sys.flags.optimize)]
+        while pending:
+            code = pending.pop()
+            codes[module.__name__, code.co_qualname] = code
+            pending.extend(item for item in code.co_consts if type(item) is CodeType)
+    classes = (sparse.csr_matrix, sparse.csr_array)
+    methods = {kind:{name:getattr(kind, name) for name in ('setdiag', '_setdiag', 'diagonal', '_swap')}
+               for kind in classes}
+    properties = {kind:{name:inspect.getattr_static(kind, name) for name in ('shape', 'dtype', 'ndim')}
+                  for kind in classes}
+    function_states = {}
+
+    def remember(function, defaults):
+        module = sys.modules.get(function.__module__)
+        code = codes.get((function.__module__, function.__qualname__))
+        if (code is None or not _original_function(function, module, code)
+                or function.__defaults__ != defaults or function.__kwdefaults__ is not None):
+            raise ValueError('CSR provider function or defaults differ from the source profile')
+        function_states[function] = _function_state(function)
+
+    for kind, members in methods.items():
+        for name, function in members.items():
+            remember(function, (0,) if name in ('setdiag', 'diagonal') else None)
+        for value in properties[kind].values():
+            remember(value.fget, None)
+    callbacks = {name:getattr(_sparsetools, name) for name in ('csr_diagonal', 'csr_sample_offsets')}
+    numpy_owners = dict(arange=multiarray, asarray=multiarray, empty=multiarray, atleast_1d=shape_base,
+        cumsum=fromnumeric, repeat=fromnumeric)
+    np_functions = {name:getattr(owner, name) for name, owner in numpy_owners.items()}
+    wrappers = {}
+    for name, defaults in (('atleast_1d', None), ('cumsum', (None, None, None)), ('repeat', (None,))):
+        function = np_functions[name]
+        if type(function) is not _ArrayFunctionDispatcher:
+            raise ValueError('original NumPy array-function dispatcher required')
+        wrapper = function.__wrapped__
+        remember(wrapper, defaults)
+        wrappers[name] = wrapper
+    for name in ('arange', 'asarray', 'empty'):
+        if type(np_functions[name]) is not BuiltinFunctionType or np_functions[name].__name__ != name:
+            raise ValueError('original NumPy array-function binding required')
+    wrapfunc = fromnumeric._wrapfunc
+    remember(wrapfunc, None)
+    upcast = _sputils.upcast
+    remember(upcast, None)
+    memo = _sputils._upcast_memo
+    memo_key = hash((np.dtype('float64'),))
+    supported_dtypes = tuple(_sputils.supported_dtypes)
+    if type(memo) is not dict or type(_sputils.supported_dtypes) is not list:
+        raise ValueError('original SciPy dtype memo required')
+    np_bindings = (_base, _compressed)
+
+    def live(kind, module):
+        return (module is np and kind in methods
+            and kind.__getattribute__ is object.__getattribute__
+            and all(getattr(kind, name) is value and _same_state(value.fget, function_states[value.fget])
+                    for name, value in properties[kind].items())
+            and all(getattr(kind, name) is function and _same_state(function, function_states[function])
+                    for name, function in methods[kind].items())
+            and all(getattr(np, name) is value for name, value in np_functions.items())
+            and all(np_functions[name].__wrapped__ is function and _same_state(function, function_states[function])
+                    for name, function in wrappers.items())
+            and fromnumeric._wrapfunc is wrapfunc and _same_state(wrapfunc, function_states[wrapfunc])
+            and _compressed.upcast is upcast and _sputils.upcast is upcast and _same_state(upcast, function_states[upcast])
+            and _sputils._upcast_memo is memo
+            and all(getattr(module, 'np', None) is np for module in np_bindings)
+            and all(getattr(_compressed, name, None) is value and getattr(_sparsetools, name) is value
+                    for name, value in callbacks.items()))
+
+    if not all(live(kind, np) for kind in classes):
+        raise ValueError('CSR provider has overridden method or library bindings')
+
+    def cold_upcast_supported():
+        return (_sputils.np is np and np.result_type is multiarray.result_type
+            and np.can_cast is multiarray.can_cast and type(_sputils.supported_dtypes) is list
+            and tuple(_sputils.supported_dtypes) == supported_dtypes
+            and next((dtype for dtype in supported_dtypes if np.can_cast(np.dtype('float64'), dtype)), None)
+                is np.float64)
+
+    return dict(scipy_version=scipy.__version__, numpy_version=np.__version__,
+        sources=[artifact_reference(module.__file__, 'scar.provider-source') for module in source_modules],
+        sparse_binary=artifact_reference(_sparsetools.__file__, 'scar.provider-binary')), live, memo, memo_key, upcast, cold_upcast_supported
+
+
+def load_csr_enforce(out):
+    """Return a guarded callable whose false result precedes every data write."""
+    import numpy as np
+    from scar.codegen.sparse_csr import SCHEMA, SOURCE
+
+    directory = Path(out).resolve()
+    manifest = read_artifact(artifact_reference(directory/'artifact.json', SCHEMA))
+    if ((manifest['schema_version'], manifest['abi_version'], manifest['language']) != (1, 1, 'c++20')
+            or manifest['source']['uri'] != str(directory/'sparse_csr.cpp')
+            or manifest['library']['uri'] != str(directory/'sparse_csr.so')
+            or manifest['template'] != artifact_reference(SOURCE, 'scar.cpp-source')
+            or read_artifact(manifest['source'], json_document=False) != SOURCE.read_bytes()):
+        raise ValueError('CSR C++ artifact differs from the admitted v1 template')
+    provider, live, memo, memo_key, upcast, cold_upcast_supported = _provider()
+    if manifest['provider'] != provider:
+        raise ValueError('CSR provider receipt differs from the compiled contract')
+    read_artifact(manifest['library'], json_document=False)
+    library = ctypes.PyDLL(manifest['library']['uri'])
+    library.scar_csr_enforce_abi_v1.restype = ctypes.c_int32
+    if library.scar_csr_enforce_abi_v1() != 1:
+        raise ValueError('CSR C++ ABI mismatch')
+    call = library.scar_csr_enforce_v1
+    preflight = library.scar_csr_enforce_preflight_v1
+    pointer, size = ctypes.c_void_p, ctypes.c_size_t
+    signature = [pointer, pointer, pointer, size, size, ctypes.c_int,
+        pointer, size, ctypes.c_int, ctypes.c_double]
+    for function in (call, preflight):
+        function.argtypes = signature
+        function.restype = ctypes.c_int32
+    indices_types = (np.dtype('int32'), np.dtype('int64'))
+    float64 = np.dtype('float64')
+    forbidden = frozenset(('shape', 'setdiag', '_setdiag', 'diagonal', '_swap', 'dtype', 'ndim'))
+
+    def try_enforce(matrix, rows, diagonal, module=np, *, original=None):
+        if not live(type(matrix), module):
+            return False
+        cached = memo.get(memo_key)
+        if cached is not np.float64 and (cached is not None or original is None):
+            return False
+        fields = vars(matrix)
+        if forbidden.intersection(fields):
+            return False
+        shape = fields.get('_shape')
+        if (type(shape) is not tuple or len(shape) != 2 or type(shape[0]) is not int
+                or type(shape[1]) is not int or shape[0] != shape[1] or shape[0] <= 0):
+            return False
+        values, indices, indptr = (fields.get(name) for name in ('data', 'indices', 'indptr'))
+        if any(type(array) is not np.ndarray or array.ndim != 1 or not array.flags.c_contiguous
+               or not array.flags.aligned for array in (values, indices, indptr, rows)):
+            return False
+        if (values.dtype != float64 or not values.flags.writeable or indices.dtype not in indices_types
+                or indptr.dtype != indices.dtype or rows.dtype not in indices_types
+                or indptr.size != shape[0]+1 or indices.size != values.size):
+            return False
+        if type(diagonal) not in (float, int, np.float64) or type(diagonal) is int and abs(diagonal) > 2**53:
+            return False
+        ranges = _ranges((values, indices, indptr, rows))
+        if any(_overlaps(ranges[0], interval) for interval in ranges[1:]):
+            return False
+        if original is not None:
+            if type(original) is not type(matrix) or original is matrix:
+                return False
+            source = vars(original)
+            inputs = [source.get(name) for name in ('data', 'indices', 'indptr')]
+            if any(type(value) is not np.ndarray or value.ndim != 1 or not value.flags.c_contiguous
+                   for value in inputs):
+                return False
+            if any(_overlaps(a, b) for a in ranges[:3] for b in _ranges(inputs)):
+                return False
+        data, columns, offsets, selected = (address for address, _ in ranges)
+        args = (data, columns, offsets, shape[0], values.size, indices.itemsize,
+            selected, rows.size, rows.itemsize, float(diagonal))
+        if cached is None:
+            if not cold_upcast_supported() or preflight(*args) != 1:
+                return False
+            # Preserve SciPy's first memo update after every no-write guard.
+            # The source clone is private under the caller's normal-completion contract.
+            upcast(values.dtype)
+        return call(*args) == 1
+
+    return try_enforce

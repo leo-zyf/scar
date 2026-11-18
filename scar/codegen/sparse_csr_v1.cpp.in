@@ -1,0 +1,136 @@
+#include <algorithm>
+#include <bit>
+#include <cfenv>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
+namespace {
+constexpr std::uint64_t sign_bit = std::uint64_t{1} << 63;
+constexpr std::uint64_t exponent_bits = 0x7ff0000000000000;
+constexpr std::uint64_t significand_bits = 0x000fffffffffffff;
+constexpr std::uint64_t quiet_bit = std::uint64_t{1} << 51;
+
+bool can_copy_diagonal(std::uint64_t value) {
+    const auto exponent = value & exponent_bits;
+    const auto significand = value & significand_bits;
+    return !(exponent == 0 && significand != 0)
+        && !(exponent == exponent_bits && significand != 0 && !(value & quiet_bit));
+}
+
+template<class Index, class Row>
+bool enforce(double *values, const Index *indices, const Index *indptr,
+             std::size_t size, std::size_t nnz, const Row *selected, std::size_t count, double diagonal,
+             bool commit) {
+    if (std::fegetround() != FE_TONEAREST || indptr[0] != 0
+            || indptr[size] < 0 || static_cast<std::size_t>(indptr[size]) != nnz
+            || !can_copy_diagonal(std::bit_cast<std::uint64_t>(diagonal))) {
+        return false;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (selected[i] < 0 || selected[i] == std::numeric_limits<Row>::max()
+                || static_cast<std::size_t>(selected[i]) >= size) {
+            return false;
+        }
+    }
+    bool has_negative_zero = false;
+    for (std::size_t row = 0; row < size; ++row) {
+        const auto begin = indptr[row];
+        const auto end = indptr[row + 1];
+        if (begin < 0 || begin >= end || static_cast<std::size_t>(end) > nnz) {
+            return false;
+        }
+        Index previous = -1;
+        bool has_diagonal = false;
+        for (auto offset = begin; offset < end; ++offset) {
+            const auto column = indices[offset];
+            if (column <= previous || static_cast<std::size_t>(column) >= size) {
+                return false;
+            }
+            previous = column;
+            if (static_cast<std::size_t>(column) == row) {
+                const auto bits = std::bit_cast<std::uint64_t>(values[offset]);
+                if (!can_copy_diagonal(bits)) {
+                    return false;
+                }
+                has_diagonal = true;
+                has_negative_zero |= bits == sign_bit;
+            }
+        }
+        if (!has_diagonal) {
+            return false;
+        }
+    }
+    if (!commit) {
+        return true;
+    }
+
+    // For known unique diagonals, SciPy's accumulation from +0 changes
+    // negative zero to positive zero in the admitted rounding mode.
+    if (has_negative_zero) {
+        for (std::size_t row = 0; row < size; ++row) {
+            const auto first = indices + indptr[row];
+            const auto last = indices + indptr[row + 1];
+            const auto position = std::lower_bound(first, last, static_cast<Index>(row)) - indices;
+            if (std::bit_cast<std::uint64_t>(values[position]) == sign_bit) {
+                values[position] = 0.0;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto row = static_cast<std::size_t>(selected[i]);
+        const auto first = indices + indptr[row];
+        const auto last = indices + indptr[row + 1];
+        const auto position = std::lower_bound(first, last, static_cast<Index>(row)) - indices;
+        std::fill(values + indptr[row], values + indptr[row + 1], 0.0);
+        values[position] = diagonal;
+    }
+    return true;
+}
+
+template<class Index>
+bool with_rows(double *values, const void *indices, const void *indptr, std::size_t size,
+               std::size_t nnz, const void *selected, std::size_t count, int row_width, double diagonal,
+               bool commit) {
+    const auto columns = static_cast<const Index *>(indices);
+    const auto offsets = static_cast<const Index *>(indptr);
+    if (row_width == 4) {
+        return enforce(values, columns, offsets, size, nnz, static_cast<const std::int32_t *>(selected),
+                       count, diagonal, commit);
+    }
+    return enforce(values, columns, offsets, size, nnz, static_cast<const std::int64_t *>(selected),
+                   count, diagonal, commit);
+}
+
+bool run(
+        double *values, const void *indices, const void *indptr, std::size_t size, std::size_t nnz,
+        int index_width, const void *selected, std::size_t count, int row_width, double diagonal, bool commit) {
+    if (!indptr || (nnz && (!values || !indices)) || (count && !selected)
+            || (row_width != 4 && row_width != 8)) {
+        return false;
+    }
+    if (index_width == 4) {
+        return with_rows<std::int32_t>(values, indices, indptr, size, nnz, selected, count, row_width, diagonal, commit);
+    }
+    if (index_width == 8) {
+        return with_rows<std::int64_t>(values, indices, indptr, size, nnz, selected, count, row_width, diagonal, commit);
+    }
+    return false;
+}
+}
+
+extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_abi_v1() {
+    return 1;
+}
+
+extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_v1(
+        double *values, const void *indices, const void *indptr, std::size_t size, std::size_t nnz,
+        int index_width, const void *selected, std::size_t count, int row_width, double diagonal) {
+    return run(values, indices, indptr, size, nnz, index_width, selected, count, row_width, diagonal, true);
+}
+
+extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_preflight_v1(
+        double *values, const void *indices, const void *indptr, std::size_t size, std::size_t nnz,
+        int index_width, const void *selected, std::size_t count, int row_width, double diagonal) {
+    return run(values, indices, indptr, size, nnz, index_width, selected, count, row_width, diagonal, false);
+}

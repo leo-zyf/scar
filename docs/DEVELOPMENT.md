@@ -58,6 +58,16 @@ Gray-Scott 259×259 证明可省一个输入根。另一个根交给原 NumPy pr
 `plan-snapshot-launch` 冷验原图、C++ 产物和成本资格。`run-snapshot-selection` 用发布的校验和检查本次参数、环境和资源，才采用获准的原生路径。
 Gray-Scott 的 577 步留出通过验收，另两种 CLI 配置已验证源码守卫适用性。详细记录见 `artifacts/baseline/three-stage-snapshot-selection.json`。
 
+### 稀疏区域的三阶段交接
+
+1. 建图。`entry-calls` 将有界运行时调用绑定到原 F4 源体。`plan_csr_region` 自动识别 CSR 更新区间，并核对原语句顺序和状态端口。scikit-fem `ex01.py` 的求解调用已接到实际 SuperLU 入口，库内部作为算子边界。
+2. 化简。原矩阵复制及调用方状态继续沿原图传递。闭合的 CSR 更新区间消去索引及对角线临时数组，并保留 SciPy 首次类型查询的状态写入。计划引用实测单核成本和目标硬件图，对单次调用计入预编译产物加载成本。
+3. 交付。用 `python -m scar.compiler.plan_csr_region --calls CALLS --out OUT` 生成 `C++20 / ABI 1` 产物及选择收据。用 `python -m scar.runtime.csr_region_entry --selection OUT/selection.json --selection-sha256 SHA --exclusive-inputs --study -- ENTRY` 验证替换与回退。`--native` 和 `--cost` 可绑定已生成的 C++ 产物与同版本实测成本。普通运行按选择保留原入口。
+
+当前适用域为 SciPy 1.18.1 的标准 `float64` CSR，要求每行有唯一的对角项。最终比较用独立的非插桩进程，核对解向量、稀疏结构和入口输出，分别报告区域和入口成本。
+
+scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 增至 1.091 s，默认决策为 `KEEP`。试跑每次完成一次 C++ 更新，解向量、CSR 数组和标准输出均通过对照。记录见 `artifacts/baseline/three-stage-sparse-entry.json`。下一轮按顺序复用前端的区域及效果契约，分解启动成本，再用重复调用场景验证摊销条件及 C++ 交付。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

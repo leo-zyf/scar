@@ -1,0 +1,260 @@
+{
+  "implemented": {
+    "abi": 1,
+    "language": "C++20",
+    "native_build": {
+      "schema": "scar.native-csr-enforce",
+      "sha256": "f2b89b24faabadab18065ed3691dd079433a312319066b455ef70d9d74480eb1",
+      "size_bytes": 3717,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-sparse-enforce/native-csr-final/artifact.json"
+    },
+    "source": {
+      "schema": "scar.cpp-source",
+      "sha256": "9313b2be04053b601aa1d13fb233ad79632f8b1757b6e278b94e2c58f3d56bea",
+      "size_bytes": 5813,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-sparse-enforce/native-csr-final/sparse_csr.cpp"
+    },
+    "study_uses_original_entry": true
+  },
+  "inferred": {
+    "family": "CSR_ZERO_ROWS_SET_DIAGONAL",
+    "preserved": [
+      "Original sparse matrix copy",
+      "RHS update",
+      "Provider memo write on miss",
+      "Original solver and entry effects"
+    ],
+    "removed_work": [
+      "Temporary expanded CSR row selection indices",
+      "Temporary whole-diagonal staging"
+    ],
+    "semantic_scope": "PRIVATE_CSR_ROW_EDIT_NORMAL_COMPLETION"
+  },
+  "observed": {
+    "native_boundary": "_superlu.gssv",
+    "source_summary": {
+      "all_bounded_source_interfaces": 19,
+      "catalog_units": 6,
+      "entry_conditional_interfaces": 19,
+      "entry_projection_units": 5,
+      "entry_reachable_observed_attempts": 65,
+      "entry_static_call_templates": 138,
+      "entry_static_scopes": 13,
+      "observed_attempts": 72,
+      "observed_target_frontiers": {
+        "OBSERVED_CALLABLE_REQUIRES_OTHER_CALL_PROTOCOL": 36,
+        "OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG": 20
+      },
+      "observed_target_kinds": {
+        "NATIVE_CARRIER": 21,
+        "OTHER_CALLABLE": 5,
+        "PYTHON_FUNCTION": 36,
+        "TYPE_OBJECT": 10
+      },
+      "preparation_loaded_units": 5,
+      "shared_source_bodies": 12,
+      "typed_route_edges": 163,
+      "typed_route_kinds": {
+        "ARGUMENT": 23,
+        "CALL_TARGET": 19,
+        "COMPLETION": 19,
+        "ENVIRONMENT": 19,
+        "PROJECTION": 45,
+        "STATE_INTERFACE": 38
+      }
+    },
+    "stage_one": {
+      "schema": "scar.study-fem-sparse-source",
+      "sha256": "6af340d3947b6efb310859b23858a8902f4aa012a20c2f3120aaf5bebf3ef283",
+      "size_bytes": 149255,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/source/result.json"
+    },
+    "target_hardware": {
+      "connections": 477,
+      "graph": {
+        "schema": "scar.target-hardware-graph",
+        "sha256": "c8bf57356a6b56f91f9dd331abfb7020b07fd92153bae2264251e214600b0e68",
+        "size_bytes": 8707,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/source/program/hardware/result.json"
+      },
+      "resources": 204,
+      "typed_counts": {
+        "CacheDomain": 86,
+        "CpuCore": 28,
+        "CpuExecutor": 2,
+        "CpuPackage": 2,
+        "DiscoveredAccelerator": 1,
+        "HardwareBoundary": 2,
+        "HardwareThread": 56,
+        "MemoryDomain": 2,
+        "NetworkInterface": 7,
+        "PciFunction": 13,
+        "StorageDevice": 4,
+        "StorageEndpoint": 1
+      }
+    }
+  },
+  "proposed": {
+    "local_scope": "COPY_CSR_AND_GUARDED_ROW_UPDATE_IN_PROCESS",
+    "plan": {
+      "schema": "scar.implementation-execution-plan",
+      "sha256": "fe2c575c12bb312fbab026f9017193b8c960c938f55f527f92b2d98cedbc0510",
+      "size_bytes": 2972,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/plan-release/plan.json"
+    },
+    "prebuilt_provider_load_ns": 58928345,
+    "source_proof": {
+      "schema": "scar.csr-row-region-proof",
+      "sha256": "96f21a13ba4a03440407bffa708467e464df09344c3bc1046fa49236b86dc6e2",
+      "size_bytes": 27372,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/plan-release/proof.json"
+    }
+  },
+  "rejected": {
+    "decision": "KEEP",
+    "entry_profitability": "NOT_PROFITABLE",
+    "reason": "PREBUILT_COLD_SCOPE_COST_PREFERS_ORIGINAL"
+  },
+  "remaining": [
+    "SuperLU native-internal dependency and effects frontier",
+    "Entry overhead attribution beyond measured provider load",
+    "Launch qualification for reusable warmed scopes"
+  ],
+  "schema": "scar.three-stage-sparse-entry.report",
+  "schema_version": 1,
+  "verified": {
+    "bitwise_fields": [
+      "matrix",
+      "rhs",
+      "solution"
+    ],
+    "correctness": [
+      {
+        "schema": "scar.raw-json",
+        "sha256": "bbb2b6d8cb6047eed2ac7cf0594a9fb3d25176edd58e2c2383f5f238426b4a02",
+        "size_bytes": 1148,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/validation-original.json"
+      },
+      {
+        "schema": "scar.raw-json",
+        "sha256": "ca913ae5e56e8676631d99d28dae7b77bd43ac4a5736634ea5b9c6f61096baf9",
+        "size_bytes": 1118,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/validation-trial.json"
+      }
+    ],
+    "entry_measurement_pairs": 4,
+    "entry_metrics": {
+      "original": {
+        "max_ns": 960729150,
+        "median_ns": 948735707.0,
+        "min_ns": 942465538,
+        "samples_ns": [
+          954583344,
+          942888070,
+          942465538,
+          960729150
+        ],
+        "variance_ns2": 81119481643526.33
+      },
+      "trial": {
+        "max_ns": 1118889280,
+        "median_ns": 1091496319.5,
+        "min_ns": 1079457515,
+        "samples_ns": [
+          1090032474,
+          1118889280,
+          1079457515,
+          1092960165
+        ],
+        "variance_ns2": 280218419807145.66
+      }
+    },
+    "entry_speedup": 0.869206510411875,
+    "entry_warmup_pairs": 1,
+    "fallback_calls_per_trial": 0,
+    "measurement_context": {
+      "BLIS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "MPLBACKEND": "Agg",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "PYTHONPATH": "/home/zyf/AAA/scikit-fem:/home/zyf/AAA/scar"
+    },
+    "native_calls_per_trial": 1,
+    "raw_entry_clocks": {
+      "schema": "scar.csr-example-clean-entry-experiment",
+      "sha256": "527e0cef0ecf0a7a45c75ff741f64af7cf4002f98b2a599f0ca0e2c9a93e8a5e",
+      "size_bytes": 6994,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/entry-ab-release/result.json"
+    },
+    "raw_region_clocks": {
+      "schema": "scar.sparse-csr-row-cost",
+      "sha256": "2bddfaaf829eb3e3fbf15c55f52d18d7a7a2516b41147f19b668b385eb1848ee",
+      "size_bytes": 12726,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-fem-sparse/cost/released/result.json"
+    },
+    "region_measurement_pairs": 9,
+    "region_metrics": {
+      "native": {
+        "bounds_are_sample_extrema": true,
+        "estimate_ns": 187514,
+        "lower_ns": 175238,
+        "sample_variance_ns2": 39802330,
+        "samples_ns": [
+          190392,
+          181051,
+          187514,
+          175238,
+          188390,
+          177774,
+          190042,
+          178146,
+          191248
+        ],
+        "upper_ns": 191248
+      },
+      "original": {
+        "bounds_are_sample_extrema": true,
+        "estimate_ns": 286710,
+        "lower_ns": 276111,
+        "sample_variance_ns2": 179693066.19444445,
+        "samples_ns": [
+          286710,
+          302892,
+          278588,
+          299409,
+          278211,
+          300200,
+          276111,
+          313674,
+          282694
+        ],
+        "upper_ns": 313674
+      }
+    },
+    "region_speedup": 1.5290058342310442,
+    "region_warmup_pairs": 2,
+    "same_stdout_stderr": true
+  },
+  "workload": {
+    "architecture": "x86_64",
+    "entry": {
+      "schema": "scar.python-source",
+      "sha256": "b3c1be5c024c2d4e6634ad3971c6a963e5ad87dff15ad902a22f27713be02f49",
+      "size_bytes": 998,
+      "uri": "/home/zyf/AAA/scikit-fem/docs/examples/ex01.py"
+    },
+    "libraries": {
+      "numpy": "2.5.2",
+      "scipy": "1.18.1"
+    },
+    "platform": "SINGLE_HOST_CPU",
+    "python": "3.14.7",
+    "source": {
+      "schema": "scar.python-source",
+      "sha256": "597303204b2f31c94527e2fad68eab05aa1e7a110eae3f6b41f7a2ff2e2f5be2",
+      "size_bytes": 29085,
+      "uri": "/home/zyf/AAA/scikit-fem/skfem/utils.py"
+    }
+  }
+}
