@@ -1,0 +1,175 @@
+// CPython bridge for an explicitly guarded trial of one generated ATen graph.
+#include "graph.hpp"
+
+#include <ATen/autocast_mode.h>
+#include <c10/core/impl/PythonDispatcherTLS.h>
+#include <torch/csrc/autograd/python_variable.h>
+#include <torch/csrc/utils/object_ptr.h>
+
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <unistd.h>
+
+#ifdef Py_GIL_DISABLED
+#error "This trial bridge requires a GIL-enabled CPython build"
+#endif
+
+namespace {
+namespace graph = scar_aten_graph;
+constexpr char capsule_name[] = "scar.aten-python-trial.cpu-pair.v1";
+
+struct TrialPair {
+    const pid_t pid;
+    graph::CpuPair pair;
+
+    TrialPair(int caller, int worker) : pid(getpid()), pair(caller, worker, false) {}
+};
+
+void check_torch_context() {
+    using TorchFunction = at::impl::PythonTorchFunctionTLS;
+    if (at::GradMode::is_enabled() || c10::InferenceMode::is_enabled()
+            || at::autocast::is_autocast_enabled(at::kCPU)
+            || c10::impl::TorchDispatchModeTLS::any_modes_set()
+            || c10::impl::PythonDispatcherTLS::get_state() != nullptr
+            || TorchFunction::stack_len() != 0 || TorchFunction::peek_skip_next() || at::hasCallbacks()) {
+        throw std::runtime_error("native trial requires no-grad and an ordinary unobserved ATen CPU context");
+    }
+}
+
+long exact_integer(PyObject* value) {
+    if (!PyLong_CheckExact(value)) throw std::invalid_argument("native trial requires an exact integer");
+    long n = PyLong_AsLong(value);
+    if (n == -1 && PyErr_Occurred()) throw python_error();
+    return n;
+}
+
+int cpu_index(PyObject* value) {
+    long n = exact_integer(value);
+    if (n < 0 || n > std::numeric_limits<int>::max()) throw std::invalid_argument("invalid trial CPU index");
+    return static_cast<int>(n);
+}
+
+void drop_pair(PyObject* capsule) {
+    auto* pair = static_cast<TrialPair*>(PyCapsule_GetPointer(capsule, capsule_name));
+    // A process fork inherits this address but has no running worker to join.
+    if (pair && pair->pid == getpid()) delete pair;
+}
+
+PyObject* translate_exception() {
+    try {
+        throw;
+    } catch (python_error& error) {
+        error.restore();
+    } catch (const std::invalid_argument& error) {
+        PyErr_SetString(PyExc_ValueError, error.what());
+    } catch (const std::bad_alloc&) {
+        PyErr_NoMemory();
+    } catch (const std::exception& error) {
+        PyErr_SetString(PyExc_RuntimeError, error.what());
+    } catch (...) {
+        PyErr_SetString(PyExc_RuntimeError, "native trial raised an unknown exception");
+    }
+    return nullptr;
+}
+
+PyObject* prepare(PyObject*, PyObject* arguments) {
+    PyObject *caller, *worker;
+    if (!PyArg_UnpackTuple(arguments, "prepare", 2, 2, &caller, &worker)) return nullptr;
+    try {
+        check_torch_context();
+        auto pair = std::make_unique<TrialPair>(cpu_index(caller), cpu_index(worker));
+        PyObject* capsule = PyCapsule_New(pair.get(), capsule_name, drop_pair);
+        if (capsule) pair.release();
+        return capsule;
+    } catch (...) {
+        return translate_exception();
+    }
+}
+
+graph::WindowSelection window_selection(PyObject* starts) {
+    if (!PyTuple_CheckExact(starts) || PyTuple_GET_SIZE(starts) == 0) {
+        throw std::invalid_argument("native trial requires a nonempty tuple of window starts");
+    }
+    graph::WindowSelection windows{};
+    long previous = -2;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(starts); ++i) {
+        const long index = exact_integer(PyTuple_GET_ITEM(starts, i));
+        if (index < 0 || static_cast<std::size_t>(index) >= windows.size()
+                || !graph::legal_window_starts[index] || index - 2 < previous) {
+            throw std::invalid_argument("native trial windows must be legal, ordered and disjoint");
+        }
+        windows[index] = true;
+        previous = index;
+    }
+    return windows;
+}
+
+PyObject* run(PyObject*, PyObject* arguments) {
+    PyObject *capsule, *input_tuple, *starts, *reference_bytes;
+    if (!PyArg_UnpackTuple(arguments, "run", 4, 4, &capsule, &input_tuple, &starts, &reference_bytes)) return nullptr;
+    auto* prepared = static_cast<TrialPair*>(PyCapsule_GetPointer(capsule, capsule_name));
+    if (!prepared) return nullptr;
+    try {
+        if (prepared->pid != getpid()) throw std::runtime_error("native trial worker belongs to another process");
+        check_torch_context();
+        if (!PyTuple_CheckExact(input_tuple) || PyTuple_GET_SIZE(input_tuple) != graph::input_count) {
+            throw std::invalid_argument("native trial input tuple has the wrong arity");
+        }
+        if (!PyTuple_CheckExact(reference_bytes) || PyTuple_GET_SIZE(reference_bytes) != graph::input_count) {
+            throw std::invalid_argument("native trial requires a matching tuple of immutable reference bytes");
+        }
+        std::array<at::Tensor, graph::input_count> inputs;
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(input_tuple, i);
+            // THPVariable_CheckExact also admits Parameter, which is outside this trial ABI.
+            if (reinterpret_cast<PyObject*>(Py_TYPE(item)) != THPVariableClass) {
+                throw std::invalid_argument("native trial requires exact torch.Tensor arguments");
+            }
+            const auto& tensor = THPVariable_Unpack(item);
+            if (!tensor.defined() || !tensor.has_storage() || tensor.key_set().has(c10::DispatchKey::Python)
+                    || tensor._fw_grad(0).defined() || tensor.storage_offset() != 0) {
+                throw std::invalid_argument("native trial requires a base-offset Tensor with ordinary storage and no forward AD");
+            }
+            inputs[i] = tensor;
+        }
+        auto windows = window_selection(starts);
+        graph::validate_inputs(inputs);
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            PyObject* expected = PyTuple_GET_ITEM(reference_bytes, i);
+            if (!PyBytes_CheckExact(expected)) throw std::invalid_argument("native trial requires exact reference bytes");
+            const auto bytes = inputs[i].nbytes();
+            if (inputs[i].storage().nbytes() != bytes || bytes != static_cast<std::size_t>(PyBytes_GET_SIZE(expected))
+                    || (bytes && std::memcmp(inputs[i].const_data_ptr<float>(), PyBytes_AS_STRING(expected), bytes))) {
+                Py_RETURN_NONE;
+            }
+        }
+        auto outputs = [&] {
+            const auto placement = prepared->pair.place_caller();
+            return graph::run_parallel(inputs, prepared->pair, windows);
+        }();
+        THPObjectPtr out(PyTuple_New(graph::output_count));
+        if (!out) return nullptr;
+        for (std::size_t i = 0; i < outputs.size(); ++i) {
+            PyObject* tensor = THPVariable_Wrap(std::move(outputs[i]));
+            if (!tensor) return nullptr;
+            PyTuple_SET_ITEM(out.get(), i, tensor);
+        }
+        return out.release();
+    } catch (...) {
+        return translate_exception();
+    }
+}
+
+PyMethodDef methods[] = {
+    {"prepare", prepare, METH_VARARGS, nullptr},
+    {"run", run, METH_VARARGS, nullptr},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyModuleDef module = {PyModuleDef_HEAD_INIT, "_scar_aten_python_trial", nullptr, -1, methods};
+} // namespace
+
+PyMODINIT_FUNC PyInit__scar_aten_python_trial() {
+    return PyModule_Create(&module);
+}

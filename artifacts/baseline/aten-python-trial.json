@@ -1,0 +1,104 @@
+{
+  "all_31_guarded_calls_faster": true,
+  "automatic_deployment_authorized": false,
+  "bitwise_outputs": true,
+  "borrowed_live_tensors": true,
+  "caller_affinity_restored": true,
+  "cpu_ids": [
+    4,
+    5
+  ],
+  "cxx_standard": 20,
+  "date": "2026-11-18",
+  "device": "cpu",
+  "extension": {
+    "path": "artifacts/current/experiments/aten-python-trial-v1/built/_scar_aten_python_trial.cpython-314-x86_64-linux-gnu.so",
+    "sha256": "af25da71d2e453b21b6f38e42c6f69a6dd72b92d1a1e49cf183ac75b8026e793",
+    "size_bytes": 260792
+  },
+  "immutable_guard_reference_bytes": 5898240,
+  "lewm_rerun": false,
+  "libtorch_version": "2.13.0+cu132",
+  "manifest": {
+    "path": "artifacts/current/experiments/aten-python-trial-v1/built/trial.json",
+    "sha256": "04b59fe31569150488d683cd500a057fcb2257cfdec148ee328dcf3d6e7ddca8",
+    "size_bytes": 9528
+  },
+  "matched_counters": {
+    "fallback_calls": 3,
+    "fallback_reasons": {
+      "CALL_ABI": 1,
+      "INPUT_BYTES": 1,
+      "RUNTIME_CONTEXT": 1
+    },
+    "native_calls": 38
+  },
+  "measured_pairs": 31,
+  "native_bridge_source": {
+    "path": "artifacts/current/experiments/aten-python-trial-v1/built/trial.cpp",
+    "sha256": "bb7a0cc0560debdc29e8d5ea97b1b2d63f6a6ca9540fa77d2a07c66dfa218af1",
+    "size_bytes": 7355
+  },
+  "num_original_operators": 4,
+  "observer_fallback": {
+    "path": "artifacts/current/experiments/aten-python-trial-v1/observer-validation.json",
+    "sha256": "8b0023b3422253263bcd92971d6b36aa1c8e64354cbffc542033003d7f9d38a9",
+    "size_bytes": 226
+  },
+  "original_binding_restored": true,
+  "original_code_key": "pycode-v2:7fa80b12344707e57a6ef95838ca0a77c276b4a43ae9a158a5523b1289f714e4",
+  "original_function": "propagate",
+  "original_plan": {
+    "schema": "scar.implementation-execution-plan",
+    "sha256": "484ecc462869a9aa84018c673b6f18573f9dd64b4252656d2415563d5e706e0f",
+    "size_bytes": 4209,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-tensor-budget-v1/ample/plan.json"
+  },
+  "original_source": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-tensor-budget-v1/fixture/subject.py",
+    "sha256": "84e36fce9bf40d96a265390ab9ff58e934f084738bbf9a9009c8f4ad6e8ac09e",
+    "size_bytes": 839
+  },
+  "schema": "scar.aten-python-trial-review",
+  "schema_version": 1,
+  "scope": "WARM_FULL_PYTHON_FUNCTION_WITH_GUARDS",
+  "selected_window_starts": [
+    1
+  ],
+  "setup_outside_timed_boundary": true,
+  "source_projection": {
+    "schema": "scar.aten-capture-graph-projection",
+    "sha256": "97b9f98444691bf372e10155b79360505e356e6f16745b69b210f0dd9b079611",
+    "size_bytes": 109256,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-tensor-budget-v1/projected/projection.json"
+  },
+  "speedup": 1.2283256011375148,
+  "standalone_delivery_regression_verified": true,
+  "statistics": {
+    "GUARDED_NATIVE": {
+      "max_ns": 19922532,
+      "median_ns": 18044249,
+      "min_ns": 17117332,
+      "variance_ns2": 712250007199.4
+    },
+    "ORIGINAL": {
+      "max_ns": 23928102,
+      "median_ns": 22164213,
+      "min_ns": 22139396,
+      "variance_ns2": 125889713662.99785
+    }
+  },
+  "timing_and_differential": {
+    "path": "artifacts/current/experiments/aten-python-trial-v1/validated-final/validation.json",
+    "sha256": "934d0066c9dd6c15d3ae064299bfbe03cf7b65e763b95e0d27dafe9b59a7437e",
+    "size_bytes": 5900
+  },
+  "warmup_pairs": 7,
+  "whole_application_timing_measured": false,
+  "wrapper_effect_contract": {
+    "schema": "scar.aten-python-wrapper-trial-contract",
+    "sha256": "e010e3f897390bfb68995f291dbec2f1eb4203867b4c85cb105ba4b4258abcbb",
+    "size_bytes": 561,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-python-trial-v1/wrapper-contract.json"
+  }
+}

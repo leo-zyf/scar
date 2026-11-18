@@ -24,8 +24,9 @@ namespace scar_aten_graph {
 // independent operations that can access the same inputs read-only.
 class CpuPair {
 public:
-    CpuPair(int caller_cpu, int worker_cpu)
-        : caller_thread_(pthread_self()), caller_cpu_(caller_cpu) {
+    CpuPair(int caller_cpu, int worker_cpu, bool pin_caller_for_lifetime = true)
+        : caller_thread_(pthread_self()), caller_cpu_(caller_cpu),
+          pin_caller_for_lifetime_(pin_caller_for_lifetime) {
         check_at_context();
         if (caller_cpu < 0 || caller_cpu >= CPU_SETSIZE
                 || worker_cpu < 0 || worker_cpu >= CPU_SETSIZE || caller_cpu == worker_cpu) {
@@ -42,14 +43,14 @@ public:
         }
         if (std::fegetenv(&original_fp_) != 0) throw std::runtime_error("read caller floating-point environment");
         try {
-            pin(caller_cpu);
+            if (pin_caller_for_lifetime_) pin(caller_cpu);
             worker_ = std::thread([this, worker_cpu] { serve(worker_cpu); });
             std::unique_lock lock(mutex_);
             complete_.wait(lock, [this] { return ready_; });
             if (terminal_error_) std::rethrow_exception(terminal_error_);
         } catch (...) {
             stop();
-            restore();
+            if (pin_caller_for_lifetime_) restore();
             throw;
         }
     }
@@ -59,14 +60,50 @@ public:
 
     ~CpuPair() {
         stop();
-        restore();
+        if (pin_caller_for_lifetime_) restore();
     }
+
+    class CallerPlacement {
+    public:
+        CallerPlacement(const CallerPlacement&) = delete;
+        CallerPlacement& operator=(const CallerPlacement&) = delete;
+
+        ~CallerPlacement() {
+            if (!pair_.pin_caller_for_lifetime_) pair_.restore();
+        }
+
+    private:
+        friend class CpuPair;
+
+        explicit CallerPlacement(CpuPair& pair) : pair_(pair) {
+            pair.check_caller_thread();
+            check_at_context();
+            if (pair.pin_caller_for_lifetime_) {
+                check_cpu(pair.caller_cpu_);
+                return;
+            }
+            cpu_set_t admitted;
+            const int error = pthread_getaffinity_np(pair.caller_thread_, sizeof(admitted), &admitted);
+            if (error != 0) throw std::system_error(error, std::generic_category(), "read caller affinity");
+            if (!CPU_EQUAL(&admitted, &pair.original_mask_)) {
+                throw std::runtime_error("caller affinity has changed since native pair preparation");
+            }
+            try {
+                pin(pair.caller_cpu_);
+            } catch (...) {
+                pair.restore();
+                throw;
+            }
+        }
+
+        CpuPair& pair_;
+    };
+
+    CallerPlacement place_caller() { return CallerPlacement(*this); }
 
     template <class L, class R>
     void run(L&& caller, R&& worker) {
-        if (!pthread_equal(pthread_self(), caller_thread_)) {
-            throw std::logic_error("native pair must run on its owning caller thread");
-        }
+        check_caller_thread();
         check_cpu(caller_cpu_);
         auto invoke_worker = [&worker] { std::invoke(std::forward<R>(worker)); };
         {
@@ -96,6 +133,12 @@ public:
     }
 
 private:
+    void check_caller_thread() const {
+        if (!pthread_equal(pthread_self(), caller_thread_)) {
+            throw std::logic_error("native pair must run on its owning caller thread");
+        }
+    }
+
     static void check_at_context() {
         if (at::get_num_threads() != 1 || at::get_num_interop_threads() != 1
                 || at::GradMode::is_enabled() || c10::InferenceMode::is_enabled()
@@ -174,6 +217,7 @@ private:
 
     pthread_t caller_thread_;
     int caller_cpu_;
+    bool pin_caller_for_lifetime_;
     cpu_set_t original_mask_;
     std::fenv_t original_fp_;
     at::ThreadLocalState caller_state_;
