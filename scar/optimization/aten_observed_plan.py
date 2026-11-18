@@ -2,6 +2,7 @@
 from collections import defaultdict
 from copy import deepcopy
 
+from scar.analysis.aten_wrapper_contracts import SCHEMA as WRAPPER_CONTRACTS
 from scar.ir.implementation_plan import (
     ImplementationOption, PlanningOperation, PlanningProblem, ResourceObligation,
     validate_problem,
@@ -14,7 +15,8 @@ from scar.optimization.implementation_costs import CostQuery, resolve_cost
 SCHEMA = 'scar.observed-aten-planning-projection'
 _SCOPE = 'ORIGINAL_ATEN_CALL_BOUNDARY'
 _FRONTIERS = (
-    'F4_TO_PROVIDER_ABI_AND_EFFECT_CONTRACT_UNQUALIFIED',
+    'GENERATED_WRAPPER_TO_EXECUTABLE_BUILD_RELATION_UNQUALIFIED',
+    'WRAPPER_PRE_AND_POST_DISPATCH_EFFECTS_UNQUALIFIED',
     'LOGICAL_CONTENT_AND_READINESS_UNQUALIFIED',
     'NO_COMPARABLE_SOURCE_AND_REPLACEMENT_COSTS',
 )
@@ -32,7 +34,7 @@ def _references(rows):
     return tuple(deepcopy(rows))
 
 
-def build_observed_aten_problem(program_refs, target_ref, source, native):
+def build_observed_aten_problem(program_refs, target_ref, source, native, *, contracts=None):
     """Project checked F4 and native facts without inferring content or placement.
 
     The producer must cold-replay source matching, world paths and capture
@@ -62,6 +64,12 @@ def build_observed_aten_problem(program_refs, target_ref, source, native):
     _require(invocation and all(op['invocation'] == invocation for op in native['operators'])
              and source.get('invocation', invocation) == invocation,
              'source and native calls need one original invocation')
+    if contracts is not None:
+        _require(contracts['schema'] == WRAPPER_CONTRACTS and contracts['schema_version'] == 1
+                 and (contracts['run'], contracts['process'], contracts['invocation'])
+                 == (native['run'], native['process'], invocation)
+                 and [row['attempt'] for row in contracts['calls']] == attempts,
+                 'wrapper contracts differ from original captured invocation')
     routes = source.get('data_routes', [])
     routes_by_consumer = defaultdict(list)
     for index, route in enumerate(routes):
@@ -98,12 +106,22 @@ def build_observed_aten_problem(program_refs, target_ref, source, native):
             ResourceObligation('memory_placement_and_transfers',
                 'Observed provider ports do not establish guarded residency, materialization or workspace bounds.', refs),
         )
+        parameters = dict(attempt=attempt, provider_observations=observations,
+            source_call=call['source_call'], positional=call['positional'], keywords=call['keywords'],
+            result=call['result'], world_before=call['world_before'], world_after=call['world_after'],
+            observed_route_locators=routes_by_consumer.get(attempt, []),
+            effects_admitted=False, replacement_authorized=False)
+        if contracts is not None:
+            wrapper = contracts['calls'][index]
+            _require((wrapper['source_call'], wrapper['site']) == (call['source_call'], native_op['call_site'])
+                     and wrapper['effects_complete'] is False and wrapper['replacement_authorized'] is False,
+                     'wrapper contract changed original site or replacement authority')
+            parameters['wrapper_contract'] = dict(
+                locator='#/calls/' + str(index), image_status=wrapper['image_status'],
+                argument_status=wrapper['argument_status'], entry_name_agreement=wrapper['entry_name_agreement'],
+                effect_requirements=sorted({effect['kind'] for effect in wrapper['effects']}))
         baseline = ImplementationOption('KEEP', 'ORIGINAL_CPYTHON_PROVIDER_CALL', refs,
-            {}, {}, {}, {}, cost, dict(attempt=attempt, provider_observations=observations,
-                source_call=call['source_call'], positional=call['positional'], keywords=call['keywords'],
-                result=call['result'], world_before=call['world_before'], world_after=call['world_after'],
-                observed_route_locators=routes_by_consumer.get(attempt, []),
-                effects_admitted=False, replacement_authorized=False), obligations)
+            {}, {}, {}, {}, cost, parameters, obligations)
         predecessors = () if index == 0 else (operations[-1].id,)
         operations.append(PlanningOperation(op_id, refs, predecessors, (baseline,), baseline.id))
     problem = validate_problem(PlanningProblem(target_ref, references, (), tuple(operations), (),
@@ -118,6 +136,10 @@ def build_observed_aten_problem(program_refs, target_ref, source, native):
         physical_data_edges_admitted=0,
         operation_ids=[op.id for op in operations], frontiers=list(_FRONTIERS),
         decision='KEEP_ORIGINAL', replacement_authorized=False)
+    if contracts is not None:
+        report['wrapper_contracts'] = {'artifact_name': 'wrapper-contracts.json',
+            'calls': [dict(attempt=row['attempt'], **op.options[0].parameters['wrapper_contract'])
+                      for row, op in zip(contracts['calls'], operations, strict=True)]}
     return problem, report
 
 

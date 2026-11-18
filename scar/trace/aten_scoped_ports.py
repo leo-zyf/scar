@@ -138,17 +138,25 @@ def decode_scoped_aten_ports(capture):
                     or not raw_schema.startswith('aten::') or '...' in raw_schema):
                 raise ValueError('original scoped operator has no supported ATen schema')
             if raw_schema not in schemas:
-                schemas[raw_schema], _, _ = parse_schema_ports(raw_schema, provider_revision=revision)
-            schema = schemas[raw_schema]
+                schemas[raw_schema] = parse_schema_ports(raw_schema, provider_revision=revision)
+            schema, arguments, returns = schemas[raw_schema]
             if schema.name != node['name']:
                 raise ValueError('ATen schema name changes its original ETO operator')
             observed_slots = {
                 (slot['role'], tuple(slot['ordered_path'])): slot
                 for slot in importer.nodes[node['id']].metadata.get('tensor_slots', ())}
+            inputs = _root_ports(node, 'inputs', schema.arguments, observed_slots, source, revision)
+            outputs = _root_ports(node, 'outputs', schema.returns, observed_slots, source, revision)
+            declared_aliases = [
+                dict(direction=arg['direction'], ordinal=arg['ordinal'], alias=arg['alias'],
+                     port=port['source'], is_out=arg['is_out'])
+                for args, ports in ((arguments, inputs), (returns, outputs))
+                for arg, port in zip(args, ports, strict=True) if arg['alias'] is not None
+            ]
             operators.append(dict(call_attempt=call['attempt'], call_site=call['site'], invocation=call['invocation'],
                 operand=call['operand'], scope=call['declaration'], eto=source, kineto=op['kineto'],
-                schema=raw_schema, inputs=_root_ports(node, 'inputs', schema.arguments, observed_slots, source, revision),
-                outputs=_root_ports(node, 'outputs', schema.returns, observed_slots, source, revision)))
+                schema=raw_schema, inputs=inputs, outputs=outputs,
+                declared_schema_effects=dict(may_mutate=bool(schema.is_mutable), alias_ports=declared_aliases)))
 
     return dict(schema='scar.aten-scoped-ports', schema_version=1, run=scopes['run'], process=scopes['process'],
         provider_revision=revision, coordinate_binding=encode(coordinates.artifact), operators=operators,

@@ -18,6 +18,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar plan-aten-capture --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --out PLAN` 将同一次调用方激活的原始 F4 端口与本次采集的 ATen 端口接入共同规划器。它保留状态顺序、本次看到的引用和未决成本，当前支持保留原执行。重复源码位置需要由共享循环接口接入。
 
+规划器可复用 F4 已准入的原生绑定图，也可通过 `--binding-graph DIR` 指定。它按原始 CALL 和完整算子声明冷重放参数路由。V2 采集提供已映射 ELF 的包装器入口证据。`wrapper-contracts.json` 保留弃用签名、可能的原生写入、返回别名及仍由包装器处理的实参。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash

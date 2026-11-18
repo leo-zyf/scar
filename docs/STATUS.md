@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 ATen 规划已接入具名的包装器入口、生成解析声明和效果要求。新 CPU 采集核对 4 个 CALL，区分进入同一 `add.Tensor` 的现代和弃用签名，保留 `out=` 的写入端口与返回别名，以及 `requires_grad` 的包装器实参。两组规划均保留原执行。独立的 CPU4/5 采集和目标库存采用同一可用掩码，逐调用资源需求和完整成本仍待验证。见 `artifacts/baseline/aten-wrapper-contracts.json`。
+
 2026-11-18 `plan-aten-capture` 已通过同次运行的原始 CALL 索引把 F4 和 ATen 接到共同规划 IR。真实 CPU 用例有 4 个 CALL、3 条保序约束和 2 条源码引用与 ETO 描述相符的路径，另核对两个工厂 CALL 各含 4 个直接原生算子。两组均保留原执行，效果、就绪、资源和成本待补。新采集另以进程映射及 ELF 字节核实 4 个包装器入口，仍需证明生成声明与二进制的构建关联。见 `artifacts/baseline/f4-aten-planning.json`。
 
 2026-11-18 生产采集已接通 CPython 原生 CALL 到同次运行的 ETO/Kineto。单线程 CPU 用例核对 17 个调用范围及其中 16 条直接算子事件。同一循环位置的两次 `mm` 分别保有事件身份，一次异常保留 `C_RAISE`。按源码范围采集后，标记由 85 减到 17，两个采集均保留 16 条直接算子事件。`link-aten-capture` 从 6 个调用事件生成 3 个 LibTorch 入口，独立 C++20 数值逐位一致。F4 中端对 PyTorch 仍返回 `STATE_PROVIDER_CALL`，当前缺少外部算子的端口和效果准入。见 `artifacts/baseline/production-torch-call-scope.json`。
