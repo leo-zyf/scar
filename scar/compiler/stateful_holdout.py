@@ -108,28 +108,60 @@ def _pins():
     return {name:_ref(root/name,'scar.implementation-source')for name in names}
 
 
+def _holdout_model_material(reference):
+    """Dispatch by the frozen model schema, never by a qualification marker."""
+    document=_read(reference);schema=document.get('schema'),document.get('schema_version')
+    if schema==('scar.stateful-activity-entry-model',1):
+        from scar.optimization.stateful_activity_model import read_activity_entry_model
+        model=read_activity_entry_model(reference['uri'])
+        _need(model==document,'source-accounted model differs from its official replay')
+        return model,_read(model['facts']),_read(model['activity_costs']),None
+    if schema==('scar.stateful-canonical-entry-model',1):
+        from scar.compiler.calibrate_stateful_entry import read_canonical_entry_model
+        model=read_canonical_entry_model(reference)
+        _need(model==document,'canonical entry model differs from its official replay')
+        facts=_read(model['facts'])
+        _need(facts.get('derivation',{}).get('basis')=='MATCHED_CANONICAL_GUARDED_ENTRY_POINT_MODEL'
+            and facts['derivation']['entry_protocol']==model['entry_protocol']
+            and facts['derivation']['calibration']==model['calibration'],
+            'matched canonical model facts/protocol/calibration required')
+        binding={key:deepcopy(model[key]) for key in ('facts','profile','domain','candidate_id',
+            'specialization','entry_protocol','calibration')}
+        binding['model']=deepcopy(reference)
+        return model,facts,None,binding
+    raise ValueError('known source-accounted or matched canonical entry model required')
+
+
 def _derive(request, frozen_policy):
     from scar.optimization.stateful_cpu_choices import _domain,stateful_cpu_cost_context
     from scar.compiler.stateful_model import read_stateful,stateful_digest
     _need(type(request)is dict and set(request)=={'model','policy','specialization','prior_correctness','entry',
         'argv','output_token','caller_cpu_ids','output_directory','capture_epoch'},'complete known holdout request fields required')
-    model=_read(request['model']);policy=_read(request['policy']);_policy(policy)
+    model,facts,activities,canonical_binding=_holdout_model_material(request['model'])
+    policy=_read(request['policy']);_policy(policy)
     frozen=_read(frozen_policy)
     epoch=request['capture_epoch']
     _need(type(epoch)is str and len(epoch)==32 and all(c in '0123456789abcdef'for c in epoch),'prepared capture epoch required')
     _need(frozen==_freeze_policy(request['policy'],policy,epoch),'generated future-capture policy differs')
-    _need((model.get('schema'),model.get('schema_version'))==('scar.stateful-activity-entry-model',1),
-        'source-accounted stateful activity entry model required')
     spec=_read(request['specialization']);candidate=_read(spec['candidate'])
     _need((spec.get('schema'),spec.get('schema_version'))==('scar.observed-stateful-specialization',1)
         and(candidate.get('schema'),candidate.get('schema_version'))==('scar.stateful-validation-candidate',1),
         'original observed specialization and F4 candidate required')
     domain=_domain(_read(spec['domain']));context=stateful_cpu_cost_context(domain,candidate['candidate_id'])
-    facts=_read(model['facts']);activities=_read(model['activity_costs']);program=_read(spec['program'])
-    _need(facts.get('context')==context and activities.get('candidate_id')==candidate['candidate_id']
-        and activities.get('domain')==spec['domain']
-        and facts.get('derivation',{}).get('activity_cost_receipt')==model['activity_costs'],
-        'model context, candidate or original activity domain differs')
+    program=_read(spec['program'])
+    _need(facts.get('context')==context,'model whole-entry context differs')
+    if canonical_binding is None:
+        _need(activities.get('candidate_id')==candidate['candidate_id']
+            and activities.get('domain')==spec['domain']
+            and facts.get('derivation',{}).get('activity_cost_receipt')==model['activity_costs'],
+            'model candidate or original activity domain differs')
+    else:
+        from scar.analysis.stateful_entry_protocol import derive_stateful_entry_protocol
+        protocol=derive_stateful_entry_protocol(candidate['native_artifact'],
+            trial=True,exclusive_inputs=True,selection=None)
+        _need(model['domain']==spec['domain'] and model['candidate_id']==candidate['candidate_id']
+            and model['specialization']==request['specialization'] and model['entry_protocol']==protocol,
+            'canonical model differs from the actual specialization or guarded trial entry protocol')
     _need(program.get('entry')==request['entry']['uri'] and candidate.get('program')==spec['program'],
         'actual entry and specialization program differ')
     _need(_ref(request['entry']['uri'],'scar.python-source')==request['entry'],'actual entry source changed')
@@ -172,16 +204,18 @@ def _derive(request, frozen_policy):
                 output=None if token is None else str(directory/'program-output')
                 episodes.append(dict(phase=phase,index=index,label=label,directory=str(directory),capture_epoch=epoch,
                     program_output_directory=output,argv=[output if token is not None and value==token else value for value in argv]))
-    return dict(schema=DESIGN,schema_version=2,request=deepcopy(request),frozen_policy=frozen_policy,
+    result=dict(schema=DESIGN,schema_version=2,request=deepcopy(request),frozen_policy=frozen_policy,
         policy_contract=frozen,timer=deepcopy(TIMER),context=context,
         candidate=spec['candidate'],domain=spec['domain'],program=spec['program'],native_artifact=candidate['native_artifact'],
-        native_members=members,model_facts=model['facts'],activity_costs=model['activity_costs'],
+        native_members=members,model_facts=model['facts'],activity_costs=model.get('activity_costs'),
         source_refs=sources,implementation_sources=_pins(),
         predicted_native_method_ns=model['duration_ns'],purpose='FOR_FUTURE_CAPTURE',
         episodes=episodes,
         python=dict(executable=sys.executable,version=sys.version),
         preparation_target_executed=False,native_loaded_during_preparation=False,
         default_backend='NO_OP',deployment_authorized=False,model_qualification_promoted=False)
+    if canonical_binding is not None:result['canonical_model_binding']=canonical_binding
+    return result
 
 
 def prepare_stateful_holdout(model,policy,specialization,entry,argv,out,*,output_token=None,prior_correctness):

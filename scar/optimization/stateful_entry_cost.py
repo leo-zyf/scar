@@ -207,6 +207,18 @@ def derive_stateful_entry_cost(domain, candidate_id, profiles=()):
         identity_queries=(tuple(inputs['live']['compiler']['command']+['--version']),))
 
 
+def _verify_entry_profile_model(document):
+    """Replay recognized model derivations through their official producers."""
+    basis=document.get('derivation',{}).get('basis')
+    if basis=='SOURCE_ACCOUNTED_SERIAL_ACTIVITY_POINT_MODEL':
+        from scar.optimization.stateful_activity_model import verify_activity_entry_profile
+        return verify_activity_entry_profile(document)
+    if basis=='MATCHED_CANONICAL_GUARDED_ENTRY_POINT_MODEL':
+        from scar.compiler.calibrate_stateful_entry import verify_canonical_entry_profile
+        return verify_canonical_entry_profile(document)
+    return None
+
+
 def _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles=()):
     """Replay existing whole-call cost admission without timing or loading code.
 
@@ -239,12 +251,11 @@ def _derive_stateful_entry_cost_uncached(domain, candidate_id, profiles=()):
     for index, profile in enumerate(profiles):
         cost, issues, document = _cost(profile, context)
         issues = list(issues)
-        if cost is not None and document.get('derivation', {}).get('basis') == 'SOURCE_ACCOUNTED_SERIAL_ACTIVITY_POINT_MODEL':
-            from scar.optimization.stateful_activity_model import verify_activity_entry_profile
+        if cost is not None:
             try:
-                verify_activity_entry_profile(document)
+                _verify_entry_profile_model(document)
             except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
-                issues.append('source-accounted activity entry model replay failed: ' + str(error))
+                issues.append('whole-entry model derivation replay failed: ' + str(error))
         if cost is not None:
             if cost['tick_seconds'] != 1e-9:
                 issues.append('whole-call profile must use the existing integer-nanosecond writer convention')
@@ -519,9 +530,8 @@ def _future_holdout_state(state,region,context,*,final):
 
 def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
     from scar.compiler.stateful_holdout import (DESIGN,POLICY,REPORT,TIMER,
-        verify_stateful_holdout_design,_distribution)
+        verify_stateful_holdout_design,_distribution,_holdout_model_material)
     from scar.compiler.stateful_model import stateful_from_dict
-    from scar.optimization.stateful_activity_model import read_activity_entry_model
     from hashlib import sha256
     observed=read_artifact(holdout_ref);rules=read_artifact(policy_ref)
     fields={'schema','schema_version','status','design','capture_epoch','observation_origin','frozen_policy',
@@ -570,15 +580,23 @@ def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
     if observed['performance_measured']is not real:raise ValueError('synthetic metadata cannot claim target measurement')
     for ref in (*design['implementation_sources'].values(),*expected_sources.values()):
         read_artifact(ref,json_document=False)
-    model=read_activity_entry_model(model_ref['uri'])
-    if read_artifact(model_ref)!=model:raise ValueError('frozen source model differs')
-    facts=read_artifact(model['facts']);activity=read_artifact(model['activity_costs'])
+    model,facts,activity,canonical_binding=_holdout_model_material(model_ref)
     domain=_domain(read_artifact(design['domain']));candidate=read_artifact(design['candidate'])
     context=stateful_cpu_cost_context(domain,candidate['candidate_id'])
     if (facts['context']!=context or design['context']!=context
-            or activity['domain']!=design['domain'] or activity['candidate_id']!=candidate['candidate_id']
             or request['caller_cpu_ids']!=domain['live_constraints']['process_affinity_cpu_ids']):
         raise ValueError('future captured caller/model context differs from original domain')
+    if canonical_binding is None:
+        if activity['domain']!=design['domain'] or activity['candidate_id']!=candidate['candidate_id']:
+            raise ValueError('future source-accounted activity model domain differs')
+    else:
+        from scar.analysis.stateful_entry_protocol import derive_stateful_entry_protocol
+        protocol=derive_stateful_entry_protocol(design['native_artifact'],
+            trial=True,exclusive_inputs=True,selection=None)
+        if (design.get('canonical_model_binding')!=canonical_binding or design['activity_costs'] is not None
+                or model['domain']!=design['domain'] or model['candidate_id']!=candidate['candidate_id']
+                or model['specialization']!=request['specialization'] or model['entry_protocol']!=protocol):
+            raise ValueError('future canonical model or exact guarded entry protocol differs')
     region=stateful_from_dict(read_artifact(domain['region']))
     pairs=observed['pairs'];planned=design['episodes']
     if type(pairs)is not list or len(pairs)!=9 or len(planned)!=18:
@@ -654,7 +672,7 @@ def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
     qualified=real and bool(correct)and error<=threshold and gain>=minimum
     verify_stateful_holdout_design(design_ref['uri'],expected_sha256=design_ref['sha256'])
     for ref in (model_ref,holdout_ref,policy_ref):read_artifact(ref)
-    return dict(schema='scar.stateful-entry-model-qualification',schema_version=1,model=model_ref,
+    result=dict(schema='scar.stateful-entry-model-qualification',schema_version=1,model=model_ref,
         holdout=holdout_ref,policy=policy_ref,design=design_ref,capture_epoch=epoch,
         status='HOLDOUT_CONTEXT_QUALIFIED'if qualified else'HOLDOUT_PREDICTION_REJECTED',
         future_metadata_consistent=True,target_measurement_observed=real,predicted_native_ns=model['duration_ns'],
@@ -671,6 +689,11 @@ def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
         cost_qualification_scope='ONLY_RETAINED_SAME_SOURCE_SHAPE_CALLER_AND_GUARDED_ENTRY_CONTEXT',
         physical_resource_qualification='SEPARATE_UNRESOLVED',whole_program_speedup_claimed=False,
         default_backend='NO_OP',deployment_authorized=False)
+    if canonical_binding is not None:
+        result.update(entry_protocol=deepcopy(model['entry_protocol']),
+            entry_protocol_scope='ONLY_EXACT_COMPILER_ARTIFACT_ADAPTER_GUARDED_ENTRY_PROTOCOL',
+            compact_or_other_trial_configuration_qualified=False)
+    return result
 
 
 def evaluate_stateful_entry_holdout(model,holdout,policy):

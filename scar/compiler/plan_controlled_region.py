@@ -35,7 +35,9 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'optimization/stateful_schedule.py', 'compiler/stateful_model.py',
     'analysis/controlled_native_time.py', 'optimization/controlled_native_tasks.py',
     'optimization/native_group_costs.py', 'analysis/schedule_time.py',
-    'ir/versioned_schedule.py', 'ir/implementation_plan.py')
+    'ir/versioned_schedule.py', 'ir/implementation_plan.py',
+    'analysis/stateful_entry_protocol.py', 'compiler/canonical_stateful_inputs.py',
+    'compiler/calibrate_stateful_entry.py')
 
 
 def _pins():
@@ -384,9 +386,14 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         strict = project_stateful_entry_implementation(identity['domain']['uri'], identity['candidate_id'],
             entry, profiles=offers)
         from scar.optimization.entry_cost_use import admit_entry_cost_for_use
+        from scar.analysis.stateful_entry_protocol import derive_stateful_entry_protocol
+        requested_protocol = derive_stateful_entry_protocol(
+            contract['implementation']['native_manifest'], trial=True,
+            exclusive_inputs=True, selection=None)
         entry_use = admit_entry_cost_for_use(entry, use=cost_use,
             qualification_ref=cost_qualification,
-            native_manifest_ref=contract['implementation']['native_manifest'])
+            native_manifest_ref=contract['implementation']['native_manifest'],
+            requested_entry_protocol=requested_protocol)
         operation = strict.operations[0]
         strict = replace(strict, operations=(replace(operation, options=(replace(operation.options[0],
             cost=decode(CostEstimate, entry_use['active_cost'])),)),))
@@ -420,7 +427,8 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         parameters['cost_use'] = dict(use=entry_use['use'], report_sha256=semantic_sha256(entry_use),
             timing_qualified=entry_use['timing_qualified'],
             qualification_reference=entry_use['qualification_reference'],
-            native_manifest=contract['implementation']['native_manifest'])
+            native_manifest=contract['implementation']['native_manifest'],
+            requested_entry_protocol=deepcopy(requested_protocol))
     if annotations is not None:
         parameters['compiler_annotations'] = dict(semantic_sha256=semantic_sha256(annotations),
             compiler_collection=compiler_feedback, timing_qualification_granted=False)

@@ -81,7 +81,7 @@ def _entry_header(entry):
 
 def _replay_entry(entry, profile_refs):
     from scar.optimization.stateful_cpu_choices import _domain, _cost, stateful_cpu_cost_context
-    from scar.optimization.stateful_activity_model import verify_activity_entry_profile
+    from scar.optimization.stateful_entry_cost import _verify_entry_profile_model
 
     _need(profile_refs, 'a pinned admitted whole profile is required for qualified timing')
     domains = [row['artifact'] for row in entry['source_refs'] if type(row) is dict
@@ -100,8 +100,7 @@ def _replay_entry(entry, profile_refs):
         cost, issues, replayed = _cost(dict(artifact=reference, locator='#'), context)
         _need(cost is not None and not issues and _digest(document) == entry['admitted_profile_sha256']
             and replayed == document, 'accepted profile differs from exact-context cost replay')
-        if document.get('derivation', {}).get('basis') == 'SOURCE_ACCOUNTED_SERIAL_ACTIVITY_POINT_MODEL':
-            verify_activity_entry_profile(document)
+        _verify_entry_profile_model(document)
         original = entry['cost']
         _need(cost['tick_seconds'] == 1e-9 and cost['duration_ticks'] == original['estimate_ns']
             and original['basis'] == 'DECLARED_MODEL'
@@ -152,15 +151,25 @@ def _replay_native(entry, qualification, native_reference):
         and native['provider_runtime'] == profile_backend['provider_runtime']
         and native['implementation_sha256'] == profile_backend['implementation_sha256'],
         'actual native compiler/provider/guard implementation differs from cost applicability')
-    return dict(native_manifest=native_reference, native_build_id=native['build_id'],
+    result=dict(native_manifest=native_reference, native_build_id=native['build_id'],
         actual_plan=identity['stage_plan'], actual_plan_sha256=identity['stage_plan_sha256'],
         generated_source=contract['implementation']['native_members']['source'],
         source_and_plan_replayed=True, runtime_abi_table_admitted_here=False,
         controlled_contract_sha256=_digest(contract),
         scope='EXACT_RETAINED_NATIVE_SOURCE_PLAN_COMPILER_SHAPE_GUARDS_AND_HOLDOUT_CONTEXT')
+    if qualification.get('entry_protocol') is not None:
+        from scar.analysis.stateful_entry_protocol import derive_stateful_entry_protocol
+        protocol=derive_stateful_entry_protocol(native_reference,
+            trial=True,exclusive_inputs=True,selection=None)
+        _need(_digest(protocol)==_digest(qualification['entry_protocol'])
+            and _digest(protocol)==_digest((entry.get('derivation') or {}).get('entry_protocol')),
+            'actual native guarded entry protocol differs from the qualified model')
+        result['entry_protocol']=protocol
+    return result
 
 
-def admit_entry_cost_for_use(entry_report, *, use, qualification_ref=None, native_manifest_ref=None):
+def admit_entry_cost_for_use(entry_report, *, use, qualification_ref=None, native_manifest_ref=None,
+                             requested_entry_protocol=None):
     """Return original and active CostEstimate wires for the requested use.
 
     DECLARED analysis preserves the existing cost exactly. Qualified use is
@@ -172,6 +181,9 @@ def admit_entry_cost_for_use(entry_report, *, use, qualification_ref=None, nativ
     original = _entry_header(entry_report)
     frontier, profiles, qualification, native_binding, entry_binding = [], [], None, None, None
     references = dict(qualification=None, native_manifest=None)
+    derivation=entry_report.get('derivation') or {}
+    canonical=derivation.get('basis')=='MATCHED_CANONICAL_GUARDED_ENTRY_POINT_MODEL'
+    protocol_binding=None
 
     def missing(field, reason):
         frontier.append(dict(field=field, reason=reason))
@@ -219,13 +231,28 @@ def admit_entry_cost_for_use(entry_report, *, use, qualification_ref=None, nativ
                 missing('native_binding', 'ACTUAL_NATIVE_SOURCE_PLAN_BINDING_FAILED: ' + str(error))
         else:
             missing('native_binding', 'NATIVE_BINDING_REQUIRES_A_REPLAYED_QUALIFICATION_CONTEXT')
+        if canonical or qualification is not None and qualification.get('entry_protocol') is not None:
+            protocol=derivation.get('entry_protocol')
+            if type(protocol) is not dict:
+                missing('entry_protocol','CANONICAL_ENTRY_PROTOCOL_MISSING_FROM_ORIGINAL_DERIVATION')
+            if type(requested_entry_protocol) is not dict:
+                missing('entry_protocol','EXACT_REQUESTED_ENTRY_PROTOCOL_REQUIRED_FOR_CANONICAL_TIMING')
+            elif _digest(requested_entry_protocol)!=_digest(protocol):
+                missing('entry_protocol','REQUESTED_ENTRY_PROTOCOL_DIFFERS_FROM_CANONICAL_MODEL')
+            if qualification is not None and _digest(qualification.get('entry_protocol'))!=_digest(protocol):
+                missing('entry_protocol','HOLDOUT_QUALIFICATION_ENTRY_PROTOCOL_DIFFERS_FROM_CANONICAL_MODEL')
+            protocol_binding=dict(model_entry_protocol=deepcopy(protocol),
+                requested_entry_protocol=deepcopy(requested_entry_protocol),
+                exact_request_matches=type(requested_entry_protocol) is dict
+                    and _digest(requested_entry_protocol)==_digest(protocol),
+                applies_only_to_exact_entry_protocol=True,compact_or_other_trial_configuration_qualified=False)
     qualified = use == QUALIFIED_TARGET_TIMING and not frontier and _known(original)
     active = original
     if use == QUALIFIED_TARGET_TIMING and not qualified:
         terms = tuple(dict.fromkeys((*original.missing_terms,
             'COST_NOT_QUALIFIED_FOR_REQUESTED_USE', *(row['reason'] for row in frontier))))
         active = replace(original, missing_terms=terms)
-    return dict(schema=SCHEMA, schema_version=1, use=use, requested_use=use,
+    result=dict(schema=SCHEMA, schema_version=1, use=use, requested_use=use,
         entry_report_sha256=_digest(entry_report),
         entry_report_reference=dict(schema=entry_report['schema'], semantic_sha256=_digest(entry_report), locator='#'),
         original_cost=deepcopy(entry_report['cost']), active_cost=encode(active),
@@ -244,11 +271,17 @@ def admit_entry_cost_for_use(entry_report, *, use, qualification_ref=None, nativ
         target_samples_fitted=False, runtime_guards_executed=False,
         target_program_executed=False, native_loaded=False, compiled=False,
         execution_authorized=False, deployment_authorized=False, default_backend='NO_OP')
+    if canonical or requested_entry_protocol is not None or protocol_binding is not None:
+        result.update(requested_entry_protocol=deepcopy(requested_entry_protocol),
+            entry_protocol_binding=protocol_binding)
+    return result
 
 
-def verify_entry_cost_use(report, entry_report, *, use, qualification_ref=None, native_manifest_ref=None):
+def verify_entry_cost_use(report, entry_report, *, use, qualification_ref=None, native_manifest_ref=None,
+                          requested_entry_protocol=None):
     expected = admit_entry_cost_for_use(entry_report, use=use,
-        qualification_ref=qualification_ref, native_manifest_ref=native_manifest_ref)
+        qualification_ref=qualification_ref, native_manifest_ref=native_manifest_ref,
+        requested_entry_protocol=requested_entry_protocol)
     _need(_digest(expected) == _digest(report), 'entry-cost use differs from exact evidence and requested-use replay')
     return expected
 
