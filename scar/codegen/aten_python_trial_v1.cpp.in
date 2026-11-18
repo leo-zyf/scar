@@ -1,6 +1,12 @@
 // CPython bridge for an explicitly guarded trial of one generated ATen graph.
 #include "graph.hpp"
 
+#ifdef SCAR_ATEN_VALUE_GEOMETRY
+#include "trial_geometry.hpp"
+
+#include <algorithm>
+#endif
+
 #include <ATen/autocast_mode.h>
 #include <c10/core/impl/PythonDispatcherTLS.h>
 #include <torch/csrc/autograd/python_variable.h>
@@ -108,6 +114,23 @@ graph::WindowSelection window_selection(PyObject* starts) {
     return windows;
 }
 
+#ifdef SCAR_ATEN_VALUE_GEOMETRY
+namespace geometry = scar_aten_trial_geometry;
+
+void verify_geometry(const at::Tensor& tensor, const geometry::TensorGeometry& expected, const char* message) {
+    if (!tensor.defined() || !tensor.device().is_cpu() || tensor.layout() != at::kStrided
+            || tensor.scalar_type() != at::kFloat || !tensor.is_contiguous() || tensor.is_inference()
+            || tensor.is_conj() || tensor.is_neg() || tensor.key_set().has(c10::DispatchKey::Python)
+            || tensor.requires_grad() || tensor._fw_grad(0).defined() || tensor.storage_offset() != 0
+            || !tensor.has_storage() || !tensor.storage().device().is_cpu()
+            || !std::ranges::equal(tensor.sizes(), expected.sizes)
+            || !std::ranges::equal(tensor.strides(), expected.strides)
+            || tensor.nbytes() != expected.storage_bytes || tensor.storage().nbytes() != expected.storage_bytes) {
+        throw std::runtime_error(message);
+    }
+}
+#endif
+
 PyObject* run(PyObject*, PyObject* arguments) {
     PyObject *capsule, *input_tuple, *starts, *reference_bytes;
     if (!PyArg_UnpackTuple(arguments, "run", 4, 4, &capsule, &input_tuple, &starts, &reference_bytes)) return nullptr;
@@ -120,7 +143,11 @@ PyObject* run(PyObject*, PyObject* arguments) {
         if (!PyTuple_CheckExact(input_tuple) || PyTuple_GET_SIZE(input_tuple) != graph::input_count) {
             throw std::invalid_argument("native trial input tuple has the wrong arity");
         }
-        if (!PyTuple_CheckExact(reference_bytes) || PyTuple_GET_SIZE(reference_bytes) != graph::input_count) {
+        const bool geometry_only = reference_bytes == Py_None;
+#ifndef SCAR_ATEN_VALUE_GEOMETRY
+        if (geometry_only) throw std::invalid_argument("native trial has no compiled geometry contract");
+#endif
+        if (!geometry_only && (!PyTuple_CheckExact(reference_bytes) || PyTuple_GET_SIZE(reference_bytes) != graph::input_count)) {
             throw std::invalid_argument("native trial requires a matching tuple of immutable reference bytes");
         }
         std::array<at::Tensor, graph::input_count> inputs;
@@ -139,17 +166,35 @@ PyObject* run(PyObject*, PyObject* arguments) {
         }
         auto windows = window_selection(starts);
         graph::validate_inputs(inputs);
-        for (std::size_t i = 0; i < inputs.size(); ++i) {
-            PyObject* expected = PyTuple_GET_ITEM(reference_bytes, i);
-            if (!PyBytes_CheckExact(expected)) throw std::invalid_argument("native trial requires exact reference bytes");
-            const auto bytes = inputs[i].nbytes();
-            if (inputs[i].storage().nbytes() != bytes || bytes != static_cast<std::size_t>(PyBytes_GET_SIZE(expected))
-                    || (bytes && std::memcmp(inputs[i].const_data_ptr<float>(), PyBytes_AS_STRING(expected), bytes))) {
-                Py_RETURN_NONE;
+        if (!geometry_only) {
+            for (std::size_t i = 0; i < inputs.size(); ++i) {
+                PyObject* expected = PyTuple_GET_ITEM(reference_bytes, i);
+                if (!PyBytes_CheckExact(expected)) throw std::invalid_argument("native trial requires exact reference bytes");
+                const auto bytes = inputs[i].nbytes();
+                if (inputs[i].storage().nbytes() != bytes || bytes != static_cast<std::size_t>(PyBytes_GET_SIZE(expected))
+                        || (bytes && std::memcmp(inputs[i].const_data_ptr<float>(), PyBytes_AS_STRING(expected), bytes))) {
+                    Py_RETURN_NONE;
+                }
             }
         }
+#ifdef SCAR_ATEN_VALUE_GEOMETRY
+        if (geometry_only) {
+            for (std::size_t i = 0; i < inputs.size(); ++i) {
+                verify_geometry(inputs[i], geometry::inputs[i], "native trial input differs from its storage geometry");
+            }
+        }
+#endif
         auto outputs = [&] {
             const auto placement = prepared->pair.place_caller();
+#ifdef SCAR_ATEN_VALUE_GEOMETRY
+            if (geometry_only) {
+                return graph::run_parallel_observed(inputs, prepared->pair, windows, [](std::size_t op, auto&& call) {
+                    auto result = call();
+                    verify_geometry(result, geometry::operations[op], "native trial operation differs from its storage geometry");
+                    return result;
+                });
+            }
+#endif
             return graph::run_parallel(inputs, prepared->pair, windows);
         }();
         if (grad_enabled) {

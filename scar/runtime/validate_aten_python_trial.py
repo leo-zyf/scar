@@ -10,6 +10,7 @@ from statistics import variance
 from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
+from scar.codegen.native_provider_bundle import _content
 from scar.optimization.paired_entry_selection import _metrics
 from scar.runtime.aten_python_trial import _read_manifest, _verify, install_aten_python_trial
 
@@ -25,11 +26,31 @@ def _original_module(proof):
     return module
 
 
-def _inputs(manifest, torch):
+def _input_receipts(manifest, input_paths):
+    if input_paths is None:
+        return manifest['inputs']
+    if manifest.get('input_guard', {}).get('kind') != 'VALUE_INDEPENDENT_GEOMETRY':
+        raise ValueError('alternate inputs require an explicit value-independent geometry trial')
+    recipe = manifest['recipe']
+    if len(input_paths) != len(recipe['inputs']):
+        raise ValueError('provide all alternate raw input files in native recipe order')
+    inputs = []
+    for tensor, path in zip(recipe['inputs'], input_paths, strict=True):
+        path = Path(path).resolve(strict=True)
+        receipt = dict(path=str(path), **_content(path))
+        if receipt['size_bytes'] != 4 * prod(tensor['shape']):
+            raise ValueError(f'alternate input bytes do not match the guarded Tensor geometry: {path}')
+        inputs.append(receipt)
+    return inputs
+
+
+def _inputs(manifest, torch, receipts=None):
     recipe = manifest['recipe']
     proof = manifest['source_proof']
     args = [None] * len(proof['parameters'])
-    for index, tensor, receipt in zip(proof['input_order'], recipe['inputs'], manifest['inputs'], strict=True):
+    if receipts is None:
+        receipts = manifest['inputs']
+    for index, tensor, receipt in zip(proof['input_order'], recipe['inputs'], receipts, strict=True):
         shape = tensor['shape']
         _verify(Path(receipt['path']), receipt)
         args[index] = torch.from_file(receipt['path'], False, prod(shape), dtype=torch.float32).reshape(shape)
@@ -59,17 +80,19 @@ def _timed(function, inputs):
     return perf_counter_ns() - start, result
 
 
-def _measure(trial, digest, manifest, warmup, repetitions, torch):
+def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
     module = _original_module(manifest['source_proof'])
     proof = manifest['source_proof']
     name, kind = proof['function'], proof['return_kind']
     original = getattr(module, name)
-    inputs = _inputs(manifest, torch)
+    inputs = _inputs(manifest, torch, receipts)
+    variable_values = manifest.get('input_guard', {}).get('kind') == 'VALUE_INDEPENDENT_GEOMETRY'
     snapshots = tuple(value.clone() for value in inputs)
     mask = os.sched_getaffinity(0)
     samples = []
+    verification = {}
     with torch.no_grad(), install_aten_python_trial(module, trial, expected_sha256=digest,
-                                                   exclusive_inputs=True) as counters:
+                                                   exclusive_inputs=True, provider_report=verification) as counters:
         guarded = getattr(module, name)
         for i in range(warmup + repetitions):
             first_original = i % 2 == 0
@@ -101,9 +124,21 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch):
                 _check_outputs(original(*alternatives), guarded(*alternatives), alternatives, torch, kind)
                 break
         expected_reasons = {'CALL_ABI': 1, 'RUNTIME_CONTEXT': 1}
-        if any(value.numel() for value in inputs):
+        changed_value_tested = any(value.numel() for value in inputs)
+        expected_native = warmup + repetitions
+        if changed_value_tested and variable_values:
+            expected_native += 1
+        if changed_value_tested and not variable_values:
             expected_reasons['INPUT_BYTES'] = 1
-        if counters['fallback_reasons'] != expected_reasons:
+        if variable_values:
+            for i, value in enumerate(inputs):
+                if value.ndim >= 2 and min(value.shape[-2:]) > 1:
+                    noncontiguous = value.transpose(-2, -1).contiguous().transpose(-2, -1)
+                    alternatives = (*inputs[:i], noncontiguous, *inputs[i+1:])
+                    _check_outputs(original(*alternatives), guarded(*alternatives), alternatives, torch, kind)
+                    expected_reasons['TENSOR_ABI'] = 1
+                    break
+        if counters['fallback_reasons'] != expected_reasons or counters['native_calls'] != expected_native:
             raise ValueError('live Python fallback did not honor the tested guard boundaries')
     if getattr(module, name) is not original or os.sched_getaffinity(0) != mask:
         raise ValueError('Python trial did not restore the original function and affinity')
@@ -115,10 +150,13 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch):
     return dict(samples=samples, metrics=metrics,
                 speedup=metrics['ORIGINAL']['median_ns'] / metrics['GUARDED_NATIVE']['median_ns'],
                 matched_faster_pairs=sum(row['guarded_ns'] < row['original_ns'] for row in samples),
-                original_restored=True, bitwise_original_results=True, inputs_unchanged=True, counters=counters)
+                original_restored=True, bitwise_original_results=True, inputs_unchanged=True, counters=counters,
+                input_guard_kind=verification.get('input_guard_kind', 'EXACT_BYTES'),
+                reference_input_bytes_loaded=verification.get('reference_input_bytes_loaded'),
+                changed_value_native_verified=variable_values and changed_value_tested)
 
 
-def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measured_pairs):
+def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measured_pairs, input_paths=None):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -126,6 +164,7 @@ def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measur
         raise ValueError('trial requires 1–100 warmup pairs and an odd 3–501 measured pairs')
     trial = Path(trial).resolve(strict=True)
     manifest = _read_manifest(trial, trial_sha256)
+    receipts = _input_receipts(manifest, input_paths)
     import torch
 
     mask = os.sched_getaffinity(0)
@@ -135,13 +174,15 @@ def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measur
     try:
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
-        evidence = _measure(trial, trial_sha256, manifest, warmup_pairs, measured_pairs, torch)
+        evidence = _measure(trial, trial_sha256, manifest, warmup_pairs, measured_pairs, torch, receipts)
     finally:
         os.sched_setaffinity(0, mask)
     report = dict(schema='scar.aten-python-trial-validation', schema_version=1,
         scope='WARM_FULL_PYTHON_FUNCTION_WITH_GUARDS', trial=str(trial / 'trial.json'), trial_sha256=trial_sha256,
         warmup_pairs=warmup_pairs, measured_pairs=measured_pairs, cpu_ids=manifest['cpus'],
-        immutable_reference_bytes=sum(row['size_bytes'] for row in manifest['inputs']),
+        immutable_reference_bytes=(0 if evidence['input_guard_kind'] == 'VALUE_INDEPENDENT_GEOMETRY'
+                                   else sum(row['size_bytes'] for row in manifest['inputs'])),
+        validated_inputs=receipts,
         complete_application_performance_measured=False, source_replacement_authorized=False, **evidence)
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-trial-validation-', dir=out.parent) as tmp:
@@ -158,6 +199,8 @@ def main(argv=None):
     parser.add_argument('--out', required=True)
     parser.add_argument('--warmup-pairs', type=int, default=7)
     parser.add_argument('--measured-pairs', type=int, default=31)
+    parser.add_argument('--input', action='append', dest='input_paths',
+                        help='alternate raw float32 inputs in recipe order for a geometry trial')
     args = parser.parse_args(argv)
     report = validate_aten_python_trial(**vars(args))
     print(json.dumps(dict(speedup=report['speedup'], faster_pairs=report['matched_faster_pairs'],

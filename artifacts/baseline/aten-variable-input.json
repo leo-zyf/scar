@@ -1,0 +1,265 @@
+{
+  "build": {
+    "path": "artifacts/current/experiments/aten-variable-input-v1/replay-safe-built/trial.json",
+    "sha256": "3e57419eac3b58b5e142f161b90d1ec646ded3a881c33ea6c5ec5723f974c282",
+    "size_bytes": 13374
+  },
+  "cpu_ids": [
+    4,
+    5
+  ],
+  "date": "2026-11-18",
+  "geometry": {
+    "basis": "EXACT_INSTALLED_META_OVERLOADS_AND_CPU_STORAGE_CALIBRATION",
+    "effect_basis": "EXPLICIT_PER_OPERATOR_DECLARATION",
+    "inputs": [
+      {
+        "shape": [
+          768,
+          768
+        ],
+        "storage_bytes": 2359296,
+        "strides": [
+          768,
+          1
+        ]
+      },
+      {
+        "shape": [
+          768,
+          768
+        ],
+        "storage_bytes": 2359296,
+        "strides": [
+          768,
+          1
+        ]
+      },
+      {
+        "shape": [
+          768,
+          384
+        ],
+        "storage_bytes": 1179648,
+        "strides": [
+          384,
+          1
+        ]
+      }
+    ],
+    "operations": [
+      {
+        "id": "call_249",
+        "shape": [
+          768,
+          768
+        ],
+        "storage_bytes": 2359296,
+        "strides": [
+          768,
+          1
+        ]
+      },
+      {
+        "id": "call_273",
+        "shape": [
+          768,
+          384
+        ],
+        "storage_bytes": 1179648,
+        "strides": [
+          384,
+          1
+        ]
+      },
+      {
+        "id": "call_280",
+        "shape": [
+          768,
+          384
+        ],
+        "storage_bytes": 1179648,
+        "strides": [
+          384,
+          1
+        ]
+      },
+      {
+        "id": "call_287",
+        "shape": [
+          768,
+          384
+        ],
+        "storage_bytes": 1179648,
+        "strides": [
+          384,
+          1
+        ]
+      }
+    ],
+    "provider_revision": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+    "schema": "scar.aten-value-independent-geometry",
+    "schema_version": 1,
+    "scope": "EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL"
+  },
+  "geometry_contract": {
+    "schema": "scar.aten-value-independent-geometry-contract",
+    "sha256": "3c4dfd3c59a2816fdcb6ffaaedce605b2d0eebade79bd620114b517f1bc672eb",
+    "size_bytes": 686,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/replay-safe-geometry-contract.json"
+  },
+  "geometry_header": {
+    "path": "artifacts/current/experiments/aten-variable-input-v1/replay-safe-built/trial_geometry.hpp",
+    "sha256": "93d90557c5d81983b8d876ca0f4ffe5c111f88e480b94617e438423a1676fdd4",
+    "size_bytes": 1887
+  },
+  "isolated_geometry_dso_validation": {
+    "path": "artifacts/current/experiments/aten-value-geometry-native-smoke/validation.json",
+    "sha256": "88750ecc1d8f100a0bdb2b3e134678867e2a3ab5db140120651185e0386859f1",
+    "size_bytes": 373
+  },
+  "lewm_rerun": false,
+  "native_binary": {
+    "path": "artifacts/current/experiments/aten-variable-input-v1/replay-safe-built/_scar_aten_python_trial.cpython-314-x86_64-linux-gnu.so",
+    "sha256": "eef6e4ee7b93e919a06c107392e7879aff4ac1a6aab223ad87afdc608813971f",
+    "size_bytes": 271448
+  },
+  "original_code_key": "pycode-v2:7fa80b12344707e57a6ef95838ca0a77c276b4a43ae9a158a5523b1289f714e4",
+  "original_reference_inputs_not_loaded": {
+    "path": "artifacts/current/experiments/aten-variable-input-v1/reference-free-validation.json",
+    "sha256": "97459659d3f7abf0bf7ea3e8811a48be9db442160b2cbf857d343c9292bd1ab6",
+    "size_bytes": 577
+  },
+  "schema": "scar.aten-variable-input-review",
+  "schema_version": 1,
+  "scope": "EXPLICIT_VALUE_INDEPENDENT_FIXED_GEOMETRY_CPU_ATEN",
+  "source_replacement_authorized": false,
+  "verified_holdouts": [
+    {
+      "all_inputs_outside_calibration": true,
+      "bitwise_original": true,
+      "case": "dense",
+      "changed_value_native": true,
+      "counters": {
+        "fallback_calls": 3,
+        "fallback_reasons": {
+          "CALL_ABI": 1,
+          "RUNTIME_CONTEXT": 1,
+          "TENSOR_ABI": 1
+        },
+        "native_calls": 39
+      },
+      "input_reference_bytes_loaded": 0,
+      "measured_pairs": 31,
+      "paired_wins": 31,
+      "speedup": 1.320549357578121,
+      "statistics": {
+        "GUARDED_NATIVE": {
+          "max_ns": 18784677,
+          "median_ns": 16800642,
+          "min_ns": 16769469,
+          "variance_ns2": 288932153057.157
+        },
+        "ORIGINAL": {
+          "max_ns": 30738120,
+          "median_ns": 22186077,
+          "min_ns": 22137306,
+          "variance_ns2": 2366465269244.146
+        }
+      },
+      "validated_inputs": [
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/dense/a.f32",
+          "sha256": "d9ff5951abd517209ed73630e4b22d541677937c5163e8646d0291760ae4f77b",
+          "size_bytes": 2359296
+        },
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/dense/b.f32",
+          "sha256": "20b9fe6b0222bede6530ce2396f6f8a21ef0bbf8937a85088881d5b0e80c6442",
+          "size_bytes": 2359296
+        },
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/dense/c.f32",
+          "sha256": "a0ae56c6c5531836f80acd48431f68e97498888a1821dfc9a25920b92e3badb2",
+          "size_bytes": 1179648
+        }
+      ],
+      "validation": {
+        "path": "artifacts/current/experiments/aten-variable-input-v1/final-dense/validation.json",
+        "sha256": "5a77912b703540f6df7420464f8171f4b5ca865976acbae62e227dafa698a19b",
+        "size_bytes": 6743
+      },
+      "warmup_pairs": 7
+    },
+    {
+      "all_inputs_outside_calibration": true,
+      "bitwise_original": true,
+      "case": "zero-pattern",
+      "changed_value_native": true,
+      "counters": {
+        "fallback_calls": 3,
+        "fallback_reasons": {
+          "CALL_ABI": 1,
+          "RUNTIME_CONTEXT": 1,
+          "TENSOR_ABI": 1
+        },
+        "native_calls": 39
+      },
+      "input_reference_bytes_loaded": 0,
+      "measured_pairs": 31,
+      "paired_wins": 31,
+      "speedup": 1.3434781373832048,
+      "statistics": {
+        "GUARDED_NATIVE": {
+          "max_ns": 19667763,
+          "median_ns": 16794673,
+          "min_ns": 16770247,
+          "variance_ns2": 724445707065.3978
+        },
+        "ORIGINAL": {
+          "max_ns": 31665514,
+          "median_ns": 22563276,
+          "min_ns": 22158117,
+          "variance_ns2": 2999781278241.5312
+        }
+      },
+      "validated_inputs": [
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/zero-pattern/a.f32",
+          "sha256": "4c0f8d331ba0de7d6712374404fa9b96cbacfd15fd3e4752b7d84b4a9075aaa1",
+          "size_bytes": 2359296
+        },
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/zero-pattern/b.f32",
+          "sha256": "b28f297fac2406ab705cc68d842b5bc47e7c973c979db996a703ddcca1d4bf06",
+          "size_bytes": 2359296
+        },
+        {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-variable-input-v1/zero-pattern/c.f32",
+          "sha256": "50b8e387d7ac40b79dad257c0d8d47fc3add88e2b7d850f6ff549703fa746d81",
+          "size_bytes": 1179648
+        }
+      ],
+      "validation": {
+        "path": "artifacts/current/experiments/aten-variable-input-v1/final-zero-pattern/validation.json",
+        "sha256": "fc963cc298453dc7986f956177823d572d79c99fc8c9d616099c22106b0d948e",
+        "size_bytes": 6767
+      },
+      "warmup_pairs": 7
+    }
+  ],
+  "whole_entry": {
+    "case": "dense",
+    "guarded_median_ns": 2062394023,
+    "measured_pairs": 7,
+    "original_median_ns": 2030706304,
+    "recommendation": "KEEP_ORIGINAL",
+    "speedup": 0.9846354679820559,
+    "validation": {
+      "path": "artifacts/current/experiments/aten-variable-input-v1/final-entry-heldout/validation.json",
+      "sha256": "9ca9e6bbc3e64b1ccdb799ed4f82ae1a60ff7d11ac5f4ce68d125af82251a5e2",
+      "size_bytes": 39384
+    },
+    "warmup_pairs": 2
+  }
+}

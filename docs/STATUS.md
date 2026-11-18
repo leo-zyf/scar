@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 原 Python ATen 试验已支持固定几何下的输入值变化。构建时用已安装的 ATen Meta 核对四个操作的形状和存储，并要求显式的无可见副作用重跑合同。运行时核对输入及中间结果，参考输入读取为 0 B。稠密随机值与稀疏值模式两组独立输入均逐字节一致，热函数分别为 1.32× 和 1.34×。完整新进程在稠密组仍 `KEEP_ORIGINAL`。见 `artifacts/baseline/aten-variable-input.json`。
+
 2026-11-18 本地 LibTorch 库身份复用已在同一 CPU 入口验证。守卫进程重用构建时 472,419,299 B 的内容校验，运行时重新散列 0 B。独立诊断中，完整校验为 1.375 s，身份复用为 3.438 ms，过期单库身份触发对应内容重验。相同负载的 7 对新进程实测中位数为 2.034→2.056 s，决策仍 `KEEP_ORIGINAL`，输出逐字节一致。见 `artifacts/baseline/aten-provider-identity.json`。
 
 2026-11-18 已验证同一 PyTorch 用例的原 `main()` 新进程。守卫路径每进程实际执行一次双核，返回值、梯度模式、标准输出和结果文件一致。2 对预热、7 对实测的进程中位数为 2.036→3.441 s，决策 `KEEP_ORIGINAL`。独立诊断中核验约 472 MB 的已加载 LibTorch 文件字节耗时中位数为 1.373 s。见 `artifacts/baseline/aten-python-entry.json`。

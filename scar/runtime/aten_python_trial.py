@@ -20,6 +20,8 @@ from scar.trace.code_snapshot import code_key
 _SCHEMA = 'scar.aten-python-trial'
 _SCOPE = 'EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL'
 _EXTENSION = '_scar_aten_python_trial'
+_EXACT_BYTES = 'EXACT_BYTES'
+_GEOMETRY = 'VALUE_INDEPENDENT_GEOMETRY'
 
 
 def _verify(path, receipt, *, retain=False):
@@ -172,13 +174,49 @@ def _torch_configuration(torch):
             torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled())
 
 
-def _ready_inputs(inputs, shapes, lengths, torch):
+def _geometry_input_strides(guard, recipe, torch):
+    from scar.analysis.aten_trial_geometry import SCHEMA, _declared_operators
+    from scar.ir.execution_recipe import read_artifact
+
+    if type(guard) is not dict or guard.keys() != {'kind', 'geometry', 'contract'} or guard['kind'] != _GEOMETRY:
+        raise ValueError('an exact value-independent geometry guard is required')
+    geometry = guard['geometry']
+    if (type(geometry) is not dict or type(geometry.get('schema_version')) is not int
+            or (geometry.get('schema'), geometry['schema_version'], geometry.get('scope'),
+                geometry.get('provider_revision')) != (SCHEMA, 1, _SCOPE, torch.version.git_version)
+            or geometry.get('basis') != 'EXACT_INSTALLED_META_OVERLOADS_AND_CPU_STORAGE_CALIBRATION'
+            or geometry.get('effect_basis') != 'EXPLICIT_PER_OPERATOR_DECLARATION'):
+        raise ValueError('the retained trial geometry differs from the installed provider scope')
+    declared = _declared_operators(read_artifact(guard['contract']), torch)
+    if declared.keys() != {row['schema'] for row in recipe['operations']}:
+        raise ValueError('the trial geometry contract differs from the graph operator set')
+
+    def check(rows, entries, identity):
+        if type(rows) is not list or len(rows) != len(entries):
+            raise ValueError('the trial geometry differs from the recipe arity')
+        fields = {'shape', 'strides', 'storage_bytes'} | ({'id'} if identity == 'id' else set())
+        for slot, entry in zip(rows, entries, strict=True):
+            if type(slot) is not dict or slot.keys() != fields or slot[identity] != entry[identity]:
+                raise ValueError('the trial geometry differs from a recipe slot')
+            shape, strides, size = slot['shape'], slot['strides'], slot['storage_bytes']
+            if (type(shape) is not list or type(strides) is not list or len(shape) != len(strides)
+                    or any(type(i) is not int or not 0 <= i < (1 << 63) for i in (*shape, *strides))
+                    or type(size) is not int or not 0 <= size < (1 << 63) or size != 4 * prod(shape)):
+                raise ValueError('the trial geometry does not have dense float32 storage')
+
+    check(geometry.get('inputs'), recipe['inputs'], 'shape')
+    check(geometry.get('operations'), recipe['operations'], 'id')
+    return tuple(tuple(row['strides']) for row in geometry['inputs'])
+
+
+def _ready_inputs(inputs, shapes, lengths, torch, *, strides=None):
     extents = []
-    for tensor, shape, size in zip(inputs, shapes, lengths, strict=True):
+    for index, (tensor, shape, size) in enumerate(zip(inputs, shapes, lengths, strict=True)):
         if (type(tensor) is not torch.Tensor or tensor.device.type != 'cpu' or tensor.dtype is not torch.float32
                 or tensor.layout is not torch.strided or tensor.requires_grad or tensor.is_inference()
                 or tensor.is_conj() or tensor.is_neg() or tensor.storage_offset() != 0
-                or tensor.shape != shape or not tensor.is_contiguous() or tensor.untyped_storage().nbytes() != size):
+                or tensor.shape != shape or not tensor.is_contiguous() or tensor.untyped_storage().nbytes() != size
+                or (strides is not None and tensor.stride() != strides[index])):
             return False
         if size:
             start = tensor.data_ptr()
@@ -196,7 +234,8 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     duration of each call. Deferred installation permits the application to
     configure Torch before the first admitted call prepares the worker.
     The ambient grad option keeps the caller's GradMode and admits only
-    plain Tensor inputs with no gradient requirement.
+    plain Tensor inputs with no gradient requirement. Geometry trials guard
+    the shape, stride, and storage bounds retained at build time.
     """
     if exclusive_inputs is not True:
         raise ValueError('the ATen Python trial requires explicit exclusive inputs')
@@ -230,14 +269,23 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         raise ValueError('the live CPU, Python or Torch context differs from the ATen trial scope')
     provider_class = torch._C._VariableFunctionsClass
     input_order = tuple(proof['input_order'])
-    shapes = tuple(tuple(item['shape']) for item in manifest['recipe']['inputs'])
+    recipe = manifest['recipe']
+    strides = _geometry_input_strides(manifest['input_guard'], recipe, torch) if 'input_guard' in manifest else None
+    shapes = tuple(tuple(item['shape']) for item in recipe['inputs'])
     lengths = tuple(4 * prod(shape) for shape in shapes)
-    receipts = manifest['inputs']
-    if (len(input_order) != len(shapes) or len(receipts) != len(shapes)
-            or tuple(row['size_bytes'] for row in receipts) != lengths):
+    if len(input_order) != len(shapes):
+        raise ValueError('the retained input mapping differs from the graph ABI')
+    receipts = None if strides is not None else manifest['inputs']
+    if receipts is not None and (len(receipts) != len(shapes) or tuple(row['size_bytes'] for row in receipts) != lengths):
         raise ValueError('the retained raw inputs differ from the graph ABI')
+    if provider_report is not None:
+        provider_report.update(input_guard_kind=_GEOMETRY if strides is not None else _EXACT_BYTES,
+                               reference_input_bytes_loaded=0)
+
     def prepare(configuration):
-        references = tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
+        references = None if receipts is None else tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
+        if provider_report is not None and references is not None:
+            provider_report['reference_input_bytes_loaded'] += sum(map(len, references))
         extension = _extension(directory, manifest['extension'])
         # Keep the two-argument ABI for existing trial binaries.
         capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
@@ -277,7 +325,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         if not ready_bindings():
             return fallback('SOURCE_BINDING', args, kwargs)
         inputs = tuple(args[index] for index in input_order)
-        if not _ready_inputs(inputs, shapes, lengths, torch):
+        if not _ready_inputs(inputs, shapes, lengths, torch, strides=strides):
             return fallback('TENSOR_ABI', args, kwargs)
         if prepared is None:
             try:
@@ -297,7 +345,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         except (MemoryError, RuntimeError, ValueError):
             return fallback('NATIVE_ERROR', args, kwargs)
         if result is None:
-            return fallback('INPUT_BYTES', args, kwargs)
+            return fallback('INPUT_BYTES' if strides is None else 'NATIVE_ERROR', args, kwargs)
         stats['native_calls'] += 1
         return result[0] if tensor_result else result
 

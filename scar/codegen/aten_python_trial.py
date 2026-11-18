@@ -9,6 +9,7 @@ import sysconfig
 from tempfile import TemporaryDirectory
 
 from scar.analysis.aten_python_trial_source import qualify_python_trial_source
+from scar.analysis.aten_trial_geometry import qualify_trial_geometry
 from scar.codegen.aten_native_graph import _read_declared
 from scar.codegen.aten_provider import _build_interface, _dependencies
 from scar.codegen.native_provider_bundle import _content
@@ -94,14 +95,35 @@ def _library_receipt(path, expected=None):
     return receipt
 
 
-def _build_extension(stage, artifact, torch):
+def _geometry_header(geometry):
+    lines = ['#pragma once', '#include <array>', '#include <cstddef>', '#include <cstdint>', '#include <span>',
+             'namespace scar_aten_trial_geometry {', 'struct TensorGeometry {',
+             '    std::span<const std::int64_t> sizes;', '    std::span<const std::int64_t> strides;',
+             '    std::size_t storage_bytes;', '};']
+    for name, count in (('inputs', 'input_count'), ('operations', 'operation_count')):
+        records = []
+        for index, row in enumerate(geometry[name]):
+            fields = []
+            for key in ('shape', 'strides'):
+                field = f'{name}_{key}_{index}'
+                values = ', '.join(map(str, row[key]))
+                lines.append(f'inline constexpr std::array<std::int64_t, {len(row[key])}> {field}{{{values}}};')
+                fields.append(field)
+            records.append('    {' + ', '.join((*fields, str(row['storage_bytes']))) + '},')
+        lines.extend((f'inline constexpr std::array<TensorGeometry, scar_aten_graph::{count}> {name}{{{{',
+                      *records, '}};'))
+    return '\n'.join((*lines, '}  // namespace scar_aten_trial_geometry', ''))
+
+
+def _build_extension(stage, artifact, torch, *, value_geometry=False):
     _, libraries, cxx, compile_flags, link_flags = _build_interface(torch)
     python_torch = libraries[0].with_name('libtorch_python.so').resolve(strict=True)
     filename = _MODULE + sysconfig.get_config_var('EXT_SUFFIX')
     # CPython API symbols are resolved by the importing interpreter, including static CPython builds.
     extension_links = [flag for flag in link_flags if flag != '-Wl,-z,defs']
-    command = [*cxx, *compile_flags, '-I', sysconfig.get_path('include'), '-O2', '-fPIC', '-shared',
-               '-pthread', 'trial.cpp', *extension_links, str(python_torch), '-o', filename]
+    options = ['-DSCAR_ATEN_VALUE_GEOMETRY'] if value_geometry else []
+    command = [*cxx, *compile_flags, *options, '-I', sysconfig.get_path('include'), '-O2', '-fPIC', '-shared',
+               '-fvisibility=hidden', '-pthread', 'trial.cpp', *extension_links, str(python_torch), '-o', filename]
     env = {name: value for name, value in os.environ.items() if not name.startswith('LD_')}
     subprocess.run(command, cwd=stage, check=True, env=env)
     listing = subprocess.run(['ldd', './' + filename], cwd=stage, check=True, capture_output=True, text=True, env=env).stdout
@@ -120,7 +142,7 @@ def _build_extension(stage, artifact, torch):
 
 
 def build_aten_python_trial(source, function, *, projection, projection_sha256, selection, selection_sha256,
-                           contract, contract_sha256, out):
+                           contract, contract_sha256, out, geometry_contract=None, geometry_contract_sha256=None):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -133,6 +155,15 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
 
     if (torch.__version__, torch.version.git_version) != (artifact['provider']['version'], artifact['provider']['revision']):
         raise ValueError('Python trial requires the same installed LibTorch provider revision')
+    guard = None
+    if geometry_contract is not None or geometry_contract_sha256 is not None:
+        if geometry_contract is None or geometry_contract_sha256 is None:
+            raise ValueError('the value-independent geometry contract requires its exact digest')
+        geometry_path, declaration, _ = _read_declared(geometry_contract, geometry_contract_sha256)
+        calibration = read_artifact(replay['calibration'])['calibration']
+        geometry = qualify_trial_geometry(recipe, declaration, calibration, torch)
+        guard = dict(kind='VALUE_INDEPENDENT_GEOMETRY', geometry=geometry,
+                     contract=_file_ref(geometry_path, declaration['schema']))
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-python-trial-', dir=out.parent) as tmp:
         stage = Path(tmp)
@@ -144,7 +175,9 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
                 raise ValueError('generated graph header differs from the exact verified bundle: ' + name)
         (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
         (stage / 'trial.cpp').write_bytes(_TEMPLATE.read_bytes())
-        extension, provider, command = _build_extension(stage, artifact, torch)
+        if guard is not None:
+            (stage / 'trial_geometry.hpp').write_text(_geometry_header(guard['geometry']))
+        extension, provider, command = _build_extension(stage, artifact, torch, value_geometry=guard is not None)
         manifest = dict(schema='scar.aten-python-trial', schema_version=1,
             scope='EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL', source_proof=proof, recipe=recipe, contract=contract,
             cpus=selected['cpu_ids'], window_starts=selected['selected_window_starts'], inputs=selected['inputs'],
@@ -153,6 +186,8 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
                 wrapper_contract=_file_ref(contract_path, contract['schema'])),
             compiler_command=command, cxx_standard=20, source_replacement_authorized=False,
             python_boundary_performance_measured=False)
+        if guard is not None:
+            manifest['input_guard'] = guard
         (stage / 'trial.json').write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + '\n')
         stage.rename(out)
     return manifest
@@ -163,6 +198,8 @@ def main(argv=None):
     for name in ('source', 'function', 'projection', 'projection-sha256', 'selection', 'selection-sha256',
                  'contract', 'contract-sha256', 'out'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--geometry-contract', help='declared value-independent operator effect and storage contract')
+    parser.add_argument('--geometry-contract-sha256')
     args = parser.parse_args(argv)
     result = build_aten_python_trial(**vars(args))
     print(json.dumps(dict(trial=str(Path(args.out) / 'trial.json'), code_key=result['source_proof']['code_key'],
