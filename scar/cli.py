@@ -693,6 +693,7 @@ def main(argv=None) -> int:
         'compile-scalar-table-region': 'scar.compiler.scalar_table_region',
         'run-scalar-table-trial': 'scar.runtime.scalar_table_entry',
         'export-native-sparse': 'scar.codegen.sparse_native_export',
+        'export-native-ordered-sparse': 'scar.codegen.native_ordered_sparse_export',
         'plan-controlled-region': 'scar.compiler.plan_controlled_region',
         'deliver-controlled-stateful': 'scar.compiler.controlled_stateful_delivery',
         'calibrate-guard-regime': 'scar.compiler.calibrate_guard_regime',

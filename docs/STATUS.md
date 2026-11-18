@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 `export-native-ordered-sparse` 把有序执行配方编译成独立 C++20 调度，重用打包的 SuperLU/OpenBLAS。8 个进程实测各自使用配方指定的物理 CPU 与地址空间限制。512 次请求按序发布；两份重复输入的结果摘要均匹配原始记录，注入失败时只发布之前的成功前缀。独立 C++ 批次的 3 对中位数为 6.447→0.894 秒。数据范围为两份已封存输入交替运行，原 Python 入口的发布资格仍单独校验。见 `artifacts/baseline/native-ordered-sparse-cpp.json`。
+
 2026-11-18 稀疏区域的 C++20 交付可独立调用已有 SuperLU 与 OpenBLAS。`export-native-sparse` 从同一 F4 执行计划冷重放，保存原生 ELF 的可迁移依赖闭包及 ABI 1 绑定。移动后由独立 C++ 可执行程序验证两组数值的逐位结果及结构守卫，实际加载路径均在包内。原 Python 入口、成本发布仍各有自己的合同。见 `artifacts/baseline/independent-native-provider-export.json`。
 
 2026-11-18 分层审查用独立输入补了源码定义身份与内置绑定验证、后继图冷回放、NumPy 提供方和当前浮点策略读法、运行中的解释器身份、实际 `spawn` 引导。两子进程的独立复现逐位一致，8 次原生和 16 次原路径调用均符合预期。此前的 Cirq 22 量子位、8 进程对照在 CPU16–24 下为 1,114.743→1,069.885 秒，试验组命中 42,064 次，应用报告结果一致。该单对 A/B 使用双方显式浮点策略和先前提交 `923ec891` 的交付链。源证据版本已更新，默认继续 `KEEP`。报告见 `artifacts/baseline/partition-spawn-and-scalar-mainline.json`。

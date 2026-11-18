@@ -1,0 +1,223 @@
+#pragma once
+
+#include "native_ordered_dispatch_v1.h"
+#include "scar_sparse_provider_v1.hpp"
+
+#include <cfenv>
+#include <cmath>
+#include <cstring>
+#include <fcntl.h>
+#include <fstream>
+#include <sstream>
+
+namespace scar::ordered_sparse_v1 {
+
+inline constexpr int size = @SCAR_MATRIX_SIZE@;
+inline constexpr int nnz = @SCAR_MATRIX_NNZ@;
+inline constexpr std::uint64_t count = @SCAR_REQUEST_COUNT@;
+inline constexpr int numa_node = @SCAR_NUMA_NODE@;
+inline constexpr int worker_cpus[] = {@SCAR_WORKER_CPUS@};
+inline constexpr int cpu_placement[][4] = {@SCAR_CPU_PLACEMENT@};
+inline constexpr std::size_t request_bytes = (std::size_t{size} + nnz) * sizeof(double);
+inline constexpr std::size_t result_bytes = std::size_t{size} * sizeof(double);
+inline constexpr std::uint64_t worker_limit = @SCAR_WORKER_LIMIT@ULL;
+inline constexpr std::size_t symbolic_budget = @SCAR_SYMBOLIC_BUDGET@ULL;
+inline constexpr std::uint64_t memory_headroom = @SCAR_MEMORY_HEADROOM@ULL;
+inline constexpr std::uint64_t pending_payload_budget = @SCAR_PAYLOAD_BUDGET@ULL;
+inline constexpr const char* blas_member = @SCAR_BLAS_MEMBER@;
+
+struct Outcome {
+    std::uint64_t published = 0;
+    bool complete = false;
+    ordered_v1::Kind terminal_kind = ordered_v1::Kind::success;
+    std::int32_t worker_status = 0;
+    std::vector<pid_t> worker_pids;
+};
+
+namespace detail {
+
+inline std::string field(const std::filesystem::path& path) {
+    std::ifstream stream(path);
+    std::string value;
+    if (!(stream >> value)) {
+        throw std::runtime_error("cannot read live native resource: " + path.string());
+    }
+    return value;
+}
+
+inline bool allows_node(std::string text) {
+    std::istringstream ranges(std::move(text));
+    for (std::string range; std::getline(ranges, range, ',');) {
+        const auto separator = range.find('-');
+        const int a = std::stoi(range.substr(0, separator));
+        const int b = separator == std::string::npos ? a : std::stoi(range.substr(separator + 1));
+        if (a <= numa_node && numa_node <= b) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline void check_resources() {
+    for (const auto& lane : cpu_placement) {
+        const auto cpu = std::filesystem::path("/sys/devices/system/cpu") / ("cpu" + std::to_string(lane[0]));
+        if (!std::filesystem::exists(cpu / ("node" + std::to_string(numa_node)))
+                || std::stoi(field(cpu / "topology/physical_package_id")) != lane[1]
+                || (lane[2] >= 0 && std::stoi(field(cpu / "topology/die_id")) != lane[2])
+                || std::stoi(field(cpu / "topology/core_id")) != lane[3]) {
+            throw std::runtime_error("live CPU topology differs from the planned native cohort");
+        }
+    }
+    std::ifstream status("/proc/self/status");
+    bool memory_allowed = false;
+    for (std::string line; std::getline(status, line);) {
+        if (line.starts_with("Mems_allowed_list:")) {
+            memory_allowed = allows_node(line.substr(line.find(':') + 1));
+            break;
+        }
+    }
+    const auto memory_file = std::filesystem::path("/sys/devices/system/node") /
+        ("node" + std::to_string(numa_node)) / "meminfo";
+    std::ifstream meminfo(memory_file);
+    std::uint64_t available_kib = 0;
+    for (std::string line; std::getline(meminfo, line);) {
+        if (const auto marker = line.find("MemFree:"); marker != std::string::npos) {
+            std::istringstream(line.substr(marker + 8)) >> available_kib;
+            break;
+        }
+    }
+    if (!memory_allowed || available_kib < (memory_headroom + 1023) / 1024) {
+        throw std::runtime_error("planned NUMA domain lacks current memory headroom");
+    }
+    const auto membership = field("/proc/self/cgroup");
+    const auto cgroup_root = std::filesystem::path("/sys/fs/cgroup");
+    if (!membership.starts_with("0::/") || !std::filesystem::exists(cgroup_root / "cgroup.controllers")) {
+        throw std::runtime_error("unified native resource hierarchy is unavailable");
+    }
+    const auto relative = std::filesystem::path(membership.substr(4));
+    if (relative.is_absolute() || relative.lexically_normal() != relative || relative.string().starts_with("..")) {
+        throw std::runtime_error("unrecognized native resource hierarchy path");
+    }
+    for (auto group = relative.empty() ? cgroup_root : cgroup_root / relative;; group = group.parent_path()) {
+        if (!std::filesystem::is_directory(group)) {
+            throw std::runtime_error("cannot resolve the live native resource group");
+        }
+        if (const auto limit = group / "memory.max"; std::filesystem::exists(limit)) {
+            const auto bound = field(limit);
+            if (bound != "max") {
+                const auto cap = std::stoull(bound), used = std::stoull(field(group / "memory.current"));
+                if (cap < used || cap - used < memory_headroom) {
+                    throw std::runtime_error("cgroup memory headroom is below the native plan");
+                }
+            }
+        }
+        if (const auto limit = group / "cpu.max"; std::filesystem::exists(limit)) {
+            std::ifstream quota(limit);
+            std::string bound;
+            std::uint64_t period;
+            if (!(quota >> bound >> period) || period == 0 || (bound != "max" &&
+                    std::stoull(bound) / period < std::size(cpu_placement))) {
+                throw std::runtime_error("cgroup CPU quota is below the native plan");
+            }
+        }
+        if (group == cgroup_root) {
+            break;
+        }
+    }
+}
+
+inline void private_worker_environment() {
+    const int stream = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (stream < 0) {
+        throw std::runtime_error("cannot isolate native worker diagnostics");
+    }
+    const bool hidden = dup2(stream, STDOUT_FILENO) >= 0 && dup2(stream, STDERR_FILENO) >= 0;
+    if (stream > STDERR_FILENO) {
+        close(stream);
+    }
+    if (!hidden || std::fesetenv(FE_DFL_ENV) != 0 || setenv("OPENBLAS_NUM_THREADS", "1", 1) != 0
+            || setenv("OMP_NUM_THREADS", "1", 1) != 0 || setenv("GOTO_NUM_THREADS", "1", 1) != 0) {
+        throw std::runtime_error("cannot configure the private native worker");
+    }
+}
+
+inline void check_blas(const std::filesystem::path& provider) {
+    void* handle = dlopen((provider / blas_member).c_str(), RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        throw std::runtime_error("the expected native BLAS provider was not loaded");
+    }
+    const auto threads = reinterpret_cast<int (*)()>(dlsym(handle, "scipy_openblas_get_num_threads"));
+    const auto parallel = reinterpret_cast<int (*)()>(dlsym(handle, "scipy_openblas_get_parallel"));
+    const bool checked = threads && parallel && threads() == 1 && parallel() == 1;
+    dlclose(handle);
+    if (!checked) {
+        throw std::runtime_error("the native BLAS worker must use a single thread");
+    }
+}
+
+struct Stop {};
+
+}  // namespace detail
+
+// `fill` writes one raw native-endian binary64 frame: nnz values followed by
+// size RHS values. `publish` borrows the successful result during its callback.
+template<class Fill, class Publish>
+Outcome run(const std::filesystem::path& provider_directory, std::span<const int> indices,
+            std::span<const int> offsets, Fill&& fill, Publish&& publish) {
+    if (indices.size() != std::size_t{nnz} || offsets.size() != std::size_t{size} + 1) {
+        throw std::invalid_argument("CSR ports must match the planned matrix shape");
+    }
+    detail::check_resources();
+    const auto provider_path = std::filesystem::canonical(provider_directory);
+    const std::vector<int> structure_indices(indices.begin(), indices.end());
+    const std::vector<int> structure_offsets(offsets.begin(), offsets.end());
+    const ordered_v1::Config config{@SCAR_OWNER_CPU@, worker_cpus, @SCAR_WINDOW@, request_bytes,
+        result_bytes, worker_limit, pending_payload_budget};
+    const auto factory = [&](int) {
+        detail::private_worker_environment();
+        auto provider = std::make_shared<sparse_v1::Provider>(provider_path);
+        detail::check_blas(provider_path);
+        sparse_v1::Timings times{};
+        auto symbolic = std::unique_ptr<const void, sparse_v1::Provider::Destroy>(provider->create(
+            size, nnz, structure_indices.data(), structure_offsets.data(), symbolic_budget, &times), provider->destroy);
+        if (!symbolic || provider->retained_bytes(symbolic.get()) > symbolic_budget) {
+            throw std::runtime_error("native CSR structure or symbolic budget was refused");
+        }
+        return [&, provider = std::move(provider), symbolic = std::move(symbolic),
+                input = std::vector<double>(std::size_t{size} + nnz), output = std::vector<double>(size)](
+                std::uint64_t, std::span<const std::byte> frame,
+                std::span<std::byte> result) mutable -> std::int32_t {
+            std::memcpy(input.data(), frame.data(), request_bytes);
+            if (!std::all_of(input.begin(), input.end(), [](double value) { return std::isfinite(value); })) {
+                return -3;
+            }
+            sparse_v1::Timings phase{};
+            const auto code = provider->solve(symbolic.get(), size, nnz, structure_indices.data(),
+                structure_offsets.data(), input.data(), input.data() + nnz, output.data(), &phase);
+            if (code == 0) {
+                std::memcpy(result.data(), output.data(), result_bytes);
+            }
+            return code;
+        };
+    };
+    Outcome outcome;
+    try {
+        auto summary = ordered_v1::dispatch(config, count, factory, std::forward<Fill>(fill),
+            [&](const ordered_v1::Retirement& row) {
+                if (row.kind != ordered_v1::Kind::success) {
+                    outcome.terminal_kind = row.kind;
+                    outcome.worker_status = row.worker_status;
+                    throw detail::Stop{};
+                }
+                publish(row);
+                ++outcome.published;
+            });
+        outcome.worker_pids = std::move(summary.worker_pids);
+        outcome.complete = outcome.published == count;
+    } catch (const detail::Stop&) {
+        // The dispatcher joins all private workers before this failure is exposed.
+    }
+    return outcome;
+}
+
+}  // namespace scar::ordered_sparse_v1

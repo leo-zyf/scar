@@ -1,0 +1,391 @@
+#pragma once
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <dirent.h>
+#include <limits>
+#include <poll.h>
+#include <sched.h>
+#include <signal.h>
+#include <span>
+#include <stdexcept>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <type_traits>
+#include <unistd.h>
+#include <vector>
+
+namespace scar::ordered_v1 {
+
+struct Config {
+    int owner_cpu;
+    std::span<const int> worker_cpus;
+    std::size_t window, request_bytes, result_bytes;
+    std::uint64_t worker_address_space_limit_bytes, payload_budget_bytes;
+    int timeout_ms = 30000;
+};
+
+enum class Kind { success, worker_failure, transport_failure };
+
+struct Retirement {
+    std::uint64_t sequence;
+    int cpu;
+    pid_t pid;
+    Kind kind;
+    std::int32_t worker_status;
+    std::span<const std::byte> result;
+};
+
+struct Summary {
+    std::uint64_t submitted = 0;
+    std::uint64_t retired = 0;
+    std::uint64_t succeeded = 0;
+    std::uint64_t worker_failed = 0;
+    std::uint64_t transport_failed = 0;
+    std::vector<pid_t> worker_pids;
+};
+
+namespace detail {
+
+using Clock = std::chrono::steady_clock;
+using Deadline = Clock::time_point;
+using Milliseconds = std::chrono::milliseconds;
+
+struct Response {
+    std::uint64_t sequence;
+    std::int32_t status;
+    std::uint32_t reserved;
+};
+
+static_assert(sizeof(Response) == 16);
+static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+static_assert(sizeof(rlim_t) <= sizeof(std::uint64_t));
+
+inline Deadline deadline(int timeout_ms) {
+    return Clock::now() + Milliseconds(timeout_ms);
+}
+
+inline bool transfer(int fd, void* storage, std::size_t remaining, bool write,
+                     Deadline until = Deadline::max()) noexcept {
+    auto* bytes = static_cast<std::byte*>(storage);
+    const bool timed = until != Deadline::max();
+    const int flags = timed ? MSG_DONTWAIT : 0;
+    while (remaining != 0) {
+        const auto transferred = write ? send(fd, bytes, remaining, flags | MSG_NOSIGNAL)
+                                       : recv(fd, bytes, remaining, flags);
+        if (transferred > 0) {
+            bytes += transferred;
+            remaining -= static_cast<std::size_t>(transferred);
+            continue;
+        }
+        if (transferred == 0 || (timed && Clock::now() >= until)) {
+            return false;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (!timed || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            return false;
+        }
+        const auto wait = std::chrono::ceil<Milliseconds>(until - Clock::now()).count();
+        if (wait <= 0) {
+            return false;
+        }
+        pollfd event{fd, static_cast<short>(write ? POLLOUT : POLLIN), 0};
+        const int ready = poll(&event, 1, static_cast<int>(wait));
+        if (ready == 0 || (ready < 0 && errno != EINTR)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool single_threaded() {
+    DIR* tasks = opendir("/proc/self/task");
+    if (!tasks) {
+        return false;
+    }
+    std::size_t count = 0;
+    errno = 0;
+    while (const auto* task = readdir(tasks)) {
+        if (task->d_name[0] != '.') {
+            ++count;
+        }
+    }
+    const bool usable = errno == 0 && count == 1;
+    closedir(tasks);
+    return usable;
+}
+
+inline void require_config(const Config& config) {
+    constexpr auto max_bytes = static_cast<std::uint64_t>(std::numeric_limits<ssize_t>::max());
+    if (config.worker_cpus.empty() || config.worker_cpus.size() >= CPU_SETSIZE
+            || config.window == 0 || config.window > config.worker_cpus.size()
+            || config.request_bytes == 0 || config.result_bytes == 0 || config.timeout_ms <= 0
+            || config.request_bytes > max_bytes || config.result_bytes > max_bytes
+            || config.worker_address_space_limit_bytes == 0
+            || config.worker_address_space_limit_bytes >= std::numeric_limits<rlim_t>::max()
+            || config.worker_address_space_limit_bytes == static_cast<std::uint64_t>(RLIM_INFINITY)) {
+        throw std::invalid_argument("invalid ordered worker dimensions or limits");
+    }
+    const auto payload = std::uint64_t{config.request_bytes} + config.result_bytes;
+    if (payload > config.payload_budget_bytes / config.window
+            || payload > config.worker_address_space_limit_bytes
+            || config.worker_address_space_limit_bytes > std::numeric_limits<std::uint64_t>::max()
+                                                        / config.worker_cpus.size()) {
+        throw std::invalid_argument("ordered worker memory bound does not cover payloads");
+    }
+    struct sigaction child_signal{};
+    if (!single_threaded() || sigaction(SIGCHLD, nullptr, &child_signal) != 0
+            || child_signal.sa_handler != SIG_DFL || (child_signal.sa_flags & SA_NOCLDWAIT)) {
+        throw std::invalid_argument("ordered dispatch requires a single owner and ordinary child reaping");
+    }
+}
+
+inline bool pin_cpu(int cpu) noexcept {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(cpu, &mask);
+    return sched_setaffinity(0, sizeof(mask), &mask) == 0;
+}
+
+class OwnerAffinity {
+public:
+    explicit OwnerAffinity(const Config& config) {
+        if (sched_getaffinity(0, sizeof(original_), &original_) != 0) {
+            throw std::runtime_error("cannot read original ordered CPU affinity");
+        }
+        cpu_set_t assigned;
+        CPU_ZERO(&assigned);
+        const auto check = [&](int cpu) {
+            if (cpu < 0 || cpu >= CPU_SETSIZE || !CPU_ISSET(cpu, &original_) || CPU_ISSET(cpu, &assigned)) {
+                throw std::invalid_argument("ordered CPU IDs must be distinct and available to the owner");
+            }
+            CPU_SET(cpu, &assigned);
+        };
+        check(config.owner_cpu);
+        for (const int cpu : config.worker_cpus) {
+            check(cpu);
+        }
+        if (!pin_cpu(config.owner_cpu)) {
+            throw std::runtime_error("cannot pin ordered dispatch owner");
+        }
+    }
+
+    OwnerAffinity(const OwnerAffinity&) = delete;
+    OwnerAffinity& operator=(const OwnerAffinity&) = delete;
+    ~OwnerAffinity() { sched_setaffinity(0, sizeof(original_), &original_); }
+
+private:
+    cpu_set_t original_;
+};
+
+struct Slot {
+    int fd = -1;
+    pid_t pid = -1;
+    bool outstanding = false;
+    bool reaped = false;
+
+    void disconnect() noexcept {
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
+        outstanding = false;
+    }
+
+    void stop() noexcept {
+        disconnect();
+        if (pid <= 0 || reaped) {
+            return;
+        }
+        kill(pid, SIGKILL);
+        while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {}
+        reaped = true;
+    }
+};
+
+class Team {
+public:
+    explicit Team(std::size_t workers) : slots(workers) {}
+    Team(const Team&) = delete;
+    Team& operator=(const Team&) = delete;
+    ~Team() {
+        for (auto& slot : slots) {
+            slot.disconnect();
+        }
+        const auto end = deadline(1000);
+        while (true) {
+            bool running = false;
+            for (auto& slot : slots) {
+                if (slot.pid <= 0 || slot.reaped) {
+                    continue;
+                }
+                const auto state = waitpid(slot.pid, nullptr, WNOHANG);
+                if (state > 0 || (state < 0 && errno != EINTR)) {
+                    slot.reaped = true;
+                } else {
+                    running = true;
+                }
+            }
+            if (!running) {
+                return;
+            }
+            if (Clock::now() >= end) {
+                break;
+            }
+            poll(nullptr, 0, 1);
+        }
+        for (auto& slot : slots) {
+            slot.stop();
+        }
+    }
+
+    std::vector<Slot> slots;
+};
+
+template<class Factory>
+int child(int fd, int cpu, const Config& config, Factory& make_worker) noexcept {
+    const auto cap = static_cast<rlim_t>(config.worker_address_space_limit_bytes);
+    const rlimit limit{cap, cap};
+    if (!pin_cpu(cpu) || setrlimit(RLIMIT_AS, &limit) != 0) {
+        return 1;
+    }
+    try {
+        std::vector<std::byte> request(config.request_bytes), output(config.result_bytes);
+        auto worker = make_worker(cpu);
+        char ready = 1;
+        if (!transfer(fd, &ready, sizeof(ready), true)) {
+            return 1;
+        }
+        std::uint64_t sequence;
+        while (transfer(fd, &sequence, sizeof(sequence), false)) {
+            if (!transfer(fd, request.data(), request.size(), false)) {
+                return 1;
+            }
+            const auto status = worker(sequence, std::span<const std::byte>(request), std::span<std::byte>(output));
+            static_assert(std::is_same_v<decltype(status), const std::int32_t>);
+            Response response{sequence, status, 0};
+            if (!transfer(fd, &response, sizeof(response), true)
+                    || (status == 0 && !transfer(fd, output.data(), output.size(), true))) {
+                return 1;
+            }
+        }
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+}  // namespace detail
+
+// Call before initializing a threaded numerical provider. The factory runs
+// inside a subprocess, and worker operations must have private effects.
+// Fill writes one full request. Successful workers write one full result.
+// Retire sees each sequence exactly once, and only during the callback may it
+// borrow the result bytes. Failed requests have no usable result bytes.
+template<class Factory, class Fill, class Retire>
+Summary dispatch(const Config& selected, std::uint64_t count,
+                 Factory&& make_worker, Fill&& fill, Retire&& retire) {
+    detail::require_config(selected);
+    Summary summary;
+    if (count == 0) {
+        return summary;
+    }
+    const std::vector<int> worker_cpus(selected.worker_cpus.begin(), selected.worker_cpus.end());
+    const Config config{selected.owner_cpu, worker_cpus, selected.window, selected.request_bytes,
+                        selected.result_bytes, selected.worker_address_space_limit_bytes,
+                        selected.payload_budget_bytes, selected.timeout_ms};
+    detail::OwnerAffinity affinity(config);
+    detail::Team team(config.worker_cpus.size());
+    std::vector<std::byte> request(config.request_bytes), output(config.result_bytes);
+    summary.worker_pids.reserve(team.slots.size());
+    for (std::size_t i = 0; i < team.slots.size(); ++i) {
+        int pair[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) != 0) {
+            throw std::runtime_error("cannot open ordered worker channel");
+        }
+        const auto pid = fork();
+        if (pid == 0) {
+            close(pair[0]);
+            for (auto& slot : team.slots) {
+                slot.disconnect();
+            }
+            _exit(detail::child(pair[1], config.worker_cpus[i], config, make_worker));
+        }
+        close(pair[1]);
+        if (pid < 0) {
+            close(pair[0]);
+            throw std::runtime_error("cannot start ordered worker process");
+        }
+        team.slots[i].fd = pair[0];
+        team.slots[i].pid = pid;
+        summary.worker_pids.push_back(pid);
+    }
+    const auto startup = detail::deadline(config.timeout_ms);
+    for (const auto& slot : team.slots) {
+        char ready = 0;
+        if (!detail::transfer(slot.fd, &ready, sizeof(ready), false, startup) || ready != 1) {
+            throw std::runtime_error("ordered worker rejected bootstrap before issuing requests");
+        }
+    }
+
+    const auto issue = [&](std::uint64_t sequence) {
+        auto& slot = team.slots[sequence % team.slots.size()];
+        if (slot.fd < 0) {
+            return;
+        }
+        if (slot.outstanding) {
+            throw std::logic_error("ordered slot already has a request");
+        }
+        fill(sequence, std::span<std::byte>(request));
+        const auto until = detail::deadline(config.timeout_ms);
+        if (!detail::transfer(slot.fd, &sequence, sizeof(sequence), true, until)
+                || !detail::transfer(slot.fd, request.data(), request.size(), true, until)) {
+            slot.stop();
+            return;
+        }
+        slot.outstanding = true;
+        ++summary.submitted;
+    };
+    std::uint64_t next = 0;
+    while (next < std::min(count, static_cast<std::uint64_t>(config.window))) {
+        issue(next++);
+    }
+    for (std::uint64_t sequence = 0; sequence < count; ++sequence) {
+        const auto index = sequence % team.slots.size();
+        auto& slot = team.slots[index];
+        Retirement result{sequence, config.worker_cpus[index], slot.pid, Kind::transport_failure, 0, {}};
+        const auto until = detail::deadline(config.timeout_ms);
+        detail::Response response{};
+        if (slot.outstanding && detail::transfer(slot.fd, &response, sizeof(response), false, until)
+                && response.sequence == sequence && response.reserved == 0) {
+            result.worker_status = response.status;
+            if (response.status != 0) {
+                result.kind = Kind::worker_failure;
+                ++summary.worker_failed;
+            } else if (detail::transfer(slot.fd, output.data(), output.size(), false, until)) {
+                result.kind = Kind::success;
+                result.result = output;
+                ++summary.succeeded;
+            }
+        }
+        slot.outstanding = false;
+        if (result.kind == Kind::transport_failure) {
+            slot.stop();
+            ++summary.transport_failed;
+        }
+        retire(result);
+        ++summary.retired;
+        if (next < count) {
+            issue(next++);
+        }
+    }
+    return summary;
+}
+
+}  // namespace scar::ordered_v1
