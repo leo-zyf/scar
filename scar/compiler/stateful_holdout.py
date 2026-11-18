@@ -336,6 +336,21 @@ def _distribution(samples):
         min_ns=min(samples),max_ns=max(samples),sample_variance_ns2=statistics.variance(samples)if len(samples)>1 else None)
 
 
+def _prediction_evaluation(predicted_native_ns,original_ns,native_ns,policy):
+    """One arithmetic order for capture and exact future-policy replay.
+
+    Producer changes require a fresh frozen design. Historical captures retain
+    their original source pins and never acquire new producer authorization.
+    """
+    _need(original_ns>0 and native_ns>0,'positive observed duration required')
+    error=abs(predicted_native_ns-native_ns)/native_ns
+    gain=(original_ns-native_ns)/original_ns
+    return dict(predicted_native_method_ns=predicted_native_ns,
+        relative_prediction_error=error,observed_method_gain=gain,
+        prediction_error_threshold_passed=error<=policy['max_relative_prediction_error'],
+        observed_gain_threshold_passed=gain>=policy['minimum_observed_gain'])
+
+
 def run_stateful_holdout(design,*,expected_sha256):
     """Run exactly the persisted design; no fitting, automatic retry or deploy."""
     document=verify_stateful_holdout_design(design,expected_sha256=expected_sha256)
@@ -383,9 +398,8 @@ def run_stateful_holdout(design,*,expected_sha256):
         summaries[label]=dict(episode_means=_distribution(means),method_calls=_distribution(
             [s['elapsed_ns']for p in measured for s in p['implementations'][label]['steps']]))
     original_ns=summaries['A']['episode_means']['median_ns'];native_ns=summaries['B']['episode_means']['median_ns']
-    _need(original_ns>0 and native_ns>0,'positive observed duration required')
-    relative_error=abs(document['predicted_native_method_ns']-native_ns)/native_ns
-    gain=(original_ns-native_ns)/original_ns;policy=document['policy_contract']
+    evaluation=_prediction_evaluation(document['predicted_native_method_ns'],
+        original_ns,native_ns,document['policy_contract'])
     report=dict(schema=REPORT,schema_version=2,status='OBSERVED_FIXED_IMPLEMENTATIONS',design=design_ref,
         capture_epoch=request['capture_epoch'],observation_origin='COLLECTOR_TARGET_EXECUTION',
         frozen_policy=document['frozen_policy'],frozen_model=request['model'],timer=document['timer'],
@@ -396,10 +410,7 @@ def run_stateful_holdout(design,*,expected_sha256):
         policy_frozen_before_target=True,design_readback_before_target=True,design_readback_after_target=True,
         caller_affinity_changed_by_harness=False,original_descriptors_restored=True,
         pairs=pairs,summaries=summaries,guard_statistics_including_warmups=total_stats,
-        frozen_policy_evaluation=dict(predicted_native_method_ns=document['predicted_native_method_ns'],
-            relative_prediction_error=relative_error,observed_method_gain=gain,
-            prediction_error_threshold_passed=relative_error<=policy['max_relative_prediction_error'],
-            observed_gain_threshold_passed=gain>=policy['minimum_observed_gain']),
+        frozen_policy_evaluation=evaluation,
         per_step_array_content_reads_by_observer=0,final_state_reads_per_episode=1,
         independent_prior_correctness=request['prior_correctness'],performance_measured=True,
         model_fitted_from_holdout=False,model_qualification_promoted=False,deployment_authorized=False,

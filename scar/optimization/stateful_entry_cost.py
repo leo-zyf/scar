@@ -530,7 +530,7 @@ def _future_holdout_state(state,region,context,*,final):
 
 def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
     from scar.compiler.stateful_holdout import (DESIGN,POLICY,REPORT,TIMER,
-        verify_stateful_holdout_design,_distribution,_holdout_model_material)
+        verify_stateful_holdout_design,_distribution,_holdout_model_material,_prediction_evaluation)
     from scar.compiler.stateful_model import stateful_from_dict
     from hashlib import sha256
     observed=read_artifact(holdout_ref);rules=read_artifact(policy_ref)
@@ -664,10 +664,9 @@ def _evaluate_future_stateful_entry_holdout(model_ref,holdout_ref,policy_ref):
             or total_fallback==0 and total['reasons']!={}):
         raise ValueError('future total guard statistics differ')
     original=statistics.median(groups['A']);native=statistics.median(groups['B'])
-    error=abs(model['duration_ns']-native)/native;gain=1-native/original
     threshold=rules['max_relative_prediction_error'];minimum=rules['minimum_observed_gain']
-    expected_evaluation=dict(predicted_native_method_ns=model['duration_ns'],relative_prediction_error=error,
-        observed_method_gain=gain,prediction_error_threshold_passed=error<=threshold,observed_gain_threshold_passed=gain>=minimum)
+    expected_evaluation=_prediction_evaluation(model['duration_ns'],original,native,rules)
+    error=expected_evaluation['relative_prediction_error'];gain=expected_evaluation['observed_method_gain']
     if observed['frozen_policy_evaluation']!=expected_evaluation:raise ValueError('future policy evaluation differs from raw samples')
     qualified=real and bool(correct)and error<=threshold and gain>=minimum
     verify_stateful_holdout_design(design_ref['uri'],expected_sha256=design_ref['sha256'])
