@@ -1,0 +1,312 @@
+{
+  "all_three_stages_complete": false,
+  "next_acceptance": [
+    "Close the effect scope around current-state snapshots using original host and provider identities.",
+    "Derive scoped copy-work and memory traffic demand for legal reduced-snapshot alternatives before measuring.",
+    "Check exact task order, actual region outputs and resource fallback in a well-amortized workload."
+  ],
+  "schema": "scar.three-stage-loop-rewrite-checkpoint",
+  "schema_version": 1,
+  "scope": "REAL_GRAY_SCOTT_DRIVER_T2_AND_FOUR_EULER_STEPS",
+  "stage1": {
+    "acceptance": {
+      "sha256": "2d3d9731e5aa1ce1ef5f74e64fe3143304c31e9c10e4b2bc8fcb9b1057dd01d5",
+      "size_bytes": 5101,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/acceptance.json"
+    },
+    "loop_transfers": {
+      "caller_attribute_writes": 1,
+      "conditional_relations": 9,
+      "effect_frontiers": 55,
+      "excluded_wrapper_operations": 4,
+      "global_logical_versions_created": 0,
+      "input_transfers": 7,
+      "iterations_unrolled": false,
+      "original_call_hops": 2,
+      "original_control_backedges": 1,
+      "original_world_carries": 1,
+      "roles": {
+        "CALLER_REWRITTEN_FIELD": 1,
+        "LOOP_LIVE_IN_ROOT_SELECTED_VALUE_UNPROVEN": 4,
+        "ORDERED_ARRAY_CONTENT_CARRY": 2
+      },
+      "root_routes": 1,
+      "selected_window_boundaries": 0,
+      "selected_wrapper_windows": 1,
+      "shared_loops": 1,
+      "structural_call_loop_membership_rederived": true,
+      "target_executed": false,
+      "transformation_authorized": false,
+      "unconditional_content_recurrence_proven": false
+    },
+    "ordered_graph": {
+      "sha256": "a58202153c6ac526cec0d9758ad8b2d6e2d3feae4ada9ff27f755a90fbfa7d7d",
+      "size_bytes": 6713,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/ordered-graph/result.json"
+    },
+    "per_step_snapshot_bytes": 1073296,
+    "proof": {
+      "sha256": "2d93a45923ba675c9eec3b190cb2808cc4d1840c487349940ce893a12ac1ee1a",
+      "size_bytes": 19050,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/proof.json"
+    },
+    "proof_summary": {
+      "content_reuse": false,
+      "current_step_private_reads": 13,
+      "external_roots_retained": false,
+      "full_snapshots_per_step": 2,
+      "outer_scopes": 1,
+      "private_payload_bytes": 2130080,
+      "private_slots": 4
+    },
+    "unconditional_host_effect_closure": false
+  },
+  "stage2": {
+    "cold_check": {
+      "sha256": "33f41a1835f3029f1bb517887e191a6c9f314c9fce6b0b24da1dc10cefcaf0d9",
+      "size_bytes": 3436,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/planning-check.json"
+    },
+    "deterministic_point_model_branch_checks": [
+      "capacity lower",
+      "isolated lower",
+      "baseline retained on tie"
+    ],
+    "explicit_validation_mode": "CAPACITY_ONLY_DIRTY",
+    "measured_capacity_model_available": false,
+    "original_epochs_parameter": 1,
+    "original_steps_parameter": 4,
+    "physical_traffic_savings_claimed": false,
+    "planning": {
+      "sha256": "4e67a864fb90c8d06c20dcf7abf18dac55c756e3bc88c2ff2c2f378fa9b9996b",
+      "size_bytes": 8146,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/planning/result.json"
+    },
+    "source_diagnostic_paired_phase_deltas": {
+      "commit": {
+        "max_ns": 369375,
+        "median_ns": 290645,
+        "min_ns": 267650,
+        "positive_samples": 7
+      },
+      "computation_with_provider": {
+        "max_ns": 1570133,
+        "median_ns": 1161685,
+        "min_ns": 908879,
+        "positive_samples": 7
+      },
+      "finite_input_scan": {
+        "max_ns": 1040068,
+        "median_ns": 101858,
+        "min_ns": 77289,
+        "positive_samples": 7
+      },
+      "guard": {
+        "max_ns": 4381140,
+        "median_ns": 3083366,
+        "min_ns": 2598264,
+        "positive_samples": 7
+      },
+      "native_abi": {
+        "max_ns": 4093126,
+        "median_ns": 2956393,
+        "min_ns": 2442581,
+        "positive_samples": 7
+      },
+      "native_outside_observed_phases": {
+        "max_ns": 99289,
+        "median_ns": 76402,
+        "min_ns": 64015,
+        "positive_samples": 7
+      },
+      "snapshot": {
+        "max_ns": 2472241,
+        "median_ns": 1040078,
+        "min_ns": 555783,
+        "positive_samples": 7
+      }
+    },
+    "source_diagnostic_recompiled_and_instrumented": true,
+    "source_runtime_check": {
+      "sha256": "1016c59d3fe91f94ddb272fa1948b4b16174a45ba25f06d66f7b1ae18743cd6b",
+      "size_bytes": 2217,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/cost/summary.json"
+    },
+    "source_runtime_diagnostic": {
+      "sha256": "37125091fc7b34150b2155e3d744796016c30323942e4f717cfd489d6ece5596",
+      "size_bytes": 17763,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/cost/observations.json"
+    },
+    "stage_diagnostic_transferred_into_clean_model": false,
+    "timing_decision": "UNRESOLVED",
+    "work_demand": {
+      "CAPACITY_ONLY_DIRTY": {
+        "peak_live_private_payload_bytes": 2130080,
+        "physical_traffic_bytes": null,
+        "private_payload_bytes_during_retained_intervals": 2130080,
+        "private_payload_requested_bytes": 2130080,
+        "private_slot_allocations": 4,
+        "private_slot_releases": 4,
+        "relative_mode_duration_ns": null,
+        "retained_inter_step_intervals": 3,
+        "retention_byte_nanoseconds": null,
+        "scope": "NORMAL_SUCCESS_FOR_EXPLICIT_STEPS_AND_EPOCHS",
+        "source_refs": [
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/slot_lifetimes"
+          },
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/epochs"
+          },
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/content_policy"
+          }
+        ],
+        "steps_requiring_full_snapshot": 4
+      },
+      "ISOLATED": {
+        "peak_live_private_payload_bytes": 2130080,
+        "physical_traffic_bytes": null,
+        "private_payload_bytes_during_retained_intervals": 0,
+        "private_payload_requested_bytes": 8520320,
+        "private_slot_allocations": 16,
+        "private_slot_releases": 16,
+        "relative_mode_duration_ns": null,
+        "retained_inter_step_intervals": 0,
+        "retention_byte_nanoseconds": null,
+        "scope": "NORMAL_SUCCESS_FOR_EXPLICIT_STEPS_AND_EPOCHS",
+        "source_refs": [
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/slot_lifetimes"
+          },
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/epochs"
+          },
+          {
+            "artifact": {
+              "schema": "scar.session-capacity-plan",
+              "sha256": "cbc10df2fab4a34b1541f9260b6de0028c5dcfe705e4a494b70a3a3389dee4cb",
+              "size_bytes": 16421,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/capacity/capacity-0.json"
+            },
+            "locator": "#/content_policy"
+          }
+        ],
+        "steps_requiring_full_snapshot": 4
+      }
+    }
+  },
+  "stage3": {
+    "automatic_deployment_authorized": false,
+    "benchmark_scope": "FRESH_PROCESS_NATIVE_OR_PYTHON_DRIVER_INCLUDING_LOAD_AND_IO",
+    "bundle": {
+      "sha256": "28d1d6dd15afa95bb9eefd7d48d49c0a8d2cea6539fb691b56a34cb8d7e769cd",
+      "size_bytes": 2384,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/planned-capacity-bundle/scope-export.json"
+    },
+    "clean_benchmark": {
+      "sha256": "609bc1e0c0b7842cf9a78173f03a0149df3f347e0e37d1a5837e41841b62289c",
+      "size_bytes": 5284,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/benchmark/result.json"
+    },
+    "clean_median_ns": {
+      "capacity": 1158094733.0,
+      "isolated": 1160745478.5,
+      "original": 1062015749.0
+    },
+    "content_cached": false,
+    "final_policy": "NO_OP",
+    "guard_checks": {
+      "all_current_snapshots": true,
+      "capacity": true,
+      "capacity_hoisted_outside_steps": true,
+      "fallback": true,
+      "isolated": true,
+      "isolated_releases_each_step": true,
+      "receiver_source_bound": true,
+      "single_fallback_ends_epoch": true
+    },
+    "intentional_affinity_fallbacks": 1,
+    "isolated_over_capacity": 1.002288884859301,
+    "kernel_computation_changed_between_modes": false,
+    "native_manifest": {
+      "sha256": "850a1b519497cbe3ea0a930447d7ad6bb46b4128cd809aaaaadf07acdd5ea98c",
+      "size_bytes": 15595,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/session-native/native/artifact.json"
+    },
+    "native_source": {
+      "sha256": "e15ef695be609a9a5292a38bcd2fec3c2e766385516384696c4a97ebfb8af517",
+      "size_bytes": 36921,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/source/session-native/native/session.cpp"
+    },
+    "original_control_retained": true,
+    "original_over_capacity": 0.9170370253294295,
+    "original_program_source_modified": false,
+    "repetitions_per_mode": 6,
+    "result_for_measured_scope": "NOT_PROFITABLE",
+    "runtime_stats": {
+      "capacity": {
+        "binding_changes": 0,
+        "creates": 1,
+        "invalidations": 29,
+        "native_calls": 4,
+        "releases": 1,
+        "resident_calls": 0
+      },
+      "fallback": {
+        "binding_changes": 0,
+        "creates": 2,
+        "invalidations": 28,
+        "native_calls": 3,
+        "releases": 2,
+        "resident_calls": 0
+      },
+      "isolated": {
+        "binding_changes": 0,
+        "creates": 4,
+        "invalidations": 1,
+        "native_calls": 4,
+        "releases": 4,
+        "resident_calls": 0
+      }
+    },
+    "session_elf_sha256": "a372a208cb7e770a7a421d11e212fdbe5ea9c7e6b7313c67b15f987cf988e9a7",
+    "validation": {
+      "sha256": "b66a48065ec3bc25d8cbf0c3d9a4a26424e5499b658a6fc533582dd0336d18a3",
+      "size_bytes": 108797,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/three-stage-loop-rewrite/delivery-planned/validation.json"
+    },
+    "warmups_per_mode": 1
+  },
+  "timestamp": "2026-11-18T04:40:38.949438+00:00"
+}

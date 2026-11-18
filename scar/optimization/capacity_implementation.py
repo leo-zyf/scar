@@ -159,6 +159,7 @@ def derive_capacity_problem(capacity_plan, *, capacity_plan_ref, steps, epochs, 
         PlanningResource(_LANE, 'EXECUTION', 1, (_fact(ref, '#/epochs/maximum_live_epochs_in_normal_single_owner_policy'),)),
         PlanningResource(_MEMORY, 'MEMORY', payload, (_fact(ref, '#/slot_lifetimes'),)))
     choices = []
+    slot_count = len(plan['slot_lifetimes'])
     for mode, lowering, allocation_epochs in ((ISOLATED, 'FRESH_ISOLATED_NATIVE', steps),
                                             (CAPACITY, 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT', epochs)):
         proofs = (_fact(activation, '#/leases'), _fact(ref, '#/parents/activation')) if mode == ISOLATED else (
@@ -166,6 +167,17 @@ def derive_capacity_problem(capacity_plan, *, capacity_plan_ref, steps, epochs, 
         parameters = dict(steps=steps, declared_retained_epochs=epochs, allocation_epochs=allocation_epochs,
             create_count=allocation_epochs, destroy_count=allocation_epochs,
             full_snapshot_steps=steps, full_snapshot_each_step=True, content_residency=False,
+            work_demand=dict(scope='NORMAL_SUCCESS_FOR_EXPLICIT_STEPS_AND_EPOCHS',
+                private_slot_allocations=slot_count * allocation_epochs,
+                private_slot_releases=slot_count * allocation_epochs,
+                private_payload_requested_bytes=payload * allocation_epochs,
+                peak_live_private_payload_bytes=payload if allocation_epochs else 0,
+                retained_inter_step_intervals=steps - allocation_epochs,
+                private_payload_bytes_during_retained_intervals=payload if steps > allocation_epochs else 0,
+                steps_requiring_full_snapshot=steps, physical_traffic_bytes=None,
+                retention_byte_nanoseconds=None, relative_mode_duration_ns=None,
+                source_refs=[_fact(ref, '#/slot_lifetimes'), _fact(ref, '#/epochs'),
+                             _fact(ref, '#/content_policy')]),
             source_loop_count_is_not_inferred=True, performance_parameters_not_source_execution_proof=True,
             conservative_private_memory_span='ENTIRE_SOURCE_REGION_FOR_BOTH_MODES',
             formal_payload_budget_is_not_available_ram=True,

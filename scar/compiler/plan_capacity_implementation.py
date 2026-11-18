@@ -1,12 +1,14 @@
-"""Source-replay capacity alternatives, solve their explicit model and export trials."""
+"""Source-replay capacity alternatives, compare their explicit costs and export trials."""
 import argparse
 import json
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.implementation_plan import digest, problem_document
-from scar.optimization.capacity_implementation import COST_SCHEMA, derive_capacity_problem, verify_capacity_problem
-from scar.optimization.joint_planner import solve_implementations, verify_execution_plan
+from scar.ir.implementation_plan import digest, problem_document, problem_from_dict
+from scar.optimization.capacity_implementation import (CAPACITY, ISOLATED, COST_SCHEMA,
+    derive_capacity_problem, verify_capacity_problem)
+from scar.optimization.constructive_planner import construct_implementations
+from scar.optimization.joint_planner import verify_execution_plan
 
 SCHEMA = 'scar.capacity-implementation-preparation'
 
@@ -25,7 +27,7 @@ def _pins():
     root = Path(__file__).resolve().parents[1]
     return {name:artifact_reference(root/name, 'scar.python-source') for name in (
         'compiler/plan_capacity_implementation.py', 'optimization/capacity_implementation.py',
-        'ir/implementation_plan.py', 'optimization/joint_planner.py',
+        'ir/implementation_plan.py', 'optimization/joint_planner.py', 'optimization/constructive_planner.py',
         'compiler/session_capacity.py', 'compiler/session_outer.py')}
 
 
@@ -53,7 +55,7 @@ def _inputs(preparation, steps, epochs, costs):
 
 
 def _verify_retained(problem, plan):
-    """Check feasibility or unresolved-domain preservation, without rerunning CP-SAT."""
+    """Check feasibility and the minimum for the single-operation point model."""
     from scar.optimization.joint_planner import _frontiers
     _need(plan.get('schema') == 'scar.implementation-execution-plan'
           and plan.get('schema_version') == 1 and plan.get('problem_sha256') == digest(problem)
@@ -66,7 +68,18 @@ def _verify_retained(problem, plan):
           and plan.get('physical_optimality_proven') is False and plan.get('target_program_executed') is False,
           'model plan cannot acquire physical/runtime authority')
     if plan.get('selected'):
-        return verify_execution_plan(problem, plan)
+        verification = verify_execution_plan(problem, plan)
+        if not frontiers:
+            operation, = problem.operations
+            selected, = plan['selected']
+            # Both modes reserve the same lane and peak private payload. For
+            # this one operation a mode's point duration is its earliest end.
+            expected = min(operation.options, key=lambda mode: (mode.cost.estimate_ns,
+                mode.id != operation.baseline_option))
+            _need(selected['option'] == expected.id and plan['makespan_ns'] == expected.cost.estimate_ns,
+                'complete capacity plan must use the fastest explicit mode and retain the baseline on ties')
+            verification['original_point_model_minimum_verified'] = True
+        return verification
     _need(plan.get('makespan_ns') is None and not plan.get('transfers') and not plan.get('memory_leases')
           and plan.get('model_optimality_proven') is False,
           'unresolved/infeasible model cannot acquire a free or selected implementation')
@@ -102,11 +115,34 @@ def _summary(cases):
         trial_policy_ready=ready, physical_optimality_proven=False)
 
 
-def _export(preparation, capacity_report, destination, cases, problem_ref, plan_ref, costs, steps, epochs):
+def _trial_policies(cases, validation_mode):
+    if validation_mode is None:
+        return [row['selected_policy'] for row in cases]
+    _need(validation_mode in (ISOLATED, CAPACITY), 'explicit validation must name an original capacity mode')
+    policies = []
+    for row in cases:
+        problem = problem_from_dict(read_artifact(row['problem']))
+        operation, = problem.operations
+        option, = [mode for mode in operation.options if mode.id == validation_mode]
+        policies.append(dict(operation=operation.id, option=option.id, lowering=option.lowering))
+    return policies
+
+
+def _export_binding(preparation, problem_ref, plan_ref, costs, steps, epochs, policies, validation_mode):
+    return dict(problem=problem_ref, plan=plan_ref, preparation=preparation,
+        costs=costs, selected_policies=policies, steps=steps, epochs=epochs,
+        validation_mode=validation_mode, model_selected_export=validation_mode is None,
+        performance_parameters_are_source_loop_counts=False,
+        performance_parameters_are_runtime_guards=False,
+        explicit_trial_only=True, measured_profitability_proven=False,
+        model_optimality_independently_reproved=False, deployment_authorized=False)
+
+
+def _export(preparation, capacity_report, destination, policies, problem_ref, plan_ref,
+            costs, steps, epochs, validation_mode):
     from scar.runtime.session_scope_bundle import inspect_scope_bundle, ADMISSION
-    policies = [row['selected_policy'] for row in cases]
     _need(all(policies) and len({p['lowering'] for p in policies}) == 1,
-          'one complete known uniform runtime policy is required for this bundle exporter')
+          'one uniform source-qualified runtime policy is required for this bundle exporter')
     lowering = policies[0]['lowering']
     if lowering == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT':
         from scar.compiler.session_capacity import export
@@ -120,12 +156,7 @@ def _export(preparation, capacity_report, destination, cases, problem_ref, plan_
     scope_ref = artifact_reference(directory/'scope.json', 'scar.workspace-session-scope')
     _need(read_artifact(scope_ref)['unqualified_kernel_policy'] == lowering,
           'exported runtime policy differs from the selected implementation')
-    binding = dict(problem=problem_ref, plan=plan_ref, preparation=preparation,
-        costs=costs, selected_policies=policies, steps=steps, epochs=epochs,
-        performance_parameters_are_source_loop_counts=False,
-        performance_parameters_are_runtime_guards=False,
-        explicit_trial_only=True, measured_profitability_proven=False,
-        model_optimality_independently_reproved=False, deployment_authorized=False)
+    binding = _export_binding(preparation, problem_ref, plan_ref, costs, steps, epochs, policies, validation_mode)
     admission_ref = artifact_reference(directory/'scope-admission.json', ADMISSION)
     admission = read_artifact(admission_ref)
     admission['implementation_planning'] = binding
@@ -140,20 +171,14 @@ def _export(preparation, capacity_report, destination, cases, problem_ref, plan_
         native_recompiled=False, native_math_changed=False, deployment_authorized=False)
 
 
-def _check_export(exported, cases, preparation, capacity_report, source_check,
-                  problem_ref, plan_ref, costs, steps, epochs):
+def _check_export(exported, policies, preparation, capacity_report, source_check,
+                  problem_ref, plan_ref, costs, steps, epochs, validation_mode):
     from scar.runtime.session_scope_bundle import inspect_scope_bundle
     admitted = inspect_scope_bundle(exported['bundle'],
         expected_admission_sha256=exported['expected_admission_sha256'])
-    policies = [row['selected_policy'] for row in cases]
     _need(all(policies) and len({p['lowering'] for p in policies}) == 1,
           'exported runtime cannot use an incomplete or mixed model selection')
-    binding = dict(problem=problem_ref, plan=plan_ref, preparation=preparation,
-        costs=costs, selected_policies=policies, steps=steps, epochs=epochs,
-        performance_parameters_are_source_loop_counts=False,
-        performance_parameters_are_runtime_guards=False,
-        explicit_trial_only=True, measured_profitability_proven=False,
-        model_optimality_independently_reproved=False, deployment_authorized=False)
+    binding = _export_binding(preparation, problem_ref, plan_ref, costs, steps, epochs, policies, validation_mode)
     expected_scope = (capacity_report['scope'] if policies[0]['lowering']
         == 'RETAIN_PRIVATE_CAPACITY_FULL_SNAPSHOT' else
         read_artifact(capacity_report['outer_preparation'])['scope'])
@@ -171,11 +196,12 @@ def _check_export(exported, cases, preparation, capacity_report, source_check,
           'export metadata/source admission differs from exact model selection')
 
 
-def _report(preparation, costs, steps, epochs, problem_ref, plan_ref, cases, export_requested, exported):
+def _report(preparation, costs, steps, epochs, problem_ref, plan_ref, cases, export_requested, exported,
+            validation_mode):
     return dict(schema=SCHEMA, schema_version=1, preparation=preparation, costs=costs,
         steps=steps, epochs=epochs, problem=problem_ref, plan=plan_ref, cases=cases,
         implementations=_pins(), summary=_summary(cases), export_requested=export_requested,
-        exported=exported, costs_are_measurements=False,
+        exported=exported, validation_mode=validation_mode, costs_are_measurements=False,
         performance_parameters_not_source_loop_authority=True,
         check_scope='SOURCE_PROBLEM_AND_RETAINED_PLAN_FEASIBILITY_NOT_OPTIMALITY_REPROOF',
         original_source_control_retained=True, source_replacement_authorized=False,
@@ -183,11 +209,13 @@ def _report(preparation, costs, steps, epochs, problem_ref, plan_ref, cases, exp
         automatic_deployment_authorized=False, default_backend='NO_OP', deployment_authorized=False)
 
 
-def prepare(preparation, out, *, steps, epochs, costs=None, export_directory=None):
+def prepare(preparation, out, *, steps, epochs, costs=None, export_directory=None, validation_mode=None):
     output = Path(out).resolve()
     _need(not output.exists(), 'fresh capacity implementation output required')
     export_path = None if export_directory is None else str(Path(export_directory).resolve())
     _need(export_path is None or not Path(export_path).exists(), 'fresh trial runtime output required')
+    _need(validation_mode is None or (export_path is not None and validation_mode in (ISOLATED, CAPACITY)),
+        'explicit validation mode requires a fresh trial export directory')
     source = _reference(preparation, 'scar.session-capacity-preparation')
     cost_ref = None if costs is None else _reference(costs, COST_SCHEMA)
     capacity_report, original, source_check = _inputs(source, steps, epochs, cost_ref)
@@ -196,7 +224,7 @@ def prepare(preparation, out, *, steps, epochs, costs=None, export_directory=Non
     multiple = len(original) > 1
     for index, (ref, _, problem, _) in enumerate(original):
         prefix = str(index)+'-' if multiple else ''
-        plan = solve_implementations(problem)
+        plan = construct_implementations(problem)
         verification = _verify_retained(problem, plan)
         problem_ref = _write(output/(prefix+'problem.json'), problem_document(problem))
         plan_ref = _write(output/(prefix+'plan.json'), plan)
@@ -210,19 +238,21 @@ def prepare(preparation, out, *, steps, epochs, costs=None, export_directory=Non
     plan_ref = _write(output/'plan.json', dict(schema='scar.capacity-independent-plans',
         schema_version=1, plans=plan_refs, summary=_summary(cases))) if multiple else plan_refs[0]
     exported = None
-    if (export_path and all(row['selected_policy'] for row in cases)
-            and len({row['selected_policy']['lowering'] for row in cases}) == 1):
-        exported = _export(source, capacity_report, export_path, cases, problem_ref, plan_ref,
-            cost_ref, steps, epochs)
-        _check_export(exported, cases, source, capacity_report, source_check,
-            problem_ref, plan_ref, cost_ref, steps, epochs)
-    report = _report(source, cost_ref, steps, epochs, problem_ref, plan_ref, cases, export_path, exported)
+    if export_path:
+        policies = _trial_policies(cases, validation_mode)
+        if all(policies) and len({policy['lowering'] for policy in policies}) == 1:
+            exported = _export(source, capacity_report, export_path, policies, problem_ref, plan_ref,
+                cost_ref, steps, epochs, validation_mode)
+            _check_export(exported, policies, source, capacity_report, source_check,
+                problem_ref, plan_ref, cost_ref, steps, epochs, validation_mode)
+    report = _report(source, cost_ref, steps, epochs, problem_ref, plan_ref, cases, export_path, exported, validation_mode)
     _write(output/'result.json', report)
     return report
 
 
 def replay(receipt):
     reference = _reference(receipt, SCHEMA); report = read_artifact(reference)
+    _need(report['implementations'] == _pins(), 'capacity implementation producer differs')
     capacity_report, original, source_check = _inputs(report['preparation'], report['steps'], report['epochs'], report['costs'])
     _need(len(original) == len(report['cases']), 'original capacity region domain changed')
     cases = []
@@ -244,11 +274,15 @@ def replay(receipt):
             and read_artifact(report['plan']) == dict(schema='scar.capacity-independent-plans',
             schema_version=1, plans=[r['plan'] for r in cases], summary=_summary(cases)),
             'independent source cases cannot be discarded or merged into a fictitious program schedule')
+    validation_mode = report['validation_mode']
+    _need(validation_mode is None or (report['export_requested'] and report['exported'] is not None),
+        'explicit capacity validation must retain its declared trial bundle')
     if report['exported'] is not None:
-        _check_export(report['exported'], cases, report['preparation'], capacity_report, source_check,
-            report['problem'], report['plan'], report['costs'], report['steps'], report['epochs'])
+        policies = _trial_policies(cases, validation_mode)
+        _check_export(report['exported'], policies, report['preparation'], capacity_report, source_check,
+            report['problem'], report['plan'], report['costs'], report['steps'], report['epochs'], validation_mode)
     expected = _report(report['preparation'], report['costs'], report['steps'], report['epochs'],
-        report['problem'], report['plan'], cases, report['export_requested'], report['exported'])
+        report['problem'], report['plan'], cases, report['export_requested'], report['exported'], validation_mode)
     _need(digest(report) == digest(expected), 'capacity model publication differs from full source/problem/plan replay')
     read_artifact(reference)
     return report
@@ -260,16 +294,19 @@ def main(argv=None):
     source.add_argument('--preparation'); source.add_argument('--check')
     parser.add_argument('--steps', type=int); parser.add_argument('--epochs', type=int)
     parser.add_argument('--costs'); parser.add_argument('--out'); parser.add_argument('--export', dest='export_directory')
+    parser.add_argument('--validation-mode', choices=(ISOLATED, CAPACITY),
+        help='export this source-qualified mode for explicit validation independently of the cost decision')
     args = parser.parse_args(argv)
     if args.check:
-        if any(value is not None for value in (args.steps, args.epochs, args.costs, args.out, args.export_directory)):
+        if any(value is not None for value in (args.steps, args.epochs, args.costs, args.out,
+                args.export_directory, args.validation_mode)):
             parser.error('check consumes only the retained capacity implementation receipt')
         report = replay(args.check)
     else:
         if args.steps is None or args.epochs is None or not args.out:
             parser.error('preparation requires --steps, --epochs and --out')
         report = prepare(args.preparation, args.out, steps=args.steps, epochs=args.epochs,
-            costs=args.costs, export_directory=args.export_directory)
+            costs=args.costs, export_directory=args.export_directory, validation_mode=args.validation_mode)
     print(json.dumps(dict(summary=report['summary'], problem=report['problem'], plan=report['plan'],
         exported=report['exported'], deployment_authorized=False), sort_keys=True))
     return 0
