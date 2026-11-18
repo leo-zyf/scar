@@ -13,6 +13,7 @@ from scar.codegen.aten_provider import _build_interface, _dependencies, _resolve
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe
 from scar.ir.record_codec import loads
+from scar.optimization.aten_tensor_lifetime import tensor_releases
 
 
 _DRIVER = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
@@ -55,7 +56,7 @@ def _argument(expression, values):
     return 'c10::Scalar(std::int64_t{' + literal + '})'
 
 
-def _render(recipe, operators, schedule=None):
+def _render(recipe, operators, schedule=None, *, release_after):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -71,7 +72,11 @@ def _render(recipe, operators, schedule=None):
     input_shapes = ', '.join(f'shape_{i}' for i in range(len(shapes)))
     outputs = ', '.join(values[output] for output in recipe['outputs'])
     shape_definitions = '\n'.join(shapes)
-    ordered = [f'    const at::Tensor {value} = {expr};' for value, expr in calls]
+    releases = [[f'{calls[dying][0]}.reset();' for dying in row] for row in release_after]
+    ordered = []
+    for i, (value, expr) in enumerate(calls):
+        ordered.append(f'    at::Tensor {value} = {expr};')
+        ordered.extend(f'    {statement}' for statement in releases[i])
     operator_calls = '\n'.join(ordered)
     pair_include = '' if schedule is None else f'#include "{_PAIR_HEADER.name}"\n'
     pair_support = ''
@@ -80,6 +85,7 @@ def _render(recipe, operators, schedule=None):
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
         parallel = [f'    at::Tensor {value};' for value, _ in calls]
         for i, (value, expr) in enumerate(calls):
+            observed = f'observe({i}, [&] {{ return {expr}; }})'
             indent = '    '
             after_window = i - 1 in starts
             if after_window:
@@ -87,17 +93,26 @@ def _render(recipe, operators, schedule=None):
                 indent += '    '
             if i in starts:
                 right, right_expr = calls[i + 1]
+                right_observed = f'observe({i + 1}, [&] {{ return {right_expr}; }})'
                 parallel.extend((f'{indent}if (windows[{i}]) {{',
-                    f'{indent}    pair.run([&] {{ {value} = {expr}; }},',
-                    f'{indent}             [&] {{ {right} = {right_expr}; }});', f'{indent}}} else {{',
-                    f'{indent}    {value} = {expr};', f'{indent}}}'))
+                    f'{indent}    pair.run([&] {{ {value} = {observed}; }},',
+                    f'{indent}             [&] {{ {right} = {right_observed}; }});'))
+                # Both readers have completed before either release row applies.
+                parallel.extend(f'{indent}    {statement}' for row in releases[i:i + 2] for statement in row)
+                parallel.extend((f'{indent}}} else {{', f'{indent}    {value} = {observed};'))
+                parallel.extend(f'{indent}    {statement}' for statement in releases[i])
+                parallel.append(f'{indent}}}')
             else:
-                parallel.append(f'{indent}{value} = {expr};')
+                parallel.append(f'{indent}{value} = {observed};')
+                parallel.extend(f'{indent}{statement}' for statement in releases[i])
             if after_window:
                 parallel.append('    }')
         parallel_calls = '\n'.join(parallel)
-        timed_calls = '\n'.join(f'    const at::Tensor {value} = observe({i}, [&] {{ return {expr}; }});'
-                                for i, (value, expr) in enumerate(calls))
+        timed = []
+        for i, (value, expr) in enumerate(calls):
+            timed.append(f'    at::Tensor {value} = observe({i}, [&] {{ return {expr}; }});')
+            timed.extend(f'    {statement}' for statement in releases[i])
+        timed_calls = '\n'.join(timed)
         pair_support = f'''
 inline constexpr std::size_t operation_count = {len(calls)};
 using WindowSelection = std::array<bool, operation_count>;
@@ -110,8 +125,9 @@ inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Ten
     return {{{outputs}}};
 }}
 
-inline std::array<at::Tensor, output_count> run_parallel(
-        std::span<const at::Tensor> inputs, CpuPair& pair, const WindowSelection& windows) {{
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_parallel_observed(
+        std::span<const at::Tensor> inputs, CpuPair& pair, const WindowSelection& windows, Observer&& observe) {{
     validate_inputs(inputs);
     for (std::size_t i = 0; i < operation_count; ++i) {{
         if (windows[i] && (!legal_window_starts[i] || (i > 0 && windows[i - 1]))) {{
@@ -120,6 +136,11 @@ inline std::array<at::Tensor, output_count> run_parallel(
     }}
 {parallel_calls}
     return {{{outputs}}};
+}}
+
+inline std::array<at::Tensor, output_count> run_parallel(
+        std::span<const at::Tensor> inputs, CpuPair& pair, const WindowSelection& windows) {{
+    return run_parallel_observed(inputs, pair, windows, [](std::size_t, auto&& call) {{ return call(); }});
 }}
 '''
     # SSA temporaries below carry Tensor handles; all numerical work stays in the provider.
@@ -179,6 +200,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     linkage_path, linked, linkage_receipt = _read_declared(linkage, linkage_sha256)
     operators, libraries, cxx, compile_flags, link_flags = _installed_linkage(linked, torch)
     recipe = normalize_recipe(recipe, operators, torch)
+    release_after = tensor_releases(recipe)
     schedule = None
     contract_receipt = None
     requested = (concurrency_contract, concurrency_sha256, target, cpu_ids)
@@ -204,7 +226,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         header.write_bytes(operator_path.read_bytes())
         if _content(header) != linked['artifacts']['operators.hpp']:
             raise ValueError('retained ATen C++ binding differs from its linkage receipt')
-        (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule))
+        (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule, release_after=release_after))
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
         if schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
@@ -233,6 +255,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             linkage=linkage_receipt, provider=linked['provider'], dependencies=dependencies,
             operation_order=[op['id'] for op in recipe['operations']], implementation='ORDERED_PROVIDER_CALLS',
             compiler_command=command, source_replacement_authorized=False, performance_measured=False,
+            tensor_lifetime=dict(profile='LAST_CONSUMER_OR_EXPORT_V1', release_after=release_after),
             files={path.name: _content(path) for path in sorted(stage.iterdir())})
         if schedule is not None:
             receipt.update(cpu_windows=schedule, concurrency_contract=contract_receipt,

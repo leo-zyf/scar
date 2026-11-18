@@ -9,6 +9,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstring>
+#include <optional>
 #include <sched.h>
 #include <string_view>
 
@@ -29,6 +30,45 @@ struct Calibration {
     OperationTimes operations;
     std::int64_t dispatch_ns;
 };
+
+struct StorageGeometry {
+    std::size_t bytes;
+    at::ScalarType dtype;
+    std::int64_t offset;
+    std::vector<std::int64_t> sizes;
+    std::vector<std::int64_t> strides;
+};
+
+using ResultStorage = std::array<std::optional<StorageGeometry>, graph::operation_count>;
+
+template <class Observations>
+void emit_storage_bytes(const Observations& observations) {
+    for (std::size_t i = 0; i < observations.size(); ++i) {
+        if (i != 0) std::cout << ',';
+        std::cout << observations[i].value().bytes;
+    }
+}
+
+void observe_storage(std::optional<StorageGeometry>& original, const at::Tensor& tensor) {
+    if (!tensor.defined() || !tensor.device().is_cpu() || tensor.layout() != at::kStrided
+            || !tensor.has_storage() || !tensor.storage().device().is_cpu()) {
+        throw std::runtime_error("calibration requires an observable strided CPU Tensor storage");
+    }
+    const auto bytes = tensor.storage().nbytes();
+    if (bytes > static_cast<std::uintmax_t>(std::numeric_limits<std::int64_t>::max())) {
+        throw std::runtime_error("Tensor storage exceeds the calibration size range");
+    }
+    const auto sizes = tensor.sizes();
+    const auto strides = tensor.strides();
+    const auto dtype = tensor.scalar_type();
+    const auto offset = tensor.storage_offset();
+    if (!original) {
+        original = StorageGeometry{bytes, dtype, offset, sizes.vec(), strides.vec()};
+    } else if (original->bytes != bytes || original->dtype != dtype || original->offset != offset
+            || !sizes.equals(original->sizes) || !strides.equals(original->strides)) {
+        throw std::runtime_error("Tensor geometry or storage size changed during calibration");
+    }
+}
 
 int integer(std::string_view text, int minimum, const char* field) {
     int parsed = 0;
@@ -153,7 +193,7 @@ std::pair<std::int64_t, Outputs> timed(const Inputs& inputs, graph::CpuPair& pai
 }
 
 void emit_benchmark(int caller, int worker, int warmup, int measurements, const graph::WindowSelection& windows,
-                    const std::vector<Sample>& samples) {
+                    const std::vector<Sample>& samples, const ResultStorage& result_storage) {
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"measured_pairs\":" << measurements
               << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
               << ",\"all_pairs_validated\":true,\"windows\":[";
@@ -173,10 +213,14 @@ void emit_benchmark(int caller, int worker, int warmup, int measurements, const 
                   << "],\"serial_ns\":" << sample.serial_ns << ",\"dual_ns\":" << sample.dual_ns
                   << ",\"bitwise_identical\":true,\"input_values_unchanged\":true,\"fresh_owned_outputs\":true}";
     }
+    std::cout << "],\"result_storage_bytes\":[";
+    emit_storage_bytes(result_storage);
     std::cout << "]}\n";
 }
 
-void emit_calibration(int caller, int worker, int warmup, const std::vector<Calibration>& calibration) {
+void emit_calibration(int caller, int worker, int warmup, const std::vector<Calibration>& calibration,
+                      const std::array<std::optional<StorageGeometry>, graph::input_count>& input_storage,
+                      const ResultStorage& result_storage) {
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
               << ",\"calibration\":{\"operation_samples_ns\":[";
     for (std::size_t row = 0; row < calibration.size(); ++row) {
@@ -193,6 +237,12 @@ void emit_calibration(int caller, int worker, int warmup, const std::vector<Cali
         if (row != 0) std::cout << ',';
         std::cout << calibration[row].dispatch_ns;
     }
+    // These sizes describe each storage attached to the visible graph slots.
+    // No storage handles, contents, or allocator memory totals are retained here.
+    std::cout << "],\"input_storage_bytes\":[";
+    emit_storage_bytes(input_storage);
+    std::cout << "],\"result_storage_bytes\":[";
+    emit_storage_bytes(result_storage);
     std::cout << "]}}\n";
 }
 
@@ -203,12 +253,18 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair, const 
 
     const SampleInputs data(args + 2);
     const auto& inputs = data.tensors;
+    ResultStorage result_storage;
 
     // Check each variant once in isolation, then keep validation out of both timed calls in each pair.
     {
         const auto serial = graph::run(inputs);
         data.check();
-        const auto dual = graph::run_parallel(inputs, pair, windows);
+        const auto dual = graph::run_parallel_observed(inputs, pair, windows, [&](std::size_t op, auto&& call) {
+            auto value = call();
+            // Each lane writes a distinct operation slot in the observed fork/join.
+            observe_storage(result_storage[op], value);
+            return value;
+        });
         data.check();
         check_outputs(inputs, serial, dual);
     }
@@ -228,18 +284,27 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair, const 
         }
     }
     check_caller(caller);
-    emit_benchmark(caller, worker, warmup, measurements, windows, samples);
+    emit_benchmark(caller, worker, warmup, measurements, windows, samples, result_storage);
 }
 
 void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
     const int warmup = integer(args[0], 3, "warmup count");
     const SampleInputs data(args + 1);
     const auto& inputs = data.tensors;
+    std::array<std::optional<StorageGeometry>, graph::input_count> input_storage;
+    ResultStorage result_storage;
+    const auto check_sample_inputs = [&] {
+        data.check();
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            observe_storage(input_storage[i], inputs[i]);
+        }
+    };
+    check_sample_inputs();
     const auto calibration_reference = graph::run(inputs);
-    data.check();
+    check_sample_inputs();
     for (int i = 1; i < warmup; ++i) {
         const auto warmed = graph::run(inputs);
-        data.check();
+        check_sample_inputs();
         check_outputs(inputs, calibration_reference, warmed);
     }
     pair.run([] {}, [] {});
@@ -251,9 +316,10 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
             const auto start = Clock::now();
             auto value = call();
             row.operations.at(operation) = elapsed_ns(start);
+            observe_storage(result_storage.at(operation), value);
             return value;
         });
-        data.check();
+        check_sample_inputs();
         check_outputs(inputs, calibration_reference, observed);
         if (std::ranges::find(row.operations, 0) != row.operations.end()) {
             throw std::runtime_error("calibration did not observe every operation in the generated graph");
@@ -264,7 +330,7 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
         calibration.push_back(row);
     }
     check_caller(caller);
-    emit_calibration(caller, worker, warmup, calibration);
+    emit_calibration(caller, worker, warmup, calibration, input_storage, result_storage);
 }
 
 }  // namespace

@@ -2,22 +2,26 @@
 
 import argparse
 import json
+from math import prod
 from pathlib import Path
 import shlex
 from statistics import median_low, variance
 import subprocess
 from tempfile import TemporaryDirectory
 
+from scar.analysis.target_graph import TargetHardwareGraph
 from scar.codegen.aten_native_graph import _read_declared
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.plan_aten_boundary import _checked, _target, _write
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import (
-    CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem, problem_document,
+    CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem, PlanningResource, problem_document,
 )
-from scar.ir.record_codec import loads
+from scar.ir.program.target_hardware import MemoryDomain, MemoryKind
+from scar.ir.record_codec import encode, loads
 from scar.optimization.aten_boundary_trials import _measurements
 from scar.optimization.aten_native_schedule import propose_cpu_pair, propose_cpu_windows, select_cpu_windows
+from scar.optimization.aten_tensor_lifetime import tensor_footprint, tensor_releases
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
 from scar.optimization.paired_entry_selection import _metrics
@@ -26,6 +30,7 @@ from scar.optimization.paired_entry_selection import _metrics
 _EXE = 'aten-native-graph'
 _ENV = {'PATH': '/usr/bin:/bin', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'}
 _GAIN = 0.05
+_MEMORY_PROFILE = 'LAST_CONSUMER_OR_EXPORT_V1'
 _SCHEDULE_KEYS = {
     'ORDERED_DEFAULT_WITH_DECLARED_CPU_PAIR_TRIAL': 'cpu_pair',
     'ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL': 'cpu_windows',
@@ -44,6 +49,9 @@ def _bundle(path, digest):
         raise ValueError('generated graph bundle with a CPU concurrency contract required')
     recipe_path = path.with_name('recipe.json')
     _, recipe, _ = _read_declared(recipe_path, artifact['files']['recipe.json']['sha256'])
+    lifetime = artifact.get('tensor_lifetime')
+    if lifetime is not None and lifetime != dict(profile=_MEMORY_PROFILE, release_after=tensor_releases(recipe)):
+        raise ValueError('generated result lifetime table differs from the recipe')
     executable = path.with_name(_EXE)
     if _content(executable) != artifact['files'][_EXE]:
         raise ValueError('generated native graph executable differs from the bundle receipt')
@@ -116,17 +124,30 @@ def _timeline(names, service, choices, cpus, dispatch):
     return timeline
 
 
-def _window_model(calibration, recipe, schedule, warmup):
+def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=False, tensor_budget_bytes=None):
     service, dispatch, op_samples, dispatch_samples = _services(calibration, recipe, warmup)
-    starts = select_cpu_windows(schedule, service, dispatch)
+    eligible = schedule
+    storage = None
+    if observe_storage:
+        input_bytes = calibration['input_storage_bytes']
+        if input_bytes != [4 * prod(row['shape']) for row in recipe['inputs']]:
+            raise ValueError('standalone input storage bytes differ from the float32 file ABI')
+        storage = tensor_footprint(recipe, input_bytes=input_bytes, output_bytes=calibration['result_storage_bytes'],
+                                   candidates=schedule['windows'], budget_bytes=tensor_budget_bytes)
+        allowed = set(storage['candidate_starts_within_budget'])
+        eligible = dict(schedule, windows=[row for row in schedule['windows'] if row['pair_indices'][0] in allowed])
+    starts = select_cpu_windows(eligible, service, dispatch)
     choices = set(starts)
     names = [op['id'] for op in recipe['operations']]
     predictions = {'SERIAL': _prediction(sum(service), [sum(row) for row in op_samples])}
     candidates = []
     for row in schedule['windows']:
         first, second = row['pair_indices']
-        candidates.append(dict(row, gain_ns=min(service[first], service[second]) - dispatch,
-                               selected=first in choices))
+        candidate = dict(row, gain_ns=min(service[first], service[second]) - dispatch, selected=first in choices)
+        if storage is not None:
+            candidate.update(peak_tensor_storage_bytes=storage['window_peak_bytes'][str(first)],
+                             within_tensor_budget=first in allowed)
+        candidates.append(candidate)
 
     def serial_or_windows(row, cost):
         return sum(row) + sum(cost - min(row[i], row[i + 1]) for i in starts)
@@ -135,11 +156,14 @@ def _window_model(calibration, recipe, schedule, warmup):
     if starts:
         predictions['TWO_CPU'] = _prediction(timeline[-1]['end_ns'], [serial_or_windows(row, cost) for row, cost in
                                                                      zip(op_samples, dispatch_samples, strict=True)])
-    return dict(basis='MINIMUM_ADJACENT_WINDOW_TILING_WITH_ADDITIVE_CALIBRATED_COSTS',
+    model = dict(basis='MINIMUM_ADJACENT_WINDOW_TILING_WITH_ADDITIVE_CALIBRATED_COSTS',
         operations=[dict(id=name, service_ns=ns) for name, ns in zip(names, service, strict=True)],
         candidates=candidates, selected_starts=list(starts), timeline=timeline,
         empty_dispatch_join_ns=dispatch, predictions=predictions,
         bounds='CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS', shared_memory_contention_modelled=False)
+    if storage is not None:
+        model['tensor_storage'] = storage
+    return model
 
 
 def _problem(hardware, schedule, origin, evidence, model, *, modes):
@@ -170,6 +194,18 @@ def _problem(hardware, schedule, origin, evidence, model, *, modes):
     return problem, plan
 
 
+def _host_tensor_budget(hardware, budget_bytes, refs):
+    memory = [row for row in TargetHardwareGraph(hardware).resources()
+              if type(row) is MemoryDomain and row.kind is MemoryKind.HOST]
+    if not memory or any(row.capacity_bytes is None for row in memory):
+        raise ValueError('target host memory capacity is required for a Tensor storage budget')
+    if budget_bytes > sum(row.capacity_bytes for row in memory):
+        raise ValueError('Tensor storage budget exceeds recorded total host memory capacity')
+    return PlanningResource('host-tensor-storage-budget', 'MEMORY', budget_bytes,
+                            (*refs, *(encode(row.evidence) for row in memory),
+                             dict(source='EXPLICIT_TENSOR_STORAGE_BUDGET', capacity_bytes=budget_bytes)))
+
+
 def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
     """Reserve the worker core only over selected fork/join intervals."""
     target, domains = _target(hardware, tuple(schedule['availability_mask']))
@@ -177,19 +213,39 @@ def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
     names = [op['id'] for op in model['operations']]
     service = [op['service_ns'] for op in model['operations']]
     timeline = _timeline(names, service, set(selected_starts), schedule['cpus'], model['empty_dispatch_join_ns'])
+    storage = model.get('tensor_storage')
+    pool = None
+    if storage is not None and storage['budget_bytes'] is not None:
+        pool = _host_tensor_budget(hardware, storage['budget_bytes'], refs)
+    name_to_index = {name: i for i, name in enumerate(names)}
     tasks = []
     for i, segment in enumerate(timeline):
         mode = 'FORK_JOIN' if len(segment['operations']) == 2 else 'ORDERED'
         duration = segment['end_ns'] - segment['start_ns']
         cost = CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', 'ATEN_SEGMENT_SERVICE_AND_HANDOFF', refs)
         demands = {resource.id: 1 for cpu in segment['cpu_ids'] for resource in domains[cpu]}
+        workspace = {}
+        if storage is not None:
+            first = name_to_index[segment['operations'][0]]
+            peak = (storage['window_peak_bytes'][str(first)] if mode == 'FORK_JOIN'
+                    else storage['operation_peak_bytes'][first])
+            segment['peak_tensor_storage_bytes'] = peak
+            if pool is not None:
+                workspace[pool.id] = peak - storage['persistent_input_bytes']
         identifier = 'aten-segment-' + str(i)
         option = ImplementationOption(mode, 'EXISTING_LIBTORCH_FIXED_CPU_LANES', refs, demands,
-            {}, {}, {}, cost, dict(operations=segment['operations'], cpu_ids=segment['cpu_ids']))
+            workspace, {}, {}, cost, dict(operations=segment['operations'], cpu_ids=segment['cpu_ids']))
         tasks.append(PlanningOperation(identifier, refs, (tasks[-1].id,) if tasks else (), (option,), mode))
-    problem = PlanningProblem(target, refs, tuple(r for rows in domains.values() for r in rows), tuple(tasks), (),
-        assumptions=('SEGMENT_BARRIER_MAKES_BOTH_OUTPUTS_READY', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
-                     'INTERNAL_FORK_JOIN_TIME_NOT_SPLIT', 'MEMORY_CONTENTION_IS_NOT_PREDICTED'))
+    resources = tuple(r for rows in domains.values() for r in rows)
+    assumptions = ('SEGMENT_BARRIER_MAKES_BOTH_OUTPUTS_READY', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
+                   'INTERNAL_FORK_JOIN_TIME_NOT_SPLIT', 'MEMORY_CONTENTION_IS_NOT_PREDICTED')
+    reserved = {}
+    if pool is not None:
+        resources = (*resources, pool)
+        reserved[pool.id] = storage['persistent_input_bytes']
+        assumptions = (*assumptions, 'TENSOR_HANDLE_STORAGE_BUDGET_EXCLUDES_PROVIDER_INTERNAL_WORKSPACE',
+                       'NUMA_PAGE_PLACEMENT_UNOBSERVED')
+    problem = PlanningProblem(target, refs, resources, tuple(tasks), (), assumptions=assumptions, reserved_memory=reserved)
     plan = construct_implementations(problem)
     verify_execution_plan(problem, plan)
     actual = {row['operation']: (row['start_ns'], row['end_ns']) for row in plan['selected']}
@@ -242,7 +298,8 @@ def _invoke(executable, schedule, mode, args, inputs):
     return loads(proc.stdout)
 
 
-def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pairs=7, measured_pairs=31):
+def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pairs=7, measured_pairs=31,
+                          tensor_budget_bytes=None):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -251,6 +308,11 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
     artifact, origin, recipe, hardware, executable, key = _bundle(bundle, bundle_sha256)
     schedule = artifact[key]
     windowed = key == 'cpu_windows'
+    observe_storage = windowed and artifact.get('tensor_lifetime') is not None
+    if tensor_budget_bytes is not None and (type(tensor_budget_bytes) is not int or not 0 < tensor_budget_bytes < 2**63):
+        raise ValueError('a positive bounded Tensor storage budget is required')
+    if tensor_budget_bytes is not None and not observe_storage:
+        raise ValueError('a graph rebuilt with the Tensor lifetime and storage calibration ABI is required')
     inputs = [_receipt(p) for p in input_paths]
     if len(inputs) != len(recipe['inputs']):
         raise ValueError('provide the native input files in their recipe order')
@@ -260,7 +322,8 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
         raw = _invoke(executable, schedule, '--calibrate-windows', [warmup_pairs], inputs)
         if ([raw['caller_cpu'], raw['worker_cpu']] != schedule['cpus'] or raw['warmup_pairs'] != warmup_pairs):
             raise ValueError('native calibration differs from the requested graph and placement')
-        model = _window_model(raw['calibration'], recipe, schedule, warmup_pairs)
+        model = _window_model(raw['calibration'], recipe, schedule, warmup_pairs,
+                              observe_storage=observe_storage, tensor_budget_bytes=tensor_budget_bytes)
         stats, matched = None, None
     else:
         raw = _invoke(executable, schedule, '--benchmark-pair', [warmup_pairs, measured_pairs], inputs)
@@ -292,6 +355,8 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
                 if matched.get('windows') != starts:
                     raise ValueError('native paired validation did not run the selected windows')
                 stats = _statistics(matched, warmup_pairs, measured_pairs, schedule['cpus'])
+                if observe_storage and matched.get('result_storage_bytes') != raw['calibration']['result_storage_bytes']:
+                    reasons.append('TWO_CPU_STORAGE_BYTES_DIFFER_FROM_SERIAL_CALIBRATION')
             if not stats['profitable_two_cpu']:
                 reasons.append('TWO_CPU_FAILED_MATCHED_VALIDATION')
         selected = 'SERIAL' if reasons else predicted
@@ -337,10 +402,13 @@ def main(argv=None):
     parser.add_argument('--input', action='append', required=True, help='input float32 files in recipe order')
     parser.add_argument('--warmup-pairs', type=int, default=7)
     parser.add_argument('--measured-pairs', type=int, default=31)
+    parser.add_argument('--tensor-budget-bytes', type=int,
+                        help='capacity quota for graph-held CPU Tensor storage, excluding provider-internal workspace')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     report = plan_aten_native_graph(args.bundle, bundle_sha256=args.bundle_sha256, input_paths=args.input,
-                                    out=args.out, warmup_pairs=args.warmup_pairs, measured_pairs=args.measured_pairs)
+                                    out=args.out, warmup_pairs=args.warmup_pairs, measured_pairs=args.measured_pairs,
+                                    tensor_budget_bytes=args.tensor_budget_bytes)
     print(json.dumps(dict(model_preferred=report['model_preferred'], selected=report['selected'],
                           validation_speedup_two_cpu=(report['validation'] or {}).get('speedup_two_cpu'),
                           launcher=str(Path(args.out) / 'launch.sh'))))
