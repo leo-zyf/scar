@@ -2,7 +2,7 @@
 
 三个阶段共享原始身份与证据，分层开发：建模建图 → 结构/资源规划 → C++20交付。完整类型见[MODEL](MODEL.md)，实际范围见[STATUS](STATUS.md)。
 
-SCAR 前端从源码、运行绑定和目标硬件构建程序 IR。SCAR 中端依据程序的效果与数值合同化简 IR，并确定任务、数据放置和资源时序。SCAR 后端验证计划，将已支持的区域降为 C++20 / ABI v1，生成运行所需的调用、同步及回退代码。数值算子复用现有实现。前端记录提供方、端口、数值合同、效果和资源要求，中端据此选择实现并安排批次、搬运、工作区及执行时序，后端生成原生调用和 ABI 适配。外部算子库负责算子内核。缺少满足合同的实现时保留原执行。
+SCAR 前端从源码、运行绑定和目标硬件构建程序 IR。前端记录现有算子的提供方、重载、数据端口、效果和资源要求。中端化简图并决定批次、数据位置、搬运、工作区和资源时序。后端验证计划，生成 C++20 / ABI v1 的原生调用、同步和回退代码。数值内核由现成的外部提供方实现。缺少满足合同的实现时保留原执行。
 
 ## 1. 前端与统一图
 
@@ -49,6 +49,10 @@ CPU/cache需求使用原CpuCore/CacheDomain及storage-scoped访问区间，保�
 C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间选择共用 `selected_stateful_lowering`，再经原 `ExecutionRecipe` / task graph进入既有C++20代码生成；算子与stateful ABI均为v1。接口未知时保留原执行。
 
 稀疏求解以原 SciPy 调用为源码绑定和行为对照。IR 保留 SuperLU 符号状态和每轮 CSR 数值输入，C++20 产物通过原生 ABI 调用同版本 SuperLU 和 OpenBLAS。独立流入口的运行依赖为包内原生库与系统 C/C++ 运行库。兼容 Python 入口另行保留首次比对及回退。独立的 `cpu-cost` 可选组使用 `scipy.optimize` 拟合成本与求线性规划界限。
+
+`link-aten-provider` 在构建时核对已安装的 LibTorch 修订和完整算子 schema，通过 C++20 编译及链接验证实际重载，并输出可直接引用的类型化调用。编译期断言核对生成头里的声明。产物保留目标库的路径及 SHA256，当前范围是本机安装的分发包。内核放置、调用上下文、端口映射、效果和收益仍需另行证明。
+
+旧数组融合、状态区域和显式 SSE2 试验仍含自产数值循环。该部分需要迁移到现成算子调用，再进入按此边界验收的交付路径。循环调度、ABI 适配、分配和数据搬运属于 SCAR 的代码生成职责。
 
 运行产物按原合同区分：普通数组caller、DIRECT/COMPOSITE whole-loop、stateful事务区域。不同profile不互相强制转换，不因表面输入相似而借用证明。
 `final_entry_capsule`为loop/stateful提供同一个最终准入核心，profile adapter复用原compact loader、ELF与guard。构建侧固定payload和源码ledger，4KiB slot保成本/验证角色，运行端不重放庞大源码图或benchmark原始证据。

@@ -12,6 +12,8 @@
 
 当前优先完成三阶段核心开发，定期在同一完整边界验证。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
 
+C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 OpenBLAS。对 PyTorch 可用 `scar link-aten-provider --provider-revision REV --schema SCHEMA --out LINKED` 从完整声明生成并校验 LibTorch 调用。输出的 `operators.hpp` 提供类型化入口，`result.json` 记录编译和链接参数。链接成功只确立外部入口的可用性。详见[架构](docs/ARCHITECTURE.md)。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash

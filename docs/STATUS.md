@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 C++20 后端已接入现有 LibTorch 调用接口的校验和生成。用 CPU0 单线程真实 PyTorch 同次采集识别出两个不同源码位置的 `mm`，并跟踪它们的结果对象进入 `add` 的两个端口。独立 C++20 验证通过生成接口调用 `mm`、`add.Tensor`、`empty.memory_format`，数值逐位一致，确认链接至原生 LibTorch。本地链接的资格与原 Python 替换许可分别保存。见 `artifacts/baseline/aten-provider-linkage.json`。
+
 2026-11-18 LeWM CEM 的 487 条调用协议前沿均已接回 50 个共享源码接口。v5 沿同帧原字节码核实了 26 个接口上的 336 次正常续行，独立冷验核对 52 条条件结果和状态边。原采集缺少同次原生调用记录，返回内容、设备完成和副作用仍待证明。本轮未运行 LeWM。见 `artifacts/baseline/lewm-observed-normal-continuations.json`。
 
 2026-11-18 LeWM CEM 的 v3 图以原调用、前驱返回和帧形参重放了一个隐式接收者布局。`solve → init_action_distrib` 有三条数据参数路由，附带帧槽隔离条件。缺少前驱证据时保留零或一前缀两种布局，现有 C++ 降级仍拒绝隐式接收者。单元构建并同进程复验耗时 64.83 s，独立冷读 63.99 s，旧 v2 冷读为 74.05 s。542 条观测前沿仍在。见 `artifacts/baseline/lewm-observed-positional-receiver.json`。

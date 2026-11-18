@@ -1,0 +1,174 @@
+{
+  "date": "2026-11-18",
+  "implemented": {
+    "command": "scar link-aten-provider",
+    "cxx_binding": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/operators.hpp",
+      "sha256": "6bd66ae76cdd130a22b89a713e80973499dfd5a7737346b11de642269cf7b1f4",
+      "size_bytes": 925
+    },
+    "cxx_standard": 20,
+    "declared_operators": [
+      {
+        "entry": "scar_aten::call_0",
+        "header": "ATen/ops/mm_ops.h",
+        "provider_type": "at::_ops::mm",
+        "schema": "aten::mm(Tensor self, Tensor mat2) -> Tensor"
+      },
+      {
+        "entry": "scar_aten::call_1",
+        "header": "ATen/ops/add_ops.h",
+        "provider_type": "at::_ops::add_Tensor",
+        "schema": "aten::add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor"
+      },
+      {
+        "entry": "scar_aten::call_2",
+        "header": "ATen/ops/empty_ops.h",
+        "provider_type": "at::_ops::empty_memory_format",
+        "schema": "aten::empty.memory_format(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor"
+      }
+    ],
+    "dispatch_device_proven_by_linkage": false,
+    "linkage": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/result.json",
+      "sha256": "57ff055726ca5aeb39456503becafd5a445bfa0ef740317acdab412ab12a9ee8",
+      "size_bytes": 2658
+    },
+    "provider": {
+      "libraries": [
+        {
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libtorch_cpu.so",
+          "sha256": "859037dc4ce429853b11c068dbae0c1b817c9260276487e059ee7d53f4c65a7d",
+          "size_bytes": 438418425
+        },
+        {
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libc10.so",
+          "sha256": "b83ea50e9171c7e3455c19f9ff2c7d21d457a7b8231e9c4ea1b6e032ae1156d5",
+          "size_bytes": 1623185
+        }
+      ],
+      "name": "LibTorch",
+      "revision": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+      "version": "2.13.0+cu132"
+    },
+    "source_selection": "EXPLICIT_EXACT_SCHEMAS_SELECTED_FROM_RETAINED_ETO"
+  },
+  "lewm_executed": false,
+  "observed": {
+    "audit": {
+      "path": "artifacts/current/experiments/same-run-torch-review/capture/audit.json",
+      "sha256": "21e745032f395c03bab4dbbbf50653c168f9217c63183b11cea65916b2ae2d36",
+      "size_bytes": 15605
+    },
+    "collector_peak_rss_kib": 812704,
+    "collector_seconds": 26.68,
+    "coordinates": {
+      "path": "artifacts/current/experiments/same-run-torch-review/capture/original/capture-coordinates.json",
+      "sha256": "38a4d3d2d6d3d266fbf1e81aeba1a44a0f5242d181bfeb226fc4fcd017267d9d",
+      "size_bytes": 86497
+    },
+    "cpu_ids": [
+      0
+    ],
+    "direct_python_operator_route_proven": false,
+    "exact_source_callable_contexts": 4,
+    "interop_threads": 1,
+    "intraop_threads": 1,
+    "mm_bytecode_offsets": [
+      36,
+      80
+    ],
+    "mm_source_lines": [
+      7,
+      8
+    ],
+    "observed_mm_output_to_add_input_object_routes": 2,
+    "pid": 1250751,
+    "run": "exec_run:capture:21e8cbebce4202330cb05afa317645ef75609b2f9b9a4871689b13c1d8932418",
+    "scope": "REAL_INSTRUMENTED_SINGLE_PROCESS_CPU_PYTORCH",
+    "script": {
+      "path": "artifacts/current/experiments/same-run-torch-review/capture/collect.sh",
+      "sha256": "11d4a01a41c10aafd54531a7f141631f74eaef5bb821942172e1cce007de5fd0",
+      "size_bytes": 1079
+    },
+    "source": {
+      "path": "artifacts/current/experiments/same-run-torch-review/capture/fixture/subject.py",
+      "sha256": "91fe43f996331d45de4201fbdccffa4447bda3e33c15884e3e2f1e21b34b358b",
+      "size_bytes": 826
+    }
+  },
+  "performance_measured": false,
+  "proposed": {
+    "closed_cpython_native_calls": 14,
+    "direct_eto_observations": 14,
+    "production_source_to_cpp_replacement_admission": "UNRESOLVED",
+    "remaining": [
+      "source_to_provider_port_and_effect_validation",
+      "hardware_and_cost_plan",
+      "replace_legacy_self_generated_numeric_loops"
+    ],
+    "scopes_with_direct_eto_children": 7,
+    "separate_source_scope_diagnostic": {
+      "path": "artifacts/current/experiments/same-run-torch-review/exact-call-pilot/joined.json",
+      "sha256": "3358cf3a496d8aa2bfb3d109f2bd56db57c2c040ebaddcc560348a892ea7e128",
+      "size_bytes": 10808
+    }
+  },
+  "replacement_authorized": false,
+  "schema": "scar.aten-provider-linkage-review",
+  "verified": {
+    "build_command": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/consumer-command.json",
+      "sha256": "f3f4de878168d7d8d74578a45217ea244632788e0c8567fa8fa7cb350b083f61",
+      "size_bytes": 475
+    },
+    "consumer_calls": {
+      "add.Tensor": 1,
+      "empty.memory_format": 1,
+      "mm": 2
+    },
+    "cpp_consumer": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/consumer.cpp",
+      "sha256": "ccf1982a851ab2b312b9d8ab097753db1218ca28d57c56cd8c89e20be3255dec",
+      "size_bytes": 1302
+    },
+    "cpp_dispatch_device": "CPU",
+    "dynamic_dependencies": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/consumer-ldd.txt",
+      "sha256": "11714cae53606e96084ba55388cc8a7eb2ced19b62032b42ec220778a81657a7",
+      "size_bytes": 1323
+    },
+    "dynamic_dependency_names": [
+      "linux-vdso.so.1",
+      "libtorch_cpu.so",
+      "libc10.so",
+      "libstdc++.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6",
+      "librt.so.1",
+      "libdl.so.2",
+      "libpthread.so.0",
+      "libm.so.6",
+      "libgomp.so.1",
+      "libcupti.so.13",
+      "libcudart.so.13",
+      "/lib64/ld-linux-x86-64.so.2",
+      "libutil.so.1"
+    ],
+    "installed_library_paths_required": true,
+    "interpreter_dependency": false,
+    "numeric_comparison": "EXACT_FLOAT32_BYTES",
+    "numpy_or_scipy_dependency": false,
+    "output": "CPU float32[2,2] 42,56,74,96; float32[0]",
+    "rejected_contracts": [
+      "wrong_revision",
+      "changed_schema",
+      "nonexistent_overload"
+    ],
+    "symbols": {
+      "path": "artifacts/current/experiments/same-run-torch-review/linked-provider/consumer-symbols.txt",
+      "sha256": "d39368e3daed539eb547be0b388ef4ba7991a73047a8357ae054834a7c6469c9",
+      "size_bytes": 4676
+    }
+  }
+}
