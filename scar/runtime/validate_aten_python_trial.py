@@ -80,7 +80,7 @@ def _timed(function, inputs):
     return perf_counter_ns() - start, result
 
 
-def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
+def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts, allow_ambient_grad):
     module = _original_module(manifest['source_proof'])
     proof = manifest['source_proof']
     name, kind = proof['function'], proof['return_kind']
@@ -91,8 +91,10 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
     mask = os.sched_getaffinity(0)
     samples = []
     verification = {}
-    with torch.no_grad(), install_aten_python_trial(module, trial, expected_sha256=digest,
-                                                   exclusive_inputs=True, provider_report=verification) as counters:
+    grad_context = torch.enable_grad() if allow_ambient_grad else torch.no_grad()
+    with grad_context, install_aten_python_trial(module, trial, expected_sha256=digest,
+                                               exclusive_inputs=True, allow_ambient_grad=allow_ambient_grad,
+                                               provider_report=verification) as counters:
         guarded = getattr(module, name)
         for i in range(warmup + repetitions):
             first_original = i % 2 == 0
@@ -123,7 +125,8 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
                 alternatives = (*inputs[:i], changed, *inputs[i+1:])
                 _check_outputs(original(*alternatives), guarded(*alternatives), alternatives, torch, kind)
                 break
-        expected_reasons = {'CALL_ABI': 1, 'RUNTIME_CONTEXT': 1}
+        grad_fallback = 'TENSOR_ABI' if allow_ambient_grad else 'RUNTIME_CONTEXT'
+        expected_reasons = {'CALL_ABI': 1, grad_fallback: 1}
         changed_value_tested = any(value.numel() for value in inputs)
         expected_native = warmup + repetitions
         if changed_value_tested and variable_values:
@@ -136,7 +139,7 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
                     noncontiguous = value.transpose(-2, -1).contiguous().transpose(-2, -1)
                     alternatives = (*inputs[:i], noncontiguous, *inputs[i+1:])
                     _check_outputs(original(*alternatives), guarded(*alternatives), alternatives, torch, kind)
-                    expected_reasons['TENSOR_ABI'] = 1
+                    expected_reasons['TENSOR_ABI'] = expected_reasons.get('TENSOR_ABI', 0) + 1
                     break
         if counters['fallback_reasons'] != expected_reasons or counters['native_calls'] != expected_native:
             raise ValueError('live Python fallback did not honor the tested guard boundaries')
@@ -156,7 +159,8 @@ def _measure(trial, digest, manifest, warmup, repetitions, torch, receipts):
                 changed_value_native_verified=variable_values and changed_value_tested)
 
 
-def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measured_pairs, input_paths=None):
+def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measured_pairs, input_paths=None,
+                              allow_ambient_grad=False):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -174,12 +178,14 @@ def validate_aten_python_trial(trial, *, trial_sha256, out, warmup_pairs, measur
     try:
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
-        evidence = _measure(trial, trial_sha256, manifest, warmup_pairs, measured_pairs, torch, receipts)
+        evidence = _measure(trial, trial_sha256, manifest, warmup_pairs, measured_pairs, torch, receipts,
+                            allow_ambient_grad)
     finally:
         os.sched_setaffinity(0, mask)
     report = dict(schema='scar.aten-python-trial-validation', schema_version=1,
         scope='WARM_FULL_PYTHON_FUNCTION_WITH_GUARDS', trial=str(trial / 'trial.json'), trial_sha256=trial_sha256,
         warmup_pairs=warmup_pairs, measured_pairs=measured_pairs, cpu_ids=manifest['cpus'],
+        ambient_grad_enabled=allow_ambient_grad,
         immutable_reference_bytes=(0 if evidence['input_guard_kind'] == 'VALUE_INDEPENDENT_GEOMETRY'
                                    else sum(row['size_bytes'] for row in manifest['inputs'])),
         validated_inputs=receipts,
@@ -201,6 +207,8 @@ def main(argv=None):
     parser.add_argument('--measured-pairs', type=int, default=31)
     parser.add_argument('--input', action='append', dest='input_paths',
                         help='alternate raw float32 inputs in recipe order for a geometry trial')
+    parser.add_argument('--allow-ambient-grad', action='store_true',
+                        help='measure in grad mode while rejecting differentiable inputs')
     args = parser.parse_args(argv)
     report = validate_aten_python_trial(**vars(args))
     print(json.dumps(dict(speedup=report['speedup'], faster_pairs=report['matched_faster_pairs'],

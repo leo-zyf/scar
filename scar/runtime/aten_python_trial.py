@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import sysconfig
 from threading import get_ident
+from time import perf_counter_ns
 from types import BuiltinFunctionType, FunctionType, ModuleType
 
 from scar.ir.record_codec import loads
@@ -241,6 +242,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         raise ValueError('the ATen Python trial requires explicit exclusive inputs')
     if type(defer_context) is not bool or type(allow_ambient_grad) is not bool:
         raise ValueError('trial context options must be booleans')
+    attachment_start = perf_counter_ns() if provider_report is not None else None
     import torch
 
     directory = Path(trial_dir).resolve(strict=True)
@@ -280,16 +282,21 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         raise ValueError('the retained raw inputs differ from the graph ABI')
     if provider_report is not None:
         provider_report.update(input_guard_kind=_GEOMETRY if strides is not None else _EXACT_BYTES,
-                               reference_input_bytes_loaded=0)
+                               reference_input_bytes_loaded=0, lazy_prepare_ns=0)
 
     def prepare(configuration):
-        references = None if receipts is None else tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
-        if provider_report is not None and references is not None:
-            provider_report['reference_input_bytes_loaded'] += sum(map(len, references))
-        extension = _extension(directory, manifest['extension'])
-        # Keep the two-argument ABI for existing trial binaries.
-        capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
-        return capsule, extension.run, references, configuration
+        lazy_start = perf_counter_ns() if defer_context and provider_report is not None else None
+        try:
+            references = None if receipts is None else tuple(_verify(Path(row['path']), row, retain=True) for row in receipts)
+            if provider_report is not None and references is not None:
+                provider_report['reference_input_bytes_loaded'] += sum(map(len, references))
+            extension = _extension(directory, manifest['extension'])
+            # Keep the two-argument ABI for existing trial binaries.
+            capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
+            return capsule, extension.run, references, configuration
+        finally:
+            if lazy_start is not None:
+                provider_report['lazy_prepare_ns'] += perf_counter_ns() - lazy_start
 
     prepared = None if defer_context else prepare(_torch_configuration(torch))
     windows = tuple(manifest['window_starts'])
@@ -353,13 +360,18 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     if namespace.get(name) is not original:
         raise ValueError('the source callable changed during trial installation')
     namespace[name] = guarded
+    if attachment_start is not None:
+        provider_report['attachment_ns'] = perf_counter_ns() - attachment_start
     try:
         yield stats
     finally:
+        detach_start = perf_counter_ns() if provider_report is not None else None
         active = False
         if namespace.get(name) is guarded:
             namespace[name] = original
         prepared = None
+        if detach_start is not None:
+            provider_report['detachment_ns'] = perf_counter_ns() - detach_start
 
 
 __all__ = ['install_aten_python_trial']

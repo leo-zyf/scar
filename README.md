@@ -40,6 +40,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `build-aten-python-trial --geometry-contract CONTRACT --geometry-contract-sha256 SHA256` 可显式生成允许值变化的试验。构建时在已安装的 ATen Meta 上传播固定形状与步长，并与 CPU 存储观测核对。每个算子须声明与数据值无关的存储和效果，并承诺回退重跑不会重复可见副作用。原生桥接核对输入和中间结果的几何，运行时无需保留参考输入。用 `validate-aten-python-trial --input X.f32 --input Y.f32 ...` 可测未参与校准的同形状输入。见 [变化输入验证](artifacts/baseline/aten-variable-input.json)。
 
+`run-aten-python-entry --mode OBSERVE_ORIGINAL` 汇总原入口实际执行的目标调用次数、耗时和 GradMode。`forecast-aten-python-entry` 用这份观测、独立输入的热调用校准及一次性准备成本，先估算进程内入口收益。独立的新进程 A/B 核对最终输出和实际收益。见 [torchdiffeq RK4 验证](artifacts/baseline/aten-ode-entry.json)。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash
