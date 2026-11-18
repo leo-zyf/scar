@@ -5,10 +5,12 @@ from hashlib import sha256
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import FunctionType
+from time import perf_counter_ns
 
 from scar.codegen.partition_multiply import load_partition_multiply
 from scar.ir.execution_recipe import read_artifact
 from scar.trace.code_snapshot import code_key
+from .entry_runner import _Scope, _arguments, _execute
 
 
 def _owner(array, ndarray):
@@ -17,7 +19,7 @@ def _owner(array, ndarray):
     return array if array.base is None and array.flags.owndata else None
 
 
-def bind_trial(original, receipt, *, exclusive_normal_completion=False):
+def bind_trial(original, receipt, *, exclusive_normal_completion=False, parent_image=None):
     """Return a guarded trial callable and counters. Never retry after a write.
 
     The caller supplies exclusivity and eligibility of normal completion.
@@ -41,7 +43,7 @@ def bind_trial(original, receipt, *, exclusive_normal_completion=False):
             or sha256(Path(source['path']).read_bytes()).hexdigest() != source['source_sha256']):
         raise ValueError('trial requires its sealed source, contract and successor')
 
-    native = load_partition_multiply(trial['native']).apply_without_copy
+    native = load_partition_multiply(trial['native'], parent_image=parent_image).apply_without_copy
     keyword = source['inputs'][3]
     dtype = np.dtype('complex128')
     multiply = _multiarray_umath.multiply
@@ -97,45 +99,57 @@ def bind_trial(original, receipt, *, exclusive_normal_completion=False):
     return guarded, status
 
 
+class PartitionScope(_Scope):
+    def __init__(self, receipt, *, parent_image=None):
+        self.receipt, self.trial = receipt, read_artifact(receipt)
+        self.parent_image = parent_image
+        self.source = Path(self.trial['source']['path'])
+        self.active, self.bindings, self.frontier, self.seen = True, [], [], set()
+
+    def attach(self, module, name, *, natural):
+        if not self.active or id(module) in self.seen:
+            return
+        self.seen.add(id(module))
+        spec = module.__spec__
+        if not natural and (spec is None or getattr(spec, '_initializing', False)
+                            or type(spec.loader) is not SourceFileLoader):
+            self.frontier.append('preloaded_source_not_a_completed_standard_module')
+            return
+        attribute = self.trial['source']['qualname']
+        original = vars(module).get(attribute)
+        start = perf_counter_ns()
+        try:
+            guarded, stats = bind_trial(original, self.receipt, exclusive_normal_completion=True,
+                                        parent_image=self.parent_image)
+        except (ValueError, OSError, ImportError) as error:
+            self.frontier.append('partition_source_rejected:' + str(error))
+            return
+        binding_ns = perf_counter_ns() - start
+
+        @wraps(original)
+        def binding(*args, **kwargs):
+            callback = guarded if self.active else original
+            return callback(*args, **kwargs)
+
+        stats['reasons'] = {}
+        setattr(module, attribute, binding)
+        self.bindings.append(dict(owner=module, attribute=attribute, descriptor=original, installed=binding,
+            binding=binding, original=original, stats=stats, module_name=name, natural_import=natural,
+            binding_ns=binding_ns))
+
+    def worker_evidence(self):
+        return dict(source=str(self.source), code_id=self.trial['source']['code_id'],
+            frontier=list(self.frontier), bindings=[dict(module=row['module_name'],
+                natural_import=row['natural_import'], binding_ns=row['binding_ns'], **row['stats'])
+                for row in self.bindings])
+
+
 def run_partition_trial(entry, argv, receipt, *, exclusive_normal_completion=False):
     """Load the source at its normal import position and run the unchanged entry."""
-    from .entry_runner import _Scope, _arguments, _execute
-
     entry, argv = _arguments(entry, argv)
     if not exclusive_normal_completion:
         return _execute(entry, argv, None, 'partition_trial_not_requested')
-    trial = read_artifact(receipt)
-
-    class TrialScope(_Scope):
-        def __init__(self):
-            self.source = Path(trial['source']['path'])
-            self.active, self.bindings, self.frontier = True, [], []
-
-        def attach(self, module, name, *, natural):
-            spec = module.__spec__
-            if not natural and (spec is None or getattr(spec, '_initializing', False)
-                                or type(spec.loader) is not SourceFileLoader):
-                self.frontier.append('preloaded_source_not_a_completed_standard_module')
-                return
-            attribute = trial['source']['qualname']
-            original = vars(module).get(attribute)
-            try:
-                guarded, stats = bind_trial(original, receipt, exclusive_normal_completion=True)
-            except ValueError as error:
-                self.frontier.append('partition_source_rejected:' + str(error))
-                return
-
-            @wraps(original)
-            def binding(*args, **kwargs):
-                callback = guarded if self.active else original
-                return callback(*args, **kwargs)
-
-            stats['reasons'] = {}
-            setattr(module, attribute, binding)
-            self.bindings.append(dict(owner=module, attribute=attribute, descriptor=original, installed=binding,
-                binding=binding, original=original, stats=stats, module_name=name, natural_import=natural))
-
-    scope = TrialScope()
+    scope = PartitionScope(receipt)
     result = _execute(entry, argv, scope, 'explicit_partition_trial')
     result['logical_copy_bytes_elided'] = sum(row['stats']['logical_copy_bytes_elided'] for row in scope.bindings)
     return result

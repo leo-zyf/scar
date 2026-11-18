@@ -1,0 +1,104 @@
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+#ifdef Py_GIL_DISABLED
+#error "scalar table v1 needs an ordinary CPython GIL"
+#endif
+
+namespace {
+
+constexpr Py_ssize_t max_live_keys = 32;
+
+bool tuple_index(PyObject* object, Py_ssize_t size, Py_ssize_t& index) {
+    index = PyLong_AsSsize_t(object);
+    if (index == -1 && PyErr_Occurred()) {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError)) {
+            PyErr_Clear();
+        }
+        return false;
+    }
+    if (index < 0) {
+        index += size;
+    }
+    return index >= 0 && index < size;
+}
+
+PyObject* subtract(PyObject*, PyObject* const* arguments, Py_ssize_t count) {
+    if (count != 4) {
+        PyErr_SetString(PyExc_TypeError, "expected table, key, left index and right index");
+        return nullptr;
+    }
+    PyObject* table = arguments[0];
+    PyObject* key = arguments[1];
+    PyObject* left = arguments[2];
+    PyObject* right = arguments[3];
+    if (!PyDict_CheckExact(table) || !PyUnicode_CheckExact(key)
+            || !PyLong_CheckExact(left) || !PyLong_CheckExact(right)
+            || PyDict_GET_SIZE(table) > max_live_keys) {
+        return Py_NewRef(Py_NotImplemented);
+    }
+
+    // The GIL stays held throughout the scan and the exact built-in operations.
+    // Hash lookup in an exact dict with even one foreign key could call its
+    // equality method, so inspect every live key before performing a lookup.
+    PyObject* row = nullptr;
+    Py_ssize_t position = 0;
+    PyObject* table_key;
+    PyObject* table_value;
+    while (PyDict_Next(table, &position, &table_key, &table_value)) {
+        if (!PyUnicode_CheckExact(table_key)) {
+            return Py_NewRef(Py_NotImplemented);
+        }
+        if (table_key == key) {
+            row = table_value;
+        }
+    }
+    if (!row) {
+        row = PyDict_GetItemWithError(table, key);
+        if (!row) {
+            return PyErr_Occurred() ? nullptr : Py_NewRef(Py_NotImplemented);
+        }
+    }
+    if (!PyTuple_CheckExact(row)) {
+        return Py_NewRef(Py_NotImplemented);
+    }
+
+    const Py_ssize_t size = PyTuple_GET_SIZE(row);
+    Py_ssize_t left_index;
+    Py_ssize_t right_index;
+    if (!tuple_index(left, size, left_index) || !tuple_index(right, size, right_index)) {
+        return PyErr_Occurred() ? nullptr : Py_NewRef(Py_NotImplemented);
+    }
+    PyObject* lhs = PyTuple_GET_ITEM(row, left_index);
+    PyObject* rhs = PyTuple_GET_ITEM(row, right_index);
+    if (!PyLong_CheckExact(lhs) || !PyLong_CheckExact(rhs)) {
+        return Py_NewRef(Py_NotImplemented);
+    }
+    return PyNumber_Subtract(lhs, rhs);
+}
+
+PyMethodDef methods[] = {
+    {"subtract", _PyCFunction_CAST(subtract), METH_FASTCALL,
+     "Try table[key][left] - table[key][right] with exact built-in inputs."},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyModuleDef module = {
+    PyModuleDef_HEAD_INIT,
+    "_scar_scalar_table_v1",
+    "Explicit-study CPython scalar table CSE with no retained values.",
+    0,
+    methods,
+};
+
+}  // namespace
+
+PyMODINIT_FUNC PyInit__scar_scalar_table_v1() {
+    PyObject* instance = PyModule_Create(&module);
+    if (instance && (PyModule_AddIntConstant(instance, "scar_operator_abi", 1) != 0
+            || PyModule_AddIntConstant(instance, "max_live_keys", max_live_keys) != 0)) {
+        Py_DECREF(instance);
+        return nullptr;
+    }
+    return instance;
+}

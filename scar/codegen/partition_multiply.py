@@ -32,13 +32,48 @@ _SCOPE = 'EXPLICIT_STUDY_EXTERNAL_ADMISSION'
 _SOURCE = 'partition_multiply.cpp'
 
 
-def _python_target():
+def _image_stamp(path):
+    if sys.platform != 'linux':
+        return None
+    try:
+        active = os.stat('/proc/self/exe')
+        on_disk = path.stat()
+    except OSError:
+        return None
+    stamp = lambda entry: [entry.st_dev, entry.st_ino, entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns]
+    current = stamp(active)
+    return current if current == stamp(on_disk) else None
+
+
+def verify_running_python(reference):
+    """Hash the exact running image once for directly spawned Linux workers."""
+    executable = Path(sys.executable).resolve()
+    before = _image_stamp(executable)
+    if before is None:
+        return None
+    expected = read_artifact(reference)['python']['executable']
+    actual = artifact_reference(executable, 'scar.native-executable-file')
+    if actual != expected or _image_stamp(executable) != before:
+        raise ValueError('parent Python executable differs from the compiled target')
+    return dict(executable=actual, live_image_stamp=before)
+
+
+def _python_target(parent_image=None):
     if sys.implementation.name != 'cpython' or not sysconfig.get_config_var('EXT_SUFFIX'):
         raise ValueError('the partition study requires the exact CPython extension ABI')
+    path = Path(sys.executable).resolve()
+    executable = None
+    if parent_image is not None:
+        stamp = _image_stamp(path)
+        if (stamp is not None and stamp == parent_image['live_image_stamp']
+                and parent_image['executable']['uri'] == str(path)):
+            executable = parent_image['executable']
+    if executable is None:
+        executable = artifact_reference(path, 'scar.native-executable-file')
     return dict(version=sys.version, machine=platform.machine(),
                 soabi=sysconfig.get_config_var('SOABI'),
                 extension_suffix=sysconfig.get_config_var('EXT_SUFFIX'),
-                executable=artifact_reference(Path(sys.executable).resolve(), 'scar.native-executable-file'))
+                executable=executable)
 
 
 def build_partition_multiply(out):
@@ -78,10 +113,10 @@ def build_partition_multiply(out):
     return artifact_reference(out / 'artifact.json', SCHEMA)
 
 
-def load_partition_multiply(reference):
+def load_partition_multiply(reference, *, parent_image=None):
     """Verify byte pins and load the internal study without installing a hook."""
     manifest = read_artifact(reference)
-    target = _python_target()
+    target = _python_target(parent_image)
     directory = Path(reference['uri']).parent
     library = directory / (MODULE_NAME + target['extension_suffix'])
     if (manifest.get('schema') != SCHEMA or manifest.get('schema_version') != 1

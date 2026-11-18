@@ -1,0 +1,189 @@
+{
+  "cirq": {
+    "default_deployment": "KEEP",
+    "default_fp": {
+      "allowed_cpus": [
+        22,
+        23,
+        24,
+        25
+      ],
+      "binding_samples_ns": [
+        124694130,
+        125877850
+      ],
+      "parent_image_verification_ns": null,
+      "result": {
+        "bytes": 5570,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/spawn-default/result.json",
+        "sha256": "561902c883b206310868d5a01b516217d7962a51260362538c9aa6eb282dfb4a"
+      },
+      "statistics": {
+        "fallback_calls": 288,
+        "logical_copy_bytes_elided": 0,
+        "native_calls": 0
+      },
+      "workers": 2
+    },
+    "independent_shared_verification": {
+      "bytes": 1239,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/startup-placement/shared-image-probe.json",
+      "sha256": "4fc36961a3de1a9e397a12f3c2d0839a39d0ddb0f57c8839a13fc9acc68523e8"
+    },
+    "scoped_fp": {
+      "allowed_cpus": [
+        22,
+        23,
+        24,
+        25
+      ],
+      "binding_samples_ns": [
+        2848341,
+        2934832
+      ],
+      "parent_image_verification_ns": 123695460,
+      "result": {
+        "bytes": 5598,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/spawn-controlled/result.json",
+        "sha256": "9bc5b580e47c9ae86b3ff0f8402ee9f80c33e2f2c9e74a73a72347a48ce264f3"
+      },
+      "statistics": {
+        "fallback_calls": 24,
+        "logical_copy_bytes_elided": 15730176,
+        "native_calls": 264
+      },
+      "workers": 2
+    },
+    "scoped_fp_policy": "explicit all-ignore with no callback; startup hook does not change it",
+    "separate_logical_vs_physical_memory": true,
+    "startup_components": {
+      "bytes": 3868,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/startup-placement/summary.json",
+      "sha256": "8d1e9a731875ae458e1636f52ffb63571db343fb0ba37c04a3990d3296e92858"
+    },
+    "testcase_scope": {
+      "circuits": 2,
+      "depth": 6,
+      "dtype": "complex128",
+      "qubits": 12,
+      "rounds": 2,
+      "workers": 2
+    }
+  },
+  "phase1": {
+    "complete_process_or_task_graph_certified": false,
+    "hardware_boundary": "OS_PROCESS_CPU_AFFINITY_MASK",
+    "spawn_coordinates": "EXACT_DIRECT_PARENT_PID_AND_SOURCE_CODE_ID",
+    "sunfish_f4_proof": {
+      "bytes": 59835,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/proof.json",
+      "sha256": "e8a0b1e164e5b288822f45e60d623b0645b6d5ce6e861f4ee11252ba1b8f4243"
+    }
+  },
+  "schema": "scar.partition-spawn-and-scalar-mainline",
+  "schema_version": 1,
+  "sunfish": {
+    "choice": "KEEP",
+    "production_deployment_authorized": false,
+    "validation": {
+      "depth": 6,
+      "fallback_order_and_exception": {
+        "bytes": 1126,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/splice/fallback-check.json",
+        "sha256": "837f8370497903c0d0a6b099f90c724ef996d33e12b34392949570979905ba0e"
+      },
+      "freshly_reproduced_cpp": {
+        "bytes": 2442,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/replayed-compact/native/artifact.json",
+        "sha256": "fc3eeeb51c35b27b1f460ea4ecf2f7646f2a8295cc5846d6cc142f0db063b4aa"
+      },
+      "freshly_reproduced_region": {
+        "bytes": 3627,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/replayed-compact/region.json",
+        "sha256": "e5314d28dd991d963441d1ddc2eaec4891d7d5d1376dce760787600049a93350"
+      },
+      "lean_runtime_import_profile": {
+        "bytes": 7146,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/splice/light-runtime.importtime",
+        "sha256": "7dde3925228d8ca1c6b5e27a6bc31417004eeb989cb2c17ed903397c1a588207"
+      },
+      "native_after_runtime_separation": {
+        "artifact": {
+          "bytes": 3340,
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/splice/uci-timed-light-ab.json",
+          "sha256": "408f82a1fb5cf04f30e55a1495f3b1bb9b8f8e0f9419b0dc07917a3da0c03c28"
+        },
+        "normalized_output_equal": true,
+        "repetitions": 3,
+        "speedup": 0.9193174240383948,
+        "statistics": {
+          "original": {
+            "max": 3.9224002590053715,
+            "median": 3.8966989750042558,
+            "min": 3.87254201999167,
+            "samples": [
+              3.9224002590053715,
+              3.87254201999167,
+              3.8966989750042558
+            ],
+            "variance": 0.0006216597453889188
+          },
+          "study": {
+            "max": 4.252990667999256,
+            "median": 4.238687174976803,
+            "min": 4.227869042020757,
+            "samples": [
+              4.252990667999256,
+              4.227869042020757,
+              4.238687174976803
+            ],
+            "variance": 0.00015878633418361552
+          }
+        },
+        "warmup_pairs": 1
+      },
+      "native_before_runtime_separation": {
+        "artifact": {
+          "bytes": 3345,
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/splice/uci-timed-ab.json",
+          "sha256": "37ff9702db60bad8ccb69c5ae41fd7b9a9a688ed4715923af50e2dad726aa56f"
+        },
+        "normalized_output_equal": true,
+        "repetitions": 3,
+        "speedup": 0.7361622851493071,
+        "statistics": {
+          "original": {
+            "max": 3.9581030719564296,
+            "median": 3.9045874510193244,
+            "min": 3.8994926240411587,
+            "samples": [
+              3.8994926240411587,
+              3.9581030719564296,
+              3.9045874510193244
+            ],
+            "variance": 0.001054177258508345
+          },
+          "study": {
+            "max": 5.314092270040419,
+            "median": 5.303976486960892,
+            "min": 5.293243972002529,
+            "samples": [
+              5.303976486960892,
+              5.293243972002529,
+              5.314092270040419
+            ],
+            "variance": 0.00010869457928670662
+          }
+        },
+        "warmup_pairs": 1
+      },
+      "no_analysis_or_compiler_imports_at_launch": true,
+      "observed_qualification": {
+        "bytes": 13031,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sunfish-scalar-table-cse/splice/uci-validation.json",
+        "sha256": "63f4eafb11db2974095ddfda9f6b2d80c728f5ef4993a579f5967abc1494f767"
+      },
+      "scope": "original fixed-depth UCI main"
+    }
+  }
+}

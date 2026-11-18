@@ -64,3 +64,11 @@ elif os.environ.get("SCAR_OPTIMIZE"):
         # target execution available for comparison.
         if os.environ.get("SCAR_TRACE_DEBUG"):
             print(f"SCAR optimizer disabled: {_scar_error}", flush=True)
+
+if os.environ.get('SCAR_PARTITION_SPAWN_PLAN'):
+    try:
+        from scar.runtime.partition_workers import install_spawn_worker as _scar_install_partition_worker
+        _scar_install_partition_worker()
+    except (OSError, ValueError, ImportError) as _scar_error:
+        if os.environ.get('SCAR_TRACE_DEBUG'):
+            print(f'SCAR partition worker disabled: {_scar_error}', flush=True)
