@@ -62,7 +62,8 @@ def _run_entry(base, mode, trial, digest, entry_function, argv, cpus, env, allow
     ]
     if allow_ambient_grad:
         command.append('--allow-ambient-grad')
-    command.extend(['--', *(arg.replace(_PLACEHOLDER, str(output)) for arg in argv)])
+    expanded_args = [arg.replace(_PLACEHOLDER, str(output)) for arg in argv]
+    command.extend(['--', *expanded_args])
 
     stdout, stderr = directory / 'stdout', directory / 'stderr'
     with stdout.open('wb') as out_stream, stderr.open('wb') as err_stream:
@@ -76,15 +77,18 @@ def _run_entry(base, mode, trial, digest, entry_function, argv, cpus, env, allow
         raise ValueError(f'entry {mode} in {base.name} exited with status {result.returncode}\n{details}')
     report = loads(report_path.read_bytes())
     returned = report.get('entry_return') if type(report) is dict else None
+    reasons = report.get('fallback_reasons') if type(report) is dict else None
     if (type(report) is not dict or report.get('schema') != 'scar.aten-python-entry-run'
             or report.get('schema_version') != 1 or report.get('mode') != mode
             or report.get('entry_function') != entry_function or report.get('cpu_ids') != sorted(cpus)
+            or report.get('trial_sha256') != digest or report.get('entry_args') != expanded_args
             or type(report.get('process_id')) is not int or report['process_id'] <= 0
             or type(report.get('entry_ns')) is not int or not 0 < report['entry_ns'] <= process_ns
             or any(type(report.get(field)) is not int or report[field] < 0
-                   for field in ('setup_ns', 'teardown_ns'))
-            or type(report.get('native_calls')) is not int or type(report.get('fallback_calls')) is not int
-            or report['fallback_calls'] < 0 or type(report.get('fallback_reasons')) is not dict
+                   for field in ('setup_ns', 'teardown_ns', 'native_calls', 'fallback_calls'))
+            or type(reasons) is not dict or any(not key or type(count) is not int or count <= 0
+                                               for key, count in reasons.items())
+            or sum(reasons.values()) != report['fallback_calls']
             or type(report.get('grad_enabled_at_entry')) is not bool
             or type(report.get('grad_enabled_at_return')) is not bool
             or type(returned) is not dict or set(returned) != {'kind', 'value'}
@@ -92,8 +96,8 @@ def _run_entry(base, mode, trial, digest, entry_function, argv, cpus, env, allow
             or returned['kind'] != type(returned['value']).__name__
             or report.get('affinity_restored') is not True or report.get('original_binding_restored') is not True):
         raise ValueError(f'entry {mode} in {base.name} returned invalid run evidence')
-    if (mode == 'ORIGINAL' and report['native_calls'] != 0) or (mode == 'GUARDED' and report['native_calls'] < 1):
-        raise ValueError(f'entry {mode} in {base.name} has unexpected native dispatch count {report["native_calls"]}')
+    if mode == 'ORIGINAL' and (report['native_calls'] or report['fallback_calls']):
+        raise ValueError(f'entry {mode} in {base.name} unexpectedly used the trial guard')
     if not stat.S_ISDIR(output.lstat().st_mode):
         raise ValueError(f'entry {mode} in {base.name} changed the output directory type')
     return dict(report, process_ns=process_ns, exit_status=result.returncode,
@@ -101,7 +105,24 @@ def _run_entry(base, mode, trial, digest, entry_function, argv, cpus, env, allow
                 output_tree=_output_tree(output))
 
 
-def _summary(pairs):
+def _native_coverage(timed, *, required, expected_native_calls):
+    guarded = [pair['runs']['GUARDED'] for pair in timed]
+    native = [run['native_calls'] for run in guarded]
+    fallback = [run['fallback_calls'] for run in guarded]
+    without_fallback = sum(count > 0 and misses == 0 for count, misses in zip(native, fallback))
+    count_matches = None
+    if expected_native_calls is not None:
+        count_matches = sum(count == expected_native_calls for count in native)
+    covered = without_fallback == len(guarded) and (count_matches is None or count_matches == len(guarded))
+    return dict(scope='MEASURED_GUARDED_ENTRY_PROCESSES', measured_processes=len(guarded),
+                native_calls=sum(native), fallback_calls=sum(fallback),
+                minimum_native_calls_per_process=min(native), maximum_native_calls_per_process=max(native),
+                processes_with_native_and_no_fallback=without_fallback, expected_native_calls=expected_native_calls,
+                processes_matching_expected_native_calls=count_matches,
+                full_coverage_required=required, coverage_requirement_met=not required or covered)
+
+
+def _summary(pairs, *, require_full_coverage=False, expected_native_calls=None):
     timed = [pair for pair in pairs if not pair['warmup']]
     boundaries = ('process_ns', 'entry_ns')
     metrics = {}
@@ -124,21 +145,28 @@ def _summary(pairs):
     checks = dict(median_gain_at_least_five_percent=20 * (baseline - guarded) >= baseline,
                   at_least_three_quarters_pairs_faster=4 * faster_pairs >= 3 * len(timed),
                   positive_median_gain_in_each_order=all(value > 0 for value in group_medians.values()))
+    coverage = _native_coverage(timed, required=require_full_coverage, expected_native_calls=expected_native_calls)
+    if require_full_coverage:
+        checks['guarded_dispatch_coverage'] = coverage['coverage_requirement_met']
     decision = dict(boundary='FRESH_PROCESS_WALL_TIME', checks=checks, faster_pairs=faster_pairs,
                     median_delta_ns_by_order=group_medians)
-    return dict(metrics=metrics, speedups=speedups, full_process_decision=decision,
+    return dict(metrics=metrics, speedups=speedups, full_process_decision=decision, native_coverage=coverage,
                 recommendation='CANDIDATE_ENTRY_GAIN_OBSERVED' if all(checks.values()) else 'KEEP_ORIGINAL',
                 automatic_deployment_authorized=False)
 
 
 def validate_aten_python_entry(trial, *, trial_sha256, entry_function, entry_args, out,
-                               warmup_pairs=2, measured_pairs=7, allow_ambient_grad=False):
+                               warmup_pairs=2, measured_pairs=7, allow_ambient_grad=False,
+                               require_full_coverage=False, expected_native_calls=None):
     """Run an explicit paired trial while preserving the application's entry function."""
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
     if not 0 <= warmup_pairs <= 100 or not 3 <= measured_pairs <= 501:
         raise ValueError('entry validation requires 0–100 warmup pairs and 3–501 measured pairs')
+    if expected_native_calls is not None and (type(expected_native_calls) is not int or expected_native_calls < 1):
+        raise ValueError('the expected native count per measured process must be a positive integer')
+    require_full_coverage = require_full_coverage or expected_native_calls is not None
     if not any(_PLACEHOLDER in arg for arg in entry_args):
         raise ValueError('an entry argument must include {output_dir} to isolate paired outputs')
     trial = Path(trial).resolve(strict=True)
@@ -158,6 +186,8 @@ def validate_aten_python_entry(trial, *, trial_sha256, entry_function, entry_arg
             runs = {mode: _run_entry(base, mode, trial, trial_sha256, entry_function, entry_args, cpus,
                                      env, allow_ambient_grad) for mode in order}
             original, guarded = (runs[mode] for mode in _MODES)
+            if not require_full_coverage and guarded['native_calls'] == 0:
+                raise ValueError(f'entry GUARDED in {base.name} has unexpected native dispatch count 0')
             for channel in ('stdout', 'stderr', 'output_tree'):
                 if original[channel] != guarded[channel]:
                     raise ValueError(f'entry pair {index} differs in {channel}')
@@ -173,7 +203,9 @@ def validate_aten_python_entry(trial, *, trial_sha256, entry_function, entry_arg
                       entry_args=entry_args, allow_ambient_grad=allow_ambient_grad, cpu_ids=cpus,
                       warmup_pairs=warmup_pairs, measured_pairs=measured_pairs, pairs=pairs,
                       matched_stdout=True, matched_stderr=True, matched_output_tree=True,
-                      matched_entry_return=True, matched_grad_mode=True, **_summary(pairs))
+                      matched_entry_return=True, matched_grad_mode=True,
+                      **_summary(pairs, require_full_coverage=require_full_coverage,
+                                 expected_native_calls=expected_native_calls))
         (stage / 'validation.json').write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n')
         stage.rename(out)
     return report
@@ -185,6 +217,10 @@ def main(argv=None):
     parser.add_argument('--trial-sha256', required=True)
     parser.add_argument('--entry-function', default='main')
     parser.add_argument('--allow-ambient-grad', action='store_true')
+    parser.add_argument('--require-full-coverage', action='store_true',
+                        help='require native dispatch without fallback in every measured guarded process')
+    parser.add_argument('--expected-native-calls', type=int,
+                        help='require this exact native count and no fallback in every measured guarded process')
     parser.add_argument('--warmup-pairs', type=int, default=2)
     parser.add_argument('--measured-pairs', type=int, default=7)
     parser.add_argument('--out', required=True)

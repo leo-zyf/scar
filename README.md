@@ -30,6 +30,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar discover-aten-regions --build PROGRAM --capture RAW --contract WRAPPERS.json --contract-sha256 SHA256 --out DISCOVERY` 按实际调用分组，用原 F4 核验完整函数边界。加 `--capture-model MODEL.json --capture-model-sha256 SHA256` 可直接链接并投影唯一闭合区域，省去手填 CALL 编号。包装器效果由显式合同声明。发现报告可供后续成本规划和原入口验证使用。
 
+`scar compile-aten-entry --help` 将发现报告接到成本规划、C++20 LibTorch 交付和可选的完整入口 A/B。校准 Tensor 按原形参传 `--input NAME=FILE`。在目标图记录两个物理核心时，命令自动恢复 CPU 绑定。并行及变值运行仍依据显式效果合同。完整入口报告同时核对原生覆盖率、输出等价和进程耗时。
+
 为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间和交接开销求出互不重叠的相邻窗口组合。独立进程只对选出的并行方案与串行基线配对验证。`PLAN/plan.json` 逐段验算核心占用，`PLAN/launch.sh` 固定输入和已选窗口。性能报告的范围是预热后的调用。见 [多窗口调度验证](artifacts/baseline/aten-native-multi-window.json)。
 
 `plan-aten-graph --tensor-budget-bytes BYTES` 给图持有的 CPU Tensor 后备存储设置预算。生成代码在最后一次读取后释放中间 Tensor 句柄，并行窗口等待两侧完成后再释放。规划器用原生校准记录的存储字节数估算各段峰值，筛掉超预算窗口，再验证核与存储预算。预算范围覆盖输入与算子结果，算子内部工作区、分配器保留与实际 NUMA 页位置仍独立记录为未建模。见 [Tensor 预算验证](artifacts/baseline/aten-tensor-budget.json)。

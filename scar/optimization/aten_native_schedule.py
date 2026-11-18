@@ -14,6 +14,14 @@ _ATTESTATIONS = ('synchronous_cpu_completion', 'read_only_operands',
 _NO_WINDOWS = 'no independent adjacent pair has a declared standalone concurrency contract'
 
 
+class AtenCpuWindowFrontier(ValueError):
+    """The current CPU window planner cannot admit this placement."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
 def _declared_operators(contract):
     fields = {'schema', 'schema_version', 'scope', 'operator_schemas', *_ATTESTATIONS}
     if (type(contract) is not dict or contract.keys() != fields
@@ -33,27 +41,39 @@ def _live_inputs(operation):
     return {arg['value'] for arg in operation['arguments'] if 'value' in arg}
 
 
-def _lanes(target, cpu_ids):
+def _exact_cpu_constraint(graph):
+    constraints = graph.constraints()
+    if len(constraints) == 1:
+        constraint, = constraints
+        mask = constraint.affinity_cpu_ids
+        if mask is not None and len(mask) == 2 and mask == constraint.allowed_cpu_ids:
+            return constraint
+    raise AtenCpuWindowFrontier('TARGET_CPU_DOMAIN_NOT_EXACT_PAIR',
+        'the recorded target requires matching two-CPU affinity and allowed masks')
+
+
+def _placement(graph, constraint, cpu_ids):
     if (type(cpu_ids) not in (tuple, list) or len(cpu_ids) != 2
             or any(type(cpu) is not int or not 0 <= cpu < 1024 for cpu in cpu_ids)
             or cpu_ids[0] == cpu_ids[1]):
         raise ValueError('two distinct ordered Linux CPU IDs required')
-    graph = TargetHardwareGraph(target)
-    constraints = graph.constraints()
     mask = tuple(sorted(cpu_ids))
-    if (len(constraints) != 1
-            or constraints[0].affinity_cpu_ids != mask or constraints[0].allowed_cpu_ids != mask):
+    if constraint.affinity_cpu_ids != mask:
         raise ValueError('proposed CPU mask differs from the recorded target availability domain')
     resources = graph.resources()
     threads = {row.cpu_id: row for row in resources if type(row) is HardwareThread and row.online is True}
     cores = {cpu: row for row in resources if type(row) is CpuCore for cpu in row.cpu_ids}
     if (any(cpu not in threads or cpu not in cores for cpu in cpu_ids)
             or cores[cpu_ids[0]].id == cores[cpu_ids[1]].id):
-        raise ValueError('parallel lanes require online threads on distinct physical cores')
+        raise AtenCpuWindowFrontier('CPU_PAIR_DISTINCT_CORES_UNAVAILABLE',
+            'parallel lanes require online threads on distinct physical cores')
     lanes = [dict(cpu=cpu, thread=encode(threads[cpu].id), core=encode(cores[cpu].id),
                   thread_fact=encode(threads[cpu].evidence), core_fact=encode(cores[cpu].evidence))
              for cpu in cpu_ids]
-    return encode(graph._snapshot), list(mask), lanes, encode(constraints[0].evidence)
+    return dict(target=encode(graph._snapshot), availability_mask=list(mask), lanes=lanes,
+                constraint_fact=encode(constraint.evidence), cpus=list(cpu_ids),
+                effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
+                source_replacement_authorized=False, performance_measured=False)
 
 
 def _independent_windows(recipe, contract):
@@ -72,11 +92,11 @@ def _independent_windows(recipe, contract):
                    statically_shared_reads=sorted(left_reads & right_reads))
 
 
-def _placement(target, cpu_ids):
-    snapshot, mask, lanes, constraint_fact = _lanes(target, cpu_ids)
-    return dict(target=snapshot, availability_mask=mask, lanes=lanes, constraint_fact=constraint_fact,
-                effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
-                source_replacement_authorized=False, performance_measured=False)
+def _required_windows(recipe, contract):
+    windows = list(_independent_windows(recipe, contract))
+    if not windows:
+        raise AtenCpuWindowFrontier('NO_PARALLEL_WINDOWS', _NO_WINDOWS)
+    return windows
 
 
 def propose_cpu_pair(recipe, *, contract, target, cpu_ids):
@@ -88,21 +108,33 @@ def propose_cpu_pair(recipe, *, contract, target, cpu_ids):
     """
     window = next(_independent_windows(recipe, contract), None)
     if window is None:
-        raise ValueError(_NO_WINDOWS)
-    placement = _placement(target, cpu_ids)
-    return dict(schema=SCHEDULE_SCHEMA, schema_version=1, scope=SCOPE,
-                pair=window['pair'], pair_indices=window['pair_indices'], cpus=list(cpu_ids),
-                statically_shared_reads=window['statically_shared_reads'], **placement)
+        raise AtenCpuWindowFrontier('NO_PARALLEL_WINDOWS', _NO_WINDOWS)
+    graph = TargetHardwareGraph(target)
+    placement = _placement(graph, _exact_cpu_constraint(graph), cpu_ids)
+    return dict(schema=SCHEDULE_SCHEMA, schema_version=1, scope=SCOPE, **window, **placement)
 
 
 def propose_cpu_windows(recipe, *, contract, target, cpu_ids):
     """Retain all legal adjacent pairs, including pairs that overlap."""
-    windows = list(_independent_windows(recipe, contract))
-    if not windows:
-        raise ValueError(_NO_WINDOWS)
-    placement = _placement(target, cpu_ids)
+    windows = _required_windows(recipe, contract)
+    graph = TargetHardwareGraph(target)
+    placement = _placement(graph, _exact_cpu_constraint(graph), cpu_ids)
     return dict(schema=WINDOWS_SCHEMA, schema_version=1, scope=SCOPE,
-                windows=windows, cpus=list(cpu_ids), **placement)
+                windows=windows, **placement)
+
+
+def resolve_aten_cpu_windows(recipe, *, contract, target, allowed_cpu_ids):
+    """Admit CPU windows using the exact recorded lane domain and launch affinity."""
+    windows = _required_windows(recipe, contract)
+    graph = TargetHardwareGraph(target)
+    constraint = _exact_cpu_constraint(graph)
+    cpu_ids = tuple(sorted(constraint.affinity_cpu_ids))
+    placement = _placement(graph, constraint, cpu_ids)
+    if not set(cpu_ids).issubset(allowed_cpu_ids):
+        raise AtenCpuWindowFrontier('CPU_PAIR_OUTSIDE_LAUNCH_AFFINITY',
+            'the launch environment cannot use both recorded CPUs')
+    return dict(schema=WINDOWS_SCHEMA, schema_version=1, scope=SCOPE,
+                windows=windows, **placement)
 
 
 def select_cpu_windows(schedule, services, dispatch):
