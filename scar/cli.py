@@ -687,6 +687,8 @@ def main(argv=None) -> int:
         'model-pipeline-host': 'scar.compiler.pipeline_host_model',
         'macro-pipeline': 'scar.compiler.macro_pipeline',
         'plan-semantic-region': 'scar.compiler.plan_semantic_region',
+        'plan-partition-copy': 'scar.optimization.partition_copy',
+        'compile-partition-trial': 'scar.compiler.compile_partition_trial',
         'plan-controlled-region': 'scar.compiler.plan_controlled_region',
         'deliver-controlled-stateful': 'scar.compiler.controlled_stateful_delivery',
         'calibrate-guard-regime': 'scar.compiler.calibrate_guard_regime',

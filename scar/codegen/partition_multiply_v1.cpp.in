@@ -1,0 +1,197 @@
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <initializer_list>
+
+namespace {
+
+class Owned {
+public:
+    explicit Owned(PyObject* object) : object_(object) {}
+    ~Owned() { Py_XDECREF(object_); }
+    Owned(const Owned&) = delete;
+    Owned& operator=(const Owned&) = delete;
+    PyObject* get() const { return object_; }
+
+private:
+    PyObject* object_;
+};
+
+bool index_component(PyObject* value) {
+    if (value == Py_Ellipsis || PyLong_CheckExact(value)) {
+        return true;
+    }
+    if (!Py_IS_TYPE(value, &PySlice_Type)) {
+        return false;
+    }
+    auto* slice = reinterpret_cast<PySliceObject*>(value);
+    for (PyObject* part : {slice->start, slice->stop, slice->step}) {
+        if (part != Py_None && !PyLong_CheckExact(part)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool basic_selectors(PyObject* selectors) {
+    if (!PyTuple_CheckExact(selectors)) {
+        return false;
+    }
+    for (Py_ssize_t index = 0; index < PyTuple_GET_SIZE(selectors); ++index) {
+        PyObject* key = PyTuple_GET_ITEM(selectors, index);
+        if (!PyTuple_CheckExact(key)) {
+            if (!index_component(key)) {
+                return false;
+            }
+            continue;
+        }
+        for (Py_ssize_t part = 0; part < PyTuple_GET_SIZE(key); ++part) {
+            if (!index_component(PyTuple_GET_ITEM(key, part))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+PyObject* coefficient(PyObject* matrix, Py_ssize_t row, Py_ssize_t column) {
+    const Owned key(Py_BuildValue("(nn)", row, column));
+    return key.get() ? PyObject_GetItem(matrix, key.get()) : nullptr;
+}
+
+PyObject* product(PyObject* target, PyObject* key, PyObject* matrix,
+                  Py_ssize_t row, Py_ssize_t column) {
+    const Owned value(PyObject_GetItem(target, key));
+    if (!value.get()) {
+        return nullptr;
+    }
+    const Owned scale(coefficient(matrix, row, column));
+    return scale.get() ? PyNumber_Multiply(value.get(), scale.get()) : nullptr;
+}
+
+bool scale_diagonal(PyObject* out, PyObject* key, PyObject* matrix, Py_ssize_t index) {
+    const Owned initialized(PyObject_GetItem(out, key));
+    if (!initialized.get()) {
+        return false;
+    }
+    const Owned scale(coefficient(matrix, index, index));
+    if (!scale.get()) {
+        return false;
+    }
+    const Owned scaled(PyNumber_InPlaceMultiply(initialized.get(), scale.get()));
+    return scaled.get() && PyObject_SetItem(out, key, scaled.get()) == 0;
+}
+
+bool initialize_diagonal(PyObject* out, PyObject* key, PyObject* target, PyObject* matrix,
+                         Py_ssize_t index, PyObject* multiply, PyObject* out_keyword) {
+    const Owned input(PyObject_GetItem(target, key));
+    if (!input.get()) {
+        return false;
+    }
+    const Owned scale(coefficient(matrix, index, index));
+    if (!scale.get()) {
+        return false;
+    }
+    const Owned output(PyObject_GetItem(out, key));
+    if (!output.get()) {
+        return false;
+    }
+    PyObject* arguments[] = {input.get(), scale.get(), output.get()};
+    const Owned scaled(PyObject_Vectorcall(multiply, arguments, 2, out_keyword));
+    return scaled.get() != nullptr;
+}
+
+bool accumulate(PyObject* out, PyObject* output_key, PyObject* target, PyObject* input_key,
+                PyObject* matrix, Py_ssize_t row, Py_ssize_t column) {
+    const Owned output(PyObject_GetItem(out, output_key));
+    if (!output.get()) {
+        return false;
+    }
+    const Owned term(product(target, input_key, matrix, row, column));
+    if (!term.get()) {
+        return false;
+    }
+    const Owned added(PyNumber_InPlaceAdd(output.get(), term.get()));
+    return added.get() && PyObject_SetItem(out, output_key, added.get()) == 0;
+}
+
+PyObject* run(PyObject* const* args, Py_ssize_t count, bool omit_copy) {
+    if (count != (omit_copy ? 5 : 4)) {
+        PyErr_SetString(PyExc_TypeError, "expected target, matrix, selectors, out and optional ufunc");
+        return nullptr;
+    }
+    PyObject* target = args[0];
+    PyObject* matrix = args[1];
+    PyObject* selectors = args[2];
+    PyObject* out = args[3];
+    PyObject* multiply = omit_copy ? args[4] : nullptr;
+    if (out == target || out == Py_None || !basic_selectors(selectors)
+            || (omit_copy && !PyCallable_Check(multiply))) {
+        PyErr_SetString(PyExc_ValueError, "an explicit output and immutable basic selectors are required");
+        return nullptr;
+    }
+    const Owned out_keyword(omit_copy ? Py_BuildValue("(s)", "out") : nullptr);
+    if (omit_copy && !out_keyword.get()) {
+        return nullptr;
+    }
+    if (!omit_copy) {
+        const Owned value(PyObject_GetItem(target, Py_Ellipsis));
+        if (!value.get() || PyObject_SetItem(out, Py_Ellipsis, value.get()) != 0) {
+            return nullptr;
+        }
+    }
+
+    // Every failure below is a provider error. The output may already be written.
+    const Py_ssize_t size = PyTuple_GET_SIZE(selectors);
+    for (Py_ssize_t row = 0; row < size; ++row) {
+        PyObject* output_key = PyTuple_GET_ITEM(selectors, row);
+        const bool initialized = omit_copy
+                ? initialize_diagonal(out, output_key, target, matrix, row, multiply, out_keyword.get())
+                : scale_diagonal(out, output_key, matrix, row);
+        if (!initialized) {
+            return nullptr;
+        }
+        for (Py_ssize_t column = 0; column < size; ++column) {
+            if (column != row && !accumulate(out, output_key, target,
+                    PyTuple_GET_ITEM(selectors, column), matrix, row, column)) {
+                return nullptr;
+            }
+        }
+    }
+    Py_INCREF(out);
+    return out;
+}
+
+PyObject* apply(PyObject*, PyObject* const* args, Py_ssize_t count) {
+    return run(args, count, false);
+}
+
+PyObject* apply_without_copy(PyObject*, PyObject* const* args, Py_ssize_t count) {
+    return run(args, count, true);
+}
+
+PyMethodDef methods[] = {
+    {"apply", _PyCFunction_CAST(apply), METH_FASTCALL,
+     "Execute an admitted explicit-output partition operation in source order."},
+    {"apply_without_copy", _PyCFunction_CAST(apply_without_copy), METH_FASTCALL,
+     "Execute with an externally proven full partition and approved multiply provider."},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyModuleDef module = {
+    PyModuleDef_HEAD_INIT,
+    "_scar_partition_multiply_v1",
+    "Explicit-study CPython partition orchestration. Requires external admission.",
+    0,
+    methods,
+};
+
+}  // namespace
+
+PyMODINIT_FUNC PyInit__scar_partition_multiply_v1() {
+    PyObject* instance = PyModule_Create(&module);
+    if (instance && PyModule_AddIntConstant(instance, "scar_operator_abi", 1) != 0) {
+        Py_DECREF(instance);
+        return nullptr;
+    }
+    return instance;
+}
