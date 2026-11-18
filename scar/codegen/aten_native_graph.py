@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -15,6 +16,8 @@ from scar.ir.record_codec import loads
 
 
 _DRIVER = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
+_PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
+_PAIR_DRIVER = Path(__file__).with_name('aten_native_graph_ab_v1.cpp.in')
 _EXECUTABLE = 'aten-native-graph'
 
 
@@ -52,7 +55,7 @@ def _argument(expression, values):
     return 'c10::Scalar(std::int64_t{' + literal + '})'
 
 
-def _render(recipe, operators):
+def _render(recipe, operators, schedule=None):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -63,15 +66,44 @@ def _render(recipe, operators):
     for index, op in enumerate(recipe['operations']):
         target = f'value_{index}'
         arguments = ', '.join(_argument(arg, values) for arg in op['arguments'])
-        calls.append(f"    const at::Tensor {target} = {entries[op['schema']]}({arguments});")
+        calls.append((target, f"{entries[op['schema']]}({arguments})"))
         values[op['id']] = target
     input_shapes = ', '.join(f'shape_{i}' for i in range(len(shapes)))
     outputs = ', '.join(values[output] for output in recipe['outputs'])
-    shape_definitions, operator_calls = '\n'.join(shapes), '\n'.join(calls)
+    shape_definitions = '\n'.join(shapes)
+    ordered = [f'    const at::Tensor {value} = {expr};' for value, expr in calls]
+    operator_calls = '\n'.join(ordered)
+    pair_include = '' if schedule is None else f'#include "{_PAIR_HEADER.name}"\n'
+    pair_support = ''
+    if schedule is not None:
+        first, second = schedule['pair_indices']
+        left, right = calls[first], calls[second]
+        parallel = [*ordered[:first], f'    at::Tensor {left[0]}, {right[0]};',
+                    f'    pair.run([&] {{ {left[0]} = {left[1]}; }},',
+                    f'             [&] {{ {right[0]} = {right[1]}; }});', *ordered[second + 1:]]
+        parallel_calls = '\n'.join(parallel)
+        timed_calls = '\n'.join(f'    const at::Tensor {value} = observe({i}, [&] {{ return {expr}; }});'
+                                for i, (value, expr) in enumerate(calls))
+        pair_support = f'''
+inline constexpr std::size_t operation_count = {len(calls)};
+
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Tensor> inputs, Observer&& observe) {{
+    validate_inputs(inputs);
+{timed_calls}
+    return {{{outputs}}};
+}}
+
+inline std::array<at::Tensor, output_count> run_parallel(std::span<const at::Tensor> inputs, CpuPair& pair) {{
+    validate_inputs(inputs);
+{parallel_calls}
+    return {{{outputs}}};
+}}
+'''
     # SSA temporaries below carry Tensor handles; all numerical work stays in the provider.
     return f'''#pragma once
 #include "operators.hpp"
-#include <algorithm>
+{pair_include}#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -85,7 +117,7 @@ inline constexpr std::size_t output_count = {len(recipe['outputs'])};
 {shape_definitions}
 inline constexpr std::array<std::span<const std::int64_t>, input_count> input_shapes{{{input_shapes}}};
 
-inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inputs) {{
+inline void validate_inputs(std::span<const at::Tensor> inputs) {{
     if (inputs.size() != input_count) {{
         throw std::invalid_argument("native graph input count differs");
     }}
@@ -102,14 +134,20 @@ inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inpu
             throw std::invalid_argument("native graph input shape differs");
         }}
     }}
+}}
+
+inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inputs) {{
+    validate_inputs(inputs);
 {operator_calls}
     return {{{outputs}}};
 }}
+{pair_support}
 }}  // namespace scar_aten_graph
 '''
 
 
-def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256, out):
+def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256, out,
+                              concurrency_contract=None, concurrency_sha256=None, target=None, cpu_ids=None):
     import torch
 
     out = Path(out).resolve()
@@ -119,9 +157,24 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     linkage_path, linked, linkage_receipt = _read_declared(linkage, linkage_sha256)
     operators, libraries, cxx, compile_flags, link_flags = _installed_linkage(linked, torch)
     recipe = normalize_recipe(recipe, operators, torch)
+    schedule = None
+    contract_receipt = None
+    requested = (concurrency_contract, concurrency_sha256, target, cpu_ids)
+    if any(item is not None for item in requested):
+        if any(item is None for item in requested):
+            raise ValueError('the CPU pair requires its contract, digest, target graph and two CPU IDs')
+        from scar.optimization.aten_native_schedule import propose_cpu_pair
+
+        _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
+        schedule = propose_cpu_pair(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
-    command = [*cxx, *compile_flags, '-O2', 'entry.cpp', *link_flags, '-o', _EXECUTABLE]
+    command = [*cxx, *compile_flags, '-O2']
+    if schedule is not None:
+        command.extend(('-pthread', 'pair.cpp'))
+    else:
+        command.append('entry.cpp')
+    command.extend((*link_flags, '-o', _EXECUTABLE))
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-native-graph-', dir=out.parent) as temporary:
         stage = Path(temporary)
@@ -129,8 +182,11 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         header.write_bytes(operator_path.read_bytes())
         if _content(header) != linked['artifacts']['operators.hpp']:
             raise ValueError('retained ATen C++ binding differs from its linkage receipt')
-        (stage / 'graph.hpp').write_text(_render(recipe, operators))
+        (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule))
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
+        if schedule is not None:
+            (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
+            (stage / 'pair.cpp').write_bytes(_PAIR_DRIVER.read_bytes())
         (stage / 'recipe.json').write_text(json.dumps(recipe, indent=2, sort_keys=True) + '\n')
         subprocess.run(command, cwd=stage, check=True, env=command_env)
         listing = subprocess.run(['ldd', './' + _EXECUTABLE], cwd=stage, check=True,
@@ -140,8 +196,14 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
                 or any('libpython' in name or 'libtorch_python' in name for name in dependencies)):
             raise ValueError('linked standalone native graph requires the declared provider without Python')
         script = stage / 'launch.sh'
-        script.write_text('#!/bin/sh\nset -eu\nexec env -i PATH=/usr/bin:/bin "$(dirname -- "$0")/'
-                          + _EXECUTABLE + '" "$@"\n')
+        launcher = 'env -i PATH=/usr/bin:/bin'
+        suffix = ''
+        if schedule is not None:
+            caller = str(schedule['cpus'][0])
+            launcher += ' OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c ' + caller
+            suffix = ' ' + shlex.join(['--run-serial', caller])
+        script.write_text('#!/bin/sh\nset -eu\nexec ' + launcher + ' "$(dirname -- "$0")/'
+                          + _EXECUTABLE + '"' + suffix + ' "$@"\n')
         script.chmod(0o755)
         (stage / 'ldd.txt').write_text(listing)
         receipt = dict(schema='scar.aten-native-graph-delivery', schema_version=1, cxx_standard=20,
@@ -150,6 +212,9 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             operation_order=[op['id'] for op in recipe['operations']], implementation='ORDERED_PROVIDER_CALLS',
             compiler_command=command, source_replacement_authorized=False, performance_measured=False,
             files={path.name: _content(path) for path in sorted(stage.iterdir())})
+        if schedule is not None:
+            receipt.update(cpu_pair=schedule, concurrency_contract=contract_receipt,
+                           implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_PAIR_TRIAL')
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt
@@ -161,10 +226,16 @@ def main(argv=None):
     parser.add_argument('--recipe-sha256', required=True)
     parser.add_argument('--linkage', required=True, help='retained link-aten-provider result.json')
     parser.add_argument('--linkage-sha256', required=True)
+    parser.add_argument('--concurrency-contract')
+    parser.add_argument('--concurrency-sha256')
+    parser.add_argument('--target', help='original target hardware graph for a CPU-pair trial')
+    parser.add_argument('--cpu', type=int, action='append', help='caller and worker IDs, in order')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     compile_aten_native_graph(args.recipe, recipe_sha256=args.recipe_sha256, linkage=args.linkage,
-                              linkage_sha256=args.linkage_sha256, out=args.out)
+                              linkage_sha256=args.linkage_sha256, out=args.out,
+                              concurrency_contract=args.concurrency_contract,
+                              concurrency_sha256=args.concurrency_sha256, target=args.target, cpu_ids=args.cpu)
     print(json.dumps(dict(executable=str(Path(args.out) / _EXECUTABLE),
                           launcher=str(Path(args.out) / 'launch.sh'))))
     return 0

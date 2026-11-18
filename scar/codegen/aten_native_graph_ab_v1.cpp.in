@@ -1,0 +1,256 @@
+#define main scar_native_file_main
+#include "entry.cpp"
+#undef main
+
+#include <ATen/Parallel.h>
+#include <ATen/core/grad_mode.h>
+
+#include <cfenv>
+#include <charconv>
+#include <chrono>
+#include <cstring>
+#include <sched.h>
+#include <string_view>
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+using Inputs = std::array<at::Tensor, graph::input_count>;
+using Outputs = std::array<at::Tensor, graph::output_count>;
+using OperationTimes = std::array<std::int64_t, graph::operation_count>;
+
+struct Sample {
+    std::int64_t serial_ns;
+    std::int64_t dual_ns;
+    bool serial_first;
+};
+
+struct Calibration {
+    OperationTimes operations;
+    std::int64_t dispatch_ns;
+};
+
+int integer(std::string_view text, int minimum, const char* field) {
+    int parsed = 0;
+    const auto* end = text.data() + text.size();
+    const auto result = std::from_chars(text.data(), end, parsed);
+    if (result.ec != std::errc{} || result.ptr != end || parsed < minimum) {
+        throw std::invalid_argument(std::string("invalid benchmark ") + field);
+    }
+    return parsed;
+}
+
+void check_launch(int caller, int worker) {
+    cpu_set_t allowed;
+    const bool pair = worker >= 0;
+    if (caller >= CPU_SETSIZE || worker >= CPU_SETSIZE || (pair && caller == worker)
+            || sched_getaffinity(0, sizeof(allowed), &allowed) != 0
+            || CPU_COUNT(&allowed) != (pair ? 2 : 1) || !CPU_ISSET(caller, &allowed)
+            || (pair && !CPU_ISSET(worker, &allowed))
+            || std::fegetround() != FE_TONEAREST) {
+        throw std::runtime_error("native graph requires its exact launch mask and default rounding");
+    }
+}
+
+void check_caller(int caller) {
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0 || CPU_COUNT(&allowed) != 1
+            || !CPU_ISSET(caller, &allowed) || sched_getcpu() != caller
+            || at::get_num_threads() != 1 || at::get_num_interop_threads() != 1
+            || at::GradMode::is_enabled() || std::fegetround() != FE_TONEAREST) {
+        throw std::runtime_error("benchmark caller context differs from its requested placement");
+    }
+}
+
+void check_inputs(const Inputs& inputs, const std::array<std::vector<unsigned char>, graph::input_count>& starting) {
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        const auto& bytes = starting[i];
+        if (inputs[i].nbytes() != bytes.size()
+                || (!bytes.empty() && std::memcmp(inputs[i].const_data_ptr<float>(), bytes.data(), bytes.size()) != 0)) {
+            throw std::runtime_error("benchmark input bytes changed");
+        }
+    }
+}
+
+void check_outputs(const Inputs& inputs, const Outputs& serial, const Outputs& dual) {
+    for (const auto* outputs : {&serial, &dual}) {
+        for (const auto& tensor : *outputs) {
+            if (!tensor.defined() || !tensor.device().is_cpu() || tensor.layout() != at::kStrided
+                    || tensor.scalar_type() != at::kFloat || !tensor.is_contiguous()
+                    || tensor.is_neg() || tensor.is_conj() || tensor.requires_grad()) {
+                throw std::runtime_error("benchmark output violates the native float32 contract");
+            }
+            if (std::ranges::any_of(inputs, [&](const at::Tensor& input) { return tensor.is_alias_of(input); })) {
+                throw std::runtime_error("benchmark output aliases an input");
+            }
+        }
+    }
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+        const auto& left = serial[i];
+        const auto& right = dual[i];
+        if (left.sizes() != right.sizes() || left.strides() != right.strides()
+                || (left.nbytes() != 0 && std::memcmp(left.const_data_ptr<float>(), right.const_data_ptr<float>(),
+                                                      left.nbytes()) != 0)) {
+            throw std::runtime_error("paired graph outputs differ in geometry or bytes");
+        }
+        for (std::size_t j = 0; j < dual.size(); ++j) {
+            if (left.is_alias_of(dual[j]) || left.is_alias_of(serial[j]) != right.is_alias_of(dual[j])) {
+                throw std::runtime_error("paired graph outputs differ in storage ownership");
+            }
+        }
+    }
+}
+
+std::int64_t elapsed_ns(Clock::time_point start) {
+    const auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+    if (duration <= 0) throw std::runtime_error("benchmark duration is below the clock resolution");
+    return duration;
+}
+
+std::pair<std::int64_t, Outputs> timed(const Inputs& inputs, graph::CpuPair& pair, bool serial) {
+    const auto start = Clock::now();
+    auto outputs = serial ? graph::run(inputs) : graph::run_parallel(inputs, pair);
+    return {elapsed_ns(start), std::move(outputs)};
+}
+
+void emit(int caller, int worker, int warmup, int measurements, const std::vector<Sample>& samples,
+          const std::vector<Calibration>& calibration) {
+    std::cout << "{\"warmup_pairs\":" << warmup << ",\"measured_pairs\":" << measurements
+              << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
+              << ",\"all_pairs_validated\":true,\"samples\":[";
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const auto& sample = samples[i];
+        if (i != 0) std::cout << ',';
+        std::cout << "{\"pair_index\":" << i << ",\"order\":["
+                  << (sample.serial_first ? "\"SERIAL\",\"TWO_CPU\"" : "\"TWO_CPU\",\"SERIAL\"")
+                  << "],\"serial_ns\":" << sample.serial_ns << ",\"dual_ns\":" << sample.dual_ns
+                  << ",\"bitwise_identical\":true,\"input_values_unchanged\":true,\"fresh_owned_outputs\":true}";
+    }
+    std::cout << "],\"calibration\":{\"operation_samples_ns\":[";
+    for (std::size_t row = 0; row < calibration.size(); ++row) {
+        if (row != 0) std::cout << ',';
+        std::cout << '[';
+        for (std::size_t i = 0; i < calibration[row].operations.size(); ++i) {
+            if (i != 0) std::cout << ',';
+            std::cout << calibration[row].operations[i];
+        }
+        std::cout << ']';
+    }
+    std::cout << "],\"empty_dispatch_samples_ns\":[";
+    for (std::size_t row = 0; row < calibration.size(); ++row) {
+        if (row != 0) std::cout << ',';
+        std::cout << calibration[row].dispatch_ns;
+    }
+    std::cout << "]}}\n";
+}
+
+void benchmark(char** args, int caller, int worker, graph::CpuPair& pair) {
+    const int warmup = integer(args[0], 3, "warmup count");
+    const int measurements = integer(args[1], 3, "measurement count");
+    if (measurements % 2 == 0) throw std::invalid_argument("benchmark requires an odd number of measured pairs");
+
+    std::array<std::vector<float>, graph::input_count> backing;
+    std::array<std::vector<unsigned char>, graph::input_count> starting;
+    Inputs inputs;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        const auto shape = graph::input_shapes[i];
+        const auto bytes = checked_bytes(shape);
+        backing[i] = read_tensor(args[2 + i], bytes);
+        starting[i].resize(bytes);
+        if (bytes != 0) std::memcpy(starting[i].data(), backing[i].data(), bytes);
+        inputs[i] = at::from_blob(backing[i].data(), at::IntArrayRef(shape.data(), shape.size()),
+                                  at::TensorOptions().device(at::kCPU).dtype(at::kFloat));
+    }
+
+    // Check each variant once in isolation, then keep validation out of both timed calls in each pair.
+    {
+        const auto serial = graph::run(inputs);
+        check_inputs(inputs, starting);
+        const auto dual = graph::run_parallel(inputs, pair);
+        check_inputs(inputs, starting);
+        check_outputs(inputs, serial, dual);
+    }
+    std::vector<Sample> samples;
+    samples.reserve(measurements);
+    const auto total = std::int64_t{warmup} + measurements;
+    for (std::int64_t i = 0; i < total; ++i) {
+        const bool serial_first = i % 2 == 0;
+        const auto first = timed(inputs, pair, serial_first);
+        const auto second = timed(inputs, pair, !serial_first);
+        check_inputs(inputs, starting);
+        check_outputs(inputs, serial_first ? first.second : second.second,
+                      serial_first ? second.second : first.second);
+        if (i >= warmup) {
+            samples.push_back({serial_first ? first.first : second.first,
+                               serial_first ? second.first : first.first, serial_first});
+        }
+    }
+
+    const auto calibration_reference = graph::run(inputs);
+    std::vector<Calibration> calibration;
+    calibration.reserve(warmup);
+    for (int i = 0; i < warmup; ++i) {
+        Calibration row{};
+        const auto observed = graph::run_observed(inputs, [&](std::size_t operation, auto&& call) {
+            const auto start = Clock::now();
+            auto value = call();
+            row.operations.at(operation) = elapsed_ns(start);
+            return value;
+        });
+        check_inputs(inputs, starting);
+        check_outputs(inputs, calibration_reference, observed);
+        if (std::ranges::find(row.operations, 0) != row.operations.end()) {
+            throw std::runtime_error("benchmark did not observe every operation in the generated graph");
+        }
+        const auto start = Clock::now();
+        pair.run([] {}, [] {});
+        row.dispatch_ns = elapsed_ns(start);
+        calibration.push_back(row);
+    }
+    check_caller(caller);
+    emit(caller, worker, warmup, measurements, samples, calibration);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const std::string_view mode = argc > 1 ? argv[1] : "";
+    const bool measure = mode == "--benchmark-pair";
+    const bool serial = mode == "--run-pair-serial";
+    const bool caller_only = mode == "--run-serial";
+    if (!measure && !serial && !caller_only && mode != "--run-pair") return scar_native_file_main(argc, argv);
+    const auto expected = graph::input_count + (measure ? 6 : (caller_only ? 3 : 4) + graph::output_count);
+    if (static_cast<std::size_t>(argc) != expected) {
+        std::fputs("usage: aten-graph --benchmark-pair <caller> <worker> <warmup> <odd-count> <input.f32>...\n"
+                   "       aten-graph --run-pair[-serial] <caller> <worker> <input.f32>... <new-output.f32>...\n"
+                   "       aten-graph --run-serial <caller> <input.f32>... <new-output.f32>...\n",
+                   stderr);
+        return 2;
+    }
+    try {
+        const int caller = integer(argv[2], 0, "caller CPU");
+        const int worker = caller_only ? -1 : integer(argv[3], 0, "worker CPU");
+        check_launch(caller, worker);
+        at::set_num_threads(1);
+        at::set_num_interop_threads(1);
+        at::NoGradGuard no_grad;
+        if (caller_only) {
+            check_caller(caller);
+            return invoke(argv + 3, graph::run);
+        }
+        graph::CpuPair pair(caller, worker);
+        check_caller(caller);
+        if (measure) {
+            benchmark(argv + 4, caller, worker, pair);
+        } else {
+            return invoke(argv + 4, [&](const auto& inputs) {
+                auto result = serial ? graph::run(inputs) : graph::run_parallel(inputs, pair);
+                check_caller(caller);
+                return result;
+            });
+        }
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "SCAR ATen CPU pair failed: %s\n", error.what());
+        return 1;
+    }
+}

@@ -97,7 +97,8 @@ struct StagedFile {
     }
 };
 
-int invoke(char** paths) {
+template <class Runner>
+int invoke(char** paths, Runner&& runner) {
     std::array<fs::path, graph::output_count> destinations;
     for (std::size_t i = 0; i < destinations.size(); ++i) {
         const fs::path path(paths[graph::input_count + i]);
@@ -119,7 +120,7 @@ int invoke(char** paths) {
                                   at::TensorOptions().device(at::kCPU).dtype(at::kFloat));
     }
 
-    const auto outputs = graph::run(inputs);
+    const std::array<at::Tensor, graph::output_count> outputs = runner(inputs);
     std::array<std::size_t, graph::output_count> sizes;
     for (std::size_t i = 0; i < outputs.size(); ++i) {
         const auto& output = outputs[i];
@@ -161,7 +162,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        return invoke(argv + 1);
+        return invoke(argv + 1, graph::run);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "SCAR ATen graph failed: %s\n", error.what());
         return 1;

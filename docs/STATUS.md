@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 生成的 ATen CPU 图已接通双核时序和 C++20 执行。规划器根据已声明的算子效果、图依赖、两个不同物理核心和独立测得的服务时间计算方案，再验证整次调用。2×2 保留串行，768×768 的独立声明用例选双核，最终匹配试验中位耗时从 24.961 ms 降至 14.459 ms，31 对均更快。测试只计预热后的原生调用。见 `artifacts/baseline/aten-native-schedule.json`。
+
 2026-11-18 已从同次 CPU 采集自动生成独立原生图。`project-aten-graph` 核对 6 个 Tensor 输入、2 条内部数据边、1 个原返回分量及外部算子链接来源。三次算子的 C++20 输出与原 Python 返回的第 0 项逐字节一致。不同采集的同摘要链接报告及 `add.out` 写入路径均被拒绝。原入口仍 `KEEP_ORIGINAL`。见 `artifacts/baseline/aten-capture-graph.json`。
 
 2026-11-18 `compile-aten-graph` 已从声明的数据依赖直接生成 C++20 和原生输入输出入口。分叉汇合、双输出链、标量及空张量共四例与 PyTorch CPU 参考逐字节一致。运行只使用现有 LibTorch 算子和本机原生依赖。当前交付按声明顺序执行，原 Python 自动替换、硬件重排及性能提升仍待验证。见 `artifacts/baseline/aten-native-graph.json`。
