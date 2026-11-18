@@ -1,7 +1,8 @@
 """Connect observed dispatch categories to original F4 Python CALL interfaces.
 
 Source ports are shared; occurrences remain in a separate evidence table.
-Native entry, type-call stages, return completion and effects stay unproved.
+Recorded Python-frame continuations retain their source and conditions.
+Native entry, returned contents, device completion and effects stay open.
 """
 from collections import Counter, defaultdict
 from bisect import bisect_left
@@ -17,6 +18,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_roles import SyntaxRoleView
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
+from scar.analysis.observed_boundary_continuations import CONTINUATION_CONDITIONS, normal_continuation
 from scar.analysis.source_request_callback_abi import request_callback_abi
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_world_returns import _table_ref
@@ -44,6 +46,7 @@ from scar.ir.record_codec import decode, encode
 
 
 SCHEMA = 'scar.source-observed-boundaries'
+VERSION = 5
 _KINDS = frozenset((Target.NATIVE_BUILTIN, Target.NATIVE_WRAPPER,
     Target.TYPE_OBJECT, Target.OTHER_UNCLASSIFIED))
 _FALSE = ('source_bodies_copied', 'loops_unrolled', 'implementation_entry_proven',
@@ -52,7 +55,8 @@ _FALSE = ('source_bodies_copied', 'loops_unrolled', 'implementation_entry_proven
 
 def _pins():
     from scar.analysis import source_observed_codes, source_observed_calls, source_call_view, source_observed_protocols
-    from scar.analysis import native_callables
+    from scar.analysis import native_callables, observed_boundary_continuations
+    from scar.ir import record_codec
     from scar.ir.program import native_callables as native_types
     from scar.ir.program import source_observed_codes as code_types
     from scar.ir.program import source_observed_calls as call_types
@@ -62,7 +66,8 @@ def _pins():
         ('code_reader', source_observed_codes), ('callsite_reader', source_observed_calls),
         ('call_ports', source_call_view), ('native_reader', native_callables), ('native_types', native_types),
         ('code_types', code_types), ('call_types', call_types), ('protocol_reader', source_observed_protocols),
-        ('request_abi', source_request_callback_abi))}
+        ('request_abi', source_request_callback_abi), ('continuation_replay', observed_boundary_continuations),
+        ('wire_codec', record_codec))}
     result.update(('request_code_'+name, digest) for name, digest in source_observed_codes.request_code_pins().items())
     return result
 
@@ -121,7 +126,7 @@ def _basis(index):
     return dict(catalog=encode(_artifact(index.view.catalog.path/'result.json', index.view.catalog.report['schema'])),
         trace=codes.trace.directory, project_root=codes.trace.project_root,
         run_scope=codes.targets.source_sha256, trace_inputs=streams,
-        code_units=sorted(set(codes._sources) | {row[0] for row in codes.root_callers}),
+        code_units=sorted(codes.selected_units),
         compiled_units=[profile.unit for profile in index.compiled],
         target_reader_budget=codes.target_reader_budget, frame_reader_budget=encode(codes.trace.frame_budget),
         native=native.basis())
@@ -185,7 +190,8 @@ def _derive(index):
             raise ValueError('native observation changed the original caller/attempt/callable token')
         observations[unit].append(R.SourceBoundaryObservation(identity, observation.id, observation.attempt.anchor,
             observation.target, observation.target_anchor, observation.profile_alternatives,
-            None if companion is None else companion[0], None if companion is None else companion[1]))
+            None if companion is None else companion[0], None if companion is None else companion[1],
+            normal_continuation(index, observation)))
     records = defaultdict(list)
     for record in groups.values(): records[record.unit].append(record)
     index.check()
@@ -322,8 +328,11 @@ def _callbacks(index, units):
 
 def _counts(units,callbacks,protocols=None):
     protocols = {} if protocols is None else protocols
+    witnessed = [row for _, observations in units.values() for row in observations if row.normal_continuation is not None]
     return dict(units=len(set(units)|set(protocols)),boundaries=sum(len(b) for b,_ in units.values()),
         observations=sum(len(o) for _,o in units.values()),
+        normal_continuation_observations=len(witnessed),
+        normal_continuation_boundaries=len({row.boundary for row in witnessed}),
         kinds=dict(Counter(b.target_kind.value for rows,_ in units.values() for b in rows)),
         callbacks=sum(len(c) for c,_ in callbacks.values()),
         callback_observations=sum(len(o) for _,o in callbacks.values()),
@@ -357,8 +366,9 @@ def build_boundaries(index, out):
         shards[unit] = dict(path='units/'+unit, tables=tables,
             boundaries=len(boundaries), observations=len(observations),
             protocols=len(protocol_rows), protocol_observations=len(protocol_observations))
-    report = dict(schema=SCHEMA, schema_version=4, basis=basis, pins=pins, shards=shards,
+    report = dict(schema=SCHEMA, schema_version=VERSION, basis=basis, pins=pins, shards=shards,
         counts=_counts(units,callbacks,protocols),
+        normal_continuation_conditions=list(CONTINUATION_CONDITIONS),
         **{name:False for name in _FALSE})
     if _basis(index) != basis or _pins() != pins: raise ValueError('boundary producer or original inputs changed')
     _durable_bytes(out/'result.json', _json(report), replace=False)
@@ -369,7 +379,9 @@ class BoundaryStore:
     def __init__(self, path, index=None):
         self.path = Path(path).absolute(); self.raw = (self.path/'result.json').read_bytes()
         self.report = r = json.loads(self.raw)
-        if (r['schema'], r['schema_version'], r['pins']) != (SCHEMA, 4, _pins()) or any(r[n] is not False for n in _FALSE):
+        if ((r['schema'], r['schema_version'], r['pins']) != (SCHEMA, VERSION, _pins())
+                or r['normal_continuation_conditions'] != list(CONTINUATION_CONDITIONS)
+                or any(r[n] is not False for n in _FALSE)):
             raise ValueError('boundary schema, producer or proof contract differs')
         basis = r['basis']
         if index is None:
@@ -431,6 +443,7 @@ class SourceObservedBoundaryProvider:
             raise ValueError('boundary provider requires the same original source catalog')
         self.available_units = frozenset(self.store.units); self.attached = set()
         self.records = {}; self.owners = {}; self.observations = defaultdict(list)
+        self.continuation_sources = {}
         self.in_edges = defaultdict(list); self.out_edges = defaultdict(list)
         self.protocols={};self.protocol_owners={};self.protocol_observations=defaultdict(list)
         self.protocol_in=defaultdict(list);self.protocol_out=defaultdict(list)
@@ -466,12 +479,16 @@ class SourceObservedBoundaryProvider:
             edges.extend((self.view.source_port(p), point, K.ARGUMENT, Meaning.DEPENDENCE, 'PYTHON_SIDE_INPUT', n)
                 for n, p in enumerate(inputs))
             edges.extend(((self.view.source_port(b.world), point, K.STATE_INTERFACE, Meaning.STATE_INTERFACE, 'PRE_CALL_WORLD', 0),
-                (point, self.view.source_port(b.result), K.COMPLETION, Meaning.DEPENDENCE, 'NORMAL_COMPLETION_NOT_OBSERVED', 0),
-                (point, self.view.source_port(b.result_world), K.STATE_INTERFACE, Meaning.STATE_INTERFACE, 'NORMAL_COMPLETION_NOT_OBSERVED', 1)))
+                (point, self.view.source_port(b.result), K.COMPLETION, Meaning.DEPENDENCE, 'IF_CALL_RETURNS_NORMALLY', 0),
+                (point, self.view.source_port(b.result_world), K.STATE_INTERFACE, Meaning.STATE_INTERFACE, 'IF_CALL_RETURNS_NORMALLY', 1)))
             for edge in edges:
                 row = b, evidence, edge
                 self.out_edges[self._key(edge[0])].append(row); self.in_edges[self._key(edge[1])].append(row)
-        for observation in rows.observations: self.observations[observation.boundary].append(observation)
+        for observation in rows.observations:
+            self.observations[observation.boundary].append(observation)
+            if observation.normal_continuation is not None and observation.boundary not in self.continuation_sources:
+                self.continuation_sources[observation.boundary] = replace(self.locator,
+                    pointer=f'#/shards/{unit}/tables/observations')
         for i,boundary in enumerate(rows.protocols):self._attach_protocol(unit,i,boundary)
         for observation in rows.protocol_observations:self.protocol_observations[observation.boundary].append(observation)
         self.attached.add(unit)
@@ -623,6 +640,8 @@ class SourceObservedBoundaryProvider:
                 callback_result_is_outer_call_result=False,first_stage_complete=False)
         return dict(node=self.describe(point), original=b, observations=tuple(self.observations[b.id]),
             native_formals_proven=False, construction_stages_proven=False, normal_completion_proven=False,
+            normal_continuation_conditions=CONTINUATION_CONDITIONS,
+            normal_continuation_count=sum(row.normal_continuation is not None for row in self.observations[b.id]),
             effects=b.effects.value, source_bodies_copied=False, first_stage_complete=False)
 
     def _neighbors(self, point, incoming):
@@ -642,13 +661,17 @@ class SourceObservedBoundaryProvider:
             if b.target_kind is Target.TYPE_OBJECT: guards += ('TYPE_OBJECT_NOT_STANDARD_CONSTRUCTION_STAGE',)
             if b.target_kind is Target.OTHER_UNCLASSIFIED: guards += ('CALLABLE_PROTOCOL_NOT_IDENTIFIED',)
             conditions = tuple(Condition(SCHEMA, guard, owner, ordinal, (source, target)) for guard in guards)
-            edges.append(Edge(source, target, kind, meaning,
-                (Evidence(SCHEMA+'.original-call-interface.v1', (self.locator, point.namespace.graph), (owner, source, target)),),
-                conditions, Strength.MAY))
+            proof = (Evidence(SCHEMA+'.original-call-interface.v1',
+                (self.locator, point.namespace.graph), (owner, source, target)),)
+            occurrence = self.continuation_sources.get(b.id)
+            if route == 'IF_CALL_RETURNS_NORMALLY' and occurrence is not None:
+                proof += (Evidence(SCHEMA+'.recorded-normal-continuation-conditional.v1',
+                    (occurrence, point.namespace.graph), (owner, source, target)),)
+            edges.append(Edge(source, target, kind, meaning, proof, conditions, Strength.MAY))
         callback=self._callback_neighbors(point,incoming)
         edges.extend(callback.edges)
         frontiers = () if not edges else (Frontier(point, 'OBSERVED_CALL_IMPLEMENTATION_AND_EFFECTS_OPEN',
-            'Python-side CALL ports and recorded target categories are connected; no native body, type-call stage or completion is proven.'),)
+            'Python-side ports retain recorded targets and scoped continuation evidence. Native entry, returned contents, device completion, and effects remain open.'),)
         protocols=self._protocol_neighbors(point,incoming)
         return Neighborhood(tuple(dict.fromkeys((*edges,*protocols.edges))),(*frontiers,*callback.frontiers,*protocols.frontiers))
 

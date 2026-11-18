@@ -11,7 +11,7 @@ from .ids import ProviderID
 from .normal_links import CodeScopeWitness
 from .normal_targets import GlobalPort, Body
 from .providers import ProviderFactReference
-from .call_edges import CallRecordAnchor, CapturedCode, InvocationKey
+from .call_edges import CallRecordAnchor, CapturedCode, CapturedSite, InvocationKey
 from .python_call_targets import PythonCallTarget, PythonTargetKind
 from .native_callables import NativeCallableFact
 
@@ -60,6 +60,21 @@ class SourceObservedProtocolBoundary:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedBoundaryContinuation:
+    """A later CALL witnessed in the same original frame after a normal continuation."""
+    successor: CallRecordAnchor
+    site: CapturedSite
+    hook_epoch: int
+
+    def __post_init__(self):
+        if (type(self.successor) is not CallRecordAnchor or type(self.successor.index) is not int
+                or type(self.site) is not CapturedSite
+                or self.site.opname not in ('CALL', 'CALL_KW', 'CALL_FUNCTION_EX')
+                or type(self.hook_epoch) is not int or self.hook_epoch < 1):
+            raise ValueError('boundary continuation requires its original typed CALL successor')
+
+
+@dataclass(frozen=True, slots=True)
 class SourceBoundaryObservation:
     boundary: ProviderID
     source_observation: ProviderID
@@ -69,6 +84,14 @@ class SourceBoundaryObservation:
     profile_alternatives: tuple[ProviderFactReference, ...]
     native: NativeCallableFact | None = None
     native_anchor: CallRecordAnchor | None = None
+    normal_continuation: ObservedBoundaryContinuation | None = None
+
+    def __post_init__(self):
+        continuation = self.normal_continuation
+        if continuation is not None and (type(continuation) is not ObservedBoundaryContinuation
+                or type(self.attempt.index) is not int or continuation.successor.path != self.attempt.path
+                or continuation.successor.index <= self.attempt.index):
+            raise ValueError('normal continuation must follow its original attempt in the same observation stream')
 
 
 class SourceCallbackBodyKind(str, Enum):

@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 LeWM CEM 的 487 条调用协议前沿均已接回 50 个共享源码接口。v5 沿同帧原字节码核实了 26 个接口上的 336 次正常续行，独立冷验核对 52 条条件结果和状态边。原采集缺少同次原生调用记录，返回内容、设备完成和副作用仍待证明。本轮未运行 LeWM。见 `artifacts/baseline/lewm-observed-normal-continuations.json`。
+
 2026-11-18 LeWM CEM 的 v3 图以原调用、前驱返回和帧形参重放了一个隐式接收者布局。`solve → init_action_distrib` 有三条数据参数路由，附带帧槽隔离条件。缺少前驱证据时保留零或一前缀两种布局，现有 C++ 降级仍拒绝隐式接收者。单元构建并同进程复验耗时 64.83 s，独立冷读 63.99 s，旧 v2 冷读为 74.05 s。542 条观测前沿仍在。见 `artifacts/baseline/lewm-observed-positional-receiver.json`。
 
 2026-11-18 用已保存的真实 GPU 采集与当前源码重建了 LeWM CEM 单元。静态图含 70 个调用，v2 回放确认 `solve` 实际进入 `init_action_distrib`，参数绑定仍待补齐。冷读复验一致，当前还有 542 条观测前沿。本机 CUDA 设备数为 0，本轮没有新推理或加速测量。见 `artifacts/baseline/lewm-observed-v2-review.json`。
