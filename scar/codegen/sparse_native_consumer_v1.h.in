@@ -1,0 +1,108 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <filesystem>
+#include <limits>
+#include <link.h>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace scar::sparse_v1 {
+
+static_assert(sizeof(int) == 4 && sizeof(double) == 8 && std::numeric_limits<double>::is_iec559);
+
+struct Timings {
+    double ordering_s, etree_s, factor_s, solve_s;
+};
+
+// The recorded plan uses the existing provider. Its dispatcher owns only ELF
+// loading and the lifetime of the library handles.
+class Provider {
+    struct Close {
+        void operator()(void* handle) const noexcept { dlclose(handle); }
+    };
+    using Library = std::unique_ptr<void, Close>;
+    std::vector<Library> handles_;
+
+    static void verify_path(void* handle, const std::filesystem::path& path) {
+        link_map* image = nullptr;
+        if (dlinfo(handle, RTLD_DI_LINKMAP, &image) != 0 || image == nullptr
+            || std::filesystem::canonical(image->l_name) != path) {
+            throw std::runtime_error("loader resolved an unexpected provider path");
+        }
+    }
+
+    void load(const std::filesystem::path& path, const char* soname) {
+        if (*soname != '\0') {
+            Library existing(dlopen(soname, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL));
+            if (existing) {
+                verify_path(existing.get(), path);
+            }
+        }
+        Library handle(dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL));
+        if (!handle) {
+            const char* error = dlerror();
+            throw std::runtime_error(error ? error : "provider load failed");
+        }
+        verify_path(handle.get(), path);
+        handles_.push_back(std::move(handle));
+    }
+
+    template<class Function>
+    Function symbol(const char* name) const {
+        dlerror();
+        void* address = dlsym(handles_.back().get(), name);
+        if (const char* error = dlerror()) {
+            throw std::runtime_error(error);
+        }
+        if (!address) {
+            throw std::runtime_error("required operator symbol is null");
+        }
+        return reinterpret_cast<Function>(address);
+    }
+
+public:
+    using Create = const void* (*)(int, int, const int*, const int*, std::size_t, Timings*);
+    using RetainedBytes = std::size_t (*)(const void*);
+    using Destroy = void (*)(const void*);
+    using Solve = int (*)(const void*, int, int, const int*, const int*, const double*, const double*, double*, Timings*);
+    using Reference = int (*)(int, int, const int*, const int*, const double*, const double*, double*, Timings*);
+
+    Create create;
+    RetainedBytes retained_bytes;
+    Destroy destroy;
+    Solve solve;
+    Reference reference;
+
+    explicit Provider(const std::filesystem::path& bundle) {
+        static constexpr const char* layout[][2] = {
+@SCAR_PROVIDER_LOAD_ORDER@
+        };
+        if (std::getenv("LD_PRELOAD") || std::getenv("LD_AUDIT")) {
+            throw std::runtime_error("unexpected ambient shared-library interception");
+        }
+        const auto root = std::filesystem::canonical(bundle);
+        for (const auto& entry : layout) {
+            const auto file = root / entry[0];
+            if (std::filesystem::canonical(file) != file) {
+                throw std::runtime_error("provider path is outside its sealed bundle layout");
+            }
+            load(file, entry[1]);
+        }
+        if (symbol<int (*)()>("scar_superlu_abi_v1")() != 1) {
+            throw std::runtime_error("sparse operator ABI version differs");
+        }
+        create = symbol<Create>("scar_superlu_symbolic_v1");
+        retained_bytes = symbol<RetainedBytes>("scar_superlu_symbolic_bytes_v1");
+        destroy = symbol<Destroy>("scar_superlu_symbolic_destroy_v1");
+        solve = symbol<Solve>("scar_superlu_symbolic_solve_v1");
+        reference = symbol<Reference>("scar_superlu_reference_v1");
+    }
+};
+
+}  // namespace scar::sparse_v1

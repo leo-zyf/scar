@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 稀疏区域的 C++20 交付可独立调用已有 SuperLU 与 OpenBLAS。`export-native-sparse` 从同一 F4 执行计划冷重放，保存原生 ELF 的可迁移依赖闭包及 ABI 1 绑定。移动后由独立 C++ 可执行程序验证两组数值的逐位结果及结构守卫，实际加载路径均在包内。原 Python 入口、成本发布仍各有自己的合同。见 `artifacts/baseline/independent-native-provider-export.json`。
+
 2026-11-18 分层审查用独立输入补了源码定义身份与内置绑定验证、后继图冷回放、NumPy 提供方和当前浮点策略读法、运行中的解释器身份、实际 `spawn` 引导。两子进程的独立复现逐位一致，8 次原生和 16 次原路径调用均符合预期。此前的 Cirq 22 量子位、8 进程对照在 CPU16–24 下为 1,114.743→1,069.885 秒，试验组命中 42,064 次，应用报告结果一致。该单对 A/B 使用双方显式浮点策略和先前提交 `923ec891` 的交付链。源证据版本已更新，默认继续 `KEEP`。报告见 `artifacts/baseline/partition-spawn-and-scalar-mainline.json`。
 
 2026-11-18 `run-partition-workers` 已验证能在正常 CPython `spawn` 子进程绑定同一份 C++20 产物，并通过真实父子 PID 和源码 CodeID 记录执行证据。Cirq 12 量子位的 2 个进程在默认 NumPy 浮点策略下回退 288 次，在双方使用显式试验策略时执行 264 次原生调用、回退 24 次，报告的数值结果一致。父进程校验一次 Python 可执行文件，匹配的子进程验证运行中文件身份。实测子绑定由约 125 ms 降至约 3 ms。Sunfish 的通用标量表达式已经从 F4 证明编译到原入口，固定深度 6 的整入口三对中位数为 3.897→4.239 秒，走法、节点数和分数一致。默认决策继续为 `KEEP`。见 `artifacts/baseline/partition-spawn-and-scalar-mainline.json`。

@@ -1,0 +1,132 @@
+{
+  "deployment": {
+    "authorized": false,
+    "fresh_performance_evidence": false
+  },
+  "implemented": {
+    "closure_manifest": {
+      "bytes": 3601,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/provider/bundle.json",
+      "sha256": "8afb57012fcf8b201e9baa8abe6e9b78a2ff4add474323148f0d354781f4dc73"
+    },
+    "command": "scar export-native-sparse",
+    "header": {
+      "bytes": 4273,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/scar_sparse_provider_v1.hpp",
+      "sha256": "077c22117bd183a69e7b22f3c319dd584ddc8fdb719302532a175f8bb9f11b39"
+    },
+    "loaded_members": [
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/provider/objects/libgfortran-040039e1-0352e75f.so.5.0.0",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/provider/objects/libquadmath-96973f99-934c22de.so.0.0.0",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/provider/objects/libscipy_openblas-5f890258.so",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/provider/objects/sparse_lu.so"
+    ],
+    "preload": [
+      "objects/libquadmath-96973f99-934c22de.so.0.0.0",
+      "objects/libgfortran-040039e1-0352e75f.so.5.0.0",
+      "objects/libscipy_openblas-5f890258.so"
+    ],
+    "relocated_manifest": {
+      "bytes": 2338,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated/artifact.json",
+      "sha256": "e3070a5b9cdcabc64cb1c42ea697f4891e57b71a60269c9cf5815c8a241665a1"
+    },
+    "root_unchanged": true,
+    "system_sonames": [
+      "ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libpthread.so.0",
+      "libstdc++.so.6",
+      "libz.so.1"
+    ]
+  },
+  "inferred": {
+    "abi": {
+      "blas_threads": "external setting",
+      "calling_convention": "C",
+      "interpreter_required": false,
+      "language": "c++20",
+      "loader": "linux-glibc",
+      "matrix": "square CSR with sorted, unique int32 column indices and int32 row offsets",
+      "numeric": "IEEE binary64 values, dense RHS and output, round-to-nearest",
+      "provider_failure_diagnostics": "unqualified",
+      "publish": "caller-owned private output; publish only on zero status",
+      "structure": "owned by symbolic handle and verified against each solve",
+      "symbolic_memory": "retained symbolic structure only; provider scratch and NUMA unresolved",
+      "version": 1
+    },
+    "compatibility": "unchanged Python entry when used",
+    "inherited_cost_claim": false,
+    "operator_fallback_failure_diagnostics_proven": false,
+    "scope": "exact sparse numeric region, no new CPU or GPU kernel"
+  },
+  "observed": {
+    "frontend_native_boundary": {
+      "bytes": 10271,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/frontend-boundary/native.json",
+      "sha256": "4721fe912d923d88a01c7cbbac7597d83d77b5c1fdc428a2d98de15adfd2da5b"
+    },
+    "frontend_python_boundary": {
+      "bytes": 4574,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/frontend-boundary/python.json",
+      "sha256": "3cf20ba67da4707b2c058e36b280127d7136bf24790078cf178a6c4df556dacf"
+    },
+    "original_elf": {
+      "schema": "scar.native-library",
+      "sha256": "ac9549b960a4077349a55042cca5daba742ee3bd3d2a004b83b9e088cf1bde1f",
+      "size_bytes": 139584,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan/native/sparse_lu.so"
+    },
+    "source_recipe_id": "recipe-v1:55f85bf6206ed3f98d5b37386c2af5dbafce340f7b068283926a396fb7a5e877",
+    "source_scope_f4_replayed": true
+  },
+  "schema": "scar.independent-native-provider-export-evidence",
+  "schema_version": 1,
+  "verified": {
+    "actual_mapping_evidence": {
+      "bytes": 4035,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/native-validation.txt",
+      "sha256": "ea7a1bc4d83d6e768fb731d948db70fbcf18809e4368416e57d38082c6246585"
+    },
+    "compiler": [
+      "c++",
+      "-std=c++20",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-O2",
+      "-I",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/relocated",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/consume_sparse.cpp",
+      "-ldl",
+      "-o",
+      "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/consume_sparse"
+    ],
+    "consumer_source": {
+      "bytes": 2776,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/consume_sparse.cpp",
+      "sha256": "425afc1695f915bb5d2ecf40c5f4b3281fd8190659c6af2b8bd95b39df7052ad"
+    },
+    "environment": {
+      "OPENBLAS_NUM_THREADS": "1",
+      "PATH": "/usr/bin:/bin"
+    },
+    "exact_output_comparisons": 2,
+    "executable_needed": [
+      "libstdc++.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6"
+    ],
+    "moved_before_check": true,
+    "retained_symbolic_bytes": 236,
+    "stack_process_no_python": true,
+    "standalone_executable": {
+      "bytes": 36512,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-independent-cpp/consume_sparse",
+      "sha256": "e46208a36a9bf97cb8917fcb8f7fa435043f7f3b42ec2e574b98ecc1f55bd754"
+    },
+    "structure_guard_declined_and_preserved_output": true
+  }
+}

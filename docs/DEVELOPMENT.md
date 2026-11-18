@@ -96,6 +96,12 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 512 次有限元参数扫描的整程中位数从 8.649 s 降到 6.933 s，完整进程计时为 1 组热身和 3 组配对。选择收据仅适用于该源码、参数、环境和 CPU 亲和性。证据见 `artifacts/baseline/three-stage-csr-symbolic-solve.json`。
 
+### 独立 C++ 原生库交付
+
+`scar export-native-sparse --recipe RECIPE --lowering LOWERING --out PACKAGE` 重放原执行计划和降级收据，封装已有 SuperLU、OpenBLAS 及其依赖的原始 ELF。`scar export-native-sparse --check PACKAGE` 可在移动后校验包内文件与加载顺序。
+
+C++20 调用方包含 `scar_sparse_provider_v1.hpp`，以包目录构造 `scar::sparse_v1::Provider`，通过 ABI 1 创建、复用和释放符号计划。成功状态返回前，输出缓冲区保持私有。独立调用使用 Linux/glibc 和随包原生库。原 F4、Python 兼容入口与历史成本保存在原收据中，交付包有自己的成本边界。
+
 ### 稀疏更新与求解的联合计划
 
 `plan_sparse_pipeline --scope SCOPE --row-selection ROW --solve-launch SOLVE --out STUDY` 复验两个区域及其跨函数数据边。循环模板保留每轮的更新、原规范化和求解，以及跨轮完成顺序。两个 C++ 计划从首次使用持有到退出，预算检查计算同时占用的元数据。
