@@ -161,7 +161,7 @@ def resolve_aten_cpu_windows(recipe, *, contract, target, allowed_cpu_ids):
                 windows=windows, **placement)
 
 
-def select_cpu_windows(schedule, services, dispatch, *, worker_services=None):
+def select_cpu_windows(schedule, services, dispatch, *, worker_services=None, pair_cost_adjustments=None):
     """Return non-overlapping first indices that minimize modeled completion time.
 
     Each position either stays serial, or starts a legal pair and skips its
@@ -192,6 +192,11 @@ def select_cpu_windows(schedule, services, dispatch, *, worker_services=None):
             raise ValueError('worker service is missing for an eligible CPU window')
         eligible.add(first)
 
+    adjustments = {} if pair_cost_adjustments is None else pair_cost_adjustments
+    if any(type(index) is not int or index not in eligible or type(cost) is not int
+           for index, cost in adjustments.items()):
+        raise ValueError('pair cost adjustments must name eligible first operation indices')
+
     # Scores compare savings first and negative handoff count second.
     scores = [(0, 0)] * (len(services) + 1)
     take = [False] * len(services)
@@ -199,7 +204,7 @@ def select_cpu_windows(schedule, services, dispatch, *, worker_services=None):
         scores[index] = scores[index + 1]
         if index in eligible:
             paired_duration = max(services[index], worker_services[index + 1]) + dispatch
-            saving = services[index] + services[index + 1] - paired_duration
+            saving = services[index] + services[index + 1] - paired_duration - adjustments.get(index, 0)
             tail_saving, tail_handoffs = scores[index + 2]
             paired = (saving + tail_saving, tail_handoffs - 1)
             if saving > 0 and paired >= scores[index]:

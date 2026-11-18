@@ -33,9 +33,10 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
     if (best_serial[0] - chosen[0]) / best_serial[0] < _GAIN:
         chosen = best_serial
     estimate, _, cpus, mode, samples = chosen
+    residency = any(row['model'].get('numa_locality', {}).get('sampled_node_residency_observed') for row in candidates)
     report = dict(schema='scar.aten-cpu-domain-plan', schema_version=1, topology=domain, probe=origin,
                   inputs=inputs, comparisons=candidates, selected_cpu_ids=list(cpus), selected_mode=mode,
                   selected_estimate_ns=estimate, best_serial_estimate_ns=best_serial[0],
                   best_serial_cpu_ids=list(best_serial[2]), workload_variant_runs=0,
-                  memory_page_placement_observed=False, source_replacement_authorized=False)
+                  memory_page_placement_observed=residency, source_replacement_authorized=False)
     return report, samples

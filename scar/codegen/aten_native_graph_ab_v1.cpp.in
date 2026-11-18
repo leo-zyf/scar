@@ -2,6 +2,8 @@
 #include "entry.cpp"
 #undef main
 
+#include "aten_numa_pages_v1.h"
+
 #include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
 
@@ -31,6 +33,20 @@ struct Calibration {
     OperationTimes worker_operations;
     std::int64_t dispatch_ns;
 };
+
+struct NumaLocality {
+    explicit NumaLocality(std::size_t window)
+        : window_start(window), inputs(graph::input_count), caller_outputs(graph::operation_count),
+          worker_outputs(graph::operation_count) {}
+
+    std::size_t window_start;
+    std::vector<graph::NumaPageSample> inputs;
+    std::vector<graph::NumaPageSample> caller_outputs;
+    std::vector<graph::NumaPageSample> worker_outputs;
+    std::vector<OperationTimes> consumer_samples;
+};
+
+constexpr std::size_t locality_storage_budget = 128;
 
 struct StorageGeometry {
     std::size_t bytes;
@@ -219,9 +235,49 @@ void emit_benchmark(int caller, int worker, int warmup, int measurements, const 
     std::cout << "]}\n";
 }
 
+void emit_page_samples(const std::vector<graph::NumaPageSample>& observations) {
+    for (std::size_t i = 0; i < observations.size(); ++i) {
+        if (i != 0) std::cout << ',';
+        graph::write_numa_pages(std::cout, observations[i]);
+    }
+}
+
+void emit_locality(const std::optional<NumaLocality>& locality) {
+    std::cout << "{\"schema_version\":1,\"status\":";
+    if (!locality) {
+        constexpr auto storages = graph::input_count + 2 * graph::operation_count;
+        std::cout << (storages > locality_storage_budget ? "\"GRAPH_EXCEEDS_LOCALITY_SAMPLE_BUDGET\""
+                                                        : "\"REQUIRES_SINGLE_LEGAL_WINDOW\"") << '}';
+        return;
+    }
+
+    std::cout << "\"MEASURED\",\"window_start\":" << locality->window_start << ",\"input_pages\":[";
+    emit_page_samples(locality->inputs);
+    std::cout << "],\"caller_output_pages\":[";
+    emit_page_samples(locality->caller_outputs);
+    std::cout << "],\"worker_output_pages\":[";
+    emit_page_samples(locality->worker_outputs);
+    std::cout << "],\"worker_output_consumer_samples_ns\":[";
+    for (std::size_t row = 0; row < locality->consumer_samples.size(); ++row) {
+        if (row != 0) std::cout << ',';
+        std::cout << '[';
+        const auto& times = locality->consumer_samples[row];
+        for (std::size_t op = 0; op < times.size(); ++op) {
+            if (op != 0) std::cout << ',';
+            if (op > locality->window_start + 1) {
+                std::cout << times[op];
+            } else {
+                std::cout << "null";
+            }
+        }
+        std::cout << ']';
+    }
+    std::cout << "]}";
+}
+
 void emit_calibration(int caller, int worker, int warmup, const std::vector<Calibration>& calibration,
                       const std::array<std::optional<StorageGeometry>, graph::input_count>& input_storage,
-                      const ResultStorage& result_storage) {
+                      const ResultStorage& result_storage, const std::optional<NumaLocality>& locality) {
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"caller_cpu\":" << caller << ",\"worker_cpu\":" << worker
               << ",\"calibration\":{\"operation_samples_ns\":[";
     for (std::size_t row = 0; row < calibration.size(); ++row) {
@@ -259,7 +315,9 @@ void emit_calibration(int caller, int worker, int warmup, const std::vector<Cali
     emit_storage_bytes(input_storage);
     std::cout << "],\"result_storage_bytes\":[";
     emit_storage_bytes(result_storage);
-    std::cout << "]}}\n";
+    std::cout << "],\"numa_locality\":";
+    emit_locality(locality);
+    std::cout << "}}\n";
 }
 
 void benchmark(char** args, int caller, int worker, graph::CpuPair& pair, const graph::WindowSelection& windows) {
@@ -309,6 +367,14 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
     const auto& inputs = data.tensors;
     std::array<std::optional<StorageGeometry>, graph::input_count> input_storage;
     ResultStorage result_storage;
+    std::optional<NumaLocality> locality;
+    if constexpr (graph::input_count + 2 * graph::operation_count <= locality_storage_budget) {
+        if (std::ranges::count(graph::legal_window_starts, true) == 1) {
+            const auto start = std::ranges::find(graph::legal_window_starts, true);
+            locality.emplace(start - graph::legal_window_starts.begin());
+            locality->consumer_samples.reserve(warmup);
+        }
+    }
     const auto check_sample_inputs = [&] {
         data.check();
         for (std::size_t i = 0; i < inputs.size(); ++i) {
@@ -347,15 +413,19 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
     }
     // Recreate each operand in original order. Only an operator admitted as a
     // worker lane may move off the caller, and the service clock runs after handoff.
-    const auto sample_worker = [&](OperationTimes& timings) {
+    const auto sample_worker = [&](Calibration& row, OperationTimes* consumer_times) {
         const auto observed = graph::run_observed(inputs, [&](std::size_t operation, auto&& call) {
             at::Tensor value;
             if (operation != 0 && graph::legal_window_starts[operation - 1]) {
                 pair.run([] {}, [&] {
                     const auto start = Clock::now();
                     value = call();
-                    timings.at(operation) = elapsed_ns(start);
+                    row.worker_operations.at(operation) = elapsed_ns(start);
                 });
+            } else if (consumer_times && operation > locality->window_start + 1) {
+                const auto start = Clock::now();
+                value = call();
+                consumer_times->at(operation) = elapsed_ns(start);
             } else {
                 value = call();
             }
@@ -366,14 +436,38 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
         check_outputs(inputs, calibration_reference, observed);
     };
     pair.run([] {}, [&] { check_lane(worker); });
-    OperationTimes worker_warmup{};
-    sample_worker(worker_warmup);
+    Calibration worker_warmup{};
+    sample_worker(worker_warmup, nullptr);
     for (auto& row : calibration) {
-        sample_worker(row.worker_operations);
+        auto* consumer_times = locality ? &locality->consumer_samples.emplace_back() : nullptr;
+        sample_worker(row, consumer_times);
+    }
+    if (locality) {
+        // Keep kernel queries out of the operation, dispatch and graph timing paths.
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            locality->inputs[i] = graph::observe_numa_pages(inputs[i]);
+        }
+        const auto observe_pages = [&](auto& pages, bool run_on_worker) {
+            const auto observed = graph::run_observed(inputs, [&](std::size_t operation, auto&& call) {
+                at::Tensor value;
+                if (run_on_worker && operation == locality->window_start + 1) {
+                    pair.run([] {}, [&] { value = call(); });
+                } else {
+                    value = call();
+                }
+                observe_storage(result_storage.at(operation), value);
+                pages[operation] = graph::observe_numa_pages(value);
+                return value;
+            });
+            check_sample_inputs();
+            check_outputs(inputs, calibration_reference, observed);
+        };
+        observe_pages(locality->caller_outputs, false);
+        observe_pages(locality->worker_outputs, true);
     }
     pair.run([] {}, [&] { check_lane(worker); });
     check_lane(caller);
-    emit_calibration(caller, worker, warmup, calibration, input_storage, result_storage);
+    emit_calibration(caller, worker, warmup, calibration, input_storage, result_storage, locality);
 }
 
 }  // namespace

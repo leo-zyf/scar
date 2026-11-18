@@ -19,6 +19,7 @@ from scar.optimization.aten_tensor_lifetime import tensor_releases
 _DRIVER = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
 _PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
 _PAIR_DRIVER = Path(__file__).with_name('aten_native_graph_ab_v1.cpp.in')
+_NUMA_HEADER = Path(__file__).with_name('aten_numa_pages_v1.h')
 _EXECUTABLE = 'aten-native-graph'
 
 
@@ -230,6 +231,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
         if schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
+            (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
             (stage / 'pair.cpp').write_bytes(_PAIR_DRIVER.read_bytes())
         (stage / 'recipe.json').write_text(json.dumps(recipe, indent=2, sort_keys=True) + '\n')
         subprocess.run(command, cwd=stage, check=True, env=command_env)

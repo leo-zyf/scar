@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 NUMA 页位置已接入 ATen 并行窗口成本。双向跨节点校准均观测到 worker 结果的采样页转到另一节点，规划器沿图依赖替换对应 caller 消费成本。选择仍是 CPU 14/15。96 步 ODE 的完整进程中位数为 12.189→8.139 s，384 次原生调用、零回退、结果逐字节一致。见 `artifacts/baseline/aten-numa-locality.json`。
+
 2026-11-18 较宽 CPU 域已接通 `compile-aten-entry`。真实 56 逻辑 CPU 目标按 NUMA、缓存和 ISA 提名四个代表对，利用现成 ATen 算子的两侧服务时间与交接成本选定 CPU 14/15。该对上原生区域实测 1.94×，96 步 ODE 的配对进程中位数从 12.337 s 降至 8.132 s。每个守卫进程执行 384 次原生调用、零回退、结果逐字节一致。见 `artifacts/baseline/aten-broad-cpu.json`。
 
 2026-11-18 `compile-aten-entry` 把已验证的发现报告接到目标 CPU、范围内成本规划、C++20 交付及完整入口 A/B。96 步 ODE 自动恢复 CPU 4/5。原生区域实测 1.72×。完整进程中位数从 12.182 s 降到 8.079 s，约 1.51×。3 次实测的守卫进程各执行 384 次原生调用，零回退，输出逐字节一致。见 `artifacts/baseline/aten-entry-delivery.json`。

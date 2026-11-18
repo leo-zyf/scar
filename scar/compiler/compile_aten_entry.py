@@ -104,7 +104,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
             native = out / 'native'
             delivered = compile_graph(native, placement)
             if any(delivered['files'][name] != compiled['files'][name]
-                   for name in ('graph.hpp', 'operators.hpp', 'pair.cpp', 'aten_native_pair_v1.h')):
+                   for name in ('graph.hpp', 'operators.hpp', 'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')):
                 raise ValueError('delivery graph code differs from the measured CPU probe')
             compiled = delivered
         primitive_observation = dict(inputs=choices['inputs'], raw=chosen['primitive_observations'])
