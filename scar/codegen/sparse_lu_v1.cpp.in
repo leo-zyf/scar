@@ -1,0 +1,289 @@
+#include <algorithm>
+#include <cfenv>
+#include <chrono>
+#include <csetjmp>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <vector>
+
+extern "C" {
+#include "slu_ddefs.h"
+}
+
+namespace {
+using Clock = std::chrono::steady_clock;
+constexpr int rejected = -1;
+constexpr int aborted = -2;
+static_assert(sizeof(int_t) == 4 && sizeof(slu_blasint) == 4);
+
+// The vendored library exposes allocator and abort callbacks. Each public
+// call owns one allocation list so a provider abort also releases C scratch.
+struct alignas(std::max_align_t) Block {
+    Block *prev, *next;
+};
+struct AllocationFrame {
+    std::jmp_buf recovery;
+    Block *head = nullptr;
+};
+thread_local AllocationFrame *active = nullptr;
+
+template<class Operation>
+int guarded(Operation operation) {
+    if (active) {
+        return rejected;
+    }
+    auto frame = std::make_unique<AllocationFrame>();
+    active = frame.get();
+    const int result = setjmp(frame->recovery) == 0 ? operation() : aborted;
+    for (auto *it = frame->head; it;) {
+        auto *next = it->next;
+        std::free(it);
+        it = next;
+    }
+    active = nullptr;
+    return result;
+}
+
+struct Timings {
+    double ordering_s, etree_s, factor_s, solve_s;
+};
+
+struct Symbolic {
+    std::vector<int_t> indices, offsets, begin, end;
+    std::vector<int> columns, etree;
+};
+
+bool valid(int size, int nnz, const int_t *indices, const int_t *offsets) {
+    if (size <= 0 || nnz <= 0 || offsets[0] != 0 || offsets[size] != nnz) {
+        return false;
+    }
+    for (int row = 0; row < size; ++row) {
+        const auto begin = offsets[row];
+        const auto end = offsets[row + 1];
+        if (begin < 0 || begin > end || end > nnz) {
+            return false;
+        }
+        int_t previous = -1;
+        for (auto i = begin; i < end; ++i) {
+            if (indices[i] <= previous || indices[i] >= size) {
+                return false;
+            }
+            previous = indices[i];
+        }
+    }
+    return true;
+}
+
+double seconds(Clock::time_point started) {
+    return std::chrono::duration<double>(Clock::now() - started).count();
+}
+
+std::size_t bytes(const Symbolic &s) {
+    return sizeof(s) + sizeof(int_t) * (s.indices.capacity() + s.offsets.capacity()
+        + s.begin.capacity() + s.end.capacity()) + sizeof(int) * (s.columns.capacity() + s.etree.capacity());
+}
+
+int analyze(Symbolic &s, int size, int nnz, Timings &time) {
+    return guarded([&] {
+        superlu_options_t options{};
+        set_default_options(&options);
+        // dgssv views the original CSR bytes as the column storage of A^T.
+        NCformat transpose_store{nnz, nullptr, s.indices.data(), s.offsets.data()};
+        SuperMatrix transpose{SLU_NC, SLU_D, SLU_GE, size, size, &transpose_store};
+        SuperMatrix permuted{};
+        auto started = Clock::now();
+        get_perm_c(options.ColPerm, &transpose, s.columns.data());
+        time.ordering_s = seconds(started);
+        started = Clock::now();
+        sp_preorder(&options, &transpose, s.columns.data(), s.etree.data(), &permuted);
+        time.etree_s = seconds(started);
+        const auto &structure = *static_cast<const NCPformat *>(permuted.Store);
+        std::copy_n(structure.colbeg, size, s.begin.data());
+        std::copy_n(structure.colend, size, s.end.data());
+        Destroy_CompCol_Permuted(&permuted);
+        return 0;
+    });
+}
+
+int solve(const Symbolic &s, int size, int nnz, const int_t *indices, const int_t *offsets,
+          const double *values, const double *rhs, double *x, Timings &time) {
+    if (std::fegetround() != FE_TONEAREST || static_cast<std::size_t>(size) != s.columns.size()
+            || static_cast<std::size_t>(nnz) != s.indices.size()
+            || std::memcmp(indices, s.indices.data(), s.indices.size() * sizeof(int_t))
+            || std::memcmp(offsets, s.offsets.data(), s.offsets.size() * sizeof(int_t))) {
+        return rejected;
+    }
+    // The public C API takes mutable pointers. Keep caller A/b and retained
+    // symbolic metadata isolated, including on singularity or abort.
+    std::vector<int_t> rowind = s.indices, begin = s.begin, end = s.end;
+    std::vector<int> columns = s.columns, etree = s.etree, pivots(size);
+    std::vector<double> numeric(values, values + nnz);
+    std::copy_n(rhs, size, x);
+    return guarded([&] {
+        superlu_options_t options{};
+        set_default_options(&options);
+        NCPformat permuted_store{nnz, numeric.data(), rowind.data(), begin.data(), end.data()};
+        SuperMatrix permuted{SLU_NCP, SLU_D, SLU_GE, size, size, &permuted_store};
+        DNformat dense_store{size, x};
+        SuperMatrix dense{SLU_DN, SLU_D, SLU_GE, size, 1, &dense_store};
+        SuperMatrix lower{}, upper{};
+        GlobalLU_t workspace{};
+        SuperLUStat_t stats{};
+        StatInit(&stats);
+        int_t info = 0;
+        auto started = Clock::now();
+        dgstrf(&options, &permuted, sp_ienv(2), sp_ienv(1), etree.data(), nullptr, 0,
+               columns.data(), pivots.data(), &lower, &upper, &workspace, &stats, &info);
+        time.factor_s = seconds(started);
+        int solve_info = 0;
+        if (!info) {
+            started = Clock::now();
+            dgstrs(TRANS, &lower, &upper, columns.data(), pivots.data(), &dense, &stats, &solve_info);
+            time.solve_s = seconds(started);
+        }
+        if (lower.Store) {
+            Destroy_SuperNode_Matrix(&lower);
+        }
+        if (upper.Store) {
+            Destroy_CompCol_Matrix(&upper);
+        }
+        StatFree(&stats);
+        return info ? info : solve_info;
+    });
+}
+}
+
+extern "C" void *superlu_python_module_malloc(std::size_t size) {
+    if (!active || size > std::numeric_limits<std::size_t>::max() - sizeof(Block)) {
+        return nullptr;
+    }
+    auto *block = static_cast<Block *>(std::malloc(sizeof(Block) + size));
+    if (!block) {
+        return nullptr;
+    }
+    block->prev = nullptr;
+    block->next = active->head;
+    if (block->next) {
+        block->next->prev = block;
+    }
+    active->head = block;
+    return block + 1;
+}
+
+extern "C" void superlu_python_module_free(void *pointer) {
+    if (!pointer) {
+        return;
+    }
+    auto *block = static_cast<Block *>(pointer) - 1;
+    if (block->prev) {
+        block->prev->next = block->next;
+    } else {
+        active->head = block->next;
+    }
+    if (block->next) {
+        block->next->prev = block->prev;
+    }
+    std::free(block);
+}
+
+extern "C" void superlu_python_module_abort(char *) {
+    std::longjmp(active->recovery, 1);
+}
+
+#define SCAR_EXPORT extern "C" __attribute__((visibility("default")))
+
+SCAR_EXPORT int scar_superlu_abi_v1() {
+    return 1;
+}
+
+SCAR_EXPORT const Symbolic *scar_superlu_symbolic_v1(
+        int size, int nnz, const int_t *indices, const int_t *offsets,
+        std::size_t budget, Timings *timings) noexcept {
+    if (!indices || !offsets || !timings || size <= 0 || nnz <= 0
+            || budget < sizeof(Symbolic)
+            || static_cast<std::size_t>(nnz) + 5 * static_cast<std::size_t>(size) + 1
+                > (budget - sizeof(Symbolic)) / sizeof(int_t)
+            || !valid(size, nnz, indices, offsets)) {
+        return nullptr;
+    }
+    try {
+        auto plan = std::make_unique<Symbolic>();
+        plan->indices.assign(indices, indices + nnz);
+        plan->offsets.assign(offsets, offsets + static_cast<std::size_t>(size) + 1);
+        plan->begin.resize(size);
+        plan->end.resize(size);
+        plan->columns.resize(size);
+        plan->etree.resize(size);
+        if (bytes(*plan) > budget || analyze(*plan, size, nnz, *timings)) {
+            return nullptr;
+        }
+        return plan.release();
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
+}
+
+SCAR_EXPORT std::size_t scar_superlu_symbolic_bytes_v1(const Symbolic *plan) {
+    return plan ? bytes(*plan) : 0;
+}
+
+SCAR_EXPORT void scar_superlu_symbolic_destroy_v1(const Symbolic *plan) {
+    delete plan;
+}
+
+SCAR_EXPORT int scar_superlu_symbolic_solve_v1(
+        const Symbolic *plan, int size, int nnz, const int_t *indices, const int_t *offsets,
+        const double *values, const double *rhs, double *output, Timings *timings) noexcept {
+    if (!plan || !indices || !offsets || !values || !rhs || !output || !timings) {
+        return rejected;
+    }
+    try {
+        return solve(*plan, size, nnz, indices, offsets, values, rhs, output, *timings);
+    } catch (const std::bad_alloc &) {
+        return aborted;
+    }
+}
+
+SCAR_EXPORT int scar_superlu_reference_v1(
+        int size, int nnz, const int_t *indices, const int_t *offsets,
+        const double *values, const double *rhs, double *output, Timings *timings) noexcept {
+    if (!indices || !offsets || !values || !rhs || !output || !timings
+            || std::fegetround() != FE_TONEAREST || !valid(size, nnz, indices, offsets)) {
+        return rejected;
+    }
+    try {
+        std::vector<int_t> column_indices(indices, indices + nnz);
+        std::vector<int_t> row_offsets(offsets, offsets + static_cast<std::size_t>(size) + 1);
+        std::vector<double> numeric(values, values + nnz);
+        std::vector<int> columns(size), rows(size);
+        std::copy_n(rhs, size, output);
+        return guarded([&] {
+            superlu_options_t options{};
+            set_default_options(&options);
+            NRformat csr_store{nnz, numeric.data(), column_indices.data(), row_offsets.data()};
+            SuperMatrix csr{SLU_NR, SLU_D, SLU_GE, size, size, &csr_store};
+            DNformat dense_store{size, output};
+            SuperMatrix dense{SLU_DN, SLU_D, SLU_GE, size, 1, &dense_store};
+            SuperMatrix lower{}, upper{};
+            SuperLUStat_t stats{};
+            StatInit(&stats);
+            int_t info = 0;
+            dgssv(&options, &csr, columns.data(), rows.data(), &lower, &upper, &dense, &stats, &info);
+            *timings = {stats.utime[COLPERM], stats.utime[ETREE], stats.utime[FACT], stats.utime[SOLVE]};
+            if (lower.Store) {
+                Destroy_SuperNode_Matrix(&lower);
+            }
+            if (upper.Store) {
+                Destroy_CompCol_Matrix(&upper);
+            }
+            StatFree(&stats);
+            return info;
+        });
+    } catch (const std::bad_alloc &) {
+        return aborted;
+    }
+}

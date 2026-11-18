@@ -76,7 +76,15 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 `--topology-cost COST` 在原执行、逐次 C++ 校验、复用索引计划之间比较。同一 CPU 线程的加载、索引构造、更新和释放分别计时，持有的索引元数据提供显式内存需求。整程资格验收还核对实际命中次数、数值结果和完整进程耗时。
 
-512 次更新的区域模型选出复用索引计划。原执行、逐次 C++、复用 C++ 的总成本点估计依次为 563.2、537.2、519.6 ms。完整入口中位数从 8.636 s 降到 8.582 s，样本范围重叠，发布结果保持 `KEEP`。详细记录见 `artifacts/baseline/three-stage-csr-topology-hoist.json`。下一轮按阶段检查稀疏求解器的结构分析、分解和求解边界及其状态依赖，再确定可复用的工作与实际成本。
+512 次更新的区域模型选出复用索引计划。原执行、逐次 C++、复用 C++ 的总成本点估计依次为 563.2、537.2、519.6 ms。完整入口中位数从 8.636 s 降到 8.582 s，样本范围重叠，发布结果保持 `KEEP`。详细记录见 `artifacts/baseline/three-stage-csr-topology-hoist.json`。
+
+### 稀疏求解的符号阶段
+
+`plan_sparse_solve` 将原 F4 调用绑定到实际 SuperLU 入口，分别表示列排序、符号预处理、数值分解和三角求解。前两步按精确 CSR 结构复用，后两步读取当次矩阵值和 RHS。C++20 产物独立构建自同版 SciPy 源码并链接原 BLAS。封存的替换只覆盖载体调用点，原 Python 状态码、警告与回退继续执行。
+
+先用 `--scope SCOPE --native NATIVE --out STUDY` 生成试运行收据。`--qualify-plan STUDY/result.json --paired-cost COST --validation VALIDATION --out FINAL` 合并可重复核验的区域成本和完整入口对照。`python -m scar.runtime.sparse_solve_launch --launch FINAL/launch.json --launch-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 在匹配上下文时采用已发布的实现。
+
+512 次有限元参数扫描的整程中位数从 8.649 s 降到 6.933 s，完整进程计时为 1 组热身和 3 组配对。选择收据仅适用于该源码、参数、环境和 CPU 亲和性。证据见 `artifacts/baseline/three-stage-csr-symbolic-solve.json`。
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
