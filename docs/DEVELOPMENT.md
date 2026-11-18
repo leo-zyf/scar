@@ -31,6 +31,14 @@
 实测收益低于原 5% 门槛。下一关按固定范围定位首调用中的亲和性、分配及执行成本，再比较合法放置的时序。报告见
 `artifacts/baseline/three-stage-real-entry.json`。
 
+下一轮资源验收从原调用点、固定 C++ 任务和实际运行三个关口交接。限定调用点的 NumPy 附加采集
+以对象身份核对公开和 C 扩展导出，`scar.analysis.numpy_ufunc_graph` 将候选操作及库文件接回原 F4。
+`plan-controlled-region` 为现有串行顺序重放时序关系及槽生命周期，生成 `native-resource-certificate.json`。
+证书使用事件顺序和字节上界，实耗时间仍由成本层求证。`deliver-controlled-stateful --validate --validate-resources`
+在原驱动核对正常调用和移除计划 CPU 后的回退。诊断入口 `observe-stateful-entry-phases` 单独编译探针，
+直接记录原 ELF 的亲和性及数组分配 API。下一关继续区分扫描、运算及提交阶段的时长，再比较改变资源安排的收益。
+报告见 `artifacts/baseline/three-stage-resource-entry.json`。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

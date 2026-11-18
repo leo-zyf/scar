@@ -1,7 +1,7 @@
 """Bind a checked stateful resource plan to one isolated C++ validation run."""
 
 import argparse
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from functools import wraps
 from hashlib import file_digest
 import importlib
@@ -27,6 +27,46 @@ def _write(path, document):
 
 def _reference(path, schema):
     return artifact_reference(Path(path).resolve(), schema)
+
+
+def _verify_native_resources(reference, contract, stages, protocol):
+    """Match the certified fixed order to the actual C++ and ABI resource inputs."""
+    from scar.optimization.resource_solver import semantic_sha256
+
+    receipt = read_artifact(reference)
+    implementation = contract['implementation']
+    identity = contract['identity']
+    memory = contract['memory']
+    time = stages['time_binding']
+    native_lane = time['resources']['native_lane']['id']
+    expected = dict(schema='scar.controlled-native-resource-certificate', schema_version=1,
+        status='VERIFIED_FIXED_NATIVE_ORDER', native_manifest=implementation['native_manifest'],
+        native_stage_plan=identity['stage_plan'], generated_source=implementation['native_members']['source'],
+        candidate=identity['candidate'], contract_sha256=semantic_sha256(contract),
+        projected_problem_sha256=stages['projected_problem_sha256'],
+        task_order=[task['id'] for task in stages['timed_schedule']['tasks']],
+        native_cpu_ids=contract['execution']['affinity_stage']['cpu_ids'],
+        native_affinity_task_ids=[row['task'] for row in time['task_bindings'] if row['native_lane'] == native_lane],
+        private_slots={row['id']:row['capacity_bytes'] for row in memory['private_slots']},
+        private_payload_bytes=memory['private_workspace_bytes'],
+        borrowed_payload_bytes=memory['borrowed_payload_bytes'],
+        scoped_payload_bytes=memory['included_payload_bytes'], budget_bytes=memory['budget_bytes'],
+        numeric_durations_proven=False, native_reordering_authorized=False)
+    source = protocol['native_members']['source']
+    stage_plan = read_artifact(expected['native_stage_plan'])
+    native_manifest = read_artifact(expected['native_manifest'])
+    if (any(receipt.get(key) != value for key, value in expected.items())
+            or any(source[key] != expected['generated_source'][key] for key in ('uri', 'sha256', 'size_bytes'))
+            or stage_plan['status'] != 'READY' or stage_plan['budget_satisfied'] is not True
+            or stage_plan['resource_binding']['cpu_ids'] != expected['native_cpu_ids']
+            or native_manifest['cpu_ids'] != expected['native_cpu_ids']
+            or {row['id']:row['capacity_bytes'] for row in stage_plan['workspace_slots']} != expected['private_slots']
+            or native_manifest['workspace_payload_bytes'] != expected['private_payload_bytes']
+            or native_manifest['external_array_bytes'] != expected['borrowed_payload_bytes']
+            or native_manifest['total_region_array_payload_bytes'] != expected['scoped_payload_bytes']
+            or native_manifest['memory_budget_bytes'] != expected['budget_bytes']):
+        raise ValueError('native resource certificate differs from the fixed C++ entry and its scope')
+    return receipt
 
 
 def _derive(preparation, canonical_model):
@@ -61,6 +101,9 @@ def _derive(preparation, canonical_model):
     if (stages['original_native_order_preserved'] is not True
             or stages['reordering_authorized'] is not False):
         raise ValueError('delivery requires the original executable native stage order')
+    resource_reference = files.get('native_resource_certificate')
+    if resource_reference is not None:
+        _verify_native_resources(resource_reference, contract, stages, protocol)
     schedules = {}
     for name in ('strict_plan', 'controlled_plan', 'native_task_plan'):
         status = read_artifact(files[name])
@@ -70,6 +113,7 @@ def _derive(preparation, canonical_model):
         canonical_model=canonical_model, entry=entry, specialization=planned['admission'],
         candidate=identity['candidate'], native_artifact=native, native_members=protocol['native_members'],
         native_stage_plan=identity['stage_plan'], native_task_projection=files['native_task_projection'],
+        native_resource_certificate=resource_reference,
         entry_loop_context=files.get('entry_loop_context'),
         entry_cost_use=files['entry_cost_use'], entry_cost_status=cost['status'],
         timing_qualified=cost['timing_qualified'], schedules=schedules,
@@ -138,9 +182,21 @@ def _episode(module, region, original, selected, entry, argv, token, directory):
         stderr=stderr.getvalue(), files=files)
 
 
-def _validate(admission, reference, directory, *, argv, output_token):
+@contextmanager
+def _caller_mask(mask):
+    original = os.sched_getaffinity(0)
+    os.sched_setaffinity(0, mask)
+    try:
+        if os.sched_getaffinity(0) != mask:
+            raise ValueError('caller CPU mask differs from the requested validation mask')
+        yield
+    finally:
+        os.sched_setaffinity(0, original)
+
+
+def _validate(admission, reference, directory, *, argv, output_token, validate_resources):
     from scar.codegen.stateful import load
-    from scar.compiler.stateful_holdout import _owner
+    from scar.compiler.stateful_holdout import _owner, _stats
     from scar.compiler.stateful_runtime import _function, install_stateful_regions
 
     if (type(argv) is not list or any(type(arg) is not str for arg in argv)
@@ -150,6 +206,16 @@ def _validate(admission, reference, directory, *, argv, output_token):
     candidate = read_artifact(admission['candidate'])
     entry = admission['entry']
     before_affinity = os.sched_getaffinity(0)
+    resource_reference = admission['native_resource_certificate']
+    resource = None
+    if validate_resources:
+        if resource_reference is None:
+            raise ValueError('resource validation requires a verified native resource certificate')
+        resource = read_artifact(resource_reference)
+        native_mask = set(resource['native_cpu_ids'])
+        reduced_mask = before_affinity - native_mask
+        if not native_mask or not native_mask <= before_affinity or not reduced_mask:
+            raise ValueError('resource validation needs both certified CPUs and other available caller CPUs')
     artifact = load(candidate['native_directory'])
     region = artifact.region
     original_source = protocol['original_source']['artifact']
@@ -175,7 +241,36 @@ def _validate(admission, reference, directory, *, argv, output_token):
                 raise ValueError('live wrapper differs from the canonical compiler entry')
             actual = _episode(module, region, original, guard, entry['uri'], argv,
                 output_token, directory/'candidate')
-            stats = guard.scar_stats
+            stats = _stats(guard)
+            resource_validation = None
+            if resource is not None:
+                if os.sched_getaffinity(0) != before_affinity:
+                    raise ValueError('successful native execution changed the caller CPU mask')
+                with _caller_mask(reduced_mask):
+                    rejected = _episode(module, region, original, guard, entry['uri'], argv,
+                        output_token, directory/'resource-fallback')
+                    if os.sched_getaffinity(0) != reduced_mask:
+                        raise ValueError('resource fallback changed the reduced caller CPU mask')
+                after = _stats(guard)
+                exact_reasons = dict(stats['reasons'])
+                affinity_reason = 'native_precommit_guard:stateful precommit guard: CPU affinity'
+                expected_fallbacks = len(rejected['trajectory'])
+                exact_reasons[affinity_reason] = exact_reasons.get(affinity_reason, 0) + expected_fallbacks
+                checks = dict(
+                    native_declined_before_commit=after['native_calls'] == stats['native_calls'],
+                    exact_affinity_fallback=after['fallback_calls'] - stats['fallback_calls'] == expected_fallbacks
+                        and after['reasons'] == exact_reasons,
+                    original_trajectory_and_effects_match=rejected == baseline)
+                resource_validation = dict(resource_certificate=resource_reference,
+                    certified_native_cpu_ids=resource['native_cpu_ids'],
+                    original_caller_cpu_ids=sorted(before_affinity), fallback_caller_cpu_ids=sorted(reduced_mask),
+                    native_calls_with_certified_resources=stats['native_calls'],
+                    resource_guard_fallback_calls=after['fallback_calls'] - stats['fallback_calls'],
+                    guard_statistics_after_fallback=after,
+                    restored_caller_cpu_ids=sorted(os.sched_getaffinity(0)),
+                    checks=checks, validated=all(checks.values()),
+                    assumption='ORIGINAL_CPP_STAGE_GUARDS_AND_SCOPED_ARRAY_PAYLOAD',
+                    complete_physical_timing_inferred=False)
         restored = vars(owner)[name] is descriptor
     finally:
         sys.path[:] = old_path
@@ -185,17 +280,20 @@ def _validate(admission, reference, directory, *, argv, output_token):
     checks = {key:baseline[key] == actual[key] for key in baseline}
     checks.update(original_binding_restored=restored, caller_affinity_restored=os.sched_getaffinity(0) == before_affinity,
         native_success=stats['native_calls'] == len(actual['trajectory']) and stats['fallback_calls'] == 0)
+    if resource_validation is not None:
+        checks['certified_resources_validated'] = resource_validation['validated']
     return _write(directory/'validation.json',
         dict(schema=VALIDATION, schema_version=1, admission=reference,
             entry_protocol=protocol['id'], entry=entry, argv=argv, output_token=output_token,
             comparisons=checks, original=baseline, candidate=actual,
             guard_statistics=stats, validated=all(checks.values()), source_bytes_unchanged=True,
+            resource_validation=resource_validation,
             snapshot_scope='DECLARED_ARRAY_BYTES_AND_SCALAR_TYPES_EACH_METHOD_ENTRY_EXIT_AND_POST_DRIVER',
             file_scope='EXPLICIT_OUTPUT_DIRECTORY', performance_measured=False, decision='KEEP',
             deployment_authorized=False))
 
 
-def prepare(preparation, model, out, *, validation_argv=None, output_token=None):
+def prepare(preparation, model, out, *, validation_argv=None, output_token=None, validate_resources=False):
     """Build a delivery receipt and optionally run the two unchanged entry paths."""
     from scar.compiler.calibrate_stateful_entry import SCHEMA as MODEL
     from scar.compiler.plan_controlled_region import SCHEMA as PLAN
@@ -203,11 +301,14 @@ def prepare(preparation, model, out, *, validation_argv=None, output_token=None)
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh stateful delivery directory required')
+    if validate_resources and validation_argv is None:
+        raise ValueError('resource validation requires an explicit driver trial')
     admission = _derive(_reference(preparation, PLAN), _reference(model, MODEL))
     directory.mkdir(parents=True)
     reference = _write(directory/'admission.json', admission)
     return (reference if validation_argv is None else
-        _validate(admission, reference, directory, argv=validation_argv, output_token=output_token))
+        _validate(admission, reference, directory, argv=validation_argv, output_token=output_token,
+            validate_resources=validate_resources))
 
 
 def main(argv=None):
@@ -216,6 +317,8 @@ def main(argv=None):
     parser.add_argument('--canonical-model')
     parser.add_argument('--out')
     parser.add_argument('--validate', action='store_true')
+    parser.add_argument('--validate-resources', action='store_true',
+        help='also compare precommit fallback with the certified native CPUs unavailable')
     parser.add_argument('--argv-json')
     parser.add_argument('--output-token')
     parser.add_argument('--check')
@@ -230,7 +333,7 @@ def main(argv=None):
             parser.error('--validate and --argv-json must be supplied together')
         result = prepare(args.preparation, args.canonical_model, args.out,
             validation_argv=None if args.argv_json is None else json.loads(args.argv_json),
-            output_token=args.output_token)
+            output_token=args.output_token, validate_resources=args.validate_resources)
         if args.validate and not read_artifact(result)['validated']:
             print(json.dumps(result, sort_keys=True))
             return 1

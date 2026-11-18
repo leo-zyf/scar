@@ -1,0 +1,159 @@
+// Optional Linux diagnostic shim. Original ABI tables and ELF stay intact.
+#include "stateful_abi_v1.h"
+#include <cerrno>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <link.h>
+#include <new>
+#include <sched.h>
+#include <time.h>
+#include <unistd.h>
+
+namespace {
+enum Phase { WorkspaceNew, WorkspaceDelete, AffinityRead, AffinityWrite,
+             AffinityCpu, AffinityMaskAllocate, AffinityMaskFree, AffinityCapacity, Count };
+struct Counters { uint64_t calls, elapsed_ns, requested_bytes; };
+struct Sample { uint64_t start_ns, end_ns; Counters rows[Count]; };
+thread_local bool active = false;
+thread_local Sample current{};
+scar_stateful_run_v1 original = nullptr;
+uintptr_t text_start = 0, text_end = 0;
+
+using New = void *(*)(size_t, const std::nothrow_t&);
+using Delete = void (*)(void *);
+using Get = int (*)(pid_t, size_t, cpu_set_t *);
+using Set = int (*)(pid_t, size_t, const cpu_set_t *);
+using Cpu = int (*)();
+using MaskNew = cpu_set_t *(*)(size_t);
+using MaskDelete = void (*)(cpu_set_t *);
+using Sysconf = long (*)(int);
+
+template<class F> F resolve(const char *symbol) {
+    F result = reinterpret_cast<F>(dlsym(RTLD_NEXT, symbol));
+    if (!result) std::abort();
+    return result;
+}
+
+New real_new() { static New p = resolve<New>("_ZnamRKSt9nothrow_t"); return p; }
+Delete real_delete() { static Delete p = resolve<Delete>("_ZdaPv"); return p; }
+Get real_get() { static Get p = resolve<Get>("sched_getaffinity"); return p; }
+Set real_set() { static Set p = resolve<Set>("sched_setaffinity"); return p; }
+Cpu real_cpu() { static Cpu p = resolve<Cpu>("sched_getcpu"); return p; }
+MaskNew real_mask_new() { static MaskNew p = resolve<MaskNew>("__sched_cpualloc"); return p; }
+MaskDelete real_mask_delete() { static MaskDelete p = resolve<MaskDelete>("__sched_cpufree"); return p; }
+Sysconf real_sysconf() { static Sysconf p = resolve<Sysconf>("sysconf"); return p; }
+
+uint64_t timestamp() {
+    const int saved = errno;
+    timespec ts{};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) std::abort();
+    errno = saved;
+    return uint64_t(ts.tv_sec) * 1000000000ULL + uint64_t(ts.tv_nsec);
+}
+
+struct Cut {
+    Phase phase;
+    uint64_t start, bytes;
+    Cut(Phase p, void *caller, uint64_t b=0) : phase(p), start(0), bytes(b) {
+        const uintptr_t address = reinterpret_cast<uintptr_t>(caller);
+        if (active && text_start <= address && address < text_end) start = timestamp();
+    }
+    ~Cut() {
+        if (start) {
+            auto &row = current.rows[phase];
+            row.elapsed_ns += timestamp() - start;
+            row.calls += 1;
+            row.requested_bytes += bytes;
+        }
+    }
+};
+
+int text_segments(dl_phdr_info *info, size_t, void *base) {
+    if (info->dlpi_addr != reinterpret_cast<uintptr_t>(base)) return 0;
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+        const auto &segment = info->dlpi_phdr[i];
+        if (segment.p_type == PT_LOAD && (segment.p_flags & PF_X)) {
+            // This diagnostic accepts precisely one executable ELF segment.
+            if (text_start) return -1;
+            text_start = info->dlpi_addr + segment.p_vaddr;
+            text_end = text_start + segment.p_memsz;
+        }
+    }
+    return 1;
+}
+}
+
+void *operator new[](size_t size, const std::nothrow_t &tag) noexcept {
+    Cut cut(WorkspaceNew, __builtin_return_address(0), size);
+    return real_new()(size, tag);
+}
+
+void operator delete[](void *pointer) noexcept {
+    Cut cut(WorkspaceDelete, __builtin_return_address(0));
+    real_delete()(pointer);
+}
+
+extern "C" int sched_getaffinity(pid_t pid, size_t size, cpu_set_t *mask) noexcept {
+    Cut cut(AffinityRead, __builtin_return_address(0));
+    return real_get()(pid, size, mask);
+}
+
+extern "C" int sched_setaffinity(pid_t pid, size_t size, const cpu_set_t *mask) noexcept {
+    Cut cut(AffinityWrite, __builtin_return_address(0));
+    return real_set()(pid, size, mask);
+}
+
+extern "C" int sched_getcpu() noexcept {
+    Cut cut(AffinityCpu, __builtin_return_address(0));
+    return real_cpu()();
+}
+
+extern "C" cpu_set_t *__sched_cpualloc(size_t slots) noexcept {
+    Cut cut(AffinityMaskAllocate, __builtin_return_address(0));
+    return real_mask_new()(slots);
+}
+
+extern "C" void __sched_cpufree(cpu_set_t *mask) noexcept {
+    Cut cut(AffinityMaskFree, __builtin_return_address(0));
+    real_mask_delete()(mask);
+}
+
+extern "C" long sysconf(int name) noexcept {
+    Cut cut(AffinityCapacity, __builtin_return_address(0));
+    return real_sysconf()(name);
+}
+
+extern "C" SCAR_EXPORT_V1 const char *scar_phase_probe_bind_v1(scar_stateful_run_v1 target) {
+    Dl_info info{};
+    if (original || !target || !dladdr(reinterpret_cast<void *>(target), &info)
+        || dl_iterate_phdr(text_segments, info.dli_fbase) != 1 || !text_start) return nullptr;
+    (void)real_new(); (void)real_delete(); (void)real_get(); (void)real_set();
+    (void)real_cpu(); (void)real_mask_new(); (void)real_mask_delete(); (void)real_sysconf();
+    original = target;
+    return info.dli_fname;
+}
+
+extern "C" SCAR_EXPORT_V1 int32_t scar_phase_probe_run_v1(const scar_array_v1 *arrays, uint64_t n,
+    const scar_scalar_v1 *scalars, uint64_t m, const scar_provider_v1 *providers, uint64_t k) {
+    if (!original || active) std::abort();
+    current = {};
+    active = true;
+    current.start_ns = timestamp();
+    int32_t status = original(arrays, n, scalars, m, providers, k);
+    current.end_ns = timestamp();
+    active = false;
+    return status;
+}
+
+extern "C" SCAR_EXPORT_V1 int32_t scar_phase_probe_read_v1(uint64_t *out, uint64_t n) {
+    if (!out || n != 2 + 3*Count || !current.start_ns || !current.end_ns || active) return 1;
+    out[0] = current.start_ns;
+    out[1] = current.end_ns;
+    for (size_t i = 0; i < Count; ++i) {
+        out[2 + 3*i] = current.rows[i].calls;
+        out[3 + 3*i] = current.rows[i].elapsed_ns;
+        out[4 + 3*i] = current.rows[i].requested_bytes;
+    }
+    current = {};
+    return 0;
+}

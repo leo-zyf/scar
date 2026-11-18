@@ -37,7 +37,8 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'optimization/native_group_costs.py', 'analysis/schedule_time.py',
     'ir/versioned_schedule.py', 'ir/implementation_plan.py',
     'analysis/stateful_entry_protocol.py', 'compiler/canonical_stateful_inputs.py',
-    'compiler/calibrate_stateful_entry.py', 'compiler/ordered_planning_graph.py')
+    'compiler/calibrate_stateful_entry.py', 'compiler/ordered_planning_graph.py',
+    'optimization/fixed_native_resources.py')
 
 
 def _pins():
@@ -204,12 +205,14 @@ def _native_task_expansion(controlled, contract, correspondence, context, observ
     reorder an ELF which still executes its original stage sequence.
     """
     from scar.optimization.controlled_native_tasks import project_controlled_native_tasks
+    from scar.optimization.fixed_native_resources import derive_fixed_native_resources
     from scar.optimization.native_group_costs import derive_native_group_costs
     costs = None if observations is None else derive_native_group_costs(observations, design)
     groups = () if costs is None else costs['cost_groups']
     problem, projection = project_controlled_native_tasks(controlled, contract,
         correspondence, context, cost_groups=groups)
-    return problem_document(problem), projection, costs
+    resources = derive_fixed_native_resources(problem, projection, contract)
+    return problem_document(problem), projection, costs, resources
 
 
 def _summary_native_correspondence(reference, binding, region, graph, correspondence):
@@ -481,12 +484,12 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
     controlled, projection = project_controlled_region(strict, contract)
-    native_problem = native_projection = native_costs = None
+    native_problem = native_projection = native_costs = native_resources = None
     if kind == 'STATEFUL_SPECIALIZATION':
         if native_context is None:
             from scar.optimization.native_stage_context import derive_native_stage_context
             native_context = derive_native_stage_context(contract['implementation']['native_manifest'])
-        native_problem, native_projection, native_costs = _native_task_expansion(controlled, contract,
+        native_problem, native_projection, native_costs, native_resources = _native_task_expansion(controlled, contract,
             correspondence, native_context, observations, group_design)
     return dict(contract=contract, source_graph=graph, correspondence=correspondence,
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
@@ -495,7 +498,7 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         **({'entry_loop_context': loop} if loop is not None else {}),
         source_region_effects=effects,
         native_task_problem=native_problem, native_task_projection=native_projection,
-        native_task_costs=native_costs,
+        native_task_costs=native_costs, native_resource_certificate=native_resources,
         strict_problem=problem_document(strict), controlled_problem=problem_document(controlled),
         projection=projection), strict, controlled
 
@@ -638,6 +641,7 @@ def main(argv=None):
             native_loaded=False, deployment_authorized=False)
     result['native_task_problem'] = saved['files'].get('native_task_problem')
     result['native_task_plan'] = saved['files'].get('native_task_plan')
+    result['native_resource_certificate'] = saved['files'].get('native_resource_certificate')
     print(json.dumps(result,sort_keys=True)); return 0
 
 
