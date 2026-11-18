@@ -128,7 +128,7 @@ C++20 调用方包含 `scar_sparse_provider_v1.hpp`，以包目录构造 `scar::
 
 真实 512 轮入口的模型从 8 至 13 个 worker 中保留 W8，选 W9 作为唯一新增对照。整程中位数为 W8 2.864 s、W9 2.965 s，发布仍保留 W8。实际发布入口在只允许原 8 个 worker 核时完成全部 512 次原生调用。证据见 `artifacts/baseline/three-stage-csr-typed-team-choice.json`。
 
-`scar export-native-ordered-sparse --recipe ORDERED --provider NUMERIC --out PACKAGE` 从已重放的配方生成 `scar_ordered_sparse_v1.hpp`，随包保留同一原生算子和 ABI。C++20 调用方为 `run` 提供一份 CSR 结构和按序生成二进制数值帧的回调。每个 slot 有一个绑定物理 CPU 的子进程，成功结果按提交顺序发布，首个失败终止发布后缀。`--check PACKAGE` 可在移动后校验包和调度头文件。该入口使用 Linux/glibc x86-64 与 cgroup v2 的实时资源检查，原 Python 参数归一化和兼容执行仍走原入口。
+`scar export-native-ordered-sparse --recipe ORDERED --provider NUMERIC --out PACKAGE` 重放配方并生成 C++20 可执行文件、`stream.json` 协议及 `scar_ordered_sparse_v1.hpp`。`PACKAGE/scar_ordered_sparse < INPUT > OUTPUT` 接收一份 CSR 结构和按序排列的原始数值帧。管道调用方应并行读写，并在末帧后关闭 stdin。每个 slot 绑定一个物理 CPU，数值执行交给同一 SuperLU/OpenBLAS，结果按提交顺序发布，首个失败结束发布。`--check PACKAGE` 可在移动后校验包。运行需要匹配配方的 Linux/glibc x86-64 资源与 cgroup v2。该入口接受已归一化的 CSR 请求，原应用的输入准备仍由原入口执行。
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
