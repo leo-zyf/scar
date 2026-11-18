@@ -1,10 +1,11 @@
 """Retarget a sealed ordered sparse scope without transferring cost measurements."""
 
+from contextlib import nullcontext
 from hashlib import sha256
 import json
-from pathlib import Path
 
 from scar.analysis.csr_topology_scope import _require
+from scar.analysis.replay_transaction import current_transaction, replay_transaction
 from scar.analysis.sparse_parallel_recipe import derive_recipe
 from scar.analysis.sparse_parallel_scope import SCHEMA as PARALLEL, check_sparse_parallel_scope
 from scar.analysis.target_inventory import _cpu_list
@@ -106,7 +107,7 @@ def _lanes(hardware, cpus, node):
     return lanes
 
 
-def _scaling_choice(release, hardware_ref, hardware, invite, count):
+def _scaling_choice(release, hardware_ref, hardware, invite, count, *, typed=False):
     current = invite['choice']
     owner, workers, window = current['owner_cpu_id'], current['worker_cpu_ids'], current['window']
     node = current['cpu_numa_node']
@@ -117,7 +118,8 @@ def _scaling_choice(release, hardware_ref, hardware, invite, count):
         and release['numa_node'] == node and sorted(set(workers)) == workers and owner not in workers
         and current['worker_count'] == len(workers) == window
         and previous['window'] < window <= min(invite['dimensions']['max_ordered_window'],count)
-        and window <= current['physical_worker_limit'] and window <= current['owner_saturation_estimate_workers']
+        and window <= current['physical_worker_limit']
+        and (typed or window <= current['owner_saturation_estimate_workers'])
         and invite['budget']['worker_total_limit_bytes'] == limit
         and current['automatic_admission'] is False and current['resource_snapshot_is_reservation'] is False,
         'choice must enlarge only the worker team/window of the same ordered owner and per-worker contract')
@@ -127,6 +129,77 @@ def _scaling_choice(release, hardware_ref, hardware, invite, count):
     _require(release['launch_cpu_ids'] == sorted([owner,*previous['cpu_ids']])
         and previous['window'] == len(previous['cpu_ids']), 'published source team differs from its original window')
     return dict(cpu_ids=workers,window=window,address_space_limit_bytes=limit), _lanes(hardware,[owner,*workers],node)
+
+
+def _typed_anchor(parallel_scope, release, invite, lanes):
+    from scar.ir.execution_recipe import SCHEMA as RECIPE, validate_recipe
+    from scar.optimization.resource_solver import semantic_sha256
+    from scar.optimization.sparse_parallel_recipe import PROFILE
+
+    frontier = read_artifact(invite['team_frontier'])
+    recipe_ref, lowering_ref = release['execution_recipe'], release['lowering']
+    _require(recipe_ref['schema'] == RECIPE and lowering_ref['schema'] == 'scar.execution-recipe-lowering'
+        and frontier['execution_recipe'] == recipe_ref,
+        'the model frontier does not retain the original typed parallel recipe')
+    recipe = validate_recipe(read_artifact(recipe_ref))
+    lowering = read_artifact(lowering_ref)
+    artifacts = recipe['artifacts']
+    original_cost = read_artifact(release['cost'])
+    _require(recipe['profile'] == PROFILE and artifacts['parallel_scope'] == parallel_scope
+        and artifacts['serial_launch'] == release['serial_launch']
+        and artifacts['detached'] == release['recipe'] and artifacts['choice'] == original_cost['choice']
+        and original_cost.get('execution_recipe') == recipe_ref
+        and recipe['semantic_boundary']['entry_context'] == release['context']
+        and recipe['semantic_boundary']['original_entry'] == release['entry'],
+        'typed recipe, costs, detached arguments or original entry belong to a different scope')
+    retained_recipe = lowering['recipe']
+    capability = recipe['implementation']['backend_capability_record']
+    policy_keys = ('launch_cpu_ids', 'owner_cpu', 'numa_node', 'count', 'matrix', 'workers',
+                   'symbolic_budget_bytes', 'memory_floor_bytes')
+    _require(retained_recipe['schema'] == RECIPE and read_artifact(retained_recipe) == recipe
+        and lowering['schema_version'] == 1 and lowering['profile'] == PROFILE
+        and lowering['recipe_replayed'] is True and lowering['native_recompiled'] is False
+        and lowering['recipe_id'] == recipe['recipe_id']
+        and lowering['recipe_sha256'] == retained_recipe['sha256']
+        and all(lowering[key + '_sha256'] == semantic_sha256(recipe[key])
+                for key in ('semantic_boundary', 'control', 'task_graph', 'resources'))
+        and lowering['input_artifacts'] == artifacts and lowering['backend_capability_record'] == capability
+        and lowering['native'] == capability['native'] == release['native']
+        and lowering['detached_recipe'] == artifacts['detached']
+        and lowering['runtime_policy'] == {key:release[key] for key in policy_keys},
+        'the established launch does not use the recipe, native bytes and lowered resource policy')
+    serial = read_artifact(release['serial_launch'])
+    serial_recipe = read_artifact(capability['serial_recipe'])
+    serial_lowering = read_artifact(capability['serial_lowering'])
+    native = read_artifact(release['native'])
+    _require(serial['execution_recipe'] == capability['serial_recipe'] == lowering['serial_recipe']
+        == serial_lowering['recipe'] and serial['lowering'] == capability['serial_lowering']
+        == lowering['serial_lowering'] and serial_lowering['recipe_id'] == serial_recipe['recipe_id']
+        and serial_lowering['native'] == release['native']
+        and lowering['native_library'] == serial_lowering['native_library'] == native['library'],
+        'the established typed lowering and fallback do not share the admitted original ABI')
+    cpu, memory, dispatch, case = (recipe['resources'][key] for key in ('selected_cpu', 'memory', 'dispatch', 'case'))
+    previous = release['workers']
+    _require(cpu == dict(owner_cpu_id=release['owner_cpu'], worker_cpu_ids=previous['cpu_ids'],
+            launch_cpu_ids=release['launch_cpu_ids'], cpu_numa_node=release['numa_node'])
+        and case == dict(call_count=release['count'], **release['matrix'])
+        and dispatch['window'] == previous['window']
+        and memory['worker_address_space_limit_bytes'] == previous['address_space_limit_bytes']
+        and memory['per_worker_symbolic_budget_bytes'] == release['symbolic_budget_bytes']
+        and memory['minimum_launch_headroom_bytes'] == release['memory_floor_bytes'],
+        'the established typed resource coordinates differ from the released policy')
+    previous_hardware = read_artifact(read_artifact(artifacts['choice'])['hardware'])
+    previous_lanes = _lanes(previous_hardware, release['launch_cpu_ids'], release['numa_node'])
+    expanded = {lane['cpu_id']:lane for lane in lanes}
+    preserved = ('physical_core', 'numa_node', 'observed_smt_siblings')
+    _require(set(release['launch_cpu_ids']) < set(expanded)
+        and all(all(expanded[lane['cpu_id']][key] == lane[key] for key in preserved) for lane in previous_lanes),
+        'the typed challenger must preserve every original CPU and its physical topology')
+    return dict(execution_recipe=recipe_ref, lowering=lowering_ref, recipe_id=recipe['recipe_id'],
+        detached_recipe=release['recipe'], native=release['native'], serial_launch=release['serial_launch'],
+        serial_recipe=capability['serial_recipe'], serial_lowering=capability['serial_lowering'],
+        established_choice=artifacts['choice'], calibration_seed=release['cost'], team_frontier=invite['team_frontier'],
+        preserved_cpu_ids=release['launch_cpu_ids'], added_worker_cpu_ids=sorted(set(expanded) - set(release['launch_cpu_ids'])))
 
 
 def _resources(lanes, window, cap, hardware):
@@ -156,13 +229,27 @@ def derive_sparse_parallel_scaling_scope(parallel_scope, released_selection, har
     _require(tuple(ref.get('schema') for ref in refs) == (PARALLEL,SELECTION,HARDWARE,CHOICE),
         'expected a sparse parallel scope, published selection, hardware and choice receipts')
     release,observed,invite = tuple(read_artifact(ref) for ref in refs[1:])
+    flags = ('execution_recipe' in release, 'lowering' in release, 'team_frontier' in invite)
+    typed = any(flags)
+    _require(not typed or all(flags), 'typed expansion requires both its established lowering and model choice')
+    with nullcontext() if not typed or current_transaction() is not None else replay_transaction():
+        if typed:
+            from scar.optimization.sparse_parallel_team_choice import check_choice
+
+            _require(invite['released_selection'] == released_selection and invite['parallel_scope'] == parallel_scope
+                and invite['calibration_seed'] == release['cost'] and check_choice(choice) == invite,
+                'the model choice is not the challenger for this exact typed publication')
+        return _derive_scope(parallel_scope, released_selection, hardware, choice, release, observed, invite, typed)
+
+
+def _derive_scope(parallel_scope, released_selection, hardware, choice, release, observed, invite, typed):
     source = check_sparse_parallel_scope(parallel_scope)
     original = _release_lineage(parallel_scope,source,release)
     count = release['count']
-    workers,lanes = _scaling_choice(release,hardware,observed,invite,count)
+    workers,lanes = _scaling_choice(release,hardware,observed,invite,count,typed=typed)
     owner = release['owner_cpu']
     contract = source['speculation_contract']
-    return dict(schema=SCHEMA,schema_version=1,parallel_scope=parallel_scope,released_selection=released_selection,
+    result = dict(schema=SCHEMA,schema_version=1,parallel_scope=parallel_scope,released_selection=released_selection,
         hardware=hardware,choice=choice,source_scope=source['source_scope'],pipeline_scope=source['pipeline_scope'],
         entry=source['entry'],context=release['context'],count=count,owner_cpu=owner,numa_node=release['numa_node'],
         original_matrix=release['matrix'],original_source_count_evidence=original['observed']['exact_count_evidence'],
@@ -183,6 +270,9 @@ def derive_sparse_parallel_scaling_scope(parallel_scope, released_selection, har
         frontiers=['WORKER_THREAD_AND_BLAS_EXECUTION_MUST_RECHECK_ORIGINAL_FLAGS',
             'CAPACITY_SNAPSHOT_IS_NOT_PHYSICAL_RESERVATION_OR_LOCAL_PAGE_PLACEMENT',
             'MORE_CORES_CAN_CHANGE_IPC_OWNER_WAIT_BOOTSTRAP_AND_BANDWIDTH_COSTS'])
+    if typed:
+        result['typed_anchor'] = _typed_anchor(parallel_scope,release,invite,lanes)
+    return result
 
 
 def check_sparse_parallel_scaling_scope(reference):

@@ -1,0 +1,230 @@
+{
+  "implemented": {
+    "execution_recipes": {
+      "baseline": {
+        "schema": "scar.execution-recipe",
+        "sha256": "f930b74a04122e12383dda3ee80e36f0aa827dcea2585e13126116738e3b1623",
+        "size_bytes": 41803,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/protocol/recipe.json"
+      },
+      "expanded": {
+        "schema": "scar.execution-recipe",
+        "sha256": "c4538bd611b84a25ba481cd0de5838451a7ac8bb599fdf95ada1773c6984b7ec",
+        "size_bytes": 42068,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/challenger-recipe/recipe.json"
+      }
+    },
+    "lowerings": {
+      "baseline": {
+        "schema": "scar.execution-recipe-lowering",
+        "sha256": "76e3319721fcb6ba44eff0ba2d8a0993ea2db8fc907f30dd81b3bf8d5d902175",
+        "size_bytes": 24835,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/study/lowered/lowering-receipt.json"
+      },
+      "expanded": {
+        "schema": "scar.execution-recipe-lowering",
+        "sha256": "941888df3b95f9e05cd2281564015b55be5223b0fd3d1ab22c37310005defd01",
+        "size_bytes": 24904,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/challenger-study/lowered/lowering-receipt.json"
+      }
+    },
+    "native": {
+      "schema": "scar.superlu-symbolic-study",
+      "sha256": "dfa4b5a5b1d766361fcb6d3fe9cdf74d665c3afc7f817ad0b842aa3d520bbb40",
+      "size_bytes": 15694,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan/native/artifact.json"
+    },
+    "result": {
+      "schema": "scar.sparse-parallel-scaling-selection",
+      "sha256": "da85b59db61f842561b8a6c87d6e646c64d83bff7440dd2c91aa244b0c20dbf3",
+      "size_bytes": 5385,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/released/selection.json"
+    }
+  },
+  "inferred": {
+    "forward_model": {
+      "schema": "scar.sparse-parallel-team-frontier",
+      "sha256": "b74f7c4d619f2c835c1d26146dfb229b96771ed8224ee36cbfcd741a13d854b1",
+      "size_bytes": 15663,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/resources/frontier.json"
+    },
+    "fresh_marginal_estimate_ns": {
+      "estimate_ns": -68305672,
+      "lower_ns": -2047361413,
+      "upper_ns": 2474426672
+    },
+    "fresh_section_estimates_ns": {
+      "baseline": {
+        "estimate_ns": 2162889739,
+        "lower_ns": 1980736202,
+        "upper_ns": 4577932159
+      },
+      "expanded": {
+        "estimate_ns": 2231195411,
+        "lower_ns": 2103505487,
+        "upper_ns": 4028097615
+      }
+    },
+    "frozen_component_estimates_ns": {
+      "10": 2334439830,
+      "11": 2461539277,
+      "12": 2590059962,
+      "13": 2718580648,
+      "8": 2285284456,
+      "9": 2293949816
+    }
+  },
+  "observed": {
+    "count": 512,
+    "cpu_numa_node": 1,
+    "hardware": {
+      "schema": "scar.sparse-parallel-hardware",
+      "sha256": "e57c13552f0ea051a3afcf0f27a10cc1a6ed929fcaa5cbea2e169a2bf18767fb",
+      "size_bytes": 43621,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/resources/hardware.json"
+    },
+    "lifecycle_deltas_baseline_minus_challenger": {
+      "bootstrap_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -103058400,
+        "lower_ns": -107413180,
+        "samples": 2,
+        "upper_ns": -98703621
+      },
+      "close_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -15357929,
+        "lower_ns": -31449188,
+        "samples": 2,
+        "upper_ns": 733329
+      },
+      "team_startup_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -103787603,
+        "lower_ns": -108525670,
+        "samples": 2,
+        "upper_ns": -99049536
+      }
+    },
+    "measured_pairs": 3,
+    "owner_cpu_id": 48,
+    "phase_deltas_baseline_minus_challenger": {
+      "native_solve_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -203063,
+        "lower_ns": -2040710,
+        "samples": 40,
+        "upper_ns": 2307553
+      },
+      "queue_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -44352,
+        "lower_ns": -2105047,
+        "samples": 40,
+        "upper_ns": 1858956
+      },
+      "request_exchange_child_setup_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -5831,
+        "lower_ns": -1422437,
+        "samples": 40,
+        "upper_ns": 2571390
+      },
+      "result_exchange_unpack_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -10016,
+        "lower_ns": -2318223,
+        "samples": 40,
+        "upper_ns": 3153256
+      }
+    },
+    "resource_changes": {
+      "maximum_native_wall_overlap": 1,
+      "owner_peak_pending_input_bytes": 200720,
+      "owner_pending_result_bound_bytes": 33800,
+      "owner_structure_bytes": 0,
+      "peak_worker_rss_bytes": -258048,
+      "worker_symbolic_payload_bytes": 168108,
+      "worker_virtual_address_caps_bytes": 1073741824
+    },
+    "sampled_calibration": {
+      "schema": "scar.sparse-parallel-scaling-cost",
+      "sha256": "b65245768583ed51c9967cc4a70950f8fcd2c1657087d5def02b9809e9061aa6",
+      "size_bytes": 16180,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/cost/result.json"
+    },
+    "warmup_pairs": 1,
+    "whole_entry": {
+      "schema": "scar.sparse-parallel-scaling-validation",
+      "sha256": "c0f3a6d4550e230c1823cfb2eb9674e03791608cc93d294852d46e5ac3124e43",
+      "size_bytes": 6599,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/entry-ab/result.json"
+    },
+    "whole_entry_wall_ns": {
+      "established": {
+        "max_ns": 2921988108,
+        "median_ns": 2864013413,
+        "min_ns": 2859259433,
+        "samples_ns": [
+          2864013413,
+          2859259433,
+          2921988108
+        ],
+        "variance_ns2": 1219758708906508.2
+      },
+      "expanded": {
+        "max_ns": 3022533227,
+        "median_ns": 2964684953,
+        "min_ns": 2957460544,
+        "samples_ns": [
+          3022533227,
+          2964684953,
+          2957460544
+        ],
+        "variance_ns2": 1272178160499474.2
+      }
+    }
+  },
+  "proposed": {
+    "assumed_lifecycle_scaling": "LINEAR_TEAM_BOOTSTRAP_AND_TEARDOWN_FROZEN_OTHER_PHASES",
+    "challenger_choice": {
+      "schema": "scar.sparse-parallel-preliminary-choice",
+      "sha256": "0dffd776c93268ac73303cfae6cb45a448257da800e318c93990bc198cf513aa",
+      "size_bytes": 2859,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/resources/choice.json"
+    },
+    "exact_source_scope": {
+      "schema": "scar.sparse-parallel-scaling-scope",
+      "sha256": "f2311d4459d4aa45ed96e280821562df833e4541b0a0eb5bd2ee6c20e89816d0",
+      "size_bytes": 19202,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/source/scope-scaling.json"
+    },
+    "independent_additional_cpu": 43
+  },
+  "rejected": {
+    "all_its_whole_entry_samples_slower": true,
+    "challenger_worker_count": 9,
+    "median_cost_fraction": 0.035150512753551855,
+    "median_cost_ns": 100671540
+  },
+  "schema": "scar.three-stage-csr-typed-team-choice",
+  "schema_version": 1,
+  "verified": {
+    "applied": {
+      "schema": "scar.sparse-parallel-scaling-execution",
+      "sha256": "a186e294fb0cc91189024087d294c7b9651ad82e212c2f3c68cc1d93ccfa31cc",
+      "size_bytes": 362743,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-team-choice/released/selected.json"
+    },
+    "fallback_calls": 0,
+    "native_calls": 512,
+    "native_peak_overlap": 8,
+    "same_source_order_and_stdio": true,
+    "selected_worker_count": 8,
+    "separately_measured_worker_counts": [
+      8,
+      9
+    ],
+    "tested_on_incumbent_mask_without_challenger_cpu": true
+  }
+}

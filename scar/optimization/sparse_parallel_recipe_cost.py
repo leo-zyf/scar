@@ -134,8 +134,12 @@ def phase_cost_ledger(terms):
                 bootstrap_first_original_prepare_already_counted=True)
 
 
-def project_recipe_window(recipe, costs, phases, *, include_first_wave=False):
-    """Apply the profile's detached credits and original publication order."""
+def project_recipe_window(recipe, costs, phases, *, include_first_wave=False, width=None):
+    """Project the frozen credit rules, optionally at a counterfactual team width.
+
+    A width override changes only this analytic projection. The recipe still
+    describes the measured team's exact runtime placement.
+    """
     ids = {item['id'] for item in recipe['task_graph']['tasks']}
     if not {task for task, _ in _CUTS.values()} <= ids:
         raise ValueError('ordered phase model does not cover the recipe task graph')
@@ -157,6 +161,10 @@ def project_recipe_window(recipe, costs, phases, *, include_first_wave=False):
     workers, window = len(cpu['worker_cpu_ids']), dispatch['window']
     if control['window'] != window or not 0 < window <= workers <= count:
         raise ValueError('ordered capacity cannot support the selected case')
+    if width is not None:
+        if type(width) is not int or not 0 < width <= count or workers != window:
+            raise ValueError('width projection requires one ordered slot per worker')
+        workers = window = width
 
     owner = costs['bootstrap_ns']
     pending = deque()

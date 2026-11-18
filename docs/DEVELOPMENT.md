@@ -118,6 +118,10 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 `plan_sparse_parallel_scaling` 复用已发布的 C++20 产物，根据主线程供给能力和同一 NUMA 节点的可用核心确定扩容配置。发布收据由配对成本和整程对照共同验收。相同有限元入口在 3 和 8 个 worker 下的中位数分别为 3.282 s 和 2.888 s。`scar.runtime.sparse_parallel_scaling` 在核集合缩小后可选回 3 个 worker，参数超出原合同则保留原入口。证据见 `artifacts/baseline/three-stage-csr-parallel-scaling.json`。
 
+已发布的 typed 方案可用 `python -m scar.optimization.sparse_parallel_team_choice --release RELEASE --hardware HARDWARE --out CANDIDATES` 预测同一 NUMA 节点上的扩容。保留原有绑核，按拓扑、CPU 配额和内存上限剔除不可用的配置。初筛按 worker 数线性近似启动与关闭成本，其余服务时间沿用当前观测，只挑一个扩容候选重新测量。`plan_sparse_parallel_scaling --prepare-scope --established RELEASE --choice CANDIDATES/choice.json --out SCOPE` 冻结候选，发布前核对两份 typed recipe、各自的实测成本以及整程对照。
+
+真实 512 轮入口的模型从 8 至 13 个 worker 中保留 W8，选 W9 作为唯一新增对照。整程中位数为 W8 2.864 s、W9 2.965 s，发布仍保留 W8。实际发布入口在只允许原 8 个 worker 核时完成全部 512 次原生调用。证据见 `artifacts/baseline/three-stage-csr-typed-team-choice.json`。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

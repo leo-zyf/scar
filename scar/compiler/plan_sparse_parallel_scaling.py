@@ -5,14 +5,17 @@ import json
 from pathlib import Path
 from statistics import median
 
-from scar.analysis.sparse_parallel_scaling_scope import SCHEMA as SOURCE, check_sparse_parallel_scaling_scope
-from scar.compiler.plan_sparse_parallel import _peak, _ref, _require, _write
-from scar.ir.execution_recipe import read_artifact
+from scar.analysis.sparse_parallel_scaling_scope import (
+    CHOICE, SCHEMA as SOURCE, check_sparse_parallel_scaling_scope, derive_sparse_parallel_scaling_scope,
+)
+from scar.compiler.plan_sparse_parallel import _check_ordered_activity, _peak, _ref, _require, _write
+from scar.ir.execution_recipe import read_artifact, validate_recipe
 from scar.ir.implementation_plan import (CostEstimate, ImplementationOption, PlanningOperation,
     PlanningProblem, PlanningResource, problem_document)
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode
 from scar.optimization.constructive_planner import construct_implementations
+from scar.optimization.resource_solver import semantic_sha256
 from scar.optimization.sparse_parallel_scaling_cost import SCHEMA as COST, check
 from scar.runtime.sparse_parallel_entry import SCHEMA as CHILD
 from scar.runtime.sparse_parallel_scaling import EXECUTION, SCHEMA
@@ -46,6 +49,44 @@ def _problem(scope, source, profile, calibration, teams):
                      'WORKER_ADDRESS_SPACE_CAP_IS_NOT_DRAM_COMMITMENT'))
 
 
+def prepare_scope(established_path, choice_path, out):
+    """Bind the modeled challenger to the original released case."""
+    anchor = _ref(established_path, CHILD)
+    choice = _ref(choice_path, CHOICE)
+    selection, invitation = read_artifact(anchor), read_artifact(choice)
+    scope = derive_sparse_parallel_scaling_scope(selection['source'], anchor, invitation['hardware'], choice)
+    directory = Path(out).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    return _write(directory, 'scope.json', scope)
+
+
+def _bind_typed_teams(teams, profile):
+    references = profile.get('execution_recipes')
+    if references is None and all('execution_recipe' not in team for team in teams.values()):
+        return {}
+    _require(type(references) is dict and set(references) == set(COST_MODES.values()),
+             'paired typed cost must identify both execution recipes')
+    lowerings = {}
+    for mode, team in teams.items():
+        key = COST_MODES[mode]
+        reference = references[key]
+        _require(team.get('execution_recipe') == reference, 'paired timing uses a different team recipe')
+        recipe = validate_recipe(read_artifact(reference))
+        lowering_ref = team['lowering']
+        lowered = read_artifact(lowering_ref)
+        artifacts = recipe['artifacts']
+        _require(lowered['recipe_id'] == recipe['recipe_id'] and read_artifact(lowered['recipe']) == recipe
+                 and all(lowered[field + '_sha256'] == semantic_sha256(recipe[field])
+                         for field in ('semantic_boundary', 'control', 'task_graph', 'resources'))
+                 and lowered['backend_capability_record'] == recipe['implementation']['backend_capability_record']
+                 and lowered['native'] == team['native'] and lowered['detached_recipe'] == team['recipe']
+                 and artifacts['parallel_scope'] == team['source'] and artifacts['serial_launch'] == team['serial_launch']
+                 and all(team[key] == value for key, value in lowered['runtime_policy'].items()),
+                 'typed team lowering, runtime policy or native binding differs')
+        lowerings[key] = lowering_ref
+    return dict(execution_recipes=references, lowerings=lowerings)
+
+
 def prepare(scope_path, expanded, cost, out):
     scope_ref = _ref(scope_path, SOURCE)
     scope = check_sparse_parallel_scaling_scope(scope_ref)
@@ -72,6 +113,7 @@ def prepare(scope_path, expanded, cost, out):
                  and clock['native'] == team['native'] and clock['context']['cpu_ids'] == team['launch_cpu_ids']
                  and {**clock['context'], 'cpu_ids':[team['owner_cpu']]} == team['context'],
                  'paired timing does not use the intended isolated core team')
+    binding = _bind_typed_teams(teams, profile)
     directory = Path(out).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     problem = _problem(scope, scope_ref, profile, cost_ref, teams)
@@ -81,7 +123,7 @@ def prepare(scope_path, expanded, cost, out):
     return _write(directory,'selection.json',dict(schema=SCHEMA, schema_version=1, source=scope_ref, cost=cost_ref,
         teams=refs, entry=base['entry'], context=scope['context'], owner_cpu=scope['owner_cpu'],
         launch_cpu_ids=scope['launch_cpu_ids'], count=scope['count'], problem=problem_ref, plan=plan_ref,
-        runtime=_ref(runtime,'scar.python-source'), study_expanded=True, decision='ESTABLISHED'))
+        runtime=_ref(runtime,'scar.python-source'), study_expanded=True, decision='ESTABLISHED', **binding))
 
 
 def _validate_run(row, name, study_ref, study, team):
@@ -105,6 +147,8 @@ def _validate_run(row, name, study_ref, study, team):
              and sorted(item['cpu'] for item in workers['workers']) == team['workers']['cpu_ids']
              and all(item['address_space_limit_bytes'] == cap for item in workers['workers']),
              'parallel overlap, order, memory cap or cleanup differs from the compiled team')
+    if 'execution_recipe' in team:
+        _check_ordered_activity(workers, team)
     _require(type(row['wall_ns']) is int and row['wall_ns'] > 0, 'positive process time required')
 
 
@@ -130,6 +174,9 @@ def qualify(study_path, validation, out):
         if pair >= warm:
             clocks[mode].append(row['wall_ns'])
     costs = check(study['cost']['uri'])
+    binding = _bind_typed_teams(teams, costs)
+    _require(binding == {key:study[key] for key in ('execution_recipes','lowerings') if key in study},
+             'the paired release must consume the recipes and lowerings used by both measured teams')
     plan = read_artifact(study['plan'])
     preferred = any(row['option'] == 'EXPANDED' for row in plan['selected'])
     win = max(clocks['EXPANDED']) < min(clocks['ESTABLISHED'])
@@ -144,6 +191,9 @@ def qualify(study_path, validation, out):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--prepare-scope', action='store_true')
+    parser.add_argument('--established')
+    parser.add_argument('--choice')
     parser.add_argument('--scope')
     parser.add_argument('--expanded')
     parser.add_argument('--cost')
@@ -151,12 +201,15 @@ def main(argv=None):
     parser.add_argument('--validation')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
-    if all((args.scope,args.expanded,args.cost)) and not args.study:
+    if (args.prepare_scope and args.established and args.choice
+            and not any((args.scope, args.expanded, args.cost, args.study, args.validation))):
+        result = prepare_scope(args.established, args.choice, args.out)
+    elif not (args.prepare_scope or args.established or args.choice) and all((args.scope,args.expanded,args.cost)) and not args.study:
         result = prepare(args.scope,args.expanded,args.cost,args.out)
-    elif args.study and args.validation and not args.scope:
+    elif not (args.prepare_scope or args.established or args.choice) and args.study and args.validation and not args.scope:
         result = qualify(args.study,args.validation,args.out)
     else:
-        parser.error('use --scope/--expanded/--cost or --study/--validation')
+        parser.error('use --prepare-scope with --established/--choice, or --scope/--expanded/--cost, or --study/--validation')
     print(json.dumps(result))
 
 
