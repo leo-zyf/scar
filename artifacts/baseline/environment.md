@@ -106,3 +106,5 @@ Current receipts, logs and the subsequent lean trace are in
 ## 2026-11-13 CPU testcase 切换
 
 Conda lewm/Python3.14.7/Torch2.13.0+cu132仍可导入；torch.cuda.is_available()为False，56逻辑CPU。当前主测试组Sunfish、Gray–Scott及Cirq，命令与实际结果见cpu-workloads.json。Cirq依赖安装隔离于~/AAA/cirq/.scar-runtime，未更改Torch/CUDA；LeWM原仓库干净。
+
+2026-11-18 复查时 PushT 数据与权重可读，LeWM 原仓库干净。本机未暴露 `/dev/nvidia*`，`nvidia-smi` 无法连接驱动，Torch 枚举到 0 张 CUDA 卡。本轮使用保留的历史 GPU 采集和当前源码事实离线重建 CEM 子图，详见 `lewm-observed-v2-review.json`。

@@ -1,0 +1,140 @@
+{
+  "historical_observation": {
+    "bytes_independently_verified": true,
+    "metadata": {
+      "sha256": "a9764c3c80ce89eae50b673df82607dd8d35f0bf9aeb09825a0cb7f03094765d",
+      "size_bytes": 2539,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/python-call-target-meta.10563.json"
+    },
+    "original_program_executed_this_turn": false,
+    "raw_bytes": 188444764,
+    "raw_inputs": [
+      {
+        "sha256": "5771a9a64e80cde9dffa7e853944630f0dc9514608a37f3c092481fa45ef1be5",
+        "size_bytes": 189583,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/call-codes.10563.jsonl"
+      },
+      {
+        "sha256": "a753265476b454b5f18088c3eecacb9b8d6f6e9c3f91e9d39931b909a85cc6a1",
+        "size_bytes": 99504466,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/call-events.10563.jsonl"
+      },
+      {
+        "sha256": "c809288fd1b11b4affa87c865ec0b1a1dd8349e5a6cd3ad5dad19174d49c31fd",
+        "size_bytes": 1320,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/call-meta.10563.json"
+      },
+      {
+        "sha256": "2070740482ad769479eadb591f60bad068a63c3d9f5a54225fd2c6f50a6ac5ef",
+        "size_bytes": 47597871,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/call-operands.10563.jsonl"
+      },
+      {
+        "sha256": "124e33624fa1f796d173cffe4e60457b8d47f77a7c326b4ee219cbd3bed797e4",
+        "size_bytes": 1840,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/call-operand-meta.10563.json"
+      },
+      {
+        "sha256": "9605d67383662031a43ae4c6863c46df5bd1c9c8ddcf9fd47ddc61d2049a49c6",
+        "size_bytes": 41149684,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-input-recovered-current/trace/python-call-targets.10563.jsonl"
+      }
+    ]
+  },
+  "measured": {
+    "cold_reread_peak_rss_kib": 546256,
+    "cold_reread_wall_seconds": 74.05,
+    "observed_graph_peak_rss_kib": 545384,
+    "observed_graph_wall_seconds": 73.25,
+    "sampled_offline_hot_frames": [
+      "read_call_operands",
+      "read_python_call_targets"
+    ],
+    "scope": "offline rebuild and cold reread on CPU0",
+    "static_wall_seconds": 123.69
+  },
+  "observed_hardware": {
+    "checkout_clean": true,
+    "cuda_visible_devices": 0,
+    "inputs": [
+      {
+        "size_bytes": 72290721,
+        "uri": "/gpu4-share/data/byx/lewm_data/checkpoints/pusht/weights.pt"
+      },
+      {
+        "size_bytes": 46300921856,
+        "uri": "/gpu4-share/data/byx/lewm_data/datasets/pusht_expert_train.h5"
+      }
+    ],
+    "nvidia_driver_reachable": false,
+    "source_checkout_head": "f70fed80288462ca4d006cb3607ec6da6eaa851f",
+    "torch": "2.13.0+cu132"
+  },
+  "outstanding": {
+    "first_stage_complete": false,
+    "implicit_receiver_and_argument_binding_complete": false,
+    "new_cuda_profile": false,
+    "new_lewm_entry_speedup_measured": false,
+    "retained_observation_frontiers": 542
+  },
+  "schema": "scar.lewm-observed-v2-review",
+  "schema_version": 1,
+  "source": {
+    "artifact": {
+      "schema": "python-source",
+      "sha256": "a6662e7f1f2c6ecaf0a8527255d531aa05ed583339aabdf2798d0206382ef51b",
+      "size_bytes": 10080,
+      "uri": "/home/zyf/AAA/le-wm/stable-worldmodel/stable_worldmodel/solver/cem.py"
+    },
+    "calls": 70,
+    "facts": {
+      "sha256": "4a4c4af8771ea1d6ac101690362c14766fb1a6858c301e0570462e4686fceeec",
+      "size_bytes": 8108,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-observed-v2-review/frontend/result.json"
+    },
+    "functions": 9,
+    "ports": 5667,
+    "unit": "d6dbd9dac099f3745d0d6051"
+  },
+  "verified": {
+    "binding": "NOT_MODELED",
+    "callee": {
+      "code_id": "pycode-v2:d698565a8f7d998e38f944a59390aa3655b60379b60fcd8618ea80c20895cbc0",
+      "fact": {
+        "artifact": {
+          "schema": "scar.source-facts-unit",
+          "sha256": "c2bf6411857832d2b824fa333d4b1c35c7ab039efc1440cbb257bf7d3e03eec3",
+          "size_bytes": 98578,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-observed-v2-review/frontend/facts/units/d6dbd9dac099f3745d0d6051/facts.json.gz"
+        },
+        "locator": "#/functions/7"
+      },
+      "invocation_id": 40139,
+      "qualname": "CEMSolver.init_action_distrib"
+    },
+    "caller": {
+      "bytecode_offset": 264,
+      "invocation_id": 40134,
+      "line": 144,
+      "qualname": "CEMSolver.solve"
+    },
+    "captured_code_descriptors_matching": 10,
+    "cold_replay_identical_counts": true,
+    "selected_unit_only": true,
+    "source_count": {
+      "annotated_parent_groups": 0,
+      "body_only_groups": 1,
+      "calls": 70,
+      "derived_interfaces": 1,
+      "interfaces": 1,
+      "observation_frontiers": 542,
+      "observed_groups": 1,
+      "parent_interfaces": 0
+    },
+    "v2_report": {
+      "sha256": "f8193207a8206af9ffd48ab865c5d31c1fe40b0f49a260509c109f48e8d409f5",
+      "size_bytes": 4659,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/lewm-observed-v2-review/observed/result.json"
+    }
+  }
+}
