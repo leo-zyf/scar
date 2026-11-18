@@ -108,7 +108,7 @@ def _component_model(calibration, recipe, schedule, warmup):
                 bounds='CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS', shared_memory_contention_modelled=False)
 
 
-def _timeline(names, service, choices, cpus, dispatch):
+def _timeline(names, service, choices, cpus, dispatch, worker_service=None):
     timeline = []
     cursor = 0
     i = 0
@@ -116,7 +116,11 @@ def _timeline(names, service, choices, cpus, dispatch):
         window = i in choices
         indices = [i, i + 1] if window else [i]
         overhead = dispatch if window else 0
-        finish = cursor + max(service[j] for j in indices) + overhead
+        duration = service[i]
+        if window:
+            right = service if worker_service is None else worker_service
+            duration = max(duration, right[i + 1])
+        finish = cursor + duration + overhead
         timeline.append(dict(start_ns=cursor, end_ns=finish, operations=[names[j] for j in indices],
             cpu_ids=cpus if window else cpus[:1], dispatch_join_ns=overhead))
         cursor = finish
@@ -126,6 +130,19 @@ def _timeline(names, service, choices, cpus, dispatch):
 
 def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=False, tensor_budget_bytes=None):
     service, dispatch, op_samples, dispatch_samples = _services(calibration, recipe, warmup)
+    worker_samples = calibration.get('worker_operation_samples_ns')
+    worker_service = None
+    if worker_samples is not None:
+        positions = {row['pair_indices'][1] for row in schedule['windows']}
+        if (type(worker_samples) is not list or len(worker_samples) != warmup or any(
+                type(row) is not list or len(row) != len(service) or any(
+                    not (type(value) is int and value > 0) if i in positions else value is not None
+                    for i, value in enumerate(row)) for row in worker_samples)):
+            raise ValueError('exact worker samples required at each legally dispatched position')
+        worker_service = [median_low(column) if i in positions else None
+                          for i, column in enumerate(zip(*worker_samples, strict=True))]
+    elif 'target_cpu_domain' in schedule:
+        raise ValueError('broad target planning requires measured worker operation service times')
     eligible = schedule
     storage = None
     if observe_storage:
@@ -136,26 +153,30 @@ def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=Fals
                                    candidates=schedule['windows'], budget_bytes=tensor_budget_bytes)
         allowed = set(storage['candidate_starts_within_budget'])
         eligible = dict(schedule, windows=[row for row in schedule['windows'] if row['pair_indices'][0] in allowed])
-    starts = select_cpu_windows(eligible, service, dispatch)
+    starts = select_cpu_windows(eligible, service, dispatch, worker_services=worker_service)
     choices = set(starts)
     names = [op['id'] for op in recipe['operations']]
     predictions = {'SERIAL': _prediction(sum(service), [sum(row) for row in op_samples])}
     candidates = []
     for row in schedule['windows']:
         first, second = row['pair_indices']
-        candidate = dict(row, gain_ns=min(service[first], service[second]) - dispatch, selected=first in choices)
+        right = service[second] if worker_service is None else worker_service[second]
+        gain = service[first] + service[second] - max(service[first], right) - dispatch
+        candidate = dict(row, gain_ns=gain, selected=first in choices)
         if storage is not None:
             candidate.update(peak_tensor_storage_bytes=storage['window_peak_bytes'][str(first)],
                              within_tensor_budget=first in allowed)
         candidates.append(candidate)
 
-    def serial_or_windows(row, cost):
-        return sum(row) + sum(cost - min(row[i], row[i + 1]) for i in starts)
+    def serial_or_windows(row, worker, cost):
+        return sum(row) + sum(cost + max(row[i], worker[i + 1]) - row[i] - row[i + 1] for i in starts)
 
-    timeline = _timeline(names, service, choices, schedule['cpus'], dispatch)
+    timeline = _timeline(names, service, choices, schedule['cpus'], dispatch, worker_service)
     if starts:
-        predictions['TWO_CPU'] = _prediction(timeline[-1]['end_ns'], [serial_or_windows(row, cost) for row, cost in
-                                                                     zip(op_samples, dispatch_samples, strict=True)])
+        sample_workers = op_samples if worker_samples is None else worker_samples
+        predictions['TWO_CPU'] = _prediction(timeline[-1]['end_ns'], [serial_or_windows(row, worker, cost)
+                                            for row, worker, cost in zip(op_samples, sample_workers,
+                                                                        dispatch_samples, strict=True)])
     model = dict(basis='MINIMUM_ADJACENT_WINDOW_TILING_WITH_ADDITIVE_CALIBRATED_COSTS',
         operations=[dict(id=name, service_ns=ns) for name, ns in zip(names, service, strict=True)],
         candidates=candidates, selected_starts=list(starts), timeline=timeline,
@@ -163,12 +184,15 @@ def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=Fals
         bounds='CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS', shared_memory_contention_modelled=False)
     if storage is not None:
         model['tensor_storage'] = storage
+    if worker_service is not None:
+        model['worker_service_ns'] = worker_service
     return model
 
 
 def _problem(hardware, schedule, origin, evidence, model, *, modes):
     cpus = tuple(schedule['cpus'])
-    target, domains = _target(hardware, tuple(schedule['availability_mask']))
+    target, domains = _target(hardware, tuple(schedule['availability_mask']),
+                              allow_cpu_subset='target_cpu_domain' in schedule)
     windows = 'windows' in schedule
     key = 'cpu_windows' if windows else 'cpu_pair'
     refs = (dict(artifact=origin, locator='#/' + key), dict(artifact=evidence, locator='#/calibration'))
@@ -208,11 +232,13 @@ def _host_tensor_budget(hardware, budget_bytes, refs):
 
 def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
     """Reserve the worker core only over selected fork/join intervals."""
-    target, domains = _target(hardware, tuple(schedule['availability_mask']))
+    target, domains = _target(hardware, tuple(schedule['availability_mask']),
+                              allow_cpu_subset='target_cpu_domain' in schedule)
     refs = (dict(artifact=origin, locator='#/cpu_windows'), dict(artifact=evidence, locator='#/calibration'))
     names = [op['id'] for op in model['operations']]
     service = [op['service_ns'] for op in model['operations']]
-    timeline = _timeline(names, service, set(selected_starts), schedule['cpus'], model['empty_dispatch_join_ns'])
+    timeline = _timeline(names, service, set(selected_starts), schedule['cpus'], model['empty_dispatch_join_ns'],
+                         model.get('worker_service_ns'))
     storage = model.get('tensor_storage')
     pool = None
     if storage is not None and storage['budget_bytes'] is not None:
@@ -299,7 +325,7 @@ def _invoke(executable, schedule, mode, args, inputs):
 
 
 def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pairs=7, measured_pairs=31,
-                          tensor_budget_bytes=None):
+                          tensor_budget_bytes=None, primitive_observation=None):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -319,13 +345,20 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
     binary = _receipt(executable)
     guarded = [binary, *artifact['provider']['libraries'], *inputs]
     if windowed:
-        raw = _invoke(executable, schedule, '--calibrate-windows', [warmup_pairs], inputs)
+        if primitive_observation is None:
+            raw = _invoke(executable, schedule, '--calibrate-windows', [warmup_pairs], inputs)
+        else:
+            if primitive_observation['inputs'] != inputs:
+                raise ValueError('CPU domain calibration input bytes differ from the selected delivery')
+            raw = primitive_observation['raw']
         if ([raw['caller_cpu'], raw['worker_cpu']] != schedule['cpus'] or raw['warmup_pairs'] != warmup_pairs):
             raise ValueError('native calibration differs from the requested graph and placement')
         model = _window_model(raw['calibration'], recipe, schedule, warmup_pairs,
                               observe_storage=observe_storage, tensor_budget_bytes=tensor_budget_bytes)
         stats, matched = None, None
     else:
+        if primitive_observation is not None:
+            raise ValueError('imported primitive observations require a generated CPU window graph')
         raw = _invoke(executable, schedule, '--benchmark-pair', [warmup_pairs, measured_pairs], inputs)
         model = _component_model(raw['calibration'], recipe, schedule, warmup_pairs)
         stats, matched = _statistics(raw, warmup_pairs, measured_pairs, schedule['cpus']), None

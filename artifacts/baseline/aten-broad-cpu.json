@@ -1,0 +1,46 @@
+{
+  "experiment": "artifacts/current/experiments/aten-broad-cpu-v1",
+  "application": "torchdiffeq 0.2.5 RK4 matrix ODE, 96 steps, float32 768×768 state",
+  "source_and_capture": {
+    "backend": "F4",
+    "target_sha256": "8956e6fa8b5103bbc87a5aaed91086df53f507812ad9f9c9cc55d18fe0196bc1",
+    "discovery_sha256": "dccad594ae0de6c544de636905e6773dce23db30d578a3fde895b4975de28b36",
+    "one_step_capture_matched_original_bytes": true
+  },
+  "placement": {
+    "recorded_logical_cpus": 56,
+    "candidate_physical_cores": 28,
+    "represented_ordered_pairs": 756,
+    "representative_cpus": [[0, 1], [0, 14], [14, 0], [14, 15]],
+    "representative_two_cpu_estimates_ns": [16162176, 14931622, 14795065, 13401811],
+    "best_serial_estimate_ns": 25227529,
+    "selected_cpus": [14, 15],
+    "primitive_rows_per_representative": 7,
+    "full_variants_measured_to_choose_placement": 0,
+    "tensor_storage_budget_bytes": 24000000,
+    "page_placement_observed": false,
+    "domain_plan_sha256": "d87899ad7ea3c96b5c71424b078b6ff8f4b99db0c0463723c92318c765759736"
+  },
+  "native_and_entry_validation": {
+    "provider": "C++20 LibTorch CPU",
+    "native_region_speedup": 1.9364629772683049,
+    "native_selection_sha256": "180dc09a5423e1229e3646d8fcfa08f1dfbd6538abbf0056cee8bacd6856d78f",
+    "paired_entry_cpu_ids": [14, 15],
+    "entry_warmup_pairs": 1,
+    "entry_measured_pairs": 3,
+    "original_wall_ns": [12337456870, 12190260703, 12387515347],
+    "guarded_wall_ns": [8132017308, 8087416488, 8180721590],
+    "entry_full_process_speedup": 1.517145918745504,
+    "guarded_native_calls_per_process": 384,
+    "guarded_fallback_calls": 0,
+    "matched_result_sha256": "d23906b4238b8dfcea10fabd0a556403c02cb650f5ffec3585e245dc65e9f713",
+    "entry_validation_sha256": "af7b683af299b1dd352d279b51b3d82a16aeec3ccea9247ae92f865ee840dcc9",
+    "delivery_sha256": "e4601925318c423c41a46f1eaa58d738600bb191d9c0412b5ecfe1aaa7a0274f"
+  },
+  "smt_only_launch": {
+    "cpu_ids": [0, 28],
+    "recommendation": "KEEP_ORIGINAL",
+    "reason": "DISTINCT_ELIGIBLE_PHYSICAL_CORES_UNAVAILABLE",
+    "delivery_sha256": "af8c504a675c603aac9b9e34328f5a40f352a1d1659e43a8dd0419ce5f703aa4"
+  }
+}

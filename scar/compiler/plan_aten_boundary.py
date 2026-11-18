@@ -35,11 +35,18 @@ def _checked(receipt):
     return path
 
 
-def _target(hardware, cpus):
+def _target(hardware, cpus, *, allow_cpu_subset=False):
     graph = TargetHardwareGraph(hardware)
-    constraint, = graph.constraints()
-    _require(constraint.affinity_cpu_ids == constraint.allowed_cpu_ids == cpus,
-             'native trial CPU mask differs from the target availability domain')
+    if allow_cpu_subset:
+        from scar.optimization.aten_native_schedule import recorded_cpu_domain
+
+        constraint, domain = recorded_cpu_domain(graph)
+        _require(bool(cpus) and set(cpus).issubset(domain),
+                 'native trial CPU mask is outside the target affinity and allowed CPU intersection')
+    else:
+        constraint, = graph.constraints()
+        _require(constraint.affinity_cpu_ids == constraint.allowed_cpu_ids == cpus,
+                 'native trial CPU mask differs from the target availability domain')
     inventory = graph.resources()
     threads = {r.cpu_id: r for r in inventory if type(r) is HardwareThread and r.online is True}
     cores = {cpu: r for r in inventory if type(r) is CpuCore for cpu in r.cpu_ids}

@@ -8,11 +8,13 @@ from pathlib import Path
 
 from scar.codegen.aten_native_graph import compile_aten_native_graph
 from scar.codegen.aten_python_trial import build_aten_python_trial
+from scar.compiler.aten_cpu_domain_plan import plan_aten_cpu_domain
 from scar.compiler.aten_region_inputs import read_aten_region_inputs
 from scar.compiler.plan_aten_native_graph import plan_aten_native_graph
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.aten_cpu_placement_domain import aten_cpu_placement_domain
 from scar.optimization.aten_native_schedule import (
-    CONTRACT_SCHEMA, AtenCpuWindowFrontier, resolve_aten_cpu_windows,
+    CONTRACT_SCHEMA, AtenCpuWindowFrontier, propose_cpu_windows, resolve_aten_cpu_windows,
 )
 from scar.runtime.validate_aten_python_entry import validate_aten_python_entry
 
@@ -53,28 +55,66 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     target_dir = Path(target['uri']).parent
     report.update(source=source['source'], function=source['function'], code_key=source['code_key'],
                   target=target, concurrency_contract=concurrency, recipe=inputs['recipe'])
+    declarations = read_artifact(concurrency)
+    allowed = os.sched_getaffinity(0)
+    domain = None
     try:
-        placement = resolve_aten_cpu_windows(recipe, contract=read_artifact(concurrency), target=target_dir,
-                                             allowed_cpu_ids=os.sched_getaffinity(0))
+        placement = resolve_aten_cpu_windows(recipe, contract=declarations, target=target_dir, allowed_cpu_ids=allowed)
     except AtenCpuWindowFrontier as error:
-        return dict(report, reason=error.reason)
+        if error.reason != 'TARGET_CPU_DOMAIN_NOT_EXACT_PAIR':
+            return dict(report, reason=error.reason)
+        try:
+            domain = aten_cpu_placement_domain(target_dir, allowed_cpu_ids=allowed)
+        except AtenCpuWindowFrontier as domain_error:
+            return dict(report, reason=domain_error.reason)
+        if not domain['representatives']:
+            return dict(report, reason=domain['reason'], cpu_domain=domain)
+        placement = propose_cpu_windows(recipe, contract=declarations, target=target_dir,
+                                        cpu_ids=domain['representatives'][0]['cpus'])
     if placement['target'] != target:
         raise ValueError('resolved hardware differs from the original F4 target')
     ordered_inputs = _calibration_inputs(named_inputs, source, recipe)
     report['calibration_order'] = [name for name, _ in ordered_inputs]
+    sample_paths = [path for _, path in ordered_inputs]
 
-    native = out / 'native'
-    compiled = compile_aten_native_graph(inputs['recipe']['uri'], recipe_sha256=inputs['recipe']['sha256'],
-        linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=native,
-        concurrency_contract=concurrency['uri'], concurrency_sha256=concurrency['sha256'],
-        target=target_dir, cpu_ids=placement['cpus'])
-    if compiled['cpu_windows'] != placement:
-        raise ValueError('compiled schedule differs from the resolved placement')
+    def compile_graph(destination, schedule):
+        result = compile_aten_native_graph(inputs['recipe']['uri'], recipe_sha256=inputs['recipe']['sha256'],
+            linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=destination,
+            concurrency_contract=concurrency['uri'], concurrency_sha256=concurrency['sha256'],
+            target=target_dir, cpu_ids=schedule['cpus'])
+        if result['cpu_windows'] != schedule:
+            raise ValueError('compiled schedule differs from the resolved placement')
+        return result
+
+    native = out / ('native' if domain is None else 'cpu-probe')
+    compiled = compile_graph(native, placement)
+    primitive_observation = None
+    if domain is not None:
+        probe = artifact_reference(native / 'artifact.json', compiled['schema'])
+        choices, chosen = plan_aten_cpu_domain(probe, domain=domain, input_paths=sample_paths,
+            warmup_pairs=graph_warmup_pairs, tensor_budget_bytes=tensor_budget_bytes)
+        path = out / 'cpu-domain-plan.json'
+        path.write_text(json.dumps(choices, sort_keys=True, indent=2, allow_nan=False) + '\n')
+        report['cpu_domain_plan'] = artifact_reference(path, choices['schema'])
+        if choices['selected_mode'] == 'SERIAL':
+            return dict(report, reason='CPU_DOMAIN_MODEL_KEPT_SERIAL')
+        if choices['selected_cpu_ids'] != placement['cpus']:
+            placement = propose_cpu_windows(recipe, contract=declarations, target=target_dir,
+                                            cpu_ids=choices['selected_cpu_ids'])
+            native = out / 'native'
+            delivered = compile_graph(native, placement)
+            if any(delivered['files'][name] != compiled['files'][name]
+                   for name in ('graph.hpp', 'operators.hpp', 'pair.cpp', 'aten_native_pair_v1.h')):
+                raise ValueError('delivery graph code differs from the measured CPU probe')
+            compiled = delivered
+        primitive_observation = dict(inputs=choices['inputs'], raw=chosen['primitive_observations'])
+
     report['native'] = artifact_reference(native / 'artifact.json', compiled['schema'])
     plan = out / 'plan'
     selection = plan_aten_native_graph(report['native']['uri'], bundle_sha256=report['native']['sha256'],
-        input_paths=[path for _, path in ordered_inputs], out=plan, warmup_pairs=graph_warmup_pairs,
-        measured_pairs=graph_measured_pairs, tensor_budget_bytes=tensor_budget_bytes)
+        input_paths=sample_paths, out=plan, warmup_pairs=graph_warmup_pairs,
+        measured_pairs=graph_measured_pairs, tensor_budget_bytes=tensor_budget_bytes,
+        primitive_observation=primitive_observation)
     report['selection'] = artifact_reference(plan / 'selection.json', selection['schema'])
     report['native_selection'] = selection['selected']
     if selection['selected'] != 'TWO_CPU':
@@ -98,6 +138,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
         measured_pairs=entry_measured_pairs, allow_ambient_grad=allow_ambient_grad,
         require_full_coverage=True, expected_native_calls=expected_native_calls)
     return dict(report, recommendation=validation['recommendation'], speedups=validation['speedups'],
+                entry_validation_cpu_context=selection['cpu_ids'],
                 entry_validation=artifact_reference(verified / 'validation.json', validation['schema']))
 
 

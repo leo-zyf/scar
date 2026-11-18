@@ -28,6 +28,7 @@ struct Sample {
 
 struct Calibration {
     OperationTimes operations;
+    OperationTimes worker_operations;
     std::int64_t dispatch_ns;
 };
 
@@ -110,13 +111,13 @@ void check_launch(int caller, int worker) {
     }
 }
 
-void check_caller(int caller) {
+void check_lane(int cpu) {
     cpu_set_t allowed;
     if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0 || CPU_COUNT(&allowed) != 1
-            || !CPU_ISSET(caller, &allowed) || sched_getcpu() != caller
+            || !CPU_ISSET(cpu, &allowed) || sched_getcpu() != cpu
             || at::get_num_threads() != 1 || at::get_num_interop_threads() != 1
             || at::GradMode::is_enabled() || std::fegetround() != FE_TONEAREST) {
-        throw std::runtime_error("benchmark caller context differs from its requested placement");
+        throw std::runtime_error("benchmark lane context differs from its requested placement");
     }
 }
 
@@ -232,6 +233,21 @@ void emit_calibration(int caller, int worker, int warmup, const std::vector<Cali
         }
         std::cout << ']';
     }
+    std::cout << "],\"worker_operation_samples_ns\":[";
+    for (std::size_t row = 0; row < calibration.size(); ++row) {
+        if (row != 0) std::cout << ',';
+        std::cout << '[';
+        const auto& times = calibration[row].worker_operations;
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            if (i != 0) std::cout << ',';
+            if (i != 0 && graph::legal_window_starts[i - 1]) {
+                std::cout << times[i];
+            } else {
+                std::cout << "null";
+            }
+        }
+        std::cout << ']';
+    }
     std::cout << "],\"empty_dispatch_samples_ns\":[";
     for (std::size_t row = 0; row < calibration.size(); ++row) {
         if (row != 0) std::cout << ',';
@@ -283,7 +299,7 @@ void benchmark(char** args, int caller, int worker, graph::CpuPair& pair, const 
                                serial_first ? second.first : first.first, serial_first});
         }
     }
-    check_caller(caller);
+    check_lane(caller);
     emit_benchmark(caller, worker, warmup, measurements, windows, samples, result_storage);
 }
 
@@ -329,7 +345,34 @@ void calibrate(char** args, int caller, int worker, graph::CpuPair& pair) {
         row.dispatch_ns = elapsed_ns(start);
         calibration.push_back(row);
     }
-    check_caller(caller);
+    // Recreate each operand in original order. Only an operator admitted as a
+    // worker lane may move off the caller, and the service clock runs after handoff.
+    const auto sample_worker = [&](OperationTimes& timings) {
+        const auto observed = graph::run_observed(inputs, [&](std::size_t operation, auto&& call) {
+            at::Tensor value;
+            if (operation != 0 && graph::legal_window_starts[operation - 1]) {
+                pair.run([] {}, [&] {
+                    const auto start = Clock::now();
+                    value = call();
+                    timings.at(operation) = elapsed_ns(start);
+                });
+            } else {
+                value = call();
+            }
+            observe_storage(result_storage.at(operation), value);
+            return value;
+        });
+        check_sample_inputs();
+        check_outputs(inputs, calibration_reference, observed);
+    };
+    pair.run([] {}, [&] { check_lane(worker); });
+    OperationTimes worker_warmup{};
+    sample_worker(worker_warmup);
+    for (auto& row : calibration) {
+        sample_worker(row.worker_operations);
+    }
+    pair.run([] {}, [&] { check_lane(worker); });
+    check_lane(caller);
     emit_calibration(caller, worker, warmup, calibration, input_storage, result_storage);
 }
 
@@ -359,11 +402,11 @@ int main(int argc, char** argv) {
         at::set_num_interop_threads(1);
         at::NoGradGuard no_grad;
         if (caller_only) {
-            check_caller(caller);
+            check_lane(caller);
             return invoke(argv + 3, graph::run);
         }
         graph::CpuPair pair(caller, worker);
-        check_caller(caller);
+        check_lane(caller);
         if (calibrating) {
             calibrate(argv + 4, caller, worker, pair);
         } else if (measure) {
@@ -371,7 +414,7 @@ int main(int argc, char** argv) {
         } else {
             return invoke(argv + 5, [&](const auto& inputs) {
                 auto result = graph::run_parallel(inputs, pair, windows);
-                check_caller(caller);
+                check_lane(caller);
                 return result;
             });
         }

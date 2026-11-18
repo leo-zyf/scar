@@ -26,11 +26,11 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar compile-aten-graph --recipe RECIPE.json --recipe-sha256 SHA256 --linkage LINKED/result.json --linkage-sha256 SHA256 --out NATIVE` 从声明的张量数据流直接生成 C++20。`scar.aten-native-recipe` v1 声明固定形状输入、精确算子签名、按顺序绑定的值和整数标量，以及输出 ID。`NATIVE/launch.sh` 按声明顺序接受原生字节序的 float32 输入文件和新输出路径，成功时报告输出形状。C++ 产物直接调用现有 LibTorch，运行依赖记录在 `artifact.json`。当前支持有序的独立 CPU 图，原 Python 区域替换单独准入。样例与实测见 [CPU 图验证](artifacts/baseline/aten-native-graph.json)。
 
-`scar project-aten-graph --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --linkage LINKED/result.json --linkage-sha256 SHA256 --out PROJECTED` 可从原始 F4 和同次采集自动生成上述配方。采集时追加 `--native-tensor-inputs`，`LINKED` 使用同一采集和调用范围执行 `link-aten-capture` 生成。投影用精确 TorchOp 输入元数据确定 dtype、设备和布局，用 F4 路径核对内部依赖与原返回分量。原生回放由调用方提供实际输入值，原 Python 决策仍单独保留。见 [采集到 C++ 验证](artifacts/baseline/aten-capture-graph.json)。
+`scar project-aten-graph --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --linkage LINKED/result.json --linkage-sha256 SHA256 --out PROJECTED` 可从原始 F4 和同次采集自动生成上述配方。采集时追加 `--python-call-targets --native-tensor-inputs`，`LINKED` 使用同一采集和调用范围执行 `link-aten-capture` 生成。投影用精确 TorchOp 输入元数据确定 dtype、设备和布局，用 F4 路径核对内部依赖与原返回分量。原生回放由调用方提供实际输入值，原 Python 决策仍单独保留。见 [采集到 C++ 验证](artifacts/baseline/aten-capture-graph.json)。
 
 `scar discover-aten-regions --build PROGRAM --capture RAW --contract WRAPPERS.json --contract-sha256 SHA256 --out DISCOVERY` 按实际调用分组，用原 F4 核验完整函数边界。加 `--capture-model MODEL.json --capture-model-sha256 SHA256` 可直接链接并投影唯一闭合区域，省去手填 CALL 编号。包装器效果由显式合同声明。发现报告可供后续成本规划和原入口验证使用。
 
-`scar compile-aten-entry --help` 将发现报告接到成本规划、C++20 LibTorch 交付和可选的完整入口 A/B。校准 Tensor 按原形参传 `--input NAME=FILE`。在目标图记录两个物理核心时，命令自动恢复 CPU 绑定。并行及变值运行仍依据显式效果合同。完整入口报告同时核对原生覆盖率、输出等价和进程耗时。
+`scar compile-aten-entry --help` 将发现报告接到成本规划、C++20 LibTorch 交付和可选的完整入口 A/B。校准 Tensor 按原形参传 `--input NAME=FILE`。较宽的 CPU 域按 NUMA、末级缓存及 ISA 提取代表对，再用主线程、工作线程和交接成本选择并行窗口。并行及变值运行仍依据显式效果合同。完整入口 A/B 两侧均使用选定的 CPU 对，核对原生覆盖率、输出等价和进程耗时。
 
 为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间和交接开销求出互不重叠的相邻窗口组合。独立进程只对选出的并行方案与串行基线配对验证。`PLAN/plan.json` 逐段验算核心占用，`PLAN/launch.sh` 固定输入和已选窗口。性能报告的范围是预热后的调用。见 [多窗口调度验证](artifacts/baseline/aten-native-multi-window.json)。
 

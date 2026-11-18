@@ -41,6 +41,20 @@ def _live_inputs(operation):
     return {arg['value'] for arg in operation['arguments'] if 'value' in arg}
 
 
+def recorded_cpu_domain(graph):
+    """Recover the CPUs admitted by both masks of a single target context."""
+    constraints = graph.constraints()
+    if len(constraints) == 1:
+        constraint, = constraints
+        affinity, allowed = constraint.affinity_cpu_ids, constraint.allowed_cpu_ids
+        if affinity is not None and allowed is not None:
+            domain = tuple(sorted(set(affinity).intersection(allowed)))
+            if domain:
+                return constraint, domain
+    raise AtenCpuWindowFrontier('TARGET_CPU_DOMAIN_UNAVAILABLE',
+        'the target requires one execution context with intersecting affinity and allowed CPU masks')
+
+
 def _exact_cpu_constraint(graph):
     constraints = graph.constraints()
     if len(constraints) == 1:
@@ -52,14 +66,18 @@ def _exact_cpu_constraint(graph):
         'the recorded target requires matching two-CPU affinity and allowed masks')
 
 
-def _placement(graph, constraint, cpu_ids):
+def _placement(graph, constraint, cpu_ids, *, domain=None):
     if (type(cpu_ids) not in (tuple, list) or len(cpu_ids) != 2
             or any(type(cpu) is not int or not 0 <= cpu < 1024 for cpu in cpu_ids)
             or cpu_ids[0] == cpu_ids[1]):
         raise ValueError('two distinct ordered Linux CPU IDs required')
     mask = tuple(sorted(cpu_ids))
-    if constraint.affinity_cpu_ids != mask:
+    exact = constraint.affinity_cpu_ids == constraint.allowed_cpu_ids == mask
+    if domain is None and not exact:
         raise ValueError('proposed CPU mask differs from the recorded target availability domain')
+    if domain is not None and not set(mask).issubset(domain):
+        raise AtenCpuWindowFrontier('CPU_PAIR_OUTSIDE_TARGET_CPU_DOMAIN',
+            'both CPU lanes must be in the recorded affinity and allowed CPU intersection')
     resources = graph.resources()
     threads = {row.cpu_id: row for row in resources if type(row) is HardwareThread and row.online is True}
     cores = {cpu: row for row in resources if type(row) is CpuCore for cpu in row.cpu_ids}
@@ -70,10 +88,15 @@ def _placement(graph, constraint, cpu_ids):
     lanes = [dict(cpu=cpu, thread=encode(threads[cpu].id), core=encode(cores[cpu].id),
                   thread_fact=encode(threads[cpu].evidence), core_fact=encode(cores[cpu].evidence))
              for cpu in cpu_ids]
-    return dict(target=encode(graph._snapshot), availability_mask=list(mask), lanes=lanes,
-                constraint_fact=encode(constraint.evidence), cpus=list(cpu_ids),
-                effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
-                source_replacement_authorized=False, performance_measured=False)
+    placement = dict(target=encode(graph._snapshot), availability_mask=list(mask), lanes=lanes,
+                     constraint_fact=encode(constraint.evidence), cpus=list(cpu_ids),
+                     effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
+                     source_replacement_authorized=False, performance_measured=False)
+    if not exact:
+        placement['target_cpu_domain'] = dict(
+            affinity_cpu_ids=list(constraint.affinity_cpu_ids), allowed_cpu_ids=list(constraint.allowed_cpu_ids),
+            eligible_cpu_ids=list(domain))
+    return placement
 
 
 def _independent_windows(recipe, contract):
@@ -115,10 +138,11 @@ def propose_cpu_pair(recipe, *, contract, target, cpu_ids):
 
 
 def propose_cpu_windows(recipe, *, contract, target, cpu_ids):
-    """Retain all legal adjacent pairs, including pairs that overlap."""
+    """Retain all legal windows on an explicit pair in the recorded target."""
     windows = _required_windows(recipe, contract)
     graph = TargetHardwareGraph(target)
-    placement = _placement(graph, _exact_cpu_constraint(graph), cpu_ids)
+    constraint, domain = recorded_cpu_domain(graph)
+    placement = _placement(graph, constraint, cpu_ids, domain=domain)
     return dict(schema=WINDOWS_SCHEMA, schema_version=1, scope=SCOPE,
                 windows=windows, **placement)
 
@@ -137,11 +161,11 @@ def resolve_aten_cpu_windows(recipe, *, contract, target, allowed_cpu_ids):
                 windows=windows, **placement)
 
 
-def select_cpu_windows(schedule, services, dispatch):
+def select_cpu_windows(schedule, services, dispatch, *, worker_services=None):
     """Return non-overlapping first indices that minimize modeled completion time.
 
     Each position either stays serial, or starts a legal pair and skips its
-    second operation. Pairing saves the shorter service time minus one handoff.
+    second operation. Pair duration uses the slower lane plus one handoff.
     A suffix dynamic program maximizes the total savings, breaking ties by
     fewer handoffs and then the earliest first index.
     """
@@ -152,6 +176,11 @@ def select_cpu_windows(schedule, services, dispatch):
             or any(type(value) is not int or value <= 0 for value in services)
             or type(dispatch) is not int or dispatch < 0):
         raise ValueError('positive integer service times and nonnegative dispatch time required')
+    if worker_services is None:
+        worker_services = services
+    elif (type(worker_services) not in (tuple, list) or len(worker_services) != len(services)
+            or any(value is not None and (type(value) is not int or value <= 0) for value in worker_services)):
+        raise ValueError('worker services must align with caller operations and give positive integer durations')
 
     eligible = set()
     for window in schedule['windows']:
@@ -159,6 +188,8 @@ def select_cpu_windows(schedule, services, dispatch):
         if (type(first) is not int or type(second) is not int or not 0 <= first < len(services) - 1
                 or second != first + 1 or first in eligible):
             raise ValueError('invalid or duplicate adjacent window in CPU proposal')
+        if worker_services[second] is None:
+            raise ValueError('worker service is missing for an eligible CPU window')
         eligible.add(first)
 
     # Scores compare savings first and negative handoff count second.
@@ -167,7 +198,8 @@ def select_cpu_windows(schedule, services, dispatch):
     for index in range(len(services) - 2, -1, -1):
         scores[index] = scores[index + 1]
         if index in eligible:
-            saving = min(services[index], services[index + 1]) - dispatch
+            paired_duration = max(services[index], worker_services[index + 1]) + dispatch
+            saving = services[index] + services[index + 1] - paired_duration
             tail_saving, tail_handoffs = scores[index + 2]
             paired = (saving + tail_saving, tail_handoffs - 1)
             if saving > 0 and paired >= scores[index]:
