@@ -194,5 +194,38 @@
   },
   "schema": "scar.strict-fp-and-structural-fusion",
   "schema_version": 1,
+  "shared_fp_status_check": {
+    "candidate": {
+      "schema": "scar.semantic-region-revision",
+      "sha256": "6b5122fe1b2a69f1f3145cb4a13fdeafda9ee2dd59612f6026e9e3aee79a9505",
+      "size_bytes": 19922,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/current/candidate/revision.json"
+    },
+    "cold_check_passed": true,
+    "cpp": {
+      "schema": "scar.cpp-source",
+      "sha256": "85414733595e53f9c96e63f432245827466a9b5c153886848c6a30bf6c72e5de",
+      "size_bytes": 8941,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/shared-fenv-native/kernel.cpp"
+    },
+    "cpp_sha256": "dcc9d89e12df744e44ff86ce22b462f0aca01aee5c0e69c53b7e16712cf6816c",
+    "decision": "KEEP",
+    "focused_tests_passed": 3,
+    "generated_asserts_added": false,
+    "original_kernel_floating_status_check_reused": true,
+    "per_scalar_result_checks_removed": true,
+    "preparation": {
+      "schema": "scar.macro-pipeline-preparation",
+      "sha256": "4576b654dd42390fe8a9b5ad6455282152d8c53338eaf263a6c07fc28e4602df",
+      "size_bytes": 4653,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/structural-fusion-v2/current/preparation.json"
+    },
+    "verification": {
+      "schema": "scar.strict-fp-native-verification",
+      "sha256": "05dac6aa2500cf2c34f1e67c0ef39f08c96ceb71683e317f6dbb53eb25a68e8b",
+      "size_bytes": 1304,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/fp-folding-v1/shared-fenv-result.json"
+    }
+  },
   "whole_goal_complete": false
 }

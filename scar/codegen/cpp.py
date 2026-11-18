@@ -223,7 +223,7 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
     # bounded ptrdiff_t row/column arithmetic in the hot loops.
     loads = [node for node in plan.region.nodes
              if node.id in needed and node.op in ("input", "slice")]
-    prelude = []
+    prelude = ["    if (output->shape[0] != 0 && output->shape[1] != 0) {"]
     for index in sorted({views[node.id][0] for node in loads}):
         prelude.extend((
             f"        const ptrdiff_t row_stride{index} = static_cast<ptrdiff_t>(inputs[{index}].strides[0]);",
@@ -266,8 +266,8 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
         if scalar_operands and scalar[node.id]:
             # Preserve floating operations until execution under the caller's
             # environment. The volatile store survives empty output loops.
-            # Keep scalar operands opaque to GCC's constant folder and
-            # inspect nonfinite results without doing another FP operation.
+            # Opaque literal reads keep the arithmetic out of GCC's constant
+            # folder. The kernel's existing fenv check covers the result.
             if node.op == "const":
                 if node.id in scalar_operands:
                     scalar_setup.append(f"    const volatile double {name}_literal = {expression};")
@@ -277,14 +277,10 @@ def _source(plan: ExecutionPlan, scalar: dict[str, bool]) -> str:
                 scalar_setup.extend((
                     f"    const volatile double {name}_rounded = {expression};",
                     f"    const double {name} = {name}_rounded;",
-                    f"    nonfinite_input |= static_cast<uint32_t>((std::bit_cast<uint64_t>({name}) & "
-                    "UINT64_C(0x7ff0000000000000)) == UINT64_C(0x7ff0000000000000));",
                 ))
         else:
             emitted.append(f"                const double {name} = {expression};")
     output_value = value_names[plan.region.output]
-    scalar_guard = "!nonfinite_input && " if scalar_operands else ""
-    prelude.insert(0, f"    if ({scalar_guard}output->shape[0] != 0 && output->shape[1] != 0) {{")
     emitted.append(f"                output_row[col] = {output_value};")
     row_loop = ["        for (int64_t row = 0; row < output->shape[0]; ++row) {",
                 *row_setup,
