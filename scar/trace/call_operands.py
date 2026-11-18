@@ -158,7 +158,7 @@ class CallOperandObserver:
         if capture in (_CAPTURE_LEAN, _CAPTURE_PROGRAM, _CAPTURE_PROCESS) and python_targets is not True:
             raise ValueError('lean capture requires explicit Python target interfaces')
         self._local_mask = sys.monitoring.events.CALL if capture in (_CAPTURE_LEAN, _CAPTURE_PROGRAM, _CAPTURE_PROCESS) else _LOCAL_MASK
-        self._stream_enabled = stream_interfaces or resource_scopes
+        self._stream_enabled = stream_interfaces or resource_scopes or os.environ.get('SCAR_TORCH_CALL_SCOPES') == '1'
         # CPython derives C_RETURN/C_RAISE from CALL. get_local_events returns
         # the normalized CALL mask even when the dependent bits were supplied.
         self.rule = _CAPTURE_RULES[capture]
@@ -194,6 +194,7 @@ class CallOperandObserver:
         self.python_targets = None
         self.stream_interfaces = None
         self.resource_scopes = None
+        self.torch_call_scopes = None
         if type(python_targets) is not bool:
             raise TypeError("python_targets must be an explicit bool")
         self._target_event_digest = hashlib.sha256() if python_targets else None
@@ -1025,6 +1026,8 @@ class CallOperandObserver:
                     # not be attributed to the target native CALL.
                     if self.resource_scopes is not None:
                         self.resource_scopes.begin(callable_object,code,offset,owner,attempt_index)
+                    if self.torch_call_scopes is not None and (self.lean_plan is not None or self._code_inside(code)):
+                        self.torch_call_scopes.begin(frame, callable_object, owner, row_site, attempt_index)
                 except Exception as error:
                     if self.lean_plan is not None or self.program_ports:
                         state = self._base_state(frame)
@@ -1041,6 +1044,8 @@ class CallOperandObserver:
         writer = self.recorder._is_capture_writer
         if self.recorder._closing or writer is not None and writer():
             return
+        if self.torch_call_scopes is not None:
+            self.torch_call_scopes.complete(sys._getframe(1), code, offset, target, 'C_RETURN')
         if self.resource_scopes is not None:
             with self.recorder.lock,self._lock:
                 self.resource_scopes.complete(code,offset,target,self.resource_scopes.C_RETURN)
@@ -1052,6 +1057,8 @@ class CallOperandObserver:
         writer = self.recorder._is_capture_writer
         if self.recorder._closing or writer is not None and writer():
             return
+        if self.torch_call_scopes is not None:
+            self.torch_call_scopes.complete(sys._getframe(1), code, offset, target, 'C_RAISE')
         if self.resource_scopes is not None:
             with self.recorder.lock,self._lock:
                 self.resource_scopes.complete(code,offset,target,self.resource_scopes.C_RAISE)

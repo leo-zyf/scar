@@ -69,13 +69,14 @@ def _trace(args) -> int:
             raise SystemExit('--project-root differs from the capture plan namespace')
     stream_interfaces = getattr(args, 'stream_interfaces', False) or program_ports
     resource_scopes=getattr(args,'resource_scopes',False)
+    torch_call_scopes = getattr(args, 'torch_call_scopes', False)
     resumptions=getattr(args,'resumptions',False)
     if getattr(args,'stream_backing',False) and not stream_interfaces:
         raise SystemExit('--stream-backing requires --stream-interfaces')
     native_callables = getattr(args, 'native_callables', False)
     compile_events = getattr(args, 'compile_events', False)
     python_targets = getattr(args, 'python_call_targets', False) or lean_plan is not None or stream_interfaces or program_ports or native_callables or compile_events or resource_scopes
-    operands = getattr(args, 'call_operands', False) or python_targets
+    operands = getattr(args, 'call_operands', False) or python_targets or torch_call_scopes
     os_capture_root = getattr(args, 'os_capture_root', None)
     if resource_scopes and os_capture_root is None:
         raise SystemExit('--resource-scopes requires --os-capture-root')
@@ -101,6 +102,7 @@ def _trace(args) -> int:
         if key.startswith('SCAR_COMPILE_'):env.pop(key,None)
     env.pop('SCAR_STREAM_INTERFACES',None)
     env.pop('SCAR_RESOURCE_SCOPES',None)
+    env.pop('SCAR_TORCH_CALL_SCOPES', None)
     env.pop('SCAR_RESUMPTIONS',None)
     env.pop('SCAR_STREAM_BACKING_OBSERVATIONS',None)
     env.pop('SCAR_OPERAND_CAPTURE',None)
@@ -122,6 +124,8 @@ def _trace(args) -> int:
     physical = getattr(args, "tensor_physical", False)
     if physical and not execution_evidence:
         raise SystemExit("--tensor-physical requires --execution-evidence")
+    if torch_call_scopes and not execution_evidence:
+        raise SystemExit('--torch-call-scopes requires --execution-evidence')
     if execution_evidence and not (getattr(args, "calls_only", False) or operands or resumptions):
         raise SystemExit("--execution-evidence requires --calls-only or --call-operands")
     if getattr(args,"calls_only",False) or operands or resumptions:
@@ -190,6 +194,8 @@ def _trace(args) -> int:
                 if getattr(args,'stream_backing',False):
                     env['SCAR_STREAM_BACKING_OBSERVATIONS'] = '1'
             if resource_scopes:env['SCAR_RESOURCE_SCOPES']='1'
+            if torch_call_scopes:
+                env['SCAR_TORCH_CALL_SCOPES'] = '1'
             env['SCAR_OPERAND_CAPTURE'] = capture
             env['SCAR_OPERAND_MAX_EVENTS'] = str(args.max_operand_events)
             env['SCAR_OPERAND_MAX_BYTES'] = str(args.max_operand_bytes)
@@ -695,6 +701,7 @@ def main(argv=None) -> int:
         'export-native-sparse': 'scar.codegen.sparse_native_export',
         'export-native-ordered-sparse': 'scar.codegen.native_ordered_sparse_export',
         'link-aten-provider': 'scar.codegen.aten_provider',
+        'link-aten-capture': 'scar.codegen.aten_capture_link',
         'plan-controlled-region': 'scar.compiler.plan_controlled_region',
         'deliver-controlled-stateful': 'scar.compiler.controlled_stateful_delivery',
         'calibrate-guard-regime': 'scar.compiler.calibrate_guard_regime',
@@ -873,6 +880,7 @@ def main(argv=None) -> int:
             ('plan-build', 'derive original F4 region and hardware planning domains from a unified program build'),
             ('compile-build', 'compose retained program domains, forward resource costs and selected C++20 lowering'),
             ('link-aten-provider', 'link exact installed ATen schemas through existing C++20 provider calls'),
+            ('link-aten-capture', 'link exact retained ETO occurrences to existing C++20 ATen provider calls'),
             ('validate-build', 'validate one model-selected implementation against its original complete entry and freeze deployment evidence'),
             ('finalize-stateful-candidate', 'replay external stateful validation, export unchanged native bytes and retain a unified entry pipeline'),
             ('run-build', 'validate selected C++ loops through an unchanged Python entry and explicit compatibility boundaries'),
@@ -1263,6 +1271,8 @@ def main(argv=None) -> int:
                        help='raw source bytes read once per observed original file (ports profiles only)')
     trace.add_argument('--execution-evidence',action='store_true',
                        help='collect native ETO/Kineto evidence alongside the call recorder when the target imports Torch; requires calls-only or call-operands')
+    trace.add_argument('--torch-call-scopes', action='store_true',
+                       help='record bounded CPython native CALL scopes in the owned Torch trace; requires execution-evidence')
     trace.add_argument('--tensor-physical',action='store_true',
                        help='also export owned profiler marker Tensor metadata and allocation epochs after close; requires execution-evidence')
     trace.add_argument('--operand-capture',choices=('windows','instructions'),default='windows',

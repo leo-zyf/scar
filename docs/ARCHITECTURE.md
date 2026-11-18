@@ -9,6 +9,8 @@ SCAR 前端从源码、运行绑定和目标硬件构建程序 IR。前端记录
 形式前端按材料依赖推进：F0源码字节/版本 → F1词法 → F2语法 → F3作用域/绑定/声明 → F4操作、值、world及控制端口。AST只用于语言前端，后续使用有类型图。
 局部函数、循环和区域正文共享；跨模块调用通过原actual/formal、返回、world和匹配Frame接线。静态不能确定的目标可由有限动态CodeID选择补充，观察结果不代表未执行分支也已证明。
 
+`trace --execution-evidence --torch-call-scopes` 在项目源码或显式采集计划的原生 CALL 上打开 RecordFunction，由同帧、同位置、同目标的 CPython `C_RETURN` 或 `C_RAISE` 关闭。`import-capture` 使用原始调用索引、ETO 父子关系及 Kineto RF ID 接线。一次调用可包含多个直接观测到的原生算子，多次执行同一源码位置各有独立身份。调用范围证据尚未证明实参映射、状态效果或设备完成。
+
 公共接口为 `ProgramView` / `ProgramDependencyGraph`：`get`、`original`、`expand`、`incoming/outgoing` 与来源解释。Operation、Value、StateLocation、Region、Resource是核心实体；Use/control等辅助端点有明确role，Contract与Measurement保留独立来源。
 Control、数据依赖、状态版本、别名和资源映射是不同关系，不能将world carry当数组内容phi，也不能把相同storage或引用路径当相同逻辑内容。
 
@@ -51,6 +53,8 @@ C0先验证选择及其源码/成本/CPU/shape/预算条件。原标量与区间
 稀疏求解以原 SciPy 调用为源码绑定和行为对照。IR 保留 SuperLU 符号状态和每轮 CSR 数值输入，C++20 产物通过原生 ABI 调用同版本 SuperLU 和 OpenBLAS。独立流入口的运行依赖为包内原生库与系统 C/C++ 运行库。兼容 Python 入口另行保留首次比对及回退。独立的 `cpu-cost` 可选组使用 `scipy.optimize` 拟合成本与求线性规划界限。
 
 `link-aten-provider` 在构建时核对已安装的 LibTorch 修订和完整算子 schema，通过 C++20 编译及链接验证实际重载，并输出可直接引用的类型化调用。编译期断言核对生成头里的声明。产物保留目标库的路径及 SHA256，当前范围是本机安装的分发包。内核放置、调用上下文、端口映射、效果和收益仍需另行证明。
+
+`link-aten-capture --call-attempt N` 可从导入模型冷重放原始调用范围，直接提取其中实际观测到的算子声明。相同重载共享类型化 C++ 入口，每次原始调用和算子事件仍各自保存。也可用 `--eto-node '#/nodes/N'` 选定原始 ETO 事件。
 
 旧数组融合、状态区域和显式 SSE2 试验仍含自产数值循环。该部分需要迁移到现成算子调用，再进入按此边界验收的交付路径。循环调度、ABI 适配、分配和数据搬运属于 SCAR 的代码生成职责。
 

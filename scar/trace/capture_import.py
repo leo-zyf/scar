@@ -146,6 +146,20 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
         stage('native', 'RUNNING')
         native = import_native_evidence(native_path('execution_trace'), native_path('kineto'),
             max_bytes=max_bytes, provider_revision=manifest['provider']['torch_git_version'])
+        scope_config = manifest.get('configuration', {}).get('native_call_scopes')
+        if scope_config is not None:
+            from scar.trace.native_call_scope_import import import_native_call_scopes
+            stage('native_call_scopes', 'RUNNING')
+            scopes = import_native_call_scopes(native, manifests[0], coordinates,
+                                              max_bytes=max_bytes, max_lines=max_lines)
+            scope_path = _write(native_out / 'native-call-scopes.json.gz', scopes)
+            native.report['native_call_scopes'] = {
+                **{key: value for key, value in scopes.items() if key != 'observations'},
+                'artifact': _stored(scope_path),
+            }
+            stage('native_call_scopes', 'IMPORTED_WITH_OPEN_OBLIGATIONS',
+                  scope_rows=scopes['scope_rows'], closed_joined_scopes=scopes['closed_joined_scopes'],
+                  direct_schema_operator_observations=scopes['direct_schema_operator_observations'], gaps=scopes['gaps'])
         dispatch_config = manifest.get('configuration', {}).get('dispatch_observations')
         if dispatch_config is not None and dispatch_config.get('started') is True:
             from scar.trace.dispatch_import import import_dispatch_bridge
@@ -273,7 +287,10 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
             gc.collect()
         required = [
             {'id': 'canonical_program_snapshot', 'status': 'OPEN', 'reason': 'source regions and call interfaces still need whole-program composition'},
-            {'id': 'python_torch_occurrence', 'status': 'OPEN', 'reason': 'shared capture membership is not an invocation-to-RF mapping'},
+            {'id': 'python_torch_occurrence', 'status': 'OPEN', 'reason':
+             'owned native CALL scopes cover only observed direct provider children'
+             if native_summary.get('native_call_scopes', {}).get('closed_joined_scopes', 0)
+             else 'shared capture membership is not an invocation-to-RF mapping'},
             {'id': 'logical_value_provenance', 'status': 'OPEN', 'reason': 'provider object/storage tokens do not prove logical content versions'},
             {'id': 'source_state_effects', 'status': 'OPEN', 'reason': 'observations require source read/write and completion correspondences'},
             {'id': 'resource_lifetime_ready', 'status': 'OPEN', 'reason': 'profiler receipts and OS handles do not close every resource lifetime/ready interface'},

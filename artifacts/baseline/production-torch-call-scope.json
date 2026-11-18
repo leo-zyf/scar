@@ -1,0 +1,182 @@
+{
+  "date": "2026-11-18",
+  "gpu_executed": false,
+  "implemented": {
+    "collector": "scar trace --torch-call-scopes",
+    "consumer": "scar import-capture",
+    "count_comparison": "SEPARATE_CONTROLLED_RUNS_WITH_AND_WITHOUT_SOURCE_SCOPE_FILTER",
+    "exact_direct_schema_children": 16,
+    "marker_budget": 1024,
+    "no_timestamps_used_to_match": true,
+    "observed_relation": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/imported-final/native/native-call-scopes.json.gz",
+      "sha256": "5a394e851025a02c2747e78f6a39849a71838b9753053eeb8f8da7dc855fddf2",
+      "size_bytes": 3148
+    },
+    "original_dispatch_groups": 10,
+    "original_dispatch_slot_associations": 24,
+    "prefilter_exact_direct_schema_children": 16,
+    "prefilter_scope_count": 85,
+    "scope_count": 17,
+    "scopes_with_children": 9,
+    "selection": "PROJECT_SOURCE_OR_EXPLICIT_LEAN_CAPTURE_PLAN"
+  },
+  "lewm_executed": false,
+  "observed": {
+    "capture": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/final/capture-coordinates.json",
+      "sha256": "1b23582e3bd899c3d18767112aa9b609d93cf32bd39974ab1420fd6f6c6bfe42",
+      "size_bytes": 87848
+    },
+    "collection_seconds": 18.88,
+    "collector_log": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/collect-final.log",
+      "sha256": "38777d553683e80d69def1a2d5dcc8291f406a860d78f83d57e1302780a8c0d0",
+      "size_bytes": 1242
+    },
+    "collector_peak_rss_kib": 823320,
+    "fixture": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/fixture/subject.py",
+      "sha256": "fea5102c023369005c5878f0c1fbd1dcc279f94027df5651f92534a57ef84e82",
+      "size_bytes": 1080
+    },
+    "native_tid": 1259215,
+    "output": [
+      [
+        42.0,
+        56.0
+      ],
+      [
+        74.0,
+        96.0
+      ]
+    ],
+    "run": {
+      "kind": "exec_run",
+      "value": "capture:17571fb1f62df9c7127887a1f8ac4f041fa2bdb04e5e7ec567f00a0e48e15247",
+      "wire": "exec_run:capture:17571fb1f62df9c7127887a1f8ac4f041fa2bdb04e5e7ec567f00a0e48e15247"
+    },
+    "scope": "CPU0_SINGLE_THREAD_INSTRUMENTED_PRODUCTION_COLLECTOR",
+    "target_process": {
+      "kind": "exec_process_instance",
+      "value": "capture:17571fb1f62df9c7127887a1f8ac4f041fa2bdb04e5e7ec567f00a0e48e15247:process:1b7479d27d105f2f719652771eb6ccb0a22faea51bb82b7e98f5f4c193af7842",
+      "wire": "exec_process_instance:capture:17571fb1f62df9c7127887a1f8ac4f041fa2bdb04e5e7ec567f00a0e48e15247:process:1b7479d27d105f2f719652771eb6ccb0a22faea51bb82b7e98f5f4c193af7842"
+    }
+  },
+  "performance_measured": false,
+  "rejected": {
+    "link_controls": [
+      "raised_native_call",
+      "normally_closed_scope_without_operator",
+      "duplicate_call_attempt",
+      "mixed_node_and_attempt_selectors"
+    ],
+    "planner_result": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/qualified-planning/result.json",
+      "sha256": "9b97974b71c3f99816fd8d3b4d023e9069a3c710245d68a3aaf5be759f5d87fa",
+      "size_bytes": 18866
+    },
+    "planner_source": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/program/manifest.json",
+      "sha256": "3b811d8e4183676ad3fc1171fd52b0486fec8950bc2f6d62bdec171db5a288af",
+      "size_bytes": 13823
+    },
+    "region_rejections": [
+      {
+        "code": "STATE_PROVIDER_CALL",
+        "detail": "only independently guarded numpy.power(array, exact int 2) provider supported",
+        "source": "calculate"
+      },
+      {
+        "code": "STATE_UNKNOWN_GLOBAL",
+        "detail": "global binding has no unique original import declaration",
+        "source": "repeated"
+      },
+      {
+        "code": "STATE_ENVIRONMENT",
+        "detail": "ordinary fixed-signature function without captures required",
+        "source": "main"
+      }
+    ],
+    "stateful_regions": 0
+  },
+  "replacement_authorized": false,
+  "required_for_planning": [
+    "SOURCE_AND_PROVIDER_ORDERED_PORT_MAPPINGS",
+    "FINAL_VALUE_AND_EFFECT_CONTRACT",
+    "RESOURCE_PLACEMENT_AND_COMPARABLE_COSTS"
+  ],
+  "schema": "scar.production-torch-call-scope-review",
+  "verified": {
+    "closure_statuses": {
+      "C_RAISE": 1,
+      "C_RETURN": 16
+    },
+    "cxx_calls": {
+      "deduplicated_provider_entrypoints": 3,
+      "selected_source_occurrences": 6
+    },
+    "cxx_consumer": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/linked-final/consumer.cpp",
+      "sha256": "ccf1982a851ab2b312b9d8ab097753db1218ca28d57c56cd8c89e20be3255dec",
+      "size_bytes": 1302
+    },
+    "cxx_header": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/linked-final/operators.hpp",
+      "sha256": "6bd66ae76cdd130a22b89a713e80973499dfd5a7737346b11de642269cf7b1f4",
+      "size_bytes": 925
+    },
+    "cxx_loaded_libraries": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/linked-final/consumer-ldd.txt",
+      "sha256": "c5a23eb6a1929dca443d10b09d034246cc616ea8f38866c2d183eb4fc498ff04",
+      "size_bytes": 1323
+    },
+    "cxx_output": "CPU float32[2,2] 42,56,74,96; float32[0]",
+    "cxx_source_receipt": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/linked-final/capture-source.json",
+      "sha256": "46d79c99c98c4db6100fc61ae2de5300111526c4ac150f368de59c2c6caf5f67",
+      "size_bytes": 15342
+    },
+    "interpreter_dependency": false,
+    "native_raise_attempt": 165,
+    "numeric_check": "EXACT_FLOAT32_BYTES",
+    "original_ref_replay": {
+      "path": "artifacts/current/experiments/same-run-torch-review/production-scopes/check-final-raw.txt",
+      "sha256": "9f7dc6e8d486d89c8a9cbc53e4ab021c0f52634322cb11839fc6e59059fc5521",
+      "size_bytes": 68
+    },
+    "same_site_occurrences": [
+      {
+        "attempt": 126,
+        "operator": "#/nodes/60",
+        "site": {
+          "code": "pycode-v2:0dc6f86fb7e1a34d1384367fb9441d34de9adc056e6959edcc4e91466529f4eb",
+          "offset": 64,
+          "opname": "CALL",
+          "position": [
+            16,
+            16,
+            8,
+            29
+          ]
+        }
+      },
+      {
+        "attempt": 133,
+        "operator": "#/nodes/69",
+        "site": {
+          "code": "pycode-v2:0dc6f86fb7e1a34d1384367fb9441d34de9adc056e6959edcc4e91466529f4eb",
+          "offset": 64,
+          "opname": "CALL",
+          "position": [
+            16,
+            16,
+            8,
+            29
+          ]
+        }
+      }
+    ],
+    "torch_tensor_scope_direct_children": 4
+  }
+}

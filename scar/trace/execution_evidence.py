@@ -48,6 +48,8 @@ class ExecutionEvidence:
         if getattr(recorder, "collector_witness", None) is not None:
             recorder._collector_native_manager = self
         self._dispatch_evidence = None
+        self._torch_call_scopes = None
+        self._torch_call_scopes_requested = os.environ.get('SCAR_TORCH_CALL_SCOPES') == '1'
         self._physical_requested = os.environ.get("SCAR_TENSOR_PHYSICAL") == "1"
         self._native_inputs_requested = os.environ.get("SCAR_NATIVE_TENSOR_INPUTS") == "1"
         if self._native_inputs_requested and not self._physical_requested:
@@ -361,6 +363,19 @@ class ExecutionEvidence:
         self._window["started_ns"] = time.perf_counter_ns()
         self._recording = True
         self.status = "RECORDING"
+        if self._torch_call_scopes_requested:
+            operand = getattr(self._call_recorder, 'operand_observer', None)
+            if operand is None:
+                self._gap('Torch CALL scopes require the operand recorder')
+            else:
+                from scar.trace.torch_call_scopes import TorchCallScopes
+                try:
+                    self._torch_call_scopes = TorchCallScopes(torch, nonce=self._paths['kineto'].name.split('.')[2],
+                                                              pid=self.pid)
+                except (AttributeError, ValueError) as error:
+                    self._gap('Torch CALL scopes unavailable: ' + type(error).__name__)
+                else:
+                    operand.torch_call_scopes = self._torch_call_scopes
         if self._call_recorder is not None:
             try:
                 from scar.trace.dispatch_evidence import DispatchEvidence, PRODUCTION_PROFILE
@@ -384,6 +399,9 @@ class ExecutionEvidence:
     def _finish_owned(self):
         if os.getpid() != self.pid:
             return
+        if self._torch_call_scopes is not None:
+            self._call_recorder.operand_observer.torch_call_scopes = None
+            self._config['native_call_scopes'] = self._torch_call_scopes.close()
         if self._dispatch_evidence is not None:
             try:
                 self._dispatch_evidence.stop()
