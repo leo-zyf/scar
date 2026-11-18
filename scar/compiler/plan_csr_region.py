@@ -27,13 +27,16 @@ from scar.ir.program.normal_targets import Body
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode
 from scar.optimization.constructive_planner import construct_implementations
-from scar.runtime.csr_region_entry import DISPATCH, ENTRY_CODE, SELECTION, interpreter_context
+from scar.runtime.csr_region_entry import DISPATCH, ENTRY_CODE, SELECTION, TOPOLOGY_SCOPE, interpreter_context
 from scar.trace.code_snapshot import code_key
 
 PROOF = 'scar.csr-row-region-proof'
 COST = 'scar.sparse-csr-row-cost'
 SCOPE_COST = 'scar.sparse-csr-scope-cost'
+TOPOLOGY_COST = 'scar.csr-topology-scope-cost'
+TOPOLOGY = 'CSR_REUSE_TOPOLOGY'
 ENTRY_VALIDATION = 'scar.csr-scope-entry-validation'
+DEFAULT_TOPOLOGY_BUDGET = 1024 * 1024
 
 
 def _need(condition, reason):
@@ -212,15 +215,73 @@ def _planning_problem(proof, target, cost, measurements, *, scope=False):
         activities=activities, timing_constraints=constraints)
 
 
-def prepare(calls, native, out, *, cost=None, scope_cost=None):
-    _need(cost is None or scope_cost is None, 'choose one source lifetime for the CSR cost analysis')
+def _topology_problem(proof, target, topology, cost, measured):
+    sources = (dict(artifact=proof, locator='#/source_binding'), dict(artifact=topology['proof'], locator='#'))
+    lane, pool = 'calling-cpu-thread', 'owned-csr-topology-payload'
+    operation = 'csr-row-update:'+proof['sha256']
+    capacity = topology['budget_bytes']
+    resources = (PlanningResource(lane, 'EXECUTION', 1, sources), PlanningResource(pool, 'MEMORY', capacity, sources))
+    options, activities, constraints = [], [], []
+    fields = ('estimate_ns', 'lower_ns', 'upper_ns')
+    count = None if measured is None else measured['count']
+    retained = (capacity if measured is None else
+                measured['resource_demands']['topology_peak_owned_payload_bytes'])
+
+    def estimate(values, locator):
+        references = sources if cost is None else (dict(artifact=cost, locator=locator),)
+        return CostEstimate(*values, 'UNKNOWN' if values[0] is None else 'EMPIRICAL_MODEL',
+            (proof if cost is None else cost)['sha256'], references)
+
+    for mode, name in (('KEEP', 'original'), (FAMILY, 'native'), (TOPOLOGY, 'topology')):
+        terms = None if measured is None else measured['terms'][name]
+        body = tuple(None if terms is None or count is None else
+                     terms['cold_first'][key] + (count-1)*terms['warm'][key] for key in fields)
+        workspace = {pool: retained} if mode == TOPOLOGY else {}
+        options.append(ImplementationOption(mode, mode, sources, {lane:1}, workspace, {}, {},
+            estimate(body, f'#/terms/{name}'), dict(call_count=count, memory_domain='HOST',
+            host_payload_cap_bytes=capacity if workspace else None)))
+        when = (ImplementationChoice(operation, mode),)
+        stages = [('load_once', False)] if mode == FAMILY else (
+            [('load_once', False), ('plan_build_once', False), ('release_once', True)] if mode == TOPOLOGY else [])
+        previous = None
+        for kind, after in stages:
+            identity = name+'-'+kind
+            values = tuple(None if terms is None else terms[kind][key] for key in fields)
+            duration = estimate(values, f'#/terms/{name}/{kind}')
+            activities.append(PlanningActivity(identity, duration, {lane:1}, duration.source_refs, when))
+            if after:
+                first, second = operation, identity
+            else:
+                first, second = previous, identity
+                previous = identity
+            if first is not None:
+                constraints.append(PlanningTimingConstraint(first+'-before-'+second, first, 'END', second, 'START',
+                    when=when, source_refs=duration.source_refs))
+        if previous is not None:
+            constraints.append(PlanningTimingConstraint(previous+'-before-body', previous, 'END', operation, 'START',
+                when=when, source_refs=sources))
+    return PlanningProblem(decode(ProviderArtifact, target), sources, resources,
+        (PlanningOperation(operation, sources, (), tuple(options), 'KEEP'),), (),
+        assumptions=('EXACT_SCOPE_COUNT_WITH_NORMAL_COMPLETION', 'RETAIN_TOPOLOGY_FROM_BUILD_THROUGH_RELEASE',
+                     'OWNED_PAYLOAD_CAP_ONLY', 'PHYSICAL_MEMORY_AND_ENTRY_REMAINDER_UNQUALIFIED'),
+        activities=tuple(activities), timing_constraints=tuple(constraints))
+
+
+def prepare(calls, native, out, *, cost=None, scope_cost=None, topology_scope=None, topology_cost=None,
+            topology_budget=DEFAULT_TOPOLOGY_BUDGET):
+    _need(sum(value is not None for value in (cost, scope_cost, topology_cost)) <= 1,
+          'choose one source lifetime for the CSR cost analysis')
+    _need((topology_cost is None or topology_scope is not None)
+          and (topology_scope is None or (cost is None and scope_cost is None)),
+          'topology timing requires its matching topology proof')
     source_graph = artifact_reference(Path(calls).resolve(), CALLS)
     proofs, target = discover(source_graph)
     _need(len(proofs) == 1, 'one admitted CSR subregion required for this single-region plan')
     proof, = proofs
     output = Path(out).resolve()
     if native is None:
-        _need(cost is None and scope_cost is None, 'prebuilt CSR artifact required for retained cost evidence')
+        _need(cost is None and scope_cost is None and topology_cost is None,
+              'prebuilt CSR artifact required for retained cost evidence')
         from scar.codegen.sparse_csr import build_csr_enforce
 
         native = output/'native'
@@ -262,10 +323,31 @@ def prepare(calls, native, out, *, cost=None, scope_cost=None):
         cell = measurements['admitted_timing_implementations']
         _need(cell is None or (cell['native_artifact'] == native_ref and cell['adapter_source'] == members[-1]),
             'repeated scope timings differ from the selected native build')
+    topology = None
+    if topology_scope is not None:
+        from scar.analysis.csr_topology_scope import check_csr_topology_scope
+
+        top_ref = artifact_reference(Path(topology_scope).resolve(), TOPOLOGY_SCOPE)
+        verified_scope = check_csr_topology_scope(top_ref)
+        _need(read_artifact(verified_scope['region_proof']) == proof and type(topology_budget) is int
+              and topology_budget > 0, 'topology proof or payload limit differs from the supported region')
+        topology = dict(proof=top_ref, budget_bytes=topology_budget)
+        runner = artifact_reference(adapter.with_name('csr_region_entry.py'), 'scar.python-source')
+        members.insert(-1, runner)
+    if topology_cost is not None:
+        from scar.optimization.csr_topology_cost import check_csr_topology_cost
+
+        cost = artifact_reference(Path(topology_cost).resolve(), TOPOLOGY_COST)
+        measurements = check_csr_topology_cost(cost)
+        _need(measurements['topology_scope'] == topology['proof'] and measurements['native_artifact'] == native_ref
+              and measurements['adapter_source'] == members[-1] and measurements['runner_source'] == runner
+              and measurements['resource_demands']['topology_budget_bytes'] == topology_budget,
+              'topology timing differs from the admitted build or scope')
     output.mkdir(parents=True, exist_ok=True)
     proof_ref = _write(output, 'proof.json', proof)
     entry_code = _seal_entry_code(output, proof, proof_ref)
-    problem = _planning_problem(proof_ref, target, cost, measurements, scope=scope_cost is not None)
+    problem = (_planning_problem(proof_ref, target, cost, measurements, scope=scope_cost is not None)
+               if topology is None else _topology_problem(proof_ref, target, topology, cost, measurements))
     problem_ref = _write(output, 'problem.json', problem_document(problem))
     plan = construct_implementations(problem)
     plan_ref = _write(output, 'plan.json', plan)
@@ -274,10 +356,13 @@ def prepare(calls, native, out, *, cost=None, scope_cost=None):
               else 'WHOLE_ENTRY_DEPLOYMENT_NOT_QUALIFIED')
     if scope_cost is not None and measurements['decision'] == 'KEEP':
         reason = 'REPEATED_SCOPE_COST_UNQUALIFIED_OR_UNPROFITABLE'
-    return _write(output, 'selection.json', dict(schema=SELECTION, schema_version=2,
+    selection = dict(schema=SELECTION, schema_version=2,
         proof=proof_ref, source=proof['source'], entry=proof['entry'], native=native_ref,
         native_members=members, entry_code=entry_code, cost=cost, problem=problem_ref, plan=plan_ref,
-        decision='KEEP', reason=reason, explicit_study_only=True))
+        decision='KEEP', reason=reason, explicit_study_only=True)
+    if topology is not None:
+        selection['topology'] = topology
+    return _write(output, 'selection.json', selection)
 
 
 def qualify_scope(selection, validation, out):
@@ -285,21 +370,39 @@ def qualify_scope(selection, validation, out):
     from scar.optimization.sparse_scope_cost import check_sparse_scope_cost
 
     selected = read_artifact(artifact_reference(Path(selection).resolve(), SELECTION))
-    _need(selected['schema_version'] == 2 and selected['cost']['schema'] == SCOPE_COST,
+    _need(selected['schema_version'] == 2 and selected.get('cost')
+          and selected['cost']['schema'] in (SCOPE_COST, TOPOLOGY_COST),
           'a repeated-scope plan with replayed costs is required')
-    cost = check_sparse_scope_cost(selected['cost'])
+    topology = selected.get('topology')
+    if selected['cost']['schema'] == TOPOLOGY_COST:
+        from scar.optimization.csr_topology_cost import check_csr_topology_cost
+
+        cost = check_csr_topology_cost(selected['cost'])
+        plan = read_artifact(selected['plan'])
+        _need(topology is not None and cost['topology_scope'] == topology['proof'], 'no replayed topology for this entry')
+        count = cost['count']
+        argv = cost['entry']['argv']
+        preferred = (cost['qualification']['preferred_section_option'] == 'topology'
+                     and any(row['option'] == TOPOLOGY for row in plan['selected']))
+    else:
+        cost = check_sparse_scope_cost(selected['cost'])
+        count = cost['count']['value']
+        argv = cost['context']['entry']['argv']
+        preferred = cost['decision'] == 'LOAD_NATIVE_CANDIDATE'
     reference = artifact_reference(Path(validation).resolve(), ENTRY_VALIDATION)
     evidence = read_artifact(reference)
     tested = read_artifact(evidence['selection'])
     keys = ('entry', 'source', 'native', 'native_members')
     _need(evidence['schema_version'] == 1 and evidence['clean'] is True
           and all(selected[key] == tested[key] for key in keys)
+          and topology == tested.get('topology')
           and selected['proof']['sha256'] == tested['proof']['sha256']
           and selected['entry_code']['revised_code_key'] == tested['entry_code']['revised_code_key']
           and selected['entry_code']['interpreter'] == evidence['context']['interpreter'],
           'entry validation differs from the source, interpreter or native candidate')
-    argv = cost['context']['entry']['argv']
     _need(evidence['context']['argv'] == argv, 'entry validation arguments differ from the source scope')
+    if topology is not None:
+        _need(evidence['context'] == cost['launch_context'], 'topology timing and entry validation context differ')
     modes = ('original', 'native')
     warm = evidence['warmup_pairs']
     repeats = evidence['measurement_pairs']
@@ -321,14 +424,21 @@ def qualify_scope(selection, validation, out):
                   and execution['selection_sha256'] == evidence['selection']['sha256']
                   and execution['decision'] == ('GUARDED_ATTACHMENT' if native else 'NO_OP')
                   and execution['exit_code'] == 0 and execution['statistics']['fallback_calls'] == 0
-                  and execution['statistics']['native_calls'] == (cost['count']['value'] if native else 0)
+                  and execution['statistics']['native_calls'] == (count if native else 0)
                   and (activation['attempts'] == 1 and activation['available'] is True if native else activation is None)
                   and type(row['wall_ns']) is int and row['wall_ns'] > 0,
                   'validation did not cover the original and guarded repeated entry')
+            if native and topology is not None:
+                stats = execution['topology']
+                _need(stats is not None and stats['builds'] == stats['build_attempts'] == 1
+                      and stats['hits'] == count-1 and stats['misses'] == stats['numeric_rejections'] == 0
+                      and 0 < stats['retained_bytes'] <= topology['budget_bytes']
+                      and stats['retained_after_close_bytes'] == 0,
+                      'fresh entry did not use and release the planned topology lifetime')
             if pair >= warm:
                 durations[row['mode']].append(row['wall_ns'])
     original, native = (durations[mode] for mode in modes)
-    qualified = cost['decision'] == 'LOAD_NATIVE_CANDIDATE' and max(native) < min(original)
+    qualified = preferred and max(native) < min(original)
     result = {**selected, 'entry_validation':reference, 'launch_context':evidence['context'],
         'entry_validation_medians_ns':{mode:median(durations[mode]) for mode in modes},
         'decision':'LOAD_NATIVE_CANDIDATE' if qualified else 'KEEP', 'explicit_study_only':not qualified,
@@ -346,13 +456,17 @@ def main(argv=None):
     parser.add_argument('--native')
     parser.add_argument('--cost')
     parser.add_argument('--scope-cost')
+    parser.add_argument('--topology-scope')
+    parser.add_argument('--topology-cost')
+    parser.add_argument('--topology-budget', type=int, default=DEFAULT_TOPOLOGY_BUDGET)
     parser.add_argument('--qualify-selection')
     parser.add_argument('--validation')
     args = parser.parse_args(argv)
     if args.qualify_selection and args.validation and not args.calls:
         result = qualify_scope(args.qualify_selection, args.validation, args.out)
     elif args.calls and args.qualify_selection is None and args.validation is None:
-        result = prepare(args.calls, args.native, args.out, cost=args.cost, scope_cost=args.scope_cost)
+        result = prepare(args.calls, args.native, args.out, cost=args.cost, scope_cost=args.scope_cost,
+            topology_scope=args.topology_scope, topology_cost=args.topology_cost, topology_budget=args.topology_budget)
     else:
         parser.error('supply --calls or both --qualify-selection and --validation')
     print(json.dumps(result))

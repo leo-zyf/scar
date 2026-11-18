@@ -17,6 +17,7 @@ from scar.trace.code_snapshot import code_key
 
 SELECTION = 'scar.csr-row-region-selection'
 ENTRY_CODE = 'scar.python-csr-row-region-code'
+TOPOLOGY_SCOPE = 'scar.csr-topology-scope'
 DISPATCH = '__scar_dispatch_private_csr_row_region'
 
 
@@ -63,6 +64,7 @@ class RowRegionScope(_Scope):
         self.loader = loader
         self.try_enforce = None
         self.activation = dict(attempts=0, load_ns=None, available=False)
+        self.topology = None
         self.active, self.bindings, self.seen, self.frontier = True, [], set(), []
 
     def activate(self):
@@ -133,6 +135,11 @@ class RowRegionScope(_Scope):
                 namespace = vars(row['module'])
                 if namespace.get(DISPATCH) is row['dispatch']:
                     del namespace[DISPATCH]
+            stats = getattr(self.try_enforce, 'topology_stats', None)
+            if stats is not None:
+                self.topology = dict(stats)
+                self.try_enforce.close()
+                self.topology['retained_after_close_bytes'] = stats['retained_bytes']
 
 
 def admit(entry, selection_path, sha256, *, study, exclusive, argv=()):
@@ -158,6 +165,16 @@ def admit(entry, selection_path, sha256, *, study, exclusive, argv=()):
         proof = read_artifact(selection['proof'])
         if proof['source'] != selection['source'] or proof['entry'] != selection['entry']:
             raise ValueError('selected CSR source differs from proof')
+        topology = selection.get('topology')
+        if topology is not None:
+            scope_reference = topology['proof']
+            scope = read_artifact(scope_reference)
+            if (scope_reference['schema'] != TOPOLOGY_SCOPE or scope['schema_version'] != 1
+                    or scope['entry']['source'] != selection['entry']
+                    or scope['region_proof']['sha256'] != selection['proof']['sha256']):
+                raise ValueError('topology plan requires its original loop and region')
+            if scope['entry']['argv'] != list(argv):
+                return None, 'CSR_TOPOLOGY_ARGUMENTS_CHANGED'
 
         native = selection['native']
         read_artifact(native)
@@ -168,6 +185,9 @@ def admit(entry, selection_path, sha256, *, study, exclusive, argv=()):
         def loader():
             from scar.runtime.sparse_csr import load_csr_enforce
 
+            if topology is not None:
+                return load_csr_enforce(load_path, reuse_topology=True,
+                    topology_budget_bytes=topology['budget_bytes'])
             return load_csr_enforce(load_path)
 
         code = selection['entry_code'] if version == 2 else None
@@ -184,6 +204,7 @@ def run(entry, argv, *, selection=None, sha256=None, study=False, exclusive=Fals
     scope, reason = admit(entry, selection, sha256, study=study, exclusive=exclusive, argv=argv)
     report = _execute(entry, argv, scope, reason)
     report['activation'] = None if scope is None else scope.activation
+    report['topology'] = None if scope is None else scope.topology
     report['selection_sha256'] = sha256
     return report
 

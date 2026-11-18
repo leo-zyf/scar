@@ -4,7 +4,10 @@ import ctypes
 import inspect
 from pathlib import Path
 import sys
-from types import BuiltinFunctionType, FunctionType
+from threading import Lock
+from time import perf_counter_ns
+from types import BuiltinFunctionType, FunctionType, MappingProxyType
+from weakref import finalize
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.trace.code_snapshot import code_key
@@ -149,15 +152,85 @@ def _provider(expected=None, *, compile_sources=None):
     return receipt, live, memo, memo_key, upcast, cold_upcast_supported
 
 
-def load_csr_enforce(out):
-    """Return a guarded callable whose false result precedes every data write."""
+class _ScopedTopology:
+    def __init__(self, library, signature, budget):
+        pointer, size = ctypes.c_void_p, ctypes.c_size_t
+        self.create = library.scar_csr_enforce_topology_create_v1
+        self.create.argtypes = [*signature[1:-1], size]
+        self.create.restype = pointer
+        self.run = library.scar_csr_enforce_topology_run_v1
+        self.run.argtypes = [pointer, *signature, ctypes.c_int]
+        self.run.restype = ctypes.c_int32
+        self.bytes = library.scar_csr_enforce_topology_bytes_v1
+        self.bytes.argtypes = [pointer]
+        self.bytes.restype = size
+        self.destroy = library.scar_csr_enforce_topology_destroy_v1
+        self.destroy.argtypes = [pointer]
+        self.destroy.restype = None
+        self.budget = budget
+        self.handle = self.release = None
+        self.lock = Lock()
+        self.closed = False
+        self.stats = dict(build_attempts=0, builds=0, build_ns=0, hits=0, misses=0,
+            numeric_rejections=0, retained_bytes=0, closed=False)
+
+    def enforce(self, args, dtype, cold_upcast):
+        with self.lock:
+            if self.closed:
+                return -1
+            return self._enforce(args, dtype, cold_upcast)
+
+    def _enforce(self, args, dtype, cold_upcast):
+        built = self.handle is None
+        if built:
+            self.stats['build_attempts'] += 1
+            started = perf_counter_ns()
+            self.handle = self.create(*args[1:-1], self.budget)
+            self.stats['build_ns'] += perf_counter_ns() - started
+            if self.handle is None:
+                return 0
+            self.release = finalize(self, self.destroy, self.handle)
+            self.release.atexit = False
+            self.stats['builds'] += 1
+            self.stats['retained_bytes'] = self.bytes(self.handle)
+        status = self.run(self.handle, *args, int(cold_upcast is None))
+        if status == 1 and cold_upcast is not None:
+            cold_upcast(dtype)
+            status = self.run(self.handle, *args, 1)
+        if status == 0:
+            self.stats['misses'] += 1
+        elif status < 0:
+            self.stats['numeric_rejections'] += 1
+        elif not built:
+            self.stats['hits'] += 1
+        return status
+
+    def close(self):
+        with self.lock:
+            if self.release is not None:
+                self.release()
+            self.handle = None
+            self.closed = self.stats['closed'] = True
+            self.stats['retained_bytes'] = 0
+
+
+def load_csr_enforce(out, *, reuse_topology=False, topology_budget_bytes=8 * 1024 * 1024):
+    """Return a guarded callable, optionally owning one exact topology until close()."""
     import numpy as np
-    from scar.codegen.sparse_csr import SCHEMA, SCHEMA_VERSION, SOURCE
+    from scar.codegen.sparse_csr import SCHEMA, SCHEMA_VERSION, SOURCE, TOPOLOGY_FEATURE
+
+    if type(reuse_topology) is not bool:
+        raise ValueError('explicit Boolean CSR topology selection required')
+    if reuse_topology and (type(topology_budget_bytes) is not int
+            or not 0 < topology_budget_bytes < (1 << (8 * ctypes.sizeof(ctypes.c_size_t)))):
+        raise ValueError('positive CSR topology memory budget required')
 
     directory = Path(out).resolve()
     manifest = read_artifact(artifact_reference(directory/'artifact.json', SCHEMA))
     if manifest['schema_version'] != SCHEMA_VERSION:
         raise ValueError('rebuild CSR C++ artifact to certify provider code at build time')
+    if reuse_topology and TOPOLOGY_FEATURE not in manifest.get('features', ()):
+        raise ValueError('rebuild CSR C++ artifact to add scoped topology support')
     if ((manifest['abi_version'], manifest['language']) != (1, 'c++20')
             or manifest['source']['uri'] != str(directory/'sparse_csr.cpp')
             or manifest['library']['uri'] != str(directory/'sparse_csr.so')
@@ -178,12 +251,13 @@ def load_csr_enforce(out):
     for function in (call, preflight):
         function.argtypes = signature
         function.restype = ctypes.c_int32
+    topology = _ScopedTopology(library, signature, topology_budget_bytes) if reuse_topology else None
     indices_types = (np.dtype('int32'), np.dtype('int64'))
     float64 = np.dtype('float64')
     forbidden = frozenset(('shape', 'setdiag', '_setdiag', 'diagonal', '_swap', 'dtype', 'ndim'))
 
     def try_enforce(matrix, rows, diagonal, module=np, *, original=None):
-        if not live(type(matrix), module):
+        if (topology is not None and topology.closed) or not live(type(matrix), module):
             return False
         cached = memo.get(memo_key)
         if cached is not np.float64 and (cached is not None or original is None):
@@ -221,12 +295,21 @@ def load_csr_enforce(out):
         data, columns, offsets, selected = (address for address, _ in ranges)
         args = (data, columns, offsets, shape[0], values.size, indices.itemsize,
             selected, rows.size, rows.itemsize, float(diagonal))
+        if cached is None and not cold_upcast_supported():
+            return False
+        if topology is not None:
+            status = topology.enforce(args, values.dtype, upcast if cached is None else None)
+            if status:
+                return status > 0
         if cached is None:
-            if not cold_upcast_supported() or preflight(*args) != 1:
+            if preflight(*args) != 1:
                 return False
             # Preserve SciPy's first memo update after every no-write guard.
             # The source clone is private under the caller's normal-completion contract.
             upcast(values.dtype)
         return call(*args) == 1
 
+    if topology is not None:
+        try_enforce.close = topology.close
+        try_enforce.topology_stats = MappingProxyType(topology.stats)
     return try_enforce

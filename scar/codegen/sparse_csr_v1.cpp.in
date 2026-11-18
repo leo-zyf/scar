@@ -3,7 +3,10 @@
 #include <cfenv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <memory>
+#include <new>
 
 namespace {
 constexpr std::uint64_t sign_bit = std::uint64_t{1} << 63;
@@ -18,13 +21,10 @@ bool can_copy_diagonal(std::uint64_t value) {
         && !(exponent == exponent_bits && significand != 0 && !(value & quiet_bit));
 }
 
-template<class Index, class Row>
-bool enforce(double *values, const Index *indices, const Index *indptr,
-             std::size_t size, std::size_t nnz, const Row *selected, std::size_t count, double diagonal,
-             bool commit) {
-    if (std::fegetround() != FE_TONEAREST || indptr[0] != 0
-            || indptr[size] < 0 || static_cast<std::size_t>(indptr[size]) != nnz
-            || !can_copy_diagonal(std::bit_cast<std::uint64_t>(diagonal))) {
+template<class Index, class Row, class Visit>
+bool scan_topology(const Index *indices, const Index *indptr, std::size_t size, std::size_t nnz,
+                   const Row *selected, std::size_t count, Visit visit) {
+    if (indptr[0] != 0 || indptr[size] < 0 || static_cast<std::size_t>(indptr[size]) != nnz) {
         return false;
     }
     for (std::size_t i = 0; i < count; ++i) {
@@ -33,7 +33,6 @@ bool enforce(double *values, const Index *indices, const Index *indptr,
             return false;
         }
     }
-    bool has_negative_zero = false;
     for (std::size_t row = 0; row < size; ++row) {
         const auto begin = indptr[row];
         const auto end = indptr[row + 1];
@@ -49,17 +48,35 @@ bool enforce(double *values, const Index *indices, const Index *indptr,
             }
             previous = column;
             if (static_cast<std::size_t>(column) == row) {
-                const auto bits = std::bit_cast<std::uint64_t>(values[offset]);
-                if (!can_copy_diagonal(bits)) {
+                if (!visit(row, static_cast<std::size_t>(offset))) {
                     return false;
                 }
                 has_diagonal = true;
-                has_negative_zero |= bits == sign_bit;
             }
         }
         if (!has_diagonal) {
             return false;
         }
+    }
+    return true;
+}
+
+bool numeric_mode(double diagonal) {
+    return std::fegetround() == FE_TONEAREST && can_copy_diagonal(std::bit_cast<std::uint64_t>(diagonal));
+}
+
+template<class Index, class Row>
+bool enforce(double *values, const Index *indices, const Index *indptr,
+             std::size_t size, std::size_t nnz, const Row *selected, std::size_t count, double diagonal,
+             bool commit) {
+    bool has_negative_zero = false;
+    if (!numeric_mode(diagonal) || !scan_topology(indices, indptr, size, nnz, selected, count,
+            [values, &has_negative_zero](auto, std::size_t offset) {
+                const auto bits = std::bit_cast<std::uint64_t>(values[offset]);
+                has_negative_zero |= bits == sign_bit;
+                return can_copy_diagonal(bits);
+            })) {
+        return false;
     }
     if (!commit) {
         return true;
@@ -117,6 +134,146 @@ bool run(
     }
     return false;
 }
+
+struct RowRange {
+    std::size_t begin, end, diagonal;
+};
+
+struct Topology {
+    std::size_t size, nnz, count, retained_bytes;
+    int index_width, row_width;
+    std::unique_ptr<std::byte[]> structure;
+    std::unique_ptr<std::size_t[]> diagonal_positions;
+    std::unique_ptr<RowRange[]> selected_ranges;
+};
+
+bool reserve_bytes(std::size_t &total, std::size_t count, std::size_t width, std::size_t limit) {
+    if (total > limit || count > (limit - total) / width) {
+        return false;
+    }
+    total += count * width;
+    return true;
+}
+
+template<class Index, class Row>
+bool remember_positions(Topology &plan, const void *indices, const void *indptr, const void *selected) {
+    const auto columns = static_cast<const Index *>(indices);
+    const auto offsets = static_cast<const Index *>(indptr);
+    const auto rows = static_cast<const Row *>(selected);
+    if (!scan_topology(columns, offsets, plan.size, plan.nnz, rows, plan.count,
+            [&plan](std::size_t row, std::size_t offset) {
+                plan.diagonal_positions[row] = offset;
+                return true;
+            })) {
+        return false;
+    }
+    for (std::size_t i = 0; i < plan.count; ++i) {
+        const auto row = static_cast<std::size_t>(rows[i]);
+        plan.selected_ranges[i] = {
+            static_cast<std::size_t>(offsets[row]),
+            static_cast<std::size_t>(offsets[row + 1]),
+            plan.diagonal_positions[row],
+        };
+    }
+    return true;
+}
+
+template<class Index>
+bool remember_rows(Topology &plan, const void *indices, const void *indptr, const void *selected) {
+    if (plan.row_width == 4) {
+        return remember_positions<Index, std::int32_t>(plan, indices, indptr, selected);
+    }
+    return remember_positions<Index, std::int64_t>(plan, indices, indptr, selected);
+}
+
+std::unique_ptr<Topology> create_topology(
+        const void *indices, const void *indptr, std::size_t size, std::size_t nnz, int index_width,
+        const void *selected, std::size_t count, int row_width, std::size_t budget) {
+    if (!size || size == std::numeric_limits<std::size_t>::max() || !nnz
+            || !indices || !indptr || (count && !selected)
+            || (index_width != 4 && index_width != 8) || (row_width != 4 && row_width != 8)) {
+        return {};
+    }
+    std::size_t structure_bytes = 0;
+    if (!reserve_bytes(structure_bytes, nnz, index_width, budget)
+            || !reserve_bytes(structure_bytes, size + 1, index_width, budget)
+            || !reserve_bytes(structure_bytes, count, row_width, budget)) {
+        return {};
+    }
+    auto total = structure_bytes;
+    if (!reserve_bytes(total, size, sizeof(std::size_t), budget)
+            || !reserve_bytes(total, count, sizeof(RowRange), budget)
+            || !reserve_bytes(total, 1, sizeof(Topology), budget)) {
+        return {};
+    }
+    auto plan = std::unique_ptr<Topology>(new Topology{
+        size, nnz, count, total, index_width, row_width,
+        std::make_unique_for_overwrite<std::byte[]>(structure_bytes),
+        std::make_unique_for_overwrite<std::size_t[]>(size),
+        count ? std::make_unique_for_overwrite<RowRange[]>(count) : nullptr,
+    });
+    const bool valid = index_width == 4 ? remember_rows<std::int32_t>(*plan, indices, indptr, selected)
+                                        : remember_rows<std::int64_t>(*plan, indices, indptr, selected);
+    if (!valid) {
+        return {};
+    }
+    const auto columns_bytes = nnz * index_width;
+    const auto offsets_bytes = (size + 1) * index_width;
+    auto *snapshot = plan->structure.get();
+    std::memcpy(snapshot, indices, columns_bytes);
+    std::memcpy(snapshot + columns_bytes, indptr, offsets_bytes);
+    if (count) {
+        std::memcpy(snapshot + columns_bytes + offsets_bytes, selected, count * row_width);
+    }
+    return plan;
+}
+
+std::int32_t run_topology(
+        const Topology *plan, double *values, const void *indices, const void *indptr, std::size_t size,
+        std::size_t nnz, int index_width, const void *selected, std::size_t count, int row_width,
+        double diagonal, bool commit) {
+    if (!plan || !values || !indices || !indptr || (count && !selected)
+            || size != plan->size || nnz != plan->nnz || count != plan->count
+            || index_width != plan->index_width || row_width != plan->row_width) {
+        return 0;
+    }
+    const auto *snapshot = plan->structure.get();
+    const auto columns_bytes = nnz * index_width;
+    const auto offsets_bytes = (size + 1) * index_width;
+    if (std::memcmp(snapshot, indices, columns_bytes)
+            || std::memcmp(snapshot + columns_bytes, indptr, offsets_bytes)
+            || (count && std::memcmp(snapshot + columns_bytes + offsets_bytes, selected, count * row_width))) {
+        return 0;
+    }
+    if (!numeric_mode(diagonal)) {
+        return -1;
+    }
+    bool has_negative_zero = false;
+    for (std::size_t row = 0; row < size; ++row) {
+        const auto bits = std::bit_cast<std::uint64_t>(values[plan->diagonal_positions[row]]);
+        if (!can_copy_diagonal(bits)) {
+            return -1;
+        }
+        has_negative_zero |= bits == sign_bit;
+    }
+    if (!commit) {
+        return 1;
+    }
+    if (has_negative_zero) {
+        for (std::size_t row = 0; row < size; ++row) {
+            auto &value = values[plan->diagonal_positions[row]];
+            if (std::bit_cast<std::uint64_t>(value) == sign_bit) {
+                value = 0.0;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto range = plan->selected_ranges[i];
+        std::fill(values + range.begin, values + range.end, 0.0);
+        values[range.diagonal] = diagonal;
+    }
+    return 1;
+}
 }
 
 extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_abi_v1() {
@@ -133,4 +290,32 @@ extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_
         double *values, const void *indices, const void *indptr, std::size_t size, std::size_t nnz,
         int index_width, const void *selected, std::size_t count, int row_width, double diagonal) {
     return run(values, indices, indptr, size, nnz, index_width, selected, count, row_width, diagonal, false);
+}
+
+extern "C" __attribute__((visibility("default"))) const Topology *scar_csr_enforce_topology_create_v1(
+        const void *indices, const void *indptr, std::size_t size, std::size_t nnz, int index_width,
+        const void *selected, std::size_t count, int row_width, std::size_t budget) noexcept {
+    try {
+        return create_topology(indices, indptr, size, nnz, index_width, selected, count, row_width, budget).release();
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
+}
+
+extern "C" __attribute__((visibility("default"))) std::size_t scar_csr_enforce_topology_bytes_v1(
+        const Topology *plan) noexcept {
+    return plan->retained_bytes;
+}
+
+extern "C" __attribute__((visibility("default"))) void scar_csr_enforce_topology_destroy_v1(
+        const Topology *plan) noexcept {
+    delete plan;
+}
+
+extern "C" __attribute__((visibility("default"))) std::int32_t scar_csr_enforce_topology_run_v1(
+        const Topology *plan, double *values, const void *indices, const void *indptr, std::size_t size,
+        std::size_t nnz, int index_width, const void *selected, std::size_t count, int row_width,
+        double diagonal, int commit) noexcept {
+    return run_topology(plan, values, indices, indptr, size, nnz, index_width, selected, count, row_width,
+                        diagonal, commit != 0);
 }

@@ -13,6 +13,7 @@ from scar.trace.code_snapshot import code_key
 
 SCHEMA = 'scar.native-csr-enforce'
 SCHEMA_VERSION = 2
+TOPOLOGY_FEATURE = 'scoped-topology-v1'
 SOURCE = Path(__file__).with_name('sparse_csr_v1.cpp.in')
 OPTIONS = ('-std=c++20', '-O3', '-shared', '-fPIC', '-fvisibility=hidden', '-fno-fast-math')
 
@@ -49,6 +50,7 @@ def build_csr_enforce(out):
     command = [*compiler, *OPTIONS, str(source), '-o', str(library)]
     subprocess.run(command, check=True, capture_output=True, text=True)
     manifest = dict(schema=SCHEMA, schema_version=SCHEMA_VERSION, abi_version=1, language='c++20',
+        features=[TOPOLOGY_FEATURE],
         source=artifact_reference(source, 'scar.cpp-source'),
         library=artifact_reference(library, 'scar.native-library'),
         template=artifact_reference(SOURCE, 'scar.cpp-source'),

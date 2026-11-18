@@ -1,0 +1,490 @@
+{
+  "implemented": {
+    "abi": 1,
+    "artifact": {
+      "schema": "scar.native-csr-enforce",
+      "sha256": "34ab4b949d1db740a795f060f30baaeef884761b769f0e695fe9fa7976c85068",
+      "size_bytes": 5523,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/native/artifact.json"
+    },
+    "language": "C++20",
+    "native_validation": {
+      "schema": "scar.raw-json",
+      "sha256": "0cd50d809a6fba5af75dbcd32254ff711db192f518ef143338d4b99e7fcab382",
+      "size_bytes": 1439,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/topology-native-validation.json"
+    },
+    "source": {
+      "schema": "scar.cpp-source",
+      "sha256": "437643d3108ff3bad8ce8a73b95d49e96ea2b2a4c5d67859449f5e90696742aa",
+      "size_bytes": 13422,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/native/sparse_csr.cpp"
+    },
+    "strategy": "HOIST_CSR_STRUCTURE_VALIDATION_AND_POSITION_DISCOVERY_KEEP_EXACT_HIT_GUARDS"
+  },
+  "inferred": {
+    "comparisons": {
+      "native_vs_topology": {
+        "break_even": {
+          "extrapolation_authorized": false,
+          "point": {
+            "positive_count_interval": [
+              1,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          },
+          "sample_envelope": {
+            "positive_count_interval": [
+              9,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          }
+        },
+        "conservative_sample_envelope_gain": 0.025977583613060025,
+        "point_gain": 0.03266098502524707,
+        "preferred_by_sample_envelope": "topology"
+      },
+      "original_vs_native": {
+        "break_even": {
+          "extrapolation_authorized": false,
+          "point": {
+            "positive_count_interval": [
+              271,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          },
+          "sample_envelope": {
+            "positive_count_interval": [
+              328,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          }
+        },
+        "conservative_sample_envelope_gain": 0.029399390899230805,
+        "point_gain": 0.04621808443598288,
+        "preferred_by_sample_envelope": "native"
+      },
+      "original_vs_topology": {
+        "break_even": {
+          "extrapolation_authorized": false,
+          "point": {
+            "positive_count_interval": [
+              206,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          },
+          "sample_envelope": {
+            "positive_count_interval": [
+              223,
+              null
+            ],
+            "source_case_intersection": [
+              512,
+              512
+            ]
+          }
+        },
+        "conservative_sample_envelope_gain": 0.06813629215460194,
+        "point_gain": 0.07736954129757072,
+        "preferred_by_sample_envelope": "topology"
+      }
+    },
+    "costs": {
+      "schema": "scar.csr-topology-scope-cost",
+      "sha256": "1aab7bf2398e6e5a09b81af7423e37cbc359e5b8732232a83586167e59db7616",
+      "size_bytes": 13139,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/cost/result.json"
+    },
+    "guard_contract": {
+      "build_point": "FIRST_ELIGIBLE_REGION_CALL_WITHIN_SCOPE",
+      "byte_comparison": "EXACT_CURRENT_BYTES_AGAINST_OWNED_SNAPSHOT_BEFORE_WRITES",
+      "concurrent_mutation_during_comparison_or_apply": "REQUIRES_EXCLUSIVE_INPUT_CONTRACT",
+      "key_excludes": [
+        "data_payload_bytes",
+        "diagonal_scalar",
+        "rhs",
+        "object_identity"
+      ],
+      "lookup_lifetime": "ONE_EXCLUSIVE_ENTRY_SCOPE",
+      "mismatch": "ORIGINAL_EXECUTION_BEFORE_ANY_WRITE",
+      "preserve_each_call": [
+        "original_copy_allocation",
+        "original_rhs",
+        "consumer_and_world_order",
+        "regular_provider_and_layout_guards",
+        "private_output_and_no_alias_checks",
+        "data_diagonal_and_current_diag_guards"
+      ],
+      "required_hit_key": [
+        "shape",
+        "nnz",
+        "index_dtype_and_width",
+        "row_dtype_and_width",
+        "selected_row_count",
+        "indptr_bytes",
+        "indices_bytes",
+        "selected_rows_bytes"
+      ],
+      "retained_topology_plans_max": 1
+    },
+    "remaining_effects": [
+      "CALLER_LOCAL_BINDING_HAS_NO_SECOND_LEXICAL_WRITER_BUT_ARRAY_CONTENTS_MAY_CHANGE",
+      "INDIRECT_NATIVE_OR_PYTHON_WRITES_THROUGH_ALIASES_NOT_CLOSED",
+      "ORIGINAL_COPY_DISJOINTNESS_IS_PER_CALL_GUARD_NOT_SOURCE_VALUE_IDENTITY",
+      "ARRAY_REPLACEMENT_RESIZE_AND_STRUCTURE_CHANGES_REQUIRE_CURRENT_GUARDS",
+      "SOURCE_GRAPH_DOES_NOT_PROVE_STABILITY_FROM_KEY_VALIDATION_TO_MUTATION"
+    ],
+    "resources": {
+      "cpu_ids": [
+        48
+      ],
+      "dram_bytes": null,
+      "exact_guard_key_payload_bytes": 101388,
+      "exact_guard_logical_compare_operand_bytes": 202776,
+      "execution_lanes": 1,
+      "memory_domain": "HOST_NATIVE_PRIVATE_METADATA",
+      "numa_residency": null,
+      "owned_payload_bytes_by_mode": {
+        "native": 0,
+        "original": 0,
+        "topology": 141396
+      },
+      "physical_rss_bytes": null,
+      "retained_from": "FIRST_PLAN_BUILD_UNTIL_SCOPE_FINISH",
+      "setup_and_warm_phases_must_serialize": true,
+      "topology_budget_bytes": 1048576,
+      "topology_other_metadata_payload_bytes": 40008,
+      "topology_peak_owned_payload_bytes": 141396
+    },
+    "terms": {
+      "native": {
+        "cold_first": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 1210006,
+          "lower_ns": 1204348,
+          "sample_variance_ns2": 98588316,
+          "samples_ns": [
+            1210006,
+            1223662,
+            1204348
+          ],
+          "upper_ns": 1223662
+        },
+        "load_once": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 29014391,
+          "lower_ns": 29002247,
+          "sample_variance_ns2": 6487678107,
+          "samples_ns": [
+            29002247,
+            29014391,
+            29147432
+          ],
+          "upper_ns": 29147432
+        },
+        "plan_build_once": {
+          "basis": "CANDIDATE_ONLY_INSTALL_ACTIVITY_ABSENT_FROM_ORIGINAL",
+          "estimate_ns": 0,
+          "lower_ns": 0,
+          "upper_ns": 0
+        },
+        "release_once": {
+          "basis": "CANDIDATE_ONLY_INSTALL_ACTIVITY_ABSENT_FROM_ORIGINAL",
+          "estimate_ns": 0,
+          "lower_ns": 0,
+          "upper_ns": 0
+        },
+        "warm": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 992080,
+          "lower_ns": 987683,
+          "sample_variance_ns2": 58347259,
+          "samples_ns": [
+            987683,
+            1002552,
+            992080
+          ],
+          "upper_ns": 1002552
+        }
+      },
+      "original": {
+        "cold_first": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 1266066,
+          "lower_ns": 1221847,
+          "sample_variance_ns2": 766415092.3333334,
+          "samples_ns": [
+            1272814,
+            1221847,
+            1266066
+          ],
+          "upper_ns": 1272814
+        },
+        "load_once": {
+          "basis": "CANDIDATE_ONLY_INSTALL_ACTIVITY_ABSENT_FROM_ORIGINAL",
+          "estimate_ns": 0,
+          "lower_ns": 0,
+          "upper_ns": 0
+        },
+        "plan_build_once": {
+          "basis": "CANDIDATE_ONLY_INSTALL_ACTIVITY_ABSENT_FROM_ORIGINAL",
+          "estimate_ns": 0,
+          "lower_ns": 0,
+          "upper_ns": 0
+        },
+        "release_once": {
+          "basis": "CANDIDATE_ONLY_INSTALL_ACTIVITY_ABSENT_FROM_ORIGINAL",
+          "estimate_ns": 0,
+          "lower_ns": 0,
+          "upper_ns": 0
+        },
+        "warm": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 1099690,
+          "lower_ns": 1091763,
+          "sample_variance_ns2": 23918134.333333332,
+          "samples_ns": [
+            1099690,
+            1100689,
+            1091763
+          ],
+          "upper_ns": 1100689
+        }
+      },
+      "topology": {
+        "cold_first": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 1174540,
+          "lower_ns": 1165380,
+          "sample_variance_ns2": 422524821.3333333,
+          "samples_ns": [
+            1165380,
+            1204668,
+            1174540
+          ],
+          "upper_ns": 1204668
+        },
+        "load_once": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 28976192,
+          "lower_ns": 28938601,
+          "sample_variance_ns2": 12512139864.333334,
+          "samples_ns": [
+            29148385,
+            28938601,
+            28976192
+          ],
+          "upper_ns": 29148385
+        },
+        "plan_build_once": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 60305,
+          "lower_ns": 59858,
+          "sample_variance_ns2": 291636.3333333333,
+          "samples_ns": [
+            60933,
+            59858,
+            60305
+          ],
+          "upper_ns": 60933
+        },
+        "release_once": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 10740,
+          "lower_ns": 10476,
+          "sample_variance_ns2": 135432.33333333334,
+          "samples_ns": [
+            10740,
+            11203,
+            10476
+          ],
+          "upper_ns": 11203
+        },
+        "warm": {
+          "basis": "EMPIRICAL_SCOPE_SAMPLE_RANGE",
+          "bounds_are_sample_extrema": true,
+          "estimate_ns": 957751,
+          "lower_ns": 939573,
+          "sample_variance_ns2": 125929921,
+          "samples_ns": [
+            957751,
+            939573,
+            960062
+          ],
+          "upper_ns": 960062
+        }
+      }
+    },
+    "totals": {
+      "native": {
+        "estimate_ns": 537177277,
+        "lower_ns": 534912608,
+        "upper_ns": 542675166
+      },
+      "original": {
+        "estimate_ns": 563207656,
+        "lower_ns": 559112740,
+        "upper_ns": 563724893
+      },
+      "topology": {
+        "estimate_ns": 519632538,
+        "lower_ns": 510296118,
+        "upper_ns": 521016871
+      }
+    }
+  },
+  "observed": {
+    "count": 512,
+    "entry": {
+      "affinity": [
+        48
+      ],
+      "argv": [
+        "512"
+      ],
+      "argv_positive_guard": true,
+      "argv_repetitions": 512,
+      "exact_setup_prefix_bytes": 651,
+      "setup_source": {
+        "schema": "scar.python-source",
+        "sha256": "b3c1be5c024c2d4e6634ad3971c6a963e5ad87dff15ad902a22f27713be02f49",
+        "size_bytes": 998,
+        "uri": "/home/zyf/AAA/scikit-fem/docs/examples/ex01.py"
+      },
+      "source": {
+        "schema": "scar.python-source",
+        "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+        "size_bytes": 1313,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+      },
+      "thread_environment": {
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "original_graph": {
+      "schema": "scar.bounded-entry-calls",
+      "sha256": "cd212a5747eed4c5a656292835d1b39afcaac427d49c34ae2dc1a809fc2998cc",
+      "size_bytes": 1357359,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/entry-calls.json"
+    },
+    "qualified_topology_scope": {
+      "schema": "scar.csr-topology-scope",
+      "sha256": "3639c28cb446ba80f2bc3e4eb2e1bc4adeb87ff05c250bfe11cecff4d925b64f",
+      "size_bytes": 127946,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/source/scope-topology.json"
+    },
+    "source_scope": {
+      "schema": "scar.study-verified-source-loop-scope",
+      "sha256": "73ae107aec380edd17daef6d6510a8d490984ad0f07c59c232f857846302ba05",
+      "size_bytes": 24104,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/scope.json"
+    }
+  },
+  "proposed": {
+    "implementation": {
+      "end_ns": 519621798,
+      "operation": "csr-row-update:7d9974b1c1fc797b2a660092736a7e5136bbafc76730adc0ec28599684be5458",
+      "option": "CSR_REUSE_TOPOLOGY",
+      "start_ns": 29036497
+    },
+    "plan": {
+      "schema": "scar.implementation-execution-plan",
+      "sha256": "fb429926f0c1e90bd1024f20bdf8b09447170fa0f5c5ae97c52c96c04e2a9f4c",
+      "size_bytes": 3692,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/planned/plan.json"
+    },
+    "planning_problem": {
+      "schema": "scar.implementation-planning-problem",
+      "sha256": "6492fe91119c8835e297129d2e5fac44373cd5fcc19ac03eda39f6f85f8a9322",
+      "size_bytes": 20840,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/planned/problem.json"
+    }
+  },
+  "rejected": {
+    "decision": "KEEP",
+    "reason": "STRUCTURAL_COST_OR_COMPLETE_ENTRY_BENEFIT_NOT_QUALIFIED",
+    "selection": {
+      "schema": "scar.csr-row-region-selection",
+      "sha256": "6fd74fe4dcc25030fd09402c948010d63399d7f2c4a9d18c44075903195e40d7",
+      "size_bytes": 5595,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/final/selection.json"
+    }
+  },
+  "schema": "scar.three-stage-csr-topology-hoist",
+  "schema_version": 1,
+  "verified": {
+    "candidate": {
+      "max_ns": 8616298954,
+      "median_ns": 8582140240,
+      "min_ns": 8579671067,
+      "samples_ns": [
+        8582140240,
+        8616298954,
+        8579671067
+      ],
+      "variance_ns2": 419086110587082.3
+    },
+    "changed_argv_uses_original_path": true,
+    "exact_hits_per_native_run": 511,
+    "exact_outputs": true,
+    "fallback_calls_per_run": 0,
+    "fresh_processes": {
+      "schema": "scar.csr-scope-entry-validation",
+      "sha256": "33e7e6c8da0b3ff32760803b4e1d98fd65dff19058cdaefd0719d1fe92b07f50",
+      "size_bytes": 6310,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-topology-hoist/entry-ab/result.json"
+    },
+    "measurement_pairs": 3,
+    "measurement_ranges_overlap": true,
+    "median_entry_speedup": 1.0063325929756655,
+    "original": {
+      "max_ns": 8785725534,
+      "median_ns": 8636487441,
+      "min_ns": 8545107954,
+      "samples_ns": [
+        8545107954,
+        8785725534,
+        8636487441
+      ],
+      "variance_ns2": 14753173141952703
+    },
+    "region_preferred": "topology",
+    "retained_after_exit_bytes": 0,
+    "retained_payload_bytes": 141396,
+    "topology_builds_per_native_run": 1,
+    "topology_misses": 0,
+    "warmup_pairs": 1
+  }
+}
