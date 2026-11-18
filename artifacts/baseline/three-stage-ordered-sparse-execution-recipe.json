@@ -1,0 +1,359 @@
+{
+  "implemented": {
+    "lowering": {
+      "schema": "scar.execution-recipe-lowering",
+      "sha256": "76e3319721fcb6ba44eff0ba2d8a0993ea2db8fc907f30dd81b3bf8d5d902175",
+      "size_bytes": 24835,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/study/lowered/lowering-receipt.json"
+    },
+    "native_library": {
+      "schema": "scar.native-library",
+      "sha256": "ac9549b960a4077349a55042cca5daba742ee3bd3d2a004b83b9e088cf1bde1f",
+      "size_bytes": 139584,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan/native/sparse_lu.so"
+    },
+    "program_graph_fingerprint": "7cbda541e913836a951ba7256d8e1d8aa70634c695355c95b099bd8b38df8b44",
+    "reused_serial_abi": {
+      "schema": "scar.execution-recipe-lowering",
+      "sha256": "04d3a8e3e38cfff881a73dc8c1f00e088b176a39a9f5cb77da59a363aca283e8",
+      "size_bytes": 12434,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-typed-recipe/plan-final/lowering-receipt.json"
+    }
+  },
+  "inferred": {
+    "modeled_first_wave": {
+      "clock": "MODELED_RELATIVE_SCOPE_NS",
+      "iterations": [
+        {
+          "courier_start_ns": 1038462969,
+          "iteration": 0,
+          "matched_retirement_ns": 1053335540,
+          "owner_submit_ns": 1036337449,
+          "publication_proxy_end_ns": 1053720857,
+          "publication_proxy_start_ns": 1053511041,
+          "result_exchange_complete_ns": 1053335540,
+          "worker_end_ns": 1053059712,
+          "worker_start_ns": 1038949066
+        },
+        {
+          "courier_start_ns": 1038638470,
+          "iteration": 1,
+          "matched_retirement_ns": 1055066093,
+          "owner_submit_ns": 1036512950,
+          "publication_proxy_end_ns": 1055451410,
+          "publication_proxy_start_ns": 1055241594,
+          "result_exchange_complete_ns": 1053511041,
+          "worker_end_ns": 1053235213,
+          "worker_start_ns": 1039124567
+        },
+        {
+          "courier_start_ns": 1038813971,
+          "iteration": 2,
+          "matched_retirement_ns": 1056796646,
+          "owner_submit_ns": 1036688451,
+          "publication_proxy_end_ns": 1057181963,
+          "publication_proxy_start_ns": 1056972147,
+          "result_exchange_complete_ns": 1053686542,
+          "worker_end_ns": 1053410714,
+          "worker_start_ns": 1039300068
+        },
+        {
+          "courier_start_ns": 1038989472,
+          "iteration": 3,
+          "matched_retirement_ns": 1058527199,
+          "owner_submit_ns": 1036863952,
+          "publication_proxy_end_ns": 1058912516,
+          "publication_proxy_start_ns": 1058702700,
+          "result_exchange_complete_ns": 1053862043,
+          "worker_end_ns": 1053586215,
+          "worker_start_ns": 1039475569
+        },
+        {
+          "courier_start_ns": 1039164973,
+          "iteration": 4,
+          "matched_retirement_ns": 1060257752,
+          "owner_submit_ns": 1037039453,
+          "publication_proxy_end_ns": 1060643069,
+          "publication_proxy_start_ns": 1060433253,
+          "result_exchange_complete_ns": 1054037544,
+          "worker_end_ns": 1053761716,
+          "worker_start_ns": 1039651070
+        },
+        {
+          "courier_start_ns": 1039340474,
+          "iteration": 5,
+          "matched_retirement_ns": 1061988305,
+          "owner_submit_ns": 1037214954,
+          "publication_proxy_end_ns": 1062373622,
+          "publication_proxy_start_ns": 1062163806,
+          "result_exchange_complete_ns": 1054213045,
+          "worker_end_ns": 1053937217,
+          "worker_start_ns": 1039826571
+        },
+        {
+          "courier_start_ns": 1039515975,
+          "iteration": 6,
+          "matched_retirement_ns": 1063718858,
+          "owner_submit_ns": 1037390455,
+          "publication_proxy_end_ns": 1064104175,
+          "publication_proxy_start_ns": 1063894359,
+          "result_exchange_complete_ns": 1054388546,
+          "worker_end_ns": 1054112718,
+          "worker_start_ns": 1040002072
+        },
+        {
+          "courier_start_ns": 1039691476,
+          "iteration": 7,
+          "matched_retirement_ns": 1065449411,
+          "owner_submit_ns": 1037565956,
+          "publication_proxy_end_ns": 1065834728,
+          "publication_proxy_start_ns": 1065624912,
+          "result_exchange_complete_ns": 1054564047,
+          "worker_end_ns": 1054288219,
+          "worker_start_ns": 1040177573
+        }
+      ]
+    },
+    "modeled_maximum_inflight": 8,
+    "prediction_boundary": "SOLVE_SCOPE_COMPONENT_PROJECTION",
+    "projected_ns": {
+      "estimate_ns": 2285284456,
+      "lower_ns": 2001198388,
+      "upper_ns": 4957568572
+    },
+    "unresolved_components": [
+      "owner_result_array_materialization_and_future_ready",
+      "retire_exact_match_cpu_separate_from_await",
+      "numeric_scratch_peak",
+      "physical_ipc_bandwidth",
+      "original_publish_and_other_entry_effects"
+    ]
+  },
+  "observed": {
+    "calibration": {
+      "schema": "scar.sparse-parallel-cost",
+      "sha256": "5997e56b278f9269e4a1dd2946835289191a179f5a5c0654304072f7b2cb8ad2",
+      "size_bytes": 16870,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/cost/typed-result.json"
+    },
+    "clean_pairs": {
+      "schema": "scar.sparse-parallel-entry-validation",
+      "sha256": "7bd73a57ba4f8686921ad1d89b7591964ecb036fa3c09c97bc4652a56d418043",
+      "size_bytes": 12078,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/entry-ab/result.json"
+    },
+    "entry": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    },
+    "measured_pairs": 3,
+    "phase_medians_ns": {
+      "native_solve_ns": 14110646,
+      "publish_digest_proxy_ns": 209816,
+      "queue_ns": 2125520,
+      "request_exchange_child_setup_ns": 486097,
+      "result_exchange_unpack_ns": 275828,
+      "submit_offer_offset_ns": 106427
+    },
+    "scope": {
+      "schema": "scar.sparse-parallel-scope",
+      "sha256": "6c1e580b60c39cd87678b10c3121b4900d48fb8bd31c63bad4aa8e1267b5ca93",
+      "size_bytes": 279124,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-parallel-ordered/source/scope-parallel.json"
+    },
+    "wall_ns": {
+      "parallel": {
+        "max_ns": 2889766978,
+        "median_ns": 2860917575,
+        "min_ns": 2818588401,
+        "samples_ns": [
+          2818588401,
+          2889766978,
+          2860917575
+        ],
+        "variance_ns2": 1281739474787269
+      },
+      "serial": {
+        "max_ns": 6960303665,
+        "median_ns": 6941824855,
+        "min_ns": 6928349615,
+        "samples_ns": [
+          6928349615,
+          6941824855,
+          6960303665
+        ],
+        "variance_ns2": 257351637246033.34
+      }
+    },
+    "warmup_pairs": 1
+  },
+  "proposed": {
+    "body_templates": 1,
+    "call_count": 512,
+    "loop_dependencies": [
+      {
+        "from": {
+          "index": "0",
+          "task": "prepare-original"
+        },
+        "kind": "ORIGINAL_ACTIVATION",
+        "to": {
+          "index": "activation",
+          "task": "allocate-team"
+        },
+        "when": "FIRST_ELIGIBLE_CALL"
+      },
+      {
+        "from": {
+          "index": "j",
+          "task": "submit"
+        },
+        "kind": "INITIAL_FILL",
+        "to": {
+          "index": "0",
+          "task": "dequeue-oldest"
+        },
+        "when": "0 <= j < W"
+      },
+      {
+        "from": {
+          "index": "i",
+          "task": "retire-matched"
+        },
+        "kind": "SLOT_CREDIT",
+        "to": {
+          "index": "i+W",
+          "task": "prepare-private"
+        },
+        "when": "i+W < count"
+      },
+      {
+        "from": {
+          "index": "i+W",
+          "task": "submit"
+        },
+        "kind": "REFILL_BEFORE_ORIGINAL_RETURN",
+        "to": {
+          "index": "i",
+          "task": "publish-original"
+        },
+        "when": "i+W < count"
+      },
+      {
+        "from": {
+          "index": "i",
+          "task": "publish-original"
+        },
+        "kind": "ORIGINAL_WORLD_BACKEDGE",
+        "to": {
+          "index": "i+1",
+          "task": "prepare-original"
+        },
+        "when": "i+1 < count"
+      },
+      {
+        "from": {
+          "index": "i",
+          "task": "dequeue-oldest"
+        },
+        "kind": "ISSUE_ORDER",
+        "to": {
+          "index": "i+1",
+          "task": "dequeue-oldest"
+        },
+        "when": "i+1 < count"
+      },
+      {
+        "from": {
+          "index": "count-1",
+          "task": "publish-original"
+        },
+        "kind": "DRAIN_THEN_CLOSE",
+        "to": {
+          "index": "activation",
+          "task": "close-team"
+        },
+        "when": "NORMAL_COMPLETION"
+      }
+    ],
+    "recipe": {
+      "schema": "scar.execution-recipe",
+      "sha256": "f930b74a04122e12383dda3ee80e36f0aa827dcea2585e13126116738e3b1623",
+      "size_bytes": 41803,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/protocol/recipe.json"
+    },
+    "runtime_policy": {
+      "count": 512,
+      "launch_cpu_ids": [
+        42,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "matrix": {
+        "nnz": 20865,
+        "size": 4225
+      },
+      "memory_floor_bytes": 8592279800,
+      "numa_node": 1,
+      "owner_cpu": 48,
+      "symbolic_budget_bytes": 8388608,
+      "workers": {
+        "address_space_limit_bytes": 1073741824,
+        "cpu_ids": [
+          42,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55
+        ],
+        "window": 8
+      }
+    },
+    "task_templates": 19
+  },
+  "rejected": {
+    "calibration_order_tamper": {
+      "schema": "scar.ordered-sparse-model-check",
+      "sha256": "8ad0adef3abcd493b0c56416e7b56e23b41265cdf03b7d0005d00131d8f03e0f",
+      "size_bytes": 895,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/cost/verify-model.json"
+    },
+    "physical_transport_bandwidth_inferred": false,
+    "whole_entry_time_from_model": false
+  },
+  "schema": "scar.three-stage-ordered-sparse-execution-recipe",
+  "schema_version": 1,
+  "verified": {
+    "actual_release_run": {
+      "schema": "scar.sparse-parallel-entry-execution",
+      "sha256": "e8d386aa67d42d63ab957b509af20f41a1273ca146c4ddf8b4c798c481e37d28",
+      "size_bytes": 362557,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selected.json"
+    },
+    "bitwise_output_and_stderr_match": true,
+    "fallback_calls": 0,
+    "launch": {
+      "schema": "scar.sparse-parallel-entry-selection",
+      "sha256": "5430c4a17894e5178d6c6ac0ed93cdb59af567584f064f6fcc6a195404cdf612",
+      "size_bytes": 6579,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selection.json"
+    },
+    "native_calls": 512,
+    "observed_native_overlap": 8,
+    "parallel_speedup": 2.426433014240195,
+    "parent_native_elf_reused": true,
+    "publication_order": "0..511",
+    "released_worker_state": true
+  }
+}

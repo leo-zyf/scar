@@ -106,6 +106,10 @@ scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 
 
 ### 稀疏求解的有序并行
 
+对已发布的 typed 串行计划，先用 `plan_sparse_parallel --prepare-recipe --scope SCOPE --serial-launch SERIAL --choice CHOICE --out RECIPE` 冻结共用 `ExecutionRecipe`。循环模板保留输入打包、进程间传递、原生求解、请求全量匹配和原程序发布。在匹配归还槽位后补发后续任务，再回到原 Python 发布。传输线程与主线程共享 owner CPU，worker 各占一个独立核。
+
+配对校准按同一 recipe 分段记录排队、输入交换和子进程准备、原生求解、结果返回和解包。规划保留首波的预计时刻，整程验收核对每个核上的求解顺序和结果返回后才发出的下一项。当前 512 轮 W8 区段预测为 2.285 s，完整入口配对中位数为串行 6.942 s、并行 2.861 s。完整 Python 发布和 Future 就绪前的数组构造仍缺独立测量。见 `artifacts/baseline/three-stage-ordered-sparse-execution-recipe.json`。
+
 `plan_sparse_parallel --scope SCOPE --serial-launch SERIAL --cost COST --out STUDY` 绑定原循环、串行产物和同一核心组的成本。主线程从原函数入口获取一次私有快照，预测有界窗口内的数值任务。隔离进程在固定核上使用同一 C++ 求解产物，各自持有工作区。原 Python 继续执行数据准备、求解入口、状态码处理和摘要发布。每次到达原求解载体前，用实际参数和全量字节匹配后才交付最早发起的结果。
 
 `--study STUDY/selection.json --validation VALIDATION --out FINAL` 核验完成顺序、性能、CPU 分配和释放。`python -m scar.runtime.sparse_parallel_entry --selection FINAL/selection.json --selection-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 使用符合源码、环境和资源条件的已发布执行方式。每个 worker 受独立地址空间上限约束，原主线程和 worker 位于同一 NUMA 节点。

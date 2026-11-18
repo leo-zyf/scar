@@ -203,7 +203,7 @@ def _overlap(tasks):
     return peak
 
 
-def _measure_ordered(raw, choice, address_space, terms):
+def _measure_ordered(raw, choice, address_space, terms, *, phase_samples=None):
     runtime = raw['runtime']
     tasks = sorted(runtime['tasks'], key=lambda task: task['issue'])
     published = runtime['publications']
@@ -218,6 +218,11 @@ def _measure_ordered(raw, choice, address_space, terms):
     if (sorted(worker['cpu'] for worker in workers.values()) != choice['worker_cpu_ids']
             or any(worker['address_space_limit_bytes'] != address_space for worker in workers.values())):
         raise ValueError('worker CPU and address-space contract differ from the study')
+    if phase_samples is not None:
+        from scar.optimization import sparse_parallel_recipe_cost as typed
+
+        typed.check_group_order(samples, choice['window'])
+        typed.append_bootstrap_phases(phase_samples, workers.values())
     for sample, task, item in zip(samples, tasks, published):
         start, prepared, issued = sample['submit_clock_ns']
         entered, actual_ready, result_ready, succeeded = sample['consume_clock_ns']
@@ -235,12 +240,16 @@ def _measure_ordered(raw, choice, address_space, terms):
         terms['native_thread_cpu_ns'].append(task['native_thread_cpu_ns'])
         terms['native_wall_ns'].append(task['ended_ns']-task['started_ns'])
         terms['wait_ns'].append(wait)
-        terms['publish_ns'].append(_duration((result_ready, succeeded)))
+        publication = (_duration((result_ready, succeeded)) if phase_samples is None
+                       else typed.append_task_phases(phase_samples, task, sample))
+        terms['publish_ns'].append(publication)
         replay = result_ready-entered-wait
         terms['first_replay_before_wait_ns' if task['issue'] == 0 else 'replay_before_wait_ns'].append(replay)
     terms['bootstrap_ns'].append(_duration(raw['bootstrap_clock_ns']))
     terms['close_ns'].append(_duration(raw['close_clock_ns']))
-    terms['loader_ns'].append(raw['loader_cut_ns']-raw['bootstrap_clock_ns'][0])
+    loader = (raw['loader_cut_ns']-raw['bootstrap_clock_ns'][0] if phase_samples is None
+              else _duration(raw['loader_clock_ns']))
+    terms['loader_ns'].append(loader)
     terms['team_spawn_and_analyze_ns'].append(runtime['startup_ns'])
     terms['owner_exact_validation_ns'].append(runtime['owner_validation_ns'])
     return dict(group=raw['group'], distinct_workers=len(workers), maximum_native_wall_overlap=_overlap(tasks),
@@ -272,6 +281,12 @@ def project_calibration(design_path, observations):
             or any(design['context']['environment'][key] != value
                    for key, value in source['entry']['thread_environment'].items())):
         raise ValueError('parallel calibration does not match admitted original input or CPU team')
+    recipe = phase_samples = None
+    if 'execution_recipe' in design:
+        from scar.optimization import sparse_parallel_recipe_cost as typed
+
+        recipe = typed.bind_calibration(design, source, parallel, choice, native)
+        phase_samples = typed.new_phase_samples()
     fields = ('bootstrap_ns', 'prepare_ns', 'submit_ns', 'worker_ns',
               'replay_before_wait_ns', 'first_replay_before_wait_ns', 'publish_ns', 'close_ns',
               'loader_ns', 'owner_exact_validation_ns', 'team_spawn_and_analyze_ns',
@@ -294,7 +309,11 @@ def project_calibration(design_path, observations):
                 raise ValueError('observed sparse calibration worker differs from frozen task list')
             digests.append((raw['output_digests'], raw['published_digest']))
             if mode == 'ordered':
-                facts.append(_measure_ordered(raw, choice, design['worker_address_space_bytes'], terms))
+                observed = _measure_ordered(raw, choice, design['worker_address_space_bytes'], terms,
+                                            phase_samples=phase_samples)
+                if recipe is not None:
+                    typed.check_group_resources(recipe, observed)
+                facts.append(observed)
             else:
                 rows = raw['samples']
                 times = [_duration((row['consume_clock_ns'][0], row['consume_clock_ns'][-1]))
@@ -308,10 +327,17 @@ def project_calibration(design_path, observations):
     serial = {key: _summary(series) for key, series in serial.items()}
     keys = ('estimate_ns', 'lower_ns', 'upper_ns')
     projections = {}
+    ledger = None if phase_samples is None else typed.phase_cost_ledger(phase_samples)
     for key in keys:
         profile = {field: value[key] for field, value in ordered.items()}
-        projections[key] = project_serial_order(count, choice['worker_count'], choice['window'], profile,
-                                               cpu_quota=hardware['cpu_quota_equivalents'])
+        if ledger is None:
+            projections[key] = project_serial_order(count, choice['worker_count'], choice['window'], profile,
+                                                   cpu_quota=hardware['cpu_quota_equivalents'])
+        else:
+            cuts = {name: measure[key] for name, measure in ledger['measured'].items()}
+            projections[key] = typed.project_recipe_window(recipe, profile, cuts,
+                                                          include_first_wave=key == 'estimate_ns')
+    binding = {} if recipe is None else dict(execution_recipe=design['execution_recipe'], phase_cost_ledger=ledger)
     return dict(schema=SCHEMA, schema_version=1, design=design_ref, observations=refs,
                 choice=design['choice'], source_scope=design['source_scope'],
                 parallel_scope=design['parallel_scope'],
@@ -320,7 +346,7 @@ def project_calibration(design_path, observations):
                 window=choice['window'], ordered=ordered, serial=serial, resources=facts,
                 projections=projections, all_outputs_bitwise=True,
                 calibration_is_section_only=True, full_entry_cost_ns=None,
-                automatic_admission=False)
+                automatic_admission=False, **binding)
 
 
 def check(path):

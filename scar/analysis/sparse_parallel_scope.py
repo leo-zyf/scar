@@ -317,6 +317,17 @@ def derive_sparse_parallel_scope(pipeline_scope):
 
 def check_sparse_parallel_scope(reference):
     """Cold-rederive the original graph and verify the entire scope receipt."""
+    from scar.analysis.replay_transaction import current_transaction
+
+    transaction = current_transaction()
+    if transaction is not None and 'uri' in reference:
+        key = tuple(reference[name] for name in ('uri', 'sha256', 'size_bytes', 'schema'))
+        return transaction.memo('scar.sparse-parallel-scope/v1', key,
+            lambda: _check_sparse_parallel_scope(reference), capture_reads=True)
+    return _check_sparse_parallel_scope(reference)
+
+
+def _check_sparse_parallel_scope(reference):
     result = read_artifact(reference) if 'uri' in reference else reference
     _require((result.get('schema'),result.get('schema_version')) == (SCHEMA,1),'expected sparse parallel scope')
     expected = derive_sparse_parallel_scope(result['pipeline_scope'])

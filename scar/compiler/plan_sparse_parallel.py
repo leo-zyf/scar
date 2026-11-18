@@ -6,8 +6,9 @@ from pathlib import Path
 from statistics import median
 import sys
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.sparse_parallel_recipe import derive_recipe
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, read_artifact, write_recipe
 from scar.ir.implementation_plan import (CostEstimate, ImplementationOption, PlanningOperation,
     PlanningProblem, PlanningResource, problem_document)
 from scar.ir.program.providers import ProviderArtifact
@@ -19,9 +20,12 @@ from scar.runtime.sparse_solve_launch import LAUNCH as SERIAL_LAUNCH
 
 SCOPE = 'scar.sparse-parallel-scope'
 RECIPE = 'scar.sparse-parallel-detached-recipe'
+CHOICE = 'scar.sparse-parallel-preliminary-choice'
 VALIDATION = 'scar.sparse-parallel-entry-validation'
 EXECUTION = 'scar.sparse-parallel-entry-execution'
 FIELDS = ('estimate_ns', 'lower_ns', 'upper_ns')
+POLICY_KEYS = ('launch_cpu_ids', 'owner_cpu', 'numa_node', 'count', 'matrix', 'workers',
+               'symbolic_budget_bytes', 'memory_floor_bytes')
 
 
 def _require(condition, reason):
@@ -62,20 +66,44 @@ def _planning(source, cost, cost_ref, target, count, memory_floor, lanes):
                      'EMPIRICAL_SERVICE_PROJECTION_INCLUDES_BOOTSTRAP_QUEUE_AND_CLOSE'))
 
 
+def _detached(scope, scope_ref):
+    source = read_artifact(scope['entry']['source'], json_document=False)
+    body = derive_recipe(source, scope['source_body'], scope['preparation'], optimize=sys.flags.optimize)
+    return dict(body, schema=RECIPE, schema_version=1, source=scope_ref)
+
+
+@replay_transaction()
+def prepare_recipe(scope_path, serial_path, choice_path, out):
+    """Freeze the chosen resource and data protocol before calibration."""
+    from scar.optimization.sparse_parallel_recipe import make_sparse_parallel_recipe
+
+    scope_ref = _ref(scope_path, SCOPE)
+    serial_ref = _ref(serial_path, SERIAL_LAUNCH)
+    choice_ref = _ref(choice_path, CHOICE)
+    directory = Path(out).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    detached = _write(directory, 'detached.json', _detached(read_artifact(scope_ref), scope_ref))
+    recipe = make_sparse_parallel_recipe(scope_ref, serial_ref, choice_ref, detached)
+    return write_recipe(recipe, directory/'recipe.json')
+
+
+@replay_transaction()
 def prepare(scope_path, serial_path, cost_path, out):
     from scar.analysis.sparse_parallel_scope import check_sparse_parallel_scope
 
     scope_ref = _ref(scope_path, SCOPE)
-    scope = check_sparse_parallel_scope(scope_ref)
     serial_ref = _ref(serial_path, SERIAL_LAUNCH)
     serial = read_artifact(serial_ref)
     attached = read_artifact(serial['study'])
     cost_ref = _ref(cost_path, COST)
     cost = check(cost_ref['uri'])
+    execution_recipe = cost.get('execution_recipe')
+    # Typed lowering replays this exact source scope before emitting a policy.
+    scope = read_artifact(scope_ref) if execution_recipe is not None else check_sparse_parallel_scope(scope_ref)
     design = read_artifact(cost['design'])
     entry = scope['entry']['source']
-    recipe = derive_recipe(read_artifact(entry, json_document=False), scope['source_body'],
-                          scope['preparation'], optimize=sys.flags.optimize)
+    detached = _detached(scope, scope_ref)
+    body = {k: value for k, value in detached.items() if k not in ('schema', 'schema_version', 'source')}
     owner, workers, window = cost['owner_cpu_id'], cost['worker_cpu_ids'], cost['window']
     cpus = sorted({owner, *workers})
     choice = read_artifact(cost['choice'])
@@ -85,7 +113,7 @@ def prepare(scope_path, serial_path, cost_path, out):
              and cost['parallel_scope'] == scope_ref and cost['source_scope'] == scope['source_scope']
              and attached['source'] == scope['solve_scope'] and attached['native'] == cost['native']
              and {**cost['context'], 'cpu_ids':[owner]} == serial['context']
-             and cpus == cost['context']['cpu_ids'] and recipe == design['recipe']
+             and cpus == cost['context']['cpu_ids'] and body == design['recipe']
              and count == source_count and len(workers) == window > 1 and cost['all_outputs_bitwise'],
              'the source, serial execution, resources and calibration must refer to one exact scope')
     shape = read_artifact(scope['solve_scope'])['sampled_values']['first_structure']
@@ -100,20 +128,41 @@ def prepare(scope_path, serial_path, cost_path, out):
     planned_memory = worker_budget + observed_owner_payload + base_copy
     directory = Path(out).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    recipe_ref = _write(directory, 'recipe.json', dict(recipe,schema=RECIPE,schema_version=1,source=scope_ref))
+    policy = dict(launch_cpu_ids=cpus, owner_cpu=owner, numa_node=choice['choice']['cpu_numa_node'],
+        count=count, matrix=matrix, workers=dict(cpu_ids=workers, window=window, address_space_limit_bytes=cap),
+        symbolic_budget_bytes=attached['budget_bytes'], memory_floor_bytes=planned_memory)
+    binding = {}
+    if execution_recipe is not None:
+        from scar.codegen.recipe import build_recipe
+
+        recipe = read_artifact(execution_recipe)
+        artifacts = recipe['artifacts']
+        detached_ref = artifacts['detached']
+        _require(artifacts['parallel_scope'] == scope_ref and artifacts['serial_launch'] == serial_ref
+                 and artifacts['choice'] == cost['choice'] and read_artifact(detached_ref) == detached,
+                 'calibration belongs to a different typed sparse protocol')
+        lowering = build_recipe(execution_recipe['uri'], directory/'lowered')
+        receipt = read_artifact(lowering)
+        lowered_policy = receipt['runtime_policy']
+        _require(lowered_policy == policy and receipt['native'] == cost['native'],
+                 'parallel calibration and lowered runtime policy differ')
+        policy = lowered_policy
+        binding = dict(execution_recipe=execution_recipe, lowering=lowering)
+    else:
+        _require('execution_recipe' not in serial, 'typed serial solve requires a parallel execution recipe and matching calibration')
+        detached_ref = _write(directory, 'recipe.json', detached)
     target = read_artifact(serial['problem'])['target']
     problem = _planning(scope_ref, cost, cost_ref, target, count, planned_memory, window)
     problem_ref = _write(directory, 'problem.json', problem_document(problem))
     plan_ref = _write(directory, 'plan.json', construct_implementations(problem))
     runtime = Path(__file__).resolve().parents[1]/'runtime'
     members = [*design['runtime'].values(), _ref(runtime/'sparse_parallel_entry.py', 'scar.python-source')]
+    if binding:
+        members.extend(member for member in receipt['runtime_members'] if member not in members)
     return _write(directory, 'selection.json', dict(schema=SCHEMA, schema_version=1, entry=entry,
         decision='SERIAL', study_parallel=True, source=scope_ref, serial_launch=serial_ref,
-        serial_study=serial['study'], recipe=recipe_ref, cost=cost_ref, native=cost['native'],
-        problem=problem_ref, plan=plan_ref, context=serial['context'], launch_cpu_ids=cpus, owner_cpu=owner,
-        numa_node=choice['choice']['cpu_numa_node'], count=count, matrix=matrix, runtime_members=members,
-        workers=dict(cpu_ids=workers, window=window, address_space_limit_bytes=cap),
-        symbolic_budget_bytes=attached['budget_bytes'], memory_floor_bytes=planned_memory))
+        serial_study=serial['study'], recipe=detached_ref, cost=cost_ref, native=cost['native'],
+        problem=problem_ref, plan=plan_ref, context=serial['context'], runtime_members=members, **policy, **binding))
 
 
 def _peak(tasks):
@@ -126,12 +175,45 @@ def _peak(tasks):
     return peak
 
 
+def _check_ordered_activity(team, study):
+    """Check measured worker order and lane retirement against the finite window."""
+    width = study['workers']['window']
+    cpus = study['workers']['cpu_ids']
+    workers = {row['cpu']: row for row in team['workers']}
+    tasks = sorted(team['tasks'], key=lambda row: row['issue'])
+    _require([row['issue'] for row in tasks] == list(range(study['count'])),
+             'measured worker service does not cover each ordered issue once')
+    for issue, task in enumerate(tasks):
+        cpu = cpus[issue % width]
+        _require(task['cpu'] == cpu and task['pid'] == workers[cpu]['pid']
+                 and task['status'] == 0 and team['publications'][issue]['native'] is True
+                 and task['submitted_ns'] <= task['exchange_started_ns'] <= task['started_ns']
+                 < task['ended_ns'] <= task['exchange_complete_ns'],
+                 'worker activity order or execution lane differs from the typed recipe')
+        if issue >= width:
+            _require(tasks[issue - width]['exchange_complete_ns'] <= task['submitted_ns'],
+                     'a lane received its next input before the previous result came back')
+    _require(all(worker['address_space_limit_bytes'] == study['workers']['address_space_limit_bytes']
+                 and 0 < worker['symbolic_bytes'] <= study['symbolic_budget_bytes'] for worker in workers.values()),
+             'worker address space or symbol payload differs from the typed recipe')
+
+
+@replay_transaction()
 def qualify(study_path, evidence_path, out):
     study_ref = _ref(study_path, SCHEMA)
     study = read_artifact(study_ref)
     evidence_ref = _ref(evidence_path, VALIDATION)
     evidence = read_artifact(evidence_ref)
     cost = check(study['cost']['uri'])
+    if study.get('execution_recipe') != cost.get('execution_recipe'):
+        raise ValueError('parallel qualification needs the same recipe as calibration')
+    if 'execution_recipe' in study:
+        from scar.codegen.ordered_sparse_recipe import verify_ordered_sparse_lowering
+
+        receipt = verify_ordered_sparse_lowering(study['execution_recipe'], study['lowering'])
+        _require(receipt['native'] == study['native'] and receipt['detached_recipe'] == study['recipe']
+                 and all(receipt['runtime_policy'][key] == study[key] for key in POLICY_KEYS),
+                 'parallel study no longer uses the lowered resource and data protocol')
     _require(evidence['schema_version'] == 1 and evidence['selection'] == study_ref and evidence['clean'] is True
              and evidence['context'] == cost['context'], 'fresh-process evidence does not bind the frozen worker plan')
     warm, repeats = evidence['warmup_pairs'], evidence['measurement_pairs']
@@ -162,6 +244,8 @@ def qualify(study_path, evidence_path, out):
                      and [item['issue'] for item in team['publications']] == list(range(count))
                      and sorted(worker['cpu'] for worker in team['workers']) == study['workers']['cpu_ids']
                      and _peak(team['tasks']) == study['workers']['window'], 'parallel workers or order differed')
+            if 'execution_recipe' in study:
+                _check_ordered_activity(team, study)
         elif raw['parallel'] is not None:
             raise ValueError('serial comparison launched the worker team')
         _require(type(row['wall_ns']) is int and row['wall_ns'] > 0, 'positive process time required')
@@ -183,17 +267,21 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scope')
     parser.add_argument('--serial-launch')
+    parser.add_argument('--choice')
+    parser.add_argument('--prepare-recipe', action='store_true')
     parser.add_argument('--cost')
     parser.add_argument('--study')
     parser.add_argument('--validation')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
-    if all((args.scope,args.serial_launch,args.cost)) and not args.study:
+    if args.prepare_recipe and all((args.scope, args.serial_launch, args.choice)) and not any((args.cost, args.study, args.validation)):
+        result = prepare_recipe(args.scope, args.serial_launch, args.choice, args.out)
+    elif not (args.prepare_recipe or args.choice) and all((args.scope,args.serial_launch,args.cost)) and not args.study:
         result = prepare(args.scope,args.serial_launch,args.cost,args.out)
-    elif args.study and args.validation and not args.scope:
+    elif not (args.prepare_recipe or args.choice) and args.study and args.validation and not args.scope:
         result = qualify(args.study,args.validation,args.out)
     else:
-        parser.error('use --scope/--serial-launch/--cost or --study/--validation')
+        parser.error('use --prepare-recipe with --scope/--serial-launch/--choice, or --scope/--serial-launch/--cost, or --study/--validation')
     print(json.dumps(result))
 
 

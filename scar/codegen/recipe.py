@@ -189,6 +189,10 @@ def build_recipe(recipe, out, *, source_root=None, native_dir=None, jobs=4):
         return build_sparse_lowering(value, out, source_root=source_root, native_dir=native_dir, jobs=jobs)
     if source_root is not None or native_dir is not None:
         raise ValueError('native provider inputs require the sparse symbolic solve profile')
+    if value['profile'] == 'cpu-ordered-sparse-solve-v1':
+        from .ordered_sparse_recipe import build_ordered_sparse_lowering
+
+        return build_ordered_sparse_lowering(value, out)
     if value['profile'] == 'cpu-temporal-loop-v1': return _build_loop_recipe(value, out)
     if value['profile'] == 'cpu-stateful-array-region-v1': return _build_stateful_recipe(value, out)
     raise ValueError('unsupported execution recipe lowering profile')
