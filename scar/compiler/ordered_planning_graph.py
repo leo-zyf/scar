@@ -52,7 +52,7 @@ def retain_ordered_planning_graph(session,region,out):
     return artifact_reference(out/'result.json',result['schema']),dependencies
 
 
-def admit_ordered_planning_graph(reference,*,program,region,out):
+def verify_ordered_planning_graph(reference,*,program,region):
     """Consume the graph through independent original-source replay."""
     from scar.analysis.read_ordered_lifetimes import read_ordered_lifetimes
     graph=read_artifact(reference)
@@ -86,13 +86,17 @@ def admit_ordered_planning_graph(reference,*,program,region,out):
     if (replay['program']!=program or graph['summary']!=summary or graph['graph_validation']!=validation):
         raise ValueError('planning graph summaries or public relations differ from source replay')
     read_artifact(reference)
-    result=dict(schema='scar.ordered-program-planning-graph-admission',schema_version=1,
+    return dict(schema='scar.ordered-program-planning-graph-admission',schema_version=1,
         graph=reference,program=program,original_region=expected_region,replay=replay,
         target_executed=False,transformation_authorized=False)
+
+
+def admit_ordered_planning_graph(reference,*,program,region,out):
+    result=verify_ordered_planning_graph(reference,program=program,region=region)
     out=Path(out).resolve()
     if out.exists():raise ValueError('fresh graph admission receipt required')
     out.write_text(json.dumps(result,sort_keys=True,indent=2,allow_nan=False)+'\n')
     return artifact_reference(out,result['schema'])
 
 
-__all__=['retain_ordered_planning_graph','admit_ordered_planning_graph']
+__all__=['retain_ordered_planning_graph','verify_ordered_planning_graph','admit_ordered_planning_graph']

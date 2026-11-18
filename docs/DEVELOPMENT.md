@@ -22,6 +22,15 @@
 的 20 个内部任务，并用原驱动对比了原生试跑的状态轨迹、日志和输出文件。阶段门以各自的证据独立验收，
 完整入口成本仍须校准，运行选择保持 `KEEP`。记录和 C++ 路径见 `artifacts/baseline/three-stage-fusion-binding.json`。
 
+真实入口继续沿原 `entry-calls → source-summary → plan-controlled-region → deliver-controlled-stateful` 推进。
+`plan-controlled-region --entry-calls CALLS --source-summary SUMMARY --ordered-graph GRAPH` 独立重放原调用、
+状态生命期和共享循环证据。数组内容跨迭代传递、调用方改写的字段、只找到来源的活入值分别保留。
+循环状态依赖证据约束相应范围的变换。完整运行时效果和跨迭代成本仍须验证。
+`deliver-controlled-stateful` 复验同一计划、原生代码和调用包装器，显式验证时保留原驱动及可见行为对照。
+`stateful-lifetime-training` 分开标定首调用与后续调用。新留出中的完整方法点估计误差降至 18.76%，
+实测收益低于原 5% 门槛。下一关按固定范围定位首调用中的亲和性、分配及执行成本，再比较合法放置的时序。报告见
+`artifacts/baseline/three-stage-real-entry.json`。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：

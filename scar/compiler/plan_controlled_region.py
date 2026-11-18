@@ -37,7 +37,7 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'optimization/native_group_costs.py', 'analysis/schedule_time.py',
     'ir/versioned_schedule.py', 'ir/implementation_plan.py',
     'analysis/stateful_entry_protocol.py', 'compiler/canonical_stateful_inputs.py',
-    'compiler/calibrate_stateful_entry.py')
+    'compiler/calibrate_stateful_entry.py', 'compiler/ordered_planning_graph.py')
 
 
 def _pins():
@@ -320,33 +320,59 @@ def _region_effect_binding(region, input_shapes, reference, graph, correspondenc
         transformation_or_parallelization_authorized=False,cost_or_timing_inferred=False)
 
 
+def _loop_context(reference, region, origin, entry_calls):
+    from scar.compiler.ordered_planning_graph import verify_ordered_planning_graph
+
+    if origin is None:
+        raise ValueError('ordered planning graph needs the original entry CALL witness')
+    program = read_artifact(entry_calls)['program']
+    verified = verify_ordered_planning_graph(reference, program=program, region=region['uri'])
+    if verified['original_region'] != region:
+        raise ValueError('ordered loop state and native lowering have different original regions')
+    replay = verified['replay']
+    if replay['schema'] != 'scar.ordered-loop-transfer-independent-replay':
+        raise ValueError('ordered planning graph needs replayable loop transfer relations')
+    summary = replay['summary']
+    return dict(schema='scar.controlled-entry-loop-context', schema_version=1,
+        ordered_graph=reference, entry_calls=entry_calls, program=program, region=region,
+        loop_transfers=replay['publication'], table_counts=replay['table_counts'],
+        graph_validation=replay['graph_validation'], state_roles=summary['roles'],
+        open_effects=summary['effect_frontiers'], shared_loops=summary['shared_loops'],
+        cost_scope='SINGLE_PROTECTED_ACTIVATION', iteration_dependence_checked=True,
+        steady_state_cost_transfer_qualified=False, loop_motion_authorized=False)
+
+
 def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-            compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
+            compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None,
+            ordered_graph=None):
     from scar.analysis.replay_transaction import replay_transaction
     # A prepare and its independent check deliberately start separate scopes.
     # No cached validation document crosses this source-admission boundary.
     with replay_transaction():
         return _derive_body(kind, admission, profiles, cost_use=cost_use, cost_qualification=cost_qualification,
             compiler_feedback=compiler_feedback, entry_calls=entry_calls,
-            native_group_observations=native_group_observations, source_summary=source_summary)
+            native_group_observations=native_group_observations, source_summary=source_summary,
+            ordered_graph=ordered_graph)
 
 
 def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
-                 compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None):
+                 compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None,
+                 ordered_graph=None):
     from scar.compiler.admission_context import AdmissionContext
     with AdmissionContext() as context:
         return _derive_in_context(kind, admission, profiles, cost_use=cost_use,
             cost_qualification=cost_qualification, compiler_feedback=compiler_feedback,
             entry_calls=entry_calls, native_group_observations=native_group_observations,
-            source_summary=source_summary, _context=context)
+            source_summary=source_summary, ordered_graph=ordered_graph, _context=context)
 
 
 def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualification,
-                      compiler_feedback, entry_calls, native_group_observations, source_summary, _context):
+                      compiler_feedback, entry_calls, native_group_observations, source_summary, ordered_graph, _context):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission, _context=_context)
     entry = correspondence = entry_use = annotations = origin = group_context = summary_binding = summary_correspondence = effects = None
+    loop = None
     native_context = observations = group_design = None
     if cost_use not in ('EXPLICIT_DECLARED_ANALYSIS', 'QUALIFIED_TARGET_TIMING'):
         raise ValueError('explicit cost-use contract required')
@@ -374,6 +400,8 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
                 summary_binding, region, graph, correspondence)
         elif entry_calls is not None:
             origin = _entry_origin(entry_calls, region, _context=_context)
+        if ordered_graph is not None:
+            loop = _loop_context(ordered_graph, spec['source_region'], origin, entry_calls)
         if compiler_feedback is not None:
             annotations = _compiler_annotations(compiler_feedback, contract, graph, correspondence)
         if native_group_observations is not None:
@@ -404,7 +432,7 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
     elif kind == 'PIPELINE_FUSION':
         if (cost_use != 'EXPLICIT_DECLARED_ANALYSIS' or cost_qualification is not None
                 or compiler_feedback is not None or entry_calls is not None or native_group_observations is not None
-                or source_summary is not None):
+                or source_summary is not None or ordered_graph is not None):
             raise ValueError('qualified entry-cost use currently requires a stateful source admission')
         from scar.optimization.region_implementation import project_region_implementation
         if profiles:
@@ -447,6 +475,8 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         parameters['source_region_effects']=dict(semantic_sha256=semantic_sha256(effects),
             analysis_id=effects['analysis']['id'],physical_alias_proof=False,
             source_order_retained=True,runtime_guards_discharged=False)
+    if loop is not None:
+        parameters['entry_loop_context'] = deepcopy(loop)
     strict = validate_problem(replace(strict, operations=(replace(operation,
         id=graph_binding['root']['wire'], source_refs=operation.source_refs+(graph_binding,),
         options=(replace(mode, parameters=parameters),)),), source_refs=strict.source_refs+(graph_binding,)))
@@ -462,6 +492,7 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         entry_cost=entry, entry_cost_use=entry_use, compiler_annotations=annotations,
         entry_source_origin=origin, native_group_context=group_context, source_summary_binding=summary_binding,
         source_summary_correspondence=summary_correspondence,
+        **({'entry_loop_context': loop} if loop is not None else {}),
         source_region_effects=effects,
         native_task_problem=native_problem, native_task_projection=native_projection,
         native_task_costs=native_costs,
@@ -474,8 +505,9 @@ def _without_elapsed(value):
 
 
 def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-              cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations, source_summary):
-    return dict(schema=SCHEMA, schema_version=4, kind=kind, admission=reference,
+              cost_use, cost_qualification, compiler_feedback, entry_calls, native_group_observations,
+              source_summary, ordered_graph):
+    return dict(schema=SCHEMA, schema_version=5 if ordered_graph is not None else 4, kind=kind, admission=reference,
         entry_profiles=list(profiles), max_seconds=max_seconds, files=files, producer_pins=_pins(),
         cost_use=cost_use, cost_qualification=cost_qualification,
         compiler_feedback=compiler_feedback,
@@ -487,12 +519,13 @@ def _metadata(kind, reference, profiles, max_seconds, files, strict, controlled,
         native_task_expansion_authorizes_reordering=False,
         cost_profiles_are_explicit_analysis_offers=True, timing_qualified=False,
         original_whole_entry_obligations_discharged=False, target_program_executed=False,
-        native_loaded=False, compiled=False, deployment_authorized=False, default_backend='NO_OP')
+        native_loaded=False, compiled=False, deployment_authorized=False, default_backend='NO_OP',
+        **({'ordered_graph': ordered_graph} if ordered_graph is not None else {}))
 
 
 def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
             cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None, compiler_feedback=None,
-            entry_calls=None, native_group_observations=None, source_summary=None):
+            entry_calls=None, native_group_observations=None, source_summary=None, ordered_graph=None):
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     reference = _reference(admission)
@@ -502,12 +535,13 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     calls = None if entry_calls is None else _reference(entry_calls)
     observed = None if native_group_observations is None else _reference(native_group_observations)
     summary = None if source_summary is None else _reference(source_summary)
+    ordered = None if ordered_graph is None else _reference(ordered_graph, 'scar.ordered-program-planning-graph')
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh controlled region output required')
     documents, strict, controlled = _derive(kind, reference, profiles,
         cost_use=cost_use, cost_qualification=qualification, compiler_feedback=feedback,
-        entry_calls=calls, native_group_observations=observed, source_summary=summary)
+        entry_calls=calls, native_group_observations=observed, source_summary=summary, ordered_graph=ordered)
     strict_plan = construct_implementations(strict, max_seconds=max_seconds)
     plan = construct_implementations(controlled, max_seconds=max_seconds)
     verification = verify_execution_plan(controlled, plan) if plan['selected'] else None
@@ -527,19 +561,22 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
     files = {key:None if value is None else _write(directory/(key.replace('_','-')+'.json'), value)
         for key,value in documents.items()}
     report = _metadata(kind, reference, profiles, max_seconds, files, strict, controlled, strict_plan, plan,
-        cost_use, qualification, feedback, calls, observed, summary)
+        cost_use, qualification, feedback, calls, observed, summary, ordered)
     _write(directory/'preparation.json', report)
     return report
 
 
 def check(preparation):
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
-    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, 4) or saved['producer_pins'] != _pins():
+    ordered = saved.get('ordered_graph')
+    version = 5 if ordered is not None else 4
+    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, version) or saved['producer_pins'] != _pins():
         raise ValueError('controlled region producer or schema differs')
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
         compiler_feedback=saved['compiler_feedback'], entry_calls=saved['entry_calls'],
-        native_group_observations=saved['native_group_observations'], source_summary=saved['source_summary'])
+        native_group_observations=saved['native_group_observations'], source_summary=saved['source_summary'],
+        ordered_graph=ordered)
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     problems = [('strict_plan', strict), ('controlled_plan', controlled)]
@@ -566,7 +603,7 @@ def check(preparation):
     if saved != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
             saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan'],
             saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback'],
-            saved['entry_calls'], saved['native_group_observations'], saved['source_summary']):
+            saved['entry_calls'], saved['native_group_observations'], saved['source_summary'], ordered):
         raise ValueError('controlled preparation summary changed its original qualification')
     return saved
 
@@ -581,6 +618,7 @@ def main(argv=None):
     parser.add_argument('--compiler-feedback', help='source-bound GCC optimization collection result')
     parser.add_argument('--entry-calls', help='bounded conditional entry CALL projection')
     parser.add_argument('--source-summary', help='cold-replayable source function dependency summary')
+    parser.add_argument('--ordered-graph', help='ordered planning graph with shared loop state transfers')
     parser.add_argument('--native-group-observations', help='frozen canonical native group observations; not a whole-call profile')
     parser.add_argument('--out'); parser.add_argument('--check'); parser.add_argument('--max-seconds',type=float,default=30)
     args = parser.parse_args(argv)
@@ -594,7 +632,7 @@ def main(argv=None):
         saved = prepare(args.kind, args.admission, args.out, entry_profiles=args.entry_profile,max_seconds=args.max_seconds,
             cost_use=args.cost_use, cost_qualification=args.cost_qualification, compiler_feedback=args.compiler_feedback,
             entry_calls=args.entry_calls, native_group_observations=args.native_group_observations,
-            source_summary=args.source_summary)
+            source_summary=args.source_summary, ordered_graph=args.ordered_graph)
         result = dict(preparation=_reference(Path(args.out)/'preparation.json'),
             strict_status=saved['strict_status'], controlled_status=saved['controlled_status'],
             native_loaded=False, deployment_authorized=False)
