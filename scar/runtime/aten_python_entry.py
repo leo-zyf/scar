@@ -40,9 +40,10 @@ def run_aten_python_entry(trial, *, trial_sha256, entry_function, mode, report, 
             raise ValueError('an original top-level entry of the trial source module is required')
         original = namespace[proof['function']]
         counters = dict(native_calls=0, fallback_calls=0, fallback_reasons={})
+        provider_report = dict(status='NOT_ATTACHED', libraries=[], content_rehashed_bytes=0, identity_reused_bytes=0)
         session = (install_aten_python_trial(module, directory, expected_sha256=trial_sha256,
                                              exclusive_inputs=True, defer_context=True,
-                                             allow_ambient_grad=allow_ambient_grad)
+                                             allow_ambient_grad=allow_ambient_grad, provider_report=provider_report)
                    if mode == 'GUARDED' else nullcontext(counters))
         torch = sys.modules['torch']
         with session as accounting:
@@ -67,7 +68,7 @@ def run_aten_python_entry(trial, *, trial_sha256, entry_function, mode, report, 
         entry_ns=entry_end-entry_start, setup_ns=entry_start-setup_start, teardown_ns=finished-entry_end,
         entry_return=dict(kind=type(result).__name__, value=result),
         grad_enabled_at_entry=grad_at_entry, grad_enabled_at_return=grad_at_return,
-        affinity_restored=True, original_binding_restored=True, **accounting)
+        affinity_restored=True, original_binding_restored=True, provider_verification=provider_report, **accounting)
     with report.open('x', encoding='utf-8') as stream:
         json.dump(data, stream, indent=2, sort_keys=True, allow_nan=False)
         stream.write('\n')

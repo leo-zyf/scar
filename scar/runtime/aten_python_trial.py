@@ -13,6 +13,7 @@ from threading import get_ident
 from types import BuiltinFunctionType, FunctionType, ModuleType
 
 from scar.ir.record_codec import loads
+from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
 from scar.trace.code_snapshot import code_key
 
 
@@ -68,15 +69,33 @@ def _provider(artifact, torch):
             continue
         path = Path(fields[5].removesuffix(' (deleted)'))
         if path.name in names:
+            if fields[5].endswith(' (deleted)'):
+                raise ValueError(f'live Torch executable mapping was unlinked: {path}')
             major, minor = (int(part, 16) for part in fields[3].split(':'))
             executable.setdefault(path, set()).add((os.makedev(major, minor), int(fields[4])))
     if executable.keys() != expected:
         raise ValueError('live Torch executable mappings differ from the ATen trial provider')
+    checked = []
     for path, receipt in libraries.items():
-        status = path.stat()
-        if executable[path] != {(status.st_dev, status.st_ino)}:
-            raise ValueError(f'live Torch executable mapping differs from its filesystem member: {path}')
-        _verify(path, receipt)
+        with path.open('rb') as member:
+            status = os.fstat(member.fileno())
+            before = file_stat_identity(status)
+            if executable[path] != {(status.st_dev, status.st_ino)}:
+                raise ValueError(f'live Torch executable mapping differs from its filesystem member: {path}')
+            retained = receipt.get('local_file_identity')
+            witnessed = (retained is not None and status.st_size == receipt['size_bytes']
+                         and retained == local_file_identity(member))
+            if not witnessed:
+                verify_library_file(member, receipt)
+            if (before != file_stat_identity(os.fstat(member.fileno()))
+                    or before != file_stat_identity(path.stat())
+                    or witnessed and retained != local_file_identity(member)):
+                raise ValueError(f'live Torch provider file changed during identification: {path}')
+            checked.append(dict(name=path.name, size_bytes=receipt['size_bytes'],
+                verification='SAME_BOOT_LOCAL_FILE_IDENTITY' if witnessed else 'SHA256'))
+    hashed = sum(row['size_bytes'] for row in checked if row['verification'] == 'SHA256')
+    return dict(status='CHECKED', libraries=checked, content_rehashed_bytes=hashed,
+                identity_reused_bytes=sum(row['size_bytes'] for row in checked) - hashed)
 
 
 def _original(module, proof):
@@ -170,7 +189,7 @@ def _ready_inputs(inputs, shapes, lengths, torch):
 
 @contextmanager
 def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_inputs=False,
-                              defer_context=False, allow_ambient_grad=False):
+                              defer_context=False, allow_ambient_grad=False, provider_report=None):
     """Yield trial counters while the exact module binding has a guarded candidate.
 
     The caller must hold exclusive read access to Tensor contents for the
@@ -192,7 +211,9 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     torch_global = proof['torch_global']
     if namespace.get(torch_global) is not torch:
         raise ValueError('the source Torch global does not bind the active provider')
-    _provider(manifest['provider'], torch)
+    verified_provider = _provider(manifest['provider'], torch)
+    if provider_report is not None:
+        provider_report.update(verified_provider)
     wrappers = _builtin_wrappers(torch, proof)
     code = original.__code__
     cpus = tuple(manifest['cpus'])

@@ -36,6 +36,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar validate-aten-python-entry --trial TRIAL --trial-sha256 SHA256 --entry-function main --out VERIFIED -- ARGS '{output_dir}/result'` 分别在新进程运行原入口与守卫入口。准备工作线程的时机延至首次合格调用，应用可先配置 Torch。试验逐对核对返回值、梯度模式、标准输出及输出目录内容，并按进程总耗时决定是否保留原入口。`--allow-ambient-grad` 适用于保持调用方梯度模式、输入无需梯度的试验。见 [完整入口验证](artifacts/baseline/aten-python-entry.json)。
 
+受信的本地 LibTorch 安装可在同次开机、同一挂载命名空间复用构建时的库文件内容校验。运行时仍核对打开的文件和已加载映射的身份。文件身份改变、旧交付缺少凭据或文件系统不支持时，执行 SHA256 内容校验。完整入口报告记录两条路径的字节数。见 [库文件身份验证](artifacts/baseline/aten-provider-identity.json)。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash

@@ -16,6 +16,7 @@ from scar.compiler.plan_aten_native_graph import _bundle, _segment_plan, _statis
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document
 from scar.optimization.joint_planner import verify_execution_plan
+from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
 
 
 _MODULE = '_scar_aten_python_trial'
@@ -78,6 +79,21 @@ def _linked_source(artifact, recipe, projection, proof):
         raise ValueError('original operator linkage differs from the compiled bundle')
 
 
+def _library_receipt(path, expected=None):
+    with path.open('rb') as member:
+        before = file_stat_identity(os.fstat(member.fileno()))
+        identity = local_file_identity(member)
+        content = verify_library_file(member, expected)
+        after_identity = local_file_identity(member)
+        after = file_stat_identity(os.fstat(member.fileno()))
+        if before != after or before != file_stat_identity(path.stat()):
+            raise ValueError('LibTorch library changed while issuing its receipt: ' + str(path))
+    receipt = dict(path=str(path), **content)
+    if identity is not None and identity == after_identity:
+        receipt['local_file_identity'] = identity
+    return receipt
+
+
 def _build_extension(stage, artifact, torch):
     _, libraries, cxx, compile_flags, link_flags = _build_interface(torch)
     python_torch = libraries[0].with_name('libtorch_python.so').resolve(strict=True)
@@ -93,8 +109,13 @@ def _build_extension(stage, artifact, torch):
     if any(dependencies.get(path.name) != str(path.resolve()) for path in [*libraries, python_torch]):
         raise ValueError('Python trial extension resolves to a different LibTorch installation')
     (stage / 'ldd.txt').write_text(listing)
-    provider = dict(artifact['provider'], libraries=[*artifact['provider']['libraries'],
-                    dict(path=str(python_torch), **_content(python_torch))])
+    original = artifact['provider']['libraries']
+    expected = {Path(row['path']): row for row in original}
+    if len(expected) != len(original) or expected.keys() != set(libraries):
+        raise ValueError('Python trial libraries differ from the verified graph bundle')
+    pinned = [_library_receipt(path, expected[path]) for path in libraries]
+    pinned.append(_library_receipt(python_torch))
+    provider = dict(artifact['provider'], libraries=pinned)
     return dict(name=filename, **_content(stage / filename)), provider, command
 
 
