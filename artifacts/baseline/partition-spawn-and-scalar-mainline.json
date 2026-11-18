@@ -1,5 +1,24 @@
 {
   "cirq": {
+    "canonical_original": {
+      "baseline_result": {
+        "bytes": 527,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/ORIGINAL.completed.json",
+        "sha256": "fdf99c3e802dba151b57661a48759f0da8d9302d0bc3cd55b8d6f3ac14154836"
+      },
+      "hardware_domain": {
+        "bytes": 17701,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/startup-placement/experiment-executor.json",
+        "sha256": "4515311e6634a1d53b81186a5f2f80e0f0def7aa35a04634eb8e8c2094ffee85"
+      },
+      "measured_pair_complete": false,
+      "original_seconds": 1114.7431698910077,
+      "workload_design": {
+        "bytes": 751,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/design.json",
+        "sha256": "03253231a579b1634a92f4d372da75c7b6b66db27517aaf1df065ea3738ea60b"
+      }
+    },
     "default_deployment": "KEEP",
     "default_fp": {
       "allowed_cpus": [
@@ -24,6 +43,26 @@
         "native_calls": 0
       },
       "workers": 2
+    },
+    "eight_worker_smoke": {
+      "artifact": {
+        "bytes": 1545,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/eight-worker-smoke-ab/result.json",
+        "sha256": "e1d2936c0c643e700e3b050876f3787496da0131cb90561820f379e0ec5698c1"
+      },
+      "circuits": 8,
+      "default_deployment": "KEEP",
+      "depth": 16,
+      "measurement_count": 1,
+      "native_calls": 4208,
+      "observed_speedup": 0.9381307268610449,
+      "original_seconds": 4.574967933003791,
+      "performance_scope": "one matched pair plus eight direct worker receipts; no full states saved",
+      "qubits": 17,
+      "rounds": 2,
+      "same_reported_application_values": true,
+      "trial_seconds": 4.8766848819796,
+      "workers": 8
     },
     "independent_shared_verification": {
       "bytes": 1239,
