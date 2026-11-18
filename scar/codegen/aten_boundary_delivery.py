@@ -8,6 +8,7 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
+from scar.codegen.aten_provider import _dependencies
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_boundary_replay import replay_aten_boundary
 from scar.compiler.plan_aten_boundary import _checked, _require, _write
@@ -65,21 +66,6 @@ def _render(context, mode, provider_rows):
         _require(code.count(placeholder) == 1, 'invalid ATen boundary template: ' + field)
         code = code.replace(placeholder, value)
     return code
-
-
-def _dependencies(listing):
-    result = {}
-    for line in listing.splitlines():
-        entry = line.strip().split()
-        if len(entry) == 2 and entry[1].startswith('(0x'):
-            path = entry[0] if entry[0].startswith('/') else None
-        elif len(entry) == 4 and entry[1] == '=>' and entry[2].startswith('/') and entry[3].startswith('(0x'):
-            path = entry[2]
-        else:
-            raise ValueError('native ELF dependency was not resolved: ' + line)
-        _require(entry[0] not in result, 'ambiguous ELF dependency')
-        result[entry[0]] = None if path is None else str(Path(path).resolve(strict=True))
-    return result
 
 
 def _stage_member(stage, name, receipt):

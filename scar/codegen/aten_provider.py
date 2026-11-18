@@ -62,6 +62,33 @@ def _write_binding(directory, operators):
     (directory / 'link-check.cpp').write_text('\n'.join(probe) + '\n')
 
 
+def _build_interface(torch):
+    root = Path(torch.__file__).resolve().parent
+    include, lib = root / 'include', root / 'lib'
+    compiler = shlex.split(os.environ.get('CXX', 'c++'))
+    libraries = [lib / name for name in ('libtorch_cpu.so', 'libc10.so')]
+    flags = ['-std=c++20', f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}',
+             '-I', str(include)]
+    link = ['-Wl,-z,defs', f'-Wl,-rpath,{lib}', *map(str, libraries)]
+    return include, libraries, compiler, flags, link
+
+
+def _dependencies(listing):
+    result = {}
+    for line in listing.splitlines():
+        entry = line.strip().split()
+        if len(entry) == 2 and entry[1].startswith('(0x'):
+            path = entry[0] if entry[0].startswith('/') else None
+        elif len(entry) == 4 and entry[1] == '=>' and entry[2].startswith('/') and entry[3].startswith('(0x'):
+            path = entry[2]
+        else:
+            raise ValueError('native ELF dependency was not resolved: ' + line)
+        if entry[0] in result:
+            raise ValueError('ambiguous ELF dependency: ' + entry[0])
+        result[entry[0]] = None if path is None else str(Path(path).resolve(strict=True))
+    return result
+
+
 def link_aten_provider(schemas, out, *, provider_revision):
     """Generate typed provider references and link them without running the target.
 
@@ -72,14 +99,8 @@ def link_aten_provider(schemas, out, *, provider_revision):
 
     if not provider_revision or provider_revision != torch.version.git_version:
         raise ValueError('operator declaration and installed PyTorch revisions differ')
-    root = Path(torch.__file__).resolve().parent
-    include, lib = root / 'include', root / 'lib'
+    include, libraries, compiler, flags, link = _build_interface(torch)
     operators = _resolve(schemas, torch, include)
-    compiler = shlex.split(os.environ.get('CXX', 'c++'))
-    libraries = [lib / name for name in ('libtorch_cpu.so', 'libc10.so')]
-    flags = ['-std=c++20', f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}',
-             '-I', str(include)]
-    link = ['-Wl,-z,defs', f'-Wl,-rpath,{lib}', *map(str, libraries)]
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)

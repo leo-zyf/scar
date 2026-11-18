@@ -1,0 +1,435 @@
+{
+  "cxx_standard": 20,
+  "device": "cpu",
+  "lewm_rerun": false,
+  "method": "ORDERED_EXISTING_LIBTORCH_OPERATORS",
+  "native_abi_version": 1,
+  "native_dependencies": {
+    "/lib64/ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+    "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+    "libc10.so": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libc10.so",
+    "libcudart.so.13": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/nvidia/cu13/lib/libcudart.so.13",
+    "libcupti.so.13": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/nvidia/cu13/lib/libcupti.so.13",
+    "libdl.so.2": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+    "libgcc_s.so.1": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+    "libgomp.so.1": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libgomp.so.1",
+    "libm.so.6": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+    "libpthread.so.0": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+    "librt.so.1": "/usr/lib/x86_64-linux-gnu/librt.so.1",
+    "libstdc++.so.6": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+    "libtorch_cpu.so": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libtorch_cpu.so",
+    "libutil.so.1": "/usr/lib/x86_64-linux-gnu/libutil.so.1",
+    "linux-vdso.so.1": null
+  },
+  "original_python_replacement": false,
+  "original_validation": {
+    "path": "artifacts/current/experiments/aten-native-graph-v1/validation.json",
+    "sha256": "4f29eadc9fe6f7b55eadc7af919f7356bed5a683636024c3a837548fabad0209",
+    "size_bytes": 17551
+  },
+  "performance_measured": false,
+  "provider_revision": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+  "python_free_native_process": true,
+  "rejected": [
+    {
+      "case": "wrong_input_size",
+      "diagnostic": "SCAR ATen graph failed: input size differs from the graph contract: artifacts/current/experiments/aten-native-graph-v1/scalar-input.f32",
+      "status": 1
+    },
+    {
+      "case": "existing_output",
+      "diagnostic": "SCAR ATen graph failed: output path already exists or is repeated: /home/zyf/AAA/scar/artifacts/current/experiments/aten-native-graph-v1/branched-verified-output-0.f32",
+      "status": 1
+    },
+    {
+      "case": "duplicate_output",
+      "diagnostic": "SCAR ATen graph failed: output path already exists or is repeated: /home/zyf/AAA/scar/artifacts/current/experiments/aten-native-graph-v1/bad-output.f32",
+      "status": 1
+    },
+    {
+      "case": "forward_edge",
+      "diagnostic": "ValueError: operation 0: Tensor operand clipped is not yet defined",
+      "status": 1
+    },
+    {
+      "case": "wrong_recipe_hash",
+      "diagnostic": "ValueError: native graph input exceeds its bound or differs from its declared digest: /home/zyf/AAA/scar/artifacts/current/experiments/aten-native-graph-v1/chain.json",
+      "status": 1
+    },
+    {
+      "case": "wrong_linkage_hash",
+      "diagnostic": "ValueError: native graph input exceeds its bound or differs from its declared digest: /home/zyf/AAA/scar/artifacts/current/experiments/aten-native-graph-v1/chain-linked/result.json",
+      "status": 1
+    }
+  ],
+  "schema": "scar.aten-native-graph-review",
+  "schema_version": 1,
+  "scope": "DECLARED_NATIVE_CPU_GRAPH",
+  "torch_version": "2.13.0+cu132",
+  "verified": [
+    {
+      "artifact": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/branched-verified/artifact.json",
+        "sha256": "f9611182e95f7d72522b48d4938be983854559d44032ded2fe7f47393940a87c",
+        "size_bytes": 4172
+      },
+      "bytewise_with_pytorch": true,
+      "case": "branched",
+      "executable": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/branched-verified/aten-native-graph",
+        "sha256": "2ac1cf5070814be42b44045fc58511afc96fb58fbd5d804c1b17a611de39e95b",
+        "size_bytes": 79384
+      },
+      "generated_cpp": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/branched-verified/graph.hpp",
+        "sha256": "fbeee56d8b3f7be9673ea3d9712d1375a106dbb0ca088c5152ffac6d1a76c292",
+        "size_bytes": 1826
+      },
+      "inputs": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/left.f32",
+          "raw_hex": "0000803f000000400000404000008040",
+          "sha256": "ad73b9acd6e4a74b2f5bb5386658ce3bb146cd040a1867646ab3b973fb6632b1",
+          "size_bytes": 16
+        },
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/right.f32",
+          "raw_hex": "0000a0400000c0400000e04000000041",
+          "sha256": "54bfe97475cf28afafa96643959c1db93e29b5436addb31ef8612549ce20da9c",
+          "size_bytes": 16
+        }
+      ],
+      "output": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/branched-verified-output-0.f32",
+          "raw_hex": "0000284200006042000094420000c042",
+          "sha256": "4ab13c9758c5761e2a39c4b78ac810c14b7cd24ed231fc6d7ac70c870e0d8ac2",
+          "size_bytes": 16
+        }
+      ],
+      "output_metadata": {
+        "abi_version": 1,
+        "byte_order": "little",
+        "dtype": "float32",
+        "outputs": [
+          {
+            "nbytes": 16,
+            "shape": [
+              2,
+              2
+            ]
+          }
+        ]
+      },
+      "recipe": {
+        "inputs": [
+          {
+            "id": "left",
+            "shape": [
+              2,
+              2
+            ]
+          },
+          {
+            "id": "right",
+            "shape": [
+              2,
+              2
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "arguments": [
+              {
+                "value": "left"
+              },
+              {
+                "value": "right"
+              }
+            ],
+            "id": "first",
+            "schema": "aten::mm(Tensor self, Tensor mat2) -> Tensor"
+          },
+          {
+            "arguments": [
+              {
+                "value": "right"
+              },
+              {
+                "value": "left"
+              }
+            ],
+            "id": "second",
+            "schema": "aten::mm(Tensor self, Tensor mat2) -> Tensor"
+          },
+          {
+            "arguments": [
+              {
+                "value": "first"
+              },
+              {
+                "value": "second"
+              },
+              {
+                "scalar": 1
+              }
+            ],
+            "id": "combined",
+            "schema": "aten::add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor"
+          }
+        ],
+        "outputs": [
+          "combined"
+        ],
+        "schema": "scar.aten-native-recipe",
+        "schema_version": 1
+      }
+    },
+    {
+      "artifact": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/chain-verified/artifact.json",
+        "sha256": "bc3ffd960ae58eaa3dfc4a41a229e344030c47cf89393fb698f5a7ebb54a8790",
+        "size_bytes": 4120
+      },
+      "bytewise_with_pytorch": true,
+      "case": "chain",
+      "executable": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/chain-verified/aten-native-graph",
+        "sha256": "94e8008ad418d2a283f6123e101eab15c23afcb9c02eb820ed07a097e9275c60",
+        "size_bytes": 78808
+      },
+      "generated_cpp": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/chain-verified/graph.hpp",
+        "sha256": "08fd11a6367f077f78f12f36d6f52d37bfb4fa828b64f0461ec58be1f98ee5fc",
+        "size_bytes": 1644
+      },
+      "inputs": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/x.f32",
+          "raw_hex": "000040c0000000bf000000000000003f000040400000807f",
+          "sha256": "4722a38d63435d2b99c8157382e5117675a23b4ec9bd70b5364375bd7fff6fdd",
+          "size_bytes": 24
+        }
+      ],
+      "output": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/chain-verified-output-0.f32",
+          "raw_hex": "0000000000000000000000009f9aec3ee9bb7e3f0000803f",
+          "sha256": "a385d820350b7a8b901ee2e5e7cd209c9fbfe4ecaa46fc8fdd05595ac7774db1",
+          "size_bytes": 24
+        },
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/chain-verified-output-1.f32",
+          "raw_hex": "e9bb7ebf9f9aecbe000000009f9aec3ee9bb7e3f0000803f",
+          "sha256": "35eb8cc9a0c1732cb3e13bb36cee46e580989711a7ea60edc050fdec01a92e7e",
+          "size_bytes": 24
+        }
+      ],
+      "output_metadata": {
+        "abi_version": 1,
+        "byte_order": "little",
+        "dtype": "float32",
+        "outputs": [
+          {
+            "nbytes": 24,
+            "shape": [
+              2,
+              3
+            ]
+          },
+          {
+            "nbytes": 24,
+            "shape": [
+              2,
+              3
+            ]
+          }
+        ]
+      },
+      "recipe": {
+        "inputs": [
+          {
+            "id": "x",
+            "shape": [
+              2,
+              3
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "arguments": [
+              {
+                "value": "x"
+              }
+            ],
+            "id": "activated",
+            "schema": "aten::tanh(Tensor self) -> Tensor"
+          },
+          {
+            "arguments": [
+              {
+                "value": "activated"
+              }
+            ],
+            "id": "clipped",
+            "schema": "aten::relu(Tensor self) -> Tensor"
+          }
+        ],
+        "outputs": [
+          "clipped",
+          "activated"
+        ],
+        "schema": "scar.aten-native-recipe",
+        "schema_version": 1
+      }
+    },
+    {
+      "artifact": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/scalar-verified/artifact.json",
+        "sha256": "cdea1aa55d7e9cd87632b3767d89357c4fbdc318314e281bd54fa5ac0175bd36",
+        "size_bytes": 4098
+      },
+      "bytewise_with_pytorch": true,
+      "case": "scalar",
+      "executable": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/scalar-verified/aten-native-graph",
+        "sha256": "fb783974087ef10cee92c45b63d42f993714e424e0bcc05852b87b389c99c61d",
+        "size_bytes": 78680
+      },
+      "generated_cpp": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/scalar-verified/graph.hpp",
+        "sha256": "3675dd55591fc9d4aecbf306b760c8870da981d238b07472bcfabd4832f85620",
+        "size_bytes": 1572
+      },
+      "inputs": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/scalar-input.f32",
+          "raw_hex": "000040c0",
+          "sha256": "71426d210d52fa91812d0a39251aa75ded92519c3d746b8ced4e5a02ec97960d",
+          "size_bytes": 4
+        }
+      ],
+      "output": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/scalar-verified-output-0.f32",
+          "raw_hex": "00000000",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+          "size_bytes": 4
+        }
+      ],
+      "output_metadata": {
+        "abi_version": 1,
+        "byte_order": "little",
+        "dtype": "float32",
+        "outputs": [
+          {
+            "nbytes": 4,
+            "shape": []
+          }
+        ]
+      },
+      "recipe": {
+        "inputs": [
+          {
+            "id": "x",
+            "shape": []
+          }
+        ],
+        "operations": [
+          {
+            "arguments": [
+              {
+                "value": "x"
+              }
+            ],
+            "id": "y",
+            "schema": "aten::relu(Tensor self) -> Tensor"
+          }
+        ],
+        "outputs": [
+          "y"
+        ],
+        "schema": "scar.aten-native-recipe",
+        "schema_version": 1
+      }
+    },
+    {
+      "artifact": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/empty-verified/artifact.json",
+        "sha256": "ba67339ec7118e9e124e780d9e9c49ddccf646b8bbd2fe28cefbd671ff8ccfb3",
+        "size_bytes": 4097
+      },
+      "bytewise_with_pytorch": true,
+      "case": "empty",
+      "executable": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/empty-verified/aten-native-graph",
+        "sha256": "8c1e1640cf7e223d49f7236f1c6e3e2b3c3ca1444bf2f906b65c89277668d62c",
+        "size_bytes": 78736
+      },
+      "generated_cpp": {
+        "path": "artifacts/current/experiments/aten-native-graph-v1/empty-verified/graph.hpp",
+        "sha256": "da489384c9c4036bb8538daf5ce28223e31a7d27165d40d5cf98fc8b166b0f98",
+        "size_bytes": 1576
+      },
+      "inputs": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/empty-input.f32",
+          "raw_hex": "",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        }
+      ],
+      "output": [
+        {
+          "path": "artifacts/current/experiments/aten-native-graph-v1/empty-verified-output-0.f32",
+          "raw_hex": "",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        }
+      ],
+      "output_metadata": {
+        "abi_version": 1,
+        "byte_order": "little",
+        "dtype": "float32",
+        "outputs": [
+          {
+            "nbytes": 0,
+            "shape": [
+              2,
+              0
+            ]
+          }
+        ]
+      },
+      "recipe": {
+        "inputs": [
+          {
+            "id": "x",
+            "shape": [
+              2,
+              0
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "arguments": [
+              {
+                "value": "x"
+              }
+            ],
+            "id": "y",
+            "schema": "aten::relu(Tensor self) -> Tensor"
+          }
+        ],
+        "outputs": [
+          "y"
+        ],
+        "schema": "scar.aten-native-recipe",
+        "schema_version": 1
+      }
+    }
+  ]
+}
