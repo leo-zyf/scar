@@ -11,6 +11,8 @@ SCAR 前端从源码、运行绑定和目标硬件构建程序 IR。前端记录
 
 `trace --execution-evidence --torch-call-scopes` 在项目源码或显式采集计划的原生 CALL 上打开 RecordFunction，由同帧、同位置、同目标的 CPython `C_RETURN` 或 `C_RAISE` 关闭。`import-capture` 使用原始调用索引、ETO 父子关系及 Kineto RF ID 接线。一次调用可包含多个直接观测到的原生算子，多次执行同一源码位置各有独立身份。调用范围证据尚未证明实参映射、状态效果或设备完成。
 
+`plan-aten-capture` 先冷重放 F4 字节码位置、实参和状态边，再解码已绑定的提供方端口。原 F4 路径保存共享正文中的引用序号。每个正常返回的原始 CALL 对应一个规划操作，可保留多个已观测的直接算子。原状态顺序作为前驱约束。源码引用和原生描述相符时，仍要证明包装器映射、内容与就绪，才能加入物理数据边。CPU 参与、内存放置或可比较成本缺失时保留原执行。
+
 公共接口为 `ProgramView` / `ProgramDependencyGraph`：`get`、`original`、`expand`、`incoming/outgoing` 与来源解释。Operation、Value、StateLocation、Region、Resource是核心实体；Use/control等辅助端点有明确role，Contract与Measurement保留独立来源。
 Control、数据依赖、状态版本、别名和资源映射是不同关系，不能将world carry当数组内容phi，也不能把相同storage或引用路径当相同逻辑内容。
 

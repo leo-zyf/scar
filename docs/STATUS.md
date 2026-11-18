@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 `plan-aten-capture` 已通过同次运行的原始 CALL 索引把 F4 和 ATen 接到共同规划 IR。真实 CPU 用例有 4 个 CALL、3 条保序约束和 2 条源码引用与 ETO 描述相符的路径，另核对两个工厂 CALL 各含 4 个直接原生算子。两组均保留原执行，效果、就绪、资源和成本待补。新采集另以进程映射及 ELF 字节核实 4 个包装器入口，仍需证明生成声明与二进制的构建关联。见 `artifacts/baseline/f4-aten-planning.json`。
+
 2026-11-18 生产采集已接通 CPython 原生 CALL 到同次运行的 ETO/Kineto。单线程 CPU 用例核对 17 个调用范围及其中 16 条直接算子事件。同一循环位置的两次 `mm` 分别保有事件身份，一次异常保留 `C_RAISE`。按源码范围采集后，标记由 85 减到 17，两个采集均保留 16 条直接算子事件。`link-aten-capture` 从 6 个调用事件生成 3 个 LibTorch 入口，独立 C++20 数值逐位一致。F4 中端对 PyTorch 仍返回 `STATE_PROVIDER_CALL`，当前缺少外部算子的端口和效果准入。见 `artifacts/baseline/production-torch-call-scope.json`。
 
 2026-11-18 C++20 后端已接入现有 LibTorch 调用接口的校验和生成。用 CPU0 单线程真实 PyTorch 同次采集识别出两个不同源码位置的 `mm`，并跟踪它们的结果对象进入 `add` 的两个端口。独立 C++20 验证通过生成接口调用 `mm`、`add.Tensor`、`empty.memory_format`，数值逐位一致，确认链接至原生 LibTorch。本地链接的资格与原 Python 替换许可分别保存。见 `artifacts/baseline/aten-provider-linkage.json`。
