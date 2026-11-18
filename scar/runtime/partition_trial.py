@@ -4,7 +4,7 @@ from functools import wraps
 from hashlib import sha256
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from types import FunctionType
+from types import BuiltinFunctionType, FunctionType
 from time import perf_counter_ns
 
 from scar.codegen.partition_multiply import load_partition_multiply
@@ -19,34 +19,61 @@ def _owner(array, ndarray):
     return array if array.base is None and array.flags.owndata else None
 
 
-def bind_trial(original, receipt, *, exclusive_normal_completion=False, parent_image=None):
-    """Return a guarded trial callable and counters. Never retry after a write.
-
-    The caller supplies exclusivity and eligibility of normal completion.
-    Runtime guards check only facts available at the activation boundary.
-    """
-    import numpy as np
-    from numpy._core import _multiarray_umath
-
-    if exclusive_normal_completion is not True:
-        raise ValueError('explicit exclusive normal-completion trial contract required')
+def _trial_material(receipt, *, replay):
     trial = read_artifact(receipt)
     (candidate,) = read_artifact(trial['plan'])['candidates']
     source = candidate['source']
     read_artifact(trial['successor'])
     if (trial.get('schema') != 'scar.partition-copy-trial' or trial.get('schema_version') != 1
             or trial.get('deployment_authorized') is not False or trial['source'] != source
-            or trial['successor'] != candidate['graphs']['after'] or candidate['decision'] != 'KEEP'
-            or type(original) is not FunctionType or source['qualname'] != original.__qualname__
+            or source.get('schema_version') != 2
+            or source.get('builtin_bindings') not in ({'enumerate': 'GLOBAL_OR_BUILTIN'},
+                {'enumerate': 'GLOBAL_OR_BUILTIN', 'len': 'GLOBAL_OR_BUILTIN'})
+            or trial['successor'] != candidate['graphs']['after'] or candidate['decision'] != 'KEEP'):
+        raise ValueError('trial requires its sealed source, contract and successor')
+    if replay:
+        from scar.optimization.partition_copy import check
+
+        if check(trial['plan']['uri']) != 1:
+            raise ValueError('the trial must replay exactly one derived region')
+        read_artifact(trial['plan'])
+    return trial
+
+
+def bind_trial(original, receipt, *, exclusive_normal_completion=False, parent_image=None):
+    """Replay the trial and bind it under an explicit normal-completion contract."""
+    if exclusive_normal_completion is not True:
+        raise ValueError('explicit exclusive normal-completion trial contract required')
+    return _bind_trial(original, _trial_material(receipt, replay=True), parent_image=parent_image)
+
+
+def _bind_trial(original, trial, *, parent_image):
+    import numpy as np
+    from numpy._core import _multiarray_umath
+
+    source = trial['source']
+    if (type(original) is not FunctionType or source['qualname'] != original.__qualname__
             or source['code_id'] != code_key(original.__code__)
             or Path(original.__code__.co_filename).resolve() != Path(source['path'])
             or sha256(Path(source['path']).read_bytes()).hexdigest() != source['source_sha256']):
-        raise ValueError('trial requires its sealed source, contract and successor')
+        raise ValueError('callable does not match the sealed trial source')
 
+    read_policy = vars(_multiarray_umath).get('_get_extobj_dict')
+    if (type(read_policy) is not BuiltinFunctionType or read_policy.__self__ is not _multiarray_umath
+            or read_policy.__name__ != '_get_extobj_dict'):
+        raise ValueError('the NumPy floating-point policy provider is unavailable')
+    carrier = vars(_multiarray_umath)
+    numpy_namespace = vars(np)
+    multiply = carrier.get('multiply')
+    ufunc = numpy_namespace.get('ufunc')
+    if (type(ufunc) is not type or ufunc.__module__ != 'numpy' or ufunc.__name__ != 'ufunc'
+            or type(multiply) is not ufunc or multiply.__name__ != 'multiply'
+            or (multiply.nin, multiply.nout, multiply.signature) != (2, 1, None)
+            or 'DD->D' not in multiply.types):
+        raise ValueError('exact NumPy multiply provider is unavailable')
     native = load_partition_multiply(trial['native'], parent_image=parent_image).apply_without_copy
     keyword = source['inputs'][3]
     dtype = np.dtype('complex128')
-    multiply = _multiarray_umath.multiply
     ndarray = np.ndarray
     original_code = original.__code__
     namespace = original.__globals__
@@ -74,14 +101,17 @@ def bind_trial(original, receipt, *, exclusive_normal_completion=False, parent_i
         output_owner = _owner(output, ndarray)
         input_owner = _owner(array, ndarray)
         weights_owner = _owner(weights, ndarray)
-        return (output_owner is not None and input_owner is not None and weights_owner is not None
+        if not (output_owner is not None and input_owner is not None and weights_owner is not None
                 and output_owner is not input_owner and output_owner is not weights_owner
                 and not output.flags.writebackifcopy and not output_owner.flags.writebackifcopy
                 and original.__code__ is original_code
                 and namespace.get('len', builtins.get('len')) is len
                 and namespace.get('enumerate', builtins.get('enumerate')) is enumerate
-                and np.multiply is multiply and np.geterrcall() is None
-                and all(policy == 'ignore' for policy in np.geterr().values()))
+                and numpy_namespace.get('multiply') is multiply):
+            return False
+        policy = read_policy()
+        return policy['call'] is None and all(policy[name] == 'ignore'
+            for name in ('divide', 'over', 'under', 'invalid'))
 
     @wraps(original)
     def guarded(*args, **kwargs):
@@ -100,8 +130,8 @@ def bind_trial(original, receipt, *, exclusive_normal_completion=False, parent_i
 
 
 class PartitionScope(_Scope):
-    def __init__(self, receipt, *, parent_image=None):
-        self.receipt, self.trial = receipt, read_artifact(receipt)
+    def __init__(self, receipt, *, parent_image=None, parent_replayed=False):
+        self.trial = _trial_material(receipt, replay=parent_replayed is not True)
         self.parent_image = parent_image
         self.source = Path(self.trial['source']['path'])
         self.active, self.bindings, self.frontier, self.seen = True, [], [], set()
@@ -119,8 +149,7 @@ class PartitionScope(_Scope):
         original = vars(module).get(attribute)
         start = perf_counter_ns()
         try:
-            guarded, stats = bind_trial(original, self.receipt, exclusive_normal_completion=True,
-                                        parent_image=self.parent_image)
+            guarded, stats = _bind_trial(original, self.trial, parent_image=self.parent_image)
         except (ValueError, OSError, ImportError) as error:
             self.frontier.append('partition_source_rejected:' + str(error))
             return

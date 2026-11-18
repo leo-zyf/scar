@@ -37,12 +37,14 @@ def _image_stamp(path):
         return None
     try:
         active = os.stat('/proc/self/exe')
-        on_disk = path.stat()
     except OSError:
         return None
+    on_disk = path.stat()
     stamp = lambda entry: [entry.st_dev, entry.st_ino, entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns]
     current = stamp(active)
-    return current if current == stamp(on_disk) else None
+    if current != stamp(on_disk):
+        raise ValueError('running Python image differs from its executable path')
+    return current
 
 
 def verify_running_python(reference):
@@ -62,14 +64,16 @@ def _python_target(parent_image=None):
     if sys.implementation.name != 'cpython' or not sysconfig.get_config_var('EXT_SUFFIX'):
         raise ValueError('the partition study requires the exact CPython extension ABI')
     path = Path(sys.executable).resolve()
+    stamp = _image_stamp(path)
     executable = None
     if parent_image is not None:
-        stamp = _image_stamp(path)
         if (stamp is not None and stamp == parent_image['live_image_stamp']
                 and parent_image['executable']['uri'] == str(path)):
             executable = parent_image['executable']
     if executable is None:
         executable = artifact_reference(path, 'scar.native-executable-file')
+        if _image_stamp(path) != stamp:
+            raise ValueError('running Python image changed during identity check')
     return dict(version=sys.version, machine=platform.machine(),
                 soabi=sysconfig.get_config_var('SOABI'),
                 extension_suffix=sysconfig.get_config_var('EXT_SUFFIX'),

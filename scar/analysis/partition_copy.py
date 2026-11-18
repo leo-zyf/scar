@@ -15,6 +15,7 @@ from scar.trace.code_snapshot import code_key
 
 
 SCHEMA = 'scar.partition-copy-source'
+VERSION = 2
 
 
 def _span(node):
@@ -51,7 +52,8 @@ class _Window:
 
 def _window(function):
     args = function.args
-    if (function.decorator_list or args.vararg or args.kwarg or args.posonlyargs
+    if (function.decorator_list or getattr(function, 'type_params', ())
+            or args.vararg or args.kwarg or args.posonlyargs
             or len(args.args) != 3 or len(args.kwonlyargs) != 1 or args.defaults):
         return None
     names = tuple(arg.arg for arg in (*args.args, *args.kwonlyargs))
@@ -122,16 +124,24 @@ def discover(source):
     if not any(window is not None for _, window in windows):
         return []
     compiled = compile(tree, str(path), 'exec', dont_inherit=True)
-    codes = {body.co_name: body for body in compiled.co_consts if type(body) is CodeType
-             and body.co_qualname == body.co_name}
+    codes = [body for body in compiled.co_consts if type(body) is CodeType]
     results = []
     for definition, window in windows:
         if window is None:
             continue
-        code = codes[definition.name]
-        results.append(dict(schema=SCHEMA, schema_version=1, path=str(path),
+        matches = [body for body in codes if body.co_qualname == definition.name
+                   and body.co_firstlineno == definition.lineno]
+        if len(matches) != 1:
+            continue
+        code, = matches
+        reserved = {'enumerate', 'len'}
+        if (reserved.intersection((*code.co_varnames, *code.co_cellvars, *code.co_freevars))
+                or 'enumerate' not in code.co_names):
+            continue
+        results.append(dict(schema=SCHEMA, schema_version=VERSION, path=str(path),
             source_sha256=sha256(raw).hexdigest(), code_id=code_key(code),
             qualname=code.co_qualname, inputs=list(window.inputs),
+            builtin_bindings={name: 'GLOBAL_OR_BUILTIN' for name in sorted(reserved.intersection(code.co_names))},
             parser=dict(api=f2['profile']['api'], ast_sha256=f2['profile']['ast_sha256'],
                         parser_sha256=f2['profile']['parser_sha256']),
             spans={role: _span(getattr(window, role)) for role in

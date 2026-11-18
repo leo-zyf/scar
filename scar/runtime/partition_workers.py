@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+from functools import wraps
 import json
 import os
 from pathlib import Path
@@ -32,15 +33,36 @@ def install_spawn_worker():
     """Join only a directly spawned worker in a pinned caller's trial."""
     # Resource trackers and unrelated Python subprocesses lack this CPython
     # spawn marker. Read the token before importing the worker's application.
-    if len(sys.argv) < 2 or sys.argv[1] != '--multiprocessing-fork':
+    invocation = getattr(sys, 'orig_argv', ())[-3:]
+    if (len(invocation) != 3 or invocation[0] != '-c' or invocation[2] != '--multiprocessing-fork'
+            or not invocation[1].startswith('from multiprocessing.spawn import spawn_main; spawn_main(')):
         return
-    from importlib.machinery import PathFinder
-
     ref = json.loads(os.environ[_ENV])
     plan = read_artifact(ref)
     parent = os.getppid()
-    if (plan.get('schema') != _PLAN or plan.get('schema_version') != 1 or parent != plan['parent_pid']):
+    if (plan.get('schema') != _PLAN or plan.get('schema_version') != 2 or parent != plan['parent_pid']):
         return
+    from multiprocessing import spawn
+    import sysconfig
+
+    origin = Path(sysconfig.get_path('stdlib')) / 'multiprocessing' / 'spawn.py'
+    bootstrap = spawn.spawn_main
+    if (Path(spawn.__file__).resolve() != origin.resolve()
+            or Path(bootstrap.__code__.co_filename).resolve() != origin.resolve()):
+        return
+
+    @wraps(bootstrap)
+    def enter(*args, **kwargs):
+        spawn.spawn_main = bootstrap
+        _attach_worker(ref, plan, parent)
+        return bootstrap(*args, **kwargs)
+
+    spawn.spawn_main = enter
+
+
+def _attach_worker(ref, plan, parent):
+    from importlib.machinery import PathFinder
+
     output = Path(ref['uri']).parent
     pid = os.getpid()
     affinity, started = _affinity(), perf_counter_ns()
@@ -51,7 +73,8 @@ def install_spawn_worker():
         from .partition_trial import PartitionScope
 
         try:
-            scope = PartitionScope(plan['trial'], parent_image=plan['parent_image'])
+            scope = PartitionScope(plan['trial'], parent_image=plan['parent_image'],
+                                   parent_replayed=plan['parent_replayed'])
             if sum(finder is PathFinder for finder in sys.meta_path) == 1:
                 sys.meta_path[:] = [_Finder(scope) if finder is PathFinder else finder for finder in sys.meta_path]
             else:
@@ -87,13 +110,15 @@ def run_spawn_trial(entry, argv, trial, out, *, exclusive_normal_completion=Fals
     parent_image_verification_ns = None
     if mode == 'TRIAL':
         from scar.codegen.partition_multiply import verify_running_python
+        from .partition_trial import _trial_material
 
+        receipt = _trial_material(trial, replay=True)
         started = perf_counter_ns()
         parent_image = verify_running_python(receipt['native'])
         parent_image_verification_ns = perf_counter_ns() - started
-    _write(path, dict(schema=_PLAN, schema_version=1, parent_pid=parent, entry=str(entry),
+    _write(path, dict(schema=_PLAN, schema_version=2, parent_pid=parent, entry=str(entry),
         argv=argv, trial=trial, mode=mode, allowed_cpu_ids=_affinity(), parent_image=parent_image,
-        parent_image_verification_ns=parent_image_verification_ns))
+        parent_image_verification_ns=parent_image_verification_ns, parent_replayed=mode == 'TRIAL'))
     ref = artifact_reference(path, _PLAN)
     prior = os.environ.get(_ENV)
     os.environ[_ENV] = json.dumps(ref, separators=(',', ':'))

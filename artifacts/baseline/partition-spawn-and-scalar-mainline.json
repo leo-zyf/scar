@@ -11,13 +11,62 @@
         "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/startup-placement/experiment-executor.json",
         "sha256": "4515311e6634a1d53b81186a5f2f80e0f0def7aa35a04634eb8e8c2094ffee85"
       },
-      "measured_pair_complete": false,
+      "measured_pair_complete": true,
       "original_seconds": 1114.7431698910077,
       "workload_design": {
         "bytes": 751,
         "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/design.json",
         "sha256": "03253231a579b1634a92f4d372da75c7b6b66db27517aaf1df065ea3738ea60b"
       }
+    },
+    "canonical_pair": {
+      "application_report_values_equal": true,
+      "default_deployment": "KEEP",
+      "fallback_calls": 176,
+      "full_state_checked": false,
+      "logical_copy_bytes_elided": 2811056106496,
+      "native_calls": 42064,
+      "observed_speedup": 1.0419278219348185,
+      "original_seconds": 1114.7431698910077,
+      "parameters": {
+        "cpu_allowed": [
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24
+        ],
+        "depth": 20,
+        "dtype": "complex128",
+        "independent_circuits": 8,
+        "qubits": 22,
+        "rounds": 12,
+        "worker_processes": 8
+      },
+      "raw_original": {
+        "bytes": 15137,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/ORIGINAL/result.json",
+        "sha256": "fee565f2af6e13a5351359ba18428a3c75d2749643d6920bf6ac339982d23354"
+      },
+      "raw_trial": {
+        "bytes": 15100,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/TRIAL/result.json",
+        "sha256": "81889cc345b6573de4ac6ef83de5ef3da97b00bdf45ebb2dd8a1082af6807419"
+      },
+      "repetitions": 1,
+      "result": {
+        "bytes": 1552,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cirq-closure/canonical-spawn-ab/result.json",
+        "sha256": "c687fa079ae84902b852b1b672155de8e533eff51a9a9d51ce577f227434edcb"
+      },
+      "scope": "historical controlled single matched pair before generic boundary fixes",
+      "software": "923ec891",
+      "trial_seconds": 1069.8852131820167,
+      "warmup_pairs": 0
     },
     "default_deployment": "KEEP",
     "default_fp": {
@@ -108,6 +157,32 @@
       "rounds": 2,
       "workers": 2
     }
+  },
+  "generic_audit": {
+    "evidence": [
+      {
+        "bytes": 283,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/partition-neutral/boundary-verification-v2.json",
+        "sha256": "9b0592379129099ff6592665b8e1cf685339a63e0448c2d341febf51ce26e486"
+      },
+      {
+        "bytes": 1559,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/partition-neutral/two-spawn-replayed-v2.json",
+        "sha256": "787e17d787376f0cab27fdfb7a5d962faddb4d617603e01b74f515c955df4876"
+      }
+    ],
+    "fixes": [
+      "definition_and_live_CodeID_exactly_joined",
+      "builtin_lexical_bindings_checked",
+      "cold_replay_of_successor_once_by_launch_owner",
+      "exact_numpy_provider_and_native_fp_policy_query",
+      "live_executable_checked_before_path_based_identity",
+      "actual_stdlib_spawn_bootstrap_required"
+    ],
+    "no_workload_rules": true,
+    "retimed_real_programs_after_fixes": false,
+    "source_schema": 2,
+    "spawn_plan_schema": 2
   },
   "phase1": {
     "complete_process_or_task_graph_certified": false,
