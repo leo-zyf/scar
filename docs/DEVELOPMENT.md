@@ -54,6 +54,10 @@ Gray-Scott 259×259 证明可省一个输入根。另一个根交给原 NumPy pr
 真实 420 步入口已通过逐步、最终状态和输出验收。下一关用独立标定验证完整入口的跨配置成本，并完善 provider 的效果边界。
 记录见 `artifacts/baseline/three-stage-snapshot-rewrite.json`。
 
+入口选择先由 `snapshot-entry-calibration` 冻结两个训练配置和一个留出配置。训练后锁定预测，留出独立验收状态、输出和完整进程耗时。
+`plan-snapshot-launch` 冷验原图、C++ 产物和成本资格。`run-snapshot-selection` 用发布的校验和检查本次参数、环境和资源，才采用获准的原生路径。
+Gray-Scott 的 577 步留出通过验收，另两种 CLI 配置已验证源码守卫适用性。详细记录见 `artifacts/baseline/three-stage-snapshot-selection.json`。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
