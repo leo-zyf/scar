@@ -22,6 +22,8 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `scar plan-aten-boundary --observations RAW --observations-sha256 SHA256 --target HARDWARE --case ID --out PLAN` 将独立 C++20 调用的配对测量接入共同规划器。它按输入、库、线程设置和目标 CPU 保存成本，核对增益方向，再为整次调用保留串行或双核方案。成本作用域为该原生调用，Python 替换资格单独保留。
 
+`scar compile-aten-boundary --plan PLAN --selection-sha256 SHA256 --adapter ADAPTER.hpp --adapter-sha256 SHA256 --out NATIVE` 冷重放选型与资源计划，再用明确提供的 C++20 适配器交付选定模式。适配器实现 `aten_boundary_abi_v1.h` 的入口，可直接使用交付中保留的原测量源码。执行 `NATIVE/launch.sh` 使用同一台主机的已核实 LibTorch、指定 CPU 和环境。
+
 主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
 
 ```bash

@@ -134,6 +134,40 @@ def _published_ref(reference, output):
     return dict(reference, uri=str(output / Path(reference['uri']).name))
 
 
+def _published_selection(selection, evidence_ref, profile_ref, raw_ref, output):
+    return dict(selection, original_evidence=_published_ref(evidence_ref, output),
+                cost_profile=_published_ref(profile_ref, output), original_observation=raw_ref)
+
+
+def _build_boundary_problem(target, cpu_resources, modes, evidence, profile_ref, selection, queries, output):
+    costs = {mode: resolve_cost(query, profile_ref) for mode, query in queries.items()}
+    _require(all(cost.basis == 'EMPIRICAL_MODEL' and not cost.missing_terms for cost in costs.values()),
+             'resolved trial cost does not match its measured boundary')
+    selected_mode = selection['selected_mode']
+    eligible = modes if selected_mode == 'TWO_CPU' else ('SERIAL',)
+    refs = (evidence['context']['original_observation'],)
+    options = []
+    for mode in eligible:
+        cost = costs[mode]
+        cost = replace(cost, source_refs=tuple(dict(item, artifact=_published_ref(item['artifact'], output))
+                                               for item in cost.source_refs))
+        demands = {resource.id: 1 for cpu in modes[mode] for resource in cpu_resources[cpu]}
+        options.append(ImplementationOption(mode, 'MEASURED_STANDALONE_ATEN_CALL', refs,
+            demands, {}, {}, {}, cost, dict(mode=mode, affinity_cpu_ids=modes[mode],
+                executable=evidence['context']['measurement_condition']['executable'],
+                source_replacement_authorized=False)))
+    problem = PlanningProblem(target, refs, tuple(r for rows in cpu_resources.values() for r in rows),
+        (PlanningOperation('aten-call-boundary', refs, (), tuple(options), 'SERIAL'),), (),
+        assumptions=('MEASURED_ISOLATED_NATIVE_CALL_WITH_FIXED_INPUT_AND_THREAD_CONTEXT',
+            'RESERVE_TESTED_CPU_LANES_FOR_WHOLE_CALL', 'NO_INDEPENDENT_MEMORY_PLACEMENT_OR_WORKSPACE_MODEL'))
+    plan = construct_implementations(problem)
+    _require([row['option'] for row in plan['selected']] == [selected_mode],
+             'common scheduler did not reproduce the admitted trial choice')
+    plan['execution_authorized'] = False
+    plan['deployment_authorized'] = False
+    return problem, plan
+
+
 def plan_aten_boundary(observations, expected_sha256, hardware, case, out):
     """Build one common planning operation for the measured whole native call."""
     out = Path(out).resolve()
@@ -151,34 +185,9 @@ def plan_aten_boundary(observations, expected_sha256, hardware, case, out):
             evidence_ref, expected_context=evidence['context'])
         _write(stage / 'cost-profile.json', profile)
         profile_ref = artifact_reference(stage / 'cost-profile.json', COST_PROFILE)
-        costs = {mode: resolve_cost(query, profile_ref) for mode, query in queries.items()}
-        _require(all(cost.basis == 'EMPIRICAL_MODEL' and not cost.missing_terms for cost in costs.values()),
-                 'resolved trial cost does not match its measured boundary')
-        selected_mode = selection['selected_mode']
-        eligible = modes if selected_mode == 'TWO_CPU' else ('SERIAL',)
-        refs = (evidence['context']['original_observation'],)
-        options = []
-        for mode in eligible:
-            cost = costs[mode]
-            cost = replace(cost, source_refs=tuple(dict(item, artifact=_published_ref(item['artifact'], out))
-                                                   for item in cost.source_refs))
-            demands = {resource.id: 1 for cpu in modes[mode] for resource in cpu_resources[cpu]}
-            options.append(ImplementationOption(mode, 'MEASURED_STANDALONE_ATEN_CALL', refs,
-                demands, {}, {}, {}, cost, dict(mode=mode, affinity_cpu_ids=modes[mode],
-                    executable=evidence['context']['measurement_condition']['executable'],
-                    source_replacement_authorized=False)))
-        problem = PlanningProblem(target, refs, tuple(r for rows in cpu_resources.values() for r in rows),
-            (PlanningOperation('aten-call-boundary', refs, (), tuple(options), 'SERIAL'),), (),
-            assumptions=('MEASURED_ISOLATED_NATIVE_CALL_WITH_FIXED_INPUT_AND_THREAD_CONTEXT',
-                'RESERVE_TESTED_CPU_LANES_FOR_WHOLE_CALL', 'NO_INDEPENDENT_MEMORY_PLACEMENT_OR_WORKSPACE_MODEL'))
-        plan = construct_implementations(problem)
-        _require([row['option'] for row in plan['selected']] == [selected_mode],
-                 'common scheduler did not reproduce the admitted trial choice')
-        plan['execution_authorized'] = False
-        plan['deployment_authorized'] = False
-        selection['original_evidence'] = _published_ref(evidence_ref, out)
-        selection['cost_profile'] = _published_ref(profile_ref, out)
-        selection['original_observation'] = raw_ref
+        problem, plan = _build_boundary_problem(target, cpu_resources, modes, evidence,
+                                                 profile_ref, selection, queries, out)
+        selection = _published_selection(selection, evidence_ref, profile_ref, raw_ref, out)
         _write(stage / 'problem.json', problem_document(problem))
         _write(stage / 'plan.json', plan)
         _write(stage / 'selection.json', selection)
