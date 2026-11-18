@@ -66,7 +66,11 @@ Gray-Scott 的 577 步留出通过验收，另两种 CLI 配置已验证源码�
 
 当前适用域为 SciPy 1.18.1 的标准 `float64` CSR，要求每行有唯一的对角项。最终比较用独立的非插桩进程，核对解向量、稀疏结构和入口输出，分别报告区域和入口成本。
 
-scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 增至 1.091 s，默认决策为 `KEEP`。试跑每次完成一次 C++ 更新，解向量、CSR 数组和标准输出均通过对照。记录见 `artifacts/baseline/three-stage-sparse-entry.json`。下一轮按顺序复用前端的区域及效果契约，分解启动成本，再用重复调用场景验证摊销条件及 C++ 交付。
+scikit-fem `ex01.py` 的热更新区间达到 1.529×。完整入口由 0.949 s 增至 1.091 s，默认决策为 `KEEP`。试跑每次完成一次 C++ 更新，解向量、CSR 数组和标准输出均通过对照。记录见 `artifacts/baseline/three-stage-sparse-entry.json`。
+
+重复调用场景先合并 F4 循环和有界计数证据，再用 `--scope-cost COST` 将一次加载、首调和后续调用接入同一资源计划。`--qualify-selection SELECTION --validation VALIDATION --out OUT` 核对同一源图、产物、入口参数、准确调用次数和清洁进程结果。未取得可确认收益时保留原执行。`ex01` 派生的 512 次真实参数扫描已完成以上验收，详见 `artifacts/baseline/three-stage-csr-repeated-scope.json`。
+
+新版 CSR 产物在构建期封存 Python 区域字节码和提供方代码指纹，首次有效调用才加载同一 C++20 / ABI 1 内核。旧 CSR 产物使用新 builder 重建。下一轮先证明哪些 CSR 结构与边界行在循环外稳定，再为这些结构推导可外提的守卫及成本，最后验证 C++ 跨次复用。
 
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 

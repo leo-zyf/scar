@@ -5,12 +5,30 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
+from types import CodeType
 
-from scar.ir.execution_recipe import artifact_reference
+from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.trace.code_snapshot import code_key
 
 SCHEMA = 'scar.native-csr-enforce'
+SCHEMA_VERSION = 2
 SOURCE = Path(__file__).with_name('sparse_csr_v1.cpp.in')
 OPTIONS = ('-std=c++20', '-O3', '-shared', '-fPIC', '-fvisibility=hidden', '-fno-fast-math')
+
+
+def _source_code_keys(modules, bindings):
+    keys = {}
+    for name, reference in modules:
+        source = read_artifact(reference, json_document=False)
+        pending = [compile(source, reference['uri'], 'exec', dont_inherit=True, optimize=sys.flags.optimize)]
+        while pending:
+            code = pending.pop()
+            binding = f'{name}:{code.co_qualname}'
+            if binding in bindings:
+                keys[binding] = code_key(code)
+            pending.extend(item for item in code.co_consts if type(item) is CodeType)
+    return keys
 
 
 def build_csr_enforce(out):
@@ -20,7 +38,7 @@ def build_csr_enforce(out):
     directory = Path(out).resolve()
     if directory.exists():
         raise ValueError('fresh CSR C++ output required')
-    provider, *_ = _provider()
+    provider, *_ = _provider(compile_sources=_source_code_keys)
     compiler = shlex.split(os.environ.get('CXX', 'g++'))
     if not compiler:
         raise ValueError('C++20 compiler required')
@@ -30,7 +48,7 @@ def build_csr_enforce(out):
     source.write_bytes(SOURCE.read_bytes())
     command = [*compiler, *OPTIONS, str(source), '-o', str(library)]
     subprocess.run(command, check=True, capture_output=True, text=True)
-    manifest = dict(schema=SCHEMA, schema_version=1, abi_version=1, language='c++20',
+    manifest = dict(schema=SCHEMA, schema_version=SCHEMA_VERSION, abi_version=1, language='c++20',
         source=artifact_reference(source, 'scar.cpp-source'),
         library=artifact_reference(library, 'scar.native-library'),
         template=artifact_reference(SOURCE, 'scar.cpp-source'),

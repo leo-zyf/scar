@@ -4,14 +4,10 @@ import ctypes
 import inspect
 from pathlib import Path
 import sys
-from types import BuiltinFunctionType, CodeType, FunctionType
+from types import BuiltinFunctionType, FunctionType
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-
-
-def _original_function(function, module, expected_code):
-    return (type(function) is FunctionType and function.__globals__ is vars(module)
-        and function.__closure__ is None and function.__code__ == expected_code)
+from scar.trace.code_snapshot import code_key
 
 
 def _function_state(function):
@@ -33,7 +29,7 @@ def _overlaps(left, right):
     return bool(length and other_length and start < other+other_length and other < start+length)
 
 
-def _provider():
+def _provider(expected=None, *, compile_sources=None):
     import numpy as np
     from numpy._core import fromnumeric, multiarray, shape_base
     from numpy._core.overrides import _ArrayFunctionDispatcher
@@ -44,34 +40,52 @@ def _provider():
     if scipy.__version__ != '1.18.1' or np.__version__ != '2.5.2':
         raise ValueError('CSR diagonal behavior requires the SciPy 1.18.1 / NumPy 2.5.2 provider profile')
     source_modules = (_base, _compressed, _csr, _data, _matrix, _sputils, fromnumeric, shape_base)
-    codes = {}
-    for module in source_modules:
-        path = Path(module.__file__)
-        pending = [compile(path.read_bytes(), str(path), 'exec', dont_inherit=True, optimize=sys.flags.optimize)]
-        while pending:
-            code = pending.pop()
-            codes[module.__name__, code.co_qualname] = code
-            pending.extend(item for item in code.co_consts if type(item) is CodeType)
+    sources = [artifact_reference(module.__file__, 'scar.provider-source') for module in source_modules]
+    receipt = dict(scipy_version=scipy.__version__, numpy_version=np.__version__,
+        sources=sources, sparse_binary=artifact_reference(_sparsetools.__file__, 'scar.provider-binary'),
+        python_runtime=dict(implementation=sys.implementation.name,
+            version=list(sys.version_info), optimize=sys.flags.optimize))
+    if compile_sources is None and (type(expected) is not dict
+            or any(expected.get(key) != value for key, value in receipt.items())):
+        raise ValueError('CSR provider source, binary or interpreter differs from the compiled contract')
     classes = (sparse.csr_matrix, sparse.csr_array)
-    methods = {kind:{name:getattr(kind, name) for name in ('setdiag', '_setdiag', 'diagonal', '_swap')}
+    method_sources = {
+        'setdiag': (_base, '_spbase.setdiag', (0,)),
+        '_setdiag': (_compressed, '_cs_matrix._setdiag', None),
+        'diagonal': (_compressed, '_cs_matrix.diagonal', (0,)),
+        '_swap': (_csr, '_csr_base._swap', None),
+    }
+    methods = {kind:{name:getattr(kind, name) for name in method_sources}
                for kind in classes}
     properties = {kind:{name:inspect.getattr_static(kind, name) for name in ('shape', 'dtype', 'ndim')}
                   for kind in classes}
     function_states = {}
+    code_keys = {}
 
-    def remember(function, defaults):
-        module = sys.modules.get(function.__module__)
-        code = codes.get((function.__module__, function.__qualname__))
-        if (code is None or not _original_function(function, module, code)
-                or function.__defaults__ != defaults or function.__kwdefaults__ is not None):
+    def remember(function, module, qualname, defaults=None):
+        if (type(function) is not FunctionType or function.__globals__ is not vars(module)
+                or function.__module__ != module.__name__ or function.__qualname__ != qualname
+                or function.__closure__ is not None or function.__kwdefaults__ is not None):
             raise ValueError('CSR provider function or defaults differ from the source profile')
+        actual = function.__defaults__
+        if actual is not defaults and (defaults is None or actual is None or len(actual) != len(defaults)
+                or any(type(left) is not type(right) or left != right for left, right in zip(actual, defaults))):
+            raise ValueError('CSR provider function or defaults differ from the source profile')
+        key = code_key(function.__code__)
+        binding = f'{module.__name__}:{qualname}'
+        if code_keys.setdefault(binding, key) != key:
+            raise ValueError('CSR provider method and array binding differ')
         function_states[function] = _function_state(function)
 
     for kind, members in methods.items():
         for name, function in members.items():
-            remember(function, (0,) if name in ('setdiag', 'diagonal') else None)
-        for value in properties[kind].values():
-            remember(value.fget, None)
+            remember(function, *method_sources[name])
+        shape_source = (_matrix, 'spmatrix.get_shape') if kind is sparse.csr_matrix else (_base, '_spbase.shape')
+        property_sources = dict(shape=shape_source, dtype=(_data, '_data_matrix.dtype'), ndim=(_base, '_spbase.ndim'))
+        for name, value in properties[kind].items():
+            if type(value) is not property:
+                raise ValueError('original CSR provider property required')
+            remember(value.fget, *property_sources[name])
     callbacks = {name:getattr(_sparsetools, name) for name in ('csr_diagonal', 'csr_sample_offsets')}
     numpy_owners = dict(arange=multiarray, asarray=multiarray, empty=multiarray, atleast_1d=shape_base,
         cumsum=fromnumeric, repeat=fromnumeric)
@@ -82,15 +96,22 @@ def _provider():
         if type(function) is not _ArrayFunctionDispatcher:
             raise ValueError('original NumPy array-function dispatcher required')
         wrapper = function.__wrapped__
-        remember(wrapper, defaults)
+        remember(wrapper, numpy_owners[name], name, defaults)
         wrappers[name] = wrapper
     for name in ('arange', 'asarray', 'empty'):
         if type(np_functions[name]) is not BuiltinFunctionType or np_functions[name].__name__ != name:
             raise ValueError('original NumPy array-function binding required')
     wrapfunc = fromnumeric._wrapfunc
-    remember(wrapfunc, None)
+    remember(wrapfunc, fromnumeric, '_wrapfunc')
     upcast = _sputils.upcast
-    remember(upcast, None)
+    remember(upcast, _sputils, 'upcast')
+    receipt['python_code'] = code_keys
+    if compile_sources is not None:
+        modules = zip((module.__name__ for module in source_modules), sources)
+        if compile_sources(modules, code_keys) != code_keys:
+            raise ValueError('CSR provider live code differs from the build-time source')
+    elif receipt != expected:
+        raise ValueError('CSR provider live code differs from the build-time certificate')
     memo = _sputils._upcast_memo
     memo_key = hash((np.dtype('float64'),))
     supported_dtypes = tuple(_sputils.supported_dtypes)
@@ -125,27 +146,25 @@ def _provider():
             and next((dtype for dtype in supported_dtypes if np.can_cast(np.dtype('float64'), dtype)), None)
                 is np.float64)
 
-    return dict(scipy_version=scipy.__version__, numpy_version=np.__version__,
-        sources=[artifact_reference(module.__file__, 'scar.provider-source') for module in source_modules],
-        sparse_binary=artifact_reference(_sparsetools.__file__, 'scar.provider-binary')), live, memo, memo_key, upcast, cold_upcast_supported
+    return receipt, live, memo, memo_key, upcast, cold_upcast_supported
 
 
 def load_csr_enforce(out):
     """Return a guarded callable whose false result precedes every data write."""
     import numpy as np
-    from scar.codegen.sparse_csr import SCHEMA, SOURCE
+    from scar.codegen.sparse_csr import SCHEMA, SCHEMA_VERSION, SOURCE
 
     directory = Path(out).resolve()
     manifest = read_artifact(artifact_reference(directory/'artifact.json', SCHEMA))
-    if ((manifest['schema_version'], manifest['abi_version'], manifest['language']) != (1, 1, 'c++20')
+    if manifest['schema_version'] != SCHEMA_VERSION:
+        raise ValueError('rebuild CSR C++ artifact to certify provider code at build time')
+    if ((manifest['abi_version'], manifest['language']) != (1, 'c++20')
             or manifest['source']['uri'] != str(directory/'sparse_csr.cpp')
             or manifest['library']['uri'] != str(directory/'sparse_csr.so')
             or manifest['template'] != artifact_reference(SOURCE, 'scar.cpp-source')
             or read_artifact(manifest['source'], json_document=False) != SOURCE.read_bytes()):
         raise ValueError('CSR C++ artifact differs from the admitted v1 template')
-    provider, live, memo, memo_key, upcast, cold_upcast_supported = _provider()
-    if manifest['provider'] != provider:
-        raise ValueError('CSR provider receipt differs from the compiled contract')
+    _, live, memo, memo_key, upcast, cold_upcast_supported = _provider(manifest['provider'])
     read_artifact(manifest['library'], json_document=False)
     library = ctypes.PyDLL(manifest['library']['uri'])
     library.scar_csr_enforce_abi_v1.restype = ctypes.c_int32
