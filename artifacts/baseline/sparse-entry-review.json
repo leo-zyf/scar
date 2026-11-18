@@ -1,0 +1,243 @@
+{
+  "decision": {
+    "compact_promoted": false,
+    "dead_result_item_promoted": false,
+    "review_grants_deployment_authority": false
+  },
+  "implemented": {
+    "comparison": "Paired clean full processes, reported times compared to individually stored raw launch observations",
+    "decision": {
+      "sha256": "bb4c0e7dd7e954450c1278ace0f201030655b501854ca3eeebb26ea2edd2548c",
+      "size_bytes": 8160,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-entry-review/decision.json"
+    },
+    "design": {
+      "schema": "scar.sparse-entry-review-design",
+      "sha256": "1b39ce211732e79e39f5b3b2526dd81f733460b3cb434b76868f9c31398a68ee",
+      "size_bytes": 5558,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-entry-review/design.json"
+    },
+    "released_entry_policy": "Only independently admitted incumbent is runnable after review"
+  },
+  "measured": {
+    "comparisons": {
+      "compact": {
+        "challenger": "compact",
+        "deployment_authorized": false,
+        "gain_fraction": -0.016833713807681904,
+        "incumbent": "parallel",
+        "measurement_pairs": 3,
+        "metrics": {
+          "compact": {
+            "max_ns": 2874310907,
+            "median_ns": 2867572194,
+            "median_ns_twice": 5735144388,
+            "min_ns": 2862154102,
+            "samples_ns": [
+              2862154102,
+              2874310907,
+              2867572194
+            ]
+          },
+          "parallel": {
+            "max_ns": 2832666533,
+            "median_ns": 2820099447,
+            "median_ns_twice": 5640198894,
+            "min_ns": 2799512731,
+            "samples_ns": [
+              2832666533,
+              2799512731,
+              2820099447
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -29487569,
+          -74798176,
+          -47472747
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      },
+      "dead_item": {
+        "challenger": "dead_item",
+        "deployment_authorized": false,
+        "gain_fraction": -0.02471730316962826,
+        "incumbent": "parallel",
+        "measurement_pairs": 3,
+        "metrics": {
+          "dead_item": {
+            "max_ns": 2908090171,
+            "median_ns": 2889804700,
+            "median_ns_twice": 5779609400,
+            "min_ns": 2865865318,
+            "samples_ns": [
+              2889804700,
+              2865865318,
+              2908090171
+            ]
+          },
+          "parallel": {
+            "max_ns": 2832666533,
+            "median_ns": 2820099447,
+            "median_ns_twice": 5640198894,
+            "min_ns": 2799512731,
+            "samples_ns": [
+              2832666533,
+              2799512731,
+              2820099447
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -57138167,
+          -66352587,
+          -87990724
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      }
+    },
+    "core_affinity": [
+      42,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "evidence": {
+      "schema": "scar.dead-item-entry-validation",
+      "sha256": "d8fa7a4044d11653c2878581b8d6a10df1bcb0d724bd2247f896e269a2e04829",
+      "size_bytes": 26214,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-entry-review/entry-ab/result.json"
+    },
+    "metrics": {
+      "compact": {
+        "max_ns": 2874310907,
+        "median_ns": 2867572194,
+        "min_ns": 2862154102,
+        "samples_ns": [
+          2862154102,
+          2874310907,
+          2867572194
+        ],
+        "variance_ns2": 37092313604143
+      },
+      "dead_item": {
+        "max_ns": 2908090171,
+        "median_ns": 2889804700,
+        "min_ns": 2865865318,
+        "samples_ns": [
+          2889804700,
+          2865865318,
+          2908090171
+        ],
+        "variance_ns2": 448398445184229
+      },
+      "parallel": {
+        "max_ns": 2832666533,
+        "median_ns": 2820099447,
+        "min_ns": 2799512731,
+        "samples_ns": [
+          2832666533,
+          2799512731,
+          2820099447
+        ],
+        "variance_ns2": 280153185541876
+      }
+    },
+    "paired_repeats": 3,
+    "reference_implementation": "parallel",
+    "scope": "wall clock of full-entry fresh process, including launch and receipt",
+    "warmups": 1
+  },
+  "reference": {
+    "context": {
+      "argv": [
+        "512"
+      ],
+      "cpu_ids": [
+        48
+      ],
+      "cwd": "/home/zyf/AAA/scar",
+      "environment": {
+        "BLIS_NUM_THREADS": "1",
+        "GLIBC_TUNABLES": null,
+        "LD_LIBRARY_PATH": null,
+        "LD_PRELOAD": null,
+        "MALLOC_ARENA_MAX": null,
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OMP_PLACES": null,
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "PYTHONHASHSEED": null,
+        "PYTHONOPTIMIZE": null,
+        "PYTHONPATH": "/home/zyf/AAA/scikit-fem:/home/zyf/AAA/scar"
+      },
+      "interpreter": {
+        "executable": "/home/zyf/AAA/scar/.venv-planner/bin/python",
+        "magic": "2b0e0d0a",
+        "name": "cpython",
+        "optimize": 0,
+        "version": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]"
+      }
+    },
+    "published_incumbent": {
+      "schema": "scar.sparse-parallel-entry-selection",
+      "sha256": "5430c4a17894e5178d6c6ac0ed93cdb59af567584f064f6fcc6a195404cdf612",
+      "size_bytes": 6579,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/released/selection.json"
+    },
+    "source": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    }
+  },
+  "schema": "scar.sparse-entry-review-milestone",
+  "schema_version": 1,
+  "verified": {
+    "actual_applied": "INCUMBENT",
+    "engine_selected": "KEEP_INCUMBENT",
+    "fallback_calls": 0,
+    "incorrect_decision_sha_rejected_before_execution": true,
+    "matched_exit_and_output": true,
+    "modified_time_rejected": true,
+    "native_calls": 512,
+    "observed_output_sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+    "trial_launch": {
+      "sha256": "2c31c9759eea7c63b9a297b1f76c188819f8d851ddc5859fd2dbe7c4ac7a8ee9",
+      "size_bytes": 363860,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-entry-review/launched.json"
+    }
+  }
+}

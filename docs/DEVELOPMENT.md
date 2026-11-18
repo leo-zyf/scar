@@ -136,6 +136,8 @@ C++20 调用方包含 `scar_sparse_provider_v1.hpp`，以包目录构造 `scar::
 
 `python -m scar.compiler.plan_dead_result_item --selection SELECTION --out PLAN` 沿原 F4 调用边确认固定解包中无人读取的返回槽。若其生产者符合已知的 NumPy 整数补集合同，计划只为这个调用边生成专用源码。向紧凑运行入口加 `--dead-item PLAN --dead-item-sha256 PLAN_SHA` 可显式试用。首次调用保持原计算，随后复核原绑定、参数和观察条件，再省去补集分配。这个计划以独占输入、正常完成和标准提供方为条件，原求解归一化及状态发布继续执行。
 
+`python -m scar.compiler.review_sparse_entry prepare` 在对照前固定已发布入口、紧凑产物、补集计划、采样器及运行环境。`qualify` 按原进程计时和执行收据重算整入口收益，比较现行实现和候选。达到 5% 中位收益且样本范围分离的候选进入独立发布评审。`python -m scar.runtime.sparse_entry_review_launch --decision DECISION --decision-sha256 SHA --exclusive-inputs -- ENTRY ARGS` 读取决策，并再次检查已发布实现的实时条件。
+
 当前主链纠偏（2026-11-17）：按“语义化简→工作/传输/存储需求→解析组织→构造时序→独立证书→C++”推进；默认不做整版本试跑排名，也不把全局CP-SAT作为每个程序的必经入口。原Python/NO_OP必须参与同边界成本判断；已有OIR保留实现和来源，但不先固定五CALL的ready骨架。
 
 传统编译器方法以本机GCC13.3为基线；2026-11-17的`-Q --help=optimizers`查询与保留的O2/O3结果逐字相同；本次继续只读核验21份既有源码/dump收据（200546B）及所引用的研究JSON，SHA和大小全部相符，未重复编译或运行目标。另直接复核13.3 release的LICM、向量成本与pass顺序源码。`-O3`是在既有分析上按序运行变换和目标成本判断，采用启发式；不保证全局最快，默认也不启用多线程。以下是SCAR的外延设计，不能作为已完成声明：
