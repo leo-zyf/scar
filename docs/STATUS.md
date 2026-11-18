@@ -1,5 +1,7 @@
 # 当前状态
 
+2026-11-18 CPU4/5 上已做同边界 A/B。独立 LibTorch 调用各取 31 对，2×2 中位数为 5.560→25.582 µs，保留串行。768×768 为 24.869→12.978 ms，规划器选择双核，资源验证通过。完整 Python 函数边界另测 41 对，包含原 `empty` 续行，768×768 为 25.008→12.188 ms，逐位核验并通过回退对照。两组成本各自保留。见 `artifacts/baseline/aten-boundary-a-b.json`。
+
 2026-11-18 ATen 规划已接入具名的包装器入口、生成解析声明和效果要求。新 CPU 采集核对 4 个 CALL，区分进入同一 `add.Tensor` 的现代和弃用签名，保留 `out=` 的写入端口与返回别名，以及 `requires_grad` 的包装器实参。两组规划均保留原执行。独立的 CPU4/5 采集和目标库存采用同一可用掩码，逐调用资源需求和完整成本仍待验证。见 `artifacts/baseline/aten-wrapper-contracts.json`。
 
 2026-11-18 `plan-aten-capture` 已通过同次运行的原始 CALL 索引把 F4 和 ATen 接到共同规划 IR。真实 CPU 用例有 4 个 CALL、3 条保序约束和 2 条源码引用与 ETO 描述相符的路径，另核对两个工厂 CALL 各含 4 个直接原生算子。两组均保留原执行，效果、就绪、资源和成本待补。新采集另以进程映射及 ELF 字节核实 4 个包装器入口，仍需证明生成声明与二进制的构建关联。见 `artifacts/baseline/f4-aten-planning.json`。

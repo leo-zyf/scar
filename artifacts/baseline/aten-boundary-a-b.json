@@ -1,0 +1,257 @@
+{
+  "automatic_original_source_replacement": false,
+  "date": "2026-11-18",
+  "implemented": {
+    "command": "scar plan-aten-boundary",
+    "costs": "EXACT_CONTEXT_IMPLEMENTATION_COST_PROFILE",
+    "cpu_resources": "TARGET_HARDWARE_THREADS_AND_DISTINCT_PHYSICAL_CORES",
+    "independent_planning_verification": true
+  },
+  "lewm_run": false,
+  "memory_placement_model_verified": false,
+  "observed": {
+    "cpu_ids": [
+      4,
+      5
+    ],
+    "cxx_standard": 20,
+    "library_threads": 1,
+    "native": {
+      "cases": [
+        {
+          "median_speedup": 0.21734031741067938,
+          "medians_and_range": {
+            "SERIAL": {
+              "max_ns": 6089,
+              "median_ns": 5560,
+              "min_ns": 5142,
+              "variance_ns2": 74318.39569892474
+            },
+            "TWO_CPU": {
+              "max_ns": 33256,
+              "median_ns": 25582,
+              "min_ns": 24736,
+              "variance_ns2": 2983578.346236559
+            }
+          },
+          "paired_wins": 0,
+          "plan": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-2/plan.json",
+            "sha256": "bb23ccfde33e70d11fb51a0194a805ad19c85863e72e46275d74e90102e703d7",
+            "size_bytes": 2862
+          },
+          "planning_problem": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-2/problem.json",
+            "sha256": "72b4f0725979041e8a53ac46896216d6e5a08fae02a24595f319f7beccad6090",
+            "size_bytes": 8791
+          },
+          "selected": "SERIAL",
+          "selection": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-2/selection.json",
+            "sha256": "40fc25af53c163618a2d0f50ee126f2bf9ec819fcea0fb0e9b2f02855fe630d9",
+            "size_bytes": 4242
+          },
+          "shape": [
+            2,
+            2
+          ]
+        },
+        {
+          "median_speedup": 1.9162090219450636,
+          "medians_and_range": {
+            "SERIAL": {
+              "max_ns": 25052651,
+              "median_ns": 24868645,
+              "min_ns": 24770661,
+              "variance_ns2": 3712861971.4064517
+            },
+            "TWO_CPU": {
+              "max_ns": 15220115,
+              "median_ns": 12978044,
+              "min_ns": 12121015,
+              "variance_ns2": 738660465663.0237
+            }
+          },
+          "paired_wins": 31,
+          "plan": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-768/plan.json",
+            "sha256": "2f8d6afb04c3b721abd537265eb19b4d958823f636d474cac6978db2fcd48800",
+            "size_bytes": 2892
+          },
+          "planning_problem": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-768/problem.json",
+            "sha256": "c787e60b24cf11475bbfc15f44c9e6db50c152e7f9eb5cbc618dd8640a51162e",
+            "size_bytes": 11934
+          },
+          "selected": "TWO_CPU",
+          "selection": {
+            "path": "artifacts/current/experiments/aten-boundary-trial/native/final-768/selection.json",
+            "sha256": "74ad1d3a705c3674eb4dc7f09b10ec9894300ae00679237e843cd9498a9585a7",
+            "size_bytes": 4466
+          },
+          "shape": [
+            768,
+            768
+          ]
+        }
+      ],
+      "measured_pairs": 31,
+      "measurement": {
+        "clock": "STEADY_CLOCK_MONOTONIC_NANOSECONDS",
+        "end": "ready owned Tensor returned to C++ caller",
+        "includes": [
+          "input geometry and alias guards",
+          "provider dispatch",
+          "all three ATen calls",
+          "output allocation and intermediate releases",
+          "dual submission and completion wait",
+          "Tensor handle publication"
+        ],
+        "outside": [
+          "process and reusable worker startup/shutdown",
+          "input manufacture",
+          "bitwise and ownership checks",
+          "returned result release",
+          "Python caller and wrappers"
+        ],
+        "overlap_probe_in_measured_pairs": false,
+        "pair_validation_in_measured_region": false,
+        "start": "before region API input validation",
+        "timing_profiler_enabled": false
+      },
+      "observations": {
+        "path": "artifacts/current/experiments/aten-boundary-trial/native/observations.json",
+        "sha256": "4bd67c4edba870956e613cb4a726745dec2e744469f388612aee3178a41392b1",
+        "size_bytes": 26493
+      },
+      "runtime_output": {
+        "path": "artifacts/current/experiments/aten-boundary-trial/native/raw.stdout",
+        "sha256": "967d8c553e1026960c19551726d96e2bad22a9c765db4374b0b9bb1e035c5de9",
+        "size_bytes": 11141
+      },
+      "scope": "STANDALONE_LIBTORCH_CPU_CALL_BOUNDARY",
+      "src": {
+        "path": "artifacts/current/experiments/aten-boundary-trial/native/boundary.cpp",
+        "sha256": "e2fa98c855704dc82b77b2f211a2ab55a32aa0a92dccbeebac4c805e23f90430",
+        "size_bytes": 13960
+      },
+      "warmup_pairs": 7
+    },
+    "python": {
+      "cases": [
+        {
+          "paired_count": 41,
+          "paired_wins": 0,
+          "serial": {
+            "max_ns": 30005,
+            "median_ns": 20823,
+            "min_ns": 19537,
+            "samples": 41,
+            "variance_ns2": 3225270.5719512193
+          },
+          "shape": [
+            2,
+            2
+          ],
+          "speedup": 0.15703619909502262,
+          "two_lanes": {
+            "max_ns": 156626,
+            "median_ns": 132600,
+            "min_ns": 112401,
+            "samples": 41,
+            "variance_ns2": 114540708.0097561
+          }
+        },
+        {
+          "paired_count": 41,
+          "paired_wins": 41,
+          "serial": {
+            "max_ns": 25671536,
+            "median_ns": 25008030,
+            "min_ns": 22125571,
+            "samples": 41,
+            "variance_ns2": 2292929848579.5977
+          },
+          "shape": [
+            768,
+            768
+          ],
+          "speedup": 2.0517873862485123,
+          "two_lanes": {
+            "max_ns": 13004841,
+            "median_ns": 12188412,
+            "min_ns": 11371070,
+            "samples": 41,
+            "variance_ns2": 242305689663.35245
+          }
+        }
+      ],
+      "driver": {
+        "path": "artifacts/current/experiments/aten-boundary-trial/python/boundary.py",
+        "sha256": "3027c42edf5dd93655af3a73eac27a62d739fc996d324a648652c996be1f69e4",
+        "size_bytes": 11960
+      },
+      "measurement": {
+        "clock": "time.perf_counter_ns",
+        "instrumented": false,
+        "order": "AB_BA_ALTERNATING",
+        "outside_clock": [
+          "pool creation",
+          "input creation",
+          "post-call validation"
+        ],
+        "timed": [
+          "call boundary",
+          "guards",
+          "queue",
+          "wait",
+          "add",
+          "empty",
+          "tuple return"
+        ],
+        "warmup_per_variant_per_shape": 9
+      },
+      "observations": {
+        "path": "artifacts/current/experiments/aten-boundary-trial/python/observations.json",
+        "sha256": "d088522bdf9baecc1c902463d6677ab4978fab16960a4f62ffb158bb023853cd",
+        "size_bytes": 20489
+      },
+      "scope": "ORIGINAL_CALCULATE_LEFT_RIGHT_TO_FULL_TUPLE_IN_CONTROLLED_EXPERIMENT"
+    },
+    "tensor_dtype": "float32",
+    "torch_provider": {
+      "libraries": [
+        {
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libtorch_cpu.so",
+          "sha256": "859037dc4ce429853b11c068dbae0c1b817c9260276487e059ee7d53f4c65a7d",
+          "size_bytes": 438418425
+        },
+        {
+          "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/torch/lib/libc10.so",
+          "sha256": "b83ea50e9171c7e3455c19f9ff2c7d21d457a7b8231e9c4ea1b6e032ae1156d5",
+          "size_bytes": 1623185
+        }
+      ],
+      "name": "LibTorch",
+      "revision": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+      "version": "2.13.0+cu132"
+    }
+  },
+  "rejected": [
+    "ALTERED_OBSERVATION_DIGEST",
+    "FOREIGN_HARDWARE_MASK",
+    "ALTERED_TIME_WITH_ORIGINAL_RAW_OUTPUT",
+    "TWO_CPU_FOR_2X2"
+  ],
+  "schema": "scar.aten-boundary-a-b-review",
+  "schema_version": 1,
+  "scope_limit": "SINGLE_ISOLATED_BOUNDARY_UNDER_RETAINED_INPUT_AND_THREAD_CONTEXT",
+  "verified": [
+    "CXX_BITWISE_VALIDATION",
+    "PYTHON_BITWISE_INPUT_VERSION_AND_ALIAS_VALIDATION",
+    "PYTHON_FALLBACK_NO_SUCCESS_ON_INVALID_RANK",
+    "EXACT_PROFILE_URIS_REPLAY_AFTER_PUBLICATION",
+    "CPU_CAPACITY_CHECK",
+    "NATIVE_PROFILE_DOES_NOT_MATCH_ORIGINAL_PYTHON_SCOPE_OR_OTHER_GEOMETRY"
+  ]
+}
