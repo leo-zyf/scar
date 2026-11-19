@@ -1,0 +1,109 @@
+{
+  "capacity_rejected_ordinals": [
+    3,
+    5,
+    6,
+    7
+  ],
+  "checks": {
+    "critical_path_and_minimum_gap_in_memory": true,
+    "declared_v1_replay": true,
+    "empirical_v1_replay": true,
+    "empirical_v2_replay": true,
+    "repinned_interval_tamper_rejected": true,
+    "source_host_dispatch_edges_replayed_with_synthetic_services": true
+  },
+  "comparison": {
+    "baseline_ordinal": 0,
+    "blockers": [
+      {
+        "lower_ns": 0,
+        "ordinal": 1,
+        "reason": "UNBOUNDED_SERVICE_INTERVAL",
+        "upper_ns": null
+      },
+      {
+        "lower_ns": 0,
+        "ordinal": 2,
+        "reason": "UNBOUNDED_SERVICE_INTERVAL",
+        "upper_ns": null
+      },
+      {
+        "lower_ns": 0,
+        "ordinal": 4,
+        "reason": "UNBOUNDED_SERVICE_INTERVAL",
+        "upper_ns": null
+      }
+    ],
+    "decision": "PLACEMENT_DOMAIN_UNRESOLVED",
+    "deployment_authorized": false,
+    "physical_optimality_proven": false,
+    "schema": "scar.native-device-interval-choice",
+    "schema_version": 1,
+    "scope": "OBSERVED_SERVICE_SAMPLE_ENVELOPES_ONLY",
+    "selected_ordinal": 0,
+    "statistical_confidence_claimed": false
+  },
+  "cpu": {
+    "calibration": {
+      "path": "artifacts/current/experiments/typed-hybrid-export-v1/cpu-placement-calibrated/validation/calibration.json",
+      "sha256": "1ded0b3fc85cbbb8f17c6e3f72f45133629efcf00d63f1a39a4d5062866d1553",
+      "size_bytes": 1749
+    },
+    "includes_process_setup_or_file_io": false,
+    "manifest_sha256": "ce38b45bcc72a179a1732d52f92a66f374075215a738ef8e0eeeff163b219c35",
+    "observed_component_samples_summed": true,
+    "retained_samples": 3,
+    "service_interval": {
+      "estimate_ns": 2550530,
+      "lower_ns": 2523212,
+      "memory_proof": "TOTAL_ORDER_VALUE_AND_WORKSPACE_LIFETIMES",
+      "memory_upper_bytes": {
+        "cpu:pageable-host": 200
+      },
+      "sample_envelope_is_physical_bound": false,
+      "scope": "FIXED_RESOURCE_ORDER_SERVICE_SAMPLE_ENVELOPE",
+      "status": "BOUNDED",
+      "upper_ns": 2651672
+    },
+    "warmup_runs": 1
+  },
+  "cuda": {
+    "measured_activities": 0,
+    "probes": [
+      {
+        "calibration_sha256": "65e404cdc37a1e6c7862ed84d8162b5f010c90629e8c157ca41ca8197bc2f3d7",
+        "ordinal": 1,
+        "phase": "DEVICE_UNAVAILABLE"
+      },
+      {
+        "calibration_sha256": "169881e364cb56d4a9a835e6828d34b77308c8c325fe804fc84144b4e262da1f",
+        "ordinal": 2,
+        "phase": "DEVICE_UNAVAILABLE"
+      },
+      {
+        "calibration_sha256": "031211747dc64a2d2349190c561b0c6c0db99adfd38e77a4e6c98e22f1ee2e3b",
+        "ordinal": 4,
+        "phase": "DEVICE_UNAVAILABLE"
+      }
+    ],
+    "service_upper_bound_ns": null
+  },
+  "decision": "PLACEMENT_DOMAIN_UNRESOLVED",
+  "default_backend": "CPU",
+  "deployment_authorized": false,
+  "examined_placements": 8,
+  "legacy_proposal": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-empirical/placement.json",
+    "sha256": "23d7c6dd4fb05489c1b08a52dd3e964384766c9040b360c9019e1b5804234bdc",
+    "size_bytes": 36889
+  },
+  "proposal": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/service-interval-v2/placement.json",
+    "sha256": "0436bb9d21ee74bf1aa9186927a23ee04852ca6e09f07c2e0869a691b6ba18e7",
+    "size_bytes": 38684
+  },
+  "schema": "scar.native-placement-service-interval-baseline",
+  "schema_version": 1,
+  "treatment_proof": "OBSERVED_SERVICE_SAMPLE_ENVELOPE_WITH_FIXED_DEPENDENCIES"
+}

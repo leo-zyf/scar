@@ -1,5 +1,7 @@
 # 当前状态
 
+实测放置按固定依赖和队列传播算子样本区间，异构路径补入同步 CPU 调用先于后续 GPU 提交的因果边。真实 CPU 归档的模型区间为 2.523–2.652 ms，点估计 2.551 ms，图持有的存储上界 200 B。三个 CUDA 方案仍缺实测，保留 CPU。见 `artifacts/baseline/native-placement-service-interval.json`。
+
 同一份硬件配置现可生成任一容量合格的 CUDA 放置标定产物。真实导出图的 2 个备选放置通过 C++20 构建及独立重放。3 个容量合格的 CUDA 放置都已取得无设备收据，并在同一次排程中复验，当前保留全 CPU。见 `artifacts/baseline/native-placement-treatment.json`。
 
 CPU/CUDA 放置已接入按方案匹配的实测成本。真实导出模型的全 CPU 产物提供 6 个原生算子服务样本集合，5 个输出与 PyTorch 逐位一致。8 种配置中 4 种被声明容量排除，3 种缺实测成本，其中 1 种已确认本机没有可用 CUDA 设备。离线重放保留全 CPU。见 `artifacts/baseline/native-empirical-placement.json`。

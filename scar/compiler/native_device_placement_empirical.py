@@ -51,7 +51,8 @@ def _evidence_by_placement(cpu, cpu_sha, profile, device_evidence, model_ref, in
 
 
 def propose_empirical_device_placement(cpu, cpu_sha, profile, projection, model, model_ref, *,
-                                      inputs=None, named_inputs=(), references, device_evidence=()):
+                                      inputs=None, named_inputs=(), references, device_evidence=(),
+                                      service_intervals=True):
     inputs, references, input_ids, reference_ids = _sample_records(projection, inputs, references, named_inputs)
     evidence, evidence_rows = _evidence_by_placement(cpu, cpu_sha, profile, device_evidence, model_ref,
                                                      input_ids, reference_ids)
@@ -81,16 +82,18 @@ def propose_empirical_device_placement(cpu, cpu_sha, profile, projection, model,
         if observed is not None:
             scope = dict(profile_id=model_ref['sha256'], input_identities=input_ids, reference_identities=reference_ids)
             reason = 'CALIBRATION_TREATMENT_DIFFERS'
-            if observed.record['cost_available']:
-                matched = match_native_hybrid_placement_costs(observed, placement, original, **scope)
-                if matched is not None:
-                    matches.append(observed.record['calibration_sha256'])
-            else:
-                if native_hybrid_placement_cost_matches(observed, placement, original, **scope):
-                    reason = observed.record['reason']
+            available = observed.record['cost_available']
+            if available:
+                matched = match_native_hybrid_placement_costs(observed, placement, original,
+                                                             host_dispatch=service_intervals, **scope)
+            if matched is not None:
+                matches.append(observed.record['calibration_sha256'])
+            elif native_hybrid_placement_cost_matches(observed, placement, original, **scope):
+                reason = 'FIXED_HOST_DISPATCH_SCHEDULE_UNRESOLVED' if available else observed.record['reason']
         return empirical_placement_candidate(placement, original, matched_hybrid=matched, unavailable_reason=reason)
 
-    analysis, selected = search_native_device_placements(choices, build, cost_basis='EMPIRICAL_MODEL')
+    analysis, selected = search_native_device_placements(choices, build, cost_basis='EMPIRICAL_MODEL',
+                                                         service_intervals=service_intervals)
     proposal = placement_proposal(projection, choices, analysis, selected,
                                   actual_device_timing='EXACT_TREATMENT_SERVICE_SAMPLES' if matches else 'UNKNOWN')
     proposal['empirical'] = dict(inputs=inputs, references=references, pageable_cpu=cpu_record,

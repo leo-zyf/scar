@@ -4,6 +4,8 @@ from sys import maxsize
 
 from scar.ir.implementation_plan import PLAN_SCHEMA, digest, problem_from_dict
 from scar.optimization.joint_planner import verify_execution_plan
+from scar.optimization.native_device_interval_choice import choose_native_device_interval
+from scar.optimization.native_device_service_interval import native_device_service_interval
 
 
 SCHEMA = 'scar.native-device-placement-search'
@@ -76,7 +78,7 @@ def _cost_frontiers(problem, cost_basis):
     return frontiers
 
 
-def _evaluate(placement, built, domain, cost_basis):
+def _evaluate(placement, built, domain, cost_basis, service_intervals):
     problem_wire, schedule, bindings = built
     problem = problem_from_dict(problem_wire)
     if (any(len(op.options) != 1 for op in problem.operations)
@@ -110,23 +112,28 @@ def _evaluate(placement, built, domain, cost_basis):
         return row, None, identity
     stable_schedule = {key: value for key, value in schedule.items() if key != 'elapsed_seconds'}
     row.update(status='VERIFIED_SCHEDULE', makespan_ns=schedule['makespan_ns'])
+    if service_intervals:
+        row['service_interval'] = native_device_service_interval(problem, stable_schedule)
     record = dict(placement=placement, problem=problem_wire, schedule=stable_schedule, bindings=bindings)
     return row, record, identity
 
 
 def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PLACEMENT_BUDGET,
-                                    cost_basis='DECLARED_MODEL'):
+                                    cost_basis='DECLARED_MODEL', service_intervals=False):
     """Return the audit summary and one selected fixed-placement record.
 
     The callback qualifies a placement and constructs its shared-material
     problem, schedule and bindings. It owns evidence replay for matched
     empirical costs and can defer an unpriced empirical schedule. Placement
     ranking compares constructed schedules, so an exhaustive placement domain
-    still makes no claim about schedule optimality.
+    still makes no claim about schedule optimality. Empirical interval
+    comparison uses the sampled service envelope for each fixed schedule.
     """
     table, switchable = _choice_table(choices)
     if type(max_placements) is not int or not 1 <= max_placements <= maxsize or cost_basis not in _COST_BASES:
         raise ValueError('placement search requires a positive bound and one explicit cost basis')
+    if service_intervals and cost_basis != 'EMPIRICAL_MODEL':
+        raise ValueError('service intervals require matched empirical placement costs')
     total = 1 << switchable
     checked, unresolved = [], []
     baseline = best = None
@@ -139,11 +146,14 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
         except PlacementCapacityExceeded as error:
             checked.append(dict(ordinal=ordinal, status='PLACEMENT_CAPACITY_EXCEEDED', detail=str(error)))
             continue
-        row, record, domain = _evaluate(placement, built, domain, cost_basis)
+        row, record, domain = _evaluate(placement, built, domain, cost_basis, service_intervals)
         checked.append(dict(ordinal=ordinal, **row))
         if record is None:
             unresolved.append(dict(ordinal=ordinal, reason='PLACEMENT_UNRESOLVED'))
             continue
+        interval = row.get('service_interval')
+        if interval is not None and interval['status'] == 'UNRESOLVED':
+            unresolved.append(dict(ordinal=ordinal, reason=interval['reason']))
         if ordinal == 0:
             baseline = record
         score = (row['makespan_ns'], ordinal.bit_count(), ordinal)
@@ -153,7 +163,18 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
     if not enumeration_complete:
         unresolved.append(dict(reason='PLACEMENT_BUDGET_EXHAUSTED', next_ordinal=len(checked)))
     selected = baseline
-    if baseline is None:
+    comparison = None
+    if service_intervals:
+        comparison = choose_native_device_interval(checked, enumeration_complete=enumeration_complete)
+        chosen = comparison['selected_ordinal']
+        if chosen is None:
+            selected = None
+        elif chosen != 0:
+            if best_key is None or chosen != best_key[2]:
+                raise ValueError('interval winner must also minimize the enclosed point estimate')
+            selected = best
+        reason = comparison['decision']
+    elif baseline is None:
         reason = 'CPU_INCUMBENT_UNRESOLVED'
     elif unresolved:
         reason = 'PLACEMENT_DOMAIN_UNRESOLVED'
@@ -174,4 +195,7 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
         best_known=known_best, selected_placement=None if selected is None else selected['placement'],
         decision=reason, default_backend='CPU', model_optimality_proven=False, physical_optimality_proven=False,
         target_program_executed=False, execution_authorized=False, deployment_authorized=False)
+    if comparison is not None:
+        summary.update(schema_version=2, interval_comparison=comparison)
+        summary['search_policy']['selection'] = 'STRICT_SERVICE_INTERVAL_DOMINANCE'
     return summary, selected

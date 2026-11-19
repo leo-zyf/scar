@@ -9,7 +9,9 @@ from scar.compiler.compile_exported_aten_cuda import ACTIVITY_BINDING, PLACEMENT
 from scar.compiler.native_device_pair import CUDA_SCHEMA, _identity, _manifest, _member
 from scar.ir.implementation_plan import digest, problem_document, problem_from_dict
 from scar.ir.v2.schemas import canonical_json
+from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
+from scar.optimization.native_device_activity_costs import _queue_order
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +22,7 @@ class NativeHybridPlacementCosts:
     bindings: dict
     repriced_problem: dict
     repriced_schedule: dict
+    emitted_activities: tuple[dict, ...] = ()
 
 
 def _receipt_status(observation, summary):
@@ -52,6 +55,10 @@ def load_native_hybrid_placement_costs(calibration, *, calibration_sha256, cpu_p
     repriced_schedule = json.loads(_member(calibration.parent, report, 'schedule.json'))
 
     reason = _receipt_status(observation, report['summary'])
+    activities = ()
+    if reason == 'EXACT_OBSERVED_TREATMENT':
+        activity_binding = json.loads(_member(cuda, manifest, ACTIVITY_BINDING))
+        activities = tuple(activity_binding['activities'])
     record = dict(calibration_sha256=calibration_sha256,
         calibration_files=report['files'], activity_binding=_identity(manifest['files'][ACTIVITY_BINDING]),
         cpu_manifest_sha256=pair['cpu']['manifest_sha256'], cuda_manifest_sha256=pair['cuda']['manifest_sha256'],
@@ -63,7 +70,7 @@ def load_native_hybrid_placement_costs(calibration, *, calibration_sha256, cpu_p
         context=observation['context'], status=observation['phase'], reason=reason,
         cost_available=reason == 'EXACT_OBSERVED_TREATMENT')
     return NativeHybridPlacementCosts(record, original_problem, original_schedule, bindings,
-                                      repriced_problem, repriced_schedule)
+                                      repriced_problem, repriced_schedule, activities)
 
 
 def _relative(path):
@@ -138,7 +145,7 @@ def native_hybrid_placement_cost_matches(evidence, placement, built, *, profile_
 
 
 def match_native_hybrid_placement_costs(evidence, placement, built, *, profile_id, input_identities,
-                                        reference_identities):
+                                        reference_identities, host_dispatch=False):
     """Return only measured costs and the corresponding locked lane/wait schedule."""
     if not evidence.record['cost_available'] or not native_hybrid_placement_cost_matches(
             evidence, placement, built, profile_id=profile_id, input_identities=input_identities,
@@ -150,8 +157,19 @@ def match_native_hybrid_placement_costs(evidence, placement, built, *, profile_i
                        for operation, priced in zip(original.operations, measured.operations, strict=True))
     rebased = replace(original, operations=operations, assumptions=measured.assumptions,
                       timing_constraints=measured.timing_constraints)
-    # Only archive anchors changed. Preserve the replayed schedule's timeline.
-    schedule = dict(evidence.repriced_schedule, problem_sha256=digest(rebased))
+    if host_dispatch:
+        reference = dict(path=ACTIVITY_BINDING, **evidence.record['activity_binding'])
+        if not evidence.emitted_activities:
+            raise ValueError('host dispatch ordering requires a replayed native activity binding')
+        constraints = _queue_order(evidence.emitted_activities, reference, host_dispatch=True)
+        rebased = replace(rebased, timing_constraints=constraints,
+                          assumptions=(*rebased.assumptions, 'SYNCHRONOUS_HOST_CALLS_GATE_LATER_GPU_DISPATCH'))
+        schedule = construct_implementations(rebased, baseline_only=True)
+        if schedule['status'] != 'FEASIBLE_WITHIN_MODEL':
+            return None
+    else:
+        # Legacy point estimates retain the archived diagnostic time table.
+        schedule = dict(evidence.repriced_schedule, problem_sha256=digest(rebased))
     schedule.pop('elapsed_seconds', None)
     verify_execution_plan(rebased, schedule)
     return problem_document(rebased), schedule, built[2]

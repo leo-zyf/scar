@@ -134,14 +134,22 @@ def _stats(values):
     return dict(estimate_ns=median_low(values), lower_ns=min(values), upper_ns=max(values))
 
 
-def _queue_order(steps, binding_ref):
+def _queue_order(steps, binding_ref, *, host_dispatch=False):
     # Preserve emitted FIFO order and cross-lane wait relations in the diagnostic model.
+    host_lane = (next((step['execution_lane'] for step in steps if step['clock'] == 'HOST_STEADY'), None)
+                 if host_dispatch else None)
+    last_host_call = None
     previous, constraints = {}, []
     for step in steps:
         name, lane = (step[key] for key in ('operation', 'execution_lane'))
         dependencies = {steps[index]['operation'] for index in step['wait_for']}
         if lane in previous:
             dependencies.add(previous[lane])
+        if host_dispatch and lane == host_lane:
+            last_host_call = name
+        elif last_host_call is not None:
+            # The native host loop cannot enqueue this GPU step until the synchronous call returns.
+            dependencies.add(last_host_call)
         for before in sorted(dependencies):
             constraints.append(PlanningTimingConstraint(f'native-service-order/{len(constraints)}',
                 before, 'END', name, 'START', source_refs=(binding_ref,)))

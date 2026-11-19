@@ -127,8 +127,14 @@ def main(argv=None):
             raise ValueError('device model must be local to its archived placement proposal')
         model = model_path.read_bytes()
         evidence = stored.get('empirical')
-        empirical = None if evidence is None else dict(inputs=evidence['inputs'], references=evidence['references'],
-            device_evidence=[(row['project'], row['calibration'], row['sha256']) for row in evidence['device_evidence']])
+        empirical = None
+        if evidence is not None:
+            version = stored['analysis']['schema_version']
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError('unsupported empirical placement analysis version')
+            empirical = dict(inputs=evidence['inputs'], references=evidence['references'],
+                device_evidence=[(row['project'], row['calibration'], row['sha256']) for row in evidence['device_evidence']],
+                service_intervals=version == 2)
         proposal = _from_cpu(args.cpu_project, stored['cpu_manifest_sha256'], stored['cpu_profile'],
                              model, _model_reference(model), empirical=empirical)
         if proposal != stored:

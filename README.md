@@ -54,6 +54,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 在同一源模型、形状和容量配置下，给 `compile-exported-aten-cuda` 加 `--placement-ordinal N` 可构建 `analysis.evaluated` 中指定的 CUDA 放置。该产物自带活动标定入口，其 C++20 排程及物化计划可独立重放。`calibrate-native-device` 的结果按放置方案及实际执行身份回填，部署默认保留 CPU。[指定放置的验收记录](artifacts/baseline/native-placement-treatment.json)。
 
+实测放置沿数据边、队列顺序和同步 CPU 调用的提交依赖，分别传播每个服务的样本最小值、中位数和最大值。只有 CUDA 方案的上界严格低于其余全部容量合格方案的下界时才提名。候选区间无法严格区分时保留 CPU。样本范围用于服务模型，完整入口仍须另做验证。[区间验收记录](artifacts/baseline/native-placement-service-interval.json)。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。
