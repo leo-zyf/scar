@@ -22,6 +22,7 @@ _PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
 _PAIR_DRIVER = Path(__file__).with_name('aten_native_graph_ab_v1.cpp.in')
 _TEAM_HEADER = Path(__file__).with_name('aten_native_team_v1.h')
 _TEAM_DRIVER = Path(__file__).with_name('aten_native_team_ab_v1.cpp.in')
+_READY_HEADER = Path(__file__).with_name('aten_ready_dag_v1.h')
 _NUMA_HEADER = Path(__file__).with_name('aten_numa_pages_v1.h')
 _EXECUTABLE = 'aten-native-graph'
 
@@ -60,7 +61,7 @@ def _argument(expression, values):
     return 'c10::Scalar(std::int64_t{' + literal + '})'
 
 
-def _render(recipe, operators, schedule=None, *, release_after):
+def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -92,6 +93,11 @@ def _render(recipe, operators, schedule=None, *, release_after):
                                if arg.get('value') in producers})
         pair_support = render_team_calls(calls, releases, outputs, schedule['legal_window_widths'],
                                          dependencies=dependencies)
+        if ready_dag:
+            from scar.codegen.aten_team_graph_source import render_ready_support
+
+            pair_include += f'#define SCAR_ATEN_READY_DAG 1\n#include "{_READY_HEADER.name}"\n'
+            pair_support += render_ready_support(calls, outputs, dependencies)
     elif schedule is not None:
         starts = {row['pair_indices'][0] for row in schedule['windows']}
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
@@ -203,7 +209,7 @@ inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inpu
 
 def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256, out,
                               concurrency_contract=None, concurrency_sha256=None, target=None, cpu_ids=None,
-                              allow_cross_numa=False):
+                              allow_cross_numa=False, ready_dag=False):
     import torch
 
     out = Path(out).resolve()
@@ -232,6 +238,14 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         else:
             schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     team = schedule is not None and 'legal_window_widths' in schedule
+    if ready_dag:
+        from scar.optimization.aten_native_schedule import _declared_operators
+
+        if not team or len({lane['numa_node'] for lane in schedule['lanes']}) != 1:
+            raise ValueError('ready DAG requires a qualified CPU team on one NUMA node')
+        declared = _declared_operators(contract)
+        if any(op['schema'] not in declared for op in recipe['operations']):
+            raise ValueError('ready DAG requires exact concurrency qualification of every reordered operator')
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']
@@ -249,12 +263,15 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         header.write_bytes(operator_path.read_bytes())
         if _content(header) != linked['artifacts']['operators.hpp']:
             raise ValueError('retained ATen C++ binding differs from its linkage receipt')
-        (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule, release_after=release_after))
+        (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule, release_after=release_after,
+                                                ready_dag=ready_dag))
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
         if team:
             (stage / _TEAM_HEADER.name).write_bytes(_TEAM_HEADER.read_bytes())
             (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
             (stage / 'team.cpp').write_bytes(_TEAM_DRIVER.read_bytes())
+            if ready_dag:
+                (stage / _READY_HEADER.name).write_bytes(_READY_HEADER.read_bytes())
         elif schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
             (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
@@ -291,6 +308,8 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         elif schedule is not None:
             receipt.update(cpu_windows=schedule, concurrency_contract=contract_receipt,
                            implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
+        if ready_dag:
+            receipt['ready_dag_abi'] = 1
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt
@@ -307,13 +326,14 @@ def main(argv=None):
     parser.add_argument('--target', help='original target hardware graph for a CPU-window trial')
     parser.add_argument('--cpu', type=int, action='append', help='caller and worker IDs, in order')
     parser.add_argument('--allow-cross-numa', action='store_true', help='admit NUMA-aware three-core team placement')
+    parser.add_argument('--ready-dag', action='store_true', help='enable dependency-ready execution on a local CPU team')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     compile_aten_native_graph(args.recipe, recipe_sha256=args.recipe_sha256, linkage=args.linkage,
                               linkage_sha256=args.linkage_sha256, out=args.out,
                               concurrency_contract=args.concurrency_contract,
                               concurrency_sha256=args.concurrency_sha256, target=args.target, cpu_ids=args.cpu,
-                              allow_cross_numa=args.allow_cross_numa)
+                              allow_cross_numa=args.allow_cross_numa, ready_dag=args.ready_dag)
     print(json.dumps(dict(executable=str(Path(args.out) / _EXECUTABLE),
                           launcher=str(Path(args.out) / 'launch.sh'))))
     return 0

@@ -26,6 +26,7 @@ _MODULE = '_scar_aten_python_trial'
 _TEMPLATE = Path(__file__).with_name('aten_python_trial_v1.cpp.in')
 _PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
 _TEAM_HEADER = 'aten_native_team_v1.h'
+_READY_HEADER = 'aten_ready_dag_v1.h'
 
 
 def _file_ref(path, schema):
@@ -34,6 +35,10 @@ def _file_ref(path, schema):
 
 def _read_plan(path, digest):
     path, selection, _ = _read_declared(path, digest)
+    if selection['schema'] == 'scar.aten-ready-selection':
+        from scar.compiler.plan_aten_ready import read_ready_selection
+
+        return read_ready_selection(path, selection)
     mode = selection['selected']
     if ((selection['schema'], selection['schema_version'], selection['boundary']) != (
             'scar.aten-native-graph-schedule', 1, 'GENERATED_WARM_ATEN_GRAPH_CALL')
@@ -131,13 +136,15 @@ def _geometry_header(geometry):
     return '\n'.join((*lines, '}  // namespace scar_aten_trial_geometry', ''))
 
 
-def _build_extension(stage, artifact, torch, *, value_geometry=False):
+def _build_extension(stage, artifact, torch, *, value_geometry=False, ready_dag=False):
     _, libraries, cxx, compile_flags, link_flags = _build_interface(torch)
     python_torch = libraries[0].with_name('libtorch_python.so').resolve(strict=True)
     filename = _MODULE + sysconfig.get_config_var('EXT_SUFFIX')
     # CPython API symbols are resolved by the importing interpreter, including static CPython builds.
     extension_links = [flag for flag in link_flags if flag != '-Wl,-z,defs']
     options = ['-DSCAR_ATEN_VALUE_GEOMETRY'] if value_geometry else []
+    if ready_dag:
+        options.append('-DSCAR_ATEN_TRIAL_READY')
     command = [*cxx, *compile_flags, *options, '-I', sysconfig.get_path('include'), '-O2', '-fPIC', '-shared',
                '-fvisibility=hidden', '-pthread', 'trial.cpp', *extension_links, str(python_torch), '-o', filename]
     env = {name: value for name, value in os.environ.items() if not name.startswith('LD_')}
@@ -185,7 +192,13 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
         stage = Path(tmp)
         bundle = Path(selected['bundle']['uri']).parent
         team = 'cpu_team' in artifact
-        for name in ('graph.hpp', 'operators.hpp', *((_TEAM_HEADER,) if team else ())):
+        ready = selected['selected'] == 'READY_DAG'
+        headers = ['graph.hpp', 'operators.hpp']
+        if team:
+            headers.append(_TEAM_HEADER)
+        if artifact.get('ready_dag_abi') == 1:
+            headers.append(_READY_HEADER)
+        for name in headers:
             dest = stage / name
             dest.write_bytes((bundle / name).read_bytes())
             if _content(dest) != artifact['files'][name]:
@@ -195,7 +208,8 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
         (stage / 'trial.cpp').write_bytes(_TEMPLATE.read_bytes())
         if guard is not None:
             (stage / 'trial_geometry.hpp').write_text(_geometry_header(guard['geometry']))
-        extension, provider, command = _build_extension(stage, artifact, torch, value_geometry=guard is not None)
+        extension, provider, command = _build_extension(stage, artifact, torch, value_geometry=guard is not None,
+                                                        ready_dag=ready)
         manifest = dict(schema='scar.aten-python-trial', schema_version=1,
             scope='EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL', source_proof=proof, recipe=recipe, contract=contract,
             cpus=selected['cpu_ids'], inputs=selected['inputs'],
@@ -204,7 +218,9 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
                 wrapper_contract=_file_ref(contract_path, contract['schema'])),
             compiler_command=command, cxx_standard=20, source_replacement_authorized=False,
             python_boundary_performance_measured=False)
-        if team:
+        if ready:
+            manifest['ready_lanes'] = selected['model']['lanes']
+        elif team:
             manifest['window_groups'] = selected['selected_windows']
         else:
             manifest['window_starts'] = selected['selected_window_starts']

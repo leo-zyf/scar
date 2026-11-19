@@ -434,7 +434,7 @@ def _prefix(cpus):
     return ['env', '-i', *(f'{k}={v}' for k, v in _ENV.items()), 'taskset', '-c', ','.join(map(str, cpus))]
 
 
-def _launcher(stage, executable, selection, schedule, inputs, guarded, starts):
+def _launcher(stage, executable, selection, schedule, inputs, guarded, choice):
     # The result is qualified for exactly the tested input bytes and linked primary images.
     checks = ['test "$(sha256sum < ' + shlex.quote(row['path']) + ' | cut -d " " -f 1)" = '
               + row['sha256'] + ' || { echo "SCAR native graph member digest differs" >&2; exit 78; }'
@@ -447,12 +447,15 @@ def _launcher(stage, executable, selection, schedule, inputs, guarded, starts):
         mode = '--run-team' if team else '--run-windows' if windowed else '--run-pair'
     cpus = schedule['cpus'] if dual else schedule['cpus'][:1]
     spec = []
-    if dual and team:
+    if selection == 'READY_DAG':
+        mode = '--run-ready'
+        spec = [''.join(map(str, choice))]
+    elif dual and team:
         from scar.compiler.plan_aten_native_team import team_window_spec
 
-        spec = [team_window_spec(starts)]
+        spec = [team_window_spec(choice)]
     elif dual and windowed:
-        spec = [','.join(map(str, starts))]
+        spec = [','.join(map(str, choice))]
     command = [*_prefix(cpus), str(executable), mode, *map(str, cpus), *spec, *(row['path'] for row in inputs)]
     launch = stage / 'launch.sh'
     launch.write_text('#!/bin/sh\nset -eu\n' + '\n'.join(checks) + '\nexec ' + shlex.join(command) + ' "$@"\n')

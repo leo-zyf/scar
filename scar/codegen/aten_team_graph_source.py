@@ -89,3 +89,47 @@ inline std::array<at::Tensor, output_count> run_parallel(
     return run_parallel_observed(inputs, team, windows, [](std::size_t, auto&& call) {{ return call(); }});
 }}
 '''
+
+
+def render_ready_support(calls, outputs, dependencies):
+    """Use the original Tensor edges to drive an opt-in ready DAG."""
+    incoming = [set() for _ in calls]
+    for producer, consumer in dependencies:
+        if type(producer) is not int or type(consumer) is not int or not 0 <= producer < consumer < len(calls):
+            raise ValueError('ready DAG dependencies must follow source order')
+        incoming[consumer].add(producer)
+    offsets = [0]
+    predecessors = []
+    for parents in incoming:
+        predecessors.extend(sorted(parents))
+        offsets.append(len(predecessors))
+
+    offset_items = ', '.join(map(str, offsets))
+    predecessor_items = ', '.join(map(str, predecessors))
+    values = '\n'.join(f'    at::Tensor {value};' for value, _ in calls)
+    cases = '\n'.join(f'        case {i}: {value} = observe({i}, [&] {{ return {expression}; }}); return;'
+                      for i, (value, expression) in enumerate(calls))
+    return f'''
+using ReadyLanes = std::array<std::uint8_t, operation_count>;
+inline constexpr std::array<std::size_t, operation_count + 1> ready_offsets{{{offset_items}}};
+inline constexpr std::array<std::size_t, {len(predecessors)}> ready_predecessors{{{predecessor_items}}};
+
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_ready(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, Observer&& observe) {{
+    validate_inputs(inputs);
+{values}
+    execute_ready_dag(team, lanes, ready_offsets, ready_predecessors, [&](std::size_t index) {{
+        switch (index) {{
+{cases}
+        default: throw std::logic_error("unknown native DAG operation");
+        }}
+    }});
+    return {{{outputs}}};
+}}
+
+inline std::array<at::Tensor, output_count> run_ready(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes) {{
+    return run_ready(inputs, team, lanes, [](std::size_t, auto&& call) {{ return call(); }});
+}}
+'''

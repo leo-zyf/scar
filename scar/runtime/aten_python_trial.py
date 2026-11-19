@@ -60,6 +60,14 @@ def _trial_layout(manifest):
     if (type(cpus) is not list or len(cpus) not in (2, 3)
             or any(type(cpu) is not int or cpu < 0 for cpu in cpus) or len(set(cpus)) != len(cpus)):
         raise ValueError('the trial requires two or three distinct nonnegative CPU IDs')
+    if 'ready_lanes' in manifest:
+        lanes = manifest['ready_lanes']
+        if (len(cpus) != 3 or 'window_groups' in manifest or 'window_starts' in manifest
+                or type(lanes) is not list or len(lanes) != len(manifest['recipe']['operations'])
+                or any(type(lane) is not int or not 0 <= lane < 3 for lane in lanes)
+                or len(set(lanes)) < 2):
+            raise ValueError('the ready DAG requires an exact three-core lane schedule')
+        return tuple(cpus), tuple(lanes)
     if len(cpus) == 2:
         if 'window_groups' in manifest or 'window_starts' not in manifest:
             raise ValueError('the two-core trial requires window starts')

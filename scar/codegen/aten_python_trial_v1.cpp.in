@@ -118,7 +118,21 @@ PyObject* prepare(PyObject*, PyObject* arguments) {
     }
 }
 
-graph::WindowSelection window_selection(PyObject* groups) {
+#ifdef SCAR_ATEN_TRIAL_READY
+graph::ReadyLanes trial_selection(PyObject* values) {
+    graph::ReadyLanes lanes{};
+    if (!PyTuple_CheckExact(values) || PyTuple_GET_SIZE(values) != lanes.size()) {
+        throw std::invalid_argument("native ready trial requires one lane per operation");
+    }
+    for (std::size_t i = 0; i < lanes.size(); ++i) {
+        const long lane = exact_integer(PyTuple_GET_ITEM(values, i));
+        if (lane < 0 || lane > 2) throw std::invalid_argument("native ready trial lane is out of range");
+        lanes[i] = static_cast<std::uint8_t>(lane);
+    }
+    return lanes;
+}
+#else
+graph::WindowSelection trial_selection(PyObject* groups) {
     if (!PyTuple_CheckExact(groups) || PyTuple_GET_SIZE(groups) == 0) {
         throw std::invalid_argument("native trial requires a nonempty schedule tuple");
     }
@@ -153,6 +167,7 @@ graph::WindowSelection window_selection(PyObject* groups) {
     }
     return windows;
 }
+#endif
 
 #ifdef SCAR_ATEN_VALUE_GEOMETRY
 namespace geometry = scar_aten_trial_geometry;
@@ -204,7 +219,7 @@ PyObject* run(PyObject*, PyObject* arguments) {
             }
             inputs[i] = tensor;
         }
-        auto windows = window_selection(starts);
+        const auto schedule = trial_selection(starts);
         graph::validate_inputs(inputs);
         if (!geometry_only) {
             for (std::size_t i = 0; i < inputs.size(); ++i) {
@@ -226,16 +241,23 @@ PyObject* run(PyObject*, PyObject* arguments) {
 #endif
         auto outputs = [&] {
             const auto placement = prepared->executor.place_caller();
+            auto execute = [&](auto&& observer) {
+#ifdef SCAR_ATEN_TRIAL_READY
+                return graph::run_ready(inputs, prepared->executor, schedule, observer);
+#else
+                return graph::run_parallel_observed(inputs, prepared->executor, schedule, observer);
+#endif
+            };
 #ifdef SCAR_ATEN_VALUE_GEOMETRY
             if (geometry_only) {
-                return graph::run_parallel_observed(inputs, prepared->executor, windows, [](std::size_t op, auto&& call) {
+                return execute([](std::size_t op, auto&& call) {
                     auto result = call();
                     verify_geometry(result, geometry::operations[op], "native trial operation differs from its storage geometry");
                     return result;
                 });
             }
 #endif
-            return graph::run_parallel(inputs, prepared->executor, windows);
+            return execute([](std::size_t, auto&& call) { return call(); });
         }();
         if (grad_enabled) {
             for (const auto& output : outputs) {

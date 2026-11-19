@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace scar_aten_graph {
@@ -130,13 +131,40 @@ public:
         submit([] {}, jobs);
     }
 
+    // A lane can be waiting for data from another lane. Signal failure even
+    // when a worker's context check throws before it can enter the callback.
+    template <class Lane, class Abort>
+    void run_lanes_with_abort(const std::array<bool, 3>& used, Lane&& run_lane, Abort&& abort) {
+        static_assert(std::is_nothrow_invocable_v<Abort&>);
+        const auto task = [&run_lane, &abort](std::size_t lane) {
+            return [&run_lane, &abort, lane](bool failed) {
+                if (failed) std::invoke(abort);
+                else std::invoke(run_lane, lane);
+            };
+        };
+        auto first = task(1);
+        auto second = task(2);
+        submit([&] {
+            if (!used[0]) return;
+            try {
+                std::invoke(run_lane, std::size_t{0});
+            } catch (...) {
+                std::invoke(abort);
+                throw;
+            }
+        }, {used[1] ? make_interruptible_job(first) : Job{},
+            used[2] ? make_interruptible_job(second) : Job{}});
+    }
+
 private:
     struct Job {
         void* closure = nullptr;
         void (*invoke)(void*) = nullptr;
+        void (*on_failure)(void*) noexcept = nullptr;
 
         explicit operator bool() const noexcept { return invoke != nullptr; }
         void operator()() const { invoke(closure); }
+        void fail() const noexcept { if (on_failure) on_failure(closure); }
     };
 
     struct Worker {
@@ -150,6 +178,12 @@ private:
     template <class F>
     static Job make_job(F& closure) {
         return {&closure, [](void* arg) { (*static_cast<F*>(arg))(); }};
+    }
+
+    template <class F>
+    static Job make_interruptible_job(F& closure) {
+        return {&closure, [](void* arg) { (*static_cast<F*>(arg))(false); },
+                [](void* arg) noexcept { (*static_cast<F*>(arg))(true); }};
     }
 
     template <class F>
@@ -256,6 +290,7 @@ private:
                     check_cpu(cpu);
                 } catch (...) {
                     error = std::current_exception();
+                    job.fail();
                 }
                 lock.lock();
                 worker.task_error = std::move(error);
@@ -266,6 +301,7 @@ private:
             std::lock_guard lock(mutex_);
             worker.terminal_error = std::current_exception();
             worker.ready = true;
+            worker.job.fail();
             worker.job = {};
             complete_.notify_one();
         }

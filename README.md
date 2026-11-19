@@ -36,6 +36,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `plan-aten-graph --tensor-budget-bytes BYTES` 给图持有的 CPU Tensor 后备存储设置预算。生成代码在最后一次读取后释放中间 Tensor 句柄，并行窗口等待两侧完成后再释放。规划器用原生校准记录的存储字节数估算各段峰值，筛掉超预算窗口，再验证核与存储预算。预算范围覆盖输入与算子结果，算子内部工作区、分配器保留与实际 NUMA 页位置仍独立记录为未建模。见 [Tensor 预算验证](artifacts/baseline/aten-tensor-budget.json)。
 
+在满足三核准入且同 NUMA 的区域，可给 `compile-aten-graph` 加 `--ready-dag`，再用 `scar plan-aten-ready --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 ... --tensor-budget-bytes BYTES --out PLAN`，按真实张量依赖安排现成 LibTorch 算子。当前执行方式保留中间值到最终汇合，规划时据此检查内存预算。通过配对验证后，可用 `PLAN/launch.sh` 运行固定输入，或把 `PLAN/selection.json` 交给原函数试验。
+
 `scar build-aten-python-trial --help` 提供显式原 Python 函数接入。它核对函数 CodeID、直线算子依赖、声明的包装器效果及已验证的原生计划，生成借用 PyTorch Tensor 句柄的 C++20 扩展。`scar validate-aten-python-trial --trial TRIAL --trial-sha256 SHA256 --out VERIFIED` 在原模块临时安装入口，测量带守卫的完整函数调用并验证原路径回退。试验按记录的 CPU、Tensor ABI 和输入内容执行，退出时恢复原绑定。见 [原函数试验](artifacts/baseline/aten-python-trial.json)。
 
 `scar validate-aten-python-entry --trial TRIAL --trial-sha256 SHA256 --entry-function main --out VERIFIED -- ARGS '{output_dir}/result'` 分别在新进程运行原入口与守卫入口。准备工作线程的时机延至首次合格调用，应用可先配置 Torch。试验逐对核对返回值、梯度模式、标准输出及输出目录内容，并按进程总耗时决定是否保留原入口。`--allow-ambient-grad` 适用于保持调用方梯度模式、输入无需梯度的试验。见 [完整入口验证](artifacts/baseline/aten-python-entry.json)。
