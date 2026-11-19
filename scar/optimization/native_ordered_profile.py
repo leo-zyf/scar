@@ -117,6 +117,18 @@ def _resources(before, hardware_ref, hardware, count, width, identity):
         cost=dict(basis='UNKNOWN', startup_ns=None, per_call_ns=None, close_ns=None, whole_scope_ns=None)), control
 
 
+def admissible_profile_widths(before, hardware, count):
+    eligible = []
+    for width in range(2, min(count, len(before['placement']['workers'])) + 1):
+        try:
+            _resources(before, None, hardware, count, width, before['recipe_id'])
+        except ValueError:
+            continue
+        eligible.append(width)
+    _require(eligible, 'current CPU and memory scope cannot admit two workers in the validated provider family')
+    return tuple(eligible)
+
+
 def observe_profile_host(anchor_digest_package, count, *, widths=None):
     """Observe and admit widths before attaching any measured service costs."""
     from scar.codegen.native_ordered_sparse_export import check_native_ordered_export
@@ -136,15 +148,7 @@ def observe_profile_host(anchor_digest_package, count, *, widths=None):
             _resources(plan, None, hardware, count, width, plan['recipe_id'])
         return hardware, tuple(sorted(checked))
 
-    eligible = []
-    for width in range(2, min(count, len(cohort) - 1) + 1):
-        try:
-            _resources(plan, None, hardware, count, width, plan['recipe_id'])
-        except ValueError:
-            continue
-        eligible.append(width)
-    _require(eligible, 'current CPU and memory scope cannot admit two workers in the validated provider family')
-    return hardware, tuple(sorted({eligible[0], eligible[-1]}))
+    return hardware, admissible_profile_widths(plan, hardware, count)
 
 
 def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, width, *, original_observation_path):
