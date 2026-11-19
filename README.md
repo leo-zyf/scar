@@ -16,6 +16,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 用 `scar trace --execution-evidence --torch-call-scopes --os-capture-root RAW --out RAW/trace -- python ENTRY.py` 采集，随后运行 `scar import-capture RAW --out MODEL`。从 `MODEL/native/native-call-scopes.json.gz` 选择原始调用序号，再用 `scar link-aten-capture --capture-model MODEL/capture-model.json --capture-model-sha256 SHA256 --call-attempt N --out LINKED` 直接生成外部调用。多次指定 `--call-attempt` 可批量生成。
 
+`scar frontend --trace TRACE --project-root ROOT --adapter-directory ADAPTER ...` 可指定外部源码重放使用的 CPython 符号适配器。`scar observed-formals BUILD` 读取已准入的 F4 绑定状态和原始帧入口，输出调用范围内的形参端口、静态绑定版本及实际引用。调用方实参路由和对象内容仍由独立证据确定。
+
 `scar plan-aten-capture --build PROGRAM --capture RAW --call-attempt N1 --call-attempt N2 --out PLAN` 将同一次调用方激活的原始 F4 端口与本次采集的 ATen 端口接入共同规划器。它保留状态顺序、本次看到的引用和未决成本，当前支持保留原执行。重复源码位置需要由共享循环接口接入。
 
 规划器可复用 F4 已准入的原生绑定图，也可通过 `--binding-graph DIR` 指定。它按原始 CALL 和完整算子声明冷重放参数路由。V2 采集提供已映射 ELF 的包装器入口证据。`wrapper-contracts.json` 保留弃用签名、可能的原生写入、返回别名及仍由包装器处理的实参。

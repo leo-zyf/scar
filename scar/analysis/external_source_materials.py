@@ -103,7 +103,7 @@ def _close_worker():
         _WORKER.close(); _WORKER = None
 
 
-def _initialize_worker(matches_path, receipt, pins):
+def _initialize_worker(matches_path, receipt, pins, adapter_directory):
     from scar.analysis.source_template_workers import _initialize_worker as initialize
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
     global _MATCHES, _WORKER, _PINS
@@ -111,7 +111,7 @@ def _initialize_worker(matches_path, receipt, pins):
     if _pins() != pins or file_receipt(Path(matches_path)/'result.json') != receipt:
         raise ValueError('external worker inputs or producer changed before initialization')
     _MATCHES = ExternalSourceMatches(matches_path); _PINS = pins
-    _WORKER = SymbolVariantWorker()
+    _WORKER = SymbolVariantWorker(adapter_directory)
     Finalize(None, _close_worker, exitpriority=10)
 
 
@@ -147,14 +147,16 @@ def _worker_task(task):
     return _build_one(_MATCHES, _WORKER, _PINS, match, recipe, out)
 
 
-def build_external_materials(matches_path, out, *, jobs=4):
+def build_external_materials(matches_path, out, *, jobs=4, adapter_directory=None):
     """Build actual F4/interface leaves covering every matched input CodeID."""
+    from scar.analysis.source_symbol_context_adapter import DEFAULT
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
     from scar.analysis.source_template_workers import _torch_guard
     started = time.monotonic(); matches_path = Path(matches_path).absolute(); out = Path(out).absolute()
     if matches_path.is_file(): matches_path = matches_path.parent
     if out.resolve() != out or out.exists() or type(jobs) is not int or not 1 <= jobs <= 8:
         raise ValueError('fresh canonical output and jobs in [1,8] required')
+    adapter = DEFAULT if adapter_directory is None else Path(adapter_directory).resolve(strict=True)
     reader = ExternalSourceMatches(matches_path)
     source_receipt = file_receipt(matches_path/'result.json'); pins = _pins()
     selected, expected, unselected = _select(reader)
@@ -162,12 +164,12 @@ def build_external_materials(matches_path, out, *, jobs=4):
     tasks = tuple((match, recipe, str(out)) for match,recipe in selected)
     if not tasks: results = []
     elif jobs == 1:
-        with _torch_guard(), SymbolVariantWorker() as worker:
+        with _torch_guard(), SymbolVariantWorker(adapter) as worker:
             results = [_build_one(reader,worker,pins,match,recipe,folder) for match,recipe,folder in tasks]
     else:
         with ProcessPoolExecutor(max_workers=min(jobs,len(tasks)),
                 mp_context=multiprocessing.get_context('spawn'), initializer=_initialize_worker,
-                initargs=(str(matches_path),source_receipt,pins)) as pool:
+                initargs=(str(matches_path),source_receipt,pins,adapter)) as pool:
             results = list(pool.map(_worker_task,tasks,chunksize=1))
     entries = [entry for entry,_ in results]
     if any(set(entry) != _ENTRY_FIELDS for entry in entries):
@@ -197,8 +199,10 @@ def build_external_materials(matches_path, out, *, jobs=4):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--matches',required=True); parser.add_argument('--out',required=True)
-    parser.add_argument('--jobs',type=int,default=4); args = parser.parse_args()
-    report = build_external_materials(args.matches,args.out,jobs=args.jobs)
+    parser.add_argument('--jobs',type=int,default=4)
+    parser.add_argument('--adapter-directory', help='use an explicitly published CPython symbol adapter')
+    args = parser.parse_args()
+    report = build_external_materials(args.matches,args.out,jobs=args.jobs,adapter_directory=args.adapter_directory)
     print(json.dumps(dict(status=report['status'],units=len(report['entries']),
         matched_code_templates=len(report['coverage']['covered_keys']),
         jobs=report['jobs'],worker_pids=report['worker_pids'],seconds=report['seconds'])),flush=True)

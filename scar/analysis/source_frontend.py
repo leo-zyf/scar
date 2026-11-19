@@ -154,7 +154,7 @@ def _reuse_source_model(run, model, roots, sources):
     return model, original
 
 
-def admit_external_sources(run, catalog, trace, project_root, jobs):
+def admit_external_sources(run, catalog, trace, project_root, jobs, *, adapter_options=()):
     """Finish bounded admission batches before projecting global call links.
 
     Each extension keeps the original leaves. A later batch discovers only
@@ -187,7 +187,7 @@ def admit_external_sources(run, catalog, trace, project_root, jobs):
                 raise RuntimeError('external source admission exhausted its budget without new material; see '+find)
             return catalog,batches
         run.stage(material,'scar.analysis.external_source_materials',
-            ['--matches',run.out/find,'--out',run.out/material,'--jobs',min(jobs,8)],
+            ['--matches',run.out/find,'--out',run.out/material,'--jobs',min(jobs,8),*adapter_options],
             run.out/material/'result.json','scar.external-source-materials',
             status='EXTERNAL_SOURCE_MATERIALS_BUILT',target_executed=False,first_stage_complete=False)
         run.stage(publish,'scar.analysis.observed_source_admission',
@@ -203,7 +203,7 @@ def admit_external_sources(run, catalog, trace, project_root, jobs):
 
 
 def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=None, source_model=None,
-        verify_body_interfaces=False):
+        verify_body_interfaces=False, adapter_directory=None):
     """Build complete local declarations for the selected source corpus."""
     paths = tuple(dict.fromkeys(Path(p).resolve() for p in paths))
     sources = tuple(dict.fromkeys(Path(p).resolve() for p in sources))
@@ -212,6 +212,10 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
         raise ValueError('trace and project_root must be supplied together')
     trace = None if trace is None else Path(trace).resolve()
     project_root = None if project_root is None else Path(project_root).resolve()
+    adapter_options = ()
+    if adapter_directory is not None:
+        adapter_directory = Path(adapter_directory).resolve(strict=True)
+        adapter_options = ('--adapter-directory', adapter_directory)
     if (not paths or any(not p.is_dir() for p in paths)
             or type(jobs) is not int or not 1 <= jobs <= 32):
         raise ValueError('frontend requires source directories and jobs in [1, 32]')
@@ -228,6 +232,8 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
         workflow_complete=False, local_declarations_complete=False, first_stage_complete=False,
         target_executed=False, global_namespace_resolved=False, runtime_dispatch_proven=False)
     try:
+        if adapter_directory is not None:
+            report['symbol_adapter'] = _receipt(adapter_directory/'result.json')
         from scar.analysis.source_connection_domains import connection_domains
         from scar.analysis.source_connection_contracts import connection_reference_catalog
         if not connection_domains()['type_domains_closed']:
@@ -313,14 +319,14 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
                 execution_namespace_proven=False, first_stage_complete=False)
             run.stage('observed-source-catalog', 'scar.analysis.observed_source_catalog',
                 ['--base',active_catalog,'--trace',trace,'--matches',out/'compilation-matches',
-                    '--project-root',project_root,'--out',out/'observed-source-catalog'],
+                    '--project-root',project_root,'--out',out/'observed-source-catalog',*adapter_options],
                 out/'observed-source-catalog/result.json','scar.observed-source-catalog',
                 target_executed=False, original_compile_options_proven=False,
                 execution_namespace_proven=False, first_stage_complete=False)
             active_catalog = out/'observed-source-catalog'
         if trace is not None:
             active_catalog,report['external_admission_batches']=admit_external_sources(
-                run,active_catalog,trace,project_root,jobs)
+                run,active_catalog,trace,project_root,jobs,adapter_options=adapter_options)
         # Canonical F4 already contains every declared body and its ports.
         # Runtime body interfaces below are derived with the admitted index.
         # A second full-catalog interface view is an optional independent audit.
@@ -424,12 +430,13 @@ def main(argv=None):
         help='also materialize and independently rederive all declared body interfaces')
     parser.add_argument('--trace', help='existing trace to join after local call interfaces; no target execution')
     parser.add_argument('--project-root', help='original trace namespace root; required with --trace')
+    parser.add_argument('--adapter-directory', help='explicit CPython symbol adapter for observed source replay')
     args = parser.parse_args(argv)
     if (args.trace is None) != (args.project_root is None):
         parser.error('--trace and --project-root must be supplied together')
     report = build_frontend(args.paths,args.out,sources=args.source,jobs=args.jobs,
         trace=args.trace,project_root=args.project_root,source_model=args.source_model,
-        verify_body_interfaces=args.verify_body_interfaces)
+        verify_body_interfaces=args.verify_body_interfaces,adapter_directory=args.adapter_directory)
     print(json.dumps(report,indent=2),flush=True)
     return 0 if report['workflow_complete'] else 1
 

@@ -240,15 +240,17 @@ class ObservedSourceCatalog(DeclaredSourceCatalog):
         return result
 
 
-def build_observed_catalog(base, trace, matches, out, *, project_root, material_roots=()):
+def build_observed_catalog(base, trace, matches, out, *, project_root, material_roots=(), adapter_directory=None):
     from scar.analysis.compilation_audit import CompilationAuditInputs, SCHEMA as MATCH_SCHEMA
     from scar.analysis.call_operand_reader import read_call_operands
+    from scar.analysis.source_symbol_context_adapter import DEFAULT
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
     from scar.analysis.compiled_local_interfaces import build_material_interfaces
     from scar.trace.code_snapshot import describe_code
     started = time.monotonic(); base = DeclaredSourceCatalog(base)
     trace = Path(trace).absolute(); matches = Path(matches).absolute(); out = Path(out).absolute()
     if out.resolve() != out or out.exists(): raise ValueError('fresh canonical observed source catalog required')
+    adapter = DEFAULT if adapter_directory is None else Path(adapter_directory).resolve(strict=True)
     if matches.is_dir(): matches /= 'result.json'
     match_receipt = _receipt(matches); report = json.loads(matches.read_bytes())
     audit = CompilationAuditInputs(trace)
@@ -265,7 +267,7 @@ def build_observed_catalog(base, trace, matches, out, *, project_root, material_
         yield describe_code(code)['key']
         for child in code.co_consts:
             if type(child) is CodeType: yield from child_keys(child)
-    with SymbolVariantWorker() as worker:
+    with SymbolVariantWorker(adapter) as worker:
         for matched in report['matches']:
             groups = defaultdict(list)
             for recipe in matched['recipes']:
@@ -333,9 +335,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('base', 'trace', 'matches', 'project-root', 'out'): parser.add_argument('--'+name, required=True)
     parser.add_argument('--material-root', action='append', default=[], help='reuse verified immutable local F4 leaves under this directory')
+    parser.add_argument('--adapter-directory', help='use an explicitly published CPython symbol adapter')
     args = parser.parse_args()
     report = build_observed_catalog(args.base, args.trace, args.matches, args.out,
-        project_root=args.project_root, material_roots=args.material_root)
+        project_root=args.project_root, material_roots=args.material_root, adapter_directory=args.adapter_directory)
     print(json.dumps(dict(compiled_units=len(report['compiled']), source_units=len(report['source_units']),
         seconds=report['seconds'], first_stage_complete=False)), flush=True)
 

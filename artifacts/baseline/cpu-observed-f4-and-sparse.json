@@ -1,0 +1,205 @@
+{
+  "schema": "scar.cpu-observed-f4-and-sparse-baseline",
+  "schema_version": 1,
+  "stage1_rk4": {
+    "actual_call_handles": 5,
+    "admitted_source_catalog": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/complete-source-catalog/result.json",
+      "sha256": "1d7a1f22c25741329ea6ffeb6a2960e7a42ddddc89233f56ebe144b10f5fcab4",
+      "size_bytes": 86126
+    },
+    "binding_locations": 63,
+    "binding_versions": 2189,
+    "body_entries": {
+      "body_protocols": {
+        "EnterDeferredBody": 3,
+        "EnterRootBody": 1
+      },
+      "covered_entries": 10,
+      "entry_coverage_complete": false,
+      "missing_entries": 739,
+      "occurrences": 10,
+      "recorded_entries": 749,
+      "shared_activations": 4,
+      "shared_interfaces": 4,
+      "source_anchor_frontiers": 0,
+      "unmatched_entries": 739
+    },
+    "bounded_navigation_gap_records": 369,
+    "call_field_frontiers": 33,
+    "coverage": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-observed-state-current/coverage.json",
+      "sha256": "3a9b9c9120038014688f9b9f3c9dab691524bf5314c4a22a3bb6c27676feb7fa",
+      "size_bytes": 4674
+    },
+    "effects_closed": false,
+    "entry_formal_occurrences": {
+      "dynamics": {
+        "invocations": 4,
+        "references": 28
+      },
+      "object_content_versions_proven": false,
+      "observed_scope": "NAMED_REFERENCE_AT_ACTUAL_FRAME_ENTRY",
+      "publication": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/observed-formals.json",
+        "sha256": "7cfb2d1ec155e197548f32f96174b218734133e26741d63ea07c30fa62b892ff",
+        "size_bytes": 69520
+      },
+      "summary": {
+        "formal_observations": 32,
+        "frontier_reasons": {
+          "CALLER_ACTUAL_ROUTE_NOT_ESTABLISHED": 4,
+          "CALLER_PACK_BINDING_UNRESOLVED": 4,
+          "FORMAL_BINDING_VERSION_TEMPLATE_NOT_TRACKED": 4
+        },
+        "observed_frames": 8
+      }
+    },
+    "external_material_summary": {
+      "matched_code_ids": 72,
+      "material_phase_seconds": 562.9103182669496,
+      "requested_code_ids": 73,
+      "source_bytes": 654769,
+      "total_worker_cpu_seconds": 1076.06338267,
+      "units": 21,
+      "unmatched_code_ids": 1,
+      "worker_processes": 2
+    },
+    "external_source_matches": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/external-source-matches/result.json",
+      "sha256": "000c57082e209d2fdb3172932034cade76350edd295c16cb1916c5dcb4c34e51",
+      "size_bytes": 121865
+    },
+    "external_source_materials": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/external-source-materials/result.json",
+      "sha256": "967b16c79bc9d62aa26d812ecd57a124c5db896b4efc02268f95e8d5658d0240",
+      "size_bytes": 106551
+    },
+    "first_stage_complete": false,
+    "gap_records": 378,
+    "gaps": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-observed-state-current/gaps.json",
+      "sha256": "789211d79a7b623fdee16ef47005fc93b087ebd8bcf50a7fde7b48e89a15e973",
+      "size_bytes": 417728
+    },
+    "local_program": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-observed-state-current/manifest.json",
+      "sha256": "a8f3cecda2b9f73f18534d40377748dc0d6524b34abd7acb083c81142a5c2238",
+      "size_bytes": 14449
+    },
+    "port_routes": 20,
+    "projected_binding_version_edges": 5206,
+    "raw_archive": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/raw/archive-index.json",
+      "sha256": "3c190abfc62198419a483f8cd81ddd8d25c87b0902e0bdd2612d3eae56c0308a",
+      "size_bytes": 8796
+    },
+    "resource_records": 273,
+    "run_scope": "PRIOR_REAL_CPU_ONLY_ONE_STEP_TRACE_REPLAY",
+    "runtime_path_complete": false,
+    "state_tables": 15,
+    "symbol_adapter": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/symbol-adapter-current/result.json",
+      "sha256": "5be8e5fa46d597bfb804555c0237a81d9b614d1114a5d98f29cee800c8202f0f",
+      "size_bytes": 6830
+    },
+    "symbol_adapter_lineage": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/symbol-adapter-current/reissue.json",
+      "sha256": "21d92af279226c72bb4d3f790f4ce2f4469f5eb78f53abfd0b89932b72763295",
+      "size_bytes": 864
+    }
+  },
+  "stage1_sparse": {
+    "admitted_source_stages": 14,
+    "first_stage_complete": false,
+    "frontend": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/frontend-current/result.json",
+      "sha256": "1ef2a2faad9866caadf090bd41b06a90317e760c142587af34aac64b8d7eb5d0",
+      "size_bytes": 2774
+    },
+    "program": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/program-current/manifest.json",
+      "sha256": "a1a838926e7d72a259a4a4676cc8ea91faaec89bfcc3599803d4b5182772e33e",
+      "size_bytes": 11529
+    },
+    "resource_records": 301,
+    "scope": "CURRENT_F4_STATIC_SOURCE_PATH_FOR_THE_FEM_SWEEP_ENTRY"
+  },
+  "stage2_sparse": {
+    "compact_input_stream": {
+      "byte_count": 311384,
+      "sha256": "b6fe03926b3a79a3f763578d0502d7667e23b8742bcd83d998201db31cd1d1e0"
+    },
+    "current_f4_recipe_requalified": false,
+    "current_recipe_replay_error": "F4 build rules differ",
+    "geometry": {
+      "call_count": 512,
+      "nnz": 20865,
+      "size": 4225
+    },
+    "input_capture": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/compact-capture.json",
+      "sha256": "f9a6f452de8d536888049d5d42d5dfc26cbb23bae2a154d0f887c54d0598156e",
+      "size_bytes": 3846
+    },
+    "new_ab_benchmark_run": false,
+    "raw_input_stream": {
+      "byte_count": 102873156,
+      "sha256": "d45c9828b22fe8851c2695d53d382177e80cb7b6a9616f1a21638047b08029a5"
+    },
+    "recipe": {
+      "schema": "scar.execution-recipe",
+      "sha256": "f930b74a04122e12383dda3ee80e36f0aa827dcea2585e13126116738e3b1623",
+      "size_bytes": 41803,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-ordered-typed/protocol/recipe.json"
+    },
+    "recipe_id": "recipe-v1:db573c4ee60a3e83fd3a2cb403286dd471476ce1ffe223d384d077267cd7f61e",
+    "recipe_scope": "PREVIOUSLY_QUALIFIED_ARCHIVE_REPLAY",
+    "scope": "NORMALIZED_CSR_SOLVE_BOUNDARY_WITH_UPSTREAM_SCIKIT_FEM_SETUP",
+    "source": {
+      "schema": "scar.python-source",
+      "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+      "size_bytes": 1313,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+    },
+    "source_output_bits_matched": 512
+  },
+  "stage3_sparse": {
+    "bundle": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/C++ moved sparse/artifact.json",
+      "sha256": "e3afe64c8acb15aac787d94fdab22fe8eed8dcd054b64e3f02ad108eb65108a2",
+      "size_bytes": 3170
+    },
+    "cpp": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/C++ moved sparse/scar_ordered_sparse.cpp",
+      "sha256": "c9df7db3629b010d0cc23863b3115de76f786d8ee18105faf92016a32e18ee73",
+      "size_bytes": 15449
+    },
+    "native_launch": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/C++ moved sparse/scar_ordered_sparse",
+      "sha256": "1c948dfba0c9af4cfa677f348b65ad66641009ad761c657e1c0d4ca644f5341c",
+      "size_bytes": 101080
+    },
+    "ordered_outputs_bitwise_equal": 512,
+    "output_stream": {
+      "byte_count": 17313864,
+      "sha256": "4894b2cbfab6630832030763716e3c7789c85ad2f36b4e1614274c596d8b1ced"
+    },
+    "output_verification": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/native-output-verification.json",
+      "sha256": "2106ad83c85d221223a439400c2ed7c1cb025f52a91a1647099c6f498a53e11f",
+      "size_bytes": 826
+    },
+    "provider_capture": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/native-strace.txt",
+      "sha256": "5fcb583ca827cba45e8b009aeb872da326d7345206bda830ef54eaf1c859498b",
+      "size_bytes": 82899
+    },
+    "scope": "REBUILT_AND_RELOCATED_STANDALONE_CXX20_BUNDLE",
+    "terminal": [
+      512,
+      4,
+      0
+    ]
+  }
+}

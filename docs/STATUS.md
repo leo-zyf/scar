@@ -1,5 +1,7 @@
 # 当前状态
 
+纯 CPU 验收扩展到两条路径。RK4 的 F4 已接通真实调用、函数体激活和绑定状态，冷读计入 5 个调用句柄、2,189 个绑定版本和 5,206 条依赖边。静态绑定版本的证明范围止于名称及其写入和读取关系。另一条采用 scikit-fem 组装的有限元扫描从已验稀疏排程重建并搬迁了独立 C++20 包，512 个 SuperLU 解按原顺序逐位一致。稀疏路径还需按现行 F4 重验优化资格和成本。见 `artifacts/baseline/cpu-observed-f4-and-sparse.json`。
+
 已从一次新鲜的纯 CPU 原入口采集贯穿支持的 RK4 路径。静态前端通过 25 层验收，动态 JOIN 将 `dynamics` 的 4 次调用绑定到 8 个原生算子。41 MB 下选择三核，四步原生入口中位耗时 1.515→0.830 s。C++20 运行包移动后从包内加载 LibTorch，16 步终态逐位一致。整程序 F4 的路径、状态和效果关系仍有未闭合项。见 `artifacts/baseline/native-cpu-end-to-end.json`。
 
 官方 CPU-only LibTorch 2.13.0 已完成固定网格 RK4 和导出推理交付。两份 C++20 产物通过完整 ELF 依赖准入和冷读重放，RK4 16 步终态与推理 5 个输出均逐位一致。严格模式拒绝带 CUDA Runtime 和 CUPTI 的旧构建。41 MB 预算下的 CPU-only RK4 四步新进程中位数为单核 1.515 s、三核 0.855 s。见 `artifacts/baseline/cpu-only-libtorch-delivery.json`。

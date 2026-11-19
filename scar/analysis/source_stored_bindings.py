@@ -24,6 +24,7 @@ from scar.ir.record_codec import decode,encode
 
 TABLES=frozenset(('rules','requests','locations','accesses','versions','selections','tracks','edges',
     'content_addresses','content_states','content_accesses','content_edges'))
+LINEAGE_TABLES=frozenset(('content_lineage','content_lineage_edges'))
 
 
 class StoredBindingVersions:
@@ -39,7 +40,8 @@ class StoredBindingVersions:
         elif header['schema_version']!=1:raise ValueError('unsupported stored binding schema')
         if (encode(self.namespace)!=header['namespace']
                 or encode(self.source.material.result_artifact)!=header['source_material']
-                or set(header['tables'])!=expected_tables or header['original_body_bytes_copied']!=0
+                or set(header['tables']) not in (expected_tables,expected_tables|LINEAGE_TABLES)
+                or header['original_body_bytes_copied']!=0
                 or any(header[k]is not False for k in ('loops_unrolled','target_executed',
                     'tensor_content_versions_proven','effect_membership_closed','first_stage_complete'))):
             raise ValueError('stored binding source domain, table grammar or authority differs')
