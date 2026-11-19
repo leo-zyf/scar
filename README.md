@@ -12,7 +12,7 @@
 
 当前优先完成三阶段核心开发，定期在同一完整边界验证。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
 
-C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 OpenBLAS。对 PyTorch 可用 `scar link-aten-provider --provider-revision REV --schema SCHEMA --out LINKED` 从完整声明生成并校验 LibTorch 调用。输出的 `operators.hpp` 提供类型化入口，`result.json` 记录编译和链接参数。链接成功只确立外部入口的可用性。详见[架构](docs/ARCHITECTURE.md)。
+C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 SuperLU 与 OpenBLAS。对 PyTorch 可用 `scar link-aten-provider --provider-revision REV --schema SCHEMA --out LINKED` 从完整声明生成并校验 LibTorch 调用。输出的 `operators.hpp` 提供类型化入口，`result.json` 记录编译和链接参数。能否替换原区域还取决于语义、资源与收益证据。详见[架构](docs/ARCHITECTURE.md)。
 
 用 `scar trace --execution-evidence --torch-call-scopes --os-capture-root RAW --out RAW/trace -- python ENTRY.py` 采集，随后运行 `scar import-capture RAW --out MODEL`。从 `MODEL/native/native-call-scopes.json.gz` 选择原始调用序号，再用 `scar link-aten-capture --capture-model MODEL/capture-model.json --capture-model-sha256 SHA256 --call-attempt N --out LINKED` 直接生成外部调用。多次指定 `--call-attempt` 可批量生成。
 
@@ -46,7 +46,7 @@ C++20 交付负责安排现成算子的调用。稀疏求解使用 SuperLU 与 O
 
 `run-aten-python-entry --mode OBSERVE_ORIGINAL` 汇总原入口实际执行的目标调用次数、耗时和 GradMode。`forecast-aten-python-entry` 用这份观测、独立输入的热调用校准及一次性准备成本，先估算进程内入口收益。独立的新进程 A/B 核对最终输出和实际收益。见 [torchdiffeq RK4 验证](artifacts/baseline/aten-ode-entry.json)。
 
-主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → 已有 C++ 后端。首条 `macro-pipeline` 将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本判断保留 Python 或采用已有整区域融合；原程序不变。成本缺失或不盈利时，即使加 `--compile` 也不构建或加载 native。
+主线采用编译器式顺序：原图与效果分析 → 合法结构改写 → 需求/成本推导 → 资源时序构造 → 证书 → C++20 编排。下面的 `macro-pipeline` 是早期数组融合实验，含自有数值循环。它将已准入的原 F4 调用区域投影到既有 OIR，由同范围成本决定是否按试验合同采用整区域融合。成本缺失或不盈利时保留原 Python 路径。
 
 ```bash
 scar macro-pipeline --inputs INPUTS.json --out UNKNOWN
