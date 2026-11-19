@@ -99,6 +99,12 @@ def _write(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + '\n')
 
 
+def _render_recurrence_launch(cpus):
+    prefix = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
+                         'taskset', '-c', ','.join(map(str, cpus))])
+    return f'#!/bin/sh\nset -eu\nexec {prefix} "$(dirname -- "$0")/bin/{_EXE}" "$@"\n'
+
+
 def _emit_sources(project, plan):
     placement = plan['placement']
     changed = False
@@ -143,10 +149,8 @@ def _recurrence_project(project, plan, graph, artifact, selected, references, me
     _write(plan_dir / 'inputs.json', dict(solver=method_provider, rhs=references, source_geometry=geometry,
                                          lowered_step=step_graph, **rhs_candidate))
     _write(plan_dir / 'dependencies.json', artifact['provider'])
-    prefix = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
-                         'taskset', '-c', ','.join(map(str, cpus))])
     launcher = project / 'launch.sh'
-    launcher.write_text(f'#!/bin/sh\nset -eu\nexec {prefix} "$(dirname -- "$0")/bin/{_EXE}" "$@"\n')
+    launcher.write_text(_render_recurrence_launch(cpus))
     launcher.chmod(0o755)
     write_native_project(project, _EXE, include_dirs=('src/providers', 'src/runtime'),
         compile_options=(*compile_flags[1:], '-O2', '-pthread'), link_options=('-pthread', link_flags[0]),

@@ -511,6 +511,18 @@ def verify_native_project(directory, manifest_sha256):
     return root, dict(receipt, native_dependencies_checked=True)
 
 
+def validate_native_outputs(root, arguments, references, *, environment=None):
+    expected = [_content(Path(path).resolve(strict=True)) for path in references]
+    with TemporaryDirectory(prefix='scar-native-validation-') as temporary:
+        outputs = [Path(temporary) / str(i) for i in range(len(references))]
+        subprocess.run([str(root / 'launch.sh'), *arguments, *map(str, outputs)], env=environment or {},
+                       check=True, capture_output=True)
+        observed = [_content(path) for path in outputs]
+    if observed != expected:
+        raise ValueError('native program output differs from its reference bytes')
+    return observed
+
+
 def validate_native_project(directory, manifest_sha256, *, arguments=(), references=()):
     root, receipt = verify_native_project(directory, manifest_sha256)
     report = dict(schema='scar.native-project-validation', schema_version=1,
@@ -524,15 +536,7 @@ def validate_native_project(directory, manifest_sha256, *, arguments=(), referen
             from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT
 
             environment = {name: os.environ[name] for name in CUDA_ENVIRONMENT if name in os.environ}
-        expected = [_content(Path(path).resolve(strict=True)) for path in references]
-        with TemporaryDirectory(prefix='scar-native-validation-') as temporary:
-            outputs = [Path(temporary) / str(i) for i in range(len(references))]
-            subprocess.run([str(root / 'launch.sh'), *arguments, *map(str, outputs)], env=environment,
-                           check=True, capture_output=True)
-            observed = [_content(path) for path in outputs]
-        if observed != expected:
-            raise ValueError('native program output differs from its reference bytes')
-        report['bitwise_output_receipts'] = observed
+        report['bitwise_output_receipts'] = validate_native_outputs(root, arguments, references, environment=environment)
         if cuda_trial:
             report['device_result_verified'] = True
     return report

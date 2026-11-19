@@ -40,6 +40,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 使用 CPU-only LibTorch 时，可给 `compile-aten-recurrence` 或 `compile-exported-aten` 加 `--require-cpu-only`。构建会验证 Linux 加载器解析出的完整 ELF 依赖，遇到 CUDA Runtime、CUPTI 或其他未准入库即停止交付。`validate-native-project` 会重放同一依赖合同。产物当前绑定构建时的 LibTorch 安装。[纯 CPU 验收记录](artifacts/baseline/cpu-only-libtorch-delivery.json)。
 
+`scar export-native-cpu --project NATIVE --manifest-sha256 SHA256 --out RUNTIME` 打包已验收的 CPU-only 产物、LibTorch 依赖和权重。`scar export-native-cpu --check RUNTIME --manifest-sha256 SHA256` 校验迁移包，可加 `--reference FILE` 和 `-- ARGS` 验收输出。运行直接执行 `RUNTIME/launch.sh`。当前验收覆盖本机 Linux 下的目录迁移，并沿用原计划的 CPU 绑定。[纯 CPU 三阶段验收](artifacts/baseline/native-cpu-end-to-end.json)。
+
 重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。
 
 `--plan-cpu-ready` 使用各形状的校准输入试验同 NUMA 物理核组。它核对独立算子、Tensor 容量和线程服务成本，并与同一调用核上的串行执行配对。只有原生入口也达到收益门槛，才把多核排程编入该形状。选型证据覆盖正常完成，Tensor 容量统计排除提供方内部工作区。CUDA 实验可用 `PYTHONPATH=. python scripts/verify_cuda_cublas_schedule.py --out NEW_DIR` 重放拷贝、cuBLAS 与流事件的离线交付。

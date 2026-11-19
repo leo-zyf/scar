@@ -14,6 +14,11 @@ from scar.codegen.native_provider_bundle import _content
 
 _SCHEMA = 'scar.aten-provider-linkage'
 _OPERATOR = re.compile(r'aten::([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\(')
+_LDD_ENTRY = re.compile(
+    r'[ \t]*(?:(?P<soname>[A-Za-z0-9_+.-]+)[ \t]+=>[ \t]+(?P<resolved>/[^\x00\r\n]+)'
+    r'|(?P<direct>/[^\x00\r\n]+)|(?P<virtual>linux-(?:vdso(?:64)?|gate)\.so\.1))'
+    r'[ \t]\(0x[0-9a-fA-F]+\)[ \t]*'
+)
 
 
 def _resolve(schemas, torch, include):
@@ -76,16 +81,15 @@ def _build_interface(torch):
 def _dependencies(listing):
     result = {}
     for line in listing.splitlines():
-        entry = line.strip().split()
-        if len(entry) == 2 and entry[1].startswith('(0x'):
-            path = entry[0] if entry[0].startswith('/') else None
-        elif len(entry) == 4 and entry[1] == '=>' and entry[2].startswith('/') and entry[3].startswith('(0x'):
-            path = entry[2]
-        else:
+        # The loader prints raw paths followed by one separator and the address.
+        entry = _LDD_ENTRY.fullmatch(line)
+        if entry is None:
             raise ValueError('native ELF dependency was not resolved: ' + line)
-        if entry[0] in result:
-            raise ValueError('ambiguous ELF dependency: ' + entry[0])
-        result[entry[0]] = None if path is None else str(Path(path).resolve(strict=True))
+        name = entry['soname'] or entry['direct'] or entry['virtual']
+        path = entry['resolved'] or entry['direct']
+        if name in result:
+            raise ValueError('ambiguous ELF dependency: ' + name)
+        result[name] = None if path is None else str(Path(path).resolve(strict=True))
     return result
 
 
