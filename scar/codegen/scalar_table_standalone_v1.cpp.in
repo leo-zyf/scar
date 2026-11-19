@@ -1,0 +1,72 @@
+#include <array>
+#include <charconv>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
+#include <span>
+#include <string_view>
+
+namespace {
+
+using Integer = std::int64_t;
+
+struct Row {
+    std::string_view key;
+    std::span<const Integer> values;
+};
+
+@SCAR_TABLE_DEFINITION@
+
+bool parse(std::string_view text, Integer& value) {
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+
+bool normalize(Integer& index, Integer size) {
+    if (index < 0) {
+        index += size;
+    }
+    return index >= 0 && index < size;
+}
+
+bool subtract(Integer left, Integer right, Integer& result) {
+    if ((right > 0 && left < std::numeric_limits<Integer>::min() + right)
+            || (right < 0 && left > std::numeric_limits<Integer>::max() + right)) {
+        return false;
+    }
+    result = left - right;
+    return true;
+}
+
+bool evaluate(std::string_view key, Integer left, Integer right, Integer& result) {
+    for (const Row& row : rows) {
+        if (row.key != key) {
+            continue;
+        }
+        const auto size = static_cast<Integer>(row.values.size());
+        if (!normalize(left, size) || !normalize(right, size)) {
+            return false;
+        }
+        return subtract(row.values[left], row.values[right], result);
+    }
+    return false;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc != 4) {
+        std::fputs("usage: scar_scalar_table KEY LEFT RIGHT\n", stderr);
+        return 2;
+    }
+    Integer left{}, right{}, result{};
+    if (!parse(argv[2], left) || !parse(argv[3], right) || !evaluate(argv[1], left, right, result)) {
+        std::fputs("scalar table input is outside the frozen signed-64 domain\n", stderr);
+        return 2;
+    }
+    std::array<char, 22> bytes;
+    const auto formatted = std::to_chars(bytes.data(), bytes.data() + bytes.size() - 1, result);
+    *formatted.ptr = '\n';
+    const auto size = static_cast<std::size_t>(formatted.ptr - bytes.data()) + 1;
+    return std::fwrite(bytes.data(), 1, size, stdout) == size && std::fflush(stdout) == 0 ? 0 : 1;
+}
