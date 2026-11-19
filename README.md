@@ -50,6 +50,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar plan-native-device-placement` 可从已验证的 CPU 包比较合格矩阵乘法的 CPU/CUDA 放置。传入 `--cpu-project`、`--cpu-sha256`、`--device-model`、`--device-model-sha256`、`--out`。声明模型使用 `scar.aten-export-placement-offline-profile`。规划按共享搬运、依赖与容量排除不合格方案，搜索或成本未决时保留 CPU。`compile-exported-aten-cuda` 接收同一模型时只构建被提名的 CUDA 方案，仍须独立实测才能进入采用审查。[放置模型示例与验收](artifacts/baseline/native-device-placement-selection.json)。
 
+加上 `--empirical --input NAME=FILE` 和按输出端口顺序重复的 `--reference FILE`，规划只用与当前执行方案匹配的服务成本。可重复传入 `--device-evidence CUDA_PROJECT CALIBRATION_JSON SHA256`。CPU 普通内存、固定页内存上的 CPU 算子、GPU 算子和双向搬运分别匹配。缺少任何一项时保留 CPU 并列出缺项。服务时间排程与完整入口收益分别验收，`--check` 可离线重放放置决策。[实测成本验收记录](artifacts/baseline/native-empirical-placement.json)。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。

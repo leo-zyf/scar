@@ -1,5 +1,7 @@
 # 当前状态
 
+CPU/CUDA 放置已接入按方案匹配的实测成本。真实导出模型的全 CPU 产物提供 6 个原生算子服务样本集合，5 个输出与 PyTorch 逐位一致。8 种配置中 4 种被声明容量排除，3 种缺实测成本，其中 1 种已确认本机没有可用 CUDA 设备。离线重放保留全 CPU。见 `artifacts/baseline/native-empirical-placement.json`。
+
 CPU/CUDA 放置已按合格算子从源图统一提名。真实导出的 3 个矩阵乘法生成 8 种配置，在声明的容量下 4 种被排除，模型提名 2 个 CPU 矩阵乘法和 1 个 CUDA 矩阵乘法。候选连同活动采集入口已生成 C++20 并通过重放。进一步收紧声明容量会保留全 CPU。无 GPU 实机样本时部署默认保持 CPU。见 `artifacts/baseline/native-device-placement-selection.json`。
 
 混合原生产物已接通可选活动采集与规划器成本重放。在真实导出图上验证了 13 个活动索引、源算子、物化字节数和事件等待绑定。C++20 调用可分别记录 CUDA 事件和主机单调时钟，普通试跑不分配计时事件。本机无设备，实测项为零，13 项活动成本保持 `UNKNOWN`，诊断计划未产生完工时间。见 `artifacts/baseline/native-device-activity-calibration.json`。

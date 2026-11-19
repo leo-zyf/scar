@@ -20,16 +20,12 @@ def qualify_device_export(recipe, shapes=None, *, graph, program_ref, input_kind
         program_ref=program_ref, input_kinds=input_kinds, allow_cuda_only=True)
 
 
-def propose_device_placement(projection, model, *, model_ref):
-    from scar.compiler.aten_export_hybrid_plan import plan_placed_hybrid_export
+def placement_choices(projection):
+    return {row['id']: ('CPU', 'CUDA') if row['schema'] == _MM else ('CPU',)
+            for row in projection['operations']}
 
-    choices = {row['id']: ('CPU', 'CUDA') if row['schema'] == _MM else ('CPU',)
-               for row in projection['operations']}
 
-    def build(placement):
-        return plan_placed_hybrid_export(projection, model, model_ref=model_ref, placement=placement)
-
-    analysis, selected = search_native_device_placements(choices, build)
+def placement_proposal(projection, choices, analysis, selected, *, actual_device_timing='UNKNOWN'):
     layout, regions, crossings = None, [], []
     if selected is not None:
         layout = selected['placement']
@@ -38,8 +34,20 @@ def propose_device_placement(projection, model, *, model_ref):
     return dict(schema='scar.native-export-placement-proposal', schema_version=1,
                 domain={name: list(modes) for name, modes in choices.items()}, selected_placement=layout,
                 selected_cuda_regions=regions, selected_crossings=crossings,
-                analysis=analysis, actual_device_timing='UNKNOWN', default_backend='CPU',
-                deployment_authorized=False), selected
+                analysis=analysis, actual_device_timing=actual_device_timing, default_backend='CPU',
+                deployment_authorized=False)
+
+
+def propose_device_placement(projection, model, *, model_ref):
+    from scar.compiler.aten_export_hybrid_plan import plan_placed_hybrid_export
+
+    choices = placement_choices(projection)
+
+    def build(placement):
+        return plan_placed_hybrid_export(projection, model, model_ref=model_ref, placement=placement)
+
+    analysis, selected = search_native_device_placements(choices, build)
+    return placement_proposal(projection, choices, analysis, selected), selected
 
 
 def plan_device_export(projection, model, *, model_ref):
@@ -58,7 +66,7 @@ def replay_device_export(projection, model, *, model_ref, problem, schedule, bin
         raise ValueError('CUDA placement or schedule differs from its replayed model and source choices')
 
 
-def _from_cpu(cpu, cpu_sha256, profile, model_bytes, model_ref):
+def _from_cpu(cpu, cpu_sha256, profile, model_bytes, model_ref, *, empirical=None):
     from scar.compiler.native_device_pair import CPU_SCHEMA, _manifest, _member
     from scar.runtime.validate_native_project import verify_native_project
 
@@ -75,7 +83,14 @@ def _from_cpu(cpu, cpu_sha256, profile, model_bytes, model_ref):
     recipe = json.loads(_member(root, manifest, base + '/' + recipe_file))
     projection = qualify_device_export(recipe, graph=graph, program_ref=reference,
         input_kinds={row['id']: row['kind'] for row in execution['inputs']})
-    proposal, _ = propose_device_placement(projection, json.loads(model_bytes), model_ref=model_ref)
+    model = json.loads(model_bytes)
+    if empirical is None:
+        proposal, _ = propose_device_placement(projection, model, model_ref=model_ref)
+    else:
+        from scar.compiler.native_device_placement_empirical import propose_empirical_device_placement
+
+        proposal = propose_empirical_device_placement(root, cpu_sha256, profile, projection, model, model_ref,
+                                                       **empirical)
     return dict(proposal, cpu_manifest_sha256=cpu_sha256, cpu_profile=profile, program=reference,
                 declared_model=model_ref)
 
@@ -91,6 +106,11 @@ def main(argv=None):
     parser.add_argument('--cpu-profile')
     parser.add_argument('--device-model')
     parser.add_argument('--device-model-sha256')
+    parser.add_argument('--empirical', action='store_true', help='use only exact measured treatments')
+    parser.add_argument('--input', action='append', default=[], metavar='NAME=FILE')
+    parser.add_argument('--reference', action='append', default=[])
+    parser.add_argument('--device-evidence', nargs=3, action='append', default=[],
+                        metavar=('CUDA_PROJECT', 'CALIBRATION_JSON', 'SHA256'))
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument('--out')
     action.add_argument('--check')
@@ -106,8 +126,11 @@ def main(argv=None):
         if model_path.resolve(strict=True) != model_path:
             raise ValueError('device model must be local to its archived placement proposal')
         model = model_path.read_bytes()
+        evidence = stored.get('empirical')
+        empirical = None if evidence is None else dict(inputs=evidence['inputs'], references=evidence['references'],
+            device_evidence=[(row['project'], row['calibration'], row['sha256']) for row in evidence['device_evidence']])
         proposal = _from_cpu(args.cpu_project, stored['cpu_manifest_sha256'], stored['cpu_profile'],
-                             model, _model_reference(model))
+                             model, _model_reference(model), empirical=empirical)
         if proposal != stored:
             raise ValueError('device placement proposal differs from its replayed source choices')
     else:
@@ -120,7 +143,12 @@ def main(argv=None):
         model_ref = _model_reference(model)
         if model_ref['sha256'] != args.device_model_sha256:
             raise ValueError('device model differs from its declared digest')
-        proposal = _from_cpu(args.cpu_project, args.cpu_sha256, args.cpu_profile, model, model_ref)
+        if not args.empirical and (args.input or args.reference or args.device_evidence):
+            parser.error('sample inputs, references and device evidence require --empirical')
+        empirical = dict(named_inputs=args.input, references=args.reference, device_evidence=args.device_evidence) \
+            if args.empirical else None
+        proposal = _from_cpu(args.cpu_project, args.cpu_sha256, args.cpu_profile, model, model_ref,
+                             empirical=empirical)
         out.parent.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix='.scar-device-placement-', dir=out.parent) as temporary:
             stage = Path(temporary)

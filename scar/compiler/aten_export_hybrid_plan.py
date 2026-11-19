@@ -62,11 +62,21 @@ def plan_hybrid_export(projection, model, *, model_ref):
     resulting certificate leaves device performance and deployment unproven.
     """
     target = _profile_target(model, model_ref, schema=OFFLINE_PROFILE, extra_durations=('cpu_aten',))
-    return _plan_placement(projection, model, model_ref, target, None)
+    return _certify_placement(*_build_placement(projection, model, model_ref, target, None))
 
 
 def plan_placed_hybrid_export(projection, model, *, model_ref, placement):
     """Lower an explicitly selected typed placement to a fixed physical problem."""
+    return _certify_placement(*_explicit_placement(projection, model, model_ref, placement))
+
+
+def build_placed_hybrid_problem(projection, model, *, model_ref, placement):
+    """Return placements and material routes before any timing-based scheduling."""
+    problem, bindings = _explicit_placement(projection, model, model_ref, placement)
+    return problem_document(problem), None, bindings
+
+
+def _explicit_placement(projection, model, model_ref, placement):
     host_bytes = model.get('host_memory_bytes') if type(model) is dict else None
     if type(host_bytes) is not int or not 0 < host_bytes < 2**63:
         raise ValueError('the placement profile requires bounded ordinary host memory')
@@ -74,10 +84,16 @@ def plan_placed_hybrid_export(projection, model, *, model_ref, placement):
                              model_ref, schema=PLACEMENT_PROFILE, extra_durations=('cpu_aten', 'cpu_mm'))
     if type(placement) is not dict:
         raise ValueError('an explicit typed CPU/CUDA placement is required')
-    return _plan_placement(projection, model, model_ref, target, placement)
+    return _build_placement(projection, model, model_ref, target, placement)
 
 
-def _plan_placement(projection, model, model_ref, target, placement):
+def _certify_placement(problem, bindings):
+    schedule = construct_implementations(problem)
+    verify_execution_plan(problem, schedule)
+    return problem_document(problem), schedule, bindings
+
+
+def _build_placement(projection, model, model_ref, target, placement):
     if (projection.get('schema') != SOURCE_SCHEMA or type(projection.get('schema_version')) is not int
             or projection['schema_version'] != 1 or projection.get('layout') != 'CONTIGUOUS_ROW_MAJOR'
             or projection.get('dtype') != 'FLOAT32'
@@ -185,9 +201,7 @@ def _plan_placement(projection, model, model_ref, target, placement):
     bindings = dict(device=model['device'], memory_kinds={_HOST: 'PinnedHost', _DEVICE: 'Device'},
         stream_channels=[_UPLOAD, _COMPUTE, _DOWNLOAD], compute_resource=_GPU, host_resource=HOST_RESOURCE,
         input_values=inputs, output_values=[published[f'{_RETURN}:{name}'] for name in projection['outputs']])
-    schedule = construct_implementations(problem)
-    verify_execution_plan(problem, schedule)
-    return problem_document(problem), schedule, bindings
+    return problem, bindings
 
 
 def _plan_pageable_host(projection, model, target, resources, operations, edges, inputs):
@@ -204,10 +218,8 @@ def _plan_pageable_host(projection, model, target, resources, operations, edges,
         'SINGLE_SYNCHRONOUS_HOST_ATEN_LANE', 'PAGEABLE_HOST_SOURCE_ORDER_ATEN_CALLS',
         'HOST_TENSOR_BACKING_EXCLUDES_PROVIDER_WORKSPACE'),
         reserved_memory={_PAGEABLE_HOST: footprint['persistent_input_bytes']})
-    schedule = construct_implementations(problem)
-    verify_execution_plan(problem, schedule)
-    return problem_document(problem), schedule, dict(deployment='CPU', host_resource=HOST_RESOURCE,
-                                                     input_values=inputs, output_values=list(projection['outputs']))
+    return problem, dict(deployment='CPU', host_resource=HOST_RESOURCE, input_values=inputs,
+                         output_values=list(projection['outputs']))
 
 
 def replay_hybrid_export(projection, model, *, model_ref, problem, schedule, bindings):

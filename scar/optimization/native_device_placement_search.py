@@ -32,20 +32,31 @@ def _choice_table(choices):
 
 def _cost_frontiers(problem, cost_basis):
     frontiers = []
+    empirical = cost_basis == 'EMPIRICAL_MODEL'
+
+    def missing(cost):
+        return (cost.basis != cost_basis or cost.estimate_ns is None or cost.missing_terms
+                or empirical and (cost.estimate_ns == 0 or not cost.source_refs))
+
+    def add(cost, **scope):
+        row = dict(**scope, reason='MISSING_MATCHED_COST', cost_basis=cost.basis)
+        if empirical:
+            row.update(context=cost.context, missing_terms=list(cost.missing_terms))
+        frontiers.append(row)
+
     for operation in problem.operations:
         mode, = operation.options
         cost = mode.cost
         if (cost.estimate_ns == 0 and cost.basis == 'DECLARED_MODEL' and cost.context == 'LOGICAL_ENDPOINT'
-                and not mode.demands and not mode.workspace_bytes):
+                and not mode.demands and not mode.workspace_bytes
+                and (not empirical or not mode.output_locations and not mode.unresolved_resources)):
             continue
-        if (cost.basis != cost_basis or cost.estimate_ns is None or cost.missing_terms
-                or cost_basis == 'EMPIRICAL_MODEL' and not cost.source_refs):
-            frontiers.append(dict(operation=operation.id, reason='MISSING_MATCHED_COST', cost_basis=cost.basis))
+        if missing(cost):
+            scope = dict(operation=operation.id, lowering=mode.lowering) if empirical else dict(operation=operation.id)
+            add(cost, **scope)
     for activity in problem.activities:
-        cost = activity.cost
-        if (cost.basis != cost_basis or cost.estimate_ns is None or cost.missing_terms
-                or cost_basis == 'EMPIRICAL_MODEL' and not cost.source_refs):
-            frontiers.append(dict(activity=activity.id, reason='MISSING_MATCHED_COST', cost_basis=cost.basis))
+        if missing(activity.cost):
+            add(activity.cost, activity=activity.id)
     return frontiers
 
 
@@ -59,6 +70,13 @@ def _evaluate(placement, built, domain, cost_basis):
     identity = (problem.target, problem.source_refs, problem.normal_completion_only, problem.objective)
     if domain is not None and identity != domain:
         raise ValueError('placement plans must describe the same source, target and observation contract')
+    frontiers = _cost_frontiers(problem, cost_basis)
+    if schedule is None:
+        if cost_basis != 'EMPIRICAL_MODEL' or not frontiers:
+            raise ValueError('only an unpriced empirical placement may defer scheduling')
+        row = dict(problem_sha256=digest(problem), schedule_status='UNRESOLVED', makespan_ns=None,
+                   status='UNRESOLVED', frontier=frontiers)
+        return row, None, identity
     if (schedule.get('schema') != PLAN_SCHEMA or schedule.get('problem_sha256') != digest(problem)
             or schedule.get('execution_authorized') is not False
             or schedule.get('deployment_authorized') is not False
@@ -68,7 +86,6 @@ def _evaluate(placement, built, domain, cost_basis):
     if status not in (*_FEASIBLE, 'UNRESOLVED'):
         raise ValueError('unexpected status from the fixed-placement constructive scheduler')
     proof = verify_execution_plan(problem, schedule) if status in _FEASIBLE else None
-    frontiers = _cost_frontiers(problem, cost_basis)
     frontiers.extend(schedule['frontiers'])
     frontiers.extend(schedule.get('construction_frontier', ()))
     row = dict(problem_sha256=schedule['problem_sha256'], schedule_status=status, makespan_ns=None)
@@ -87,8 +104,9 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
 
     The callback qualifies a placement and constructs its shared-material
     problem, schedule and bindings. It owns evidence replay for matched
-    empirical costs. Placement ranking compares constructed schedules, so an
-    exhaustive placement domain still makes no claim about schedule optimality.
+    empirical costs and can defer an unpriced empirical schedule. Placement
+    ranking compares constructed schedules, so an exhaustive placement domain
+    still makes no claim about schedule optimality.
     """
     table = _choice_table(choices)
     if type(max_placements) is not int or not 1 <= max_placements <= maxsize or cost_basis not in _COST_BASES:

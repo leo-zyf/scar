@@ -1,0 +1,162 @@
+{
+  "checks": {
+    "altered_sample_rejected": true,
+    "declared_proposal_replayed": true,
+    "empirical_proposal_replayed": true,
+    "legacy_cuda_project_replayed": true,
+    "repinned_placement_rejected": true
+  },
+  "cpu": {
+    "bitwise_output_receipts": [
+      {
+        "sha256": "658c89d58371b5ef999dfe6f2431f969c2c8d29beba4c6f10ad8a521a6d9ffd0",
+        "size_bytes": 24
+      },
+      {
+        "sha256": "10e500af170fcba19dc29f9cccbeb9edbac74e8c29dc7d9c9814993def9d6bdd",
+        "size_bytes": 16
+      },
+      {
+        "sha256": "08397e5df19de73b0bfc534983fd30baaf594ec4193fcf6e702af3770a15a734",
+        "size_bytes": 16
+      },
+      {
+        "sha256": "08397e5df19de73b0bfc534983fd30baaf594ec4193fcf6e702af3770a15a734",
+        "size_bytes": 16
+      },
+      {
+        "sha256": "658c89d58371b5ef999dfe6f2431f969c2c8d29beba4c6f10ad8a521a6d9ffd0",
+        "size_bytes": 24
+      }
+    ],
+    "calibration": {
+      "path": "artifacts/current/experiments/typed-hybrid-export-v1/cpu-placement-calibrated/validation/calibration.json",
+      "sha256": "1ded0b3fc85cbbb8f17c6e3f72f45133629efcf00d63f1a39a4d5062866d1553",
+      "size_bytes": 1749
+    },
+    "cpu_ids": [
+      0
+    ],
+    "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+    "manifest_sha256": "ce38b45bcc72a179a1732d52f92a66f374075215a738ef8e0eeeff163b219c35",
+    "modeled_service_makespan_ns": 2550530,
+    "samples": 3,
+    "services": [
+      {
+        "max_ns": 1496595,
+        "median_ns": 1414575,
+        "min_ns": 1405182,
+        "operation": "mm"
+      },
+      {
+        "max_ns": 19984,
+        "median_ns": 19682,
+        "min_ns": 9570,
+        "operation": "mm_1"
+      },
+      {
+        "max_ns": 1065471,
+        "median_ns": 1054516,
+        "min_ns": 1049514,
+        "operation": "relu"
+      },
+      {
+        "max_ns": 7653,
+        "median_ns": 6746,
+        "min_ns": 6569,
+        "operation": "mm_2"
+      },
+      {
+        "max_ns": 58079,
+        "median_ns": 51640,
+        "min_ns": 49066,
+        "operation": "add"
+      },
+      {
+        "max_ns": 3890,
+        "median_ns": 3371,
+        "min_ns": 3311,
+        "operation": "relu_1"
+      }
+    ],
+    "timing_scope": "SERIAL_OPERATOR_SERVICE_EXCLUDES_SETUP_AND_FILE_IO",
+    "validation": {
+      "path": "artifacts/current/experiments/typed-hybrid-export-v1/cpu-placement-calibrated-validation.json",
+      "sha256": "45c4b4e33dc77b6581f0f8726a63b897ba68c63d72dc1f9d9249b7e90803b995",
+      "size_bytes": 814
+    },
+    "warmups": 1
+  },
+  "cuda": {
+    "actual_timing": "UNKNOWN",
+    "calibration": {
+      "path": "artifacts/current/experiments/typed-hybrid-export-v1/empirical-placement-device-calibration/calibration.json",
+      "sha256": "65e404cdc37a1e6c7862ed84d8162b5f010c90629e8c157ca41ca8197bc2f3d7",
+      "size_bytes": 5191
+    },
+    "executed_samples": 0,
+    "observation": {
+      "path": "artifacts/current/experiments/typed-hybrid-export-v1/empirical-placement-device-calibration/observation.json",
+      "sha256": "22b2bdb795bc754fccf37954e6c58d39ca07ddf1a860dc56ede428296d5ff123",
+      "size_bytes": 3609
+    },
+    "observed_activity_count": 0,
+    "phase": "DEVICE_UNAVAILABLE",
+    "probe_returncode": 77
+  },
+  "placement": {
+    "decision": "PLACEMENT_DOMAIN_UNRESOLVED",
+    "default_backend": "CPU",
+    "deployment_authorized": false,
+    "examined": 8,
+    "missing_costs_by_ordinal": {
+      "1": [
+        "CPU_PINNED_REQUIRES_MATCHED_ATEN_OUT",
+        "CUDA_REQUIRES_D2H",
+        "CUDA_REQUIRES_H2D",
+        "CUDA_REQUIRES_SGEMM",
+        "DEVICE_UNAVAILABLE"
+      ],
+      "2": [
+        "CPU_PINNED_REQUIRES_MATCHED_ATEN_OUT",
+        "CUDA_REQUIRES_D2H",
+        "CUDA_REQUIRES_H2D",
+        "CUDA_REQUIRES_SGEMM",
+        "NO_MATCHED_HYBRID_TREATMENT"
+      ],
+      "4": [
+        "CPU_PINNED_REQUIRES_MATCHED_ATEN_OUT",
+        "CUDA_REQUIRES_D2H",
+        "CUDA_REQUIRES_H2D",
+        "CUDA_REQUIRES_SGEMM",
+        "NO_MATCHED_HYBRID_TREATMENT"
+      ]
+    },
+    "physical_optimality_proven": false,
+    "selected": {
+      "add": "CPU",
+      "mm": "CPU",
+      "mm_1": "CPU",
+      "mm_2": "CPU",
+      "relu": "CPU",
+      "relu_1": "CPU"
+    },
+    "statuses": {
+      "PLACEMENT_CAPACITY_EXCEEDED": 4,
+      "UNRESOLVED": 3,
+      "VERIFIED_SCHEDULE": 1
+    }
+  },
+  "proposal": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/empirical-device-placement/placement.json",
+    "sha256": "6639a0c1c0b90195f0cc25e35f0bb0bd26982569815e09fb8760757758e6398b",
+    "size_bytes": 27711
+  },
+  "schema": "scar.native-empirical-placement-baseline",
+  "schema_version": 1,
+  "source_model": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/model.pt2",
+    "sha256": "2d7da20d2bdc2785b8df76871f26b9b056c85882dbbd10820851e0485a580fcb",
+    "size_bytes": 11982
+  }
+}
