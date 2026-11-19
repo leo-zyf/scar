@@ -1,0 +1,279 @@
+{
+  "next_gate": [
+    "SOURCE_ATTACHED_MATRIX_LOAD_AND_CONSTRAINT_RETURN_ROUTES",
+    "QUALIFY_UPSTREAM_PROVIDERS_AND_COST_DEPENDENCIES",
+    "ORIGINAL_ENTRY_TO_NATIVE_STDOUT_WITH_MATCHED_CONTRACT_AND_TIMING"
+  ],
+  "schema": "scar.cpu-return-producers-and-selected-publication",
+  "schema_version": 1,
+  "stage1": {
+    "call_plan": {
+      "bytes": 238293,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/replay-v1/plan.json",
+      "sha256": "faebd069ee90852fccee9b4b5181220e2a6f7c1e93264de95360615efb628c55"
+    },
+    "capture": {
+      "bytes": 1249,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/replay-v1/observed/result.json",
+      "sha256": "2b8c2d5bf18e6f33716471913c37500272c420d8ced5ed1b29f2c8ac3e53f602"
+    },
+    "capture_wall_seconds": 9.143455019919202,
+    "coo_producers": {
+      "constrained_rows": "SOURCE_AND_CONDITIONAL_ROUTE",
+      "load": "EXACT_CALL_TARGET_WITH_BODY_OUTSIDE_CATALOG",
+      "matrix": "SOURCE_AND_CONDITIONAL_ROUTE"
+    },
+    "frontier_audit": {
+      "bytes": 62300,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/coo-producer-frontier-audit-v1/result.json",
+      "sha256": "b69c494df98cbd61d984835129cff7d3f25cf8031fe12a9e48463c5c15fe3670"
+    },
+    "graph_summary": {
+      "all_bounded_source_interfaces": 33,
+      "catalog_units": 8,
+      "entry_conditional_interfaces": 33,
+      "entry_projection_units": 8,
+      "entry_reachable_observed_attempts": 105,
+      "entry_static_call_templates": 240,
+      "entry_static_scopes": 22,
+      "observed_attempts": 112,
+      "observed_target_frontiers": {
+        "OBSERVED_CALLABLE_REQUIRES_OTHER_CALL_PROTOCOL": 62,
+        "OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG": 24
+      },
+      "observed_target_kinds": {
+        "BOUND_PYTHON_METHOD": 2,
+        "NATIVE_CARRIER": 33,
+        "OTHER_CALLABLE": 12,
+        "PYTHON_FUNCTION": 48,
+        "TYPE_OBJECT": 17
+      },
+      "preparation_loaded_units": 8,
+      "shared_source_bodies": 21,
+      "typed_route_edges": 267,
+      "typed_route_kinds": {
+        "ARGUMENT": 40,
+        "CALL_TARGET": 33,
+        "COMPLETION": 33,
+        "ENVIRONMENT": 33,
+        "PROJECTION": 62,
+        "STATE_INTERFACE": 66
+      }
+    },
+    "observed_sites": 112,
+    "planned_code_bodies": 20,
+    "planned_sites": 121,
+    "program": {
+      "bytes": 15274,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/replay-v1/program/manifest.json",
+      "sha256": "731ebd1dbf22b9ec9405a8fdd3f4dcaf70ff6f1539704b13d19580156f7fbf69"
+    },
+    "source_graph": {
+      "bytes": 2745385,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/replay-v1/entry-calls.json",
+      "sha256": "9f349faf1eb8fdc3b77579062576d3939f6fdd5e3f4d51a79330987cfc962b9b"
+    },
+    "target_iterations": 512,
+    "transforms_enabled": false,
+    "whole_entry_graph_complete": false
+  },
+  "stage2": {
+    "choice": {
+      "bytes": 2357,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/publication-choice-v1/result.json",
+      "sha256": "5b7e989dd7b38afa2ce5bb1ed04fa2abc893cb405d5cb7093be4c65fbc04e878"
+    },
+    "cpu_id": 7,
+    "graph_storage": {
+      "guarded_member_count": 23,
+      "mismatch_verification": {
+        "bytes": 1323,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/source-summary-binding-reader-v1/scope-boundary-result.json",
+        "sha256": "b79cf29fc550cb0d15d2b2353e28e4fc4a394f7e68db608820e050fe04cc16ab"
+      },
+      "mismatched_entry_rejected": true,
+      "shard_count": 22,
+      "storage_verification": {
+        "bytes": 1431,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/source-summary-binding-reader-v1/large-archive-result.json",
+        "sha256": "09b51fb78f020b436b85723490e8a2bee16ce33c733c154e3a935163ad89cad4"
+      },
+      "unit_verification": {
+        "bytes": 98,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/source-summary-binding-reader-v1/unit.log",
+        "sha256": "ba0d9c8fb02c0dc8feb9d89b0613fe7e71d4ec619c28ff667bc99b2ca6af4188"
+      }
+    },
+    "instrumented": true,
+    "measured_entry": {
+      "bytes": 9881,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/original-boundary-cost-v1/result.json",
+      "sha256": "90fd29c417ff39940c7276119af3222a3277df82ade36e3e15358d6c89cc2e1f"
+    },
+    "observed_site_count": 13,
+    "rebound_entry": {
+      "bytes": 44005,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/original-boundary-cost-v1/eight-unit-projection.json",
+      "sha256": "29d8a807ca9f696c79c535b2530f89190c68f918324da1ad2198b88d771439a6"
+    },
+    "selected_publication": {
+      "sha256": "5b7e989dd7b38afa2ce5bb1ed04fa2abc893cb405d5cb7093be4c65fbc04e878",
+      "size_bytes": 2357,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/sha256-delivery-v1/C++ selected native/evidence/choice.json"
+    },
+    "summary_ns": {
+      "exit_observed_disjoint_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": 25378,
+        "lower_ns": 24983,
+        "samples": 3,
+        "upper_ns": 26305
+      },
+      "prefix_observed_disjoint_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": 37233505,
+        "lower_ns": 36644296,
+        "samples": 3,
+        "upper_ns": 37751439
+      }
+    },
+    "unmeasured": {
+      "imports_and_module_gaps_ns": null,
+      "loop_without_final_digest_ns": null,
+      "post_stdout_teardown_ns": null,
+      "python_stdout_buffer_flush_and_os_write_service_ns": null,
+      "uninstrumented_whole_entry_ns": null,
+      "worker_lane_or_memory_traffic_ns": null
+    },
+    "untimed_producer_count": 3
+  },
+  "stage3": {
+    "boundary": "CAPTURED_COO_MATRIX_AND_LOAD_CONTRIBUTIONS_AND_CONSTRAINED_ROWS_THROUGH_ORDERED_SHA256_STDOUT",
+    "clean_packaging_comparison": {
+      "boundary": "SAME_PREOPENED_COO_INPUT_TO_SHA256_STDOUT_AND_ALL_NATIVE_EXITS",
+      "cpu_ids": [
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "full_original_entry_speedup": null,
+      "ingress_cpu": 49,
+      "ns": {
+        "composed": {
+          "max_ns": 995369654,
+          "median_ns": 990250895.0,
+          "min_ns": 987188209,
+          "sample_stdev_ns": 3658606.65269429,
+          "samples_ns": [
+            987188209,
+            988572901,
+            995369654,
+            991928889
+          ]
+        },
+        "split": {
+          "max_ns": 986047456,
+          "median_ns": 983987213.0,
+          "min_ns": 981807774,
+          "sample_stdev_ns": 1816124.9798416041,
+          "samples_ns": [
+            981807774,
+            983314931,
+            986047456,
+            984659495
+          ]
+        }
+      },
+      "observed_median_change_percent": 0.6365613208431098,
+      "paired_repetitions": 4,
+      "record": {
+        "bytes": 1265,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/benchmark-composed.json",
+        "sha256": "ae4b9efac0233ebc6a31f7b96e7f6dcd37eafc45142751bf771404ef7078490a"
+      },
+      "warmup_per_arm": 1
+    },
+    "coo_observation": {
+      "bytes": 5306,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/operands/result.json",
+      "sha256": "a02ea3aa691270a8c96a874e326e5ab54518d967310f3cfff1f50a23e1380861"
+    },
+    "coo_wire": {
+      "bytes": 1475660,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/operands/source-coo.bin",
+      "sha256": "2d3bc6294fd68dc5db7503c1b27833546d41ad5a1847323386c7d9eb399eb4c1"
+    },
+    "csr_only_delivery": {
+      "bytes": 5781,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/sha256-delivery-v1/acceptance.json",
+      "sha256": "affe9b2609c4fdc36615bda6762f8a3e7d21f5b7d38b6205f17bdb75342f621a"
+    },
+    "cxx_standard": 20,
+    "executable": {
+      "bytes": 38696,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/C++ COO release/scar_publish",
+      "sha256": "b1fd73bf1c9b2f04104260b653ffe954052fedc878e31cd5f5e2c5a7cfdee663"
+    },
+    "full_python_entry_native": false,
+    "independent_ingress_acceptance": {
+      "bytes": 1481,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/independent-ingress-acceptance.json",
+      "sha256": "6cec2e4134b03f0dfa2c2a2fa8b870c0e31c329d00545a8019364241ee55760f"
+    },
+    "ingress_source": {
+      "bytes": 5141,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/C++ COO release/coo/main.cpp",
+      "sha256": "90783728e8b9caaab5d174e658024859803cfbae8fab978df0d1eec42e8ce82e"
+    },
+    "installed_and_relocated": {
+      "bytes": 894,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/compose-relocation.log",
+      "sha256": "c021f327c7706fa2f0ef19edf9cab2f5cafb9472f99af6e9ed61a4672db5d15d"
+    },
+    "native_csr": {
+      "bytes": 302168,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/cxx-csr.bin",
+      "sha256": "ff4fe3bcbaf289cc7aa5df5c4fb5c16bc893cecee16cecc321acf659bd7515be"
+    },
+    "native_stdout": {
+      "bytes": 65,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/composed.stdout",
+      "sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e"
+    },
+    "no_python_runtime": true,
+    "operator_source": {
+      "archive_sha256": "52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307",
+      "provider": "SciPy 1.18.1 sparsetools",
+      "upstream": "https://pypi.org/project/scipy/1.18.1/#scipy-1.18.1.tar.gz"
+    },
+    "original_csr": {
+      "bytes": 302168,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/operands/original-csr.bin",
+      "sha256": "ff4fe3bcbaf289cc7aa5df5c4fb5c16bc893cecee16cecc321acf659bd7515be"
+    },
+    "original_stdout": {
+      "bytes": 65,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/capture.stdout",
+      "sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e"
+    },
+    "original_workload_modified": false,
+    "release": {
+      "bytes": 2312,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/C++ COO release/artifact.json",
+      "sha256": "856dd2bc83160dd5938ec6bd9c3b89af100aaa9f2fb8f651d22138ba39aad390"
+    },
+    "source": {
+      "bytes": 10061,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/coo-assembly-provider-v1/C++ COO release/scar_publish.cpp",
+      "sha256": "e22f10c061d2b7603d0f177107131d9c66ea52fbd2f8ae4d0c939fcbca97269b"
+    },
+    "truncated_coo_exits_nonzero": true,
+    "truncated_coo_stdout_bytes": 0
+  },
+  "target": "Linux x86-64 CPU",
+  "workload": "scikit-fem repeated linear solve, 512 iterations"
+}
