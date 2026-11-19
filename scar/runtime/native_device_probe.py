@@ -153,6 +153,39 @@ def _attempt(root, mode, pair, prefix, arguments, output_count, scratch, environ
                     outputs=[_content(path) if path.is_file() and not path.is_symlink() else None for path in outputs])
 
 
+def _launch_scope(cpu_ids):
+    available = os.sched_getaffinity(0)
+    if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= available:
+        raise ValueError('native device comparison requires the CPU incumbent affinity on this host')
+    prefix = ('/usr/bin/taskset', '-c', ','.join(map(str, sorted(cpu_ids))))
+    environment = {name: os.environ[name] for name in CUDA_ENVIRONMENT if name in os.environ}
+    return prefix, environment, sorted(available)
+
+
+def _observe_cuda_preflight(cuda, manifest, device, cpu_ids, scope):
+    prefix, environment, available = scope
+    host = os.uname()
+    context = dict(cpu_model=_cpu_model(), architecture=host.machine, kernel_release=host.release,
+                   caller_affinity=available, benchmark_cpus=cpu_ids, cuda_environment=environment,
+                   device_ordinal=device, cuda_identity=None, cuda_identity_error=None)
+    probe = _stdio(subprocess.run([*prefix, str(cuda / 'launch.sh'), '--probe'],
+                                  env=environment, capture_output=True))
+    rejection = native_device_probe_reason(probe, device=device)
+    if rejection is not None:
+        return context, probe, 'DEVICE_UNAVAILABLE' if rejection == 'CUDA_DEVICE_UNAVAILABLE' else 'PROBE_FAILED'
+    runtime = _cuda_runtime_lock(cuda, manifest)
+    identity, error = (_cuda_device_identity(runtime, device, prefix, environment) if runtime
+                       else (None, 'native candidate has no unique locked CUDA Runtime library'))
+    context.update(cuda_identity=identity, cuda_identity_error=error)
+    return context, probe, 'DEVICE_SCOPE_UNVERIFIED' if identity is None else None
+
+
+def _check_device_unchanged(context, prefix, environment):
+    identity = context['cuda_identity']
+    if _cuda_device_identity(identity['runtime_library'], context['device_ordinal'], prefix, environment)[0] != identity:
+        raise ValueError('CUDA device identity changed during native evidence collection')
+
+
 def probe_native_device_pair(cpu_root, cuda_root, *, inputs, references, cpu_profile=None,
                              warmup_pairs=1, measurement_pairs=4, expected_identity=None):
     """Collect fresh-process wall time only after the matched CUDA preflight."""
@@ -176,11 +209,8 @@ def probe_native_device_pair(cpu_root, cuda_root, *, inputs, references, cpu_pro
     device, byte_order = description['device'], description['byte_order']
     if byte_order != sys.byteorder:
         raise ValueError('native device package byte order differs from the running host')
-    available_cpus = os.sched_getaffinity(0)
-    if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= available_cpus:
-        raise ValueError('native device comparison requires the CPU incumbent affinity on this host')
-    prefix = ('/usr/bin/taskset', '-c', ','.join(map(str, sorted(cpu_ids))))
-    environment = {name: os.environ[name] for name in CUDA_ENVIRONMENT if name in os.environ}
+    scope = _launch_scope(cpu_ids)
+    prefix, environment, _ = scope
 
     input_records, reference_records = _receipt_paths(inputs), _receipt_paths(references)
     input_shapes = [port['shape'] for port in execution['inputs'] if port['kind'] == 'INPUT']
@@ -193,42 +223,28 @@ def probe_native_device_pair(cpu_root, cuda_root, *, inputs, references, cpu_pro
         protected.update(str(root / name) for name in ('artifact.json', *manifest['files']))
         protected.update(path for path in manifest['dependencies'].values() if path is not None)
     before = _stat_locks(protected)
-    host = os.uname()
-    context = dict(cpu_model=_cpu_model(), architecture=host.machine, kernel_release=host.release,
-                   caller_affinity=sorted(available_cpus), benchmark_cpus=cpu_ids, cuda_environment=environment,
-                   device_ordinal=device, cuda_identity=None, cuda_identity_error=None)
-    probe = _stdio(subprocess.run([*prefix, str(cuda / 'launch.sh'), '--probe'],
-                                  env=environment, capture_output=True))
-    rejection = native_device_probe_reason(probe, device=device)
+    context, probe, phase = _observe_cuda_preflight(cuda, cuda_manifest, device, cpu_ids, scope)
     runs = []
-    if rejection is not None:
-        phase = 'DEVICE_UNAVAILABLE' if rejection == 'CUDA_DEVICE_UNAVAILABLE' else 'PROBE_FAILED'
-    else:
-        runtime_library = _cuda_runtime_lock(cuda, cuda_manifest)
-        identity, error = (_cuda_device_identity(runtime_library, device, prefix, environment) if runtime_library
-                           else (None, 'native candidate has no unique locked CUDA Runtime library'))
-        context.update(cuda_identity=identity, cuda_identity_error=error)
-        phase = 'DEVICE_SCOPE_UNVERIFIED'
-        if identity is not None:
-            phase = 'COMPLETE'
-            paths = [row['path'] for row in input_records]
-            entries = {'CPU': (cpu, paths if cpu_profile is None else [cpu_profile, *paths]),
-                       'CUDA': (cuda, ['--trial', *paths])}
-            with TemporaryDirectory(prefix='scar-matched-device-') as scratch:
-                for index in range(2 * (warmup_pairs + measurement_pairs)):
-                    pair, position = divmod(index, 2)
-                    mode = _MODES[(pair + position) % 2]
-                    root, arguments = entries[mode]
-                    row = _attempt(root, mode, pair, prefix, arguments, len(references), scratch, environment)
-                    runs.append(row)
-                    reason = native_device_run_reason(row, references=references, output_shapes=shapes,
-                                                      byte_order=byte_order)
-                    if reason is not None:
-                        phase = ('OUTPUT_MISMATCH' if reason.endswith('_OUTPUT_MISMATCH') else
-                                 'INCUMBENT_FAILED' if mode == 'CPU' else 'CANDIDATE_FAILED')
-                        break
-            if phase == 'COMPLETE' and _cuda_device_identity(runtime_library, device, prefix, environment)[0] != identity:
-                raise ValueError('CUDA device identity changed during the paired comparison')
+    if phase is None:
+        phase = 'COMPLETE'
+        paths = [row['path'] for row in input_records]
+        entries = {'CPU': (cpu, paths if cpu_profile is None else [cpu_profile, *paths]),
+                   'CUDA': (cuda, ['--trial', *paths])}
+        with TemporaryDirectory(prefix='scar-matched-device-') as scratch:
+            for index in range(2 * (warmup_pairs + measurement_pairs)):
+                pair, position = divmod(index, 2)
+                mode = _MODES[(pair + position) % 2]
+                root, arguments = entries[mode]
+                row = _attempt(root, mode, pair, prefix, arguments, len(references), scratch, environment)
+                runs.append(row)
+                reason = native_device_run_reason(row, references=references, output_shapes=shapes,
+                                                  byte_order=byte_order)
+                if reason is not None:
+                    phase = ('OUTPUT_MISMATCH' if reason.endswith('_OUTPUT_MISMATCH') else
+                             'INCUMBENT_FAILED' if mode == 'CPU' else 'CANDIDATE_FAILED')
+                    break
+        if phase == 'COMPLETE':
+            _check_device_unchanged(context, prefix, environment)
     if (_stat_locks(protected) != before or _receipt_paths(row['path'] for row in input_records) != input_records
             or _receipt_paths(row['path'] for row in reference_records) != reference_records
             or _package(cpu, 'scar.native-exported-aten')[1] != cpu_identity

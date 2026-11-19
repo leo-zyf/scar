@@ -25,6 +25,9 @@ CUDA_ENVIRONMENT = ('CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER', 'CUDA_MPS_PIPE_
 _MODEL_PATH = 'plan/cuda-model.json'
 _PROGRAM_PATH = 'plan/program.json'
 _HYBRID_MODEL = 'scar.aten-export-hybrid-offline-profile'
+ACTIVITY_BINDING = 'plan/activity-binding.json'
+_ACTIVITY_MEMBERS = dict(program=_PROGRAM_PATH, problem='plan/problem.json', schedule='plan/schedule.json',
+                         bindings='plan/bindings.json', executable=EXECUTABLE, launcher='launch.sh')
 
 
 def _pipeline(model):
@@ -55,7 +58,7 @@ def _provider_libraries(toolkit):
     return libraries
 
 
-def _render_launch(inputs, output_count, *, host_lane=False):
+def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False):
     weight_checks = '\n'.join(
         f'test "$(sha256sum < "$root/{row["path"]}" | cut -d " " -f 1)" = {row["payload"]["sha256"]}'
         for row in inputs if row['kind'] == 'WEIGHT')
@@ -67,6 +70,9 @@ def _render_launch(inputs, output_count, *, host_lane=False):
     arguments.extend('"${' + str(next(ports)) + '}"' for _ in range(output_count))
     user_count = sum(row['kind'] == 'INPUT' for row in inputs)
     host_limits = 'OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ' if host_lane else ''
+    file_mode = '--trial|--calibrate) mode=$1; shift' if calibrate else '--trial) shift'
+    mode = '"$mode"' if calibrate else '--trial'
+    mode_help = '--trial|--calibrate' if calibrate else '--trial'
     return f'''#!/bin/sh
 set -eu
 root=$(dirname -- "$0")
@@ -78,17 +84,17 @@ run_cuda() {{
 case "${{1:-}}" in
   --describe|--probe) test "$#" -eq 1
     run_cuda "$1" ;;
-  --trial) shift ;;
-  *) echo "usage: launch.sh --describe | --probe | --trial INPUT... NEW_OUTPUT..." >&2
+  {file_mode} ;;
+  *) echo "usage: launch.sh --describe | --probe | {mode_help} INPUT... NEW_OUTPUT..." >&2
     exit 2 ;;
 esac
 test "$#" -eq {user_count + output_count}
 {weight_checks}
-run_cuda --trial {' '.join(arguments)}
+run_cuda {mode} {' '.join(arguments)}
 '''
 
 
-def _native_sources(projection, problem, schedule, bindings):
+def _native_sources(projection, problem, schedule, bindings, *, calibrate=False):
     from scar.codegen.aten_export_cuda_source import render_exported_cuda_entry
 
     shapes = {row['id']: row['shape'] for row in (*projection['inputs'], *projection['operations'])}
@@ -99,6 +105,8 @@ def _native_sources(projection, problem, schedule, bindings):
     keywords = {key: bindings[key] for key in ('device', 'memory_kinds', 'stream_channels', 'compute_resource')}
     if 'host_resource' in bindings:
         keywords['host_compute_resource'] = bindings['host_resource']
+    if calibrate:
+        keywords['calibrate'] = True
     return render_exported_cuda_entry(problem_from_dict(problem), schedule, **keywords,
         input_ports=input_ports, output_ports=output_ports)
 
@@ -109,7 +117,7 @@ def _describe(root):
 
 
 def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sha256,
-                               out, input_shapes=(), cuda_root='/usr/local/cuda'):
+                               out, input_shapes=(), cuda_root='/usr/local/cuda', with_activity_calibration=False):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -123,6 +131,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
     qualify, plan, _, status = _pipeline(declared)
+    if with_activity_calibration and declared['schema'] != _HYBRID_MODEL:
+        raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
     exported = torch.export.load(model)
     recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
     include = Path(torch.__file__).resolve().parent / 'include'
@@ -147,7 +157,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             raise ValueError('declared CUDA model changed when it was read')
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
         problem, schedule, bindings = plan(projection, declared, model_ref=model_ref)
-        generated = _native_sources(projection, problem, schedule, bindings)
+        generated = _native_sources(projection, problem, schedule, bindings, calibrate=with_activity_calibration)
         toolkit = Path(cuda_root).resolve(strict=True)
         libraries = _provider_libraries(toolkit)
         host_lane = 'host_resource' in bindings
@@ -172,10 +182,13 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
                    'bindings': bindings, 'execution': dict(source=source, program=program_ref, model=model_ref,
                        inputs=inputs, symbolic_profile=symbols,
                        actual_device_timing='UNKNOWN', deployment_authorized=False, default_backend='NO_OP')}
+        if with_activity_calibration:
+            records['execution']['activity_calibration_abi'] = 1
         for name, value in records.items():
             _write_record(root / f'plan/{name}.json', value)
         launch = root / 'launch.sh'
-        launch.write_text(_render_launch(inputs, len(projection['outputs']), host_lane=host_lane))
+        launch.write_text(_render_launch(inputs, len(projection['outputs']), host_lane=host_lane,
+                                         calibrate=with_activity_calibration))
         launch.chmod(0o755)
         for name, content in generated.sources.items():
             path = root / name
@@ -192,6 +205,12 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         _write_record(root / 'plan/dependencies.json',
                       [dict(path=str(path), **_content(path)) for path in sorted(set(libraries) | set(locks))])
         _write_record(root / 'validation/description.json', _describe(root))
+        if with_activity_calibration:
+            from scar.compiler.native_device_activity_binding import derive_activity_binding
+
+            members = {role: dict(path=path, **_content(root / path)) for role, path in _ACTIVITY_MEMBERS.items()}
+            _write_record(root / ACTIVITY_BINDING,
+                          derive_activity_binding(graph, problem, schedule, bindings, references=members))
         if _content(model) != source_lock or _content(model_file) != model_lock:
             raise ValueError('exported source or CUDA profile changed during native compilation')
         report = dict(schema=SCHEMA, schema_version=1, status=status,
@@ -199,6 +218,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             default_backend='NO_OP', deployment_authorized=False, actual_device_timing='UNKNOWN',
             files={path.relative_to(root).as_posix(): _content(path)
                    for path in sorted(root.rglob('*')) if path.is_file()})
+        if with_activity_calibration:
+            report['activity_calibration_abi'] = 1
         _write_record(root / 'artifact.json', report)
         root.rename(out)
     return report
@@ -239,9 +260,14 @@ def replay_cuda_project(root, manifest, member):
             raise ValueError('CUDA file input differs from the qualified ordered port')
     problem, schedule, bindings = (read(name) for name in ('problem', 'schedule', 'bindings'))
     replay(projection, declared, model_ref=execution['model'], problem=problem, schedule=schedule, bindings=bindings)
-    generated = _native_sources(projection, problem, schedule, bindings)
+    abi = execution.get('activity_calibration_abi')
+    if (abi != manifest.get('activity_calibration_abi') or (abi is None) != (ACTIVITY_BINDING not in files)
+            or (abi is not None and (type(abi) is not int or abi != 1 or 'host_resource' not in bindings))):
+        raise ValueError('CUDA activity calibration ABI differs from its archived binding')
+    generated = _native_sources(projection, problem, schedule, bindings, calibrate=abi is not None)
     sources = dict(generated.sources)
-    sources['launch.sh'] = _render_launch(inputs, len(projection['outputs']), host_lane='host_resource' in bindings)
+    sources['launch.sh'] = _render_launch(inputs, len(projection['outputs']), host_lane='host_resource' in bindings,
+                                          calibrate=abi is not None)
     if any(member(name).read_text() != content for name, content in sources.items()):
         raise ValueError('CUDA source differs from its replayed copy and cuBLAS lowering')
     description = json.loads(member('validation/description.json').read_bytes())
@@ -252,6 +278,17 @@ def replay_cuda_project(root, manifest, member):
                 executed_schedule_replayed=False, device_result_verified=False, **policy)
     if 'host_resource' in bindings:
         result.update(cuda_regions=len(projection['cuda_regions']), host_provider_calls=description['host_provider_calls'])
+    if abi is not None:
+        from scar.codegen.aten_export_cuda_source import ACTIVITY_CALIBRATION_SCHEMA
+        from scar.compiler.native_device_activity_binding import replay_activity_binding
+
+        row = json.loads(member(ACTIVITY_BINDING).read_bytes())
+        members = {role: dict(path=path, **files[path]) for role, path in _ACTIVITY_MEMBERS.items()}
+        replay_activity_binding(row, graph, problem, schedule, bindings, references=members)
+        if description.get('activity_calibration') != dict(schema=ACTIVITY_CALIBRATION_SCHEMA, schema_version=1,
+                                                            steps=len(row['activities'])):
+            raise ValueError('instrumented executable does not describe the bound activity steps')
+        result['activity_calibration_bound'] = True
     return result
 
 
@@ -261,6 +298,8 @@ def main(argv=None):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--input-shape', action='append', default=[], dest='input_shapes')
     parser.add_argument('--cuda-root', default='/usr/local/cuda')
+    parser.add_argument('--with-activity-calibration', action='store_true',
+                        help='include explicit activity timing alongside the clean hybrid entry')
     args = parser.parse_args(argv)
     report = compile_exported_aten_cuda(**vars(args))
     print(json.dumps(dict(status=report['status'], executable=str(Path(args.out) / report['executable']),

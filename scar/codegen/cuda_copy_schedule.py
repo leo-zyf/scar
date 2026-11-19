@@ -24,6 +24,9 @@ class CudaCopySource:
     header: str
     buffer_values: tuple[str, ...]
     stream_channels: tuple[str, ...]
+    activity_operations: tuple[str, ...]
+    activity_streams: tuple[str, ...]
+    activity_waits: tuple[tuple[int, ...], ...]
 
 
 def _completion_waits(copies, selected, streams, predecessors):
@@ -348,4 +351,6 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
     lines.extend(['}};', '', 'inline void run(std::span<Buffer* const> materializations) {',
                   f'    detail::execute(device, {stream_resource}, buffers, steps, materializations);', '}', '',
                   '}  // namespace scar_cuda_generated', ''])
-    return CudaCopySource('\n'.join(lines), buffers, used_streams)
+    activity_operations = tuple(op.id for op, _ in operations)
+    return CudaCopySource('\n'.join(lines), buffers, used_streams, activity_operations,
+                          tuple(stream_keys[name] for name in activity_operations), tuple(waits))

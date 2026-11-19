@@ -92,13 +92,8 @@ def _package_identities(witness, cpu, cuda):
             for mode, root, locked in (('CPU', cpu, witness['cpu']), ('CUDA', cuda, witness['cuda']))}
 
 
-def _replay_observation(witness, observation, settings, cpu, cuda):
+def _locked_trial_context(witness, observation, cpu, cuda):
     from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT
-    from scar.runtime.native_device_probe import SCHEMA as OBSERVATION_SCHEMA
-
-    if (observation['schema'] != OBSERVATION_SCHEMA or observation['schema_version'] != 1
-            or any(observation[key] != settings[key] for key in ('warmup_pairs', 'measurement_pairs'))):
-        raise ValueError('paired observation differs from the declared measurement protocol')
     ports = [row for row in witness['inputs'] if row['kind'] == 'INPUT']
     _check_file_records(observation['inputs'], ports)
     references = _check_file_records(observation['references'], witness['outputs'], reference=True)
@@ -129,6 +124,16 @@ def _replay_observation(witness, observation, settings, cpu, cuda):
                        for key in ('device_count', 'runtime_version', 'driver_version'))
                 or device['device_count'] <= context['device_ordinal']):
             raise ValueError('paired CUDA runtime identity lacks its locked provider or device facts')
+    return references, probe_reason, device
+
+
+def _replay_observation(witness, observation, settings, cpu, cuda):
+    from scar.runtime.native_device_probe import SCHEMA as OBSERVATION_SCHEMA
+
+    if (observation['schema'] != OBSERVATION_SCHEMA or observation['schema_version'] != 1
+            or any(observation[key] != settings[key] for key in ('warmup_pairs', 'measurement_pairs'))):
+        raise ValueError('paired observation differs from the declared measurement protocol')
+    references, _, device = _locked_trial_context(witness, observation, cpu, cuda)
     decision = compare_native_device(observation['probe'], observation['runs'], references=references,
         output_shapes=[item['shape'] for item in witness['outputs']], device=witness['cuda']['device'],
         byte_order=witness['abi']['byte_order'], runtime_qualified=device is not None, **settings)

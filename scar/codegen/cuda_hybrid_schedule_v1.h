@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cuda_cublas_schedule_v1.h"
+#include "cuda_cublas_schedule_v1.h"/* SCAR_ACTIVITY_INCLUDE */
 
 #include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
@@ -79,8 +79,8 @@ inline void host_call(const Step& step, std::span<Buffer* const> buffers) {
     }
 }
 
-inline void execute(int device, std::span<const std::size_t> workspace_bytes, std::span<const BufferSpec> specs,
-                    std::span<const Step> steps, std::span<Buffer* const> buffers) {
+/* SCAR_ACTIVITY_TEMPLATE */inline void execute(int device, std::span<const std::size_t> workspace_bytes, std::span<const BufferSpec> specs,
+                    std::span<const Step> steps, std::span<Buffer* const> buffers/* SCAR_ACTIVITY_ARGUMENT */) {/* SCAR_ACTIVITY_SETUP_START */
     using cuda_copy_v1::detail::check;
     if (specs.size() != buffers.size()) throw std::invalid_argument("hybrid buffer count differs");
     std::unordered_set<Buffer*> identities;
@@ -94,7 +94,7 @@ inline void execute(int device, std::span<const std::size_t> workspace_bytes, st
     }
     at::set_num_threads(1);
     const at::NoGradGuard no_grad;
-    const cuda_copy_v1::detail::DeviceScope scope(device);
+    const cuda_copy_v1::detail::DeviceScope scope(device);/* SCAR_ACTIVITY_INIT */
     cuda_copy_v1::detail::Queues queues(workspace_bytes.size(), steps.size());
     cuda_cublas_v1::detail::Dispatcher gpu(device, workspace_bytes);
     const cuda_copy_v1::detail::DrainQueuedWork drain{queues};
@@ -106,32 +106,32 @@ inline void execute(int device, std::span<const std::size_t> workspace_bytes, st
         if (steps[index].record_completion) {
             check(cudaEventCreateWithFlags(&queues.events[index], cudaEventDisableTiming), "cudaEventCreateWithFlags");
         }
-    }
+    }/* SCAR_ACTIVITY_SETUP_END */
     for (std::size_t index = 0; index < steps.size(); ++index) {
         const auto& step = steps[index];
-        if (step.host()) {
+        if (step.host()) {/* SCAR_ACTIVITY_HOST_WAIT_START */
             for (const auto predecessor : step.wait_for) {
                 check(cudaEventSynchronize(queues.events[predecessor]), "cudaEventSynchronize");
-            }
-            host_call(step, buffers);
+            }/* SCAR_ACTIVITY_HOST_START */
+            host_call(step, buffers);/* SCAR_ACTIVITY_HOST_END */
             continue;
         }
         const auto stream = queues.streams[step.stream];
         for (const auto predecessor : step.wait_for) {
             check(cudaStreamWaitEvent(stream, queues.events[predecessor], 0), "cudaStreamWaitEvent");
-        }
+        }/* SCAR_ACTIVITY_DEVICE_START */
         if (const auto* copy = std::get_if<Copy>(&step.operation)) {
             cuda_copy_v1::detail::enqueue_copy(stream, copy->source, copy->destination, copy->direction, specs, buffers);
         } else {
             gpu.enqueue(cuda_cublas_v1::Step{step.stream, std::get<MatrixMultiply>(step.operation),
                                              step.wait_for, step.record_completion},
                         stream, specs, buffers);
-        }
+        }/* SCAR_ACTIVITY_DEVICE_END */
         if (step.record_completion) {
             check(cudaEventRecord(queues.events[index], stream), "cudaEventRecord");
         }
-    }
-    queues.join();
+    }/* SCAR_ACTIVITY_JOIN_START */
+    queues.join();/* SCAR_ACTIVITY_JOIN_END */
 }
 
 }  // namespace detail

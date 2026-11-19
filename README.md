@@ -46,6 +46,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar assess-native-device` 用 `--cpu-project`、`--cuda-project` 及对应的 `--cpu-sha256`、`--cuda-sha256` 核对同一源图的两个产物。传入 `--input NAME=FILE`、按顺序重复的 `--reference FILE` 和 `--out`。CUDA 到达准入后才开始交替运行新进程，比较全部返回字节和包含文件 I/O 的耗时。`--check ASSESSMENT --check-sha256 SHA` 重放证据而无需重新计时。无设备时保留 CPU，完整通过的收益证据会进入采用审查。[配对验收记录](artifacts/baseline/native-device-assessment.json)。
 
+混合包可以用 `--with-activity-calibration` 加入专用采集入口。`scar calibrate-native-device` 接收同一组包、输入和参考参数，用 CUDA 流事件与主机单调时钟分别测量绑定后的执行步骤。分配、I/O 和同步单列。命令输出可重放的诊断成本图，采样缺失或低于计时分辨率的步骤保留 `UNKNOWN`。整入口收益仍使用普通试跑模式单独验收。[活动成本验收](artifacts/baseline/native-device-activity-calibration.json)。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。

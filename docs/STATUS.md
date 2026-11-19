@@ -1,5 +1,7 @@
 # 当前状态
 
+混合原生产物已接通可选活动采集与规划器成本重放。在真实导出图上验证了 13 个活动索引、源算子、物化字节数和事件等待绑定。C++20 调用可分别记录 CUDA 事件和主机单调时钟，普通试跑不分配计时事件。本机无设备，实测项为零，13 项活动成本保持 `UNKNOWN`，诊断计划未产生完工时间。见 `artifacts/baseline/native-device-activity-calibration.json`。
+
 纯 CPU 与混合包已接入同一配对验收。实测混合用例通过源图、权重、五个输出端口及二进制身份的准入。CUDA 探测返回 77，决定保留 CPU，双方均未进入计时。离线重放复现该决策。修改已锁定的二进制身份、重复返回的参考或采用结论均无法通过验收。见 `artifacts/baseline/native-device-assessment.json`。
 
 混合 `torch.export` 已接通设备分区、共享搬运、C++20 交付与离线重放。真实用例识别出两个 GPU 区域，统一计划含三个 cuBLAS 调用、三个 CPU ATen 调用、五次上传和两次下载。五个输出的 CPU 原生参考均与 PyTorch 逐位一致。混合产物通过编译链接，设备探测仍无可用 GPU，尚未实测混合执行正确性与性能。见 `artifacts/baseline/typed-hybrid-export-delivery.json`。

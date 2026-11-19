@@ -24,7 +24,7 @@ namespace {
 namespace graph = scar_cuda_generated;
 namespace fs = std::filesystem;
 using graph::Buffer;
-using graph::Memory;
+using graph::Memory;/* SCAR_PROBE_NAMESPACE */
 
 static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
 static_assert(std::endian::native == std::endian::little || std::endian::native == std::endian::big);
@@ -75,7 +75,7 @@ void describe() {
     std::cout << "{\"abi_version\":1,\"dtype\":\"float32\",\"layout\":\"row_major_contiguous\",\"byte_order\":\""
               << byte_order << "\",\"device\":" << graph::device << ",\"buffer_count\":" << graph::buffers.size()
               << ",\"stream_count\":" << graph::workspace_bytes.size() << ",\"copy_count\":" << copies
-              << ",\"provider_calls\":" << provider_calls << ",\"cross_stream_waits\":" << waits/* SCAR_HOST_DESCRIPTION */
+              << ",\"provider_calls\":" << provider_calls << ",\"cross_stream_waits\":" << waits/* SCAR_HOST_DESCRIPTION *//* SCAR_PROBE_DESCRIPTION */
               << ",\"execution_requires_trial\":true,\"inputs\":[";
     write_ports(inputs);
     std::cout << "],\"outputs\":[";
@@ -97,7 +97,7 @@ bool device_available() {
     return true;
 }
 
-void execute(char** paths) {
+/* SCAR_PROBE_TEMPLATE */void execute(char** paths/* SCAR_PROBE_ARGUMENT */) {
     std::array<fs::path, outputs.size()> destinations;
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         const fs::path path(paths[inputs.size() + index]);
@@ -111,23 +111,23 @@ void execute(char** paths) {
     }
 
     std::array<std::unique_ptr<Buffer>, graph::buffers.size()> storage;
-    std::array<Buffer*, graph::buffers.size()> bindings;
+    std::array<Buffer*, graph::buffers.size()> bindings;/* SCAR_PROBE_ALLOC_START */
     for (std::size_t index = 0; index < storage.size(); ++index) {
         const auto& spec = graph::buffers[index];
         storage[index] = std::make_unique<Buffer>(graph::device, spec.memory, spec.size);
         bindings[index] = storage[index].get();
-    }
+    }/* SCAR_PROBE_INPUT_START */
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         read_input(paths[index], *bindings[inputs[index].slot]);
     }
-    graph::run(bindings);
+    /* SCAR_PROBE_RUN */
 
     std::array<StagedFile, outputs.size()> staged;
     for (std::size_t index = 0; index < outputs.size(); ++index) {
         const auto& result = *bindings[outputs[index].slot];
         staged[index].stage(destinations[index], result.data(), result.size());
     }
-    for (std::size_t index = 0; index < staged.size(); ++index) staged[index].publish(destinations[index]);
+    for (std::size_t index = 0; index < staged.size(); ++index) staged[index].publish(destinations[index]);/* SCAR_PROBE_PUBLISH_END */
 }
 }  // namespace
 
@@ -138,14 +138,14 @@ int main(int argc, char** argv) {
         return 0;
     }
     const bool probe = argc == 2 && flag == "--probe";
-    const bool trial = flag == "--trial" && static_cast<std::size_t>(argc) == 2 + inputs.size() + outputs.size();
-    if (!probe && !trial) {
-        std::fputs("usage: aten-inference-cuda --describe | --probe | --trial <input.f32>... <new-output.f32>...\n", stderr);
+    const bool trial = flag == "--trial" && static_cast<std::size_t>(argc) == 2 + inputs.size() + outputs.size();/* SCAR_PROBE_FLAG */
+    if (!probe && !trial/* SCAR_PROBE_REQUIRED */) {
+        std::fputs("usage: aten-inference-cuda --describe | --probe | --trial/* SCAR_PROBE_USAGE */ <input.f32>... <new-output.f32>...\n", stderr);
         return 2;
     }
     try {
         if (!device_available()) return 77;
-        if (trial) execute(argv + 2);
+        if (trial) execute(argv + 2);/* SCAR_PROBE_EXECUTE */
         else std::cout << "{\"device\":" << graph::device << ",\"available\":true}\n";
         return 0;
     } catch (const std::exception& error) {
