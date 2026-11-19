@@ -217,7 +217,7 @@ void run() {
     for (const int number : {SIGINT, SIGTERM, SIGHUP}) {
         require(sigaction(number, &stop, nullptr) < 0 ? errno : 0, "cannot configure publication shutdown");
     }
-    for (const int fd : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
+    for (const int fd : {@SCAR_FD_LIST@}) {
         require(fcntl(fd, F_GETFD) < 0 ? errno : 0, "publication requires stdin, stdout and stderr");
     }
     cpu_set_t original;
@@ -257,10 +257,10 @@ void run() {
 
 }  // namespace
 
-int main(int argc, char**) {
+int main(int argc, char**@SCAR_ARG_PARAM@) {
     try {
-        if (argc != 1) {
-            throw std::runtime_error("selected publication accepts @SCAR_INLET@ on stdin and no arguments");
+        if (@SCAR_ARG_GUARD@) {
+            throw std::runtime_error(@SCAR_USAGE@);
         }
         run();
         return 0;

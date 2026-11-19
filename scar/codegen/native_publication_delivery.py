@@ -1,16 +1,18 @@
 """Package a replayed ordered publication choice as a standalone C++20 executable."""
 
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 from shutil import copytree
+import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.codegen import native_coo_ingress
+from scar.codegen import native_coo_ingress, source_triangle_seed_wire
 from scar.codegen.native_ordered_sparse_export import SCHEMA as ORDERED_PACKAGE, check_native_ordered_export
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.ir.execution_recipe import artifact_reference, read_artifact
@@ -30,6 +32,7 @@ _INPUT_STAGES = {
     'ingress': ('coo', 'bin/scar_coo_ingress', 'canonical', 'COO operands'),
 }
 _FLAGS = ('-O2', '-Wall', '-Wextra', '-Werror', '-pedantic')
+_SOURCE_SEED = 'evidence/source-seed.json'
 
 
 def _require(condition, message):
@@ -131,12 +134,30 @@ def _render(plan):
         OWNER=str(plan['owner_cpu']), PIPE=str(plan['pipe_capacity_bytes']), ENV=environment,
         CWD=json.dumps(plan['cwd']), PRODUCER=json.dumps(producer), DIGEST=json.dumps(digest),
         START_INGRESS='', CLOSE_INGRESS='', WAIT_INGRESS='', INPUT='STDIN_FILENO',
-        INLET='canonical CSR')
+        FD_LIST='STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO', ARG_PARAM='', ARG_GUARD='argc != 1')
+    inlet = 'canonical CSR'
     sequence = [stage for stage in _INPUT_STAGES if stage in plan]
     if sequence:
         pin_owner = '    set_affinity(std::span(&owner, 1));\n'
         start = [pin_owner] if len(sequence) > 1 else []
         previous = None
+        if 'source_seed' in plan:
+            seed = plan['source_seed']
+            payload = bytes.fromhex(seed['wire_hex'])
+            payload_text = ', '.join(map(str, payload))
+            previous = 'initial'
+            start.extend((
+                f'    constexpr std::array<unsigned char, {len(payload)}> seed_bytes{{{payload_text}}};\n',
+                '    auto initial = make_pipe();\n'
+                '    ssize_t seeded;\n'
+                '    do {\n'
+                '        check_shutdown();\n'
+                '        seeded = write(initial[1].get(), seed_bytes.data(), seed_bytes.size());\n'
+                '    } while (seeded < 0 && errno == EINTR);\n'
+                '    require(seeded < 0 ? errno : seeded != static_cast<ssize_t>(seed_bytes.size()) ? EIO : 0,\n'
+                '            "cannot stage generated source input");\n'
+                '    initial[1].close_now();\n',
+            ))
         for stage in sequence:
             _, _, channel, _ = _INPUT_STAGES[stage]
             command, = plan[stage]['command']
@@ -151,7 +172,15 @@ def _render(plan):
             previous = channel
         values.update(START_INGRESS=''.join(start), CLOSE_INGRESS=f'    {previous}[0].close_now();\n',
             WAIT_INGRESS=''.join(f'    {stage}.successful(end);\n' for stage in reversed(sequence)),
-            INPUT=f'{previous}[0].get()', INLET=_INPUT_STAGES[sequence[0]][3])
+            INPUT=f'{previous}[0].get()')
+        inlet = _INPUT_STAGES[sequence[0]][3]
+    usage = f'selected publication accepts {inlet} on stdin and no arguments'
+    if 'source_seed' in plan:
+        count, = plan['source_seed']['argv']
+        usage = f'selected source publication requires the fixed argument {count}'
+        values.update(FD_LIST='STDOUT_FILENO, STDERR_FILENO', ARG_PARAM=' argv',
+            ARG_GUARD=f'argc != 2 || std::string_view(argv[1]) != {json.dumps(count)}')
+    values['USAGE'] = json.dumps(usage)
     source = _TEMPLATE.read_text()
     for marker, value in values.items():
         source = source.replace(f'@SCAR_{marker}@', value)
@@ -162,6 +191,17 @@ def _copy_evidence(directory, label, reference):
     name = f'evidence/{label}.json'
     (directory / name).write_bytes(read_artifact(reference, json_document=False))
     return _local(directory, name, reference['schema'])
+
+
+def _source_plan(root, plan, reference, derived, topology, binary):
+    _require(plan['schema_version'] == 5, 'the source seed needs a complete triangle topology route')
+    release = binary['qualified_release']
+    record = _read_local(root, {**release, 'uri': 'binary/' + release['uri']},
+                         'binary/' + release['uri'], release['schema'])
+    payload = source_triangle_seed_wire.wire_payload(derived, topology, record)
+    return {**plan, 'schema_version': 6, 'scope': 'SOURCE_DERIVED_FIXED_ARGV_TO_SHA256_STDOUT',
+        'source_seed': dict(provenance=reference, argv=derived['argv'], wire_hex=payload.hex(),
+            size_bytes=len(payload), sha256=sha256(payload).hexdigest())}
 
 
 def _build(directory, plan):
@@ -262,13 +302,60 @@ def export(choice, out, *, coo_observation=None, scipy_source=None, basis_packag
     return artifact_reference(out / 'artifact.json', SCHEMA)
 
 
+@replay_transaction()
+def seal_source_seed(package, derivation, out):
+    """Generate a fixed-argv binary that supplies the statically derived seed."""
+    from scar.analysis.source_triangle_seed import check as check_derivation
+
+    source = Path(package).resolve(strict=True)
+    manifest = check(source)
+    _require(manifest['schema_version'] == 5, 'expected the checked explicit triangle seed package')
+    evidence = artifact_reference(Path(derivation).resolve(strict=True), source_triangle_seed_wire.SOURCE)
+    values = check_derivation(evidence['uri'])
+    _require(values == read_artifact(evidence), 'source derivation changed during admission')
+    out = Path(out).resolve()
+    if out.exists() or out.is_relative_to(source):
+        raise ValueError('a fresh output outside the source package is required')
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix='.scar-source-seed-', dir=out.parent) as temporary:
+        root = Path(temporary) / 'delivery'
+        copytree(source, root)
+        stages = {stage: _input_member(root, stage) for stage in ('basis', 'mesh', 'topology')}
+        _link_identical_providers(root, stages)
+        binary = check_native_ordered_export(root / 'binary')
+        plan = _read_local(root, manifest['plan'], 'plan.json', PLAN)
+        reference = _copy_evidence(root, 'source-seed', evidence)
+        plan = _source_plan(root, plan, reference, values, stages['topology'][1], binary)
+        (root/'plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2) + '\n')
+        _build(root, plan)
+        doc = dict(manifest, schema_version=6, source_seed=reference, plan=_local(root, 'plan.json', PLAN),
+            source=_local(root, 'scar_publish.cpp', 'scar.cpp-source'),
+            executable=_local(root, _TARGET, 'scar.native-executable-file'),
+            cmake=_local(root, 'CMakeLists.txt', 'scar.cmake-project'))
+        (root/'artifact.json').write_text(json.dumps(doc, sort_keys=True, indent=2) + '\n')
+        check(root)
+        design = _read_local(root, manifest['evidence']['design'], 'evidence/design.json',
+                             manifest['evidence']['design']['schema'])
+        cpus = ','.join(map(str, plan['cpu_ids']))
+        probe = subprocess.run(['taskset', '-c', cpus, str(root/_TARGET), *plan['source_seed']['argv']],
+            env=plan['environment'], cwd=plan['cwd'], stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=125, check=True)
+        _require(probe.stdout == design['expected_stdout'].encode('ascii') and not probe.stderr,
+            'source-seeded executable did not reproduce original publication')
+        if out.exists():
+            raise FileExistsError(out)
+        root.rename(out)
+    return artifact_reference(out/'artifact.json', SCHEMA)
+
+
 def check(package):
     root = Path(package).resolve(strict=True)
     doc = _read_local(root, _local(root, 'artifact.json', SCHEMA), 'artifact.json', SCHEMA)
     ordered = tuple(reversed(_INPUT_STAGES))
     version = doc['schema_version']
-    _require(type(version) is int and 1 <= version <= 5
-        and tuple(stage for stage in ordered if stage in doc) == ordered[:version - 1]
+    _require(type(version) is int and 1 <= version <= 6
+        and tuple(stage for stage in ordered if stage in doc) == ordered[:min(version, 5) - 1]
+        and ('source_seed' in doc) == (version == 6)
         and doc['full_python_entry'] is False, 'unsupported native publication delivery')
     evidence = doc['evidence']
     selected = _read_local(root, evidence['choice'], 'evidence/choice.json', CHOICE)
@@ -284,11 +371,16 @@ def check(package):
         packages.append(check_native_ordered_export(root / role))
     plan = _read_local(root, doc['plan'], 'plan.json', PLAN)
     stages = {}
-    for stage in ordered[:version - 1]:
+    for stage in ordered[:min(version, 5) - 1]:
         stages[stage] = _input_member(root, stage)
         _require(doc[stage] == stages[stage][0], 'bundled provider differs from publication receipt: ' + stage)
+    expected = _project(selected, design, packages, stages)
+    if version == 6:
+        seed = doc['source_seed']
+        derived = _read_local(root, seed, _SOURCE_SEED, source_triangle_seed_wire.SOURCE)
+        expected = _source_plan(root, expected, seed, derived, stages['topology'][1], packages[0])
     _require(doc['selected'] == plan['selected']
-        and semantic_sha256(plan) == semantic_sha256(_project(selected, design, packages, stages))
+        and semantic_sha256(plan) == semantic_sha256(expected)
         and doc['source'] == _local(root, 'scar_publish.cpp', 'scar.cpp-source')
         and (root / 'scar_publish.cpp').read_bytes() == _render(plan)
         and doc['cmake'] == _local(root, 'CMakeLists.txt', 'scar.cmake-project')
@@ -302,23 +394,27 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--choice', type=Path)
     mode.add_argument('--check', type=Path)
+    mode.add_argument('--seal-seed', type=Path)
     parser.add_argument('--out', type=Path)
     parser.add_argument('--coo-observation', type=Path)
     parser.add_argument('--scipy-source', type=Path)
     parser.add_argument('--basis-package', type=Path)
     parser.add_argument('--mesh-package', type=Path)
     parser.add_argument('--topology-package', type=Path)
+    parser.add_argument('--derivation', type=Path)
     args = parser.parse_args(argv)
-    if args.check and all(value is None for value in (args.out, args.coo_observation,
-            args.scipy_source, args.basis_package, args.mesh_package, args.topology_package)):
+    stages = (args.coo_observation, args.scipy_source, args.basis_package, args.mesh_package, args.topology_package)
+    if args.check and not any((args.out, args.derivation, *stages)):
         receipt = check(args.check)
         print(json.dumps(dict(verified=True, selected=receipt['selected'])))
-    elif args.choice and args.out:
+    elif args.choice and args.out and not args.derivation:
         print(json.dumps(export(args.choice, args.out, coo_observation=args.coo_observation,
             scipy_source=args.scipy_source, basis_package=args.basis_package,
             mesh_package=args.mesh_package, topology_package=args.topology_package)))
+    elif args.seal_seed and args.derivation and args.out and not any(stages):
+        print(json.dumps(seal_source_seed(args.seal_seed, args.derivation, args.out)))
     else:
-        parser.error('choose --check PACKAGE or --choice RESULT --out PACKAGE')
+        parser.error('choose --check PACKAGE, --choice RESULT --out PACKAGE, or --seal-seed PACKAGE --derivation SOURCE --out PACKAGE')
     return 0
 
 
