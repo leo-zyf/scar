@@ -23,8 +23,12 @@ PLAN = 'scar.native-ordered-publication-launch-plan'
 _TEMPLATE = Path(__file__).with_name('native_publication_supervisor_v1.cpp.in')
 _TARGET = 'scar_publish'
 _ARMS = ('binary', 'digest')
-_INGRESS = 'coo/bin/scar_coo_ingress'
-_BASIS = 'basis/bin/scar_basis_coo'
+_INPUT_STAGES = {
+    'topology': ('topology', 'bin/scar_triangle_topology', 'mesh_data', 'triangle seed'),
+    'mesh': ('mesh', 'bin/scar_mesh_basis', 'basis_data', 'mesh arrays'),
+    'basis': ('basis', 'bin/scar_basis_coo', 'operands', 'basis arrays'),
+    'ingress': ('coo', 'bin/scar_coo_ingress', 'canonical', 'COO operands'),
+}
 _FLAGS = ('-O2', '-Wall', '-Wextra', '-Werror', '-pedantic')
 
 
@@ -48,7 +52,7 @@ def _read_local(root, actual, name, schema):
     return read_artifact({**actual, 'uri': str(root / name)})
 
 
-def _project(choice, design, packages, ingress=None, basis=None):
+def _project(choice, design, packages, stages):
     launch, options = design['launch'], design['graph']['options']
     cpus, owner = launch['cpu_ids'], launch['consumer_cpu_id']
     capacity = options[BASE]['pipe_capacity_bytes']
@@ -83,22 +87,37 @@ def _project(choice, design, packages, ingress=None, basis=None):
         environment=environment, cwd=launch['cwd'], timeout_ns=120_000_000_000,
         completion='BUFFER_ONE_DIGEST_LINE_AND_REQUIRE_EVERY_CHILD_EXIT_ZERO_BEFORE_STDOUT',
         scope='EXPLICIT_INDEPENDENT_CANONICAL_CSR_TO_SHA256_STDOUT', full_python_entry=False)
-    if ingress is not None:
-        reference, coo = ingress
+    if 'ingress' in stages:
+        reference, coo = stages['ingress']
         _require(_same_content(coo['canonical_sample'], plan['source']),
             'COO observation does not produce the canonical CSR input of this publication choice')
         plan.update(schema_version=2, scope='EXPLICIT_COO_TO_SHA256_STDOUT',
-            ingress=dict(receipt=reference, command=[_INGRESS], cpu_id=owner,
+            ingress=dict(receipt=reference, command=['coo/bin/scar_coo_ingress'], cpu_id=owner,
                 contract='COO_ASSEMBLY_TO_CANONICAL_CSR_ON_STDIN'))
-    if basis is not None:
-        reference, upstream = basis
-        _require(ingress is not None and coo['input_sample'] == upstream['original_coo']
+    if 'basis' in stages:
+        reference, upstream = stages['basis']
+        _require('ingress' in stages and coo['input_sample'] == upstream['original_coo']
             and upstream['executable']['uri'] == 'bin/scar_basis_coo',
             'basis provider output must be the exact input of the selected COO stage')
         plan.update(schema_version=3, scope='EXPLICIT_BASIS_ARRAYS_TO_SHA256_STDOUT',
-            basis=dict(receipt=reference, command=[_BASIS], cpu_id=owner,
+            basis=dict(receipt=reference, command=['basis/bin/scar_basis_coo'], cpu_id=owner,
                 source=upstream['admitted_input'],
                 contract='BASIS_ARRAYS_TO_COO_ON_STDIN'))
+    for stage, required, result, version, scope, contract in (
+            ('mesh', 'basis', 'exact_basis', 4, 'EXPLICIT_MESH_ARRAYS_TO_SHA256_STDOUT',
+                'MESH_ARRAYS_TO_BASIS_ON_STDIN'),
+            ('topology', 'mesh', 'exact_mesh', 5, 'EXPLICIT_TRIANGLE_SEED_TO_SHA256_STDOUT',
+                'TRIANGLE_SEED_TO_MESH_ARRAYS_ON_STDIN')):
+        if stage not in stages:
+            continue
+        reference, upstream = stages[stage]
+        directory, target, _, _ = _INPUT_STAGES[stage]
+        _require(required in stages and upstream[result] == plan[required]['source']
+            and upstream['executable']['uri'] == target,
+            'upstream stage output must be the exact input of its admitted consumer: ' + stage)
+        plan.update(schema_version=version, scope=scope)
+        plan[stage] = dict(receipt=reference, command=[f'{directory}/{target}'], cpu_id=owner,
+            source=upstream['admitted_input'], contract=contract)
     return plan
 
 
@@ -108,37 +127,31 @@ def _render(plan):
     digest = plan['commands'][-1][0]
     environment = ''.join(f'const_cast<char*>({json.dumps(key + "=" + value)}), '
         for key, value in sorted(plan['environment'].items()))
-    coo = plan.get('ingress')
     values = dict(SPLIT='true' if split else 'false', CPUS=', '.join(map(str, plan['cpu_ids'])),
         OWNER=str(plan['owner_cpu']), PIPE=str(plan['pipe_capacity_bytes']), ENV=environment,
         CWD=json.dumps(plan['cwd']), PRODUCER=json.dumps(producer), DIGEST=json.dumps(digest),
         START_INGRESS='', CLOSE_INGRESS='', WAIT_INGRESS='', INPUT='STDIN_FILENO',
         INLET='canonical CSR')
-    if coo is not None:
-        command, = coo['command']
-        start = ''
+    sequence = [stage for stage in _INPUT_STAGES if stage in plan]
+    if sequence:
         pin_owner = '    set_affinity(std::span(&owner, 1));\n'
-        close, wait = '', '    ingress.successful(end);\n'
-        input_fd, inlet = 'STDIN_FILENO', 'COO operands'
-        if 'basis' in plan:
-            basis, = plan['basis']['command']
-            start = (pin_owner +
-                      '    Child basis;\n'
-                      '    auto operands = make_pipe();\n'
-                      f'    basis.launch(root / {json.dumps(basis)}, nullptr, STDIN_FILENO, operands[1].get());\n'
-                      '    operands[1].close_now();\n')
-            close = '    operands[0].close_now();\n'
-            wait += '    basis.successful(end);\n'
-            input_fd, inlet = 'operands[0].get()', 'basis arrays'
-            pin_owner = ''
-        values.update(START_INGRESS=(
-            start +
-            '    Child ingress;\n'
-            '    auto canonical = make_pipe();\n' + pin_owner +
-            f'    ingress.launch(root / {json.dumps(command)}, nullptr, {input_fd}, canonical[1].get());\n'
-            '    canonical[1].close_now();\n' + close),
-            CLOSE_INGRESS='    canonical[0].close_now();\n', WAIT_INGRESS=wait,
-            INPUT='canonical[0].get()', INLET=inlet)
+        start = [pin_owner] if len(sequence) > 1 else []
+        previous = None
+        for stage in sequence:
+            _, _, channel, _ = _INPUT_STAGES[stage]
+            command, = plan[stage]['command']
+            input_fd = 'STDIN_FILENO' if previous is None else f'{previous}[0].get()'
+            start.extend((f'    Child {stage};\n', f'    auto {channel} = make_pipe();\n'))
+            if len(sequence) == 1:
+                start.append(pin_owner)
+            start.extend((f'    {stage}.launch(root / {json.dumps(command)}, nullptr, {input_fd}, {channel}[1].get());\n',
+                          f'    {channel}[1].close_now();\n'))
+            if previous is not None:
+                start.append(f'    {previous}[0].close_now();\n')
+            previous = channel
+        values.update(START_INGRESS=''.join(start), CLOSE_INGRESS=f'    {previous}[0].close_now();\n',
+            WAIT_INGRESS=''.join(f'    {stage}.successful(end);\n' for stage in reversed(sequence)),
+            INPUT=f'{previous}[0].get()', INLET=_INPUT_STAGES[sequence[0]][3])
     source = _TEMPLATE.read_text()
     for marker, value in values.items():
         source = source.replace(f'@SCAR_{marker}@', value)
@@ -153,7 +166,7 @@ def _copy_evidence(directory, label, reference):
 
 def _build(directory, plan):
     (directory / 'scar_publish.cpp').write_bytes(_render(plan))
-    directories = (*_ARMS, *(folder for field, folder in (('ingress', 'coo'), ('basis', 'basis')) if field in plan))
+    directories = (*_ARMS, *(_INPUT_STAGES[stage][0] for stage in reversed(_INPUT_STAGES) if stage in plan))
     write_native_project(directory, _TARGET, sources=('scar_publish.cpp',), compile_options=_FLAGS,
         install_dirs=tuple((path, 'bin') for path in directories), preserve_install_permissions=True)
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
@@ -161,17 +174,40 @@ def _build(directory, plan):
     executable.rename(directory / _TARGET)
 
 
-def _basis_member(root):
-    from scar.codegen import native_basis_coo
+def _input_member(root, stage):
+    if stage == 'ingress':
+        module = native_coo_ingress
+    elif stage == 'basis':
+        from scar.codegen import native_basis_coo as module
+    elif stage == 'mesh':
+        from scar.codegen import native_mesh_basis as module
+    else:
+        from scar.codegen import native_triangle_topology as module
 
-    return (_local(root, 'basis/artifact.json', native_basis_coo.SCHEMA),
-            native_basis_coo.check(root / 'basis'))
+    directory = _INPUT_STAGES[stage][0]
+    return _local(root, f'{directory}/artifact.json', module.SCHEMA), module.check(root / directory)
+
+
+def _link_identical_providers(root, stages):
+    shared = {}
+    for stage, (_, document) in stages.items():
+        folder = root / _INPUT_STAGES[stage][0]
+        for reference in document.get('libraries', ()):
+            identity = reference['sha256'], reference['size_bytes']
+            current = folder / reference['uri']
+            previous = shared.setdefault(identity, current)
+            if current != previous:
+                current.unlink()
+                current.hardlink_to(previous)
 
 
 @replay_transaction()
-def export(choice, out, *, coo_observation=None, scipy_source=None, basis_package=None):
+def export(choice, out, *, coo_observation=None, scipy_source=None, basis_package=None,
+           mesh_package=None, topology_package=None):
     _require((coo_observation is None) == (scipy_source is None), 'COO delivery requires both provider inputs')
     _require(basis_package is None or coo_observation is not None, 'basis delivery also requires the COO stage')
+    _require(mesh_package is None or basis_package is not None, 'mesh delivery also requires the Basis stage')
+    _require(topology_package is None or mesh_package is not None, 'topology delivery also requires the mesh stage')
     choice = Path(choice).resolve(strict=True)
     reference = artifact_reference(choice, CHOICE)
     selected = check_choice(choice)
@@ -198,27 +234,26 @@ def export(choice, out, *, coo_observation=None, scipy_source=None, basis_packag
             _require(_same_content(reference, member), 'copied arm differs from the original publication choice')
             bundles.append(reference)
             packages.append(check_native_ordered_export(root / role))
-        ingress = None
+        stages = {}
         if coo_observation is not None:
             native_coo_ingress.export(coo_observation, scipy_source, root / 'coo')
-            ingress = (_local(root, 'coo/artifact.json', native_coo_ingress.SCHEMA),
-                       native_coo_ingress.check(root / 'coo'))
-        basis = None
-        if basis_package is not None:
-            copytree(Path(basis_package).resolve(strict=True), root / 'basis')
-            basis = _basis_member(root)
-        plan = _project(selected, design, packages, ingress, basis)
+            stages['ingress'] = _input_member(root, 'ingress')
+        for stage, package in (('basis', basis_package), ('mesh', mesh_package), ('topology', topology_package)):
+            if package is None:
+                continue
+            copytree(Path(package).resolve(strict=True), root / _INPUT_STAGES[stage][0])
+            stages[stage] = _input_member(root, stage)
+        plan = _project(selected, design, packages, stages)
+        _link_identical_providers(root, stages)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2, sort_keys=True, allow_nan=False) + '\n')
         _build(root, plan)
-        document = dict(schema=SCHEMA, schema_version=1, evidence=evidence, packages=bundles,
+        document = dict(schema=SCHEMA, schema_version=plan['schema_version'], evidence=evidence, packages=bundles,
             selected=plan['selected'], plan=_local(root, 'plan.json', PLAN),
             source=_local(root, 'scar_publish.cpp', 'scar.cpp-source'),
             executable=_local(root, _TARGET, 'scar.native-executable-file'),
             cmake=_local(root, 'CMakeLists.txt', 'scar.cmake-project'), full_python_entry=False)
-        if ingress is not None:
-            document.update(schema_version=2, ingress=ingress[0])
-        if basis is not None:
-            document.update(schema_version=3, basis=basis[0])
+        for stage, (reference, _) in stages.items():
+            document[stage] = reference
         (root / 'artifact.json').write_text(json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + '\n')
         check(root)
         if out.exists():
@@ -230,8 +265,10 @@ def export(choice, out, *, coo_observation=None, scipy_source=None, basis_packag
 def check(package):
     root = Path(package).resolve(strict=True)
     doc = _read_local(root, _local(root, 'artifact.json', SCHEMA), 'artifact.json', SCHEMA)
-    _require((doc['schema_version'], 'ingress' in doc, 'basis' in doc)
-        in ((1, False, False), (2, True, False), (3, True, True))
+    ordered = tuple(reversed(_INPUT_STAGES))
+    version = doc['schema_version']
+    _require(type(version) is int and 1 <= version <= 5
+        and tuple(stage for stage in ordered if stage in doc) == ordered[:version - 1]
         and doc['full_python_entry'] is False, 'unsupported native publication delivery')
     evidence = doc['evidence']
     selected = _read_local(root, evidence['choice'], 'evidence/choice.json', CHOICE)
@@ -246,17 +283,12 @@ def check(package):
             'local ordered publication package differs from its measured arm')
         packages.append(check_native_ordered_export(root / role))
     plan = _read_local(root, doc['plan'], 'plan.json', PLAN)
-    ingress = None
-    if 'ingress' in doc:
-        ref = _local(root, 'coo/artifact.json', native_coo_ingress.SCHEMA)
-        _require(doc['ingress'] == ref, 'bundled COO provider differs from publication receipt')
-        ingress = ref, native_coo_ingress.check(root / 'coo')
-    basis = None
-    if 'basis' in doc:
-        basis = _basis_member(root)
-        _require(doc['basis'] == basis[0], 'bundled basis provider differs from publication receipt')
+    stages = {}
+    for stage in ordered[:version - 1]:
+        stages[stage] = _input_member(root, stage)
+        _require(doc[stage] == stages[stage][0], 'bundled provider differs from publication receipt: ' + stage)
     _require(doc['selected'] == plan['selected']
-        and semantic_sha256(plan) == semantic_sha256(_project(selected, design, packages, ingress, basis))
+        and semantic_sha256(plan) == semantic_sha256(_project(selected, design, packages, stages))
         and doc['source'] == _local(root, 'scar_publish.cpp', 'scar.cpp-source')
         and (root / 'scar_publish.cpp').read_bytes() == _render(plan)
         and doc['cmake'] == _local(root, 'CMakeLists.txt', 'scar.cmake-project')
@@ -274,14 +306,17 @@ def main(argv=None):
     parser.add_argument('--coo-observation', type=Path)
     parser.add_argument('--scipy-source', type=Path)
     parser.add_argument('--basis-package', type=Path)
+    parser.add_argument('--mesh-package', type=Path)
+    parser.add_argument('--topology-package', type=Path)
     args = parser.parse_args(argv)
     if args.check and all(value is None for value in (args.out, args.coo_observation,
-            args.scipy_source, args.basis_package)):
+            args.scipy_source, args.basis_package, args.mesh_package, args.topology_package)):
         receipt = check(args.check)
         print(json.dumps(dict(verified=True, selected=receipt['selected'])))
     elif args.choice and args.out:
         print(json.dumps(export(args.choice, args.out, coo_observation=args.coo_observation,
-            scipy_source=args.scipy_source, basis_package=args.basis_package)))
+            scipy_source=args.scipy_source, basis_package=args.basis_package,
+            mesh_package=args.mesh_package, topology_package=args.topology_package)))
     else:
         parser.error('choose --check PACKAGE or --choice RESULT --out PACKAGE')
     return 0
