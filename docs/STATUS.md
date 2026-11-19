@@ -1,5 +1,7 @@
 # 当前状态
 
+纯 CPU 与混合包已接入同一配对验收。实测混合用例通过源图、权重、五个输出端口及二进制身份的准入。CUDA 探测返回 77，决定保留 CPU，双方均未进入计时。离线重放复现该决策。修改已锁定的二进制身份、重复返回的参考或采用结论均无法通过验收。见 `artifacts/baseline/native-device-assessment.json`。
+
 混合 `torch.export` 已接通设备分区、共享搬运、C++20 交付与离线重放。真实用例识别出两个 GPU 区域，统一计划含三个 cuBLAS 调用、三个 CPU ATen 调用、五次上传和两次下载。五个输出的 CPU 原生参考均与 PyTorch 逐位一致。混合产物通过编译链接，设备探测仍无可用 GPU，尚未实测混合执行正确性与性能。见 `artifacts/baseline/typed-hybrid-export-delivery.json`。
 
 真实 `torch.export` 的三个非方阵乘法已从类型化源图生成 CUDA C++20 候选。源图共享的四个外部值各上传一次，四个返回端口共用三次下载，内部中间值由设备上的下游算子直接读取。独立验收重放了源图、物理计划及 C++；同一输入的 CPU 原生产物四个输出均与 PyTorch 逐位一致。本机探测无可用 GPU，CUDA 实机结果、耗时及自动采用仍未验证。见 `artifacts/baseline/export-cuda-source-delivery.json`。
