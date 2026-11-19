@@ -1,0 +1,257 @@
+{
+  "argv": [
+    "96"
+  ],
+  "benchmark": {
+    "archive": {
+      "bytes": 6415,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/compiled/benchmark.json",
+      "sha256": "e7b65bb87f4fd2d6914f3398e5ab7677774a4a9ca84752b5154241dbc0bd142b"
+    },
+    "cpu_ids": [
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "cpu_model": "Intel Xeon E5-2680 v4",
+    "measured_rounds": 3,
+    "original_to_selected_median_speedup": 1.761601616786619,
+    "samples": {
+      "2": {
+        "max_ns": 1556191316,
+        "median_ns": 1538585588,
+        "min_ns": 1527511495,
+        "sample_stdev_ns": 14463340.593691083,
+        "samples_ns": [
+          1527511495,
+          1538585588,
+          1556191316
+        ]
+      },
+      "6": {
+        "max_ns": 1130217250,
+        "median_ns": 1127801516,
+        "min_ns": 1123780117,
+        "sample_stdev_ns": 3251771.361777198,
+        "samples_ns": [
+          1130217250,
+          1123780117,
+          1127801516
+        ]
+      },
+      "original": {
+        "max_ns": 2001854873,
+        "median_ns": 1986736974,
+        "min_ns": 1974478851,
+        "sample_stdev_ns": 13712883.420357017,
+        "samples_ns": [
+          2001854873,
+          1974478851,
+          1986736974
+        ]
+      }
+    },
+    "stdout_identical_all_arms": true,
+    "stdout_sha256": "468b0ba1bcbf1180d6c80f1ca76266aaeb73c27211a5a5fc0e3c4c8a6b6611a4",
+    "warmup_rounds": 1
+  },
+  "entry": {
+    "schema": "scar.python-source",
+    "sha256": "239a8fef8b0810301eab8bea630cd623ea00e6ce55aaf4dc72866e346824ac4c",
+    "size_bytes": 1313,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/csr-repeated-scope/source/fem-sweep.py"
+  },
+  "family": {
+    "bytes": 5922,
+    "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/family.json",
+    "sha256": "d415545d4f3686306492f73cff6a55042a4e2b20164c023a64c1a7f8cb97b97d"
+  },
+  "schema": "scar.cpu-triangle-profile-auto-entry-acceptance",
+  "schema_version": 1,
+  "scope": "REGISTERED_PROVIDER_FAMILY_SINGLE_ENTRY_AND_FIXED_ARGV",
+  "stage1": {
+    "call_target_admission_seconds": 88.88894488895312,
+    "capture_affinity": [
+      49
+    ],
+    "entry_projection": {
+      "bytes": 3504100,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/entry-calls.json",
+      "sha256": "9ddebe1681d9fb551c1860426ae8cf7aa3ffd4bfa12d70e3ecf8fc63a570fc0e"
+    },
+    "entry_summary": {
+      "all_bounded_source_interfaces": 50,
+      "catalog_units": 14,
+      "entry_conditional_interfaces": 40,
+      "entry_projection_units": 10,
+      "entry_reachable_observed_attempts": 126,
+      "entry_static_call_templates": 276,
+      "entry_static_scopes": 27,
+      "observed_attempts": 182,
+      "observed_target_frontiers": {
+        "OBSERVED_CALLABLE_REQUIRES_OTHER_CALL_PROTOCOL": 115,
+        "OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG": 27
+      },
+      "observed_target_kinds": {
+        "BOUND_PYTHON_METHOD": 2,
+        "NATIVE_CARRIER": 53,
+        "OTHER_CALLABLE": 29,
+        "PYTHON_FUNCTION": 65,
+        "TYPE_OBJECT": 33
+      },
+      "preparation_loaded_units": 14,
+      "shared_source_bodies": 26,
+      "typed_route_edges": 324,
+      "typed_route_kinds": {
+        "ARGUMENT": 56,
+        "CALL_TARGET": 40,
+        "COMPLETION": 40,
+        "ENVIRONMENT": 40,
+        "PROJECTION": 68,
+        "STATE_INTERFACE": 80
+      }
+    },
+    "f4_seconds": 96.81507292296737,
+    "first_stage_complete": false,
+    "frontend": {
+      "bytes": 2677,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/result.json",
+      "sha256": "0b7e71f3d566b2d17a53d0eff296daa0dc3704c0986f029a1075d179625865f0"
+    },
+    "graph": {
+      "bytes": 15032,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/program-replay-1/manifest.json",
+      "sha256": "123861eaf8289ae4fca870dd73e40280421017e57b7f2f5a8177811e463c7c6c"
+    },
+    "graph_summary": {
+      "bounded_call_binding_publications": 1,
+      "bounded_call_target_attempts": 182,
+      "bounded_source_function_interfaces": 50,
+      "catalog_local_graph_materialized": false,
+      "configuration_inputs": 0,
+      "gaps": 385,
+      "loaded_units": 14,
+      "observed_binding_state_publications": 0,
+      "observed_body_activation_publications": 0,
+      "observed_boundary_publications": 0,
+      "observed_invocation_handles": 0,
+      "observed_publications": 0,
+      "observed_resource_scope_publications": 0,
+      "observed_resumption_publications": 0,
+      "resource_records": 301,
+      "source_units": 14
+    },
+    "initial_f4_rejected": {
+      "bytes": 2962,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/compile.stderr",
+      "sha256": "b6f87b8d002a737cf509a5375e956449c60a3628b4c50bcc31ff7c70656d7165"
+    },
+    "instrumented_seconds": 2.6368496370268986,
+    "original_capture": {
+      "bytes": 1332,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/observed/result.json",
+      "sha256": "bbb3f12aa8be43124690502c11604a7efcd2307a847ad5227bee995118245a98"
+    },
+    "original_process_id": 1584434,
+    "original_processes": 1,
+    "resumed_from_same_original_capture": true,
+    "selected_frame_records": 10,
+    "source_seed": {
+      "bytes": 10968,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/source-seed.json",
+      "sha256": "c7eb21ff872ba15de56d4383a9f50d3fa871291bd39a00dc5f087300f827a8bc"
+    }
+  },
+  "stage2": {
+    "candidate_widths": [
+      2,
+      6
+    ],
+    "count_evidence": {
+      "bytes": 1619,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/frontend/original-observation.json",
+      "sha256": "7dab89cc6f15dacc841f59ec630d76a88acc09e6d2c2e61ba85ec066715eb60a"
+    },
+    "decision": "MEASURED_NATIVE_GAIN",
+    "global_optimum_proven": false,
+    "hardware": {
+      "bytes": 31672,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/hardware-1795121553440817277.json",
+      "sha256": "d45af880870a5ba56a630bb0e879d4e6db9aed32a5df012c21f412bbff3a2efb"
+    },
+    "matched_arms_only": true,
+    "operation_cost_basis": "UNKNOWN",
+    "selected_width": 6,
+    "selection": {
+      "bytes": 2556,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/compiled/selection.json",
+      "sha256": "c65274c4449ee3d0b78abbebf14bab4c9c775c9a3d8152522685f2950030323a"
+    },
+    "source_counts": {
+      "builtin_range_calls": 1,
+      "digest_update_sites_reached": 96,
+      "enforce_completed": 96,
+      "enforce_started": 96,
+      "solve_completed": 96,
+      "solve_started": 96,
+      "sweep_completed": 1,
+      "sweep_started": 1
+    }
+  },
+  "stage3": {
+    "cold_readback": {
+      "bytes": 4540,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/check.json",
+      "sha256": "90c64a8b4d65d07851d924fab523ac568a8344062417257afd25b7fc269fad8f"
+    },
+    "deployment_authorized": false,
+    "full_original_effect_equivalence": false,
+    "install": {
+      "bytes": 482,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/install.json",
+      "sha256": "4141546a69bc934d3fb79cdc7e5215620f285c4043e15f7a6916599046796d45"
+    },
+    "install_verification": {
+      "clean_environment": true,
+      "fixed_argv": [
+        "96"
+      ],
+      "installed_stdout_bytes": 65,
+      "installed_stdout_sha256": "468b0ba1bcbf1180d6c80f1ca76266aaeb73c27211a5a5fc0e3c4c8a6b6611a4",
+      "open_seed_file_required": false,
+      "relocated_verification": true,
+      "same_rebuilt_elf": true,
+      "schema": "scar.source-triangle-profile-install-check",
+      "schema_version": 1,
+      "selected_width": 6,
+      "stdin": "CLOSED",
+      "wrong_argument_status": 1,
+      "wrong_argument_stdout_bytes": 0
+    },
+    "result": {
+      "bytes": 4992,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/result.json",
+      "sha256": "ab96e96dbeb4d88aa8368ed8c41df7ede33b3e94c0758a0c61c0bfb70b1e6e54"
+    },
+    "seed": {
+      "bytes": 472,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/compiled/upstream/seed.bin",
+      "sha256": "8fc720fb84f53217afb518835348ab2415bc39ac225c4aa32206817ca5780e6f"
+    },
+    "selected_package": {
+      "bytes": 2235,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/compiled/native-6/artifact.json",
+      "sha256": "03d2fec0db9d851cde086183f1077a2c22eece0287a7c541f9cdc6d156b856ef"
+    },
+    "selected_source": {
+      "bytes": 12977,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/source-profile-96-auto-v1/entry/compiled/native-6/scar_publish.cpp",
+      "sha256": "eca809614bbfffaaba87dbe3caea91b3e10923b5d084cf09307576778b0a56f7"
+    }
+  },
+  "workload": "scikit-fem finite element parameter sweep"
+}

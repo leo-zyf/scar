@@ -1,5 +1,9 @@
 # 当前状态
 
+`scar compile-triangle-profile --family FAMILY --entry ENTRY --argv 96 --out OUT` 已跑通已登记的 scikit-fem CPU 入口。前端在同一原程序进程中采集一次，接通 182 条调用观测和 10 个选定帧，入口图包含 324 条类型化依赖边。首次离线构图因并行编辑触发输入校验，随后通过 `--resume` 用同一份采集完成构图。F4 重放耗时 96.8 s，其中调用目标准入占 88.9 s。
+
+排程层按实际 CPU 核、NUMA 和内存约束提名 2 和 6 worker，保留有序发布。C++20 工件与原入口在 CPU 49–55 各预热一次、交替测三轮，中位数分别为原入口 1.987 s、2 worker 1.539 s、6 worker 1.128 s，stdout 逐字节一致。SCAR 推荐 6 worker，约 1.76×。结果已冷读复验，工件搬迁、安装后在关闭 stdin 的最小环境中通过执行。下一步将已知调用目标的图投影与新运行事件分开复用，取得逐段成本证据，再以另一条 CPU 入口验证提供方接口。当前结论限于已登记的提供方、入口和参数，完整 Python 可见效果仍待闭合。见 `artifacts/baseline/cpu-triangle-profile-auto-entry.json`。
+
 `scar compile-triangle-profile` 已把已准入的源码证据、CPU 排程、C++20 生成和整入口对照接到同一命令。`128` 轮有独立的原程序调用和输出证据，五组静态初始数据与 `512` 轮逐字段一致。两种工作线程配置共享一次上游编译和同一数值输入。CPU 49–55 上各预热一次并交替测三轮，Python 原入口、2 worker、6 worker 的中位数分别为 2.500 s、1.738 s、1.216 s，均逐字节匹配。选中 6 worker，约 2.06×。工件安装后在关闭 stdin 的空环境中实跑通过。当前命令仍以已验证的三角形提供方和源码证据为输入。见 `artifacts/baseline/cpu-triangle-profile-second-count.json`。
 
 固定参数 `512` 的 scikit-fem 入口已能把从源码推导的初始网格和参考单元数据编入 C++20 工件。推导复验期间禁止导入数值库和目标包，生成的 472 字节输入与原运行记录逐字节一致。安装后关闭 stdin 仍能输出相同的 65 字节结果。入口效果验收涵盖这组参数和输出，日志及导入效果仍待证明。

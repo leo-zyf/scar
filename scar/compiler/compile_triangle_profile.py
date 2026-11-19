@@ -3,13 +3,15 @@
 import argparse
 from hashlib import file_digest, sha256
 import json
+from math import isfinite
 import os
 from pathlib import Path
 from shutil import copytree
 from statistics import median
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
-from time import perf_counter_ns
+from time import perf_counter_ns, time_ns
 
 from scar.codegen import native_parameterized_upstream as upstream
 from scar.codegen import native_publication_delivery
@@ -21,6 +23,7 @@ from scar.optimization.native_ordered_publication import ENV
 
 SCHEMA = 'scar.source-triangle-profile-compilation'
 BENCHMARK = 'scar.source-triangle-profile-benchmark'
+AUTOMATIC = 'scar.source-triangle-entry-compilation'
 
 
 def _require(valid, reason):
@@ -40,6 +43,10 @@ def _hash(path):
         return file_digest(stream, 'sha256').hexdigest()
 
 
+def _launch_environment(context):
+    return {**ENV, **{key: value for key, value in context['environment'].items() if value is not None}}
+
+
 def _stage_measurement(root, packages):
     """Hold executable and library identity constant wherever arms agree."""
     staged = {}
@@ -48,6 +55,8 @@ def _stage_measurement(root, packages):
         copytree(Path(reference['uri']).parent, stage, copy_function=os.link)
         staged[width] = stage
     first, *others = staged.values()
+    if not others:
+        return staged, []
     shared = []
     for member in first.rglob('*'):
         if not member.is_file() or not (os.access(member, os.X_OK) or '.so' in member.name):
@@ -81,7 +90,7 @@ def _measure(out, plans, packages, *, repeats):
     _require(set(cpus) <= os.sched_getaffinity(0), 'benchmark requires the complete planned CPU cohort')
     argv = source['argv']
     cwd = context['cwd']
-    environment = {**ENV, **{key:value for key,value in context['environment'].items() if value is not None}}
+    environment = _launch_environment(context)
     interpreter = context['interpreter']['executable']
     entry = source['entry']
     prefix = ['/usr/bin/taskset', '-c', ','.join(map(str, cpus))]
@@ -118,8 +127,8 @@ def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, 
     anchor = Path(anchor).resolve(strict=True)
     baseline = native_publication_delivery.check(anchor)
     _require(baseline['schema_version'] == 6 and type(repeats) is int and repeats >= 3
-        and len(widths) >= 2 and len(widths) == len(set(widths)),
-        'supply a source-sealed provider family and at least two distinct measured widths')
+        and len(widths) >= 1 and len(widths) == len(set(widths)),
+        'supply a source-sealed provider family and distinct measured widths')
     out = Path(out).resolve()
     _require(not out.is_relative_to(anchor), 'profile output must be outside the provider family')
     out.mkdir(parents=True, exist_ok=False)
@@ -149,6 +158,69 @@ def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, 
     return _write(out/'result.json', result)
 
 
+def _check_acquisition(acquired, entry, argv):
+    seed = read_artifact(acquired['source_seed'])
+    observed = read_artifact(acquired['original_observation'])
+    oracle = read_artifact(acquired['oracle'], json_document=False)
+    frame = read_artifact(seed['provenance']['frames'])
+    frontend = read_artifact(acquired['frontend'])
+    _require(frontend == {key: value for key, value in acquired.items() if key != 'frontend'}
+        and frontend['original_processes'] == 1 and frontend['prior_runtime_observations_transferred'] is False
+        and seed['entry'] == observed['entry'] == entry and seed['argv'] == observed['argv'] == argv
+        and frame['process_id'] == observed['process_id'] and frame['thread_id'] == observed['thread_id']
+        and frame['cpu_ids'] == observed['affinity']
+        and oracle == (observed['return_digest'] + '\n').encode('ascii')
+        and sha256(oracle).hexdigest() == observed['expected_stdout_sha256'],
+        'call bindings, loop completion and stdout must come from the same original child')
+
+
+def compile_entry(family_path, entry, argv, out, *, widths=None, repeats=3, max_capture_seconds=60,
+                  resume=False):
+    """Collect the fresh evidence required by a registered native provider family."""
+    from scar.compiler.observe_triangle_profile import observe_profile
+    from scar.compiler.triangle_profile_family import SCHEMA as FAMILY, resolve
+    from scar.runtime.sparse_ordered_scope_observe import scope_design
+
+    _require(type(argv) in (list, tuple) and len(argv) == 1 and type(argv[0]) is str
+        and argv[0].isascii() and argv[0].isdecimal() and 0 < len(argv[0]) <= 9,
+        'expected one canonical finite iteration argument')
+    count = int(argv[0])
+    _require(count > 1 and argv[0] == str(count), 'expected more than one iteration without leading zeros')
+    _require(isfinite(max_capture_seconds) and max_capture_seconds > 0, 'expected a positive source capture budget')
+    argv = list(argv)
+    entry = Path(entry).resolve(strict=True)
+    family_ref = artifact_reference(Path(family_path).resolve(strict=True), FAMILY)
+    selected = resolve(family_ref['uri'], entry, interpreter=sys.executable)
+    read_artifact(family_ref)
+    anchor = Path(selected['anchor']['uri']).parent
+    entry_ref = artifact_reference(entry, 'scar.python-source')
+    _require(entry_ref == selected['entry'], 'entry changed during provider admission')
+    context = selected['context']
+    out = Path(out).resolve()
+    _require(not out.is_relative_to(anchor), 'profile output must be outside the provider family')
+    available, selected_widths = profiles.observe_profile_host(anchor/'digest', count, widths=widths)
+    aggregate = scope_design(anchor/'digest', argv)
+    if resume:
+        _require((out/'frontend'/'observed'/'result.json').is_file()
+            and not (out/'compiled').exists() and not (out/'result.json').exists(),
+            'resumption needs an existing source capture and a fresh downstream compilation')
+    else:
+        out.mkdir(parents=True, exist_ok=False)
+    hardware_path = out/(f'hardware-{time_ns()}.json' if resume else 'hardware.json')
+    hardware = _write(hardware_path, available)
+    acquired = observe_profile(selected['source_seed']['uri'], argv, out/'frontend',
+        aggregate_design=aggregate, interpreter=context['interpreter'],
+        cwd=context['cwd'], environment=_launch_environment(context), expected_entry=entry,
+        max_seconds=max_capture_seconds, cpu_ids=selected['launch_cpu_ids'][:1], resume=resume)
+    _check_acquisition(acquired, entry_ref, argv)
+    compiled = compile_profile(anchor, acquired['source_seed']['uri'], hardware['uri'],
+        acquired['oracle']['uri'], acquired['original_observation']['uri'], out/'compiled',
+        widths=selected_widths, repeats=repeats)
+    return _write(out/'result.json', dict(schema=AUTOMATIC, schema_version=1, family=family_ref,
+        entry=entry_ref, argv=argv, anchor=selected['anchor'], acquisition=acquired,
+        hardware=hardware, candidate_widths=list(selected_widths), compilation=compiled, resumed_capture=resume))
+
+
 def check(path):
     """Replay the prepared artifacts and selection without timing the workload again."""
     reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
@@ -175,21 +247,60 @@ def check(path):
     return saved
 
 
+def check_entry(path):
+    """Replay the admission and check the observed and compiled sides of the entry."""
+    from scar.compiler.triangle_profile_family import resolve
+
+    saved = read_artifact(artifact_reference(Path(path).resolve(strict=True), AUTOMATIC))
+    read_artifact(saved['family'])
+    selected = resolve(saved['family']['uri'], saved['entry']['uri'], interpreter=sys.executable)
+    read_artifact(saved['entry'], json_document=False)
+    hardware = read_artifact(saved['hardware'])
+    acquired = saved['acquisition']
+    _check_acquisition(acquired, saved['entry'], saved['argv'])
+    compiled = check(saved['compilation']['uri'])
+    anchor = Path(saved['anchor']['uri']).parent
+    plans = [read_artifact(plan) for plan in compiled['plans'].values()]
+    _require(saved['schema_version'] == 1
+        and selected['anchor'] == saved['anchor'] and selected['entry'] == saved['entry']
+        and selected['source_seed'] == acquired['family']
+        and compiled == read_artifact(saved['compilation'])
+        and compiled['source_seed'] == acquired['source_seed']
+        and compiled['original_observation'] == acquired['original_observation']
+        and compiled['oracle'] == acquired['oracle']
+        and sorted(map(int, compiled['plans'])) == saved['candidate_widths']
+        and hardware['schema'] == profiles.HARDWARE
+        and all(plan['hardware'] == saved['hardware']
+                and Path(plan['anchor']['package']['uri']).parent == anchor/'digest' for plan in plans),
+        'entry admission, observed run and compiled profile differ')
+    return saved
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for flag in ('anchor', 'source-seed', 'hardware', 'oracle', 'original-observation', 'out'):
         parser.add_argument('--'+flag, type=Path)
     parser.add_argument('--check', type=Path)
+    parser.add_argument('--family', type=Path)
+    parser.add_argument('--entry', type=Path)
+    parser.add_argument('--argv', nargs='+')
+    parser.add_argument('--max-capture-seconds', type=float, default=60)
+    parser.add_argument('--resume', action='store_true', help='resume offline source projection after a completed capture')
     parser.add_argument('--width', type=int, action='append')
     parser.add_argument('--repeats', type=int, default=3)
     args = parser.parse_args(argv)
-    sources = (args.anchor, args.source_seed, args.hardware, args.oracle, args.original_observation, args.out)
-    if args.check is not None and not any(sources) and args.width is None:
-        value = check(args.check)
-    elif args.check is None and all(source is not None for source in sources) and args.width is not None:
-        value = compile_profile(*sources, widths=args.width, repeats=args.repeats)
+    explicit = (args.anchor, args.source_seed, args.hardware, args.oracle, args.original_observation)
+    automatic = (args.family, args.entry, args.argv)
+    if args.check is not None and not any((*explicit, *automatic, args.out, args.width, args.resume)):
+        schema = json.loads(args.check.read_bytes())['schema']
+        value = check_entry(args.check) if schema == AUTOMATIC else check(args.check)
+    elif args.check is None and args.out and all(automatic) and not any(explicit):
+        value = compile_entry(*automatic, args.out, widths=args.width, repeats=args.repeats,
+                              max_capture_seconds=args.max_capture_seconds, resume=args.resume)
+    elif args.check is None and args.out and all(explicit) and not any(automatic) and args.width is not None and not args.resume:
+        value = compile_profile(*explicit, args.out, widths=args.width, repeats=args.repeats)
     else:
-        parser.error('use --check RESULT or provide the admitted sources, widths and output directory')
+        parser.error('use --family/--entry/--argv and --out, the explicit evidence inputs, or --check RESULT')
     print(json.dumps(value, sort_keys=True))
 
 
