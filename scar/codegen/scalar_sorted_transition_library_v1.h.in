@@ -1,0 +1,24 @@
+#ifndef SCAR_SCALAR_SORTED_TRANSITION_V1_H
+#define SCAR_SCALAR_SORTED_TRANSITION_V1_H
+
+#include "scar_scalar_sorted_v1.h"
+#include "scar_scalar_transition_resident_v1.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Use scar_scalar_sorted_v1 for the eager ordered record array. Each requested
+ * lazy transition receives one state POD and one ranked move. The record score
+ * is eligible only with an agreeing caller-attested original producer token.
+ * The resident status enum distinguishes full and transported scoring. Output
+ * is unchanged on failure. The library retains no input or output pointers. */
+int scar_scalar_lazy_transition_v1(uint32_t table_slot, const struct scar_resident_output_v1* state,
+    const struct scar_sorted_record_v1* move, const struct scar_resident_score_v1* producer,
+    struct scar_resident_output_v1* output);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
