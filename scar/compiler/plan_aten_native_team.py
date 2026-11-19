@@ -36,8 +36,9 @@ def team_statistics(raw, schedule, warmup, repetitions, windows, mode):
 
 def team_segments(hardware, schedule, origin, evidence, model, mode):
     timeline = model['timelines'][mode]
+    sampled = model.get('numa_locality', {}).get('sampled_node_residency_observed', False)
     return _verify_resource_segments(hardware, schedule, origin, evidence, timeline, model['tensor_storage'],
-                                     key='cpu_team')
+                                     key='cpu_team', numa_sampled=sampled)
 
 
 def plan_aten_native_team(verified, *, input_paths, out, warmup_pairs, measured_pairs,

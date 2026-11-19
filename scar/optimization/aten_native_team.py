@@ -16,10 +16,12 @@ from scar.optimization.aten_native_schedule import (
     recorded_cpu_domain,
 )
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, tensor_footprint, tensor_releases
+from scar.optimization.aten_team_numa_locality import model_aten_team_numa_locality
 
 
 TEAM_SCHEMA = 'scar.aten-native-cpu-team'
 TEAM_DOMAIN_SCHEMA = 'scar.aten-cpu-team-placement-domain'
+TEAM_PLACEMENT_POLICY = 'ISA_COMPATIBLE_ORDERED_TOPOLOGY'
 _MAX_REPRESENTATIVES = 64
 _MODE_NAMES = ('SERIAL', 'TWO_CPU', 'THREE_CPU')
 
@@ -65,20 +67,24 @@ def _valid_lane(lane):
             and thread.isa_evidence is not None)
 
 
-def _team_context(lane):
-    return lane[2].numa_node, tuple(sorted(lane[0].isa_flags))
+def _team_context(lane, allow_cross_numa):
+    numa = None if allow_cross_numa else lane[2].numa_node
+    return numa, tuple(sorted(lane[0].isa_flags))
+
+
+def _crosses_numa(lanes):
+    return len({lane[2].numa_node for lane in lanes}) > 1
 
 
 def _cpu_number(value):
     return type(value) is int and 0 <= value < 1024
 
 
-def _representatives(lanes):
-    # Teams stay inside an observed NUMA and ISA domain. Within it, retain one
-    # ordered sample per combination of exact topology and LLC memberships.
+def _representatives(lanes, allow_cross_numa):
+    # Keep NUMA and LLC in the ordered signature even when lanes can span nodes.
     by_context = defaultdict(lambda: defaultdict(list))
     for cpu, lane in lanes.items():
-        by_context[_team_context(lane)][_signature(lane), lane[3].id].append(cpu)
+        by_context[_team_context(lane, allow_cross_numa)][_signature(lane), lane[3].id].append(cpu)
     representatives = []
     for classes in by_context.values():
         if sum(map(len, classes.values())) < 3:
@@ -96,15 +102,21 @@ def _representatives(lanes):
                 used[group] += 1
             if len(representatives) >= _MAX_REPRESENTATIVES:
                 return [], 'CPU_TEAM_TOPOLOGY_CLASS_BUDGET_EXCEEDED'
-            representatives.append(dict(cpus=cpus, represented_ordered_teams=combinations,
-                                        topology=[_topology(lanes[cpu]) for cpu in cpus]))
+            team_lanes = [lanes[cpu] for cpu in cpus]
+            row = dict(cpus=cpus, represented_ordered_teams=combinations,
+                       topology=[_topology(lane) for lane in team_lanes])
+            if allow_cross_numa:
+                row['cross_numa'] = _crosses_numa(team_lanes)
+            representatives.append(row)
     if not representatives:
         return [], 'NO_THREE_DISTINCT_COMPATIBLE_CORES'
     return representatives, None
 
 
-def aten_cpu_team_domain(target, *, allowed_cpu_ids):
-    """Nominate recorded same-NUMA, ISA-compatible team placements for calibration."""
+def aten_cpu_team_domain(target, *, allowed_cpu_ids, allow_cross_numa=False):
+    """Nominate ordered, ISA-compatible team placements for calibration."""
+    if type(allow_cross_numa) is not bool:
+        raise ValueError('team NUMA policy must be an explicit boolean')
     allowed = tuple(allowed_cpu_ids)
     if any(type(cpu) is not int or cpu < 0 for cpu in allowed):
         raise ValueError('launch affinity requires nonnegative Linux CPU IDs')
@@ -124,17 +136,21 @@ def aten_cpu_team_domain(target, *, allowed_cpu_ids):
         else:
             lanes[cpu] = lane
             used_cores.add(lane[1].id)
-    representatives, reason = _representatives(lanes)
+    representatives, reason = _representatives(lanes, allow_cross_numa)
+    policy = ('ONE_ORDERED_REPRESENTATIVE_PER_ISA_TOPOLOGY_CLASS' if allow_cross_numa
+              else 'ONE_ORDERED_REPRESENTATIVE_PER_SAME_NUMA_ISA_TOPOLOGY_CLASS')
     return dict(schema=TEAM_DOMAIN_SCHEMA, schema_version=1, target=encode(graph._snapshot),
                 constraint_fact=encode(constraint.evidence), recorded_cpu_ids=list(recorded),
                 launch_cpu_ids=sorted(launch), eligible_cpus=list(lanes),
-                policy='ONE_ORDERED_REPRESENTATIVE_PER_SAME_NUMA_ISA_TOPOLOGY_CLASS',
+                policy=policy,
                 class_limit=_MAX_REPRESENTATIVES, representatives=representatives, reason=reason,
                 excluded_cpu_counts=dict(excluded))
 
 
-def propose_cpu_team(recipe, *, contract, target, cpu_ids):
+def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=False):
     """Replay a concrete team against recorded hardware and graph independence."""
+    if type(allow_cross_numa) is not bool:
+        raise ValueError('team NUMA policy must be an explicit boolean')
     groups = _groups(recipe, contract)
     if not any(group['width'] == 3 for group in groups):
         raise AtenCpuWindowFrontier('NO_THREE_READY_ATEN_OPERATIONS',
@@ -152,17 +168,23 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids):
     if not all(map(_valid_lane, lanes)) or len({lane[1].id for lane in lanes}) != 3:
         raise AtenCpuWindowFrontier('CPU_TEAM_DISTINCT_CORES_UNAVAILABLE',
                                    'team lanes require distinct online cores with known topology')
-    if len(set(map(_team_context, lanes))) != 1:
+    if len({_team_context(lane, allow_cross_numa) for lane in lanes}) != 1:
+        if allow_cross_numa:
+            raise AtenCpuWindowFrontier('CPU_TEAM_REQUIRES_COMPATIBLE_ISA_CONTEXT',
+                                       'team lanes require compatible ISA flags')
         raise AtenCpuWindowFrontier('CPU_TEAM_REQUIRES_SAME_NUMA_ISA_CONTEXT',
                                    'team lanes require one recorded NUMA node and compatible ISA flags')
-    return dict(schema=TEAM_SCHEMA, schema_version=1, scope=SCOPE, target=encode(graph._snapshot),
-                cpus=cpus, availability_mask=sorted(cpus), lanes=[_topology(lane) for lane in lanes],
-                constraint_fact=encode(constraint.evidence),
-                target_cpu_domain=dict(affinity_cpu_ids=list(constraint.affinity_cpu_ids),
-                                       allowed_cpu_ids=list(constraint.allowed_cpu_ids), eligible_cpu_ids=list(domain)),
-                legal_window_widths=_widths(groups, len(recipe['operations'])), groups=groups,
-                effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
-                source_replacement_authorized=False, performance_measured=False)
+    schedule = dict(schema=TEAM_SCHEMA, schema_version=1, scope=SCOPE, target=encode(graph._snapshot),
+                    cpus=cpus, availability_mask=sorted(cpus), lanes=[_topology(lane) for lane in lanes],
+                    constraint_fact=encode(constraint.evidence),
+                    target_cpu_domain=dict(affinity_cpu_ids=list(constraint.affinity_cpu_ids),
+                                           allowed_cpu_ids=list(constraint.allowed_cpu_ids), eligible_cpu_ids=list(domain)),
+                    legal_window_widths=_widths(groups, len(recipe['operations'])), groups=groups,
+                    effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
+                    source_replacement_authorized=False, performance_measured=False)
+    if allow_cross_numa:
+        schedule.update(placement_policy=TEAM_PLACEMENT_POLICY, cross_numa=_crosses_numa(lanes))
+    return schedule
 
 
 def _bounded_duration(value):
@@ -297,35 +319,91 @@ def _timeline(operations, cpus, service, handoffs, choices, storage):
     return timeline
 
 
+def _timeline_prediction(timeline, lane_samples, handoff_samples):
+    estimate = timeline[-1]['end_ns']
+    totals = []
+    for row, measurements in enumerate(zip(*lane_samples, strict=True)):
+        handoffs = {width: values[row] for width, values in handoff_samples.items()}
+        totals.append(sum(_segment_time(measurements, handoffs, segment['start'], segment['width'])
+                          for segment in timeline))
+    return dict(estimate_ns=estimate, sample_min_ns=min(estimate, *totals), sample_max_ns=max(estimate, *totals))
+
+
+def _price_numa_context(context, operations, cpus, service, handoffs, lane_samples, handoff_samples, storage):
+    choices = context['windows']
+    lane_by_op = [0] * len(operations)
+    for start, width in choices:
+        lane_by_op[start:start + width] = range(width)
+    contextual_service = [list(row) for row in service]
+    contextual_samples = [[list(row) for row in samples] for samples in lane_samples]
+    for i, samples in enumerate(zip(*context['replacement_operation_samples_ns'], strict=True)):
+        if samples[0] is None:
+            continue
+        lane = lane_by_op[i]
+        contextual_service[lane][i] = median_low(samples)
+        for row, duration in zip(contextual_samples[lane], samples, strict=True):
+            row[i] = duration
+    timeline = _timeline(operations, cpus, contextual_service, handoffs, choices, storage)
+    return timeline, _timeline_prediction(timeline, contextual_samples, handoff_samples)
+
+
 def model_cpu_team(calibration, recipe, schedule, warmup, *, tensor_budget_bytes=None):
     """Select a resource-legal ordered tiling from separately measured primitives."""
     windows = _team_groups(recipe, schedule)
     operations = recipe['operations']
     service, handoffs, lane_samples, handoff_samples = _measurements(calibration, warmup, len(operations), windows)
     storage, possible = _storage(calibration, recipe, windows, tensor_budget_bytes)
-    by_mode = _best_tilings(service, handoffs, possible)
+    numa = model_aten_team_numa_locality(calibration.get('numa_team'), recipe, schedule, warmup,
+                                        result_storage_bytes=calibration['result_storage_bytes'])
+    cross_numa = schedule.get('cross_numa') is True
+    contexts = [] if numa is None else numa['contexts']
+    nodes = [lane['numa_node'] for lane in schedule['lanes']]
+    if contexts:
+        by_mode = {'SERIAL': []}
+    else:
+        without_pages = {window for window in possible if len(set(nodes[:window[1]])) == 1}
+        by_mode = _best_tilings(service, handoffs, without_pages if cross_numa else possible)
     timelines = {mode: _timeline(operations, schedule['cpus'], service, handoffs, choices, storage)
                  for mode, choices in by_mode.items()}
-    predictions = {}
-    for mode, timeline in timelines.items():
-        estimate = timeline[-1]['end_ns']
-        totals = []
-        for row in range(warmup):
-            measured_service = [lane[row] for lane in lane_samples]
-            measured_handoffs = {width: values[row] for width, values in handoff_samples.items()}
-            totals.append(sum(_segment_time(measured_service, measured_handoffs, segment['start'], segment['width'])
-                              for segment in timeline))
-        predictions[mode] = dict(estimate_ns=estimate, sample_min_ns=min(estimate, *totals),
-                                 sample_max_ns=max(estimate, *totals))
+    predictions = {mode: _timeline_prediction(timeline, lane_samples, handoff_samples)
+                   for mode, timeline in timelines.items()}
+    context_costs = []
+    for context in contexts:
+        choices = context['windows']
+        within_budget = all(tuple(window) in possible for window in choices)
+        cost = dict(windows=choices, within_tensor_budget=within_budget,
+                    complete_page_evidence=context['complete_page_evidence'])
+        context_costs.append(cost)
+        if not within_budget:
+            cost['reason'] = 'TENSOR_BUDGET_EXCEEDED'
+            continue
+        widest = max(width for _, width in choices)
+        if len(set(nodes[:widest])) > 1 and not context['complete_page_evidence']:
+            cost['reason'] = 'CROSS_NUMA_PAGE_EVIDENCE_INCOMPLETE'
+            continue
+        timeline, prediction = _price_numa_context(context, operations, schedule['cpus'], service, handoffs,
+                                                   lane_samples, handoff_samples, storage)
+        cost['prediction'] = prediction
+        mode = _MODE_NAMES[widest - 1]
+        score = (prediction['estimate_ns'], len(choices), choices)
+        if mode not in predictions or score < (predictions[mode]['estimate_ns'], len(by_mode[mode]), by_mode[mode]):
+            by_mode[mode], timelines[mode], predictions[mode] = choices, timeline, prediction
 
     selected = min(by_mode, key=lambda mode: (predictions[mode]['estimate_ns'], _MODE_NAMES.index(mode)))
     choices = {tuple(group) for group in by_mode[selected]}
     candidates = [dict(group, peak_tensor_storage_bytes=storage['group_peak_bytes'][f'{start}:{width}'],
                        within_tensor_budget=(start, width) in possible, selected=(start, width) in choices)
                   for (start, width), group in windows.items()]
-    return dict(basis='MINIMUM_ADJACENT_ATEN_WINDOW_TILING_PER_EXECUTION_WIDTH', selected=selected,
+    model = dict(basis='MINIMUM_ADJACENT_ATEN_WINDOW_TILING_PER_EXECUTION_WIDTH', selected=selected,
                 selected_windows=by_mode[selected], mode_windows=by_mode, timeline=timelines[selected],
                 timelines=timelines, predictions=predictions, candidates=candidates, tensor_storage=storage,
                 operations=[dict(id=op['id'], service_ns=duration) for op, duration in zip(operations, service[0], strict=True)],
                 lane_service_ns=service, dispatch_join_ns=handoffs, bounds='CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS',
                 shared_memory_contention_modelled=False, numa_page_placement_modelled=False)
+    if numa is not None:
+        model.update(numa_locality=numa, numa_context_costs=context_costs,
+                     numa_page_placement_modelled=bool(contexts and numa['sampled_node_residency_observed']))
+    if cross_numa and 'THREE_CPU' not in predictions and (not contexts or any(
+            cost.get('reason') == 'CROSS_NUMA_PAGE_EVIDENCE_INCOMPLETE' for cost in context_costs)):
+        model['parallel_frontier'] = 'CROSS_NUMA_PAGE_CONTEXT_UNAVAILABLE'
+    return model

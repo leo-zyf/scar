@@ -2,6 +2,8 @@
 #include "entry.cpp"
 #undef main
 
+#include "aten_numa_pages_v1.h"
+
 #include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
 
@@ -21,6 +23,8 @@ using Outputs = std::array<at::Tensor, graph::output_count>;
 using OperationTimes = std::array<std::int64_t, graph::operation_count>;
 using LaneEligibility = std::array<bool, graph::operation_count>;
 using OperationRows = std::vector<OperationTimes>;
+using PageSamples = std::vector<graph::NumaPageSample>;
+using Windows = std::vector<std::array<std::size_t, 2>>;
 
 struct StorageGeometry {
     std::size_t bytes;
@@ -169,6 +173,119 @@ void emit_operations(const OperationRows& rows, const LaneEligibility* eligibili
     std::cout << ']';
 }
 
+struct NumaTeamContext {
+    Windows windows;
+    PageSamples outputs;
+    OperationRows services;
+};
+
+struct NumaTeam {
+    PageSamples inputs, caller_outputs;
+    std::vector<NumaTeamContext> contexts;
+};
+
+constexpr std::size_t max_numa_contexts = 8;
+constexpr std::size_t max_numa_storages = 256;
+
+bool enumerate_windows(std::size_t next, Windows& windows, std::vector<NumaTeamContext>& contexts) {
+    for (std::size_t start = next; start < graph::operation_count; ++start) {
+        for (std::size_t width = 2; width <= graph::legal_window_widths[start]; ++width) {
+            const auto storage_count = graph::input_count + (2 + contexts.size()) * graph::operation_count;
+            if (contexts.size() == max_numa_contexts || storage_count > max_numa_storages) return false;
+            windows.push_back({start, width});
+            contexts.push_back({windows, {}, {}});
+            if (!enumerate_windows(start + width, windows, contexts)) return false;
+            windows.pop_back();
+        }
+    }
+    return true;
+}
+
+std::optional<NumaTeam> calibrate_numa(const SampleInputs& data, const Outputs& reference, graph::CpuTeam& team,
+                                      ResultStorage& storage, int warmup) {
+    NumaTeam evidence;
+    Windows windows;
+    if (!enumerate_windows(0, windows, evidence.contexts)) return std::nullopt;
+
+    const auto& inputs = data.tensors;
+    for (const auto& input : inputs) evidence.inputs.push_back(graph::observe_numa_pages(input));
+
+    const auto replay = [&](const Windows& selection, OperationTimes* timings, PageSamples* pages) {
+        std::array<std::size_t, graph::operation_count> lanes{};
+        for (const auto& [start, width] : selection) {
+            for (std::size_t lane = 1; lane < width; ++lane) lanes[start + lane] = lane;
+        }
+        const auto output = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
+            at::Tensor value;
+            const auto run = [&] {
+                if (timings) {
+                    const auto started = Clock::now();
+                    value = call();
+                    timings->at(op) = elapsed_ns(started);
+                } else {
+                    value = call();
+                }
+            };
+            if (lanes[op] == 0) run();
+            else team.run_on_worker(lanes[op], run);
+            observe_storage(storage[op], value);
+            if (pages) pages->push_back(graph::observe_numa_pages(value));
+            return value;
+        });
+        data.check();
+        check_outputs(inputs, reference, output);
+    };
+
+    // Keep residency queries and integrity checks outside the in-lane operation clocks.
+    evidence.caller_outputs.reserve(graph::operation_count);
+    replay({}, nullptr, &evidence.caller_outputs);
+    for (auto& context : evidence.contexts) {
+        replay(context.windows, nullptr, nullptr);
+        context.services.resize(warmup);
+        for (auto& row : context.services) replay(context.windows, &row, nullptr);
+        context.outputs.reserve(graph::operation_count);
+        replay(context.windows, nullptr, &context.outputs);
+    }
+    return evidence;
+}
+
+void emit_pages(const PageSamples& samples) {
+    std::cout << '[';
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        if (i) std::cout << ',';
+        graph::write_numa_pages(std::cout, samples[i]);
+    }
+    std::cout << ']';
+}
+
+void emit_numa(const std::optional<NumaTeam>& evidence) {
+    std::cout << "{\"schema_version\":1,\"status\":";
+    if (!evidence) {
+        std::cout << "\"TEAM_CONTEXT_BUDGET_EXCEEDED\"}";
+        return;
+    }
+    std::cout << "\"MEASURED\",\"input_pages\":";
+    emit_pages(evidence->inputs);
+    std::cout << ",\"caller_output_pages\":";
+    emit_pages(evidence->caller_outputs);
+    std::cout << ",\"contexts\":[";
+    for (std::size_t i = 0; i < evidence->contexts.size(); ++i) {
+        if (i) std::cout << ',';
+        const auto& context = evidence->contexts[i];
+        std::cout << "{\"windows\":[";
+        for (std::size_t j = 0; j < context.windows.size(); ++j) {
+            if (j) std::cout << ',';
+            emit_numbers(context.windows[j]);
+        }
+        std::cout << "],\"output_pages\":";
+        emit_pages(context.outputs);
+        std::cout << ",\"operation_samples_ns\":";
+        emit_operations(context.services);
+        std::cout << '}';
+    }
+    std::cout << "]}";
+}
+
 void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team) {
     const int warmup = integer(args[0], 3, 100, "warmup count");
     const SampleInputs data(args + 1);
@@ -218,6 +335,7 @@ void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team
     }
     std::array<std::size_t, graph::input_count> input_bytes{};
     for (std::size_t i = 0; i < inputs.size(); ++i) input_bytes[i] = inputs[i].storage().nbytes();
+    const auto numa = calibrate_numa(data, reference, team, storage, warmup);
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"cpu_ids\":";
     emit_numbers(cpus);
     std::cout << ",\"calibration\":{\"operation_samples_ns\":";
@@ -234,6 +352,8 @@ void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team
     emit_numbers(input_bytes);
     std::cout << ",\"result_storage_bytes\":";
     emit_storage(storage);
+    std::cout << ",\"numa_team\":";
+    emit_numa(numa);
     std::cout << "}}\n";
 }
 

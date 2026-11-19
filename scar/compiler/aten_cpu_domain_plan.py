@@ -3,7 +3,34 @@
 from scar.codegen.aten_native_graph import _read_declared
 from scar.compiler.plan_aten_native_graph import _GAIN, _bundle, _invoke, _receipt, _window_model
 from scar.optimization.aten_native_schedule import propose_cpu_windows
-from scar.optimization.aten_native_team import model_cpu_team, propose_cpu_team
+from scar.optimization.aten_native_team import TEAM_PLACEMENT_POLICY, model_cpu_team, propose_cpu_team
+
+
+def choose_aten_cpu_domain(candidates, *, team):
+    options = [(cost['estimate_ns'], mode != 'SERIAL', tuple(row['cpus']), mode, row)
+               for row in candidates for mode, cost in row['model']['predictions'].items()
+               if not team or mode in ('SERIAL', row['model']['selected'])]
+    by_point = lambda option: option[:3]
+    serial = min((option for option in options if option[3] == 'SERIAL'), key=by_point)
+    chosen = min(options, key=by_point)
+    ranking = None
+    if team and all('cross_numa' in row for row in candidates):
+        ranking = dict(policy='SAME_NODE_WHEN_CROSS_NODE_CALIBRATION_SPANS_OVERLAP',
+                       point_preferred_cpu_ids=list(chosen[2]), decision='MINIMUM_MODELED_TIME')
+        if chosen[3] != 'SERIAL' and chosen[4]['cross_numa']:
+            local = min((option for option in options if option[3] != 'SERIAL' and not option[4]['cross_numa']),
+                        key=by_point, default=None)
+            if local is not None:
+                cross_cost = chosen[4]['model']['predictions'][chosen[3]]
+                local_cost = local[4]['model']['predictions'][local[3]]
+                ranking.update(same_node_cpu_ids=list(local[2]), same_node_prediction=local_cost,
+                               cross_node_prediction=cross_cost)
+                if cross_cost['sample_max_ns'] >= local_cost['sample_min_ns']:
+                    ranking['decision'] = 'CROSS_NODE_RANK_UNRESOLVED_WITHIN_CALIBRATION_SPANS'
+                    chosen = local
+    if (serial[0] - chosen[0]) / serial[0] < _GAIN:
+        chosen = serial
+    return chosen, serial, ranking
 
 
 def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_budget_bytes):
@@ -15,9 +42,12 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
     inputs = [_receipt(path) for path in input_paths]
     candidates = []
     team = key == 'cpu_team'
-    propose = propose_cpu_team if team else propose_cpu_windows
     for representative in domain['representatives']:
-        schedule = propose(recipe, contract=contract, target=hardware, cpu_ids=representative['cpus'])
+        if team:
+            schedule = propose_cpu_team(recipe, contract=contract, target=hardware, cpu_ids=representative['cpus'],
+                 allow_cross_numa=artifact[key].get('placement_policy') == TEAM_PLACEMENT_POLICY)
+        else:
+            schedule = propose_cpu_windows(recipe, contract=contract, target=hardware, cpu_ids=representative['cpus'])
         if schedule['target'] != domain['target'] or 'target_cpu_domain' not in schedule:
             raise ValueError('the graph probe must replay the nominated broader CPU target')
         raw = _invoke(executable, schedule, '--calibrate-team' if team else '--calibrate-windows', [warmup_pairs], inputs)
@@ -30,17 +60,14 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
         else:
             model = _window_model(raw['calibration'], recipe, schedule, warmup_pairs, observe_storage=True,
                                   tensor_budget_bytes=tensor_budget_bytes)
-        candidates.append(dict(cpus=schedule['cpus'], primitive_observations=raw, model=model))
+        candidate = dict(cpus=schedule['cpus'], primitive_observations=raw, model=model)
+        if 'cross_numa' in schedule:
+            candidate['cross_numa'] = schedule['cross_numa']
+        candidates.append(candidate)
     if any(_receipt(row['path']) != row for row in inputs):
         raise ValueError('a calibration input changed while pricing the CPU domain')
 
-    alternatives = [(cost['estimate_ns'], mode != 'SERIAL', tuple(row['cpus']), mode, row)
-                    for row in candidates for mode, cost in row['model']['predictions'].items()
-                    if not team or mode in ('SERIAL', row['model']['selected'])]
-    best_serial = min((option for option in alternatives if option[3] == 'SERIAL'), key=lambda option: option[:3])
-    chosen = min(alternatives, key=lambda option: option[:3])
-    if (best_serial[0] - chosen[0]) / best_serial[0] < _GAIN:
-        chosen = best_serial
+    chosen, best_serial, ranking = choose_aten_cpu_domain(candidates, team=team)
     estimate, _, cpus, mode, samples = chosen
     residency = any(row['model'].get('numa_locality', {}).get('sampled_node_residency_observed') for row in candidates)
     report = dict(schema='scar.aten-cpu-domain-plan', schema_version=1, topology=domain, probe=origin,
@@ -48,4 +75,6 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
                   selected_estimate_ns=estimate, best_serial_estimate_ns=best_serial[0],
                   best_serial_cpu_ids=list(best_serial[2]), workload_variant_runs=0,
                   memory_page_placement_observed=residency, source_replacement_authorized=False)
+    if ranking is not None:
+        report['topology_ranking'] = ranking
     return report, samples

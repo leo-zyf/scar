@@ -1,6 +1,7 @@
 """Connect a discovered ATen region to hardware planning and guarded application validation."""
 
 import argparse
+from functools import partial
 import json
 from math import prod
 import os
@@ -16,7 +17,9 @@ from scar.optimization.aten_cpu_placement_domain import aten_cpu_placement_domai
 from scar.optimization.aten_native_schedule import (
     CONTRACT_SCHEMA, AtenCpuWindowFrontier, propose_cpu_windows, resolve_aten_cpu_windows,
 )
-from scar.optimization.aten_native_team import aten_cpu_team_domain, propose_cpu_team, team_window_widths
+from scar.optimization.aten_native_team import (
+    TEAM_PLACEMENT_POLICY, aten_cpu_team_domain, propose_cpu_team, team_window_widths,
+)
 from scar.runtime.validate_aten_python_entry import validate_aten_python_entry
 
 
@@ -62,10 +65,10 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     placement = None
     propose = propose_cpu_windows
     if 3 in team_window_widths(recipe, declarations):
-        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed)
+        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed, allow_cross_numa=True)
         if team['representatives']:
             domain = team
-            propose = propose_cpu_team
+            propose = partial(propose_cpu_team, allow_cross_numa=True)
             placement = propose(recipe, contract=declarations, target=target_dir,
                                 cpu_ids=domain['representatives'][0]['cpus'])
         else:
@@ -94,7 +97,8 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
         result = compile_aten_native_graph(inputs['recipe']['uri'], recipe_sha256=inputs['recipe']['sha256'],
             linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=destination,
             concurrency_contract=concurrency['uri'], concurrency_sha256=concurrency['sha256'],
-            target=target_dir, cpu_ids=schedule['cpus'])
+            target=target_dir, cpu_ids=schedule['cpus'],
+            allow_cross_numa=schedule.get('placement_policy') == TEAM_PLACEMENT_POLICY)
         key = 'cpu_team' if 'legal_window_widths' in schedule else 'cpu_windows'
         if result[key] != schedule:
             raise ValueError('compiled schedule differs from the resolved placement')
@@ -116,7 +120,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
             placement = propose(recipe, contract=declarations, target=target_dir, cpu_ids=choices['selected_cpu_ids'])
             native = out / 'native'
             delivered = compile_graph(native, placement)
-            sources = ('team.cpp', 'aten_native_team_v1.h') if 'cpu_team' in compiled else (
+            sources = ('team.cpp', 'aten_native_team_v1.h', 'aten_numa_pages_v1.h') if 'cpu_team' in compiled else (
                 'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')
             if any(delivered['files'][name] != compiled['files'][name]
                    for name in ('graph.hpp', 'operators.hpp', *sources)):

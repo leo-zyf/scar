@@ -63,12 +63,13 @@ def _bundle(path, digest):
     schedule = artifact[key]
     hardware = Path(schedule['target']['uri']).parent
     if key == 'cpu_team':
-        from scar.optimization.aten_native_team import propose_cpu_team
+        from scar.optimization.aten_native_team import TEAM_PLACEMENT_POLICY, propose_cpu_team
 
-        qualify = propose_cpu_team
+        replayed = propose_cpu_team(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'],
+                                    allow_cross_numa=schedule.get('placement_policy') == TEAM_PLACEMENT_POLICY)
     else:
         qualify = propose_cpu_windows if key == 'cpu_windows' else propose_cpu_pair
-    replayed = qualify(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'])
+        replayed = qualify(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'])
     if replayed != schedule:
         raise ValueError('retained CPU placement differs from the recipe, contract or target hardware graph')
     for library in artifact['provider']['libraries']:

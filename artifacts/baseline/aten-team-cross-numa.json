@@ -1,0 +1,63 @@
+{
+  "experiment": "artifacts/current/experiments/aten-team-cross-numa-v1",
+  "application": "torchdiffeq 0.2.5 RK4, 64 steps, float32 768×768, three independent matrix multiplications per RHS",
+  "cross_node_delivery": {
+    "experiment_stage": "broad",
+    "ordered_topology_representatives": 8,
+    "placement_ranking": "INITIAL_POINT_ESTIMATE",
+    "selected_cpus": [0, 1, 14],
+    "selected_numa_nodes": [0, 0, 1],
+    "selected_window_groups": [[0, 3]],
+    "worker_operation": "call_1049",
+    "worker_input_remote_pages": {"input_1": [32, 32], "input_2": [32, 32]},
+    "caller_consumer": "call_1063",
+    "caller_read_of_worker_result_remote_pages": [31, 32],
+    "original_entry_sampled_input_pages_after_first_read": {"a": {"0": 32}, "b": {"0": 32}, "state": {"0": 32}},
+    "live_page_report_sha256": "9c5c63453189e95cb49081c89cc4378ce0c677691e2092698529d16658c6df09",
+    "native_region_speedup_against_serial": 2.4409653902245187,
+    "entry_warmup_pairs": 1,
+    "entry_measured_pairs": 3,
+    "original_wall_ns": [11934563808, 12125729535, 11954373482],
+    "guarded_wall_ns": [6850185346, 6655639364, 6861313919],
+    "full_process_speedup": 1.7451167929318099,
+    "native_calls_per_guarded_process": 256,
+    "fallback_calls": 0,
+    "paired_output_sha256": "231427b23d3f85346551cc1e558bea9a53ad80d2bf19671e21ec0f327853a978",
+    "domain_plan_sha256": "592aaa5dd259f4befd254a35a233237b9fc2377d7c4d8f360e9229038a679126",
+    "selection_sha256": "ba298b4506cb34378940f10da6a00738909bcea0f719540f97b50168d01c8837",
+    "validation_sha256": "bde51637cf074d26973b025bdc4c788ff834cf3edfd33f887e9fc40ae9c04da3"
+  },
+  "placement_holdout": {
+    "same_executable_and_inputs": true,
+    "alternating_placement_rounds": 3,
+    "measured_native_pairs_per_round_per_placement": 5,
+    "cross_node_parallel_median_ns": 16986905,
+    "same_node_cpus": [14, 15, 16],
+    "same_node_parallel_median_ns": 15087517,
+    "report_sha256": "48951fe3e8fa74ac5be5a27cd0241c614891d1e662509f49735f67662d8209b6"
+  },
+  "updated_policy_replay": {
+    "input": "RETAINED_CROSS_NODE_DELIVERY_PRIMITIVES",
+    "point_preferred_cpus": [0, 1, 14],
+    "cross_node_sample_span_ns": [14278348, 15508885],
+    "same_node_sample_span_ns": [14813905, 15725412],
+    "selected_cpus": [14, 15, 16],
+    "decision": "CROSS_NODE_RANK_UNRESOLVED_WITHIN_CALIBRATION_SPANS",
+    "holdout_used_as_cost_input": false
+  },
+  "fresh_updated_policy_validation": {
+    "experiment_stage": "conservative",
+    "selected_cpus": [14, 15, 16],
+    "ranking_decision": "MINIMUM_MODELED_TIME",
+    "original_wall_ns": [11879226544, 11968116112, 11952180087],
+    "guarded_wall_ns": [6421403030, 6468901709, 6437013646],
+    "full_process_speedup": 1.8567896146106757,
+    "native_calls_per_guarded_process": 256,
+    "fallback_calls": 0,
+    "paired_output_sha256": "231427b23d3f85346551cc1e558bea9a53ad80d2bf19671e21ec0f327853a978",
+    "domain_plan_sha256": "2197f025f831086e2406a709c146bf38799d8f49c6d8443adc3ee950146de18f",
+    "selection_sha256": "336f3025bf841f96477981dc7d3bde429ed8704b5cfe5e57e3d36eeafb8a6c75",
+    "validation_sha256": "caf31f02c87564b707c1f57c19f84547cf046d5aae78db6d64554a1a542a3363",
+    "delivery_sha256": "b55ce128a9270e007dc7fc09496fceea45cc0d787e1c11682245a005b6602535"
+  }
+}

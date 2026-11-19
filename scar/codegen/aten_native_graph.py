@@ -197,7 +197,8 @@ inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inpu
 
 
 def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256, out,
-                              concurrency_contract=None, concurrency_sha256=None, target=None, cpu_ids=None):
+                              concurrency_contract=None, concurrency_sha256=None, target=None, cpu_ids=None,
+                              allow_cross_numa=False):
     import torch
 
     out = Path(out).resolve()
@@ -211,6 +212,8 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     schedule = None
     contract_receipt = None
     requested = (concurrency_contract, concurrency_sha256, target, cpu_ids)
+    if allow_cross_numa and (cpu_ids is None or len(cpu_ids) != 3):
+        raise ValueError('cross-NUMA team placement requires three CPU IDs')
     if any(item is not None for item in requested):
         if any(item is None for item in requested):
             raise ValueError('CPU scheduling requires its contract, digest, target graph and CPU IDs')
@@ -218,8 +221,11 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         from scar.optimization.aten_native_team import propose_cpu_team
 
         _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
-        propose = propose_cpu_team if len(cpu_ids) == 3 else propose_cpu_windows
-        schedule = propose(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
+        if len(cpu_ids) == 3:
+            schedule = propose_cpu_team(recipe, contract=contract, target=target, cpu_ids=cpu_ids,
+                                        allow_cross_numa=allow_cross_numa)
+        else:
+            schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     team = schedule is not None and 'legal_window_widths' in schedule
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
@@ -242,6 +248,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
         if team:
             (stage / _TEAM_HEADER.name).write_bytes(_TEAM_HEADER.read_bytes())
+            (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
             (stage / 'team.cpp').write_bytes(_TEAM_DRIVER.read_bytes())
         elif schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
@@ -294,12 +301,14 @@ def main(argv=None):
     parser.add_argument('--concurrency-sha256')
     parser.add_argument('--target', help='original target hardware graph for a CPU-window trial')
     parser.add_argument('--cpu', type=int, action='append', help='caller and worker IDs, in order')
+    parser.add_argument('--allow-cross-numa', action='store_true', help='admit NUMA-aware three-core team placement')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     compile_aten_native_graph(args.recipe, recipe_sha256=args.recipe_sha256, linkage=args.linkage,
                               linkage_sha256=args.linkage_sha256, out=args.out,
                               concurrency_contract=args.concurrency_contract,
-                              concurrency_sha256=args.concurrency_sha256, target=args.target, cpu_ids=args.cpu)
+                              concurrency_sha256=args.concurrency_sha256, target=args.target, cpu_ids=args.cpu,
+                              allow_cross_numa=args.allow_cross_numa)
     print(json.dumps(dict(executable=str(Path(args.out) / _EXECUTABLE),
                           launcher=str(Path(args.out) / 'launch.sh'))))
     return 0
