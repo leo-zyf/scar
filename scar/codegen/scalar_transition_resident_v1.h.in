@@ -1,0 +1,52 @@
+#ifndef SCAR_SCALAR_TRANSITION_RESIDENT_V1_H
+#define SCAR_SCALAR_TRANSITION_RESIDENT_V1_H
+
+#include <stdint.h>
+
+#define SCAR_RESIDENT_SCORE_STUDY_V1 @SCAR_SCORE_STUDY@
+#define SCAR_RESIDENT_SCORE_RECEIPT_TAG_V1 UINT64_C(@SCAR_SCORE_TAG@)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Slot order, ASCII extents and the version table are fixed by the manifest. */
+struct scar_resident_input_v1 {
+    int64_t scalars[@SCAR_INPUT_SCALARS@];
+    uint32_t lengths[@SCAR_INPUT_LENGTHS@];
+    uint8_t strings[@SCAR_INPUT_STRINGS@];
+};
+
+struct scar_resident_output_v1 {
+    int64_t scalars[@SCAR_OUTPUT_SCALARS@];
+    uint32_t lengths[@SCAR_OUTPUT_LENGTHS@];
+    uint8_t strings[@SCAR_OUTPUT_STRINGS@];
+};
+
+enum scar_resident_status_v1 {
+    SCAR_RESIDENT_NATIVE_V1 = 0,
+    SCAR_RESIDENT_TRANSPORTED_V1 = 1,
+    SCAR_RESIDENT_DECLINED_V1 = 2,
+    SCAR_RESIDENT_INTERNAL_ERROR_V1 = 3
+};
+
+/* The optional score is evidence supplied by an isolated study caller.
+ * Only supply a token from the current guarded producer. The library checks
+ * its receipt tag, version slot and exact logical input snapshot. On mismatch,
+ * the library recomputes. The caller still owns producer provenance. */
+struct scar_resident_score_v1 {
+    uint64_t receipt_tag;
+    uint32_t table_slot;
+    int64_t delta;
+    struct scar_resident_input_v1 source_inputs;
+};
+
+/* Output is unchanged on failure. The library retains no pointers. */
+int scar_resident_transition_v1(uint32_t table_slot, const struct scar_resident_input_v1* input,
+    const struct scar_resident_score_v1* score, struct scar_resident_output_v1* output);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
