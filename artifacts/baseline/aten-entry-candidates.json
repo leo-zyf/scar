@@ -1,0 +1,135 @@
+{
+  "cpu_ids": [
+    14,
+    15,
+    16
+  ],
+  "decisions": {
+    "GROUPED": {
+      "incumbent": "ORIGINAL",
+      "promoted": true,
+      "reasons": []
+    },
+    "READY_DAG": {
+      "incumbent": "GROUPED",
+      "promoted": false,
+      "reasons": [
+        "INSUFFICIENT_GAIN_OVER_ORIGINAL",
+        "INSUFFICIENT_GAIN_OVER_INCUMBENT"
+      ]
+    }
+  },
+  "expected_native_calls_per_process": 96,
+  "fallback_calls": 0,
+  "grouped_over_ready_speedup": 1.2458061924323747,
+  "measured_rounds": 4,
+  "metrics": {
+    "GROUPED": {
+      "max_ns": 9093277231,
+      "median_ns": 9085610095.5,
+      "median_ns_twice": 18171220191,
+      "min_ns": 9029989194,
+      "samples_ns": [
+        9093277231,
+        9090954920,
+        9029989194,
+        9080265271
+      ],
+      "variance_ns2": 878237676641324.6
+    },
+    "ORIGINAL": {
+      "max_ns": 11818019687,
+      "median_ns": 11761495304.5,
+      "median_ns_twice": 23522990609,
+      "min_ns": 11740008790,
+      "samples_ns": [
+        11749933219,
+        11818019687,
+        11740008790,
+        11773057390
+      ],
+      "variance_ns2": 1205708905362427
+    },
+    "READY_DAG": {
+      "max_ns": 11358032112,
+      "median_ns": 11318909319,
+      "median_ns_twice": 22637818638,
+      "min_ns": 10960262969,
+      "samples_ns": [
+        11358032112,
+        11327968675,
+        11309849963,
+        10960262969
+      ],
+      "variance_ns2": 3.4932705097743252e+16
+    }
+  },
+  "native_calls_per_guarded_process": 96,
+  "native_ready_validation": [
+    {
+      "baseline": "serial",
+      "passed": true,
+      "speedup": 1.4845239941104242
+    },
+    {
+      "baseline": "0:3",
+      "passed": false,
+      "speedup": 0.9209540277035836
+    }
+  ],
+  "ordered_rounds": [
+    [
+      "ORIGINAL",
+      "GROUPED",
+      "READY_DAG"
+    ],
+    [
+      "ORIGINAL",
+      "GROUPED",
+      "READY_DAG"
+    ],
+    [
+      "READY_DAG",
+      "GROUPED",
+      "ORIGINAL"
+    ],
+    [
+      "GROUPED",
+      "READY_DAG",
+      "ORIGINAL"
+    ],
+    [
+      "ORIGINAL",
+      "READY_DAG",
+      "GROUPED"
+    ]
+  ],
+  "output_sha256": "7cd6347251e39202c3a7084e70b11e4f80209e983d3f0fa30c758c428839754e",
+  "refs": {
+    "delivery": {
+      "path": "artifacts/current/experiments/aten-entry-candidates-v1/add-pressure/delivery.json",
+      "sha256": "9f4a006927c27d3f59d59610c7e0f728344b7d344ab4b94b1b85e8081ee170b0"
+    },
+    "earlier_two_candidate_holdout": {
+      "path": "artifacts/current/experiments/aten-ready-lifetime-v2/add-pressure/entry-comparison/comparison.json",
+      "sha256": "254e03f0bb84708c7017866a2ba5acad8f387dc6353325bfd5de79f230db3936"
+    },
+    "independent_audit": {
+      "path": "artifacts/current/experiments/aten-entry-candidates-v1/add-pressure-audit.json",
+      "sha256": "007cdb2ba49fbb1a16e9a63203d98428343c94c8ebe87de157f33c91fbb32647"
+    },
+    "validation": {
+      "path": "artifacts/current/experiments/aten-entry-candidates-v1/add-pressure/entry-validation/validation.json",
+      "sha256": "3080322050dd04aca23890c894c420cc3ce85918223e8379c62f5012867e1e2b"
+    }
+  },
+  "scope": "ONE_RECORDED_ENTRY_AND_CPU_PLACEMENT",
+  "selected": "GROUPED",
+  "speedups": {
+    "entry_ns": 1.4092201772301094,
+    "process_ns": 1.2945190450474355
+  },
+  "tensor_budget_bytes": 230000000,
+  "warmup_rounds": 1,
+  "workload": "torchdiffeq RK4, 24 steps, five float32 add operators in the admitted RHS graph"
+}

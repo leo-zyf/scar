@@ -26,6 +26,7 @@ from scar.optimization.joint_planner import verify_execution_plan
 SCHEMA = 'scar.aten-ready-selection'
 _CALIBRATION = 'scar.aten-generated-team-observations'
 _PAIRED = 'scar.aten-ready-paired-validation'
+_ENTRY_TRIAL_POLICY = 'NATIVE_SERIAL_GAIN_FOR_ENTRY_COMPARISON'
 
 
 def _ready_bundle(path, digest):
@@ -153,7 +154,8 @@ def _derive(recipe, schedule, raw, budget, warmup, *, ready_dag_abi):
     return model, baselines
 
 
-def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_bytes, warmup_pairs=5, measured_pairs=12):
+def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_bytes, warmup_pairs=5,
+                    measured_pairs=12, primitive_observation=None, entry_comparison=False):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -164,7 +166,12 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
     if len(inputs) != len(recipe['inputs']):
         raise ValueError('supply inputs in original recipe order')
     guarded = [_receipt(executable), *artifact['provider']['libraries'], *inputs]
-    raw = _invoke(executable, schedule, '--calibrate-team', [warmup_pairs], inputs)
+    if primitive_observation is None:
+        raw = _invoke(executable, schedule, '--calibrate-team', [warmup_pairs], inputs)
+    else:
+        if primitive_observation['inputs'] != inputs:
+            raise ValueError('ready DAG calibration used different input bytes')
+        raw = primitive_observation['raw']
     abi = artifact['ready_dag_abi']
     model, baselines = _derive(recipe, schedule, raw, tensor_budget_bytes, warmup_pairs, ready_dag_abi=abi)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -190,17 +197,19 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
                 validations.append(_case(measured, model, baseline, warmup_pairs, measured_pairs,
                                          raw['calibration']['result_storage_bytes'], recipe=recipe))
                 measurements.append(publish(f'paired-{i}.json', _PAIRED, measured))
-            if not all(result['profitable'] for result in validations):
+            if not all(result['profitable'] for result in (validations[:1] if entry_comparison else validations)):
                 reason = 'READY_DAG_DID_NOT_BEAT_MATCHED_BASELINES'
         if any(_receipt(row['path']) != row for row in guarded):
             raise ValueError('native ready DAG members changed during measurement')
-        if reason is None:
+        if reason is None and all(result['profitable'] for result in validations):
             _launcher(stage, executable, 'READY_DAG', schedule, inputs, guarded, model['lanes'])
         report = dict(schema=SCHEMA, schema_version=abi, bundle=origin, executable=guarded[0], inputs=inputs,
             cpu_ids=model['cpu_ids'], model=model, observations=calibration, paired_validation=measurements,
             validation=validations, warmup_pairs=warmup_pairs, measured_pairs=measured_pairs,
             selected='READY_DAG' if reason is None else 'KEEP_ORIGINAL', reason=reason,
             source_replacement_authorized=False)
+        if entry_comparison:
+            report['validation_policy'] = _ENTRY_TRIAL_POLICY
         _write(stage / 'selection.json', report)
         stage.rename(out)
     return report
@@ -224,8 +233,12 @@ def read_ready_selection(path, selection):
     model, baselines = _derive(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
     results = [_case(read_artifact(ref), model, baseline, warmup, count, raw['calibration']['result_storage_bytes'], recipe=recipe)
                for ref, baseline in zip(selection['paired_validation'], baselines, strict=True)]
+    policy = selection.get('validation_policy')
+    if policy not in (None, _ENTRY_TRIAL_POLICY):
+        raise ValueError('unknown ready DAG validation policy')
+    required = results[:1] if policy == _ENTRY_TRIAL_POLICY else results
     if (model != selection['model'] or model['status'] != 'PLAN_READY_DAG' or model['cpu_ids'] != selection['cpu_ids']
-            or results != selection['validation'] or not all(row['profitable'] for row in results)):
+            or not required or results != selection['validation'] or not all(row['profitable'] for row in required)):
         raise ValueError('retained ready DAG choice differs from its calibration or matched validation')
     problem, execution = _resource_plan(hardware, schedule, origin, calibration, recipe, raw['calibration'], model)
     problem_ref = artifact_reference(path.with_name('problem.json'), PROBLEM_SCHEMA)

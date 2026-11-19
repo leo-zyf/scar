@@ -6,11 +6,20 @@ from scar.optimization.aten_native_schedule import propose_cpu_windows
 from scar.optimization.aten_native_team import TEAM_PLACEMENT_POLICY, model_cpu_team, propose_cpu_team
 
 
+def _placement_cost(option):
+    _, _, _, mode, row = option
+    model = row['ready_model'] if mode == 'READY_DAG' else row['model']
+    return model['predictions'][mode]
+
+
 def choose_aten_cpu_domain(candidates, *, team):
     options = [(cost['estimate_ns'], mode != 'SERIAL', tuple(row['cpus']), mode, row)
                for row in candidates for mode, cost in row['model']['predictions'].items()
                if not team or mode in ('SERIAL', row['model']['selected'])]
-    by_point = lambda option: option[:3]
+    options.extend((row['ready_model']['predictions']['READY_DAG']['estimate_ns'], True,
+                    tuple(row['cpus']), 'READY_DAG', row)
+                   for row in candidates if row.get('ready_model', {}).get('status') == 'PLAN_READY_DAG')
+    by_point = lambda option: (*option[:3], option[3] == 'READY_DAG')
     serial = min((option for option in options if option[3] == 'SERIAL'), key=by_point)
     chosen = min(options, key=by_point)
     ranking = None
@@ -21,8 +30,8 @@ def choose_aten_cpu_domain(candidates, *, team):
             local = min((option for option in options if option[3] != 'SERIAL' and not option[4]['cross_numa']),
                         key=by_point, default=None)
             if local is not None:
-                cross_cost = chosen[4]['model']['predictions'][chosen[3]]
-                local_cost = local[4]['model']['predictions'][local[3]]
+                cross_cost = _placement_cost(chosen)
+                local_cost = _placement_cost(local)
                 ranking.update(same_node_cpu_ids=list(local[2]), same_node_prediction=local_cost,
                                cross_node_prediction=cross_cost)
                 if cross_cost['sample_max_ns'] >= local_cost['sample_min_ns']:
@@ -33,7 +42,7 @@ def choose_aten_cpu_domain(candidates, *, team):
     return chosen, serial, ranking
 
 
-def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_budget_bytes):
+def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_budget_bytes, price_ready=False):
     artifact, origin, recipe, hardware, executable, key = _bundle(probe['uri'], probe['sha256'])
     if origin != probe or key not in ('cpu_windows', 'cpu_team') or not 3 <= warmup_pairs <= 100:
         raise ValueError('the graph must support bounded CPU window calibration')
@@ -63,6 +72,11 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
         candidate = dict(cpus=schedule['cpus'], primitive_observations=raw, model=model)
         if 'cross_numa' in schedule:
             candidate['cross_numa'] = schedule['cross_numa']
+        if price_ready and team and not schedule.get('cross_numa'):
+            from scar.optimization.aten_ready_dag import plan_ready_dag
+
+            candidate['ready_model'] = plan_ready_dag(recipe, schedule, raw['calibration'], warmup_pairs,
+                                                     tensor_budget_bytes=tensor_budget_bytes)
         candidates.append(candidate)
     if any(_receipt(row['path']) != row for row in inputs):
         raise ValueError('a calibration input changed while pricing the CPU domain')
