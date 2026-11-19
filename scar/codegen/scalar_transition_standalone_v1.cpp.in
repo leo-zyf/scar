@@ -1,0 +1,137 @@
+#include <algorithm>
+#include <optional>
+#include <tuple>
+
+@SCAR_SHARED_RUNTIME@
+
+using BoolPair = std::array<bool, 2>;
+
+[[maybe_unused]] bool item(const BoolPair& pair, Integer index) {
+    return pair[checked_index(index, pair.size())];
+}
+
+[[maybe_unused]] bool parse_bool(std::string_view text) {
+    if (text == "0") {
+        return false;
+    }
+    if (text == "1") {
+        return true;
+    }
+    throw Decline{};
+}
+
+[[maybe_unused]] Integer multiply(Integer a, Integer b) {
+    if (a == 0 || b == 0) {
+        return 0;
+    }
+    const bool overflow = a > 0 ? (b > 0 ? a > high / b : b < low / a)
+                                : (b > 0 ? a < low / b : a < high / b);
+    if (overflow) {
+        throw Decline{};
+    }
+    return a * b;
+}
+
+[[maybe_unused]] std::string reversed(std::string value) {
+    std::reverse(value.begin(), value.end());
+    return value;
+}
+
+[[maybe_unused]] std::string swapcase(std::string value) {
+    for (auto& byte : value) {
+        if ('a' <= byte && byte <= 'z') {
+            byte = static_cast<char>(byte - 'a' + 'A');
+        } else if ('A' <= byte && byte <= 'Z') {
+            byte = static_cast<char>(byte - 'A' + 'a');
+        }
+    }
+    return value;
+}
+
+Integer text_length(const std::string& text) {
+    if (text.size() > static_cast<std::uint64_t>(high)) {
+        throw Decline{};
+    }
+    return static_cast<Integer>(text.size());
+}
+
+Integer clip(Integer index, Integer length) {
+    return std::clamp(index < 0 ? index + length : index, Integer{0}, length);
+}
+
+[[maybe_unused]] std::string slice(const std::string& text, std::optional<Integer> start,
+                                  std::optional<Integer> stop) {
+    const auto length = text_length(text);
+    const auto first = clip(start.value_or(0), length);
+    const auto last = clip(stop.value_or(length), length);
+    return text.substr(static_cast<std::size_t>(first), static_cast<std::size_t>(std::max(last - first, Integer{0})));
+}
+
+[[maybe_unused]] std::string splice(const std::string& text, Integer index, const std::string& replacement) {
+    const auto length = text_length(text);
+    const auto first = static_cast<std::size_t>(clip(index, length));
+    const auto tail = static_cast<std::size_t>(clip(add(index, 1), length));
+    const auto suffix = text.size() - tail;
+    std::string result;
+    if (replacement.size() > result.max_size() - first || suffix > result.max_size() - first - replacement.size()) {
+        throw Decline{};
+    }
+    result.reserve(first + replacement.size() + suffix);
+    result.append(text, 0, first);
+    result.append(replacement);
+    result.append(text, tail, suffix);
+    return result;
+}
+
+@SCAR_SCORE@
+
+@SCAR_TRANSITION@
+
+[[maybe_unused]] void append_field(std::string& output, const std::string& value) {
+    constexpr std::string_view hex = "0123456789abcdef";
+    output += "s:";
+    for (unsigned char byte : value) {
+        output += hex[byte >> 4];
+        output += hex[byte & 15];
+    }
+    output += '\n';
+}
+
+[[maybe_unused]] void append_field(std::string& output, Integer value) {
+    std::array<char, 21> digits;
+    const auto result = std::to_chars(digits.data(), digits.data() + digits.size(), value);
+    output += "i:";
+    output.append(digits.data(), result.ptr);
+    output += '\n';
+}
+
+[[maybe_unused]] void append_field(std::string& output, bool value) {
+    output += value ? "b:1\n" : "b:0\n";
+}
+
+int publish(const State& state) {
+    std::string record = "SCAR_STATE_V1\n";
+    std::apply([&](const auto&... value) { (append_field(record, value), ...); }, state);
+    return std::fwrite(record.data(), 1, record.size(), stdout) == record.size() && std::fflush(stdout) == 0 ? 0 : 1;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        if (argc != @SCAR_ARGC@) {
+            throw Decline{};
+        }
+        const std::string_view version(argv[1]);
+        for (const auto& table : tables) {
+            if (version == table.version) {
+@SCAR_INPUT_SETUP@
+                const auto returned = evaluate_transition(table, @SCAR_INPUTS@);
+                return publish(returned);
+            }
+        }
+    } catch (const Decline&) {
+    }
+    std::fputs("transition input is outside the admitted version or scalar domain\n", stderr);
+    return 2;
+}

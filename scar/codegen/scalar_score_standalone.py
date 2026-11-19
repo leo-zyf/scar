@@ -54,6 +54,8 @@ def _ordered(left, right, task):
 
 
 class _Emitter:
+    cpp_types = _CPP_TYPE
+
     def __init__(self, inputs):
         self.inputs = {row['name']: (row['type'], f'in_{i}') for i, row in enumerate(inputs)}
         _require(len(self.inputs) == len(inputs) and self.inputs
@@ -132,7 +134,7 @@ class _Emitter:
                     cpp = f'local_{self.serial}'
                     self.serial += 1
                     local[name] = (kind, cpp)
-                    lines.append(f'{prefix}[[maybe_unused]] {_CPP_TYPE[kind]} {cpp} = {code};')
+                    lines.append(f'{prefix}[[maybe_unused]] {self.cpp_types[kind]} {cpp} = {code};')
             elif op == 'if':
                 _require(statement.keys() <= {'op', 'test', 'body', 'else', 'site'}
                          and type(statement.get('site', '')) is str, 'invalid score conditional')
