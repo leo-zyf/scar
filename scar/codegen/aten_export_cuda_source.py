@@ -12,6 +12,28 @@ _CPU_FILE_ABI = _ROOT / 'aten_native_cli_v1.cpp.in'
 _RUNTIME_HEADERS = ('cuda_copy_schedule_v1.h', 'cuda_cublas_schedule_v1.h')
 ACTIVITY_CALIBRATION_SCHEMA = 'scar.hybrid-native-activity-observation'
 
+# Only materialize the header and typed host branch for a plan that selected CPU MM.
+_HOST_MM_HOOKS = {
+    'INCLUDE': '\n#include <ATen/ops/mm_ops.h>',
+    'STRUCT': '''
+
+struct HostMm {
+    HostTensor left;
+    HostTensor right;
+    HostTensor output;
+};''',
+    'VARIANT': ', HostMm',
+    'PREDICATE': ' || std::holds_alternative<HostMm>(operation)',
+    'SCHEMA': '''
+static_assert(std::string_view(at::_ops::mm_out::schema_str) ==
+              "mm.out(Tensor self, Tensor mat2, *, Tensor(a!) out) -> Tensor(a!)");''',
+    'CALL': ''' else if (const auto* mm = std::get_if<HostMm>(&step.operation)) {
+        output_slot = mm->output;
+        output = host_view(output_slot, buffers);
+        at::_ops::mm_out::call(host_view(mm->left, buffers), host_view(mm->right, buffers), output);
+    }''',
+}
+
 # Empty expansions preserve the established C++ bytes for archived bundles.
 _EXECUTOR_HOOKS = {
     'INCLUDE': '\n#include "cuda_hybrid_activity_v1.h"',
@@ -78,12 +100,12 @@ class CudaExportSource:
     stream_channels: tuple[str, ...]
 
 
-def _apply_activity_hooks(source, prefix, hooks, calibrate):
+def _apply_hooks(source, prefix, hooks, enabled):
     for key, active in hooks.items():
         marker = f'/* SCAR_{prefix}_{key} */'
         if source.count(marker) != 1:
-            raise ValueError(f'native activity template needs exactly one {marker} hook')
-        replacement = active if calibrate else ('graph::run(bindings);' if prefix == 'PROBE' and key == 'RUN' else '')
+            raise ValueError(f'native template needs exactly one {marker} hook')
+        replacement = active if enabled else ('graph::run(bindings);' if prefix == 'PROBE' and key == 'RUN' else '')
         source = source.replace(marker, replacement)
     return source
 
@@ -163,13 +185,13 @@ def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, strea
     main = main.replace('/* SCAR_HOST_METRICS */', host_metrics)
     main = main.replace('/* SCAR_COUNT_WAITS */', count_waits)
     main = main.replace('/* SCAR_HOST_DESCRIPTION */', host_description)
-    main = _apply_activity_hooks(main, 'PROBE', _CLI_HOOKS, calibrate)
+    main = _apply_hooks(main, 'PROBE', _CLI_HOOKS, calibrate)
     sources = {'src/main.cpp': main, 'include/scar_generated/cuda_schedule.hpp': lowered.header,
                **{f'src/{name}': (_ROOT / name).read_text() for name in runtime_headers}}
     if host_compute_resource is not None:
         header = 'cuda_hybrid_schedule_v1.h'
-        sources[f'src/{header}'] = _apply_activity_hooks((_ROOT / header).read_text(), 'ACTIVITY',
-                                                        _EXECUTOR_HOOKS, calibrate)
+        runtime = _apply_hooks((_ROOT / header).read_text(), 'HOST_MM', _HOST_MM_HOOKS, lowered.requires_host_mm)
+        sources[f'src/{header}'] = _apply_hooks(runtime, 'ACTIVITY', _EXECUTOR_HOOKS, calibrate)
     if calibrate:
         header = 'cuda_hybrid_activity_v1.h'
         sources[f'src/{header}'] = (_ROOT / header).read_text()

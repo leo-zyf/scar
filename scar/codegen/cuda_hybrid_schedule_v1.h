@@ -5,7 +5,7 @@
 #include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
 #include <ATen/ops/add_ops.h>
-#include <ATen/ops/from_blob.h>
+#include <ATen/ops/from_blob.h>/* SCAR_HOST_MM_INCLUDE */
 #include <ATen/ops/relu_ops.h>
 
 #include <cstdint>
@@ -35,16 +35,16 @@ struct HostAdd {
     HostTensor right;
     HostTensor output;
     std::int64_t alpha;
-};
+};/* SCAR_HOST_MM_STRUCT */
 
 struct Step {
     std::size_t stream;
-    std::variant<Copy, MatrixMultiply, HostRelu, HostAdd> operation;
+    std::variant<Copy, MatrixMultiply, HostRelu, HostAdd/* SCAR_HOST_MM_VARIANT */> operation;
     std::span<const std::size_t> wait_for;
     bool record_completion;
 
     bool host() const noexcept {
-        return std::holds_alternative<HostRelu>(operation) || std::holds_alternative<HostAdd>(operation);
+        return std::holds_alternative<HostRelu>(operation) || std::holds_alternative<HostAdd>(operation)/* SCAR_HOST_MM_PREDICATE */;
     }
 };
 
@@ -53,7 +53,7 @@ namespace detail {
 static_assert(std::string_view(at::_ops::relu_out::schema_str) ==
               "relu.out(Tensor self, *, Tensor(a!) out) -> Tensor(a!)");
 static_assert(std::string_view(at::_ops::add_out::schema_str) ==
-              "add.out(Tensor self, Tensor other, *, Scalar alpha=1, Tensor(a!) out) -> Tensor(a!)");
+              "add.out(Tensor self, Tensor other, *, Scalar alpha=1, Tensor(a!) out) -> Tensor(a!)");/* SCAR_HOST_MM_SCHEMA */
 
 inline at::Tensor host_view(HostTensor port, std::span<Buffer* const> buffers) {
     return at::from_blob(buffers[port.slot]->data(), {port.rows, port.columns},
@@ -67,7 +67,7 @@ inline void host_call(const Step& step, std::span<Buffer* const> buffers) {
         output_slot = relu->output;
         output = host_view(output_slot, buffers);
         at::_ops::relu_out::call(host_view(relu->input, buffers), output);
-    } else {
+    }/* SCAR_HOST_MM_CALL */ else {
         const auto& add = std::get<HostAdd>(step.operation);
         output_slot = add.output;
         output = host_view(output_slot, buffers);

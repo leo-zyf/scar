@@ -17,6 +17,8 @@ _SGEMM = 'CUBLAS_SGEMM_F32_COLUMN_MAJOR_V1'
 _HOST_ATEN = 'LIBTORCH_ATEN_CPU_OUT_F32_V1'
 _RELU = FUNCTIONAL_EXPORT_SCHEMAS['aten.relu.default']
 _ADD = FUNCTIONAL_EXPORT_SCHEMAS['aten.add.Tensor']
+_MM = FUNCTIONAL_EXPORT_SCHEMAS['aten.mm.default']
+_HOST_OPERANDS = {_RELU: 1, _ADD: 3, _MM: 2}
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,7 @@ class CudaCopySource:
     activity_operations: tuple[str, ...]
     activity_streams: tuple[str, ...]
     activity_waits: tuple[tuple[int, ...], ...]
+    requires_host_mm: bool = False
 
 
 def _completion_waits(copies, selected, streams, predecessors):
@@ -146,8 +149,7 @@ def _host_ports(mode, incoming, outgoing, output, destination):
         raise ValueError('ATen host operation requires a synchronous out-port contract')
     schema = parameters['schema']
     arguments = parameters['arguments']
-    if type(arguments) is not list or not (schema == _RELU and len(arguments) == 1
-                                            or schema == _ADD and len(arguments) == 3):
+    if type(arguments) is not list or type(schema) is not str or _HOST_OPERANDS.get(schema) != len(arguments):
         raise ValueError('ATen host operation has no qualified provider binding')
     count = 1 if schema == _RELU else 2
     inputs = {edge.id: edge for edge in incoming}
@@ -169,6 +171,13 @@ def _host_ports(mode, incoming, outgoing, output, destination):
     alpha = None
     if schema == _RELU:
         expected = ports[0][1:]
+        operation = 'HostRelu'
+    elif schema == _MM:
+        (rows, reduction), (other_reduction, columns) = (port[1:] for port in ports)
+        if reduction != other_reduction:
+            raise ValueError('ATen MM host arguments have different reduction extents')
+        expected = rows, columns
+        operation = 'HostMm'
     else:
         left, right = (port[1:] for port in ports)
         if any(a != b and 1 not in (a, b) for a, b in zip(left, right, strict=True)):
@@ -179,9 +188,10 @@ def _host_ports(mode, incoming, outgoing, output, destination):
                 or not -(2**63) <= scalar['scalar'] < 2**63):
             raise ValueError('ATen add requires a signed 64-bit integral alpha')
         alpha = scalar['scalar']
+        operation = 'HostAdd'
     if result != expected:
         raise ValueError('ATen host provider result has a different projected shape')
-    return ('HostRelu' if schema == _RELU else 'HostAdd'), (*ports, (output, *result)), alpha
+    return operation, (*ports, (output, *result)), alpha
 
 
 def _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource=None):
@@ -352,5 +362,7 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
                   f'    detail::execute(device, {stream_resource}, buffers, steps, materializations);', '}', '',
                   '}  // namespace scar_cuda_generated', ''])
     activity_operations = tuple(op.id for op, _ in operations)
+    requires_host_mm = any(mode.lowering == _HOST_ATEN and mode.parameters['schema'] == _MM
+                           for _, mode in operations)
     return CudaCopySource('\n'.join(lines), buffers, used_streams, activity_operations,
-                          tuple(stream_keys[name] for name in activity_operations), tuple(waits))
+                          tuple(stream_keys[name] for name in activity_operations), tuple(waits), requires_host_mm)

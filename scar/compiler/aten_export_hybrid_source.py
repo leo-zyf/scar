@@ -101,7 +101,7 @@ def _crossings(inputs, operations, outputs):
     return _cuda_regions(operations, tensor_operands, consumers, set(outputs)), list(crossings.values())
 
 
-def qualify_hybrid_export(recipe, shapes=None, *, graph, program_ref, input_kinds):
+def qualify_hybrid_export(recipe, shapes=None, *, graph, program_ref, input_kinds, allow_cuda_only=False):
     """Replay exact contiguous rank-two FP32 MM, add, and ReLU geometry."""
     _fields(recipe, {'schema', 'schema_version', 'inputs', 'operations', 'outputs'}, 'hybrid export recipe')
     if (recipe['schema'] != RECIPE_SCHEMA or type(recipe['schema_version']) is not int
@@ -139,7 +139,8 @@ def qualify_hybrid_export(recipe, shapes=None, *, graph, program_ref, input_kind
         operations.append(dict(id=name, schema=schema, arguments=arguments, result=name, shape=matrices[name],
             nbytes=4 * rows * columns, placement='CUDA' if schema == _MM else 'CPU', **geometry))
         demanded.update(tensors)
-    if {row['placement'] for row in operations} != {'CPU', 'CUDA'}:
+    placements = {row['placement'] for row in operations}
+    if 'CUDA' not in placements or not allow_cuda_only and 'CPU' not in placements:
         raise ValueError('hybrid export requires both CPU and CUDA operations')
     if set(outputs) - {row['id'] for row in operations} or demanded != matrices.keys():
         raise ValueError('hybrid export requires used entry values, used results and produced output values')

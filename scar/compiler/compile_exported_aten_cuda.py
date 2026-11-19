@@ -25,13 +25,19 @@ CUDA_ENVIRONMENT = ('CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER', 'CUDA_MPS_PIPE_
 _MODEL_PATH = 'plan/cuda-model.json'
 _PROGRAM_PATH = 'plan/program.json'
 _HYBRID_MODEL = 'scar.aten-export-hybrid-offline-profile'
+_PLACEMENT_MODEL = 'scar.aten-export-placement-offline-profile'
 ACTIVITY_BINDING = 'plan/activity-binding.json'
 _ACTIVITY_MEMBERS = dict(program=_PROGRAM_PATH, problem='plan/problem.json', schedule='plan/schedule.json',
                          bindings='plan/bindings.json', executable=EXECUTABLE, launcher='launch.sh')
 
 
 def _pipeline(model):
-    if isinstance(model, dict) and model.get('schema') == _HYBRID_MODEL:
+    schema = model.get('schema') if isinstance(model, dict) else None
+    if schema == _PLACEMENT_MODEL:
+        from scar.compiler.aten_export_device_placement import plan_device_export, qualify_device_export, replay_device_export
+
+        return qualify_device_export, plan_device_export, replay_device_export, 'OFFLINE_CPP20_PLACEMENT_CANDIDATE'
+    if schema == _HYBRID_MODEL:
         from scar.compiler.aten_export_hybrid_plan import plan_hybrid_export, replay_hybrid_export
         from scar.compiler.aten_export_hybrid_source import qualify_hybrid_export
 
@@ -131,8 +137,6 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
     qualify, plan, _, status = _pipeline(declared)
-    if with_activity_calibration and declared['schema'] != _HYBRID_MODEL:
-        raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
     exported = torch.export.load(model)
     recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
     include = Path(torch.__file__).resolve().parent / 'include'
@@ -156,11 +160,13 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         if model_ref != dict(path=_MODEL_PATH, **model_lock):
             raise ValueError('declared CUDA model changed when it was read')
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
-        problem, schedule, bindings = plan(projection, declared, model_ref=model_ref)
+        problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref)
+        host_lane = 'host_resource' in bindings
+        if with_activity_calibration and not host_lane:
+            raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
         generated = _native_sources(projection, problem, schedule, bindings, calibrate=with_activity_calibration)
         toolkit = Path(cuda_root).resolve(strict=True)
         libraries = _provider_libraries(toolkit)
-        host_lane = 'host_resource' in bindings
         options = ['-O2']
         runtime_dirs = [str(toolkit / 'lib64')]
         if host_lane:
@@ -184,6 +190,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
                        actual_device_timing='UNKNOWN', deployment_authorized=False, default_backend='NO_OP')}
         if with_activity_calibration:
             records['execution']['activity_calibration_abi'] = 1
+        if placement:
+            records['placement-search'], = placement
         for name, value in records.items():
             _write_record(root / f'plan/{name}.json', value)
         launch = root / 'launch.sh'
@@ -259,7 +267,13 @@ def replay_cuda_project(root, manifest, member):
         if expected != observed:
             raise ValueError('CUDA file input differs from the qualified ordered port')
     problem, schedule, bindings = (read(name) for name in ('problem', 'schedule', 'bindings'))
-    replay(projection, declared, model_ref=execution['model'], problem=problem, schedule=schedule, bindings=bindings)
+    placement = None
+    if declared['schema'] == _PLACEMENT_MODEL:
+        placement = read('placement-search')
+    elif 'plan/placement-search.json' in files:
+        raise ValueError('CUDA project includes an undeclared placement search')
+    replay(projection, declared, model_ref=execution['model'], problem=problem, schedule=schedule, bindings=bindings,
+           **(dict(placement_search=placement) if placement is not None else {}))
     abi = execution.get('activity_calibration_abi')
     if (abi != manifest.get('activity_calibration_abi') or (abi is None) != (ACTIVITY_BINDING not in files)
             or (abi is not None and (type(abi) is not int or abi != 1 or 'host_resource' not in bindings))):
@@ -277,7 +291,10 @@ def replay_cuda_project(root, manifest, member):
                 physical_activities=len(problem['operations']), offline_schedule_replayed=True,
                 executed_schedule_replayed=False, device_result_verified=False, **policy)
     if 'host_resource' in bindings:
-        result.update(cuda_regions=len(projection['cuda_regions']), host_provider_calls=description['host_provider_calls'])
+        regions = projection['cuda_regions'] if placement is None else placement['selected_cuda_regions']
+        result.update(cuda_regions=len(regions), host_provider_calls=description['host_provider_calls'])
+    if placement is not None:
+        result['device_placements_replayed'] = True
     if abi is not None:
         from scar.codegen.aten_export_cuda_source import ACTIVITY_CALIBRATION_SCHEMA
         from scar.compiler.native_device_activity_binding import replay_activity_binding
