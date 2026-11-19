@@ -14,18 +14,26 @@ from scar.compiler.call_binding import (
 )
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import decode
+from scar.optimization.resource_solver import semantic_sha256
 from scar.trace.lean_capture import LeanBodyPlan, LeanCapturePlan
 
 
-def _producer_targets(dependence, report):
+RETURN_DEMANDS = 'scar.stage1-producer-return-demands-observation'
+
+
+def _observation(report, pointer):
     prefix = '#/observed_targets/'
+    if type(pointer) is not str or not pointer.startswith(prefix) or not pointer[len(prefix):].isdecimal():
+        raise ValueError('entry producer lacks its original observation reference')
+    return report['observed_targets'][int(pointer[len(prefix):])]
+
+
+def _producer_targets(dependence, report):
     pointers = {pointer for item in dependence['live_ins']
         for call in item['observed_calls'] for pointer in call['observations']}
     targets = {}
     for pointer in sorted(pointers):
-        if not pointer.startswith(prefix) or not pointer[len(prefix):].isdecimal():
-            raise ValueError('entry producer lacks its original observation reference')
-        row = report['observed_targets'][int(pointer[len(prefix):])]
+        row = _observation(report, pointer)
         code = row['observation']['target_code']
         if row['entry_scope_reachable'] and code is not None:
             targets[code['key']] = code
@@ -37,6 +45,41 @@ def plan_entry_producer_calls(dependence_path, catalog):
     reference = artifact_reference(dependence_path, DEPENDENCE)
     dependence = read_artifact(reference)
     report = read_artifact(dependence['entry_calls'])
+    return _plan_calls(catalog, report, _producer_targets(dependence, report),
+        'PRIOR_OBSERVED_SITES_AND_IMMEDIATE_PRODUCER_BODIES', {'source_dependence': reference})
+
+
+def plan_return_producer_calls(demand_path, catalog):
+    """Follow selected return dependencies without widening the original sample."""
+    reference = artifact_reference(demand_path, RETURN_DEMANDS)
+    demand = read_artifact(reference)
+    if demand['schema_version'] != 1:
+        raise ValueError('unsupported return producer demand version')
+    entry = demand['entry_projection']
+    if entry['schema'] != 'scar.bounded-entry-calls':
+        raise ValueError('return producer demands require the original entry projection')
+    report = read_artifact(entry)
+    summary = read_artifact(demand['source_summary'])
+    header = summary['header'] if summary['schema_version'] == 2 else summary
+    if (header['schema'] != 'scar.interprocedural-summary'
+            or header['entry_projection'] != dict(sha256=semantic_sha256(report),
+                program=report['program'], producer=report['producer'])):
+        raise ValueError('return demands and source summary name different entry projections')
+    targets = {}
+    for path, rows in demand['observed_source_targets'].items():
+        for selected in rows:
+            row = _observation(report, selected['observation'])
+            code = row['observation']['target_code']
+            if (not row['entry_scope_reachable'] or code is None
+                    or (code['filename'], code['key'], code['qualname'])
+                    != (path, selected['code_key'], selected['qualname'])):
+                raise ValueError('return producer differs from its observed code identity')
+            targets[code['key']] = code
+    return _plan_calls(catalog, report, targets, 'PRIOR_OBSERVED_SITES_AND_RETURN_PRODUCER_BODIES',
+        {'source_return_demands': reference, 'source_entry_projection': entry})
+
+
+def _plan_calls(catalog, report, targets, selection, provenance):
     view = ProgramView(catalog)
     store = view.catalog.fact_store
     previous = defaultdict(set)
@@ -77,7 +120,7 @@ def plan_entry_producer_calls(dependence_path, catalog):
     if details is None or {(r['code_key'], r['offset']) for r in sites.values()} != prior_keys:
         raise ValueError('expanded catalog lost a previously observed exact CALL site')
 
-    for key, code in _producer_targets(dependence, report).items():
+    for key, code in targets.items():
         path = code['filename']
         if not view.catalog.units_for_source(path):
             frontiers.append(dict(field='producer.body', code_key=key, path=path,
@@ -98,21 +141,24 @@ def plan_entry_producer_calls(dependence_path, catalog):
         for key, values in offsets.items())
     sources = sorted({body.source.path for body in selected})
     namespace = os.path.commonpath([str(Path(path).parent) for path in sources])
-    read_artifact(reference, json_document=False)
+    for reference in provenance.values():
+        read_artifact(reference, json_document=False)
     return validate_call_binding_plan({**details,
-        'source_selection': 'PRIOR_OBSERVED_SITES_AND_IMMEDIATE_PRODUCER_BODIES',
-        'source_dependence': reference, 'sites': list(sites.values()), 'frontiers': frontiers,
+        'source_selection': selection, **provenance, 'sites': list(sites.values()), 'frontiers': frontiers,
         'sources': sources, 'module_bodies_included': True,
         'selector': LeanCapturePlan(namespace, selected, max_codes=64).to_dict()})
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--entry-dependence', required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--entry-dependence', type=Path)
+    source.add_argument('--return-demands', type=Path)
     parser.add_argument('--catalog', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     args = parser.parse_args(argv)
-    plan = plan_entry_producer_calls(args.entry_dependence, args.catalog)
+    plan = (plan_entry_producer_calls(args.entry_dependence, args.catalog) if args.entry_dependence
+            else plan_return_producer_calls(args.return_demands, args.catalog))
     if args.out.exists():
         raise FileExistsError(args.out)
     write_call_binding_plan(plan, args.out)
