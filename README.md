@@ -32,6 +32,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar compile-aten-entry --help` 默认将已闭合的发现区域交付为独立 C++20 程序，计算调用 LibTorch。校准 Tensor 按原形参传 `--input NAME=FILE`。带容量预算的同 NUMA 计划可联合选择算子执行核和核内顺序，并与原序就绪计划配对验证。未采用并行计划时，容量合格的串行执行仍走 C++20。需要对照原 Python 程序时，`--entry-function` 单独运行完整入口差分实验。
 
+`scar compile-aten-recurrence` 从已验原生 RHS 与固定网格步骤生成整个求解入口。`scar compile-exported-aten` 接收 `torch.export` 文件，为指定 `--input-shape NAME=DIM,DIM` 生成独立 CPU 推理程序。两条路径都写出 `plan/program.json`、`plan/problem.json`、`plan/execution.json` 和可构建的 CMake 工程。`scar validate-native-project` 冷读程序图和资源档案，核对文件与原生动态库，再按可选参考文件做逐字节验收。当前 AI 范围是受支持的纯函数 CPU FP32 算子和单个静态形状特化。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。

@@ -10,6 +10,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.analysis.replay_transaction import replay_transaction
+from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.sparse_native_export import check_sparse_export
 from scar.ir.execution_recipe import SCHEMA as RECIPE, artifact_reference, read_artifact
 from scar.optimization.native_ordered_resources import SCHEMA as PLAN, project_native_ordered_resources
@@ -83,11 +84,15 @@ def _write_stream(directory, plan, stream):
     if not compiler:
         raise ValueError('CXX must select an available C++20 compiler')
     version = subprocess.check_output([*compiler, '--version'], text=True).splitlines()[0]
-    invocation = [*compiler, *_CXXFLAGS, _STREAM_MAIN, '-ldl', '-o', _STREAM_EXECUTABLE]
-    subprocess.run(invocation, cwd=directory, check=True)
+    write_native_project(directory, _STREAM_EXECUTABLE, sources=(_STREAM_MAIN,), include_dirs=('.',),
+        compile_options=_CXXFLAGS[1:-1], link_options=(_CXXFLAGS[-1],), libraries=('dl',), install_dirs=(('numeric', 'bin'),))
+    executable, _ = build_native_project(directory, _STREAM_EXECUTABLE, compiler)
+    # Preserve the existing colocated stream executable/solver ABI.
+    executable.rename(directory / _STREAM_EXECUTABLE)
     return dict(protocol=_local(directory, _STREAM_PLAN, stream['schema']),
         source=_local(directory, _STREAM_MAIN, 'scar.cpp-source'),
         executable=_local(directory, _STREAM_EXECUTABLE, 'scar.native-executable-file'),
+        cmake=_local(directory, 'CMakeLists.txt', 'scar.cmake-project'),
         compiler=dict(command=compiler, version=version, options=list(_CXXFLAGS)))
 
 
@@ -99,6 +104,8 @@ def _check_stream(directory, plan, transport, detached=None):
             or transport['compiler']['options'] != list(_CXXFLAGS)
             or not os.access(directory / _STREAM_EXECUTABLE, os.X_OK)):
         raise ValueError('native stream executable or protocol differs from its receipt')
+    if 'cmake' in transport and transport['cmake'] != _local(directory, 'CMakeLists.txt', 'scar.cmake-project'):
+        raise ValueError('native stream project definition differs from its receipt')
     protocol = read_artifact({**transport['protocol'], 'uri': str(directory / _STREAM_PLAN)})
     validate_native_ordered_stream(plan, protocol, detached=detached)
     if (directory / _STREAM_MAIN).read_bytes() != _render_main(protocol, plan):
@@ -197,22 +204,47 @@ def check_native_ordered_export(path):
     return manifest
 
 
+def rebuild_native_ordered_project(path, out):
+    """Rebuild an independently replayable native export on its existing wire ABI."""
+    source = Path(path).resolve(strict=True)
+    manifest = check_native_ordered_export(source)
+    if 'stream' not in manifest:
+        raise ValueError('the native export needs an executable stream recipe')
+    plan = read_artifact({**manifest['plan'], 'uri': str(source / 'plan.json')})
+    protocol = read_artifact({**manifest['stream']['protocol'], 'uri': str(source / _STREAM_PLAN)})
+    out = Path(out).resolve()
+    if out.exists() or out.is_relative_to(source):
+        raise ValueError('a fresh output outside the original sparse package is required')
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix='.scar-sparse-project-', dir=out.parent) as temporary:
+        directory = Path(temporary)
+        copytree(source, directory, dirs_exist_ok=True)
+        manifest['stream'] = _write_stream(directory, plan, protocol)
+        (directory / 'artifact.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+        check_native_ordered_export(directory)
+        directory.rename(out)
+    return artifact_reference(out / 'artifact.json', SCHEMA)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--recipe')
     parser.add_argument('--provider')
     parser.add_argument('--out')
     parser.add_argument('--check')
+    parser.add_argument('--rebuild-project', help='build a checked standalone export using the shared CMake project')
     parser.add_argument('--detached', action='store_true', help='export compact prepared inputs and scalar tickets')
     args = parser.parse_args(argv)
     export = (args.recipe, args.provider, args.out)
-    if args.check and not any(export) and not args.detached:
+    if args.rebuild_project and args.out and not any((args.recipe, args.provider, args.check, args.detached)):
+        print(json.dumps(rebuild_native_ordered_project(args.rebuild_project, args.out)))
+    elif args.check and not any(export) and not args.detached and not args.rebuild_project:
         result = check_native_ordered_export(args.check)
         print(json.dumps(dict(verified=True, recipe_id=result['recipe_id'])))
-    elif not args.check and all(export):
+    elif not args.check and all(export) and not args.rebuild_project:
         print(json.dumps(export_native_ordered(*export, detached=args.detached)))
     else:
-        parser.error('choose --check PACKAGE or supply --recipe, --provider and --out')
+        parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --recipe, --provider and --out')
     return 0
 
 

@@ -1,0 +1,142 @@
+{
+  "copy_route_model": {
+    "consumer_ns": 4,
+    "finish_ns": 12,
+    "hop_durations_ns": [
+      3,
+      5
+    ],
+    "host_staging_bytes": 16,
+    "real_device_execution": false,
+    "setup": "declared GPU/host/NPU copy capabilities",
+    "undersized_host_route_rejected": true
+  },
+  "inference": {
+    "2": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native/ai-2-validation.json",
+      "record": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "4ad7d39e67936efea9ca84dfa97cec9e9ce1d67732073ffb0c1dfd7dd48b4554",
+            "size_bytes": 128
+          }
+        ],
+        "graph_operations": 4,
+        "graph_regions": 1,
+        "manifest_sha256": "1345282eb395b48c1918ec14672f91b05ecdc6388832277d020afa5f03fd0b37",
+        "native_dependencies_checked": true,
+        "physical_activities": 4,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      },
+      "sha256": "2b29e8a3623b0c91a66410c981b0cb49a98e921c80a3b7e06944e537a563e74a"
+    },
+    "4": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native/ai-4-validation.json",
+      "record": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "c06c625786fd4fcc05adbea05bdbf4fa70c27cc64b8b1e2bf0c2be8f8d4c6d16",
+            "size_bytes": 256
+          }
+        ],
+        "graph_operations": 4,
+        "graph_regions": 1,
+        "manifest_sha256": "054a543d662c9bc66da46e7d213289c63df43f5976be39a66f646fa6bbfa9f7b",
+        "native_dependencies_checked": true,
+        "physical_activities": 4,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      },
+      "sha256": "c8435ff38e045b383a0e1468235626628266e80ffef4db1543699742d7eefcc2"
+    },
+    "8": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native/ai-8-validation.json",
+      "record": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "9c08eaa3dfce31d22e2f437f16ebb71a7dae58424834874dd468929807ed7a10",
+            "size_bytes": 512
+          }
+        ],
+        "graph_operations": 4,
+        "graph_regions": 1,
+        "manifest_sha256": "efec90ee8f75e9cb62de8fb5db5d7a240f87a80f548212583c717c876e7412b0",
+        "native_dependencies_checked": true,
+        "physical_activities": 4,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      },
+      "sha256": "1a50906f6cdcd0ae61bf4caebdabc2b85a1b0194e9a53a03300fea4b31307dfb"
+    }
+  },
+  "inference_install_rebuild_verified": true,
+  "limitations": {
+    "accelerator_runtime_verified": false,
+    "arbitrary_python_entry_verified": false,
+    "cpu_inference_profile": "one fixed specialization within a declared symbolic range, CPU FP32",
+    "new_end_to_end_performance_measurements": false
+  },
+  "recurrence": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native/recurrence-validation.json",
+    "record": {
+      "bitwise_output_receipts": [
+        {
+          "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+          "size_bytes": 2359296
+        }
+      ],
+      "graph_operations": 40,
+      "graph_regions": 3,
+      "manifest_sha256": "123511970c290680348713d15242ebda44ebb29bd1b285f841af2f52ec5ba4df",
+      "native_dependencies_checked": true,
+      "physical_activities": 23,
+      "schema": "scar.native-project-validation",
+      "schema_version": 1
+    },
+    "sha256": "1744908699acacfccd729a7c6eab0790ce728d310f34f4e36d8345ddb49f4604"
+  },
+  "rejected": {
+    "changed_plan_digest": true,
+    "declared_shape": "ValueError: exported symbolic constraint does not hold for s77",
+    "storage_budget": "ValueError: native Tensor budget 16 bytes is below the serial backing-storage peak of 3136 bytes",
+    "wrong_native_input_size": true
+  },
+  "scope": "CANONICAL_PROGRAM_GRAPH_PHYSICAL_PROBLEM_AND_CXX20_PROJECT",
+  "sparse": {
+    "artifact": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native/sparse/artifact.json",
+    "executable_sha256": "5ff73c721cedf784f0ec7467a94da08cd932e6aaae65aab4857253bb1bd8fdbd",
+    "original_F4_rules_current": false,
+    "remained_on_replayed_native_export": true,
+    "stream": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native-v2/sparse/validation/verified-output.json",
+      "record": {
+        "geometry": {
+          "call_count": 512,
+          "nnz": 20865,
+          "size": 4225
+        },
+        "ordered_output_bits_matched": 512,
+        "original_observation": {
+          "byte_count": 167413,
+          "sha256": "595b87d0b2fa458e3cf943927a759b929c043fe8ab97a2867b6cfd7c463598d0",
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/layered-native-v2/sparse/validation/final-original.json"
+        },
+        "output_aggregate_sha256": "a6cbef4e3434c08950f953cccf3008b8dda987232860cbc28257e176ccbf5e14",
+        "recipe_id": "recipe-v1:db573c4ee60a3e83fd3a2cb403286dd471476ce1ffe223d384d077267cd7f61e",
+        "schema": "scar.native-ordered-output-observation",
+        "schema_version": 1,
+        "stream": {
+          "byte_count": 17313864,
+          "sha256": "4894b2cbfab6630832030763716e3c7789c85ad2f36b4e1614274c596d8b1ced"
+        },
+        "terminal": [
+          512,
+          4,
+          0
+        ]
+      },
+      "sha256": "ffbbe68803a38d48d8dbb66d728c2d41a5b4ed185b8761e673114aa672e00619"
+    }
+  }
+}
