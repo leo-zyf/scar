@@ -46,7 +46,17 @@ def _rules():
             '../compiler/call_binding.py','../compiler/graph_frontend.py','../trace/call_binding.py',
             '../trace/code_snapshot.py','../trace/lean_capture.py',
             '../ir/program/source_state.py',
-            '../ir/program/build_f4_resources.py')}
+            '../ir/program/build_f4_resources.py','build_reader_versions.py')}
+
+
+def _admit_rules(recorded, *, publishing=False):
+    from scar.analysis.build_reader_versions import BUILD_TRANSITION, compatible_pins
+
+    active = _rules()
+    if recorded != active and (publishing or not compatible_pins(
+            recorded, active, BUILD_TRANSITION, added=('build_reader_versions.py',))):
+        raise ValueError('build resource or assembly rules differ')
+    return active
 
 
 def _write(path, value):
@@ -177,8 +187,7 @@ class BuildSession:
             raise ValueError('bounded CALL metadata is supported only by the F4 backend')
         if (self.report.get('schema'), self.report.get('schema_version')) != (SCHEMA, 1):
             raise ValueError('unsupported build manifest')
-        if self.report['rules'] != _rules():
-            raise ValueError('build resource or assembly rules changed')
+        _admit_rules(self.report['rules'], publishing=_publishing)
         if not _publishing and self.report.get('workflow_complete') is not True:
             raise ValueError('build publication has not completed readback')
         _check(self.report['model'])

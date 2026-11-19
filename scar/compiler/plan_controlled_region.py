@@ -570,10 +570,14 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
 
 
 def check(preparation):
+    from scar.analysis.build_reader_versions import CONTROLLED_TRANSITION, compatible_pins
+
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
     ordered = saved.get('ordered_graph')
     version = 5 if ordered is not None else 4
-    if (saved.get('schema'), saved.get('schema_version')) != (SCHEMA, version) or saved['producer_pins'] != _pins():
+    active_pins = _pins()
+    if ((saved.get('schema'), saved.get('schema_version')) != (SCHEMA, version)
+            or not compatible_pins(saved['producer_pins'], active_pins, CONTROLLED_TRANSITION)):
         raise ValueError('controlled region producer or schema differs')
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
@@ -603,7 +607,7 @@ def check(preparation):
             (saved['files'][key] is not None if value is None else read_artifact(saved['files'][key]) != value)
             for key,value in documents.items())):
         raise ValueError('controlled source graph, resources, costs or plan differ from cold replay')
-    if saved != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
+    if {**saved, 'producer_pins': active_pins} != _metadata(saved['kind'], saved['admission'], saved['entry_profiles'], saved['max_seconds'],
             saved['files'], strict, controlled, documents['strict_plan'], documents['controlled_plan'],
             saved['cost_use'], saved['cost_qualification'], saved['compiler_feedback'],
             saved['entry_calls'], saved['native_group_observations'], saved['source_summary'], ordered):

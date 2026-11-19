@@ -52,7 +52,7 @@ def test_live_entry_admission_owns_one_replay_and_rechecks_material(tmp_path, mo
     catalog.fact_store = NS(model_units=models, rows={'unit':row}, report=selected.report,
         source_parent_for=lambda unit:selected, validate_parents=lambda:None)
     catalog.interface_store = NS(validate_parents=lambda:None)
-    owner = NS(path=directory, report=report, closed=False, catalog=catalog,
+    owner = NS(path=directory, report=report, reader_rules=MappingProxyType({}), closed=False, catalog=catalog,
         view=NS(units={}), providers={}, _admitted={})
     session = object.__new__(BuildSession); session._f4 = owner
     other = object.__new__(BuildSession); other._f4 = owner

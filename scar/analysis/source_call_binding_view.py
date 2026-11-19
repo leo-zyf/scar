@@ -96,11 +96,16 @@ class SourceCallBindingProvider:
         # is not permission to redirect an original call to another offset.
         expected={}
         bodies=() if self.plan['selector']is None else self.plan['selector']['bodies']
-        for path in dict.fromkeys(row['source']['path'] for row in bodies):
-            replay=plan_call_bindings(view,path,max_targets_per_site=self.plan['max_targets_per_site'])
+        path_by_code={body['code']['key']:body['source']['path'] for body in bodies}
+        by_path=defaultdict(set)
+        for row in self.plan['sites']:
+            by_path[path_by_code[row['code_key']]].add(row['query'])
+        budget=self.plan['max_targets_per_site']
+        for path,queries in by_path.items():
+            replay=plan_call_bindings(view,path,call_indices=queries,max_targets_per_site=budget)
             for row in replay['sites']:expected[row['id'],row['code_key'],row['offset']]=row
             if any(row['source']['path']==path and row['code']['qualname']=='<module>' for row in bodies):
-                replay=plan_call_bindings(view,path,entry='<module>',max_targets_per_site=self.plan['max_targets_per_site'])
+                replay=plan_call_bindings(view,path,entry='<module>',call_indices=queries,max_targets_per_site=budget)
                 for row in replay['sites']:expected[row['id'],row['code_key'],row['offset']]=row
         for row in self.plan['sites']:
             if expected.get((row['id'],row['code_key'],row['offset']))!=row:

@@ -120,11 +120,11 @@ def _live_parent(provider,reference):
     # The parent publication already validated the base 360-edge domain before
     # registering the lifetime layer. Recheck exact original typed semantics;
     # do not count the lifetime extension against that older base domain.
-    from scar.analysis.build import _receipt,_rules
+    from scar.analysis.build import _admit_rules,_receipt
     catalog=program.get('f4',{}).get('catalog')
-    if (program.get('backend')!='F4' or program.get('rules')!=_rules()
-            or catalog!=_receipt(provider.view.catalog.path/'result.json')):
+    if program.get('backend')!='F4' or catalog!=_receipt(provider.view.catalog.path/'result.json'):
         raise ValueError('loop transfer parent program uses another original source catalog/rules')
+    _admit_rules(program.get('rules'))
     activation_counts=_activation_tables(Path(life['activation_publication']['uri']).parent,
         activation,provider.activation)
     life_counts,edges=_life_tables(Path(reference['uri']).parent,life,lifetime)
@@ -164,7 +164,11 @@ def _header(report):
     if (set(report)!=_FIELDS or report.get('schema')!=SCHEMA
             or type(report.get('schema_version'))is not int or report['schema_version']!=1):
         raise ValueError('unsupported ordered loop transfer publication')
-    if report['pins']!=_pins():raise ValueError('ordered loop transfer producing rules changed')
+    from scar.analysis.build_reader_versions import LOOP_TRANSFER_TRANSITION, compatible_pins
+    active=_pins();recorded=report['pins']
+    if ({**recorded,'rules':active['rules']}!=active
+            or not compatible_pins(recorded['rules'],active['rules'],LOOP_TRANSFER_TRANSITION)):
+        raise ValueError('ordered loop transfer producing rules changed')
     for name in('iterations_unrolled','unconditional_content_recurrence_proven','target_executed','transformation_authorized'):
         if report[name]is not False:raise ValueError('ordered loop transfer authority flag differs: '+name)
     for name in('original_body_bytes_copied','runtime_invocations_created','global_logical_versions_created'):
@@ -175,6 +179,7 @@ def _header(report):
         if type(report[name])is not dict or report[name].get('schema')!=schema:
             raise ValueError('ordered loop original reference differs: '+name)
         read_artifact(report[name])
+    return active
 
 
 @contextmanager
@@ -216,7 +221,7 @@ def _open_lifetime(reference):
 def read_ordered_loop_transfers(path):
     """Independently rederive all typed transfer rows, guards and public edges."""
     started=time.perf_counter();publication=_reference(path,SCHEMA)
-    report=read_artifact(publication);_header(report);pins=report['pins']
+    report=read_artifact(publication);active_pins=_header(report);pins=report['pins']
     with _open_lifetime(report['lifetime_publication'])as parent:
         if (report['activation_publication']!=parent.life['activation_publication']
                 or report['original_region']!=parent.life['original_region']
@@ -228,7 +233,7 @@ def read_ordered_loop_transfers(path):
         validation=_graph(provider)
         if validation!=report['graph_validation']:raise ValueError('cold ordered loop transfer graph differs')
         provider.check();read_artifact(publication,json_document=False)
-        if pins!=_pins():raise ValueError('ordered loop transfer rules changed during independent replay')
+        if active_pins!=_pins():raise ValueError('ordered loop transfer rules changed during independent replay')
         receipt=dict(schema=REPLAY_SCHEMA,schema_version=1,publication=publication,
             lifetime_publication=report['lifetime_publication'],activation_publication=report['activation_publication'],
             original_region=report['original_region'],program=report['program'],producer_pins=pins,

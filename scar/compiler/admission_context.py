@@ -181,7 +181,7 @@ class AdmissionContext:
         owner = session._f4
         if owner is None or owner.closed or artifact_reference(owner.path/'manifest.json', reference['schema']) != reference:
             raise ValueError('admission ProgramBuild session is closed or changed')
-        if owner.report != read_artifact(reference) or owner.report['rules'] != _rules():
+        if owner.report != read_artifact(reference) or owner.reader_rules != _rules():
             raise ValueError('admission ProgramBuild report or reader rules changed')
         self.watch(reference)
         _validate_catalog_parents(owner.catalog)

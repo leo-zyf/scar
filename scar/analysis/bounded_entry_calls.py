@@ -121,7 +121,7 @@ def _entry_parent_materials(owner):
     owner.catalog.interface_store.validate_parents()
     paths = {owner.path/'manifest.json', Path(__file__).resolve()}
     expected = {}
-    for name, digest in owner.report['rules'].items():
+    for name, digest in owner.reader_rules.items():
         path = (Path(build.__file__).parent/name).resolve()
         paths.add(path); expected[str(path)] = digest, None
     for receipt in owner._admitted.values():
@@ -209,9 +209,11 @@ def _admit_entry_calls(session, report=None):
     """Replay once, then lend only the genuinely registered owner capability."""
     from scar.analysis.replay_transaction import current_transaction
 
-    entry = derive_bounded_entry_calls(session)
-    if report is not None and _canonical(entry) != _canonical(report):
-        raise ValueError('bounded entry query differs from original ProgramBuild providers')
+    current = derive_bounded_entry_calls(session)
+    entry = current
+    if report is not None:
+        _verify_entry_projection(report, current)
+        entry = report
     registry = getattr(session, '_scar_entry_admissions', None)
     if registry is None:
         registry = {}; session._scar_entry_admissions = registry
@@ -220,7 +222,7 @@ def _admit_entry_calls(session, report=None):
         _catalog=session._f4.catalog, _pid=os.getpid(), _thread=get_ident(), _transaction=current_transaction(),
         _registry=registry, _nonce=object(), _projection=_canonical(entry),
         _digest=sha256(_canonical(entry).encode()).hexdigest(), _versions={},
-        _references=[dict(entry['program']), dict(entry['producer'])], _state=None,
+        _references=[dict(entry['program']), dict(current['producer'])], _state=None,
         _closed=False, _invalid=False, _fact_resolver=None, _fact_routes={}, _fact_producer=None)
     for name, value in values.items():
         object.__setattr__(admission, name, value)
@@ -505,11 +507,18 @@ def derive_bounded_entry_calls(session):
             observations='BOUNDED_ORIGINAL_ATTEMPTS_NOT_FUTURE_TARGET_EXHAUSTIVENESS'))
 
 
+def _verify_entry_projection(report, expected):
+    from scar.analysis.build_reader_versions import compatible_entry_producer
+
+    if (not compatible_entry_producer(report.get('producer'), expected['producer'])
+            or _canonical({**report, 'producer': expected['producer']}) != _canonical(expected)):
+        raise ValueError('bounded entry query differs from original ProgramBuild providers')
+
+
 def verify_bounded_entry_calls(session, report):
     """Replay original providers in the caller's independently admitted session."""
     expected = derive_bounded_entry_calls(session)
-    if _canonical(report) != _canonical(expected):
-        raise ValueError('bounded entry query differs from original ProgramBuild providers')
+    _verify_entry_projection(report, expected)
     return dict(schema=SCHEMA+'.verification', verified=True,
         report_sha256=sha256(_canonical(report).encode()).hexdigest(),
         summary=expected['summary'], target_executed=False,
@@ -618,7 +627,7 @@ def _source_witness(session, report, *, path, sha256, code_key):
             len(source_bytes), 'scar.python-source')), program=report['program'],
         entry_projection=dict(schema=report['schema'], schema_version=report['schema_version'],
             canonical_sha256=hashlib.sha256(_canonical(report).encode()).hexdigest()),
-        producer=_artifact(__file__, 'scar.python-producer'), witnessed=bool(matches),
+        producer=report['producer'], witnessed=bool(matches),
         observed_code_matches=code_matches, matches=matches, rejected_observations=rejected,
         frontier=[] if matches else ['SOURCE_CODE_NOT_IN_ORDINARY_ENTRY_CONDITIONAL_CALL_CHAIN'],
         qualification=dict(proof=('EXACT_SOURCE_BYTES_AND_CODE_ID_IN_CONDITIONAL_STATIC_ENTRY_CHAIN'
