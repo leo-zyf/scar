@@ -23,7 +23,7 @@ from scar.trace.code_snapshot import describe_code, site
 _require = region._require
 
 
-def _seal(plan, raw, recipe):
+def _seal(plan, raw, recipe, *, snapshot_inputs=True):
     root = compile_original(raw, recipe)
     owner = plan['sorted_owner']
     original = evidence._one((code for code in code_tree(root) if describe_code(code) == owner),
@@ -41,9 +41,10 @@ def _seal(plan, raw, recipe):
                            and evidence._span(row) == selected['position']), 'expected one exact sort expression')
     threshold = plan['predicate']['threshold']
     capture = plan['predicate']['nonzero_capture']
-    call.args = [call.func, *call.args, ast.Name(id=plan['receiver'], ctx=ast.Load()),
-                 ast.Name(id=threshold, ctx=ast.Load()),
-                 ast.Name(id=capture, ctx=ast.Load()) if capture else ast.Constant(value=0)]
+    call.args = [call.func, *call.args]
+    if snapshot_inputs:
+        call.args += [ast.Name(id=plan['receiver'], ctx=ast.Load()), ast.Name(id=threshold, ctx=ast.Load()),
+                      ast.Name(id=capture, ctx=ast.Load()) if capture else ast.Constant(value=0)]
     call.func = ast.Name(id=OFFER, ctx=ast.Load())
     revised = compile(ast.fix_missing_locations(tree), recipe['filename'], 'exec',
                       dont_inherit=True, optimize=recipe['optimize'])
