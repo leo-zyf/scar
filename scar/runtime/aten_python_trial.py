@@ -316,6 +316,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
     if provider_report is not None:
         provider_report.update(input_guard_kind=_GEOMETRY if strides is not None else _EXACT_BYTES,
                                reference_input_bytes_loaded=0, lazy_prepare_ns=0)
+    retained_replica = 'ready_retained_replica' in manifest
 
     def prepare(configuration):
         lazy_start = perf_counter_ns() if defer_context and provider_report is not None else None
@@ -326,7 +327,8 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
             extension = _extension(directory, manifest['extension'])
             # CPU arguments follow the compiled executor's arity.
             capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
-            return capsule, extension.run, references, configuration
+            counts = extension.retained_counts if retained_replica else None
+            return capsule, extension.run, references, configuration, counts
         finally:
             if lazy_start is not None:
                 provider_report['lazy_prepare_ns'] += perf_counter_ns() - lazy_start
@@ -378,7 +380,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
             if not ready_bindings():
                 prepared = None
                 return fallback('SOURCE_BINDING', args, kwargs)
-        capsule, native, references, _ = prepared
+        capsule, native, references, _, _ = prepared
         try:
             result = native(capsule, inputs, windows, references)
         except (MemoryError, RuntimeError, ValueError):
@@ -401,6 +403,9 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         active = False
         if namespace.get(name) is guarded:
             namespace[name] = original
+        if retained_replica:
+            hits, misses = (0, 0) if prepared is None else prepared[4](prepared[0])
+            stats['retained_replica'] = dict(hits=hits, misses=misses)
         prepared = None
         if detach_start is not None:
             provider_report['detachment_ns'] = perf_counter_ns() - detach_start

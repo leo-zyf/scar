@@ -175,10 +175,11 @@ inline std::array<at::Tensor, output_count> run_ready(
 #ifdef SCAR_ATEN_READY_REPLICA
 inline constexpr std::array<TeamDataEdge, {len(input_edges)}> ready_input_read_edges{{{input_edge_values}}};
 
-template <class Observer, class ReleaseObserver, class CopyObserver>
-inline std::array<at::Tensor, output_count> run_ready_replicated_inspected(
+template <class Observer, class ReleaseObserver, class PrepareObserver, class Materialize>
+inline std::array<at::Tensor, output_count> run_ready_replica_inspected(
         std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica,
-        Observer&& observe, ReleaseObserver&& observe_release, CopyObserver&& observe_copy) {{
+        Observer&& observe, ReleaseObserver&& observe_release, PrepareObserver&& observe_prepare,
+        Materialize&& materialize) {{
     validate_inputs(inputs);
     if (replica.input_index >= inputs.size() || replica.lane >= 3 || inputs[replica.input_index].numel() == 0
             || !std::any_of(ready_input_read_edges.begin(), ready_input_read_edges.end(), [&](const auto& edge) {{
@@ -193,17 +194,41 @@ inline std::array<at::Tensor, output_count> run_ready_replicated_inspected(
     const auto prepare = [&](std::size_t lane) {{
         if (lane != replica.lane) return;
         std::copy(inputs.begin(), inputs.end(), replicated_inputs.begin());
-        replicated_inputs[replica.input_index] = observe_copy([&] {{
-            return materialize_ready_replica(inputs[replica.input_index]);
+        replicated_inputs[replica.input_index] = observe_prepare([&] {{
+            return materialize(inputs[replica.input_index]);
         }});
     }};
     return run_ready_with_lane_inputs(team, lanes, select_inputs, prepare, observe, observe_release);
+}}
+
+template <class Observer, class ReleaseObserver, class CopyObserver>
+inline std::array<at::Tensor, output_count> run_ready_replicated_inspected(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica,
+        Observer&& observe, ReleaseObserver&& observe_release, CopyObserver&& observe_copy) {{
+    return run_ready_replica_inspected(inputs, team, lanes, replica, observe, observe_release, observe_copy,
+        materialize_ready_replica);
 }}
 
 inline std::array<at::Tensor, output_count> run_ready_replicated(
         std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica) {{
     return run_ready_replicated_inspected(inputs, team, lanes, replica,
         [](std::size_t, auto&& call) {{ return call(); }}, [](std::size_t) {{}}, [](auto&& copy) {{ return copy(); }});
+}}
+
+template <class Observer, class ReleaseObserver, class PrepareObserver>
+inline std::array<at::Tensor, output_count> run_ready_retained_inspected(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica,
+        ReadyRetainedReplica& cache, Observer&& observe, ReleaseObserver&& observe_release,
+        PrepareObserver&& observe_prepare) {{
+    return run_ready_replica_inspected(inputs, team, lanes, replica, observe, observe_release, observe_prepare,
+        [&](const at::Tensor& input) {{ return cache.acquire(input); }});
+}}
+
+inline std::array<at::Tensor, output_count> run_ready_retained(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica,
+        ReadyRetainedReplica& cache) {{
+    return run_ready_retained_inspected(inputs, team, lanes, replica, cache,
+        [](std::size_t, auto&& call) {{ return call(); }}, [](std::size_t) {{}}, [](auto&& call) {{ return call(); }});
 }}
 #endif
 '''

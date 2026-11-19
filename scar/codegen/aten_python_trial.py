@@ -137,7 +137,8 @@ def _geometry_header(geometry):
     return '\n'.join((*lines, '}  // namespace scar_aten_trial_geometry', ''))
 
 
-def _build_extension(stage, artifact, torch, *, value_geometry=False, ready_dag=False, ready_replica=None):
+def _build_extension(stage, artifact, torch, *, value_geometry=False, ready_dag=False, ready_replica=None,
+                     retain_replica=False):
     _, libraries, cxx, compile_flags, link_flags = _build_interface(torch)
     python_torch = libraries[0].with_name('libtorch_python.so').resolve(strict=True)
     filename = _MODULE + sysconfig.get_config_var('EXT_SUFFIX')
@@ -149,6 +150,8 @@ def _build_extension(stage, artifact, torch, *, value_geometry=False, ready_dag=
     if ready_replica is not None:
         options.extend((f"-DSCAR_ATEN_TRIAL_REPLICA_INPUT={ready_replica['input_index']}",
                         f"-DSCAR_ATEN_TRIAL_REPLICA_LANE={ready_replica['lane']}"))
+    if retain_replica:
+        options.append('-DSCAR_ATEN_TRIAL_RETAINED_REPLICA')
     command = [*cxx, *compile_flags, *options, '-I', sysconfig.get_path('include'), '-O2', '-fPIC', '-shared',
                '-fvisibility=hidden', '-pthread', 'trial.cpp', *extension_links, str(python_torch), '-o', filename]
     env = {name: value for name, value in os.environ.items() if not name.startswith('LD_')}
@@ -196,8 +199,9 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
         stage = Path(tmp)
         bundle = Path(selected['bundle']['uri']).parent
         team = 'cpu_team' in artifact
-        ready = selected['selected'] in ('READY_DAG', 'READY_DAG_REPLICA')
-        replica = selected['input_replica']['candidate'] if selected['selected'] == 'READY_DAG_REPLICA' else None
+        ready = selected['selected'] in ('READY_DAG', 'READY_DAG_REPLICA', 'READY_DAG_RETAINED')
+        retained = selected['selected'] == 'READY_DAG_RETAINED'
+        replica = selected['input_replica']['candidate'] if selected['selected'] in ('READY_DAG_REPLICA', 'READY_DAG_RETAINED') else None
         headers = ['graph.hpp', 'operators.hpp']
         if team:
             headers.append(_TEAM_HEADER)
@@ -216,7 +220,7 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
         if guard is not None:
             (stage / 'trial_geometry.hpp').write_text(_geometry_header(guard['geometry']))
         extension, provider, command = _build_extension(stage, artifact, torch, value_geometry=guard is not None,
-                                                        ready_dag=ready, ready_replica=replica)
+                                                        ready_dag=ready, ready_replica=replica, retain_replica=retained)
         manifest = dict(schema='scar.aten-python-trial', schema_version=1,
             scope='EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL', source_proof=proof, recipe=recipe, contract=contract,
             cpus=selected['cpu_ids'], inputs=selected['inputs'],
@@ -229,6 +233,9 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
             manifest['ready_lanes'] = selected['model']['lanes']
             if replica is not None:
                 manifest['ready_input_replica'] = replica
+            if retained:
+                manifest['ready_retained_replica'] = dict(
+                    break_even_total_calls=selected['input_replica']['model']['break_even_total_calls'])
         elif team:
             manifest['window_groups'] = selected['selected_windows']
         else:

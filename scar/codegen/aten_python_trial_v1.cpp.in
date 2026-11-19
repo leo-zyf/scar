@@ -35,6 +35,9 @@ using Executor = graph::CpuPair;
 struct TrialExecutor {
     const pid_t pid;
     Executor executor;
+#ifdef SCAR_ATEN_TRIAL_RETAINED_REPLICA
+    graph::ReadyRetainedReplica retained_replica;
+#endif
 
 #ifdef SCAR_ATEN_TEAM
     TrialExecutor(std::array<int, 3> cpus, bool allow_ambient_grad)
@@ -244,8 +247,13 @@ PyObject* run(PyObject*, PyObject* arguments) {
             auto execute = [&](auto&& observer) {
 #if defined(SCAR_ATEN_TRIAL_REPLICA_INPUT)
                 constexpr graph::ReadyReplica replica{SCAR_ATEN_TRIAL_REPLICA_INPUT, SCAR_ATEN_TRIAL_REPLICA_LANE};
+#ifdef SCAR_ATEN_TRIAL_RETAINED_REPLICA
+                return graph::run_ready_retained_inspected(inputs, prepared->executor, schedule, replica,
+                    prepared->retained_replica, observer, [](std::size_t) {}, [](auto&& read) { return read(); });
+#else
                 return graph::run_ready_replicated_inspected(inputs, prepared->executor, schedule, replica, observer,
                     [](std::size_t) {}, [](auto&& copy) { return copy(); });
+#endif
 #elif defined(SCAR_ATEN_TRIAL_READY)
                 return graph::run_ready(inputs, prepared->executor, schedule, observer);
 #else
@@ -283,7 +291,23 @@ PyObject* run(PyObject*, PyObject* arguments) {
     }
 }
 
+#ifdef SCAR_ATEN_TRIAL_RETAINED_REPLICA
+PyObject* retained_counts(PyObject*, PyObject* capsule) {
+    auto* trial = static_cast<TrialExecutor*>(PyCapsule_GetPointer(capsule, capsule_name));
+    if (!trial) return nullptr;
+    if (trial->pid != getpid()) {
+        PyErr_SetString(PyExc_RuntimeError, "native trial worker belongs to another process");
+        return nullptr;
+    }
+    return Py_BuildValue("KK", static_cast<unsigned long long>(trial->retained_replica.hits()),
+                         static_cast<unsigned long long>(trial->retained_replica.misses()));
+}
+#endif
+
 PyMethodDef methods[] = {
+#ifdef SCAR_ATEN_TRIAL_RETAINED_REPLICA
+    {"retained_counts", retained_counts, METH_O, nullptr},
+#endif
     {"prepare", prepare, METH_VARARGS, nullptr},
     {"run", run, METH_VARARGS, nullptr},
     {nullptr, nullptr, 0, nullptr},

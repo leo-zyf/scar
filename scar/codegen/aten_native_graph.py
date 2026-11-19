@@ -323,6 +323,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             receipt['ready_dag_abi'] = 2
         if ready_replica:
             receipt['ready_replica_abi'] = 1
+            receipt['ready_retained_abi'] = 1
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt

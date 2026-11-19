@@ -20,6 +20,7 @@ from scar.optimization.aten_native_schedule import _declared_operators
 from scar.optimization.aten_native_team import model_cpu_team
 from scar.optimization.aten_ready_dag import plan_ready_dag
 from scar.optimization.aten_ready_replica import nominate_ready_replica, price_ready_replica
+from scar.optimization.aten_ready_retained import price_ready_retained
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
 
@@ -70,30 +71,46 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     timeline = model['timeline']
     copy_id, replica_value = '$ready-input-copy', '$ready-input-replica'
     replica_witness = None
+    retained = False
     if replica is not None:
+        retained = replica.get('retained', False)
         transform = replica['model']
         candidate = replica['candidate']
         timeline = transform['timeline']
         copy = transform['copy_prologue']
         replica_witness = dict(artifact=replica['calibration'], locator='#/raw/replica_pages')
-        copy_refs = (*refs, replica_witness, dict(artifact=replica['calibration'], locator='#/raw/copy_samples_ns'),
+        price_field = 'check_samples_ns' if retained else 'copy_samples_ns'
+        copy_refs = (*refs, replica_witness, dict(artifact=replica['calibration'], locator=f'#/raw/{price_field}'),
                      dict(artifact=origin, locator=f"#/cpu_team/lanes/{copy['lane']}"))
         value, size = candidate['value'], candidate['allocated_bytes']
         cpu = copy['cpu_id']
         demand = {resource.id: 1 for resource in domains[cpu]}
-        implementation = ImplementationOption('COPY', 'LIBTORCH_COPY_INTO_FIRST_TOUCHED_HOST_STORAGE', copy_refs,
-            demand, {}, {value: memory.id}, {replica_value: memory.id},
-            CostEstimate(copy['end_ns'] - copy['start_ns'], None, None, 'EMPIRICAL_MODEL', 'ATEN_READY_REPLICA_COPY', copy_refs),
+        if retained:
+            copy_id = '$ready-input-check'
+        action = 'CHECK' if retained else 'COPY'
+        replica_producer = None if retained else copy_id
+        replica_source = memory.id if retained else None
+        prologue_inputs = {value: memory.id}
+        if retained:
+            prologue_inputs[replica_value] = memory.id
+            edges.append(PlanningDataEdge(f'{replica_value}->{copy_id}', replica_value, None, copy_id,
+                                          size, memory.id, source_refs=copy_refs))
+        implementation = ImplementationOption(action,
+            'EXACT_RETAINED_NUMA_REPLICA_CHECK' if retained else 'LIBTORCH_COPY_INTO_FIRST_TOUCHED_HOST_STORAGE', copy_refs,
+            demand, {}, prologue_inputs, {} if retained else {replica_value: memory.id},
+            CostEstimate(copy['end_ns'] - copy['start_ns'], None, None, 'EMPIRICAL_MODEL',
+                         'ATEN_READY_RETAINED_CHECK' if retained else 'ATEN_READY_REPLICA_COPY', copy_refs),
             dict(logical_value=value, replica_value=replica_value, allocation_bytes=size, target_numa_node=candidate['dest_node'],
                  cpu_id=cpu, lane=copy['lane']))
-        operations.append(PlanningOperation(copy_id, copy_refs, (), (implementation,), 'COPY'))
+        operations.append(PlanningOperation(copy_id, copy_refs, (), (implementation,), action))
         edges.append(PlanningDataEdge(f'{value}->{copy_id}', value, None, copy_id, inputs[value], memory.id,
                                       source_refs=copy_refs))
-        edges.append(PlanningDataEdge(f'{replica_value}->{join}', replica_value, copy_id, join, size, None,
+        edges.append(PlanningDataEdge(f'{replica_value}->{join}', replica_value, replica_producer, join, size, replica_source,
                                       source_refs=copy_refs))
         locations[replica_value] = memory.id
-        cost_context = 'ATEN_READY_REPLICATED_PROVIDER_REPLAY'
-        cost_refs = (*refs, dict(artifact=replica['calibration'], locator='#/raw/replicated_samples_ns'))
+        cost_context = 'ATEN_READY_RETAINED_PROVIDER_REPLAY' if retained else 'ATEN_READY_REPLICATED_PROVIDER_REPLAY'
+        operation_samples = 'retained_samples_ns' if retained else 'replicated_samples_ns'
+        cost_refs = (*refs, dict(artifact=replica['calibration'], locator=f'#/raw/{operation_samples}'))
     lane_ends = {}
     for row, native in zip(timeline, recipe['operations'], strict=True):
         identifier = row['operation']
@@ -106,8 +123,8 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         for value in operands:
             if replica is not None and value == candidate['value'] and row['index'] in candidate['consumers']:
                 edge_refs = (*refs, replica_witness, dict(artifact=origin, locator=f"#/cpu_team/lanes/{row['lane']}"))
-                edges.append(PlanningDataEdge(f'{replica_value}->{identifier}', replica_value, copy_id, identifier,
-                                              size, None, source_refs=edge_refs))
+                edges.append(PlanningDataEdge(f'{replica_value}->{identifier}', replica_value, replica_producer, identifier,
+                                              size, replica_source, source_refs=edge_refs))
                 input_values.append(replica_value)
                 continue
             producer = value if value in outputs else None
@@ -144,9 +161,11 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         assumptions = (*assumptions, 'SAMPLED_NUMA_RESIDENCY_IN_SHARED_HOST_MEMORY')
     if replica is not None:
         assumptions = (*assumptions, 'ONE_PRIVATE_INPUT_REPLICA_HELD_TO_RETURN')
+        if retained:
+            assumptions = (*assumptions, 'WARM_HIT_ON_ONE_PRIOR_PRIVATE_MAPPING_AFTER_EXACT_CONTENT_CHECK')
     problem = PlanningProblem(target, refs, resources, tuple(operations), tuple(edges),
         assumptions=assumptions,
-        reserved_memory={memory.id: storage['persistent_input_bytes']})
+        reserved_memory={memory.id: storage['persistent_input_bytes'] + (size if retained else 0)})
     execution = construct_implementations(problem)
     verified = verify_execution_plan(problem, execution)
     actual_peak = verified['resource_peaks'][memory.id]
@@ -232,11 +251,14 @@ def calibrate_ready_placement(executable, recipe, schedule, inputs, raw, *, budg
     return raw, model
 
 
-def _replica_validation(raw, model, candidate, warmup, count):
+def _replica_validation(raw, model, candidate, warmup, count, *, retained=False):
     if (raw['all_pairs_validated'] is not True or
             (raw['cpu_ids'], raw['lanes'], raw['input_index'], raw['lane'], raw['warmup_pairs'], raw['measured_pairs']) !=
             (model['cpu_ids'], model['lanes'], candidate['input_index'], candidate['lane'], warmup, count)):
         raise ValueError('ready input replica validation ran outside its nominated configuration')
+    if retained and (type(raw['retained_hits']) is not int or type(raw['retained_misses']) is not int
+                     or raw['retained_hits'] != count or raw['retained_misses'] != 0):
+        raise ValueError('ready retained comparison requires only hits in the measured warm pairs')
     rows = []
     for i, row in enumerate(raw['samples']):
         order = 'AB' if (i + warmup) % 2 == 0 else 'BA'
@@ -246,24 +268,34 @@ def _replica_validation(raw, model, candidate, warmup, count):
         rows.append(dict(pair_index=i, order=modes, serial_ns=row['baseline_ns'], dual_ns=row['ready_ns'],
                          bitwise_identical=True, input_values_unchanged=True, fresh_owned_outputs=True))
     metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count)
-    return dict(metrics={'DIRECT': metrics['SERIAL'], 'REPLICATED': metrics['TWO_CPU']}, wins=wins,
+    label = 'RETAINED' if retained else 'REPLICATED'
+    result = dict(metrics={'DIRECT': metrics['SERIAL'], label: metrics['TWO_CPU']}, wins=wins,
         paired_order_differences={'AB': directional['SERIAL'], 'BA': directional['TWO_CPU']}, speedup=ratio, profitable=faster)
+    if retained:
+        result.update(retained_hits=raw['retained_hits'], retained_misses=raw['retained_misses'])
+    return result
 
 
-def _try_replica(executable, recipe, schedule, model, inputs, warmup, count, publish):
+def _try_replica(executable, recipe, schedule, model, inputs, warmup, count, publish, *, retained=False):
     candidate = nominate_ready_replica(recipe, schedule, model)
+    record = dict(candidate=candidate)
+    if retained:
+        record['retained'] = True
     if candidate is None:
-        return dict(candidate=None, decision='NO_ADMISSIBLE_INPUT_REPLICA')
+        return dict(record, decision='NO_ADMISSIBLE_INPUT_REPLICA')
     spec = [''.join(map(str, model['lanes'])), candidate['input_index'], candidate['lane'], warmup]
-    raw = _invoke(executable, schedule, '--calibrate-ready-replica', spec, inputs)
-    priced = price_ready_replica(recipe, schedule, model, candidate, raw, warmup)
-    record = dict(candidate=candidate, model=priced, decision=priced['status'],
+    mode = 'retained' if retained else 'replica'
+    stage = 'RETAINED' if retained else 'REPLICA'
+    raw = _invoke(executable, schedule, f'--calibrate-ready-{mode}', spec, inputs)
+    price = price_ready_retained if retained else price_ready_replica
+    priced = price(recipe, schedule, model, candidate, raw, warmup)
+    record.update(model=priced, decision=priced['status'],
                   calibration=publish('input-replica.json', _REPLICA_CALIBRATION, dict(raw=raw)))
-    if priced['status'] == 'PLAN_READY_REPLICA':
-        paired = _invoke(executable, schedule, '--benchmark-ready-replica', [*spec, count], inputs)
-        validation = _replica_validation(paired, model, candidate, warmup, count)
+    if priced['status'] == f'PLAN_READY_{stage}':
+        paired = _invoke(executable, schedule, f'--benchmark-ready-{mode}', [*spec, count], inputs)
+        validation = _replica_validation(paired, model, candidate, warmup, count, retained=retained)
         record.update(paired=publish('input-replica-paired.json', _REPLICA_PAIRED, dict(raw=paired)),
-                      validation=validation, decision='READY_DAG_REPLICA' if validation['profitable'] else 'KEEP_DIRECT_READY')
+                      validation=validation, decision=f'READY_DAG_{stage}' if validation['profitable'] else 'KEEP_DIRECT_READY')
     return record
 
 
@@ -271,27 +303,37 @@ def _replay_replica(recipe, schedule, model, replica, warmup, count):
     candidate = nominate_ready_replica(recipe, schedule, model)
     if replica['candidate'] != candidate:
         raise ValueError('ready input replica differs from the qualified DATA edges')
+    retained = 'retained' in replica
+    if retained and replica['retained'] is not True:
+        raise ValueError('invalid retained replica profile')
     if candidate is None:
-        if replica != dict(candidate=None, decision='NO_ADMISSIBLE_INPUT_REPLICA'):
+        expected = dict(candidate=None, decision='NO_ADMISSIBLE_INPUT_REPLICA')
+        if retained:
+            expected['retained'] = True
+        if replica != expected:
             raise ValueError('ready selection has evidence for an unqualified input replica')
-        return False
+        return 'READY_DAG'
     raw = read_artifact(replica['calibration'])['raw']
-    price = price_ready_replica(recipe, schedule, model, candidate, raw, warmup)
+    pricer = price_ready_retained if retained else price_ready_replica
+    stage = 'RETAINED' if retained else 'REPLICA'
+    price = pricer(recipe, schedule, model, candidate, raw, warmup)
     if replica['model'] != price:
         raise ValueError('ready input replica price differs from its service measurements')
     decision = price['status']
-    if decision == 'PLAN_READY_REPLICA':
-        validation = _replica_validation(read_artifact(replica['paired'])['raw'], model, candidate, warmup, count)
+    if decision == f'PLAN_READY_{stage}':
+        validation = _replica_validation(read_artifact(replica['paired'])['raw'], model, candidate, warmup, count,
+                                         retained=retained)
         if validation != replica['validation']:
             raise ValueError('ready input replica validation differs from its paired measurements')
-        decision = 'READY_DAG_REPLICA' if validation['profitable'] else 'KEEP_DIRECT_READY'
+        decision = f'READY_DAG_{stage}' if validation['profitable'] else 'KEEP_DIRECT_READY'
     if replica['decision'] != decision:
         raise ValueError('ready input replica choice differs from its replay')
-    return decision == 'READY_DAG_REPLICA'
+    return decision if decision == f'READY_DAG_{stage}' else 'READY_DAG'
 
 
 def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_bytes, warmup_pairs=5,
-                    measured_pairs=12, primitive_observation=None, entry_comparison=False, try_input_replica=False):
+                    measured_pairs=12, primitive_observation=None, entry_comparison=False, try_input_replica=False,
+                    try_retained_input_replica=False):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -300,6 +342,8 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
     artifact, origin, recipe, hardware, executable, schedule = _ready_bundle(bundle, bundle_sha256)
     if try_input_replica and artifact.get('ready_replica_abi') != 1:
         raise ValueError('input replica planning requires a bundle built with --ready-dag --allow-cross-numa')
+    if try_retained_input_replica and (try_input_replica or artifact.get('ready_retained_abi') != 1):
+        raise ValueError('select one replica trial and use a current retained-capable cross-NUMA bundle')
     inputs = [_receipt(path) for path in input_paths]
     if len(inputs) != len(recipe['inputs']):
         raise ValueError('supply inputs in original recipe order')
@@ -338,17 +382,18 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
                 measurements.append(publish(f'paired-{i}.json', _PAIRED, measured))
             if not all(result['profitable'] for result in (validations[:1] if entry_comparison else validations)):
                 reason = 'READY_DAG_DID_NOT_BEAT_MATCHED_BASELINES'
-            if try_input_replica:
-                replica = _try_replica(executable, recipe, schedule, model, inputs, warmup_pairs, measured_pairs, publish)
-                if reason is None and replica['decision'] == 'READY_DAG_REPLICA':
-                    selected = 'READY_DAG_REPLICA'
+            if try_input_replica or try_retained_input_replica:
+                replica = _try_replica(executable, recipe, schedule, model, inputs, warmup_pairs, measured_pairs, publish,
+                                       retained=try_retained_input_replica)
+                if reason is None and replica['decision'] in ('READY_DAG_REPLICA', 'READY_DAG_RETAINED'):
+                    selected = replica['decision']
             problem, execution = _resource_plan(hardware, schedule, origin, calibration, recipe, raw['calibration'], model,
-                                               replica=replica if selected == 'READY_DAG_REPLICA' else None)
+                                               replica=replica if selected != 'READY_DAG' else None)
             _write(stage / 'problem.json', problem)
             _write(stage / 'plan.json', execution)
         if any(_receipt(row['path']) != row for row in guarded):
             raise ValueError('native ready DAG members changed during measurement')
-        if reason is None and all(result['profitable'] for result in validations):
+        if reason is None and selected != 'READY_DAG_RETAINED' and all(result['profitable'] for result in validations):
             placement = replica['candidate'] if selected == 'READY_DAG_REPLICA' else None
             _launcher(stage, executable, selected, schedule, inputs, guarded, model['lanes'], replica=placement)
         report = dict(schema=SCHEMA, schema_version=abi, bundle=origin, executable=guarded[0], inputs=inputs,
@@ -366,7 +411,7 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
 
 
 def read_ready_selection(path, selection):
-    if selection['schema'] != SCHEMA or selection['selected'] not in ('READY_DAG', 'READY_DAG_REPLICA'):
+    if selection['schema'] != SCHEMA or selection['selected'] not in ('READY_DAG', 'READY_DAG_REPLICA', 'READY_DAG_RETAINED'):
         raise ValueError('selected and independently validated ready DAG required')
     bundle = selection['bundle']
     artifact, origin, recipe, hardware, executable, schedule = _ready_bundle(bundle['uri'], bundle['sha256'])
@@ -392,15 +437,16 @@ def read_ready_selection(path, selection):
             or not required or results != selection['validation'] or not all(row['profitable'] for row in required)):
         raise ValueError('retained ready DAG choice differs from its calibration or matched validation')
     replica = selection.get('input_replica')
-    use_replica = False
+    chosen = 'READY_DAG'
     if replica is not None:
-        if artifact.get('ready_replica_abi') != 1:
+        abi_key = 'ready_retained_abi' if 'retained' in replica else 'ready_replica_abi'
+        if artifact.get(abi_key) != 1:
             raise ValueError('ready selection has input replica evidence for an incompatible native bundle')
-        use_replica = _replay_replica(recipe, schedule, model, replica, warmup, count)
-    if use_replica != (selection['selected'] == 'READY_DAG_REPLICA'):
+        chosen = _replay_replica(recipe, schedule, model, replica, warmup, count)
+    if chosen != selection['selected']:
         raise ValueError('ready selection does not agree with its replica comparison')
     problem, execution = _resource_plan(hardware, schedule, origin, calibration, recipe, raw['calibration'], model,
-                                       replica=replica if use_replica else None)
+                                       replica=replica if chosen != 'READY_DAG' else None)
     problem_ref = artifact_reference(path.with_name('problem.json'), PROBLEM_SCHEMA)
     plan_ref = artifact_reference(path.with_name('plan.json'), PLAN_SCHEMA)
     stored = read_artifact(plan_ref)
@@ -421,12 +467,16 @@ def main(argv=None):
     parser.add_argument('--tensor-budget-bytes', required=True, type=int)
     parser.add_argument('--warmup-pairs', type=int, default=5)
     parser.add_argument('--measured-pairs', type=int, default=12)
-    parser.add_argument('--try-input-replica', action='store_true', help='price one reusable NUMA-local copy of a read-only input')
+    replicas = parser.add_mutually_exclusive_group()
+    replicas.add_argument('--try-input-replica', action='store_true', help='price one NUMA-local input copy per call')
+    replicas.add_argument('--try-retained-input-replica', action='store_true',
+                          help='price one byte-checked NUMA-local input copy retained across calls')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     selection = plan_aten_ready(args.bundle, bundle_sha256=args.bundle_sha256, input_paths=args.input,
         tensor_budget_bytes=args.tensor_budget_bytes, warmup_pairs=args.warmup_pairs,
-        measured_pairs=args.measured_pairs, out=args.out, try_input_replica=args.try_input_replica)
+        measured_pairs=args.measured_pairs, out=args.out, try_input_replica=args.try_input_replica,
+        try_retained_input_replica=args.try_retained_input_replica)
     print(json.dumps(dict(selected=selection['selected'], reason=selection['reason'],
         selection=str(Path(args.out) / 'selection.json'))))
     return 0

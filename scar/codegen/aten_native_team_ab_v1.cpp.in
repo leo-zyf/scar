@@ -768,7 +768,7 @@ void emit_replica_context(const std::array<int, 3>& cpus, const graph::ReadyLane
 }
 
 void calibrate_ready_replica(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
-                             const graph::ReadyLanes& lanes, graph::ReadyReplica replica) {
+                             const graph::ReadyLanes& lanes, graph::ReadyReplica replica, bool retained) {
     const int warmup = integer(args[0], 3, 100, "warmup count");
     const SampleInputs data(args + 1);
     const auto& inputs = data.tensors;
@@ -780,31 +780,44 @@ void calibrate_ready_replica(char** args, const std::array<int, 3>& cpus, graph:
     });
     data.check();
 
-    // Reserve page queries and copy-byte checks for an untimed invocation.
+    // Reserve page queries and the independent replica comparison for an untimed invocation.
     std::optional<graph::NumaPageSample> replica_pages;
     {
-        const auto page_probe = graph::run_ready_replicated_inspected(inputs, team, lanes, replica,
-            [](std::size_t, auto&& call) { return call(); }, [](std::size_t) {}, [&](auto&& copy) {
-                if (replica_pages) throw std::runtime_error("ready input replica copied twice");
-                at::Tensor value = copy();
-                const auto& source = inputs[replica.input_index];
-                if (!value.is_contiguous() || source.sizes() != value.sizes() || source.strides() != value.strides()
-                        || source.is_alias_of(value) || source.scalar_type() != value.scalar_type()
-                        || (source.nbytes() && std::memcmp(source.const_data_ptr<float>(), value.const_data_ptr<float>(),
-                                                         source.nbytes()) != 0)) {
-                    throw std::runtime_error("ready input replica differs from its original Tensor");
-                }
-                replica_pages = graph::observe_numa_pages(value);
-                return value;
-            });
+        const auto observe = [](std::size_t, auto&& call) { return call(); };
+        const auto release = [](std::size_t) {};
+        const auto prepare = [&](auto&& call) {
+            if (replica_pages) throw std::runtime_error("ready input replica prepared twice");
+            at::Tensor value = call();
+            const auto& source = inputs[replica.input_index];
+            if (!value.is_contiguous() || source.sizes() != value.sizes() || source.strides() != value.strides()
+                    || source.is_alias_of(value) || source.scalar_type() != value.scalar_type()
+                    || (source.nbytes() && std::memcmp(source.const_data_ptr<float>(), value.const_data_ptr<float>(),
+                                                     source.nbytes()) != 0)) {
+                throw std::runtime_error("ready input replica differs from its original Tensor");
+            }
+            replica_pages = graph::observe_numa_pages(value);
+            return value;
+        };
+        graph::ReadyRetainedReplica cache;
+        if (retained) {
+            const auto cold = graph::run_ready_retained(inputs, team, lanes, replica, cache);
+            data.check();
+            check_outputs(inputs, reference, cold);
+        }
+        const auto page_probe = retained
+            ? graph::run_ready_retained_inspected(inputs, team, lanes, replica, cache, observe, release, prepare)
+            : graph::run_ready_replicated_inspected(inputs, team, lanes, replica, observe, release, prepare);
         data.check();
         check_outputs(inputs, reference, page_probe);
         if (!replica_pages) throw std::runtime_error("ready input replica was not observed");
+        if (retained && (cache.hits() != 1 || cache.misses() != 1)) {
+            throw std::runtime_error("ready retained page probe expected a hot replica");
+        }
     }
 
     OperationRows direct(warmup), replicated(warmup);
-    std::vector<std::int64_t> copies(warmup);
-    const auto replay = [&](OperationTimes& row, std::int64_t* copy_ns) {
+    std::vector<std::int64_t> prepare_samples(warmup), cold_samples(retained ? warmup : 0);
+    const auto replay = [&](OperationTimes& row, std::int64_t* prepare_ns, graph::ReadyRetainedReplica* cache) {
         const auto observe = [&](std::size_t op, auto&& call) {
             const auto start = Clock::now();
             auto value = call();
@@ -812,60 +825,100 @@ void calibrate_ready_replica(char** args, const std::array<int, 3>& cpus, graph:
             observe_storage(storage[op], value);
             return value;
         };
-        const auto output = copy_ns == nullptr ? graph::run_ready(inputs, team, lanes, observe)
-            : graph::run_ready_replicated_inspected(inputs, team, lanes, replica, observe, [](std::size_t) {},
-                [&](auto&& copy) {
-                    if (*copy_ns != 0) throw std::runtime_error("ready input replica copied twice");
-                    const auto start = Clock::now();
-                    auto value = copy();
-                    *copy_ns = elapsed_ns(start);
-                    return value;
-                });
+        const auto release = [](std::size_t) {};
+        const auto prepare = [&](auto&& call) {
+            if (*prepare_ns != 0) throw std::runtime_error("ready input replica prepared twice");
+            const auto start = Clock::now();
+            auto value = call();
+            *prepare_ns = elapsed_ns(start);
+            return value;
+        };
+        const auto output = prepare_ns == nullptr ? graph::run_ready(inputs, team, lanes, observe)
+            : cache != nullptr
+                ? graph::run_ready_retained_inspected(inputs, team, lanes, replica, *cache, observe, release, prepare)
+                : graph::run_ready_replicated_inspected(inputs, team, lanes, replica, observe, release, prepare);
         data.check();
         check_outputs(inputs, reference, output);
-        if (copy_ns != nullptr && *copy_ns == 0) throw std::runtime_error("ready input replica was not timed");
+        if (prepare_ns != nullptr && *prepare_ns == 0) throw std::runtime_error("ready input replica was not timed");
+        if (cache != nullptr && (cache->hits() != 1 || cache->misses() != 1)) {
+            throw std::runtime_error("ready retained calibration expected exactly one cold miss and one hit");
+        }
+    };
+    const auto prime_retained = [&](graph::ReadyRetainedReplica& cache) {
+        const auto start = Clock::now();
+        const auto output = graph::run_ready_retained(inputs, team, lanes, replica, cache);
+        const auto cold_ns = elapsed_ns(start);
+        data.check();
+        check_outputs(inputs, reference, output);
+        if (cache.hits() != 0 || cache.misses() != 1) {
+            throw std::runtime_error("ready retained calibration expected a cold miss");
+        }
+        return cold_ns;
     };
     OperationTimes prime{};
-    std::int64_t prime_copy = 0;
-    replay(prime, nullptr);
-    replay(prime, &prime_copy);
+    std::int64_t prime_prepare = 0;
+    {
+        graph::ReadyRetainedReplica cache;
+        replay(prime, nullptr, nullptr);
+        if (retained) prime_retained(cache);
+        replay(prime, &prime_prepare, retained ? &cache : nullptr);
+    }
     for (int i = 0; i < warmup; ++i) {
-        if (i % 2 == 0) {
-            replay(direct[i], nullptr);
-            replay(replicated[i], &copies[i]);
-        } else {
-            replay(replicated[i], &copies[i]);
-            replay(direct[i], nullptr);
-        }
+        graph::ReadyRetainedReplica cache;
+        if (retained) cold_samples[i] = prime_retained(cache);
+        if (i % 2 == 0) replay(direct[i], nullptr, nullptr);
+        replay(replicated[i], &prepare_samples[i], retained ? &cache : nullptr);
+        if (i % 2 != 0) replay(direct[i], nullptr, nullptr);
     }
     emit_replica_context(cpus, lanes, replica, warmup);
     std::cout << ",\"direct_samples_ns\":";
     emit_operations(direct);
-    std::cout << ",\"replicated_samples_ns\":";
+    std::cout << (retained ? ",\"retained_samples_ns\":" : ",\"replicated_samples_ns\":");
     emit_operations(replicated);
-    std::cout << ",\"copy_samples_ns\":";
-    emit_numbers(copies);
+    std::cout << (retained ? ",\"check_samples_ns\":" : ",\"copy_samples_ns\":");
+    emit_numbers(prepare_samples);
+    if (retained) {
+        std::cout << ",\"cold_samples_ns\":";
+        emit_numbers(cold_samples);
+    }
     std::cout << ",\"replica_pages\":";
     graph::write_numa_pages(std::cout, replica_pages.value());
     std::cout << ",\"all_runs_validated\":true}\n";
 }
 
 void benchmark_ready_replica(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
-                             const graph::ReadyLanes& lanes, graph::ReadyReplica replica) {
+                             const graph::ReadyLanes& lanes, graph::ReadyReplica replica, bool retained) {
     const int warmup = integer(args[0], 3, 100, "warmup count");
     const int measured = integer(args[1], 4, 500, "measurement count");
     if (measured % 2 != 0) throw std::invalid_argument("ready replica requires balanced AB/BA measurement pairs");
     const SampleInputs data(args + 2);
     const auto& inputs = data.tensors;
+    graph::ReadyRetainedReplica cache;
+    if (retained) {
+        const auto reference = graph::run_ready(inputs, team, lanes);
+        const auto prime = graph::run_ready_retained(inputs, team, lanes, replica, cache);
+        data.check();
+        check_outputs(inputs, reference, prime);
+        if (cache.hits() != 0 || cache.misses() != 1) {
+            throw std::runtime_error("ready retained benchmark expected a cold miss while priming");
+        }
+    }
     const auto samples = measure_ready_pairs(data, warmup, measured, [&](bool direct) {
         const auto started = Clock::now();
-        auto output = direct ? graph::run_ready(inputs, team, lanes)
-                             : graph::run_ready_replicated(inputs, team, lanes, replica);
+        auto output = direct ? graph::run_ready(inputs, team, lanes) : retained
+            ? graph::run_ready_retained(inputs, team, lanes, replica, cache)
+            : graph::run_ready_replicated(inputs, team, lanes, replica);
         return std::pair{elapsed_ns(started), std::move(output)};
     });
+    if (retained && (cache.hits() != static_cast<std::size_t>(warmup + measured) || cache.misses() != 1)) {
+        throw std::runtime_error("ready retained benchmark expected every call after priming to hit");
+    }
     emit_replica_context(cpus, lanes, replica, warmup);
     std::cout << ",\"measured_pairs\":" << measured << ",\"all_pairs_validated\":true,\"samples\":";
     emit_ready_samples(samples);
+    if (retained) {
+        std::cout << ",\"retained_hits\":" << cache.hits() - warmup << ",\"retained_misses\":" << cache.misses() - 1;
+    }
     std::cout << "}\n";
 }
 #endif
@@ -885,9 +938,11 @@ int main(int argc, char** argv) {
     running_ready = mode == "--run-ready";
 #endif
 #ifdef SCAR_ATEN_READY_REPLICA
-    calibrating_replica = mode == "--calibrate-ready-replica";
-    measuring_replica = mode == "--benchmark-ready-replica";
-    running_replica = mode == "--run-ready-replica";
+    const bool retained = mode == "--calibrate-ready-retained" || mode == "--benchmark-ready-retained"
+        || mode == "--run-ready-retained";
+    calibrating_replica = mode == "--calibrate-ready-replica" || mode == "--calibrate-ready-retained";
+    measuring_replica = mode == "--benchmark-ready-replica" || mode == "--benchmark-ready-retained";
+    running_replica = mode == "--run-ready-replica" || mode == "--run-ready-retained";
 #endif
     if (!calibrating && !measuring && !serial && !calibrating_ready && !measuring_ready && !running_ready
             && !calibrating_replica && !measuring_replica && !running_replica && mode != "--run-team") {
@@ -907,7 +962,10 @@ int main(int argc, char** argv) {
 #ifdef SCAR_ATEN_READY_REPLICA
         std::fputs("       aten-graph --calibrate-ready-replica <caller> <worker1> <worker2> <lanes> <input-index> <lane> <warmup> <input.f32>...\n"
                    "       aten-graph --benchmark-ready-replica <caller> <worker1> <worker2> <lanes> <input-index> <lane> <warmup> <even-count> <input.f32>...\n"
-                   "       aten-graph --run-ready-replica <caller> <worker1> <worker2> <lanes> <input-index> <lane> <input.f32>... <new-output.f32>...\n", stderr);
+                   "       aten-graph --run-ready-replica <caller> <worker1> <worker2> <lanes> <input-index> <lane> <input.f32>... <new-output.f32>...\n"
+                   "       aten-graph --calibrate-ready-retained <caller> <worker1> <worker2> <lanes> <input-index> <lane> <warmup> <input.f32>...\n"
+                   "       aten-graph --benchmark-ready-retained <caller> <worker1> <worker2> <lanes> <input-index> <lane> <warmup> <even-count> <input.f32>...\n"
+                   "       aten-graph --run-ready-retained <caller> <worker1> <worker2> <lanes> <input-index> <lane> <input.f32>... <new-output.f32>...\n", stderr);
 #endif
         return 2;
     }
@@ -932,10 +990,14 @@ int main(int argc, char** argv) {
             const auto lanes = parse_ready_lanes(argv[5]);
             const auto replica = parse_ready_replica(argv + 6);
             if (running_replica) return invoke(argv + 8, [&](const auto& inputs) {
+                if (retained) {
+                    graph::ReadyRetainedReplica cache;
+                    return graph::run_ready_retained(inputs, team, lanes, replica, cache);
+                }
                 return graph::run_ready_replicated(inputs, team, lanes, replica);
             });
-            if (calibrating_replica) calibrate_ready_replica(argv + 8, cpus, team, lanes, replica);
-            else benchmark_ready_replica(argv + 8, cpus, team, lanes, replica);
+            if (calibrating_replica) calibrate_ready_replica(argv + 8, cpus, team, lanes, replica, retained);
+            else benchmark_ready_replica(argv + 8, cpus, team, lanes, replica, retained);
             return 0;
         }
 #endif
