@@ -13,7 +13,8 @@ from .call_binding import (plan_call_bindings, plan_program_call_bindings, read_
 
 def observe_call_bindings(command, out, *, plan_path=None, source=None, catalog=None,
                           entry=None, max_targets_per_site=1, max_seconds=60,
-                          all_sources=False,include_modules=False):
+                          all_sources=False,include_modules=False,environment=None,cwd=None,
+                          stdin=None,stdout=None,stderr=None):
     if plan_path is not None:
         if source is not None or catalog is not None or all_sources or include_modules:
             raise ValueError('read a plan or select original source calls')
@@ -32,14 +33,15 @@ def observe_call_bindings(command, out, *, plan_path=None, source=None, catalog=
     out=Path(out).absolute()
     if out.exists(): raise ValueError('fresh CALL observation output required')
     out.mkdir(parents=True);path=out/'plan.json';write_call_binding_plan(plan,path)
-    env=dict(os.environ)
+    env=dict(os.environ if environment is None else environment)
     for name in ('SCAR_TRACE_DIR','SCAR_OPTIMIZE','SCAR_REGION_METADATA_PLAN','SCAR_REGION_METADATA_OUT'):
         env.pop(name,None)
     env['SCAR_CALL_BINDING_PLAN']=str(path);env['SCAR_CALL_BINDING_OUT']=str(out)
-    root=str(Path(__file__).resolve().parents[2])
-    env['PYTHONPATH']=root+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+    if environment is None:
+        root=str(Path(__file__).resolve().parents[2])
+        env['PYTHONPATH']=root+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     started=time.monotonic();reason=None
-    process=subprocess.Popen(command,env=env,start_new_session=True)
+    process=subprocess.Popen(command,env=env,cwd=cwd,stdin=stdin,stdout=stdout,stderr=stderr,start_new_session=True)
     try: process.wait(timeout=max_seconds)
     except subprocess.TimeoutExpired:
         reason='TIME_BUDGET_PREFIX_STOP'
