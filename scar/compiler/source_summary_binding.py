@@ -46,23 +46,40 @@ def derive_stateful_source_summary_binding(summary, specialization, *, entry_cal
     Different ProgramBuild receipts may describe the same entry/source version.
     Both are retained and checked; their identity is never inferred from names.
     """
+    binding, _ = _derive_stateful_source_summary_binding(summary, specialization,
+        entry_calls=entry_calls, _context=_context)
+    return binding
+
+
+def _derive_stateful_source_summary_binding(summary, specialization, *, entry_calls,
+        _context=None, retained_producer=None):
     from scar.analysis.bounded_entry_calls import _derive_entry_source_witness_admitted
     from scar.analysis.interprocedural_summary import _verified_interprocedural_summary
+    from scar.analysis.source_summary_storage import SCHEMA as SUMMARY, read_source_summary
     from scar.compiler.admission_context import AdmissionContext
+    from scar.compiler.source_summary_reader_versions import compatible_binding_producer
     from scar.compiler.stateful_model import stateful_from_dict, stateful_digest
 
     if _context is None:
         with AdmissionContext() as context:
-            return derive_stateful_source_summary_binding(summary,specialization,
-                entry_calls=entry_calls,_context=context)
+            return _derive_stateful_source_summary_binding(summary, specialization,
+                entry_calls=entry_calls, _context=context, retained_producer=retained_producer)
     _need(type(_context) is AdmissionContext, 'original live AdmissionContext required')
     _context.validate()
-    summary_ref = _ref(summary)
+    summary_ref = _ref(summary, SUMMARY)
     specialization_ref = _ref(specialization, 'scar.observed-stateful-specialization')
     calls_ref = _ref(entry_calls, 'scar.bounded-entry-calls')
-    retained_summary = read_artifact(summary_ref)
+    retained_summary = read_source_summary(summary_ref, watch=_context.watch)
     calls = read_artifact(calls_ref)
-    for reference in (summary_ref,specialization_ref,calls_ref):_context.watch(reference)
+    _need(retained_summary['entry_projection'] == dict(sha256=semantic_sha256(calls),
+        program=calls['program'], producer=calls['producer']),
+        'source summary belongs to another original entry projection')
+    producer = artifact_reference(__file__, 'scar.python-source')
+    if retained_producer is not None:
+        retained_producer = _reference(retained_producer)
+        _need(compatible_binding_producer(retained_producer, producer),
+            'stateful source summary binding producer differs from cold replay')
+    for reference in (specialization_ref,calls_ref):_context.watch(reference)
     materials = _context.stateful(specialization_ref)
     admission = materials['admission']
     _need(admission['native_metadata_verified'] is True, 'source-admitted native validation candidate required')
@@ -75,9 +92,6 @@ def derive_stateful_source_summary_binding(summary, specialization, *, entry_cal
     session = _context.program(calls['program'])
     with _verified_interprocedural_summary(session,retained_summary,entry_calls=calls) as (checked,entry_admission):
         _need(checked == retained_summary, 'source summary verifier did not return the complete retained report')
-        _need(checked['entry_projection'] == dict(sha256=semantic_sha256(calls),
-            program=calls['program'], producer=calls['producer']),
-            'source summary belongs to another original entry projection')
         entry_source = _entry_source(session, calls['program'])
         source = region.source
         witness = _derive_entry_source_witness_admitted(session, entry_admission,
@@ -140,20 +154,23 @@ def derive_stateful_source_summary_binding(summary, specialization, *, entry_cal
         runtime_guards_discharged=False, whole_entry_legality_proven=False,
         native_loaded=False, compiled=False, target_program_executed=False,
         timing_qualified=False, deployment_authorized=False,
-        producer_source=artifact_reference(__file__, 'scar.python-source'))
+        producer_source=producer)
     for reference in (summary_ref, specialization_ref, calls_ref, candidate['native_artifact'],
             specialized['candidate'], specialized['program'], calls['program'], entry_source,
             specialized['source_region'], witness['source'], result['producer_source']):
         read_artifact(reference, json_document=False)
     _context._watch_tree(result,_program=calls['program']);_context._producers();_context.validate()
-    return json.loads(json.dumps(result, sort_keys=True, allow_nan=False))
+    if retained_producer is not None:
+        result['producer_source'] = retained_producer
+    return json.loads(json.dumps(result, sort_keys=True, allow_nan=False)), retained_summary
 
 
 def verify_stateful_source_summary_binding(binding, summary, specialization, *, entry_calls, _context=None):
     """Recompute the complete conditional binding, including both cold parents."""
     retained = (read_artifact(_ref(binding, SCHEMA)) if isinstance(binding, (str, Path))
         or type(binding) is dict and 'uri' in binding else binding)
-    expected = derive_stateful_source_summary_binding(summary, specialization, entry_calls=entry_calls,_context=_context)
+    expected, _ = _derive_stateful_source_summary_binding(summary, specialization, entry_calls=entry_calls,
+        _context=_context, retained_producer=retained['producer_source'])
     _need(expected == retained, 'stateful source summary binding differs from cold replay')
     return expected
 

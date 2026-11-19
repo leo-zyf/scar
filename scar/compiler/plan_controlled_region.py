@@ -29,6 +29,7 @@ _PRODUCERS = ('compiler/plan_controlled_region.py', 'compiler/controlled_resourc
     'optimization/native_stage_context.py', 'compiler/calibrate_native_groups.py',
     'optimization/cost_context_compatibility.py', 'analysis/source_function_summary.py',
     'analysis/interprocedural_summary.py', 'compiler/source_summary_binding.py',
+    'analysis/source_summary_storage.py', 'compiler/source_summary_reader_versions.py',
     'compiler/admission_context.py', 'compiler/stateful_candidate.py',
     'analysis/stateful_region_effects.py', 'analysis/stateful_dependencies.py',
     'analysis/source_fact_materials.py',
@@ -215,13 +216,12 @@ def _native_task_expansion(controlled, contract, correspondence, context, observ
     return problem_document(problem), projection, costs, resources
 
 
-def _summary_native_correspondence(reference, binding, region, graph, correspondence):
+def _summary_native_correspondence(reference, summary, binding, region, graph, correspondence):
     """Join exact original F4 ports to semantic operations and native stages.
 
     These are source associations, not runtime storage/version equalities.
     Shared evaluate/Expr projections keep the same semantic operation ID.
     """
-    summary = read_artifact(reference)
     canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
     def step_key(point):
         if not isinstance(point, dict) or 'port' not in point:
@@ -347,7 +347,7 @@ def _loop_context(reference, region, origin, entry_calls):
 
 def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
             compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None,
-            ordered_graph=None):
+            ordered_graph=None, summary_binding_producer=None):
     from scar.analysis.replay_transaction import replay_transaction
     # A prepare and its independent check deliberately start separate scopes.
     # No cached validation document crosses this source-admission boundary.
@@ -355,22 +355,24 @@ def _derive(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS',
         return _derive_body(kind, admission, profiles, cost_use=cost_use, cost_qualification=cost_qualification,
             compiler_feedback=compiler_feedback, entry_calls=entry_calls,
             native_group_observations=native_group_observations, source_summary=source_summary,
-            ordered_graph=ordered_graph)
+            ordered_graph=ordered_graph, summary_binding_producer=summary_binding_producer)
 
 
 def _derive_body(kind, admission, profiles, *, cost_use='EXPLICIT_DECLARED_ANALYSIS', cost_qualification=None,
                  compiler_feedback=None, entry_calls=None, native_group_observations=None, source_summary=None,
-                 ordered_graph=None):
+                 ordered_graph=None, summary_binding_producer=None):
     from scar.compiler.admission_context import AdmissionContext
     with AdmissionContext() as context:
         return _derive_in_context(kind, admission, profiles, cost_use=cost_use,
             cost_qualification=cost_qualification, compiler_feedback=compiler_feedback,
             entry_calls=entry_calls, native_group_observations=native_group_observations,
-            source_summary=source_summary, ordered_graph=ordered_graph, _context=context)
+            source_summary=source_summary, ordered_graph=ordered_graph, _context=context,
+            summary_binding_producer=summary_binding_producer)
 
 
 def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualification,
-                      compiler_feedback, entry_calls, native_group_observations, source_summary, ordered_graph, _context):
+                      compiler_feedback, entry_calls, native_group_observations, source_summary, ordered_graph,
+                      _context, summary_binding_producer=None):
     from scar.compiler.controlled_resources import derive_controlled_resource_contract
     from scar.optimization.controlled_region_planning import project_controlled_region
     contract = derive_controlled_resource_contract(kind, admission, _context=_context)
@@ -395,12 +397,13 @@ def _derive_in_context(kind, admission, profiles, *, cost_use, cost_qualificatio
         if source_summary is not None:
             if entry_calls is None:
                 raise ValueError('source summary binding requires its original entry CALL projection')
-            from scar.compiler.source_summary_binding import derive_stateful_source_summary_binding
-            summary_binding = derive_stateful_source_summary_binding(source_summary, admission,
-                entry_calls=entry_calls, _context=_context)
+            from scar.compiler.source_summary_binding import _derive_stateful_source_summary_binding
+            summary_binding, summary_document = _derive_stateful_source_summary_binding(source_summary, admission,
+                entry_calls=entry_calls, _context=_context, retained_producer=summary_binding_producer)
             origin = _entry_origin_document(entry_calls,summary_binding['entry_witness'],region.source)
-            summary_correspondence = _summary_native_correspondence(source_summary,
+            summary_correspondence = _summary_native_correspondence(summary_binding['summary'], summary_document,
                 summary_binding, region, graph, correspondence)
+            del summary_document
         elif entry_calls is not None:
             origin = _entry_origin(entry_calls, region, _context=_context)
         if ordered_graph is not None:
@@ -570,20 +573,22 @@ def prepare(kind, admission, out, *, entry_profiles=(), max_seconds=30,
 
 
 def check(preparation):
-    from scar.analysis.build_reader_versions import CONTROLLED_TRANSITION, compatible_pins
+    from scar.compiler.source_summary_reader_versions import compatible_plan_pins
 
     reference = _reference(preparation, SCHEMA); saved = read_artifact(reference)
     ordered = saved.get('ordered_graph')
     version = 5 if ordered is not None else 4
     active_pins = _pins()
     if ((saved.get('schema'), saved.get('schema_version')) != (SCHEMA, version)
-            or not compatible_pins(saved['producer_pins'], active_pins, CONTROLLED_TRANSITION)):
+            or not compatible_plan_pins(saved['producer_pins'], active_pins)):
         raise ValueError('controlled region producer or schema differs')
+    binding = saved['files'].get('source_summary_binding')
+    summary_binding_producer = None if binding is None else read_artifact(binding)['producer_source']
     documents, strict, controlled = _derive(saved['kind'], saved['admission'], saved['entry_profiles'],
         cost_use=saved['cost_use'], cost_qualification=saved['cost_qualification'],
         compiler_feedback=saved['compiler_feedback'], entry_calls=saved['entry_calls'],
         native_group_observations=saved['native_group_observations'], source_summary=saved['source_summary'],
-        ordered_graph=ordered)
+        ordered_graph=ordered, summary_binding_producer=summary_binding_producer)
     from scar.optimization.constructive_planner import construct_implementations
     from scar.optimization.joint_planner import verify_execution_plan
     problems = [('strict_plan', strict), ('controlled_plan', controlled)]

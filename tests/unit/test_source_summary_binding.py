@@ -24,9 +24,10 @@ def test_source_binding_replays_parents_rejects_wrong_identity_and_never_infers_
     import pickle
     import gzip
     from scar.analysis import build, bounded_entry_calls, interprocedural_summary
-    from scar.analysis import source_fact_materials
+    from scar.analysis import source_fact_materials, source_summary_storage
     from scar.codegen import stateful
     from scar.compiler.admission_context import AdmissionContext, require_admission_session
+    from scar.compiler.source_summary_reader_versions import _BINDING_PREDECESSOR
     from scar.analysis.replay_transaction import replay_transaction
     from scar.compiler import native_lowering_view, stateful_candidate
 
@@ -97,7 +98,7 @@ def test_source_binding_replays_parents_rejects_wrong_identity_and_never_infers_
     local = dict(function_id='source-function:fixture', body=body, body_point=point,
         definition=definition, source_function=function,
         source=dict(path=str(original), sha256=source.sha256),source_refs=[logical,fact])  # Effects absent, never NONE.
-    summary = dict(schema='scar.interprocedural-source-summary', schema_version=1,
+    summary = dict(schema=interprocedural_summary.SCHEMA, schema_version=1,
         entry_projection=dict(sha256=semantic_sha256(calls), program=calls['program'], producer=calls['producer']),
         functions=[dict(function_id=local['function_id'], body=body, point=point,
             definition=definition, source_function=function, local=local)])
@@ -166,9 +167,26 @@ def test_source_binding_replays_parents_rejects_wrong_identity_and_never_infers_
         with replay_transaction():
             with pytest.raises(ValueError,match='another metadata replay scope'):context.program(programs[0])
         with pytest.raises(ValueError):require_admission_session(context.program(programs[0]),programs[1])
+        sharded = dict(summary, calls=[], tokens=[], sccs=[], dependency_sets={}, unknown_facts={})
+        sharded['id'] = 'interprocedural-summary:' + semantic_sha256(sharded)
+        with monkeypatch.context() as small:
+            small.setattr(source_summary_storage, '_LIMIT', 0)
+            sharded_ref = source_summary_storage.write_source_summary(tmp_path/'sharded.json', sharded)
+        tabular = derive_stateful_source_summary_binding(sharded_ref, specialization_ref,
+            entry_calls=calls_ref, _context=context)
+        assert tabular['bindings'][0]['local_summary'] == dict(artifact=sharded_ref, locator='#/functions/0/local')
+        assert tabular['bindings'][0]['local_summary_sha256'] == semantic_sha256(local)
+        folder = tmp_path/'sharded.json.tables'
+        assert len(tuple(folder.iterdir())) == 6
+        assert all(str(path) in context._watched for path in folder.iterdir())
     assert len(closed)==2
     with pytest.raises(ValueError):context.stateful(specialization_ref)
-    assert [row[0] for row in invoked] == ['native', 'summary', 'witness']
+    assert [row[0] for row in invoked] == ['native', 'summary', 'witness', 'summary', 'witness']
+    with pytest.raises(ValueError, match='admission dependency'):
+        with AdmissionContext() as context:
+            source_summary_storage.read_source_summary(sharded_ref, watch=context.watch)
+            (folder/'functions-000000.jsonl.gz').write_bytes(b'changed physical summary')
+            context.validate()
     assert result['native_stateful_write_actions'][0]['target_path'] == ['state', 'arr']
     assert result['entry_witness']['matches'][0]['conditions'] == witness['matches'][0]['conditions']
     assert result['missing_effects_interpretation'] == 'UNKNOWN_NOT_NONE_OR_PURE'
@@ -192,6 +210,14 @@ def test_source_binding_replays_parents_rejects_wrong_identity_and_never_infers_
     changed = deepcopy(result); changed['effects_closed'] = True
     with pytest.raises(ValueError, match='differs from cold replay'):
         verify_stateful_source_summary_binding(changed, summary_path, specialization_ref, entry_calls=calls_ref)
+    previous_sha, previous_size = _BINDING_PREDECESSOR
+    preceding = dict(result, producer_source=dict(result['producer_source'],
+        sha256=previous_sha, size_bytes=previous_size))
+    assert verify_stateful_source_summary_binding(preceding, summary_path, specialization_ref,
+        entry_calls=calls_ref) == preceding
+    preceding['producer_source']['sha256'] = '0'*64
+    with pytest.raises(ValueError, match='binding producer differs'):
+        verify_stateful_source_summary_binding(preceding, summary_path, specialization_ref, entry_calls=calls_ref)
     for mutate in ('projection', 'point', 'source'):
         changed = deepcopy(summary)
         if mutate == 'projection': changed['entry_projection']['sha256'] = 'f'*64

@@ -9,12 +9,13 @@ from scar.analysis.interprocedural_summary import SCHEMA
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes
 from scar.analysis.source_symbol_variants import _table
-from scar.ir.execution_recipe import _LIMIT, artifact_reference, read_artifact
+from scar.ir.execution_recipe import _LIMIT, _reference, artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 
 
 _ARRAYS = ('functions', 'calls', 'tokens', 'sccs')
 _MAPS = ('dependency_sets', 'unknown_facts')
+_TABLE_SCHEMA = 'scar.source-summary-table'
 
 
 def write_source_summary(path, report):
@@ -60,10 +61,18 @@ def write_source_summary(path, report):
     return artifact_reference(path, SCHEMA)
 
 
-def read_source_summary(path):
-    """Restore the same semantic report after checking every shard receipt."""
-    path = Path(path).absolute()
-    reference = artifact_reference(path, SCHEMA)
+def read_source_summary(path, *, watch=None):
+    """Read a path or exact receipt and restore the logical summary document.
+
+    Locators such as ``#/functions/0`` address the restored document in both
+    formats. A live consumer can watch the manifest and every physical shard.
+    """
+    reference = artifact_reference(path, SCHEMA) if isinstance(path, (str, Path)) else _reference(path)
+    if reference['schema'] != SCHEMA:
+        raise ValueError('source summary artifact schema differs')
+    path = Path(reference['uri'])
+    if watch is not None:
+        watch(dict(reference))
     result = read_artifact(reference)
     if result['schema_version'] == 1:
         return result
@@ -82,8 +91,12 @@ def read_source_summary(path):
                  if key == 'functions' else [f'{key}.jsonl.gz'])
         rows = []
         for filename, receipt in zip(files, descriptors, strict=True):
-            if receipt['path'] != filename or (folder / filename).is_symlink():
+            member = folder / filename
+            if receipt['path'] != filename or member.is_symlink():
                 raise ValueError('source summary shard name differs from its typed table')
+            if watch is not None:
+                watch(_reference(dict(uri=str(member), sha256=receipt['sha256'],
+                    size_bytes=receipt['bytes'], schema=_TABLE_SCHEMA)))
             shard = _table(folder, receipt)
             if key == 'functions' and len(shard) != 1:
                 raise ValueError('one original function summary required per shard')
