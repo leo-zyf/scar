@@ -1,0 +1,246 @@
+{
+  "cpp20": {
+    "deployment_authorized": false,
+    "different_table_version": {
+      "exit_code": 2,
+      "output_bytes": 0
+    },
+    "full_native_search_complete": false,
+    "host": {
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "machine": "x86_64",
+      "model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+      "reference_python": "3.14.7"
+    },
+    "prepared_sort_calls_per_round": 16384,
+    "prepared_sort_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/measure-prepared.py",
+      "sha256": "df93134324ca3837ea1e4bce65457988880c9993c55d36f12d72c720c56fa2bc",
+      "size_bytes": 7525
+    },
+    "prepared_sort_generated_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/measure-prepared.cpp",
+      "sha256": "34a05f11c609d518606cb2fdfb6573ec4739464b90d1c09520403c7e17d70bfc",
+      "size_bytes": 14822
+    },
+    "prepared_sort_measurements": {
+      "native": {
+        "max_ns_per_region": 6247.883605957031,
+        "median_ns_per_region": 5691.421875,
+        "min_ns_per_region": 5607.231262207031,
+        "samples_ns_per_region": [
+          6119.2996826171875,
+          5607.231262207031,
+          5678.455749511719,
+          5691.421875,
+          6247.883605957031
+        ],
+        "stdev_ns_per_region": 292.6459429654224
+      },
+      "original": {
+        "max_ns_per_region": 60201.1845703125,
+        "median_ns_per_region": 59541.689453125,
+        "min_ns_per_region": 59155.43933105469,
+        "samples_ns_per_region": [
+          59162.41485595703,
+          59596.64245605469,
+          60201.1845703125,
+          59155.43933105469,
+          59541.689453125
+        ],
+        "stdev_ns_per_region": 427.337763129426
+      }
+    },
+    "prepared_sort_repetitions": 5,
+    "prepared_sort_speedup": 10.461654532176988,
+    "prepared_sort_timing": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/prepared-timing.json",
+      "sha256": "55c346e3295e89725ca31930fde917f5fbebc0f7b3191d52cc9b95ddfca1fb76",
+      "size_bytes": 2870
+    },
+    "prepared_sort_warmup": 1,
+    "resident_caller": {
+      "path": "artifacts/current/experiments/cpu-state-transition-v1/sunfish-single-replay/resident-c-validation-v1/caller.c",
+      "sha256": "1a84304214d0662e74b0066af488bc5edfa57abc46dbd02037d54d3e65c11a03",
+      "size_bytes": 9284
+    },
+    "resident_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/resident.check.json",
+      "sha256": "691b12b39214f9e123e859cffca71675bf4320823860a451427c20310c8d8088",
+      "size_bytes": 4982
+    },
+    "resident_kernel_decision": "ACCEPT_DETACHED_ABI_KEEP_ORIGINAL_SEARCH",
+    "resident_measurements": {
+      "path": "artifacts/current/experiments/cpu-state-transition-v1/sunfish-single-replay/resident-c-validation-v1/result.json",
+      "sha256": "b2b0908a985cdc5a7362affe78274309b2daac6fbe830c023eeaab38907ecc66",
+      "size_bytes": 3370
+    },
+    "resident_native_artifact": {
+      "path": "artifacts/current/experiments/cpu-state-transition-v1/sunfish-single-replay/resident-library-study-v1/artifact.json",
+      "sha256": "59a7e9e7e31b12259b61a2f79665423ad29824a5cc599ee322d72b9937eca926",
+      "size_bytes": 6630
+    },
+    "sorted_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/sorted.check.json",
+      "sha256": "e7806729287c8b8d9fcb8518ee4f3ad3cc3283cf70d935a98bc08485841807d0",
+      "size_bytes": 68
+    },
+    "sorted_cpp": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/native/src/main.cpp",
+      "sha256": "346ed8e3d966f3900b2712e9d0245848689b0fb56b3e26fc85b20c812a58340f",
+      "size_bytes": 24214
+    },
+    "sorted_executable": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/native/bin/scar_scalar_sorted",
+      "sha256": "e9f8d6717417a868799428ceda01ed1c3f6c5ff7919df3bd636d5403646a7ded",
+      "size_bytes": 81200
+    },
+    "sorted_native_artifact": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/native/artifact.json",
+      "sha256": "515456dc4bc8fad2c11858d79c970cc2118f2c08b4ad260efffdba27f8cdd091",
+      "size_bytes": 1628
+    },
+    "sorted_output": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/native/samples.stdout",
+      "sha256": "cf89308a440a87bbf18d0ef4d1cc92972dbb5c8d0f20fc5180f113b9352c528a",
+      "size_bytes": 4709
+    },
+    "whole_application_speedup_proven": false
+  },
+  "frontend": {
+    "cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/provenance.check.json",
+      "sha256": "7a9442beb4798bbceaf8c05270f2719ad0408db65d448ac96a0f3ce34fe345cc",
+      "size_bytes": 563
+    },
+    "normalization": "REMOVE_UCI_INFO_TIME_AND_NPS_ONLY",
+    "normalized_stdout_sha256": "99ad688627f960ef2c9d0a58cf059a96166f71ced4378e25ca3cb5f4eab9d6c7",
+    "obligations": {
+      "all_original_yield_shapes_classified": true,
+      "current_iteration_consumer_uses_unpacked_move": true,
+      "deployment_authorized": false,
+      "external_reentry_proven_absent": false,
+      "lexical_generator_reference_unique": true,
+      "lookup_stability_through_suspension_proven": false,
+      "normal_control_only": true,
+      "record_exposure_closed_under_exact_builtin_sorted_and_ordinary_source_access": true,
+      "runtime_version_token_implemented": false,
+      "successful_score_definition_reaches_carried_slot": true,
+      "throw_and_close_effects_closed": false
+    },
+    "original_eager_sort_activations": 16,
+    "original_eager_sort_output_records": 247,
+    "original_execution_stdout": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/source.stdout",
+      "sha256": "0de59d28bf7d8f4be107e16510279138d55d2caf7956276f7a6c2aa8a6e5d969",
+      "size_bytes": 1654
+    },
+    "original_observed_score_pairs": 32,
+    "original_source_capture": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/source.json",
+      "sha256": "16ed729dc97a65ab474f73e3802ab9c092889dd927571be8d0b5259bb2de3b55",
+      "size_bytes": 27767
+    },
+    "original_source_capture_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/run-capture.py",
+      "sha256": "42fe4a1b76ee6c2a21645b6f4a1aefc0afcf74df9a79d87e382a1ad52b73e032",
+      "size_bytes": 1530
+    },
+    "previous_reference_stdout": {
+      "path": "artifacts/current/experiments/cpu-native-search-study-v1/d2-0-original.stdout",
+      "sha256": "a5a3baed86605d5ee7dc29c1770d03d9387fa32ce2f765b8b48634a3ae07a88d",
+      "size_bytes": 1661
+    },
+    "provenance": {
+      "path": "artifacts/current/experiments/sunfish-scalar-table-cse/loop-score-provenance-v1/contract.json",
+      "sha256": "a566eb1722117d7225aab1b7774797c55ed64fdf6be5d2b474d8835fc6fb5bdd",
+      "size_bytes": 80329
+    },
+    "source_capture_scalar_values": [
+      0,
+      1,
+      2
+    ],
+    "source_capture_thresholds": [
+      36
+    ],
+    "source_version_counts": {
+      "5d70478a0cc5d779d6fdce57da3fd2941d033c116f5089f92fc8081c115517ba": 8,
+      "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7": 8
+    }
+  },
+  "ir": {
+    "default_schedule_changed": false,
+    "eager_sort_plan": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/plan.json",
+      "sha256": "5807fa89b9868515347716cfebe2c972fff09c0894fb6c96c7df6db9017bfae3",
+      "size_bytes": 35161
+    },
+    "fixed_window_service_delta_ns": {
+      "heaviest_serial_solve_chain_delta_ns": [
+        251809081,
+        251809081
+      ],
+      "observed_loop_duration_delta_ns": [
+        253017593,
+        258329893
+      ],
+      "unassigned_delta_ns": [
+        1208512,
+        6520812
+      ]
+    },
+    "one_first_request_explains_shift": false,
+    "ordered_credit_analysis": {
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/credit-cost-v1/result.json",
+      "sha256": "d8fe77dccf2e279093069cf941ed48ff40ae2392a8362d0aabccc7cd7b5894f8",
+      "size_bytes": 13937
+    },
+    "ordered_credit_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/credit.check.json",
+      "sha256": "98cad604a5561258371dfe554d58277e906fc1f8a2fa2369da30e027c367f557",
+      "size_bytes": 167
+    },
+    "original_state_port_count": 8,
+    "retained_external_inputs": [
+      {
+        "name": "field_board",
+        "type": "str"
+      },
+      {
+        "name": "field_wc__0",
+        "type": "bool"
+      },
+      {
+        "name": "field_wc__1",
+        "type": "bool"
+      },
+      {
+        "name": "field_ep",
+        "type": "int"
+      },
+      {
+        "name": "field_kp",
+        "type": "int"
+      }
+    ],
+    "rewrite": {
+      "chain": [
+        "READ_STATE",
+        "GENERATE_RECORD",
+        "SCORE_RECORD",
+        "FILTER_RECORD",
+        "STABLE_SORT"
+      ],
+      "retained_effects": [
+        "ORDERED_SCORER_EVALUATION",
+        "FILTER_AFTER_SCORE",
+        "EXACT_COMPARISON_ORDER"
+      ],
+      "rule": "FUSE_EAGER_SCALAR_GENERATOR_CONSUMER"
+    },
+    "solve_service_cause_identified": false
+  },
+  "schema": "scar.cpu-eager-sort-and-credit-cost",
+  "schema_version": 1
+}
