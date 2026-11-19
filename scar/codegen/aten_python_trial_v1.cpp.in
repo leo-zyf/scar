@@ -242,7 +242,11 @@ PyObject* run(PyObject*, PyObject* arguments) {
         auto outputs = [&] {
             const auto placement = prepared->executor.place_caller();
             auto execute = [&](auto&& observer) {
-#ifdef SCAR_ATEN_TRIAL_READY
+#if defined(SCAR_ATEN_TRIAL_REPLICA_INPUT)
+                constexpr graph::ReadyReplica replica{SCAR_ATEN_TRIAL_REPLICA_INPUT, SCAR_ATEN_TRIAL_REPLICA_LANE};
+                return graph::run_ready_replicated_inspected(inputs, prepared->executor, schedule, replica, observer,
+                    [](std::size_t) {}, [](auto&& copy) { return copy(); });
+#elif defined(SCAR_ATEN_TRIAL_READY)
                 return graph::run_ready(inputs, prepared->executor, schedule, observer);
 #else
                 return graph::run_parallel_observed(inputs, prepared->executor, schedule, observer);

@@ -12,12 +12,13 @@ namespace scar_aten_graph {
 
 // Cross-lane Tensor edges publish and wait on completion. Independent use
 // counters release backing handles without introducing scheduling constraints.
-template <std::size_t Count, std::size_t Edges, class Invoke, class Release>
+template <std::size_t Count, std::size_t Edges, class Invoke, class Release, class Prepare>
 void execute_ready_dag(CpuTeam& team, const std::array<std::uint8_t, Count>& lanes,
                        const std::array<std::size_t, Count + 1>& offsets,
                        const std::array<std::size_t, Edges>& predecessors,
                        const std::array<std::size_t, Count>& consumer_counts,
-                       const std::array<bool, Count>& exported, Invoke&& invoke, Release&& release) {
+                       const std::array<bool, Count>& exported, Invoke&& invoke, Release&& release,
+                       Prepare&& prepare) {
     enum Completion : std::uint8_t { pending, complete, cancelled };
 
     std::array<bool, 3> used{};
@@ -56,6 +57,8 @@ void execute_ready_dag(CpuTeam& team, const std::array<std::uint8_t, Count>& lan
         }
     };
     const auto run_lane = [&](std::size_t lane) {
+        if (stopping.load(std::memory_order_acquire)) return;
+        prepare(lane);
         for (std::size_t index = 0; index < Count; ++index) {
             if (lanes[index] != lane) continue;
             for (auto edge = offsets[index]; edge < offsets[index + 1]; ++edge) {

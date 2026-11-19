@@ -435,7 +435,7 @@ def _prefix(cpus):
     return ['env', '-i', *(f'{k}={v}' for k, v in _ENV.items()), 'taskset', '-c', ','.join(map(str, cpus))]
 
 
-def _launcher(stage, executable, selection, schedule, inputs, guarded, choice):
+def _launcher(stage, executable, selection, schedule, inputs, guarded, choice, *, replica=None):
     # The result is qualified for exactly the tested input bytes and linked primary images.
     checks = ['test "$(sha256sum < ' + shlex.quote(row['path']) + ' | cut -d " " -f 1)" = '
               + row['sha256'] + ' || { echo "SCAR native graph member digest differs" >&2; exit 78; }'
@@ -448,9 +448,11 @@ def _launcher(stage, executable, selection, schedule, inputs, guarded, choice):
         mode = '--run-team' if team else '--run-windows' if windowed else '--run-pair'
     cpus = schedule['cpus'] if dual else schedule['cpus'][:1]
     spec = []
-    if selection == 'READY_DAG':
-        mode = '--run-ready'
+    if selection in ('READY_DAG', 'READY_DAG_REPLICA'):
+        mode = '--run-ready' if replica is None else '--run-ready-replica'
         spec = [''.join(map(str, choice))]
+        if replica is not None:
+            spec.extend(str(replica[k]) for k in ('input_index', 'lane'))
     elif dual and team:
         from scar.compiler.plan_aten_native_team import team_window_spec
 

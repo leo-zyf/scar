@@ -23,6 +23,7 @@ _PAIR_DRIVER = Path(__file__).with_name('aten_native_graph_ab_v1.cpp.in')
 _TEAM_HEADER = Path(__file__).with_name('aten_native_team_v1.h')
 _TEAM_DRIVER = Path(__file__).with_name('aten_native_team_ab_v1.cpp.in')
 _READY_HEADER = Path(__file__).with_name('aten_ready_dag_v1.h')
+_REPLICA_HEADER = Path(__file__).with_name('aten_ready_replica_v1.h')
 _NUMA_HEADER = Path(__file__).with_name('aten_numa_pages_v1.h')
 _EXECUTABLE = 'aten-native-graph'
 
@@ -61,7 +62,7 @@ def _argument(expression, values):
     return 'c10::Scalar(std::int64_t{' + literal + '})'
 
 
-def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False):
+def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False, ready_replica=False):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -102,8 +103,15 @@ def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False)
             from scar.codegen.aten_team_graph_source import render_ready_support
 
             pair_include += f'#define SCAR_ATEN_READY_DAG 2\n#include "{_READY_HEADER.name}"\n'
+            if ready_replica:
+                pair_include += f'#define SCAR_ATEN_READY_REPLICA 1\n#include "{_REPLICA_HEADER.name}"\n'
             exported = tuple(producers[value] for value in recipe['outputs'])
-            pair_support += render_ready_support(calls, outputs, dependencies, exported_indices=exported)
+            input_ordinals = {row['id']: i for i, row in enumerate(recipe['inputs'])}
+            input_reads = sorted({(input_ordinals[arg['value']], i)
+                                  for i, op in enumerate(recipe['operations']) for arg in op['arguments']
+                                  if arg.get('value') in input_ordinals})
+            pair_support += render_ready_support(calls, outputs, dependencies, exported_indices=exported,
+                                                 input_read_edges=input_reads)
     elif schedule is not None:
         starts = {row['pair_indices'][0] for row in schedule['windows']}
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
@@ -246,6 +254,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     team = schedule is not None and 'legal_window_widths' in schedule
     if ready_dag and (not team or schedule['schema_version'] != 2):
         raise ValueError('ready DAG requires a qualified full-graph CPU team')
+    ready_replica = ready_dag and allow_cross_numa
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']
@@ -264,7 +273,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         if _content(header) != linked['artifacts']['operators.hpp']:
             raise ValueError('retained ATen C++ binding differs from its linkage receipt')
         (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule, release_after=release_after,
-                                                ready_dag=ready_dag))
+                                                ready_dag=ready_dag, ready_replica=ready_replica))
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
         if team:
             (stage / _TEAM_HEADER.name).write_bytes(_TEAM_HEADER.read_bytes())
@@ -272,6 +281,8 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             (stage / 'team.cpp').write_bytes(_TEAM_DRIVER.read_bytes())
             if ready_dag:
                 (stage / _READY_HEADER.name).write_bytes(_READY_HEADER.read_bytes())
+            if ready_replica:
+                (stage / _REPLICA_HEADER.name).write_bytes(_REPLICA_HEADER.read_bytes())
         elif schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
             (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
@@ -310,6 +321,8 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
                            implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
         if ready_dag:
             receipt['ready_dag_abi'] = 2
+        if ready_replica:
+            receipt['ready_replica_abi'] = 1
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt

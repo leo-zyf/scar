@@ -1,0 +1,221 @@
+{
+  "application": {
+    "evidence": {
+      "path": "artifacts/current/experiments/aten-input-replica-v1/reuse-heavy/entry-validation/validation.json",
+      "sha256": "531366fa1761f189dc9c22b6b22edf86f75cc81b696ba98c42e89a7dd181152b"
+    },
+    "fallback_calls": 0,
+    "fixture": {
+      "path": "artifacts/current/experiments/aten-input-replica-v1/workload/fixture-evidence.json",
+      "sha256": "a26c388e650facc00569b8a504bc821abc821e019931bc294aa7a51488cd3e66"
+    },
+    "measured_pairs": 3,
+    "native_calls_per_guarded_process": 4,
+    "output_sha256": "fa7c6080fbb53daff11136527b69f2177bb88f4b8d9515c69e6eb9c072d5f12b",
+    "process_ns": {
+      "GUARDED": {
+        "max_ns": 4851058636,
+        "median_ns": 4835333561,
+        "median_ns_twice": 9670667122,
+        "min_ns": 4827621001,
+        "samples_ns": [
+          4835333561,
+          4851058636,
+          4827621001
+        ],
+        "variance_ns2": 142680716650408.34
+      },
+      "ORIGINAL": {
+        "max_ns": 6160878398,
+        "median_ns": 5749719153,
+        "median_ns_twice": 11499438306,
+        "min_ns": 5702316858,
+        "samples_ns": [
+          5702316858,
+          5749719153,
+          6160878398
+        ],
+        "variance_ns2": 6.359626471456811e+16
+      }
+    },
+    "speedups": {
+      "entry_ns": 1.391073906314522,
+      "process_ns": 1.1891049666924933
+    },
+    "steps": 1,
+    "warmup_pairs": 1,
+    "winner": "READY_DAG"
+  },
+  "cases": {
+    "existing": {
+      "candidate": {
+        "allocated_bytes": 2359296,
+        "bytes": 2359296,
+        "consumers": [
+          2,
+          4
+        ],
+        "dest_node": 0,
+        "exposure_score_bytes": 4718592,
+        "input_index": 0,
+        "lane": 1,
+        "value": "input_0"
+      },
+      "copy_clock_ns": 2452413,
+      "copy_local_page_count": 32,
+      "cpu_ids": [
+        14,
+        0,
+        15
+      ],
+      "evidence": {
+        "certificate": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/existing/replica-certificate-holdout.json",
+          "sha256": "c0e944b7a1f592c1a08cd152ee330d1b745ebbd81a5c8585f91a740fcb0bbd5c"
+        },
+        "holdout": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/existing/replica-paired-holdout.json",
+          "sha256": "39693525c442bf547284015738f94059b64710f8e3a5358294bcb23779a10996"
+        },
+        "selection": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/existing/plan/selection.json",
+          "sha256": "ac6b565c2fc3a7654e2f01bf2eb8adfe32006e77343010f8c47d18ba639b9ff0"
+        },
+        "typed_problem": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/existing/replica-problem-holdout.json",
+          "sha256": "eb40b3249db988f05bab25893da962fd20581170a17ff6b17bf91a8b43d57686"
+        }
+      },
+      "held_out_pairs": 12,
+      "holdout_medians_ns": {
+        "DIRECT": 38704870,
+        "REPLICATED": 40421693
+      },
+      "independent_holdout_speedup": 0.9575271871962414,
+      "lanes": [
+        2,
+        0,
+        1,
+        2,
+        1,
+        0,
+        2,
+        0
+      ],
+      "predictions": {
+        "DIRECT": {
+          "estimate_ns": 40410606,
+          "sample_max_ns": 40785006,
+          "sample_min_ns": 38907716
+        },
+        "REPLICATED": {
+          "estimate_ns": 40667343,
+          "sample_max_ns": 41145359,
+          "sample_min_ns": 40254432
+        }
+      },
+      "recipe_ops": 8,
+      "replica_decision": "KEEP_DIRECT_READY",
+      "rhs_sha256": "926b08b82cbf98c16663fa59baddacc7adfa5c40b3497694b205724b2da0181a",
+      "scope": "CONCURRENT_PROVIDER_SAMPLE_CRITICAL_PATH_WITH_LANE_LOCAL_COPY",
+      "selected": "READY_DAG"
+    },
+    "reuse-heavy": {
+      "candidate": {
+        "allocated_bytes": 37748736,
+        "bytes": 37748736,
+        "consumers": [
+          10,
+          11,
+          12,
+          13,
+          14
+        ],
+        "dest_node": 0,
+        "exposure_score_bytes": 188743680,
+        "input_index": 3,
+        "lane": 1,
+        "value": "input_3"
+      },
+      "copy_clock_ns": 26896031,
+      "copy_local_page_count": 32,
+      "cpu_ids": [
+        14,
+        0,
+        15
+      ],
+      "evidence": {
+        "certificate": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/reuse-heavy/replica-certificate-holdout.json",
+          "sha256": "fb6b60f46cc2cdad2066a59ec1f79c4382040386dd00dd43552c31974b593154"
+        },
+        "holdout": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/reuse-heavy/replica-paired-holdout.json",
+          "sha256": "de8818cb508c7ae2fd7e710aeaba9e0b945a64af805d1206c12d6050ea887475"
+        },
+        "selection": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/reuse-heavy/plan/selection.json",
+          "sha256": "3a10d2b19775640d50393bb3e8d828dd97729de20b3ebd98fc1e41ded76913f8"
+        },
+        "typed_problem": {
+          "path": "artifacts/current/experiments/aten-input-replica-v1/reuse-heavy/replica-problem-holdout.json",
+          "sha256": "7a2a2f053b4685fcc03a39be90951333439039f0f43c0c2d7dedafb007a1e4a5"
+        }
+      },
+      "held_out_pairs": 8,
+      "holdout_medians_ns": {
+        "DIRECT": 432220380.5,
+        "REPLICATED": 451704356
+      },
+      "independent_holdout_speedup": 0.9568656462104165,
+      "lanes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "predictions": {
+        "DIRECT": {
+          "estimate_ns": 391144933,
+          "sample_max_ns": 393546255,
+          "sample_min_ns": 389529632
+        },
+        "REPLICATED": {
+          "estimate_ns": 409739392,
+          "sample_max_ns": 425504385,
+          "sample_min_ns": 403160274
+        }
+      },
+      "recipe_ops": 24,
+      "replica_decision": "KEEP_DIRECT_READY",
+      "rhs_sha256": "0de339d153b2566ca774fdde5b1bee6fd9494fdf289179550dd134ba296ffdf5",
+      "scope": "CONCURRENT_PROVIDER_SAMPLE_CRITICAL_PATH_WITH_LANE_LOCAL_COPY",
+      "selected": "READY_DAG"
+    }
+  },
+  "replicated_python_bridge_diagnostic": {
+    "path": "artifacts/current/experiments/aten-input-replica-v1/existing/extension-diagnostic/result.json",
+    "sha256": "3a1be7645445d1fd8ddf5558826a655a8d0ba6f159afc9d3410ee2cd4e485fe0"
+  },
+  "scope": "ONE_EPHEMERAL_READ_ONLY_NUMA_INPUT_REPLICA"
+}

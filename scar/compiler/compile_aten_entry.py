@@ -139,6 +139,8 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
                 'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')
             if 'ready_dag_abi' in compiled:
                 sources = (*sources, 'aten_ready_dag_v1.h')
+            if 'ready_replica_abi' in compiled:
+                sources = (*sources, 'aten_ready_replica_v1.h')
             if any(delivered['files'][name] != compiled['files'][name]
                      for name in ('graph.hpp', 'operators.hpp', *sources)):
                 raise ValueError('delivery graph code differs from the measured CPU probe')

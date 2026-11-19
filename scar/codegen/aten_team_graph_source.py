@@ -91,7 +91,7 @@ inline std::array<at::Tensor, output_count> run_parallel(
 '''
 
 
-def render_ready_support(calls, outputs, dependencies, *, exported_indices):
+def render_ready_support(calls, outputs, dependencies, *, exported_indices, input_read_edges=()):
     """Render completion dependencies and last-use handling of original Tensor values."""
     incoming = [set() for _ in calls]
     for producer, consumer in dependencies:
@@ -119,6 +119,11 @@ def render_ready_support(calls, outputs, dependencies, *, exported_indices):
     values = '\n'.join(f'    auto& {value} = values[{i}];' for i, (value, _) in enumerate(calls))
     cases = '\n'.join(f'        case {i}: {value} = observe({i}, [&] {{ return {expression}; }}); return;'
                       for i, (value, expression) in enumerate(calls))
+    input_edges = sorted(set(input_read_edges))
+    if any(type(input_index) is not int or type(consumer) is not int or input_index < 0
+           or not 0 <= consumer < len(calls) for input_index, consumer in input_edges):
+        raise ValueError('ready replica reads must refer to external inputs and known operations')
+    input_edge_values = ', '.join(f'TeamDataEdge{{{input_index}, {consumer}}}' for input_index, consumer in input_edges)
     return f'''
 using ReadyLanes = std::array<std::uint8_t, operation_count>;
 inline constexpr std::array<std::size_t, operation_count + 1> ready_offsets{{{offset_items}}};
@@ -126,14 +131,14 @@ inline constexpr std::array<std::size_t, {len(predecessors)}> ready_predecessors
 inline constexpr std::array<std::size_t, operation_count> ready_consumer_counts{{{consumer_items}}};
 inline constexpr std::array<bool, operation_count> ready_exported{{{export_items}}};
 
-template <class Observer, class ReleaseObserver>
-inline std::array<at::Tensor, output_count> run_ready_inspected(
-        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes,
+template <class LaneInputs, class Prepare, class Observer, class ReleaseObserver>
+inline std::array<at::Tensor, output_count> run_ready_with_lane_inputs(
+        CpuTeam& team, const ReadyLanes& lanes, LaneInputs&& select_inputs, Prepare&& prepare,
         Observer&& observe, ReleaseObserver&& observe_release) {{
-    validate_inputs(inputs);
     std::array<at::Tensor, operation_count> values;
 {values}
     const auto invoke = [&](std::size_t index) {{
+        const auto inputs = select_inputs(lanes[index]);
         switch (index) {{
 {cases}
         default: throw std::logic_error("unknown native DAG operation");
@@ -143,8 +148,17 @@ inline std::array<at::Tensor, output_count> run_ready_inspected(
                       invoke, [&](std::size_t index) {{
         values[index].reset();
         observe_release(index);
-    }});
+    }}, prepare);
     return {{{outputs}}};
+}}
+
+template <class Observer, class ReleaseObserver>
+inline std::array<at::Tensor, output_count> run_ready_inspected(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes,
+        Observer&& observe, ReleaseObserver&& observe_release) {{
+    validate_inputs(inputs);
+    return run_ready_with_lane_inputs(team, lanes, [inputs](std::size_t) {{ return inputs; }},
+                                      [](std::size_t) {{}}, observe, observe_release);
 }}
 
 template <class Observer>
@@ -157,4 +171,39 @@ inline std::array<at::Tensor, output_count> run_ready(
         std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes) {{
     return run_ready(inputs, team, lanes, [](std::size_t, auto&& call) {{ return call(); }});
 }}
+
+#ifdef SCAR_ATEN_READY_REPLICA
+inline constexpr std::array<TeamDataEdge, {len(input_edges)}> ready_input_read_edges{{{input_edge_values}}};
+
+template <class Observer, class ReleaseObserver, class CopyObserver>
+inline std::array<at::Tensor, output_count> run_ready_replicated_inspected(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica,
+        Observer&& observe, ReleaseObserver&& observe_release, CopyObserver&& observe_copy) {{
+    validate_inputs(inputs);
+    if (replica.input_index >= inputs.size() || replica.lane >= 3 || inputs[replica.input_index].numel() == 0
+            || !std::any_of(ready_input_read_edges.begin(), ready_input_read_edges.end(), [&](const auto& edge) {{
+                return edge[0] == replica.input_index && lanes[edge[1]] == replica.lane;
+            }})) {{
+        throw std::invalid_argument("ready replica must identify a nonempty input and a consuming lane");
+    }}
+    std::array<at::Tensor, input_count> replicated_inputs;
+    const auto select_inputs = [&](std::size_t lane) {{
+        return lane == replica.lane ? std::span<const at::Tensor>(replicated_inputs) : inputs;
+    }};
+    const auto prepare = [&](std::size_t lane) {{
+        if (lane != replica.lane) return;
+        std::copy(inputs.begin(), inputs.end(), replicated_inputs.begin());
+        replicated_inputs[replica.input_index] = observe_copy([&] {{
+            return materialize_ready_replica(inputs[replica.input_index]);
+        }});
+    }};
+    return run_ready_with_lane_inputs(team, lanes, select_inputs, prepare, observe, observe_release);
+}}
+
+inline std::array<at::Tensor, output_count> run_ready_replicated(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, ReadyReplica replica) {{
+    return run_ready_replicated_inspected(inputs, team, lanes, replica,
+        [](std::size_t, auto&& call) {{ return call(); }}, [](std::size_t) {{}}, [](auto&& copy) {{ return copy(); }});
+}}
+#endif
 '''
