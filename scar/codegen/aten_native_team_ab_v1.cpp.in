@@ -1,0 +1,352 @@
+#define main scar_native_file_main
+#include "entry.cpp"
+#undef main
+
+#include <ATen/Parallel.h>
+#include <ATen/core/grad_mode.h>
+
+#include <cfenv>
+#include <charconv>
+#include <chrono>
+#include <cstring>
+#include <optional>
+#include <sched.h>
+#include <string_view>
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+using Inputs = std::array<at::Tensor, graph::input_count>;
+using Outputs = std::array<at::Tensor, graph::output_count>;
+using OperationTimes = std::array<std::int64_t, graph::operation_count>;
+using LaneEligibility = std::array<bool, graph::operation_count>;
+using OperationRows = std::vector<OperationTimes>;
+
+struct StorageGeometry {
+    std::size_t bytes;
+    at::ScalarType dtype;
+    std::int64_t offset;
+    std::vector<std::int64_t> sizes, strides;
+
+    bool operator==(const StorageGeometry&) const = default;
+};
+
+using ResultStorage = std::array<std::optional<StorageGeometry>, graph::operation_count>;
+
+void observe_storage(std::optional<StorageGeometry>& recorded, const at::Tensor& tensor) {
+    if (!tensor.defined() || !tensor.device().is_cpu() || tensor.layout() != at::kStrided
+            || !tensor.has_storage() || !tensor.storage().device().is_cpu()) {
+        throw std::runtime_error("calibration requires observable strided CPU Tensor storage");
+    }
+    const StorageGeometry actual{tensor.storage().nbytes(), tensor.scalar_type(), tensor.storage_offset(),
+                                 tensor.sizes().vec(), tensor.strides().vec()};
+    if (recorded && *recorded != actual) throw std::runtime_error("calibration Tensor geometry changed");
+    recorded = actual;
+}
+
+struct SampleInputs {
+    std::array<std::vector<float>, graph::input_count> backing;
+    std::array<std::vector<unsigned char>, graph::input_count> starting;
+    Inputs tensors;
+
+    explicit SampleInputs(char** paths) {
+        for (std::size_t i = 0; i < tensors.size(); ++i) {
+            const auto shape = graph::input_shapes[i];
+            const auto bytes = checked_bytes(shape);
+            backing[i] = read_tensor(paths[i], bytes);
+            starting[i].resize(bytes);
+            if (bytes) std::memcpy(starting[i].data(), backing[i].data(), bytes);
+            tensors[i] = at::from_blob(backing[i].data(), at::IntArrayRef(shape.data(), shape.size()),
+                                      at::TensorOptions().device(at::kCPU).dtype(at::kFloat));
+        }
+    }
+
+    void check() const {
+        for (std::size_t i = 0; i < tensors.size(); ++i) {
+            const auto& expected = starting[i];
+            if (tensors[i].nbytes() != expected.size() || (expected.size() &&
+                    std::memcmp(tensors[i].const_data_ptr<float>(), expected.data(), expected.size()) != 0)) {
+                throw std::runtime_error("native team input bytes changed");
+            }
+        }
+    }
+};
+
+void check_outputs(const Inputs& inputs, const Outputs& baseline, const Outputs& candidate) {
+    for (const auto* outputs : {&baseline, &candidate}) {
+        for (const auto& tensor : *outputs) {
+            if (!tensor.defined() || !tensor.device().is_cpu() || tensor.layout() != at::kStrided
+                    || tensor.scalar_type() != at::kFloat || !tensor.is_contiguous()
+                    || tensor.is_neg() || tensor.is_conj() || tensor.requires_grad()
+                    || std::ranges::any_of(inputs, [&](const auto& input) { return tensor.is_alias_of(input); })) {
+                throw std::runtime_error("native team output violates the independent float32 contract");
+            }
+        }
+    }
+    for (std::size_t i = 0; i < baseline.size(); ++i) {
+        const auto& left = baseline[i];
+        const auto& right = candidate[i];
+        if (left.sizes() != right.sizes() || left.strides() != right.strides()
+                || (left.nbytes() && std::memcmp(left.const_data_ptr<float>(), right.const_data_ptr<float>(),
+                                                  left.nbytes()) != 0)) {
+            throw std::runtime_error("native team paired outputs differ in geometry or bytes");
+        }
+        for (std::size_t j = 0; j < candidate.size(); ++j) {
+            if (left.is_alias_of(candidate[j]) || left.is_alias_of(baseline[j]) != right.is_alias_of(candidate[j])) {
+                throw std::runtime_error("native team paired outputs differ in storage ownership");
+            }
+        }
+    }
+}
+
+std::int64_t elapsed_ns(Clock::time_point start) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+    if (elapsed <= 0) throw std::runtime_error("native team duration is below clock resolution");
+    return elapsed;
+}
+
+int integer(std::string_view text, int minimum, int maximum, const char* field) {
+    const auto* end = text.data() + text.size();
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end || value < minimum || value > maximum) {
+        throw std::invalid_argument(std::string("invalid native team ") + field);
+    }
+    return value;
+}
+
+graph::WindowSelection parse_windows(std::string_view specification) {
+    graph::WindowSelection windows{};
+    std::size_t previous_end = 0;
+    for (;;) {
+        const auto delimiter = specification.find(',');
+        const auto window = specification.substr(0, delimiter);
+        const auto colon = window.find(':');
+        if (colon == std::string_view::npos) throw std::invalid_argument("expected a start:width window");
+        const auto start = static_cast<std::size_t>(integer(window.substr(0, colon), 0,
+                                                            std::numeric_limits<int>::max(), "window start"));
+        const int width = integer(window.substr(colon + 1), 2, 3, "window width");
+        if (start >= windows.size() || start < previous_end || width > graph::legal_window_widths[start]) {
+            throw std::invalid_argument("native team windows must be legal, ordered and disjoint");
+        }
+        windows[start] = static_cast<unsigned char>(width);
+        if (delimiter == std::string_view::npos) return windows;
+        previous_end = start + width;
+        specification.remove_prefix(delimiter + 1);
+    }
+}
+
+template <class Range>
+void emit_numbers(const Range& values) {
+    std::cout << '[';
+    bool comma = false;
+    for (const auto& value : values) {
+        if (comma) std::cout << ',';
+        std::cout << value;
+        comma = true;
+    }
+    std::cout << ']';
+}
+
+void emit_storage(const ResultStorage& storage) {
+    std::array<std::size_t, graph::operation_count> bytes{};
+    for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = storage[i].value().bytes;
+    emit_numbers(bytes);
+}
+
+void emit_operations(const OperationRows& rows, const LaneEligibility* eligibility = nullptr) {
+    std::cout << '[';
+    for (std::size_t row = 0; row < rows.size(); ++row) {
+        if (row) std::cout << ',';
+        std::cout << '[';
+        for (std::size_t op = 0; op < graph::operation_count; ++op) {
+            if (op) std::cout << ',';
+            if (eligibility && !(*eligibility)[op]) std::cout << "null";
+            else std::cout << rows[row][op];
+        }
+        std::cout << ']';
+    }
+    std::cout << ']';
+}
+
+void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team) {
+    const int warmup = integer(args[0], 3, 100, "warmup count");
+    const SampleInputs data(args + 1);
+    const auto& inputs = data.tensors;
+    const auto reference = graph::run(inputs);
+    data.check();
+
+    std::array<LaneEligibility, 2> eligible{};
+    for (std::size_t start = 0; start < graph::operation_count; ++start) {
+        const auto width = graph::legal_window_widths[start];
+        for (std::size_t lane = 1; lane < width; ++lane) eligible[lane - 1][start + lane] = true;
+    }
+    ResultStorage storage;
+    auto observe = [&](std::size_t lane, OperationTimes& timings) {
+        const auto output = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
+            at::Tensor value;
+            const auto timed = [&] {
+                const auto started = Clock::now();
+                value = call();
+                timings[op] = elapsed_ns(started);
+            };
+            if (lane == 0) timed();
+            else if (eligible[lane - 1][op]) team.run_on_worker(lane, timed);
+            else value = call();
+            observe_storage(storage[op], value);
+            return value;
+        });
+        data.check();
+        check_outputs(inputs, reference, output);
+    };
+    std::array<OperationRows, 3> services;
+    for (std::size_t lane = 0; lane < services.size(); ++lane) {
+        OperationTimes prime{};
+        observe(lane, prime);
+        services[lane].resize(warmup);
+        for (auto& row : services[lane]) observe(lane, row);
+    }
+    std::vector<std::int64_t> handoff_two, handoff_three;
+    const auto idle = [] {};
+    for (int i = 0; i < warmup; ++i) {
+        auto started = Clock::now();
+        team.run(idle, idle);
+        handoff_two.push_back(elapsed_ns(started));
+        started = Clock::now();
+        team.run(idle, idle, idle);
+        handoff_three.push_back(elapsed_ns(started));
+    }
+    std::array<std::size_t, graph::input_count> input_bytes{};
+    for (std::size_t i = 0; i < inputs.size(); ++i) input_bytes[i] = inputs[i].storage().nbytes();
+    std::cout << "{\"warmup_pairs\":" << warmup << ",\"cpu_ids\":";
+    emit_numbers(cpus);
+    std::cout << ",\"calibration\":{\"operation_samples_ns\":";
+    emit_operations(services[0]);
+    std::cout << ",\"worker_operation_samples_ns\":[";
+    emit_operations(services[1], &eligible[0]);
+    std::cout << ',';
+    emit_operations(services[2], &eligible[1]);
+    std::cout << "],\"empty_dispatch_samples_ns\":{\"2\":";
+    emit_numbers(handoff_two);
+    std::cout << ",\"3\":";
+    emit_numbers(handoff_three);
+    std::cout << "},\"input_storage_bytes\":";
+    emit_numbers(input_bytes);
+    std::cout << ",\"result_storage_bytes\":";
+    emit_storage(storage);
+    std::cout << "}}\n";
+}
+
+struct PairedSample {
+    bool serial_first;
+    std::int64_t serial_ns, parallel_ns;
+};
+
+void benchmark(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
+               const graph::WindowSelection& windows) {
+    const int warmup = integer(args[0], 3, 100, "warmup count");
+    const int measured = integer(args[1], 3, 501, "measurement count");
+    if (measured % 2 == 0) throw std::invalid_argument("native team requires an odd measured pair count");
+    const SampleInputs data(args + 2);
+    const auto& inputs = data.tensors;
+    ResultStorage storage;
+    {
+        const auto baseline = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
+            auto value = call();
+            observe_storage(storage[op], value);
+            return value;
+        });
+        data.check();
+        const auto parallel = graph::run_parallel_observed(inputs, team, windows, [&](std::size_t op, auto&& call) {
+            auto value = call();
+            observe_storage(storage[op], value);
+            return value;
+        });
+        data.check();
+        check_outputs(inputs, baseline, parallel);
+    }
+
+    auto timed = [&](bool serial) {
+        const auto started = Clock::now();
+        auto output = serial ? graph::run(inputs) : graph::run_parallel(inputs, team, windows);
+        return std::pair{elapsed_ns(started), std::move(output)};
+    };
+    std::vector<PairedSample> samples;
+    samples.reserve(measured);
+    for (int pair = 0; pair < warmup + measured; ++pair) {
+        const bool serial_first = (pair % 2 == 0);
+        const auto first = timed(serial_first);
+        const auto second = timed(!serial_first);
+        data.check();
+        const auto& serial = serial_first ? first : second;
+        const auto& parallel = serial_first ? second : first;
+        check_outputs(inputs, serial.second, parallel.second);
+        if (pair >= warmup) samples.push_back({serial_first, serial.first, parallel.first});
+    }
+    std::cout << "{\"warmup_pairs\":" << warmup << ",\"measured_pairs\":" << measured << ",\"cpu_ids\":";
+    emit_numbers(cpus);
+    std::cout << ",\"windows\":[";
+    bool comma = false;
+    for (std::size_t start = 0; start < windows.size(); ++start) {
+        const unsigned int width = windows[start];
+        if (!width) continue;
+        if (comma) std::cout << ',';
+        std::cout << '[' << start << ',' << width << ']';
+        comma = true;
+    }
+    std::cout << "],\"all_pairs_validated\":true,\"samples\":[";
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        if (i) std::cout << ',';
+        const auto& sample = samples[i];
+        std::cout << "{\"order\":\"" << (sample.serial_first ? "AB" : "BA") << "\",\"serial_ns\":"
+                  << sample.serial_ns << ",\"parallel_ns\":" << sample.parallel_ns << '}';
+    }
+    std::cout << "],\"result_storage_bytes\":";
+    emit_storage(storage);
+    std::cout << "}\n";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const std::string_view mode = argc > 1 ? argv[1] : "";
+    const bool calibrating = mode == "--calibrate-team";
+    const bool measuring = mode == "--benchmark-team";
+    const bool serial = mode == "--run-serial";
+    if (!calibrating && !measuring && !serial && mode != "--run-team") return scar_native_file_main(argc, argv);
+    const auto expected = graph::input_count + (measuring ? 8 : calibrating ? 6 : (serial ? 3 : 6) + graph::output_count);
+    if (static_cast<std::size_t>(argc) != expected) {
+        std::fputs("usage: aten-graph --calibrate-team <caller> <worker1> <worker2> <warmup> <input.f32>...\n"
+                   "       aten-graph --benchmark-team <caller> <worker1> <worker2> <windows> <warmup> <odd-count> <input.f32>...\n"
+                   "       aten-graph --run-team <caller> <worker1> <worker2> <windows> <input.f32>... <new-output.f32>...\n"
+                   "       aten-graph --run-serial <caller> <input.f32>... <new-output.f32>...\n", stderr);
+        return 2;
+    }
+    try {
+        const int caller = integer(argv[2], 0, CPU_SETSIZE - 1, "caller CPU");
+        at::set_num_threads(1);
+        at::set_num_interop_threads(1);
+        at::NoGradGuard no_grad;
+        if (serial) {
+            cpu_set_t mask;
+            if (sched_getaffinity(0, sizeof(mask), &mask) != 0 || CPU_COUNT(&mask) != 1 || !CPU_ISSET(caller, &mask)
+                    || sched_getcpu() != caller || std::fegetround() != FE_TONEAREST) {
+                throw std::runtime_error("native serial run requires its exact CPU and default rounding");
+            }
+            return invoke(argv + 3, graph::run);
+        }
+        const std::array cpus{caller, integer(argv[3], 0, CPU_SETSIZE - 1, "first worker CPU"),
+                              integer(argv[4], 0, CPU_SETSIZE - 1, "second worker CPU")};
+        graph::CpuTeam team(cpus);
+        if (calibrating) {
+            calibrate(argv + 5, cpus, team);
+        } else {
+            const auto windows = parse_windows(argv[5]);
+            if (measuring) benchmark(argv + 6, cpus, team, windows);
+            else return invoke(argv + 6, [&](const auto& inputs) { return graph::run_parallel(inputs, team, windows); });
+        }
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "SCAR ATen CPU team failed: %s\n", error.what());
+        return 1;
+    }
+}

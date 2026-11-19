@@ -14,15 +14,18 @@ from scar.codegen.aten_native_graph import _read_declared
 from scar.codegen.aten_provider import _build_interface, _dependencies
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.plan_aten_native_graph import _bundle, _segment_plan, _statistics, _window_model
+from scar.compiler.plan_aten_native_team import team_segments, team_statistics
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document
 from scar.optimization.joint_planner import verify_execution_plan
+from scar.optimization.aten_native_team import model_cpu_team
 from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
 
 
 _MODULE = '_scar_aten_python_trial'
 _TEMPLATE = Path(__file__).with_name('aten_python_trial_v1.cpp.in')
 _PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
+_TEAM_HEADER = 'aten_native_team_v1.h'
 
 
 def _file_ref(path, schema):
@@ -31,12 +34,14 @@ def _file_ref(path, schema):
 
 def _read_plan(path, digest):
     path, selection, _ = _read_declared(path, digest)
-    if (selection['schema'], selection['schema_version'], selection['selected'], selection['boundary']) != (
-            'scar.aten-native-graph-schedule', 1, 'TWO_CPU', 'GENERATED_WARM_ATEN_GRAPH_CALL'):
-        raise ValueError('a validated two-CPU generated graph selection is required')
+    mode = selection['selected']
+    if ((selection['schema'], selection['schema_version'], selection['boundary']) != (
+            'scar.aten-native-graph-schedule', 1, 'GENERATED_WARM_ATEN_GRAPH_CALL')
+            or mode not in ('TWO_CPU', 'THREE_CPU')):
+        raise ValueError('a validated parallel generated graph selection is required')
     bundle = selection['bundle']
     artifact, origin, recipe, hardware, executable, key = _bundle(bundle['uri'], bundle['sha256'])
-    if (origin != bundle or key != 'cpu_windows' or 'tensor_lifetime' not in artifact
+    if (origin != bundle or key not in ('cpu_windows', 'cpu_team') or 'tensor_lifetime' not in artifact
             or selection['executable'] != dict(path=str(executable), **_content(executable))):
         raise ValueError('selected program does not match the retained graph delivery')
     schedule = artifact[key]
@@ -44,16 +49,27 @@ def _read_plan(path, digest):
     calibrated = read_artifact(evidence)
     validation = read_artifact(selection['paired_validation'])
     warmup, count = selection['warmup_pairs'], selection['measured_pairs']
-    model = _window_model(calibrated['calibration'], recipe, schedule, warmup, observe_storage=True,
-                          tensor_budget_bytes=selection['model']['tensor_storage']['budget_bytes'])
-    stats = _statistics(validation, warmup, count, schedule['cpus'])
-    starts = selection['selected_window_starts']
-    if (model != selection['model'] or stats != selection['validation'] or not stats['profitable_two_cpu']
-            or not starts or starts != model['selected_starts'] or starts != validation['windows']
+    budget = selection['model']['tensor_storage']['budget_bytes']
+    if key == 'cpu_team':
+        model = model_cpu_team(calibrated['calibration'], recipe, schedule, warmup, tensor_budget_bytes=budget)
+        starts = selection['selected_windows']
+        stats = team_statistics(validation, schedule, warmup, count, starts, mode)
+        profits = stats['profitable_parallel'] and mode == model['selected']
+        expected_starts = model['selected_windows']
+        problem, _, timeline = team_segments(hardware, schedule, origin, evidence, model, mode)
+    else:
+        model = _window_model(calibrated['calibration'], recipe, schedule, warmup, observe_storage=True,
+                              tensor_budget_bytes=budget)
+        stats = _statistics(validation, warmup, count, schedule['cpus'])
+        starts = selection['selected_window_starts']
+        profits = stats['profitable_two_cpu'] and mode == 'TWO_CPU'
+        expected_starts = model['selected_starts']
+        problem, _, timeline = _segment_plan(hardware, schedule, origin, evidence, model, starts)
+    if (model != selection['model'] or stats != selection['validation'] or not profits
+            or not starts or starts != expected_starts or starts != validation['windows']
             or selection['cpu_ids'] != schedule['cpus'] or selection['original_target'] != schedule['target']
             or validation['result_storage_bytes'] != calibrated['calibration']['result_storage_bytes']):
         raise ValueError('retained ATen time, storage or window choice differs from its evidence')
-    problem, _, timeline = _segment_plan(hardware, schedule, origin, evidence, model, starts)
     problem_ref = _file_ref(path.with_name('problem.json'), PROBLEM_SCHEMA)
     execution_ref = _file_ref(path.with_name('plan.json'), PLAN_SCHEMA)
     if problem_document(problem) != read_artifact(problem_ref) or timeline != selection['execution_timeline']:
@@ -168,24 +184,30 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
     with TemporaryDirectory(prefix='.scar-aten-python-trial-', dir=out.parent) as tmp:
         stage = Path(tmp)
         bundle = Path(selected['bundle']['uri']).parent
-        for name in ('graph.hpp', 'operators.hpp'):
+        team = 'cpu_team' in artifact
+        for name in ('graph.hpp', 'operators.hpp', *((_TEAM_HEADER,) if team else ())):
             dest = stage / name
             dest.write_bytes((bundle / name).read_bytes())
             if _content(dest) != artifact['files'][name]:
                 raise ValueError('generated graph header differs from the exact verified bundle: ' + name)
-        (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
+        if not team:
+            (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
         (stage / 'trial.cpp').write_bytes(_TEMPLATE.read_bytes())
         if guard is not None:
             (stage / 'trial_geometry.hpp').write_text(_geometry_header(guard['geometry']))
         extension, provider, command = _build_extension(stage, artifact, torch, value_geometry=guard is not None)
         manifest = dict(schema='scar.aten-python-trial', schema_version=1,
             scope='EXPLICIT_PYTHON_CPU_DIFFERENTIAL_TRIAL', source_proof=proof, recipe=recipe, contract=contract,
-            cpus=selected['cpu_ids'], window_starts=selected['selected_window_starts'], inputs=selected['inputs'],
+            cpus=selected['cpu_ids'], inputs=selected['inputs'],
             provider=provider, extension=extension, references=dict(replay,
                 source_projection=_file_ref(projection_path, captured['schema']),
                 wrapper_contract=_file_ref(contract_path, contract['schema'])),
             compiler_command=command, cxx_standard=20, source_replacement_authorized=False,
             python_boundary_performance_measured=False)
+        if team:
+            manifest['window_groups'] = selected['selected_windows']
+        else:
+            manifest['window_starts'] = selected['selected_window_starts']
         if guard is not None:
             manifest['input_guard'] = guard
         (stage / 'trial.json').write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + '\n')

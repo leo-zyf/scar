@@ -12,6 +12,7 @@
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/csrc/utils/object_ptr.h>
 
+#include <array>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -23,14 +24,25 @@
 
 namespace {
 namespace graph = scar_aten_graph;
+#ifdef SCAR_ATEN_TEAM
+constexpr char capsule_name[] = "scar.aten-python-trial.cpu-team.v1";
+using Executor = graph::CpuTeam;
+#else
 constexpr char capsule_name[] = "scar.aten-python-trial.cpu-pair.v1";
+using Executor = graph::CpuPair;
+#endif
 
-struct TrialPair {
+struct TrialExecutor {
     const pid_t pid;
-    graph::CpuPair pair;
+    Executor executor;
 
-    TrialPair(int caller, int worker, bool allow_ambient_grad)
-        : pid(getpid()), pair(caller, worker, false, allow_ambient_grad) {}
+#ifdef SCAR_ATEN_TEAM
+    TrialExecutor(std::array<int, 3> cpus, bool allow_ambient_grad)
+        : pid(getpid()), executor(cpus, false, allow_ambient_grad) {}
+#else
+    TrialExecutor(int caller, int worker, bool allow_ambient_grad)
+        : pid(getpid()), executor(caller, worker, false, allow_ambient_grad) {}
+#endif
 };
 
 void check_torch_context(bool expected_grad_enabled) {
@@ -57,10 +69,10 @@ int cpu_index(PyObject* value) {
     return static_cast<int>(n);
 }
 
-void drop_pair(PyObject* capsule) {
-    auto* pair = static_cast<TrialPair*>(PyCapsule_GetPointer(capsule, capsule_name));
-    // A process fork inherits this address but has no running worker to join.
-    if (pair && pair->pid == getpid()) delete pair;
+void drop_executor(PyObject* capsule) {
+    auto* trial = static_cast<TrialExecutor*>(PyCapsule_GetPointer(capsule, capsule_name));
+    // Only the originating process owns the worker threads.
+    if (trial && trial->pid == getpid()) delete trial;
 }
 
 PyObject* translate_exception() {
@@ -82,34 +94,62 @@ PyObject* translate_exception() {
 
 PyObject* prepare(PyObject*, PyObject* arguments) {
     PyObject *caller, *worker, *ambient_grad = Py_False;
+#ifdef SCAR_ATEN_TEAM
+    PyObject* second_worker;
+    if (!PyArg_UnpackTuple(arguments, "prepare", 3, 4, &caller, &worker, &second_worker, &ambient_grad)) return nullptr;
+#else
     if (!PyArg_UnpackTuple(arguments, "prepare", 2, 3, &caller, &worker, &ambient_grad)) return nullptr;
+#endif
     try {
         if (!PyBool_Check(ambient_grad)) throw std::invalid_argument("allow_ambient_grad requires an exact bool");
         const bool allow_ambient_grad = ambient_grad == Py_True;
         check_torch_context(allow_ambient_grad && at::GradMode::is_enabled());
-        auto pair = std::make_unique<TrialPair>(cpu_index(caller), cpu_index(worker), allow_ambient_grad);
-        PyObject* capsule = PyCapsule_New(pair.get(), capsule_name, drop_pair);
-        if (capsule) pair.release();
+#ifdef SCAR_ATEN_TEAM
+        std::array<int, 3> cpus{cpu_index(caller), cpu_index(worker), cpu_index(second_worker)};
+        auto trial = std::make_unique<TrialExecutor>(cpus, allow_ambient_grad);
+#else
+        auto trial = std::make_unique<TrialExecutor>(cpu_index(caller), cpu_index(worker), allow_ambient_grad);
+#endif
+        PyObject* capsule = PyCapsule_New(trial.get(), capsule_name, drop_executor);
+        if (capsule) trial.release();
         return capsule;
     } catch (...) {
         return translate_exception();
     }
 }
 
-graph::WindowSelection window_selection(PyObject* starts) {
-    if (!PyTuple_CheckExact(starts) || PyTuple_GET_SIZE(starts) == 0) {
-        throw std::invalid_argument("native trial requires a nonempty tuple of window starts");
+graph::WindowSelection window_selection(PyObject* groups) {
+    if (!PyTuple_CheckExact(groups) || PyTuple_GET_SIZE(groups) == 0) {
+        throw std::invalid_argument("native trial requires a nonempty schedule tuple");
     }
     graph::WindowSelection windows{};
-    long previous = -2;
-    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(starts); ++i) {
-        const long index = exact_integer(PyTuple_GET_ITEM(starts, i));
-        if (index < 0 || static_cast<std::size_t>(index) >= windows.size()
-                || !graph::legal_window_starts[index] || index - 2 < previous) {
+    std::size_t previous_end = 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(groups); ++i) {
+        PyObject* group = PyTuple_GET_ITEM(groups, i);
+#ifdef SCAR_ATEN_TEAM
+        if (!PyTuple_CheckExact(group) || PyTuple_GET_SIZE(group) != 2) {
+            throw std::invalid_argument("native team window requires a start and width");
+        }
+        const long index = exact_integer(PyTuple_GET_ITEM(group, 0));
+        const long width = exact_integer(PyTuple_GET_ITEM(group, 1));
+        if (width != 2 && width != 3) throw std::invalid_argument("invalid native team window width");
+#else
+        const long index = exact_integer(group);
+        constexpr long width = 2;
+#endif
+        const auto start = static_cast<std::size_t>(index);
+        if (index < 0 || start >= windows.size() || start < previous_end
+                || static_cast<std::size_t>(width) > windows.size() - start) {
             throw std::invalid_argument("native trial windows must be legal, ordered and disjoint");
         }
-        windows[index] = true;
-        previous = index;
+#ifdef SCAR_ATEN_TEAM
+        if (width > graph::legal_window_widths[start]) throw std::invalid_argument("illegal native team window");
+        windows[start] = static_cast<graph::WindowSelection::value_type>(width);
+#else
+        if (!graph::legal_window_starts[start]) throw std::invalid_argument("illegal native pair window");
+        windows[start] = true;
+#endif
+        previous_end = start + static_cast<std::size_t>(width);
     }
     return windows;
 }
@@ -134,11 +174,11 @@ void verify_geometry(const at::Tensor& tensor, const geometry::TensorGeometry& e
 PyObject* run(PyObject*, PyObject* arguments) {
     PyObject *capsule, *input_tuple, *starts, *reference_bytes;
     if (!PyArg_UnpackTuple(arguments, "run", 4, 4, &capsule, &input_tuple, &starts, &reference_bytes)) return nullptr;
-    auto* prepared = static_cast<TrialPair*>(PyCapsule_GetPointer(capsule, capsule_name));
+    auto* prepared = static_cast<TrialExecutor*>(PyCapsule_GetPointer(capsule, capsule_name));
     if (!prepared) return nullptr;
     try {
         if (prepared->pid != getpid()) throw std::runtime_error("native trial worker belongs to another process");
-        const bool grad_enabled = prepared->pair.prepared_grad_enabled();
+        const bool grad_enabled = prepared->executor.prepared_grad_enabled();
         check_torch_context(grad_enabled);
         if (!PyTuple_CheckExact(input_tuple) || PyTuple_GET_SIZE(input_tuple) != graph::input_count) {
             throw std::invalid_argument("native trial input tuple has the wrong arity");
@@ -185,17 +225,17 @@ PyObject* run(PyObject*, PyObject* arguments) {
         }
 #endif
         auto outputs = [&] {
-            const auto placement = prepared->pair.place_caller();
+            const auto placement = prepared->executor.place_caller();
 #ifdef SCAR_ATEN_VALUE_GEOMETRY
             if (geometry_only) {
-                return graph::run_parallel_observed(inputs, prepared->pair, windows, [](std::size_t op, auto&& call) {
+                return graph::run_parallel_observed(inputs, prepared->executor, windows, [](std::size_t op, auto&& call) {
                     auto result = call();
                     verify_geometry(result, geometry::operations[op], "native trial operation differs from its storage geometry");
                     return result;
                 });
             }
 #endif
-            return graph::run_parallel(inputs, prepared->pair, windows);
+            return graph::run_parallel(inputs, prepared->executor, windows);
         }();
         if (grad_enabled) {
             for (const auto& output : outputs) {

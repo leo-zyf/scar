@@ -36,6 +36,7 @@ _MEMORY_PROFILE = 'LAST_CONSUMER_OR_EXPORT_V1'
 _SCHEDULE_KEYS = {
     'ORDERED_DEFAULT_WITH_DECLARED_CPU_PAIR_TRIAL': 'cpu_pair',
     'ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL': 'cpu_windows',
+    'ORDERED_DEFAULT_WITH_DECLARED_CPU_TEAM_TRIAL': 'cpu_team',
 }
 
 
@@ -61,7 +62,12 @@ def _bundle(path, digest):
     _, requirements, _ = _read_declared(contract['path'], contract['sha256'])
     schedule = artifact[key]
     hardware = Path(schedule['target']['uri']).parent
-    qualify = propose_cpu_windows if key == 'cpu_windows' else propose_cpu_pair
+    if key == 'cpu_team':
+        from scar.optimization.aten_native_team import propose_cpu_team
+
+        qualify = propose_cpu_team
+    else:
+        qualify = propose_cpu_windows if key == 'cpu_windows' else propose_cpu_pair
     replayed = qualify(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'])
     if replayed != schedule:
         raise ValueError('retained CPU placement differs from the recipe, contract or target hardware graph')
@@ -334,9 +340,6 @@ def _host_tensor_budget(hardware, budget_bytes, refs):
 
 def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
     """Reserve the worker core only over selected fork/join intervals."""
-    target, domains = _target(hardware, tuple(schedule['availability_mask']),
-                              allow_cpu_subset='target_cpu_domain' in schedule)
-    refs = (dict(artifact=origin, locator='#/cpu_windows'), dict(artifact=evidence, locator='#/calibration'))
     names = [op['id'] for op in model['operations']]
     service = [op['service_ns'] for op in model['operations']]
     choices = set(selected_starts)
@@ -348,38 +351,46 @@ def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
         service = _caller_service(service, model.get('numa_consumer_cost'), choices)
     timeline = _timeline(names, service, choices, schedule['cpus'], model['empty_dispatch_join_ns'], worker_service)
     storage = model.get('tensor_storage')
+    if storage is not None:
+        name_to_index = {name: i for i, name in enumerate(names)}
+        for segment in timeline:
+            first = name_to_index[segment['operations'][0]]
+            segment['peak_tensor_storage_bytes'] = (storage['window_peak_bytes'][str(first)]
+                if len(segment['operations']) == 2 else storage['operation_peak_bytes'][first])
+    sampled = model.get('numa_locality', {}).get('sampled_node_residency_observed')
+    return _verify_resource_segments(hardware, schedule, origin, evidence, timeline, storage,
+                                     key='cpu_windows', numa_sampled=sampled)
+
+
+def _verify_resource_segments(hardware, schedule, origin, evidence, timeline, storage, *, key, numa_sampled=False):
+    target, domains = _target(hardware, tuple(schedule['availability_mask']),
+                              allow_cpu_subset='target_cpu_domain' in schedule)
+    refs = (dict(artifact=origin, locator='#/' + key), dict(artifact=evidence, locator='#/calibration'))
     pool = None
     if storage is not None and storage['budget_bytes'] is not None:
         pool = _host_tensor_budget(hardware, storage['budget_bytes'], refs)
-    name_to_index = {name: i for i, name in enumerate(names)}
     tasks = []
     for i, segment in enumerate(timeline):
-        mode = 'FORK_JOIN' if len(segment['operations']) == 2 else 'ORDERED'
+        mode = 'FORK_JOIN' if len(segment['operations']) > 1 else 'ORDERED'
         duration = segment['end_ns'] - segment['start_ns']
         cost = CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', 'ATEN_SEGMENT_SERVICE_AND_HANDOFF', refs)
         demands = {resource.id: 1 for cpu in segment['cpu_ids'] for resource in domains[cpu]}
         workspace = {}
-        if storage is not None:
-            first = name_to_index[segment['operations'][0]]
-            peak = (storage['window_peak_bytes'][str(first)] if mode == 'FORK_JOIN'
-                    else storage['operation_peak_bytes'][first])
-            segment['peak_tensor_storage_bytes'] = peak
-            if pool is not None:
-                workspace[pool.id] = peak - storage['persistent_input_bytes']
+        if pool is not None:
+            workspace[pool.id] = segment['peak_tensor_storage_bytes'] - storage['persistent_input_bytes']
         identifier = 'aten-segment-' + str(i)
         option = ImplementationOption(mode, 'EXISTING_LIBTORCH_FIXED_CPU_LANES', refs, demands,
             workspace, {}, {}, cost, dict(operations=segment['operations'], cpu_ids=segment['cpu_ids']))
         tasks.append(PlanningOperation(identifier, refs, (tasks[-1].id,) if tasks else (), (option,), mode))
     resources = tuple(r for rows in domains.values() for r in rows)
-    assumptions = ('SEGMENT_BARRIER_MAKES_BOTH_OUTPUTS_READY', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
+    barrier = 'SEGMENT_BARRIER_MAKES_ALL_OUTPUTS_READY' if key == 'cpu_team' else 'SEGMENT_BARRIER_MAKES_BOTH_OUTPUTS_READY'
+    assumptions = (barrier, 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
                    'INTERNAL_FORK_JOIN_TIME_NOT_SPLIT', 'MEMORY_CONTENTION_IS_NOT_PREDICTED')
     reserved = {}
     if pool is not None:
         resources = (*resources, pool)
         reserved[pool.id] = storage['persistent_input_bytes']
-        residency = ('NUMA_PAGE_RESIDENCY_SAMPLED_IN_CALIBRATION'
-                     if model.get('numa_locality', {}).get('sampled_node_residency_observed')
-                     else 'NUMA_PAGE_PLACEMENT_UNOBSERVED')
+        residency = 'NUMA_PAGE_RESIDENCY_SAMPLED_IN_CALIBRATION' if numa_sampled else 'NUMA_PAGE_PLACEMENT_UNOBSERVED'
         assumptions = (*assumptions, 'TENSOR_HANDLE_STORAGE_BUDGET_EXCLUDES_PROVIDER_INTERNAL_WORKSPACE', residency)
     problem = PlanningProblem(target, refs, resources, tuple(tasks), (), assumptions=assumptions, reserved_memory=reserved)
     plan = construct_implementations(problem)
@@ -394,15 +405,20 @@ def _statistics(raw, warmup, repetitions, cpus):
     if ([raw['caller_cpu'], raw['worker_cpu']] != cpus or raw['warmup_pairs'] != warmup
             or raw['measured_pairs'] != repetitions or raw['all_pairs_validated'] is not True):
         raise ValueError('native observations differ from the requested graph trial')
-    samples, differences, directional = _measurements(raw['samples'], repetitions)
+    metrics, wins, by_order, ratio, faster = _compare_measured_pairs(raw['samples'], repetitions)
+    return dict(metrics=metrics, wins_two_cpu=wins, paired_order_differences=by_order,
+                speedup_two_cpu=ratio, profitable_two_cpu=faster)
+
+
+def _compare_measured_pairs(rows, repetitions):
+    samples, differences, directional = _measurements(rows, repetitions)
     metrics = {mode: dict(_metrics(values), variance_ns2=variance(values)) for mode, values in samples.items()}
     serial, dual = (metrics[m]['median_ns'] for m in ('SERIAL', 'TWO_CPU'))
     wins = sum(value > 0 for value in differences)
     by_order = {order[0]: _metrics(values) for order, values in directional.items()}
     faster = ((serial - dual) / serial >= _GAIN and 4 * wins >= 3 * repetitions
               and all(row['median_ns_twice'] > 0 for row in by_order.values()))
-    return dict(metrics=metrics, wins_two_cpu=wins, paired_order_differences=by_order,
-                speedup_two_cpu=serial / dual, profitable_two_cpu=faster)
+    return metrics, wins, by_order, serial / dual, faster
 
 
 def _prefix(cpus):
@@ -414,11 +430,20 @@ def _launcher(stage, executable, selection, schedule, inputs, guarded, starts):
     checks = ['test "$(sha256sum < ' + shlex.quote(row['path']) + ' | cut -d " " -f 1)" = '
               + row['sha256'] + ' || { echo "SCAR native graph member digest differs" >&2; exit 78; }'
               for row in guarded]
-    dual = selection == 'TWO_CPU'
+    dual = selection != 'SERIAL'
     windowed = 'windows' in schedule
-    mode = ('--run-windows' if windowed else '--run-pair') if dual else '--run-serial'
+    team = 'legal_window_widths' in schedule
+    mode = '--run-serial'
+    if dual:
+        mode = '--run-team' if team else '--run-windows' if windowed else '--run-pair'
     cpus = schedule['cpus'] if dual else schedule['cpus'][:1]
-    spec = [','.join(map(str, starts))] if dual and windowed else []
+    spec = []
+    if dual and team:
+        from scar.compiler.plan_aten_native_team import team_window_spec
+
+        spec = [team_window_spec(starts)]
+    elif dual and windowed:
+        spec = [','.join(map(str, starts))]
     command = [*_prefix(cpus), str(executable), mode, *map(str, cpus), *spec, *(row['path'] for row in inputs)]
     launch = stage / 'launch.sh'
     launch.write_text('#!/bin/sh\nset -eu\n' + '\n'.join(checks) + '\nexec ' + shlex.join(command) + ' "$@"\n')
@@ -447,6 +472,12 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
     observe_storage = windowed and artifact.get('tensor_lifetime') is not None
     if tensor_budget_bytes is not None and (type(tensor_budget_bytes) is not int or not 0 < tensor_budget_bytes < 2**63):
         raise ValueError('a positive bounded Tensor storage budget is required')
+    if key == 'cpu_team':
+        from scar.compiler.plan_aten_native_team import plan_aten_native_team
+
+        return plan_aten_native_team((artifact, origin, recipe, hardware, executable, key), input_paths=input_paths,
+            out=out, warmup_pairs=warmup_pairs, measured_pairs=measured_pairs, tensor_budget_bytes=tensor_budget_bytes,
+            primitive_observation=primitive_observation)
     if tensor_budget_bytes is not None and not observe_storage:
         raise ValueError('a graph rebuilt with the Tensor lifetime and storage calibration ABI is required')
     inputs = [_receipt(p) for p in input_paths]
@@ -552,7 +583,8 @@ def main(argv=None):
     report = plan_aten_native_graph(args.bundle, bundle_sha256=args.bundle_sha256, input_paths=args.input,
                                     out=args.out, warmup_pairs=args.warmup_pairs, measured_pairs=args.measured_pairs,
                                     tensor_budget_bytes=args.tensor_budget_bytes)
+    speedup_key = 'speedup_parallel' if 'selected_windows' in report else 'speedup_two_cpu'
     print(json.dumps(dict(model_preferred=report['model_preferred'], selected=report['selected'],
-                          validation_speedup_two_cpu=(report['validation'] or {}).get('speedup_two_cpu'),
-                          launcher=str(Path(args.out) / 'launch.sh'))))
+                          launcher=str(Path(args.out) / 'launch.sh'),
+                          **{'validation_' + speedup_key: (report['validation'] or {}).get(speedup_key)})))
     return 0

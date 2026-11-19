@@ -16,6 +16,7 @@ from scar.optimization.aten_cpu_placement_domain import aten_cpu_placement_domai
 from scar.optimization.aten_native_schedule import (
     CONTRACT_SCHEMA, AtenCpuWindowFrontier, propose_cpu_windows, resolve_aten_cpu_windows,
 )
+from scar.optimization.aten_native_team import aten_cpu_team_domain, propose_cpu_team, team_window_widths
 from scar.runtime.validate_aten_python_entry import validate_aten_python_entry
 
 
@@ -58,8 +59,20 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     declarations = read_artifact(concurrency)
     allowed = os.sched_getaffinity(0)
     domain = None
+    placement = None
+    propose = propose_cpu_windows
+    if 3 in team_window_widths(recipe, declarations):
+        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed)
+        if team['representatives']:
+            domain = team
+            propose = propose_cpu_team
+            placement = propose(recipe, contract=declarations, target=target_dir,
+                                cpu_ids=domain['representatives'][0]['cpus'])
+        else:
+            report['cpu_team_frontier'] = team['reason']
     try:
-        placement = resolve_aten_cpu_windows(recipe, contract=declarations, target=target_dir, allowed_cpu_ids=allowed)
+        if placement is None:
+            placement = resolve_aten_cpu_windows(recipe, contract=declarations, target=target_dir, allowed_cpu_ids=allowed)
     except AtenCpuWindowFrontier as error:
         if error.reason != 'TARGET_CPU_DOMAIN_NOT_EXACT_PAIR':
             return dict(report, reason=error.reason)
@@ -82,7 +95,8 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
             linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=destination,
             concurrency_contract=concurrency['uri'], concurrency_sha256=concurrency['sha256'],
             target=target_dir, cpu_ids=schedule['cpus'])
-        if result['cpu_windows'] != schedule:
+        key = 'cpu_team' if 'legal_window_widths' in schedule else 'cpu_windows'
+        if result[key] != schedule:
             raise ValueError('compiled schedule differs from the resolved placement')
         return result
 
@@ -99,12 +113,13 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
         if choices['selected_mode'] == 'SERIAL':
             return dict(report, reason='CPU_DOMAIN_MODEL_KEPT_SERIAL')
         if choices['selected_cpu_ids'] != placement['cpus']:
-            placement = propose_cpu_windows(recipe, contract=declarations, target=target_dir,
-                                            cpu_ids=choices['selected_cpu_ids'])
+            placement = propose(recipe, contract=declarations, target=target_dir, cpu_ids=choices['selected_cpu_ids'])
             native = out / 'native'
             delivered = compile_graph(native, placement)
+            sources = ('team.cpp', 'aten_native_team_v1.h') if 'cpu_team' in compiled else (
+                'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')
             if any(delivered['files'][name] != compiled['files'][name]
-                   for name in ('graph.hpp', 'operators.hpp', 'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')):
+                   for name in ('graph.hpp', 'operators.hpp', *sources)):
                 raise ValueError('delivery graph code differs from the measured CPU probe')
             compiled = delivered
         primitive_observation = dict(inputs=choices['inputs'], raw=chosen['primitive_observations'])
@@ -117,7 +132,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
         primitive_observation=primitive_observation)
     report['selection'] = artifact_reference(plan / 'selection.json', selection['schema'])
     report['native_selection'] = selection['selected']
-    if selection['selected'] != 'TWO_CPU':
+    if selection['selected'] not in ('TWO_CPU', 'THREE_CPU'):
         return dict(report, reason='NATIVE_PLAN_KEPT_SERIAL')
 
     trial_dir = out / 'trial'

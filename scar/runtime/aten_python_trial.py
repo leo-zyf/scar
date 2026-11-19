@@ -55,6 +55,31 @@ def _read_manifest(directory, expected_sha256):
     return manifest
 
 
+def _trial_layout(manifest):
+    cpus = manifest['cpus']
+    if (type(cpus) is not list or len(cpus) not in (2, 3)
+            or any(type(cpu) is not int or cpu < 0 for cpu in cpus) or len(set(cpus)) != len(cpus)):
+        raise ValueError('the trial requires two or three distinct nonnegative CPU IDs')
+    if len(cpus) == 2:
+        if 'window_groups' in manifest or 'window_starts' not in manifest:
+            raise ValueError('the two-core trial requires window starts')
+        return tuple(cpus), tuple(manifest['window_starts'])
+
+    groups = manifest.get('window_groups')
+    if 'window_starts' in manifest or type(groups) is not list or not groups:
+        raise ValueError('the three-core trial requires nonempty window groups')
+    end = 0
+    count = len(manifest['recipe']['operations'])
+    for group in groups:
+        if type(group) is not list or len(group) != 2 or any(type(value) is not int for value in group):
+            raise ValueError('each team window requires an exact integer start and width')
+        start, width = group
+        if start < end or width not in (2, 3) or start + width > count:
+            raise ValueError('the trial team windows must be ordered, disjoint and bounded')
+        end = start + width
+    return tuple(cpus), tuple(tuple(group) for group in groups)
+
+
 def _provider(artifact, torch):
     if (artifact['name'], artifact['version'], artifact['revision']) != (
             'LibTorch', torch.__version__, torch.version.git_version):
@@ -247,6 +272,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
 
     directory = Path(trial_dir).resolve(strict=True)
     manifest = _read_manifest(directory, expected_sha256)
+    cpus, windows = _trial_layout(manifest)
     proof = manifest['source_proof']
     namespace, original = _original(module, proof)
     torch_global = proof['torch_global']
@@ -257,10 +283,9 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
         provider_report.update(verified_provider)
     wrappers = _builtin_wrappers(torch, proof)
     code = original.__code__
-    cpus = tuple(manifest['cpus'])
     allowed_cpus = set(cpus)
     gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)
-    if len(cpus) != 2 or len(allowed_cpus) != 2 or not gil_enabled():
+    if not gil_enabled():
         raise ValueError('the live CPU, Python or Torch context differs from the ATen trial scope')
 
     def ready_context():
@@ -291,7 +316,7 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
             if provider_report is not None and references is not None:
                 provider_report['reference_input_bytes_loaded'] += sum(map(len, references))
             extension = _extension(directory, manifest['extension'])
-            # Keep the two-argument ABI for existing trial binaries.
+            # CPU arguments follow the compiled executor's arity.
             capsule = extension.prepare(*cpus, True) if allow_ambient_grad else extension.prepare(*cpus)
             return capsule, extension.run, references, configuration
         finally:
@@ -299,7 +324,6 @@ def install_aten_python_trial(module, trial_dir, *, expected_sha256, exclusive_i
                 provider_report['lazy_prepare_ns'] += perf_counter_ns() - lazy_start
 
     prepared = None if defer_context else prepare(_torch_configuration(torch))
-    windows = tuple(manifest['window_starts'])
     arguments = len(proof['parameters'])
     tensor_result = proof['return_kind'] == 'TENSOR'
     owner = get_ident()

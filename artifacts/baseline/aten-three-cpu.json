@@ -1,0 +1,36 @@
+{
+  "experiment": "artifacts/current/experiments/aten-three-cpu-flow-v1",
+  "application": "torchdiffeq 0.2.5 RK4, 64 steps, float32 768×768 state",
+  "capture": {
+    "discoverable_concurrent_operations": ["call_1018", "call_1042", "call_1049"],
+    "discovery_sha256": "935c8aa463fa7daefa5cd6e12064014132fe9f34eca6cb33ec58731d0011cb99",
+    "matching_one_step_output_sha256": "a0076269e06e6da3cc08ccad113edc025c78de2a64aca8da2e9736b90da6acd7"
+  },
+  "placement_and_cost": {
+    "same_numa_topology_representatives": [[0, 1, 2], [14, 15, 16]],
+    "selected_cpus": [14, 15, 16],
+    "selected_windows": [[0, 3]],
+    "primitive_rows_per_placement": 7,
+    "modeled_selected_placement_ns": {"SERIAL": 38351367, "TWO_CPU": 26416865, "THREE_CPU": 14476694},
+    "tensor_storage_budget_bytes": 24000000,
+    "maximum_planned_tensor_storage_bytes": 16515072,
+    "cpu_domain_plan_sha256": "92bfbbba7e95e7cb3ab0952f992995444ecdbd0757bb1495bef3f0dbc01de64e",
+    "native_selection_sha256": "b45610f46ba4c4d6b12c32330a06c552d5e83303013d8ee20a18bf06433580e0"
+  },
+  "runtime_validation": {
+    "provider": "C++20 LibTorch CPU",
+    "scope": "PAIRED_FRESH_APPLICATION_PROCESSES_ON_SELECTED_CPU_MASK",
+    "native_region_speedup_against_serial": 2.510854262324383,
+    "native_measured_pairs": 11,
+    "entry_warmup_pairs": 1,
+    "entry_measured_pairs": 3,
+    "original_wall_ns": [11982684095, 11896925520, 11991758496],
+    "guarded_wall_ns": [6494367575, 6486257082, 6431092593],
+    "full_process_speedup": 1.8473958006156006,
+    "native_calls_per_guarded_process": 256,
+    "fallback_calls": 0,
+    "matched_result_sha256": "231427b23d3f85346551cc1e558bea9a53ad80d2bf19671e21ec0f327853a978",
+    "validation_sha256": "5b2e95eb179b51b2ba70717d50c825488d682f9cee0836561dc4900557f2fefd",
+    "delivery_sha256": "acece8ce7e1a1121873bb27061e97e4338772cbb82910b58271751d738d38987"
+  }
+}

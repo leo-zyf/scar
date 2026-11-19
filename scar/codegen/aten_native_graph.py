@@ -10,6 +10,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.codegen.aten_provider import _build_interface, _dependencies, _resolve
+from scar.codegen.aten_team_graph_source import render_team_calls
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe
 from scar.ir.record_codec import loads
@@ -19,6 +20,8 @@ from scar.optimization.aten_tensor_lifetime import tensor_releases
 _DRIVER = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
 _PAIR_HEADER = Path(__file__).with_name('aten_native_pair_v1.h')
 _PAIR_DRIVER = Path(__file__).with_name('aten_native_graph_ab_v1.cpp.in')
+_TEAM_HEADER = Path(__file__).with_name('aten_native_team_v1.h')
+_TEAM_DRIVER = Path(__file__).with_name('aten_native_team_ab_v1.cpp.in')
 _NUMA_HEADER = Path(__file__).with_name('aten_numa_pages_v1.h')
 _EXECUTABLE = 'aten-native-graph'
 
@@ -81,7 +84,10 @@ def _render(recipe, operators, schedule=None, *, release_after):
     operator_calls = '\n'.join(ordered)
     pair_include = '' if schedule is None else f'#include "{_PAIR_HEADER.name}"\n'
     pair_support = ''
-    if schedule is not None:
+    if schedule is not None and 'legal_window_widths' in schedule:
+        pair_include = f'#define SCAR_ATEN_TEAM 1\n#include "{_TEAM_HEADER.name}"\n'
+        pair_support = render_team_calls(calls, releases, outputs, schedule['legal_window_widths'])
+    elif schedule is not None:
         starts = {row['pair_indices'][0] for row in schedule['windows']}
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
         parallel = [f'    at::Tensor {value};' for value, _ in calls]
@@ -207,15 +213,20 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
     requested = (concurrency_contract, concurrency_sha256, target, cpu_ids)
     if any(item is not None for item in requested):
         if any(item is None for item in requested):
-            raise ValueError('the CPU pair requires its contract, digest, target graph and two CPU IDs')
+            raise ValueError('CPU scheduling requires its contract, digest, target graph and CPU IDs')
         from scar.optimization.aten_native_schedule import propose_cpu_windows
+        from scar.optimization.aten_native_team import propose_cpu_team
 
         _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
-        schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
+        propose = propose_cpu_team if len(cpu_ids) == 3 else propose_cpu_windows
+        schedule = propose(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
+    team = schedule is not None and 'legal_window_widths' in schedule
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']
-    if schedule is not None:
+    if team:
+        command.extend(('-pthread', 'team.cpp'))
+    elif schedule is not None:
         command.extend(('-pthread', 'pair.cpp'))
     else:
         command.append('entry.cpp')
@@ -229,7 +240,10 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             raise ValueError('retained ATen C++ binding differs from its linkage receipt')
         (stage / 'graph.hpp').write_text(_render(recipe, operators, schedule, release_after=release_after))
         (stage / 'entry.cpp').write_bytes(_DRIVER.read_bytes())
-        if schedule is not None:
+        if team:
+            (stage / _TEAM_HEADER.name).write_bytes(_TEAM_HEADER.read_bytes())
+            (stage / 'team.cpp').write_bytes(_TEAM_DRIVER.read_bytes())
+        elif schedule is not None:
             (stage / _PAIR_HEADER.name).write_bytes(_PAIR_HEADER.read_bytes())
             (stage / _NUMA_HEADER.name).write_bytes(_NUMA_HEADER.read_bytes())
             (stage / 'pair.cpp').write_bytes(_PAIR_DRIVER.read_bytes())
@@ -259,7 +273,10 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             compiler_command=command, source_replacement_authorized=False, performance_measured=False,
             tensor_lifetime=dict(profile='LAST_CONSUMER_OR_EXPORT_V1', release_after=release_after),
             files={path.name: _content(path) for path in sorted(stage.iterdir())})
-        if schedule is not None:
+        if team:
+            receipt.update(cpu_team=schedule, concurrency_contract=contract_receipt,
+                           implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_TEAM_TRIAL')
+        elif schedule is not None:
             receipt.update(cpu_windows=schedule, concurrency_contract=contract_receipt,
                            implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')

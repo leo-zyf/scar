@@ -14,7 +14,7 @@ from time import perf_counter_ns
 
 from scar.ir.record_codec import loads
 from scar.optimization.paired_entry_selection import _metrics
-from scar.runtime.aten_python_trial import _read_manifest
+from scar.runtime.aten_python_trial import _read_manifest, _trial_layout
 
 
 _MODES = ('ORIGINAL', 'GUARDED')
@@ -171,10 +171,10 @@ def validate_aten_python_entry(trial, *, trial_sha256, entry_function, entry_arg
         raise ValueError('an entry argument must include {output_dir} to isolate paired outputs')
     trial = Path(trial).resolve(strict=True)
     manifest = _read_manifest(trial, trial_sha256)
-    cpus = manifest['cpus']
-    if (type(cpus) is not list or len(cpus) != 2 or any(type(cpu) is not int for cpu in cpus)
-            or len(set(cpus)) != 2 or not set(cpus) <= os.sched_getaffinity(0)):
-        raise ValueError('trial CPU pair is outside the current allowed affinity')
+    trial_cpus, _ = _trial_layout(manifest)
+    cpus = list(trial_cpus)
+    if not set(cpus) <= os.sched_getaffinity(0):
+        raise ValueError('trial CPUs are outside the current allowed affinity')
     env = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', PYTHONDONTWRITEBYTECODE='1')
     out.parent.mkdir(parents=True, exist_ok=True)
     pairs = []
