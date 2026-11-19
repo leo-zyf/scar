@@ -1,0 +1,310 @@
+{
+  "fixed_profile_timing": {
+    "arbitrary_program_speedup_proven": false,
+    "arms_ns": {
+      "native": {
+        "max_ns": 1937357125,
+        "median_ns": 1920641183.5,
+        "min_ns": 1898621026,
+        "sample_stdev_ns": 17215074.085784286,
+        "samples_ns": [
+          1912523303,
+          1937357125,
+          1898621026,
+          1928759064
+        ]
+      },
+      "original": {
+        "max_ns": 8686444573,
+        "median_ns": 8642766261.0,
+        "min_ns": 8569901964,
+        "sample_stdev_ns": 49450943.02573386,
+        "samples_ns": [
+          8655653115,
+          8629879407,
+          8569901964,
+          8686444573
+        ]
+      }
+    },
+    "cpus": [
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "matched_pairs": 4,
+    "record": {
+      "bytes": 2633,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/triangle-seed-publication-v1/benchmark.json",
+      "sha256": "cbb90a65cb98c7de4e9c403da6a6a87d27b855a5a043280cdad7466d4d502068"
+    },
+    "scope": "ORIGINAL_FRESH_PROCESS_VS_FIXED_CAPTURED_SEED_NATIVE_FRESH_PROCESS",
+    "speedup": 4.49993800781165,
+    "warmup_per_arm": 1
+  },
+  "iterations": 512,
+  "next_gate": [
+    "DERIVE_FIXED_ENTRY_CONFIGURATION_FROM_SOURCE_CONTRACT",
+    "CONNECT_COMPLETE_ORIGINAL_EFFECTS_AND_VALIDATE_ADDITIONAL_CONFIGURATIONS",
+    "QUALIFY_COMPACT_TYPED_HANDOFF_WITH_MATCHED_COST_AND_SHARED_LIFETIME"
+  ],
+  "schema": "scar.cpu-triangle-seed-to-publication",
+  "schema_version": 1,
+  "stage1": {
+    "acceptance": {
+      "bytes": 17928,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/mesh-basis-source-v1/result.json",
+      "sha256": "5bd640f08c539383d0a842297a053daab34b51e470373e79b4a3eab119a70c7c"
+    },
+    "activation_routes": {
+      "bytes": 182362,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/mesh-basis-source-v1/replay/activation-admission.json",
+      "sha256": "f39a1fcb2ce99566fbab545c6d129350d6bec190202ed2ad7c28a29086d94bd9"
+    },
+    "body_activations": 55,
+    "complete_program": false,
+    "entry_graph": {
+      "bytes": 3513037,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/mesh-basis-source-v1/replay/entry-calls.json",
+      "sha256": "e4b7321ec8c2d5e5cd6a2afe74f56e79543e2da1cd5860bb9133e58d610f505f"
+    },
+    "exact_code_bodies": 22,
+    "exact_mesh_and_basis_source_capture": {
+      "bytes": 16363,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/capture.json",
+      "sha256": "13654c1f51fce46f4194a000bee6d9c14d2eaf21d6d715283921f5ce09f745ca"
+    },
+    "graph_summary": {
+      "all_bounded_source_interfaces": 50,
+      "catalog_units": 14,
+      "entry_conditional_interfaces": 40,
+      "entry_projection_units": 10,
+      "entry_reachable_observed_attempts": 126,
+      "entry_static_call_templates": 276,
+      "entry_static_scopes": 27,
+      "observed_attempts": 182,
+      "observed_target_frontiers": {
+        "OBSERVED_CALLABLE_REQUIRES_OTHER_CALL_PROTOCOL": 115,
+        "OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG": 27
+      },
+      "observed_target_kinds": {
+        "BOUND_PYTHON_METHOD": 2,
+        "NATIVE_CARRIER": 53,
+        "OTHER_CALLABLE": 29,
+        "PYTHON_FUNCTION": 65,
+        "TYPE_OBJECT": 33
+      },
+      "preparation_loaded_units": 14,
+      "shared_source_bodies": 26,
+      "typed_route_edges": 324,
+      "typed_route_kinds": {
+        "ARGUMENT": 56,
+        "CALL_TARGET": 40,
+        "COMPLETION": 40,
+        "ENVIRONMENT": 40,
+        "PROJECTION": 68,
+        "STATE_INTERFACE": 80
+      }
+    },
+    "linked_runtime_call_attempts": 15,
+    "live_alias_routes": {
+      "same_basis_at_matrix_and_load": true,
+      "same_boundary_rows_at_solve": true,
+      "same_refinement_mesh_at_basis_entry": true,
+      "same_refinement_mesh_at_boundary_query": true,
+      "same_refinement_mesh_on_basis_receiver": true
+    },
+    "observed_mesh_shape": {
+      "cells": 8192,
+      "constraints": 256,
+      "vertices": 4225
+    },
+    "ordinary_returns": 52,
+    "phase_capture_cpu": 7,
+    "program": {
+      "bytes": 15122,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/mesh-basis-source-v1/replay/program/manifest.json",
+      "sha256": "cd200a0349bcc8dd9d921a8d342b0c09b8dc2c4bca3b0cb826beebe25f9d95d6"
+    },
+    "remaining": [
+      "STATIC_CONSTRUCTOR_PROTOCOL",
+      "QUADRATURE_PROVIDER_AND_EFFECT_SURFACE"
+    ],
+    "resource_records": 301
+  },
+  "stage2": {
+    "compact_value": {
+      "bitwise_sample_discharged": true,
+      "borrowed_strides_bytes": [
+        24,
+        0,
+        8
+      ],
+      "broadcast_axis": 1,
+      "contiguous_strides_bytes": [
+        196608,
+        24,
+        8
+      ],
+      "dense_payload_bytes": 589824,
+      "dtype": "<f8",
+      "expanded_shape": [
+        3,
+        8192,
+        3
+      ],
+      "future_values_invariant_proven": false,
+      "logical_port_dependency": true,
+      "requirements": [
+        "QUALIFIED_STRIDED_CONSUMER",
+        "RETAIN_OWNER_GENERATION_AND_BORROW_LIFETIME",
+        "PRESERVE_EXACT_REDUCTION_ORDER_AND_OUTPUT_CONTRACT",
+        "CHECK_PROFIT_AT_SAME_BOUNDARY"
+      ],
+      "serialized_payload_bytes_avoidable_with_compact_port": 589752,
+      "source_payload_bytes": 72
+    },
+    "decision": "KEEP_WIRE",
+    "diagnostic_cpu": 7,
+    "expanded_graph_cross_reference": {
+      "bytes": 24893,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-basis-handoff-v1/stage1-cross-reference.json",
+      "sha256": "ddffda08843a26e103a8182940f24774ad1d1d0baddd3c022032dd41f0062ef2"
+    },
+    "nested_refinement": {
+      "charge_child_and_parent_separately": false,
+      "child_calls": 6,
+      "child_wall_intervals_ns": [
+        [
+          557108968355234,
+          557108968910175
+        ],
+        [
+          557108970862827,
+          557108971235972
+        ],
+        [
+          557108973141580,
+          557108973503896
+        ],
+        [
+          557108975400796,
+          557108975899625
+        ],
+        [
+          557108977760153,
+          557108979052014
+        ],
+        [
+          557108980894165,
+          557108985529146
+        ]
+      ],
+      "child_wall_sum_ns": 7716073,
+      "parent_wall_ns": 19057543,
+      "unattributed_parent_remainder_ns": 11341470
+    },
+    "observed_inclusive_wall_ns": {
+      "basis": 3750128,
+      "refine": 19057543,
+      "rows": 17110346
+    },
+    "physical_wire": {
+      "exact_mesh_record_bytes": 167288,
+      "exact_seed_record_bytes": 472,
+      "field_payload_bytes": {
+        "constraints": 1024,
+        "mesh_connectivity": 98304,
+        "mesh_coordinates": 67600,
+        "quadrature_weights": 24,
+        "reference_derivatives": 144,
+        "reference_values": 72
+      },
+      "materialized_basis_record_bytes": 2065508,
+      "peak_physical_memory_bytes": null,
+      "physical_pipe_service_ns": null
+    },
+    "planned_cpu": 49,
+    "receipt": {
+      "bytes": 23205,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-basis-handoff-v1/result.json",
+      "sha256": "f631319f42b33a7a40eb307102d6bb85e517256c7d72e539e15fbc25acd1acb3"
+    },
+    "timing_transferred_between_cpus": false,
+    "unknown_layout_gain": true
+  },
+  "stage3": {
+    "basis": {
+      "bytes": 2065508,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/basis-assembly-provider-v1/basis-stream.bin",
+      "sha256": "18849ecb00f08af2554d1849f1c565a611f970248454f3db3d112c1d18c87d42"
+    },
+    "exact_native_stdout": {
+      "bytes": 65,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/triangle-seed-publication-v1/stdout",
+      "sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e"
+    },
+    "exact_original_stdout": {
+      "bytes": 65,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/stdout",
+      "sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e"
+    },
+    "exact_refined_mesh": {
+      "bytes": 167288,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/native-mesh.bin",
+      "sha256": "868f761b9056003b368e2dc92043fefbbc339b37ce4d2ad70f2fad60279660a0"
+    },
+    "full_original_entry_automatically_compiled": false,
+    "mesh_basis_qualification": {
+      "bytes": 3104,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/mesh-basis-acceptance.json",
+      "sha256": "c115e95c61f82cc2683bfe28b01d6d91c1f141ae89ee0cfad01e38b4b5970882"
+    },
+    "native_topology": {
+      "bytes": 4324,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/C++ triangular topology/artifact.json",
+      "sha256": "6ed2e52fdf774863f5de8c478c917c49f67207c0dc0877c89a81cf1471dc5579"
+    },
+    "original_source_effects_closed": false,
+    "release": {
+      "bytes": 2934,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/triangle-seed-publication-v1/C++ triangle seed release/artifact.json",
+      "sha256": "fb220167e463745078162967100839abfcf52582df2b87d623e5eb49bcba9b6d"
+    },
+    "relocated_rebuilt_install": {
+      "bytes": 520,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/triangle-seed-publication-v1/install.json",
+      "sha256": "a022165ee7be2282325786a4fda241dd0f1dae996f63c8cb1f4734712ca10890"
+    },
+    "scalar_field_counts": {
+      "constraints": 256,
+      "dofs": 24576,
+      "grad": 147456,
+      "quadrature": 24576,
+      "value": 73728
+    },
+    "scope": "EXPLICIT_TRIANGLE_SEED_TO_SHA256_STDOUT",
+    "sealed_reference_element_and_seed": true,
+    "seed": {
+      "bytes": 472,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/mesh-seed-topology-v1/seed.bin",
+      "sha256": "9deac7c611d1196db78cb03de80c69dc0eb89169a785c6db08e4b4621bc50022"
+    },
+    "sha_verified_library_paths": 9,
+    "shared_library_duplicate_logical_bytes_avoided": 871927554,
+    "source": {
+      "bytes": 10799,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/triangle-seed-publication-v1/C++ triangle seed release/scar_publish.cpp",
+      "sha256": "0d76439d7901088541d16aad92f82cbe370663bf863a1f343e9d78a77085c14b"
+    },
+    "standalone_cpp20": true,
+    "truncated_input_nonzero_and_stdout_bytes_zero": true,
+    "unique_physical_provider_files": 3,
+    "uses_python_at_runtime": false
+  },
+  "workload": "fixed scikit-fem uniform triangle refinement and sparse solve"
+}
