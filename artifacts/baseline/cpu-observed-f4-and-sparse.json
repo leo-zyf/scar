@@ -55,6 +55,22 @@
         "observed_frames": 8
       }
     },
+    "external_catalog_graph_inventory": {
+      "inventoried_units": 22,
+      "local_model_closed": false,
+      "missing_address_rules": {
+        "ContextExceptionArguments": 40,
+        "EnterHandledException": 174,
+        "PrepareReraise": 461,
+        "RestoreHandledException": 588
+      },
+      "publication": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/catalog-graph-state/result.json",
+        "sha256": "0a7c4b5bef702e5069147f4ace1c369a3874a702b78d771ecc0c97db3bca71c3",
+        "size_bytes": 9624
+      },
+      "seconds": 1402.5048924500588
+    },
     "external_material_summary": {
       "matched_code_ids": 72,
       "material_phase_seconds": 562.9103182669496,
@@ -76,6 +92,23 @@
       "size_bytes": 106551
     },
     "first_stage_complete": false,
+    "formal_native_operands": {
+      "logical_content_versions_established": false,
+      "proof_scope": "FORMAL_ENTRY_REFERENCE_TO_SAME_CAPTURE_NATIVE_OPERAND_OBSERVATION",
+      "publication": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/observed-formal-native-operands.json",
+        "sha256": "92dedbcf7af92fd6c967e00adbc6da737fea27d661342d59fec78c56a48817d8",
+        "size_bytes": 199977
+      },
+      "rejections": {
+        "FORMAL_ENTRY_WITHOUT_QUALIFIED_OPERAND": 4
+      },
+      "summary": {
+        "formals": 32,
+        "matched_formals": 28,
+        "observed_operand_links": 36
+      }
+    },
     "gap_records": 378,
     "gaps": {
       "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-observed-state-current/gaps.json",
@@ -111,6 +144,36 @@
   },
   "stage1_sparse": {
     "admitted_source_stages": 14,
+    "current_bounded_dynamic_witness": {
+      "capture_cpu_ids": [
+        49
+      ],
+      "catalog": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/catalog/result.json",
+        "sha256": "a77c6c011455486d267ea45c75cccc3ad34ad3b254854de4b2260655c9b997dd",
+        "size_bytes": 926
+      },
+      "cold_checks_passed": true,
+      "ordered_scope": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/scope-parallel.json",
+        "sha256": "56b27f28762eb54da7e927c65410bd834b85ce2b2f2640cd421aec1980be6731",
+        "size_bytes": 281338
+      },
+      "original_observation_attempts": {
+        "row": 60,
+        "solve": 76
+      },
+      "publication": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/summary.json",
+        "sha256": "340c11ae9ef8e3c650c7d5b75cf6adf5a58df46f5b4e9728d0a96de5dca81458",
+        "size_bytes": 5900
+      },
+      "solve_scope": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/scope-solve.json",
+        "sha256": "e07260fce33eb8157587e74e9081c8703f099796323a71365fa81a370d5cd5de",
+        "size_bytes": 43327
+      }
+    },
     "first_stage_complete": false,
     "frontend": {
       "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/frontend-current/result.json",
@@ -125,13 +188,118 @@
     "resource_records": 301,
     "scope": "CURRENT_F4_STATIC_SOURCE_PATH_FOR_THE_FEM_SWEEP_ENTRY"
   },
+  "stage2_rk4_budget_case": {
+    "alternatives": {
+      "READY_DAG": {
+        "peak_tensor_storage_bytes": 40108040,
+        "source_order_peak_tensor_storage_bytes": 42467336,
+        "within_budget": false
+      },
+      "SERIAL": {
+        "body_estimate_ns": 311840009,
+        "peak_tensor_storage_bytes": 35389448,
+        "source_order_peak_tensor_storage_bytes": 37748744,
+        "within_budget": true
+      }
+    },
+    "bitwise_outputs": 1,
+    "budget_bytes": 36000000,
+    "budget_scope": "GRAPH_HELD_TENSOR_BACKING_STORAGE",
+    "cpu_ids": [
+      14
+    ],
+    "decision": "ONLY_ADMISSIBLE_PLAN",
+    "manifest": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/recurrence-budget-36mb-v1/artifact.json",
+      "sha256": "5ee99cb504926e762680d97b441ae3293d9bbbbc30a85b2878b532cc0bcafc09",
+      "size_bytes": 10976
+    },
+    "native_validation": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/recurrence-budget-36mb-validation.json",
+      "sha256": "1c5ce24dd12053c67673c1595b5e376c50d3be0f859acca524da534aae36877a",
+      "size_bytes": 1373
+    },
+    "new_ab_benchmark_run": false,
+    "original_reference": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/reference-16.f32",
+      "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+      "size_bytes": 2359296
+    },
+    "physical_execution_plan": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/recurrence-budget-36mb-v1/plan/execution.json",
+      "sha256": "e769a485b95741a9a8f72a0bc14729d41cfe6ed479952d06781b6602f5bae007",
+      "size_bytes": 15940
+    },
+    "reference_steps": 16,
+    "selected_mode": "SERIAL",
+    "tested_budget_chosen_for_feasibility_boundary": true
+  },
   "stage2_sparse": {
+    "archived_ordered_recipe_current_reader_error": "F4 build rules differ",
     "compact_input_stream": {
       "byte_count": 311384,
       "sha256": "b6fe03926b3a79a3f763578d0502d7667e23b8742bcd83d998201db31cd1d1e0"
     },
-    "current_f4_recipe_requalified": false,
-    "current_recipe_replay_error": "F4 build rules differ",
+    "current_f4_ordered_recipe_requalified": false,
+    "current_serial_source_and_cost_release": {
+      "cost_samples": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-cost/result.json",
+        "sha256": "ac86b7ef5f1a8e060ecc47e0f1d35710b43043ed21db04ef8683992d25a4521d",
+        "size_bytes": 7979
+      },
+      "cpu_ids": [
+        49
+      ],
+      "decision": "LOAD_NATIVE_CANDIDATE",
+      "full_entry_wall_ns": {
+        "native": {
+          "max_ns": 6961360098,
+          "median_ns": 6939889917,
+          "min_ns": 6936747697,
+          "samples_ns": [
+            6961360098,
+            6939889917,
+            6936747697
+          ],
+          "variance_ns2": 179435416947660.34
+        },
+        "original": {
+          "max_ns": 8694761615,
+          "median_ns": 8691477668,
+          "min_ns": 8667357008,
+          "samples_ns": [
+            8691477668,
+            8667357008,
+            8694761615
+          ],
+          "variance_ns2": 223933838593143
+        }
+      },
+      "measurement_pairs": 3,
+      "median_original_over_native": 1.2523941693526432,
+      "modeled_intervals_ns": {
+        "native_upper": 6113678793,
+        "original_lower": 6645826777
+      },
+      "release": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-release/launch.json",
+        "sha256": "c4f5c2f0f2b9dd603cdea9417e5c429ae665f69a828c7d98a01c347805048a9a",
+        "size_bytes": 3989
+      },
+      "requested_calls": 512,
+      "scope": "ORIGINAL_FEM_ENTRY_WITH_GUARDED_NATIVE_SUPERLU_SOLVE_BOUNDARY",
+      "study": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-study/result.json",
+        "sha256": "f566776e9719ac8e0089d59f0f20d78b7d2894828c9f86f187585b25d096652f",
+        "size_bytes": 2411
+      },
+      "validation": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-entry-ab/result.json",
+        "sha256": "fbc6391e2e2c731f18d19fe63c1ba2b969e203b48522897320721ec2506b569d",
+        "size_bytes": 13382
+      },
+      "warmup_pairs": 1
+    },
     "geometry": {
       "call_count": 512,
       "nnz": 20865,
@@ -142,7 +310,8 @@
       "sha256": "f9a6f452de8d536888049d5d42d5dfc26cbb23bae2a154d0f887c54d0598156e",
       "size_bytes": 3846
     },
-    "new_ab_benchmark_run": false,
+    "new_ab_benchmark_run": true,
+    "ordered_release_status": "CURRENT_F4_SCOPE_REBUILT_CURRENT_SERIAL_REQUALIFIED_ORDERED_RELEASE_PENDING",
     "raw_input_stream": {
       "byte_count": 102873156,
       "sha256": "d45c9828b22fe8851c2695d53d382177e80cb7b6a9616f1a21638047b08029a5"
@@ -174,6 +343,27 @@
       "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/C++ moved sparse/scar_ordered_sparse.cpp",
       "sha256": "c9df7db3629b010d0cc23863b3115de76f786d8ee18105faf92016a32e18ee73",
       "size_bytes": 15449
+    },
+    "current_serial_source_release_execution": {
+      "fallback_calls": 0,
+      "launch": {
+        "applied": "LOAD_NATIVE_CANDIDATE",
+        "reason": "QUALIFIED_SPARSE_SYMBOLIC_SCOPE",
+        "sha256": "c4f5c2f0f2b9dd603cdea9417e5c429ae665f69a828c7d98a01c347805048a9a"
+      },
+      "matches_baseline_stdout": true,
+      "native_solver_calls": 512,
+      "publication": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-admitted-live.json",
+        "sha256": "ad44a77613d7958bb91bdc1a3863c6e17b12251d6317bd250bb002ec6d48dcec",
+        "size_bytes": 1838
+      },
+      "scope": "GUARDED_CXX_SOLVER_IN_ORIGINAL_PYTHON_ENTRY",
+      "stdout": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-admitted-live.stdout",
+        "sha256": "a3b74b82b3b4c0652a203508fa5f7823d29772a5e5d8cc06b9d51f7085ea7e3e",
+        "size_bytes": 65
+      }
     },
     "native_launch": {
       "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/C++ moved sparse/scar_ordered_sparse",

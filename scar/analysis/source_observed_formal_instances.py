@@ -117,9 +117,15 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog='scar observed-formals', description=__doc__)
     parser.add_argument('build', help='F4 build with observed binding states')
     parser.add_argument('--unit', help='source unit identity, defaults to the entry unit')
+    parser.add_argument('--capture', help='join original native operands from this capture archive')
     args = parser.parse_args(argv)
     with BuildSession(args.build) as session:
-        result = export_observed_formal_instances(session, unit=args.unit)
+        if args.capture is None:
+            result = export_observed_formal_instances(session, unit=args.unit)
+        else:
+            from scar.analysis.source_formal_native_operands import export_source_formal_native_operands
+
+            result = export_source_formal_native_operands(session, args.capture, unit=args.unit)
     print(json.dumps(result, sort_keys=True, ensure_ascii=False))
     return 0
 
