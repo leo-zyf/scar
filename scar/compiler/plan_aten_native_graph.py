@@ -435,7 +435,7 @@ def _prefix(cpus):
     return ['env', '-i', *(f'{k}={v}' for k, v in _ENV.items()), 'taskset', '-c', ','.join(map(str, cpus))]
 
 
-def _launcher(stage, executable, selection, schedule, inputs, guarded, choice, *, replica=None):
+def _launcher(stage, executable, selection, schedule, inputs, guarded, choice, *, replica=None, operation_order=None):
     # The result is qualified for exactly the tested input bytes and linked primary images.
     checks = ['test "$(sha256sum < ' + shlex.quote(row['path']) + ' | cut -d " " -f 1)" = '
               + row['sha256'] + ' || { echo "SCAR native graph member digest differs" >&2; exit 78; }'
@@ -453,6 +453,11 @@ def _launcher(stage, executable, selection, schedule, inputs, guarded, choice, *
         spec = [''.join(map(str, choice))]
         if replica is not None:
             spec.extend(str(replica[k]) for k in ('input_index', 'lane'))
+        if operation_order is not None:
+            if replica is not None:
+                raise ValueError('native ordered launch does not admit a replica')
+            mode = '--run-ready-ordered'
+            spec.append(','.join(map(str, operation_order)))
     elif dual and team:
         from scar.compiler.plan_aten_native_team import team_window_spec
 

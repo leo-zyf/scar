@@ -32,6 +32,7 @@ _ENTRY_TRIAL_POLICY = 'NATIVE_SERIAL_GAIN_FOR_ENTRY_COMPARISON'
 _NUMA_REQUIRED = 'READY_DAG_NUMA_CALIBRATION_REQUIRED'
 _REPLICA_CALIBRATION = 'scar.aten-ready-replica-calibration'
 _REPLICA_PAIRED = 'scar.aten-ready-replica-paired'
+_NATIVE_ONLY = 'STANDALONE_CPP20_ONLY'
 
 
 def _ready_bundle(path, digest):
@@ -112,7 +113,9 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         operation_samples = 'retained_samples_ns' if retained else 'replicated_samples_ns'
         cost_refs = (*refs, dict(artifact=replica['calibration'], locator=f'#/raw/{operation_samples}'))
     lane_ends = {}
-    for row, native in zip(timeline, recipe['operations'], strict=True):
+    order = model.get('operation_order', range(len(timeline)))
+    for index in order:
+        row, native = timeline[index], recipe['operations'][index]
         identifier = row['operation']
         prior = row['lane_predecessor']
         predecessors = () if prior is None else (timeline[prior]['operation'],)
@@ -157,6 +160,8 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
                            else 'RETAINS_ALL_TENSOR_HANDLES_EXCLUDING_PROVIDER_WORKSPACE')
     assumptions = ('DATA_AND_LOCAL_LANE_ORDER', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
                    lifetime_assumption, 'SERVICES_EXCLUDE_DISPATCH_AND_JOIN')
+    if 'operation_order' in model:
+        assumptions = (*assumptions, 'TOPOLOGICAL_OPERATION_ORDER_BOUND_TO_NATIVE_EXECUTOR')
     if locality is not None:
         assumptions = (*assumptions, 'SAMPLED_NUMA_RESIDENCY_IN_SHARED_HOST_MEMORY')
     if replica is not None:
@@ -189,7 +194,8 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
 def _case(raw, model, baseline, warmup, count, storage, *, recipe):
     if (raw['all_pairs_validated'] is not True or
             (raw['lanes'], raw['baseline'], raw['cpu_ids'], raw['warmup_pairs'], raw['measured_pairs'],
-             raw['result_storage_bytes']) != (model['lanes'], baseline, model['cpu_ids'], warmup, count, storage)):
+             raw['result_storage_bytes']) != (model['lanes'], baseline, model['cpu_ids'], warmup, count, storage)
+            or raw.get('operation_order') != model.get('operation_order')):
         raise ValueError('ready DAG validation differs from its planned boundary or storage geometry')
     residency = model['tensor_storage']
     lifetime = None
@@ -220,11 +226,11 @@ def _case(raw, model, baseline, warmup, count, storage, *, recipe):
     return results
 
 
-def _ready_model(recipe, schedule, raw, budget, warmup, *, ready_dag_abi):
+def _ready_model(recipe, schedule, raw, budget, warmup, *, ready_dag_abi, joint_order=False):
     if raw['cpu_ids'] != schedule['cpus'] or raw['warmup_pairs'] != warmup:
         raise ValueError('ready DAG calibration belongs to a different CPU execution context')
     return plan_ready_dag(recipe, schedule, raw['calibration'], warmup, tensor_budget_bytes=budget,
-                          ready_dag_abi=ready_dag_abi)
+                          ready_dag_abi=ready_dag_abi, joint_order=joint_order)
 
 
 def _baselines(recipe, schedule, calibration, model, budget, warmup):
@@ -236,8 +242,17 @@ def _baselines(recipe, schedule, calibration, model, budget, warmup):
     return baselines
 
 
-def calibrate_ready_placement(executable, recipe, schedule, inputs, raw, *, budget, warmup, ready_dag_abi):
-    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=ready_dag_abi)
+def _source_order_baseline(recipe, schedule, raw, model, budget, warmup, abi):
+    if 'operation_order' in model and model['status'] == 'PLAN_READY_DAG':
+        source_order = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+        if source_order['status'] == 'PLAN_READY_DAG':
+            return source_order, 'ready:' + ''.join(map(str, source_order['lanes']))
+    return None, None
+
+
+def calibrate_ready_placement(executable, recipe, schedule, inputs, raw, *, budget, warmup, ready_dag_abi,
+                              joint_order=False):
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=ready_dag_abi, joint_order=joint_order)
     if model['status'] != _NUMA_REQUIRED:
         return raw, model
     lanes = ''.join(map(str, model['lanes']))
@@ -333,13 +348,16 @@ def _replay_replica(recipe, schedule, model, replica, warmup, count):
 
 def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_bytes, warmup_pairs=5,
                     measured_pairs=12, primitive_observation=None, entry_comparison=False, try_input_replica=False,
-                    try_retained_input_replica=False):
+                    try_retained_input_replica=False, joint_order=False):
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
     if not 3 <= warmup_pairs <= 100 or not 4 <= measured_pairs <= 500 or measured_pairs % 2:
         raise ValueError('ready DAG requires 3–100 warmups and an even number of 4–500 measurement pairs')
     artifact, origin, recipe, hardware, executable, schedule = _ready_bundle(bundle, bundle_sha256)
+    if joint_order and (artifact.get('ready_order_abi') != 1 or entry_comparison or try_input_replica
+                        or try_retained_input_replica or schedule.get('cross_numa', False)):
+        raise ValueError('joint ordering requires a current same-NUMA native-only graph')
     if try_input_replica and artifact.get('ready_replica_abi') != 1:
         raise ValueError('input replica planning requires a bundle built with --ready-dag --allow-cross-numa')
     if try_retained_input_replica and (try_input_replica or artifact.get('ready_retained_abi') != 1):
@@ -356,8 +374,7 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
         raw = primitive_observation['raw']
     abi = artifact['ready_dag_abi']
     raw, model = calibrate_ready_placement(executable, recipe, schedule, inputs, raw,
-        budget=tensor_budget_bytes, warmup=warmup_pairs, ready_dag_abi=abi)
-    baselines = _baselines(recipe, schedule, raw['calibration'], model, tensor_budget_bytes, warmup_pairs)
+        budget=tensor_budget_bytes, warmup=warmup_pairs, ready_dag_abi=abi, joint_order=joint_order)
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-ready-', dir=out.parent) as temporary:
         stage = Path(temporary)
@@ -370,13 +387,31 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
         calibration = publish('observations.json', _CALIBRATION, raw)
         validations, measurements = [], []
         replica = None
+        order_trial = None
+        if joint_order:
+            original_model, baseline = _source_order_baseline(recipe, schedule, raw, model,
+                                                               tensor_budget_bytes, warmup_pairs, abi)
+            if original_model is not None:
+                spec = [''.join(map(str, model['lanes'])), ','.join(map(str, model['operation_order']))]
+                paired = _invoke(executable, schedule, '--benchmark-ready-ordered',
+                                 [*spec, baseline, warmup_pairs, measured_pairs], inputs)
+                validation = _case(paired, model, baseline, warmup_pairs, measured_pairs,
+                                   raw['calibration']['result_storage_bytes'], recipe=recipe)
+                order_trial = dict(prediction=model['joint_cpu_plan'], validation=validation,
+                                   observations=publish('joint-order-paired.json', _PAIRED, paired))
+                if not validation['profitable']:
+                    model = original_model
+        baselines = _baselines(recipe, schedule, raw['calibration'], model, tensor_budget_bytes, warmup_pairs)
         selected = 'READY_DAG'
         reason = model['reason']
         if model['status'] == 'PLAN_READY_DAG':
             lanes = ''.join(map(str, model['lanes']))
+            order = model.get('operation_order')
+            mode, prefix = '--benchmark-ready', [lanes]
+            if order is not None:
+                mode, prefix = '--benchmark-ready-ordered', [lanes, ','.join(map(str, order))]
             for i, baseline in enumerate(baselines):
-                measured = _invoke(executable, schedule, '--benchmark-ready',
-                                   [lanes, baseline, warmup_pairs, measured_pairs], inputs)
+                measured = _invoke(executable, schedule, mode, [*prefix, baseline, warmup_pairs, measured_pairs], inputs)
                 validations.append(_case(measured, model, baseline, warmup_pairs, measured_pairs,
                                          raw['calibration']['result_storage_bytes'], recipe=recipe))
                 measurements.append(publish(f'paired-{i}.json', _PAIRED, measured))
@@ -393,14 +428,28 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
             _write(stage / 'plan.json', execution)
         if any(_receipt(row['path']) != row for row in guarded):
             raise ValueError('native ready DAG members changed during measurement')
+        delivered = 'KEEP_ORIGINAL'
         if reason is None and selected != 'READY_DAG_RETAINED' and all(result['profitable'] for result in validations):
             placement = replica['candidate'] if selected == 'READY_DAG_REPLICA' else None
-            _launcher(stage, executable, selected, schedule, inputs, guarded, model['lanes'], replica=placement)
+            _launcher(stage, executable, selected, schedule, inputs, guarded, model['lanes'], replica=placement,
+                      operation_order=model.get('operation_order'))
+        if reason is None:
+            delivered = selected
+        elif joint_order:
+            if model['tensor_storage']['serial_peak_bytes'] <= tensor_budget_bytes:
+                delivered = 'SERIAL'
+                _launcher(stage, executable, delivered, schedule, inputs, guarded, ())
+            else:
+                delivered = 'NO_NATIVE_DELIVERY'
         report = dict(schema=SCHEMA, schema_version=abi, bundle=origin, executable=guarded[0], inputs=inputs,
             cpu_ids=model['cpu_ids'], model=model, observations=calibration, paired_validation=measurements,
             validation=validations, warmup_pairs=warmup_pairs, measured_pairs=measured_pairs,
-            selected=selected if reason is None else 'KEEP_ORIGINAL', reason=reason,
+            selected=delivered, reason=reason,
             source_replacement_authorized=False)
+        if joint_order:
+            report['delivery_scope'] = _NATIVE_ONLY
+            if order_trial is not None:
+                report['joint_order_comparison'] = order_trial
         if entry_comparison:
             report['validation_policy'] = _ENTRY_TRIAL_POLICY
         if replica is not None:
@@ -425,7 +474,27 @@ def read_ready_selection(path, selection):
     if not 3 <= warmup <= 100 or not 4 <= count <= 500 or count % 2:
         raise ValueError('ready DAG selection requires its balanced matched trial')
     budget = selection['model']['tensor_storage']['budget_bytes']
-    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+    delivery_scope = selection.get('delivery_scope')
+    if (delivery_scope not in (None, _NATIVE_ONLY) or delivery_scope == _NATIVE_ONLY
+            and (artifact.get('ready_order_abi') != 1 or selection.get('validation_policy') is not None
+                 or selection.get('input_replica') is not None)):
+        raise ValueError('ready selection differs from the standalone native delivery scope')
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi, joint_order=delivery_scope == _NATIVE_ONLY)
+    if delivery_scope == _NATIVE_ONLY:
+        original_model, baseline = _source_order_baseline(recipe, schedule, raw, model, budget, warmup, abi)
+        trial = selection.get('joint_order_comparison')
+        if original_model is None:
+            if trial is not None:
+                raise ValueError('unexpected source-order comparison for this ready plan')
+        else:
+            if trial is None:
+                raise ValueError('standalone joint plan requires its source-order comparison')
+            paired = read_artifact(trial['observations'])
+            expected = _case(paired, model, baseline, warmup, count, raw['calibration']['result_storage_bytes'], recipe=recipe)
+            if trial['validation'] != expected or trial['prediction'] != model['joint_cpu_plan']:
+                raise ValueError('joint ready comparison differs from the replayed evidence')
+            if not expected['profitable']:
+                model = original_model
     baselines = _baselines(recipe, schedule, raw['calibration'], model, budget, warmup)
     results = [_case(read_artifact(ref), model, baseline, warmup, count, raw['calibration']['result_storage_bytes'], recipe=recipe)
                for ref, baseline in zip(selection['paired_validation'], baselines, strict=True)]
@@ -471,12 +540,14 @@ def main(argv=None):
     replicas.add_argument('--try-input-replica', action='store_true', help='price one NUMA-local input copy per call')
     replicas.add_argument('--try-retained-input-replica', action='store_true',
                           help='price one byte-checked NUMA-local input copy retained across calls')
+    replicas.add_argument('--joint-order', action='store_true',
+                          help='optimize CPU placement and topological order for standalone C++20 delivery')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     selection = plan_aten_ready(args.bundle, bundle_sha256=args.bundle_sha256, input_paths=args.input,
         tensor_budget_bytes=args.tensor_budget_bytes, warmup_pairs=args.warmup_pairs,
         measured_pairs=args.measured_pairs, out=args.out, try_input_replica=args.try_input_replica,
-        try_retained_input_replica=args.try_retained_input_replica)
+        try_retained_input_replica=args.try_retained_input_replica, joint_order=args.joint_order)
     print(json.dumps(dict(selected=selection['selected'], reason=selection['reason'],
         selection=str(Path(args.out) / 'selection.json'))))
     return 0

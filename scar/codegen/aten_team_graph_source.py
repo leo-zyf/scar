@@ -126,6 +126,8 @@ def render_ready_support(calls, outputs, dependencies, *, exported_indices, inpu
     input_edge_values = ', '.join(f'TeamDataEdge{{{input_index}, {consumer}}}' for input_index, consumer in input_edges)
     return f'''
 using ReadyLanes = std::array<std::uint8_t, operation_count>;
+using ReadyOrder = std::array<std::size_t, operation_count>;
+inline constexpr const ReadyOrder& ready_source_order = source_ready_order<operation_count>;
 inline constexpr std::array<std::size_t, operation_count + 1> ready_offsets{{{offset_items}}};
 inline constexpr std::array<std::size_t, {len(predecessors)}> ready_predecessors{{{predecessor_items}}};
 inline constexpr std::array<std::size_t, operation_count> ready_consumer_counts{{{consumer_items}}};
@@ -134,7 +136,7 @@ inline constexpr std::array<bool, operation_count> ready_exported{{{export_items
 template <class LaneInputs, class Prepare, class Observer, class ReleaseObserver>
 inline std::array<at::Tensor, output_count> run_ready_with_lane_inputs(
         CpuTeam& team, const ReadyLanes& lanes, LaneInputs&& select_inputs, Prepare&& prepare,
-        Observer&& observe, ReleaseObserver&& observe_release) {{
+        Observer&& observe, ReleaseObserver&& observe_release, const ReadyOrder& order = ready_source_order) {{
     std::array<at::Tensor, operation_count> values;
 {values}
     const auto invoke = [&](std::size_t index) {{
@@ -148,17 +150,23 @@ inline std::array<at::Tensor, output_count> run_ready_with_lane_inputs(
                       invoke, [&](std::size_t index) {{
         values[index].reset();
         observe_release(index);
-    }}, prepare);
+    }}, prepare, order);
     return {{{outputs}}};
 }}
 
 template <class Observer, class ReleaseObserver>
 inline std::array<at::Tensor, output_count> run_ready_inspected(
         std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes,
-        Observer&& observe, ReleaseObserver&& observe_release) {{
+        Observer&& observe, ReleaseObserver&& observe_release, const ReadyOrder& order = ready_source_order) {{
     validate_inputs(inputs);
     return run_ready_with_lane_inputs(team, lanes, [inputs](std::size_t) {{ return inputs; }},
-                                      [](std::size_t) {{}}, observe, observe_release);
+                                      [](std::size_t) {{}}, observe, observe_release, order);
+}}
+
+inline std::array<at::Tensor, output_count> run_ready_ordered(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, const ReadyOrder& order) {{
+    return run_ready_inspected(inputs, team, lanes, [](std::size_t, auto&& call) {{ return call(); }},
+                               [](std::size_t) {{}}, order);
 }}
 
 template <class Observer>

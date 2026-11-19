@@ -321,6 +321,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
                            implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
         if ready_dag:
             receipt['ready_dag_abi'] = 2
+            receipt['ready_order_abi'] = 1
         if ready_replica:
             receipt['ready_replica_abi'] = 1
             receipt['ready_retained_abi'] = 1

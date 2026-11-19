@@ -587,6 +587,19 @@ graph::ReadyLanes parse_ready_lanes(std::string_view text) {
     return lanes;
 }
 
+graph::ReadyOrder parse_ready_order(std::string_view text) {
+    graph::ReadyOrder order{};
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        const auto delimiter = text.find(',');
+        if ((delimiter == std::string_view::npos) != (i + 1 == order.size())) {
+            throw std::invalid_argument("ready DAG requires one order position per operation");
+        }
+        order[i] = integer(text.substr(0, delimiter), 0, static_cast<int>(order.size() - 1), "ready operation");
+        if (delimiter != std::string_view::npos) text.remove_prefix(delimiter + 1);
+    }
+    return order;
+}
+
 void emit_ready_samples(const std::vector<PairedSample>& samples) {
     std::cout << '[';
     for (std::size_t i = 0; i < samples.size(); ++i) {
@@ -684,14 +697,23 @@ void calibrate_ready_locality(char** args, const std::array<int, 3>& cpus, graph
 }
 
 void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
-                     const graph::ReadyLanes& lanes) {
+                     const graph::ReadyLanes& lanes, const graph::ReadyOrder* order = nullptr) {
     const std::string_view baseline_spec(args[0]);
-    const auto windows = baseline_spec == "serial" ? std::nullopt : std::optional(parse_windows(baseline_spec));
+    const auto baseline_lanes = order && baseline_spec.starts_with("ready:")
+        ? std::optional(parse_ready_lanes(baseline_spec.substr(6))) : std::nullopt;
+    const auto windows = baseline_lanes || baseline_spec == "serial"
+        ? std::nullopt : std::optional(parse_windows(baseline_spec));
     const int warmup = integer(args[1], 3, 100, "warmup count");
     const int measured = integer(args[2], 4, 500, "measurement count");
     if (measured % 2 != 0) throw std::invalid_argument("ready DAG requires balanced AB/BA measurement pairs");
     const SampleInputs data(args + 3);
     const auto& inputs = data.tensors;
+    const auto& operation_order = order ? *order : graph::ready_source_order;
+    const auto run_baseline = [&] {
+        if (baseline_lanes) return graph::run_ready(inputs, team, *baseline_lanes);
+        if (windows) return graph::run_parallel(inputs, team, *windows);
+        return graph::run(inputs);
+    };
     ResultStorage storage;
     const auto input_bytes = std::accumulate(inputs.begin(), inputs.end(), std::size_t{0},
         [](std::size_t sum, const at::Tensor& tensor) { return sum + tensor.storage().nbytes(); });
@@ -715,14 +737,13 @@ void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam
                 throw std::runtime_error("ready DAG released a result twice");
             }
             live.fetch_sub(storage[op]->bytes, std::memory_order_relaxed);
-        });
+        }, operation_order);
         data.check();
         check_outputs(inputs, reference, ready);
     }
     const auto samples = measure_ready_pairs(data, warmup, measured, [&](bool baseline) {
         const auto started = Clock::now();
-        auto output = baseline ? (windows ? graph::run_parallel(inputs, team, *windows) : graph::run(inputs))
-                               : graph::run_ready(inputs, team, lanes);
+        auto output = baseline ? run_baseline() : graph::run_ready_ordered(inputs, team, lanes, operation_order);
         return std::pair{elapsed_ns(started), std::move(output)};
     });
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"measured_pairs\":" << measured << ",\"cpu_ids\":";
@@ -736,6 +757,10 @@ void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam
     emit_ready_samples(samples);
     std::cout << ",\"result_storage_bytes\":";
     emit_storage(storage);
+    if (order) {
+        std::cout << ",\"operation_order\":";
+        emit_numbers(*order);
+    }
     std::vector<std::size_t> released_indices;
     for (std::size_t op = 0; op < released.size(); ++op) {
         if (released[op].load(std::memory_order_relaxed)) released_indices.push_back(op);
@@ -930,12 +955,13 @@ int main(int argc, char** argv) {
     const bool calibrating = mode == "--calibrate-team";
     const bool measuring = mode == "--benchmark-team";
     const bool serial = mode == "--run-serial";
-    bool calibrating_ready = false, measuring_ready = false, running_ready = false;
+    bool calibrating_ready = false, measuring_ready = false, running_ready = false, ordered_ready = false;
     bool calibrating_replica = false, measuring_replica = false, running_replica = false;
 #ifdef SCAR_ATEN_READY_DAG
     calibrating_ready = mode == "--calibrate-ready-locality";
-    measuring_ready = mode == "--benchmark-ready";
-    running_ready = mode == "--run-ready";
+    measuring_ready = mode == "--benchmark-ready" || mode == "--benchmark-ready-ordered";
+    running_ready = mode == "--run-ready" || mode == "--run-ready-ordered";
+    ordered_ready = mode == "--benchmark-ready-ordered" || mode == "--run-ready-ordered";
 #endif
 #ifdef SCAR_ATEN_READY_REPLICA
     const bool retained = mode == "--calibrate-ready-retained" || mode == "--benchmark-ready-retained"
@@ -950,14 +976,16 @@ int main(int argc, char** argv) {
     }
     const auto expected = graph::input_count + (measuring_replica ? 10 : calibrating_replica ? 9
         : measuring_ready ? 9 : measuring ? 8 : calibrating_ready ? 7 : calibrating ? 6
-        : (running_replica ? 8 : serial ? 3 : 6) + graph::output_count);
+        : (running_replica ? 8 : serial ? 3 : 6) + graph::output_count) + ordered_ready;
     if (static_cast<std::size_t>(argc) != expected) {
         std::fputs("usage: aten-graph --calibrate-team <caller> <worker1> <worker2> <warmup> <input.f32>...\n"
                    "       aten-graph --benchmark-team <caller> <worker1> <worker2> <windows> <warmup> <odd-count> <input.f32>...\n"
                    "       aten-graph --run-team <caller> <worker1> <worker2> <windows> <input.f32>... <new-output.f32>...\n"
                    "       aten-graph --run-serial <caller> <input.f32>... <new-output.f32>...\n", stderr);
 #ifdef SCAR_ATEN_READY_DAG
-        std::fputs("       aten-graph --calibrate-ready-locality <caller> <worker1> <worker2> <lanes> <warmup> <input.f32>...\n", stderr);
+        std::fputs("       aten-graph --calibrate-ready-locality <caller> <worker1> <worker2> <lanes> <warmup> <input.f32>...\n"
+                   "       aten-graph --benchmark-ready-ordered <caller> <worker1> <worker2> <lanes> <order> <baseline> <warmup> <even-count> <input.f32>...\n"
+                   "       aten-graph --run-ready-ordered <caller> <worker1> <worker2> <lanes> <order> <input.f32>... <new-output.f32>...\n", stderr);
 #endif
 #ifdef SCAR_ATEN_READY_REPLICA
         std::fputs("       aten-graph --calibrate-ready-replica <caller> <worker1> <worker2> <lanes> <input-index> <lane> <warmup> <input.f32>...\n"
@@ -1004,6 +1032,14 @@ int main(int argc, char** argv) {
 #ifdef SCAR_ATEN_READY_DAG
         if (calibrating_ready || measuring_ready || running_ready) {
             const auto lanes = parse_ready_lanes(argv[5]);
+            if (ordered_ready) {
+                const auto order = parse_ready_order(argv[6]);
+                if (running_ready) return invoke(argv + 7, [&](const auto& inputs) {
+                    return graph::run_ready_ordered(inputs, team, lanes, order);
+                });
+                benchmark_ready(argv + 7, cpus, team, lanes, &order);
+                return 0;
+            }
             if (running_ready) return invoke(argv + 6, [&](const auto& inputs) { return graph::run_ready(inputs, team, lanes); });
             if (calibrating_ready) calibrate_ready_locality(argv + 6, cpus, team, lanes);
             else benchmark_ready(argv + 6, cpus, team, lanes);

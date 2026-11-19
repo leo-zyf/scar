@@ -45,24 +45,30 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
              geometry_contract, geometry_contract_sha256, tensor_budget_bytes,
              graph_warmup_pairs, graph_measured_pairs, entry_function, entry_args, entry_warmup_pairs,
              entry_measured_pairs, allow_ambient_grad, expected_native_calls, compare_ready=False,
-             allow_cross_numa_ready=False):
+             allow_cross_numa_ready=False, native_only=False):
     report = dict(schema='scar.aten-entry-delivery', schema_version=1, discovery=inputs['discovery'],
-                  recommendation='KEEP_ORIGINAL', automatic_deployment_authorized=False)
+                  recommendation='KEEP_ORIGINAL', delivery_scope='PYTHON_DIFFERENTIAL_EXPERIMENT',
+                  automatic_deployment_authorized=False)
+    if native_only:
+        report.update(recommendation='NO_NATIVE_DELIVERY', delivery_scope='STANDALONE_CPP20_REGION')
     if inputs['status'] == 'KEEP_ORIGINAL':
         return dict(report, reason='DISCOVERY_KEPT_ORIGINAL', discovery_reason=inputs.get('reason'))
-    if concurrency_contract is None:
-        return dict(report, reason='CONCURRENCY_CONTRACT_REQUIRED')
 
     source, target = inputs['source'], inputs['target']
     recipe = read_artifact(inputs['recipe'])
+    report.update(source=source['source'], function=source['function'], code_key=source['code_key'],
+                  target=target, recipe=inputs['recipe'])
+    if concurrency_contract is None:
+        if native_only and tensor_budget_bytes is None:
+            return _ordered_native(inputs, report, out, 'CONCURRENCY_CONTRACT_UNAVAILABLE')
+        return dict(report, reason='CONCURRENCY_CONTRACT_REQUIRED')
     concurrency = artifact_reference(Path(concurrency_contract).resolve(strict=True), CONTRACT_SCHEMA)
     if concurrency['sha256'] != concurrency_sha256:
         raise ValueError('concurrency declaration differs from its pinned digest')
     target_dir = Path(target['uri']).parent
-    report.update(source=source['source'], function=source['function'], code_key=source['code_key'],
-                  target=target, concurrency_contract=concurrency, recipe=inputs['recipe'])
+    report['concurrency_contract'] = concurrency
     declarations = read_artifact(concurrency)
-    ready_graph = compare_ready and ready_team_available(recipe, declarations)
+    ready_graph = (compare_ready or native_only and tensor_budget_bytes is not None) and ready_team_available(recipe, declarations)
     allowed = os.sched_getaffinity(0)
     domain = None
     placement = None
@@ -90,6 +96,8 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
             placement = resolve_aten_cpu_windows(recipe, contract=declarations, target=target_dir, allowed_cpu_ids=allowed)
     except AtenCpuWindowFrontier as error:
         if error.reason != 'TARGET_CPU_DOMAIN_NOT_EXACT_PAIR':
+            if native_only and tensor_budget_bytes is None:
+                return _ordered_native(inputs, report, out, error.reason)
             return dict(report, reason=error.reason)
         try:
             domain = aten_cpu_placement_domain(target_dir, allowed_cpu_ids=allowed)
@@ -129,7 +137,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
         path = out / 'cpu-domain-plan.json'
         path.write_text(json.dumps(choices, sort_keys=True, indent=2, allow_nan=False) + '\n')
         report['cpu_domain_plan'] = artifact_reference(path, choices['schema'])
-        if choices['selected_mode'] == 'SERIAL' and not compare_ready:
+        if choices['selected_mode'] == 'SERIAL' and not (compare_ready or native_only):
             return dict(report, reason='CPU_DOMAIN_MODEL_KEPT_SERIAL')
         if choices['selected_cpu_ids'] != placement['cpus']:
             placement = propose(recipe, contract=declarations, target=target_dir, cpu_ids=choices['selected_cpu_ids'])
@@ -149,10 +157,23 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
 
     report['native'] = artifact_reference(native / 'artifact.json', compiled['schema'])
     plan = out / 'plan'
+    if native_only and 'ready_order_abi' in compiled:
+        selection = plan_aten_ready(report['native']['uri'], bundle_sha256=report['native']['sha256'],
+            input_paths=sample_paths, out=plan, tensor_budget_bytes=tensor_budget_bytes,
+            warmup_pairs=graph_warmup_pairs, measured_pairs=min(graph_measured_pairs + 1, 500),
+            primitive_observation=primitive_observation, joint_order=True)
+        return _native_result(report, selection, plan)
     selection = plan_aten_native_graph(report['native']['uri'], bundle_sha256=report['native']['sha256'],
         input_paths=sample_paths, out=plan, warmup_pairs=graph_warmup_pairs,
         measured_pairs=graph_measured_pairs, tensor_budget_bytes=tensor_budget_bytes,
         primitive_observation=primitive_observation)
+    if native_only:
+        storage = selection['model'].get('tensor_storage')
+        if (selection['selected'] == 'SERIAL' and storage is not None and tensor_budget_bytes is not None
+                and storage.get('serial_peak_bytes', 0) > tensor_budget_bytes):
+            (plan / 'launch.sh').unlink()
+            return dict(report, reason='NATIVE_SERIAL_STORAGE_BUDGET_EXCEEDED')
+        return _native_result(report, selection, plan)
     report['selection'] = artifact_reference(plan / 'selection.json', selection['schema'])
     report['native_selection'] = selection['selected']
     if compare_ready:
@@ -179,6 +200,24 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     return dict(report, recommendation=validation['recommendation'], speedups=validation['speedups'],
                 entry_validation_cpu_context=selection['cpu_ids'],
                 entry_validation=artifact_reference(verified / 'validation.json', validation['schema']))
+
+
+def _native_result(report, selection, plan):
+    result = dict(report, selection=artifact_reference(plan / 'selection.json', selection['schema']),
+                  native_selection=selection['selected'], reason=selection.get('reason'))
+    launcher = plan / 'launch.sh'
+    if launcher.is_file():
+        result.update(recommendation='STANDALONE_NATIVE_REGION_READY', launcher=str(launcher))
+    return result
+
+
+def _ordered_native(inputs, report, out, reason):
+    directory = out / 'native'
+    compiled = compile_aten_native_graph(inputs['recipe']['uri'], recipe_sha256=inputs['recipe']['sha256'],
+        linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=directory)
+    return dict(report, recommendation='STANDALONE_NATIVE_REGION_READY', native_selection='SERIAL', reason=reason,
+                native=artifact_reference(directory / 'artifact.json', compiled['schema']),
+                launcher=str(directory / 'launch.sh'))
 
 
 def _build_trial(inputs, selection, trial_dir, geometry_contract, geometry_contract_sha256):
@@ -249,7 +288,9 @@ def main(argv=None):
     parser.add_argument('--tensor-budget-bytes', type=int)
     parser.add_argument('--graph-warmup-pairs', type=int, default=7)
     parser.add_argument('--graph-measured-pairs', type=int, default=31)
-    parser.add_argument('--entry-function', help='validate the original callable in paired fresh processes')
+    parser.add_argument('--entry-function', help='run a Python differential experiment instead of standalone delivery')
+    parser.add_argument('--native-only', action='store_true',
+                        help='deliver the closed region as a standalone C++20 program')
     parser.add_argument('--compare-ready', action='store_true',
                         help='compare qualified grouped and dependency-ready variants at the full entry')
     parser.add_argument('--allow-cross-numa-ready', action='store_true',
@@ -270,6 +311,8 @@ def main(argv=None):
         parser.error('--geometry-contract and --geometry-contract-sha256 must be provided together')
     if args.entry_function is None and (args.entry_args or args.expected_native_calls is not None or args.allow_ambient_grad):
         parser.error('entry arguments and coverage options require --entry-function')
+    if args.native_only and args.entry_function is not None:
+        parser.error('--native-only delivers an independent program and takes no Python entry')
     if args.entry_measured_pairs is None:
         args.entry_measured_pairs = 4 if args.compare_ready else 3
     if args.compare_ready and (not args.entry_function or not (0 < (args.tensor_budget_bytes or 0) < 2**63)
@@ -287,7 +330,7 @@ def main(argv=None):
         entry_function=args.entry_function, entry_args=args.entry_args, entry_warmup_pairs=args.entry_warmup_pairs,
         entry_measured_pairs=args.entry_measured_pairs, allow_ambient_grad=args.allow_ambient_grad,
         expected_native_calls=args.expected_native_calls, compare_ready=args.compare_ready,
-        allow_cross_numa_ready=args.allow_cross_numa_ready)
+        allow_cross_numa_ready=args.allow_cross_numa_ready, native_only=args.entry_function is None)
     path = out / 'delivery.json'
     path.write_text(json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + '\n')
     print(json.dumps(dict(report=str(path), recommendation=report['recommendation'], reason=report.get('reason'))))

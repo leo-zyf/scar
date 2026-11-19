@@ -30,7 +30,7 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar discover-aten-regions --build PROGRAM --capture RAW --contract WRAPPERS.json --contract-sha256 SHA256 --out DISCOVERY` 按实际调用分组，用原 F4 核验完整函数边界。加 `--capture-model MODEL.json --capture-model-sha256 SHA256` 可直接链接并投影唯一闭合区域，省去手填 CALL 编号。包装器效果由显式合同声明。发现报告可供后续成本规划和原入口验证使用。
 
-`scar compile-aten-entry --help` 将发现报告接到成本规划、C++20 LibTorch 交付和可选的完整入口 A/B。校准 Tensor 按原形参传 `--input NAME=FILE`。存在三个相邻且独立的重叠安全算子时，按 NUMA、末级缓存及 ISA 提取有序代表组并比较串行、双核和三核。跨节点组合以完整的页采样和对应线程的实测算子成本为依据。完整入口 A/B 两侧共享选定的 CPU 掩码，核对原生覆盖率、输出等价和进程耗时。
+`scar compile-aten-entry --help` 默认将已闭合的发现区域交付为独立 C++20 程序，计算调用 LibTorch。校准 Tensor 按原形参传 `--input NAME=FILE`。带容量预算的同 NUMA 计划可联合选择算子执行核和核内顺序，并与原序就绪计划配对验证。未采用并行计划时，容量合格的串行执行仍走 C++20。需要对照原 Python 程序时，`--entry-function` 单独运行完整入口差分实验。
 
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 

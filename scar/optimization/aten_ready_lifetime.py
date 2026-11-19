@@ -35,23 +35,40 @@ def _satisfies(prefix, dependency):
             prefix[2] >= dependency[2])
 
 
-def ready_lifetime_bound(dependencies, lanes, output_indices, result_bytes, persistent_input_bytes):
+def _operation_order(dependencies, supplied):
+    count = len(dependencies)
+    if supplied is None:
+        return range(count)
+    if (type(supplied) not in (list, tuple) or len(supplied) != count
+            or any(type(op) is not int for op in supplied) or sorted(supplied) != list(range(count))):
+        raise ValueError('ready lifetime operation order must be an exact permutation')
+    seen = set()
+    for op in supplied:
+        if not all(parent in seen for parent in dependencies[op]):
+            raise ValueError('ready lifetime operation order must follow Tensor dependencies')
+        seen.add(op)
+    return supplied
+
+
+def ready_lifetime_bound(dependencies, lanes, output_indices, result_bytes, persistent_input_bytes, *,
+                         operation_order=None):
     """Return a safe storage envelope independent of sampled operation durations.
 
-    Within a lane, execution follows source order. An operation finishes after
-    publishing its result and dropping any handles it is last to consume. At a
-    reachable completed prefix, every ready lane head can have allocated its
-    output before any further operation finishes. That cut bounds storage
-    even if some ready operators start later or allocate partway through.
+    Each lane traverses the supplied topological order, or source order by
+    default. A finished operation has published its result and dropped the
+    handles it is last to consume. At a reachable completed prefix, every
+    ready lane head can have allocated its output before any further operation
+    finishes. That cut bounds storage across execution timings.
     """
     _validate(dependencies, lanes, output_indices, result_bytes, persistent_input_bytes)
     full_retention = _bounded_sum((persistent_input_bytes, *result_bytes))
     exports = set(output_indices)
     by_lane = [[], [], []]
-    ranks = []
-    for op, lane in enumerate(lanes):
+    ranks = [0] * len(lanes)
+    for op in _operation_order(dependencies, operation_order):
+        lane = lanes[op]
         by_lane[lane].append(op)
-        ranks.append(len(by_lane[lane]))
+        ranks[op] = len(by_lane[lane])
 
     # The latest consumer on each lane subsumes smaller ranks on that lane.
     # The same compression makes checking prerequisites independent of fan-in.
@@ -60,8 +77,9 @@ def ready_lifetime_bound(dependencies, lanes, output_indices, result_bytes, pers
     for op, parents in enumerate(dependencies):
         lane = lanes[op]
         for parent in parents:
-            last_uses[parent][lane] = ranks[op]
-            requirements[op][lanes[parent]] = ranks[parent]
+            last_uses[parent][lane] = max(last_uses[parent][lane], ranks[op])
+            source_lane = lanes[parent]
+            requirements[op][source_lane] = max(requirements[op][source_lane], ranks[parent])
     retained_results = [op in exports or any(uses) for op, uses in enumerate(last_uses)]
 
     frontier = deque([_INITIAL_PREFIX])

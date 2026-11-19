@@ -10,6 +10,35 @@
 
 namespace scar_aten_graph {
 
+template <std::size_t Count>
+inline constexpr auto source_ready_order = [] {
+    std::array<std::size_t, Count> order{};
+    for (std::size_t index = 0; index < Count; ++index) order[index] = index;
+    return order;
+}();
+
+template <std::size_t Count, std::size_t Edges>
+void validate_ready_order(const std::array<std::size_t, Count>& order,
+                          const std::array<std::size_t, Count + 1>& offsets,
+                          const std::array<std::size_t, Edges>& predecessors) {
+    std::array<std::size_t, Count> rank;
+    rank.fill(Count);
+    for (std::size_t position = 0; position < Count; ++position) {
+        const auto index = order[position];
+        if (index >= Count || rank[index] != Count) {
+            throw std::invalid_argument("ready DAG order must name each operation exactly once");
+        }
+        rank[index] = position;
+    }
+    for (std::size_t index = 0; index < Count; ++index) {
+        for (auto edge = offsets[index]; edge < offsets[index + 1]; ++edge) {
+            if (rank[predecessors[edge]] >= rank[index]) {
+                throw std::invalid_argument("ready DAG order violates a Tensor dependency");
+            }
+        }
+    }
+}
+
 // Cross-lane Tensor edges publish and wait on completion. Independent use
 // counters release backing handles without introducing scheduling constraints.
 template <std::size_t Count, std::size_t Edges, class Invoke, class Release, class Prepare>
@@ -18,8 +47,12 @@ void execute_ready_dag(CpuTeam& team, const std::array<std::uint8_t, Count>& lan
                        const std::array<std::size_t, Edges>& predecessors,
                        const std::array<std::size_t, Count>& consumer_counts,
                        const std::array<bool, Count>& exported, Invoke&& invoke, Release&& release,
-                       Prepare&& prepare) {
+                       Prepare&& prepare,
+                       const std::array<std::size_t, Count>& order = source_ready_order<Count>) {
     enum Completion : std::uint8_t { pending, complete, cancelled };
+
+    // The generated source order has already been checked against its edges.
+    if (&order != &source_ready_order<Count>) validate_ready_order(order, offsets, predecessors);
 
     std::array<bool, 3> used{};
     for (const auto lane : lanes) {
@@ -59,7 +92,7 @@ void execute_ready_dag(CpuTeam& team, const std::array<std::uint8_t, Count>& lan
     const auto run_lane = [&](std::size_t lane) {
         if (stopping.load(std::memory_order_acquire)) return;
         prepare(lane);
-        for (std::size_t index = 0; index < Count; ++index) {
+        for (const auto index : order) {
             if (lanes[index] != lane) continue;
             for (auto edge = offsets[index]; edge < offsets[index + 1]; ++edge) {
                 const auto parent = predecessors[edge];

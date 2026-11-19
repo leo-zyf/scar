@@ -3,6 +3,7 @@
 from statistics import median_low
 
 from scar.optimization.aten_native_team import READY_SERVICE_SCOPE, _measurements, _storage, _team_groups, data_dependencies
+from scar.optimization.aten_ready_joint import ordered_ready_intervals, solve_ready_joint
 from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
 from scar.optimization.aten_ready_numa import model_ready_numa_locality
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
@@ -59,7 +60,7 @@ def _prediction(point, samples):
     return dict(estimate_ns=point, sample_min_ns=min(point, *samples), sample_max_ns=max(point, *samples))
 
 
-def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2):
+def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2, joint_order=False):
     """Nominate and price a deterministic lane schedule on the measured placement.
 
     Callers must replay the exact concurrency declaration for every operator.
@@ -85,6 +86,8 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
                   contention_modelled=False, per_edge_notification_cost_modelled=False,
                   source_replacement_authorized=False)
     cross_numa = len(set(nodes)) > 1
+    if joint_order and (cross_numa or not full_graph):
+        raise ValueError('joint ready ordering requires the same-NUMA full-graph contract')
     if None in nodes or (cross_numa and not full_graph):
         return dict(report, reason='READY_DAG_REQUIRES_SAME_NUMA_NODE')
     if tensor_budget_bytes is None:
@@ -108,28 +111,44 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
     if ready_dag_abi == 1 and peak > tensor_budget_bytes:
         return dict(report, reason='READY_DAG_TENSOR_BUDGET_EXCEEDED')
 
+    exports = set(recipe['outputs'])
+    output_indices = [i for i, op in enumerate(operations) if op['id'] in exports]
+    if joint_order:
+        report['joint_cpu_plan'] = solve_ready_joint(dependencies, service, handoffs, output_indices,
+            result_bytes, input_bytes, tensor_budget_bytes)
     candidates = []
     for domain in _LANE_DOMAINS:
         lanes = _assign_lanes(dependencies, service, domain)
         width = max(lanes) + 1
         intervals = _intervals(dependencies, lanes, _assigned_costs(service, lanes))
         if width > 1 and _overlap(intervals):
-            candidates.append((_finish(intervals) + handoffs[str(width)], width, lanes, intervals))
+            candidates.append((_finish(intervals) + handoffs[str(width)], width, lanes, intervals, None))
+    if joint_order and report['joint_cpu_plan']['lanes'] is not None:
+        solution = report['joint_cpu_plan']
+        lanes, order = solution['lanes'], solution['operation_order']
+        intervals = ordered_ready_intervals(dependencies, lanes, _assigned_costs(service, lanes), order)
+        width = max(lanes) + 1
+        finish = _finish(intervals) + handoffs[str(width)]
+        if finish != solution['estimate_ns']:
+            raise ValueError('joint placement proof differs from the CPU ready graph')
+        if _overlap(intervals):
+            candidates.append((finish, width, lanes, intervals, order))
     if not candidates:
         return dict(report, reason='READY_DAG_HAS_NO_MODELED_OVERLAP')
 
-    candidates.sort()
+    candidates.sort(key=lambda row: (row[0], row[1], row[4] is not None, row[2]))
     if ready_dag_abi == 2:
-        exports = {value for value in recipe['outputs']}
-        output_indices = [i for i, op in enumerate(operations) if op['id'] in exports]
         checked = {}
-        for _, _, lanes, _ in candidates:
-            key = tuple(lanes)
+        def identity(row):
+            return tuple(row[2]), tuple(row[4]) if row[4] is not None else None
+
+        for row in candidates:
+            key = identity(row)
             if key not in checked:
-                checked[key] = ready_lifetime_bound(dependencies, lanes, output_indices, result_bytes, input_bytes)
-        eligible = [row for row in candidates
-                    if checked[tuple(row[2])]['peak_tensor_storage_bytes'] <= tensor_budget_bytes]
-        bound = checked[tuple(eligible[0][2])] if eligible else min(
+                checked[key] = ready_lifetime_bound(dependencies, row[2], output_indices, result_bytes, input_bytes,
+                                                    operation_order=row[4])
+        eligible = [row for row in candidates if checked[identity(row)]['peak_tensor_storage_bytes'] <= tensor_budget_bytes]
+        bound = checked[identity(eligible[0])] if eligible else min(
             checked.values(), key=lambda proof: proof['peak_tensor_storage_bytes'])
         report['tensor_storage'].update(accounting='RELEASE_ON_LAST_COMPLETED_CONSUMER',
             full_retention_bytes=peak, lifetime_proof=bound,
@@ -138,10 +157,16 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
             return dict(report, reason='READY_DAG_TENSOR_BUDGET_EXCEEDED')
         candidates = eligible
 
-    estimate, width, lanes, intervals = candidates[0]
-    samples = [_finish(_intervals(dependencies, lanes, _assigned_costs(measurements, lanes))) + handoffs_ns
-               for measurements, handoffs_ns in zip(zip(*lane_samples, strict=True), handoff_samples[str(width)],
-                                                     strict=True)]
+    estimate, width, lanes, intervals, order = candidates[0]
+    if order is None:
+        replay = _intervals
+    else:
+        def replay(dependencies, lanes, costs):
+            return ordered_ready_intervals(dependencies, lanes, costs, order)
+
+        report.update(operation_order=order, basis='JOINT_PLACEMENT_AND_ORDER_WITH_MEASURED_LANE_SERVICES')
+    samples = [_finish(replay(dependencies, lanes, _assigned_costs(measurements, lanes))) + handoffs_ns
+               for measurements, handoffs_ns in zip(zip(*lane_samples, strict=True), handoff_samples[str(width)], strict=True)]
     prediction = _prediction(estimate, samples)
     if cross_numa:
         measured = calibration.get('ready_numa')

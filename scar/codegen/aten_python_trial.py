@@ -37,6 +37,8 @@ def _file_ref(path, schema):
 def _read_plan(path, digest):
     path, selection, _ = _read_declared(path, digest)
     if selection['schema'] == 'scar.aten-ready-selection':
+        if selection.get('delivery_scope') == 'STANDALONE_CPP20_ONLY':
+            raise ValueError('standalone C++20 plans do not install a Python trial')
         from scar.compiler.plan_aten_ready import read_ready_selection
 
         return read_ready_selection(path, selection)
