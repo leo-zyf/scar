@@ -1,0 +1,43 @@
+{
+  "joint_context_limit": 8,
+  "retained_captured_graph": {
+    "experiment": "artifacts/current/experiments/aten-joint-numa-v1/captured",
+    "cpu_ids": [0, 14],
+    "joint_contexts_measured_at_operation_scope": 7,
+    "selected_window_starts": [3, 6],
+    "cross_window_worker_read": ["call_344", "call_351", "call_365"],
+    "native_measured_pairs": 11,
+    "native_speedup": 1.8387315073738753,
+    "matches_original_output_sha256": [
+      "4ab13c9758c5761e2a39c4b78ac810c14b7cd24ed231fc6d7ac70c870e0d8ac2",
+      "a43b4d99ddb433074f86576fcdb8ebd268d66d8357fd41086180a4661ce1d59a",
+      "65dad55178cb726eafcd9edab3d81008d01b191ddb36b0301995fdb3f0434daa"
+    ],
+    "selection_sha256": "9a60d528426e26e6cfb688ae5d91cfc358bee228ae0570f9fcafad5237c6d47d"
+  },
+  "fresh_captured_application": {
+    "experiment": "artifacts/current/experiments/aten-joint-numa-flow-v1",
+    "application": "torchdiffeq 0.2.5, 48-step coupled matrix RK4 ODE, float32 768×768",
+    "one_step_instrumented_matches_original": true,
+    "one_step_output_sha256": "6f90c2e187ee8f9c0d272bf6610d7f5878d27ade30b7e471f44bfd5c93e3f782",
+    "discovery_sha256": "2f46bf1e87ae37ed64bb48029966a712b7179182749a1512790d8e8b0d4844c8",
+    "cross_window_worker_read": ["call_1042", "call_1049", "call_1063"],
+    "joint_contexts_per_placement": 3,
+    "topology_representative_cpu_ids": [[0, 1], [0, 14], [14, 0], [14, 15]],
+    "cpu_domain_plan_sha256": "08e83182042076074c9262620e5a94f5fb546c532f62a03e4c08d07401e8e66b",
+    "selected_cpu_ids": [14, 15],
+    "selected_window_starts": [0, 3],
+    "native_speedup": 1.927573401734673,
+    "native_selection_sha256": "3490c81d238c063c439b4528b3e31ec6a7a378639f863f493f310f76040f1bfb",
+    "entry_warmup_pairs": 1,
+    "entry_measured_pairs": 3,
+    "original_wall_ns": [11732851046, 11734180828, 11774557938],
+    "guarded_wall_ns": [7658308883, 7514150905, 7458491732],
+    "full_process_speedup": 1.5616110158490355,
+    "native_calls_per_guarded_process": 192,
+    "fallback_calls": 0,
+    "matched_result_sha256": "113472493b5a255a1cf95c6c3f9ae81be5e230897ba104370eb196b28e1eaa60",
+    "validation_sha256": "a0ec28f48e5cb8bc427b10b8a7c3932edfb7f99f8a30c7d3844df036293411ca",
+    "delivery_sha256": "b5f647d1dbf320ee6c74739ecf20b94a402b53882e6de30ac76b75684a6b451f"
+  }
+}

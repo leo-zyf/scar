@@ -20,6 +20,7 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.target_hardware import CpuExecutor, MemoryDomain, MemoryKind
 from scar.ir.record_codec import encode, loads
 from scar.optimization.aten_boundary_trials import _measurements
+from scar.optimization.aten_joint_numa_locality import model_aten_joint_numa_locality
 from scar.optimization.aten_native_schedule import propose_cpu_pair, propose_cpu_windows, select_cpu_windows
 from scar.optimization.aten_numa_locality import model_aten_numa_locality
 from scar.optimization.aten_tensor_lifetime import tensor_footprint, tensor_releases
@@ -143,7 +144,8 @@ def _numa_context(calibration, recipe, schedule, warmup):
         owner = owners[0] if len(owners) == 1 else None
         lanes.append(dict(cpu=cpu, numa_node=None if owner is None else owner.numa_node,
                           fact=None if owner is None else encode(owner.evidence)))
-    context = model_aten_numa_locality(locality, recipe, schedule, caller_numa_node=lanes[0]['numa_node'],
+    model = model_aten_joint_numa_locality if locality.get('schema_version') == 2 else model_aten_numa_locality
+    context = model(locality, recipe, schedule, caller_numa_node=lanes[0]['numa_node'],
         worker_numa_node=lanes[1]['numa_node'], warmup_pairs=warmup,
         result_storage_bytes=calibration.get('result_storage_bytes'))
     return dict(context, lanes=lanes)
@@ -154,6 +156,54 @@ def _caller_service(service, replacements, choices):
         return service
     return [duration if changed is None else changed
             for duration, changed in zip(service, replacements['caller_service_ns'], strict=True)]
+
+
+def _joint_window_model(recipe, schedule, numa, storage, service, dispatch, op_samples, dispatch_samples):
+    names = [op['id'] for op in recipe['operations']]
+    serial = _prediction(sum(service), [sum(row) for row in op_samples])
+    allowed_starts = ({row['pair_indices'][0] for row in schedule['windows']} if storage is None
+                      else set(storage['candidate_starts_within_budget']))
+    contexts = []
+    for context in numa['contexts']:
+        starts = context['window_starts']
+        observations = context['replacement_operation_samples_ns']
+        lane_services = [old if column[0] is None else median_low(column)
+                         for old, column in zip(service, zip(*observations, strict=True), strict=True)]
+        estimate = sum(lane_services) + sum(dispatch - min(lane_services[i], lane_services[i + 1]) for i in starts)
+        totals = []
+        for baseline, replacements, handoff in zip(op_samples, observations, dispatch_samples, strict=True):
+            row = [old if new is None else new for old, new in zip(baseline, replacements, strict=True)]
+            totals.append(sum(row) + sum(handoff - min(row[i], row[i + 1]) for i in starts))
+        contexts.append(dict(window_starts=starts, lane_service_ns=lane_services,
+                             within_tensor_budget=set(starts) <= allowed_starts, prediction=_prediction(estimate, totals)))
+
+    affordable = (row for row in contexts if row['within_tensor_budget'])
+    best = min(affordable, key=lambda row: (row['prediction']['estimate_ns'], len(row['window_starts']),
+                                          row['window_starts']), default=None)
+    selected = best is not None and best['prediction']['estimate_ns'] < serial['estimate_ns']
+    starts = best['window_starts'] if selected else []
+    timeline = _timeline(names, best['lane_service_ns'] if selected else service, set(starts), schedule['cpus'], dispatch)
+    predictions = {'SERIAL': serial}
+    if selected:
+        predictions['TWO_CPU'] = best['prediction']
+    by_window = {row['window_starts'][0]: row for row in contexts if len(row['window_starts']) == 1}
+    candidates = []
+    for window in schedule['windows']:
+        first = window['pair_indices'][0]
+        gain = serial['estimate_ns'] - by_window[first]['prediction']['estimate_ns']
+        candidate = dict(window, gain_ns=gain, selected=first in starts)
+        if storage is not None:
+            candidate.update(peak_tensor_storage_bytes=storage['window_peak_bytes'][str(first)],
+                             within_tensor_budget=first in allowed_starts)
+        candidates.append(candidate)
+    model = dict(basis='MINIMUM_NONOVERLAPPING_WINDOW_CONTEXT_WITH_MEASURED_OPERATION_COSTS',
+        operations=[dict(id=name, service_ns=ns) for name, ns in zip(names, service, strict=True)],
+        candidates=candidates, selected_starts=starts, timeline=timeline, empty_dispatch_join_ns=dispatch,
+        predictions=predictions, bounds='CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS',
+        shared_memory_contention_modelled=False, numa_locality=numa, joint_numa_context_costs=contexts)
+    if storage is not None:
+        model['tensor_storage'] = storage
+    return model
 
 
 def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=False, tensor_budget_bytes=None):
@@ -183,6 +233,8 @@ def _window_model(calibration, recipe, schedule, warmup, *, observe_storage=Fals
         eligible = dict(schedule, windows=[row for row in schedule['windows'] if row['pair_indices'][0] in allowed])
 
     numa = _numa_context(calibration, recipe, schedule, warmup)
+    if numa is not None and numa.get('contexts'):
+        return _joint_window_model(recipe, schedule, numa, storage, service, dispatch, op_samples, dispatch_samples)
     replacement_samples = None if numa is None else numa.get('replacement_operation_samples_ns')
     replacements, adjustments = None, {}
     if replacement_samples is not None:
@@ -288,8 +340,13 @@ def _segment_plan(hardware, schedule, origin, evidence, model, selected_starts):
     names = [op['id'] for op in model['operations']]
     service = [op['service_ns'] for op in model['operations']]
     choices = set(selected_starts)
-    timeline = _timeline(names, _caller_service(service, model.get('numa_consumer_cost'), choices), choices,
-                         schedule['cpus'], model['empty_dispatch_join_ns'], model.get('worker_service_ns'))
+    worker_service = model.get('worker_service_ns')
+    if choices and 'joint_numa_context_costs' in model:
+        context, = (row for row in model['joint_numa_context_costs'] if set(row['window_starts']) == choices)
+        service = context['lane_service_ns']
+    else:
+        service = _caller_service(service, model.get('numa_consumer_cost'), choices)
+    timeline = _timeline(names, service, choices, schedule['cpus'], model['empty_dispatch_join_ns'], worker_service)
     storage = model.get('tensor_storage')
     pool = None
     if storage is not None and storage['budget_bytes'] is not None:
