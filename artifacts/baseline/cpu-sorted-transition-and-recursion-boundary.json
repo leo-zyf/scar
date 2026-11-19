@@ -1,0 +1,240 @@
+{
+  "cpp20": {
+    "deployment_authorized": false,
+    "depth_4_observed_boundaries": [
+      {
+        "sort": {
+          "clean_call_frequency_proven": false,
+          "fallback_calls": 0,
+          "fallback_reasons": {},
+          "mean_instrumented_success_phase_ns": {
+            "decode_and_recheck": 16440.651648781335,
+            "ffi_and_native": 11731.779858365557,
+            "guard_and_version": 10885.405439457792,
+            "input_pack": 6994.799365686232
+          },
+          "native_calls": 23017,
+          "native_status_counts": {
+            "native": 23017
+          },
+          "observed_attempts": 23017,
+          "timed_fallback_phase_ns": null,
+          "total_success_phase_ns": {
+            "decode_and_recheck": 378414479,
+            "ffi_and_native": 270030377,
+            "guard_and_version": 250549377,
+            "input_pack": 160999297
+          }
+        },
+        "transition": {
+          "clean_call_frequency_proven": false,
+          "fallback_calls": 196,
+          "fallback_reasons": {
+            "no_ordered_producer": 196
+          },
+          "mean_instrumented_success_phase_ns": {
+            "guard": 12934.970111186387,
+            "pod_native_decode_and_recheck": 40624.59901167656
+          },
+          "native_calls": 25093,
+          "native_status_counts": {
+            "native_recompute": 0,
+            "transported": 25093
+          },
+          "observed_attempts": 25289,
+          "timed_fallback_phase_ns": null,
+          "total_success_phase_ns": {
+            "guard": 324577205,
+            "pod_native_decode_and_recheck": 1019393063
+          }
+        }
+      }
+    ],
+    "detached_caller": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/c-validation-v1/caller.c",
+      "sha256": "7017291ae76505f6f4fbaceb7d554f6859fc57288ff3adbc41f3b61c9fb833b3",
+      "size_bytes": 5816
+    },
+    "detached_caller_validation": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/c-validation-v1/result.json",
+      "sha256": "b721ea5177aedf297196582dc6e270ad2e0be016fb1ce3b902667391e886cf08",
+      "size_bytes": 1003
+    },
+    "headers": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/native-library-v1/include/scar_scalar_sorted_transition_v1.h",
+      "sha256": "2535f49c236dc90e8f9082be7965461a3f63b8c49982c77ff2a505cf67b3e119",
+      "size_bytes": 884
+    },
+    "library": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/native-library-v1/artifact.json",
+      "sha256": "89fcd2aaa693fde9995cbbe3cc05a91185aa0e61d3269171f4fdbc5c1a0f6732",
+      "size_bytes": 11747
+    },
+    "library_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/native-library.check.json",
+      "sha256": "405734cd0715ae64aa376323341ef71a8fa6408d29838f327f3777e60f5dd824",
+      "size_bytes": 7933
+    },
+    "native_recomputed_states_validated": 32,
+    "ordered_output_records_validated": 247,
+    "shadow_counts": {
+      "no_ordered_producer": 19,
+      "shadow_verified": 3315,
+      "transported": 3315
+    },
+    "shadow_original_comparison": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/live-shadow/00-fused.json",
+      "sha256": "ea81abc968623a879d201558de3f89b709ce50d6aebd915c4c4ad08a3185f89c",
+      "size_bytes": 2325
+    },
+    "shared_native_score_and_tables": true,
+    "source": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/native-library-v1/src/sorted_transition.cpp",
+      "sha256": "eadde59c759ba6abe0b5cd55648724b6fd27e1dda77fae58e237d71981e3178b",
+      "size_bytes": 43557
+    },
+    "transported_states_validated": 32,
+    "whole_search_cpp": false
+  },
+  "frontend": {
+    "external_effect_sites": 1,
+    "observed_transition_cases": 32,
+    "original_dictionary_pairs": 4,
+    "original_flow": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/source-flow.json",
+      "sha256": "4f446520479826fbea5a985b8d752840a4701691a6aa31486d946e9226c99a36",
+      "size_bytes": 110831
+    },
+    "original_flow_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/source-flow.check.json",
+      "sha256": "fc7dcfd574d41e842695c549dfd2d97a52d74082b3ee65e055984b1f5bb82a6c",
+      "size_bytes": 136
+    },
+    "recursive_effects_closed": false,
+    "recursive_region": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/recursive-region.json",
+      "sha256": "0209aacf330cddd29a04f1ca5b39c95318aad3d959785458ba7703c53e7ff947",
+      "size_bytes": 67932
+    },
+    "recursive_region_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/recursive-region.check.json",
+      "sha256": "68378552c646b9558d95fef99c73b3a9df4d9e3427c68672953a2a6bdcba8802",
+      "size_bytes": 80
+    },
+    "recursive_shared_fields": [
+      "deadline",
+      "history",
+      "nodes",
+      "tp_move",
+      "tp_score"
+    ],
+    "recursive_sites_with_observed_handoff": 1,
+    "recursive_source_sites": 3,
+    "typed_data_edges": 8
+  },
+  "optimization": {
+    "canonical_stdout_sha256": "7b108d57533b5dbf37e4f9a7e680ce077cd910f8018f17a47d6e70311821c559",
+    "cpu_ids": [
+      7
+    ],
+    "decision": "QUALIFIED_OBSERVED_GAIN",
+    "default_selection_changed": false,
+    "depth": 4,
+    "fused_region_is_profitable": false,
+    "historical_cost_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/historical.check.json",
+      "sha256": "9f9393fbab98572fcd872df10be1aaa2f8c484b15a1f6a4882a4b981fed1c4e8",
+      "size_bytes": 92
+    },
+    "historical_cost_ledger": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/cost/historical.json",
+      "sha256": "04b94e8a613d8ba21a5518d9e6ce967b95c99880526bdf28774871a874928aab",
+      "size_bytes": 32516
+    },
+    "measured_pairs": 4,
+    "normalized_only": "UCI_INFO_TIME_AND_NPS_ONLY",
+    "paired_input": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/live-clean/commands.stdin",
+      "sha256": "5785093a546c485083553050d13c4a5eff190ad9b76b544a7daddb3e9a7150ba",
+      "size_bytes": 126
+    },
+    "paired_raw_run": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/live-clean/run.json",
+      "sha256": "41fc7ca851db7bc951828264a6dc7d744c210702ba37cfd4a92e5ed5f67aef16",
+      "size_bytes": 33797
+    },
+    "positions": 2,
+    "run_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/run-paired.py",
+      "sha256": "95322038224f1183e3404e6f534cc2ad394ffbff92f5e690e90996294a46fdce",
+      "size_bytes": 6239
+    },
+    "scope": {
+      "included": [
+        "startup",
+        "guard",
+        "marshalling",
+        "ffi",
+        "native",
+        "fallback",
+        "retained_source_search",
+        "output"
+      ],
+      "isolated_regions_only": false,
+      "kind": "WHOLE_ORIGINAL_SEARCH_ENTRY_FRESH_PROCESS",
+      "pure_native_time_known": false
+    },
+    "selected": "sort_only",
+    "selection": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/cost/selection.json",
+      "sha256": "bc8dbe432d316385991150fe0d5b4bf03f4983c6b30e93d8bd4c388ba61cbf02",
+      "size_bytes": 6546
+    },
+    "selection_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-transition-v1/selection.check.json",
+      "sha256": "295100c5632e7377183f5924e0a57bab3d0364fc77f03e054a8dfb4335f90fbc",
+      "size_bytes": 145
+    },
+    "warmup_pairs": 1,
+    "whole_entry_wall": {
+      "fused": {
+        "max_ns": 4404503533,
+        "median_ns": 4343851921.5,
+        "min_ns": 4327631279,
+        "sample_stdev_ns": 33907377.66302696,
+        "samples_ns": [
+          4404503533,
+          4343169532,
+          4344534311,
+          4327631279
+        ]
+      },
+      "original": {
+        "max_ns": 3142729450,
+        "median_ns": 3123172483.0,
+        "min_ns": 3102774361,
+        "sample_stdev_ns": 16383466.1673662,
+        "samples_ns": [
+          3142729450,
+          3121318779,
+          3125026187,
+          3102774361
+        ]
+      },
+      "sort_only": {
+        "max_ns": 2973770441,
+        "median_ns": 2885354669.5,
+        "min_ns": 2860007176,
+        "sample_stdev_ns": 50056470.019337006,
+        "samples_ns": [
+          2973770441,
+          2890429530,
+          2880279809,
+          2860007176
+        ]
+      }
+    }
+  },
+  "schema": "scar.cpu-sorted-transition-and-recursion-boundary",
+  "schema_version": 1
+}
