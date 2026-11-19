@@ -26,6 +26,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 from scar.optimization.constructive_planner import construct_implementations
+from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
 
 
 SCHEMA = 'scar.aten-recurrence-delivery'
@@ -112,7 +113,7 @@ def _emit_sources(project, plan):
 
 
 def _recurrence_project(project, plan, graph, artifact, selected, references, method_provider, geometry, step_graph, recipe,
-                        toolchain, arguments, scratch, calibration_steps, *, rhs_candidate):
+                        toolchain, arguments, scratch, calibration_steps, *, rhs_candidate, require_cpu_only):
     libraries, cxx, compile_flags, link_flags = toolchain
     plan_dir = project / 'plan'
     plan_dir.mkdir(parents=True)
@@ -151,7 +152,8 @@ def _recurrence_project(project, plan, graph, artifact, selected, references, me
         compile_options=(*compile_flags[1:], '-O2', '-pthread'), link_options=('-pthread', link_flags[0]),
         libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),), install_launcher=True)
     _emit_sources(project, plan)
-    _, dependencies = build_native_project(project, _EXE, cxx, expected_libraries=libraries)
+    _, dependencies = build_native_project(project, _EXE, cxx, expected_libraries=libraries,
+                                            require_cpu_only=require_cpu_only)
 
     observation = calibrate_tensor_body(project, arguments, scratch, repeats=calibration_steps)
     observation.update(inputs=selected['inputs'], placement=plan['placement'])
@@ -191,7 +193,7 @@ def _recurrence_project(project, plan, graph, artifact, selected, references, me
 def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, geometry_contract_sha256,
                             out, tensor_budget_bytes, method=None, step_size=None, state_input_index=None,
                             serial_rhs=False, calibration_steps=4, discovery=None, discovery_sha256=None,
-                            source_entry=None):
+                            source_entry=None, require_cpu_only=False):
     import torch
 
     from scar.compiler.aten_recurrence_capture import capture_aten_step
@@ -290,7 +292,7 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
         for mode, plan in plans.items():
             outputs, dependencies, estimate = _recurrence_project(projects[mode], plan, graph, artifact, selected,
                 references, method_provider, geometry, step_graph, recipe, toolchain, arguments, scratch, calibration_steps,
-                rhs_candidate=rhs_candidate)
+                rhs_candidate=rhs_candidate, require_cpu_only=require_cpu_only)
             if expected is not None and outputs != expected:
                 raise ValueError('native recurrence candidates produced different output bytes')
             expected = outputs
@@ -340,6 +342,8 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
             full_entry_performance_measured=comparison is not None,
             files={path.relative_to(stage).as_posix(): _content(path)
                    for path in sorted(stage.rglob('*')) if path.is_file()})
+        if require_cpu_only:
+            report['cpu_linkage'] = qualify_cpu_dependencies(report['dependencies'])
         _write(stage / 'artifact.json', report)
         stage.rename(out)
     return report
@@ -360,6 +364,8 @@ def main(argv=None):
     parser.add_argument('--tensor-budget-bytes', required=True, type=int)
     parser.add_argument('--serial-rhs', action='store_true')
     parser.add_argument('--calibration-steps', default=4, type=int)
+    parser.add_argument('--require-cpu-only', action='store_true',
+                        help='require a qualified CPU-only ELF dependency closure')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     report = compile_aten_recurrence(**vars(args))

@@ -47,7 +47,7 @@ def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=
     (root / 'CMakeLists.txt').write_text('\n'.join(lines) + '\n')
 
 
-def build_native_project(root, name, compiler, *, expected_libraries=()):
+def build_native_project(root, name, compiler, *, expected_libraries=(), require_cpu_only=False):
     """Build into a temporary directory, then check and return the installed ELF."""
     if not compiler:
         raise ValueError('an available C++ compiler is required')
@@ -73,6 +73,10 @@ def build_native_project(root, name, compiler, *, expected_libraries=()):
     if (any(dependencies.get(path.name) != str(path.resolve()) for path in expected_libraries)
             or any(name.startswith(('libpython', 'libtorch_python')) for name in dependencies)):
         raise ValueError('native project did not link the required non-Python provider libraries')
+    if require_cpu_only:
+        from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+
+        qualify_cpu_dependencies(dependencies)
     validation = root / 'validation'
     validation.mkdir(exist_ok=True)
     (validation / 'build.log').write_text('\n'.join(logs))

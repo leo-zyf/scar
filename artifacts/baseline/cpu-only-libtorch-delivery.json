@@ -1,0 +1,216 @@
+{
+  "compatibility": {
+    "independently_repinned_strict_receipt_rejected": true,
+    "legacy_archive_replayed": true,
+    "rejected_sonames": [
+      "libcudart.so.13",
+      "libcupti.so.13"
+    ],
+    "strict_cuda_built_libtorch_rejection": {
+      "path": "artifacts/current/experiments/cpu-only-libtorch-v1/mixed-provider-rejection.log",
+      "sha256": "367b3842c1fd11cccd8fa5e5146490ecbb3214815e48ed01acd803823c1d539a",
+      "size_bytes": 1880
+    }
+  },
+  "fresh_native_comparison": {
+    "archive": {
+      "path": "artifacts/current/experiments/cpu-only-libtorch-v1/rk4-41mb/validation/comparison.json",
+      "sha256": "5fbdb3fac9852b325f058a9a828154a56ddf5d503aaa29044dc2b54e79e6257c",
+      "size_bytes": 5581
+    },
+    "measurement_pairs": 4,
+    "metrics": {
+      "READY_DAG": {
+        "max_ns": 883845617,
+        "median_ns": 855008344,
+        "median_ns_twice": 1710016688,
+        "min_ns": 831222490,
+        "samples_ns": [
+          835479994,
+          874536694,
+          883845617,
+          831222490
+        ]
+      },
+      "SERIAL": {
+        "max_ns": 1518805099,
+        "median_ns": 1514850886,
+        "median_ns_twice": 3029701772,
+        "min_ns": 1509929217,
+        "samples_ns": [
+          1512511617,
+          1518805099,
+          1517190155,
+          1509929217
+        ]
+      }
+    },
+    "serial_over_ready": 1.7717381317158234,
+    "steps": 4,
+    "timing_scope": "COLD_STANDALONE_PROCESS_INCLUDING_FILE_IO",
+    "warmup_pairs": 1
+  },
+  "linkage": {
+    "approved_dependencies": [
+      {
+        "category": "LINUX_LOADER",
+        "soname": "/lib64/ld-linux-x86-64.so.2"
+      },
+      {
+        "category": "LINUX_HOST_RUNTIME",
+        "soname": "libc.so.6"
+      },
+      {
+        "category": "LIBTORCH_CPU",
+        "soname": "libc10.so"
+      },
+      {
+        "category": "LINUX_HOST_RUNTIME",
+        "soname": "libdl.so.2"
+      },
+      {
+        "category": "HOST_COMPILER_RUNTIME",
+        "soname": "libgcc_s.so.1"
+      },
+      {
+        "category": "HOST_PARALLEL_RUNTIME",
+        "soname": "libgomp.so.1"
+      },
+      {
+        "category": "LINUX_HOST_RUNTIME",
+        "soname": "libm.so.6"
+      },
+      {
+        "category": "LINUX_HOST_RUNTIME",
+        "soname": "libpthread.so.0"
+      },
+      {
+        "category": "LINUX_HOST_RUNTIME",
+        "soname": "librt.so.1"
+      },
+      {
+        "category": "HOST_COMPILER_RUNTIME",
+        "soname": "libstdc++.so.6"
+      },
+      {
+        "category": "LIBTORCH_CPU",
+        "soname": "libtorch_cpu.so"
+      },
+      {
+        "category": "LINUX_KERNEL_VDSO",
+        "soname": "linux-vdso.so.1"
+      }
+    ],
+    "platform_portability_proven": false,
+    "schema": "scar.cpu-native-linkage",
+    "schema_version": 1,
+    "scope": "LINUX_ELF_LOADER_RESOLVED_DT_NEEDED_CLOSURE"
+  },
+  "portability_scope": "CURRENT_LINUX_HOST_AND_INSTALLED_LIBTORCH_CPU_PATHS",
+  "products": {
+    "inference": {
+      "bitwise_output_receipts": [
+        {
+          "sha256": "658c89d58371b5ef999dfe6f2431f969c2c8d29beba4c6f10ad8a521a6d9ffd0",
+          "size_bytes": 24
+        },
+        {
+          "sha256": "10e500af170fcba19dc29f9cccbeb9edbac74e8c29dc7d9c9814993def9d6bdd",
+          "size_bytes": 16
+        },
+        {
+          "sha256": "08397e5df19de73b0bfc534983fd30baaf594ec4193fcf6e702af3770a15a734",
+          "size_bytes": 16
+        },
+        {
+          "sha256": "08397e5df19de73b0bfc534983fd30baaf594ec4193fcf6e702af3770a15a734",
+          "size_bytes": 16
+        },
+        {
+          "sha256": "658c89d58371b5ef999dfe6f2431f969c2c8d29beba4c6f10ad8a521a6d9ffd0",
+          "size_bytes": 24
+        }
+      ],
+      "graph_operations": 7,
+      "graph_regions": 1,
+      "manifest": {
+        "path": "artifacts/current/experiments/cpu-only-libtorch-v1/inference/artifact.json",
+        "sha256": "c1826d9903e827d0539f2a9f4ac4ebf40c879d5429978e0c7aadc6b5943bd541",
+        "size_bytes": 5608
+      },
+      "validation": {
+        "path": "artifacts/current/experiments/cpu-only-libtorch-v1/inference-validation.json",
+        "sha256": "69749c481275863e645f7de9c75bcce4ecc2b496cc81f7c6ff7d17ef7261bb5f",
+        "size_bytes": 1758
+      }
+    },
+    "rk4-41mb": {
+      "bitwise_output_receipts": [
+        {
+          "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+          "size_bytes": 2359296
+        }
+      ],
+      "cpu_ids": [
+        14,
+        15,
+        16
+      ],
+      "graph_operations": 40,
+      "graph_regions": 3,
+      "manifest": {
+        "path": "artifacts/current/experiments/cpu-only-libtorch-v1/rk4-41mb/artifact.json",
+        "sha256": "d0a865d3f2d55ecc65b2f407c139ffc3aaabf3885e0593d1b23be205706c53c7",
+        "size_bytes": 12085
+      },
+      "peak_tensor_storage_bytes": 40108040,
+      "tensor_budget_bytes": 41000000,
+      "validation": {
+        "path": "artifacts/current/experiments/cpu-only-libtorch-v1/rk4-41mb-validation.json",
+        "sha256": "f7661c94093710ec3d11cbcc4c8d589b73366511f850851e4ee922a30e1fbcd0",
+        "size_bytes": 1373
+      }
+    }
+  },
+  "provider": {
+    "cuda_version": null,
+    "name": "LibTorch",
+    "revision": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+    "version": "2.13.0+cpu",
+    "wheel": {
+      "path": "artifacts/current/experiments/cpu-only-libtorch-v1/wheels/direct/torch-2.13.0+cpu-cp314-cp314-manylinux_2_28_x86_64.whl",
+      "sha256": "d20fa53ee744502fa4c69818a720b05ca0d37abd055d4f6e66cae155114bc691",
+      "size_bytes": 191822516
+    },
+    "wheel_source": "https://download.pytorch.org/whl/cpu/torch/"
+  },
+  "reference": {
+    "path": "artifacts/current/experiments/cpu-only-libtorch-v1/reference-16.f32",
+    "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+    "size_bytes": 2359296
+  },
+  "reference_steps": 16,
+  "rhs_selection": {
+    "path": "artifacts/current/experiments/cpu-only-libtorch-v1/cpu-rhs-complete/plan/selection.json",
+    "sha256": "372e9668b406b92a33787423d7c07cbf0eca98cc97124c933fadea1b35f2a7d3",
+    "size_bytes": 14453
+  },
+  "runtime_observation": {
+    "cuda_library_open_observed": false,
+    "output_bitwise_equal": true,
+    "python_process_observed": false,
+    "scope": "EXECVE_AND_OPENAT_CLEAN_ENV",
+    "trace": {
+      "path": "artifacts/current/experiments/cpu-only-libtorch-v1/rk4-runtime-elf.log",
+      "sha256": "c84ca8a451ba83787e1e21aa6afaa7fa01b24cbc74fbf34fe56dc5d506f1cb77",
+      "size_bytes": 12778
+    }
+  },
+  "schema": "scar.cpu-only-libtorch-delivery-baseline",
+  "schema_version": 1,
+  "source_discovery": {
+    "path": "artifacts/current/experiments/cpu-only-libtorch-v1/cpu-discovery/discovery.json",
+    "sha256": "c8c8e58b8f64283a22bf1fcf13279db80c4e3c95a077ac3bad95b03a6678bbfe",
+    "size_bytes": 24554
+  }
+}

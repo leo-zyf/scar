@@ -160,7 +160,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     if native_only and 'ready_order_abi' in compiled:
         selection = plan_aten_ready(report['native']['uri'], bundle_sha256=report['native']['sha256'],
             input_paths=sample_paths, out=plan, tensor_budget_bytes=tensor_budget_bytes,
-            warmup_pairs=graph_warmup_pairs, measured_pairs=min(graph_measured_pairs + 1, 500),
+            warmup_pairs=graph_warmup_pairs, measured_pairs=min(graph_measured_pairs + graph_measured_pairs % 2, 500),
             primitive_observation=primitive_observation, joint_order=True)
         return _native_result(report, selection, plan)
     selection = plan_aten_native_graph(report['native']['uri'], bundle_sha256=report['native']['sha256'],
@@ -242,7 +242,7 @@ def _compare_entry_schedules(inputs, *, report, grouped, compiled, out, sample_p
         directory = out / 'ready-plan'
         ready = plan_aten_ready(report['native']['uri'], bundle_sha256=report['native']['sha256'],
             input_paths=sample_paths, out=directory, tensor_budget_bytes=tensor_budget_bytes,
-            warmup_pairs=graph_warmup_pairs, measured_pairs=min(graph_measured_pairs + 1, 500),
+            warmup_pairs=graph_warmup_pairs, measured_pairs=min(graph_measured_pairs + graph_measured_pairs % 2, 500),
             primitive_observation=dict(inputs=grouped['inputs'], raw=read_artifact(grouped['observations'])),
             entry_comparison=True)
         candidates['READY_DAG'] = dict(status=ready['selected'], reason=ready['reason'],

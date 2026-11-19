@@ -1,5 +1,7 @@
 # 当前状态
 
+官方 CPU-only LibTorch 2.13.0 已完成固定网格 RK4 和导出推理交付。两份 C++20 产物通过完整 ELF 依赖准入和冷读重放，RK4 16 步终态与推理 5 个输出均逐位一致。严格模式拒绝带 CUDA Runtime 和 CUPTI 的旧构建。41 MB 预算下的 CPU-only RK4 四步新进程中位数为单核 1.515 s、三核 0.855 s。见 `artifacts/baseline/cpu-only-libtorch-delivery.json`。
+
 纯 CPU 固定网格递推已接通张量生命周期排程。真实 RK4 的三核存储上界由 42,467,336 B 降到 40,108,040 B，在 41 MB 预算下获选。38 MB 下保留单核，两种 C++20 产物的 16 步终态都与原 torchdiffeq 逐位一致。41 MB 下的新进程四步配对中位数为单核 1.531 s、三核 0.789 s。见 `artifacts/baseline/cpu-recurrence-lifetime-order.json`。
 
 实测放置按固定依赖和队列传播算子样本区间，异构路径补入同步 CPU 调用先于后续 GPU 提交的因果边。真实 CPU 归档的模型区间为 2.523–2.652 ms，点估计 2.551 ms，图持有的存储上界 200 B。三个 CUDA 方案仍缺实测，保留 CPU。见 `artifacts/baseline/native-placement-service-interval.json`。

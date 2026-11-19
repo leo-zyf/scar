@@ -493,6 +493,15 @@ def verify_native_project(directory, manifest_sha256):
     current = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={}))
     if current != manifest['dependencies'] or any(name.startswith(('libpython', 'libtorch_python')) for name in current):
         raise ValueError('runtime dependency resolution differs from the checked native project')
+    if 'cpu_linkage' in manifest:
+        from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+
+        if manifest['schema'] not in ('scar.aten-recurrence-delivery', 'scar.native-exported-aten'):
+            raise ValueError('the CPU-only dependency contract requires a native CPU project')
+        cpu_linkage = qualify_cpu_dependencies(current)
+        if canonical_json(manifest['cpu_linkage']) != canonical_json(cpu_linkage):
+            raise ValueError('CPU-only linkage differs from the replayed ELF dependency closure')
+        receipt['cpu_linkage'] = cpu_linkage
     locks = json.loads(member('plan/dependencies.json').read_text())
     for lock in locks['libraries'] if type(locks) is dict else locks:
         library = Path(lock['path'])

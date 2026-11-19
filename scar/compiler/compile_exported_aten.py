@@ -266,7 +266,7 @@ def _plan_profile(root, label, plan, execution, recipe, shapes, sources, target,
         _write_record(plan / 'schedule.json', schedule)
 
 
-def _build_profiles(root, prepared, cpp_sources, toolchain, placements):
+def _build_profiles(root, prepared, cpp_sources, toolchain, placements, *, require_cpu_only=False):
     _, libraries, cxx, flags, links = toolchain
     first = next(iter(prepared.values()))
     launch = root / 'launch.sh'
@@ -278,7 +278,8 @@ def _build_profiles(root, prepared, cpp_sources, toolchain, placements):
         compile_options=(*flags[1:], '-O2', *threads), link_options=(links[0], *threads),
         libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),),
         install_dirs=(('data', '.'),), install_launcher=True)
-    _, dependencies = build_native_project(root, _EXECUTABLE, cxx, expected_libraries=libraries)
+    _, dependencies = build_native_project(root, _EXECUTABLE, cxx, expected_libraries=libraries,
+                                            require_cpu_only=require_cpu_only)
     return dependencies
 
 
@@ -293,7 +294,7 @@ def _emit_ready(root, label, prepared, placement):
 
 
 def _select_ready_profiles(root, prepared, cpp_sources, toolchain, target, capacity, calibration,
-                           serial_dependencies):
+                           serial_dependencies, *, require_cpu_only=False):
     from scar.compiler.aten_export_placement import plan_export_cpu
 
     with TemporaryDirectory(prefix='.scar-export-placement-', dir=root.parent) as temporary:
@@ -337,7 +338,8 @@ def _select_ready_profiles(root, prepared, cpp_sources, toolchain, target, capac
                     _emit_ready(candidate, label, prepared, placement)
                 masks = dict(serial_masks)
                 masks.update({label: placement['cpu_ids'] for label, placement in placements.items()})
-                dependencies = _build_profiles(candidate, prepared, cpp_sources, toolchain, masks)
+                dependencies = _build_profiles(candidate, prepared, cpp_sources, toolchain, masks,
+                                               require_cpu_only=require_cpu_only)
                 projects = {'SERIAL': root, 'READY_DAG': candidate}
                 tested_files = {mode: {name: _content(project / name) for name in ('bin/' + _EXECUTABLE, 'launch.sh')}
                                 for mode, project in projects.items()}
@@ -376,7 +378,7 @@ def _select_ready_profiles(root, prepared, cpp_sources, toolchain, target, capac
 
 def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_bytes, input_shapes=(),
                           calibration_input=(), shape_profiles=(), simplify_normal_completion=False,
-                          plan_cpu_ready=False):
+                          plan_cpu_ready=False, require_cpu_only=False):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -438,13 +440,14 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
             sources.extend(f'src/profiles/{name}.cpp' for name in groups)
         providers = [dict(path=str(path), **_content(path)) for path in libraries]
         _write_record(pending / 'plan/dependencies.json', providers)
-        dependencies = _build_profiles(pending, prepared, sources, toolchain, dict.fromkeys(groups, [cpu]))
+        dependencies = _build_profiles(pending, prepared, sources, toolchain, dict.fromkeys(groups, [cpu]),
+                                       require_cpu_only=require_cpu_only)
         for label, artifacts in prepared.items():
             _plan_profile(pending, label, *artifacts, target, memory.capacity, samples.get(label))
         ready = {}
         if plan_cpu_ready:
             dependencies, ready = _select_ready_profiles(pending, prepared, sources, toolchain, target,
-                memory.capacity, samples, dependencies)
+                memory.capacity, samples, dependencies, require_cpu_only=require_cpu_only)
         if _content(model) != original:
             raise ValueError('exported model changed during its native build')
         report = dict(schema=SCHEMA, schema_version=1, executable='bin/' + _EXECUTABLE,
@@ -462,6 +465,10 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
                     ('READY_DAG_CPU_LIBTORCH' if ready else report['selected']),
                 performance_measured=any((items[0] / 'ready/entry-comparison.json').is_file()
                                          for items in prepared.values()))
+        if require_cpu_only:
+            from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+
+            report['cpu_linkage'] = qualify_cpu_dependencies(dependencies)
         _write_record(pending / 'artifact.json', report)
         pending.rename(out)
     return report
@@ -480,6 +487,8 @@ def main(argv=None):
                         help='apply structural rules under the native normal-completion contract')
     parser.add_argument('--plan-cpu-ready', action='store_true',
                         help='choose measured native parallel placement under the normal-completion contract')
+    parser.add_argument('--require-cpu-only', action='store_true',
+                        help='require a qualified CPU-only ELF dependency closure')
     args = parser.parse_args(argv)
     kwargs = vars(args)
     kwargs['input_shapes'] = kwargs.pop('input_shape')
