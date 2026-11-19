@@ -1,5 +1,7 @@
 # 当前状态
 
+纯 CPU 固定网格递推已接通张量生命周期排程。真实 RK4 的三核存储上界由 42,467,336 B 降到 40,108,040 B，在 41 MB 预算下获选。38 MB 下保留单核，两种 C++20 产物的 16 步终态都与原 torchdiffeq 逐位一致。41 MB 下的新进程四步配对中位数为单核 1.531 s、三核 0.789 s。见 `artifacts/baseline/cpu-recurrence-lifetime-order.json`。
+
 实测放置按固定依赖和队列传播算子样本区间，异构路径补入同步 CPU 调用先于后续 GPU 提交的因果边。真实 CPU 归档的模型区间为 2.523–2.652 ms，点估计 2.551 ms，图持有的存储上界 200 B。三个 CUDA 方案仍缺实测，保留 CPU。见 `artifacts/baseline/native-placement-service-interval.json`。
 
 同一份硬件配置现可生成任一容量合格的 CUDA 放置标定产物。真实导出图的 2 个备选放置通过 C++20 构建及独立重放。3 个容量合格的 CUDA 放置都已取得无设备收据，并在同一次排程中复验，当前保留全 CPU。见 `artifacts/baseline/native-placement-treatment.json`。

@@ -36,6 +36,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `compile-aten-recurrence` 可通过 `--discovery REPORT --discovery-sha256 SHA256` 从原入口推导求解方法、步长和状态输入端口，交付范围为自治固定网格求解的终态，运行入口使用原生文件参数。默认用四步回放标定算子，并按存储容量、估计成本和原生入口配对测量选择并行或串行。`compile-exported-aten` 可用重复的 `--calibration-input NAME=FILE` 为当前形状标定 CPU 串行版本。冷读验收通过 `plan/schedule.json` 重放执行顺序、绑核和释放点，并核对由同一计划生成的 C++ 源码。计时范围和验收结果见 [CPU 计划重放](artifacts/baseline/cpu-schedule-replay.json)。
 
+`compile-aten-recurrence` 在既有读写依赖和 RHS 调用顺序下求共享循环体的张量存储峰值。峰值更低的顺序进入 C++20 交付，原图和生命周期证明可离线重放。真实 RK4 在 41 MB 预算下采用三核，38 MB 时采用单核，两种入口的 16 步终态均逐位一致。[CPU 生命周期排程验收](artifacts/baseline/cpu-recurrence-lifetime-order.json)。
+
 重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。
 
 `--plan-cpu-ready` 使用各形状的校准输入试验同 NUMA 物理核组。它核对独立算子、Tensor 容量和线程服务成本，并与同一调用核上的串行执行配对。只有原生入口也达到收益门槛，才把多核排程编入该形状。选型证据覆盖正常完成，Tensor 容量统计排除提供方内部工作区。CUDA 实验可用 `PYTHONPATH=. python scripts/verify_cuda_cublas_schedule.py --out NEW_DIR` 重放拷贝、cuBLAS 与流事件的离线交付。

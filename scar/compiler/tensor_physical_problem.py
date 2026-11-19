@@ -8,8 +8,8 @@ from scar.ir.implementation_plan import (
 
 
 def tensor_physical_problem(hardware, cpus, *, budget, operations, inputs, outputs, sizes, reserved,
-                            source, region, dispatch=None, costs=None):
-    """Retain original body order and explicitly report unmeasured service costs."""
+                            source, region, dispatch=None, costs=None, order_assumption='SOURCE_ORDER'):
+    """Bind an admitted body order and explicitly report unmeasured service costs."""
     target, lanes = _target(hardware, tuple(cpus), allow_cpu_subset=True)
     memory = _host_tensor_budget(hardware, budget, (source,))
     ids = {row['id'] for row in operations}
@@ -48,5 +48,5 @@ def tensor_physical_problem(hardware, cpus, *, budget, operations, inputs, outpu
     tasks.append(PlanningOperation(endpoint, (source,), previous, (marker,), 'RETURN'))
     return problem_document(PlanningProblem(target, (source,),
         (*[resource for entries in lanes.values() for resource in entries], memory), tuple(tasks), tuple(data),
-        assumptions=('SYNCHRONOUS_CPU_BODY', 'SOURCE_ORDER', 'PROVIDER_WORKSPACE_NOT_MEASURED'),
+        assumptions=('SYNCHRONOUS_CPU_BODY', order_assumption, 'PROVIDER_WORKSPACE_NOT_MEASURED'),
         reserved_memory={memory.id: reserved}))

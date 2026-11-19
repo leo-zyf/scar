@@ -112,7 +112,7 @@ def _emit_sources(project, plan):
 
 
 def _recurrence_project(project, plan, graph, artifact, selected, references, method_provider, geometry, step_graph, recipe,
-                        toolchain, arguments, scratch, calibration_steps):
+                        toolchain, arguments, scratch, calibration_steps, *, rhs_candidate):
     libraries, cxx, compile_flags, link_flags = toolchain
     plan_dir = project / 'plan'
     plan_dir.mkdir(parents=True)
@@ -140,7 +140,7 @@ def _recurrence_project(project, plan, graph, artifact, selected, references, me
         if mode == 'READY_DAG':
             (plan_dir / name).write_bytes(read_artifact(references[key], json_document=False))
     _write(plan_dir / 'inputs.json', dict(solver=method_provider, rhs=references, source_geometry=geometry,
-                                         lowered_step=step_graph))
+                                         lowered_step=step_graph, **rhs_candidate))
     _write(plan_dir / 'dependencies.json', artifact['provider'])
     prefix = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
                          'taskset', '-c', ','.join(map(str, cpus))])
@@ -171,7 +171,9 @@ def _recurrence_project(project, plan, graph, artifact, selected, references, me
     physical = tensor_physical_problem(Path(plan['target']['uri']).parent, cpus, budget=storage['budget_bytes'],
         operations=plan['operations'], inputs={row['id'] for row in plan['inputs']}, outputs=[plan['output']],
         sizes=physical_sizes, reserved=storage['raw_file_backing_bytes'] + storage['previous_step_state_bytes'] + 8,
-        source=plan['program_graph'], region='step', dispatch=dispatch, costs=costs)
+        source=plan['program_graph'], region='step', dispatch=dispatch, costs=costs,
+        order_assumption=('PROVEN_TENSOR_LIFETIME_ORDER' if plan['step_lifetime_order']['status'] == 'IMPROVED'
+                          else 'SOURCE_ORDER'))
     problem = problem_from_dict(physical)
     rhs_problem, rhs_schedule = ((read_artifact(references[key]) for key in ('planning_problem', 'execution_plan'))
                                  if mode == 'READY_DAG' else (None, None))
@@ -244,21 +246,24 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
     step_graph = capture_aten_step(step, shape, step_size, explicit_time=True)
 
     measured_storage = selected['model']['tensor_storage']
+    ready_placement = dict(mode='READY_DAG', cpus=selected['cpu_ids'], lanes=selected['model']['lanes'],
+                           operation_order=selected['model'].get('operation_order'))
+    rhs_candidate = dict(rhs_candidate_storage=measured_storage, rhs_candidate_placement=ready_placement)
     alternatives, plans = {}, {}
     modes = ('SERIAL',) if serial_rhs else ('READY_DAG', 'SERIAL')
     for mode in modes:
         peak = measured_storage['serial_peak_bytes' if mode == 'SERIAL' else 'peak_tensor_storage_bytes']
         storage = dict(measured_storage, peak_tensor_storage_bytes=peak)
-        plan = plan_recurrence(step_graph, recipe, storage, state_input_index=state_input_index, step_size=step_size)
+        plan = plan_recurrence(step_graph, recipe, storage, state_input_index=state_input_index, step_size=step_size,
+                               optimize_lifetime=True)
         needed = plan['peak_tensor_storage_bytes']
-        alternatives[mode] = dict(peak_tensor_storage_bytes=needed, within_budget=needed <= tensor_budget_bytes)
+        alternatives[mode] = dict(peak_tensor_storage_bytes=needed, within_budget=needed <= tensor_budget_bytes,
+                                  source_order_peak_tensor_storage_bytes=plan['step_lifetime_order']['original_peak_bytes'])
         if needed <= tensor_budget_bytes:
             plan['storage']['budget_bytes'] = tensor_budget_bytes
             plan['timing_basis'] = 'MEASURED_CPU_BODY_PER_STEP'
-            ready = mode == 'READY_DAG'
-            plan['placement'] = dict(mode=mode, cpus=selected['cpu_ids'] if ready else selected['cpu_ids'][:1],
-                lanes=selected['model']['lanes'] if ready else None,
-                operation_order=selected['model'].get('operation_order') if ready else None)
+            plan['placement'] = ready_placement if mode == 'READY_DAG' else dict(mode=mode, cpus=selected['cpu_ids'][:1],
+                lanes=None, operation_order=None)
             plans[mode] = plan
     if not plans:
         raise ValueError('no native recurrence fits its Tensor storage budget')
@@ -284,7 +289,8 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
         candidates, expected = {}, None
         for mode, plan in plans.items():
             outputs, dependencies, estimate = _recurrence_project(projects[mode], plan, graph, artifact, selected,
-                references, method_provider, geometry, step_graph, recipe, toolchain, arguments, scratch, calibration_steps)
+                references, method_provider, geometry, step_graph, recipe, toolchain, arguments, scratch, calibration_steps,
+                rhs_candidate=rhs_candidate)
             if expected is not None and outputs != expected:
                 raise ValueError('native recurrence candidates produced different output bytes')
             expected = outputs
@@ -310,10 +316,14 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
         if comparison is not None:
             _write(stage / 'validation' / 'comparison.json', comparison)
         if len(plans) == 2:
-            alternative = next(project for name, project in projects.items() if name != mode)
+            alternate_mode, = plans.keys() - {mode}
+            alternative = projects[alternate_mode]
             alternative_evidence = stage / 'validation' / 'alternative'
             alternative_evidence.mkdir()
-            for name in ('problem.json', 'schedule.json'):
+            physical_records = ('problem.json', 'schedule.json')
+            if alternate_mode == 'READY_DAG':
+                physical_records += ('rhs-problem.json', 'rhs-schedule.json')
+            for name in physical_records:
                 (alternative_evidence / name).write_bytes((alternative / 'plan' / name).read_bytes())
             (alternative_evidence / 'calibration.json').write_bytes((alternative / 'validation/calibration.json').read_bytes())
         check_samples()
@@ -325,6 +335,7 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
             alternatives=alternatives, dependencies=candidates[mode], selection_reason=reason,
             source_entry_inferred=boundary is not None,
             source_entry_replayable=boundary is not None,
+            step_lifetime_planned=True,
             calibration_steps=calibration_steps, executable='bin/' + _EXE,
             full_entry_performance_measured=comparison is not None,
             files={path.relative_to(stage).as_posix(): _content(path)

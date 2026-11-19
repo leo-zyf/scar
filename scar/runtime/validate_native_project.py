@@ -16,9 +16,118 @@ from scar.compiler.tensor_execution import (
 )
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
+from scar.ir.v2.schemas import canonical_json
 
 
-def _replay_recurrence_selection(manifest, member, execution, observation, schedule):
+def _replay_recurrence_rhs_storage(recipe, geometry, storage, placement):
+    from scar.optimization.aten_native_team import data_dependencies
+    from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
+    from scar.optimization.aten_tensor_lifetime import _bytes, tensor_footprint
+
+    inputs, results = geometry['inputs'], geometry['operations']
+    cpus = placement['cpus']
+    if (placement['mode'] != 'READY_DAG' or len(cpus) != 3 or len(set(cpus)) != len(cpus)
+            or any(type(cpu) is not int or cpu < 0 for cpu in cpus)
+            or [row['shape'] for row in inputs] != [row['shape'] for row in recipe['inputs']]
+            or [row['id'] for row in results] != [row['id'] for row in recipe['operations']]
+            or any(row['storage_bytes'] != 4 * prod(row['shape']) for row in (*inputs, *results))):
+        raise ValueError('recurrence RHS geometry or placement differs from the admitted dense Tensor ABI')
+    input_bytes, result_bytes = ([row['storage_bytes'] for row in rows] for rows in (inputs, results))
+    serial = tensor_footprint(recipe, input_bytes=input_bytes, output_bytes=result_bytes, candidates=())
+    returned = set(recipe['outputs'])
+    exports = [index for index, row in enumerate(results) if row['id'] in returned]
+    ready = ready_lifetime_bound(data_dependencies(recipe), placement['lanes'], exports, result_bytes,
+                                 serial['persistent_input_bytes'], operation_order=placement['operation_order'])
+    budget = storage['budget_bytes']
+    expected = {key: serial[key] for key in ('scope', 'persistent_input_bytes', 'serial_peak_bytes', 'excluded_bytes')}
+    expected.update(accounting='RELEASE_ON_LAST_COMPLETED_CONSUMER', budget_bytes=budget,
+                    full_retention_bytes=sum(input_bytes) + sum(result_bytes), lifetime_proof=ready,
+                    peak_tensor_storage_bytes=ready['peak_tensor_storage_bytes'])
+    if not _bytes(budget) or not 0 < expected['peak_tensor_storage_bytes'] <= budget or expected != storage:
+        raise ValueError('recurrence RHS storage differs from replayed serial and ready Tensor lifetimes')
+    return expected
+
+
+def _replay_recurrence_lifetimes(manifest, member, graph, execution, recipe):
+    from scar.compiler.tensor_program_graph import recurrence_graph
+    from scar.optimization.aten_recurrence import plan_recurrence
+
+    source = json.loads(member('plan/inputs.json').read_bytes())
+    step, geometry = source['lowered_step'], source['source_geometry']
+    port, step_size = execution['state_input_index'], execution['step_size']
+    if (source['rhs'] != manifest['source_references'] or source['solver'] != manifest['method_provider']
+            or not any(row['id'] == recipe['outputs'][0] and row['shape'] == step['inputs'][0]['shape']
+                       for row in geometry['operations'])):
+        raise ValueError('recurrence source and RHS result differ from the admitted step')
+    ready = source['rhs_candidate_placement']
+    storage = _replay_recurrence_rhs_storage(recipe, geometry, source['rhs_candidate_storage'], ready)
+    plans = {}
+    alternatives = manifest['alternatives']
+    budget = manifest['tensor_budget_bytes']
+    if set(alternatives) not in ({'SERIAL'}, {'READY_DAG', 'SERIAL'}) or type(budget) is not int or not 0 < budget < 2**63:
+        raise ValueError('recurrence lifetime plan needs its original candidate domain and Tensor budget')
+    for mode, row in alternatives.items():
+        peak = storage['serial_peak_bytes'] if mode == 'SERIAL' else storage['peak_tensor_storage_bytes']
+        plan = plan_recurrence(step, recipe, dict(storage, peak_tensor_storage_bytes=peak),
+                               state_input_index=port, step_size=step_size, optimize_lifetime=True)
+        needed = plan['peak_tensor_storage_bytes']
+        if (row['peak_tensor_storage_bytes'] != needed or row['within_budget'] is not (needed <= budget)
+                or row['source_order_peak_tensor_storage_bytes'] != plan['step_lifetime_order']['original_peak_bytes']):
+            raise ValueError('recurrence alternative differs from its replayed lifetime and budget admission')
+        placement = dict(mode='SERIAL', cpus=ready['cpus'][:1], lanes=None, operation_order=None)
+        plan['storage']['budget_bytes'] = budget
+        plan.update(placement=ready if mode == 'READY_DAG' else placement, timing_basis='MEASURED_CPU_BODY_PER_STEP')
+        plans[mode] = plan
+    selected = plans[execution['placement']['mode']]
+    if canonical_json(selected) != canonical_json({key: execution.get(key) for key in selected}):
+        raise ValueError('recurrence execution differs from the replayed step lifetime plan')
+    original = recurrence_graph(step, recipe, geometry, selected['control'], selected['rhs_bindings'], step_size=step_size)
+    if codec.dumps(graph) != codec.dumps(original):
+        raise ValueError('recurrence program graph differs from the original lowered step')
+    return plans, source['rhs']
+
+
+def _replay_recurrence_body(problem, plan, lowered, *, source):
+    named = plan['operations']
+    operations = [row['id'] for row in named]
+    storage = plan['storage']
+    sizes = {row['id']: (8 if row['dtype'] == 'FLOAT64' else 4) * prod(row['shape'])
+             for row in (*plan['inputs'], *named)}
+    consumed = {edge.value for edge in problem.data_edges}
+    memory, = [resource for resource in problem.resources if resource.kind == 'MEMORY']
+    reserved = sum(storage[key] for key in ('raw_file_backing_bytes', 'previous_step_state_bytes',
+                                         'fixed_step_size_bytes'))
+    order = 'PROVEN_TENSOR_LIFETIME_ORDER' if plan['step_lifetime_order']['status'] == 'IMPROVED' else 'SOURCE_ORDER'
+    if (problem.source_refs != (source,) or [task.id for task in problem.operations] != [*operations, '$return']
+            or problem.assumptions != ('SYNCHRONOUS_CPU_BODY', order, 'PROVIDER_WORKSPACE_NOT_MEASURED')
+            or any(task.predecessors != tuple(operations[max(0, index - 1):index])
+                   for index, task in enumerate(problem.operations))
+            or memory.capacity != storage['budget_bytes'] or problem.reserved_memory != {memory.id: reserved}
+            or any(edge.nbytes != sizes[edge.value] for edge in problem.data_edges)
+            or (lowered['operations'], lowered['release_after']) != (named, plan['release_after'])):
+        raise ValueError('recurrence physical schedule differs from the verified step lifetime order or storage')
+    for task, row in zip(problem.operations[:-1], named, strict=True):
+        mode, = task.options
+        extra = storage['rhs_non_input_peak_bytes'] - sizes[task.id] if row['op'] == 'RHS' else 0
+        extra += 0 if task.id in consumed else sizes[task.id]
+        lowering = 'NATIVE_SHARED_RHS' if row['op'] == 'RHS' else 'NATIVE_ATEN_CALL'
+        origin = dict(source, operation=f'program_operation:step/operation/{task.id}')
+        if (mode.lowering != lowering or mode.workspace_bytes != ({memory.id: extra} if extra else {})
+                or task.source_refs != (origin,) or mode.proof_refs != (origin,)):
+            raise ValueError('recurrence operation provenance or workspace differs from its step lifetime proof')
+
+
+def _recurrence_rhs_archive(member, references, base):
+    documents = []
+    for name, role in (('rhs-problem.json', 'planning_problem'), ('rhs-schedule.json', 'execution_plan')):
+        raw = member(base + name)
+        if _content(raw) != {key: references[role][key] for key in ('sha256', 'size_bytes')}:
+            raise ValueError('packaged recurrence RHS differs from its admitted ready schedule')
+        documents.append(json.loads(raw.read_bytes()))
+    return documents
+
+
+def _replay_recurrence_selection(manifest, member, execution, observation, schedule, recipe, *, lifetimes=None):
     def read(relative):
         return json.loads(member(relative).read_bytes())
 
@@ -40,11 +149,21 @@ def _replay_recurrence_selection(manifest, member, execution, observation, sched
                 (observation['inputs'], observation['repeats'], observation['outputs'])
                 or other_obs['placement']['mode'] != alternate_mode):
             raise ValueError('alternative calibration has a different input or execution scope')
-        other_problem = read(archive + 'problem.json')
+        other_document = read(archive + 'problem.json')
+        other_problem = problem_from_dict(other_document)
         other_schedule = read(archive + 'schedule.json')
-        replay_operation_costs(problem_from_dict(other_problem), execution, other_obs,
+        alternate = execution if lifetimes is None else lifetimes[0][alternate_mode]
+        replay_operation_costs(other_problem, alternate, other_obs,
             dict(path='validation/calibration.json', **_content(member(archive + 'calibration.json'))))
-        scheduled_tensor_body(other_problem, other_schedule, execution)
+        other_lowered = scheduled_tensor_body(other_document, other_schedule, alternate)
+        if lifetimes is not None:
+            placement = alternate['placement']
+            if other_obs['placement'] != placement or other_problem.target.sha256 != execution['target']['sha256']:
+                raise ValueError('alternative calibration differs from its replayed recurrence placement or target')
+            _replay_recurrence_body(other_problem, alternate, other_lowered, source=execution['program_graph'])
+            rhs = (_recurrence_rhs_archive(member, lifetimes[1], archive)
+                   if alternate_mode == 'READY_DAG' else (None, None))
+            replay_recurrence_placement(other_problem, placement, recipe, *rhs)
         if alternatives[alternate_mode]['body_estimate_ns'] != other_schedule['makespan_ns']:
             raise ValueError('alternative estimate differs from its physical schedule')
         if alternatives['READY_DAG']['body_estimate_ns'] < alternatives['SERIAL']['body_estimate_ns']:
@@ -272,6 +391,10 @@ def _replay_family(manifest, member):
 def _replay_single(manifest, member):
     files = manifest['files']
     graph, execution, document, problem = _read_profile(member, files, 'plan')
+    lifetime_planned = manifest.get('step_lifetime_planned', False)
+    if (type(lifetime_planned) is not bool or lifetime_planned != ('step_lifetime_order' in execution)
+            or lifetime_planned and ('plan/schedule.json' not in files or execution['schema'] != 'scar.aten-recurrence-plan')):
+        raise ValueError('recurrence lifetime proof differs from its manifest')
     replayed = False
     if execution['schema'] == 'scar.native-tensor-entry-plan' and (
             'simplified_normal_completion' in manifest or 'plan/schedule.json' in files):
@@ -309,12 +432,26 @@ def _replay_single(manifest, member):
             if placement != observation['placement'] or (placement['mode'], placement['cpus']) != (
                     manifest['rhs_mode'], manifest['cpus']):
                 raise ValueError('recurrence calibration and emitted placement differ')
-            rhs_problem, rhs_schedule = ((json.loads(member(name).read_bytes()) for name in
-                ('plan/rhs-problem.json', 'plan/rhs-schedule.json')) if placement['mode'] == 'READY_DAG' else (None, None))
+            lifetimes = (_replay_recurrence_lifetimes(manifest, member, graph, execution, rhs_recipe)
+                         if lifetime_planned else None)
+            if lifetimes is not None:
+                _replay_recurrence_body(problem, execution, lowered, source=execution['program_graph'])
+            rhs_problem = rhs_schedule = None
+            if placement['mode'] == 'READY_DAG':
+                if lifetimes is None:
+                    rhs_problem, rhs_schedule = (json.loads(member('plan/' + name).read_bytes())
+                                                 for name in ('rhs-problem.json', 'rhs-schedule.json'))
+                else:
+                    if execution['rhs_schedule'] != lifetimes[1]['execution_plan']:
+                        raise ValueError('recurrence execution does not bind the admitted ready RHS')
+                    rhs_problem, rhs_schedule = _recurrence_rhs_archive(member, lifetimes[1], 'plan/')
+            elif lifetimes is not None and execution['rhs_schedule'] is not None:
+                raise ValueError('serial recurrence has no ready RHS schedule')
             if rhs_schedule is not None and execution['rhs_schedule']['sha256'] != files['plan/rhs-schedule.json']['sha256']:
                 raise ValueError('parallel RHS schedule differs from the archived selection')
             replay_recurrence_placement(problem, placement, rhs_recipe, rhs_problem, rhs_schedule)
-            _replay_recurrence_selection(manifest, member, execution, observation, schedule)
+            _replay_recurrence_selection(manifest, member, execution, observation, schedule, rhs_recipe,
+                                         lifetimes=lifetimes)
             generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
                 lanes=placement['lanes'], operation_order=placement['operation_order'])
         else:

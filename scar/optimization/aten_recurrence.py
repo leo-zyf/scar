@@ -4,6 +4,7 @@ from math import isfinite, prod
 
 from scar.compiler.aten_native_recipe import SCHEMA as RHS_SCHEMA, SCHEMA_VERSION as RHS_VERSION
 from scar.compiler.aten_native_recipe import _fields, _identifier, _shape
+from scar.optimization.aten_recurrence_liveness import plan_step_lifetime_order
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes, tensor_releases
 
 
@@ -147,7 +148,8 @@ def _storage(operations, release_after, raw_backing, carry, rhs_temporary):
                 excluded_bytes=['PROVIDER_INTERNAL_WORKSPACE', 'ALLOCATOR_RESERVES', 'OTHER_PROCESS_MEMORY'])
 
 
-def plan_recurrence(step_graph, rhs_recipe, rhs_storage, *, state_input_index, step_size, tensor_budget_bytes=None):
+def plan_recurrence(step_graph, rhs_recipe, rhs_storage, *, state_input_index, step_size, tensor_budget_bytes=None,
+                    optimize_lifetime=False):
     """Replay a fixed-step body and bound its storage over any admitted step count.
 
     The caller separately qualifies the RHS provider, its output geometry, its
@@ -163,6 +165,13 @@ def plan_recurrence(step_graph, rhs_recipe, rhs_storage, *, state_input_index, s
     state = inputs[0]['id']
     shape = inputs[0]['shape']
     backing, rhs_temporary = _call_storage(rhs_recipe, rhs_storage, state_input_index, shape)
+    carry = 4 * prod(shape)
+    lifetime = None
+    if optimize_lifetime:
+        lifetime = plan_step_lifetime_order(operations, output, raw_backing=backing, carry=carry,
+                                            rhs_temporary=rhs_temporary)
+        by_name = {row['id']: row for row in operations}
+        operations = [by_name[name] for name in lifetime['order']]
     rhs_bindings = []
     for op in operations:
         if op['op'] == 'RHS':
@@ -174,13 +183,15 @@ def plan_recurrence(step_graph, rhs_recipe, rhs_storage, *, state_input_index, s
         raise ValueError('recurrence step must invoke its qualified RHS at least once')
     release_after = tensor_releases(dict(schema=RHS_SCHEMA, schema_version=RHS_VERSION, inputs=inputs,
                                          operations=operations, outputs=[output]))
-    storage = _storage(operations, release_after, backing, 4 * prod(shape), rhs_temporary)
+    storage = _storage(operations, release_after, backing, carry, rhs_temporary)
     peak = storage['peak_tensor_storage_bytes']
+    if lifetime is not None and lifetime['peak_bytes'] != peak:
+        raise ValueError('Tensor lifetime order differs from its mechanically replayed backing peak')
     if tensor_budget_bytes is not None and peak > tensor_budget_bytes:
         raise ValueError(f'recurrence Tensor storage peak {peak} exceeds budget {tensor_budget_bytes}')
     storage['budget_bytes'] = tensor_budget_bytes
     fixed_parameters = [i for i in range(len(rhs_recipe['inputs'])) if i != state_input_index]
-    return dict(schema=SCHEMA, schema_version=1, inputs=inputs, operations=operations, output=output,
+    plan = dict(schema=SCHEMA, schema_version=1, inputs=inputs, operations=operations, output=output,
                 discarded_scalar_ops=discarded, rhs_bindings=rhs_bindings, release_after=release_after,
                 state_input_index=state_input_index, step_size=float(step_size), peak_tensor_storage_bytes=peak,
                 storage=storage, control=dict(kind='FIXED_COUNT_LOOP', body_count=1,
@@ -188,3 +199,6 @@ def plan_recurrence(step_graph, rhs_recipe, rhs_storage, *, state_input_index, s
                                        initial_entry_input=state_input_index),
                     invariant_entry_inputs=fixed_parameters, invariant_step_size_input=inputs[1]['id']),
                 timing_basis='UNMEASURED_RECURRENCE')
+    if lifetime is not None:
+        plan['step_lifetime_order'] = lifetime
+    return plan
