@@ -122,7 +122,31 @@ def _measure(out, plans, packages, *, repeats):
         launch=launch, raw=raw, arms=arms, warmup_rounds=1, measured_rounds=repeats)
 
 
-def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, widths, repeats=3):
+def _model_input_matches(canonical, model):
+    matched = model['matched_input']
+    return all(matched[key] == canonical[key] for key in ('sha256', 'size_bytes'))
+
+
+def _nominate_width(out, pilot, solver, common, oracle, admissible):
+    from scar.codegen.native_ordered_timing import collect
+    from scar.optimization.native_ordered_width_cost import propose
+
+    canonical = read_artifact(common)['canonical_csr']
+    input_path = Path(common['uri']).parent / canonical['uri']
+    diagnostic = collect(solver, out/'calibration', input_path=input_path,
+                         expected_stdout=oracle)
+    model = propose(pilot['uri'], [diagnostic['uri']])
+    width = model['recommended_width']
+    _require(type(width) is int and width in admissible and model['admissible_widths'] == list(admissible)
+        and model['profile_plan'] == pilot and model['native_observations'] == [diagnostic]
+        and _model_input_matches(canonical, model),
+        'native width model differs from its exact pilot, evidence or allowed cohort')
+    return width, dict(pilot_width=admissible[0], observation=diagnostic,
+                      proposal=_write(out/'width-cost.json', model))
+
+
+def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, widths, repeats=3,
+                    calibrate_widths=False):
     """Reuse the checked upstream provider family and measure fresh scoped schedules."""
     anchor = Path(anchor).resolve(strict=True)
     baseline = native_publication_delivery.check(anchor)
@@ -132,29 +156,46 @@ def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, 
     out = Path(out).resolve()
     _require(not out.is_relative_to(anchor), 'profile output must be outside the provider family')
     out.mkdir(parents=True, exist_ok=False)
+    admissible = tuple(sorted(widths))
+    use_model = calibrate_widths and len(admissible) > 1
     plans = {}
-    for width in sorted(widths):
+
+    def prepare(width):
         schedule = profiles.plan_profile(anchor/'digest', source_seed, hardware, oracle, width,
             original_observation_path=observation)
-        plans[str(width)] = _write(out/f'width-{width}.json', schedule)
-    documents = [read_artifact(reference) for reference in plans.values()]
-    recipe_ids = {document['resources']['recipe_id'] for document in documents}
-    _require(len(recipe_ids) == 1, 'schedule widths must share one numerical wire identity')
-    common = upstream.export(anchor, source_seed, count=documents[0]['resources']['case']['call_count'],
-        recipe_id=recipe_ids.pop(), out=out/'upstream')
-    packages = {}
-    for width, reference in plans.items():
-        solver = out/f'solver-{width}'
-        export_profile_solver(reference['uri'], solver)
-        packages[width] = delivery.export(reference['uri'], out/'upstream', solver, out/f'native-{width}')
+        reference = _write(out/f'width-{width}.json', schedule)
+        export_profile_solver(reference['uri'], out/f'solver-{width}')
+        plans[str(width)] = reference
+        return schedule
+
+    pilot = admissible[0]
+    first = prepare(pilot)
+    resources = first['resources']
+    identity = resources['recipe_id']
+    common = upstream.export(anchor, source_seed, count=resources['case']['call_count'],
+        recipe_id=identity, out=out/'upstream')
+    width_model = None
+    additional = admissible[1:]
+    if use_model:
+        width, width_model = _nominate_width(out, plans[str(pilot)], out/f'solver-{pilot}', common,
+                                             oracle, admissible)
+        additional = (width,) if width != pilot else ()
+    for width in additional:
+        schedule = prepare(width)
+        _require(schedule['resources']['recipe_id'] == identity,
+            'schedule widths must share one numerical wire identity')
+    packages = {width: delivery.export(ref['uri'], out/'upstream', out/f'solver-{width}', out/f'native-{width}')
+                for width, ref in plans.items()}
     benchmark = _write(out/'benchmark.json', _measure(out, plans, packages, repeats=repeats))
     selection = profiles.select_profile(benchmark['uri'])
     decision = _write(out/'selection.json', selection)
-    result = dict(schema=SCHEMA, schema_version=1, source_seed=documents[0]['source_seed'],
-        original_observation=documents[0]['original_observation'], oracle=documents[0]['oracle'],
+    result = dict(schema=SCHEMA, schema_version=1, source_seed=first['source_seed'],
+        original_observation=first['original_observation'], oracle=first['oracle'],
         upstream=common, plans=plans, packages=packages, benchmark=benchmark, decision=decision,
         selected=selection['recommended_arm'], selected_native_width=selection['selected_width'],
         full_original_effects_closed=False)
+    if width_model is not None:
+        result['width_model'] = width_model
     return _write(out/'result.json', result)
 
 
@@ -198,7 +239,7 @@ def compile_entry(family_path, entry, argv, out, *, widths=None, repeats=3, max_
     context = selected['context']
     out = Path(out).resolve()
     _require(not out.is_relative_to(anchor), 'profile output must be outside the provider family')
-    available, selected_widths = profiles.observe_profile_host(anchor/'digest', count, widths=widths)
+    available, admissible = profiles.observe_profile_host(anchor/'digest', count, widths=widths)
     aggregate = scope_design(anchor/'digest', argv)
     if resume:
         _require((out/'frontend'/'observed'/'result.json').is_file()
@@ -215,10 +256,25 @@ def compile_entry(family_path, entry, argv, out, *, widths=None, repeats=3, max_
     _check_acquisition(acquired, entry_ref, argv)
     compiled = compile_profile(anchor, acquired['source_seed']['uri'], hardware['uri'],
         acquired['oracle']['uri'], acquired['original_observation']['uri'], out/'compiled',
-        widths=selected_widths, repeats=repeats)
+        widths=admissible, repeats=repeats, calibrate_widths=widths is None)
+    measured_widths = sorted(map(int, read_artifact(compiled)['plans']))
     return _write(out/'result.json', dict(schema=AUTOMATIC, schema_version=1, family=family_ref,
         entry=entry_ref, argv=argv, anchor=selected['anchor'], acquisition=acquired,
-        hardware=hardware, candidate_widths=list(selected_widths), compilation=compiled, resumed_capture=resume))
+        hardware=hardware, candidate_widths=measured_widths, compilation=compiled, resumed_capture=resume))
+
+
+def _check_width_model(record, plans, canonical):
+    from scar.optimization.native_ordered_width_cost import check as verify_width_cost
+
+    model = verify_width_cost(record['proposal']['uri'])
+    pilot = record['pilot_width']
+    _require(model == read_artifact(record['proposal'])
+        and pilot == model['admissible_widths'][0]
+        and model['profile_plan'] == plans[str(pilot)]
+        and model['native_observations'] == [record['observation']]
+        and _model_input_matches(canonical, model)
+        and set(plans) == {str(pilot), str(model['recommended_width'])},
+        'clean benchmark differs from the replayed native width nomination')
 
 
 def check(path):
@@ -228,13 +284,16 @@ def check(path):
     benchmark = read_artifact(saved['benchmark'])
     selection = profiles.verify_profile_selection(saved['decision']['uri'])
     common = saved['upstream']
-    _require(upstream.check(Path(common['uri']).parent) == read_artifact(common)
+    compiled_upstream = upstream.check(Path(common['uri']).parent)
+    _require(compiled_upstream == read_artifact(common)
         and saved['schema_version'] == 1 and saved['full_original_effects_closed'] is False
         and benchmark['plans'] == saved['plans'] and benchmark['packages'] == saved['packages']
         and selection == read_artifact(saved['decision']) and selection['benchmark'] == saved['benchmark']
         and selection['recommended_arm'] == saved['selected']
         and selection['selected_width'] == saved['selected_native_width'],
         'published profile compilation or performance choice differs from cold replay')
+    if 'width_model' in saved:
+        _check_width_model(saved['width_model'], saved['plans'], compiled_upstream['canonical_csr'])
     for width, package in saved['packages'].items():
         native = delivery.check(Path(package['uri']).parent)
         profile = read_artifact(saved['plans'][width])
@@ -286,7 +345,8 @@ def main(argv=None):
     parser.add_argument('--argv', nargs='+')
     parser.add_argument('--max-capture-seconds', type=float, default=60)
     parser.add_argument('--resume', action='store_true', help='resume offline source projection after a completed capture')
-    parser.add_argument('--width', type=int, action='append')
+    parser.add_argument('--width', type=int, action='append',
+                        help='measure an explicit worker width instead of automatic cost nomination')
     parser.add_argument('--repeats', type=int, default=3)
     args = parser.parse_args(argv)
     explicit = (args.anchor, args.source_seed, args.hardware, args.oracle, args.original_observation)

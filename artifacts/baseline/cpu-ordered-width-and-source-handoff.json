@@ -1,0 +1,262 @@
+{
+  "compiler": "scar compile-cpu-entry",
+  "cpu_model": "Intel Xeon E5-2680 v4",
+  "finite_element": {
+    "admissible_widths": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "built_and_clean_measured_widths": [
+      2,
+      6
+    ],
+    "capture_process": 1597157,
+    "clean_comparison": {
+      "bytes": 6261,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/native/compiled/benchmark.json",
+      "sha256": "18b801e246056a5511fb78fcae7666739ea8121556e572ef074c2a28e9fd3a26"
+    },
+    "clean_cpu_ids": [
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ],
+    "clean_speedup": 1.7433791448212592,
+    "cold_readback": {
+      "bytes": 907,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/current-check.json",
+      "sha256": "b0c5c762e3b70e817cfe9e02f677023f8fb263601263b05fc6c8485bc0c84456"
+    },
+    "compiler_wall_seconds": 140.67,
+    "entry": {
+      "bytes": 989,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/result.json",
+      "sha256": "9761014edf34cfc24810e0176c6d42b09bf5e4c090c6445f7847f45a8c425520"
+    },
+    "exact_stdout_sha256": "468b0ba1bcbf1180d6c80f1ca76266aaeb73c27211a5a5fc0e3c4c8a6b6611a4",
+    "frontend": {
+      "bytes": 2631,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/native/frontend/result.json",
+      "sha256": "814e61995c3afce69f3376fe1bfb4ec502ac9e086b45439340ad1713501f3682"
+    },
+    "full_python_effect_equivalence": false,
+    "global_optimum_proven": false,
+    "heldout_covered_intervals_wall_ns": 189018457,
+    "heldout_used_for_nomination": false,
+    "heldout_width": {
+      "bytes": 22582,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/heldout-native-width/result.json",
+      "sha256": "b74fa14a571b8659bdc551ab226861373e9f90d57b6bc2de11fd76571a1a95b4"
+    },
+    "input_matches_upstream_csr": true,
+    "measured_rounds": 3,
+    "measurements": {
+      "2": {
+        "max_ns": 1572224458,
+        "median_ns": 1535609920,
+        "min_ns": 1535507764,
+        "sample_stdev_ns": 21168964.890027948,
+        "samples_ns": [
+          1535507764,
+          1535609920,
+          1572224458
+        ]
+      },
+      "6": {
+        "max_ns": 1162887319,
+        "median_ns": 1146416595,
+        "min_ns": 1137106494,
+        "sample_stdev_ns": 13055099.051041333,
+        "samples_ns": [
+          1146416595,
+          1162887319,
+          1137106494
+        ]
+      },
+      "original": {
+        "max_ns": 2006292895,
+        "median_ns": 1998638783,
+        "min_ns": 1987182233,
+        "sample_stdev_ns": 9618171.781314854,
+        "samples_ns": [
+          1998638783,
+          1987182233,
+          2006292895
+        ]
+      }
+    },
+    "model_loop_only_conditional_lower_ns": {
+      "2": 508971360,
+      "3": 339314240,
+      "4": 254485680,
+      "5": 203588544,
+      "6": 169657120
+    },
+    "model_loop_only_intervals_ns": {
+      "2": {
+        "estimate_ns": 536721882,
+        "lower_ns": 517140689,
+        "upper_ns": 637359479
+      },
+      "3": {
+        "estimate_ns": 358097012,
+        "lower_ns": 344982754,
+        "upper_ns": 425247022
+      },
+      "4": {
+        "estimate_ns": 268890486,
+        "lower_ns": 258987147,
+        "upper_ns": 319318557
+      },
+      "5": {
+        "estimate_ns": 223545860,
+        "lower_ns": 215405820,
+        "upper_ns": 265459980
+      },
+      "6": {
+        "estimate_ns": 179895778,
+        "lower_ns": 173158261,
+        "upper_ns": 213645619
+      }
+    },
+    "pilot": {
+      "bytes": 14141,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/native/compiled/calibration/result.json",
+      "sha256": "4d9749a640495d8c2b51de2054a8efc1145aa50d9de775cca94e4f8306194c62"
+    },
+    "pilot_phase_wall_and_cpu_ns": {
+      "issue_prepare": {
+        "count": 96,
+        "total_cpu_ns": 130574,
+        "total_wall_ns": 262748
+      },
+      "issue_send": {
+        "count": 96,
+        "total_cpu_ns": 726120,
+        "total_wall_ns": 860525
+      },
+      "ordered_receive_payload": {
+        "count": 96,
+        "total_cpu_ns": 1067474,
+        "total_wall_ns": 1209712
+      },
+      "ordered_wait_receive_header": {
+        "count": 96,
+        "total_cpu_ns": 1719784,
+        "total_wall_ns": 518026142
+      },
+      "retire": {
+        "count": 96,
+        "total_cpu_ns": 19078954,
+        "total_wall_ns": 19211185
+      }
+    },
+    "previous_entry_check": {
+      "bytes": 912,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/prior-entry-check.json",
+      "sha256": "013f2db0ce74fcb1c56cd6c95c344e7bc504a82e1bb62a44052edf7137c637ee"
+    },
+    "proposal": {
+      "bytes": 15811,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/native/compiled/width-cost.json",
+      "sha256": "8df010d02a2e6e59ac86e78856295958ef6eed6be7d095717bccffb50f6d7670"
+    },
+    "scope": "CONDITIONAL_NATIVE_LOOP_NOMINATION_AND_CLEAN_COMPARISON",
+    "selected_cxx": {
+      "bytes": 12980,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/cost-selected/native/compiled/native-6/scar_publish.cpp",
+      "sha256": "efdbb1e0b0392503d2579c849c3842dd9ab60ab69a2c590e8920efb022b07d61"
+    },
+    "selected_width": 6,
+    "warmup_rounds": 1
+  },
+  "rk4": {
+    "comparison_scope": "FULL_CLEAN_PROCESS_FINAL_TENSOR_FILE_NORMAL_COMPLETION",
+    "cpu_ids": [
+      14,
+      15,
+      16
+    ],
+    "equal_output_tensor_all_runs": true,
+    "final_tensor_sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+    "measured_rounds": 3,
+    "measurements": {
+      "native": {
+        "max_ns": 2358097665,
+        "median_ns": 2350800281,
+        "min_ns": 2337069918,
+        "sample_stdev_ns": 10676616.39012437,
+        "samples_ns": [
+          2337069918,
+          2350800281,
+          2358097665
+        ]
+      },
+      "original": {
+        "max_ns": 6772030222,
+        "median_ns": 6734523993,
+        "min_ns": 6695872056,
+        "sample_stdev_ns": 38080519.289473906,
+        "samples_ns": [
+          6734523993,
+          6772030222,
+          6695872056
+        ]
+      }
+    },
+    "paired_entry_measurement": {
+      "bytes": 3099,
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/rk4-16-paired.json",
+      "sha256": "2eb3bbf379f55460da90cbc02496311d98642b1b58d72e4bc27ae27287931925"
+    },
+    "speedup": 2.864779304065431,
+    "stdout_equivalent_between_arms": false,
+    "steps": 16,
+    "warmup_rounds": 1
+  },
+  "schema": "scar.cpu-ordered-width-and-source-handoff-acceptance",
+  "schema_version": 1,
+  "sunfish": {
+    "capture": {
+      "bytes": 4369,
+      "path": "artifacts/current/experiments/sunfish-scalar-table-cse/observed-call-handoff-v1/capture.json",
+      "sha256": "6ed2bfe33c8a3fc7430baff03d8dee3006644a1dce11f10891bf03f8bc0d7e96"
+    },
+    "cold_readback": {
+      "bytes": 31,
+      "path": "artifacts/current/experiments/sunfish-scalar-table-cse/observed-call-handoff-v1/common-cli-check.json",
+      "sha256": "725fa5600cb9e8b95a5cc169d64726986679374309fe0a048364fac69ca21bba"
+    },
+    "depth": 2,
+    "formal": "pos",
+    "handoff": {
+      "bytes": 39908,
+      "path": "artifacts/current/experiments/sunfish-scalar-table-cse/observed-call-handoff-v1/handoff.json",
+      "sha256": "8af4fde870b0f9a3fa0b9cfbe71487bfdbf2858e48f11b202933463481835077"
+    },
+    "observed_handoffs": 8,
+    "original_f4_edges": 5,
+    "original_stdout": {
+      "bytes": 1084,
+      "path": "artifacts/current/experiments/sunfish-scalar-table-cse/observed-call-handoff-v1/original.stdout",
+      "sha256": "68775d523c8565731c02a17dccf879552d014ada24eff0c6371672c73a0d75da"
+    },
+    "scope": "SAMPLED_DIRECT_POSITIONAL_NORMAL_HANDOFF",
+    "semantic_obligations": {
+      "future_dispatch_proven": false,
+      "logical_content_version_proven": false,
+      "reference_handoff_observed": true,
+      "state_effects_closed": false,
+      "target_executed_by_projection": false,
+      "transformation_authorized": false,
+      "whole_entry_complete": false
+    }
+  }
+}

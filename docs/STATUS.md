@@ -1,5 +1,9 @@
 # 当前状态
 
+`compile-cpu-entry` 的有序 CPU 路径现从一个两 worker 原生诊断推导全部 2–6 worker 的循环耗时。按实际 CPU、NUMA 和内存约束提名六 worker，构建校准与提名两种宽度。六 worker 循环估计 179.9 ms，另一次诊断覆盖区间合计 189.0 ms。整入口清洁中位数为 Python 1.999 s、两 worker 1.536 s、六 worker 1.146 s，stdout 逐字节一致。原生诊断通过独立描述符记录，按序等待与载荷接收各有观测。
+
+RK4 16 步完成 1 对预热、3 对清洁测量，Python 与 C++ 中位数为 6.735 s 和 2.351 s，终态文件逐位匹配，两套 stdout 各按自身格式验证。Sunfish 深度 2 的真实运行验证了 8 次返回对象到递归形参的直接传递，连接 5 条原始 F4 数据边。下一步补上 Sunfish 该区域的内容与效果沿边证明，并用原生诊断继续收紧跨宽度的成本估计。见 `artifacts/baseline/cpu-ordered-width-and-source-handoff.json`。
+
 `scar compile-cpu-entry --provider A --provider B --entry SOURCE --out OUT --argv ...` 已用同一命令编译有限元和固定网格 RK4 两条 CPU 入口。SCAR 依据源码路径、字节和提供方合同选择唯一入口，`--check OUT/result.json` 可按原合同冷复验。
 
 有限元 96 轮再次从一次原程序采集重建了 182 条动态调用绑定。它沿用经核验的静态图，单独离线验收的绑定与发布为 1.199 s。准备、求解和有序发布的 288 个区间已汇总到同一份源图。清洁测量的 Python 原入口和六 worker C++20 中位数为 1.981 s 和 1.125 s，stdout 逐字节一致，约 1.76×。
