@@ -11,6 +11,13 @@ from tempfile import TemporaryDirectory
 
 from scar.analysis.replay_transaction import replay_transaction
 from scar.codegen.native_project import build_native_project, write_native_project
+from scar.codegen.native_provider_bundle import (
+    SCHEMA as PROVIDER_BUNDLE, build_native_provider_bundle, validate_native_provider_bundle,
+)
+from scar.codegen.native_sparse_publication import (
+    SCHEMA as PUBLICATION, STREAM as DIGEST_STREAM, SYSTEM_LIBRARIES,
+    project as project_publication, project_stream as project_digest_stream,
+)
 from scar.codegen.native_sparse_source import SOURCE_STREAM, project_source_csr_stream, render_source_scale
 from scar.codegen.sparse_native_export import check_sparse_export, export_sparse_native
 from scar.ir.execution_recipe import SCHEMA as RECIPE, artifact_reference, read_artifact
@@ -33,6 +40,9 @@ _WIRE_SOURCE = Path(__file__).with_name('native_ordered_sparse_wire_v1.cpp.in')
 _MAIN_SOURCE = Path(__file__).with_name('native_ordered_sparse_main_v1.cpp.in')
 _DETACHED_MAIN = Path(__file__).with_name('native_ordered_sparse_detached_v1.cpp.in')
 _SOURCE_INGRESS = Path(__file__).with_name('native_ordered_sparse_source_v1.cpp.in')
+_PUBLICATION_SOURCE = Path(__file__).with_name('native_ordered_sparse_publication_v1.cpp.in')
+_PUBLICATION_FILE = 'publication.json'
+_CRYPTO_BUNDLE = 'sha256/bundle.json'
 _DETACHED_SOURCE = 'detached-source.json'
 _STREAM_PLAN = 'stream.json'
 _STREAM_MAIN = 'scar_ordered_sparse.cpp'
@@ -70,45 +80,76 @@ def _local(root, name, schema):
     return {**artifact_reference(path, schema), 'uri': name}
 
 
-def _render_main(stream, plan):
+def _render_publication(tail, digest):
+    before, markers = tail.split('@SCAR_RESULT_SUCCESS_BEGIN@', 1)
+    legacy, after = markers.split('@SCAR_RESULT_SUCCESS_END@', 1)
+    tail = before + ('            publication.append(row.result);' if digest else legacy) + after
+    values = dict(RESULT_SETUP='        DigestPublication publication;\n' if digest else '',
+        RESULT_COMPLETE='publication.complete()' if digest else 'publish_record(published, Record::end, 0)',
+        RESULT_FAULT='publish_digest_failure' if digest else 'publish_record',
+        MAIN_ARGV=' argv' if digest else '',
+        MAIN_PARAMETERS=' && (argc != 2 || std::string_view(argv[1]) != "--consume-records")' if digest else '',
+        MAIN_USAGE='ordered sparse digest accepts binary stdin and optional --consume-records' if digest
+            else 'detached sparse executable accepts binary stdin and no arguments',
+        ALTERNATE_MAIN=('        if (argc == 2) {\n'
+                        '            return consume_binary_results();\n'
+                        '        }\n') if digest else '',
+        RESULT_HEADER='' if digest else '        write_exact(output_header);\n')
+    for name, value in values.items():
+        tail = tail.replace('@SCAR_' + name + '@', value)
+    return tail
+
+
+def _render_main(stream, plan, crypto=None):
     digest = stream['recipe_id'].removeprefix('recipe-v1:')
     wire = _WIRE_SOURCE.read_text().replace('@SCAR_RECIPE_DIGEST@', digest).replace(
         '@SCAR_INPUT_MAGIC@', stream['input']['magic']) + '\n'
-    if stream['schema'] in (DETACHED_STREAM, SOURCE_STREAM):
+    is_digest = stream['schema'] == DIGEST_STREAM
+    if is_digest != (crypto is not None):
+        raise ValueError('native digest stream and package provider must be selected together')
+    if stream['schema'] in (DETACHED_STREAM, SOURCE_STREAM, DIGEST_STREAM):
         includes = ''.join(f'#include <{name}>\n' for name in (
             'algorithm', 'cmath', 'cstring', 'iterator', 'memory', 'utility', 'dlfcn.h'))
         tail = _DETACHED_MAIN.read_text().replace('@SCAR_OWNER_CPU@', str(plan['placement']['owner_cpu_id']))
         before, ticket = tail.split('@SCAR_TICKET_BEGIN@\n', 1)
         legacy_ticket, after = ticket.split('@SCAR_TICKET_END@', 1)
-        source = stream['schema'] == SOURCE_STREAM
+        source = stream['schema'] in (SOURCE_STREAM, DIGEST_STREAM)
         ingress = ''
         if source:
             expression = render_source_scale(stream['source']['expression'], stream['header']['count'])
             ingress = _SOURCE_INGRESS.read_text().replace('@SCAR_SCALE_EXPRESSION@', expression) + '\n'
+        if is_digest:
+            includes += '#include <openssl/evp.h>\n'
+            wire = wire.replace('\nvoid publish_record(', '\n[[maybe_unused]] void publish_record(')
+            ingress += _PUBLICATION_SOURCE.read_text().replace('@SCAR_CRYPTO_PATH@', json.dumps(crypto)) + '\n\n'
         tail = before + ('            fill_source_scale(sequence, request);' if source else legacy_ticket) + after
         tail = (tail.replace('@SCAR_SOURCE_INGRESS@', ingress)
                 .replace('@SCAR_SNAPSHOT_READER@', 'read_source_snapshot' if source else 'read_snapshot')
                 .replace('@SCAR_LEGACY_UNUSED@', '[[maybe_unused]] ' if source else ''))
+        tail = _render_publication(tail, is_digest)
         return (includes + wire + tail.replace('@SCAR_BLAS_SCALE_SYMBOL@', DETACHED_BLAS_SYMBOL)).encode()
     return (wire + _MAIN_SOURCE.read_text()).encode()
 
 
 def _compile_flags(schema):
-    if schema == SOURCE_STREAM:
+    if schema in (SOURCE_STREAM, DIGEST_STREAM):
         return (*_CXXFLAGS[:-1], '-fno-fast-math', '-ffp-contract=off', _CXXFLAGS[-1])
     return _CXXFLAGS
 
 
-def _write_stream(directory, plan, stream):
+def _write_stream(directory, plan, stream, crypto=None):
     (directory / _STREAM_PLAN).write_text(json.dumps(stream, sort_keys=True, indent=2, allow_nan=False) + '\n')
-    (directory / _STREAM_MAIN).write_bytes(_render_main(stream, plan))
+    (directory / _STREAM_MAIN).write_bytes(_render_main(stream, plan, crypto))
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
     if not compiler:
         raise ValueError('CXX must select an available C++20 compiler')
     version = subprocess.check_output([*compiler, '--version'], text=True).splitlines()[0]
     flags = _compile_flags(stream['schema'])
+    install = [('numeric', 'bin')]
+    if crypto is not None:
+        install.append(('sha256', 'bin'))
     write_native_project(directory, _STREAM_EXECUTABLE, sources=(_STREAM_MAIN,), include_dirs=('.',),
-        compile_options=flags[1:-1], link_options=(flags[-1],), libraries=('dl',), install_dirs=(('numeric', 'bin'),))
+        compile_options=flags[1:-1], link_options=(flags[-1],), libraries=('dl',), install_dirs=install)
     executable, _ = build_native_project(directory, _STREAM_EXECUTABLE, compiler)
     # Preserve the existing colocated stream executable/solver ABI.
     executable.rename(directory / _STREAM_EXECUTABLE)
@@ -119,8 +160,9 @@ def _write_stream(directory, plan, stream):
         compiler=dict(command=compiler, version=version, options=list(flags)))
 
 
-def _check_stream(directory, plan, transport, detached=None, *, source_csr=False):
-    schema = SOURCE_STREAM if source_csr else STREAM if detached is None else DETACHED_STREAM
+def _check_stream(directory, plan, transport, detached=None, *, source_csr=False, publication=None, crypto=None):
+    schema = DIGEST_STREAM if publication is not None else SOURCE_STREAM if source_csr else (
+        STREAM if detached is None else DETACHED_STREAM)
     if (transport['protocol'] != _local(directory, _STREAM_PLAN, schema)
             or transport['source'] != _local(directory, _STREAM_MAIN, 'scar.cpp-source')
             or transport['executable'] != _local(directory, _STREAM_EXECUTABLE, 'scar.native-executable-file')
@@ -131,18 +173,50 @@ def _check_stream(directory, plan, transport, detached=None, *, source_csr=False
         raise ValueError('native stream project definition differs from its receipt')
     protocol = read_artifact({**transport['protocol'], 'uri': str(directory / _STREAM_PLAN)})
     if source_csr:
-        if semantic_sha256(protocol) != semantic_sha256(project_source_csr_stream(plan, detached)):
+        expected = project_source_csr_stream(plan, detached)
+        if publication is not None:
+            expected = project_digest_stream(expected, publication)
+        if semantic_sha256(protocol) != semantic_sha256(expected):
             raise ValueError('native source CSR stream differs from its released integer/float and ingress contracts')
     else:
         validate_native_ordered_stream(plan, protocol, detached=detached)
-    if (directory / _STREAM_MAIN).read_bytes() != _render_main(protocol, plan):
+    if (directory / _STREAM_MAIN).read_bytes() != _render_main(protocol, plan, crypto):
         raise ValueError('native stream entry differs from its recipe and protocol')
 
 
+def _bundled_crypto(directory, reference, publication):
+    if reference != _local(directory, _CRYPTO_BUNDLE, PROVIDER_BUNDLE):
+        raise ValueError('ordered digest bundle differs from its local receipt')
+    bundle = validate_native_provider_bundle({**reference, 'uri': str(directory / _CRYPTO_BUNDLE)})
+    provider, = bundle['members']
+    original = publication['provider']['libcrypto']
+    if (provider['path'] != bundle['root'] or provider['origin'] != original['uri']
+            or any(provider[key] != original[key] for key in ('sha256', 'size_bytes'))
+            or publication['provider']['abi'] != 'OPENSSL_EVP_SHA256'
+            or publication['provider']['external_config_loaded'] is not False):
+        raise ValueError('ordered digest does not ship the admitted OpenSSL implementation')
+    return 'sha256/' + bundle['root']
+
+
+def _check_publication(directory, manifest, selected):
+    publication = manifest['publication']
+    ref = publication['contract']
+    if ref != _local(directory, _PUBLICATION_FILE, PUBLICATION):
+        raise ValueError('ordered digest contract differs from its local receipt')
+    contract = read_artifact({**ref, 'uri': str(directory / _PUBLICATION_FILE)})
+    if ({**contract['release'], 'uri': _RELEASE_FILE} != manifest['qualified_release']
+            or contract['execution_recipe'] != selected['execution_recipe']
+            or contract['parallel_scope'] != selected['source'] or contract['entry_source'] != selected['entry']):
+        raise ValueError('ordered digest publication is not attached to the qualified source release')
+    return contract, _bundled_crypto(directory, publication['provider'], contract)
+
+
 @replay_transaction()
-def export_native_ordered(recipe, provider, out, *, detached=False, release=None, source_csr=False):
+def export_native_ordered(recipe, provider, out, *, detached=False, release=None, source_csr=False, output_contract=None):
     if source_csr and (detached or release is None):
         raise ValueError('native source CSR requires the published release and its own ingress protocol')
+    if output_contract is not None and not source_csr:
+        raise ValueError('a native output contract requires the canonical source CSR ingress')
     release_ref = None
     if release is not None:
         from scar.compiler.plan_sparse_parallel import qualify
@@ -168,6 +242,13 @@ def export_native_ordered(recipe, provider, out, *, detached=False, release=None
         protocol = project_native_detached_stream(plan, read_artifact(source_ref))
     else:
         protocol = project_native_ordered_stream(plan)
+    publication_ref = publication = None
+    if output_contract is not None:
+        publication_ref = artifact_reference(output_contract, PUBLICATION)
+        publication = read_artifact(publication_ref)
+        if project_publication(release_ref, publication['entry_dependence'], replay_entry=True) != publication:
+            raise ValueError('ordered output contract differs from the original publication routes and provider')
+        protocol = project_digest_stream(protocol, publication)
     capability = source['implementation']['backend_capability_record']
     out = Path(out).resolve()
     if out.exists():
@@ -201,11 +282,20 @@ def export_native_ordered(recipe, provider, out, *, detached=False, release=None
         (directory / _DISPATCH_HEADER).write_bytes(_DISPATCH_SOURCE.read_bytes())
         (directory / _ORDERED_HEADER).write_bytes(_render(plan, blas))
         (directory / 'plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2, allow_nan=False) + '\n')
-        stream = _write_stream(directory, plan, protocol)
-        version = 4 if source_csr else 3 if detached else 2
+        publication_members, crypto = None, None
+        if publication is not None:
+            build_native_provider_bundle(publication['provider']['libcrypto'], directory / 'sha256',
+                provider_roots=(), system_sonames=SYSTEM_LIBRARIES)
+            (directory / _PUBLICATION_FILE).write_bytes(read_artifact(publication_ref, json_document=False))
+            publication_members = dict(contract=_local(directory, _PUBLICATION_FILE, PUBLICATION),
+                provider=_local(directory, _CRYPTO_BUNDLE, PROVIDER_BUNDLE))
+            crypto = _bundled_crypto(directory, publication_members['provider'], publication)
+        stream = _write_stream(directory, plan, protocol, crypto)
+        version = 5 if publication is not None else 4 if source_csr else 3 if detached else 2
         boundaries = {2: 'native CSR structure and one binary64 value/RHS frame per ordered request',
                       3: 'prepared CSR template, RHS base and one binary64 scale per ordered request',
-                      4: 'canonical source CSR, original RHS and selected row indices'}
+                      4: 'canonical source CSR, original RHS and selected row indices',
+                      5: 'canonical source CSR, original RHS and selected row indices to explicit native stdout'}
         manifest = dict(schema=SCHEMA, schema_version=version, recipe=recipe_ref, recipe_id=source['recipe_id'],
             numeric=_local(directory, 'numeric/artifact.json', native['schema']), blas_member=blas,
             plan=_local(directory, 'plan.json', PLAN), headers=[_local(directory, name, 'scar.cpp-header')
@@ -219,6 +309,8 @@ def export_native_ordered(recipe, provider, out, *, detached=False, release=None
         if release_ref is not None:
             (directory / _RELEASE_FILE).write_bytes(read_artifact(release_ref, json_document=False))
             manifest['qualified_release'] = _local(directory, _RELEASE_FILE, _RELEASE)
+        if publication_members is not None:
+            manifest['publication'] = publication_members
         (directory / 'artifact.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         check_native_ordered_export(directory)
         if out.exists():
@@ -233,9 +325,10 @@ def check_native_ordered_export(path):
     verification = check_sparse_export(root / 'numeric')
     expected_headers = [_local(root, name, 'scar.cpp-header') for name in (_ABI_HEADER, _DISPATCH_HEADER, _ORDERED_HEADER)]
     version = manifest.get('schema_version')
-    if (version not in (1, 2, 3, 4) or ('stream' in manifest) != (version >= 2)
+    if (version not in (1, 2, 3, 4, 5) or ('stream' in manifest) != (version >= 2)
             or ('detached_source' in manifest) != (version >= 3)
-            or version == 4 and 'qualified_release' not in manifest or manifest['deployment_authorized'] is not False
+            or ('publication' in manifest) != (version == 5)
+            or version >= 4 and 'qualified_release' not in manifest or manifest['deployment_authorized'] is not False
             or manifest['headers'] != expected_headers
             or manifest['numeric'] != _local(root, 'numeric/artifact.json', verification['schema'])
             or manifest['plan'] != _local(root, 'plan.json', PLAN)):
@@ -279,7 +372,9 @@ def check_native_ordered_export(path):
             raise ValueError('compact export detached source differs from its receipt')
         detached = read_artifact({**reference, 'uri': str(root / _DETACHED_SOURCE)})
     if version >= 2:
-        _check_stream(root, plan, manifest['stream'], detached, source_csr=version == 4)
+        publication, crypto = _check_publication(root, manifest, selected) if version == 5 else (None, None)
+        _check_stream(root, plan, manifest['stream'], detached, source_csr=version >= 4,
+            publication=publication, crypto=crypto)
     return manifest
 
 
@@ -291,6 +386,10 @@ def rebuild_native_ordered_project(path, out):
         raise ValueError('the native export needs an executable stream recipe')
     plan = read_artifact({**manifest['plan'], 'uri': str(source / 'plan.json')})
     protocol = read_artifact({**manifest['stream']['protocol'], 'uri': str(source / _STREAM_PLAN)})
+    crypto = None
+    if manifest['schema_version'] == 5:
+        release = read_artifact({**manifest['qualified_release'], 'uri': str(source / _RELEASE_FILE)})
+        _, crypto = _check_publication(source, manifest, release)
     out = Path(out).resolve()
     if out.exists() or out.is_relative_to(source):
         raise ValueError('a fresh output outside the original sparse package is required')
@@ -298,7 +397,7 @@ def rebuild_native_ordered_project(path, out):
     with TemporaryDirectory(prefix='.scar-sparse-project-', dir=out.parent) as temporary:
         directory = Path(temporary)
         copytree(source, directory, dirs_exist_ok=True)
-        manifest['stream'] = _write_stream(directory, plan, protocol)
+        manifest['stream'] = _write_stream(directory, plan, protocol, crypto)
         (directory / 'artifact.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         check_native_ordered_export(directory)
         directory.rename(out)
@@ -317,16 +416,19 @@ def main(argv=None):
     input_protocol = parser.add_mutually_exclusive_group()
     input_protocol.add_argument('--detached', action='store_true', help='export compact prepared inputs and scalar tickets')
     input_protocol.add_argument('--source-csr', action='store_true', help='export source CSR, RHS, and selected row inputs')
+    parser.add_argument('--output-contract', help='lower a qualified independent ordered SHA-256 stdout contract')
     args = parser.parse_args(argv)
     export = (args.recipe or args.release, args.provider, args.out)
-    if args.rebuild_project and args.out and not any((export[0], args.provider, args.check, args.detached, args.source_csr)):
+    custom_stream = args.detached or args.source_csr or args.output_contract
+    if args.rebuild_project and args.out and not any((export[0], args.provider, args.check, custom_stream)):
         print(json.dumps(rebuild_native_ordered_project(args.rebuild_project, args.out)))
-    elif args.check and not any(export) and not (args.detached or args.source_csr or args.rebuild_project):
+    elif args.check and not any(export) and not (custom_stream or args.rebuild_project):
         result = check_native_ordered_export(args.check)
         print(json.dumps(dict(verified=True, recipe_id=result['recipe_id'])))
     elif not args.check and export[0] and args.out and not args.rebuild_project:
         print(json.dumps(export_native_ordered(args.recipe, args.provider, args.out,
-            detached=args.detached, release=args.release, source_csr=args.source_csr)))
+            detached=args.detached, release=args.release, source_csr=args.source_csr,
+            output_contract=args.output_contract)))
     else:
         parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --release or --recipe with --out')
     return 0

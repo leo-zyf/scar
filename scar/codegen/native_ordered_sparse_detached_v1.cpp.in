@@ -75,7 +75,7 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
         sparse::detail::check_resources();
         const auto executable = std::filesystem::canonical("/proc/self/exe");
         const auto provider_path = std::filesystem::canonical(executable.parent_path() / "numeric");
-        constexpr auto window = std::size(sparse::worker_cpus);
+@SCAR_RESULT_SETUP@        constexpr auto window = std::size(sparse::worker_cpus);
         const ordered::Config config{@SCAR_OWNER_CPU@, sparse::worker_cpus, window, sizeof(double), sparse::result_bytes,
             sparse::worker_limit, window * (sizeof(double) + sparse::result_bytes)};
 
@@ -144,8 +144,8 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
             if (row.worker_status != 0 || row.result.size() != sparse::result_bytes) {
                 throw std::runtime_error("unexpected detached CSR result");
             }
-            publish_record(published, Record::success, 0);
-            write_exact(row.result);
+@SCAR_RESULT_SUCCESS_BEGIN@            publish_record(published, Record::success, 0);
+            write_exact(row.result);@SCAR_RESULT_SUCCESS_END@
             ++published;
         };
         if (sparse::count == 0) {
@@ -155,15 +155,15 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
         if (published != sparse::count) {
             throw std::runtime_error("incomplete detached CSR publication");
         }
-        publish_record(published, Record::end, 0);
+        @SCAR_RESULT_COMPLETE@;
         return 0;
     } catch (const sparse::detail::Stop&) {
-        publish_record(published, failure, worker_status);
+        @SCAR_RESULT_FAULT@(published, failure, worker_status);
     } catch (const InputFailure& error) {
-        publish_record(published, Record::protocol_failure, 0);
+        @SCAR_RESULT_FAULT@(published, Record::protocol_failure, 0);
         std::fprintf(stderr, "%s\n", error.message);
     } catch (const std::exception& error) {
-        publish_record(published, Record::host_failure, 0);
+        @SCAR_RESULT_FAULT@(published, Record::host_failure, 0);
         std::fprintf(stderr, "%s\n", error.what());
     }
     return 1;
@@ -171,9 +171,9 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
 
 }  // namespace
 
-int main(int argc, char**) {
-    if (argc != 1) {
-        std::fputs("detached sparse executable accepts binary stdin and no arguments\n", stderr);
+int main(int argc, char**@SCAR_MAIN_ARGV@) {
+    if (argc != 1@SCAR_MAIN_PARAMETERS@) {
+        std::fputs("@SCAR_MAIN_USAGE@\n", stderr);
         return 1;
     }
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
@@ -181,7 +181,7 @@ int main(int argc, char**) {
         return 1;
     }
     try {
-        auto observed = input_header;
+@SCAR_ALTERNATE_MAIN@        auto observed = input_header;
         read_exact(observed, "incomplete detached CSR header");
         if (observed != input_header) {
             throw InputFailure{"detached CSR header differs from the compiled recipe"};
@@ -191,8 +191,7 @@ int main(int argc, char**) {
         read_exact(std::as_writable_bytes(std::span(offsets)), "incomplete detached CSR offsets");
         check_structure(indices, offsets);
         auto input = @SCAR_SNAPSHOT_READER@(indices, offsets);
-        write_exact(output_header);
-        return run_requests(indices, offsets, input);
+@SCAR_RESULT_HEADER@        return run_requests(indices, offsets, input);
     } catch (const InputFailure& error) {
         std::fprintf(stderr, "%s\n", error.message);
     } catch (const OutputFailure&) {
