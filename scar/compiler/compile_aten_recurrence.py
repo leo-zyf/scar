@@ -199,6 +199,8 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
     if out.exists():
         raise FileExistsError(out)
     boundary = None
+    boundary_source = None
+    boundary_bytes = None
     discovered = None
     if discovery is not None or discovery_sha256 is not None or source_entry is not None:
         if not discovery or not discovery_sha256 or any(value is not None for value in (method, step_size, state_input_index)):
@@ -206,7 +208,10 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
         discovered = read_aten_region_inputs(discovery, discovery_sha256=discovery_sha256)
         if discovered['status'] != 'CLOSED_SOURCE_REPLAY':
             raise ValueError('fixed-grid source requires an admitted RHS discovery')
-        boundary = derive_fixed_grid_entry(discovered['source'], source_entry or 'main')
+        boundary_source = {key: discovered['source'][key]
+                           for key in ('source', 'function', 'torch_global', 'parameters', 'input_order', 'code_key')}
+        boundary_bytes = Path(boundary_source['source']['path']).read_bytes()
+        boundary = derive_fixed_grid_entry(boundary_source, source_entry or 'main', source_bytes=boundary_bytes)
         method, step_size, state_input_index = (boundary[key] for key in ('method', 'step_size', 'state_input_index'))
         boundary['discovery'] = discovered['discovery']
     elif state_input_index is None:
@@ -300,6 +305,8 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
         stage = projects[mode]
         if boundary is not None:
             _write(stage / 'plan' / 'source-entry.json', boundary)
+            _write(stage / 'plan' / 'source-entry-binding.json', boundary_source)
+            (stage / 'plan' / 'source-entry.py').write_bytes(boundary_bytes)
         if comparison is not None:
             _write(stage / 'validation' / 'comparison.json', comparison)
         if len(plans) == 2:
@@ -317,6 +324,7 @@ def compile_aten_recurrence(selection, *, selection_sha256, geometry_contract, g
             operation_order=placement['operation_order'], tensor_budget_bytes=tensor_budget_bytes,
             alternatives=alternatives, dependencies=candidates[mode], selection_reason=reason,
             source_entry_inferred=boundary is not None,
+            source_entry_replayable=boundary is not None,
             calibration_steps=calibration_steps, executable='bin/' + _EXE,
             full_entry_performance_measured=comparison is not None,
             files={path.relative_to(stage).as_posix(): _content(path)

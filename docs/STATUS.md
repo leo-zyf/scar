@@ -1,5 +1,7 @@
 # 当前状态
 
+单个 C++20 推理包已可按名称分派批次 2、4、8，三个形状分别通过成本、存储、生成代码与双输出逐位验收。按正常完成合同自动删除两次无消费者的算子调用，原图保留。固定步长求解包可用内置源码重新推导求解边界，RK4 16 步结果仍逐位一致。单 CUDA 设备的 pinned host 与 device 搬运计划已生成并链接 C++，实机缺少可用设备。各验证范围见 `artifacts/baseline/native-shape-and-copy-replay.json`。
+
 CPU 部署计划已接通算子标定、容量约束、C++20 生成及冷读验收。RK4 在 64 MiB 预算下采用三核，四步独立原生进程的中位耗时为 1.507 s → 0.788 s。40,000,000 B 预算下使用串行 C++。两种产物及自动推导求解参数的产物均通过 16 步原程序终态逐位验证。单形状 CPU 推理也通过标定计划及逐位验证。预算只计算图持有的 Tensor 存储。GPU/NPU 的实机排程和交付仍待验证。见 `artifacts/baseline/cpu-schedule-replay.json`。
 
 固定网格 RK4 与 CPU `torch.export` 已共用程序图、物理问题、CMake 工程及冷读验收。RK4 的 16 步终态与原程序逐位一致。推理模型在批次 2、4、8 分别构建并通过同一验收，批次 4 还通过重新构建与安装路径复验。已验的 SuperLU/OpenBLAS 原生稀疏包由同一 CMake 生成器重建，512 个结果均一致。源 F4 收据仍需更新。GPU 经主机到 NPU 的两跳搬运已验证模型容量与时序，实机后端及通用 Python 入口仍未完成。见 `artifacts/baseline/layered-native.json`。

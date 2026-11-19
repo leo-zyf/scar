@@ -63,7 +63,7 @@ def _argument(expression, values):
 
 
 def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False, ready_replica=False,
-            observe_serial=False):
+            observe_serial=False, namespace='scar_aten_graph'):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -202,7 +202,7 @@ inline std::array<at::Tensor, output_count> run_parallel(
 #include <span>
 #include <stdexcept>
 
-namespace scar_aten_graph {{
+namespace {namespace} {{
 inline constexpr int abi_version = 1;
 inline constexpr std::size_t input_count = {len(shapes)};
 inline constexpr std::size_t output_count = {len(recipe['outputs'])};
@@ -234,7 +234,7 @@ inline std::array<at::Tensor, output_count> run(std::span<const at::Tensor> inpu
     return {{{outputs}}};
 }}
 {pair_support}
-}}  // namespace scar_aten_graph
+}}  // namespace {namespace}
 '''
 
 

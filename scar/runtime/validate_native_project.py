@@ -2,7 +2,9 @@
 
 import argparse
 import json
+from math import prod
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -54,6 +56,194 @@ def _replay_recurrence_selection(manifest, member, execution, observation, sched
         raise ValueError('published recurrence does not implement the replayed native selection')
 
 
+def _read_profile(member, files, base):
+    graph_file = base + '/program.json'
+    graph = codec.loads(member(graph_file).read_text())
+    execution = json.loads(member(base + '/execution.json').read_text())
+    document = json.loads(member(base + '/problem.json').read_text())
+    problem = problem_from_dict(document)
+    reference = execution['program_graph']
+    if reference != dict(path=graph_file, **files[graph_file]):
+        raise ValueError('execution plan does not reference its original program graph')
+    known = {operation.id.wire for operation in graph.operations}
+    if any(ref.get('operation') not in known for row in problem.operations if row.id != '$return'
+           for ref in row.source_refs):
+        raise ValueError('physical operation lacks a source program graph node')
+    if problem.source_refs != (reference,) or execution['target']['sha256'] != problem.target.sha256:
+        raise ValueError('shared physical problem differs from its graph or target binding')
+    return graph, execution, document, problem
+
+
+def _require_generated(member, generated):
+    if any(member(name).read_text() != source for name, source in generated.items()):
+        raise ValueError('generated C++ differs from the verified native schedule lowering')
+
+
+def _replay_exported(member, manifest, base, label, graph, execution, document, problem):
+    from scar.codegen.aten_export_source import render_exported_entry
+    from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+    from scar.ir.program.model import DataValue
+    from scar.optimization.aten_export_rewrite import eliminate_dead_export_ops
+    from scar.optimization.aten_tensor_lifetime import tensor_footprint
+
+    files = manifest['files']
+    if execution['schema'] != 'scar.native-tensor-entry-plan' or execution['source'] != manifest['source']:
+        raise ValueError('inference profile is missing its qualified source binding')
+    recipe = json.loads(member(base + '/recipe.json').read_bytes())
+    original_path, rewrite_path = base + '/source-recipe.json', base + '/rewrite.json'
+    original = recipe
+    if manifest.get('simplified_normal_completion'):
+        original = json.loads(member(original_path).read_bytes())
+        reduced, evidence = eliminate_dead_export_ops(original)
+        if reduced != recipe or evidence != json.loads(member(rewrite_path).read_bytes()):
+            raise ValueError('inference structural reduction differs from its replayed recipe')
+    elif original_path in files or rewrite_path in files:
+        raise ValueError('inference profile has an undeclared structural reduction')
+    definitions = {item.id.value: item.data_type for item in graph.values if isinstance(item, DataValue)}
+    types = {row['id']: tensor_type(row['shape']) for row in original['inputs']}
+    sizes = {row['id']: 4 * prod(row['shape']) for row in original['inputs']}
+    shapes = {}
+    for row in original['operations']:
+        name = row['id']
+        value_type = definitions.get(f'entry/operation/{name}/result', '')
+        match = re.fullmatch(r'tensor\.FLOAT32\[((?:[0-9]+(?:,[0-9]+)*)?)\]', value_type)
+        if match is None:
+            raise ValueError('inference profile is missing a source Tensor type')
+        extents = [int(size) for size in match[1].split(',')] if match[1] else []
+        types[name] = tensor_type(extents)
+        shapes[name] = extents
+        sizes[name] = 4 * prod(extents)
+    if codec.dumps(straight_line_graph(original, types)) != codec.dumps(graph):
+        raise ValueError('inference recipe differs from its original typed program graph')
+    storage = execution['storage']
+    cpu, = execution['cpu_ids']
+    memory, = [resource for resource in problem.resources if resource.kind == 'MEMORY']
+    operations = [row['id'] for row in recipe['operations']]
+    produced = set(operations)
+    operands = {(arg['value'], row['id']) for row in recipe['operations']
+                for arg in row['arguments'] if 'value' in arg}
+    operands.update((name, '$return') for name in recipe['outputs'])
+    expected_edges = {(name, consumer, sizes[name], name if name in produced else None,
+                       None if name in produced else memory.id) for name, consumer in operands}
+    edges = {(edge.value, edge.consumer, edge.nbytes, edge.producer, edge.external_location)
+             for edge in problem.data_edges}
+    if (tensor_footprint(recipe, input_bytes=[sizes[row['id']] for row in recipe['inputs']],
+            output_bytes=[sizes[row['id']] for row in recipe['operations']], candidates=(),
+            budget_bytes=storage['budget_bytes']) != storage
+            or execution['output_shapes'] != [shapes[name] for name in recipe['outputs']]
+            or [dict(id=row['id'], shape=row['shape']) for row in execution['inputs']] != recipe['inputs']
+            or [task.id for task in problem.operations] != [*operations, '$return']
+            or len(problem.data_edges) != len(expected_edges) or edges != expected_edges
+            or memory.capacity != storage['budget_bytes']
+            or problem.reserved_memory != {memory.id: storage['persistent_input_bytes']}
+            or any(option.parameters['cpu_ids'] != [cpu] for task in problem.operations if task.id != '$return'
+                   for option in task.options)):
+        raise ValueError('inference file geometry, storage or CPU placement differs from the executed recipe')
+    for row in execution['inputs']:
+        if row['kind'] == 'WEIGHT':
+            if row['path'] not in files or _content(member(row['path'])) != {key: row[key] for key in ('sha256', 'size_bytes')}:
+                raise ValueError('inference weight does not match its packaged payload')
+        elif row['kind'] != 'INPUT':
+            raise ValueError('inference profile input kind is not part of the native file ABI')
+    schedule_path = base + '/schedule.json'
+    if schedule_path in files:
+        calibration_path = 'validation/calibration.json' if label is None else base + '/calibration.json'
+        observation = json.loads(member(calibration_path).read_bytes())
+        if execution['cpu_ids'] != observation['cpu_ids']:
+            raise ValueError('inference calibration and emitted placement differ')
+        replay_operation_costs(problem, recipe, observation, dict(path=calibration_path, **files[calibration_path]))
+        schedule = json.loads(member(schedule_path).read_bytes())
+        lowered = scheduled_tensor_body(document, schedule, recipe)
+        releases = lowered['release_after']
+    else:
+        lowered = recipe
+        releases = storage['release_after']
+    _require_generated(member, render_exported_entry(lowered, execution['bindings'], releases, cpu, profile=label))
+    return schedule_path in files
+
+
+def _profile_receipt(graph, problem, replayed):
+    return dict(graph_regions=len(graph.regions), graph_operations=len(graph.operations),
+                physical_activities=len(problem.operations), executed_schedule_replayed=replayed)
+
+
+def _replay_family(manifest, member):
+    from scar.codegen.aten_export_source import render_profile_dispatch
+
+    profiles = manifest['profiles']
+    _require_generated(member, {'src/main.cpp': render_profile_dispatch(profiles)})
+    receipts, interface, assignments = {}, None, set()
+    for label in profiles:
+        base = 'plan/profiles/' + label
+        graph, execution, document, problem = _read_profile(member, manifest['files'], base)
+        signature = (execution['cpu_ids'], [row if row['kind'] == 'WEIGHT' else row['id']
+                     for row in execution['inputs']], len(execution['output_shapes']))
+        assignment = tuple(sorted(execution['symbolic_profile'].items()))
+        if (interface is not None and signature != interface) or assignment in assignments:
+            raise ValueError('native inference profiles must share one file ABI and have distinct shape bindings')
+        interface = signature
+        assignments.add(assignment)
+        replayed = _replay_exported(member, manifest, base, label, graph, execution, document, problem)
+        receipts[label] = dict(_profile_receipt(graph, problem, replayed),
+                               symbolic_profile=execution['symbolic_profile'])
+    all_measured = all(row['executed_schedule_replayed'] for row in receipts.values())
+    if all_measured != manifest['body_calibrated']:
+        raise ValueError('profile family calibration receipt differs from its manifest')
+    totals = {key: sum(row[key] for row in receipts.values())
+              for key in ('graph_regions', 'graph_operations', 'physical_activities')}
+    return dict(totals, profiles=receipts, executed_schedule_replayed=all_measured)
+
+
+def _replay_single(manifest, member):
+    files = manifest['files']
+    graph, execution, document, problem = _read_profile(member, files, 'plan')
+    replayed = False
+    if execution['schema'] == 'scar.native-tensor-entry-plan' and (
+            'simplified_normal_completion' in manifest or 'plan/schedule.json' in files):
+        replayed = _replay_exported(member, manifest, 'plan', None, graph, execution, document, problem)
+    elif 'plan/schedule.json' in files:
+        schedule = json.loads(member('plan/schedule.json').read_bytes())
+        calibration_path = 'validation/calibration.json'
+        observation = json.loads(member(calibration_path).read_bytes())
+        replay_operation_costs(problem, execution, observation, dict(path=calibration_path, **files[calibration_path]))
+        lowered = scheduled_tensor_body(document, schedule, execution)
+        if execution['schema'] == 'scar.aten-recurrence-plan':
+            from scar.codegen.aten_recurrence_source import render_recurrence
+
+            placement = execution['placement']
+            if manifest.get('source_entry_inferred'):
+                boundary = json.loads(member('plan/source-entry.json').read_bytes())
+                if manifest.get('source_entry_replayable'):
+                    from scar.analysis.fixed_grid_source import derive_fixed_grid_entry
+
+                    source = json.loads(member('plan/source-entry-binding.json').read_bytes())
+                    potential = derive_fixed_grid_entry(source, boundary['entry'],
+                        source_bytes=member('plan/source-entry.py').read_bytes())
+                    if potential != {key: item for key, item in boundary.items() if key != 'discovery'}:
+                        raise ValueError('recurrence source entry differs from its replayed source binding')
+                if (boundary['method'] != manifest['method_provider']['method']
+                        or boundary['step_size'] != execution['step_size']
+                        or boundary['state_input_index'] != execution['state_input_index']):
+                    raise ValueError('recurrence differs from its admitted source-entry binding')
+            rhs_recipe = json.loads(member('plan/rhs-recipe.json').read_bytes())
+            if placement != observation['placement'] or (placement['mode'], placement['cpus']) != (
+                    manifest['rhs_mode'], manifest['cpus']):
+                raise ValueError('recurrence calibration and emitted placement differ')
+            rhs_problem, rhs_schedule = ((json.loads(member(name).read_bytes()) for name in
+                ('plan/rhs-problem.json', 'plan/rhs-schedule.json')) if placement['mode'] == 'READY_DAG' else (None, None))
+            if rhs_schedule is not None and execution['rhs_schedule']['sha256'] != files['plan/rhs-schedule.json']['sha256']:
+                raise ValueError('parallel RHS schedule differs from the archived selection')
+            replay_recurrence_placement(problem, placement, rhs_recipe, rhs_problem, rhs_schedule)
+            _replay_recurrence_selection(manifest, member, execution, observation, schedule)
+            generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
+                lanes=placement['lanes'], operation_order=placement['operation_order'])
+        else:
+            raise ValueError('native schedule is missing a source replay implementation')
+        _require_generated(member, generated)
+        replayed = True
+    return _profile_receipt(graph, problem, replayed)
+
+
 def verify_native_project(directory, manifest_sha256):
     root = Path(directory).resolve(strict=True)
     path = root / 'artifact.json'
@@ -71,62 +261,7 @@ def verify_native_project(directory, manifest_sha256):
     for name, expected in files.items():
         if _content(member(name)) != expected:
             raise ValueError(f'native project member differs: {name}')
-    graph = codec.loads(member('plan/program.json').read_text())
-    execution = json.loads(member('plan/execution.json').read_text())
-    problem = problem_from_dict(json.loads(member('plan/problem.json').read_text()))
-    reference = execution['program_graph']
-    if reference != dict(path='plan/program.json', **files['plan/program.json']):
-        raise ValueError('execution plan does not reference its original program graph')
-    known = {operation.id.wire for operation in graph.operations}
-    if any(ref.get('operation') not in known for row in problem.operations if row.id != '$return'
-           for ref in row.source_refs):
-        raise ValueError('physical operation lacks a source program graph node')
-    if problem.source_refs != (reference,) or execution['target']['sha256'] != problem.target.sha256:
-        raise ValueError('shared physical problem differs from its graph or target binding')
-    replayed = False
-    if 'plan/schedule.json' in files:
-        schedule = json.loads(member('plan/schedule.json').read_bytes())
-        calibration_path = 'validation/calibration.json'
-        observation = json.loads(member(calibration_path).read_bytes())
-        recurrence = execution['schema'] == 'scar.aten-recurrence-plan'
-        body = execution if recurrence else json.loads(member('plan/recipe.json').read_bytes())
-        replay_operation_costs(problem, body, observation, dict(path=calibration_path, **files[calibration_path]))
-        lowered = scheduled_tensor_body(json.loads(member('plan/problem.json').read_bytes()), schedule, body)
-        if recurrence:
-            from scar.codegen.aten_recurrence_source import render_recurrence
-
-            placement = execution['placement']
-            if manifest.get('source_entry_inferred'):
-                boundary = json.loads(member('plan/source-entry.json').read_bytes())
-                if (boundary['method'] != manifest['method_provider']['method']
-                        or boundary['step_size'] != execution['step_size']
-                        or boundary['state_input_index'] != execution['state_input_index']):
-                    raise ValueError('recurrence differs from its admitted source-entry binding')
-            rhs_recipe = json.loads(member('plan/rhs-recipe.json').read_bytes())
-            if placement != observation['placement'] or (placement['mode'], placement['cpus']) != (
-                    manifest['rhs_mode'], manifest['cpus']):
-                raise ValueError('recurrence calibration and emitted placement differ')
-            rhs_problem, rhs_schedule = ((json.loads(member(name).read_bytes()) for name in
-                ('plan/rhs-problem.json', 'plan/rhs-schedule.json')) if placement['mode'] == 'READY_DAG' else (None, None))
-            if rhs_schedule is not None and execution['rhs_schedule']['sha256'] != files['plan/rhs-schedule.json']['sha256']:
-                raise ValueError('parallel RHS schedule differs from the archived selection')
-            replay_recurrence_placement(problem, placement, rhs_recipe, rhs_problem, rhs_schedule)
-            _replay_recurrence_selection(manifest, member, execution, observation, schedule)
-            generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
-                lanes=placement['lanes'], operation_order=placement['operation_order'])
-        elif execution['schema'] == 'scar.native-tensor-entry-plan':
-            from scar.codegen.aten_export_source import render_exported_entry
-
-            cpu, = execution['cpu_ids']
-            if execution['cpu_ids'] != observation['cpu_ids'] or any(option.parameters['cpu_ids'] != [cpu]
-                    for task in problem.operations if task.id != '$return' for option in task.options):
-                raise ValueError('inference calibration and emitted placement differ')
-            generated = render_exported_entry(lowered, execution['bindings'], lowered['release_after'], cpu)
-        else:
-            raise ValueError('native schedule is missing a source replay implementation')
-        if any(member(name).read_text() != source for name, source in generated.items()):
-            raise ValueError('generated C++ differs from the verified native schedule lowering')
-        replayed = True
+    receipt = _replay_family(manifest, member) if 'profiles' in manifest else _replay_single(manifest, member)
     executable = member(manifest['executable'])
     current = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={}))
     if current != manifest['dependencies'] or any(name.startswith(('libpython', 'libtorch_python')) for name in current):
@@ -137,9 +272,7 @@ def verify_native_project(directory, manifest_sha256):
         if current.get(library.name) != str(library.resolve()) or _content(library) != {
                 key: lock[key] for key in ('sha256', 'size_bytes')}:
             raise ValueError(f'native operator library differs from the build lock: {library.name}')
-    return root, dict(graph_regions=len(graph.regions), graph_operations=len(graph.operations),
-                      physical_activities=len(problem.operations), native_dependencies_checked=True,
-                      executed_schedule_replayed=replayed)
+    return root, dict(receipt, native_dependencies_checked=True)
 
 
 def validate_native_project(directory, manifest_sha256, *, arguments=(), references=()):

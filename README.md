@@ -36,6 +36,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `compile-aten-recurrence` 可通过 `--discovery REPORT --discovery-sha256 SHA256` 从原入口推导求解方法、步长和状态输入端口，交付范围为自治固定网格求解的终态，运行入口使用原生文件参数。默认用四步回放标定算子，并按存储容量、估计成本和原生入口配对测量选择并行或串行。`compile-exported-aten` 可用重复的 `--calibration-input NAME=FILE` 为当前形状标定 CPU 串行版本。冷读验收通过 `plan/schedule.json` 重放执行顺序、绑核和释放点，并核对由同一计划生成的 C++ 源码。计时范围和验收结果见 [CPU 计划重放](artifacts/baseline/cpu-schedule-replay.json)。
 
+重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。

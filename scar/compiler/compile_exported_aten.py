@@ -1,7 +1,6 @@
-"""Import a functional torch.export graph and deliver a native CPU shape profile."""
+"""Import a functional torch.export graph and deliver specialized native CPU inference."""
 
 import argparse
-import hashlib
 import json
 from math import prod
 import os
@@ -10,7 +9,7 @@ import shlex
 from tempfile import TemporaryDirectory
 
 from scar.analysis.target_graph import TargetHardwareGraph
-from scar.codegen.aten_export_source import render_exported_entry
+from scar.codegen.aten_export_source import render_exported_entry, render_profile_dispatch, valid_profile_name
 from scar.codegen.aten_provider import _build_interface, _resolve, _write_binding
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
@@ -22,6 +21,7 @@ from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 from scar.ir.record_codec import encode
+from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS, eliminate_dead_export_ops
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.aten_native_schedule import recorded_cpu_domain
 from scar.optimization.aten_tensor_lifetime import tensor_footprint
@@ -29,10 +29,6 @@ from scar.optimization.aten_tensor_lifetime import tensor_footprint
 
 SCHEMA = 'scar.native-exported-aten'
 _EXECUTABLE = 'aten-inference'
-# This profile binds functional deterministic math. Dispatcher metadata alone
-# cannot certify that an arbitrary ATen overload lacks mutable or RNG effects.
-_OPERATOR_NAMES = {'aten.mm.default', 'aten.matmul.default', 'aten.add.Tensor', 'aten.sub.Tensor',
-                   'aten.mul.Tensor', 'aten.relu.default', 'aten.sigmoid.default', 'aten.tanh.default'}
 
 
 def _shape_profiles(text):
@@ -98,7 +94,7 @@ def _project(exported, profiles, torch):
                 inputs.append(dict(id=node.name, shape=shape))
                 results[node] = torch.empty(shape, dtype=torch.float32, device='meta')
             elif node.op == 'call_function':
-                if str(node.target) not in _OPERATOR_NAMES:
+                if str(node.target) not in FUNCTIONAL_EXPORT_SCHEMAS:
                     raise ValueError(f'unsupported functional export operator at {node.name}: {node.target}')
                 schema = node.target._schema
                 args, positional, keywords = [], [], {}
@@ -158,8 +154,110 @@ def _calibration_paths(arguments, inputs):
     return [paths[row['id']] for row in user]
 
 
+def _profile_arguments(arguments):
+    groups = {}
+    for argument in arguments:
+        name, separator, item = argument.partition(':')
+        if not separator or not item or not valid_profile_name(name):
+            raise ValueError('use PROFILE:NAME=VALUE for native inference profile arguments')
+        groups.setdefault(name, []).append(item)
+    return groups
+
+
+def _write_record(path, record):
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
+
+
+def _write_launch(root, inputs, output_count, cpu, *, family):
+    command = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
+                          'taskset', '-c', str(cpu)])
+    weights = [item for item in inputs if item['kind'] == 'WEIGHT']
+    checks = '\n'.join(f'test "$(sha256sum < "$root/{item["path"]}" | cut -d " " -f 1)" = {item["sha256"]}'
+                       for item in weights)
+    ordinal = iter(range(1, len(inputs) + output_count + 1))
+    arguments = [f'"$root/{item["path"]}"' if item['kind'] == 'WEIGHT' else '"${' + str(next(ordinal)) + '}"'
+                 for item in inputs]
+    arguments.extend('"${' + str(next(ordinal)) + '}"' for _ in range(output_count))
+    count = len(inputs) - len(weights) + output_count
+    setup = f'test "$#" -eq {count}\n'
+    profile_argument = ''
+    if family:
+        setup = f'test "$#" -eq {count + 1}\nprofile=$1\nshift\n'
+        profile_argument = '"$profile" '
+    launch = root / 'launch.sh'
+    launch.write_text('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\nprobe=\n'
+        'if [ "${1:-}" = --calibrate ]; then probe=--calibrate; shift; fi\n'
+        f'{setup}{checks}\nexec {command} "$root/bin/{_EXECUTABLE}" {profile_argument}$probe '
+        + ' '.join(arguments) + '\n')
+    launch.chmod(0o755)
+
+
+def _prepare_profile(root, label, recipe, shapes, symbols, weight_records, bindings, source, cpu,
+                     target_reference, capacity, simplify_normal_completion):
+    relative = Path('plan') if label is None else Path('plan/profiles') / label
+    plan = root / relative
+    plan.mkdir(parents=True)
+    graph = straight_line_graph(recipe, {name: tensor_type(shape) for name, shape in shapes.items()})
+    program = plan / 'program.json'
+    program.write_text(codec.dumps(graph) + '\n')
+    if simplify_normal_completion:
+        _write_record(plan / 'source-recipe.json', recipe)
+        recipe, receipt = eliminate_dead_export_ops(recipe)
+        _write_record(plan / 'rewrite.json', receipt)
+    storage = tensor_footprint(recipe, input_bytes=[4 * prod(row['shape']) for row in recipe['inputs']],
+        output_bytes=[4 * prod(shapes[row['id']]) for row in recipe['operations']], candidates=(),
+        budget_bytes=capacity)
+    inputs = [dict(item, kind='WEIGHT', **weight_records[item['id']]) if item['id'] in weight_records
+              else dict(item, kind='INPUT') for item in recipe['inputs']]
+    execution = dict(schema='scar.native-tensor-entry-plan', schema_version=1, source=source,
+        target=target_reference, cpu_ids=[cpu], bindings=bindings, inputs=inputs,
+        output_shapes=[shapes[name] for name in recipe['outputs']], symbolic_profile=symbols, storage=storage,
+        schedule='SOURCE_DATA_ORDER', program_graph=dict(path=(relative / 'program.json').as_posix(), **_content(program)),
+        timing_basis='UNMEASURED_MODEL_ENTRY')
+    sources = render_exported_entry(recipe, bindings, storage['release_after'], cpu, profile=label)
+    for name, content in sources.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    _write_record(plan / 'recipe.json', recipe)
+    return plan, execution, recipe, shapes, sources
+
+
+def _plan_profile(root, label, plan, execution, recipe, shapes, sources, target, capacity, calibration_input):
+    cpu, = execution['cpu_ids']
+    inputs = execution['inputs']
+    costs = None
+    if calibration_input:
+        samples = _calibration_paths(calibration_input, inputs)
+        receipts = [dict(path=str(path), **_content(path)) for path in samples]
+        arguments = [str(path) for path in samples]
+        if label is not None:
+            arguments.insert(0, label)
+        with TemporaryDirectory(prefix='.scar-model-samples-') as scratch:
+            observed = calibrate_tensor_body(root, arguments, scratch, repeats=1, outputs=len(recipe['outputs']))
+        if receipts != [dict(path=str(path), **_content(path)) for path in samples]:
+            raise ValueError('model calibration samples changed during execution')
+        observed.update(inputs=receipts, cpu_ids=[cpu])
+        calibration = root / 'validation/calibration.json' if label is None else plan / 'calibration.json'
+        _write_record(calibration, observed)
+        evidence = dict(path=calibration.relative_to(root).as_posix(), **_content(calibration))
+        costs = operation_costs(observed, recipe['operations'], evidence)
+        execution['timing_basis'] = 'MEASURED_CPU_BODY_ONE_FIXED_SHAPE'
+    problem = tensor_physical_problem(target, [cpu], budget=capacity, operations=recipe['operations'],
+        inputs={row['id'] for row in inputs}, outputs=recipe['outputs'], sizes={k: 4 * prod(s) for k, s in shapes.items()},
+        reserved=execution['storage']['persistent_input_bytes'], source=execution['program_graph'], region='entry', costs=costs)
+    _write_record(plan / 'problem.json', problem)
+    _write_record(plan / 'execution.json', execution)
+    if costs is not None:
+        schedule = construct_implementations(problem_from_dict(problem))
+        scheduled = scheduled_tensor_body(problem, schedule, recipe)
+        if render_exported_entry(scheduled, execution['bindings'], scheduled['release_after'], cpu, profile=label) != sources:
+            raise ValueError('calibrated model source differs from its verified schedule lowering')
+        _write_record(plan / 'schedule.json', schedule)
+
+
 def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_bytes, input_shapes=(),
-                          calibration_input=()):
+                          calibration_input=(), shape_profiles=(), simplify_normal_completion=False):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -168,12 +266,21 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
         raise ValueError('exported model differs from its declared digest')
     if type(tensor_budget_bytes) is not int or not 0 < tensor_budget_bytes < 2**63:
         raise ValueError('a positive bounded Tensor storage budget is required')
+    if shape_profiles:
+        groups = _profile_arguments(shape_profiles)
+        samples = _profile_arguments(calibration_input)
+        if input_shapes or len(groups) < 2 or set(samples) - groups.keys():
+            raise ValueError('use two or more named profiles with their own calibration inputs')
+    else:
+        groups = {None: input_shapes}
+        samples = {None: calibration_input}
     exported = torch.export.load(model)
-    recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
+    projected = {label: _project(exported, _shape_profiles(group), torch) for label, group in groups.items()}
+    first_recipe, _, weights, _ = next(iter(projected.values()))
+    if len({tuple(sorted(item[3].items())) for item in projected.values()}) != len(projected):
+        raise ValueError('native profiles must select distinct symbolic assignments')
     include, libraries, cxx, flags, links = _build_interface(torch)
-    bindings = _resolve([row['schema'] for row in recipe['operations']], torch, include)
-    recipe = normalize_recipe(recipe, bindings, torch)
-    graph = straight_line_graph(recipe, {name: tensor_type(shape) for name, shape in shapes.items()})
+    bindings = _resolve([row['schema'] for row in first_recipe['operations']], torch, include)
     inventory = TargetHardwareGraph(target)
     _, domain = recorded_cpu_domain(inventory)
     cpu = next((cpu for cpu in domain if cpu in os.sched_getaffinity(0)), None)
@@ -181,101 +288,54 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
         raise ValueError('no recorded CPU is available for the native export')
     target_reference = encode(inventory._snapshot)
     memory = _host_tensor_budget(target, tensor_budget_bytes, (dict(target=target_reference),))
-    storage = tensor_footprint(recipe, input_bytes=[4 * prod(row['shape']) for row in recipe['inputs']],
-        output_bytes=[4 * prod(shapes[row['id']]) for row in recipe['operations']], candidates=(),
-        budget_bytes=memory.capacity)
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-export-native-', dir=out.parent) as temporary:
         pending = Path(temporary)
-        header = pending / 'include/scar_generated'
         provider = pending / 'src/providers'
-        header.mkdir(parents=True)
         provider.mkdir(parents=True)
         _write_binding(provider, bindings)
         (provider / 'link-check.cpp').unlink()
-        source_files = render_exported_entry(recipe, bindings, storage['release_after'], cpu)
-        for name, content in source_files.items():
-            path = pending / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
-        plan = pending / 'plan'
-        plan.mkdir()
-        program = plan / 'program.json'
-        program.write_text(codec.dumps(graph) + '\n')
-        program_ref = dict(path='plan/program.json', **_content(program))
         (pending / 'data').mkdir()
-        inputs = []
-        for item in recipe['inputs']:
-            name = item['id']
-            record = dict(item, kind='WEIGHT' if name in weights else 'INPUT')
-            if name in weights:
-                file = pending / 'data' / (name + '.f32')
-                weights[name].numpy().tofile(file)
-                record.update(path=file.relative_to(pending).as_posix(), **_content(file))
-            inputs.append(record)
+        weight_records = {}
+        for name, tensor in weights.items():
+            file = pending / 'data' / (name + '.f32')
+            tensor.numpy().tofile(file)
+            weight_records[name] = dict(path=file.relative_to(pending).as_posix(), **_content(file))
         source = dict(path=str(model), **original)
-        execution = dict(schema='scar.native-tensor-entry-plan', schema_version=1, source=source,
-            target=target_reference, cpu_ids=[cpu], bindings=bindings, inputs=inputs,
-            output_shapes=[shapes[name] for name in recipe['outputs']], symbolic_profile=symbols, storage=storage,
-            schedule='SOURCE_DATA_ORDER', program_graph=program_ref, timing_basis='UNMEASURED_MODEL_ENTRY')
-        (plan / 'recipe.json').write_text(json.dumps(recipe, indent=2, sort_keys=True) + '\n')
+        prepared = {}
+        for label, (recipe, shapes, _, symbols) in projected.items():
+            recipe = normalize_recipe(recipe, bindings, torch)
+            prepared[label] = _prepare_profile(pending, label, recipe, shapes, symbols, weight_records,
+                bindings, source, cpu, target_reference, memory.capacity, simplify_normal_completion)
+        sources = ['src/main.cpp']
+        if shape_profiles:
+            (pending / sources[0]).write_text(render_profile_dispatch(list(groups)))
+            sources.extend(f'src/profiles/{name}.cpp' for name in groups)
         providers = [dict(path=str(path), **_content(path)) for path in libraries]
-        (plan / 'dependencies.json').write_text(json.dumps(providers, indent=2, sort_keys=True) + '\n')
-        launch = pending / 'launch.sh'
-        command = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
-                              'taskset', '-c', str(cpu)])
-        checks = '\n'.join(f'test "$(sha256sum < "$root/{item["path"]}" | cut -d " " -f 1)" = {item["sha256"]}'
-                           for item in inputs if item['kind'] == 'WEIGHT')
-        ordinal = iter(range(1, len(inputs) + len(recipe['outputs']) + 1))
-        arguments = [f'"$root/{item["path"]}"' if item['kind'] == 'WEIGHT' else '"${' + str(next(ordinal)) + '}"'
-                     for item in inputs]
-        arguments.extend('"${' + str(next(ordinal)) + '}"' for _ in recipe['outputs'])
-        count = len(inputs) - len(weights) + len(recipe['outputs'])
-        launch.write_text('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\nprobe=\n'
-            'if [ "${1:-}" = --calibrate ]; then probe=--calibrate; shift; fi\n'
-            f'test "$#" -eq {count}\n{checks}\nexec {command} "$root/bin/{_EXECUTABLE}" $probe '
-            + ' '.join(arguments) + '\n')
-        launch.chmod(0o755)
-        write_native_project(pending, _EXECUTABLE, include_dirs=('src/providers',), compile_options=(*flags[1:], '-O2'),
+        _write_record(pending / 'plan/dependencies.json', providers)
+        _write_launch(pending, next(iter(prepared.values()))[1]['inputs'], len(first_recipe['outputs']), cpu,
+                      family=bool(shape_profiles))
+        write_native_project(pending, _EXECUTABLE, sources=sources, include_dirs=('src/providers',), compile_options=(*flags[1:], '-O2'),
             link_options=(links[0],), libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),),
             install_dirs=(('data', '.'),), install_launcher=True)
         _, dependencies = build_native_project(pending, _EXECUTABLE, cxx, expected_libraries=libraries)
-        costs = None
-        if calibration_input:
-            samples = _calibration_paths(calibration_input, inputs)
-            receipts = [dict(path=str(path), **_content(path)) for path in samples]
-            with TemporaryDirectory(prefix='.scar-model-samples-') as scratch:
-                observed = calibrate_tensor_body(pending, list(map(str, samples)), scratch, repeats=1,
-                                                  outputs=len(recipe['outputs']))
-            if receipts != [dict(path=str(path), **_content(path)) for path in samples]:
-                raise ValueError('model calibration samples changed during execution')
-            observed.update(inputs=receipts, cpu_ids=[cpu])
-            calibration = pending / 'validation/calibration.json'
-            calibration.write_text(json.dumps(observed, sort_keys=True, indent=2) + '\n')
-            costs = operation_costs(observed, recipe['operations'], dict(path='validation/calibration.json', **_content(calibration)))
-            execution['timing_basis'] = 'MEASURED_CPU_BODY_ONE_FIXED_SHAPE'
-        problem = tensor_physical_problem(target, [cpu], budget=memory.capacity, operations=recipe['operations'],
-            inputs={row['id'] for row in inputs}, outputs=recipe['outputs'], sizes={k: 4 * prod(s) for k, s in shapes.items()},
-            reserved=storage['persistent_input_bytes'], source=program_ref, region='entry', costs=costs)
-        (plan / 'problem.json').write_text(json.dumps(problem, indent=2, sort_keys=True) + '\n')
-        (plan / 'execution.json').write_text(json.dumps(execution, indent=2, sort_keys=True) + '\n')
-        if costs is not None:
-            schedule = construct_implementations(problem_from_dict(problem))
-            scheduled = scheduled_tensor_body(problem, schedule, recipe)
-            if render_exported_entry(scheduled, bindings, scheduled['release_after'], cpu) != source_files:
-                raise ValueError('calibrated model source differs from its verified schedule lowering')
-            (plan / 'schedule.json').write_text(json.dumps(schedule, indent=2, sort_keys=True) + '\n')
+        for label, artifacts in prepared.items():
+            _plan_profile(pending, label, *artifacts, target, memory.capacity, samples.get(label))
         if _content(model) != original:
             raise ValueError('exported model changed during its native build')
         report = dict(schema=SCHEMA, schema_version=1, executable='bin/' + _EXECUTABLE,
             selected='SERIAL_CPU_LIBTORCH', status='STANDALONE_CPP20_SHAPE_PROFILE', dependencies=dependencies,
-            source=source, program_graph=codec.SCHEMA, performance_measured=False, body_calibrated=costs is not None,
+            source=source, program_graph=codec.SCHEMA, performance_measured=False,
+            body_calibrated=all(bool(samples.get(label)) for label in groups),
+            simplified_normal_completion=simplify_normal_completion,
             files={path.relative_to(pending).as_posix(): _content(path)
                    for path in sorted(pending.rglob('*')) if path.is_file()})
-        (pending / 'artifact.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+        if shape_profiles:
+            report.update(status='STANDALONE_CPP20_SHAPE_FAMILY', profiles=list(groups))
+        _write_record(pending / 'artifact.json', report)
         pending.rename(out)
     return report
 
@@ -287,9 +347,14 @@ def main(argv=None):
     parser.add_argument('--tensor-budget-bytes', type=int, required=True)
     parser.add_argument('--input-shape', action='append', default=[])
     parser.add_argument('--calibration-input', action='append', default=[])
+    parser.add_argument('--shape-profile', action='append', default=[], metavar='PROFILE:NAME=DIM,DIM',
+                        help='register an explicit shape under a native dispatch name')
+    parser.add_argument('--simplify-normal-completion', action='store_true',
+                        help='apply structural rules under the native normal-completion contract')
     args = parser.parse_args(argv)
     kwargs = vars(args)
     kwargs['input_shapes'] = kwargs.pop('input_shape')
+    kwargs['shape_profiles'] = kwargs.pop('shape_profile')
     report = compile_exported_aten(**kwargs)
     print(json.dumps(dict(status=report['status'], executable=str(Path(args.out) / report['executable']))))
     return 0
