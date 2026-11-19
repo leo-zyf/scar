@@ -1,0 +1,254 @@
+{
+  "schema": "scar.cpu-inventory-and-ordered-closure",
+  "schema_version": 1,
+  "stage1": {
+    "assembled_with_reused_bindings": {
+      "assembly_seconds": 439.6852327559609,
+      "coverage": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-reused-bindings-explicit-v1/coverage.json",
+        "sha256": "ad804fc0e9c0f36c953a1c894dae7bab79be3dc868bbee1c7b27b384212f168f",
+        "size_bytes": 5537
+      },
+      "covered_entries": 749,
+      "first_stage_complete": false,
+      "loaded_source_units": 22,
+      "publication": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-reused-bindings-explicit-v1/manifest.json",
+        "sha256": "ed0968429832404aec205588f6d50e1100a3672d813406b29e0543eba10602c1",
+        "size_bytes": 14687
+      },
+      "readback_mode": "STORED_TABLES_WITH_ADMITTED_INDEX",
+      "versions": 32845
+    },
+    "binding_table_comparison": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/binding-inventory-comparison.json",
+      "sha256": "cd661a82bd89a3ee42d9420f294ac239f1e071f5f906e87f8dde2d952a400e2b",
+      "size_bytes": 829
+    },
+    "comparison": {
+      "byte_identical_tables": 294,
+      "counts": {
+        "binding_accesses": 16722,
+        "content_accesses": 5759,
+        "content_addresses": 5542,
+        "content_lineage_records": 6136,
+        "content_lineage_relations": 6136,
+        "content_relations": 41019,
+        "content_states": 11518,
+        "locations": 11437,
+        "operations": 145329,
+        "read_selections": 882,
+        "relations": 128772,
+        "tracks": 316,
+        "versions": 32845
+      },
+      "equal_typed_row_multisets": 21,
+      "fixed_points": 316,
+      "legacy_unit_work_s": 3044.405313510564,
+      "legacy_wall_s": 1664.284028384951,
+      "legacy_workers": 2,
+      "replay_unit_work_s": 449.3739484831458,
+      "replay_wall_s": 226.84369235101622,
+      "replay_workers": 6,
+      "same_source_and_trace": true,
+      "schema": "scar.observed-static-shard-reuse-comparison",
+      "schema_version": 1,
+      "unit_count": 21
+    },
+    "effects_closed": false,
+    "first_stage_complete": false,
+    "legacy_binding_state": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/observed-binding-states/result.json",
+      "sha256": "fc57543748ed689212e4d99ac84bb6b3f2c6907209e105f6c5387acc1683c759",
+      "size_bytes": 144560
+    },
+    "object_content_versions_proven": false,
+    "reused_binding_state": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/observed-bindings-from-inventory-v1/result.json",
+      "sha256": "ad9a7fbbfe5f6270ddc36054f39fbfef8087e787250e57dda1b521f0fb837f12",
+      "size_bytes": 162533
+    },
+    "reused_dynamic_parent": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/observed-function-interfaces/result.json",
+      "sha256": "4cb56c62135f41ddc50e00974915014298bec9dead1a3cec97d2acbb396b21f3",
+      "size_bytes": 40168
+    },
+    "scope": "SAME_RK4_INPUT_AND_RECORDED_EXECUTION_SAVED_STATIC_STATE_ROWS",
+    "static_graph_index": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/catalog-graph-state/index.json",
+      "sha256": "30c4d4b3d8391eb32542dbe192b3feebeca7a0e72583fd205f65089bda527f30",
+      "size_bytes": 12250
+    },
+    "wall_time_changes_include_worker_count": true
+  },
+  "stage2": {
+    "assessment": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/summary.json",
+      "sha256": "c80d7dcd45903abd4669daaea69c5617e38296eb9674ab6b400a6d6c9e03b9d8",
+      "size_bytes": 4539
+    },
+    "calibration_seed": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/resources/choice.json",
+      "sha256": "afc1763702c2b5a8589b0173afe4a3a7f84a8b088d912b9a166a93f6b434db04",
+      "size_bytes": 1947
+    },
+    "entry_ab": {
+      "architecture": "x86_64",
+      "measurement_pairs": 3,
+      "no_concurrent_standalone_sparse_execution": true,
+      "observed_median_speedup": 2.5431553611974693,
+      "parallel": {
+        "max_ns": 2748465254,
+        "median_ns": 2726393494,
+        "min_ns": 2715102214,
+        "samples_ns": [
+          2715102214,
+          2748465254,
+          2726393494
+        ],
+        "variance_ns2": 287958005262933.3
+      },
+      "scope": "CLEAN_PYTHON_ENTRY_NATIVE_SERIAL_VERSUS_FIXED_ORDERED_TEAM",
+      "serial": {
+        "max_ns": 6991808397,
+        "median_ns": 6933642231,
+        "min_ns": 6916858403,
+        "samples_ns": [
+          6916858403,
+          6933642231,
+          6991808397
+        ],
+        "variance_ns2": 1547083558345529.2
+      },
+      "warmup_pairs": 1
+    },
+    "global_worker_width_optimality_proven": false,
+    "live_application": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/release-live.json",
+      "sha256": "9120d61a6534008fb9eb424185f72070ef9b1073b92eceee09e80dafb038d979",
+      "size_bytes": 362055
+    },
+    "measured_workers": 6,
+    "model_selected_workers": 6,
+    "model_team_estimates_ns": {
+      "10": 2525551202,
+      "11": 2666852372,
+      "12": 2808153542,
+      "13": 2949454712,
+      "2": 3709833836,
+      "3": 2761237851,
+      "4": 2355014664,
+      "5": 2172134984,
+      "6": 2095598402,
+      "7": 2102417130,
+      "8": 2242948862,
+      "9": 2384250031
+    },
+    "physical_plan": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/study/plan.json",
+      "sha256": "4db3f83ca12e696e57503db5c77d78f02fdd0ce2480945646390b2230074664a",
+      "size_bytes": 3392
+    },
+    "physical_release": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/release/selection.json",
+      "sha256": "27f38b08ed77b84cd8648c542839438ad5ee2fe01531e2d3295c7502e96a317b",
+      "size_bytes": 6947
+    },
+    "serial_release": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/serial-release/launch.json",
+      "sha256": "c4f5c2f0f2b9dd603cdea9417e5c429ae665f69a828c7d98a01c347805048a9a",
+      "size_bytes": 3989
+    },
+    "source_scope": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-source-witness-v1/scope-parallel.json",
+      "sha256": "56b27f28762eb54da7e927c65410bd834b85ce2b2f2640cd421aec1980be6731",
+      "size_bytes": 281338
+    },
+    "width_frontier": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/forward-width-range/frontier.json",
+      "sha256": "153e839aa21d1f87adb4479995c219951b4c51e8362f48d73d9ed2423b76f5de",
+      "size_bytes": 24960
+    }
+  },
+  "stage3": {
+    "actual_native_linkage": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/native-validation/runtime-open.log",
+      "sha256": "81dafe65ee229bfba76eaeca0b56f6626c8ff3978feab0f91bbd69c0be1a8364",
+      "size_bytes": 47780
+    },
+    "bitwise_matches": 512,
+    "cpp": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ current ordered sparse/scar_ordered_sparse.cpp",
+      "sha256": "81867ae0595d25e9d5b45232bd7705c87337ad96aa0a6c5425a36cb7b69a1557",
+      "size_bytes": 8941
+    },
+    "delivery": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/native-validation/stage-iii-receipt.json",
+      "sha256": "9598e3250546df5c565768732a54f12059f3e457226dbde31cd843e12077ecd0",
+      "size_bytes": 5224
+    },
+    "executable": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ current ordered sparse/scar_ordered_sparse",
+      "sha256": "2962f1bb039ec84c58ed175c543448c106e397f5e269df8ff7e3f6ccd8bd98d2",
+      "size_bytes": 93144
+    },
+    "export_from_release": {
+      "cpp": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only sparse/scar_ordered_sparse.cpp",
+        "sha256": "81867ae0595d25e9d5b45232bd7705c87337ad96aa0a6c5425a36cb7b69a1557",
+        "size_bytes": 8941
+      },
+      "local_release_receipt": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only sparse/release.json",
+        "sha256": "27f38b08ed77b84cd8648c542839438ad5ee2fe01531e2d3295c7502e96a317b",
+        "size_bytes": 6947
+      },
+      "output_stream": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/native-validation/release-only-native-output.bin",
+        "sha256": "caa6f9b98527e3100f750fda9dd19c32a676b16b5870814700da8dd907c623d7",
+        "size_bytes": 17313864
+      },
+      "package": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only sparse/artifact.json",
+        "sha256": "0bd4b580b05a3a3481607213b5a502b6c3ab2a86f582839e38914378295989ae",
+        "size_bytes": 3188
+      },
+      "package_readback": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/native-validation/release-only-package-check.json",
+        "sha256": "030e6e69f68f710024ea3c4300883c07fa5763e45f1d12b27baabd6e75cc164a",
+        "size_bytes": 110
+      },
+      "provider_exported_from_release": true,
+      "release": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/release/selection.json",
+        "sha256": "27f38b08ed77b84cd8648c542839438ad5ee2fe01531e2d3295c7502e96a317b",
+        "size_bytes": 6947
+      },
+      "resolved_provider": {
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only sparse/numeric/artifact.json",
+        "sha256": "6c3b31b1ef0ed0dc2aa78db74b26e5594d70e06360b219345d68417c8e8d7ff2",
+        "size_bytes": 2420
+      },
+      "same_full_stream_as_fresh_original_validated_run": true,
+      "unqualified_study_rejected": true
+    },
+    "full_original_python_entry_replaced": false,
+    "package": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ current ordered sparse/artifact.json",
+      "sha256": "a4ceac430d8b4d26a543b7211cf62a5ef12a3c400cbd4c8dd1ec993500ec7c18",
+      "size_bytes": 2972
+    },
+    "scope": "NORMALIZED_CSR_STRUCTURE_AND_ORDERED_CURRENT_VALUE_RHS_FRAMES",
+    "shared_execution_recipe": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/protocol/recipe.json",
+      "sha256": "536f81ecb4dbc9d19f532a4b3164c8df27076db3c03564581247f40ca410a4e5",
+      "size_bytes": 41662
+    },
+    "standalone_timing_measured": false,
+    "verification": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/native-validation/native-observed.json",
+      "sha256": "396a00f7dd585520242616f96a5b9c13854148930dab5b93812817672eca0a8e",
+      "size_bytes": 856
+    }
+  }
+}

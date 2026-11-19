@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 
 from scar.analysis.replay_transaction import replay_transaction
 from scar.codegen.native_project import build_native_project, write_native_project
-from scar.codegen.sparse_native_export import check_sparse_export
+from scar.codegen.sparse_native_export import check_sparse_export, export_sparse_native
 from scar.ir.execution_recipe import SCHEMA as RECIPE, artifact_reference, read_artifact
 from scar.optimization.native_ordered_resources import SCHEMA as PLAN, project_native_ordered_resources
 from scar.optimization.native_ordered_stream import (
@@ -139,21 +139,7 @@ def export_native_ordered(recipe, provider, out, *, detached=False, release=None
         protocol = project_native_detached_stream(plan, read_artifact(source_ref))
     else:
         protocol = project_native_ordered_stream(plan)
-    provider = Path(provider).resolve(strict=True)
-    native = check_sparse_export(provider)
     capability = source['implementation']['backend_capability_record']
-    provenance = native['build_provenance']
-    if (provenance['recipe'] != capability['serial_recipe']
-            or provenance['lowering'] != capability['serial_lowering']
-            or provenance['native'] != capability['native'] or native['abi']['version'] != capability['abi_version']):
-        raise ValueError('ordered recipe and standalone numeric provider do not share the same lowered ABI')
-    closure_path = provider / native['provider']['uri']
-    closure = read_artifact({**native['provider'], 'uri': str(closure_path)})
-    matches = [row for row in closure['members'] if row['origin'] == capability['blas']['uri']
-               and row['sha256'] == capability['blas']['sha256']]
-    if len(matches) != 1:
-        raise ValueError('ordered recipe requires its exact single-thread BLAS member')
-    blas = 'provider/' + matches[0]['path']
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -161,8 +147,28 @@ def export_native_ordered(recipe, provider, out, *, detached=False, release=None
 
     with TemporaryDirectory(prefix='.scar-native-ordered-', dir=out.parent) as temporary:
         directory = Path(temporary)
-        copytree(provider, directory / 'numeric')
-        (directory / _ABI_HEADER).write_bytes((provider / native['header']['uri']).read_bytes())
+        numeric = directory / 'numeric'
+        if provider is None:
+            export_sparse_native(capability['serial_recipe']['uri'], capability['serial_lowering']['uri'], numeric)
+            provider = numeric
+        else:
+            provider = Path(provider).resolve(strict=True)
+        native = check_sparse_export(provider)
+        provenance = native['build_provenance']
+        if (provenance['recipe'] != capability['serial_recipe']
+                or provenance['lowering'] != capability['serial_lowering']
+                or provenance['native'] != capability['native'] or native['abi']['version'] != capability['abi_version']):
+            raise ValueError('ordered recipe and standalone numeric provider do not share the same lowered ABI')
+        closure_path = provider / native['provider']['uri']
+        closure = read_artifact({**native['provider'], 'uri': str(closure_path)})
+        matches = [row for row in closure['members'] if row['origin'] == capability['blas']['uri']
+                   and row['sha256'] == capability['blas']['sha256']]
+        if len(matches) != 1:
+            raise ValueError('ordered recipe requires its exact single-thread BLAS member')
+        blas = 'provider/' + matches[0]['path']
+        if provider != numeric:
+            copytree(provider, numeric)
+        (directory / _ABI_HEADER).write_bytes((numeric / native['header']['uri']).read_bytes())
         (directory / _DISPATCH_HEADER).write_bytes(_DISPATCH_SOURCE.read_bytes())
         (directory / _ORDERED_HEADER).write_bytes(_render(plan, blas))
         (directory / 'plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2, allow_nan=False) + '\n')
@@ -269,7 +275,7 @@ def main(argv=None):
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument('--recipe')
     choice.add_argument('--release', help='replay the published parallel decision before exporting its recipe')
-    parser.add_argument('--provider')
+    parser.add_argument('--provider', help='reuse a checked numeric bundle instead of exporting the selected provider')
     parser.add_argument('--out')
     parser.add_argument('--check')
     parser.add_argument('--rebuild-project', help='build a checked standalone export using the shared CMake project')
@@ -281,11 +287,11 @@ def main(argv=None):
     elif args.check and not any(export) and not args.detached and not args.rebuild_project:
         result = check_native_ordered_export(args.check)
         print(json.dumps(dict(verified=True, recipe_id=result['recipe_id'])))
-    elif not args.check and all(export) and not args.rebuild_project:
+    elif not args.check and export[0] and args.out and not args.rebuild_project:
         print(json.dumps(export_native_ordered(args.recipe, args.provider, args.out,
             detached=args.detached, release=args.release)))
     else:
-        parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --release or --recipe with --provider and --out')
+        parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --release or --recipe with --out')
     return 0
 
 
