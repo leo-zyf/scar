@@ -314,7 +314,7 @@ def _iteration(tree, calls, code, argv):
                  and _form(node.iter, f'range({count})')), 'repetition loop')
     _, range_type = _type(calls, loop_code, loop.iter)
     _require(range_type == {'module': 'builtins', 'qualname': 'range'}, 'loop bound requires exact builtin range')
-    return int(argv[0]), assignment, int_site, loop_site
+    return int(argv[0]), assignment, int_site, loop_site, count
 
 
 def _quadrature(owner, dispatch, refdom_name, order):
@@ -366,6 +366,23 @@ def _same_attempt(locator, calls, activation, raw):
              and json.loads(observation['metadata_json']) == row['target'],
              'projected call does not match the retained capture')
     return row
+
+
+def _observed_loop_count(frames, attempt, iterations, formal):
+    candidates = [(index, row) for index, row in enumerate(frames['records'])
+                  if 'selected_count' in row['fields']]
+    if not candidates:
+        return None
+    index, frame = _one(candidates, 'captured loop-count operand')
+    count = frame['fields']['selected_count']
+    _require(frame['process_id'] == frames['process_id'] and frame['thread_id'] == attempt['thread_id']
+             and frame['raw_call_attempt'] == attempt['index'] and frame['caller_code'] == attempt['caller_code_key']
+             and frame['caller_offset'] == attempt['offset'] and frame['code'] == attempt['target']['code']
+             and frame['phase'] in ('ENTERED', 'NORMAL_RETURN')
+             and type(count['value']) is int
+             and count == {'formal': formal, 'type': ['builtins', 'int'], 'value': iterations},
+             'captured loop-count operand does not match its original call and launch argv')
+    return f'#/records/{index}/fields/selected_count'
 
 
 def _mesh_post_init(owner, mesh_tree, mesh_symbol, nodes):
@@ -466,7 +483,7 @@ def extract(entry_calls, activations, source_root, argv):
     elem_site, elem_type = _type(calls, caller, element_call)
     basis_site, basis_type = _type(calls, caller, basis_call)
     refine_site, refine_obs = _observation(calls, caller, refine_call)
-    iterations, count_assignment, int_site, loop_site = _iteration(tree, calls, caller, argv)
+    iterations, count_assignment, int_site, loop_site, count_formal = _iteration(tree, calls, caller, argv)
     selectors = {'mesh_type': mesh_site, 'element_type': elem_site, 'basis_type': basis_site,
                  'refinement': refine_site, 'int_constructor': int_site, 'loop_consumer': loop_site}
 
@@ -578,8 +595,8 @@ def extract(entry_calls, activations, source_root, argv):
              'quadrature rule requires bounded two-component binary64 points')
     local_basis = _method(element, 'lbasis')
     values, derivatives = _local_basis(local_basis, integration_points, nnodes)
-    for role, locator in selectors.items():
-        _same_attempt(locator, calls, activation, raw)
+    attempts = {role: _same_attempt(locator, calls, activation, raw) for role, locator in selectors.items()}
+    observed_count = _observed_loop_count(frames, attempts['loop_consumer'], iterations, count_formal)
     _require(ctor_frame['fields']['X']['shape'] == [2, qpoints] and ctor_frame['fields']['X']['dtype'] == '<f8'
              and ctor_frame['fields']['W']['shape'] == [qpoints] and ctor_frame['fields']['W']['dtype'] == '<f8'
              and ctor_frame['fields']['element_dofs']['shape'][0] == nnodes,
@@ -601,6 +618,7 @@ def extract(entry_calls, activations, source_root, argv):
         'provenance': {
             'observed_call_sites': selectors,
             'observed_basis_frames': {name: constructor[name] for name in records},
+            **({'observed_loop_count': observed_count} if observed_count is not None else {}),
             'frames': frame_ref, 'raw_attempts': raw_ref, 'frame_design': frames['design'],
             'original_run': activation['original_run'],
             'source_spans': {
