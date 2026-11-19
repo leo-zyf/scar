@@ -1,0 +1,237 @@
+{
+  "cpp20": {
+    "detached_c_host": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/sorted-library-c-validation-v1/result.json",
+      "sha256": "7f90ab21ca202c2d0e5544920c4f2da7db9bc9ec7f53d11395528b64c10a91ce",
+      "size_bytes": 1111
+    },
+    "epoch_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch.check.json",
+      "sha256": "c4bc585e93cd03be096de036ed5267b3ab6b320d5ec7cd9a6d05ac26fc55b699",
+      "size_bytes": 589
+    },
+    "epoch_helper": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-v1/artifact.json",
+      "sha256": "d761a5785332cd9285f5e12ae067f39fd0af1c66da584e2bb9c935bfcf7b3724",
+      "size_bytes": 673
+    },
+    "library_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/library.check.json",
+      "sha256": "3968e0b4f294b5a290d33df9f0c372efd0c9e6f48f83cc86c8f964b99b5ec3d1",
+      "size_bytes": 3736
+    },
+    "library_record_count": 247,
+    "library_sample_count": 16,
+    "native_search_complete": false,
+    "sort_c_header": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/sorted-library-v1/include/scar_scalar_sorted_v1.h",
+      "sha256": "f74486ec4ef281bb23c6f761e676b12de39334029de3f3fb49e7ee9c5e3484d3",
+      "size_bytes": 1310
+    },
+    "sort_cpp": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/sorted-library-v1/src/sorted.cpp",
+      "sha256": "e83b910a318a6974b13ac304de7ab1eb8f20cc86465edc469db7d5c8b3b44adb",
+      "size_bytes": 25444
+    },
+    "sort_native_library": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/sorted-library-v1/artifact.json",
+      "sha256": "9ab1326f9be33a2d9586c56f6cc6537dd332b460e9473cd77c50abb3f150780d",
+      "size_bytes": 4918
+    }
+  },
+  "frontend": {
+    "asynchronous_and_reflection_effects_authorized": false,
+    "closed_scope": "ORIGINAL_EAGER_SORT_EXPRESSION_AND_RELEASED_UNSTARTED_ITERATORS",
+    "complete_effect_closure": false,
+    "guarded_site": {
+      "code": "pycode-v2:0a4dcddb632e1d99af935a7c23ee55c98f261e43ee65e2ec0d167fe12a9167c6",
+      "offset": 286,
+      "opname": "CALL_KW",
+      "position": [
+        444,
+        444,
+        23,
+        116
+      ]
+    },
+    "original_source": {
+      "schema": "scar.python-source",
+      "sha256": "5d9ba12a615e6394b634b22ca2ad33fd4720bb6ca38e327717be7891060e2819",
+      "size_bytes": 32941,
+      "uri": "/home/zyf/AAA/sunfish/sunfish.py"
+    },
+    "source_guard": {
+      "path": "artifacts/current/experiments/cpu-sorted-region-v1/source-guard-final.json",
+      "sha256": "909e0a07c329f269a79ad3258bfc17c4d321404df31ba25e61049fa8812888a9",
+      "size_bytes": 25604
+    },
+    "source_guard_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/source.check.json",
+      "sha256": "301acb80d7e13e290a7883316181396e18698812639bdd7e752dbab7f0a65f12",
+      "size_bytes": 3248
+    }
+  },
+  "ordered_solver": {
+    "clean_solver_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/ordered.check.json",
+      "sha256": "be9b45472a9c003a7a60bd67c882082375d50abdd846dbb49f320230c9adad13",
+      "size_bytes": 132
+    },
+    "clean_solver_validation": {
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/observed-resource-schedule-v2/clean-validation.json",
+      "sha256": "145c0d2a74b6d35396a512992780138793344754cb545c33f7db715fd0ae49c3",
+      "size_bytes": 4845
+    },
+    "default_selection_changed": false,
+    "dominated": {
+      "address_space_limits_bytes_saved": 4294967296,
+      "by": "2/2",
+      "loop_wall_separation_ns": 253017593,
+      "scope": "MATCHED_NATIVE_DIAGNOSTIC_OUTPUT_AND_EXACT_PLACEMENT_ONLY",
+      "solve_chain_separation_ns": 251809081
+    },
+    "exact_stdout_sha256": "468b0ba1bcbf1180d6c80f1ca76266aaeb73c27211a5a5fc0e3c4c8a6b6611a4",
+    "global_optimum_proven": false,
+    "measured_pairs": 3,
+    "median_speedup": 1.2869005491322525,
+    "previous_schema_cold_check": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/ordered-v1.check.json",
+      "sha256": "115a1f22c8ccb5a6ecfa1ddd3a6c0890358a210a95677d50a6766db8dcc0d401",
+      "size_bytes": 112
+    },
+    "resource_schedule": {
+      "path": "artifacts/current/experiments/cpu-ordered-width-cost-v1/observed-resource-schedule-v2/proposal.json",
+      "sha256": "209fc10a55c74a75371dcdd6186cad584192b6a46208517e64d38ee67db99e00",
+      "size_bytes": 24165
+    },
+    "scope": "NATIVE_SOLVER_WITH_MATCHED_PREBUILT_CSR_INPUT",
+    "selected": "2/2",
+    "unknown_cost_options": 18,
+    "wall_clock": {
+      "2/2": {
+        "max_ns": 632229377,
+        "median_ns": 631078576,
+        "min_ns": 629936638,
+        "sample_stdev_ns": 1146372.3551247795,
+        "samples_ns": [
+          629936638,
+          631078576,
+          632229377
+        ]
+      },
+      "6/2": {
+        "max_ns": 815731271,
+        "median_ns": 812135366,
+        "min_ns": 805087328,
+        "sample_stdev_ns": 5414469.734050879,
+        "samples_ns": [
+          805087328,
+          812135366,
+          815731271
+        ]
+      }
+    },
+    "warmup_pairs": 1
+  },
+  "original_search": {
+    "bestmoves": [
+      "bestmove e2e4 ponder d7d5",
+      "bestmove a7a8q ponder c6d8"
+    ],
+    "canonical_stdout_sha256": "7b108d57533b5dbf37e4f9a7e680ce077cd910f8018f17a47d6e70311821c559",
+    "clean_timing": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-timing/d4-receipt.json",
+      "sha256": "cbaa51d74e8726111a78c5b6c1426354e717271f76ec42a63e6a8181d3b22f62",
+      "size_bytes": 5802
+    },
+    "configuration_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-live-configuration/run-study.py",
+      "sha256": "212eb04e273eb5ad3fe0f7c2670c0c3f00a57e3b39bd65082fbd985481c68140",
+      "size_bytes": 6008
+    },
+    "cpu_ids": [
+      7
+    ],
+    "decision": "PASS_ISOLATED_BOUNDARY_PROFITABILITY",
+    "default_selection_changed": false,
+    "deployment_authorized": false,
+    "depth": 4,
+    "first_guard_attempt": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/initial-timing/d4-receipt.json",
+      "sha256": "6fea5b8419936ce6f40859c64df14aa7933757352ba8bf1c7975853caf32bfb1",
+      "size_bytes": 4030
+    },
+    "measured_pairs": 4,
+    "median_speedup": 1.0812043236297861,
+    "native_observed_calls": 23017,
+    "observed_configuration_counts": {
+      "36": 2930,
+      "97": 65
+    },
+    "observed_guard_phase_mean_ns": {
+      "mutation_epoch": {
+        "decode_and_recheck": 14412,
+        "ffi_and_native": 10549,
+        "guard_and_version": 12444,
+        "input_pack": 6789
+      },
+      "unwatched": {
+        "decode_and_recheck": 42571,
+        "ffi_and_native": 11623,
+        "guard_and_version": 39052,
+        "input_pack": 11078
+      }
+    },
+    "observed_timing_run": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-timing/d4-0-native.json",
+      "sha256": "c0a72b01590c91170df2f1b145781bcad29f9fe1ccb7e4aef8d2743e9850587a",
+      "size_bytes": 2175
+    },
+    "positions": 2,
+    "shadow_with_configuration_change": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-live-configuration/d2-0-native.json",
+      "sha256": "f5f7246e08484fd656947bc46df57789a995241ba1ac1fb38824950b081068f9",
+      "size_bytes": 2122
+    },
+    "shadow_without_configuration_change": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-probe/d2-0-native.json",
+      "sha256": "f67f89be084f951bf9ecdc559b3b9dafe6f5fb467cbbf3c9a2c55527d9ad9531",
+      "size_bytes": 2065
+    },
+    "timing_driver": {
+      "path": "artifacts/current/experiments/cpu-sorted-search-study-v1/epoch-timing/run-study.py",
+      "sha256": "36502ab855cedc41fb6c785e79f0663bcd51cfa834a64161f8bb4ce0eb2336a1",
+      "size_bytes": 5814
+    },
+    "timing_normalization": "UCI_INFO_TIME_AND_NPS_ONLY",
+    "wall_clock": {
+      "native": {
+        "max_ns": 2903701690,
+        "median_ns": 2885325251.5,
+        "min_ns": 2858841625,
+        "sample_stdev_ns": 18737229.18610139,
+        "samples_ns": [
+          2858841625,
+          2903701690,
+          2889237216,
+          2881413287
+        ]
+      },
+      "original": {
+        "max_ns": 3140063092,
+        "median_ns": 3119626137.0,
+        "min_ns": 3115605654,
+        "sample_stdev_ns": 11431196.571489735,
+        "samples_ns": [
+          3115605654,
+          3116051330,
+          3140063092,
+          3123200944
+        ]
+      }
+    },
+    "warmup_pairs": 1
+  },
+  "schema": "scar.cpu-guarded-sort-and-observed-schedule",
+  "schema_version": 1
+}
