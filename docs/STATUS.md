@@ -1,5 +1,11 @@
 # 当前状态
 
+`scar compile-cpu-entry --provider A --provider B --entry SOURCE --out OUT --argv ...` 已用同一命令编译有限元和固定网格 RK4 两条 CPU 入口。SCAR 依据源码路径、字节和提供方合同选择唯一入口，`--check OUT/result.json` 可按原合同冷复验。
+
+有限元 96 轮再次从一次原程序采集重建了 182 条动态调用绑定。它沿用经核验的静态图，单独离线验收的绑定与发布为 1.199 s。准备、求解和有序发布的 288 个区间已汇总到同一份源图。清洁测量的 Python 原入口和六 worker C++20 中位数为 1.981 s 和 1.125 s，stdout 逐字节一致，约 1.76×。
+
+RK4 复用已验 RHS，重新构建递推图、规划 41 MB 内的三核排程、生成并搬迁 C++20 包。16 步终态与原程序逐位一致。两步原生比较中，串行和三核中位数分别为 0.914 s 和 0.585 s。Python 状态行和原生 ABI 元数据分开验收。下一步补采原生求解、进程间搬运与按序等待的成本，让成本图提名 worker 宽度，并继续扩大源码入口覆盖。见 `artifacts/baseline/cpu-entry-native-providers.json`。
+
 `scar compile-triangle-profile --family FAMILY --entry ENTRY --argv 96 --out OUT` 已跑通已登记的 scikit-fem CPU 入口。前端在同一原程序进程中采集一次，接通 182 条调用观测和 10 个选定帧，入口图包含 324 条类型化依赖边。首次离线构图因并行编辑触发输入校验，随后通过 `--resume` 用同一份采集完成构图。F4 重放耗时 96.8 s，其中调用目标准入占 88.9 s。
 
 排程层按实际 CPU 核、NUMA 和内存约束提名 2 和 6 worker，保留有序发布。C++20 工件与原入口在 CPU 49–55 各预热一次、交替测三轮，中位数分别为原入口 1.987 s、2 worker 1.539 s、6 worker 1.128 s，stdout 逐字节一致。SCAR 推荐 6 worker，约 1.76×。结果已冷读复验，工件搬迁、安装后在关闭 stdin 的最小环境中通过执行。下一步将已知调用目标的图投影与新运行事件分开复用，取得逐段成本证据，再以另一条 CPU 入口验证提供方接口。当前结论限于已登记的提供方、入口和参数，完整 Python 可见效果仍待闭合。见 `artifacts/baseline/cpu-triangle-profile-auto-entry.json`。
