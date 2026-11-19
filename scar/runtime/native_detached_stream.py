@@ -26,10 +26,11 @@ _READ_TIMEOUT = 35
 _CLOSE_TIMEOUT = 2
 
 
-def _operands(snapshot):
+def _operands(snapshot, values=None):
+    matrix_values = snapshot.data if values is None else values
     for array, length, dtype in (
             (snapshot.columns, snapshot.nnz, '<i4'), (snapshot.offsets, snapshot.size + 1, '<i4'),
-            (snapshot.data, snapshot.nnz, '<f8'), (snapshot.load, snapshot.size, '<f8')):
+            (matrix_values, snapshot.nnz, '<f8'), (snapshot.load, snapshot.size, '<f8')):
         if array.shape != (length,) or array.dtype.str != dtype or not array.flags.c_contiguous:
             raise ValueError('detached snapshot does not fit the native wire ABI')
         yield memoryview(array).cast('B')
@@ -58,11 +59,29 @@ def _write_input(input_file, protocol, snapshot, geometry):
     return input_bytes
 
 
+def _write_source_input(input_file, protocol, snapshot, geometry, source_values):
+    if source_values is None:
+        raise ValueError('source CSR transfer requires the original matrix values')
+    input_file.write(_HEADER.pack(b'SCARPSR1', *geometry))
+    for payload in _operands(snapshot, source_values):
+        input_file.write(payload)
+    rows = snapshot.rows.astype('<i4', copy=False)
+    input_file.write(_ROW_COUNT.pack(len(rows)))
+    input_file.write(memoryview(rows).cast('B'))
+    input_bytes = input_file.tell()
+    sizes = protocol['bytes']
+    if input_bytes != sizes['input_fixed'] + len(rows) * sizes['selected_row']:
+        raise ValueError('source CSR input size differs from the native wire contract')
+    input_file.seek(0)
+    return input_bytes
+
+
 class NativeDetachedStream:
     """Read private outputs in order. The caller checks live inputs before publication."""
 
-    def __init__(self, package, manifest, snapshot, allowed_cpus):
-        if manifest.get('schema_version') != 3:
+    def __init__(self, package, manifest, snapshot, allowed_cpus, *, source_values=None):
+        version = manifest.get('schema_version')
+        if version not in (3, 4):
             raise ValueError('a verified compact ordered package is required')
         directory = Path(package).resolve(strict=True)
         protocol_ref = manifest['stream']['protocol']
@@ -79,7 +98,8 @@ class NativeDetachedStream:
         executable = directory / manifest['stream']['executable']['uri']
         try:
             with TemporaryFile() as input_file:
-                self.stats['input_bytes'] = _write_input(input_file, protocol, snapshot, geometry)
+                self.stats['input_bytes'] = (_write_source_input(input_file, protocol, snapshot, geometry, source_values)
+                    if version == 4 else _write_input(input_file, protocol, snapshot, geometry))
                 original_affinity = os.sched_getaffinity(0)
                 os.sched_setaffinity(0, allowed_cpus)
                 try:

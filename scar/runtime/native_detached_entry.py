@@ -29,7 +29,7 @@ def _admit_package(package, sha256, selection, *, selection_sha256=None):
     if artifact_reference(root / 'artifact.json', SCHEMA)['sha256'] != sha256:
         raise ValueError('compact package fingerprint differs')
     manifest = check_native_ordered_export(root)
-    if (manifest['schema_version'] != 3 or manifest['recipe'] != selection['execution_recipe']
+    if (manifest['schema_version'] not in (3, 4) or manifest['recipe'] != selection['execution_recipe']
             or {**manifest['detached_source'], 'uri': selection['recipe']['uri']} != selection['recipe']):
         raise ValueError('compact package and admitted source recipe differ')
     release = manifest.get('qualified_release')
@@ -81,6 +81,7 @@ class _CompactOffers:
         self.blas_path = blas_path
         self.owner = get_ident()
         self.original = self.snapshot = self.transport = None
+        self.source_values = None
         self.floating_control = self.blas_threads = self.live_bytes = None
         self.ticket = 0
         self.disabled = False
@@ -102,6 +103,8 @@ class _CompactOffers:
             if type(inputs['count']) is not int or inputs['count'] != self.selected['count']:
                 raise ValueError('original iteration count differs')
             self.snapshot = DetachedCSR(**inputs, expression=self.recipe['scale'], **self.selected['matrix'])
+            if self.manifest['schema_version'] == 4:
+                self.source_values = inputs['matrix'].data.copy()
             self.stats['inputs_captured'] = True
         except _FAILURES:
             self._reject('DETACHED_LIVE_INPUTS_CHANGED')
@@ -115,7 +118,7 @@ class _CompactOffers:
         from scar.runtime.native_detached_stream import NativeDetachedStream
 
         self.transport = NativeDetachedStream(self.package, self.manifest, self.snapshot,
-            self.selected['launch_cpu_ids'])
+            self.selected['launch_cpu_ids'], source_values=self.source_values)
 
     def __call__(self, args, options):
         if self.disabled:
@@ -157,6 +160,7 @@ class _CompactOffers:
     def close(self):
         self.disabled = True
         self.snapshot = None
+        self.source_values = None
         if self.transport is not None:
             self.transport.close()
 

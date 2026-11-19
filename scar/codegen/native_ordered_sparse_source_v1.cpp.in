@@ -1,0 +1,62 @@
+DetachedInput read_source_snapshot(std::span<const int> indices, std::span<const int> offsets) {
+    if (std::fesetenv(FE_DFL_ENV) != 0) {
+        throw std::runtime_error("cannot establish binary64 source scale environment");
+    }
+    DetachedInput input{std::vector<double>(sparse::nnz), std::vector<double>(sparse::size), {}};
+    read_exact(std::as_writable_bytes(std::span(input.values)), "incomplete source CSR values");
+    read_exact(std::as_writable_bytes(std::span(input.rhs)), "incomplete source RHS");
+    constexpr double min_normal = std::numeric_limits<double>::min();
+    constexpr double max_before_scale = std::numeric_limits<double>::max() / 2;
+    if (!std::all_of(input.values.begin(), input.values.end(), [](double value) { return std::isfinite(value); })
+            || !std::all_of(input.rhs.begin(), input.rhs.end(), [](double value) {
+                const double magnitude = std::abs(value);
+                return magnitude == 0.0 || (magnitude >= min_normal && magnitude <= max_before_scale);
+            })) {
+        throw InputFailure{"source CSR or RHS includes a value outside its numerical contract"};
+    }
+
+    std::array<std::byte, 4> count_bytes;
+    read_exact(count_bytes, "missing source CSR selected row count");
+    const auto count = get_unsigned(count_bytes);
+    if (count > sparse::size) {
+        throw InputFailure{"too many selected source CSR rows"};
+    }
+    auto& rows = input.diagonals;
+    rows.resize(count);
+    read_exact(std::as_writable_bytes(std::span(rows)), "incomplete source CSR selected rows");
+    require_eof();
+    std::sort(rows.begin(), rows.end());
+    if ((!rows.empty() && (rows.front() < 0 || rows.back() >= sparse::size))
+            || std::adjacent_find(rows.begin(), rows.end()) != rows.end()) {
+        throw InputFailure{"source CSR selected rows must be unique and in range"};
+    }
+
+    auto selected = rows.begin();
+    for (int row = 0; row < sparse::size; ++row) {
+        const auto begin = indices.begin() + offsets[row];
+        const auto end = indices.begin() + offsets[row + 1];
+        const auto diagonal = std::lower_bound(begin, end, row);
+        if (diagonal == end || *diagonal != row) {
+            throw InputFailure{"source CSR requires a stored diagonal in each row"};
+        }
+        const auto slot = diagonal - indices.begin();
+        if (selected != rows.end() && *selected == row) {
+            std::fill(input.values.begin() + offsets[row], input.values.begin() + offsets[row + 1], 0.0);
+            input.rhs[row] = 0.0;
+            *selected++ = static_cast<int>(slot);
+        } else if (input.values[slot] == 0.0) {
+            // Source adds a positive zero on every diagonal before editing selected rows.
+            input.values[slot] = 0.0;
+        }
+    }
+    return input;
+}
+
+void fill_source_scale(std::uint64_t sequence, std::span<std::byte> request) {
+    (void)sequence;
+    const double scale = @SCAR_SCALE_EXPRESSION@;
+    if (!(scale >= 1.0 && scale < 2.0)) {
+        throw InputFailure{"source CSR scale is outside [1.0, 2.0)"};
+    }
+    std::memcpy(request.data(), &scale, sizeof(scale));
+}

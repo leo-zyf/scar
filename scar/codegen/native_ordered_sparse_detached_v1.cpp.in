@@ -4,7 +4,7 @@ struct DetachedInput {
     std::vector<int> diagonals;
 };
 
-DetachedInput read_snapshot(std::span<const int> indices, std::span<const int> offsets) {
+@SCAR_LEGACY_UNUSED@DetachedInput read_snapshot(std::span<const int> indices, std::span<const int> offsets) {
     DetachedInput input{std::vector<double>(sparse::nnz), std::vector<double>(sparse::size), {}};
     read_exact(std::as_writable_bytes(std::span(input.values)), "incomplete detached CSR values");
     read_exact(std::as_writable_bytes(std::span(input.rhs)), "incomplete detached RHS values");
@@ -48,7 +48,7 @@ DetachedInput read_snapshot(std::span<const int> indices, std::span<const int> o
     return input;
 }
 
-using ScaleCopy = void (*)(int, int, int, int, double, const double*, int, double*, int);
+@SCAR_SOURCE_INGRESS@using ScaleCopy = void (*)(int, int, int, int, double, const double*, int, double*, int);
 
 ScaleCopy scale_copy(const std::filesystem::path& provider_path) {
     void* handle = dlopen((provider_path / sparse::blas_member).c_str(), RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
@@ -113,6 +113,7 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
             };
         };
         const auto fill = [](std::uint64_t sequence, std::span<std::byte> request) {
+@SCAR_TICKET_BEGIN@
             std::array<std::byte, 8> number;
             read_exact(number, "missing or incomplete detached CSR sequence");
             if (get_unsigned(number) != sequence) {
@@ -125,7 +126,7 @@ int run_requests(std::span<const int> indices, std::span<const int> offsets, Det
             }
             if (sequence + 1 == sparse::count) {
                 require_eof();
-            }
+            }@SCAR_TICKET_END@
         };
         const auto retire = [&](const ordered::Retirement& row) {
             if (row.sequence != published) {
@@ -189,7 +190,7 @@ int main(int argc, char**) {
         read_exact(std::as_writable_bytes(std::span(indices)), "incomplete detached CSR indices");
         read_exact(std::as_writable_bytes(std::span(offsets)), "incomplete detached CSR offsets");
         check_structure(indices, offsets);
-        auto input = read_snapshot(indices, offsets);
+        auto input = @SCAR_SNAPSHOT_READER@(indices, offsets);
         write_exact(output_header);
         return run_requests(indices, offsets, input);
     } catch (const InputFailure& error) {
