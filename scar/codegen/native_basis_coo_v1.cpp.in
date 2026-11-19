@@ -1,0 +1,102 @@
+#include <ATen/Parallel.h>
+#include <ATen/ops/add.h>
+#include <ATen/ops/empty.h>
+#include <ATen/ops/isfinite.h>
+#include <ATen/ops/mul.h>
+#include <ATen/ops/zeros_like.h>
+
+#include <array>
+#include <bit>
+#include <cfenv>
+#include <cstdint>
+#include <cstdio>
+#include <span>
+#include <stdexcept>
+
+namespace {
+constexpr std::int64_t basis = @SCAR_BASIS@;
+constexpr std::int64_t components = @SCAR_COMPONENTS@;
+constexpr std::int64_t elements = @SCAR_ELEMENTS@;
+constexpr std::int64_t points = @SCAR_POINTS@;
+constexpr std::int64_t rows = @SCAR_ROWS@;
+constexpr auto weighted_scalar = @SCAR_VALUE_SCALE@;
+constexpr std::array<std::int64_t, components> component_order{@SCAR_COMPONENT_ORDER@};
+constexpr std::array<std::int64_t, points> point_order{@SCAR_POINT_ORDER@};
+constexpr std::array<unsigned char, 100> input_header{@SCAR_HEADER@};
+static_assert(std::endian::native == std::endian::little && sizeof(double) == 8);
+
+at::Tensor read_tensor(at::IntArrayRef shape, at::ScalarType dtype) {
+    auto output = at::empty(shape, at::TensorOptions().dtype(dtype).device(at::kCPU));
+    const auto bytes = output.nbytes();
+    if (std::fread(output.data_ptr(), 1, bytes, stdin) != bytes) {
+        throw std::runtime_error("incomplete ordered weighted-form operands");
+    }
+    if (dtype == at::kDouble && !at::isfinite(output).all().item<bool>()) {
+        throw std::runtime_error("nonfinite ordered weighted-form operand");
+    }
+    return output;
+}
+
+at::Tensor reduce(const at::Tensor& values, std::int64_t axis, std::span<const std::int64_t> order) {
+    auto output = at::zeros_like(values.select(axis, 0));
+    for (const auto coordinate : order) {
+        output = at::add(output, values.select(axis, coordinate));
+    }
+    return output;
+}
+
+void write_bytes(const void* data, std::size_t count) {
+    if (std::fwrite(data, 1, count, stdout) != count) {
+        throw std::runtime_error("cannot publish ordered contributions");
+    }
+}
+
+void write_tensor(const at::Tensor& value) {
+    const auto output = value.contiguous();
+    write_bytes(output.const_data_ptr(), output.nbytes());
+}
+
+void run() {
+    at::set_num_threads(1);
+    at::set_num_interop_threads(1);
+    if (std::fesetenv(FE_DFL_ENV) != 0) {
+        throw std::runtime_error("cannot establish the qualified binary64 environment");
+    }
+    std::array<unsigned char, input_header.size()> header;
+    if (std::fread(header.data(), 1, header.size(), stdin) != header.size() || header != input_header) {
+        throw std::runtime_error("ordered weighted-form header differs from its admitted shape");
+    }
+    const auto gradient = read_tensor({basis, components, elements, points}, at::kDouble);
+    const auto value = read_tensor({basis, elements, points}, at::kDouble);
+    const auto weights = read_tensor({elements, points}, at::kDouble);
+    const auto element_port = read_tensor({basis, elements}, at::kInt);
+    const auto constraint_port = read_tensor({rows}, at::kInt);
+    if (std::fgetc(stdin) != EOF || std::ferror(stdin)) {
+        throw std::runtime_error("ordered weighted-form ingress has extra bytes or a read error");
+    }
+    const auto paired = at::mul(gradient.unsqueeze(1), gradient.unsqueeze(0));
+    const auto integrand = reduce(paired, 2, component_order);
+    const auto matrix = reduce(at::mul(integrand, weights), 3, point_order);
+    const auto load = reduce(at::mul(at::mul(value, weighted_scalar), weights), 2, point_order);
+    write_bytes(header.data() + 24, header.size() - 24);
+    write_tensor(element_port.unsqueeze(0).expand({basis, basis, elements}));
+    write_tensor(element_port.unsqueeze(1).expand({basis, basis, elements}));
+    write_tensor(matrix);
+    write_tensor(element_port);
+    write_tensor(load);
+    write_tensor(constraint_port);
+    if (std::fflush(stdout) != 0) {
+        throw std::runtime_error("cannot flush ordered contributions");
+    }
+}
+}  // namespace
+
+int main() {
+    try {
+        run();
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        return 1;
+    }
+}

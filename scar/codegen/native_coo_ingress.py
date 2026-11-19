@@ -142,7 +142,8 @@ def export(observation_path, source_path, out):
             name = str(path.relative_to(root))
             members[name] = {**artifact_reference(path, 'scar.native-coo-member'), 'uri': name}
         result = dict(schema=SCHEMA, schema_version=1, observation=ref, upstream_source=source,
-            stream=observation['stream'], canonical_sample=observation['output_reference'],
+            stream=observation['stream'], input_sample=observation['input'],
+            canonical_sample=observation['output_reference'],
             provider_routines=['coo_tocsr', 'csr_has_sorted_indices',
                 'csr_sort_indices', 'csr_sum_duplicates', 'coo_todense'],
             members=members, dependencies=dependencies,
