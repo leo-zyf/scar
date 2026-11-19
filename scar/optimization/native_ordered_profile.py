@@ -185,12 +185,20 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
     hardware_ref = _ref(hardware_path, HARDWARE)
     plan, control = _resources(before, hardware_ref, read_artifact(hardware_ref), count, width, identity)
     wire = project_source_csr_stream(plan, detached)
+    diagnosis = {}
+    if 'segmented_cost' in observation:
+        from scar.optimization.ordered_source_owner_cost import project_source_cost
+        from scar.runtime.sparse_ordered_scope_observe import _scope_design
+
+        design = _scope_design(package, manifest, seed['argv'], PACKAGE)
+        diagnosis['source_cost'] = project_source_cost(
+            design, observation, observation_ref, seed, scope, detached['source'], plan)
     return dict(schema=SCHEMA, schema_version=1, anchor=anchor, source_seed=seed_ref, argv=seed['argv'],
         original_observation=observation_ref, oracle=oracle_ref, hardware=hardware_ref,
         width=width, resources=plan, control=control, wire_identity=logical,
         source_stream_input=wire['input'], source_stream_header=wire['header'],
         decision='CALIBRATION_ELIGIBLE_STANDALONE', historical_costs_transferred=False,
-        full_original_effect_equivalence=False, deployment_authorized=False)
+        full_original_effect_equivalence=False, deployment_authorized=False, **diagnosis)
 
 
 def verify_profile_plan(path):

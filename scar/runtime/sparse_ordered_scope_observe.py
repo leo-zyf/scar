@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sys
 from threading import get_ident
+from time import perf_counter_ns, thread_time_ns
 from types import CodeType
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
@@ -20,6 +21,9 @@ from scar.trace.code_snapshot import code_key, describe_code
 
 SCHEMA = 'scar.study-aggregate-source-scope'
 DESIGN = 'scar.aggregate-ordered-source-scope-design'
+COST = 'scar.ordered-source-owner-segments'
+PUBLICATION = 'ordered_publication'
+CLOCKS = ('wall_ns', 'thread_cpu_ns')
 
 
 def _require(condition, message):
@@ -41,6 +45,10 @@ def scope_design(anchor_digest_package, argv):
         'expected one positive bounded repetition argument for the ordered source scope')
     package = Path(anchor_digest_package).resolve(strict=True)
     manifest = check_native_ordered_export(package)
+    return _scope_design(package, manifest, argv, PACKAGE)
+
+
+def _scope_design(package, manifest, argv, package_schema):
     _require(manifest['schema_version'] == 5, 'expected the admitted standalone digest family')
     detached = read_artifact({**manifest['detached_source'], 'uri': str(package/'detached-source.json')})
     source = read_artifact(detached['source'])
@@ -67,11 +75,68 @@ def scope_design(anchor_digest_package, argv):
     previous, count = source_scope['observed']['consumer_completions'], int(argv[0])
     counts = {event: count if total == previous else total for event, total in original['local_event_counts'].items()}
     return dict(schema=DESIGN, schema_version=1, entry=original['entry'], argv=argv, count=count,
-        archive=artifact_reference(package/'artifact.json', PACKAGE), provenance=reference,
+        archive=artifact_reference(package/'artifact.json', package_schema), provenance=reference,
         code_keys=original['code_keys'], targets=targets, body=body, ordered_children=children,
         formals=detached['roles'], expected_counts=counts, loop_inputs=original['loop_inputs'],
         range_site=iterator['caller_site'], publication_site=publication['caller_site'],
         publication_callable=json.loads(publication['metadata_json']))
+
+
+def cost_boundaries(design):
+    """Use exactly the same CodeID and call-site selectors as the count proof."""
+    def original(name):
+        return dict(**design['targets'][name], entry='PY_START', exit='PY_RETURN')
+
+    return dict(scope=original(design['body']),
+        phases={**{name: original(name) for name in design['ordered_children']},
+            PUBLICATION: dict(code=None, caller=design['publication_site'], entry='CALL', exit='C_RETURN',
+                              callable=design['publication_callable'])})
+
+
+def _clock():
+    return perf_counter_ns(), thread_time_ns()
+
+
+class _OwnerCosts:
+    """Keep fixed-size summaries of mutually disjoint selected phase spans."""
+
+    def __init__(self):
+        self.body = None
+        self.last = None
+        self.active = None
+        self.phases = {}
+
+    def open_scope(self):
+        self.body = self.last = _clock()
+
+    def enter(self, name):
+        cut = _clock()
+        _require(self.active is None and all(a <= b for a, b in zip(self.last, cut, strict=True)),
+            'owner phase spans overlap or move backward')
+        self.active = name, cut
+
+    def leave(self, name, stop):
+        _require(self.active is not None and self.active[0] == name, 'owner phase lost its exact entry event')
+        _, begin = self.active
+        row = self.phases.setdefault(name, {'count': 0})
+        row['count'] += 1
+        for axis, first, last in zip(CLOCKS, begin, stop, strict=True):
+            elapsed = last - first
+            _require(elapsed >= 0, 'owner phase clock moved backward')
+            stats = row.setdefault(axis, dict(first_ns=first, sum_ns=0, min_ns=elapsed, max_ns=elapsed))
+            stats.update(last_ns=last, sum_ns=stats['sum_ns']+elapsed,
+                         min_ns=min(stats['min_ns'], elapsed), max_ns=max(stats['max_ns'], elapsed))
+        self.active, self.last = None, stop
+
+    def close_scope(self, stop, design, observer_thread, affinity):
+        _require(self.active is None and all(a <= b for a, b in zip(self.last, stop, strict=True)),
+            'loop returned with an overlapping or unfinished timed phase')
+        return dict(schema=COST, schema_version=1, process_id=os.getpid(), thread_id=observer_thread,
+            affinity=affinity, clock_sources=dict(wall_ns='PERF_COUNTER_NS', thread_cpu_ns='THREAD_TIME_NS'),
+            scope='INSTRUMENTED_ORIGINAL_OWNER_ONLY', boundaries=cost_boundaries(design),
+            envelope={axis: [a,b] for axis,a,b in zip(CLOCKS,self.body,stop,strict=True)},
+            phases=self.phases, phase_order=[*design['ordered_children'], PUBLICATION],
+            occurrence_intervals_saved=False, clean_measurement=False)
 
 
 def _geometry(frame, formals):
@@ -108,6 +173,9 @@ def observe_scope(design, out_path):
     returned = None
     publisher = None
     publication_target = None
+    cost = _OwnerCosts()
+    cost_record = None
+    affinity = sorted(os.sched_getaffinity(0))
     range_site = design['range_site']['offset']
     publication_site = design['publication_site']['offset']
 
@@ -155,19 +223,26 @@ def observe_scope(design, out_path):
                 'original per-iteration call order differs from the admitted route')
         active[frame] = name
         counters[name+'_started'] += 1
+        if name == body:
+            cost.open_scope()
+        else:
+            cost.enter(name)
 
     def finish(_code, _offset, value):
-        nonlocal returned, body_frame, stage
+        nonlocal returned, body_frame, stage, cost_record
         frame = sys._getframe(1)
         name = active.pop(frame, None)
         if name is None:
             return
+        stop = _clock()
         counters[name+'_completed'] += 1
         if name == body:
             _require(not stage and type(value) is str and re.fullmatch('[0-9a-f]{64}', value) is not None,
                 'original ordered publication did not complete as a digest')
             returned, body_frame = value, None
+            cost_record = cost.close_scope(stop, design, owner_thread, affinity)
         else:
+            cost.leave(name, stop)
             stage += 1
 
     def call(_code, offset, target, arg0):
@@ -186,13 +261,16 @@ def observe_scope(design, out_path):
         if publisher is None:
             publisher = arg0
         _require(publisher is arg0, 'ordered publication switched receivers')
+        cost.enter(PUBLICATION)
 
     def c_return(_code, offset, target, _arg0):
         nonlocal stage
         if offset == publication_site and sys._getframe(1) is body_frame:
+            stop = _clock()
             _require(stage == len(children) and target is publication_target,
                 'original publication did not return from the identified carrier')
             counters['digest_update_sites_reached'] += 1
+            cost.leave(PUBLICATION, stop)
             stage = 0
 
     callbacks = ((events.PY_START, start), (events.PY_RETURN, finish),
@@ -207,17 +285,20 @@ def observe_scope(design, out_path):
         closed = True
         for code in watched:
             monitor.set_local_events(tool, code, 0)
+        watched.clear()
         for event, _ in callbacks:
             monitor.register_callback(tool, event, None)
         monitor.free_tool_id(tool)
-    _require(returned is not None and not active and dict(counters) == design['expected_counts'],
+    _require(returned is not None and not active and dict(counters) == design['expected_counts']
+        and sorted(os.sched_getaffinity(0)) == affinity,
         'original loop did not complete the exact admitted iteration cardinality')
     stdout_hash = sha256((returned+'\n').encode('ascii')).hexdigest()
     result = dict(schema=SCHEMA, schema_version=1, entry=design['entry'], argv=design['argv'],
         installed_native_providers=0, local_event_counts=dict(counters), affinity=sorted(os.sched_getaffinity(0)),
         code_keys=design['code_keys'], normal_completion=True, per_iteration_records=False, array_contents_saved=False,
         loop_inputs=loop_inputs, return_digest=returned, process_id=os.getpid(), thread_id=owner_thread,
-        expected_stdout_sha256=stdout_hash, local_monitoring_only=True, performance_measurement=False)
+        expected_stdout_sha256=stdout_hash, local_monitoring_only=True, performance_measurement=False,
+        segmented_cost=cost_record)
     with Path(out_path).open('x', encoding='utf-8') as output:
         json.dump(result, output, indent=2, sort_keys=True, allow_nan=False)
         output.write('\n')
