@@ -23,7 +23,7 @@ constexpr std::int64_t cells = @SCAR_CELLS@;
 constexpr std::int64_t points = @SCAR_POINTS@;
 constexpr std::int64_t constraints = @SCAR_CONSTRAINTS@;
 constexpr std::array<unsigned char, 120> input_header{@SCAR_HEADER@};
-static_assert(std::endian::native == std::endian::little && sizeof(double) == 8);
+@SCAR_OUTPUT_HEADER_DECLARATION@static_assert(std::endian::native == std::endian::little && sizeof(double) == 8);
 
 at::Tensor read_tensor(at::IntArrayRef shape, at::ScalarType type) {
     auto value = at::empty(shape, at::TensorOptions().device(at::kCPU).dtype(type));
@@ -83,10 +83,10 @@ void run() {
     const auto first_term = at::mul(first, reference_gradient.select(1, 0).unsqueeze(1).unsqueeze(2));
     const auto second_term = at::mul(second, reference_gradient.select(1, 1).unsqueeze(1).unsqueeze(2));
     const auto gradients = at::add(at::add(at::zeros_like(first_term), first_term), second_term);
-    const auto values = reference_value.unsqueeze(1).expand({3, cells, points});
+    @SCAR_VALUE_VIEW@;
     const auto weights = at::mul(at::abs(determinant).unsqueeze(-1), reference_weights);
 
-    write_bytes(observed.data() + 20, observed.size() - 20);
+    @SCAR_OUTPUT_HEADER_WRITE@;
     write_tensor(gradients);
     write_tensor(values);
     write_tensor(weights);

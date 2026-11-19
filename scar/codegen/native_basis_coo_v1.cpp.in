@@ -22,7 +22,7 @@ constexpr std::int64_t rows = @SCAR_ROWS@;
 constexpr auto weighted_scalar = @SCAR_VALUE_SCALE@;
 constexpr std::array<std::int64_t, components> component_order{@SCAR_COMPONENT_ORDER@};
 constexpr std::array<std::int64_t, points> point_order{@SCAR_POINT_ORDER@};
-constexpr std::array<unsigned char, 100> input_header{@SCAR_HEADER@};
+constexpr std::array<unsigned char, @SCAR_HEADER_SIZE@> input_header{@SCAR_HEADER@};
 static_assert(std::endian::native == std::endian::little && sizeof(double) == 8);
 
 at::Tensor read_tensor(at::IntArrayRef shape, at::ScalarType dtype) {
@@ -67,7 +67,7 @@ void run() {
         throw std::runtime_error("ordered weighted-form header differs from its admitted shape");
     }
     const auto gradient = read_tensor({basis, components, elements, points}, at::kDouble);
-    const auto value = read_tensor({basis, elements, points}, at::kDouble);
+    @SCAR_VALUE_READER@;
     const auto weights = read_tensor({elements, points}, at::kDouble);
     const auto element_port = read_tensor({basis, elements}, at::kInt);
     const auto constraint_port = read_tensor({rows}, at::kInt);
@@ -78,7 +78,7 @@ void run() {
     const auto integrand = reduce(paired, 2, component_order);
     const auto matrix = reduce(at::mul(integrand, weights), 3, point_order);
     const auto load = reduce(at::mul(at::mul(value, weighted_scalar), weights), 2, point_order);
-    write_bytes(header.data() + 24, header.size() - 24);
+    @SCAR_COO_HEADER_WRITE@;
     write_tensor(element_port.unsqueeze(0).expand({basis, basis, elements}));
     write_tensor(element_port.unsqueeze(1).expand({basis, basis, elements}));
     write_tensor(matrix);
