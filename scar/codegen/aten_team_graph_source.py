@@ -1,10 +1,10 @@
 """Render admitted two- and three-lane windows using ordinary provider calls."""
 
 
-def render_team_calls(calls, releases, outputs, legal_widths):
-    def observed(position):
+def render_team_calls(calls, releases, outputs, legal_widths, *, dependencies):
+    def observed(position, observer='observe'):
         _, expression = calls[position]
-        return f'observe({position}, [&] {{ return {expression}; }})'
+        return f'{observer}({position}, [&] {{ return {expression}; }})'
 
     serial = []
     parallel = [f'    at::Tensor {value};' for value, _ in calls]
@@ -29,7 +29,7 @@ def render_team_calls(calls, releases, outputs, legal_widths):
             parallel.extend(f'{indent}    {line}' for i in indices for line in releases[i])
             parallel.append(f'{indent}}} else {{')
             indent += '    '
-        parallel.append(f'{indent}{value} = {observed(index)};')
+        parallel.append(f'{indent}{value} = {observed(index, "observe_serial")};')
         parallel.extend(f'{indent}{line}' for line in releases[index])
         for _ in range(1, legal_widths[index]):
             indent = indent[:-4]
@@ -38,11 +38,18 @@ def render_team_calls(calls, releases, outputs, legal_widths):
             parallel.append('    }')
 
     widths = ', '.join(map(str, legal_widths))
+    edges = sorted(set(dependencies))
+    if any(type(producer) is not int or type(consumer) is not int or not 0 <= producer < consumer < len(calls)
+           for producer, consumer in edges):
+        raise ValueError('team graph dependencies must follow source order')
+    edge_values = ', '.join(f'TeamDataEdge{{{producer}, {consumer}}}' for producer, consumer in edges)
     serial_body, parallel_body = '\n'.join(serial), '\n'.join(parallel)
     return f'''
 inline constexpr std::size_t operation_count = {len(calls)};
 using WindowSelection = std::array<std::uint8_t, operation_count>;
 inline constexpr WindowSelection legal_window_widths{{{widths}}};
+using TeamDataEdge = std::array<std::size_t, 2>;
+inline constexpr std::array<TeamDataEdge, {len(edges)}> team_data_edges{{{edge_values}}};
 
 template <class Observer>
 inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Tensor> inputs, Observer&& observe) {{
@@ -51,10 +58,10 @@ inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Ten
     return {{{outputs}}};
 }}
 
-template <class Observer, class GroupObserver>
+template <class Observer, class GroupObserver, class SerialObserver>
 inline std::array<at::Tensor, output_count> run_parallel_groups_observed(
         std::span<const at::Tensor> inputs, CpuTeam& team, const WindowSelection& windows,
-        Observer&& observe, GroupObserver&& observe_group) {{
+        Observer&& observe, GroupObserver&& observe_group, SerialObserver&& observe_serial) {{
     validate_inputs(inputs);
     for (std::size_t first = 0; first < operation_count; ++first) {{
         const auto width = windows[first];
@@ -73,8 +80,8 @@ inline std::array<at::Tensor, output_count> run_parallel_groups_observed(
 template <class Observer>
 inline std::array<at::Tensor, output_count> run_parallel_observed(
         std::span<const at::Tensor> inputs, CpuTeam& team, const WindowSelection& windows, Observer&& observe) {{
-    return run_parallel_groups_observed(inputs, team, windows, std::forward<Observer>(observe),
-                                        [](std::size_t, std::size_t, auto&& run) {{ run(); }});
+    return run_parallel_groups_observed(inputs, team, windows, observe,
+                                        [](std::size_t, std::size_t, auto&& run) {{ run(); }}, observe);
 }}
 
 inline std::array<at::Tensor, output_count> run_parallel(

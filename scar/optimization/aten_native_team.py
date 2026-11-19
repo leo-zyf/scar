@@ -15,6 +15,7 @@ from scar.optimization.aten_native_schedule import (
     _live_inputs,
     recorded_cpu_domain,
 )
+from scar.optimization.aten_post_join_evidence import read_aten_post_join_evidence
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, tensor_footprint, tensor_releases
 from scar.optimization.aten_team_group_evidence import read_aten_team_group_evidence
 from scar.optimization.aten_team_numa_locality import model_aten_team_numa_locality
@@ -303,7 +304,7 @@ def _best_tilings(service, dispatch, possible):
     return results
 
 
-def _timeline(operations, cpus, service, handoffs, choices, storage, *, group_medians=None):
+def _timeline(operations, cpus, service, handoffs, choices, storage, *, group_medians=None, post_join_indices=()):
     widths = dict(choices)
     start, offset, timeline = 0, 0, []
     while start < len(operations):
@@ -320,6 +321,8 @@ def _timeline(operations, cpus, service, handoffs, choices, storage, *, group_me
                        dispatch_join_ns=0 if width == 1 else handoffs[str(width)])
         if measured is not None:
             segment['duration_basis'] = 'MEASURED_CONCURRENT_FORK_JOIN'
+        elif start in post_join_indices:
+            segment['duration_basis'] = 'MEASURED_POST_JOIN_CONSUMER'
         timeline.append(segment)
         start += width
         offset += duration
@@ -339,14 +342,20 @@ def _timeline_prediction(timeline, lane_samples, handoff_samples, *, groups=None
 
 
 def _price_numa_context(context, operations, cpus, service, handoffs, lane_samples, handoff_samples, storage,
-                        *, group_evidence=None):
+                        *, group_evidence=None, post_join_evidence=None):
     choices = context['windows']
     lane_by_op = [0] * len(operations)
     for start, width in choices:
         lane_by_op[start:start + width] = range(width)
     contextual_service = [list(row) for row in service]
     contextual_samples = [[list(row) for row in samples] for samples in lane_samples]
+    post_join_samples = {}
+    if post_join_evidence is not None:
+        post_join_samples = dict(zip(post_join_evidence['operation_indices'],
+            zip(*post_join_evidence['consumer_samples_ns'], strict=True), strict=True))
     for i, samples in enumerate(zip(*context['replacement_operation_samples_ns'], strict=True)):
+        if i in post_join_samples:
+            samples = post_join_samples[i]
         if samples[0] is None:
             continue
         lane = lane_by_op[i]
@@ -358,7 +367,8 @@ def _price_numa_context(context, operations, cpus, service, handoffs, lane_sampl
     if group_evidence is not None:
         medians = dict(zip(starts, group_evidence['group_median_ns'], strict=True))
         groups = [dict(zip(starts, row, strict=True)) for row in group_evidence['group_samples_ns']]
-    timeline = _timeline(operations, cpus, contextual_service, handoffs, choices, storage, group_medians=medians)
+    timeline = _timeline(operations, cpus, contextual_service, handoffs, choices, storage,
+                         group_medians=medians, post_join_indices=post_join_samples)
     return timeline, _timeline_prediction(timeline, contextual_samples, handoff_samples, groups=groups)
 
 
@@ -371,13 +381,20 @@ def model_cpu_team(calibration, recipe, schedule, warmup, *, tensor_budget_bytes
     numa = model_aten_team_numa_locality(calibration.get('numa_team'), recipe, schedule, warmup,
                                         result_storage_bytes=calibration['result_storage_bytes'])
     concurrent = read_aten_team_group_evidence(calibration.get('concurrent_team'), recipe, schedule, warmup)
+    post_join = read_aten_post_join_evidence(calibration.get('post_join_team'), recipe, schedule, warmup)
     cross_numa = schedule.get('cross_numa') is True
     contexts = [] if numa is None else numa['contexts']
     group_contexts = {} if concurrent is None else {
         tuple(map(tuple, context['windows'])): context for context in concurrent['contexts']}
+    context_keys = [tuple(map(tuple, context['windows'])) for context in contexts]
     if concurrent is not None and (numa is None or concurrent['status'] != numa['status'] or
-            list(group_contexts) != [tuple(map(tuple, context['windows'])) for context in contexts]):
+                                   list(group_contexts) != context_keys):
         raise ValueError('team simultaneous timings and NUMA contexts describe different window sets')
+    post_join_contexts = {} if post_join is None else {
+        tuple(map(tuple, context['windows'])): context for context in post_join['contexts']}
+    if post_join is not None and (concurrent is None or post_join['status'] != concurrent['status'] or
+                                  list(post_join_contexts) != context_keys):
+        raise ValueError('team serial consumer timings and simultaneous timings describe different window sets')
     nodes = [lane['numa_node'] for lane in schedule['lanes']]
     if contexts:
         by_mode = {'SERIAL': []}
@@ -402,9 +419,17 @@ def model_cpu_team(calibration, recipe, schedule, warmup, *, tensor_budget_bytes
         if len(set(nodes[:widest])) > 1 and not context['complete_page_evidence']:
             cost['reason'] = 'CROSS_NUMA_PAGE_EVIDENCE_INCOMPLETE'
             continue
+        context_key = tuple(map(tuple, choices))
+        groups = group_contexts.get(context_key)
+        consumers = post_join_contexts.get(context_key)
         timeline, prediction = _price_numa_context(context, operations, schedule['cpus'], service, handoffs,
-                                                   lane_samples, handoff_samples, storage,
-                                                   group_evidence=group_contexts.get(tuple(map(tuple, choices))))
+            lane_samples, handoff_samples, storage, group_evidence=groups, post_join_evidence=consumers)
+        if consumers is not None and consumers['operation_indices']:
+            _, independent = _price_numa_context(context, operations, schedule['cpus'], service, handoffs,
+                lane_samples, handoff_samples, storage, group_evidence=groups)
+            cost.update(post_join_prediction=prediction, independent_consumer_prediction=independent)
+            prediction = dict(prediction, sample_min_ns=min(prediction['sample_min_ns'], independent['sample_min_ns']),
+                              sample_max_ns=max(prediction['sample_max_ns'], independent['sample_max_ns']))
         cost['prediction'] = prediction
         mode = _MODE_NAMES[widest - 1]
         score = (prediction['estimate_ns'], len(choices), choices)
@@ -427,6 +452,10 @@ def model_cpu_team(calibration, recipe, schedule, warmup, *, tensor_budget_bytes
                      numa_page_placement_modelled=bool(contexts and numa['sampled_node_residency_observed']))
     if concurrent is not None:
         model.update(concurrent_team=concurrent, concurrent_group_interaction_measured=bool(group_contexts))
+    if post_join is not None:
+        model['post_join_team'] = post_join
+        if any('post_join_prediction' in cost for cost in context_costs):
+            model['bounds'] = 'UNION_OF_CONSUMER_CALIBRATION_SPANS_NOT_PHYSICAL_BOUNDS'
     if cross_numa and 'THREE_CPU' not in predictions and (not contexts or any(
             cost.get('reason') == 'CROSS_NUMA_PAGE_EVIDENCE_INCOMPLETE' for cost in context_costs)):
         model['parallel_frontier'] = 'CROSS_NUMA_PAGE_CONTEXT_UNAVAILABLE'

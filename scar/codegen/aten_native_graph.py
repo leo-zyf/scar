@@ -86,7 +86,12 @@ def _render(recipe, operators, schedule=None, *, release_after):
     pair_support = ''
     if schedule is not None and 'legal_window_widths' in schedule:
         pair_include = f'#define SCAR_ATEN_TEAM 1\n#include "{_TEAM_HEADER.name}"\n'
-        pair_support = render_team_calls(calls, releases, outputs, schedule['legal_window_widths'])
+        producers = {op['id']: i for i, op in enumerate(recipe['operations'])}
+        dependencies = sorted({(producers[arg['value']], consumer)
+                               for consumer, op in enumerate(recipe['operations']) for arg in op['arguments']
+                               if arg.get('value') in producers})
+        pair_support = render_team_calls(calls, releases, outputs, schedule['legal_window_widths'],
+                                         dependencies=dependencies)
     elif schedule is not None:
         starts = {row['pair_indices'][0] for row in schedule['windows']}
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))

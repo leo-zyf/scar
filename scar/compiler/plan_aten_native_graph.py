@@ -374,9 +374,14 @@ def _verify_resource_segments(hardware, schedule, origin, evidence, timeline, st
     for i, segment in enumerate(timeline):
         mode = 'FORK_JOIN' if len(segment['operations']) > 1 else 'ORDERED'
         duration = segment['end_ns'] - segment['start_ns']
-        measured = segment.get('duration_basis') == 'MEASURED_CONCURRENT_FORK_JOIN'
-        cost_refs = (*refs, dict(artifact=evidence, locator='#/calibration/concurrent_team')) if measured else refs
-        basis = 'ATEN_MEASURED_CONCURRENT_FORK_JOIN' if measured else 'ATEN_SEGMENT_SERVICE_AND_HANDOFF'
+        measurement = segment.get('duration_basis')
+        sources = {'MEASURED_CONCURRENT_FORK_JOIN': 'concurrent_team',
+                   'MEASURED_POST_JOIN_CONSUMER': 'post_join_team'}
+        if measurement in sources:
+            cost_refs = (*refs, dict(artifact=evidence, locator='#/calibration/' + sources[measurement]))
+            basis = 'ATEN_' + measurement
+        else:
+            cost_refs, basis = refs, 'ATEN_SEGMENT_SERVICE_AND_HANDOFF'
         cost = CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', basis, cost_refs)
         demands = {resource.id: 1 for cpu in segment['cpu_ids'] for resource in domains[cpu]}
         workspace = {}

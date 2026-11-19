@@ -178,6 +178,8 @@ struct NumaTeamContext {
     PageSamples outputs;
     OperationRows services;
     std::vector<std::vector<std::int64_t>> group_samples;
+    std::vector<std::size_t> consumer_indices;
+    std::vector<std::vector<std::int64_t>> consumer_samples;
 };
 
 struct NumaTeam {
@@ -194,7 +196,7 @@ bool enumerate_windows(std::size_t next, Windows& windows, std::vector<NumaTeamC
             const auto storage_count = graph::input_count + (2 + contexts.size()) * graph::operation_count;
             if (contexts.size() == max_numa_contexts || storage_count > max_numa_storages) return false;
             windows.push_back({start, width});
-            contexts.push_back({windows, {}, {}, {}});
+            contexts.push_back({windows, {}, {}, {}, {}, {}});
             if (!enumerate_windows(start + width, windows, contexts)) return false;
             windows.pop_back();
         }
@@ -250,12 +252,31 @@ std::optional<NumaTeam> calibrate_numa(const SampleInputs& data, const Outputs& 
     return evidence;
 }
 
+std::vector<std::size_t> post_join_consumers(const Windows& windows) {
+    LaneEligibility grouped{};
+    for (const auto& [start, width] : windows) {
+        for (std::size_t lane = 0; lane < width; ++lane) grouped[start + lane] = true;
+    }
+    auto descendants = grouped;
+    for (const auto& [producer, consumer] : graph::team_data_edges) {
+        if (descendants[producer]) descendants[consumer] = true;
+    }
+    std::vector<std::size_t> consumers;
+    for (std::size_t op = 0; op < graph::operation_count; ++op) {
+        if (descendants[op] && !grouped[op]) consumers.push_back(op);
+    }
+    return consumers;
+}
+
 void calibrate_concurrent(const SampleInputs& data, const Outputs& reference, graph::CpuTeam& team,
                           ResultStorage& storage, std::vector<NumaTeamContext>& contexts, int warmup) {
     const auto& inputs = data.tensors;
     for (auto& context : contexts) {
         graph::WindowSelection selection{};
         for (const auto& [start, width] : context.windows) selection[start] = static_cast<std::uint8_t>(width);
+        context.consumer_indices = post_join_consumers(context.windows);
+        LaneEligibility timed_consumers{};
+        for (const auto op : context.consumer_indices) timed_consumers[op] = true;
         {
             // Qualify intermediate results on the concurrent path before entering the clocks.
             const auto observed = graph::run_parallel_observed(inputs, team, selection, [&](std::size_t op, auto&& call) {
@@ -267,8 +288,12 @@ void calibrate_concurrent(const SampleInputs& data, const Outputs& reference, gr
             check_outputs(inputs, reference, observed);
         }
         context.group_samples.resize(warmup);
-        for (auto& row : context.group_samples) {
+        context.consumer_samples.resize(warmup);
+        for (std::size_t sample = 0; sample < context.group_samples.size(); ++sample) {
+            auto& row = context.group_samples[sample];
+            auto& consumers = context.consumer_samples[sample];
             row.reserve(context.windows.size());
+            consumers.reserve(context.consumer_indices.size());
             const auto observed = graph::run_parallel_groups_observed(inputs, team, selection,
                 [](std::size_t, auto&& call) { return call(); },
                 [&](std::size_t start, std::size_t width, auto&& run) {
@@ -279,9 +304,23 @@ void calibrate_concurrent(const SampleInputs& data, const Outputs& reference, gr
                     const auto began = Clock::now();
                     run();
                     row.push_back(elapsed_ns(began));
+                },
+                [&](std::size_t op, auto&& call) {
+                    if (!timed_consumers[op]) return call();
+                    if (consumers.size() >= context.consumer_indices.size()
+                            || context.consumer_indices[consumers.size()] != op) {
+                        throw std::runtime_error("post-join consumers differ from static dependencies");
+                    }
+                    const auto began = Clock::now();
+                    auto value = call();
+                    consumers.push_back(elapsed_ns(began));
+                    return value;
                 });
             if (row.size() != context.windows.size()) {
                 throw std::runtime_error("concurrent team clock missed a window");
+            }
+            if (consumers.size() != context.consumer_indices.size()) {
+                throw std::runtime_error("concurrent team clock missed a post-join consumer");
             }
             data.check();
             check_outputs(inputs, reference, observed);
@@ -303,6 +342,15 @@ void emit_windows(const Windows& windows) {
     for (std::size_t i = 0; i < windows.size(); ++i) {
         if (i) std::cout << ',';
         emit_numbers(windows[i]);
+    }
+    std::cout << ']';
+}
+
+void emit_timing_rows(const std::vector<std::vector<std::int64_t>>& rows) {
+    std::cout << '[';
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (i) std::cout << ',';
+        emit_numbers(rows[i]);
     }
     std::cout << ']';
 }
@@ -344,12 +392,30 @@ void emit_concurrent(const std::optional<NumaTeam>& evidence) {
         const auto& context = evidence->contexts[i];
         std::cout << "{\"windows\":";
         emit_windows(context.windows);
-        std::cout << ",\"group_samples_ns\":[";
-        for (std::size_t j = 0; j < context.group_samples.size(); ++j) {
-            if (j) std::cout << ',';
-            emit_numbers(context.group_samples[j]);
-        }
-        std::cout << "]}";
+        std::cout << ",\"group_samples_ns\":";
+        emit_timing_rows(context.group_samples);
+        std::cout << '}';
+    }
+    std::cout << "]}";
+}
+
+void emit_post_join(const std::optional<NumaTeam>& evidence) {
+    std::cout << "{\"schema_version\":1,\"status\":";
+    if (!evidence) {
+        std::cout << "\"TEAM_CONTEXT_BUDGET_EXCEEDED\"}";
+        return;
+    }
+    std::cout << "\"MEASURED\",\"contexts\":[";
+    for (std::size_t i = 0; i < evidence->contexts.size(); ++i) {
+        if (i) std::cout << ',';
+        const auto& context = evidence->contexts[i];
+        std::cout << "{\"windows\":";
+        emit_windows(context.windows);
+        std::cout << ",\"operation_indices\":";
+        emit_numbers(context.consumer_indices);
+        std::cout << ",\"consumer_samples_ns\":";
+        emit_timing_rows(context.consumer_samples);
+        std::cout << '}';
     }
     std::cout << "]}";
 }
@@ -425,6 +491,8 @@ void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team
     emit_numa(numa);
     std::cout << ",\"concurrent_team\":";
     emit_concurrent(numa);
+    std::cout << ",\"post_join_team\":";
+    emit_post_join(numa);
     std::cout << "}}\n";
 }
 

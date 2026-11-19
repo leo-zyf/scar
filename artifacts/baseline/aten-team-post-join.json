@@ -1,0 +1,45 @@
+{
+  "experiment": "artifacts/current/experiments/aten-post-join-v1/memory",
+  "application": "24-step torchdiffeq RK4 with 100 MiB of float32 Tensor inputs in the parallel RHS group",
+  "cpu_ids": [14, 15, 16],
+  "window_groups": [[0, 3]],
+  "fixed_context_calibration": {
+    "group_and_handoff_median_ns": 19125639,
+    "post_join_consumers": ["call_1082", "call_1089"],
+    "post_join_consumer_medians_ns": [7294875, 7270392],
+    "same_samples_without_post_join_model_ns": 56381773,
+    "with_post_join_model_ns": 33690906,
+    "retained_calibration_span_ns": [33590932, 56652866],
+    "span_is_physical_bound": false
+  },
+  "unmodified_binary_balanced_holdout": {
+    "used_for_plan_selection": false,
+    "samples_per_order": 6,
+    "AB_parallel_median_ns": 54875537,
+    "BA_parallel_median_ns": 44986345,
+    "sha256": "f6069496a8f32196cbbaa94b3954ebc572a03d07d04b43bfb9ca21848b8daf3b"
+  },
+  "separate_instrumented_order_diagnostic": {
+    "used_for_plan_selection": false,
+    "samples_per_order": 6,
+    "AB": {"group_ns": 17793067.5, "consumer_ns": 36914971, "outside_clocks_ns": 15655.5},
+    "BA": {"group_ns": 8166178, "consumer_ns": 36850941.5, "outside_clocks_ns": 15339.5},
+    "sha256": "b292488cf969b3729c0b76303d96926645f6e83c820f41cbf9377332ae8b1f74"
+  },
+  "full_application_validation": {
+    "original_wall_ns": [11700160146, 11692001976, 11875931718],
+    "guarded_wall_ns": [9134993317, 9129800336, 9171547687],
+    "full_process_speedup": 1.2808066453892513,
+    "warmup_pairs": 1,
+    "measured_pairs": 3,
+    "native_calls_per_guarded_process": 96,
+    "fallback_calls": 0,
+    "matched_result_sha256": "7cd6347251e39202c3a7084e70b11e4f80209e983d3f0fa30c758c428839754e",
+    "validation_sha256": "df8695035c505541358cb63a869b730ceee15f7f6e09a0ad952808828c07428a"
+  },
+  "verified_final_delivery": {
+    "same_extension_and_execution_context_as_full_application_validation": true,
+    "selection_sha256": "b6588f1018ef61b4a466715e03fc96ce4f771680e76f9929b84bed28c4fed5d3",
+    "trial_sha256": "9e1fe6560a185f6f9f4b2cb2191fe2687a68fff4a1b645760a97e63bc43c4963"
+  }
+}
