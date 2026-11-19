@@ -23,7 +23,9 @@ def render_team_calls(calls, releases, outputs, legal_widths):
             parallel.append(f'{indent}if (windows[{index}] == {width}) {{')
             indices = range(index, index + width)
             closures = [f'[&] {{ {calls[i][0]} = {observed(i)}; }}' for i in indices]
-            parallel.append(f'{indent}    team.run({", ".join(closures)});')
+            parallel.extend((f'{indent}    observe_group({index}, {width}, [&] {{',
+                             f'{indent}        team.run({", ".join(closures)});',
+                             f'{indent}    }});'))
             parallel.extend(f'{indent}    {line}' for i in indices for line in releases[i])
             parallel.append(f'{indent}}} else {{')
             indent += '    '
@@ -49,9 +51,10 @@ inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Ten
     return {{{outputs}}};
 }}
 
-template <class Observer>
-inline std::array<at::Tensor, output_count> run_parallel_observed(
-        std::span<const at::Tensor> inputs, CpuTeam& team, const WindowSelection& windows, Observer&& observe) {{
+template <class Observer, class GroupObserver>
+inline std::array<at::Tensor, output_count> run_parallel_groups_observed(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const WindowSelection& windows,
+        Observer&& observe, GroupObserver&& observe_group) {{
     validate_inputs(inputs);
     for (std::size_t first = 0; first < operation_count; ++first) {{
         const auto width = windows[first];
@@ -65,6 +68,13 @@ inline std::array<at::Tensor, output_count> run_parallel_observed(
     }}
 {parallel_body}
     return {{{outputs}}};
+}}
+
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_parallel_observed(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const WindowSelection& windows, Observer&& observe) {{
+    return run_parallel_groups_observed(inputs, team, windows, std::forward<Observer>(observe),
+                                        [](std::size_t, std::size_t, auto&& run) {{ run(); }});
 }}
 
 inline std::array<at::Tensor, output_count> run_parallel(
