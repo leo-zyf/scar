@@ -100,8 +100,6 @@ public:
     Queues(const Queues&) = delete;
     Queues& operator=(const Queues&) = delete;
     ~Queues() {
-        // Keep caller storage in use until queued work has been drained, including when submission fails.
-        if (!joined_) for (auto stream : streams) if (stream) cudaStreamSynchronize(stream);
         for (auto event : events) if (event) cudaEventDestroy(event);
         for (auto stream : streams) if (stream) cudaStreamDestroy(stream);
     }
@@ -111,6 +109,10 @@ public:
         joined_ = true;
     }
 
+    void drain_noexcept() noexcept {
+        if (!joined_) for (auto stream : streams) if (stream) cudaStreamSynchronize(stream);
+    }
+
     std::vector<cudaStream_t> streams;
     std::vector<cudaEvent_t> events;
 
@@ -118,10 +120,24 @@ private:
     bool joined_ = false;
 };
 
+struct DrainQueuedWork {
+    Queues& queues;
+    ~DrainQueuedWork() { queues.drain_noexcept(); }
+};
+
+inline void enqueue_copy(cudaStream_t stream, std::size_t source, std::size_t destination,
+                         cudaMemcpyKind direction, std::span<const BufferSpec> specs,
+                         std::span<Buffer* const> buffers) {
+    check(cudaMemcpyAsync(buffers[destination]->data(), buffers[source]->data(),
+                          specs[source].size, direction, stream), "cudaMemcpyAsync");
+}
+
 // The generated plan owns the ordering. The caller owns non-overlapping buffers
 // and supplies their initial values before entering this synchronous boundary.
-inline void execute(int device, std::size_t stream_count, std::span<const BufferSpec> specs,
-                    std::span<const Step> steps, std::span<Buffer* const> buffers) {
+template <typename StepType, typename MakeDispatcher>
+void execute_queued(int device, std::size_t stream_count, std::span<const BufferSpec> specs,
+                    std::span<const StepType> steps, std::span<Buffer* const> buffers,
+                    MakeDispatcher make_dispatcher) {
     if (specs.size() != buffers.size()) throw std::invalid_argument("CUDA copy buffer count differs");
     std::unordered_set<Buffer*> identities;
     identities.reserve(buffers.size());
@@ -134,9 +150,13 @@ inline void execute(int device, std::size_t stream_count, std::span<const Buffer
     }
     DeviceScope scope(device);
     Queues queues(stream_count, steps.size());
+    auto dispatch = make_dispatcher();
+    // Drain before releasing provider state, and keep the streams alive until that state is gone.
+    const DrainQueuedWork drain{queues};
     for (auto& stream : queues.streams) {
         check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
     }
+    dispatch.prepare(queues.streams);
     for (std::size_t index = 0; index < steps.size(); ++index) {
         if (steps[index].record_completion) {
             check(cudaEventCreateWithFlags(&queues.events[index], cudaEventDisableTiming), "cudaEventCreateWithFlags");
@@ -148,13 +168,26 @@ inline void execute(int device, std::size_t stream_count, std::span<const Buffer
         for (const auto predecessor : step.wait_for) {
             check(cudaStreamWaitEvent(stream, queues.events[predecessor], 0), "cudaStreamWaitEvent");
         }
-        check(cudaMemcpyAsync(buffers[step.destination]->data(), buffers[step.source]->data(),
-                              specs[step.source].size, step.direction, stream), "cudaMemcpyAsync");
+        dispatch.enqueue(step, stream, specs, buffers);
         if (step.record_completion) {
             check(cudaEventRecord(queues.events[index], stream), "cudaEventRecord");
         }
     }
     queues.join();
+}
+
+struct CopyDispatcher {
+    void prepare(std::span<const cudaStream_t>) const {}
+
+    void enqueue(const Step& step, cudaStream_t stream, std::span<const BufferSpec> specs,
+                 std::span<Buffer* const> buffers) const {
+        enqueue_copy(stream, step.source, step.destination, step.direction, specs, buffers);
+    }
+};
+
+inline void execute(int device, std::size_t stream_count, std::span<const BufferSpec> specs,
+                    std::span<const Step> steps, std::span<Buffer* const> buffers) {
+    execute_queued(device, stream_count, specs, steps, buffers, [] { return CopyDispatcher{}; });
 }
 
 }  // namespace detail
