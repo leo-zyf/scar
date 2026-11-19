@@ -140,6 +140,22 @@
       "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/symbol-adapter-current/reissue.json",
       "sha256": "21d92af279226c72bb4d3f790f4ce2f4469f5eb78f53abfd0b89932b72763295",
       "size_bytes": 864
+    },
+    "typed_template_handoff": {
+      "comparison": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/typed-f4-leaf-replay.json",
+        "sha256": "068cadc20ec87e48d08afc06b8077244800de505f3d44de8c3f89c53f0aff69e",
+        "size_bytes": 475
+      },
+      "full_frontend_speedup_measured": false,
+      "input_archive_replayed_equal": true,
+      "legacy_external_wire_validation_preserved": true,
+      "production_readback": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/typed-f4-leaf-production.json",
+        "sha256": "62db984d0efe227b8dfc779c56601652fabea74b6a871629d6a3bb8d01f2390d",
+        "size_bytes": 301
+      },
+      "scope": "ONE_REAL_FIXED_GRID_F4_LEAF_PUBLICATION_AND_LINKING"
     }
   },
   "stage1_sparse": {

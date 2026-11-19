@@ -16,8 +16,8 @@ from scar.analysis import source_compiler_symbol_variants as S,source_compile_in
 from scar.analysis import source_expression_rules,source_statement_rules,source_root_rules,normal_graph,normal_links
 from scar.analysis.frontend_bindings import FrontendBindingView
 from scar.analysis.source_context_view import SourceContextView
-from scar.analysis.source_productions import ProductionSourceIndex,production_plan_document
-from scar.analysis.source_template_links import build_template_graph
+from scar.analysis.source_productions import ProductionSourceIndex
+from scar.analysis import source_template_links
 from scar.analysis.source_expression_materials import _WORLD,_implementation as recipe_implementation
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
@@ -61,7 +61,7 @@ def construct_graph(context,binding,native,topology,symbols,f0,f2,roles):
             if plans[key]!=plan:raise ValueError('conflicting context source plans')
             return
         plans[key]=plan
-        records[domain].append(production_plan_document(plan))
+        records[domain].append(plan)
         for step in plan.steps:
             ins=step.instruction
             if type(ins) is P.EvaluateChild and ins.purpose is P.ProductionPurpose.CONDITION:
@@ -94,8 +94,8 @@ def construct_graph(context,binding,native,topology,symbols,f0,f2,roles):
         add(domain,rule.build(occurrence,purpose))
     while pending:
         add(D.EXPRESSIONS,rules[D.EXPRESSIONS].build(pending.popleft(),P.ProductionPurpose.CONDITION))
-    graph=build_template_graph(context.namespace,f2,
-        ((domain,i,document) for domain,rows in records.items() for i,document in enumerate(rows,1)))
+    graph,records=source_template_links._build_template_graph_from_admitted_plans(context.namespace,f2,
+        ((domain,i,plan) for domain,rows in records.items() for i,plan in enumerate(rows,1)))
     interfaces=dict(nodes={n.key:n for n in graph.templates},links={(e.caller,e.step):e for e in graph.links})
     unit=dict(key=context.namespace,path=f0['path'])
     facts=normal_links._Facts(unit,f2,encode(binding.bindings),encode(binding.declarations),encode(roles),encode(context.material))

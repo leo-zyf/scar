@@ -99,13 +99,41 @@ def validate_state_sequence(plan):
 
 
 def build_template_graph(unit, syntax, records, *, max_visits=1_000_000):
-    """Consume (domain, one-based line, plan document), never parse source."""
+    """Check external plan documents before linking the original slots."""
+    def admit(_domain, _line, document):
+        plan = read_production_plan(document, max_visits=max_visits)
+        return plan, _digest(document)
+
+    return _link_template_graph(unit, syntax, records, admit)
+
+
+def _build_template_graph_from_admitted_plans(unit, syntax, records):
+    """Link the current producer's source-matched plans and return their wire rows."""
+    documents = {domain: [] for domain in T.SourceMaterialDomain}
+
+    def admit(domain, line, plan):
+        _require(type(plan) is P.SourceProductionPlan and line == len(documents[domain]) + 1,
+            unit, 'invalid admitted plan or original material line')
+        document = encode(plan, record_tags=P.PRODUCTION_RECORD_TAGS)
+        canonical = _json(document)[:-1]
+        # Each wire value occupies bytes in canonical JSON. For an unusually
+        # large record, retain the reader's exact wire visit budget.
+        if len(canonical) > 1_000_000:
+            read_production_plan(document)
+        documents[domain].append(document)
+        return plan, sha256(canonical).hexdigest()
+
+    graph = _link_template_graph(unit, syntax, records, admit)
+    return graph, documents
+
+
+def _link_template_graph(unit, syntax, records, admit):
     nodes = {}; contexts = {}; sites = []; common_input = common_profile = None
     syntax_digest = _digest(syntax)
-    for domain, line, document in records:
+    for domain, line, record in records:
         _require(type(domain) is T.SourceMaterialDomain and type(line) is int and line > 0,
             unit, 'invalid original material coordinates')
-        plan = read_production_plan(document, max_visits=max_visits)
+        plan, digest = admit(domain, line, record)
         validate_state_sequence(plan)
         _require(type(plan.source) is P.ProductionOccurrence and plan.profile is not None
             and plan.compilation_flow is not None, unit, 'expected a source-bound profiled occurrence template')
@@ -115,7 +143,6 @@ def build_template_graph(unit, syntax, records, *, max_visits=1_000_000):
             unit, 'templates mix source inputs or state/exception profiles')
         _require(plan.input.f2_sha256 == syntax_digest and plan.input.path == syntax['input']['path'], unit, 'original F2 input differs')
         key = T.SourceTemplateKey(plan.source.occurrence, plan.purpose)
-        digest = _digest(document)
         if key in nodes:
             _require(nodes[key].origin.plan_sha256 == digest, key, 'conflicting templates for the same source/purpose')
             continue
