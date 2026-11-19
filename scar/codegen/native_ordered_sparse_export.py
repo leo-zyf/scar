@@ -34,6 +34,8 @@ _DETACHED_SOURCE = 'detached-source.json'
 _STREAM_PLAN = 'stream.json'
 _STREAM_MAIN = 'scar_ordered_sparse.cpp'
 _STREAM_EXECUTABLE = 'scar_ordered_sparse'
+_RELEASE = 'scar.sparse-parallel-entry-selection'
+_RELEASE_FILE = 'release.json'
 _CXXFLAGS = ('-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic', '-Wl,-z,defs')
 
 
@@ -113,8 +115,23 @@ def _check_stream(directory, plan, transport, detached=None):
 
 
 @replay_transaction()
-def export_native_ordered(recipe, provider, out, *, detached=False):
+def export_native_ordered(recipe, provider, out, *, detached=False, release=None):
+    release_ref = None
+    if release is not None:
+        from scar.compiler.plan_sparse_parallel import qualify
+
+        release_ref = artifact_reference(release, _RELEASE)
+        selected = read_artifact(release_ref)
+        if recipe is not None or selected.get('decision') != 'PARALLEL' or selected.get('study_parallel') is not False:
+            raise ValueError('native delivery requires a published parallel selection')
+        with TemporaryDirectory(prefix='scar-ordered-qualification-') as check:
+            replayed = qualify(selected['study']['uri'], selected['validation']['uri'], check)
+            if read_artifact(replayed) != selected:
+                raise ValueError('sparse release differs from its replayed optimization decision')
+        recipe = selected['execution_recipe']['uri']
     recipe_ref = artifact_reference(recipe, RECIPE)
+    if release_ref is not None and recipe_ref != selected['execution_recipe']:
+        raise ValueError('sparse release lost its selected execution recipe')
     source = verify_sparse_parallel_recipe(read_artifact(recipe_ref))
     plan = project_native_ordered_resources(source)
     source_ref = source['artifacts']['detached']
@@ -161,6 +178,9 @@ def export_native_ordered(recipe, provider, out, *, detached=False):
         if detached:
             (directory / _DETACHED_SOURCE).write_bytes(read_artifact(source_ref, json_document=False))
             manifest['detached_source'] = _local(directory, _DETACHED_SOURCE, DETACHED_RECIPE)
+        if release_ref is not None:
+            (directory / _RELEASE_FILE).write_bytes(read_artifact(release_ref, json_document=False))
+            manifest['qualified_release'] = _local(directory, _RELEASE_FILE, _RELEASE)
         (directory / 'artifact.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         check_native_ordered_export(directory)
         if out.exists():
@@ -182,6 +202,24 @@ def check_native_ordered_export(path):
             or manifest['plan'] != _local(root, 'plan.json', PLAN)):
         raise ValueError('an ordered package member differs from its receipt')
     plan = read_artifact({**manifest['plan'], 'uri': str(root / 'plan.json')})
+    if 'qualified_release' in manifest:
+        release = manifest['qualified_release']
+        if release != _local(root, _RELEASE_FILE, _RELEASE):
+            raise ValueError('ordered package release differs from its local receipt')
+        selected = read_artifact({**release, 'uri': str(root / _RELEASE_FILE)})
+        dispatch, placement, case, memory = (plan[name] for name in ('dispatch', 'placement', 'case', 'memory'))
+        if (selected.get('decision') != 'PARALLEL' or selected.get('study_parallel') is not False
+                or selected['execution_recipe'] != manifest['recipe'] or selected['owner_cpu'] != placement['owner_cpu_id']
+                or selected['numa_node'] != placement['cpu_numa_node']
+                or selected['launch_cpu_ids'] != placement['launch_cpu_ids']
+                or selected['workers']['cpu_ids'] != placement['worker_cpu_ids']
+                or selected['workers']['window'] != dispatch['window']
+                or selected['workers']['address_space_limit_bytes'] != memory['worker_address_space_limit_bytes']
+                or selected['symbolic_budget_bytes'] != memory['per_worker_symbolic_budget_bytes']
+                or selected['memory_floor_bytes'] != memory['minimum_launch_headroom_bytes']
+                or selected['count'] != case['call_count']
+                or selected['matrix'] != {name: case[name] for name in ('size', 'nnz')}):
+            raise ValueError('ordered C++ schedule differs from the qualified release')
     closure_path = root / 'numeric' / verification['provider']['uri']
     closure = read_artifact({**verification['provider'], 'uri': str(closure_path)})
     operator, = [row for row in closure['members'] if row['path'] == closure['root']]
@@ -228,23 +266,26 @@ def rebuild_native_ordered_project(path, out):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recipe')
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument('--recipe')
+    choice.add_argument('--release', help='replay the published parallel decision before exporting its recipe')
     parser.add_argument('--provider')
     parser.add_argument('--out')
     parser.add_argument('--check')
     parser.add_argument('--rebuild-project', help='build a checked standalone export using the shared CMake project')
     parser.add_argument('--detached', action='store_true', help='export compact prepared inputs and scalar tickets')
     args = parser.parse_args(argv)
-    export = (args.recipe, args.provider, args.out)
-    if args.rebuild_project and args.out and not any((args.recipe, args.provider, args.check, args.detached)):
+    export = (args.recipe or args.release, args.provider, args.out)
+    if args.rebuild_project and args.out and not any((export[0], args.provider, args.check, args.detached)):
         print(json.dumps(rebuild_native_ordered_project(args.rebuild_project, args.out)))
     elif args.check and not any(export) and not args.detached and not args.rebuild_project:
         result = check_native_ordered_export(args.check)
         print(json.dumps(dict(verified=True, recipe_id=result['recipe_id'])))
     elif not args.check and all(export) and not args.rebuild_project:
-        print(json.dumps(export_native_ordered(*export, detached=args.detached)))
+        print(json.dumps(export_native_ordered(args.recipe, args.provider, args.out,
+            detached=args.detached, release=args.release)))
     else:
-        parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --recipe, --provider and --out')
+        parser.error('choose --check PACKAGE, --rebuild-project PACKAGE --out OUT, or supply --release or --recipe with --provider and --out')
     return 0
 
 
