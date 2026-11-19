@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from heapq import heappop, heappush
 
+from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS
 from scar.optimization.joint_planner import verify_execution_plan
 
 
@@ -13,6 +14,9 @@ _DIRECTIONS = {
     ('Device', 'Device'): 'cudaMemcpyDeviceToDevice',
 }
 _SGEMM = 'CUBLAS_SGEMM_F32_COLUMN_MAJOR_V1'
+_HOST_ATEN = 'LIBTORCH_ATEN_CPU_OUT_F32_V1'
+_RELU = FUNCTIONAL_EXPORT_SCHEMAS['aten.relu.default']
+_ADD = FUNCTIONAL_EXPORT_SCHEMAS['aten.add.Tensor']
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +97,14 @@ def render_cuda_cublas_schedule(problem, schedule, *, device, memory_kinds, stre
     return _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource)
 
 
+def render_cuda_hybrid_schedule(problem, schedule, *, device, memory_kinds, stream_channels, compute_resource,
+                                host_compute_resource):
+    """Emit a cuBLAS and LibTorch schedule with dependency-local host waits."""
+    if not isinstance(compute_resource, str) or not isinstance(host_compute_resource, str):
+        raise ValueError('hybrid scheduling needs bound device and host execution resources')
+    return _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource)
+
+
 def _sgemm_ports(mode, incoming, outgoing, output, destination):
     parameters = mode.parameters
     if (set(parameters) != {'left_edge', 'right_edge', 'rows', 'columns', 'reduction', 'completion'}
@@ -116,7 +128,60 @@ def _sgemm_ports(mode, incoming, outgoing, output, destination):
     return left, right, (rows, columns, reduction), workspace
 
 
-def _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource):
+def _matrix_geometry(shape):
+    if (type(shape) is not list or len(shape) != 2
+            or any(type(extent) is not int or not 0 < extent < 2**31 for extent in shape)
+            or 4 * shape[0] * shape[1] >= 2**63):
+        raise ValueError('ATen host ports require bounded contiguous FP32 matrices')
+    return tuple(shape)
+
+
+def _host_ports(mode, incoming, outgoing, output, destination):
+    parameters = mode.parameters
+    if (set(parameters) != {'schema', 'arguments', 'shape', 'completion'}
+            or parameters['completion'] != 'HOST_SYNCHRONOUS' or mode.workspace_bytes):
+        raise ValueError('ATen host operation requires a synchronous out-port contract')
+    schema = parameters['schema']
+    arguments = parameters['arguments']
+    if type(arguments) is not list or not (schema == _RELU and len(arguments) == 1
+                                            or schema == _ADD and len(arguments) == 3):
+        raise ValueError('ATen host operation has no qualified provider binding')
+    count = 1 if schema == _RELU else 2
+    inputs = {edge.id: edge for edge in incoming}
+    ports, edge_ids = [], set()
+    for arg in arguments[:count]:
+        if (type(arg) is not dict or set(arg) != {'edge', 'shape'}
+                or not isinstance(arg['edge'], str) or arg['edge'] not in inputs):
+            raise ValueError('ATen host argument differs from its ordered input edge')
+        edge = inputs[arg['edge']]
+        shape = _matrix_geometry(arg['shape'])
+        if edge.nbytes != 4 * shape[0] * shape[1] or edge.value == output:
+            raise ValueError('ATen host input has a different extent or aliases its output')
+        edge_ids.add(edge.id)
+        ports.append((edge.value, *shape))
+    result = _matrix_geometry(parameters['shape'])
+    if (edge_ids != inputs.keys() or mode.input_locations != dict.fromkeys((row[0] for row in ports), destination)
+            or any(edge.value != output or edge.nbytes != 4 * result[0] * result[1] for edge in outgoing)):
+        raise ValueError('ATen host materials do not match the full input and output contract')
+    alpha = None
+    if schema == _RELU:
+        expected = ports[0][1:]
+    else:
+        left, right = (port[1:] for port in ports)
+        if any(a != b and 1 not in (a, b) for a, b in zip(left, right, strict=True)):
+            raise ValueError('ATen add host arguments do not broadcast')
+        expected = tuple(map(max, zip(left, right, strict=True)))
+        scalar = arguments[-1]
+        if (type(scalar) is not dict or set(scalar) != {'scalar'} or type(scalar['scalar']) is not int
+                or not -(2**63) <= scalar['scalar'] < 2**63):
+            raise ValueError('ATen add requires a signed 64-bit integral alpha')
+        alpha = scalar['scalar']
+    if result != expected:
+        raise ValueError('ATen host provider result has a different projected shape')
+    return ('HostRelu' if schema == _RELU else 'HostAdd'), (*ports, (output, *result)), alpha
+
+
+def _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource=None):
     verify_execution_plan(problem, schedule)
     if type(device) is not int or not 0 <= device < 2**31:
         raise ValueError('CUDA copy lowering requires an explicit device ordinal')
@@ -133,6 +198,10 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
         raise ValueError('CUDA streams require exclusive planning channels')
     if compute_resource is not None and (compute_resource not in resources or resources[compute_resource].kind != 'EXECUTION'):
         raise ValueError('cuBLAS needs one bound CUDA execution resource')
+    if host_compute_resource is not None and (host_compute_resource == compute_resource
+            or host_compute_resource not in resources or resources[host_compute_resource].kind != 'EXECUTION'
+            or resources[host_compute_resource].capacity != 1):
+        raise ValueError('ATen hybrid host requires one exclusive synchronous execution resource')
 
     selected = {row['operation']: row for row in schedule['selected']}
     incoming = defaultdict(list)
@@ -163,9 +232,21 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
             returns.append(op.id)
             continue
         is_compute = mode.lowering == _SGEMM and compute_resource is not None
-        if ((mode.lowering != 'CUDA_MEMCPY_ASYNC' and not is_compute) or mode.cost.estimate_ns <= 0
+        is_host = mode.lowering == _HOST_ATEN and host_compute_resource is not None
+        if ((mode.lowering != 'CUDA_MEMCPY_ASYNC' and not (is_compute or is_host)) or mode.cost.estimate_ns <= 0
                 or not outgoing[op.id] or len(mode.output_locations) != 1):
             raise ValueError('CUDA operation requires positive service and a single explicit output material')
+        (output, destination), = mode.output_locations.items()
+        if is_host:
+            if mode.demands != {host_compute_resource: 1} or memory_kinds.get(destination) != 'PinnedHost':
+                raise ValueError('ATen host operation requires the host lane and pinned-host output')
+            operation, ports, alpha = _host_ports(mode, incoming[op.id], outgoing[op.id], output, destination)
+            for name, rows, columns in ports:
+                material(name, destination, 4 * rows * columns)
+            stream_keys[op.id] = host_compute_resource
+            operands[op.id] = operation, ports, alpha
+            operations.append((op, mode))
+            continue
         active = {name for name, units in mode.demands.items() if units}
         own = active & channels
         required = own | {compute_resource} if is_compute else own
@@ -173,7 +254,6 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
                 or any(resources[name].kind != 'BANDWIDTH_CLASS' for name in active - required)):
             raise ValueError('CUDA operations need one selected stream and their qualified device demands')
         stream_keys[op.id], = own
-        (output, destination), = mode.output_locations.items()
         if is_compute:
             if memory_kinds.get(destination) != 'Device':
                 raise ValueError('cuBLAS SGEMM requires bound device memory')
@@ -217,15 +297,21 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
         raise ValueError('CUDA buffers and workspaces cannot all remain allocated within the verified budget')
 
     operations.sort(key=lambda item: (selected[item[0].id]['start_ns'], item[0].id))
-    used_streams = tuple(sorted(set(stream_keys.values())))
+    used_streams = tuple(sorted(set(stream_keys.values()) - {host_compute_resource}))
     stream_indices = {key: index for index, key in enumerate(used_streams)}
+    host_index = len(used_streams)
+    if host_compute_resource is not None:
+        stream_indices[host_compute_resource] = host_index
     streams = [stream_indices[stream_keys[op.id]] for op, _ in operations]
     buffers = tuple(sorted(slots))
     buffer_indices = {key: index for index, key in enumerate(buffers)}
     waits = _completion_waits(operations, selected, streams, predecessors)
+    if host_compute_resource is not None:
+        # Synchronous caller work has completed before any later GPU submission.
+        waits = [tuple(prior for prior in row if streams[prior] != host_index) for row in waits]
     recorded = {prior for row in waits for prior in row}
 
-    provider = 'cublas' if workspaces else 'copy'
+    provider = 'hybrid' if host_compute_resource is not None else ('cublas' if workspaces else 'copy')
     lines = ['#pragma once', '', f'#include "cuda_{provider}_schedule_v1.h"', '#include <array>', '',
              'namespace scar_cuda_generated {', f'using namespace scar::cuda_{provider}_v1;', '',
              f'inline constexpr int device = {device};',
@@ -243,11 +329,18 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
             lines.append(f'inline constexpr std::array<std::size_t, {len(row)}> wait_{index}{{{entries}}};')
     lines.append(f'inline constexpr std::array<Step, {len(operations)}> steps{{{{')
     for index, (op, mode) in enumerate(operations):
-        values, parameters = operands[op.id]
-        operands_cpp = ', '.join(str(item) for item in (*[buffer_indices[name] for name in values], *parameters))
-        if workspaces:
-            alternative = 'MatrixMultiply' if mode.lowering == _SGEMM else 'Copy'
-            operands_cpp = f'{alternative}{{{operands_cpp}}}'
+        if mode.lowering == _HOST_ATEN:
+            operation, ports, alpha = operands[op.id]
+            fields = [f'{{{buffer_indices[name]}, {rows}, {columns}}}' for name, rows, columns in ports]
+            if alpha is not None:
+                fields.append(f'{alpha}LL' if alpha != -(2**63) else '(-9223372036854775807LL - 1LL)')
+            operands_cpp = operation + '{' + ', '.join(fields) + '}'
+        else:
+            values, parameters = operands[op.id]
+            operands_cpp = ', '.join(str(item) for item in (*[buffer_indices[name] for name in values], *parameters))
+            if workspaces:
+                alternative = 'MatrixMultiply' if mode.lowering == _SGEMM else 'Copy'
+                operands_cpp = f'{alternative}{{{operands_cpp}}}'
         dependency = f'wait_{index}' if waits[index] else '{}'
         record = 'true' if index in recorded else 'false'
         lines.append(f'    {{{streams[index]}, {operands_cpp}, {dependency}, {record}}},')

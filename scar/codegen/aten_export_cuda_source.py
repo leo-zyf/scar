@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from scar.codegen.cuda_copy_schedule import render_cuda_cublas_schedule
+from scar.codegen.cuda_copy_schedule import render_cuda_cublas_schedule, render_cuda_hybrid_schedule
 
 
 _ROOT = Path(__file__).parent
@@ -61,10 +61,16 @@ def _host_boundary(problem, schedule, memory_kinds):
 
 
 def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, stream_channels, compute_resource,
-                               input_ports, output_ports):
+                               input_ports, output_ports, host_compute_resource=None):
     """Emit an explicit-trial CUDA executable and its ordered file-to-buffer bindings."""
-    lowered = render_cuda_cublas_schedule(problem, schedule, device=device, memory_kinds=memory_kinds,
-                                          stream_channels=stream_channels, compute_resource=compute_resource)
+    kwargs = dict(device=device, memory_kinds=memory_kinds, stream_channels=stream_channels,
+                  compute_resource=compute_resource)
+    runtime_headers = _RUNTIME_HEADERS
+    if host_compute_resource is None:
+        lowered = render_cuda_cublas_schedule(problem, schedule, **kwargs)
+    else:
+        lowered = render_cuda_hybrid_schedule(problem, schedule, host_compute_resource=host_compute_resource, **kwargs)
+        runtime_headers += ('cuda_hybrid_schedule_v1.h',)
     indices = {value: index for index, value in enumerate(lowered.buffer_values)}
     input_bytes, output_bytes = _host_boundary(problem, schedule, memory_kinds)
     input_slots, inputs = _file_ports(input_ports, input_bytes, indices, 'input')
@@ -77,6 +83,18 @@ def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, strea
         raise ValueError('native file ABI template is missing its staged publisher')
     main = _TEMPLATE.read_text().replace('/* SCAR_FILE_PORTS */', inputs + '\n\n' + outputs)
     main = main.replace('/* SCAR_STAGED_FILE */', start + staging)
+    host_metrics = host_description = ''
+    count_waits = 'waits += step.wait_for.size();'
+    if host_compute_resource is not None:
+        host_metrics = '\n    std::size_t host_provider_calls = 0, host_waits = 0;'
+        count_waits = ('if (step.host()) {\n            ++host_provider_calls;\n'
+                       '            host_waits += step.wait_for.size();\n        } else {\n'
+                       '            waits += step.wait_for.size();\n        }')
+        host_description = ('\n              << ",\\\"host_provider_calls\\\":" << host_provider_calls'
+                            ' << ",\\\"host_waits\\\":" << host_waits')
+    main = main.replace('/* SCAR_HOST_METRICS */', host_metrics)
+    main = main.replace('/* SCAR_COUNT_WAITS */', count_waits)
+    main = main.replace('/* SCAR_HOST_DESCRIPTION */', host_description)
     sources = {'src/main.cpp': main, 'include/scar_generated/cuda_schedule.hpp': lowered.header,
-               **{f'src/{name}': (_ROOT / name).read_text() for name in _RUNTIME_HEADERS}}
+               **{f'src/{name}': (_ROOT / name).read_text() for name in runtime_headers}}
     return CudaExportSource(sources, input_slots, output_slots, lowered.buffer_values, lowered.stream_channels)

@@ -1,7 +1,6 @@
 """Plan a source-qualified FP32 matrix graph under a synthetic CUDA model."""
 
 from collections import defaultdict
-from dataclasses import replace
 from pathlib import PurePosixPath
 
 from scar.compiler.aten_export_cuda_source import SCHEMA as SOURCE_SCHEMA
@@ -12,7 +11,7 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
-from scar.optimization.material_routes import expand_material_route
+from scar.optimization.material_routes import expand_material_route, expand_shared_material_route
 
 
 OFFLINE_PROFILE = 'scar.aten-export-cuda-offline-profile'
@@ -22,17 +21,17 @@ _GPU = 'cuda:compute'
 _RETURN = '$return'
 
 
-def _profile_target(model, reference):
+def _profile_target(model, reference, *, schema=OFFLINE_PROFILE, extra_durations=()):
     keys = {'schema', 'schema_version', 'device', 'pinned_host_bytes', 'device_bytes',
             'workspace_bytes', 'model_durations_ns'}
-    if (type(model) is not dict or model.keys() != keys or model['schema'] != OFFLINE_PROFILE
+    if (type(model) is not dict or model.keys() != keys or model['schema'] != schema
             or type(model['schema_version']) is not int or model['schema_version'] != 1):
         raise ValueError('an explicit synthetic CUDA offline profile is required')
     amounts = [model[key] for key in ('pinned_host_bytes', 'device_bytes', 'workspace_bytes')]
     durations = model['model_durations_ns']
     if (type(model['device']) is not int or not 0 <= model['device'] < 2**31
             or any(type(size) is not int or not 0 < size < 2**63 for size in amounts) or amounts[-1] < 16384
-            or type(durations) is not dict or set(durations) != {'h2d', 'sgemm', 'd2h'}
+            or type(durations) is not dict or set(durations) != {'h2d', 'sgemm', 'd2h', *extra_durations}
             or any(type(ns) is not int or not 0 < ns < 2**60 for ns in durations.values())):
         raise ValueError('invalid CUDA offline device, storage, workspace or synthetic duration')
     if type(reference) is not dict or set(reference) != {'path', 'sha256', 'size_bytes'}:
@@ -52,29 +51,6 @@ def _matrix(row):
             or row['nbytes'] >= 2**63):
         raise ValueError('CUDA source matrix extent or byte count is outside the provider ABI')
     return shape
-
-
-def _share_external_upload(problem, edges, upload):
-    """Expand one producer route and bind all other consumers to its device output."""
-    first, *others = edges
-    problem = expand_material_route(problem, first, (upload,))
-    material = next(edge for edge in problem.data_edges if edge.id == first)
-    if not others:
-        return problem
-    others = set(others)
-    replacements = {edge.consumer: edge.value for edge in problem.data_edges if edge.id in others}
-    data = tuple(replace(edge, value=material.value, producer=material.producer, external_location=None)
-                 if edge.id in others else edge for edge in problem.data_edges)
-    tasks = []
-    for op in problem.operations:
-        if op.id in replacements:
-            mode, = op.options
-            locations = dict(mode.input_locations)
-            pool = locations.pop(replacements[op.id])
-            locations[material.value] = pool
-            op = replace(op, options=(replace(mode, input_locations=locations),))
-        tasks.append(op)
-    return replace(problem, operations=tuple(tasks), data_edges=data)
 
 
 def plan_cuda_export(projection, model, *, model_ref):
@@ -161,7 +137,7 @@ def plan_cuda_export(projection, model, *, model_ref):
     upload = TransferOption('h2d', _HOST, _DEVICE, {_UPLOAD: 1}, cost('h2d'), 'CUDA_MEMCPY_ASYNC', (profile_ref,))
     download = TransferOption('d2h', _DEVICE, _HOST, {_DOWNLOAD: 1}, cost('d2h'), 'CUDA_MEMCPY_ASYNC', (profile_ref,))
     for name in inputs:
-        problem = _share_external_upload(problem, uploads[name], upload)
+        problem = expand_shared_material_route(problem, uploads[name], (upload,))
     for name in outputs:
         problem = expand_material_route(problem, f'{_RETURN}:{name}', (download,))
     exported_materials = {edge.id: edge.value for edge in problem.data_edges if edge.consumer == _RETURN}

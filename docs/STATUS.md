@@ -1,5 +1,7 @@
 # 当前状态
 
+混合 `torch.export` 已接通设备分区、共享搬运、C++20 交付与离线重放。真实用例识别出两个 GPU 区域，统一计划含三个 cuBLAS 调用、三个 CPU ATen 调用、五次上传和两次下载。五个输出的 CPU 原生参考均与 PyTorch 逐位一致。混合产物通过编译链接，设备探测仍无可用 GPU，尚未实测混合执行正确性与性能。见 `artifacts/baseline/typed-hybrid-export-delivery.json`。
+
 真实 `torch.export` 的三个非方阵乘法已从类型化源图生成 CUDA C++20 候选。源图共享的四个外部值各上传一次，四个返回端口共用三次下载，内部中间值由设备上的下游算子直接读取。独立验收重放了源图、物理计划及 C++；同一输入的 CPU 原生产物四个输出均与 PyTorch 逐位一致。本机探测无可用 GPU，CUDA 实机结果、耗时及自动采用仍未验证。见 `artifacts/baseline/export-cuda-source-delivery.json`。
 
 CPU 推理现可按形状选用不同排程。一个动态 `torch.export` 模型交付为单个 C++20 程序，大形状采用同 NUMA 三核，小形状保留单核。大形状原生入口中位耗时为 1.261 s → 0.819 s，两个形状的输出均逐位一致。CUDA 侧已将 H2D、cuBLAS FP32 SGEMM 和 D2H 放进同一份物理计划，编译链接通过，实机尚缺可用设备。见 `artifacts/baseline/cpu-ready-and-cublas.json`。

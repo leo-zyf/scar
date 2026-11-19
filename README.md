@@ -42,6 +42,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar compile-exported-aten-cuda` 从 `torch.export` 构建连续行主序 FP32 `aten.mm` 图的 CUDA 候选。传入 `--model`、`--model-sha256`、`--cuda-model`、`--cuda-model-sha256` 和 `--out`。声明的 CUDA 假设模型只给离线规划提供容量与时间参数，实机时间保持 `UNKNOWN`，默认仍 `NO_OP`。产物用 `launch.sh --describe` 查看计划，用 `--probe` 检查设备。只有显式 `--trial` 才启动 GPU。`validate-native-project` 可离线重放源图、搬运、容量和 C++ 降低。[模型示例与验收记录](artifacts/baseline/export-cuda-source-delivery.json)。
 
+同一命令接收 `scar.aten-export-hybrid-offline-profile` 时，前端会从源图识别相连的 GPU 矩阵乘法区域，将受支持的二维 `relu` 和 `add.Tensor` 留在 CPU，并在同一物理计划中记录跨设备依赖。每个逻辑值到同一目标内存的搬运只安排一次。CPU 算子通过 LibTorch 写入预分配的固定页内存，GPU 侧调用 cuBLAS。当前候选仍采用声明成本。[混合模型示例与验收记录](artifacts/baseline/typed-hybrid-export-delivery.json)。
+
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。

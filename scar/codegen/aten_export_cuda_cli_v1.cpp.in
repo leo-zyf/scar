@@ -66,16 +66,16 @@ void write_ports(const std::array<FilePort, Count>& ports) {
 }
 
 void describe() {
-    std::size_t copies = 0, provider_calls = 0, waits = 0;
+    std::size_t copies = 0, provider_calls = 0, waits = 0;/* SCAR_HOST_METRICS */
     for (const auto& step : graph::steps) {
         copies += std::holds_alternative<graph::Copy>(step.operation);
         provider_calls += std::holds_alternative<graph::MatrixMultiply>(step.operation);
-        waits += step.wait_for.size();
+        /* SCAR_COUNT_WAITS */
     }
     std::cout << "{\"abi_version\":1,\"dtype\":\"float32\",\"layout\":\"row_major_contiguous\",\"byte_order\":\""
               << byte_order << "\",\"device\":" << graph::device << ",\"buffer_count\":" << graph::buffers.size()
               << ",\"stream_count\":" << graph::workspace_bytes.size() << ",\"copy_count\":" << copies
-              << ",\"provider_calls\":" << provider_calls << ",\"cross_stream_waits\":" << waits
+              << ",\"provider_calls\":" << provider_calls << ",\"cross_stream_waits\":" << waits/* SCAR_HOST_DESCRIPTION */
               << ",\"execution_requires_trial\":true,\"inputs\":[";
     write_ports(inputs);
     std::cout << "],\"outputs\":[";

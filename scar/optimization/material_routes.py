@@ -87,3 +87,48 @@ def expand_material_route(problem, edge_id, qualified_hops):
     return validate_problem(replace(problem,
         operations=(*[updated if row.id == consumer.id else row for row in problem.operations], *copies),
         data_edges=(*[row for row in problem.data_edges if row.id != edge.id], *data)))
+
+
+def expand_shared_material_route(problem, edge_ids, qualified_hops):
+    """Expand one crossing for uses of the same logical value at one destination."""
+    first, *others = edge_ids
+    original, = (edge for edge in problem.data_edges if edge.id == first)
+    problem = expand_material_route(problem, first, qualified_hops)
+    if not others:
+        return problem
+    edges = {edge.id: edge for edge in problem.data_edges}
+    material = edges[first]
+    operations = {op.id: op for op in problem.operations}
+    consumer = operations[material.consumer]
+    destinations = {mode.input_locations[material.value] for mode in consumer.options}
+    if len(destinations) != 1:
+        raise ValueError('shared crossing requires one fixed memory destination')
+    destination, = destinations
+    remaining = {edges[edge_id].consumer: edges[edge_id] for edge_id in others}
+    if len(remaining) != len(others) or material.consumer in remaining or first in others:
+        raise ValueError('shared crossing requires distinct consumers')
+    if any({mode.input_locations[edge.value] for mode in operations[edge.consumer].options} != {destination}
+           for edge in remaining.values()):
+        raise ValueError('shared crossing consumers must agree on the memory destination')
+    if any((edge.value, edge.nbytes) != (original.value, original.nbytes) for edge in remaining.values()):
+        raise ValueError('shared crossing consumers must read the same logical value and byte extent')
+    if material.value == original.value:
+        return problem
+    if any((edge.consumer in remaining and edge.value == material.value) for edge in problem.data_edges):
+        raise ValueError('shared crossing would bind two material ports at one consumer')
+    others = set(others)
+    data = tuple(replace(edge, value=material.value, producer=material.producer, external_location=None, transfers=())
+                 if edge.id in others else edge for edge in problem.data_edges)
+    tasks = []
+    for op in problem.operations:
+        if op.id in remaining:
+            old = remaining[op.id].value
+            options = []
+            for mode in op.options:
+                locations = dict(mode.input_locations)
+                del locations[old]
+                locations[material.value] = destination
+                options.append(replace(mode, input_locations=locations))
+            op = replace(op, options=tuple(options))
+        tasks.append(op)
+    return replace(problem, operations=tuple(tasks), data_edges=data)

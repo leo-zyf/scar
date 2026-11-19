@@ -909,7 +909,7 @@ def main(argv=None) -> int:
             ('compile-aten-entry', 'deliver and validate hardware-planned ATen from a discovered source region'),
             ('compile-aten-recurrence', 'lower a fixed-grid Tensor recurrence to a standalone C++20 executable'),
             ('compile-exported-aten', 'build standalone C++20 shape specializations from a functional torch.export graph'),
-            ('compile-exported-aten-cuda', 'build an offline C++20 CUDA candidate from a functional torch.export matrix graph'),
+            ('compile-exported-aten-cuda', 'build offline C++20 CUDA or hybrid candidates from functional torch.export graphs'),
             ('validate-native-project', 'replay the native project and compare an optional raw output reference'),
             ('plan-aten-capture', 'join original F4 and observed ATen ports into the common execution planner'),
             ('plan-aten-boundary', 'replay paired standalone ATen cost observations into hardware planning'),
