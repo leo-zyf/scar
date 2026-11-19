@@ -79,6 +79,53 @@ def _require_generated(member, generated):
         raise ValueError('generated C++ differs from the verified native schedule lowering')
 
 
+def _replay_exported_choice(member, files, base, execution, recipe, sizes, observation):
+    from scar.compiler.aten_export_placement import replay_export_cpu
+
+    ready = base + '/ready/'
+    proposal = json.loads(member(ready + 'proposal.json').read_bytes())
+    candidate = proposal['placement']
+    if candidate['cpu_ids'][0:1] != observation['cpu_ids']:
+        raise ValueError('inference ready candidate and serial baseline have different caller CPUs')
+    sampled = proposal['evidence'].get('inputs')
+    if sampled is not None:
+        user_receipts = iter(observation['inputs'])
+        expected = []
+        for port in execution['inputs']:
+            receipt = port if port['kind'] == 'WEIGHT' else next(user_receipts)
+            expected.append(dict(id=port['id'], sha256=receipt['sha256'], size_bytes=receipt['size_bytes']))
+        if sampled != expected:
+            raise ValueError('inference ready and serial costs bind different file contents')
+    physical_path, schedule_path = ready + 'problem.json', ready + 'schedule.json'
+    has_candidate_plan = physical_path in files
+    if has_candidate_plan != (schedule_path in files):
+        raise ValueError('inference ready candidate is missing a physical certificate')
+    candidate_problem = json.loads(member(physical_path).read_bytes()) if has_candidate_plan else None
+    candidate_schedule = json.loads(member(schedule_path).read_bytes()) if has_candidate_plan else None
+    replay_export_cpu(recipe, proposal['evidence'], origin=execution['program_graph'],
+        tensor_budget_bytes=execution['storage']['budget_bytes'],
+        result_bytes=[sizes[row['id']] for row in recipe['operations']],
+        problem=candidate_problem, schedule=candidate_schedule, placement=candidate,
+        evidence_path=ready + 'proposal.json')
+    placement = execution.get('placement')
+    comparison_path = ready + 'entry-comparison.json'
+    choice = 'SERIAL'
+    if candidate['mode'] == 'READY_DAG':
+        comparison = json.loads(member(comparison_path).read_bytes())
+        choice = replay_native_comparison(comparison, observation['outputs'])
+    elif comparison_path in files:
+        raise ValueError('serial inference has a comparison without an admitted ready candidate')
+    if choice == 'READY_DAG':
+        if (placement != candidate or execution['cpu_ids'] != candidate['cpu_ids']
+                or comparison['tested_files']['READY_DAG'] != {name: files[name]
+                    for name in ('bin/aten-inference', 'launch.sh')}
+                or any(files[base + '/' + name] != files[ready + name] for name in ('problem.json', 'schedule.json'))):
+            raise ValueError('native inference does not execute the verified ready placement')
+    elif placement is not None or execution['cpu_ids'] != observation['cpu_ids']:
+        raise ValueError('native inference differs from the replayed serial choice')
+    return placement
+
+
 def _replay_exported(member, manifest, base, label, graph, execution, document, problem):
     from scar.codegen.aten_export_source import render_exported_entry
     from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
@@ -116,7 +163,29 @@ def _replay_exported(member, manifest, base, label, graph, execution, document, 
     if codec.dumps(straight_line_graph(original, types)) != codec.dumps(graph):
         raise ValueError('inference recipe differs from its original typed program graph')
     storage = execution['storage']
-    cpu, = execution['cpu_ids']
+    cpu = execution['cpu_ids'][0]
+    schedule_path = base + '/schedule.json'
+    calibration_path = 'validation/calibration.json' if label is None else base + '/calibration.json'
+    observation = json.loads(member(calibration_path).read_bytes()) if schedule_path in files else None
+    placement = None
+    if manifest.get('cpu_ready_planned'):
+        if not observation:
+            raise ValueError('inference placement requires its measured serial baseline')
+        placement = _replay_exported_choice(member, files, base, execution, recipe, sizes, observation)
+    elif execution.get('placement') is not None:
+        raise ValueError('inference has an undeclared ready placement')
+    if placement is None and execution['cpu_ids'] != [cpu]:
+        raise ValueError('serial inference requires exactly one CPU')
+
+    serial_schedule_path = schedule_path
+    if placement is not None:
+        serial_problem_path = base + '/ready/serial-problem.json'
+        serial_schedule_path = base + '/ready/serial-schedule.json'
+        document = json.loads(member(serial_problem_path).read_bytes())
+        problem = problem_from_dict(document)
+        if (problem.source_refs != (execution['program_graph'],)
+                or problem.target.sha256 != execution['target']['sha256']):
+            raise ValueError('inference serial proof does not bind the same source graph and target')
     memory, = [resource for resource in problem.resources if resource.kind == 'MEMORY']
     operations = [row['id'] for row in recipe['operations']]
     produced = set(operations)
@@ -145,20 +214,18 @@ def _replay_exported(member, manifest, base, label, graph, execution, document, 
                 raise ValueError('inference weight does not match its packaged payload')
         elif row['kind'] != 'INPUT':
             raise ValueError('inference profile input kind is not part of the native file ABI')
-    schedule_path = base + '/schedule.json'
     if schedule_path in files:
-        calibration_path = 'validation/calibration.json' if label is None else base + '/calibration.json'
-        observation = json.loads(member(calibration_path).read_bytes())
-        if execution['cpu_ids'] != observation['cpu_ids']:
+        if observation['cpu_ids'] != [cpu]:
             raise ValueError('inference calibration and emitted placement differ')
         replay_operation_costs(problem, recipe, observation, dict(path=calibration_path, **files[calibration_path]))
-        schedule = json.loads(member(schedule_path).read_bytes())
+        schedule = json.loads(member(serial_schedule_path).read_bytes())
         lowered = scheduled_tensor_body(document, schedule, recipe)
         releases = lowered['release_after']
     else:
         lowered = recipe
         releases = storage['release_after']
-    _require_generated(member, render_exported_entry(lowered, execution['bindings'], releases, cpu, profile=label))
+    _require_generated(member, render_exported_entry(lowered, execution['bindings'], releases, cpu,
+                       profile=label, placement=placement))
     return schedule_path in files
 
 
@@ -172,11 +239,11 @@ def _replay_family(manifest, member):
 
     profiles = manifest['profiles']
     _require_generated(member, {'src/main.cpp': render_profile_dispatch(profiles)})
-    receipts, interface, assignments = {}, None, set()
+    receipts, interface, assignments, masks = {}, None, set(), {}
     for label in profiles:
         base = 'plan/profiles/' + label
         graph, execution, document, problem = _read_profile(member, manifest['files'], base)
-        signature = (execution['cpu_ids'], [row if row['kind'] == 'WEIGHT' else row['id']
+        signature = ([row if row['kind'] == 'WEIGHT' else row['id']
                      for row in execution['inputs']], len(execution['output_shapes']))
         assignment = tuple(sorted(execution['symbolic_profile'].items()))
         if (interface is not None and signature != interface) or assignment in assignments:
@@ -184,8 +251,15 @@ def _replay_family(manifest, member):
         interface = signature
         assignments.add(assignment)
         replayed = _replay_exported(member, manifest, base, label, graph, execution, document, problem)
+        masks[label] = execution['cpu_ids']
         receipts[label] = dict(_profile_receipt(graph, problem, replayed),
                                symbolic_profile=execution['symbolic_profile'])
+        if manifest.get('cpu_ready_planned'):
+            receipts[label]['cpu_ids'] = execution['cpu_ids']
+    if manifest.get('cpu_ready_planned'):
+        from scar.compiler.compile_exported_aten import _render_launch
+
+        _require_generated(member, {'launch.sh': _render_launch(execution['inputs'], len(execution['output_shapes']), masks)})
     all_measured = all(row['executed_schedule_replayed'] for row in receipts.values())
     if all_measured != manifest['body_calibrated']:
         raise ValueError('profile family calibration receipt differs from its manifest')
@@ -201,6 +275,11 @@ def _replay_single(manifest, member):
     if execution['schema'] == 'scar.native-tensor-entry-plan' and (
             'simplified_normal_completion' in manifest or 'plan/schedule.json' in files):
         replayed = _replay_exported(member, manifest, 'plan', None, graph, execution, document, problem)
+        if manifest.get('cpu_ready_planned'):
+            from scar.compiler.compile_exported_aten import _render_launch
+
+            _require_generated(member, {'launch.sh': _render_launch(execution['inputs'], len(execution['output_shapes']),
+                               {None: execution['cpu_ids']})})
     elif 'plan/schedule.json' in files:
         schedule = json.loads(member('plan/schedule.json').read_bytes())
         calibration_path = 'validation/calibration.json'
@@ -261,6 +340,11 @@ def verify_native_project(directory, manifest_sha256):
     for name, expected in files.items():
         if _content(member(name)) != expected:
             raise ValueError(f'native project member differs: {name}')
+    if manifest.get('cpu_ready_planned'):
+        from scar.compiler.compile_exported_aten import CPU_READY_SCOPE
+
+        if manifest['cpu_ready_scope'] != CPU_READY_SCOPE:
+            raise ValueError('inference CPU ready plan uses a different observable execution contract')
     receipt = _replay_family(manifest, member) if 'profiles' in manifest else _replay_single(manifest, member)
     executable = member(manifest['executable'])
     current = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={}))

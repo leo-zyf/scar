@@ -62,11 +62,11 @@ def operation_costs(observation, operations, evidence):
             for index, (op, samples) in enumerate(zip(operations, zip(*vectors, strict=True), strict=True))}
 
 
-def compare_native_projects(projects, arguments, scratch, expected):
+def compare_native_projects(projects, arguments, scratch, expected, *, output_count=1):
     runs, outputs = [], []
     for index in range(5):
         for mode in (_MODES if index % 2 == 0 else _MODES[::-1]):
-            elapsed, stdout, stderr, actual = run_native_sample(projects[mode], arguments, scratch)
+            elapsed, stdout, stderr, actual = run_native_sample(projects[mode], arguments, scratch, outputs=output_count)
             if actual != expected or stderr:
                 raise ValueError('paired native candidates must match the calibrated result and exit cleanly')
             runs.append(dict(pair=index, mode=mode, wall_ns=elapsed, returncode=0,

@@ -48,17 +48,25 @@ def _ready_bundle(path, digest):
     return artifact, origin, recipe, hardware, executable, artifact[key]
 
 
-def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, model, *, replica=None):
-    target, domains = _target(hardware, tuple(schedule['availability_mask']), allow_cpu_subset=True)
-    refs = (dict(artifact=origin, locator='#/cpu_team'), dict(artifact=evidence, locator='#/calibration'))
+def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, model, *, replica=None,
+                   program_graph=None, recorded_resources=None):
     storage = model['tensor_storage']
-    memory = _host_tensor_budget(hardware, storage['budget_bytes'], refs)
+    if program_graph is None:
+        refs = (dict(artifact=origin, locator='#/cpu_team'), dict(artifact=evidence, locator='#/calibration'))
+    else:
+        refs = (dict(artifact=evidence, locator='#/evidence/team'),
+                dict(artifact=evidence, locator='#/evidence/calibration/calibration'))
+    if recorded_resources is None:
+        target, domains = _target(hardware, tuple(schedule['availability_mask']), allow_cpu_subset=True)
+        memory = _host_tensor_budget(hardware, storage['budget_bytes'], refs)
+    else:
+        target, domains, memory = recorded_resources
     resources = (*[item for domain in domains.values() for item in domain], memory)
     inputs = {spec['id']: nbytes for spec, nbytes in
               zip(recipe['inputs'], calibration['input_storage_bytes'], strict=True)}
     outputs = {op['id']: nbytes for op, nbytes in
                zip(recipe['operations'], calibration['result_storage_bytes'], strict=True)}
-    join = '$ready-return'
+    join = '$ready-return' if program_graph is None else '$return'
     last_consumer = storage['accounting'] == 'RELEASE_ON_LAST_COMPLETED_CONSUMER'
     kept = set(recipe['outputs']) if last_consumer else outputs.keys()
     read = {model['timeline'][parent]['operation'] for parents in model['data_dependencies'] for parent in parents}
@@ -117,6 +125,8 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     for index in order:
         row, native = timeline[index], recipe['operations'][index]
         identifier = row['operation']
+        source_refs = refs if program_graph is None else (
+            dict(program_graph, operation=f'program_operation:entry/operation/{identifier}'),)
         prior = row['lane_predecessor']
         predecessors = () if prior is None else (timeline[prior]['operation'],)
         if replica is not None and prior is None and row['lane'] == copy['lane']:
@@ -131,7 +141,7 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
                 input_values.append(replica_value)
                 continue
             producer = value if value in outputs else None
-            edge_refs = refs
+            edge_refs = source_refs
             if locality is not None:
                 edge_refs = (*refs, dict(artifact=evidence, locator='#/calibration/ready_numa/' + page_index[value]),
                              dict(artifact=origin, locator=f"#/cpu_team/lanes/{row['lane']}"))
@@ -149,7 +159,7 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
             {identifier: memory.id} if has_consumer else {},
             CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', cost_context, cost_refs),
             dict(cpu_id=row['cpu_id'], lane=row['lane']))
-        operations.append(PlanningOperation(identifier, refs, predecessors, (option,), 'CPU_LANE'))
+        operations.append(PlanningOperation(identifier, source_refs, predecessors, (option,), 'CPU_LANE'))
         lane_ends[row['lane']] = identifier
     return_uses = ImplementationOption('RETURN', 'LOGICAL_TENSOR_RETENTION_ENDPOINT', refs,
         {}, {}, locations, {}, CostEstimate(0, 0, 0, 'DECLARED_MODEL', 'LOGICAL_ENDPOINT', refs),
@@ -168,7 +178,8 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         assumptions = (*assumptions, 'ONE_PRIVATE_INPUT_REPLICA_HELD_TO_RETURN')
         if retained:
             assumptions = (*assumptions, 'WARM_HIT_ON_ONE_PRIOR_PRIVATE_MAPPING_AFTER_EXACT_CONTENT_CHECK')
-    problem = PlanningProblem(target, refs, resources, tuple(operations), tuple(edges),
+    problem = PlanningProblem(target, refs if program_graph is None else (program_graph,),
+        resources, tuple(operations), tuple(edges),
         assumptions=assumptions,
         reserved_memory={memory.id: storage['persistent_input_bytes'] + (size if retained else 0)})
     execution = construct_implementations(problem)

@@ -6,6 +6,7 @@ from math import prod
 import os
 from pathlib import Path
 import shlex
+from shutil import copytree
 from tempfile import TemporaryDirectory
 
 from scar.analysis.target_graph import TargetHardwareGraph
@@ -15,7 +16,9 @@ from scar.codegen.native_project import build_native_project, write_native_proje
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import SCHEMA as RECIPE, normalize_recipe
 from scar.compiler.plan_aten_native_graph import _host_tensor_budget
-from scar.compiler.tensor_execution import calibrate_tensor_body, operation_costs, scheduled_tensor_body
+from scar.compiler.tensor_execution import (
+    calibrate_tensor_body, compare_native_projects, operation_costs, replay_native_comparison, scheduled_tensor_body,
+)
 from scar.compiler.tensor_physical_problem import tensor_physical_problem
 from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
 from scar.ir.implementation_plan import problem_from_dict
@@ -28,6 +31,7 @@ from scar.optimization.aten_tensor_lifetime import tensor_footprint
 
 
 SCHEMA = 'scar.native-exported-aten'
+CPU_READY_SCOPE = 'NORMAL_COMPLETION_STANDALONE_CPU_FLOAT32_FILE_ABI'
 _EXECUTABLE = 'aten-inference'
 
 
@@ -168,9 +172,9 @@ def _write_record(path, record):
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 
 
-def _write_launch(root, inputs, output_count, cpu, *, family):
+def _render_launch(inputs, output_count, placements):
     command = shlex.join(['env', '-i', 'PATH=/usr/bin:/bin', 'OMP_NUM_THREADS=1', 'MKL_NUM_THREADS=1',
-                          'taskset', '-c', str(cpu)])
+                          'taskset', '-c'])
     weights = [item for item in inputs if item['kind'] == 'WEIGHT']
     checks = '\n'.join(f'test "$(sha256sum < "$root/{item["path"]}" | cut -d " " -f 1)" = {item["sha256"]}'
                        for item in weights)
@@ -181,15 +185,21 @@ def _write_launch(root, inputs, output_count, cpu, *, family):
     count = len(inputs) - len(weights) + output_count
     setup = f'test "$#" -eq {count}\n'
     profile_argument = ''
-    if family:
+    if None not in placements:
         setup = f'test "$#" -eq {count + 1}\nprofile=$1\nshift\n'
         profile_argument = '"$profile" '
-    launch = root / 'launch.sh'
-    launch.write_text('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\nprobe=\n'
+    masks = {name: ','.join(map(str, cpus)) for name, cpus in placements.items()}
+    if len(set(masks.values())) == 1:
+        mask = next(iter(masks.values()))
+    else:
+        setup += 'case "$profile" in\n'
+        setup += ''.join(f'  {name}) mask={mask} ;;\n' for name, mask in masks.items())
+        setup += '  *) echo "unknown native inference profile" >&2; exit 2 ;;\nesac\n'
+        mask = '"$mask"'
+    return ('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\nprobe=\n'
         'if [ "${1:-}" = --calibrate ]; then probe=--calibrate; shift; fi\n'
-        f'{setup}{checks}\nexec {command} "$root/bin/{_EXECUTABLE}" {profile_argument}$probe '
+        f'{setup}{checks}\nexec {command} {mask} "$root/bin/{_EXECUTABLE}" {profile_argument}$probe '
         + ' '.join(arguments) + '\n')
-    launch.chmod(0o755)
 
 
 def _prepare_profile(root, label, recipe, shapes, symbols, weight_records, bindings, source, cpu,
@@ -256,8 +266,117 @@ def _plan_profile(root, label, plan, execution, recipe, shapes, sources, target,
         _write_record(plan / 'schedule.json', schedule)
 
 
+def _build_profiles(root, prepared, cpp_sources, toolchain, placements):
+    _, libraries, cxx, flags, links = toolchain
+    first = next(iter(prepared.values()))
+    launch = root / 'launch.sh'
+    launch.write_text(_render_launch(first[1]['inputs'], len(first[2]['outputs']), placements))
+    launch.chmod(0o755)
+    threads = ('-pthread',) if any(len(cpus) > 1 for cpus in placements.values()) else ()
+    write_native_project(root, _EXECUTABLE, sources=cpp_sources,
+        include_dirs=('src/providers', 'src/runtime') if threads else ('src/providers',),
+        compile_options=(*flags[1:], '-O2', *threads), link_options=(links[0], *threads),
+        libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),),
+        install_dirs=(('data', '.'),), install_launcher=True)
+    _, dependencies = build_native_project(root, _EXECUTABLE, cxx, expected_libraries=libraries)
+    return dependencies
+
+
+def _emit_ready(root, label, prepared, placement):
+    _, execution, recipe, _, _ = prepared[label]
+    files = render_exported_entry(recipe, execution['bindings'], execution['storage']['release_after'],
+                                  placement['cpu_ids'][0], profile=label, placement=placement)
+    for name, source in files.items():
+        path = root / name
+        path.parent.mkdir(exist_ok=True, parents=True)
+        path.write_text(source)
+
+
+def _select_ready_profiles(root, prepared, cpp_sources, toolchain, target, capacity, calibration,
+                           serial_dependencies):
+    from scar.compiler.aten_export_placement import plan_export_cpu
+
+    with TemporaryDirectory(prefix='.scar-export-placement-', dir=root.parent) as temporary:
+        scratch = Path(temporary)
+        placements, candidate_args = {}, {}
+        for index, (label, (plan, execution, recipe, shapes, _)) in enumerate(prepared.items()):
+            sample_paths = _calibration_paths(calibration[label], execution['inputs'])
+            calibration_name = root / 'validation/calibration.json' if label is None else plan / 'calibration.json'
+            observation = json.loads(calibration_name.read_bytes())
+            if observation['inputs'] != [dict(path=str(path), **_content(path)) for path in sample_paths]:
+                raise ValueError('CPU ready planning requires the exact serial calibration inputs')
+            by_port = iter(sample_paths)
+            inputs = [root / row['path'] if row['kind'] == 'WEIGHT' else next(by_port)
+                      for row in execution['inputs']]
+            serial_cpu, = execution['cpu_ids']
+            ready = plan / 'ready'
+            placement, evidence, problem, schedule = plan_export_cpu(recipe, target=target,
+                input_paths=inputs, tensor_budget_bytes=capacity, bindings=execution['bindings'],
+                toolchain=toolchain, build_root=scratch / f'probe-{index}', origin=execution['program_graph'],
+                serial_cpu=serial_cpu, result_bytes=[4 * prod(shapes[row['id']]) for row in recipe['operations']],
+                evidence_path=(ready / 'proposal.json').relative_to(root).as_posix())
+            ready.mkdir()
+            _write_record(ready / 'proposal.json', dict(placement=placement, evidence=evidence))
+            if problem is not None:
+                _write_record(ready / 'problem.json', problem)
+                _write_record(ready / 'schedule.json', schedule)
+            if placement['mode'] == 'READY_DAG':
+                placements[label] = placement
+                candidate_args[label] = sample_paths, observation
+
+        serial_masks = {label: items[1]['cpu_ids'] for label, items in prepared.items()}
+        # When a profile drops out, re-measure the reduced package before
+        # publishing it. Accepted evidence then binds the exact shipped ELF.
+        while placements:
+            with TemporaryDirectory(prefix='candidate-', dir=scratch) as trial_directory:
+                candidate = Path(trial_directory)
+                for directory in ('src', 'include'):
+                    copytree(root / directory, candidate / directory)
+                copytree(root / 'data', candidate / 'data', copy_function=os.link)
+                for label, placement in placements.items():
+                    _emit_ready(candidate, label, prepared, placement)
+                masks = dict(serial_masks)
+                masks.update({label: placement['cpu_ids'] for label, placement in placements.items()})
+                dependencies = _build_profiles(candidate, prepared, cpp_sources, toolchain, masks)
+                projects = {'SERIAL': root, 'READY_DAG': candidate}
+                tested_files = {mode: {name: _content(project / name) for name in ('bin/' + _EXECUTABLE, 'launch.sh')}
+                                for mode, project in projects.items()}
+                choices = {}
+                for label, placement in placements.items():
+                    plan, _, recipe, _, _ = prepared[label]
+                    paths, observation = candidate_args[label]
+                    arguments = ([label] if label is not None else []) + list(map(str, paths))
+                    comparison = compare_native_projects(projects, arguments, scratch, observation['outputs'],
+                                                         output_count=len(recipe['outputs']))
+                    if observation['inputs'] != [dict(path=str(path), **_content(path)) for path in paths]:
+                        raise ValueError('CPU ready comparison inputs changed during benchmarking')
+                    comparison['tested_files'] = tested_files
+                    _write_record(plan / 'ready/entry-comparison.json', comparison)
+                    if replay_native_comparison(comparison, observation['outputs']) == 'READY_DAG':
+                        choices[label] = placement
+                if choices.keys() != placements.keys():
+                    placements = choices
+                    continue
+                for label, placement in choices.items():
+                    _emit_ready(root, label, prepared, placement)
+                    plan, execution, _, _, _ = prepared[label]
+                    ready = plan / 'ready'
+                    for name in ('problem.json', 'schedule.json'):
+                        (plan / name).rename(ready / ('serial-' + name))
+                        (plan / name).write_bytes((ready / name).read_bytes())
+                    execution.update(cpu_ids=placement['cpu_ids'], schedule='DEPENDENCY_READY_CPU_TEAM',
+                        timing_basis='MEASURED_CPU_LANE_SERVICES_AND_ENTRY_COMPARISON', placement=placement)
+                    _write_record(plan / 'execution.json', execution)
+                for name in ('CMakeLists.txt', 'launch.sh', 'bin/' + _EXECUTABLE, 'validation/build.log',
+                             'validation/ldd.txt'):
+                    (candidate / name).replace(root / name)
+                return dependencies, choices
+        return serial_dependencies, {}
+
+
 def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_bytes, input_shapes=(),
-                          calibration_input=(), shape_profiles=(), simplify_normal_completion=False):
+                          calibration_input=(), shape_profiles=(), simplify_normal_completion=False,
+                          plan_cpu_ready=False):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -274,12 +393,15 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
     else:
         groups = {None: input_shapes}
         samples = {None: calibration_input}
+    if plan_cpu_ready and not all(samples.get(label) for label in groups):
+        raise ValueError('CPU ready planning requires calibration files for each inference profile')
     exported = torch.export.load(model)
     projected = {label: _project(exported, _shape_profiles(group), torch) for label, group in groups.items()}
     first_recipe, _, weights, _ = next(iter(projected.values()))
     if len({tuple(sorted(item[3].items())) for item in projected.values()}) != len(projected):
         raise ValueError('native profiles must select distinct symbolic assignments')
-    include, libraries, cxx, flags, links = _build_interface(torch)
+    toolchain = _build_interface(torch)
+    include, libraries = toolchain[:2]
     bindings = _resolve([row['schema'] for row in first_recipe['operations']], torch, include)
     inventory = TargetHardwareGraph(target)
     _, domain = recorded_cpu_domain(inventory)
@@ -316,14 +438,13 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
             sources.extend(f'src/profiles/{name}.cpp' for name in groups)
         providers = [dict(path=str(path), **_content(path)) for path in libraries]
         _write_record(pending / 'plan/dependencies.json', providers)
-        _write_launch(pending, next(iter(prepared.values()))[1]['inputs'], len(first_recipe['outputs']), cpu,
-                      family=bool(shape_profiles))
-        write_native_project(pending, _EXECUTABLE, sources=sources, include_dirs=('src/providers',), compile_options=(*flags[1:], '-O2'),
-            link_options=(links[0],), libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),),
-            install_dirs=(('data', '.'),), install_launcher=True)
-        _, dependencies = build_native_project(pending, _EXECUTABLE, cxx, expected_libraries=libraries)
+        dependencies = _build_profiles(pending, prepared, sources, toolchain, dict.fromkeys(groups, [cpu]))
         for label, artifacts in prepared.items():
             _plan_profile(pending, label, *artifacts, target, memory.capacity, samples.get(label))
+        ready = {}
+        if plan_cpu_ready:
+            dependencies, ready = _select_ready_profiles(pending, prepared, sources, toolchain, target,
+                memory.capacity, samples, dependencies)
         if _content(model) != original:
             raise ValueError('exported model changed during its native build')
         report = dict(schema=SCHEMA, schema_version=1, executable='bin/' + _EXECUTABLE,
@@ -335,6 +456,12 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
                    for path in sorted(pending.rglob('*')) if path.is_file()})
         if shape_profiles:
             report.update(status='STANDALONE_CPP20_SHAPE_FAMILY', profiles=list(groups))
+        if plan_cpu_ready:
+            report.update(cpu_ready_planned=True, cpu_ready_scope=CPU_READY_SCOPE,
+                selected='CPU_PROFILE_PLACEMENTS' if shape_profiles else
+                    ('READY_DAG_CPU_LIBTORCH' if ready else report['selected']),
+                performance_measured=any((items[0] / 'ready/entry-comparison.json').is_file()
+                                         for items in prepared.values()))
         _write_record(pending / 'artifact.json', report)
         pending.rename(out)
     return report
@@ -351,6 +478,8 @@ def main(argv=None):
                         help='register an explicit shape under a native dispatch name')
     parser.add_argument('--simplify-normal-completion', action='store_true',
                         help='apply structural rules under the native normal-completion contract')
+    parser.add_argument('--plan-cpu-ready', action='store_true',
+                        help='choose measured native parallel placement under the normal-completion contract')
     args = parser.parse_args(argv)
     kwargs = vars(args)
     kwargs['input_shapes'] = kwargs.pop('input_shape')

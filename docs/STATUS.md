@@ -1,5 +1,7 @@
 # 当前状态
 
+CPU 推理现可按形状选用不同排程。一个动态 `torch.export` 模型交付为单个 C++20 程序，大形状采用同 NUMA 三核，小形状保留单核。大形状原生入口中位耗时为 1.261 s → 0.819 s，两个形状的输出均逐位一致。CUDA 侧已将 H2D、cuBLAS FP32 SGEMM 和 D2H 放进同一份物理计划，编译链接通过，实机尚缺可用设备。见 `artifacts/baseline/cpu-ready-and-cublas.json`。
+
 单个 C++20 推理包已可按名称分派批次 2、4、8，三个形状分别通过成本、存储、生成代码与双输出逐位验收。按正常完成合同自动删除两次无消费者的算子调用，原图保留。固定步长求解包可用内置源码重新推导求解边界，RK4 16 步结果仍逐位一致。单 CUDA 设备的 pinned host 与 device 搬运计划已生成并链接 C++，实机缺少可用设备。各验证范围见 `artifacts/baseline/native-shape-and-copy-replay.json`。
 
 CPU 部署计划已接通算子标定、容量约束、C++20 生成及冷读验收。RK4 在 64 MiB 预算下采用三核，四步独立原生进程的中位耗时为 1.507 s → 0.788 s。40,000,000 B 预算下使用串行 C++。两种产物及自动推导求解参数的产物均通过 16 步原程序终态逐位验证。单形状 CPU 推理也通过标定计划及逐位验证。预算只计算图持有的 Tensor 存储。GPU/NPU 的实机排程和交付仍待验证。见 `artifacts/baseline/cpu-schedule-replay.json`。

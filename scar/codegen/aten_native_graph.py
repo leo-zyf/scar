@@ -63,7 +63,7 @@ def _argument(expression, values):
 
 
 def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False, ready_replica=False,
-            observe_serial=False, namespace='scar_aten_graph'):
+            observe_serial=False, namespace='scar_aten_graph', ready_dependencies=None):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -103,7 +103,23 @@ inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Ten
     return {{{outputs}}};
 }}
 '''
-    if schedule is not None and 'legal_window_widths' in schedule:
+    if ready_dependencies is not None:
+        if schedule is not None or observe_serial or ready_replica:
+            raise ValueError('direct ready lowering requires only the Tensor dependency graph')
+        from scar.codegen.aten_team_graph_source import render_ready_support
+
+        pair_include = f'#include "runtime/{_READY_HEADER.name}"\n'
+        producers = {op['id']: i for i, op in enumerate(recipe['operations'])}
+        dependencies = [(producer, consumer) for consumer, parents in enumerate(ready_dependencies)
+                        for producer in parents]
+        if namespace != 'scar_aten_graph':
+            pair_support = ('using scar_aten_graph::CpuTeam;\n'
+                            'using scar_aten_graph::execute_ready_dag;\n'
+                            'using scar_aten_graph::source_ready_order;\n')
+        pair_support += f'inline constexpr std::size_t operation_count = {len(calls)};\n'
+        pair_support += render_ready_support(calls, outputs, dependencies,
+            exported_indices=[producers[name] for name in recipe['outputs']])
+    elif schedule is not None and 'legal_window_widths' in schedule:
         pair_include = f'#define SCAR_ATEN_TEAM 1\n#include "{_TEAM_HEADER.name}"\n'
         producers = {op['id']: i for i, op in enumerate(recipe['operations'])}
         if ready_dag:
