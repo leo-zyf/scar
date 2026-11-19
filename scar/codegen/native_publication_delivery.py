@@ -130,7 +130,7 @@ def _build(directory, plan):
     (directory / 'scar_publish.cpp').write_bytes(_render(plan))
     directories = (*_ARMS, 'coo') if 'ingress' in plan else _ARMS
     write_native_project(directory, _TARGET, sources=('scar_publish.cpp',), compile_options=_FLAGS,
-        install_dirs=tuple((path, 'bin') for path in directories))
+        install_dirs=tuple((path, 'bin') for path in directories), preserve_install_permissions=True)
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
     executable, _ = build_native_project(directory, _TARGET, compiler)
     executable.rename(directory / _TARGET)

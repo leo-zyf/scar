@@ -23,7 +23,7 @@ def _cmake_arg(value):
 
 def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=(),
                          compile_options=(), link_options=(), libraries=(), runtime_dirs=(),
-                         install_dirs=(), install_launcher=False):
+                         install_dirs=(), install_launcher=False, preserve_install_permissions=False):
     """Write the shared project format with profile-specific source and link inputs."""
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
         raise ValueError('expected a CMake target name')
@@ -41,7 +41,8 @@ def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=
         lines.append(f'set_property(TARGET {name} PROPERTY INSTALL_RPATH {paths})')
     lines.append(f'install(TARGETS {name} RUNTIME DESTINATION bin)')
     for directory, destination in install_dirs:
-        lines.append(f'install(DIRECTORY {_cmake_arg(directory)} DESTINATION {_cmake_arg(destination)})')
+        permissions = ' USE_SOURCE_PERMISSIONS' if preserve_install_permissions else ''
+        lines.append(f'install(DIRECTORY {_cmake_arg(directory)} DESTINATION {_cmake_arg(destination)}{permissions})')
     if install_launcher:
         lines.append('install(PROGRAMS launch.sh DESTINATION .)')
     (root / 'CMakeLists.txt').write_text('\n'.join(lines) + '\n')
