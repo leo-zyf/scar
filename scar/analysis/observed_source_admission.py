@@ -13,7 +13,7 @@ import time
 
 from scar.analysis.source_declared_catalog import read_source_catalog, DeclaredSourceCatalog, _receipt, _check
 from scar.analysis.observed_source_catalog import ObservedSourceCatalog, SCHEMA, _FALSE
-from scar.analysis.observed_compiled_material import ObservedCompiledLocalMaterial, _LEGACY_V1_PRODUCER
+from scar.analysis.observed_compiled_material import ObservedCompiledLocalMaterial, _COMPATIBLE_V1_PRODUCERS
 from scar.analysis.observed_external_sources import ExternalSourceMatches, match_external_sources
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
@@ -77,8 +77,9 @@ def extend(catalog, materials, out):
         raise ValueError('external material batch did not publish complete matched scope coverage')
     from scar.analysis.external_source_materials import _pins
     pins = _pins()
-    legacy = {**pins, 'dependencies': {**pins['dependencies'], 'material': _LEGACY_V1_PRODUCER}}
-    if batch['pins'] not in (pins, legacy):raise ValueError('external material batch producer differs')
+    legacy = tuple({**pins, 'dependencies': {**pins['dependencies'], 'material': digest}}
+        for digest in _COMPATIBLE_V1_PRODUCERS)
+    if batch['pins'] not in (pins, *legacy):raise ValueError('external material batch producer differs')
     _check(batch['source_reader']);reader=ExternalSourceMatches(Path(batch['source_reader']['path']).parent)
     expected={(c['capture']['process_id'],c['capture']['code']['key'])
         for m in reader.matches for c in m['matched_captures']}

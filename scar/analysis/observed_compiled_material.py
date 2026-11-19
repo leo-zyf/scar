@@ -6,6 +6,7 @@ This format has no exec/read events, namespace solver or importable module grant
 """
 from collections import defaultdict
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import fields
 import gzip
 from hashlib import sha256
@@ -30,8 +31,11 @@ FACTS_FORMAT = 'OBSERVED_COMPILED_LOCAL_JSON'
 LOWERING = 'CODE_EQUIVALENT_REPLAY_NOT_ORIGINAL_REQUEST'
 _CLAIMS = ('target_executed', 'original_request_proven', 'runtime_namespace_proven',
     'source_body_activated', 'global_namespace_resolved', 'first_stage_complete')
-# The preceding v1 producer wrote the same canonical plan arrays and receipts.
-_LEGACY_V1_PRODUCER = '6c56d389738e99cb01ae4d05e32b58b3d36b0b7b9105b2d8c38f65a7bf779050'
+# These v1 producers wrote the same canonical plans and receipts.
+_COMPATIBLE_V1_PRODUCERS = (
+    '6c56d389738e99cb01ae4d05e32b58b3d36b0b7b9105b2d8c38f65a7bf779050',
+    'b64e9ba9651f689a0f87c4f4a04a0a8069aae4d5842b23b141847357bf81bf18',
+)
 
 
 def _pins():
@@ -197,16 +201,19 @@ class ObservedCompiledLocalMaterial:
     def __init__(self, path):
         self.path = self.root = Path(path).absolute()
         if self.path.resolve() != self.path: raise ValueError('canonical local material required')
-        self._report_raw = (self.path/'result.json').read_bytes()
+        self._report_path = self.path/'result.json'
+        self._report_raw = self._report_path.read_bytes()
         self.report = report = json.loads(self._report_raw)
         if ((report.get('schema'), report.get('schema_version')) != (SCHEMA, 1)
-                or report['implementation_sha256'] not in (_LEGACY_V1_PRODUCER, sha256(Path(__file__).read_bytes()).hexdigest())
+                or report['implementation_sha256'] not in (*_COMPATIBLE_V1_PRODUCERS,
+                    sha256(Path(__file__).read_bytes()).hexdigest())
                 or report['pins'] != _pins() or report['lowering'] != LOWERING
                 or set(report['claims']) != set(_CLAIMS) or any(report['claims'].values())):
             raise ValueError('local compiled material producer or contract differs')
         _recipe(report['recipe'])
         self.unit, self.source_unit = report['unit'], report['source_unit']
-        self._parents = {self.path/'result.json':self._report_raw}
+        self._report_snapshot = deepcopy(report)
+        self._parents = {self._report_path:self._report_raw}
         self._stamps = {}; self._plans = {}
         for descriptor in (*report['materials'].values(), *report['tables'].values(), report['snapshot']):
             self._read_raw(descriptor)
@@ -245,9 +252,10 @@ class ObservedCompiledLocalMaterial:
         return self._document(self.report['materials'][name])
 
     def validate_parents(self):
-        if (self.path/'result.json').read_bytes() != self._report_raw or json.loads(self._report_raw) != self.report:
+        if (self.path/'result.json' != self._report_path or self.report != self._report_snapshot
+                or self._report_path.read_bytes() != self._report_raw):
             raise ValueError('local compiled report changed')
-        if any(path.read_bytes() != raw for path,raw in self._parents.items()):
+        if any(path != self._report_path and path.read_bytes() != raw for path,raw in self._parents.items()):
             raise ValueError('local compiled parent changed')
         if any(_stamp(path) != stamp for path,stamp in self._stamps.items()):
             raise ValueError('local compiled material table changed')
