@@ -71,8 +71,28 @@ def _serial_evidence(reference, scope):
     return launch, study, recipe
 
 
+def _storage_requirements(size, nnz, window, cap, symbolic_budget):
+    structure = 4 * (nnz + size + 1)
+    per_window_input, per_window_output = window * 8 * (nnz + size), window * 8 * size
+    detached = 12 * nnz + 28 * size + 4
+    total_cap = window * cap
+    return dict(worker_address_space_limit_bytes=cap, per_worker_symbolic_budget_bytes=symbolic_budget,
+        worker_address_space_sum_bytes=total_cap, owner_pending_input_bytes=per_window_input,
+        owner_pending_result_bound_bytes=per_window_output, owner_structure_bytes=structure,
+        owner_detached_snapshot_bound_bytes=detached,
+        minimum_launch_headroom_bytes=total_cap + per_window_input + per_window_output + structure + detached,
+        worker_native_scratch_bound_bytes=None, owner_transient_scratch_bound_bytes=None,
+        physical_reservation=False, physical_numa_residency_proven=False)
+
+
 def _resources(artifacts, scope, count, symbolic_budget):
     choice = read_artifact(artifacts['choice'])
+    from .sparse_parallel_trial_choice import BASIS, check_trial_choice
+
+    if choice.get('basis') == BASIS:
+        _require(choice['parallel_scope'] == artifacts['parallel_scope']
+            and choice['serial_launch'] == artifacts['serial_launch'], 'calibration seed belongs to another sparse recipe')
+        check_trial_choice(artifacts['choice'])
     hardware = read_artifact(choice['hardware'])
     team = choice['choice']
     owner, workers, numa = team['owner_cpu_id'], team['worker_cpu_ids'], team['cpu_numa_node']
@@ -101,26 +121,16 @@ def _resources(artifacts, scope, count, symbolic_budget):
     structure = read_artifact(scope['solve_scope'])['sampled_values']['first_structure']
     indices, indptr = structure['indices'], structure['indptr']
     n, nnz = indptr['shape'][0] - 1, indices['shape'][0]
-    structure_bytes = 4 * (nnz + n + 1)
     _require(0 < n < 2**31 - 1 and 0 < nnz < 2**31 - 1
         and indices['shape'] == [nnz] and indptr['shape'] == [n + 1]
         and indices['dtype'] == indptr['dtype'] == '<i4'
         and indices['nbytes'] == 4 * nnz and indptr['nbytes'] == 4 * (n + 1),
         'the scaled CSR case must preserve the original 32-bit shape and exact structure extent')
-    input_bytes, result_bytes = window * 8 * (nnz + n), window * 8 * n
-    detached_bytes = 12 * nnz + 28 * n + 4
-    cap_sum = window * cap
     return dict(case=dict(call_count=count, size=n, nnz=nnz), hardware=choice['hardware'],
         selected_cpu=dict(owner_cpu_id=owner, worker_cpu_ids=workers, launch_cpu_ids=cpus, cpu_numa_node=numa),
         dispatch=dict(window=window, one_inflight_per_worker=True,
             courier_cpu_policy='INHERITED_OWNER_AFFINITY', worker_threads=1),
-        memory=dict(worker_address_space_limit_bytes=cap, per_worker_symbolic_budget_bytes=symbolic_budget,
-            worker_address_space_sum_bytes=cap_sum, owner_pending_input_bytes=input_bytes,
-            owner_pending_result_bound_bytes=result_bytes, owner_structure_bytes=structure_bytes,
-            owner_detached_snapshot_bound_bytes=detached_bytes,
-            minimum_launch_headroom_bytes=cap_sum + input_bytes + result_bytes + structure_bytes + detached_bytes,
-            worker_native_scratch_bound_bytes=None, owner_transient_scratch_bound_bytes=None,
-            physical_reservation=False, physical_numa_residency_proven=False))
+        memory=_storage_requirements(n, nnz, window, cap, symbolic_budget))
 
 
 def _schedule(operation, resources, symbols):

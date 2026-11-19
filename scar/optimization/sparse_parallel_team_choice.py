@@ -144,8 +144,8 @@ def _project(recipe, cost, width, anchor):
     return spans, components
 
 
-def derive_team_frontier(release_ref, hardware_ref):
-    """Project every nested width with the original owner and current core evidence."""
+def derive_team_frontier(release_ref, hardware_ref, *, minimum_width=None):
+    """Project nested widths with the original owner and current core evidence."""
     _require((release_ref.get('schema'), hardware_ref.get('schema')) == (RELEASE, HARDWARE),
         'a published ordered sparse selection and original hardware observation are required')
     release, recipe, cost = _anchor(release_ref)
@@ -154,11 +154,14 @@ def derive_team_frontier(release_ref, hardware_ref):
         and hardware['memory_placement_enforced'] is False, 'expected a non-reserving target inventory')
     workers = release['workers']['cpu_ids']
     width = len(workers)
+    floor = width if minimum_width is None else minimum_width
+    _require(type(floor) is int and 2 <= floor <= width,
+        'model width floor must cover at least two workers and the measured team')
     additions, excluded = _hardware_candidates(hardware, release)
     limit = min(release['count'], width + len(additions))
     alternatives, rejected = [], []
-    for slots in range(width, limit+1):
-        worker_ids = sorted([*workers, *additions[:slots-width]])
+    for slots in range(floor, limit+1):
+        worker_ids = sorted([*workers[:slots], *additions[:max(0, slots-width)]])
         capacity, reasons = _capacity(hardware, release, recipe, slots)
         row = dict(window=slots, worker_cpu_ids=worker_ids, capacity=capacity)
         if reasons:
@@ -170,7 +173,7 @@ def derive_team_frontier(release_ref, hardware_ref):
     expanded = [row for row in alternatives if row['window'] > width]
     selected = min(alternatives, key=rank, default=None)
     challenger = min(expanded, key=rank, default=None)
-    return dict(schema=SCHEMA, schema_version=1, released_selection=release_ref, hardware=hardware_ref,
+    result = dict(schema=SCHEMA, schema_version=1, released_selection=release_ref, hardware=hardware_ref,
         calibration_seed=release['cost'], parallel_scope=release['source'], source_scope=cost['source_scope'],
         execution_recipe=release['execution_recipe'], native=release['native'],
         case=recipe['resources']['case'], owner_cpu_id=release['owner_cpu'], cpu_numa_node=release['numa_node'],
@@ -185,6 +188,11 @@ def derive_team_frontier(release_ref, hardware_ref):
             loop_services_frozen_from_anchor=True, service_interval_is_observed_sample_envelope=True,
             fresh_live_resource_preflight_required=True, bandwidth_and_contention_unmodeled=True,
             whole_entry_optimality_proven=False))
+    if minimum_width is not None:
+        result['minimum_width'] = floor
+    if floor < width:
+        result['qualification']['layout_space'] = 'NESTED_PREFIX_OF_PUBLISHED_TEAM_THEN_ADD_INDEPENDENT_CPUS'
+    return result
 
 
 def _choice(frontier_ref, frontier):
@@ -192,6 +200,16 @@ def _choice(frontier_ref, frontier):
     _require(row is not None, 'no wider configuration passed the frozen target capacity checks')
     cost = read_artifact(frontier['calibration_seed'])
     previous_choice = read_artifact(cost['choice'])
+    if 'scope_baseline' in previous_choice:
+        seed = {'scope_baseline': previous_choice['scope_baseline']}
+    else:
+        from .sparse_parallel_trial_choice import BASIS
+
+        capacity_seed = previous_choice.get('capacity_seed', cost['choice'])
+        original = read_artifact(capacity_seed)
+        _require(original.get('basis') == BASIS and original['parallel_scope'] == frontier['parallel_scope'],
+            'challenger requires the original same-scope capacity seed')
+        seed = {'capacity_seed': capacity_seed}
     window = row['window']
     base = frontier['baseline']['window']
     capacity = row['capacity']
@@ -209,7 +227,7 @@ def _choice(frontier_ref, frontier):
     saturation = -(-worker_service//owner_service)
     return dict(schema=CHOICE, schema_version=1, hardware=frontier['hardware'], team_frontier=frontier_ref,
         released_selection=frontier['released_selection'], parallel_scope=frontier['parallel_scope'],
-        calibration_seed=frontier['calibration_seed'], scope_baseline=previous_choice['scope_baseline'],
+        calibration_seed=frontier['calibration_seed'], **seed,
         owner_service_seed_ns=owner_service, worker_service_seed_ns=worker_service,
         empirical_resource_reservation=False, worker_set_order='RETAIN_PUBLISHED_TEAM_THEN_ASCENDING_INDEPENDENT_CPU',
         dimensions=dict(call_count=frontier['case']['call_count'], max_ordered_window=frontier['physical_worker_limit']),
@@ -229,11 +247,12 @@ def _reference(value, schema):
 
 
 def check(value):
-    """Recompute the frontier from frozen original admission, hardware and raw W8 clocks."""
+    """Recompute the frontier from the original admission, hardware and team clocks."""
     reference = _reference(value, SCHEMA)
     _require(reference['schema'] == SCHEMA, 'expected an ordered sparse team frontier')
     result = read_artifact(reference)
-    _require(result == derive_team_frontier(result['released_selection'], result['hardware']),
+    _require(result == derive_team_frontier(result['released_selection'], result['hardware'],
+        minimum_width=result.get('minimum_width')),
         'saved team frontier differs from forward hardware and measured anchor replay')
     return result
 
@@ -256,7 +275,7 @@ def _write(path, value):
     return artifact_reference(path, value['schema'])
 
 
-def publish(release, hardware, out, *, cpu_ids=None):
+def publish(release, hardware, out, *, cpu_ids=None, minimum_width=None):
     directory = Path(out).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     release = _reference(release, RELEASE)
@@ -265,7 +284,7 @@ def publish(release, hardware, out, *, cpu_ids=None):
         hardware = _write(directory/'hardware.json', calibration.collect_hardware(cpu_ids))
     else:
         hardware = _reference(hardware, HARDWARE)
-    frontier = derive_team_frontier(release, hardware)
+    frontier = derive_team_frontier(release, hardware, minimum_width=minimum_width)
     frontier_ref = _write(directory/'frontier.json', frontier)
     choice_ref = None if frontier['fresh_challenger'] is None else _write(directory/'choice.json', _choice(frontier_ref, frontier))
     return dict(frontier=frontier_ref, choice=choice_ref)
@@ -278,16 +297,17 @@ def main(argv=None):
     hardware.add_argument('--hardware')
     hardware.add_argument('--cpu-ids', type=_cpu_list)
     parser.add_argument('--out')
+    parser.add_argument('--min-width', type=int, help='include nested prefixes of the measured team down to this width')
     checks = parser.add_mutually_exclusive_group()
     checks.add_argument('--check')
     checks.add_argument('--check-choice')
     args = parser.parse_args(argv)
     if args.check or args.check_choice:
-        if any((args.release, args.out, args.hardware, args.cpu_ids)):
+        if any((args.release, args.out, args.hardware, args.cpu_ids)) or args.min_width is not None:
             parser.error('a check accepts only its saved receipt')
         result = check(args.check) if args.check else check_choice(args.check_choice)
     elif args.release and args.out and (args.hardware or args.cpu_ids):
-        result = publish(args.release, args.hardware, args.out, cpu_ids=args.cpu_ids)
+        result = publish(args.release, args.hardware, args.out, cpu_ids=args.cpu_ids, minimum_width=args.min_width)
     else:
         parser.error('use --release with --hardware or --cpu-ids, and --out')
     print(json.dumps(result, sort_keys=True))
