@@ -1,0 +1,208 @@
+{
+  "schema": "scar.cpu-focused-entry-and-digest-publication",
+  "schema_version": 1,
+  "stage1": {
+    "entry_graph": {
+      "bytes": 2327100,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/joined/entry-calls-bounded-replay-main-v1.json",
+      "sha256": "6505d08240a21baa6a9b8625f9c8e96b9be775da2c152526c5762efa5ac81ffb"
+    },
+    "expanded_dynamic_units": 6,
+    "expanded_static_catalog": {
+      "bytes": 1191,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/combined/catalog/result.json",
+      "sha256": "acd07d303f78da189cac45cf708d7238063c3bce1bd8df5c7763bf7d95a1e16a"
+    },
+    "expanded_static_units": 8,
+    "interprocedural_summary": {
+      "functions": 17,
+      "manifest": {
+        "bytes": 157986,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/joined/source-summary-tables-v1.json",
+        "sha256": "7edbad1ff898c6c06ba378df60aad5cdb032f39485b14fa56a3ca226d6fe30c6"
+      },
+      "original_json_bytes": 88724462,
+      "readback": {
+        "bytes": 442,
+        "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/joined/source-summary-tables-v1-check.log",
+        "sha256": "5e74e5100a4a63ea35936f08dcb682c082ede609674aa29bb0849d07a60a172d"
+      },
+      "same_decoded_records": true,
+      "selected_source_summary_cli_verified": true,
+      "total_archive_bytes": 9699299,
+      "typed_shards": 22,
+      "whole_application_complete": false
+    },
+    "legacy_entry_admission": {
+      "bytes": 2503,
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/f4-reader-version-audit-v1/result-sparse.json",
+      "sha256": "25ab1a497b3148b5cccaaa021c43ce5523446666f768fdf8d5603d263e5fecf3"
+    },
+    "legacy_reader": {
+      "bytes": 4049,
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/f4-reader-version-audit-v1/result-legacy.json",
+      "sha256": "bfc8ab3ea04c89c5b2255166d6ed0711333fd05c8b75db4734840ad5a4381c7a"
+    },
+    "legacy_target_and_resources": {
+      "bytes": 6411,
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/f4-reader-version-audit-v1/result-resources.json",
+      "sha256": "6bfb147261ad9dbee6cb5ab1e97598eb4dd3e92cf42482753c6b889e947ccbf0"
+    },
+    "newly_demanded_sources": [
+      "/home/zyf/AAA/scikit-fem/skfem/assembly/form/coo_data.py",
+      "/home/zyf/AAA/scikit-fem/skfem/mesh/mesh_tri_1.py"
+    ],
+    "program": {
+      "bytes": 15059,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/joined/program-bounded-replay-main-v1/manifest.json",
+      "sha256": "0b7abad6285756d6c726b049baaea71d6f27553e8f59fb11e8a031b47b921a99"
+    },
+    "released_owner_cost_cold_replay": {
+      "bytes": 75,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/owner-live-cost-v3/read-after-version-v1.log",
+      "sha256": "61ca4b11872b0397848b3c7f942d18893880bc24ac50ecbbd6aa2b7eb7cd3480"
+    },
+    "return_producer_demands": {
+      "bytes": 23527,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/joined/source-summary-return-demands-v1.json",
+      "sha256": "35f73cd70a3bdef56ac19902587cbd5bdbed6ba673f49ed05fb3f1673d095605"
+    },
+    "return_producer_frontend": {
+      "bytes": 3421,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/entry-upstream-frontend-v1/transitive-return-producers-v1/selected-frontend/result.json",
+      "sha256": "5be19cb80f09ae163f793ac6cb0ccb28bcfea3ef00380510f976c407e6cbea68"
+    },
+    "summary": {
+      "all_bounded_source_interfaces": 28,
+      "catalog_units": 6,
+      "entry_conditional_interfaces": 28,
+      "entry_projection_units": 6,
+      "entry_reachable_observed_attempts": 90,
+      "entry_static_call_templates": 206,
+      "entry_static_scopes": 18,
+      "observed_attempts": 97,
+      "observed_target_frontiers": {
+        "OBSERVED_CALLABLE_REQUIRES_OTHER_CALL_PROTOCOL": 51,
+        "OBSERVED_PYTHON_BODY_OUTSIDE_ADMITTED_CATALOG": 24
+      },
+      "observed_target_kinds": {
+        "BOUND_PYTHON_METHOD": 2,
+        "NATIVE_CARRIER": 29,
+        "OTHER_CALLABLE": 6,
+        "PYTHON_FUNCTION": 44,
+        "TYPE_OBJECT": 16
+      },
+      "preparation_loaded_units": 6,
+      "shared_source_bodies": 17,
+      "typed_route_edges": 231,
+      "typed_route_kinds": {
+        "ARGUMENT": 36,
+        "CALL_TARGET": 28,
+        "COMPLETION": 28,
+        "ENVIRONMENT": 28,
+        "PROJECTION": 55,
+        "STATE_INTERFACE": 56
+      }
+    },
+    "unchanged_relative_to_isolated_replay_except": [
+      "producer",
+      "program"
+    ]
+  },
+  "stage2": {
+    "cold_replay": {
+      "bytes": 29,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/publication-choice-v1/checked-main.log",
+      "sha256": "8c6fd9562ed0d2d662cb7127d9e1d66fe857612389e5b968052fa7e456ff268d"
+    },
+    "decision": {
+      "bytes": 2357,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/publication-choice-v1/result.json",
+      "sha256": "5b7e989dd7b38afa2ce5bb1ed04fa2abc893cb405d5cb7093be4c65fbc04e878"
+    },
+    "design": {
+      "bytes": 10419,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/publication-choice-v1/design.json",
+      "sha256": "eacf79f63cac954c9639d64948315620d2c41c80a41ac12d01a2c68221aaedcc"
+    },
+    "forward_cost": {
+      "actual_pipe_occupancy_bytes": null,
+      "binary_total_ns": null,
+      "conclusion": "FUSED_REDUCES_FRAMED_TRAFFIC; TIMING_REQUIRES_MATCHED_MEASUREMENT",
+      "fused_total_ns": null,
+      "native_process_startup_and_crypto_initialization_ns": null,
+      "native_publish_service_ns": null,
+      "pipe_service_ns": null,
+      "status": "PARTIAL",
+      "worker_duration_change_from_backpressure_ns": null
+    },
+    "fused_profitable_with_measured_samples": false,
+    "observations": {
+      "bytes": 10006,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/publication-choice-v1/observations.json",
+      "sha256": "a6ea227be80bdd2f758402fdfb928c96739197adea97612bb5700fc667673871"
+    },
+    "pipe_bytes_removed_if_fused": 17313864,
+    "selected": "BINARY_NATIVE_CONSUMER",
+    "timings": {
+      "arms": {
+        "BINARY_NATIVE_CONSUMER": {
+          "bound_kind": "observed_sample_envelope",
+          "estimate_ns": 981350486,
+          "lower_ns": 972544730,
+          "samples": 5,
+          "upper_ns": 991541679,
+          "variance_ns2": 59706821675058.7
+        },
+        "IN_PROCESS_SHA256": {
+          "bound_kind": "observed_sample_envelope",
+          "estimate_ns": 992148470,
+          "lower_ns": 986840736,
+          "samples": 5,
+          "upper_ns": 1006040555,
+          "variance_ns2": 58386157486344.8
+        }
+      },
+      "bound_scope": "OBSERVED_SAMPLES_ONLY",
+      "full_python_entry": false,
+      "measured_output_bytes": 65,
+      "minimum_reduction_basis_points": 200,
+      "observed_worst_reduction_basis_points": -345,
+      "paired_reduction_ns": {
+        "bound_kind": "observed_sample_envelope",
+        "estimate_ns": -14296006,
+        "lower_ns": -24690069,
+        "samples": 5,
+        "upper_ns": -48487
+      },
+      "same_exact_stdout": true,
+      "same_no_stderr": true
+    }
+  },
+  "stage3": {
+    "acceptance": {
+      "bytes": 6250,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/acceptance.json",
+      "sha256": "74e3f1a03b9aa66610bac79e249e62a685a60768eb059e34baa66a507e28e67d"
+    },
+    "contract": {
+      "bytes": 3173,
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/output-contract.json",
+      "sha256": "fa4556fcdaf1c170b778bbb332c5b3685c4426ba1629c47f1c350277000e7090"
+    },
+    "expected_stdout_bytes": 65,
+    "full_original_entry_cpp": false,
+    "generated_cpp": {
+      "sha256": "1036c2539010dc853744d6c8a023a58805d0a4ef3f078fc090fa3881fa2dd937",
+      "size_bytes": 22714,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-digest-v1/C++ SHA256 release/scar_ordered_sparse.cpp"
+    },
+    "native_input": {
+      "sha256": "ff4fe3bcbaf289cc7aa5df5c4fb5c16bc893cecee16cecc321acf659bd7515be",
+      "size_bytes": 302168,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/canonical-csr-native-v1/canonical-source.bin"
+    },
+    "numeric_request_count": 512,
+    "original_stdout_effects_discharged": false
+  }
+}
