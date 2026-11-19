@@ -111,6 +111,13 @@ def _render_main(stream, plan, crypto=None):
         includes = ''.join(f'#include <{name}>\n' for name in (
             'algorithm', 'cmath', 'cstring', 'iterator', 'memory', 'utility', 'dlfcn.h'))
         tail = _DETACHED_MAIN.read_text().replace('@SCAR_OWNER_CPU@', str(plan['placement']['owner_cpu_id']))
+        if plan['dispatch'].get('credit_policy') == 'INDEPENDENT_ORDERED_WINDOW_V1':
+            window = plan['dispatch']['window']
+            former = 'constexpr auto window = std::size(sparse::worker_cpus);'
+            if (type(window) is not int or not 1 < window < len(plan['placement']['worker_cpu_ids'])
+                    or tail.count(former) != 1):
+                raise ValueError('independent credits must bind the one detached dispatch window')
+            tail = tail.replace(former, f'constexpr std::size_t window = {window};')
         before, ticket = tail.split('@SCAR_TICKET_BEGIN@\n', 1)
         legacy_ticket, after = ticket.split('@SCAR_TICKET_END@', 1)
         source = stream['schema'] in (SOURCE_STREAM, DIGEST_STREAM)

@@ -71,13 +71,18 @@ def _package(path):
         'owner_cpu_id', 'worker_cpu_ids', 'launch_cpu_ids', 'cpu_numa_node')}
     count = resources['case']['call_count']
     width = len(placement['worker_cpu_ids'])
+    window = resources['dispatch']['window']
+    independent = 'window' in package
+    fixed_window = (schema == profile.SCHEMA and package['schema_version'] == 2
+                    and package['window'] == window and 1 < window < width) if independent else window == width
     _require(stream['schema'] == ordered.DIGEST_STREAM and transport['source']['uri'] == ordered._STREAM_MAIN
              and transport['cmake']['uri'] == 'CMakeLists.txt'
              and transport['executable']['uri'] == ordered._STREAM_EXECUTABLE
-             and count == stream['header']['count'] and width == resources['dispatch']['window']
+             and count == stream['header']['count'] and fixed_window
              and 1 <= width <= count, 'ordered diagnostic requires a complete canonical CSR-to-digest cohort')
     context = dict(package=_ref(manifest, schema), recipe_id=package['recipe_id'], placement=placement,
-                   count=count, width=width, protocol=_member(root, transport['protocol']))
+                   count=count, width=width, protocol=_member(root, transport['protocol']),
+                   **({'window': window} if independent else {}))
     return root, package, stream, context
 
 
@@ -104,7 +109,7 @@ def _span(value, phase):
     return f'probe::measure(probe::Phase::{phase}, [&] {{ return {value}; }})'
 
 
-def _render_dispatch(raw):
+def _render_dispatch(raw, *, credits=False):
     source = _patch(raw.decode(), 'namespace scar::ordered_v1 {',
         f'#include "{_PROBE}"\n\nnamespace scar::ordered_v1 {{\n\nnamespace probe = scar::ordered_timing_v1;')
     patches = (
@@ -144,6 +149,11 @@ def _render_dispatch(raw):
     )
     for before, after in patches:
         source = _patch(source, before, after)
+    if credits:
+        source = _patch(source, '        ++summary.submitted;',
+            '        ++summary.submitted;\n        probe::issued_credit();')
+        source = _patch(source, '        ++summary.retired;',
+            '        ++summary.retired;\n        ++probe::retired_credits;')
     return source.encode()
 
 
@@ -170,10 +180,28 @@ def _render_entry(raw):
     return source.encode()
 
 
+def _probe_source(credits):
+    if not credits:
+        return _TEMPLATE.read_bytes()
+    source = _patch(_TEMPLATE.read_text(), 'inline bool valid_clock = true;',
+        'inline bool valid_clock = true;\n'
+        'inline std::uint64_t issued_credits = 0, retired_credits = 0, peak_credits = 0;\n'
+        'inline void issued_credit() noexcept {\n'
+        '    ++issued_credits;\n'
+        '    peak_credits = std::max(peak_credits, issued_credits - retired_credits);\n'
+        '}')
+    begin = '        bool success = std::fputs("SCAR_ORDERED_TIMING_V1\\n", stream) >= 0;'
+    source = _patch(source, begin, begin +
+        '\n        success &= std::fprintf(stream, "credits %" PRIu64 " %" PRIu64 " %" PRIu64 "\\n",'
+        '\n                                issued_credits, retired_credits, peak_credits) >= 0;')
+    return source.encode()
+
+
 def _render(root, package):
     headers = {row['uri']: read_artifact(_member(root, row), json_document=False) for row in package['headers']}
-    headers[ordered._DISPATCH_HEADER] = _render_dispatch(headers[ordered._DISPATCH_HEADER])
-    headers[_PROBE] = _TEMPLATE.read_bytes()
+    credits = 'window' in package
+    headers[ordered._DISPATCH_HEADER] = _render_dispatch(headers[ordered._DISPATCH_HEADER], credits=credits)
+    headers[_PROBE] = _probe_source(credits)
     sources = {name: (raw, _HEADER) for name, raw in headers.items()}
     sources[ordered._STREAM_MAIN] = (_render_entry(read_artifact(_member(root, package['stream']['source']),
                                                                 json_document=False)), _SOURCE)
@@ -206,10 +234,15 @@ def _read_timing(path, context):
     header, *records = path.read_text(encoding='ascii').splitlines()
     _require(header == 'SCAR_ORDERED_TIMING_V1', 'invalid native timing records')
     lanes = []
+    credits = None
     for row in records:
         key, *raw = row.split()
         values = list(map(int, raw))
-        if key == 'lane':
+        if key == 'credits':
+            _require('window' in context and credits is None and not lanes and len(values) == 3,
+                'unexpected ordered credit telemetry')
+            credits = dict(zip(('issued', 'retired', 'peak_inflight'), values, strict=True))
+        elif key == 'lane':
             i, start, end = values
             _require(i == len(lanes), 'out-of-order diagnostic lanes')
             lanes.append(dict(slot=i, cpu_start=start, cpu_end=end, phases={}))
@@ -221,6 +254,9 @@ def _read_timing(path, context):
     cpus = [placement['owner_cpu_id'], *placement['worker_cpu_ids']]
     count, width = context['count'], context['width']
     _require(len(lanes) == len(cpus), 'diagnostic lane count differs from the exact cohort')
+    if 'window' in context:
+        _require(credits == dict(issued=count, retired=count, peak_inflight=min(count, context['window'])),
+            'live in-flight credits differ from the independent window and completed request count')
     for slot, (lane, cpu) in enumerate(zip(lanes, cpus, strict=True)):
         _require(lane['cpu_start'] == lane['cpu_end'] == cpu, 'diagnostic CPU differs from the selected pin')
         single, items = (_OWNER_SINGLE, _OWNER_ITEMS) if slot == 0 else (_WORKER_SINGLE, _WORKER_ITEMS)
@@ -236,7 +272,8 @@ def _read_timing(path, context):
                          'inconsistent diagnostic clock aggregate')
     return dict(owner=lanes[0], workers=lanes[1:], clocks=['CLOCK_MONOTONIC', 'CLOCK_PROCESS_CPUTIME_ID'],
                 marker_scope='NESTED_PHASES_DO_NOT_ADD', receive_scope='WAIT_WAKE_AND_RECV_WALL_NOT_PURE_IPC',
-                cost_scope='INSTRUMENTED_NATIVE_DIAGNOSTIC_NOT_PROFITABILITY_EVIDENCE')
+                cost_scope='INSTRUMENTED_NATIVE_DIAGNOSTIC_NOT_PROFITABILITY_EVIDENCE',
+                **({'credits': credits} if credits is not None else {}))
 
 
 def _run(executable, input_path, cpus, *, timing=None):
@@ -290,7 +327,8 @@ def collect(package, out, *, input_path, expected_stdout=None):
         for label, data in (('production', first), ('diagnostic', second)):
             (stage / f'{label}.stdout').write_bytes(data)
             _output(stage / f'{label}.stdout')
-        record = dict(schema=SCHEMA, schema_version=1, **context, input=input_ref, expected_stdout=oracle,
+        record = dict(schema=SCHEMA, schema_version=2 if 'window' in context else 1,
+                      **context, input=input_ref, expected_stdout=oracle,
                       production=dict(executable=_member(root, manifest['stream']['executable']),
                                       stdout={**_ref(stage / 'production.stdout', _STDOUT), 'uri': 'production.stdout'},
                                       wall_ns=clean_time),
@@ -314,7 +352,9 @@ def check(path):
     record = read_artifact(ref)
     result = Path(ref['uri']).parent
     root, manifest, protocol, context = _package(record['package']['uri'])
-    _require(record['schema_version'] == 1 and all(record.get(key) == value for key, value in context.items())
+    _require(record['schema_version'] == (2 if 'window' in context else 1)
+             and ('window' in record) == ('window' in context)
+             and all(record.get(key) == value for key, value in context.items())
              and record['deployment_authorized'] is False and record['input']['schema'] == _INPUT,
              'ordered diagnostic receipt differs from its production recipe')
     _input(record['input'], protocol)

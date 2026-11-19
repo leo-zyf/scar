@@ -157,7 +157,7 @@ def _same_bytes(left, right):
     return all(left[key] == right[key] for key in ('sha256', 'size_bytes'))
 
 
-def _bind_observed_profiles(rows, profile_ref, profile):
+def _bind_observed_profiles(rows, profile_ref, profile, *, allow_independent_windows=False):
     from scar.codegen.native_ordered_profile import SCHEMA as SOLVER
 
     matched_input = rows[0]['input']
@@ -180,8 +180,11 @@ def _bind_observed_profiles(rows, profile_ref, profile):
         bound = read_artifact(bound_ref)
         saw_pilot |= bound_ref == profile_ref
         placement = bound['resources']['placement']
+        window = row.get('window', row['width'])
         _require(all(bound[key] == profile[key] for key in scope_keys)
             and bound['resources']['case'] == case and bound['width'] == solver['width'] == row['width']
+            and window == bound['resources']['dispatch']['window'] == solver.get('window', solver['width'])
+            and (allow_independent_windows or window == row['width'])
             and row['placement'] == {key: placement[key] for key in
                 ('owner_cpu_id', 'worker_cpu_ids', 'launch_cpu_ids', 'cpu_numa_node')},
             'diagnostic service is bound to a different registered scope or physical placement')

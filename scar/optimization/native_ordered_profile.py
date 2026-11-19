@@ -75,13 +75,16 @@ def _original(seed, observation, original, before, detached, oracle):
             'aggregate count, F4 frame and output must belong to the same original observation')
 
 
-def _resources(before, hardware_ref, hardware, count, width, identity):
+def _resources(before, hardware_ref, hardware, count, width, identity, *, window=None):
     old = before['placement']
     owner, node = old['owner_cpu_id'], old['cpu_numa_node']
     permitted = {row['cpu_id'] for row in hardware['processors'] if row['permitted'] and row['numa_nodes'] == [node]}
     available = [lane for lane in old['workers'] if lane['cpu_id'] in permitted]
     _require(type(width) is int and 1 < width <= min(count, len(available)),
         'requested width is outside the admitted physical cohort')
+    credits = width if window is None else window
+    _require(type(credits) is int and 1 < credits <= width,
+        'ordered profile requires at least two credits and at most one credit per worker')
     worker_lanes = [dict(lane, slot=index) for index, lane in enumerate(available[:width])]
     workers = [lane['cpu_id'] for lane in worker_lanes]
     evidence = _lanes(hardware, [owner, *workers], node)
@@ -96,8 +99,11 @@ def _resources(before, hardware_ref, hardware, count, width, identity):
     quota = hardware['cpu_quota_equivalents']
     _require(quota is None or quota[0] >= (width + 1)*quota[1], 'CPU quota cannot supply the pinned cohort')
     case, old_memory = before['case'], before['memory']
-    arithmetic = _storage_requirements(case['size'], case['nnz'], width,
+    arithmetic = _storage_requirements(case['size'], case['nnz'], credits,
         old_memory['worker_address_space_limit_bytes'], old_memory['per_worker_symbolic_budget_bytes'])
+    extra_address_space = (width-credits)*old_memory['worker_address_space_limit_bytes']
+    arithmetic['worker_address_space_sum_bytes'] += extra_address_space
+    arithmetic['minimum_launch_headroom_bytes'] += extra_address_space
     memory = {key: arithmetic.get(key, value) for key, value in old_memory.items()}
     node_free = hardware['node_free_snapshot'].get(str(node), {})
     limit = hardware['finite_memory_headroom_snapshot_bytes']
@@ -106,13 +112,16 @@ def _resources(before, hardware_ref, hardware, count, width, identity):
         and node_free['bytes'] >= headroom and (limit is None or limit >= headroom),
         'current NUMA or cgroup headroom does not admit the new placement')
     control = dict(iteration=dict(axis='i', count=count, unrolled=False, shared_body_instances=1),
-        window=width, initial_fill='FIRST_W_ISSUES', refill='ORDERED_PUBLICATION_I_RETURNS_SLOT_TO_I_PLUS_W',
+        window=credits, initial_fill='FIRST_W_ISSUES', refill='ORDERED_PUBLICATION_I_RETURNS_SLOT_TO_I_PLUS_W',
         retirement='ASCENDING_ISSUE_ONLY', completion='DRAIN_ALL_SUCCESS_THEN_CLOSE_AND_PUBLISH')
+    dispatch = {**before['dispatch'], 'window': credits}
+    if credits != width:
+        dispatch['credit_policy'] = 'INDEPENDENT_ORDERED_WINDOW_V1'
     return dict(before, recipe_id=identity, case={**case, 'call_count': count},
         source_control_sha256=semantic_sha256(control),
         placement={**old, 'hardware': hardware_ref, 'choice': None, 'worker_cpu_ids': workers,
                    'launch_cpu_ids': sorted([owner, *workers]), 'workers': lanes[1:]},
-        dispatch={**before['dispatch'], 'window': width},
+        dispatch=dispatch,
         memory={**memory, 'headroom_basis': 'CHECKED_PROFILE_OWNED_BYTES_AND_LIVE_RECHECK'},
         cost=dict(basis='UNKNOWN', startup_ns=None, per_call_ns=None, close_ns=None, whole_scope_ns=None)), control
 
@@ -151,7 +160,8 @@ def observe_profile_host(anchor_digest_package, count, *, widths=None):
     return hardware, admissible_profile_widths(plan, hardware, count)
 
 
-def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, width, *, original_observation_path):
+def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, width, *, original_observation_path,
+                 window=None):
     """Bind source, observed count, invariant loop and provider to a new fixed CPU plan."""
     from scar.codegen.native_ordered_sparse_export import SCHEMA as PACKAGE, check_native_ordered_export
     from scar.codegen.native_sparse_source import project_source_csr_stream
@@ -187,7 +197,8 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
         size=before['case']['size'], nnz=before['case']['nnz'])
     identity = 'recipe-v1:' + semantic_sha256(logical)
     hardware_ref = _ref(hardware_path, HARDWARE)
-    plan, control = _resources(before, hardware_ref, read_artifact(hardware_ref), count, width, identity)
+    plan, control = _resources(before, hardware_ref, read_artifact(hardware_ref), count, width, identity, window=window)
+    independent_window = plan['dispatch']['window'] if plan['dispatch']['window'] != width else None
     wire = project_source_csr_stream(plan, detached)
     diagnosis = {}
     if 'segmented_cost' in observation:
@@ -197,19 +208,21 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
         design = _scope_design(package, manifest, seed['argv'], PACKAGE)
         diagnosis['source_cost'] = project_source_cost(
             design, observation, observation_ref, seed, scope, detached['source'], plan)
-    return dict(schema=SCHEMA, schema_version=1, anchor=anchor, source_seed=seed_ref, argv=seed['argv'],
+    return dict(schema=SCHEMA, schema_version=2 if independent_window is not None else 1,
+        anchor=anchor, source_seed=seed_ref, argv=seed['argv'],
         original_observation=observation_ref, oracle=oracle_ref, hardware=hardware_ref,
         width=width, resources=plan, control=control, wire_identity=logical,
         source_stream_input=wire['input'], source_stream_header=wire['header'],
         decision='CALIBRATION_ELIGIBLE_STANDALONE', historical_costs_transferred=False,
-        full_original_effect_equivalence=False, deployment_authorized=False, **diagnosis)
+        full_original_effect_equivalence=False, deployment_authorized=False, **diagnosis,
+        **({'window': independent_window} if independent_window is not None else {}))
 
 
 def verify_profile_plan(path):
     stored = read_artifact(_ref(path, SCHEMA))
     replay = plan_profile(Path(stored['anchor']['package']['uri']).parent,
         stored['source_seed']['uri'], stored['hardware']['uri'], stored['oracle']['uri'], stored['width'],
-        original_observation_path=stored['original_observation']['uri'])
+        original_observation_path=stored['original_observation']['uri'], window=stored.get('window'))
     _require(replay == stored, 'count profile differs from its exact cold replay')
     return stored
 
@@ -253,7 +266,8 @@ def select_profile(benchmark_path):
     for name, profile_ref in plans.items():
         _require(profile_ref == _ref(profile_ref['uri'], SCHEMA), 'profile changed before the measured comparison')
         profile = verify_profile_plan(profile_ref['uri'])
-        _require(name == str(profile['width']), 'benchmark width does not name its exact physical plan')
+        _require(name == str(profile['width']) and profile['resources']['dispatch']['window'] == profile['width'],
+            'width-only benchmark requires its exact diagonal physical plan')
         native_launch, providers = _full_package(packages[name], profile_ref, profile)
         native_launches.append(native_launch)
         native_providers.append(providers)

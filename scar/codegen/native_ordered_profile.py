@@ -71,12 +71,13 @@ def export_profile_solver(profile_plan_path, out):
         sha256_ref = archive['publication']['provider']
         crypto = ordered._bundled_crypto(root, sha256_ref, publication)
         stream = ordered._write_stream(root, profile['resources'], protocol, crypto)
-        manifest = dict(schema=SCHEMA, schema_version=1, profile_plan=profile_ref,
+        manifest = dict(schema=SCHEMA, schema_version=profile['schema_version'], profile_plan=profile_ref,
             profile_member=local(root, _PROFILE_FILE, PROFILE), recipe_id=profile['resources']['recipe_id'],
             count=profile['resources']['case']['call_count'], width=profile['width'],
             numeric=archive['numeric'], sha256_provider=sha256_ref, blas_member=blas,
             headers=[local(root, name, 'scar.cpp-header') for name in _MEMBERS],
-            stream=stream, deployment_authorized=False)
+            stream=stream, deployment_authorized=False,
+            **({'window': profile['window']} if 'window' in profile else {}))
         _write(root/'artifact.json', manifest)
         _check(root, profile)
         if out.exists():
@@ -91,7 +92,9 @@ def _check(root, profile):
     anchor, archive, detached, publication, protocol = _arc(profile)
     resources = profile['resources']
     numeric = check_sparse_export(root/'numeric')
-    _require(manifest['schema_version'] == 1 and manifest['deployment_authorized'] is False
+    _require(manifest['schema_version'] == profile['schema_version']
+        and manifest.get('window') == profile.get('window') and ('window' in manifest) == ('window' in profile)
+        and manifest['deployment_authorized'] is False
         and manifest['profile_member'] == local(root, _PROFILE_FILE, PROFILE)
         and manifest['profile_member'] == {**manifest['profile_plan'], 'uri': _PROFILE_FILE}
         and read_artifact(_part(root, manifest['profile_member'])) == profile

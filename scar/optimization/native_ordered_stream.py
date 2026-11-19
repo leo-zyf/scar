@@ -97,7 +97,10 @@ def project_native_detached_stream(resource_plan, detached, *, recipe_id=None):
     header, sizes = raw['header'], raw['bytes']
     n, nnz, count = (header[key] for key in ('size', 'nnz', 'count'))
     window = resource_plan['dispatch']['window']
-    if (len(resource_plan['placement']['workers']) != window
+    workers = len(resource_plan['placement']['workers'])
+    independent = resource_plan['dispatch'].get('credit_policy') == 'INDEPENDENT_ORDERED_WINDOW_V1'
+    credits_match = window < workers <= count if independent else workers == window
+    if (not credits_match
             or detached.get('schema') != DETACHED_RECIPE or detached.get('schema_version') != 1
             or set(detached['roles']) != {'matrix', 'load', 'boundary', 'count'}):
         raise ValueError('compact ingress requires the ordered recipe and its detached snapshot contract')
