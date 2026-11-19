@@ -34,6 +34,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
+追加 `--allow-cross-numa-ready` 可比较跨节点核组。规划先提名核分配，再按该分配重放提供方算子并采样张量页。跨节点候选须提供完整观测。成本范围仍有重叠时优先选择同节点，最终执行经过区域和完整入口验证。
+
 为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间和交接开销求出互不重叠的相邻窗口组合。独立进程只对选出的并行方案与串行基线配对验证。`PLAN/plan.json` 逐段验算核心占用，`PLAN/launch.sh` 固定输入和已选窗口。性能报告的范围是预热后的调用。见 [多窗口调度验证](artifacts/baseline/aten-native-multi-window.json)。
 
 `plan-aten-graph --tensor-budget-bytes BYTES` 给图持有的 CPU Tensor 后备存储设置预算。生成代码在最后一次读取后释放中间 Tensor 句柄，并行窗口等待两侧完成后再释放。规划器用原生校准记录的存储字节数估算各段峰值，筛掉超预算窗口，再验证核与存储预算。预算范围覆盖输入与算子结果，算子内部工作区、分配器保留与实际 NUMA 页位置仍独立记录为未建模。见 [Tensor 预算验证](artifacts/baseline/aten-tensor-budget.json)。

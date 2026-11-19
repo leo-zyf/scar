@@ -6,6 +6,7 @@ from math import prod
 from statistics import median_low
 
 from scar.analysis.target_graph import TargetHardwareGraph
+from scar.ir.program.target_hardware import MemoryDomain, MemoryKind
 from scar.ir.record_codec import encode
 from scar.optimization.aten_cpu_placement_domain import _cpu_memberships, _lane, _signature, _topology
 from scar.optimization.aten_native_schedule import (
@@ -205,14 +206,12 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=Fals
     if not set(cpus).issubset(domain):
         raise AtenCpuWindowFrontier('CPU_TEAM_OUTSIDE_TARGET_CPU_DOMAIN',
                                    'team lanes must belong to the recorded target availability domain')
-    membership = _cpu_memberships(graph.resources())
+    inventory = graph.resources()
+    membership = _cpu_memberships(inventory)
     lanes = [_lane(cpu, *membership) for cpu in cpus]
     if not all(map(_valid_lane, lanes)) or len({lane[1].id for lane in lanes}) != 3:
         raise AtenCpuWindowFrontier('CPU_TEAM_DISTINCT_CORES_UNAVAILABLE',
                                    'team lanes require distinct online cores with known topology')
-    if ready_dag and _crosses_numa(lanes):
-        raise AtenCpuWindowFrontier('READY_DAG_REQUIRES_SAME_NUMA_NODE',
-                                   'ready DAG requires one recorded NUMA node')
     if len({_team_context(lane, allow_cross_numa) for lane in lanes}) != 1:
         if allow_cross_numa:
             raise AtenCpuWindowFrontier('CPU_TEAM_REQUIRES_COMPATIBLE_ISA_CONTEXT',
@@ -231,6 +230,9 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=Fals
         schedule['ready_graph'] = ready_graph
     if allow_cross_numa:
         schedule.update(placement_policy=TEAM_PLACEMENT_POLICY, cross_numa=_crosses_numa(lanes))
+        if ready_dag and schedule['cross_numa']:
+            schedule['host_numa_node_ids'] = sorted({row.numa_node for row in inventory
+                if type(row) is MemoryDomain and row.kind is MemoryKind.HOST and row.numa_node is not None})
     return schedule
 
 

@@ -245,7 +245,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     team = schedule is not None and 'legal_window_widths' in schedule
     if ready_dag and (not team or schedule['schema_version'] != 2):
-        raise ValueError('ready DAG requires a qualified CPU team on one NUMA node')
+        raise ValueError('ready DAG requires a qualified full-graph CPU team')
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']

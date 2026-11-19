@@ -73,11 +73,12 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
         candidate = dict(cpus=schedule['cpus'], primitive_observations=raw, model=model)
         if 'cross_numa' in schedule:
             candidate['cross_numa'] = schedule['cross_numa']
-        if price_ready and team and not schedule.get('cross_numa'):
-            from scar.optimization.aten_ready_dag import plan_ready_dag
+        if price_ready and team:
+            from scar.compiler.plan_aten_ready import calibrate_ready_placement
 
-            candidate['ready_model'] = plan_ready_dag(recipe, schedule, raw['calibration'], warmup_pairs,
-                                                     tensor_budget_bytes=tensor_budget_bytes)
+            raw, ready_model = calibrate_ready_placement(executable, recipe, schedule, inputs, raw,
+                budget=tensor_budget_bytes, warmup=warmup_pairs, ready_dag_abi=artifact['ready_dag_abi'])
+            candidate.update(ready_model=ready_model, primitive_observations=raw)
         candidates.append(candidate)
     if any(_receipt(row['path']) != row for row in inputs):
         raise ValueError('a calibration input changed while pricing the CPU domain')

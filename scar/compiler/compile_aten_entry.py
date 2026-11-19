@@ -44,7 +44,8 @@ def _calibration_inputs(named_inputs, source, recipe):
 def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha256,
              geometry_contract, geometry_contract_sha256, tensor_budget_bytes,
              graph_warmup_pairs, graph_measured_pairs, entry_function, entry_args, entry_warmup_pairs,
-             entry_measured_pairs, allow_ambient_grad, expected_native_calls, compare_ready=False):
+             entry_measured_pairs, allow_ambient_grad, expected_native_calls, compare_ready=False,
+             allow_cross_numa_ready=False):
     report = dict(schema='scar.aten-entry-delivery', schema_version=1, discovery=inputs['discovery'],
                   recommendation='KEEP_ORIGINAL', automatic_deployment_authorized=False)
     if inputs['status'] == 'KEEP_ORIGINAL':
@@ -67,10 +68,10 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     placement = None
     propose = propose_cpu_windows
     if ready_graph:
-        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed)
+        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed, allow_cross_numa=allow_cross_numa_ready)
         if team['representatives']:
             domain = team
-            propose = partial(propose_cpu_team, ready_dag=True)
+            propose = partial(propose_cpu_team, ready_dag=True, allow_cross_numa=allow_cross_numa_ready)
             placement = propose(recipe, contract=declarations, target=target_dir,
                                 cpu_ids=team['representatives'][0]['cpus'])
         else:
@@ -249,6 +250,8 @@ def main(argv=None):
     parser.add_argument('--entry-function', help='validate the original callable in paired fresh processes')
     parser.add_argument('--compare-ready', action='store_true',
                         help='compare qualified grouped and dependency-ready variants at the full entry')
+    parser.add_argument('--allow-cross-numa-ready', action='store_true',
+                        help='include ready placements across NUMA nodes with measured page evidence')
     parser.add_argument('--entry-warmup-pairs', type=int, default=1)
     parser.add_argument('--entry-measured-pairs', type=int,
                         help='measured pairs (default 3), or even full comparison rounds (default 4)')
@@ -270,6 +273,8 @@ def main(argv=None):
     if args.compare_ready and (not args.entry_function or not (0 < (args.tensor_budget_bytes or 0) < 2**63)
             or not 4 <= args.entry_measured_pairs <= 500 or args.entry_measured_pairs % 2):
         parser.error('--compare-ready requires --entry-function, --tensor-budget-bytes and 4–500 even entry rounds')
+    if args.allow_cross_numa_ready and not args.compare_ready:
+        parser.error('--allow-cross-numa-ready requires --compare-ready')
     out = Path(args.out).resolve()
     inputs = read_aten_region_inputs(args.discovery, discovery_sha256=args.discovery_sha256)
     out.mkdir(parents=True)
@@ -279,7 +284,8 @@ def main(argv=None):
         graph_warmup_pairs=args.graph_warmup_pairs, graph_measured_pairs=args.graph_measured_pairs,
         entry_function=args.entry_function, entry_args=args.entry_args, entry_warmup_pairs=args.entry_warmup_pairs,
         entry_measured_pairs=args.entry_measured_pairs, allow_ambient_grad=args.allow_ambient_grad,
-        expected_native_calls=args.expected_native_calls, compare_ready=args.compare_ready)
+        expected_native_calls=args.expected_native_calls, compare_ready=args.compare_ready,
+        allow_cross_numa_ready=args.allow_cross_numa_ready)
     path = out / 'delivery.json'
     path.write_text(json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + '\n')
     print(json.dumps(dict(report=str(path), recommendation=report['recommendation'], reason=report.get('reason'))))

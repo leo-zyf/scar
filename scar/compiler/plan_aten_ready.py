@@ -27,6 +27,7 @@ SCHEMA = 'scar.aten-ready-selection'
 _CALIBRATION = 'scar.aten-generated-team-observations'
 _PAIRED = 'scar.aten-ready-paired-validation'
 _ENTRY_TRIAL_POLICY = 'NATIVE_SERIAL_GAIN_FOR_ENTRY_COMPARISON'
+_NUMA_REQUIRED = 'READY_DAG_NUMA_CALIBRATION_REQUIRED'
 
 
 def _ready_bundle(path, digest):
@@ -57,6 +58,11 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     kept = set(recipe['outputs']) if last_consumer else outputs.keys()
     read = {model['timeline'][parent]['operation'] for parents in model['data_dependencies'] for parent in parents}
     locations = dict.fromkeys((value for value in outputs if value in kept), memory.id)
+    locality = model.get('ready_numa')
+    page_index = {value: f'input_pages/{i}' for i, value in enumerate(inputs)}
+    page_index.update({value: f'output_pages/{i}' for i, value in enumerate(outputs)})
+    cost_context = 'ATEN_READY_NUMA_PROVIDER_REPLAY' if locality else 'ISOLATED_ATEN_LANE'
+    cost_refs = (*refs, dict(artifact=evidence, locator='#/calibration/ready_numa/operation_samples_ns')) if locality else refs
     operations, edges = [], []
     lane_ends = {}
     for row, native in zip(model['timeline'], recipe['operations'], strict=True):
@@ -66,8 +72,12 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         operands = sorted({arg['value'] for arg in native['arguments'] if 'value' in arg})
         for value in operands:
             producer = value if value in outputs else None
+            edge_refs = refs
+            if locality is not None:
+                edge_refs = (*refs, dict(artifact=evidence, locator='#/calibration/ready_numa/' + page_index[value]),
+                             dict(artifact=origin, locator=f"#/cpu_team/lanes/{row['lane']}"))
             edges.append(PlanningDataEdge(f'{value}->{identifier}', value, producer, identifier,
-                outputs[value] if producer else inputs[value], None if producer else memory.id, source_refs=refs))
+                outputs[value] if producer else inputs[value], None if producer else memory.id, source_refs=edge_refs))
         if identifier in kept:
             edges.append(PlanningDataEdge(f'{identifier}->{join}', identifier, identifier, join,
                                           outputs[identifier], None, source_refs=refs))
@@ -77,7 +87,7 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
         option = ImplementationOption('CPU_LANE', 'EXISTING_LIBTORCH_READY_DAG', refs, demands,
             {} if has_consumer else {memory.id: outputs[identifier]}, dict.fromkeys(operands, memory.id),
             {identifier: memory.id} if has_consumer else {},
-            CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', 'ISOLATED_ATEN_LANE', refs),
+            CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', cost_context, cost_refs),
             dict(cpu_id=row['cpu_id'], lane=row['lane']))
         operations.append(PlanningOperation(identifier, refs, predecessors, (option,), 'CPU_LANE'))
         lane_ends[row['lane']] = identifier
@@ -88,9 +98,12 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     operations.append(PlanningOperation(join, refs, join_predecessors, (return_uses,), 'RETURN'))
     lifetime_assumption = ('LAST_CONSUMER_OR_EXPORT_EXCLUDING_PROVIDER_WORKSPACE' if last_consumer
                            else 'RETAINS_ALL_TENSOR_HANDLES_EXCLUDING_PROVIDER_WORKSPACE')
+    assumptions = ('DATA_AND_LOCAL_LANE_ORDER', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
+                   lifetime_assumption, 'SERVICES_EXCLUDE_DISPATCH_AND_JOIN')
+    if locality is not None:
+        assumptions = (*assumptions, 'SAMPLED_NUMA_RESIDENCY_IN_SHARED_HOST_MEMORY')
     problem = PlanningProblem(target, refs, resources, tuple(operations), tuple(edges),
-        assumptions=('DATA_AND_LOCAL_LANE_ORDER', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
-                     lifetime_assumption, 'SERVICES_EXCLUDE_DISPATCH_AND_JOIN'),
+        assumptions=assumptions,
         reserved_memory={memory.id: storage['persistent_input_bytes']})
     execution = construct_implementations(problem)
     verified = verify_execution_plan(problem, execution)
@@ -141,17 +154,35 @@ def _case(raw, model, baseline, warmup, count, storage, *, recipe):
     return results
 
 
-def _derive(recipe, schedule, raw, budget, warmup, *, ready_dag_abi):
+def _ready_model(recipe, schedule, raw, budget, warmup, *, ready_dag_abi):
     if raw['cpu_ids'] != schedule['cpus'] or raw['warmup_pairs'] != warmup:
         raise ValueError('ready DAG calibration belongs to a different CPU execution context')
-    calibration = raw['calibration']
-    model = plan_ready_dag(recipe, schedule, calibration, warmup, tensor_budget_bytes=budget, ready_dag_abi=ready_dag_abi)
+    return plan_ready_dag(recipe, schedule, raw['calibration'], warmup, tensor_budget_bytes=budget,
+                          ready_dag_abi=ready_dag_abi)
+
+
+def _baselines(recipe, schedule, calibration, model, budget, warmup):
     baselines = ['serial']
     if model['status'] == 'PLAN_READY_DAG' and model['tensor_storage']['serial_peak_bytes'] <= budget:
         windows = model_cpu_team(calibration, recipe, schedule, warmup, tensor_budget_bytes=budget)['selected_windows']
         if windows:
             baselines.append(team_window_spec(windows))
-    return model, baselines
+    return baselines
+
+
+def calibrate_ready_placement(executable, recipe, schedule, inputs, raw, *, budget, warmup, ready_dag_abi):
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=ready_dag_abi)
+    if model['status'] != _NUMA_REQUIRED:
+        return raw, model
+    lanes = ''.join(map(str, model['lanes']))
+    measured = _invoke(executable, schedule, '--calibrate-ready-locality', [lanes, warmup], inputs)
+    if measured['cpu_ids'] != schedule['cpus'] or measured['warmup_pairs'] != warmup:
+        raise ValueError('ready NUMA calibration ran outside its nominated placement')
+    raw = dict(raw, calibration=dict(raw['calibration'], ready_numa=measured['ready_numa']))
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=ready_dag_abi)
+    if model['status'] == _NUMA_REQUIRED:
+        raise ValueError('ready NUMA calibration did not resolve the requested locality evidence')
+    return raw, model
 
 
 def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_bytes, warmup_pairs=5,
@@ -173,7 +204,9 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
             raise ValueError('ready DAG calibration used different input bytes')
         raw = primitive_observation['raw']
     abi = artifact['ready_dag_abi']
-    model, baselines = _derive(recipe, schedule, raw, tensor_budget_bytes, warmup_pairs, ready_dag_abi=abi)
+    raw, model = calibrate_ready_placement(executable, recipe, schedule, inputs, raw,
+        budget=tensor_budget_bytes, warmup=warmup_pairs, ready_dag_abi=abi)
+    baselines = _baselines(recipe, schedule, raw['calibration'], model, tensor_budget_bytes, warmup_pairs)
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-ready-', dir=out.parent) as temporary:
         stage = Path(temporary)
@@ -230,7 +263,8 @@ def read_ready_selection(path, selection):
     if not 3 <= warmup <= 100 or not 4 <= count <= 500 or count % 2:
         raise ValueError('ready DAG selection requires its balanced matched trial')
     budget = selection['model']['tensor_storage']['budget_bytes']
-    model, baselines = _derive(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+    baselines = _baselines(recipe, schedule, raw['calibration'], model, budget, warmup)
     results = [_case(read_artifact(ref), model, baseline, warmup, count, raw['calibration']['result_storage_bytes'], recipe=recipe)
                for ref, baseline in zip(selection['paired_validation'], baselines, strict=True)]
     policy = selection.get('validation_policy')

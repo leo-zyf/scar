@@ -587,6 +587,71 @@ graph::ReadyLanes parse_ready_lanes(std::string_view text) {
     return lanes;
 }
 
+void calibrate_ready_locality(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
+                              const graph::ReadyLanes& lanes) {
+    const int warmup = integer(args[0], 3, 100, "warmup count");
+    const SampleInputs data(args + 1);
+    const auto& inputs = data.tensors;
+    ResultStorage storage;
+    const auto reference = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
+        auto result = call();
+        observe_storage(storage[op], result);
+        return result;
+    });
+    data.check();
+
+    const auto replay = [&](OperationTimes* timings, PageSamples* pages) {
+        const auto output = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
+            at::Tensor value;
+            const auto on_lane = [&] {
+                if (timings) {
+                    const auto start = Clock::now();
+                    value = call();
+                    timings->at(op) = elapsed_ns(start);
+                } else {
+                    value = call();
+                }
+            };
+            if (lanes[op] == 0) on_lane();
+            else team.run_on_worker(lanes[op], on_lane);
+            observe_storage(storage[op], value);
+            if (pages) pages->push_back(graph::observe_numa_pages(value));
+            return value;
+        });
+        data.check();
+        check_outputs(inputs, reference, output);
+    };
+
+    // The source-order replay preserves ready-plan producer placement while excluding concurrent contention.
+    replay(nullptr, nullptr);
+    OperationRows timings(warmup);
+    for (auto& row : timings) replay(&row, nullptr);
+
+    // Page queries are outside the clocks and describe a separate replay on the same lanes.
+    PageSamples input_pages, output_pages;
+    input_pages.reserve(inputs.size());
+    output_pages.reserve(graph::operation_count);
+    for (const auto& input : inputs) input_pages.push_back(graph::observe_numa_pages(input));
+    replay(nullptr, &output_pages);
+
+    std::array<unsigned int, graph::operation_count> lane_numbers{};
+    std::copy(lanes.begin(), lanes.end(), lane_numbers.begin());
+    std::cout << "{\"cpu_ids\":";
+    emit_numbers(cpus);
+    std::cout << ",\"warmup_pairs\":" << warmup << ",\"ready_numa\":{\"schema_version\":1"
+              << ",\"scope\":\"SOURCE_ORDER_REPLAY_ON_PLANNED_LANES\",\"lanes\":";
+    emit_numbers(lane_numbers);
+    std::cout << ",\"input_pages\":";
+    emit_pages(input_pages);
+    std::cout << ",\"output_pages\":";
+    emit_pages(output_pages);
+    std::cout << ",\"operation_samples_ns\":";
+    emit_operations(timings);
+    std::cout << ",\"result_storage_bytes\":";
+    emit_storage(storage);
+    std::cout << "}}\n";
+}
+
 void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team,
                      const graph::ReadyLanes& lanes) {
     const std::string_view baseline_spec(args[0]);
@@ -678,21 +743,26 @@ int main(int argc, char** argv) {
     const bool calibrating = mode == "--calibrate-team";
     const bool measuring = mode == "--benchmark-team";
     const bool serial = mode == "--run-serial";
-    bool measuring_ready = false, running_ready = false;
+    bool calibrating_ready = false, measuring_ready = false, running_ready = false;
 #ifdef SCAR_ATEN_READY_DAG
+    calibrating_ready = mode == "--calibrate-ready-locality";
     measuring_ready = mode == "--benchmark-ready";
     running_ready = mode == "--run-ready";
 #endif
-    if (!calibrating && !measuring && !serial && !measuring_ready && !running_ready && mode != "--run-team") {
+    if (!calibrating && !measuring && !serial && !calibrating_ready && !measuring_ready && !running_ready
+            && mode != "--run-team") {
         return scar_native_file_main(argc, argv);
     }
-    const auto expected = graph::input_count + (measuring_ready ? 9 : measuring ? 8 : calibrating ? 6 :
+    const auto expected = graph::input_count + (measuring_ready ? 9 : measuring ? 8 : calibrating_ready ? 7 : calibrating ? 6 :
                                                (serial ? 3 : 6) + graph::output_count);
     if (static_cast<std::size_t>(argc) != expected) {
         std::fputs("usage: aten-graph --calibrate-team <caller> <worker1> <worker2> <warmup> <input.f32>...\n"
                    "       aten-graph --benchmark-team <caller> <worker1> <worker2> <windows> <warmup> <odd-count> <input.f32>...\n"
                    "       aten-graph --run-team <caller> <worker1> <worker2> <windows> <input.f32>... <new-output.f32>...\n"
                    "       aten-graph --run-serial <caller> <input.f32>... <new-output.f32>...\n", stderr);
+#ifdef SCAR_ATEN_READY_DAG
+        std::fputs("       aten-graph --calibrate-ready-locality <caller> <worker1> <worker2> <lanes> <warmup> <input.f32>...\n", stderr);
+#endif
         return 2;
     }
     try {
@@ -712,10 +782,11 @@ int main(int argc, char** argv) {
                               integer(argv[4], 0, CPU_SETSIZE - 1, "second worker CPU")};
         graph::CpuTeam team(cpus);
 #ifdef SCAR_ATEN_READY_DAG
-        if (measuring_ready || running_ready) {
+        if (calibrating_ready || measuring_ready || running_ready) {
             const auto lanes = parse_ready_lanes(argv[5]);
             if (running_ready) return invoke(argv + 6, [&](const auto& inputs) { return graph::run_ready(inputs, team, lanes); });
-            benchmark_ready(argv + 6, cpus, team, lanes);
+            if (calibrating_ready) calibrate_ready_locality(argv + 6, cpus, team, lanes);
+            else benchmark_ready(argv + 6, cpus, team, lanes);
             return 0;
         }
 #endif

@@ -1,7 +1,10 @@
 """Price a source-ordered CPU lane schedule over original Tensor dependencies."""
 
+from statistics import median_low
+
 from scar.optimization.aten_native_team import READY_SERVICE_SCOPE, _measurements, _storage, _team_groups, data_dependencies
 from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
+from scar.optimization.aten_ready_numa import model_ready_numa_locality
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
 
 
@@ -23,14 +26,18 @@ def _assign_lanes(dependencies, service, domains):
     return lanes
 
 
-def _intervals(dependencies, lanes, service):
+def _assigned_costs(rows, lanes):
+    return [rows[lane][index] for index, lane in enumerate(lanes)]
+
+
+def _intervals(dependencies, lanes, costs):
     intervals = []
-    previous = [None] * len(service)
+    previous = [None] * (max(lanes) + 1)
     for index, (parents, lane) in enumerate(zip(dependencies, lanes, strict=True)):
         prior = previous[lane]
         constraints = parents if prior is None else (*parents, prior)
         start = max((intervals[parent][1] for parent in constraints), default=0)
-        intervals.append((start, start + service[lane][index], prior))
+        intervals.append((start, start + costs[index], prior))
         previous[lane] = index
     return intervals
 
@@ -53,12 +60,13 @@ def _prediction(point, samples):
 
 
 def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2):
-    """Nominate a deterministic lane schedule from the measured placement alone.
+    """Nominate and price a deterministic lane schedule on the measured placement.
 
     Callers must replay the exact concurrency declaration for every operator.
     Each lane is traversed in original source order, with waits on original
-    DATA predecessors only. Same-NUMA isolated times omit contention and
-    notification overhead. The bounded model requires later matched validation.
+    DATA predecessors only. Across NUMA nodes, price the exact nominee using
+    a measured provider replay on its lanes and observed storage pages. Cost
+    estimates still require matched concurrent validation.
     """
     dependencies = data_dependencies(recipe)
     operations = recipe['operations']
@@ -76,7 +84,8 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
                   basis='SOURCE_ORDER_EARLIEST_FINISH_WITH_MEASURED_LANE_SERVICES',
                   contention_modelled=False, per_edge_notification_cost_modelled=False,
                   source_replacement_authorized=False)
-    if None in nodes or len(set(nodes)) != 1:
+    cross_numa = len(set(nodes)) > 1
+    if None in nodes or (cross_numa and not full_graph):
         return dict(report, reason='READY_DAG_REQUIRES_SAME_NUMA_NODE')
     if tensor_budget_bytes is None:
         return dict(report, reason='READY_DAG_REQUIRES_TENSOR_BUDGET')
@@ -103,7 +112,7 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
     for domain in _LANE_DOMAINS:
         lanes = _assign_lanes(dependencies, service, domain)
         width = max(lanes) + 1
-        intervals = _intervals(dependencies, lanes, service)
+        intervals = _intervals(dependencies, lanes, _assigned_costs(service, lanes))
         if width > 1 and _overlap(intervals):
             candidates.append((_finish(intervals) + handoffs[str(width)], width, lanes, intervals))
     if not candidates:
@@ -130,10 +139,33 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
         candidates = eligible
 
     estimate, width, lanes, intervals = candidates[0]
-    samples = [_finish(_intervals(dependencies, lanes, measurements)) + handoffs_ns
+    samples = [_finish(_intervals(dependencies, lanes, _assigned_costs(measurements, lanes))) + handoffs_ns
                for measurements, handoffs_ns in zip(zip(*lane_samples, strict=True), handoff_samples[str(width)],
                                                      strict=True)]
     prediction = _prediction(estimate, samples)
+    if cross_numa:
+        measured = calibration.get('ready_numa')
+        if measured is None:
+            return dict(report, status='READY_DAG_NUMA_CALIBRATION_REQUIRED',
+                        reason='READY_DAG_NUMA_CALIBRATION_REQUIRED', lanes=lanes, launch_width=width)
+        locality = model_ready_numa_locality(measured, recipe, schedule, lanes, warmup,
+                                             result_storage_bytes=result_bytes)
+        report['ready_numa'] = locality
+        locality['isolated_prediction'] = prediction
+        if locality['status'] != 'MEASURED':
+            return dict(report, reason='READY_DAG_NUMA_PAGE_EVIDENCE_INCOMPLETE', lanes=lanes, launch_width=width)
+        timings = locality['operation_samples_ns']
+        intervals = _intervals(dependencies, lanes, [median_low(samples) for samples in zip(*timings, strict=True)])
+        estimate = _finish(intervals) + handoffs[str(width)]
+        context_samples = [_finish(_intervals(dependencies, lanes, measurements)) + handoffs_ns
+                           for measurements, handoffs_ns in zip(timings, handoff_samples[str(width)], strict=True)]
+        contextual = _prediction(estimate, context_samples)
+        locality['contextual_prediction'] = contextual
+        prediction = dict(estimate_ns=estimate,
+                          sample_min_ns=min(prediction['sample_min_ns'], contextual['sample_min_ns']),
+                          sample_max_ns=max(prediction['sample_max_ns'], contextual['sample_max_ns']))
+        report.update(basis='SOURCE_ORDER_EARLIEST_FINISH_WITH_FIXED_LANE_NUMA_REPLAY',
+                      bounds='ISOLATED_AND_CONTEXTUAL_CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS')
     report['predictions']['READY_DAG'] = prediction
     if (serial['estimate_ns'] - estimate) / serial['estimate_ns'] < _MIN_GAIN:
         return dict(report, reason='READY_DAG_PREDICTED_GAIN_BELOW_THRESHOLD')
