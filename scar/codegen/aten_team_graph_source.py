@@ -91,8 +91,8 @@ inline std::array<at::Tensor, output_count> run_parallel(
 '''
 
 
-def render_ready_support(calls, outputs, dependencies):
-    """Use the original Tensor edges to drive an opt-in ready DAG."""
+def render_ready_support(calls, outputs, dependencies, *, exported_indices):
+    """Render completion dependencies and last-use handling of original Tensor values."""
     incoming = [set() for _ in calls]
     for producer, consumer in dependencies:
         if type(producer) is not int or type(consumer) is not int or not 0 <= producer < consumer < len(calls):
@@ -100,32 +100,57 @@ def render_ready_support(calls, outputs, dependencies):
         incoming[consumer].add(producer)
     offsets = [0]
     predecessors = []
+    consumers = [0] * len(calls)
     for parents in incoming:
         predecessors.extend(sorted(parents))
         offsets.append(len(predecessors))
+        for parent in parents:
+            consumers[parent] += 1
+
+    exported_indices = tuple(exported_indices)
+    if not exported_indices or any(type(index) is not int or not 0 <= index < len(calls) for index in exported_indices):
+        raise ValueError('ready DAG requires explicit exported result indices')
+    exported = set(exported_indices)
 
     offset_items = ', '.join(map(str, offsets))
     predecessor_items = ', '.join(map(str, predecessors))
-    values = '\n'.join(f'    at::Tensor {value};' for value, _ in calls)
+    consumer_items = ', '.join(map(str, consumers))
+    export_items = ', '.join('true' if i in exported else 'false' for i in range(len(calls)))
+    values = '\n'.join(f'    auto& {value} = values[{i}];' for i, (value, _) in enumerate(calls))
     cases = '\n'.join(f'        case {i}: {value} = observe({i}, [&] {{ return {expression}; }}); return;'
                       for i, (value, expression) in enumerate(calls))
     return f'''
 using ReadyLanes = std::array<std::uint8_t, operation_count>;
 inline constexpr std::array<std::size_t, operation_count + 1> ready_offsets{{{offset_items}}};
 inline constexpr std::array<std::size_t, {len(predecessors)}> ready_predecessors{{{predecessor_items}}};
+inline constexpr std::array<std::size_t, operation_count> ready_consumer_counts{{{consumer_items}}};
+inline constexpr std::array<bool, operation_count> ready_exported{{{export_items}}};
 
-template <class Observer>
-inline std::array<at::Tensor, output_count> run_ready(
-        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, Observer&& observe) {{
+template <class Observer, class ReleaseObserver>
+inline std::array<at::Tensor, output_count> run_ready_inspected(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes,
+        Observer&& observe, ReleaseObserver&& observe_release) {{
     validate_inputs(inputs);
+    std::array<at::Tensor, operation_count> values;
 {values}
-    execute_ready_dag(team, lanes, ready_offsets, ready_predecessors, [&](std::size_t index) {{
+    const auto invoke = [&](std::size_t index) {{
         switch (index) {{
 {cases}
         default: throw std::logic_error("unknown native DAG operation");
         }}
+    }};
+    execute_ready_dag(team, lanes, ready_offsets, ready_predecessors, ready_consumer_counts, ready_exported,
+                      invoke, [&](std::size_t index) {{
+        values[index].reset();
+        observe_release(index);
     }});
     return {{{outputs}}};
+}}
+
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_ready(
+        std::span<const at::Tensor> inputs, CpuTeam& team, const ReadyLanes& lanes, Observer&& observe) {{
+    return run_ready_inspected(inputs, team, lanes, observe, [](std::size_t) {{}});
 }}
 
 inline std::array<at::Tensor, output_count> run_ready(

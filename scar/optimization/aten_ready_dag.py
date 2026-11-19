@@ -1,6 +1,7 @@
 """Price a source-ordered CPU lane schedule over original Tensor dependencies."""
 
 from scar.optimization.aten_native_team import _measurements, _storage, _team_groups
+from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes, tensor_releases
 
 
@@ -60,7 +61,7 @@ def _prediction(point, samples):
     return dict(estimate_ns=point, sample_min_ns=min(point, *samples), sample_max_ns=max(point, *samples))
 
 
-def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes):
+def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2):
     """Nominate a deterministic lane schedule from the measured placement alone.
 
     Callers must replay the exact concurrency declaration for every operator.
@@ -85,19 +86,20 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
         return dict(report, reason='READY_DAG_REQUIRES_SAME_NUMA_NODE')
     if tensor_budget_bytes is None:
         return dict(report, reason='READY_DAG_REQUIRES_TENSOR_BUDGET')
-    if not _bytes(tensor_budget_bytes):
-        raise ValueError('ready DAG Tensor budget must be a bounded nonnegative byte count')
+    if not _bytes(tensor_budget_bytes) or tensor_budget_bytes == 0:
+        raise ValueError('ready DAG Tensor budget must be a positive bounded byte count')
 
     service, handoffs, lane_samples, handoff_samples = _measurements(calibration, warmup, len(operations), windows)
     original_storage, _ = _storage(calibration, recipe, {}, None)
     input_bytes = original_storage['persistent_input_bytes']
-    peak = _bounded_sum((input_bytes, *calibration['result_storage_bytes']))
+    result_bytes = calibration['result_storage_bytes']
+    peak = _bounded_sum((input_bytes, *result_bytes))
     report['tensor_storage'] = dict(scope=original_storage['scope'], accounting='ALL_INPUTS_AND_RESULTS_TO_RETURN',
         persistent_input_bytes=input_bytes, serial_peak_bytes=original_storage['serial_peak_bytes'],
         peak_tensor_storage_bytes=peak, budget_bytes=tensor_budget_bytes, excluded_bytes=original_storage['excluded_bytes'])
     serial = _prediction(sum(service[0]), [sum(row) for row in lane_samples[0]])
     report['predictions']['SERIAL'] = serial
-    if peak > tensor_budget_bytes:
+    if ready_dag_abi == 1 and peak > tensor_budget_bytes:
         return dict(report, reason='READY_DAG_TENSOR_BUDGET_EXCEEDED')
 
     candidates = []
@@ -110,7 +112,27 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
     if not candidates:
         return dict(report, reason='READY_DAG_HAS_NO_MODELED_OVERLAP')
 
-    estimate, width, lanes, intervals = min(candidates)
+    candidates.sort()
+    if ready_dag_abi == 2:
+        exports = {value for value in recipe['outputs']}
+        output_indices = [i for i, op in enumerate(operations) if op['id'] in exports]
+        checked = {}
+        for _, _, lanes, _ in candidates:
+            key = tuple(lanes)
+            if key not in checked:
+                checked[key] = ready_lifetime_bound(dependencies, lanes, output_indices, result_bytes, input_bytes)
+        eligible = [row for row in candidates
+                    if checked[tuple(row[2])]['peak_tensor_storage_bytes'] <= tensor_budget_bytes]
+        bound = checked[tuple(eligible[0][2])] if eligible else min(
+            checked.values(), key=lambda proof: proof['peak_tensor_storage_bytes'])
+        report['tensor_storage'].update(accounting='RELEASE_ON_LAST_COMPLETED_CONSUMER',
+            full_retention_bytes=peak, lifetime_proof=bound,
+            peak_tensor_storage_bytes=bound['peak_tensor_storage_bytes'])
+        if not eligible:
+            return dict(report, reason='READY_DAG_TENSOR_BUDGET_EXCEEDED')
+        candidates = eligible
+
+    estimate, width, lanes, intervals = candidates[0]
     samples = [_finish(_intervals(dependencies, lanes, measurements)) + handoffs_ns
                for measurements, handoffs_ns in zip(zip(*lane_samples, strict=True), handoff_samples[str(width)],
                                                      strict=True)]

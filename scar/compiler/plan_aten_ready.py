@@ -31,7 +31,7 @@ _PAIRED = 'scar.aten-ready-paired-validation'
 def _ready_bundle(path, digest):
     artifact, origin, recipe, hardware, executable, key = _bundle(path, digest)
     abi = artifact.get('ready_dag_abi')
-    if key != 'cpu_team' or type(abi) is not int or abi != 1:
+    if key != 'cpu_team' or type(abi) is not int or abi not in (1, 2):
         raise ValueError('compile the original three-core ATen graph with --ready-dag')
     contract = artifact['concurrency_contract']
     _, requirements, _ = _read_declared(contract['path'], contract['sha256'])
@@ -52,8 +52,12 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     outputs = {op['id']: nbytes for op, nbytes in
                zip(recipe['operations'], calibration['result_storage_bytes'], strict=True)}
     join = '$ready-return'
-    locations = {value: memory.id for value in outputs}
+    last_consumer = storage['accounting'] == 'RELEASE_ON_LAST_COMPLETED_CONSUMER'
+    kept = set(recipe['outputs']) if last_consumer else outputs.keys()
+    read = {model['timeline'][parent]['operation'] for parents in model['data_dependencies'] for parent in parents}
+    locations = dict.fromkeys((value for value in outputs if value in kept), memory.id)
     operations, edges = [], []
+    lane_ends = {}
     for row, native in zip(model['timeline'], recipe['operations'], strict=True):
         identifier = row['operation']
         prior = row['lane_predecessor']
@@ -63,27 +67,36 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
             producer = value if value in outputs else None
             edges.append(PlanningDataEdge(f'{value}->{identifier}', value, producer, identifier,
                 outputs[value] if producer else inputs[value], None if producer else memory.id, source_refs=refs))
-        edges.append(PlanningDataEdge(f'{identifier}->{join}', identifier, identifier, join,
-                                      outputs[identifier], None, source_refs=refs))
+        if identifier in kept:
+            edges.append(PlanningDataEdge(f'{identifier}->{join}', identifier, identifier, join,
+                                          outputs[identifier], None, source_refs=refs))
+        has_consumer = identifier in kept or identifier in read
         demands = {resource.id: 1 for resource in domains[row['cpu_id']]}
         duration = row['end_ns'] - row['start_ns']
         option = ImplementationOption('CPU_LANE', 'EXISTING_LIBTORCH_READY_DAG', refs, demands,
-            {}, dict.fromkeys(operands, memory.id), {identifier: memory.id},
+            {} if has_consumer else {memory.id: outputs[identifier]}, dict.fromkeys(operands, memory.id),
+            {identifier: memory.id} if has_consumer else {},
             CostEstimate(duration, None, None, 'EMPIRICAL_MODEL', 'ISOLATED_ATEN_LANE', refs),
             dict(cpu_id=row['cpu_id'], lane=row['lane']))
         operations.append(PlanningOperation(identifier, refs, predecessors, (option,), 'CPU_LANE'))
+        lane_ends[row['lane']] = identifier
     return_uses = ImplementationOption('RETURN', 'LOGICAL_TENSOR_RETENTION_ENDPOINT', refs,
         {}, {}, locations, {}, CostEstimate(0, 0, 0, 'DECLARED_MODEL', 'LOGICAL_ENDPOINT', refs),
         dict(exported_tensors=recipe['outputs']))
-    operations.append(PlanningOperation(join, refs, (), (return_uses,), 'RETURN'))
+    join_predecessors = tuple(lane_ends[lane] for lane in sorted(lane_ends)) if last_consumer else ()
+    operations.append(PlanningOperation(join, refs, join_predecessors, (return_uses,), 'RETURN'))
+    lifetime_assumption = ('LAST_CONSUMER_OR_EXPORT_EXCLUDING_PROVIDER_WORKSPACE' if last_consumer
+                           else 'RETAINS_ALL_TENSOR_HANDLES_EXCLUDING_PROVIDER_WORKSPACE')
     problem = PlanningProblem(target, refs, resources, tuple(operations), tuple(edges),
         assumptions=('DATA_AND_LOCAL_LANE_ORDER', 'DECLARED_CONCURRENT_OPERATOR_EFFECTS',
-                     'RETAINS_ALL_TENSOR_HANDLES_EXCLUDING_PROVIDER_WORKSPACE', 'SERVICES_EXCLUDE_DISPATCH_AND_JOIN'),
+                     lifetime_assumption, 'SERVICES_EXCLUDE_DISPATCH_AND_JOIN'),
         reserved_memory={memory.id: storage['persistent_input_bytes']})
     execution = construct_implementations(problem)
     verified = verify_execution_plan(problem, execution)
-    if verified['resource_peaks'][memory.id] != storage['peak_tensor_storage_bytes']:
-        raise ValueError('ready DAG material lifetimes differ from its full retention envelope')
+    actual_peak = verified['resource_peaks'][memory.id]
+    envelope = storage['peak_tensor_storage_bytes']
+    if actual_peak > envelope or (not last_consumer and actual_peak != envelope):
+        raise ValueError('ready DAG material lifetimes exceed the admitted storage envelope')
     observed = {row['operation']: (row['start_ns'], row['end_ns']) for row in execution['selected']}
     expected_join = max(row['end_ns'] for row in model['timeline'])
     if observed.pop(join) != (expected_join, expected_join):
@@ -93,11 +106,23 @@ def _resource_plan(hardware, schedule, origin, evidence, recipe, calibration, mo
     return problem_document(problem), execution
 
 
-def _case(raw, model, baseline, warmup, count, storage):
+def _case(raw, model, baseline, warmup, count, storage, *, recipe):
     if (raw['all_pairs_validated'] is not True or
             (raw['lanes'], raw['baseline'], raw['cpu_ids'], raw['warmup_pairs'], raw['measured_pairs'],
              raw['result_storage_bytes']) != (model['lanes'], baseline, model['cpu_ids'], warmup, count, storage)):
         raise ValueError('ready DAG validation differs from its planned boundary or storage geometry')
+    residency = model['tensor_storage']
+    lifetime = None
+    if residency['accounting'] == 'RELEASE_ON_LAST_COMPLETED_CONSUMER':
+        outputs = set(recipe['outputs'])
+        releases = [i for i, op in enumerate(recipe['operations']) if op['id'] not in outputs]
+        retained = residency['persistent_input_bytes'] + sum(
+            nbytes for op, nbytes in zip(recipe['operations'], storage, strict=True) if op['id'] in outputs)
+        lifetime = raw['ready_lifetime']
+        peak = lifetime['graph_held_peak_bytes']
+        if (lifetime['released_indices'] != releases or lifetime['retained_bytes_at_return'] != retained
+                or type(peak) is not int or not retained <= peak <= residency['peak_tensor_storage_bytes']):
+            raise ValueError('ready DAG allocation/release observation does not satisfy its storage proof')
     rows = []
     for i, row in enumerate(raw['samples']):
         order = 'AB' if (i + warmup) % 2 == 0 else 'BA'
@@ -107,18 +132,21 @@ def _case(raw, model, baseline, warmup, count, storage):
         rows.append(dict(pair_index=i, order=modes, serial_ns=row['baseline_ns'], dual_ns=row['ready_ns'],
                          bitwise_identical=True, input_values_unchanged=True, fresh_owned_outputs=True))
     metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count)
-    return dict(baseline=baseline, metrics={'BASELINE': metrics['SERIAL'], 'READY_DAG': metrics['TWO_CPU']},
+    results = dict(baseline=baseline, metrics={'BASELINE': metrics['SERIAL'], 'READY_DAG': metrics['TWO_CPU']},
                 wins=wins, paired_order_differences={'AB': directional['SERIAL'], 'BA': directional['TWO_CPU']},
                 speedup=ratio, profitable=faster)
+    if lifetime is not None:
+        results['untimed_lifetime_observation'] = lifetime
+    return results
 
 
-def _derive(recipe, schedule, raw, budget, warmup):
+def _derive(recipe, schedule, raw, budget, warmup, *, ready_dag_abi):
     if raw['cpu_ids'] != schedule['cpus'] or raw['warmup_pairs'] != warmup:
         raise ValueError('ready DAG calibration belongs to a different CPU execution context')
     calibration = raw['calibration']
-    model = plan_ready_dag(recipe, schedule, calibration, warmup, tensor_budget_bytes=budget)
+    model = plan_ready_dag(recipe, schedule, calibration, warmup, tensor_budget_bytes=budget, ready_dag_abi=ready_dag_abi)
     baselines = ['serial']
-    if model['status'] == 'PLAN_READY_DAG':
+    if model['status'] == 'PLAN_READY_DAG' and model['tensor_storage']['serial_peak_bytes'] <= budget:
         windows = model_cpu_team(calibration, recipe, schedule, warmup, tensor_budget_bytes=budget)['selected_windows']
         if windows:
             baselines.append(team_window_spec(windows))
@@ -137,7 +165,8 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
         raise ValueError('supply inputs in original recipe order')
     guarded = [_receipt(executable), *artifact['provider']['libraries'], *inputs]
     raw = _invoke(executable, schedule, '--calibrate-team', [warmup_pairs], inputs)
-    model, baselines = _derive(recipe, schedule, raw, tensor_budget_bytes, warmup_pairs)
+    abi = artifact['ready_dag_abi']
+    model, baselines = _derive(recipe, schedule, raw, tensor_budget_bytes, warmup_pairs, ready_dag_abi=abi)
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-aten-ready-', dir=out.parent) as temporary:
         stage = Path(temporary)
@@ -159,7 +188,7 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
                 measured = _invoke(executable, schedule, '--benchmark-ready',
                                    [lanes, baseline, warmup_pairs, measured_pairs], inputs)
                 validations.append(_case(measured, model, baseline, warmup_pairs, measured_pairs,
-                                         raw['calibration']['result_storage_bytes']))
+                                         raw['calibration']['result_storage_bytes'], recipe=recipe))
                 measurements.append(publish(f'paired-{i}.json', _PAIRED, measured))
             if not all(result['profitable'] for result in validations):
                 reason = 'READY_DAG_DID_NOT_BEAT_MATCHED_BASELINES'
@@ -167,7 +196,7 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
             raise ValueError('native ready DAG members changed during measurement')
         if reason is None:
             _launcher(stage, executable, 'READY_DAG', schedule, inputs, guarded, model['lanes'])
-        report = dict(schema=SCHEMA, schema_version=1, bundle=origin, executable=guarded[0], inputs=inputs,
+        report = dict(schema=SCHEMA, schema_version=abi, bundle=origin, executable=guarded[0], inputs=inputs,
             cpu_ids=model['cpu_ids'], model=model, observations=calibration, paired_validation=measurements,
             validation=validations, warmup_pairs=warmup_pairs, measured_pairs=measured_pairs,
             selected='READY_DAG' if reason is None else 'KEEP_ORIGINAL', reason=reason,
@@ -178,19 +207,22 @@ def plan_aten_ready(bundle, *, bundle_sha256, input_paths, out, tensor_budget_by
 
 
 def read_ready_selection(path, selection):
-    if (selection['schema'], selection['schema_version'], selection['selected']) != (SCHEMA, 1, 'READY_DAG'):
+    if selection['schema'] != SCHEMA or selection['selected'] != 'READY_DAG':
         raise ValueError('selected and independently validated ready DAG required')
     bundle = selection['bundle']
     artifact, origin, recipe, hardware, executable, schedule = _ready_bundle(bundle['uri'], bundle['sha256'])
-    if origin != bundle or selection['executable'] != _receipt(executable):
+    abi = artifact['ready_dag_abi']
+    if (origin != bundle or selection['schema_version'] != abi
+            or selection['executable'] != _receipt(executable)):
         raise ValueError('ready DAG selection does not identify the original executable')
     calibration = selection['observations']
     raw = read_artifact(calibration)
     warmup, count = selection['warmup_pairs'], selection['measured_pairs']
     if not 3 <= warmup <= 100 or not 4 <= count <= 500 or count % 2:
         raise ValueError('ready DAG selection requires its balanced matched trial')
-    model, baselines = _derive(recipe, schedule, raw, selection['model']['tensor_storage']['budget_bytes'], warmup)
-    results = [_case(read_artifact(ref), model, baseline, warmup, count, raw['calibration']['result_storage_bytes'])
+    budget = selection['model']['tensor_storage']['budget_bytes']
+    model, baselines = _derive(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+    results = [_case(read_artifact(ref), model, baseline, warmup, count, raw['calibration']['result_storage_bytes'], recipe=recipe)
                for ref, baseline in zip(selection['paired_validation'], baselines, strict=True)]
     if (model != selection['model'] or model['status'] != 'PLAN_READY_DAG' or model['cpu_ids'] != selection['cpu_ids']
             or results != selection['validation'] or not all(row['profitable'] for row in results)):

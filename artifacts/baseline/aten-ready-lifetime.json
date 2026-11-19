@@ -1,0 +1,306 @@
+{
+  "add_pressure": {
+    "application_validation": {
+      "fallback_calls": 0,
+      "measured_pairs": 3,
+      "native_calls_per_measured_process": 96,
+      "output_sha256": "7cd6347251e39202c3a7084e70b11e4f80209e983d3f0fa30c758c428839754e",
+      "process_time_ns": {
+        "GUARDED": {
+          "max_ns": 11307195574,
+          "median_ns": 10499452032,
+          "median_ns_twice": 20998904064,
+          "min_ns": 10260695868,
+          "samples_ns": [
+            10260695868,
+            10499452032,
+            11307195574
+          ],
+          "variance_ns2": 3.007692950247978e+17
+        },
+        "ORIGINAL": {
+          "max_ns": 12184432573,
+          "median_ns": 11892985528,
+          "median_ns_twice": 23785971056,
+          "min_ns": 11871104567,
+          "samples_ns": [
+            11892985528,
+            11871104567,
+            12184432573
+          ],
+          "variance_ns2": 3.0599099306241932e+16
+        }
+      },
+      "sha256": "5391546c7d2ca1f79ee5561b30fc0aa1918d3254a482bfaec377467dc183cd2e",
+      "speedups": {
+        "entry_ns": 1.1807134754895288,
+        "process_ns": 1.1327244023547913
+      },
+      "steps": 24,
+      "warmup_pairs": 1
+    },
+    "certificate_sha256": "790307169fc5144937c351c5b81dccf63bf4c6b32956dcb128468180939757af",
+    "compiled_trial_sha256": "db759bdcc3ee1bdec0344a504391debfa9cdc316c7b4853fcf2978f042b18833",
+    "cpu_ids": [
+      14,
+      15,
+      16
+    ],
+    "graph_held_storage": {
+      "accounting": "RELEASE_ON_LAST_COMPLETED_CONSUMER",
+      "budget_bytes": 230000000,
+      "excluded_bytes": [
+        "PROVIDER_INTERNAL_WORKSPACE",
+        "ALLOCATOR_RESERVES",
+        "OTHER_PROCESS_MEMORY"
+      ],
+      "full_retention_bytes": 235929600,
+      "lifetime_proof": {
+        "peak_tensor_storage_bytes": 209715200,
+        "proof": "COMPLETE_LANE_PREFIX_FRONTIER",
+        "reachable_prefixes": 11,
+        "witness_completed": [
+          0,
+          1
+        ],
+        "witness_in_flight": [
+          2,
+          3
+        ]
+      },
+      "peak_tensor_storage_bytes": 209715200,
+      "persistent_input_bytes": 104857600,
+      "scope": "GRAPH_HELD_TENSOR_BACKING_STORAGE",
+      "serial_peak_bytes": 209715200
+    },
+    "lanes": [
+      0,
+      1,
+      2,
+      1,
+      0
+    ],
+    "native_validation": [
+      {
+        "baseline": "serial",
+        "measured_pairs": 12,
+        "medians_ns": {
+          "BASELINE": 83369911.5,
+          "READY_DAG": 45064196.5
+        },
+        "sha256": "7a0c335818ba0f308775e78aaffff4ccea6685d18cc4a519465d4445df2bdc3a",
+        "speedup": 1.8500254742143245,
+        "untimed_lifetime_observation": {
+          "graph_held_peak_bytes": 209715200,
+          "released_indices": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "retained_bytes_at_return": 131072000
+        },
+        "warmup_pairs": 5,
+        "wins": 12
+      },
+      {
+        "baseline": "0:3",
+        "measured_pairs": 12,
+        "medians_ns": {
+          "BASELINE": 55250765.5,
+          "READY_DAG": 47638228.5
+        },
+        "sha256": "eaf86c23b13e5cb90eb395d570c4835e51c287ed5ed96df2feb1b384a4d02fc1",
+        "speedup": 1.1597989102386543,
+        "untimed_lifetime_observation": {
+          "graph_held_peak_bytes": 209715200,
+          "released_indices": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "retained_bytes_at_return": 131072000
+        },
+        "warmup_pairs": 5,
+        "wins": 11
+      }
+    ],
+    "selection_sha256": "5d75b7ddc49ce8f9c79462e2419a54697df662cebd7bc6c53196e7757fbe6178",
+    "standalone_equal_sha256": "cbfc8083979f1b8db4b32171a3738775e42b788de79bd3bd06b3c76ab8300db3"
+  },
+  "add_pressure_application_holdout": {
+    "grouped_over_ready_median_speedup": 0.8414246743275497,
+    "measured_pairs": 4,
+    "preferred_for_this_application": "GROUPED",
+    "process_median_ns": {
+      "GROUPED": 9172064779.5,
+      "READY_DAG": 10900636812.0
+    },
+    "ready_wins": 1,
+    "sha256": "254e03f0bb84708c7017866a2ba5acad8f387dc6353325bfd5de79f230db3936",
+    "warmup_pairs": 1
+  },
+  "disabled_storage_40_mib": "READY_DAG_TENSOR_BUDGET_EXCEEDED",
+  "independent_diagnostics": {
+    "pinned_trace_sha256": "c44dbfb967f13647b9fa6795bccd7b2e978ac435e1d57d0f24d185285ab65b8a",
+    "synthetic": {
+      "cpu_ids": [
+        6,
+        7,
+        8
+      ],
+      "distinct_readers_for_repeated_operand": 2,
+      "exports_retained": true,
+      "no_reader_released": true,
+      "opposite_completion_order_trials": 128,
+      "provider_exception_trials": 64,
+      "team_reused_after_failures": true
+    },
+    "synthetic_sha256": "045f39097742248ba5f616e9b3ccf8358872b643423af1ea19827ece90a7108e",
+    "unrelated_branch_overlap_ns": 42322332,
+    "untimed_graph_held_peak_bytes": 44826624
+  },
+  "measurement_root": "artifacts/current/experiments/aten-ready-lifetime-v2",
+  "rk4": {
+    "application_validation": {
+      "fallback_calls": 0,
+      "measured_pairs": 3,
+      "native_calls_per_measured_process": 128,
+      "output_sha256": "b06e08b9e2af8899509bc46f7335dbdd47e3ba7918056adfc9507cd2c5834d2f",
+      "process_time_ns": {
+        "GUARDED": {
+          "max_ns": 14676063776,
+          "median_ns": 14653173016,
+          "median_ns_twice": 29306346032,
+          "min_ns": 14648113654,
+          "samples_ns": [
+            14653173016,
+            14676063776,
+            14648113654
+          ],
+          "variance_ns2": 221798892839921.34
+        },
+        "ORIGINAL": {
+          "max_ns": 18970544811,
+          "median_ns": 18970144352,
+          "median_ns_twice": 37940288704,
+          "min_ns": 18869327539,
+          "samples_ns": [
+            18970144352,
+            18970544811,
+            18869327539
+          ],
+          "variance_ns2": 3401521050334939
+        }
+      },
+      "sha256": "7d8583d4dd055e672fac2e823836ec279b02044a4f040e484c3a1ec887102bd3",
+      "speedups": {
+        "entry_ns": 1.360257863445286,
+        "process_ns": 1.2946100023036813
+      },
+      "steps": 32,
+      "warmup_pairs": 1
+    },
+    "certificate_sha256": "c065b2ed7307b62c3dff399dce9ccefc926dc56c8012422da3604d16aba9eb9a",
+    "compiled_trial_sha256": "d5c129d351e93a8914ded55678274065d19d092294a513caad3398f5c333b10a",
+    "cpu_ids": [
+      14,
+      15,
+      16
+    ],
+    "graph_held_storage": {
+      "accounting": "RELEASE_ON_LAST_COMPLETED_CONSUMER",
+      "budget_bytes": 50331648,
+      "excluded_bytes": [
+        "PROVIDER_INTERNAL_WORKSPACE",
+        "ALLOCATOR_RESERVES",
+        "OTHER_PROCESS_MEMORY"
+      ],
+      "full_retention_bytes": 54263808,
+      "lifetime_proof": {
+        "peak_tensor_storage_bytes": 47185920,
+        "proof": "COMPLETE_LANE_PREFIX_FRONTIER",
+        "reachable_prefixes": 17,
+        "witness_completed": [
+          0,
+          1,
+          2
+        ],
+        "witness_in_flight": [
+          3,
+          5
+        ]
+      },
+      "peak_tensor_storage_bytes": 47185920,
+      "persistent_input_bytes": 28311552,
+      "scope": "GRAPH_HELD_TENSOR_BACKING_STORAGE",
+      "serial_peak_bytes": 44826624
+    },
+    "lanes": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "native_validation": [
+      {
+        "baseline": "serial",
+        "measured_pairs": 12,
+        "medians_ns": {
+          "BASELINE": 126613750.5,
+          "READY_DAG": 91393256
+        },
+        "sha256": "34e8b687ea59581434940e44929c4cefbfd09c232f118b9b8be6ce2a97ff55b5",
+        "speedup": 1.3853730137374687,
+        "untimed_lifetime_observation": {
+          "graph_held_peak_bytes": 44826624,
+          "released_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "retained_bytes_at_return": 30670848
+        },
+        "warmup_pairs": 5,
+        "wins": 12
+      },
+      {
+        "baseline": "0:2,2:2,4:2",
+        "measured_pairs": 12,
+        "medians_ns": {
+          "BASELINE": 102777299,
+          "READY_DAG": 91288075.5
+        },
+        "sha256": "21f8951508deb30ff6bec36c3e6184ae26033187acb531e2e49fa81538f08cd5",
+        "speedup": 1.1258567829047945,
+        "untimed_lifetime_observation": {
+          "graph_held_peak_bytes": 44826624,
+          "released_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "retained_bytes_at_return": 30670848
+        },
+        "warmup_pairs": 5,
+        "wins": 12
+      }
+    ],
+    "selection_sha256": "463afa6f80b199e38fd3fa0bc1a14a83692a802081117858d1c3886794e40c4e",
+    "standalone_equal_sha256": "69f9e882abbede1cd3f370dc83d8872d4e34b043d74edbb1f6a518e2bc6a5ec1"
+  },
+  "scope": "SAME_NUMA_FLOAT32_LIBTORCH_GRAPH_HELD_STORAGE"
+}

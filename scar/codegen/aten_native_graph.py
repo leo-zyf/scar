@@ -96,8 +96,9 @@ def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False)
         if ready_dag:
             from scar.codegen.aten_team_graph_source import render_ready_support
 
-            pair_include += f'#define SCAR_ATEN_READY_DAG 1\n#include "{_READY_HEADER.name}"\n'
-            pair_support += render_ready_support(calls, outputs, dependencies)
+            pair_include += f'#define SCAR_ATEN_READY_DAG 2\n#include "{_READY_HEADER.name}"\n'
+            exported = tuple(producers[value] for value in recipe['outputs'])
+            pair_support += render_ready_support(calls, outputs, dependencies, exported_indices=exported)
     elif schedule is not None:
         starts = {row['pair_indices'][0] for row in schedule['windows']}
         legal = ', '.join('true' if i in starts else 'false' for i in range(len(calls)))
@@ -309,7 +310,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
             receipt.update(cpu_windows=schedule, concurrency_contract=contract_receipt,
                            implementation='ORDERED_DEFAULT_WITH_DECLARED_CPU_WINDOWS_TRIAL')
         if ready_dag:
-            receipt['ready_dag_abi'] = 1
+            receipt['ready_dag_abi'] = 2
         (stage / 'artifact.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         stage.rename(out)
     return receipt

@@ -196,7 +196,7 @@ def build_aten_python_trial(source, function, *, projection, projection_sha256, 
         headers = ['graph.hpp', 'operators.hpp']
         if team:
             headers.append(_TEAM_HEADER)
-        if artifact.get('ready_dag_abi') == 1:
+        if artifact.get('ready_dag_abi') in (1, 2):
             headers.append(_READY_HEADER)
         for name in headers:
             dest = stage / name

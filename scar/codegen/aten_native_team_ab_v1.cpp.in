@@ -7,10 +7,12 @@
 #include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
 
+#include <atomic>
 #include <cfenv>
 #include <charconv>
 #include <chrono>
 #include <cstring>
+#include <numeric>
 #include <optional>
 #include <sched.h>
 #include <string_view>
@@ -586,6 +588,10 @@ void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam
     const SampleInputs data(args + 3);
     const auto& inputs = data.tensors;
     ResultStorage storage;
+    const auto input_bytes = std::accumulate(inputs.begin(), inputs.end(), std::size_t{0},
+        [](std::size_t sum, const at::Tensor& tensor) { return sum + tensor.storage().nbytes(); });
+    std::atomic_size_t live{input_bytes}, peak{input_bytes};
+    std::array<std::atomic_bool, graph::operation_count> released{};
     {
         auto observe = [&](std::size_t op, auto&& call) {
             auto value = call();
@@ -593,7 +599,18 @@ void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam
             return value;
         };
         const auto reference = graph::run_observed(inputs, observe);
-        const auto ready = graph::run_ready(inputs, team, lanes, observe);
+        const auto ready = graph::run_ready_inspected(inputs, team, lanes, [&](std::size_t op, auto&& call) {
+            const auto bytes = storage[op]->bytes;
+            const auto current = live.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+            auto maximum = peak.load(std::memory_order_relaxed);
+            while (current > maximum && !peak.compare_exchange_weak(maximum, current, std::memory_order_relaxed)) {}
+            return observe(op, call);
+        }, [&](std::size_t op) {
+            if (released[op].exchange(true, std::memory_order_relaxed)) {
+                throw std::runtime_error("ready DAG released a result twice");
+            }
+            live.fetch_sub(storage[op]->bytes, std::memory_order_relaxed);
+        });
         data.check();
         check_outputs(inputs, reference, ready);
     }
@@ -633,6 +650,14 @@ void benchmark_ready(char** args, const std::array<int, 3>& cpus, graph::CpuTeam
     }
     std::cout << "],\"result_storage_bytes\":";
     emit_storage(storage);
+    std::vector<std::size_t> released_indices;
+    for (std::size_t op = 0; op < released.size(); ++op) {
+        if (released[op].load(std::memory_order_relaxed)) released_indices.push_back(op);
+    }
+    std::cout << ",\"ready_lifetime\":{\"graph_held_peak_bytes\":" << peak.load(std::memory_order_relaxed)
+              << ",\"retained_bytes_at_return\":" << live.load(std::memory_order_relaxed) << ",\"released_indices\":";
+    emit_numbers(released_indices);
+    std::cout << '}';
     std::cout << "}\n";
 }
 #endif
