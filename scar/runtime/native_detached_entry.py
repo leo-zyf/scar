@@ -22,7 +22,7 @@ def _member(package, reference):
     return read_artifact({**reference, 'uri': str(package / reference['uri'])})
 
 
-def _admit_package(package, sha256, selection):
+def _admit_package(package, sha256, selection, *, selection_sha256=None):
     from scar.codegen.native_ordered_sparse_export import SCHEMA, check_native_ordered_export
 
     root = Path(package).resolve(strict=True)
@@ -32,6 +32,10 @@ def _admit_package(package, sha256, selection):
     if (manifest['schema_version'] != 3 or manifest['recipe'] != selection['execution_recipe']
             or {**manifest['detached_source'], 'uri': selection['recipe']['uri']} != selection['recipe']):
         raise ValueError('compact package and admitted source recipe differ')
+    release = manifest.get('qualified_release')
+    if release is not None and (
+            selection_sha256 not in (None, release['sha256']) or _member(root, release) != selection):
+        raise ValueError('compact package and admitted release selection differ')
     plan = _member(root, manifest['plan'])
     numeric = _member(root, manifest['numeric'])
     placement, workers, memory = plan['placement'], selection['workers'], plan['memory']
@@ -192,7 +196,8 @@ def run(entry, argv, *, selection=None, sha256=None, package=None, package_sha25
         reason = 'DETACHED_LIVE_RESOURCES_CHANGED'
         if _resources_fit(selected):
             try:
-                root, manifest, recipe, blas = _admit_package(package, package_sha256, selected)
+                root, manifest, recipe, blas = _admit_package(package, package_sha256, selected,
+                    selection_sha256=sha256)
             except _FAILURES:
                 reason = 'DETACHED_PACKAGE_OR_RECIPE_CHANGED'
             else:

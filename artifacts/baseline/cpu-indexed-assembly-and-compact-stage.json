@@ -1,0 +1,157 @@
+{
+  "schema": "scar.cpu-indexed-assembly-and-compact-stage",
+  "schema_version": 1,
+  "stage1": {
+    "clean_baseline": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-reused-bindings-explicit-v1/manifest.json",
+      "sha256": "ed0968429832404aec205588f6d50e1100a3672d813406b29e0543eba10602c1",
+      "size_bytes": 14687
+    },
+    "index_integration": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/plan-table-index-integration-v1.json",
+      "sha256": "f353f91d011ad09277ccbec9de0c8a3cf02cc9476ba5a6fac57d58af01ae673a",
+      "size_bytes": 181
+    },
+    "indexed_assembly": {
+      "baseline_seconds": 439.6852327559609,
+      "comparison": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-assembly-indexed-v1.log",
+        "sha256": "155cecacde38c443a653a94612c9a7ebb0a1492aef6af0925997dcc033cc24c3",
+        "size_bytes": 1025
+      },
+      "first_stage_complete": false,
+      "indexed_seconds": 336.75312302901875,
+      "invocation_producer_receipts_normalized_for_equality": true,
+      "manifest": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-assembly-indexed-v1/manifest.json",
+        "sha256": "fa022c42d9801764a78a1f110b3b05efac4f1076fdf360d457f507d8fb8eb5e1",
+        "size_bytes": 14633
+      },
+      "semantic_tables_equal": {
+        "configuration.json": true,
+        "coverage.json": true,
+        "entry-query.json": true,
+        "gaps.json": true,
+        "observed.json": true,
+        "relationships.json": true,
+        "resources.json.gz": true
+      }
+    },
+    "original_recipe_records_preserved": true,
+    "plan_lookup_comparison": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/plan-table-index-micro-v1.json",
+      "sha256": "5217173a45a258e46133842be2cef23d761ad1af7ab33179530206385efc4258",
+      "size_bytes": 315
+    },
+    "previous_reader": {
+      "legacy_invocation_routes_replayed": 39,
+      "observed_binding_versions": 32845,
+      "observed_call_handles": 8,
+      "old_version_rule_receipt_preserved_on_disk": true,
+      "prior_program_read": true,
+      "receipt": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-assembly-prior-reader-v1.json",
+        "sha256": "87190f0a0fbb0d461c39b8888bb34129cc555129272b54a8d6e9ea5db278617a",
+        "size_bytes": 186
+      }
+    },
+    "profile": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-assembly-samples-v1.json",
+      "sha256": "01d501b5fc720918946640c8a0a186d11a5548b3c044510aa3c9be246caf610b",
+      "size_bytes": 3046138
+    },
+    "reused_materials_rejoined": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/catalog-read-prior-materials-v1/result.json",
+      "sha256": "3b4b41073704fae0dd31f71088f833c0cd348e5749d947a2b5971ec60e3c6d2e",
+      "size_bytes": 86108
+    },
+    "sampled_baseline": {
+      "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-assembly-sampled-v1/manifest.json",
+      "sha256": "3d3cb785b52ebebad63ba993a8a94a77eb737522b8ca4accecd2d1099fa367c0",
+      "size_bytes": 14632
+    },
+    "sampled_counts": {
+      "compiled_plan_lookup_samples": 1258,
+      "invocation_outgoing_samples": 858,
+      "path_stat_leaf_samples": 1849,
+      "plan_table_document_samples": 608,
+      "samples": 7392
+    },
+    "sampling_interval_seconds": 0.05
+  },
+  "stage2": {
+    "disjoint_observed_startup_subphases_ns": 697764250,
+    "full_entry_cost_derived_from_owner_graph": false,
+    "original_normalization_operations": 6,
+    "owner_cost_ledger": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/owner-cost-v1/result.json",
+      "sha256": "63292a025383fcd647b44546f33bf943c798b289142d5d2b9aa78fa2cb64f4fd",
+      "size_bytes": 26131
+    },
+    "published_plan": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/release/selection.json",
+      "sha256": "27f38b08ed77b84cd8648c542839438ad5ee2fe01531e2d3295c7502e96a317b",
+      "size_bytes": 6947
+    },
+    "same_w6_release": true,
+    "unresolved_actual_duration_ns": {
+      "bootstrap-team": null,
+      "capture-live-ins": null,
+      "compare-request": null,
+      "entry-assembly-and-exit": null,
+      "prepare-original": null,
+      "prepare-private": null,
+      "publish-original": null
+    }
+  },
+  "stage3": {
+    "acceptance": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/compact-replay-v1/acceptance.json",
+      "sha256": "a5fffaf8c559f718bfc5374d5ac1643016518b61fbdb36c11c3c2dea9641ef1a",
+      "size_bytes": 5237
+    },
+    "compact_wire_bytes": 311384,
+    "executed_native_recipe_release": {
+      "path": "artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/release/selection.json",
+      "sha256": "27f38b08ed77b84cd8648c542839438ad5ee2fe01531e2d3295c7502e96a317b",
+      "size_bytes": 6947
+    },
+    "full_original_entry_cpp": false,
+    "generated_cpp": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only compact sparse/scar_ordered_sparse.cpp",
+      "sha256": "49ab01d0e8560b0554dbc6cb1214ee65e6d413ba57e7c5a962515c171196ac20",
+      "size_bytes": 15449
+    },
+    "native_bitwise_outputs": 512,
+    "native_runtime_boundary": "little-endian CSR structure and values, base RHS, constraint rows and their diagonal slots, release-approved scalar tickets",
+    "numeric_output": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/compact-replay-v1/native-output.json",
+      "sha256": "396a00f7dd585520242616f96a5b9c13854148930dab5b93812817672eca0a8e",
+      "size_bytes": 856
+    },
+    "original_entry_guarded": {
+      "authoritative_reference_calls": 1,
+      "fallback_calls": 0,
+      "original_stdout_sha256_payload": "a6cbef4e3434c08950f953cccf3008b8dda987232860cbc28257e176ccbf5e14",
+      "replaced_calls": 511,
+      "scope": "original source prepares inputs and preserves publication/effects; C++ provides guarded numeric results"
+    },
+    "package": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/C++ release-only compact sparse/artifact.json",
+      "sha256": "c731088201d6c78a52d3e26a1687190bbeb37a7c79f5ebf8235cd38560103ea1",
+      "size_bytes": 3421
+    },
+    "prepared_snapshot": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/compact-replay-v1/prepared-input.json",
+      "sha256": "864d6349b2f1ee0fc41a5d4c79ae13cdb1db186179ded7f593e0c7c425ad16c0",
+      "size_bytes": 3949
+    },
+    "prepared_wire": {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/sparse-cpu-second-workload-v1/current-ordered-plan-v1/compact-replay-v1/prepared-input.bin",
+      "sha256": "ef128087a58c44e2f8dda3e6912fe023f719dda62ebc998319957035f9ced480",
+      "size_bytes": 311384
+    },
+    "raw_wire_bytes": 102873156,
+    "timing_measured": false
+  }
+}
