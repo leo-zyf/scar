@@ -1,0 +1,213 @@
+{
+  "cpu_reference": {
+    "bitwise_output_receipts": [
+      {
+        "sha256": "2d5f4cf76277332aac7edb568c453b338a33edcd9e8c7973b48bc6efe94d0ca7",
+        "size_bytes": 32
+      },
+      {
+        "sha256": "08397e5df19de73b0bfc534983fd30baaf594ec4193fcf6e702af3770a15a734",
+        "size_bytes": 16
+      },
+      {
+        "sha256": "088bae22266619be8f07efdfab9ed57ebde9f000f6c3c21be5bab9f64f27f3a5",
+        "size_bytes": 40
+      },
+      {
+        "sha256": "2d5f4cf76277332aac7edb568c453b338a33edcd9e8c7973b48bc6efe94d0ca7",
+        "size_bytes": 32
+      }
+    ],
+    "executed_schedule_replayed": false,
+    "graph_operations": 4,
+    "graph_regions": 1,
+    "manifest_sha256": "4c247071938853357e29b78997c97336531999511225ea8da1a17b498206a3d5",
+    "native_dependencies_checked": true,
+    "physical_activities": 4,
+    "schema": "scar.native-project-validation",
+    "schema_version": 1
+  },
+  "cuda_candidate": {
+    "archive_replay": {
+      "actual_device_timing": "UNKNOWN",
+      "default_backend": "NO_OP",
+      "deployment_authorized": false,
+      "device_result_verified": false,
+      "executed_schedule_replayed": false,
+      "graph_operations": 4,
+      "graph_regions": 1,
+      "manifest_sha256": "8e0ac560bb50679001560f437e4d1341333d704901799c3142bcf55843924ac3",
+      "native_dependencies_checked": true,
+      "offline_schedule_replayed": true,
+      "physical_activities": 11,
+      "schema": "scar.native-project-validation",
+      "schema_version": 1
+    },
+    "candidate_activity_counts": {
+      "D2H": 3,
+      "H2D": 4,
+      "SGEMM": 3
+    },
+    "cuda_provider_symbols": [
+      "cublasSgemm_v2",
+      "cudaMemcpyAsync",
+      "cudaStreamWaitEvent"
+    ],
+    "declared_profile": {
+      "device": 0,
+      "device_bytes": 1048576,
+      "model_durations_ns": {
+        "d2h": 5,
+        "h2d": 3,
+        "sgemm": 7
+      },
+      "pinned_host_bytes": 1048576,
+      "schema": "scar.aten-export-cuda-offline-profile",
+      "schema_version": 1,
+      "workspace_bytes": 16384
+    },
+    "device_probe_unmasked": {
+      "return_code": 77,
+      "stderr": "CUDA device unavailable: no CUDA-capable device is detected"
+    },
+    "gates": {
+      "cuda_scope_forwarded": true,
+      "device_probe": {
+        "return_code": 77,
+        "stderr": "CUDA device unavailable: no CUDA-capable device is detected"
+      },
+      "explicit_trial_return_code": 77,
+      "non_trial_return_code": 2,
+      "preceding_cpu_paths_replayed": true,
+      "repinned_execution_authorization_rejected": true,
+      "trial_created_outputs": false,
+      "undersized_pinned_and_device_capacity_rejected": true,
+      "unsupported_rank_two_operator_rejected": true
+    },
+    "generated_source": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/src/main.cpp",
+      "sha256": "73827b56055e189f9274ab4a19cb8e5264d3cffa29fff4ec98399df13ca5e565",
+      "size_bytes": 7888
+    },
+    "independent_cpu_layout_check_bitwise_output_count": 4,
+    "intermediate_direct_device_consumer": "mm_1",
+    "manifest": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/artifact.json",
+      "sha256": "8e0ac560bb50679001560f437e4d1341333d704901799c3142bcf55843924ac3",
+      "size_bytes": 4556
+    },
+    "native_description": {
+      "abi_version": 1,
+      "buffer_count": 14,
+      "byte_order": "little",
+      "copy_count": 7,
+      "cross_stream_waits": 6,
+      "device": 0,
+      "dtype": "float32",
+      "execution_requires_trial": true,
+      "inputs": [
+        {
+          "nbytes": 48,
+          "shape": [
+            3,
+            4
+          ],
+          "slot": 9
+        },
+        {
+          "nbytes": 32,
+          "shape": [
+            4,
+            2
+          ],
+          "slot": 7
+        },
+        {
+          "nbytes": 60,
+          "shape": [
+            3,
+            5
+          ],
+          "slot": 8
+        },
+        {
+          "nbytes": 24,
+          "shape": [
+            2,
+            3
+          ],
+          "slot": 13
+        }
+      ],
+      "layout": "row_major_contiguous",
+      "outputs": [
+        {
+          "nbytes": 32,
+          "shape": [
+            2,
+            4
+          ],
+          "slot": 0
+        },
+        {
+          "nbytes": 16,
+          "shape": [
+            2,
+            2
+          ],
+          "slot": 1
+        },
+        {
+          "nbytes": 40,
+          "shape": [
+            2,
+            5
+          ],
+          "slot": 2
+        },
+        {
+          "nbytes": 32,
+          "shape": [
+            2,
+            4
+          ],
+          "slot": 0
+        }
+      ],
+      "provider_calls": 3,
+      "stream_count": 3
+    },
+    "performance_measured": false,
+    "problem": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/plan/problem.json",
+      "sha256": "64188db700ea496c501318e066ea9af376b2e9ff59ee470166b1d2d54245a146",
+      "size_bytes": 36725
+    },
+    "program": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/plan/program.json",
+      "sha256": "8eb2b7447b01f584960f6912dbfec13f4c56229df7f2fcaeb391622d86b540f6",
+      "size_bytes": 8751
+    },
+    "schedule": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/plan/schedule.json",
+      "sha256": "4a59555d57e7296697b81469ca516b147b8369a6bc94ee8d5b5c443e99e04d3c",
+      "size_bytes": 8906
+    },
+    "shared_external_upload_consumers": [
+      "mm",
+      "mm_2"
+    ],
+    "source_projection": {
+      "path": "artifacts/current/experiments/source-cuda-plan-v1/cuda-qualified/plan/projection.json",
+      "sha256": "a47cf0b0bdb44e831a4617b93e5559e6ffc2005dd7b630a46d7f9129ec18d2be",
+      "size_bytes": 2088
+    }
+  },
+  "schema": "scar.export-cuda-source-delivery-receipt",
+  "schema_version": 1,
+  "source_model": {
+    "path": "artifacts/current/experiments/source-cuda-plan-v1/model.pt2",
+    "sha256": "d6205524a23ef0b15d6f5e98b7966c4f9bca3f49881598e3311d17d640b67118",
+    "size_bytes": 9934
+  }
+}

@@ -3,6 +3,7 @@
 import argparse
 import json
 from math import prod
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -345,7 +346,12 @@ def verify_native_project(directory, manifest_sha256):
 
         if manifest['cpu_ready_scope'] != CPU_READY_SCOPE:
             raise ValueError('inference CPU ready plan uses a different observable execution contract')
-    receipt = _replay_family(manifest, member) if 'profiles' in manifest else _replay_single(manifest, member)
+    if manifest['schema'] == 'scar.native-exported-aten-cuda':
+        from scar.compiler.compile_exported_aten_cuda import replay_cuda_project
+
+        receipt = replay_cuda_project(root, manifest, member)
+    else:
+        receipt = _replay_family(manifest, member) if 'profiles' in manifest else _replay_single(manifest, member)
     executable = member(manifest['executable'])
     current = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={}))
     if current != manifest['dependencies'] or any(name.startswith(('libpython', 'libtorch_python')) for name in current):
@@ -364,15 +370,25 @@ def validate_native_project(directory, manifest_sha256, *, arguments=(), referen
     report = dict(schema='scar.native-project-validation', schema_version=1,
                   manifest_sha256=manifest_sha256, **receipt)
     if references:
+        cuda_trial = receipt.get('offline_schedule_replayed', False)
+        if cuda_trial and list(arguments[:1]) != ['--trial']:
+            raise ValueError('CUDA reference comparison requires an explicit --trial invocation')
+        environment = {}
+        if cuda_trial:
+            from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT
+
+            environment = {name: os.environ[name] for name in CUDA_ENVIRONMENT if name in os.environ}
         expected = [_content(Path(path).resolve(strict=True)) for path in references]
         with TemporaryDirectory(prefix='scar-native-validation-') as temporary:
             outputs = [Path(temporary) / str(i) for i in range(len(references))]
-            subprocess.run([str(root / 'launch.sh'), *arguments, *map(str, outputs)], env={},
+            subprocess.run([str(root / 'launch.sh'), *arguments, *map(str, outputs)], env=environment,
                            check=True, capture_output=True)
             observed = [_content(path) for path in outputs]
         if observed != expected:
             raise ValueError('native program output differs from its reference bytes')
         report['bitwise_output_receipts'] = observed
+        if cuda_trial:
+            report['device_result_verified'] = True
     return report
 
 

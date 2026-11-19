@@ -1,5 +1,7 @@
 # 当前状态
 
+真实 `torch.export` 的三个非方阵乘法已从类型化源图生成 CUDA C++20 候选。源图共享的四个外部值各上传一次，四个返回端口共用三次下载，内部中间值由设备上的下游算子直接读取。独立验收重放了源图、物理计划及 C++；同一输入的 CPU 原生产物四个输出均与 PyTorch 逐位一致。本机探测无可用 GPU，CUDA 实机结果、耗时及自动采用仍未验证。见 `artifacts/baseline/export-cuda-source-delivery.json`。
+
 CPU 推理现可按形状选用不同排程。一个动态 `torch.export` 模型交付为单个 C++20 程序，大形状采用同 NUMA 三核，小形状保留单核。大形状原生入口中位耗时为 1.261 s → 0.819 s，两个形状的输出均逐位一致。CUDA 侧已将 H2D、cuBLAS FP32 SGEMM 和 D2H 放进同一份物理计划，编译链接通过，实机尚缺可用设备。见 `artifacts/baseline/cpu-ready-and-cublas.json`。
 
 单个 C++20 推理包已可按名称分派批次 2、4、8，三个形状分别通过成本、存储、生成代码与双输出逐位验收。按正常完成合同自动删除两次无消费者的算子调用，原图保留。固定步长求解包可用内置源码重新推导求解边界，RK4 16 步结果仍逐位一致。单 CUDA 设备的 pinned host 与 device 搬运计划已生成并链接 C++，实机缺少可用设备。各验证范围见 `artifacts/baseline/native-shape-and-copy-replay.json`。
