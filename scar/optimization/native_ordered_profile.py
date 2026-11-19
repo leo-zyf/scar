@@ -11,7 +11,7 @@ from scar.analysis.source_triangle_seed import SCHEMA as SEED, check as check_se
 from scar.analysis.sparse_parallel_scaling_scope import _lanes
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
-from scar.optimization.sparse_parallel_cost import HARDWARE
+from scar.optimization.sparse_parallel_cost import HARDWARE, collect_hardware
 from scar.optimization.sparse_parallel_recipe import _storage_requirements
 
 
@@ -57,7 +57,8 @@ def _original(seed, observation, original, before, detached, oracle):
     _require(isinstance(fields, str) and re.fullmatch(r'#/records/[0-9]+/fields/selected_count', fields) is not None,
         'the new count must be observed at its original F4 call')
     index = int(fields.split('/')[2])
-    row = read_artifact(proof['frames'])['records'][index]
+    frames = read_artifact(proof['frames'])
+    row = frames['records'][index]
     _require(row['code']['key'] == detached['body_code_key']
         and row['fields']['selected_count']['formal'] == detached['roles']['count']
         and row['fields']['selected_count']['value'] == count,
@@ -65,16 +66,26 @@ def _original(seed, observation, original, before, detached, oracle):
     digest = observation['return_digest']
     _require(isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) is not None
         and oracle == (digest + '\n').encode('ascii'), 'oracle differs from the original ordered publication')
+    if 'process_id' in observation:
+        _require(observation['process_id'] == frames['process_id']
+            and observation['thread_id'] == frames['thread_id']
+            and observation['expected_stdout_sha256'] == sha256(oracle).hexdigest()
+            and observation['local_monitoring_only'] is True
+            and observation['performance_measurement'] is False,
+            'aggregate count, F4 frame and output must belong to the same original observation')
 
 
 def _resources(before, hardware_ref, hardware, count, width, identity):
     old = before['placement']
     owner, node = old['owner_cpu_id'], old['cpu_numa_node']
-    _require(type(width) is int and 1 < width <= min(count, len(old['worker_cpu_ids'])),
+    permitted = {row['cpu_id'] for row in hardware['processors'] if row['permitted'] and row['numa_nodes'] == [node]}
+    available = [lane for lane in old['workers'] if lane['cpu_id'] in permitted]
+    _require(type(width) is int and 1 < width <= min(count, len(available)),
         'requested width is outside the admitted physical cohort')
-    workers = old['worker_cpu_ids'][:width]
+    worker_lanes = [dict(lane, slot=index) for index, lane in enumerate(available[:width])]
+    workers = [lane['cpu_id'] for lane in worker_lanes]
     evidence = _lanes(hardware, [owner, *workers], node)
-    lanes = [old['owner'], *old['workers'][:width]]
+    lanes = [old['owner'], *worker_lanes]
     _require(all(row['cpu_id'] == lane['cpu_id'] and row['observed_smt_siblings'] == lane['siblings']
         and row['physical_core'] == [lane[key] for key in ('package_id', 'die_id', 'core_id')]
         for row, lane in zip(evidence, lanes, strict=True)), 'original CPU lanes have changed')
@@ -106,6 +117,36 @@ def _resources(before, hardware_ref, hardware, count, width, identity):
         cost=dict(basis='UNKNOWN', startup_ns=None, per_call_ns=None, close_ns=None, whole_scope_ns=None)), control
 
 
+def observe_profile_host(anchor_digest_package, count, *, widths=None):
+    """Observe and admit widths before attaching any measured service costs."""
+    from scar.codegen.native_ordered_sparse_export import check_native_ordered_export
+
+    _require(type(count) is int and 1 < count < 2**31 - 1, 'expected an admitted finite repetition count')
+    package = Path(anchor_digest_package).resolve(strict=True)
+    manifest = check_native_ordered_export(package)
+    _require(manifest['schema_version'] == 5, 'expected a checked canonical native digest provider')
+    plan = read_artifact(_local(package, manifest['plan']))
+    cohort = plan['placement']['launch_cpu_ids']
+    hardware = collect_hardware(cohort)
+    if widths is not None:
+        checked = tuple(widths)
+        _require(len(checked) >= 1 and all(type(width) is int for width in checked)
+            and len(checked) == len(set(checked)), 'expected distinct explicit worker widths')
+        for width in checked:
+            _resources(plan, None, hardware, count, width, plan['recipe_id'])
+        return hardware, tuple(sorted(checked))
+
+    eligible = []
+    for width in range(2, min(count, len(cohort) - 1) + 1):
+        try:
+            _resources(plan, None, hardware, count, width, plan['recipe_id'])
+        except ValueError:
+            continue
+        eligible.append(width)
+    _require(eligible, 'current CPU and memory scope cannot admit two workers in the validated provider family')
+    return hardware, tuple(sorted({eligible[0], eligible[-1]}))
+
+
 def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, width, *, original_observation_path):
     """Bind source, observed count, invariant loop and provider to a new fixed CPU plan."""
     from scar.codegen.native_ordered_sparse_export import SCHEMA as PACKAGE, check_native_ordered_export
@@ -131,7 +172,7 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
     count = seed['iterations']
     _require(seed['entry'] == contract['entry_source'] == release['entry'] == scope['entry']['source']
         and scope['source_body']['code_key'] == detached['body_code_key']
-        and count != release['count'] and release['count'] == before['case']['call_count']
+        and release['count'] == before['case']['call_count']
         and original_scope['consumer_completions'] == release['count'],
         'source, detached code or original fixed profile differs')
     _original(seed, observation, original, before, detached, read_artifact(oracle_ref, json_document=False))
@@ -193,9 +234,9 @@ def select_profile(benchmark_path):
     benchmark = _ref(benchmark_path, BENCHMARK)
     observed = read_artifact(benchmark)
     plans, packages = observed['plans'], observed['packages']
-    _require(observed['schema_version'] == 1 and plans.keys() == packages.keys()
-        and len(plans) >= 2 and all(re.fullmatch('[1-9][0-9]*', name) for name in plans),
-        'a matched count study needs two or more qualified widths')
+    _require(observed['schema_version'] == 1 and plans.keys() == packages.keys() and plans
+        and all(re.fullmatch('[1-9][0-9]*', name) for name in plans),
+        'a matched count study needs at least one qualified native width')
     profiles, native_launches, native_providers = {}, [], []
     for name, profile_ref in plans.items():
         _require(profile_ref == _ref(profile_ref['uri'], SCHEMA), 'profile changed before the measured comparison')
@@ -251,14 +292,18 @@ def select_profile(benchmark_path):
         upper, lower = summary[case]['max_ns'], summary[other]['min_ns']
         return repeats >= 3 and upper < lower and upper*10000 <= lower*(10000-minimum)
 
-    robust = [case for case in widths if all(robustly_faster(case, other) for other in widths if other != case)]
+    robust = [case for case in widths if len(widths) > 1
+        and all(robustly_faster(case, other) for other in widths if other != case)]
     selected = robust[0] if robust else widths[0]
+    reason = 'ROBUST_GAIN_WITHIN_MATCHED_WIDTHS' if robust else 'NARROWEST_WITHOUT_ROBUST_GAIN'
+    if len(widths) == 1:
+        reason = 'ONLY_FEASIBLE_NATIVE_WIDTH'
     recommended = selected if robustly_faster(selected, 'original') else 'original'
     return dict(schema=SELECTION, schema_version=1, benchmark=benchmark, selected_width=int(selected),
         selected_plan=plans[selected], selected_package=packages[selected], measurements=summary,
         policy=dict(minimum_reduction_basis_points=minimum, insufficient_rounds=repeats < 3,
             bound_scope='OBSERVED_SAMPLE_ENVELOPES_ONLY', fallback='RETAIN_NARROWEST_WITHOUT_ROBUST_GAIN'),
-        decision='ROBUST_GAIN_WITHIN_MATCHED_WIDTHS' if robust else 'NARROWEST_WITHOUT_ROBUST_GAIN',
+        decision=reason,
         recommended_arm=recommended,
         recommendation='MEASURED_NATIVE_GAIN' if recommended != 'original' else 'KEEP_ORIGINAL_NO_ROBUST_GAIN',
         exact_stdout_sha256=digest, original_to_selected_median_speedup=
