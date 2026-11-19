@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 _FILE_CLI = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
+_PROBE = Path(__file__).with_name('aten_tensor_probe_v1.h')
 _ENTRIES = {
     'ADD': ('add', 'add_Tensor'),
     'SUB': ('sub', 'sub_Tensor'),
@@ -80,8 +81,12 @@ def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None)
         name = f'temporary_{index}'
         values[operation['id']] = name
         temporaries.append(name)
-        body.append(f'        at::Tensor {name} = {expression};')
-        body.extend(f'        {temporaries[released]}.reset();' for released in releases)
+        body.append(f'        auto {name} = observe({index}, [&] {{\n'
+                    f'            auto result = {expression};')
+        body.extend(f'            {temporaries[released]}.reset();' for released in releases if released != index)
+        body.extend(('            return result;', '        });'))
+        if index in releases:
+            body.append(f'        {name}.reset();')
     includes = '\n'.join(sorted(headers))
     checks = '\n'.join(f'static_assert(std::string_view({target}::schema_str) == {json.dumps(schema)});'
                        for target, schema in sorted(signatures.items()))
@@ -130,8 +135,9 @@ std::int32_t parse_step_count(std::string_view text) {{
     return count;
 }}
 
+template <class Observer>
 std::array<at::Tensor, graph::output_count> repeat(
-        const std::array<at::Tensor, graph::input_count>& inputs, std::int32_t count{team_parameter}) {{
+        const std::array<at::Tensor, graph::input_count>& inputs, std::int32_t count{team_parameter}, Observer&& observe) {{
     const auto step_size = at::scalar_tensor({float(plan['step_size']).hex()},
                                             at::TensorOptions().device(at::kCPU).dtype(at::kDouble));
     auto rhs_inputs = inputs;
@@ -152,21 +158,38 @@ std::array<at::Tensor, graph::output_count> repeat(
 '''
 
     main = f'''#include "regions/step.hpp"
+#include "runtime/aten_tensor_probe_v1.h"
 
 int main(int argc, char** argv) {{
-    if (static_cast<std::size_t>(argc) != 2 + graph::input_count + graph::output_count) {{
+    const bool probe = argc > 1 && std::string_view(argv[1]) == "--calibrate";
+    const int first = probe ? 2 : 1;
+    if (static_cast<std::size_t>(argc) != first + 1 + graph::input_count + graph::output_count) {{
         std::fputs("usage: aten-recurrence <count> <input.f32>... <new-output.f32>\\n", stderr);
         return 2;
     }}
     try {{
-        const auto count = parse_step_count(argv[1]);
+        ScarTensorBodyProbe<{len(plan['operations'])}> measurement(probe);
+        const auto count = parse_step_count(argv[first]);
         if (std::fegetround() != FE_TONEAREST) {{
             throw std::runtime_error("native recurrence requires default floating-point rounding");
         }}
         at::set_num_threads(1);
         at::set_num_interop_threads(1);
         at::NoGradGuard no_grad;
-{constructor}        return invoke(argv + 2, [&](const auto& inputs) {{ return repeat(inputs, count{team_argument}); }});
+{constructor}        if (!probe) {{
+            return invoke(argv + first + 1, [&](const auto& inputs) {{
+                return repeat(inputs, count{team_argument}, [](auto, auto&& run) {{ return run(); }});
+            }});
+        }}
+        measurement.setup_complete();
+        const auto status = invoke(argv + first + 1, [&](const auto& inputs) {{
+            measurement.input_ready();
+            auto output = repeat(inputs, count{team_argument}, measurement);
+            measurement.computed();
+            return output;
+        }});
+        measurement.write();
+        return status;
     }} catch (const std::exception& error) {{
         std::fprintf(stderr, "SCAR ATen recurrence failed: %s\\n", error.what());
         return 1;
@@ -174,4 +197,5 @@ int main(int argc, char** argv) {{
 }}
 '''
     return {'src/main.cpp': main, 'src/regions/step.hpp': region,
+            'src/runtime/aten_tensor_probe_v1.h': _PROBE.read_text(),
             'src/runtime/file_io.hpp': '#pragma once\n' + file_cli + '\n'}

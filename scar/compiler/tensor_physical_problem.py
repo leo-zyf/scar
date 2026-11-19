@@ -8,7 +8,7 @@ from scar.ir.implementation_plan import (
 
 
 def tensor_physical_problem(hardware, cpus, *, budget, operations, inputs, outputs, sizes, reserved,
-                            source, region, dispatch=None):
+                            source, region, dispatch=None, costs=None):
     """Retain original body order and explicitly report unmeasured service costs."""
     target, lanes = _target(hardware, tuple(cpus), allow_cpu_subset=True)
     memory = _host_tensor_budget(hardware, budget, (source,))
@@ -29,11 +29,13 @@ def tensor_physical_problem(hardware, cpus, *, budget, operations, inputs, outpu
             data.append(PlanningDataEdge(f'{value}->{name}', value, producer, name, sizes[value],
                 memory.id if producer is None else None, source_refs=references))
         unused = sizes[name] if name not in consumers else 0
+        cost = costs[name] if costs is not None else CostEstimate(None, None, None, 'UNKNOWN',
+            'UNMEASURED_REGION_OPERATOR', references)
         modes = (ImplementationOption('NATIVE', lowering, references,
             {resource.id: 1 for cpu in used for resource in lanes[cpu]},
             {memory.id: extra_workspace + unused} if extra_workspace or unused else {},
             dict.fromkeys(operands[name], memory.id), {name: memory.id} if name in consumers else {},
-            CostEstimate(None, None, None, 'UNKNOWN', 'UNMEASURED_REGION_OPERATOR', references),
+            cost,
             dict(cpu_ids=list(used), completion='SYNCHRONOUS_RETURN')),)
         tasks.append(PlanningOperation(name, references, previous, modes, 'NATIVE'))
         previous = (name,)

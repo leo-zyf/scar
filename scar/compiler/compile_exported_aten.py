@@ -10,16 +10,19 @@ import shlex
 from tempfile import TemporaryDirectory
 
 from scar.analysis.target_graph import TargetHardwareGraph
-from scar.codegen.aten_native_graph import _DRIVER, _render
+from scar.codegen.aten_export_source import render_exported_entry
 from scar.codegen.aten_provider import _build_interface, _resolve, _write_binding
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import SCHEMA as RECIPE, normalize_recipe
 from scar.compiler.plan_aten_native_graph import _host_tensor_budget
+from scar.compiler.tensor_execution import calibrate_tensor_body, operation_costs, scheduled_tensor_body
 from scar.compiler.tensor_physical_problem import tensor_physical_problem
 from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 from scar.ir.record_codec import encode
+from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.aten_native_schedule import recorded_cpu_domain
 from scar.optimization.aten_tensor_lifetime import tensor_footprint
 
@@ -142,7 +145,21 @@ def _project(exported, profiles, torch):
     return recipe, shapes, weights, {str(key): value for key, value in symbols.items()}
 
 
-def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_bytes, input_shapes=()):
+def _calibration_paths(arguments, inputs):
+    paths = {}
+    for argument in arguments:
+        name, separator, path = argument.partition('=')
+        if not separator or not name or not path or name in paths:
+            raise ValueError('use --calibration-input NAME=FILE once per user Tensor')
+        paths[name] = Path(path).resolve(strict=True)
+    user = [row for row in inputs if row['kind'] == 'INPUT']
+    if set(paths) != {row['id'] for row in user}:
+        raise ValueError('native calibration files must match all original user inputs')
+    return [paths[row['id']] for row in user]
+
+
+def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_bytes, input_shapes=(),
+                          calibration_input=()):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -179,8 +196,11 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
         provider.mkdir(parents=True)
         _write_binding(provider, bindings)
         (provider / 'link-check.cpp').unlink()
-        (header / 'graph.hpp').write_text(_render(recipe, bindings, release_after=storage['release_after']))
-        (pending / 'src/main.cpp').write_bytes(_DRIVER.read_bytes())
+        source_files = render_exported_entry(recipe, bindings, storage['release_after'], cpu)
+        for name, content in source_files.items():
+            path = pending / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
         plan = pending / 'plan'
         plan.mkdir()
         program = plan / 'program.json'
@@ -201,11 +221,6 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
             target=target_reference, cpu_ids=[cpu], bindings=bindings, inputs=inputs,
             output_shapes=[shapes[name] for name in recipe['outputs']], symbolic_profile=symbols, storage=storage,
             schedule='SOURCE_DATA_ORDER', program_graph=program_ref, timing_basis='UNMEASURED_MODEL_ENTRY')
-        problem = tensor_physical_problem(target, [cpu], budget=memory.capacity, operations=recipe['operations'],
-            inputs={row['id'] for row in inputs}, outputs=recipe['outputs'], sizes={k: 4 * prod(s) for k, s in shapes.items()},
-            reserved=storage['persistent_input_bytes'], source=program_ref, region='entry')
-        (plan / 'problem.json').write_text(json.dumps(problem, indent=2, sort_keys=True) + '\n')
-        (plan / 'execution.json').write_text(json.dumps(execution, indent=2, sort_keys=True) + '\n')
         (plan / 'recipe.json').write_text(json.dumps(recipe, indent=2, sort_keys=True) + '\n')
         providers = [dict(path=str(path), **_content(path)) for path in libraries]
         (plan / 'dependencies.json').write_text(json.dumps(providers, indent=2, sort_keys=True) + '\n')
@@ -219,18 +234,45 @@ def compile_exported_aten(model, *, model_sha256, out, target, tensor_budget_byt
                      for item in inputs]
         arguments.extend('"${' + str(next(ordinal)) + '}"' for _ in recipe['outputs'])
         count = len(inputs) - len(weights) + len(recipe['outputs'])
-        launch.write_text('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\n'
-            f'test "$#" -eq {count}\n{checks}\nexec {command} "$root/bin/{_EXECUTABLE}" ' + ' '.join(arguments) + '\n')
+        launch.write_text('#!/bin/sh\nset -eu\nroot=$(dirname -- "$0")\nprobe=\n'
+            'if [ "${1:-}" = --calibrate ]; then probe=--calibrate; shift; fi\n'
+            f'test "$#" -eq {count}\n{checks}\nexec {command} "$root/bin/{_EXECUTABLE}" $probe '
+            + ' '.join(arguments) + '\n')
         launch.chmod(0o755)
         write_native_project(pending, _EXECUTABLE, include_dirs=('src/providers',), compile_options=(*flags[1:], '-O2'),
             link_options=(links[0],), libraries=tuple(map(str, libraries)), runtime_dirs=(str(libraries[0].parent),),
             install_dirs=(('data', '.'),), install_launcher=True)
         _, dependencies = build_native_project(pending, _EXECUTABLE, cxx, expected_libraries=libraries)
+        costs = None
+        if calibration_input:
+            samples = _calibration_paths(calibration_input, inputs)
+            receipts = [dict(path=str(path), **_content(path)) for path in samples]
+            with TemporaryDirectory(prefix='.scar-model-samples-') as scratch:
+                observed = calibrate_tensor_body(pending, list(map(str, samples)), scratch, repeats=1,
+                                                  outputs=len(recipe['outputs']))
+            if receipts != [dict(path=str(path), **_content(path)) for path in samples]:
+                raise ValueError('model calibration samples changed during execution')
+            observed.update(inputs=receipts, cpu_ids=[cpu])
+            calibration = pending / 'validation/calibration.json'
+            calibration.write_text(json.dumps(observed, sort_keys=True, indent=2) + '\n')
+            costs = operation_costs(observed, recipe['operations'], dict(path='validation/calibration.json', **_content(calibration)))
+            execution['timing_basis'] = 'MEASURED_CPU_BODY_ONE_FIXED_SHAPE'
+        problem = tensor_physical_problem(target, [cpu], budget=memory.capacity, operations=recipe['operations'],
+            inputs={row['id'] for row in inputs}, outputs=recipe['outputs'], sizes={k: 4 * prod(s) for k, s in shapes.items()},
+            reserved=storage['persistent_input_bytes'], source=program_ref, region='entry', costs=costs)
+        (plan / 'problem.json').write_text(json.dumps(problem, indent=2, sort_keys=True) + '\n')
+        (plan / 'execution.json').write_text(json.dumps(execution, indent=2, sort_keys=True) + '\n')
+        if costs is not None:
+            schedule = construct_implementations(problem_from_dict(problem))
+            scheduled = scheduled_tensor_body(problem, schedule, recipe)
+            if render_exported_entry(scheduled, bindings, scheduled['release_after'], cpu) != source_files:
+                raise ValueError('calibrated model source differs from its verified schedule lowering')
+            (plan / 'schedule.json').write_text(json.dumps(schedule, indent=2, sort_keys=True) + '\n')
         if _content(model) != original:
             raise ValueError('exported model changed during its native build')
         report = dict(schema=SCHEMA, schema_version=1, executable='bin/' + _EXECUTABLE,
             selected='SERIAL_CPU_LIBTORCH', status='STANDALONE_CPP20_SHAPE_PROFILE', dependencies=dependencies,
-            source=source, program_graph=codec.SCHEMA, performance_measured=False,
+            source=source, program_graph=codec.SCHEMA, performance_measured=False, body_calibrated=costs is not None,
             files={path.relative_to(pending).as_posix(): _content(path)
                    for path in sorted(pending.rglob('*')) if path.is_file()})
         (pending / 'artifact.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
@@ -244,6 +286,7 @@ def main(argv=None):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--tensor-budget-bytes', type=int, required=True)
     parser.add_argument('--input-shape', action='append', default=[])
+    parser.add_argument('--calibration-input', action='append', default=[])
     args = parser.parse_args(argv)
     kwargs = vars(args)
     kwargs['input_shapes'] = kwargs.pop('input_shape')

@@ -1,0 +1,295 @@
+{
+  "cpu_static_inference": {
+    "calibration": {
+      "path": "artifacts/current/experiments/cpu-schedule-replay/ai/validation/calibration.json",
+      "sha256": "eba024a505ae19ca64d2a3ebf7570a42113c4740f390c2fcd278090babcf3140",
+      "size_bytes": 1141
+    },
+    "generated_entry": {
+      "path": "artifacts/current/experiments/cpu-schedule-replay/ai/src/main.cpp",
+      "sha256": "6dfdeaad9b3490951f421d77bba3beac23d4f142f885cad695b317f0068a486e",
+      "size_bytes": 8016
+    },
+    "manifest": {
+      "path": "artifacts/current/experiments/cpu-schedule-replay/ai/artifact.json",
+      "sha256": "bade02d8d669b20fd53a6d6a977a62b93de7fa86e6590d1330c0df7b5084d613",
+      "size_bytes": 4327
+    },
+    "schedule": {
+      "path": "artifacts/current/experiments/cpu-schedule-replay/ai/plan/schedule.json",
+      "sha256": "e0c0613640791c9869775dc8f64645165cbb4fcacf3833283bd2d71f535e2ff4",
+      "size_bytes": 4063
+    },
+    "validation": {
+      "bitwise_output_receipts": [
+        {
+          "sha256": "c06c625786fd4fcc05adbea05bdbf4fa70c27cc64b8b1e2bf0c2be8f8d4c6d16",
+          "size_bytes": 256
+        }
+      ],
+      "executed_schedule_replayed": true,
+      "graph_operations": 4,
+      "graph_regions": 1,
+      "manifest_sha256": "bade02d8d669b20fd53a6d6a977a62b93de7fa86e6590d1330c0df7b5084d613",
+      "native_dependencies_checked": true,
+      "physical_activities": 4,
+      "schema": "scar.native-project-validation",
+      "schema_version": 1
+    }
+  },
+  "negative_replay": {
+    "edited_lowered_source": "generated C++ differs from the verified native schedule lowering",
+    "edited_selected_duration": "selected duration or resource qualification is unresolved"
+  },
+  "performance": {
+    "comparison": {
+      "path": "artifacts/current/experiments/cpu-schedule-replay/wide/validation/comparison.json",
+      "sha256": "8c0bc8ef873daaed434cef24554d308200dd6cb0f0bd47f9bffbb5fc0ce739eb",
+      "size_bytes": 5583
+    },
+    "measurement_pairs": 4,
+    "metrics": {
+      "READY_DAG": {
+        "max_ns": 834076371,
+        "median_ns": 787999147,
+        "median_ns_twice": 1575998294,
+        "min_ns": 776902945,
+        "sample_variance_ns_squared": 653692164842567,
+        "samples_ns": [
+          784777486,
+          834076371,
+          776902945,
+          791220808
+        ]
+      },
+      "SERIAL": {
+        "max_ns": 1509728621,
+        "median_ns": 1507351635.5,
+        "median_ns_twice": 3014703271,
+        "min_ns": 1501653317,
+        "sample_variance_ns_squared": 12880131716876.916,
+        "samples_ns": [
+          1509728621,
+          1506071535,
+          1508631736,
+          1501653317
+        ]
+      }
+    },
+    "scope": "Four-step standalone C++ fresh processes, including setup and file I/O.",
+    "serial_over_parallel": 1.912884856841095,
+    "warmup_pairs": 1
+  },
+  "platform": {
+    "cpu": "Intel Xeon E5-2680 v4",
+    "cxx_standard": 20,
+    "gpu_used": false,
+    "logical_cpus": 56,
+    "torch": "2.13.0+cu132",
+    "torch_build_cuda": "13.2"
+  },
+  "recurrence": {
+    "correctness_steps": 16,
+    "method": "rk4",
+    "per_step_calibration": {
+      "samples": 3,
+      "steps": 4,
+      "warmups": 1
+    },
+    "source_inferred": {
+      "alternatives": {
+        "READY_DAG": {
+          "peak_tensor_storage_bytes": 42467336,
+          "within_budget": false
+        },
+        "SERIAL": {
+          "body_estimate_ns": 296501305,
+          "peak_tensor_storage_bytes": 37748744,
+          "within_budget": true
+        }
+      },
+      "calibration": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/inferred/validation/calibration.json",
+        "sha256": "ea01119c8c0f1c10b3c6044a9fe56a7342c75a72e7c75f61888ef7a494f19dfd",
+        "size_bytes": 3707
+      },
+      "cpus": [
+        14
+      ],
+      "generated_entry": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/inferred/src/main.cpp",
+        "sha256": "385a351e43614d700b0e99b7b7fcd507f24b829f9ccb95bba90cae33590b5e36",
+        "size_bytes": 1553
+      },
+      "manifest": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/inferred/artifact.json",
+        "sha256": "ffd8d81ca30f062c7f9c9538fdf6511b42fe2e5e979e76eafc318848cd5826a0",
+        "size_bytes": 9351
+      },
+      "rhs_mode": "SERIAL",
+      "schedule": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/inferred/plan/schedule.json",
+        "sha256": "0d77b1ae1bcbd038b192dfd36bb50a2a10c9f6d6f3633edbec12c2f1a650a14d",
+        "size_bytes": 11990
+      },
+      "source_entry": {
+        "call_span": [
+          34,
+          15,
+          35,
+          70
+        ],
+        "discovery": {
+          "schema": "scar.aten-region-discovery",
+          "sha256": "1fa4e717b5953f1b34ea44d1b7d58113543337901717bbee3a5938344ff54c7a",
+          "size_bytes": 24560,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-fullgraph-v1/workload/discovery/discovery.json"
+        },
+        "entry": "main",
+        "method": "rk4",
+        "rhs": "dynamics",
+        "rhs_code_key": "pycode-v2:c6f5af9ea32af7a0095658f43a06540732db20e30ac9889441d134fee597af52",
+        "scope": "FINAL_STATE_WITH_NATIVE_FILE_ARGUMENTS",
+        "source": {
+          "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-fullgraph-v1/workload/fixture/subject.py",
+          "sha256": "99999227bcacf8b9552dafd1948628c2a32c214523c5acff3aeecf3f82dc502d",
+          "size_bytes": 1454
+        },
+        "state_input_index": 0,
+        "step_size": 0.015625
+      },
+      "tensor_budget_bytes": 40000000,
+      "validation": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+            "size_bytes": 2359296
+          }
+        ],
+        "executed_schedule_replayed": true,
+        "graph_operations": 40,
+        "graph_regions": 3,
+        "manifest_sha256": "ffd8d81ca30f062c7f9c9538fdf6511b42fe2e5e979e76eafc318848cd5826a0",
+        "native_dependencies_checked": true,
+        "physical_activities": 23,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      }
+    },
+    "step_size": 0.015625,
+    "storage_scope": "Graph-managed Tensor backing storage, excluding provider scratch and allocator reservation.",
+    "tight": {
+      "alternatives": {
+        "READY_DAG": {
+          "peak_tensor_storage_bytes": 42467336,
+          "within_budget": false
+        },
+        "SERIAL": {
+          "body_estimate_ns": 297088701,
+          "peak_tensor_storage_bytes": 37748744,
+          "within_budget": true
+        }
+      },
+      "calibration": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/tight/validation/calibration.json",
+        "sha256": "9ed71f70c1c3a02443def20b229f4e74cc7f4e247b1e8f6b159584842ec57e6b",
+        "size_bytes": 3706
+      },
+      "cpus": [
+        14
+      ],
+      "generated_entry": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/tight/src/main.cpp",
+        "sha256": "385a351e43614d700b0e99b7b7fcd507f24b829f9ccb95bba90cae33590b5e36",
+        "size_bytes": 1553
+      },
+      "manifest": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/tight/artifact.json",
+        "sha256": "51f39bacfe3f0acded92659d95460190314538fc47dfc305dfce58d752751fcf",
+        "size_bytes": 9171
+      },
+      "rhs_mode": "SERIAL",
+      "schedule": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/tight/plan/schedule.json",
+        "sha256": "53a42706b47ea4f77c6e43414328bd3c20f6aa8d3293b4c538645926a7caf373",
+        "size_bytes": 11990
+      },
+      "tensor_budget_bytes": 40000000,
+      "validation": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+            "size_bytes": 2359296
+          }
+        ],
+        "executed_schedule_replayed": true,
+        "graph_operations": 40,
+        "graph_regions": 3,
+        "manifest_sha256": "51f39bacfe3f0acded92659d95460190314538fc47dfc305dfce58d752751fcf",
+        "native_dependencies_checked": true,
+        "physical_activities": 23,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      }
+    },
+    "wide": {
+      "alternatives": {
+        "READY_DAG": {
+          "body_estimate_ns": 114720966,
+          "peak_tensor_storage_bytes": 42467336,
+          "within_budget": true
+        },
+        "SERIAL": {
+          "body_estimate_ns": 297472791,
+          "peak_tensor_storage_bytes": 37748744,
+          "within_budget": true
+        }
+      },
+      "calibration": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/wide/validation/calibration.json",
+        "sha256": "f502641a34a4163a790bffbb31622aa55a7447e6b30621b33f1db255cf01e47b",
+        "size_bytes": 3801
+      },
+      "cpus": [
+        14,
+        15,
+        16
+      ],
+      "generated_entry": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/wide/src/main.cpp",
+        "sha256": "b06019684a8e79e9d0a0b50abcab6a52b20b1a460535f9141ac9ddef111f174e",
+        "size_bytes": 1596
+      },
+      "manifest": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/wide/artifact.json",
+        "sha256": "62142c64492cdff6343c72ccc3339f38072f597a20d582b9bb9d196113cfae16",
+        "size_bytes": 10226
+      },
+      "rhs_mode": "READY_DAG",
+      "schedule": {
+        "path": "artifacts/current/experiments/cpu-schedule-replay/wide/plan/schedule.json",
+        "sha256": "761d5ce07c49210c95dc3770da6ceb7258334c624a0f5e6f8e8758a1236a9443",
+        "size_bytes": 12122
+      },
+      "tensor_budget_bytes": 67108864,
+      "validation": {
+        "bitwise_output_receipts": [
+          {
+            "sha256": "2588cefbffa4d17c711954900e7d90918697e8d40b922b0a9e8df36968cc08ba",
+            "size_bytes": 2359296
+          }
+        ],
+        "executed_schedule_replayed": true,
+        "graph_operations": 40,
+        "graph_regions": 3,
+        "manifest_sha256": "62142c64492cdff6343c72ccc3339f38072f597a20d582b9bb9d196113cfae16",
+        "native_dependencies_checked": true,
+        "physical_activities": 23,
+        "schema": "scar.native-project-validation",
+        "schema_version": 1
+      }
+    }
+  },
+  "schema": "scar.cpu-schedule-replay-receipt",
+  "schema_version": 1
+}

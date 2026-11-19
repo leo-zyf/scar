@@ -62,7 +62,8 @@ def _argument(expression, values):
     return 'c10::Scalar(std::int64_t{' + literal + '})'
 
 
-def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False, ready_replica=False):
+def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False, ready_replica=False,
+            observe_serial=False):
     entries = {row['schema']: row['entry'] for row in operators}
     values = {}
     shapes, calls = [], []
@@ -86,6 +87,22 @@ def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False,
     operator_calls = '\n'.join(ordered)
     pair_include = '' if schedule is None else f'#include "{_PAIR_HEADER.name}"\n'
     pair_support = ''
+    if observe_serial:
+        if schedule is not None:
+            raise ValueError('standalone serial observation expects no parallel graph schedule')
+        observed = []
+        for index, (value, expression) in enumerate(calls):
+            observed.append(f'    at::Tensor {value} = observe({index}, [&] {{ return {expression}; }});')
+            observed.extend(f'    {line}' for line in releases[index])
+        observed_calls = '\n'.join(observed)
+        pair_support = f'''
+template <class Observer>
+inline std::array<at::Tensor, output_count> run_observed(std::span<const at::Tensor> inputs, Observer&& observe) {{
+    validate_inputs(inputs);
+{observed_calls}
+    return {{{outputs}}};
+}}
+'''
     if schedule is not None and 'legal_window_widths' in schedule:
         pair_include = f'#define SCAR_ATEN_TEAM 1\n#include "{_TEAM_HEADER.name}"\n'
         producers = {op['id']: i for i, op in enumerate(recipe['operations'])}
