@@ -55,6 +55,66 @@
         "observed_frames": 8
       }
     },
+    "expanded_observed_frontend": {
+      "admitted_stages": 19,
+      "assembled_program": {
+        "coverage": {
+          "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-current-observed/coverage.json",
+          "sha256": "7d670f7c376ad481831166425fb7913d7002251e45f3b722115ec55c250f5302",
+          "size_bytes": 5551
+        },
+        "effects_closed": false,
+        "first_stage_complete": false,
+        "gap_counts": {
+          "configuration": 1,
+          "coverage": 1,
+          "creations": 1,
+          "exec": 1,
+          "native": 1,
+          "protocol": 1,
+          "query": 413,
+          "resource_scopes": 1,
+          "resumptions": 1
+        },
+        "gaps": {
+          "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-current-observed/gaps.json",
+          "sha256": "b6610e91219d5e7e06f60681d570d22f4c81fd48649e6114aef515358af20b98",
+          "size_bytes": 750344
+        },
+        "matched_body_entries": 749,
+        "publication": {
+          "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/program-current-observed/manifest.json",
+          "sha256": "3a14ee5d0e9278913576c4ec79d69d94b3548459f81f91781b63f8283212d739",
+          "size_bytes": 14626
+        },
+        "readback_mode": "STORED_TABLES_WITH_ADMITTED_INDEX",
+        "recorded_body_entries": 749,
+        "resources": 486,
+        "runtime_path_complete": false,
+        "seconds": 442.1795588720124,
+        "shared_body_interfaces": 73,
+        "source_units": 22,
+        "workflow_complete": true
+      },
+      "binding_selection": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/observed-binding-states/result.json",
+        "sha256": "fc57543748ed689212e4d99ac84bb6b3f2c6907209e105f6c5387acc1683c759",
+        "size_bytes": 144560
+      },
+      "completed_fixed_points": 316,
+      "first_stage_complete": false,
+      "publication": {
+        "path": "artifacts/current/experiments/native-cpu-end-to-end-v1/frontend-observed-current/result.json",
+        "sha256": "9edb6e630e8b128307e688edd2a0666264ef566a21e2ecee7136dd8f34c68ea2",
+        "size_bytes": 5688
+      },
+      "relations": 128772,
+      "selected_local_read_slots": 316,
+      "selected_units": 21,
+      "versions": 32845,
+      "wall_seconds": 4109.647134298924,
+      "workflow_complete": true
+    },
     "external_catalog_graph_inventory": {
       "inventoried_units": 22,
       "local_model_closed": false,
