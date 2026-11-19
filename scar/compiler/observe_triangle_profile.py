@@ -198,6 +198,18 @@ def _project(out, source, catalog, target, max_seconds, *, resume=False):
     return _write(out/'entry-calls.json', projection)
 
 
+def _bind_calls(out, prior, capture, source, catalog, target, *, resume):
+    from scar.analysis.rebind_bounded_entry_calls import rebind
+
+    try:
+        rebound = rebind(prior, capture)
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        projection = _project(out, source, catalog, target, 3600, resume=resume)
+        return projection, {'decision': 'REBUILT_F4', 'reason': str(error)}
+    evidence = _write(out/'entry-calls-rebound.json', rebound)
+    return evidence, {'decision': 'EXACT_STATIC_PROOF_REUSE', 'key': rebound['static_proof_key']}
+
+
 def observe_profile(source_seed, argv, out, *, aggregate_design, interpreter, cwd,
                     environment, expected_entry=None, max_seconds=60, cpu_ids=None, resume=False):
     """Collect one original run or resume a complete capture, then join its source graph."""
@@ -212,11 +224,12 @@ def observe_profile(source_seed, argv, out, *, aggregate_design, interpreter, cw
              and re.fullmatch('[1-9][0-9]{0,8}', argv[0]) is not None and int(argv[0]) > 1,
              'expected one finite positive repeated-loop argument')
     old_calls = read_artifact(seed['entry_calls'])
+    prior_calls = old_calls.get('static_projection', seed['entry_calls'])
     old_activation = read_artifact(seed['activations'])
     old_frames = read_artifact(seed['provenance']['frames'])
     old_declaration = read_artifact(seed['provenance']['frame_design'])
     catalog = old_activation['source_catalog']
-    prior_program = read_artifact(old_calls['program'])
+    prior_program = read_artifact(read_artifact(prior_calls)['program'])
     _require(prior_program['entry'] == entry['uri'] and prior_program['workflow_complete']
              and prior_program['f4']['catalog'] == dict(path=catalog['uri'], bytes=catalog['size_bytes'], sha256=catalog['sha256']),
              'retained catalog differs from the selected graph')
@@ -275,7 +288,9 @@ def observe_profile(source_seed, argv, out, *, aggregate_design, interpreter, cw
                  and evidence['normal_completion'] is True
                  and (evidence['return_digest'] + '\n').encode('ascii') == read_artifact(oracle, json_document=False),
                  'aggregate capture differs from the original entry, argv or stdout')
-    calls = _project(out, entry['uri'], Path(catalog['uri']).parent, target, 3600, resume=resume)
+    capture = artifact_reference(out/'observed'/'result.json', 'scar.call-binding-run')
+    calls, reuse = _bind_calls(out, prior_calls, capture, entry['uri'], Path(catalog['uri']).parent,
+                               target, resume=resume)
     refined = source_triangle_seed.extract(calls['uri'], activation['uri'], seed['source_root'], argv)
     _require(refined['entry'] == entry and refined['fields'] == seed['fields'] and refined['sources'] == seed['sources']
              and refined['depth'] == seed['depth'] and refined['provenance'].get('observed_loop_count'),
@@ -283,7 +298,7 @@ def observe_profile(source_seed, argv, out, *, aggregate_design, interpreter, cw
     seed_ref = _write(out/'source-seed.json', refined)
     record = dict(schema=SCHEMA, schema_version=1, family=anchor, argv=argv, frame_design=design_ref,
         entry_calls=calls, source_seed=seed_ref, activation=activation, oracle=oracle, original_observation=observation,
-        original_processes=1, prior_runtime_observations_transferred=False)
+        static_projection=reuse, original_processes=1, prior_runtime_observations_transferred=False)
     return dict(record, frontend=_write(out/'result.json', record))
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from types import CodeType
 
 from scar.compiler.call_binding import plan_digest
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import _json, artifact_reference, read_artifact
 from scar.trace.code_snapshot import call_instruction, describe_code, site
 
 SCHEMA = 'scar.source-triangle-seed'
@@ -455,11 +455,23 @@ def _basis_order(basis_tree, basis_symbol, basis_init, base_name, basis_call):
                 'argument route into inherited basis')
 
 
+def _call_projection(path):
+    artifact = artifact_reference(path, _CALLS)
+    calls = _json(read_artifact(artifact, json_document=False))
+    if type(calls) is dict and calls.get('schema') == _CALLS:
+        return artifact, calls
+    from scar.analysis import rebind_bounded_entry_calls
+
+    _require(type(calls) is dict and calls.get('schema') == rebind_bounded_entry_calls.SCHEMA,
+             'requires an original or rebound bounded CALL projection')
+    artifact['schema'] = rebind_bounded_entry_calls.SCHEMA
+    return artifact, rebind_bounded_entry_calls.check(artifact)
+
+
 def extract(entry_calls, activations, source_root, argv):
     """Build a detached, machine-readable source seed and its exact evidence."""
-    calls_ref = artifact_reference(entry_calls, _CALLS)
+    calls_ref, calls = _call_projection(entry_calls)
     activation_ref = artifact_reference(activations, _ACTIVATION)
-    calls = read_artifact(calls_ref)
     activation = read_artifact(activation_ref)
     frame_ref = activation['frame_observations']
     raw_ref = activation['bounded_call_observations']
