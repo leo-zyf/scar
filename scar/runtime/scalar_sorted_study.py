@@ -332,7 +332,7 @@ class _Offer:
         finally:
             self.lock.release()
 
-    def _evaluate(self, target, iterator, reverse):
+    def _evaluate(self, target, iterator, reverse, *, publish=None):
         started = perf_counter_ns() if self.observe else 0
         if target is not _SORTED or reverse is not self.reverse or not _unstarted(iterator) or _observer_active():
             return self._fallback(target, iterator, reverse, 'original_sort_or_observer')
@@ -395,7 +395,7 @@ class _Offer:
             self.counts['native'] += 1
             self.versions[self.labels[slot]] += 1
             self.thresholds[str(threshold)] += 1
-        return rows
+        return rows if publish is None else publish(rows, receiver, slot, stamp)
 
 
 def run_native(entry, argv, manifest, digest, guard_path, guard_digest, *, epoch_path=None,
