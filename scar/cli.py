@@ -496,6 +496,7 @@ def main(argv=None) -> int:
         from scar.analysis.interprocedural_summary import (
             derive_interprocedural_summary, verify_interprocedural_summary)
         from scar.ir.execution_recipe import artifact_reference
+        from scar.analysis.source_summary_storage import read_source_summary, write_source_summary
         summary_parser = argparse.ArgumentParser(prog='scar source-summary',
             description='Compose source function dependencies over original conditional CALL routes; no target execution.')
         summary_parser.add_argument('--program')
@@ -506,7 +507,7 @@ def main(argv=None) -> int:
         if summary_args.check:
             if summary_args.out or summary_args.entry_calls:
                 summary_parser.error('--check replays its own source inputs; --out/--entry-calls are separate')
-            report = json.loads(Path(summary_args.check).read_bytes())
+            report = read_source_summary(summary_args.check)
             program = summary_args.program or str(Path(report['entry_projection']['program']['uri']).parent)
             with BuildSession(program) as session:
                 verify_interprocedural_summary(session, report)
@@ -518,9 +519,7 @@ def main(argv=None) -> int:
             with BuildSession(summary_args.program) as session:
                 report = derive_interprocedural_summary(session, entry)
             output = Path(summary_args.out).absolute()
-            output.parent.mkdir(parents=True, exist_ok=True)
-            with output.open('x') as stream:
-                json.dump(report, stream, sort_keys=True, indent=2, allow_nan=False); stream.write('\n')
+            write_source_summary(output, report)
         print(json.dumps(dict(summary=artifact_reference(output, report['schema']),
             functions=len(report['functions']), source_bodies_shared=True,
             target_executed=False, transformation_authorized=False)))
