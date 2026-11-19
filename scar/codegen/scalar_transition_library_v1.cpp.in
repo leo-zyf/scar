@@ -1,0 +1,68 @@
+#include "scar_scalar_transition_v1.h"
+#include <cstring>
+
+@SCAR_COMPUTATION@
+
+[[maybe_unused]] std::string argument_string(const scar_transition_arg_v1& arg) {
+    if (arg.kind != SCAR_TRANSITION_ASCII_V1 || arg.scalar != 0 || (arg.size != 0 && !arg.data)) {
+        throw Decline{};
+    }
+    if (arg.size == 0) {
+        return {};
+    }
+    const std::string_view text(reinterpret_cast<const char*>(arg.data), arg.size);
+    if (!ascii(text) || text.find('\0') != std::string_view::npos) {
+        throw Decline{};
+    }
+    return std::string(text);
+}
+
+[[maybe_unused]] Integer argument_integer(const scar_transition_arg_v1& arg) {
+    if (arg.kind != SCAR_TRANSITION_I64_V1 || arg.data || arg.size != 0) {
+        throw Decline{};
+    }
+    return arg.scalar;
+}
+
+[[maybe_unused]] bool argument_bool(const scar_transition_arg_v1& arg) {
+    if (arg.kind != SCAR_TRANSITION_BOOL_V1 || arg.data || arg.size != 0 || (arg.scalar != 0 && arg.scalar != 1)) {
+        throw Decline{};
+    }
+    return arg.scalar != 0;
+}
+
+}  // namespace
+
+extern "C" __attribute__((visibility("default")))
+int scar_scalar_transition_v1(const char* version, std::size_t version_size,
+    const scar_transition_arg_v1* args, std::size_t count,
+    std::uint8_t* output, std::size_t capacity, std::size_t* written) {
+    if (!written) {
+        return SCAR_TRANSITION_DECLINED_V1;
+    }
+    *written = 0;
+    if (!version || version_size != 64 || !args || count != @SCAR_COUNT@ || (!output && capacity != 0)) {
+        return SCAR_TRANSITION_DECLINED_V1;
+    }
+    try {
+        const std::string_view identity(version, version_size);
+        for (const auto& table : tables) {
+            if (identity != table.version) {
+                continue;
+            }
+@SCAR_INPUT_SETUP@
+            const auto record = encode_state(evaluate_transition(table, @SCAR_INPUTS@));
+            *written = record.size();
+            if (capacity < record.size()) {
+                return SCAR_TRANSITION_NEED_CAPACITY_V1;
+            }
+            std::memcpy(output, record.data(), record.size());
+            return SCAR_TRANSITION_OK_V1;
+        }
+    } catch (const Decline&) {
+        return SCAR_TRANSITION_DECLINED_V1;
+    } catch (...) {
+        return SCAR_TRANSITION_INTERNAL_ERROR_V1;
+    }
+    return SCAR_TRANSITION_DECLINED_V1;
+}

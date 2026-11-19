@@ -1,0 +1,47 @@
+#ifndef SCAR_SCALAR_TRANSITION_V1_H
+#define SCAR_SCALAR_TRANSITION_V1_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum scar_transition_arg_kind_v1 {
+    SCAR_TRANSITION_ASCII_V1 = 1,
+    SCAR_TRANSITION_I64_V1 = 2,
+    SCAR_TRANSITION_BOOL_V1 = 3
+};
+
+enum scar_transition_status_v1 {
+    SCAR_TRANSITION_OK_V1 = 0,
+    SCAR_TRANSITION_NEED_CAPACITY_V1 = 1,
+    SCAR_TRANSITION_DECLINED_V1 = 2,
+    SCAR_TRANSITION_INTERNAL_ERROR_V1 = 3
+};
+
+struct scar_transition_arg_v1 {
+    const uint8_t* data;
+    size_t size;
+    int64_t scalar;
+    uint32_t kind;
+};
+
+/* Port order comes from the package manifest. ASCII arguments use data and
+ * size with scalar zero. Scalar arguments use scalar with data NULL and size
+ * zero. Bool scalar values are 0 or 1. No pointers are retained.
+ *
+ * The output buffer and written storage must be disjoint. Success writes a
+ * complete SCAR_STATE_V1 record. NEED_CAPACITY reports the required length;
+ * NULL output with capacity zero can be used to query it. Other failures set
+ * written to zero. All failures leave the output buffer untouched. */
+int scar_scalar_transition_v1(const char* version, size_t version_size,
+    const struct scar_transition_arg_v1* args, size_t count,
+    uint8_t* output, size_t capacity, size_t* written);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
