@@ -1,0 +1,67 @@
+#include "scar_scalar_sorted_v1.h"
+#include <cstring>
+
+@SCAR_COMPUTATION@
+
+[[maybe_unused]] bool read_bool(Integer value) {
+    if (value != 0 && value != 1) {
+        throw Decline{};
+    }
+    return value != 0;
+}
+
+[[maybe_unused]] bool valid_text(std::string_view text, std::size_t capacity) {
+    return text.size() <= capacity && ascii(text) && text.find('\0') == std::string_view::npos;
+}
+
+[[maybe_unused]] std::string read_text(const uint8_t* data, std::size_t size, std::size_t capacity) {
+    if (size > capacity) {
+        throw Decline{};
+    }
+    const std::string_view text(reinterpret_cast<const char*>(data), size);
+    if (!valid_text(text, capacity)) {
+        throw Decline{};
+    }
+    return std::string(text);
+}
+
+[[maybe_unused]] void write_text(uint8_t* data, uint32_t& size, const std::string& text) {
+    std::memcpy(data, text.data(), text.size());
+    size = static_cast<uint32_t>(text.size());
+}
+
+}  // namespace
+
+extern "C" __attribute__((visibility("default")))
+int scar_scalar_sorted_v1(uint32_t table_slot, const scar_sorted_input_v1* input,
+    int64_t threshold, int64_t depth, scar_sorted_record_v1* records,
+    std::size_t capacity, std::size_t* written) {
+    if (!written) {
+        return SCAR_SORTED_DECLINED_V1;
+    }
+    *written = 0;
+    if (!input || table_slot >= tables.size() || (!records && capacity != 0)) {
+        return SCAR_SORTED_DECLINED_V1;
+    }
+    try {
+@SCAR_INPUT_SETUP@
+        const auto ordered_records = ordered(tables[table_slot], threshold, depth, @SCAR_INPUTS@);
+@SCAR_PREFLIGHT@
+        *written = ordered_records.size();
+        if (capacity < ordered_records.size()) {
+            return SCAR_SORTED_NEED_CAPACITY_V1;
+        }
+        for (std::size_t i = 0; i < ordered_records.size(); ++i) {
+            const auto& row = ordered_records[i];
+            scar_sorted_record_v1 staged;
+            std::memset(&staged, 0, sizeof(staged));
+@SCAR_OUTPUT_SETUP@
+            std::memcpy(records + i, &staged, sizeof(staged));
+        }
+        return SCAR_SORTED_OK_V1;
+    } catch (const Decline&) {
+        return SCAR_SORTED_DECLINED_V1;
+    } catch (...) {
+        return SCAR_SORTED_INTERNAL_ERROR_V1;
+    }
+}

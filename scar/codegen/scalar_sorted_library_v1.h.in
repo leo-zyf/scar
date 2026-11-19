@@ -1,0 +1,45 @@
+#ifndef SCAR_SCALAR_SORTED_V1_H
+#define SCAR_SCALAR_SORTED_V1_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Port slots, string offsets, capacities and table slots are in the manifest.
+ * Boolean scalar slots contain 0 or 1. Strings are exact ASCII byte fragments. */
+struct scar_sorted_input_v1 {
+    int64_t scalars[@SCAR_INPUT_SCALARS@];
+    uint32_t lengths[@SCAR_INPUT_LENGTHS@];
+    uint8_t strings[@SCAR_INPUT_STRINGS@];
+};
+
+struct scar_sorted_record_v1 {
+    int64_t scalars[@SCAR_RECORD_SCALARS@];
+    uint32_t lengths[@SCAR_RECORD_LENGTHS@];
+    uint8_t strings[@SCAR_RECORD_STRINGS@];
+};
+
+enum scar_sorted_status_v1 {
+    SCAR_SORTED_OK_V1 = 0,
+    SCAR_SORTED_NEED_CAPACITY_V1 = 1,
+    SCAR_SORTED_DECLINED_V1 = 2,
+    SCAR_SORTED_INTERNAL_ERROR_V1 = 3
+};
+
+/* capacity and written count records, not bytes. Successful calls write the
+ * complete ordered result. NEED_CAPACITY reports the full required count.
+ * Other failures set written to zero. All failures leave records unchanged.
+ * Records may be NULL when capacity is zero. written must be disjoint from
+ * the input and record storage. The library retains no pointers. */
+int scar_scalar_sorted_v1(uint32_t table_slot, const struct scar_sorted_input_v1* input,
+    int64_t threshold, int64_t depth, struct scar_sorted_record_v1* records,
+    size_t capacity, size_t* written);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
