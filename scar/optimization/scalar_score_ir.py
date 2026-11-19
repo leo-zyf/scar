@@ -47,10 +47,13 @@ def _args(op, result, operands, kinds):
 
 
 class _Normalize:
-    def __init__(self, function, code, table, fields, positionals, globals_):
+    assignment_types = ('int', 'str', 'bool')
+
+    def __init__(self, function, code, table, fields, positionals, globals_, *, allow_defaults=False):
         _require(len(function.args.posonlyargs + function.args.args) == 2
             and not (function.args.kwonlyargs or function.args.vararg or function.args.kwarg
-                     or function.args.defaults or function.decorator_list or code.co_freevars or code.co_cellvars),
+                     or function.args.defaults and not allow_defaults or function.decorator_list
+                     or code.co_freevars or code.co_cellvars),
             'scalar boundary requires a plain receiver and one tuple argument')
         self.receiver, self.argument = (arg.arg for arg in function.args.posonlyargs + function.args.args)
         self.table = table
@@ -97,7 +100,7 @@ class _Normalize:
             arms = [self.expr(part, bound) for part in node.values]
             return _args('and', 'bool', arms, ('bool',) * len(arms))
         if type(node) is ast.IfExp:
-            arms = [self.expr(part, bound) for part in (node.test, node.body, node.orelse)]
+            arms = [self.test(node.test, bound), self.expr(node.body, bound), self.expr(node.orelse, bound)]
             kind = arms[1]['type']
             return _args('select', kind, arms, ('bool', kind, kind))
         if type(node) is ast.Compare:
@@ -114,9 +117,14 @@ class _Normalize:
             return parts[0] if len(parts) == 1 else _node('and', 'bool', args=parts)
         raise ValueError('unsupported scalar expression: ' + type(node).__name__)
 
+    def test(self, node, bound):
+        value = self.expr(node, bound)
+        _require(value['type'] == 'bool', 'scalar conditional needs an exact bool')
+        return value
+
     def assign(self, target, value, bound, nested):
         _require(type(target) is ast.Name and target.id not in (self.receiver, self.argument)
-            and value['type'] in ('int', 'str', 'bool')
+            and value['type'] in self.assignment_types
             and (target.id in bound or not nested)
             and bound.get(target.id, value['type']) == value['type'],
             'scalar assignment must preserve its original local type and conditional lifetime')
@@ -160,8 +168,7 @@ class _Normalize:
                               [_node('get', 'int', name=name), self.expr(node.value, bound)], ('int', 'int'))
                 result.append(self.assign(node.target, value, bound, nested))
             elif type(node) is ast.If:
-                test = self.expr(node.test, bound)
-                _require(test['type'] == 'bool', 'scalar conditional needs an exact bool')
+                test = self.test(node.test, bound)
                 result.append({'op':'if', 'site':f'{node.lineno}:{node.col_offset}', 'test':test,
                                'body':self.block(node.body, dict(bound), nested=True),
                                'else':self.block(node.orelse, dict(bound), nested=True)})
