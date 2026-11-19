@@ -1,6 +1,5 @@
 """Compare explicitly materialized CPU/CUDA placements without running them."""
 
-from itertools import islice, product
 from sys import maxsize
 
 from scar.ir.implementation_plan import PLAN_SCHEMA, digest, problem_from_dict
@@ -24,10 +23,27 @@ def _choice_table(choices):
     table = []
     for name, modes in choices.items():
         if (type(name) is not str or not name or type(modes) not in (list, tuple)
+                or any(type(mode) is not str for mode in modes)
                 or tuple(modes) not in _DEVICE_OPTIONS):
             raise ValueError('each operation needs a CPU incumbent and optionally a qualified CUDA choice')
         table.append((name, tuple(modes)))
-    return table
+    return table, sum(len(modes) == 2 for _, modes in table)
+
+
+def _placement_for_ordinal(table, switchable, ordinal):
+    bits = iter(f'{ordinal:0{switchable}b}')
+    return {name: modes[1] if len(modes) == 2 and next(bits) == '1' else modes[0]
+            for name, modes in table}
+
+
+def placement_assignment(choices, ordinal: int) -> dict[str, str]:
+    """Resolve an assignment in CPU-first order, with later choices varying faster."""
+    if type(ordinal) is not int or ordinal < 0:
+        raise ValueError('placement ordinal must be a nonnegative integer')
+    table, switchable = _choice_table(choices)
+    if ordinal.bit_length() > switchable:
+        raise ValueError('placement ordinal is outside the declared placement domain')
+    return _placement_for_ordinal(table, switchable, ordinal)
 
 
 def _cost_frontiers(problem, cost_basis):
@@ -108,17 +124,16 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
     ranking compares constructed schedules, so an exhaustive placement domain
     still makes no claim about schedule optimality.
     """
-    table = _choice_table(choices)
+    table, switchable = _choice_table(choices)
     if type(max_placements) is not int or not 1 <= max_placements <= maxsize or cost_basis not in _COST_BASES:
         raise ValueError('placement search requires a positive bound and one explicit cost basis')
-    switchable = sum(len(modes) == 2 for _, modes in table)
     total = 1 << switchable
     checked, unresolved = [], []
     baseline = best = None
     best_key = None
     domain = None
-    for ordinal, assignment in enumerate(islice(product(*(modes for _, modes in table)), max_placements)):
-        placement = {name: location for (name, _), location in zip(table, assignment, strict=True)}
+    for ordinal in range(min(total, max_placements)):
+        placement = _placement_for_ordinal(table, switchable, ordinal)
         try:
             built = build(placement)
         except PlacementCapacityExceeded as error:
@@ -131,7 +146,7 @@ def search_native_device_placements(choices, build, *, max_placements=DEFAULT_PL
             continue
         if ordinal == 0:
             baseline = record
-        score = (row['makespan_ns'], assignment.count('CUDA'), ordinal)
+        score = (row['makespan_ns'], ordinal.bit_count(), ordinal)
         if best_key is None or score < best_key:
             best, best_key = record, score
     enumeration_complete = len(checked) == total

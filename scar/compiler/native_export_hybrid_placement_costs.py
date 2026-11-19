@@ -5,7 +5,7 @@ import json
 from pathlib import Path, PurePosixPath
 
 from scar.compiler.calibrate_native_device import replay_native_device_calibration
-from scar.compiler.compile_exported_aten_cuda import ACTIVITY_BINDING
+from scar.compiler.compile_exported_aten_cuda import ACTIVITY_BINDING, PLACEMENT_RECORDS
 from scar.compiler.native_device_pair import CUDA_SCHEMA, _identity, _manifest, _member
 from scar.ir.implementation_plan import digest, problem_document, problem_from_dict
 from scar.ir.v2.schemas import canonical_json
@@ -40,9 +40,10 @@ def load_native_hybrid_placement_costs(calibration, *, calibration_sha256, cpu_p
     pair = report['pair']
     cuda = Path(cuda_project).resolve(strict=True)
     manifest = _manifest(cuda, pair['cuda']['manifest_sha256'], CUDA_SCHEMA)
-    if manifest['status'] != 'OFFLINE_CPP20_PLACEMENT_CANDIDATE':
+    placement_record = PLACEMENT_RECORDS.get(manifest['status'])
+    if placement_record is None:
         raise ValueError('empirical placement costs require a compiled typed placement archive')
-    proposal = json.loads(_member(cuda, manifest, 'plan/placement-search.json'))
+    proposal = json.loads(_member(cuda, manifest, f'plan/{placement_record}.json'))
     original_problem = json.loads(_member(cuda, manifest, 'plan/problem.json'))
     original_schedule = json.loads(_member(cuda, manifest, 'plan/schedule.json'))
     bindings = json.loads(_member(cuda, manifest, 'plan/bindings.json'))

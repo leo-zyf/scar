@@ -1,0 +1,125 @@
+{
+  "capacity_rejected_ordinals": [
+    3,
+    5,
+    6,
+    7
+  ],
+  "checks": {
+    "capacity_rejection_published_no_project": true,
+    "exact_placement_receipts_replayed": true,
+    "legacy_artifacts_replayed": true,
+    "new_artifacts_replayed_without_torch": true,
+    "repinned_ordinal_tamper_rejected": true
+  },
+  "declared_model": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/placement-model.json",
+    "sha256": "85001f8c0cacb13b012e728cc5642e85888bc3e8b09a0ad6c2fe043b46d41211",
+    "size_bytes": 327
+  },
+  "deployment_authorized": false,
+  "empirical_decision": "PLACEMENT_DOMAIN_UNRESOLVED",
+  "empirical_report": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-empirical/placement.json",
+    "sha256": "23d7c6dd4fb05489c1b08a52dd3e964384766c9040b360c9019e1b5804234bdc",
+    "size_bytes": 36889
+  },
+  "examined_placements": 8,
+  "schema": "scar.native-placement-treatment-baseline",
+  "schema_version": 1,
+  "selected": "ALL_CPU",
+  "source_model": {
+    "path": "artifacts/current/experiments/typed-hybrid-export-v1/model.pt2",
+    "sha256": "2d7da20d2bdc2785b8df76871f26b9b056c85882dbbd10820851e0485a580fcb",
+    "size_bytes": 11982
+  },
+  "treatments": [
+    {
+      "bound_activities": 9,
+      "calibration": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/empirical-placement-device-calibration/calibration.json",
+        "sha256": "65e404cdc37a1e6c7862ed84d8162b5f010c90629e8c157ca41ca8197bc2f3d7",
+        "size_bytes": 5191
+      },
+      "cpu_calls": 5,
+      "explicit_copies": 3,
+      "gpu_calls": 1,
+      "gpu_operations": [
+        "mm_2"
+      ],
+      "measured_activities": 0,
+      "ordinal": 1,
+      "phase": "DEVICE_UNAVAILABLE",
+      "probe_returncode": 77,
+      "project": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/hybrid-placement-qualified/artifact.json",
+        "sha256": "584b333be8a634e420471f70c7ba63f09a4469d18428317f45469a70b9a43a9d",
+        "size_bytes": 5713
+      },
+      "proof": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/hybrid-placement-qualified/plan/placement-search.json",
+        "sha256": "3a79d39ba96aeff92b593e37c8c8db2e07ee9d41e55b4f38a02af9706eced106",
+        "size_bytes": 5715
+      },
+      "status": "OFFLINE_CPP20_PLACEMENT_CANDIDATE"
+    },
+    {
+      "bound_activities": 9,
+      "calibration": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-2-calibration/calibration.json",
+        "sha256": "169881e364cb56d4a9a835e6828d34b77308c8c325fe804fc84144b4e262da1f",
+        "size_bytes": 5203
+      },
+      "cpu_calls": 5,
+      "explicit_copies": 3,
+      "gpu_calls": 1,
+      "gpu_operations": [
+        "mm_1"
+      ],
+      "measured_activities": 0,
+      "ordinal": 2,
+      "phase": "DEVICE_UNAVAILABLE",
+      "probe_returncode": 77,
+      "project": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-2/artifact.json",
+        "sha256": "89e38d4429b893b380ccd5d1e42abacd719133fd6935609b58bc6d3ed0d631b8",
+        "size_bytes": 5728
+      },
+      "proof": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-2/plan/placement-treatment.json",
+        "sha256": "a04ad2d7563d48f8b0228767f17ccb69663cb4450b48ef3224f00bb483cc2c5d",
+        "size_bytes": 2540
+      },
+      "status": "OFFLINE_CPP20_PLACEMENT_CALIBRATION_TREATMENT"
+    },
+    {
+      "bound_activities": 9,
+      "calibration": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-4-calibration/calibration.json",
+        "sha256": "031211747dc64a2d2349190c561b0c6c0db99adfd38e77a4e6c98e22f1ee2e3b",
+        "size_bytes": 5199
+      },
+      "cpu_calls": 5,
+      "explicit_copies": 3,
+      "gpu_calls": 1,
+      "gpu_operations": [
+        "mm"
+      ],
+      "measured_activities": 0,
+      "ordinal": 4,
+      "phase": "DEVICE_UNAVAILABLE",
+      "probe_returncode": 77,
+      "project": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-4/artifact.json",
+        "sha256": "f27faadd5a57dfc83a307f045018782ebbfcbf3c93e22cdd0e37691263c536e8",
+        "size_bytes": 5728
+      },
+      "proof": {
+        "path": "artifacts/current/experiments/typed-hybrid-export-v1/ordinal-audit-4/plan/placement-treatment.json",
+        "sha256": "ed925660e3b332a2721a036ba6af6e196de8b13eeee2927cd54b415d11a5164d",
+        "size_bytes": 2425
+      },
+      "status": "OFFLINE_CPP20_PLACEMENT_CALIBRATION_TREATMENT"
+    }
+  ]
+}

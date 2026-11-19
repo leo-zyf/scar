@@ -26,17 +26,28 @@ _MODEL_PATH = 'plan/cuda-model.json'
 _PROGRAM_PATH = 'plan/program.json'
 _HYBRID_MODEL = 'scar.aten-export-hybrid-offline-profile'
 _PLACEMENT_MODEL = 'scar.aten-export-placement-offline-profile'
+_PLACEMENT_CANDIDATE = 'OFFLINE_CPP20_PLACEMENT_CANDIDATE'
+_PLACEMENT_TREATMENT = 'OFFLINE_CPP20_PLACEMENT_CALIBRATION_TREATMENT'
+PLACEMENT_RECORDS = {_PLACEMENT_CANDIDATE: 'placement-search', _PLACEMENT_TREATMENT: 'placement-treatment'}
 ACTIVITY_BINDING = 'plan/activity-binding.json'
 _ACTIVITY_MEMBERS = dict(program=_PROGRAM_PATH, problem='plan/problem.json', schedule='plan/schedule.json',
                          bindings='plan/bindings.json', executable=EXECUTABLE, launcher='launch.sh')
 
 
-def _pipeline(model):
+def _pipeline(model, *, treatment=False):
     schema = model.get('schema') if isinstance(model, dict) else None
+    if treatment and schema != _PLACEMENT_MODEL:
+        raise ValueError('an exact calibration placement requires the typed placement profile')
     if schema == _PLACEMENT_MODEL:
-        from scar.compiler.aten_export_device_placement import plan_device_export, qualify_device_export, replay_device_export
+        from scar.compiler.aten_export_device_placement import qualify_device_export
 
-        return qualify_device_export, plan_device_export, replay_device_export, 'OFFLINE_CPP20_PLACEMENT_CANDIDATE'
+        if treatment:
+            from scar.compiler.native_export_placement_treatment import plan_device_treatment, replay_device_treatment
+
+            return qualify_device_export, plan_device_treatment, replay_device_treatment, _PLACEMENT_TREATMENT
+        from scar.compiler.aten_export_device_placement import plan_device_export, replay_device_export
+
+        return qualify_device_export, plan_device_export, replay_device_export, _PLACEMENT_CANDIDATE
     if schema == _HYBRID_MODEL:
         from scar.compiler.aten_export_hybrid_plan import plan_hybrid_export, replay_hybrid_export
         from scar.compiler.aten_export_hybrid_source import qualify_hybrid_export
@@ -123,7 +134,8 @@ def _describe(root):
 
 
 def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sha256,
-                               out, input_shapes=(), cuda_root='/usr/local/cuda', with_activity_calibration=False):
+                               out, input_shapes=(), cuda_root='/usr/local/cuda', with_activity_calibration=False,
+                               placement_ordinal=None):
     import torch
 
     model = Path(model).resolve(strict=True)
@@ -136,7 +148,10 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
     if model_lock['sha256'] != cuda_model_sha256:
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
-    qualify, plan, _, status = _pipeline(declared)
+    treatment = placement_ordinal is not None
+    qualify, plan, _, status = _pipeline(declared, treatment=treatment)
+    plan_options = {'ordinal': placement_ordinal} if treatment else {}
+    with_activity_calibration = with_activity_calibration or treatment
     exported = torch.export.load(model)
     recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
     include = Path(torch.__file__).resolve().parent / 'include'
@@ -160,7 +175,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         if model_ref != dict(path=_MODEL_PATH, **model_lock):
             raise ValueError('declared CUDA model changed when it was read')
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
-        problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref)
+        problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref, **plan_options)
         host_lane = 'host_resource' in bindings
         if with_activity_calibration and not host_lane:
             raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
@@ -191,7 +206,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         if with_activity_calibration:
             records['execution']['activity_calibration_abi'] = 1
         if placement:
-            records['placement-search'], = placement
+            records[PLACEMENT_RECORDS[status]], = placement
         for name, value in records.items():
             _write_record(root / f'plan/{name}.json', value)
         launch = root / 'launch.sh'
@@ -240,7 +255,8 @@ def replay_cuda_project(root, manifest, member):
 
     execution = read('execution')
     declared = json.loads(member(_MODEL_PATH).read_bytes())
-    qualify, _, replay, status = _pipeline(declared)
+    treatment = manifest['status'] == _PLACEMENT_TREATMENT
+    qualify, _, replay, status = _pipeline(declared, treatment=treatment)
     policy = dict(actual_device_timing='UNKNOWN', default_backend='NO_OP', deployment_authorized=False)
     if (any(record.get(key) != expected for record in (manifest, execution) for key, expected in policy.items())
             or execution['source'] != manifest['source'] or manifest['status'] != status
@@ -267,15 +283,21 @@ def replay_cuda_project(root, manifest, member):
         if expected != observed:
             raise ValueError('CUDA file input differs from the qualified ordered port')
     problem, schedule, bindings = (read(name) for name in ('problem', 'schedule', 'bindings'))
+    record_name = PLACEMENT_RECORDS.get(status)
+    expected_records = set() if record_name is None else {record_name}
+    declared_records = {name for name in PLACEMENT_RECORDS.values() if f'plan/{name}.json' in files}
+    if declared_records != expected_records:
+        raise ValueError('CUDA project placement record differs from its artifact kind')
     placement = None
-    if declared['schema'] == _PLACEMENT_MODEL:
-        placement = read('placement-search')
-    elif 'plan/placement-search.json' in files:
-        raise ValueError('CUDA project includes an undeclared placement search')
+    replay_options = {}
+    if record_name is not None:
+        placement = read(record_name)
+        replay_options[record_name.replace('-', '_')] = placement
     replay(projection, declared, model_ref=execution['model'], problem=problem, schedule=schedule, bindings=bindings,
-           **(dict(placement_search=placement) if placement is not None else {}))
+           **replay_options)
     abi = execution.get('activity_calibration_abi')
     if (abi != manifest.get('activity_calibration_abi') or (abi is None) != (ACTIVITY_BINDING not in files)
+            or (treatment and abi is None)
             or (abi is not None and (type(abi) is not int or abi != 1 or 'host_resource' not in bindings))):
         raise ValueError('CUDA activity calibration ABI differs from its archived binding')
     generated = _native_sources(projection, problem, schedule, bindings, calibrate=abi is not None)
@@ -295,6 +317,8 @@ def replay_cuda_project(root, manifest, member):
         result.update(cuda_regions=len(regions), host_provider_calls=description['host_provider_calls'])
     if placement is not None:
         result['device_placements_replayed'] = True
+    if treatment:
+        result['calibration_placement_ordinal'] = placement['ordinal']
     if abi is not None:
         from scar.codegen.aten_export_cuda_source import ACTIVITY_CALIBRATION_SCHEMA
         from scar.compiler.native_device_activity_binding import replay_activity_binding
@@ -317,6 +341,8 @@ def main(argv=None):
     parser.add_argument('--cuda-root', default='/usr/local/cuda')
     parser.add_argument('--with-activity-calibration', action='store_true',
                         help='include explicit activity timing alongside the clean hybrid entry')
+    parser.add_argument('--placement-ordinal', type=int,
+                        help='build a capacity-feasible GPU placement for calibration in CPU-first source order')
     args = parser.parse_args(argv)
     report = compile_exported_aten_cuda(**vars(args))
     print(json.dumps(dict(status=report['status'], executable=str(Path(args.out) / report['executable']),
