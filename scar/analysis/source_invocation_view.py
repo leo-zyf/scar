@@ -21,6 +21,7 @@ from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEd
 
 
 SCHEMA='scar.source-invocation-ports'
+_PREVIOUS_QUERY_ADAPTER = ('754fb58968b582429234943fa3e105436e23f3c45732cd1f2156082730b7e5d4', 34253)
 _GUARDS=('RECORDED_DIRECT_INVOCATION_SELECTED','ORIGINAL_SOURCE_INTERFACE_CONDITIONS_RETAINED',
     'SOURCE_WORLD_BINDING_IS_NOT_CONTENT_PRESERVATION','NO_CONTENT_VERSION_EQUALITY_OR_EFFECT_PURITY_PROVEN')
 _BODY_GUARDS=('ORIGINAL_SHARED_F4_RELATION_PARAMETERIZED_BY_INVOCATION',
@@ -314,13 +315,14 @@ class SourceInvocationProvider:
             content_preservation_proven=False,logical_content_version_proven=False,source_body_copied=False)
 
     def _neighbors(self,point,incoming):
+        entry=self.nodes.get(point.node)
+        if entry is None or point.namespace!=entry[1].namespace:return Neighborhood()
         self.check()
-        if self.describe(point) is None:return Neighborhood()
         if point.context!=():
             return Neighborhood(frontiers=(Frontier(point,'STATIC_FRAME_IS_NOT_INVOCATION_SCOPE',
                 'Use the original run/InvocationKey occurrence handle without a static frame context.'),))
         edges=list((self.in_edges if incoming else self.out_edges)[point.node]);frontiers=list(self.frontiers[point.node])
-        record,original=self.nodes[point.node]
+        record,original=entry
         if type(record)is I.SourceInvocationBinding:return Neighborhood(tuple(edges),tuple(frontiers))
         if type(record)is I.SourceInvocationPort and record.boundary is not None:
             frontiers.append(Frontier(point,'CALLER_ATTEMPT_INTERNAL_SELECTION_OPEN',
@@ -419,13 +421,14 @@ class LazySourceInvocationProvider:
             self.gaps.append(dict(layer='invocations',kind='SAME_RUN_OBSERVED_FUNCTION_GROUPS_NOT_AVAILABLE',run_scope=self.run_scope))
         view.register(self)
 
-    def check(self):
+    def check(self,*,extra_store=None):
         from pathlib import Path
         from scar.analysis.source_value_flow import _artifact
         self.activations.store.check()
         if any(_artifact(Path(rule.uri),rule.schema)!=rule for rule in self.rules):
             raise ValueError('invocation scope provider rules changed')
         stores={id(self.materials[unit]):self.materials[unit] for unit in self.providers}
+        if extra_store is not None:stores[id(extra_store)]=extra_store
         for store in stores.values():store.validate()
 
     def ensure(self,unit):
@@ -440,7 +443,7 @@ class LazySourceInvocationProvider:
         try:
             groups,facts=_original_invocation_groups(store,unit)
             def guard():
-                self.check();store.validate()
+                self.check(extra_store=store)
             provider=self.activations.bind_invocations(groups,group_facts=facts,check=guard)
             self.providers[unit]=provider
             shard=store.report['shards'][unit]
@@ -468,18 +471,20 @@ class LazySourceInvocationProvider:
 
     def _query(self,point,incoming):
         from dataclasses import replace
-        self.check()
         source=self.view.namespaces.get(point.namespace)
         original=source is not None and point.node in source.records
-        if original:self.ensure(source.unit)
         key=point.namespace,point.node
+        adjacency=self.in_edges if incoming else self.out_edges
+        if original:self.ensure(source.unit)
+        elif key in adjacency:self.check()
+        else:return Neighborhood()
         if incoming:
             # Instance handles have their own InvocationKey scope, never a
             # static DependencyFrame selected by a source navigation path.
             if point.context!=():return Neighborhood()
-            edges=tuple(self.in_edges[key])
+            edges=tuple(adjacency.get(key,()))
         else:
-            edges=tuple(replace(edge,source=point) for edge in self.out_edges[key])
+            edges=tuple(replace(edge,source=point) for edge in adjacency.get(key,()))
         frontiers=()
         if original and source.unit in self.failed:
             frontiers=(Frontier(point,'INVOCATION_SOURCE_GROUPS_UNAVAILABLE',self.failed[source.unit]),)
@@ -507,6 +512,13 @@ class LazySourceInvocationProvider:
         """Replay only a publication's demanded units against original stores."""
         import json
         current=self.publication()
+        if type(record) is dict and type(record.get('provider_rules')) is list:
+            # The earlier query adapter retained the same records. Rebuild
+            # all the original relations before accepting its saved counts.
+            current_rules=current['provider_rules']
+            digest,size=_PREVIOUS_QUERY_ADAPTER
+            if record['provider_rules']==[{**current_rules[0],'sha256':digest,'size_bytes':size},*current_rules[1:]]:
+                record={**record,'provider_rules':current_rules}
         dynamic={'group_tables','materialized_units','unavailable_units','actual_call_handles','routes','field_frontiers'}
         if (type(record) is not dict or set(record)!=set(current)
                 or any(record[key]!=current[key] for key in current.keys()-dynamic)):

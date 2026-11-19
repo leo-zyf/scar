@@ -30,6 +30,8 @@ FACTS_FORMAT = 'OBSERVED_COMPILED_LOCAL_JSON'
 LOWERING = 'CODE_EQUIVALENT_REPLAY_NOT_ORIGINAL_REQUEST'
 _CLAIMS = ('target_executed', 'original_request_proven', 'runtime_namespace_proven',
     'source_body_activated', 'global_namespace_resolved', 'first_stage_complete')
+# The preceding v1 producer wrote the same canonical plan arrays and receipts.
+_LEGACY_V1_PRODUCER = '6c56d389738e99cb01ae4d05e32b58b3d36b0b7b9105b2d8c38f65a7bf779050'
 
 
 def _pins():
@@ -198,7 +200,7 @@ class ObservedCompiledLocalMaterial:
         self._report_raw = (self.path/'result.json').read_bytes()
         self.report = report = json.loads(self._report_raw)
         if ((report.get('schema'), report.get('schema_version')) != (SCHEMA, 1)
-                or report['implementation_sha256'] != sha256(Path(__file__).read_bytes()).hexdigest()
+                or report['implementation_sha256'] not in (_LEGACY_V1_PRODUCER, sha256(Path(__file__).read_bytes()).hexdigest())
                 or report['pins'] != _pins() or report['lowering'] != LOWERING
                 or set(report['claims']) != set(_CLAIMS) or any(report['claims'].values())):
             raise ValueError('local compiled material producer or contract differs')
@@ -259,6 +261,7 @@ class ObservedCompiledLocalMaterial:
         return tuple(dict.fromkeys((*self._parents, *self._stamps)))
 
     def plans(self, keys):
+        from scar.analysis.observed_plan_rows import PlanRowCache
         from scar.analysis.source_productions import _digest, read_production_plan
         keys = tuple(dict.fromkeys(keys)); self.validate_parents()
         if any(type(key) is not SourceTemplateKey or key not in self.interfaces['nodes'] for key in keys):
@@ -268,9 +271,16 @@ class ObservedCompiledLocalMaterial:
             if key not in self._plans:
                 node = self.interfaces['nodes'][key]; wanted[node.origin.domain.value][node.origin.line] = key
         for domain, lines in wanted.items():
-            records = self._document(self.report['tables'][domain])['records']
+            owner = getattr(self, 'catalog', self)
+            cache = getattr(owner, '_compiled_plan_rows', None)
+            if cache is None:
+                cache = owner._compiled_plan_rows = PlanRowCache()
+            descriptor = self.report['tables'][domain]
+            table_path = self.path / descriptor['path']
+            cache_key = table_path, descriptor['sha256'], descriptor['decoded_sha256']
+            records = cache.load(cache_key, descriptor, lambda: gzip.decompress(self._read_raw(descriptor)))
             for line,key in lines.items():
-                node = self.interfaces['nodes'][key]; document = records[line-1]
+                node = self.interfaces['nodes'][key]; document = records.row(line)
                 if _digest(document) != node.origin.plan_sha256:
                     raise ValueError('local compiled plan digest differs')
                 plan = read_production_plan(document)
