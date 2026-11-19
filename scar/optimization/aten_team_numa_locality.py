@@ -24,7 +24,7 @@ def _legal_contexts(schedule, recipe):
     if (type(widths) is not list or len(widths) != operation_count
             or any(type(width) is not int or not 1 <= width <= min(3, operation_count - start)
                    for start, width in enumerate(widths))
-            or 3 not in widths):
+            or (schedule.get('schema_version') != 2 and 3 not in widths)):
         raise ValueError('team NUMA observations require legal two- and three-lane windows')
 
     for start, width in enumerate(widths):

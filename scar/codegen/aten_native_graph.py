@@ -88,9 +88,14 @@ def _render(recipe, operators, schedule=None, *, release_after, ready_dag=False)
     if schedule is not None and 'legal_window_widths' in schedule:
         pair_include = f'#define SCAR_ATEN_TEAM 1\n#include "{_TEAM_HEADER.name}"\n'
         producers = {op['id']: i for i, op in enumerate(recipe['operations'])}
-        dependencies = sorted({(producers[arg['value']], consumer)
-                               for consumer, op in enumerate(recipe['operations']) for arg in op['arguments']
-                               if arg.get('value') in producers})
+        if ready_dag:
+            dependencies = [(producer, consumer)
+                            for consumer, parents in enumerate(schedule['ready_graph']['data_dependencies'])
+                            for producer in parents]
+        else:
+            dependencies = sorted({(producers[arg['value']], consumer)
+                                   for consumer, op in enumerate(recipe['operations']) for arg in op['arguments']
+                                   if arg.get('value') in producers})
         pair_support = render_team_calls(calls, releases, outputs, schedule['legal_window_widths'],
                                          dependencies=dependencies)
         if ready_dag:
@@ -235,18 +240,12 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
         if len(cpu_ids) == 3:
             schedule = propose_cpu_team(recipe, contract=contract, target=target, cpu_ids=cpu_ids,
-                                        allow_cross_numa=allow_cross_numa)
+                                        allow_cross_numa=allow_cross_numa, ready_dag=ready_dag)
         else:
             schedule = propose_cpu_windows(recipe, contract=contract, target=target, cpu_ids=cpu_ids)
     team = schedule is not None and 'legal_window_widths' in schedule
-    if ready_dag:
-        from scar.optimization.aten_native_schedule import _declared_operators
-
-        if not team or len({lane['numa_node'] for lane in schedule['lanes']}) != 1:
-            raise ValueError('ready DAG requires a qualified CPU team on one NUMA node')
-        declared = _declared_operators(contract)
-        if any(op['schema'] not in declared for op in recipe['operations']):
-            raise ValueError('ready DAG requires exact concurrency qualification of every reordered operator')
+    if ready_dag and (not team or schedule['schema_version'] != 2):
+        raise ValueError('ready DAG requires a qualified CPU team on one NUMA node')
     operator_path = linkage_path.with_name('operators.hpp')
     command_env = {key: val for key, val in os.environ.items() if not key.startswith('LD_')}
     command = [*cxx, *compile_flags, '-O2']

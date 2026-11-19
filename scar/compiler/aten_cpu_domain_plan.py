@@ -54,7 +54,8 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
     for representative in domain['representatives']:
         if team:
             schedule = propose_cpu_team(recipe, contract=contract, target=hardware, cpu_ids=representative['cpus'],
-                 allow_cross_numa=artifact[key].get('placement_policy') == TEAM_PLACEMENT_POLICY)
+                 allow_cross_numa=artifact[key].get('placement_policy') == TEAM_PLACEMENT_POLICY,
+                 ready_dag=artifact[key]['schema_version'] == 2)
         else:
             schedule = propose_cpu_windows(recipe, contract=contract, target=hardware, cpu_ids=representative['cpus'])
         if schedule['target'] != domain['target'] or 'target_cpu_domain' not in schedule:

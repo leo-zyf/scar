@@ -16,10 +16,10 @@ from scar.compiler.plan_aten_ready import plan_aten_ready
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.aten_cpu_placement_domain import aten_cpu_placement_domain
 from scar.optimization.aten_native_schedule import (
-    CONTRACT_SCHEMA, AtenCpuWindowFrontier, _declared_operators, propose_cpu_windows, resolve_aten_cpu_windows,
+    CONTRACT_SCHEMA, AtenCpuWindowFrontier, propose_cpu_windows, resolve_aten_cpu_windows,
 )
 from scar.optimization.aten_native_team import (
-    TEAM_PLACEMENT_POLICY, aten_cpu_team_domain, propose_cpu_team, team_window_widths,
+    TEAM_PLACEMENT_POLICY, aten_cpu_team_domain, propose_cpu_team, ready_team_available, team_window_widths,
 )
 from scar.runtime.validate_aten_python_entry import validate_aten_python_entry
 
@@ -61,13 +61,21 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     report.update(source=source['source'], function=source['function'], code_key=source['code_key'],
                   target=target, concurrency_contract=concurrency, recipe=inputs['recipe'])
     declarations = read_artifact(concurrency)
-    ready_operators = _declared_operators(declarations) if compare_ready else ()
-    ready_effects = compare_ready and all(op['schema'] in ready_operators for op in recipe['operations'])
+    ready_graph = compare_ready and ready_team_available(recipe, declarations)
     allowed = os.sched_getaffinity(0)
     domain = None
     placement = None
     propose = propose_cpu_windows
-    if 3 in team_window_widths(recipe, declarations):
+    if ready_graph:
+        team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed)
+        if team['representatives']:
+            domain = team
+            propose = partial(propose_cpu_team, ready_dag=True)
+            placement = propose(recipe, contract=declarations, target=target_dir,
+                                cpu_ids=team['representatives'][0]['cpus'])
+        else:
+            report['ready_team_frontier'] = team['reason']
+    if placement is None and 3 in team_window_widths(recipe, declarations):
         team = aten_cpu_team_domain(target_dir, allowed_cpu_ids=allowed, allow_cross_numa=True)
         if team['representatives']:
             domain = team
@@ -98,7 +106,7 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
 
     def compile_graph(destination, schedule):
         team = 'legal_window_widths' in schedule
-        ready = compare_ready and team and ready_effects and not schedule.get('cross_numa')
+        ready = team and schedule['schema_version'] == 2
         result = compile_aten_native_graph(inputs['recipe']['uri'], recipe_sha256=inputs['recipe']['sha256'],
             linkage=inputs['linkage']['uri'], linkage_sha256=inputs['linkage']['sha256'], out=destination,
             concurrency_contract=concurrency['uri'], concurrency_sha256=concurrency['sha256'],
@@ -115,7 +123,8 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
     if domain is not None:
         probe = artifact_reference(native / 'artifact.json', compiled['schema'])
         choices, chosen = plan_aten_cpu_domain(probe, domain=domain, input_paths=sample_paths,
-            warmup_pairs=graph_warmup_pairs, tensor_budget_bytes=tensor_budget_bytes, price_ready=ready_effects)
+            warmup_pairs=graph_warmup_pairs, tensor_budget_bytes=tensor_budget_bytes,
+            price_ready='ready_dag_abi' in compiled)
         path = out / 'cpu-domain-plan.json'
         path.write_text(json.dumps(choices, sort_keys=True, indent=2, allow_nan=False) + '\n')
         report['cpu_domain_plan'] = artifact_reference(path, choices['schema'])
@@ -127,15 +136,13 @@ def _compile(inputs, *, out, named_inputs, concurrency_contract, concurrency_sha
             delivered = compile_graph(native, placement)
             sources = ('team.cpp', 'aten_native_team_v1.h', 'aten_numa_pages_v1.h') if 'cpu_team' in compiled else (
                 'pair.cpp', 'aten_native_pair_v1.h', 'aten_numa_pages_v1.h')
-            if compiled.get('ready_dag_abi') != delivered.get('ready_dag_abi'):
-                # Reduced and ready-capable binaries are distinct calibration contexts.
-                chosen = None
-            elif any(delivered['files'][name] != compiled['files'][name]
+            if 'ready_dag_abi' in compiled:
+                sources = (*sources, 'aten_ready_dag_v1.h')
+            if any(delivered['files'][name] != compiled['files'][name]
                      for name in ('graph.hpp', 'operators.hpp', *sources)):
                 raise ValueError('delivery graph code differs from the measured CPU probe')
             compiled = delivered
-        if chosen is not None:
-            primitive_observation = dict(inputs=choices['inputs'], raw=chosen['primitive_observations'])
+        primitive_observation = dict(inputs=choices['inputs'], raw=chosen['primitive_observations'])
 
     report['native'] = artifact_reference(native / 'artifact.json', compiled['schema'])
     plan = out / 'plan'

@@ -1,4 +1,4 @@
-"""Qualify and price adjacent ATen windows on a three-core CPU team."""
+"""Qualify a three-core ATen team and price its adjacent windows."""
 
 from collections import Counter, defaultdict
 from itertools import product
@@ -24,6 +24,7 @@ from scar.optimization.aten_team_numa_locality import model_aten_team_numa_local
 TEAM_SCHEMA = 'scar.aten-native-cpu-team'
 TEAM_DOMAIN_SCHEMA = 'scar.aten-cpu-team-placement-domain'
 TEAM_PLACEMENT_POLICY = 'ISA_COMPATIBLE_ORDERED_TOPOLOGY'
+READY_SERVICE_SCOPE = 'ALL_QUALIFIED_RECIPE_OPERATIONS'
 _MAX_REPRESENTATIVES = 64
 _MODE_NAMES = ('SERIAL', 'TWO_CPU', 'THREE_CPU')
 
@@ -60,6 +61,35 @@ def _widths(groups, operation_count):
 def team_window_widths(recipe, contract):
     """Return the largest legal adjacent width at each normalized operation."""
     return _widths(_groups(recipe, contract), len(recipe['operations']))
+
+
+def data_dependencies(recipe):
+    """Recover direct Tensor producers, including a single edge for repeated operands."""
+    tensor_releases(recipe)
+    operations = recipe['operations']
+    producers = {operation['id']: index for index, operation in enumerate(operations)}
+    return [sorted({producers[arg['value']] for arg in operation['arguments'] if arg.get('value') in producers})
+            for operation in operations]
+
+
+def _ready_graph(recipe):
+    dependencies = data_dependencies(recipe)
+    releases = [[] for _ in dependencies]
+    for operation, parents in enumerate(dependencies):
+        releases[max(parents, default=-1) + 1].append(operation)
+    ready = set()
+    for prefix, released in enumerate(releases):
+        ready.update(released)
+        if len(ready) > 1:
+            return dict(data_dependencies=dependencies, first_ready_prefix=prefix, ready_operations=sorted(ready))
+        ready.remove(prefix)
+    return None
+
+
+def ready_team_available(recipe, contract):
+    """Check whether exact whole-graph effects and DATA permit a ready team."""
+    declared = _declared_operators(contract)
+    return all(op['schema'] in declared for op in recipe['operations']) and _ready_graph(recipe) is not None
 
 
 def _valid_lane(lane):
@@ -149,12 +179,22 @@ def aten_cpu_team_domain(target, *, allowed_cpu_ids, allow_cross_numa=False):
                 excluded_cpu_counts=dict(excluded))
 
 
-def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=False):
+def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=False, ready_dag=False):
     """Replay a concrete team against recorded hardware and graph independence."""
-    if type(allow_cross_numa) is not bool:
-        raise ValueError('team NUMA policy must be an explicit boolean')
+    if type(allow_cross_numa) is not bool or type(ready_dag) is not bool:
+        raise ValueError('team NUMA and ready-DAG policies must be explicit booleans')
     groups = _groups(recipe, contract)
-    if not any(group['width'] == 3 for group in groups):
+    ready_graph = None
+    if ready_dag:
+        declared = _declared_operators(contract)
+        if any(op['schema'] not in declared for op in recipe['operations']):
+            raise AtenCpuWindowFrontier('READY_DAG_EFFECT_CONTRACT_INCOMPLETE',
+                                       'ready DAG requires an exact effect declaration for every operation')
+        ready_graph = _ready_graph(recipe)
+        if ready_graph is None:
+            raise AtenCpuWindowFrontier('READY_DAG_HAS_NO_INDEPENDENT_OPERATIONS',
+                                       'no source prefix has two DATA-ready operations')
+    elif not any(group['width'] == 3 for group in groups):
         raise AtenCpuWindowFrontier('NO_THREE_READY_ATEN_OPERATIONS',
                                    'assessed recipe has no independent adjacent triple')
     cpus = list(cpu_ids)
@@ -170,13 +210,16 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=Fals
     if not all(map(_valid_lane, lanes)) or len({lane[1].id for lane in lanes}) != 3:
         raise AtenCpuWindowFrontier('CPU_TEAM_DISTINCT_CORES_UNAVAILABLE',
                                    'team lanes require distinct online cores with known topology')
+    if ready_dag and _crosses_numa(lanes):
+        raise AtenCpuWindowFrontier('READY_DAG_REQUIRES_SAME_NUMA_NODE',
+                                   'ready DAG requires one recorded NUMA node')
     if len({_team_context(lane, allow_cross_numa) for lane in lanes}) != 1:
         if allow_cross_numa:
             raise AtenCpuWindowFrontier('CPU_TEAM_REQUIRES_COMPATIBLE_ISA_CONTEXT',
                                        'team lanes require compatible ISA flags')
         raise AtenCpuWindowFrontier('CPU_TEAM_REQUIRES_SAME_NUMA_ISA_CONTEXT',
                                    'team lanes require one recorded NUMA node and compatible ISA flags')
-    schedule = dict(schema=TEAM_SCHEMA, schema_version=1, scope=SCOPE, target=encode(graph._snapshot),
+    schedule = dict(schema=TEAM_SCHEMA, schema_version=2 if ready_dag else 1, scope=SCOPE, target=encode(graph._snapshot),
                     cpus=cpus, availability_mask=sorted(cpus), lanes=[_topology(lane) for lane in lanes],
                     constraint_fact=encode(constraint.evidence),
                     target_cpu_domain=dict(affinity_cpu_ids=list(constraint.affinity_cpu_ids),
@@ -184,6 +227,8 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=Fals
                     legal_window_widths=_widths(groups, len(recipe['operations'])), groups=groups,
                     effect_basis='EXPLICIT_STANDALONE_CALLER_CONTRACT',
                     source_replacement_authorized=False, performance_measured=False)
+    if ready_dag:
+        schedule['ready_graph'] = ready_graph
     if allow_cross_numa:
         schedule.update(placement_policy=TEAM_PLACEMENT_POLICY, cross_numa=_crosses_numa(lanes))
     return schedule
@@ -207,8 +252,13 @@ def _validate_samples(samples, count, operation_count, positions):
 
 def _team_groups(recipe, schedule):
     if (type(schedule) is not dict or schedule.get('schema') != TEAM_SCHEMA
-            or type(schedule.get('schema_version')) is not int or schedule['schema_version'] != 1):
+            or type(schedule.get('schema_version')) is not int or schedule['schema_version'] not in (1, 2)):
         raise ValueError('native CPU team schedule required')
+    full_graph = schedule['schema_version'] == 2
+    if full_graph:
+        graph = _ready_graph(recipe)
+        if graph is None or schedule.get('ready_graph') != graph:
+            raise ValueError('ready team admission differs from its original Tensor dependency graph')
     operations = recipe['operations']
     windows = {}
     for group in schedule['groups']:
@@ -221,7 +271,7 @@ def _team_groups(recipe, schedule):
         if group['operations'] != names or any(set(names) & _live_inputs(op) for op in region):
             raise ValueError('native team window crosses an original Tensor dependency')
         windows[start, width] = group
-    if (not any(width == 3 for _, width in windows)
+    if ((not full_graph and not any(width == 3 for _, width in windows))
             or any((start, 2) not in windows for start, width in windows if width == 3)
             or schedule['legal_window_widths'] != _widths(windows.values(), len(operations))):
         raise ValueError('native team windows disagree with the admitted widths')
@@ -246,7 +296,7 @@ def _storage(calibration, recipe, windows, budget):
     return footprint, possible
 
 
-def _measurements(calibration, warmup, operation_count, windows):
+def _measurements(calibration, warmup, operation_count, windows, *, full_graph=False):
     if type(warmup) is not int or not 3 <= warmup <= 100:
         raise ValueError('native team calibration requires three to one hundred warmups')
     all_lanes = calibration['worker_operation_samples_ns']
@@ -255,8 +305,13 @@ def _measurements(calibration, warmup, operation_count, windows):
             or handoffs.keys() != {'2', '3'} or any(type(samples) is not list or len(samples) != warmup
             or not all(map(_bounded_duration, samples)) for samples in handoffs.values())):
         raise ValueError('native team needs exactly two worker matrices and separate two- and three-lane handoff costs')
-    measured_positions = [set(range(operation_count)), {start + 1 for start, width in windows if width >= 2},
-                          {start + 2 for start, width in windows if width == 3}]
+    all_positions = set(range(operation_count))
+    scope = READY_SERVICE_SCOPE if full_graph else None
+    if calibration.get('service_scope') != scope:
+        raise ValueError('ATen team service evidence scope differs from its schedule')
+    measured_positions = ([all_positions] * 3 if full_graph else
+        [all_positions, {start + 1 for start, width in windows if width >= 2},
+                        {start + 2 for start, width in windows if width == 3}])
     lanes = [calibration['operation_samples_ns'], *all_lanes]
     for samples, positions in zip(lanes, measured_positions, strict=True):
         _validate_samples(samples, warmup, operation_count, positions)
@@ -376,7 +431,8 @@ def model_cpu_team(calibration, recipe, schedule, warmup, *, tensor_budget_bytes
     """Select a resource-legal ordered tiling from separately measured primitives."""
     windows = _team_groups(recipe, schedule)
     operations = recipe['operations']
-    service, handoffs, lane_samples, handoff_samples = _measurements(calibration, warmup, len(operations), windows)
+    service, handoffs, lane_samples, handoff_samples = _measurements(
+        calibration, warmup, len(operations), windows, full_graph=schedule['schema_version'] == 2)
     storage, possible = _storage(calibration, recipe, windows, tensor_budget_bytes)
     numa = model_aten_team_numa_locality(calibration.get('numa_team'), recipe, schedule, warmup,
                                         result_storage_bytes=calibration['result_storage_bytes'])

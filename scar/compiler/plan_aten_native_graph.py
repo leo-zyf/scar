@@ -66,7 +66,8 @@ def _bundle(path, digest):
         from scar.optimization.aten_native_team import TEAM_PLACEMENT_POLICY, propose_cpu_team
 
         replayed = propose_cpu_team(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'],
-                                    allow_cross_numa=schedule.get('placement_policy') == TEAM_PLACEMENT_POLICY)
+                                    allow_cross_numa=schedule.get('placement_policy') == TEAM_PLACEMENT_POLICY,
+                                    ready_dag=schedule['schema_version'] == 2)
     else:
         qualify = propose_cpu_windows if key == 'cpu_windows' else propose_cpu_pair
         replayed = qualify(recipe, contract=requirements, target=hardware, cpu_ids=schedule['cpus'])

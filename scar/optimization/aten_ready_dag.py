@@ -1,21 +1,12 @@
 """Price a source-ordered CPU lane schedule over original Tensor dependencies."""
 
-from scar.optimization.aten_native_team import _measurements, _storage, _team_groups
+from scar.optimization.aten_native_team import READY_SERVICE_SCOPE, _measurements, _storage, _team_groups, data_dependencies
 from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
-from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes, tensor_releases
+from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
 
 
 _MIN_GAIN = 0.05
 _LANE_DOMAINS = ((0, 1), (0, 2), (0, 1, 2))
-
-
-def data_dependencies(recipe):
-    """Recover direct Tensor producers, including a single edge for repeated operands."""
-    tensor_releases(recipe)
-    operations = recipe['operations']
-    producers = {operation['id']: index for index, operation in enumerate(operations)}
-    return [sorted({producers[arg['value']] for arg in operation['arguments'] if arg.get('value') in producers})
-            for operation in operations]
 
 
 def _assign_lanes(dependencies, service, domains):
@@ -72,6 +63,9 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
     dependencies = data_dependencies(recipe)
     operations = recipe['operations']
     windows = _team_groups(recipe, schedule)
+    full_graph = schedule['schema_version'] == 2
+    if full_graph and ready_dag_abi != 2:
+        raise ValueError('whole-graph readiness requires the Tensor lifetime ABI')
     cpus = schedule['cpus']
     nodes = [lane['numa_node'] for lane in schedule['lanes']]
     if len(cpus) != 3 or len(set(cpus)) != 3 or len(nodes) != 3:
@@ -89,7 +83,10 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
     if not _bytes(tensor_budget_bytes) or tensor_budget_bytes == 0:
         raise ValueError('ready DAG Tensor budget must be a positive bounded byte count')
 
-    service, handoffs, lane_samples, handoff_samples = _measurements(calibration, warmup, len(operations), windows)
+    service, handoffs, lane_samples, handoff_samples = _measurements(
+        calibration, warmup, len(operations), windows, full_graph=full_graph)
+    if full_graph:
+        report['service_scope'] = READY_SERVICE_SCOPE
     original_storage, _ = _storage(calibration, recipe, {}, None)
     input_bytes = original_storage['persistent_input_bytes']
     result_bytes = calibration['result_storage_bytes']

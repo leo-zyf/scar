@@ -430,10 +430,15 @@ void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team
     data.check();
 
     std::array<LaneEligibility, 2> eligible{};
+#ifdef SCAR_ATEN_READY_DAG
+    // Ready placement can assign any qualified operator to either worker.
+    for (auto& lane : eligible) lane.fill(true);
+#else
     for (std::size_t start = 0; start < graph::operation_count; ++start) {
         const auto width = graph::legal_window_widths[start];
         for (std::size_t lane = 1; lane < width; ++lane) eligible[lane - 1][start + lane] = true;
     }
+#endif
     ResultStorage storage;
     auto observe = [&](std::size_t lane, OperationTimes& timings) {
         const auto output = graph::run_observed(inputs, [&](std::size_t op, auto&& call) {
@@ -475,7 +480,11 @@ void calibrate(char** args, const std::array<int, 3>& cpus, graph::CpuTeam& team
     if (numa) calibrate_concurrent(data, reference, team, storage, numa->contexts, warmup);
     std::cout << "{\"warmup_pairs\":" << warmup << ",\"cpu_ids\":";
     emit_numbers(cpus);
-    std::cout << ",\"calibration\":{\"operation_samples_ns\":";
+    std::cout << ",\"calibration\":{";
+#ifdef SCAR_ATEN_READY_DAG
+    std::cout << "\"service_scope\":\"ALL_QUALIFIED_RECIPE_OPERATIONS\",";
+#endif
+    std::cout << "\"operation_samples_ns\":";
     emit_operations(services[0]);
     std::cout << ",\"worker_operation_samples_ns\":[";
     emit_operations(services[1], &eligible[0]);

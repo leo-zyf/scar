@@ -32,7 +32,7 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar compile-aten-entry --help` 将发现报告接到成本规划、C++20 LibTorch 交付和可选的完整入口 A/B。校准 Tensor 按原形参传 `--input NAME=FILE`。存在三个相邻且独立的重叠安全算子时，按 NUMA、末级缓存及 ISA 提取有序代表组并比较串行、双核和三核。跨节点组合以完整的页采样和对应线程的实测算子成本为依据。完整入口 A/B 两侧共享选定的 CPU 掩码，核对原生覆盖率、输出等价和进程耗时。
 
-加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，硬件成本模型可将就绪调度列为候选。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
+加上 `--compare-ready --tensor-budget-bytes BYTES --entry-function main` 后，SCAR 沿完整张量数据图查找可同时就绪的操作，在同 NUMA 物理核上校准全部合格算子的服务时间。每轮用同一 CPU 掩码启动原程序及通过区域验证的候选，平衡每对方案的先后顺序。`delivery.json` 给出完整入口选择，`entry-validation/validation.json` 保留各候选结果。可用 `scar validate-aten-entry-candidates --check REPORT --check-sha256 SHA256` 重放选择和输出校验。
 
 为独立 CPU 图追加 `--concurrency-contract CONTRACT.json --concurrency-sha256 SHA256 --target HARDWARE --cpu CALLER --cpu WORKER` 可生成双核试验入口。`scar plan-aten-graph --bundle NATIVE/artifact.json --bundle-sha256 SHA256 --input X.f32 --input Y.f32 --out PLAN` 用单算子服务时间和交接开销求出互不重叠的相邻窗口组合。独立进程只对选出的并行方案与串行基线配对验证。`PLAN/plan.json` 逐段验算核心占用，`PLAN/launch.sh` 固定输入和已选窗口。性能报告的范围是预热后的调用。见 [多窗口调度验证](artifacts/baseline/aten-native-multi-window.json)。
 
