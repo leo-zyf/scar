@@ -75,7 +75,99 @@ def _candidate(n, workers, window, terms, scenario, memory, limit, diagonal):
         conditional_cost_interval_ns=intervals, point_model=point_model, conditional_credit_chain=lower)
 
 
-def propose(transport_proposal_path, *, memory_limit_bytes=None):
+def _dominance(candidate, competitor):
+    """Use disjoint observed service envelopes and the same result contract."""
+    return (candidate['configuration']['window'] == competitor['configuration']['window']
+        and candidate['exact_stdout_sha256'] == competitor['exact_stdout_sha256']
+        and candidate['observed_loop_wall_ns']['upper_ns'] < competitor['observed_loop_wall_ns']['lower_ns']
+        and candidate['heaviest_serial_solve_ns']['upper_ns'] < competitor['heaviest_serial_solve_ns']['lower_ns']
+        and candidate['address_space_limits_bytes'] <= competitor['address_space_limits_bytes']
+        and candidate['minimum_launch_headroom_bytes'] <= competitor['minimum_launch_headroom_bytes'])
+
+
+def _observed_schedule(source_ref, model, plan, limit, memory_cap, credit_cost_path):
+    from scar.optimization import native_ordered_credit_cost as credit
+    from scar.optimization import native_ordered_width_cost as width_cost
+
+    credit_ref = _ref(credit_cost_path, credit.SCHEMA)
+    measured = credit.check(credit_ref['uri'])
+    pair = read_artifact(measured['validation'])
+    _require(read_artifact(credit_ref) == measured
+        and model['recipe_id'] == measured['recipe_id']
+        and model['matched_input'] == measured['matched_input'] == pair['matched_input']
+        and pair['diagonal_profile'] == model['profile_plan']
+        and pair['diagonal_observation'] in model['native_observations']
+        and measured['exact_stdout_sha256'] == pair['exact_stdout_sha256'],
+        'credit observations require the same exact pilot, ordered input, recipe and output')
+
+    quotes = {}
+    for role in ('diagonal', 'independent'):
+        row = width_cost._credit_service_quote(credit_ref, pair[f'{role}_observation'],
+            pair[f'{role}_profile'], measured['arms'][role], measured['exact_stdout_sha256'])
+        config = row['configuration']
+        key = f'{config["workers"]}/{config["window"]}'
+        _require(key not in quotes and config['workers'] in model['admissible_widths'],
+            'exact observation lies outside the checked resource domain')
+        quotes[key] = row
+
+    options = {}
+    for workers in model['admissible_widths']:
+        cohort = model['projections'][str(workers)]
+        for window in range(1, workers+1):
+            key = f'{workers}/{window}'
+            memory = _memory(model['case'], window, workers, plan['memory'])
+            fits = memory['minimum_launch_headroom_bytes'] <= limit
+            quote = quotes.get(key)
+            worker_cpus, owner = cohort['worker_cpu_ids'], cohort['owner_cpu_id']
+            configuration = dict(workers=workers, window=window, owner_cpu_id=owner, worker_cpu_ids=worker_cpus,
+                launch_cpu_ids=sorted([owner, *worker_cpus]), cpu_numa_node=cohort['cpu_numa_node'])
+            if quote is not None:
+                _require(configuration == quote['configuration']
+                    and memory['minimum_launch_headroom_bytes'] == quote['minimum_launch_headroom_bytes']
+                    and memory['summed_worker_address_space_limits_bytes'] == quote['address_space_limits_bytes'],
+                    'cost quote differs from its scheduled lanes or memory contract')
+            state = 'MEASURED_ADMISSIBLE' if quote is not None else 'UNKNOWN'
+            if not fits:
+                state = 'RESOURCE_REJECTED'
+            if window == 1:
+                state = 'WINDOW_UNAVAILABLE'
+            options[key] = dict(configuration=configuration, memory=memory, fits_recorded_headroom=fits,
+                cost_quote=quote, cost_status='OBSERVED' if quote is not None else 'UNKNOWN',
+                state=state, observed_package_verified=quote is not None)
+
+    candidates = {key: row for key,row in options.items() if row['state'] == 'MEASURED_ADMISSIBLE'}
+    cost_order = sorted(candidates, key=lambda key: (
+        candidates[key]['cost_quote']['observed_loop_wall_ns']['upper_ns'],
+        candidates[key]['configuration']['workers'], candidates[key]['configuration']['window']))
+    for loser in cost_order:
+        right = candidates[loser]['cost_quote']
+        winner = next((key for key in cost_order if key != loser and _dominance(candidates[key]['cost_quote'], right)), None)
+        if winner is not None:
+            left = candidates[winner]['cost_quote']
+            options[loser].update(state='DOMINATED', dominance=dict(by=winner,
+                scope='MATCHED_NATIVE_DIAGNOSTIC_OUTPUT_AND_EXACT_PLACEMENT_ONLY',
+                loop_wall_separation_ns=right['observed_loop_wall_ns']['lower_ns']-left['observed_loop_wall_ns']['upper_ns'],
+                solve_chain_separation_ns=right['heaviest_serial_solve_ns']['lower_ns']-left['heaviest_serial_solve_ns']['upper_ns'],
+                address_space_limits_bytes_saved=right['address_space_limits_bytes']-left['address_space_limits_bytes']))
+    chosen = next((key for key in cost_order if options[key]['state'] == 'MEASURED_ADMISSIBLE'), None)
+    compiler_job = None
+    if chosen is not None:
+        row = options[chosen]
+        config = row['configuration']
+        compiler_job = dict(width=config['workers'], window=config['window'], owner_cpu_id=config['owner_cpu_id'],
+            worker_cpu_ids=config['worker_cpu_ids'], minimum_launch_headroom_bytes=row['memory']['minimum_launch_headroom_bytes'],
+            live_resource_guard_required=True)
+    return dict(schema=SCHEMA, schema_version=2, transport=source_ref, credit_cost=credit_ref,
+        profile_plan=model['profile_plan'], matched_input=model['matched_input'],
+        recorded_headroom_bytes=limit, requested_memory_cap_bytes=memory_cap, options=options,
+        cost_policy='EXACT_OBSERVATION_PER_WORKER_POPULATION_WINDOW_AND_PLACEMENT',
+        unmatched_configuration_fallback='UNKNOWN', selected_configuration=chosen, compile_candidate=compiler_job,
+        decision='NOMINATE_UNDOMINATED_MEASURED_CONFIGURATION' if compiler_job else 'NO_MEASURED_CONFIGURATION_FITS',
+        transport_model_costs_used=False, cross_configuration_timing_transfer=False, default_selection_changed=False,
+        global_optimum_proven=False, clean_validation_required=True, deployment_authorized=False)
+
+
+def propose(transport_proposal_path, *, memory_limit_bytes=None, credit_cost_path=None):
     """Nominate one currently lowerable candidate and retain unsupported window projections."""
     source_ref = _ref(transport_proposal_path, transport.SCHEMA)
     model = transport.check(source_ref['uri'])
@@ -95,6 +187,8 @@ def propose(transport_proposal_path, *, memory_limit_bytes=None):
         _require(type(memory_limit_bytes) is int and 0 < memory_limit_bytes <= minimum,
             'explicit cap must fit the archived physical and cgroup snapshot')
         minimum = memory_limit_bytes
+    if credit_cost_path is not None:
+        return _observed_schedule(source_ref, model, plan, minimum, memory_limit_bytes, credit_cost_path)
 
     count = model['case']['call_count']
     terms = model['fitted_terms_ns']
@@ -161,6 +255,7 @@ def validate_holdout(proposal_path, transport_holdout_path):
     """Check the selected diagonal against an already archived independent run."""
     proposal_ref = _ref(proposal_path, SCHEMA)
     proposal = check(proposal_ref['uri'])
+    _require(proposal['schema_version'] == 1, 'transport holdout replays the conditional resource model only')
     heldout_ref = _ref(transport_holdout_path, transport.HOLDOUT)
     holdout = transport.check(heldout_ref['uri'])
     width = holdout['holdout_width']
@@ -187,7 +282,9 @@ def check(path):
     _require(schema in (SCHEMA, VALIDATION), 'unsupported ordered resource-schedule result')
     frozen = read_artifact(_ref(path, schema))
     if schema == SCHEMA:
-        replay = propose(frozen['transport']['uri'], memory_limit_bytes=frozen['requested_memory_cap_bytes'])
+        cost = frozen['credit_cost']['uri'] if frozen['schema_version'] == 2 else None
+        replay = propose(frozen['transport']['uri'], memory_limit_bytes=frozen['requested_memory_cap_bytes'],
+            credit_cost_path=cost)
     else:
         replay = validate_holdout(frozen['proposal']['uri'], frozen['transport_holdout']['uri'])
     _require(replay == frozen, 'ordered resource schedule must exactly match cold replay')
@@ -200,14 +297,15 @@ def main(argv=None):
     for flag in ('transport', 'proposal', 'check'):
         mode.add_argument('--'+flag, type=Path)
     parser.add_argument('--holdout', type=Path)
+    parser.add_argument('--credit-cost', type=Path, help='quote only configurations with admitted credit observations')
     parser.add_argument('--memory-limit-bytes', type=int)
     parser.add_argument('--out', type=Path)
     args = parser.parse_args(argv)
-    if args.check and not any((args.holdout, args.out, args.memory_limit_bytes)):
+    if args.check and not any((args.holdout, args.out, args.credit_cost, args.memory_limit_bytes is not None)):
         value = check(args.check)
     elif args.transport and args.out and not args.holdout:
-        value = propose(args.transport, memory_limit_bytes=args.memory_limit_bytes)
-    elif args.proposal and args.holdout and args.out and args.memory_limit_bytes is None:
+        value = propose(args.transport, memory_limit_bytes=args.memory_limit_bytes, credit_cost_path=args.credit_cost)
+    elif args.proposal and args.holdout and args.out and args.memory_limit_bytes is None and args.credit_cost is None:
         value = validate_holdout(args.proposal, args.holdout)
     else:
         parser.error('use --check RESULT, --transport MODEL --out RESULT, or --proposal RESULT --holdout VALIDATION --out RESULT')

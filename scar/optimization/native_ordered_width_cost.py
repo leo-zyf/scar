@@ -157,6 +157,38 @@ def _same_bytes(left, right):
     return all(left[key] == right[key] for key in ('sha256', 'size_bytes'))
 
 
+def _configuration(profile):
+    resources = profile['resources']
+    placement = resources['placement']
+    return dict(workers=profile['width'], window=resources['dispatch']['window'], **{
+        key: placement[key] for key in ('owner_cpu_id', 'worker_cpu_ids', 'launch_cpu_ids', 'cpu_numa_node')})
+
+
+def _credit_service_quote(credit_ref, observation_ref, profile_ref, arm, stdout_sha256):
+    """Attach an audited measured credit chain to one concrete placement."""
+    profile = read_artifact(profile_ref)
+    observation = read_artifact(observation_ref)
+    configuration = _configuration(profile)
+    _require(configuration['workers'] == observation['width'] == arm['workers']
+        and configuration['window'] == observation.get('window', observation['width']) == arm['window']
+        and all(configuration[key] == observation['placement'][key] for key in observation['placement'])
+        and observation['diagnostic']['stdout']['sha256'] == stdout_sha256,
+        'credit service quote must bind its exact observed configuration and output')
+    first, last = arm['owner_loop_envelope_ns']
+    solves = arm['heaviest_serial_solve_service_ns']['solve']
+    _require(0 <= solves['lower_ns'] <= solves['upper_ns'] <= last and 0 < first <= last,
+        'solve-chain work must fit within the measured native loop observation')
+    memory = profile['resources']['memory']
+    return dict(basis='EXACT_CONFIGURATION_DIAGNOSTIC_OBSERVATION', configuration=configuration,
+        credit_cost=credit_ref, native_observation=observation_ref, profile_plan=profile_ref,
+        observed_loop_wall_ns=dict(lower_ns=first, upper_ns=last),
+        heaviest_serial_solve_ns=solves,
+        address_space_limits_bytes=memory['worker_address_space_sum_bytes'],
+        minimum_launch_headroom_bytes=memory['minimum_launch_headroom_bytes'],
+        exact_stdout_sha256=stdout_sha256, exact_input=observation['input'],
+        transferable_to_other_configuration=False, clean_profitability_proven=False)
+
+
 def _bind_observed_profiles(rows, profile_ref, profile, *, allow_independent_windows=False):
     from scar.codegen.native_ordered_profile import SCHEMA as SOLVER
 
@@ -179,13 +211,13 @@ def _bind_observed_profiles(rows, profile_ref, profile, *, allow_independent_win
         bound_ref = solver['profile_plan']
         bound = read_artifact(bound_ref)
         saw_pilot |= bound_ref == profile_ref
-        placement = bound['resources']['placement']
+        configuration = _configuration(bound)
         window = row.get('window', row['width'])
         _require(all(bound[key] == profile[key] for key in scope_keys)
-            and bound['resources']['case'] == case and bound['width'] == solver['width'] == row['width']
-            and window == bound['resources']['dispatch']['window'] == solver.get('window', solver['width'])
+            and bound['resources']['case'] == case and configuration['workers'] == solver['width'] == row['width']
+            and window == configuration['window'] == solver.get('window', solver['width'])
             and (allow_independent_windows or window == row['width'])
-            and row['placement'] == {key: placement[key] for key in
+            and row['placement'] == {key: configuration[key] for key in
                 ('owner_cpu_id', 'worker_cpu_ids', 'launch_cpu_ids', 'cpu_numa_node')},
             'diagnostic service is bound to a different registered scope or physical placement')
     _require(saw_pilot, 'at least one diagnostic must measure the exact requested pilot plan')
