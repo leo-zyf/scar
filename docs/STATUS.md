@@ -1,5 +1,9 @@
 # 当前状态
 
+Sunfish 已在深度 2 的一次原程序执行中接通八条链路，从表项差值到走子合计，再到递归形参。原图保留四处可能写表的位置。对采集到的一个 6×120 表内容版本，`compile-scalar-table-scope` 把两次行查找合并为一次，并保留两次索引读取。独立 C++20 工件在空环境和搬迁后均通过八个样本，越界输入拒绝。验收范围是这一评分表达式，整搜索交付与收益仍待验证。
+
+有序 CPU 排程现分开推导发送端服务、结果可见时刻、接收端服务和按序等待。新模型接入 `compile-cpu-entry`，有限元 80 轮在原程序、两 worker、六 worker 三组各预热一次并测三轮，中位数为 1.734 s、1.445 s、1.107 s，stdout 逐字节一致，六 worker 约 1.57×。96 轮的独立诊断显示新模型仍低估六 worker 循环约 8–11 ms。下一步按内容版本扩大 Sunfish 可安全降低的范围，同时用独立证据收紧跨宽度求解成本。见 `artifacts/baseline/cpu-scalar-scope-and-transport.json`。
+
 `compile-cpu-entry` 的有序 CPU 路径现从一个两 worker 原生诊断推导全部 2–6 worker 的循环耗时。按实际 CPU、NUMA 和内存约束提名六 worker，构建校准与提名两种宽度。六 worker 循环估计 179.9 ms，另一次诊断覆盖区间合计 189.0 ms。整入口清洁中位数为 Python 1.999 s、两 worker 1.536 s、六 worker 1.146 s，stdout 逐字节一致。原生诊断通过独立描述符记录，按序等待与载荷接收各有观测。
 
 RK4 16 步完成 1 对预热、3 对清洁测量，Python 与 C++ 中位数为 6.735 s 和 2.351 s，终态文件逐位匹配，两套 stdout 各按自身格式验证。Sunfish 深度 2 的真实运行验证了 8 次返回对象到递归形参的直接传递，连接 5 条原始 F4 数据边。下一步补上 Sunfish 该区域的内容与效果沿边证明，并用原生诊断继续收紧跨宽度的成本估计。见 `artifacts/baseline/cpu-ordered-width-and-source-handoff.json`。

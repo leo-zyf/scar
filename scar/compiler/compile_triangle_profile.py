@@ -129,20 +129,23 @@ def _model_input_matches(canonical, model):
 
 def _nominate_width(out, pilot, solver, common, oracle, admissible):
     from scar.codegen.native_ordered_timing import collect
+    from scar.optimization.native_ordered_transport_cost import propose as propose_transport
     from scar.optimization.native_ordered_width_cost import propose
 
     canonical = read_artifact(common)['canonical_csr']
     input_path = Path(common['uri']).parent / canonical['uri']
     diagnostic = collect(solver, out/'calibration', input_path=input_path,
                          expected_stdout=oracle)
-    model = propose(pilot['uri'], [diagnostic['uri']])
+    proposal = _write(out/'width-cost.json', propose(pilot['uri'], [diagnostic['uri']]))
+    model = propose_transport(proposal['uri'])
     width = model['recommended_width']
     _require(type(width) is int and width in admissible and model['admissible_widths'] == list(admissible)
         and model['profile_plan'] == pilot and model['native_observations'] == [diagnostic]
+        and model['pilot_proposal'] == proposal and model['holdout_used_for_nomination'] is False
         and _model_input_matches(canonical, model),
         'native width model differs from its exact pilot, evidence or allowed cohort')
-    return width, dict(pilot_width=admissible[0], observation=diagnostic,
-                      proposal=_write(out/'width-cost.json', model))
+    return width, dict(pilot_width=admissible[0], observation=diagnostic, proposal=proposal,
+                      transport_proposal=_write(out/'transport-cost.json', model))
 
 
 def compile_profile(anchor, source_seed, hardware, oracle, observation, out, *, widths, repeats=3,
@@ -264,11 +267,20 @@ def compile_entry(family_path, entry, argv, out, *, widths=None, repeats=3, max_
 
 
 def _check_width_model(record, plans, canonical):
-    from scar.optimization.native_ordered_width_cost import check as verify_width_cost
+    if 'transport_proposal' in record:
+        from scar.optimization.native_ordered_transport_cost import check as verify_transport
 
-    model = verify_width_cost(record['proposal']['uri'])
+        reference = record['transport_proposal']
+        model = verify_transport(reference['uri'])
+        _require(model['pilot_proposal'] == record['proposal'] and model['holdout_used_for_nomination'] is False,
+            'transport proposal differs from its calibrated pilot')
+    else:
+        from scar.optimization.native_ordered_width_cost import check as verify_width_cost
+
+        reference = record['proposal']
+        model = verify_width_cost(reference['uri'])
     pilot = record['pilot_width']
-    _require(model == read_artifact(record['proposal'])
+    _require(model == read_artifact(reference)
         and pilot == model['admissible_widths'][0]
         and model['profile_plan'] == plans[str(pilot)]
         and model['native_observations'] == [record['observation']]
