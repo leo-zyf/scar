@@ -1,0 +1,165 @@
+{
+  "calibration": {
+    "schema": "scar.native-png-service-calibration",
+    "sha256": "1b6e810e35a027b81e317d8403ece0ac70fab9813a4490fc8def55f58e38651a",
+    "size_bytes": 32037,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/png-clean-four-frame-calibration/result.json"
+  },
+  "calibration_driver": {
+    "schema": "scar.native-png-service",
+    "sha256": "ebefe03c0c9bf582627582edaaa1554c22d5f5b6c5bc427c500f4f378bea4060",
+    "size_bytes": 7845,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/png-clean-provider/result.json"
+  },
+  "method_limit": "Prepared, pre-touched borrowed pixels and one synchronous provider call in a fresh process. Renderer, full entry timing, physical disk I/O and complete workspace are separate.",
+  "planning_projection": {
+    "schema": "scar.native-plot-boundary-plan",
+    "sha256": "5713a2314da77c4b47f480548bcd37a5005dc8687d548723ae1c940a737eae66",
+    "size_bytes": 63093,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/eight-frame-calibrated-publication-plan.json"
+  },
+  "schema": "scar.cpu-native-png-service-calibration-acceptance",
+  "schema_version": 1,
+  "stages": {
+    "delivery": {
+      "cxx_standard": 20,
+      "holdouts": [
+        "independent-original-png-frame-01"
+      ],
+      "internal_phase_probes": false,
+      "same_released_provider": {
+        "schema": "scar.native-live-plot",
+        "sha256": "3a77591f8b673768bcff63033158edb05d6ae94a4808d4dc94868492dd627d3a",
+        "size_bytes": 161130,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-plot-provider/result.json"
+      },
+      "separate_calibration_driver": true,
+      "state": "VERIFIED",
+      "timed_code": "_ZN4scar4live8save_pngEPKcPKvjj",
+      "total_exact_png_publications": 24
+    },
+    "frontend": {
+      "attachment": "CALIBRATED_PNG_CHILD_OF_SYNCHRONOUS_SOURCE_EFFECT",
+      "cpu": {
+        "core_id": 0,
+        "die_id": 0,
+        "id": 0,
+        "numa_node": 0,
+        "package_id": 0,
+        "required_affinity": [
+          0
+        ],
+        "thread_siblings": [
+          0,
+          28
+        ]
+      },
+      "mount": {
+        "device_major": 252,
+        "device_minor": 5,
+        "fstype": "ext4",
+        "id": 60,
+        "optional_fields": [
+          "shared:56"
+        ],
+        "options": "rw,noatime",
+        "parent_id": 33,
+        "path": "/home",
+        "root": "/",
+        "source": "/dev/mapper/ubuntu--vg-lv--home",
+        "super_options": "rw"
+      },
+      "operation": "original-call:f9f21219d269374c3a7c511fd994961a23aa238ed46aeaf3cec3577a158c7140",
+      "source": {
+        "artifact": {
+          "schema": "scar.source-native-controller",
+          "sha256": "780c29897d7bb94227638078866695a54e63eef01971fb04469cb67b0acdafaf",
+          "size_bytes": 168246,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-controller.json"
+        },
+        "locator": "#/program/5/body/6/then/4"
+      },
+      "state": "VERIFIED_SCOPED",
+      "target_endpoint": {
+        "resource": {
+          "kind": "target_resource",
+          "value": "endpoint/cdedc5e0b1dbb04938a324f9",
+          "wire": "target_resource:endpoint/cdedc5e0b1dbb04938a324f9"
+        },
+        "snapshot": {
+          "schema": "scar.target-hardware-graph",
+          "sha256": "0f5b5c95e4be6c4135d3428ba061238f7261b0f614fd7a71c83c3b17632ad583",
+          "size_bytes": 8695,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-entry-v1/program/hardware/result.json"
+        }
+      }
+    },
+    "planning": {
+      "borrowed_input_bytes": 23040000,
+      "decision": "NO_OP",
+      "effect_order": "BLOCKED_BY_ORIGINAL_COMPLETION_ORDER",
+      "full_cost": "UNKNOWN",
+      "matching_frame_count": 3,
+      "private_peak_bound_bytes": null,
+      "scope": "PREPARED_RGBA_TO_SYNCHRONOUS_PNG_PUBLICATION",
+      "state": "PARTIAL_COST_CALIBRATED"
+    }
+  },
+  "timing": {
+    "fresh_process_for_each_sample": true,
+    "measured_per_frame": 5,
+    "per_frame": {
+      "independent-original-png-frame-01": {
+        "max_ns": 237774574,
+        "median_ns": 237590407,
+        "min_ns": 237322008,
+        "samples_ns": [
+          237322008,
+          237590407,
+          237376754,
+          237762283,
+          237774574
+        ]
+      },
+      "plot-release-frame-00": {
+        "max_ns": 241435907,
+        "median_ns": 237978217,
+        "min_ns": 237682383,
+        "samples_ns": [
+          237978217,
+          237682383,
+          237800143,
+          241435907,
+          238594797
+        ]
+      },
+      "plot-release-frame-01": {
+        "max_ns": 238504622,
+        "median_ns": 237893723,
+        "min_ns": 237533604,
+        "samples_ns": [
+          238071212,
+          237830953,
+          237893723,
+          238504622,
+          237533604
+        ]
+      },
+      "plot-release-frame-02": {
+        "max_ns": 239906009,
+        "median_ns": 237229951,
+        "min_ns": 236574298,
+        "samples_ns": [
+          236574298,
+          237372260,
+          236974307,
+          237229951,
+          239906009
+        ]
+      }
+    },
+    "unit": "ns",
+    "warmup_per_frame": 1,
+    "whole_entry_speedup": null
+  }
+}

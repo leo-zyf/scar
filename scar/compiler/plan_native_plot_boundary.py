@@ -11,8 +11,8 @@ from scar.analysis.target_graph import TargetHardwareGraph
 from scar.compiler.observe_native_plot_entry import SCHEMA as DIAGNOSTIC, check as check_diagnostics
 from scar.compiler.plan_native_controller import _at, _port_key, read_native_controller_plan
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.implementation_plan import ResourceObligation, problem_document, validate_problem
-from scar.ir.program.target_hardware import CpuCore, HardwareThread, TargetResourceRef
+from scar.ir.implementation_plan import CostEstimate, ResourceObligation, problem_document, validate_problem
+from scar.ir.program.target_hardware import CpuCore, HardwareThread, StorageEndpoint, TargetResourceRef
 from scar.ir.record_codec import encode
 from scar.optimization.constructive_planner import construct_implementations
 
@@ -72,8 +72,7 @@ def _covered_effect(problem, controller, source):
     return callback['source'], effect, successors
 
 
-def _observed_cpu(problem, cpu_ids):
-    hardware = TargetHardwareGraph(Path(problem.target.uri).parent)
+def _observed_cpu(problem, cpu_ids, hardware):
     _need(hardware._snapshot == problem.target, 'hardware artifact differs')
     cpu, = cpu_ids
     resources = hardware.resources()
@@ -81,11 +80,50 @@ def _observed_cpu(problem, cpu_ids):
                    and row.online and row.cpu_id == cpu), 'observed CPU has no target thread')
     core = _one((row for row in resources if type(row) is CpuCore and cpu in row.cpu_ids),
                 'observed CPU has no target core')
-    return [encode(TargetResourceRef(problem.target, row.id)) for row in (thread, core)]
+    return thread, core
+
+
+def _calibrated_publication(calibration, observed, problem, hardware, core):
+    from scar.compiler.calibrate_native_png import SCHEMA as CALIBRATION, check
+
+    reference = artifact_reference(Path(calibration).resolve(strict=True), CALIBRATION)
+    service = check(reference['uri'])
+    _need(service == read_artifact(reference), 'clean calibration changed during replay')
+    app = read_artifact(observed['arms']['v1']['application'])
+    cpu = service['environment']['cpu']
+    _need(service['provider'] == app['controller']['plot']['provider']
+          and service['cpu_id'] == cpu['id'] == observed['cpu_ids'][0],
+          'measured PNG operator and CPU must match the pinned native baseline')
+    _need(cpu['package_id'] == core.package_id and cpu['die_id'] == core.die_id and cpu['core_id'] == core.core_id
+          and tuple(cpu['thread_siblings']) == core.cpu_ids,
+          'measured CPU topology differs from the target inventory')
+    mount = service['environment']['filesystem']['mount']
+    endpoints = [node for node in hardware.resources() if type(node) is StorageEndpoint
+                 and (node.mount_point, node.source, node.filesystem) == (mount['path'], mount['source'], mount['fstype'])]
+    _need(len(endpoints) <= 1, 'calibration mount names multiple target endpoints')
+    storage = encode(TargetResourceRef(problem.target, endpoints[0].id)) if endpoints else None
+    witness = read_artifact(service['witnesses'])
+    expected = {(out['sha256'], out['size_bytes']) for out in observed['runs'][0]['v1']['outputs'].values()}
+    quotes = {}
+    for row in witness['samples']:
+        case = row['id']
+        png = row['expected_png']
+        if (png['sha256'], png['size_bytes']) not in expected:
+            continue
+        cost_fact = _at(reference, f'#/per_frame/{case}')
+        point = service['per_frame'][case]['median_ns']
+        context = service['scope'] + ':' + reference['sha256'] + ':' + case
+        quotes[case] = encode(CostEstimate(point, None, None, 'EMPIRICAL_MODEL', context, (cost_fact,)))
+    _need(len(quotes) >= 2, 'calibration and controlled entry must share distinct output witnesses')
+    width, height = service['canvas']
+    return dict(artifact=reference, measured_scope=service['scope'],
+                measured_storage_endpoint=storage, measured_context=_at(reference, '#/environment'),
+                borrowed_rgba_payload_bytes=4 * width * height, sample_bound_costs=quotes,
+                transferable_to_parent=False, private_workspace_bound_bytes=None)
 
 
 @replay_transaction()
-def project(diagnostic):
+def project(diagnostic, calibration=None):
     reference = artifact_reference(Path(diagnostic).resolve(strict=True), DIAGNOSTIC)
     observed = check_diagnostics(reference['uri'])
     _need(observed == read_artifact(reference) and observed['clean_performance_claim'] is False,
@@ -93,13 +131,20 @@ def project(diagnostic):
     controller, problem, plot, plot_ref = _binding(
         [row['application'] for row in observed['arms'].values()], observed)
     callback, effect, successors = _covered_effect(problem, controller, plot)
-    cpu = _observed_cpu(problem, observed['cpu_ids'])
+    hardware = TargetHardwareGraph(Path(problem.target.uri).parent)
+    thread, core = _observed_cpu(problem, observed['cpu_ids'], hardware)
+    cpu = [encode(TargetResourceRef(problem.target, row.id)) for row in (thread, core)]
     detail = _at(reference, '#/summary')
     refs = (callback, _at(plot_ref, '#/output/save'), _at(plot_ref, '#/counter'), detail)
     baseline, = effect.options
+    measured = {}
+    if calibration is not None:
+        measured = {'calibrated_child': _calibrated_publication(calibration, observed, problem, hardware, core)}
+        refs = (*refs, _at(measured['calibrated_child']['artifact']))
     cost = replace(baseline.cost, source_refs=baseline.cost.source_refs + (detail,),
                    missing_terms=(*baseline.cost.missing_terms, 'CLEAN_RENDER_AND_PUBLICATION_SERVICE_TIME'))
     option = replace(baseline, cost=cost, proof_refs=baseline.proof_refs + refs,
+                     parameters={**baseline.parameters, **measured},
                      unresolved_resources=baseline.unresolved_resources + (
                          ResourceObligation('private_live_set', 'per-frame peak workspace and placement unknown', refs),
                          ResourceObligation('storage_endpoint', 'no same-run filesystem resource binding', refs),
@@ -115,7 +160,7 @@ def project(diagnostic):
                   same_run_hardware_topology_proven=False, complete_effect_cost='UNKNOWN',
                   effect_motion='BLOCKED_BY_ORIGINAL_COMPLETION_ORDER',
                   child_phases_reorderable=False, deployment_authorized=False)
-    return dict(report, problem=problem_document(problem), plan=plan)
+    return dict(report, **measured, problem=problem_document(problem), plan=plan)
 
 
 def main(argv=None):
@@ -124,13 +169,15 @@ def main(argv=None):
     inputs.add_argument('--diagnostic', type=Path)
     inputs.add_argument('--check', type=Path)
     parser.add_argument('--out', type=Path)
+    parser.add_argument('--calibration', type=Path)
     args = parser.parse_args(argv)
     if args.check:
         saved = json.loads(args.check.read_bytes())
-        report = project(saved['diagnostic']['uri'])
+        calibration = saved.get('calibrated_child', {}).get('artifact', {}).get('uri')
+        report = project(saved['diagnostic']['uri'], calibration)
         _need(saved == report, 'saved publication planning result differs at cold replay')
     elif args.out:
-        report = project(args.diagnostic)
+        report = project(args.diagnostic, args.calibration)
         with args.out.open('x') as output:
             output.write(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n')
     else:

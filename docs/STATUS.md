@@ -1,5 +1,7 @@
 # 当前状态
 
+`calibrate-native-png` 用正式原生库的同步 `save_png` 测量已准备 RGBA 到 PNG 发布的干净服务成本。CPU 0 上四帧各预热 1 次、测量 5 次，24 次输出均与原始 PNG 逐字节一致，各帧中位数为 237.2–238.0 ms。采集核对同次 CPU 拓扑、`/home` 的 ext4 挂载和原生库字节。`plan-native-plot-boundary --calibration` 将三个匹配样本的成本及 23,040,000 B 借用输入接回规划图。完整渲染成本和私有工作区预算继续保留 `UNKNOWN`，同步发布约束仍生效。见 `artifacts/baseline/cpu-native-png-service-calibration.json`。
+
 `export-native-live-plot-phase --png-detail` 在两份独立 C++20 诊断包里记录了 Pillow 的逐行滤波、zlib 压缩、临时文件操作和最终发布。真实 CPU 0 八帧运行共做 3 对。两版的所有 PNG 和 stdout 与清洁入口逐字节一致。已有版的 PNG 区间中位数为 1.877 s，其中压缩约 1.229 s、滤波约 0.624 s，临时文件操作及发布合计的中位数约 1.9 ms。此处耗时用于定位。
 
 `plan-native-plot-boundary` 冷重放原 F4 保存端口、控制器作用域、首次数值更新前的发布证据及目标 CPU 拓扑，将诊断接到共享规划问题的既有操作。保持同步发布约束，绘图工作区上界及同次文件系统资源仍待测定，完整成本为 `UNKNOWN`，选择为 `NO_OP`。原生交付保持已有算子和发布路径。见 `artifacts/baseline/cpu-native-png-boundary-acceptance.json`。
