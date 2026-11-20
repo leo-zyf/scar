@@ -1,0 +1,204 @@
+{
+  "calibration": {
+    "schema": "scar.native-render-service-calibration",
+    "sha256": "9760dabadb6fb4488fcff3399f4959701efa02f360e712d46c19f4b21e6258d2",
+    "size_bytes": 160742,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/render-service-capped-clean/result.json"
+  },
+  "default_backend": "NO_OP",
+  "delivery": {
+    "driver": {
+      "schema": "scar.native-live-plot-service",
+      "sha256": "96833bffaf728fda1d38b5993820cf90fef6fddc545727ec7d6f6d1639d26b48",
+      "size_bytes": 28445,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/render-clean-provider/result.json"
+    },
+    "exact_png_publications": 108,
+    "measurement": "PREPARED_ROOTS_TO_SYNCHRONOUS_FRAME_PUBLICATION",
+    "measurement_pairs": 5,
+    "prior_capacity_check": {
+      "schema": "scar.native-plot-calibration-driver-memory-envelope",
+      "sha256": "7d4b196a0102b8803612b089020193f3094d6b86e0454a1dbe15dd1b6af22785",
+      "size_bytes": 35195,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/clean-driver-memory-cpu5-eight/result.json"
+    },
+    "private_workspace_bound_bytes": null,
+    "process_address_space_limit_bytes": 83886080,
+    "state": "VERIFIED_STOCK_PROVIDER_SCOPED_DRIVER",
+    "warmup_pairs": 1
+  },
+  "deployment_authorized": false,
+  "frontend": {
+    "cpu": {
+      "core_id": 0,
+      "die_id": 0,
+      "id": 0,
+      "numa_node": 0,
+      "package_id": 0,
+      "required_affinity": [
+        0
+      ],
+      "thread_siblings": [
+        0,
+        28
+      ]
+    },
+    "independent_byte_check": {
+      "schema": "scar.render-clean-witnesses",
+      "sha256": "8630e645c04962a421c707ffc6c4ff9c3c328c26cc7b92e271a98e00950414a8",
+      "size_bytes": 23411,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/render-clean-witnesses.json"
+    },
+    "sequence": {
+      "schema": "scar.native-render-phase-input-sequence",
+      "sha256": "6c00f8d81177adaf146629704b6075e76f09d77dbcb8e5b243c428f40ed20276",
+      "size_bytes": 26038,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/phase-sequence-v1/result.json"
+    },
+    "source_callback": {
+      "artifact": {
+        "schema": "scar.source-native-controller",
+        "sha256": "780c29897d7bb94227638078866695a54e63eef01971fb04469cb67b0acdafaf",
+        "size_bytes": 168246,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-controller.json"
+      },
+      "locator": "#/program/5/body/6/then/4"
+    },
+    "state": "VERIFIED_SCOPED",
+    "storage": {
+      "resource": {
+        "kind": "target_resource",
+        "value": "endpoint/cdedc5e0b1dbb04938a324f9",
+        "wire": "target_resource:endpoint/cdedc5e0b1dbb04938a324f9"
+      },
+      "snapshot": {
+        "schema": "scar.target-hardware-graph",
+        "sha256": "0f5b5c95e4be6c4135d3428ba061238f7261b0f614fd7a71c83c3b17632ad583",
+        "size_bytes": 8695,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/stateful-entry-v1/program/hardware/result.json"
+      }
+    }
+  },
+  "planner": {
+    "cases": {
+      "1": {
+        "costs": {
+          "v1": {
+            "max_ns": 330317497,
+            "median_by_call_kind_ns": {
+              "render": 320160759
+            },
+            "median_ns": 320160759,
+            "min_ns": 317551493,
+            "vm_peak_bytes": 43372544,
+            "vm_rss_high_water_bytes": 38412288
+          },
+          "v2": {
+            "max_ns": 315676400,
+            "median_by_call_kind_ns": {
+              "destroy": 17423,
+              "prepare": 6983102,
+              "render": 308355904
+            },
+            "median_ns": 315333765,
+            "min_ns": 315122538,
+            "vm_peak_bytes": 44343296,
+            "vm_rss_high_water_bytes": 38948864
+          }
+        },
+        "gain_fraction": 0.015076782098708106,
+        "model_status": "FEASIBLE_WITHIN_MODEL",
+        "modeled_selection": {
+          "end_ns": 320160759,
+          "operation": "render-episode",
+          "option": "v1",
+          "start_ns": 0
+        },
+        "source_reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD"
+        ],
+        "verdict": "KEEP_INCUMBENT"
+      },
+      "8": {
+        "costs": {
+          "v1": {
+            "max_ns": 2445361273,
+            "median_by_call_kind_ns": {
+              "render": 2431715133
+            },
+            "median_ns": 2431715133,
+            "min_ns": 2413960870,
+            "vm_peak_bytes": 47882240,
+            "vm_rss_high_water_bytes": 43601920
+          },
+          "v2": {
+            "max_ns": 2404066672,
+            "median_by_call_kind_ns": {
+              "destroy": 24446,
+              "prepare": 7001688,
+              "render": 2382064154
+            },
+            "median_ns": 2389076359,
+            "min_ns": 2373679954,
+            "vm_peak_bytes": 48504832,
+            "vm_rss_high_water_bytes": 43831296
+          }
+        },
+        "gain_fraction": 0.017534444483798012,
+        "model_status": "FEASIBLE_WITHIN_MODEL",
+        "modeled_selection": {
+          "end_ns": 2431715133,
+          "operation": "render-episode",
+          "option": "v1",
+          "start_ns": 0
+        },
+        "source_reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD"
+        ],
+        "verdict": "KEEP_INCUMBENT"
+      }
+    },
+    "complete_effect_cost": "UNKNOWN",
+    "effect_motion": "BLOCKED_BY_ORIGINAL_COMPLETION_ORDER",
+    "empirical_minimum_gain": 0.05,
+    "state": "TWO_FEASIBLE_ISOLATED_EPISODE_PLANS",
+    "whole_entry_reviews": [
+      {
+        "benchmark": {
+          "schema": "scar.native-process-boundary-benchmark",
+          "sha256": "e6ea8483625e75afa32aea9f8916d23f6a1e2c5e079583a8ed88319e8c80d13f",
+          "size_bytes": 123674,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/paired-clean-cpu0/result.json"
+        },
+        "median_gain_fraction": -0.01915230313082546,
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "verdict": "KEEP_INCUMBENT"
+      },
+      {
+        "benchmark": {
+          "schema": "scar.native-process-boundary-benchmark",
+          "sha256": "6d9ab41e980497859cfa284900351055a28011d353a9e01aafe3c4a0b2e107b1",
+          "size_bytes": 50590,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/eight-frame-clean-replay/result.json"
+        },
+        "median_gain_fraction": 0.021534251030765263,
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD"
+        ],
+        "verdict": "KEEP_INCUMBENT"
+      }
+    ],
+    "whole_entry_verdict": "KEEP_INCUMBENT"
+  },
+  "planning_projection": {
+    "schema": "scar.native-plot-boundary-plan",
+    "sha256": "4104da35a2ab89474f34189ca25cdf31db082d25f25b0fc4ac4e8bb87b52db0a",
+    "size_bytes": 168005,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/eight-frame-render-calibrated-plan.json"
+  },
+  "schema": "scar.cpu-native-render-service-calibration-acceptance",
+  "schema_version": 1
+}

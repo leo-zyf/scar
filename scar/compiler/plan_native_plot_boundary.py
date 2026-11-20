@@ -11,10 +11,14 @@ from scar.analysis.target_graph import TargetHardwareGraph
 from scar.compiler.observe_native_plot_entry import SCHEMA as DIAGNOSTIC, check as check_diagnostics
 from scar.compiler.plan_native_controller import _at, _port_key, read_native_controller_plan
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.implementation_plan import CostEstimate, ResourceObligation, problem_document, validate_problem
+from scar.ir.implementation_plan import (
+    CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem, PlanningResource,
+    ResourceObligation, problem_document, validate_problem,
+)
 from scar.ir.program.target_hardware import CpuCore, HardwareThread, StorageEndpoint, TargetResourceRef
 from scar.ir.record_codec import encode
 from scar.optimization.constructive_planner import construct_implementations
+from scar.optimization.paired_entry_selection import compare_entry_pairs
 
 
 SCHEMA = 'scar.native-plot-boundary-plan'
@@ -90,18 +94,10 @@ def _calibrated_publication(calibration, observed, problem, hardware, core):
     service = check(reference['uri'])
     _need(service == read_artifact(reference), 'clean calibration changed during replay')
     app = read_artifact(observed['arms']['v1']['application'])
-    cpu = service['environment']['cpu']
     _need(service['provider'] == app['controller']['plot']['provider']
-          and service['cpu_id'] == cpu['id'] == observed['cpu_ids'][0],
+          and service['cpu_id'] == observed['cpu_ids'][0],
           'measured PNG operator and CPU must match the pinned native baseline')
-    _need(cpu['package_id'] == core.package_id and cpu['die_id'] == core.die_id and cpu['core_id'] == core.core_id
-          and tuple(cpu['thread_siblings']) == core.cpu_ids,
-          'measured CPU topology differs from the target inventory')
-    mount = service['environment']['filesystem']['mount']
-    endpoints = [node for node in hardware.resources() if type(node) is StorageEndpoint
-                 and (node.mount_point, node.source, node.filesystem) == (mount['path'], mount['source'], mount['fstype'])]
-    _need(len(endpoints) <= 1, 'calibration mount names multiple target endpoints')
-    storage = encode(TargetResourceRef(problem.target, endpoints[0].id)) if endpoints else None
+    storage = _measured_resources(service['environment'], problem, hardware, core)
     witness = read_artifact(service['witnesses'])
     expected = {(out['sha256'], out['size_bytes']) for out in observed['runs'][0]['v1']['outputs'].values()}
     quotes = {}
@@ -122,8 +118,104 @@ def _calibrated_publication(calibration, observed, problem, hardware, core):
                 transferable_to_parent=False, private_workspace_bound_bytes=None)
 
 
+def _measured_resources(environment, problem, hardware, core):
+    cpu = environment['cpu']
+    _need(cpu['package_id'] == core.package_id and cpu['die_id'] == core.die_id and cpu['core_id'] == core.core_id
+          and tuple(cpu['thread_siblings']) == core.cpu_ids,
+          'measured CPU topology differs from the target inventory')
+    mount = environment['filesystem']['mount']
+    endpoints = [node for node in hardware.resources() if type(node) is StorageEndpoint
+                 and (node.mount_point, node.source, node.filesystem) == (mount['path'], mount['source'], mount['fstype'])]
+    _need(len(endpoints) <= 1, 'calibration mount names multiple target endpoints')
+    return encode(TargetResourceRef(problem.target, endpoints[0].id)) if endpoints else None
+
+
+def _isolated_render_plan(count, comparison, receipt, callback, target, thread, storage):
+    report_root = f'#/cases/{count}'
+    quote = _at(receipt, report_root + '/selection/metrics')
+    cap = _at(receipt, '#/address_space_limit_bytes')
+    context = _at(receipt, '#/environment')
+    refs = (callback, quote, cap, context)
+    lane = thread.id.wire
+    modes = []
+    for version, metrics in comparison['metrics'].items():
+        cost = CostEstimate(metrics['median_ns_twice'] // 2, None, None, 'EMPIRICAL_MODEL',
+                            f'ISOLATED_RENDER_EPISODE:{receipt["sha256"]}:{count}:{version}', (quote,))
+        modes.append(ImplementationOption(version, 'PRESERVE_RELEASED_SYNCHRONOUS_RENDER_ABI', refs,
+                     {lane: 1}, {}, {}, {}, cost, dict(provider_version=version, prefix_frames=int(count),
+                     measured_storage_endpoint=storage, observed_address_space_cap=cap)))
+    episode = PlanningOperation('render-episode', refs, (), tuple(modes), 'v1')
+    problem = PlanningProblem(target, refs, (PlanningResource(lane, 'EXECUTION', 1, (context,)),), (episode,), (),
+        assumptions=('KNOWN_CPU_AFFINITY_NOT_EXCLUSIVE_PHYSICAL_CORE', 'WHOLE_PROCESS_VIRTUAL_CAP_NOT_PRIVATE_WORKSPACE',
+                     'ONE_SCOPE_WITH_ALL_SYNCHRONOUS_PNG_EFFECTS_IN_ORIGINAL_ORDER'))
+    plan = construct_implementations(problem, baseline_only=comparison['verdict'] == 'KEEP_INCUMBENT')
+    plan.pop('elapsed_seconds')
+    return dict(comparison=_at(receipt, report_root + '/selection'), problem=problem_document(problem), plan=plan)
+
+
+def _entry_reviews(sample, observed):
+    from scar.compiler.observe_native_plot_entry import BENCHMARK, ENTRY, _benchmark_ref
+
+    sequence = read_artifact(sample['sequence'])
+    references = (dict(sequence['clean_controller_witness'], schema=BENCHMARK), observed['benchmark'])
+    result = []
+    context = None
+    for reference in dict((row['sha256'], row) for row in references).values():
+        benchmark = read_artifact(reference)
+        case = _one((row for row in benchmark['evidence'] if row['id'] == observed['case']),
+                    'need a matching whole entry cohort')
+        _need(benchmark['qualified'] and not benchmark['instrumented'] and not benchmark['baseline_only']
+              and benchmark['original_and_candidate_share_environment_and_affinity']
+              and benchmark['cpu_ids'] == observed['cpu_ids'] and case['arguments'] == sequence['arguments']
+              and case['outputs_equal_for_required_comparisons'], 'whole entry output or benchmark context differs')
+        executions = tuple(benchmark['pinned_inputs'][f'{case["id"]}:{side}_executable']
+                           for side in ('original', 'candidate'))
+        settings = (benchmark['working_directory'], benchmark['environment'], executions)
+        _need(context is None or context == settings, 'whole entry cohorts use different binaries or launch context')
+        context = settings
+        warmups, repetitions = benchmark['warmups'], benchmark['paired_repetitions']
+        rows = []
+        expected_outputs = {name: (row['sha256'], row['size_bytes']) for name, row in
+                            case['samples']['original'][0]['outputs'].items()}
+        for arm, side in (('v1', 'original'), ('v2', 'candidate')):
+            pinned = _benchmark_ref(benchmark['pinned_inputs'][f'{arm}_package_manifest'], ENTRY)
+            _need(pinned == sample['source_applications'][arm], 'whole entry cohort used another source application')
+            samples = case['warmup'][side] + case['samples'][side]
+            _need(len(case['warmup'][side]) == warmups and len(samples) == warmups + repetitions,
+                  'whole entry cohort has incomplete paired observations')
+            for pair, run in enumerate(samples):
+                _need(not run['timed_out'] and run['status'] == 0 and {
+                    name: (row['sha256'], row['size_bytes']) for name, row in run['outputs'].items()
+                } == expected_outputs, 'whole entry run changed release output identity')
+                rows.append(dict(pair=pair, mode=arm, wall_ns=run['elapsed_ns'], returncode=run['status'],
+                                 stdout_sha256=run['stdout']['sha256'], stderr_sha256=run['stderr']['sha256']))
+        result.append(dict(benchmark=reference, selection=compare_entry_pairs(rows, incumbent='v1', challenger='v2',
+                           warmup_pairs=warmups, measurement_pairs=repetitions)))
+    return result
+
+
+def _calibrated_render(path, observed, problem, hardware, thread, core, callback):
+    from scar.compiler.calibrate_native_render import SCHEMA as RENDER, check
+
+    receipt = artifact_reference(Path(path).resolve(strict=True), RENDER)
+    sample = check(receipt['uri'])
+    expected = {arm: row['application'] for arm, row in observed['arms'].items()}
+    _need(sample == read_artifact(receipt) and sample['source_applications'] == expected
+          and sample['cpu'] == observed['cpu_ids'][0], 'complete native render calibration used another entry or CPU')
+    storage = _measured_resources(sample['environment'], problem, hardware, core)
+    _need(storage is not None, 'render episode needs an identified target publication endpoint')
+    cases = {count: _isolated_render_plan(count, row['selection'], receipt, callback, problem.target, thread, storage)
+             for count, row in sample['cases'].items()}
+    reviews = _entry_reviews(sample, observed)
+    proposed = all(row['selection']['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for row in reviews)
+    return dict(artifact=receipt, measured_scope=sample['scope'], measured_storage_endpoint=storage,
+                address_space_limit_bytes=sample['address_space_limit_bytes'], cases=cases,
+                whole_entry_reviews=reviews, whole_entry_verdict='REVIEW_REQUIRED' if proposed else 'KEEP_INCUMBENT',
+                transferable_to_parent=False, deployment_authorized=False)
+
+
 @replay_transaction()
-def project(diagnostic, calibration=None):
+def project(diagnostic, calibration=None, render_calibration=None):
     reference = artifact_reference(Path(diagnostic).resolve(strict=True), DIAGNOSTIC)
     observed = check_diagnostics(reference['uri'])
     _need(observed == read_artifact(reference) and observed['clean_performance_claim'] is False,
@@ -141,8 +233,13 @@ def project(diagnostic, calibration=None):
     if calibration is not None:
         measured = {'calibrated_child': _calibrated_publication(calibration, observed, problem, hardware, core)}
         refs = (*refs, _at(measured['calibrated_child']['artifact']))
+    missing_time = 'CLEAN_RENDER_AND_PUBLICATION_SERVICE_TIME'
+    if render_calibration is not None:
+        measured['calibrated_render'] = _calibrated_render(render_calibration, observed, problem, hardware, thread, core, callback)
+        refs = (*refs, _at(measured['calibrated_render']['artifact']))
+        missing_time = 'MATCHED_FULL_CALLER_SERVICE_WITH_QUALIFIED_RENDER_MODE'
     cost = replace(baseline.cost, source_refs=baseline.cost.source_refs + (detail,),
-                   missing_terms=(*baseline.cost.missing_terms, 'CLEAN_RENDER_AND_PUBLICATION_SERVICE_TIME'))
+                   missing_terms=(*baseline.cost.missing_terms, missing_time))
     option = replace(baseline, cost=cost, proof_refs=baseline.proof_refs + refs,
                      parameters={**baseline.parameters, **measured},
                      unresolved_resources=baseline.unresolved_resources + (
@@ -170,14 +267,16 @@ def main(argv=None):
     inputs.add_argument('--check', type=Path)
     parser.add_argument('--out', type=Path)
     parser.add_argument('--calibration', type=Path)
+    parser.add_argument('--render-calibration', type=Path)
     args = parser.parse_args(argv)
     if args.check:
         saved = json.loads(args.check.read_bytes())
         calibration = saved.get('calibrated_child', {}).get('artifact', {}).get('uri')
-        report = project(saved['diagnostic']['uri'], calibration)
+        render = saved.get('calibrated_render', {}).get('artifact', {}).get('uri')
+        report = project(saved['diagnostic']['uri'], calibration, render)
         _need(saved == report, 'saved publication planning result differs at cold replay')
     elif args.out:
-        report = project(args.diagnostic, args.calibration)
+        report = project(args.diagnostic, args.calibration, args.render_calibration)
         with args.out.open('x') as output:
             output.write(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n')
     else:

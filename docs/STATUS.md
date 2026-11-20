@@ -1,5 +1,9 @@
 # 当前状态
 
+`calibrate-native-render` 现在可用已发布的两套 C++20 绘图 ABI 校准从预备输入到同步发布的完整渲染会话。CPU 0 上的 1 帧和 8 帧前缀各预热 1 对、测量 5 对。所有 108 个 PNG 与留存的原始输出逐字节一致。已有版 v1 与资产常驻版 v2 的会话中位数分别为 320.2 → 315.3 ms 和 2.432 → 2.389 s。两版每次都在 80 MiB 进程虚拟地址空间上限内完成，八帧的最大 VmPeak 分别为 46,760 和 47,368 KiB。该上限涵盖整个独立驱动。
+
+`plan-native-plot-boundary --render-calibration` 将 CPU、挂载点、进程上限和两种作用域成本接入原保存操作，并为 1 帧、8 帧分别构造可行计划。两个收益都低于已有 5% 资格门槛。此前两轮匹配的整入口测试方向相反，均未通过该门槛，因此默认选择 v1，原同步发布顺序不变。完整调用方成本和算子私有工作区预算继续单独记录。见 `artifacts/baseline/cpu-native-render-service-calibration.json`。
+
 `calibrate-native-png` 用正式原生库的同步 `save_png` 测量已准备 RGBA 到 PNG 发布的干净服务成本。CPU 0 上四帧各预热 1 次、测量 5 次，24 次输出均与原始 PNG 逐字节一致，各帧中位数为 237.2–238.0 ms。采集核对同次 CPU 拓扑、`/home` 的 ext4 挂载和原生库字节。`plan-native-plot-boundary --calibration` 将三个匹配样本的成本及 23,040,000 B 借用输入接回规划图。完整渲染成本和私有工作区预算继续保留 `UNKNOWN`，同步发布约束仍生效。见 `artifacts/baseline/cpu-native-png-service-calibration.json`。
 
 `export-native-live-plot-phase --png-detail` 在两份独立 C++20 诊断包里记录了 Pillow 的逐行滤波、zlib 压缩、临时文件操作和最终发布。真实 CPU 0 八帧运行共做 3 对。两版的所有 PNG 和 stdout 与清洁入口逐字节一致。已有版的 PNG 区间中位数为 1.877 s，其中压缩约 1.229 s、滤波约 0.624 s，临时文件操作及发布合计的中位数约 1.9 ms。此处耗时用于定位。

@@ -1,0 +1,275 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+@ROOT_SUPPORT@
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <filesystem>
+#include <link.h>
+#include <openssl/evp.h>
+#include <set>
+#include <span>
+#include <string>
+#include <sys/resource.h>
+#include <unistd.h>
+#include <utility>
+
+#define SCAR_RESIDENT_ABI @RESIDENT@
+
+namespace {
+namespace fs = std::filesystem;
+using Digest = std::array<unsigned char, 32>;
+using Clock = std::chrono::steady_clock;
+static_assert(Clock::is_steady);
+constexpr std::string_view provider_path = @PROVIDER@;
+
+struct PackageFile {
+    std::string_view path;
+    std::size_t bytes;
+    Digest digest;
+};
+constexpr std::array<PackageFile, @FILE_COUNT@> package_files{{@FILES@}};
+constexpr std::array<std::string_view, @HOST_COUNT@> host_files{{@HOSTS@}};
+
+void require(bool ok, const char* message) {
+    if (!ok) throw std::runtime_error(message);
+}
+
+@BOUND_LOADER@
+
+struct LoadedClosure {
+    std::set<fs::path> remaining;
+    std::string problem;
+
+    explicit LoadedClosure(const fs::path& root) {
+        for (const auto& member : package_files) remaining.insert(fs::canonical(root / member.path));
+        for (const auto& name : host_files) remaining.emplace(name);
+    }
+
+    static int visit(dl_phdr_info* image, std::size_t, void* context) noexcept {
+        const std::string_view name(image->dlpi_name);
+        if (name.empty() || name == "linux-vdso.so.1") return 0;
+        auto& state = *static_cast<LoadedClosure*>(context);
+        try {
+            const auto path = fs::canonical(name);
+            if (state.remaining.erase(path) == 1) return 0;
+            state.problem = "unexpected shared library: " + path.string();
+        } catch (...) {}
+        return 1;
+    }
+
+    void verify() {
+        const auto status = ::dl_iterate_phdr(visit, this);
+        if (!problem.empty()) throw std::runtime_error(problem);
+        require(status == 0 && remaining.empty(), "released plot library runtime closure differs");
+    }
+};
+
+template<class Function>
+Function symbol(const Library& library, const fs::path& provider, const char* name) {
+    const auto* mapped = library.image();
+    require(fs::canonical(mapped->l_name) == provider, "released plot library glibc link map differs");
+    ::dlerror();
+    auto* address = ::dlsym(library.get(), name);
+    const bool lookup = ::dlerror() == nullptr;
+    Dl_info target{};
+    require(lookup && address && ::dladdr(address, &target) == 1 && target.dli_fname &&
+            fs::canonical(target.dli_fname) == provider && target.dli_sname &&
+            std::string_view(target.dli_sname) == name && target.dli_saddr == address,
+            "released public plot ABI symbol differs");
+    return reinterpret_cast<Function>(address);
+}
+
+void prefault(const Root& root) {
+    const auto page = ::sysconf(_SC_PAGESIZE);
+    require(page > 0, "cannot read host page size");
+    const auto* bytes = static_cast<const volatile char*>(root.storage.data());
+    for (std::size_t offset = 0; offset < root.storage.size(); offset += page)
+        static_cast<void>(bytes[offset]);
+    if (!root.storage.empty()) static_cast<void>(bytes[root.storage.size() - 1]);
+}
+
+struct Frame {
+    Root z;
+    scar_array_v1 descriptor;
+    double time;
+    std::string output;
+
+    explicit Frame(char** arguments) : z(arguments[0], arguments[1], scar::live::root_shapes[2]),
+        descriptor(z.descriptor(scar::live::root_shapes[2])) {
+        std::size_t end{};
+        time = std::stod(arguments[2], &end);
+        require(std::isfinite(time) && end == std::string_view(arguments[2]).size(), "invalid frame time");
+        const auto path = fs::absolute(arguments[3]);
+        require(!path.filename().empty() && !fs::exists(fs::symlink_status(path)), "frame output must be fresh");
+        output = path.string();
+        prefault(z);
+    }
+};
+
+struct Timing {
+    const char* operation;
+    int frame;
+    std::int64_t nanoseconds;
+};
+
+struct Measurements {
+    std::array<char, 512> error{};
+    std::vector<Timing> rows;
+
+    template<class Operation>
+    void record(const char* name, int frame, Operation&& operation) {
+        const auto begin = Clock::now();
+        const auto status = std::forward<Operation>(operation)();
+        const auto end = Clock::now();
+        if (status) throw std::runtime_error(error.data());
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count();
+        require(elapsed > 0, "native plot service has no measured duration");
+        rows.push_back({name, frame, elapsed});
+    }
+};
+
+class Resources {
+    const char* path_ = std::getenv("SCAR_PLOT_SERVICE_RESOURCE_LOG");
+    struct rlimit before_{};
+
+    static std::string limit(rlim_t value) {
+        return value == RLIM_INFINITY ? "null" : std::to_string(value);
+    }
+
+    static std::array<std::uint64_t, 2> process_peaks() {
+        std::array<std::uint64_t, 2> sizes{};
+        constexpr std::array<std::string_view, 2> names{"VmPeak:", "VmHWM:"};
+        std::ifstream status("/proc/self/status");
+        std::string line;
+        while (std::getline(status, line)) {
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                if (!line.starts_with(names[i])) continue;
+                const auto start = line.find_first_not_of(" \t", names[i].size());
+                require(start != std::string::npos, "native process memory metric is missing");
+                const auto end = line.data() + line.size();
+                const auto result = std::from_chars(line.data() + start, end, sizes[i]);
+                require(result.ec == std::errc{} && std::string_view(result.ptr, end - result.ptr) == " kB",
+                        "native process memory metric differs");
+            }
+        }
+        require(sizes[0] >= sizes[1] && sizes[1] > 0, "native process memory peaks are invalid");
+        return sizes;
+    }
+public:
+    Resources() {
+        if (path_ && *path_) {
+            require(!fs::exists(fs::symlink_status(path_)), "resource sidecar must be fresh");
+            require(::getrlimit(RLIMIT_AS, &before_) == 0, "cannot observe native address-space limit");
+        }
+    }
+
+    void write() const {
+        if (!path_ || !*path_) return;
+        struct rlimit after{};
+        struct rusage usage{};
+        require(::getrlimit(RLIMIT_AS, &after) == 0 && after.rlim_cur == before_.rlim_cur &&
+                after.rlim_max == before_.rlim_max && ::getrusage(RUSAGE_SELF, &usage) == 0 &&
+                usage.ru_maxrss > 0, "native resource measurement differs");
+        const auto [virtual_peak, resident_peak] = process_peaks();
+        const auto soft = limit(before_.rlim_cur);
+        const auto hard = limit(before_.rlim_max);
+        auto* output = std::fopen(path_, "wbx");
+        require(output, "cannot create native resource sidecar");
+        const auto written = std::fprintf(output,
+            "{\"schema\":\"scar.native-live-plot-service-resources\",\"schema_version\":1,"
+            "\"address_space_limit_bytes\":%s,\"address_space_hard_limit_bytes\":%s,\"ru_maxrss_kib\":%ld,"
+            "\"vm_peak_kib\":%llu,\"vm_hwm_kib\":%llu}\n", soft.c_str(), hard.c_str(), usage.ru_maxrss,
+            static_cast<unsigned long long>(virtual_peak), static_cast<unsigned long long>(resident_peak));
+        const auto closed = std::fclose(output);
+        require(written > 0 && closed == 0, "cannot publish native resource sidecar");
+    }
+};
+
+#if SCAR_RESIDENT_ABI
+struct ResidentOwner {
+    scar_live_plot_destroy_fn_v2 destroy;
+    void* value = nullptr;
+    ~ResidentOwner() { if (value) destroy(value); }
+};
+#endif
+}
+
+int main(int argc, char** argv) {
+    try {
+        require(argc >= 11 && (argc - 7) % 4 == 0,
+                "expected LAYOUT FONT X OFF Y OFF (Z OFF TIME FRESH_OUTPUT_PNG)+");
+        const auto root = fs::read_symlink("/proc/self/exe").parent_path().parent_path();
+        const auto layout = fs::absolute(argv[1]).string();
+        const auto font = fs::absolute(argv[2]).string();
+        check_package(root);
+        const auto provider = fs::canonical(root / provider_path);
+        const Library library(provider);
+        LoadedClosure(root).verify();
+#if SCAR_RESIDENT_ABI
+        const auto prepare = symbol<scar_live_plot_prepare_fn_v2>(library, provider, "scar_live_plot_prepare_v2");
+        const auto render = symbol<scar_live_plot_render_fn_v2>(library, provider, "scar_live_plot_render_v2");
+        const auto destroy = symbol<scar_live_plot_destroy_fn_v2>(library, provider, "scar_live_plot_destroy_v2");
+#else
+        const auto render = symbol<scar_live_plot_fn_v1>(library, provider, "scar_live_plot_v1");
+#endif
+        Root x_storage(argv[3], argv[4], scar::live::root_shapes[0]);
+        Root y_storage(argv[5], argv[6], scar::live::root_shapes[1]);
+        const auto x = x_storage.descriptor(scar::live::root_shapes[0]);
+        const auto y = y_storage.descriptor(scar::live::root_shapes[1]);
+        prefault(x_storage);
+        prefault(y_storage);
+        std::vector<Frame> frames;
+        frames.reserve((argc - 7) / 4);
+        std::set<fs::path> outputs;
+        for (int i = 7; i < argc; i += 4) {
+            const auto& frame = frames.emplace_back(argv + i);
+            const fs::path path(frame.output);
+            require(outputs.insert(fs::canonical(path.parent_path()) / path.filename()).second,
+                    "multiple frames target the same output file");
+        }
+        Measurements timings;
+        timings.rows.reserve(frames.size() + 2);
+        const Resources resources;
+        auto* error = timings.error.data();
+        const auto capacity = timings.error.size();
+#if SCAR_RESIDENT_ABI
+        ResidentOwner owner{destroy};
+        timings.record("prepare", -1, [&] {
+            return prepare(&x, &y, layout.c_str(), font.c_str(), &owner.value, error, capacity);
+        });
+        require(owner.value, "native plot prepare returned no context");
+#endif
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            const auto& frame = frames[i];
+            timings.record("render", static_cast<int>(i), [&] {
+#if SCAR_RESIDENT_ABI
+                return render(owner.value, &frame.descriptor, frame.time, frame.output.c_str(), error, capacity);
+#else
+                return render(&x, &y, &frame.descriptor, frame.time, layout.c_str(), font.c_str(),
+                              frame.output.c_str(), error, capacity);
+#endif
+            });
+        }
+#if SCAR_RESIDENT_ABI
+        auto* completed = std::exchange(owner.value, nullptr);
+        timings.record("destroy", -1, [&] { destroy(completed); return 0; });
+#endif
+        resources.write();
+        std::cout << "operation\tframe\telapsed_ns\n";
+        for (const auto& row : timings.rows)
+            std::cout << row.operation << '\t' << row.frame << '\t' << row.nanoseconds << '\n';
+        require(bool(std::cout.flush()), "cannot publish native render service timings");
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}
