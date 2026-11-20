@@ -1,10 +1,16 @@
 # 当前状态
 
+纯 CPU 已生成独立 C++20 Sunfish 入口。建图把 7 条有应答顺序的输入命令接到原控制分支、启动输出、位置准备和实际搜索的输入端口。规划在命令匹配后才执行对应效果。11 行启动回复和两个初始局面经原源码与观察证据固定，搜索分数、PV、走法及状态由原生算法实时计算。
+
+交付依次使用 `project-scalar-recursive-entry`、`observe-scalar-recursive-entry`、`plan-scalar-recursive-entry` 和 `export-scalar-recursive-entry`。包内包含 CMake、源码、头文件和宿主 ELF。前端分析发生在构建与复验，独立入口只依赖宿主 C/C++ 库。当前准入范围包括固定命令、应答顺序和已绑定的输入。下一轮降低源位置构造和命令参数的数据流，扩大输入域。
+
+直接运行原 Python 脚本和生成 ELF，固定同一逻辑核，一对预热、四对清洁测量的中位数为 **1.957 → 0.262 秒，7.45×**。观察轮逐条核对 39 次探测，两局历史、根位置、节点数及有序表一致。发布的 ELF 单独搬迁并在空环境通过，未知命令返回 77，已发布的合法前缀保留。见 `artifacts/baseline/cpu-standalone-recursive-entry-acceptance.json`。
+
 Sunfish 的原图已接通两次搜索之间的状态边。原 UCI 在第一次关闭后执行 6 次走子表查找和 6 次属性检查。第二次搜索继续使用同一份 714 条走子记录，在首个探测前换掉旧分数表。已经观察到的按键读取可直接走 C ABI。其他消费路径和外部别名仍是准入边界。
 
 C++20 v2 在一次原生分配中执行两场搜索。第一次关闭保留有序走子表，第二次原初始化后原子重绑并清空原生分数表。最后一个关闭点回写仍可见的状态。四对无插桩运行的整进程中位数 **1.990 → 1.684 秒，1.18×**，基线为上一版每局回写。独立观察核对 39 次探测、两局最终字典摘要和 6 次跨搜索查找。发布快照累计从 6,563,979 B 降到 361,965 B。见 `artifacts/baseline/cpu-recursive-owner-continuity-acceptance.json`。
 
-复跑使用 `project-scalar-recursive-owner-continuity`、`observe-scalar-recursive-owner-continuity`、`plan-scalar-recursive-owner`、`export-scalar-recursive-driver --rebind` 与 `scripts/measure_scalar_recursive_owner.py`。下一轮先补入口的命令状态、位置构造和输出依赖，再规划 C++20 入口。启动诊断已定位到桥接入口会载入前端分析，部署工作应在构建期完成。完整独立 C++ 入口仍待实现。
+驻留桥接的复跑入口为 `project-scalar-recursive-owner-continuity`、`observe-scalar-recursive-owner-continuity`、`plan-scalar-recursive-owner`、`export-scalar-recursive-driver --rebind` 与 `scripts/measure_scalar_recursive_owner.py`。
 
 纯 CPU 主链已扩到 Sunfish 的整个迭代搜索驱动。建图把原 UCI 调用、共享的循环体、递归探测、暂停/恢复和关闭接在一起。两次深度 4 搜索共观察 39 次探测，含两次关闭前的深度 5 探测。每局使用新的分数表，第二局继续使用走子表。
 
