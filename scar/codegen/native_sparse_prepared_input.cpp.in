@@ -1,0 +1,32 @@
+constexpr char prepared_csr[] =
+#include "prepared_csr.inc"
+;
+static_assert(sizeof(prepared_csr) - 1 == @SCAR_BODY_SIZE@);
+constexpr std::array<unsigned char, 56> prepared_header{@SCAR_HEADER@};
+
+void write_prepared(int fd, std::span<const std::byte> data) {
+    while (!data.empty()) {
+        check_shutdown();
+        const auto count = write(fd, data.data(), data.size());
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        require(count < 0 ? errno : count == 0 ? EIO : 0, "cannot stage the prepared CSR image");
+        data = data.subspan(static_cast<std::size_t>(count));
+    }
+}
+
+Fd stage_prepared(std::uint32_t request_count) {
+    auto header = prepared_header;
+    for (std::size_t i = 0; i < sizeof(request_count); ++i) {
+        header[@SCAR_COUNT_OFFSET@ + i] = static_cast<unsigned char>(request_count >> (i * 8));
+    }
+    Fd image(static_cast<int>(syscall(SYS_memfd_create, "scar-prepared-csr", MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+    require(image.get() < 0 ? errno : 0, "cannot allocate the prepared CSR descriptor");
+    write_prepared(image.get(), std::as_bytes(std::span(header)));
+    write_prepared(image.get(), std::as_bytes(std::span(prepared_csr)).first(sizeof(prepared_csr) - 1));
+    constexpr int seal = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+    require(fcntl(image.get(), F_ADD_SEALS, seal) < 0 ? errno : 0, "cannot seal the prepared CSR descriptor");
+    require(lseek(image.get(), 0, SEEK_SET) < 0 ? errno : 0, "cannot rewind the prepared CSR descriptor");
+    return image;
+}
