@@ -117,17 +117,17 @@ class PythonTargetObserver:
         Schema, field order, counters and both transports remain unchanged.
         Current code/default/receiver observations still happen at each CALL.
         """
-        if self.closed or self.stopped:return
+        if self.closed or self.stopped:return False
         document={'schema':'scar.python-call-targets','schema_version':2,'kind':kind,'value':fields}
         if self._deferred is not None:
             if self.records>=self.budget.max_records or not self._deferred.append(document):
-                self.stopped=True;return
+                self.stopped=True;return False
             self.bytes=self._deferred.accepted_bytes
             self.records+=1;self.counts[kind]+=1
-            return
+            return True
         raw=(json.dumps(document,ensure_ascii=True,separators=(',',':'),allow_nan=False)+'\n').encode('ascii')
         if self.records>=self.budget.max_records or self.bytes+len(raw)>self.budget.max_bytes:
-            self.stopped=True;return
+            self.stopped=True;return False
         try:
             if len(self._buffer)+len(raw)>self._buffer_limit:self._flush()
             if len(raw)>=self._buffer_limit:self._write_all(raw)
@@ -136,6 +136,7 @@ class PythonTargetObserver:
             self.stopped=self._io_failed=True
             raise
         self.digest.update(raw);self.bytes+=len(raw);self.records+=1;self.counts[kind]+=1
+        return True
     def _write_all(self,raw):
         if os.getpid()!=self.recorder.pid:raise OSError('forked process cannot flush parent Python target records')
         offset=0
@@ -254,11 +255,14 @@ class PythonTargetObserver:
         # ENTRY_HANDSHAKE. v2 adds entries only for methods/external code.
         if pending['kind'] is Kind.FUNCTION and self.operand._code_inside(frame.f_code):return True
         pid,tid,owner=pending['caller']
-        self._emit_fields('ENTRY',{'attempt_index':pending['attempt'],
+        observed = self._emit_fields('ENTRY',{'attempt_index':pending['attempt'],
             'caller':{'process_id':pid,'thread_id':tid,'invocation_id':owner},
             'callee':{'process_id':self.recorder.pid,'thread_id':threading.get_ident(),'invocation_id':state[0]},
             'entry_index':self.recorder.index,'code':pending['code_key'],
             'receiver_parameter_index':receiver_index,'receiver_reference':receiver_ref})
+        scopes = self.operand.resource_scopes
+        if observed and scopes is not None:
+            scopes.stage_python_entry(frame, owner, pending['attempt'])
         return True
     def close(self):
         if self.closed or os.getpid()!=self.recorder.pid:return

@@ -458,7 +458,9 @@ class CallOperandObserver:
                     try:
                         # The frame recorder already popped its active entry;
                         # this observer's retained frame is the right source.
-                        if (threading.get_ident(), id(frame)) not in self._frames:
+                        identity = threading.get_ident(), id(frame)
+                        if (identity not in self._frames and (self.resource_scopes is None
+                                or not self.resource_scopes.tracks_python(identity))):
                             return
                     finally:
                         self._lock.release()
@@ -479,7 +481,16 @@ class CallOperandObserver:
                         self._on_frame_exit(frame)  # Release only originally owned frame/masks.
                     return
                 if event == "call":
-                    self._on_frame_enter(frame)
+                    scopes = self.resource_scopes
+                    if scopes is None:
+                        self._on_frame_enter(frame)
+                    else:
+                        try:
+                            self._on_frame_enter(frame)
+                            # Bracket application execution after collector entry work.
+                            scopes.commit_python_entry(frame)
+                        finally:
+                            scopes.python_entry_candidate = None
                 elif event == "return":
                     self._on_frame_exit(frame)
         except Exception as error:
@@ -536,14 +547,16 @@ class CallOperandObserver:
                            and expected_code == code_key and caller_key == parent_state[1]
                            and caller_site == call_site)
                 if matches:
-                    self._emit("ENTRY_HANDSHAKE", invocation, self.recorder.index,
-                               {"attempt_index": attempt_index, "entry_index": self.recorder.index})
+                    handshake = self._emit("ENTRY_HANDSHAKE", invocation, self.recorder.index,
+                        {"attempt_index": attempt_index, "entry_index": self.recorder.index})
                     witness = getattr(self.recorder, 'collector_witness', None)
                     if witness is not None and not witness.guard('environments'):
                         self._stopped = True
                         return
                     self.environment_observer.entry(target, attempt_index, invocation,
                         self.recorder.index, frame.f_globals, frame.f_builtins)
+                    if handshake is not None and self.resource_scopes is not None:
+                        self.resource_scopes.stage_python_entry(frame, parent_state[0], attempt_index)
                 else:
                     self._gap("EXPECTED_FUNCTION_ENTRY_NOT_MATCHED", parent_state[0])
                     self.environment_observer.discard(attempt_index)
@@ -604,6 +617,8 @@ class CallOperandObserver:
 
     def _on_frame_exit(self, frame):
         identity = threading.get_ident(), id(frame)
+        if self.resource_scopes is not None:
+            self.resource_scopes.complete_python(identity)
         state = self._frames.pop(identity, None)
         if state is None:
             return

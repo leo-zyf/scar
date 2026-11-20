@@ -29,7 +29,7 @@ class SourceResourceScopeProvider:
         artifact=_artifact(self.store.path/'result.json',SCHEMA)
         self.locator=SourceArtifactLocator(artifact,artifact.sha256,artifact.size_bytes,'canonical-json')
         root=RegionID(_digest((SCHEMA+'.evidence-root',self.store.coordinates.run.id)))
-        self.namespace=GraphNamespace(self.locator,SCHEMA+'.observations.v1',root)
+        self.namespace=GraphNamespace(self.locator,SCHEMA+'.observations.v'+str(self.store.report['schema_version']),root)
         self.owned_namespaces=(self.namespace,)
         self.root=Point(self.namespace,root,None)
         self.nodes[root]=(self.store.report,self.root,V.ProgramEntityKind.REGION,V.ProgramNodeRole.PROVIDER)
@@ -55,7 +55,10 @@ class SourceResourceScopeProvider:
             self.interfaces[group.node]=original;self.group_scopes[group.node]=observations
             self.group_work[group.node]=tuple(row for i in identities for row in work[i])
             self._add(self.root,group,K.CONTAINS,Meaning.STRUCTURE,'SHARED_SOURCE_RESOURCE_INTERFACE')
-            self._add(operation,group,K.RESOURCE,Meaning.REFERENCE,'OBSERVED_NATIVE_CALL_SCOPE_NOT_EXCLUSIVE_WORK_OR_COST')
+            boundary=('OBSERVED_CALL_BOUNDARIES_NOT_EXCLUSIVE_WORK_OR_COST'
+                if any(isinstance(scope,R.ObservedPythonResourceScope) for scope in observations)
+                else 'OBSERVED_NATIVE_CALL_SCOPE_NOT_EXCLUSIVE_WORK_OR_COST')
+            self._add(operation,group,K.RESOURCE,Meaning.REFERENCE,boundary)
             for port,type_ in zip(anchor.arguments,anchor.types):
                 if type(type_)is ValueType and type_.kind is ValueKind.STATE:
                     self._add(view.source_port(port),group,K.STATE_INTERFACE,Meaning.STATE_INTERFACE,

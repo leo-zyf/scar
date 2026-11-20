@@ -1,0 +1,224 @@
+{
+  "deployment_authorized": false,
+  "first_stage_complete": false,
+  "performance_claim_made": false,
+  "remaining": [
+    "original NumPy allocation continuity across unobserved body boundaries",
+    "implicit buffered publication and external-provider effect closure",
+    "qualified full entry costs including in-domain allocation and guard costs",
+    "independent native application with original inputs and external effects"
+  ],
+  "schema": "scar.cpu-source-effect-scope-acceptance",
+  "schema_version": 1,
+  "verified": {
+    "buffered_text": {
+      "content_provenance": "OPEN",
+      "explicit_flush_attempt": 22,
+      "observed_kernel_write_bytes": 10,
+      "possible_preceding_writes": [
+        16,
+        19
+      ],
+      "query": {
+        "bytes": 12976,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/nested-publication-release.json",
+        "sha256": "d12815574f3b6b77690699681f9f525cb144ede71efee85acfa8fe89ea3abde2"
+      },
+      "replay": {
+        "bytes": 3901,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/nested-scope-release/result.json",
+        "sha256": "564df4b674afb2a6445e7e2ae644be69fb60e32e87bcfc145005ebe123a0d9ca"
+      },
+      "summary": {
+        "enclosed_work": 9,
+        "excluded_marker_writes": 22,
+        "python_activation_scopes": 3,
+        "scopes": 11,
+        "source_bindings": 11,
+        "source_bound_scopes": 11,
+        "source_frontiers": 0,
+        "syscalls": {
+          "close": 1,
+          "fstat": 4,
+          "lseek": 2,
+          "openat": 1,
+          "write": 1
+        },
+        "unassigned_work": 2976,
+        "unclosed_scopes": 0
+      }
+    },
+    "gray_scott": {
+      "actual_callee": {
+        "code": "pycode-v2:2672609ea3b062eccd1a2ddc0390125eb5f7994e75202d3509007913e00f3c9e",
+        "invocation": 37,
+        "normal_completion_proven": false,
+        "path": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/matplotlib/figure.py",
+        "qualname": "Figure.savefig"
+      },
+      "bidirectional_relations": 306,
+      "buffered_process_stdout": {
+        "observed_write_bytes": 53,
+        "source": {
+          "artifact": {
+            "schema": "strace.syscalls.text.v1",
+            "sha256": "0ee5e3bc5ff95f0c7a12d55a6152356a7db7da84f81bcf2c31df972467e340e8",
+            "size_bytes": 1200890,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot/os/syscalls.1767143"
+          },
+          "locator": "#/lines/12797"
+        },
+        "source_content_provenance": "OPEN"
+      },
+      "capture_transport": "snapshot",
+      "capture_wall_seconds": 12.421917503001168,
+      "command": [
+        "/home/zyf/AAA/scar/.venv-planner/bin/python",
+        "-B",
+        "/home/zyf/AAA/gray-scott/python/run_simulation.py",
+        "-T",
+        "45.35",
+        "-F",
+        "0.033",
+        "-k",
+        "0.0625",
+        "-d",
+        "300",
+        "--outdir",
+        "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot-files"
+      ],
+      "coordinates": {
+        "bytes": 65011,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot/capture-coordinates.json",
+        "sha256": "c33636e92372adcad6457f17d85290a8a69cd9d2ffe2ea7ddec5c6173ab91a70"
+      },
+      "graph": {
+        "bytes": 4313,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot-release/result.json",
+        "sha256": "cb672f8e32da753dd36ccc1daed670c52cff004f141bb31e58efb1d2ade3d1d9"
+      },
+      "graph_check": {
+        "bytes": 738,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot-release.check.json",
+        "sha256": "4b31cd9ac92db749f9cf84231ac95e255b915104a78a8767862e06700625d2e8"
+      },
+      "observed_file_operations": [
+        {
+          "name": "openat",
+          "return": 16,
+          "source": {
+            "artifact": {
+              "schema": "strace.syscalls.text.v1",
+              "sha256": "0ee5e3bc5ff95f0c7a12d55a6152356a7db7da84f81bcf2c31df972467e340e8",
+              "size_bytes": 1200890,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot/os/syscalls.1767143"
+            },
+            "locator": "#/lines/11271"
+          }
+        },
+        {
+          "name": "write",
+          "return": 106172,
+          "source": {
+            "artifact": {
+              "schema": "strace.syscalls.text.v1",
+              "sha256": "0ee5e3bc5ff95f0c7a12d55a6152356a7db7da84f81bcf2c31df972467e340e8",
+              "size_bytes": 1200890,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot/os/syscalls.1767143"
+            },
+            "locator": "#/lines/11278"
+          }
+        },
+        {
+          "name": "close",
+          "return": 0,
+          "source": {
+            "artifact": {
+              "schema": "strace.syscalls.text.v1",
+              "sha256": "0ee5e3bc5ff95f0c7a12d55a6152356a7db7da84f81bcf2c31df972467e340e8",
+              "size_bytes": 1200890,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot/os/syscalls.1767143"
+            },
+            "locator": "#/lines/11281"
+          }
+        }
+      ],
+      "png": {
+        "bytes": 106172,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-snapshot-files/frame_000000.png",
+        "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18"
+      },
+      "png_bytes_match": true,
+      "reference_png": {
+        "bytes": 106172,
+        "path": "artifacts/current/experiments/cpu-common-front-end-v1/files/frame_000000.png",
+        "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18"
+      },
+      "shared_source_interfaces": 51,
+      "source_call": {
+        "call_attempt": 49,
+        "code": "pycode-v2:4cf18ddd0c76d2debd821350bafea43edaf4a050af367b39f45fb66ca3b35700",
+        "path": "/home/zyf/AAA/gray-scott/python/gray_scott.py",
+        "position": [
+          231,
+          231,
+          8,
+          91
+        ],
+        "qualname": "GrayScott._dump"
+      },
+      "summary": {
+        "enclosed_work": 4799,
+        "excluded_marker_writes": 1140,
+        "python_activation_scopes": 479,
+        "scopes": 570,
+        "source_bindings": 570,
+        "source_bound_scopes": 570,
+        "source_frontiers": 0,
+        "syscalls": {
+          "brk": 471,
+          "close": 23,
+          "fstat": 25,
+          "getdents64": 2,
+          "ioctl": 1,
+          "lseek": 2829,
+          "lstat": 36,
+          "mkdir": 1,
+          "mmap": 23,
+          "mprotect": 3,
+          "munmap": 2,
+          "openat": 25,
+          "read": 1278,
+          "stat": 79,
+          "write": 1
+        },
+        "unassigned_work": 18571,
+        "unclosed_scopes": 0
+      }
+    },
+    "legacy_v1": {
+      "replay": {
+        "bytes": 3881,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/native-scope-release/result.json",
+        "sha256": "165bf401b6b4ef636136b61a62d09afc3798246d447d0d574daaf163a21a8bf4"
+      },
+      "summary": {
+        "enclosed_work": 6,
+        "excluded_marker_writes": 16,
+        "scopes": 8,
+        "source_bindings": 8,
+        "source_bound_scopes": 8,
+        "source_frontiers": 0,
+        "syscalls": {
+          "close": 1,
+          "fstat": 1,
+          "lseek": 2,
+          "openat": 1,
+          "write": 1
+        },
+        "unassigned_work": 2966,
+        "unclosed_scopes": 0
+      }
+    }
+  }
+}

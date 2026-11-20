@@ -1,20 +1,23 @@
 """Connect owned boundary markers, original CALLs, OS work and source ports.
 
 Only per-thread syscall order and explicit marker offsets are used. Markers
-are collector work. Other work is either enclosed by a balanced observed
-native call or remains unassigned; enclosure is not exclusive program origin.
+are collector work. Enclosure requires a balanced observed native call or
+ordinary Python activation. Enclosure is not exclusive program origin.
 """
 from collections import Counter,defaultdict
+from bisect import bisect_left
 from hashlib import sha256
 import argparse
+import inspect
 import json
 from pathlib import Path
 import time
 
 from scar.trace.capture_coordinates import bind_capture_coordinates
-from scar.trace.resource_scopes import read_resource_scopes,RECORD,SCHEMA as MARKERS
-from scar.trace.os_resources import _scan,_number,_interface_family
+from scar.trace.resource_scopes import read_resource_scopes,RECORD
+from scar.trace.os_resources import _scan,_number,_interface_family,_WRITE
 from scar.analysis.call_operand_reader import read_call_operands
+from scar.analysis.python_call_targets import read_python_call_targets
 from scar.analysis.source_body_activations import _SourceAnchors
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
@@ -27,12 +30,14 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.ir.program import resource_scopes as R
 from scar.ir.program import source_productions as P
+from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.record_codec import encode,decode
 
 
 SCHEMA='scar.source-resource-scopes'
+_RESUMABLE=inspect.CO_GENERATOR|inspect.CO_COROUTINE|inspect.CO_ASYNC_GENERATOR|inspect.CO_ITERABLE_COROUTINE
 
 
 def _receipt(path):
@@ -42,11 +47,12 @@ def _receipt(path):
 
 def _pins():
     from scar.trace import resource_scopes,os_resources,capture_coordinates
-    from scar.analysis import source_body_activations,source_observed_codes,source_observed_calls
+    from scar.analysis import python_call_targets,source_body_activations,source_observed_codes,source_observed_calls
     return {**source_observed_codes.request_code_pins(),**{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer',__import__(__name__,fromlist=['__file__'])),('types',R),
         ('markers',resource_scopes),('os_reader',os_resources),('coordinates',capture_coordinates),
-        ('source_anchors',source_body_activations),('call_index',source_observed_calls))}}
+        ('source_anchors',source_body_activations),('call_index',source_observed_calls),
+        ('python_targets',python_call_targets))}}
 
 
 def _physical_members(coordinates,artifacts):
@@ -61,13 +67,80 @@ def _physical_members(coordinates,artifacts):
     return result
 
 
-def derive_resource_scopes(coordinates,capture,trace):
+def _python_activations(trace,coordinates,membership):
+    targets=coordinates.report.get('python_call_target_membership')
+    if (targets is None or targets['manifest']!=membership.get('python_target_manifest')
+            or targets['events']!=membership.get('python_target_events')):
+        raise ValueError('Python resource markers have no exact bound callee handoff')
+    declaration=targets['manifest']
+    expected=dict(path=declaration['uri'],sha256=declaration['sha256'],bytes=declaration['size_bytes'])
+    if _receipt(declaration['uri'])!=expected:
+        raise ValueError('Python target handoff differs from its coordinate membership')
+    observed=read_python_call_targets(trace)
+    if _receipt(declaration['uri'])!=expected:
+        raise ValueError('Python target handoff changed while reading its entries')
+    bindings={(entry.caller,entry.attempt_index):(entry,anchor)
+        for entry,anchor in zip(observed.entries,observed.entry_anchors,strict=True)}
+    entries={entry.invocation:entry for entry in trace.entries}
+    exits=defaultdict(list)
+    for exit_ in trace.exits:exits[exit_.invocation].append(exit_)
+    codes={(capture.process_id,capture.code.key):capture for capture in trace.frame_scan.captures}
+    return bindings,entries,exits,codes
+
+
+def _python_scope(fields,attempt,activation,claimed):
+    bindings,entries,exits,codes=activation
+    begin=fields[1];binding=bindings.get((begin.caller,begin.attempt_index))
+    if binding is None:raise ValueError('Python resource scope has no original actual callee entry')
+    entry,anchor=binding
+    frame=entries[entry.callee];ends=exits[entry.callee]
+    code=codes.get((entry.callee.process_id,entry.code))
+    if (entry.callee in claimed or code is None or code.code.flags&_RESUMABLE or frame.suspended
+            or frame.anchor.index!=entry.entry_index or attempt.frame_index>=entry.entry_index
+            or len(ends)!=1 or ends[0].code!=entry.code or ends[0].return_site.code!=entry.code
+            or ends[0].completion is FrameCompletion.SUSPENDED
+            or ends[0].anchor.index is None or ends[0].anchor.index<=entry.entry_index):
+        raise ValueError('Python resource scope has no unique ordinary frame lifetime')
+    claimed.add(entry.callee)
+    return R.ObservedPythonResourceScope(*fields,entry.callee,code.anchor,anchor,frame.anchor,ends[0].anchor)
+
+
+def _enclosing_scopes(calls,boundaries):
+    """Sweep exact per-TID completion lines and select the deepest full enclosure."""
+    states={}
+    for tid,rows in boundaries.items():
+        states[tid]=(iter(sorted(rows)),[],[])
+    next_boundary={tid:next(state[0]) for tid,state in states.items()}
+    for call in calls:
+        tid=call['tid'];state=states.get(tid)
+        if state is None:yield None;continue
+        following,openings,identities=state
+        boundary=next_boundary[tid];last=call['line'];first=call['first_line']
+        while boundary is not None and boundary[0]<=last:
+            line,opened,identity=boundary
+            if opened:
+                openings.append(line);identities.append(identity)
+            else:
+                if identities.pop()!=identity:raise ValueError('balanced scope ranges are not nested')
+                openings.pop()
+            boundary=next(following,None)
+        next_boundary[tid]=boundary
+        # A resumed call may have started before a currently enclosing inner
+        # frame. Select only an interval that brackets both original lines.
+        depth=len(openings)-1 if openings and openings[-1]<first else bisect_left(openings,first)-1
+        yield identities[depth] if depth>=0 else None
+
+
+def derive_resource_scopes(coordinates,capture,trace,*,include_positive_writes=False):
     membership=coordinates.report.get('resource_scope_membership')
     if membership is None:raise ValueError('capture has no bound resource scope marker channel')
     declaration=membership['manifest'];metadata=Path(declaration['uri'])
     markers=read_resource_scopes(metadata,expected_sha256=declaration['sha256'])
     if markers.metadata['process_id']!=coordinates.target_process.pid:
         raise ValueError('resource marker process differs from its bound capture')
+    if encode(markers.artifact)!=membership['events']:
+        raise ValueError('resource markers differ from the coordinate membership')
+    python=(_python_activations(trace,coordinates,membership) if markers.metadata['schema_version']==2 else None)
     attempts={(row.invocation,row.index):row for row in trace.attempts}
     files,artifacts,lines,calls=_scan(Path(capture)/'os',128_000_000,2_000_000,interface_work=True)
     members=_physical_members(coordinates,artifacts)
@@ -93,39 +166,53 @@ def derive_resource_scopes(coordinates,capture,trace):
         raise ValueError('marker offsets have no unique exact native-TID pwrite receipts')
     by_tid=defaultdict(list)
     for event in markers.events:by_tid[event.native_tid].append(event)
-    scopes=[];ranges=defaultdict(list);scope_calls={}
+    scopes=[];boundaries=defaultdict(list);scope_calls={};relations={};claimed=set();claimed_attempts=set()
     for tid,rows in by_tid.items():
         stack=[];previous=0
         for event in rows:
             call=os_markers[event.sequence][0]
             if call['first_line']<=previous:raise ValueError('marker file and per-thread syscall orders disagree')
             previous=call['line']
-            if event.kind is R.ScopeEventKind.BEGIN:stack.append(event);continue
+            if event.kind is R.ScopeEventKind.BEGIN:
+                attempt_key=(event.caller,event.attempt_index)
+                if attempt_key not in attempts or attempt_key in claimed_attempts:
+                    raise ValueError('resource scope has no distinct original CALL attempt')
+                claimed_attempts.add(attempt_key);stack.append(event);continue
             if not stack or stack[-1].scope!=event.scope:
                 raise ValueError('resource marker completions are not properly nested')
-            begin=stack.pop();attempt=attempts.get((begin.caller,begin.attempt_index))
-            if attempt is None:raise ValueError('resource scope has no original CALL attempt')
+            begin=stack.pop();attempt=attempts[begin.caller,begin.attempt_index]
             opening=os_markers[begin.sequence][0]
             identity=ProviderID(_digest((SCHEMA,coordinates.run.id,begin,event)))
-            row=R.ObservedResourceScope(identity,begin,event,attempt.anchor,fact(opening),fact(call,True))
+            fields=(identity,begin,event,attempt.anchor,fact(opening),fact(call,True))
+            if event.kind is R.ScopeEventKind.PY_EXIT:
+                if python is None:raise ValueError('Python resource scope requires V2 marker membership')
+                row=_python_scope(fields,attempt,python,claimed)
+                relations[identity]='ENCLOSED_BY_OBSERVED_PYTHON_ACTIVATION'
+            else:
+                if python is not None and (begin.caller,begin.attempt_index) in python[0]:
+                    raise ValueError('native resource completion contradicts an observed Python activation')
+                row=R.ObservedResourceScope(*fields)
+                relations[identity]='ENCLOSED_BY_OBSERVED_NATIVE_CALL'
             scopes.append(row);scope_calls[identity]=attempt
-            ranges[tid].append((opening['line'],call['first_line'],identity))
-        frontiers.extend(dict(reason='UNCLOSED_NATIVE_SCOPE',begin=encode(event.source)) for event in stack)
-    # Find the innermost balanced enclosing region. Calls spanning a marker
-    # boundary remain unassigned; incomplete ranges never acquire later work.
-    for tid in ranges:ranges[tid].sort()
-    work=[]
-    for call in candidates:
-        enclosing=[row for row in ranges.get(call['tid'],())
-            if row[0]<call['first_line'] and call['line']<row[1]]
-        if not enclosing:
-            unassigned.append((fact(call),'NO_BALANCED_ENCLOSING_SCOPE'));continue
-        selected=max(enclosing,key=lambda row:row[0])
-        work.append(R.ScopedResourceWork(selected[2],fact(call),call['name'],
-            _interface_family(call['name']),call['result']))
-    return dict(scopes=tuple(sorted(scopes,key=lambda row:row.id.value)),work=tuple(work),
+            boundaries[tid].extend(((opening['line'],True,identity),(call['first_line'],False,identity)))
+        frontiers.extend(dict(reason=('UNCLOSED_RESOURCE_SCOPE' if python is not None else 'UNCLOSED_NATIVE_SCOPE'),
+            begin=encode(event.source)) for event in stack)
+    if (len(scopes),len(frontiers))!=(markers.metadata['completed'],markers.metadata['unclosed']):
+        raise ValueError('resource scope boundary totals differ from marker handoff')
+    work=[];positive_write_fds={}
+    for call,selected in zip(candidates,_enclosing_scopes(candidates,boundaries),strict=True):
+        source=fact(call)
+        if include_positive_writes and call['name'] in _WRITE and (call['result'] or 0)>0:
+            positive_write_fds[source]=_number(call['args'][0]) if call['args'] else None
+        if selected is None:
+            unassigned.append((source,'NO_BALANCED_ENCLOSING_SCOPE'));continue
+        work.append(R.ScopedResourceWork(selected,source,call['name'],
+            _interface_family(call['name']),call['result'],relations[selected]))
+    derived=dict(scopes=tuple(sorted(scopes,key=lambda row:row.id.value)),work=tuple(work),
         markers=tuple((events[i].source,fact(os_markers[i][0])) for i in sorted(events)),
-        unassigned=tuple(unassigned),frontiers=tuple(frontiers)),scope_calls,markers
+        unassigned=tuple(unassigned),frontiers=tuple(frontiers))
+    if include_positive_writes:derived['positive_write_fds']=positive_write_fds
+    return derived,scope_calls,markers
 
 
 def _source_bindings(index,rows,attempts):
@@ -180,7 +267,10 @@ def build_resource_scopes(capture,out,*,catalog=None,project_root=None,graph_che
         source_bindings=len(bindings),source_bound_scopes=len({r.scope for r in bindings}),
         source_frontiers=len(source_frontiers),unclosed_scopes=len(rows['frontiers']),
         syscalls=dict(Counter(row.syscall for row in rows['work'])))
-    report=dict(schema=SCHEMA,schema_version=1,capture=str(capture),catalog=None if catalog is None else str(Path(catalog).resolve()),
+    version=markers.metadata['schema_version']
+    if version==2:
+        summary['python_activation_scopes']=sum(isinstance(row,R.ObservedPythonResourceScope) for row in rows['scopes'])
+    report=dict(schema=SCHEMA,schema_version=version,capture=str(capture),catalog=None if catalog is None else str(Path(catalog).resolve()),
         project_root=project_root,coordinates=encode(coordinates.artifact),pins=pins,tables=tables,shards=shards,summary=summary,
         scope_ownership_condition=markers.metadata['ownership_condition'],
         non_marker_work_may_include_nested_callbacks_and_collector_overhead=True,
@@ -198,7 +288,8 @@ class ResourceScopeStore:
     """Read stored typed scopes against original OS, CALL and source inputs."""
     def __init__(self,path,*,index=None):
         self.path=Path(path).resolve();self.raw=(self.path/'result.json').read_bytes();r=json.loads(self.raw);self.report=r
-        if (r['schema'],r['schema_version'],r['pins'])!=(SCHEMA,1,_pins()):
+        if (r['schema']!=SCHEMA or type(r['schema_version']) is not int or r['schema_version'] not in (1,2)
+                or r['pins']!=_pins()):
             raise ValueError('resource scope schema or implementation differs')
         if (any(r[name]is not False for name in ('direct_program_origin_proven','effects_closed',
                 'readiness_established','clock_matching_used','source_bodies_copied','first_stage_complete'))
@@ -215,9 +306,13 @@ class ResourceScopeStore:
         if (Path(trace.directory).resolve()!=Path(r['capture'])/'trace'
                 or index is not None and str(index.view.catalog.path)!=r['catalog']):
             raise ValueError('resource scope index uses another source catalog or capture')
-        expected,attempts,_=derive_resource_scopes(self.coordinates,r['capture'],trace)
+        expected,attempts,markers=derive_resource_scopes(self.coordinates,r['capture'],trace)
+        if r['schema_version']!=markers.metadata['schema_version']:
+            raise ValueError('stored resource scope output changes the original marker schema')
         expected_bindings=() if index is None else _source_bindings(index,expected,attempts)
-        kinds=dict(scopes=R.ObservedResourceScope,work=R.ScopedResourceWork,
+        scope_kind=R.ObservedResourceScope if r['schema_version']==1 else (
+            R.ObservedPythonResourceScope|R.ObservedResourceScope)
+        kinds=dict(scopes=scope_kind,work=R.ScopedResourceWork,
             markers=tuple[ProviderFactReference,ProviderFactReference],
             unassigned=tuple[ProviderFactReference,str],frontiers=None)
         self.rows={};self.guards={}

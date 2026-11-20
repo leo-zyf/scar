@@ -301,12 +301,14 @@ def _resource_scope_members(files,trace_root,pid,members):
     if not files.contains(metadata):return None,[]
     doc,declaration=files.document(metadata,SCHEMA)
     row=doc.get('file',{});events=PurePosixPath(row.get('uri',''))
-    _need(doc.get('schema')==SCHEMA and doc.get('schema_version')==1 and doc.get('process_id')==pid
+    version=doc.get('schema_version')
+    _need(doc.get('schema')==SCHEMA and type(version) is int and version in (1,2)
+          and doc.get('process_id')==pid
           and events==trace_root/f'resource-scopes.{pid}.{doc.get("nonce")}.bin'
           and doc.get('record_format')=='<8s8Q' and doc.get('record_bytes')==RECORD.size
           and _integer(doc.get('records')) and doc.get('errors')==[]
           and doc.get('clock_matching_used') is False,'resource scope marker profile differs')
-    artifact=files.verify(events,SCHEMA+'.binary.v1')
+    artifact=files.verify(events,SCHEMA+'.binary.v'+str(version))
     _need((artifact.sha256,artifact.size_bytes)==(row.get('sha256'),row.get('size_bytes'))
           and artifact.size_bytes==doc['records']*RECORD.size,'resource marker bytes differ')
     inputs=doc.get('legacy_inputs')
@@ -316,9 +318,11 @@ def _resource_scope_members(files,trace_root,pid,members):
         _need(original is not None and item['process_id']==pid
               and (item['raw_sha256'],item['raw_bytes'])==(original.sha256,original.size_bytes),
               'resource scope markers refer to another original CALL stream')
+    capability='SCAR_NATIVE_RESOURCE_SCOPES_V1' if version==1 else 'SCAR_PYTHON_AND_NATIVE_RESOURCE_SCOPES_V2'
+    membership=dict(capability=capability,manifest=encode(declaration),
+        events=encode(artifact),records=doc['records'],scope_completion_proven=False)
     members[str(events)]=artifact;members[str(metadata)]=declaration
-    return dict(capability='SCAR_NATIVE_RESOURCE_SCOPES_V1',manifest=encode(declaration),
-        events=encode(artifact),records=doc['records'],scope_completion_proven=False),[str(events),str(metadata)]
+    return membership,[str(events),str(metadata)]
 
 
 def _stream_interface_members(files, trace_root, pid, members, project_root):
@@ -538,9 +542,15 @@ def bind_capture_coordinates(capture_dir, *, max_bytes=1_000_000_000, max_lines=
     operand_name = trace_root / ("call-operands." + str(pid) + ".jsonl")
     members[str(operand_name)] = files.verify(operand_name, "scar.call-operands.events.v1")
     _need(members[str(operand_name)].size_bytes == operands["bytes"], "operand event byte count differs")
-    resource_scope_membership,resource_scope_names=_resource_scope_members(files,trace_root,pid,members)
+    resource_scope_membership,resource_scope_names=_resource_scope_members(
+        files,trace_root,pid,members)
     python_target_membership, python_target_names = _python_target_members(
         files, trace_root, pid, members, operands["project_root"])
+    if (resource_scope_membership is not None
+            and resource_scope_membership['capability']=='SCAR_PYTHON_AND_NATIVE_RESOURCE_SCOPES_V2'):
+        _need(python_target_membership is not None,'Python resource markers need retained original callee observations')
+        resource_scope_membership.update(python_target_manifest=python_target_membership['manifest'],
+            python_target_events=python_target_membership['events'])
     stream_membership, stream_names = _stream_interface_members(
         files, trace_root, pid, members, operands['project_root'])
     lean_plan_membership, lean_plan_names = _lean_plan_member(files, trace_root, pid, members, calls, operands)

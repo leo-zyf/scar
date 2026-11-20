@@ -874,6 +874,7 @@ def main(argv=None) -> int:
         'native-interfaces': 'scar.analysis.source_binding_native_graph',
         'resource-graph': 'scar.analysis.source_resource_graph',
         'resource-scopes': 'scar.analysis.source_resource_scopes',
+        'buffered-stream-publications': 'scar.analysis.buffered_stream_publication',
         'name-flow': 'scar.analysis.source_control_namespaces',
     }
     if cli_argv and cli_argv[0] in ('state-view','program-state-view'):
@@ -1484,7 +1485,7 @@ def main(argv=None) -> int:
     trace.add_argument('--stream-backing',action='store_true',
         help='also observe exact builtin stream backing handles; requires --stream-interfaces')
     trace.add_argument('--resource-scopes',action='store_true',
-        help='opt in to owned native CALL markers for OS/source joins; requires --os-capture-root')
+        help='opt in to exact Python and native call scope markers for OS/source joins; requires --os-capture-root')
     trace.add_argument('--max-os-lines',type=int,default=2000000)
     trace.add_argument('--max-capture-bytes',type=int,default=256000000)
     trace.add_argument('--max-archive-bytes',type=int,default=128000000)
