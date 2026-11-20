@@ -1,0 +1,97 @@
+#pragma once
+
+#include "controller_effect_abi_v1.h"
+#include "stateful_abi_v1.h"
+
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <openssl/evp.h>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+class ControllerStartup {
+    struct ArrayBinding {
+        std::size_t index, offset, bytes;
+        std::int64_t rows, columns;
+    };
+    struct ScalarBinding {
+        std::size_t index;
+        scar_scalar_v1 value;
+    };
+    struct ControllerBinding {
+        std::size_t index;
+        scar_controller_value_v1 value;
+    };
+
+    static constexpr std::array<ArrayBinding, @ARRAY_COUNT@> arrays{{@ARRAYS@}};
+    static constexpr std::array<ScalarBinding, @SCALAR_COUNT@> scalars{{@SCALARS@}};
+    static constexpr std::array<ControllerBinding, @SLOT_COUNT@> slots{{@SLOTS@}};
+    static constexpr std::size_t image_size = @IMAGE_SIZE@;
+    static constexpr std::string_view image_sha256 = "@IMAGE_SHA256@";
+    std::vector<unsigned char> image_;
+
+    static bool valid_digest(const std::vector<unsigned char>& image) {
+        std::array<unsigned char, EVP_MAX_MD_SIZE> hash;
+        unsigned int size = 0;
+        if (EVP_Digest(image.data(), image.size(), hash.data(), &size, EVP_sha256(), nullptr) != 1 ||
+            size * 2 != image_sha256.size()) return false;
+        constexpr std::string_view alphabet = "0123456789abcdef";
+        for (std::size_t i = 0; i < size; ++i) {
+            if (image_sha256[i * 2] != alphabet[hash[i] >> 4] ||
+                image_sha256[i * 2 + 1] != alphabet[hash[i] & 0xf]) return false;
+        }
+        return true;
+    }
+
+public:
+    ControllerStartup() : image_(image_size) {
+        static_assert(std::endian::native == std::endian::little && sizeof(double) == 8);
+        const auto executable = std::filesystem::read_symlink("/proc/self/exe");
+        const auto path = executable.parent_path().parent_path() / "assets/startup.bin";
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.read(reinterpret_cast<char*>(image_.data()), image_.size()) ||
+            stream.peek() != std::ifstream::traits_type::eof() || !valid_digest(image_)) {
+            throw std::runtime_error("startup image differs from the reproduced original constructor");
+        }
+    }
+
+    bool initialize_array(std::size_t index, std::vector<double>& values, scar_array_v1& descriptor) const {
+        for (const auto& binding : arrays) {
+            if (binding.index != index) continue;
+            if (image_.size() != image_size) throw std::runtime_error("startup image was released before initialization");
+            values.resize(binding.bytes / sizeof(double));
+            if (binding.bytes) std::memcpy(values.data(), image_.data() + binding.offset, binding.bytes);
+            const auto address = reinterpret_cast<std::uintptr_t>(values.data());
+            descriptor = {values.data(), 2, {binding.rows, binding.columns}, {binding.columns * 8, 8},
+                          address, address + binding.bytes};
+            return true;
+        }
+        return false;
+    }
+
+    bool initialize_scalar(std::size_t index, scar_scalar_v1& value) const {
+        for (const auto& binding : scalars) {
+            if (binding.index != index) continue;
+            value = binding.value;
+            return true;
+        }
+        return false;
+    }
+
+    bool initialize_slot(std::size_t index, scar_controller_value_v1& value) const {
+        for (const auto& binding : slots) {
+            if (binding.index != index) continue;
+            value = binding.value;
+            return true;
+        }
+        return false;
+    }
+
+    void release_image() { std::vector<unsigned char>{}.swap(image_); }
+};

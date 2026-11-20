@@ -25,8 +25,8 @@
                 "expected --int, --float, or --bool for a controller slot");
         return {SCAR_CONTROLLER_BOOL_V1, 0, value == "true", 0, nullptr, 0};
     };
-@CONTROLLER_INPUTS@@GUARDS@    auto arguments = bind(argc - next + 1, argv + next - 1);
+@CONTROLLER_INPUTS@@GUARDS@@STARTUP@    auto arguments = bind(argc - next + 1, argv + next - 1);
     require(!fs::exists(fs::symlink_status(controller_out)) &&
             std::find(arguments.outputs.begin(), arguments.outputs.end(), controller_out) == arguments.outputs.end(),
             "controller output must have a fresh distinct path");
-@NUMBER_INPUTS@
+@STARTUP_SCALARS@@NUMBER_INPUTS@@STARTUP_SLOTS@

@@ -1,5 +1,11 @@
 # 当前状态
 
+`project-controller-startup-slice` 已闭合 9 个控制器输入的原始值来源。所选构造分支上，`F` 和 `kappa` 独立流入各自的标量字段。`plan-controller-startup` 将默认值和选定数值提供者接入构建期物化，隔离执行原构造器两次。原先观测的数组用于校验摘要。4 个独立数组根生成 2,146,592 字节的启动映像，其中 `u/v` 接到原生更新端口，`x/y` 保留为辅助数据。变化的参数继续由调用方提供。
+
+`capture-agg-scene` 采集原 AGG 绘制操作及像素参考。`export-native-agg-scene` 复用原 AGG 的 C++ 栅格化实现。两个不同的实测场景用同一可执行文件重新生成 RGBA，随后编码为 PNG，两层输出均逐字节一致。场景的布局、等值线几何和字形位图仍由原流程提供。
+
+组合入口使用 `--startup-plan` 与已有子进程计划。搬迁后用两组运行时速率分别完成一次更新，初始数组由构建期资产初始化。两组更新后的数组内容不同，且各自的数组、标量、PNG 和 MP4 与原程序逐字节一致。绘制记录由试验夹具传入。整程序发布和 A/B 仍待场景生成闭合，规划保留 `NO_OP`。见 `artifacts/baseline/cpu-controller-startup-agg-acceptance.json`。
+
 `project-controller-initialization` 已把 Gray–Scott 的实际构造和初始化写入接到 9 个控制器输入。两次零步运行在原入口各取一次状态，所观测到的字段变化仅有 `F`、`kappa`，四个数组逐字节一致。依赖独立性与数值算子合同仍待验证，初始化保持原路径。
 
 `plan-controller-child` 从原 F4 和子进程证据绑定 8 个字面量、2 个运行时目录参数与 FFmpeg 可执行文件。`export-native-stateful-entry --controller-plan PLAN --child-plan CHILD` 从原调用点同步启动并等待。C++ 使用原继承配置和 `check=False` 规则，区分退出码、信号和启动失败。

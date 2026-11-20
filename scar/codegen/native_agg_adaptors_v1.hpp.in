@@ -1,0 +1,39 @@
+#pragma once
+
+#include "agg_basics.h"
+#include <cstdint>
+#include <vector>
+
+namespace mpl {
+class PathIterator {
+    std::vector<double> vertices_;
+    std::vector<std::uint8_t> codes_;
+    unsigned position_ = 0;
+    bool simplify_ = false;
+    double threshold_ = 1.0 / 9.0;
+
+public:
+    PathIterator() = default;
+    PathIterator(std::vector<double> vertices, std::vector<std::uint8_t> codes,
+                 bool simplify, double threshold)
+        : vertices_(std::move(vertices)), codes_(std::move(codes)),
+          simplify_(simplify), threshold_(threshold) {}
+
+    unsigned vertex(double* x, double* y) {
+        *x = 0.;
+        *y = 0.;
+        if (position_ >= total_vertices()) return agg::path_cmd_stop;
+        const auto index = position_++;
+        *x = vertices_[2 * index];
+        *y = vertices_[2 * index + 1];
+        if (has_codes()) return codes_[index];
+        return index ? agg::path_cmd_line_to : agg::path_cmd_move_to;
+    }
+    void rewind(unsigned position) { position_ = position; }
+    unsigned total_vertices() const { return vertices_.size() / 2; }
+    bool should_simplify() const { return simplify_; }
+    double simplify_threshold() const { return threshold_; }
+    bool has_codes() const { return !codes_.empty(); }
+    void* get_id() { return vertices_.data(); }
+};
+}

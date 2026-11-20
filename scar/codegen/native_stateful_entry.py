@@ -96,6 +96,8 @@ def _render(ports, metadata, provider, update=None, controller=None):
         PROVIDER_DECLARATIONS='scar_provider_v1 scar_numpy_power_provider();\n\n' if selected else '',
         PROVIDER_COUNT=str(int(selected)), UPDATE_DECLARATIONS='', UPDATE_OUTPUT_COUNT='', UPDATE_OUTPUT='',
         FINALIZE_EFFECTS='',
+        BIND_COUNT='1 + 3 * (arrays.size() + scalars.size() + output_count)',
+        CHECK_SCALAR_INGRESS='', CHECK_ARRAY_INGRESS='', MAY_INITIALIZE_ARRAY='', AFTER_ARRAYS_READY='',
         ENTRY_ARGUMENTS='    const auto arguments = bind(argc, argv);',
         RUN_BODY=setup + f'''    const auto status = table->run(descriptors.data(), descriptors.size(),
                                    arguments.values.data(), arguments.values.size(), {provider_args});
@@ -120,19 +122,23 @@ def _project(root, plan, provider, update, controller=None):
         from scar.codegen.native_update_entry import COPY_SOURCE
         sources += (COPY_SOURCE,)
     libraries = ('m',)
+    install_dirs = (('licenses', '.'),) if provider is not None else ()
     if controller is not None:
         from scar.codegen.native_controller_entry import SOURCE
         sources += (SOURCE,)
         libraries += ('dl',)
-        if controller.child is not None:
+        if controller.child is not None or controller.startup is not None:
             libraries += ('crypto',)
+        if controller.startup is not None:
+            install_dirs += (('assets', '.'),)
     write_native_project(root, _TARGET, sources=sources, compile_options=(*options, *parallel),
                          link_options=parallel, libraries=libraries,
-                         install_dirs=(('licenses', '.'),) if provider is not None else ())
+                         install_dirs=install_dirs)
 
 
 def _host_libraries(controller):
-    return _HOST_LIBS | {'libcrypto.so.3'} if controller is not None and controller.child is not None else _HOST_LIBS
+    crypto = controller is not None and (controller.child is not None or controller.startup is not None)
+    return _HOST_LIBS | {'libcrypto.so.3'} if crypto else _HOST_LIBS
 
 
 def _linkage(executable, controller):
@@ -184,13 +190,13 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
 
 
 @replay_transaction()
-def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None):
+def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None, startup_plan=None):
     """Publish a CMake project and executable using the original replayed ABI code."""
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
     _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
-    _need((console_plan is None and child_plan is None) or controller_plan is not None,
+    _need((console_plan is None and child_plan is None and startup_plan is None) or controller_plan is not None,
           'effect plan requires its original controller plan')
     _need(console_plan is None or child_plan is None, 'choose one effect plan until inherited stdout is qualified')
     from scar.codegen.native_update_entry import COPY_SOURCE
@@ -198,15 +204,19 @@ def export(native, out, *, update_plan=None, controller_plan=None, console_plan=
     if controller_plan is not None:
         from scar.codegen.native_controller_entry import prepare
         from scar.compiler.plan_native_controller import SCHEMA as PLANNING
-        console_ref = child_ref = None
+        console_ref = child_ref = startup_ref = None
         if console_plan is not None:
             from scar.compiler.plan_controller_console import SCHEMA as CONSOLE
             console_ref = artifact_reference(Path(console_plan).resolve(strict=True), CONSOLE)
         if child_plan is not None:
             from scar.compiler.plan_controller_child import SCHEMA as CHILD
             child_ref = artifact_reference(Path(child_plan).resolve(strict=True), CHILD)
+        if startup_plan is not None:
+            from scar.compiler.plan_controller_startup import SCHEMA as STARTUP
+            startup_ref = artifact_reference(Path(startup_plan).resolve(strict=True), STARTUP)
         controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
-                             metadata, ports, console_reference=console_ref, child_reference=child_ref)
+                             metadata, ports, console_reference=console_ref, child_reference=child_ref,
+                             startup_reference=startup_ref)
         update = controller.update
     elif update_plan is not None:
         from scar.codegen.native_update_entry import prepare
@@ -235,7 +245,9 @@ def export(native, out, *, update_plan=None, controller_plan=None, console_plan=
             (root / COPY_SOURCE).write_bytes(update.copy_source)
         if controller is not None:
             for name, (_, payload) in controller.members().items():
-                (root / name).write_bytes(payload)
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
         _project(root, plan, provider, update, controller)
         _, dependencies = build_native_project(root, _TARGET, (compiler,))
         _need({Path(name).name for name in dependencies} <= _host_libraries(controller),
@@ -261,9 +273,12 @@ def check(package):
         from scar.codegen.native_controller_entry import prepare
         console = original['controller'].get('console')
         child = original['controller'].get('child')
+        startup = original['controller'].get('startup')
         controller = prepare(original['controller']['planning'], metadata, ports,
                              console_reference=console['planning'] if console is not None else None,
-                             child_reference=child['planning'] if child is not None else None)
+                             child_reference=child['planning'] if child is not None else None,
+                             startup_reference=startup['planning'] if startup is not None else None,
+                             package=root)
         update = controller.update
     elif 'update' in original:
         from scar.codegen.native_update_entry import prepare
@@ -310,13 +325,14 @@ def main(argv=None):
     effects = parser.add_mutually_exclusive_group()
     effects.add_argument('--console-plan')
     effects.add_argument('--child-plan')
+    parser.add_argument('--startup-plan')
     args = parser.parse_args(argv)
     if args.check and not (args.native or args.out or args.update_plan or args.controller_plan
-                           or args.console_plan or args.child_plan):
+                           or args.console_plan or args.child_plan or args.startup_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
         report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan,
-                        console_plan=args.console_plan, child_plan=args.child_plan)
+                        console_plan=args.console_plan, child_plan=args.child_plan, startup_plan=args.startup_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

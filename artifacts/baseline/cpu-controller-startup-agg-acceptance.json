@@ -1,0 +1,292 @@
+{
+  "schema": "scar.cpu-controller-startup-agg-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "aggrender_capture": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-scene-release/result.json",
+      "sha256": "f55404172e27b65f29fca1104a3204932a587815c10927df7bf88d43734f776e",
+      "size_bytes": 1539
+    },
+    "scene_cases": [
+      {
+        "draw_counts": {
+          "clear": 1,
+          "draw_markers": 18,
+          "draw_path": 6,
+          "draw_path_collection": 2,
+          "draw_text_image": 110
+        },
+        "expected_png": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-scene-plot-release/frame_000000.png",
+          "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18",
+          "size_bytes": 106172
+        },
+        "native_png": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-png-chain/frame-0.png",
+          "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18",
+          "size_bytes": 106172
+        },
+        "native_raster": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-png-chain/frame-0.rgba",
+          "sha256": "31d0959294df2eec61bd40f13938d720ef061194a8e8c8ef96f3b9a6f593255f",
+          "size_bytes": 23040000
+        },
+        "scene_bytes": 320091
+      },
+      {
+        "draw_counts": {
+          "clear": 1,
+          "draw_markers": 18,
+          "draw_path": 6,
+          "draw_path_collection": 2,
+          "draw_text_image": 110
+        },
+        "expected_png": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-scene-plot-release/frame_000001.png",
+          "sha256": "0e5d6f19b6d6a82066151dc7fe868ccffe78ec019975c656a4e43c8f03ed4bb0",
+          "size_bytes": 107781
+        },
+        "native_png": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-png-chain/frame-1.png",
+          "sha256": "0e5d6f19b6d6a82066151dc7fe868ccffe78ec019975c656a4e43c8f03ed4bb0",
+          "size_bytes": 107781
+        },
+        "native_raster": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-agg-png-chain/frame-1.rgba",
+          "sha256": "d32f3b0dbbe4a985490d17919ef634bff5eecf2b51b27c94dc2ffee4e765cc27",
+          "size_bytes": 23040000
+        },
+        "scene_bytes": 292060
+      }
+    ],
+    "source_slice_cold_replayed": true,
+    "startup_source_slice": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-startup-slice-qualified.json",
+      "sha256": "b2adfe17deb466a74b78b8a7b6e878c9ecea539e533bec23340e2cbdd44551d3",
+      "size_bytes": 405686
+    }
+  },
+  "stage2": {
+    "default_backend": "NO_OP",
+    "runtime_routes": [
+      {
+        "id": "input:3",
+        "kind": "float64",
+        "option": "feed_rate",
+        "parameter": "F",
+        "path": [
+          "self",
+          "F"
+        ],
+        "source": {
+          "artifact": {
+            "schema": "scar.source-controller-startup-slice",
+            "sha256": "b2adfe17deb466a74b78b8a7b6e878c9ecea539e533bec23340e2cbdd44551d3",
+            "size_bytes": 405686,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-startup-slice-qualified.json"
+          },
+          "locator": "#/ports/3"
+        },
+        "witness_values": [
+          {
+            "binary64_be": "3fa0e5604189374c",
+            "kind": "float64",
+            "value": 0.033
+          },
+          {
+            "binary64_be": "3fadb22d0e560419",
+            "kind": "float64",
+            "value": 0.058
+          }
+        ]
+      },
+      {
+        "id": "input:6",
+        "kind": "float64",
+        "option": "death_rate",
+        "parameter": "kappa",
+        "path": [
+          "self",
+          "kappa"
+        ],
+        "source": {
+          "artifact": {
+            "schema": "scar.source-controller-startup-slice",
+            "sha256": "b2adfe17deb466a74b78b8a7b6e878c9ecea539e533bec23340e2cbdd44551d3",
+            "size_bytes": 405686,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-startup-slice-qualified.json"
+          },
+          "locator": "#/ports/6"
+        },
+        "witness_values": [
+          {
+            "binary64_be": "3fb0000000000000",
+            "kind": "float64",
+            "value": 0.0625
+          },
+          {
+            "binary64_be": "3fb4bc6a7ef9db23",
+            "kind": "float64",
+            "value": 0.081
+          }
+        ]
+      },
+      {
+        "id": "field:self.movie",
+        "kind": "bool",
+        "option": "movie",
+        "parameter": "movie",
+        "path": [
+          "self",
+          "movie"
+        ],
+        "source": {
+          "artifact": {
+            "schema": "scar.source-controller-startup-slice",
+            "sha256": "b2adfe17deb466a74b78b8a7b6e878c9ecea539e533bec23340e2cbdd44551d3",
+            "size_bytes": 405686,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-startup-slice-qualified.json"
+          },
+          "locator": "#/ports/8"
+        },
+        "witness_values": [
+          {
+            "kind": "bool",
+            "value": false
+          },
+          {
+            "kind": "bool",
+            "value": false
+          }
+        ]
+      },
+      {
+        "id": "field:self.outdir",
+        "kind": "str",
+        "option": "outdir",
+        "parameter": "outdir",
+        "path": [
+          "self",
+          "outdir"
+        ],
+        "source": {
+          "artifact": {
+            "schema": "scar.source-controller-startup-slice",
+            "sha256": "b2adfe17deb466a74b78b8a7b6e878c9ecea539e533bec23340e2cbdd44551d3",
+            "size_bytes": 405686,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-startup-slice-qualified.json"
+          },
+          "locator": "#/ports/11"
+        },
+        "witness_values": [
+          {
+            "kind": "str",
+            "value": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-startup-handoff/unpublished"
+          },
+          {
+            "kind": "str",
+            "value": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-source-effect-scope-v1/gray-startup-handoff/unpublished"
+          }
+        ]
+      }
+    ],
+    "startup_plan": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-plan.json",
+      "sha256": "adb6406c0c6996e50ab72eb5c9e5d6a2b6377179dbd26ba0c9f94cbdc439382b",
+      "size_bytes": 55055
+    },
+    "static_preparation_outputs": 12,
+    "whole_application_authorized": false
+  },
+  "stage3": {
+    "captured_values_used_as_producer": false,
+    "cxx_standard": 20,
+    "exact_provider_runs": 2,
+    "native_startup_child_package": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-child-entry/result.json",
+      "sha256": "24c9820e9a3205ca1bb6a4f54433cb0a8e5807151fdae2998e9beb5811288356",
+      "size_bytes": 41684
+    },
+    "original_agg_package": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-agg-scene/result.json",
+      "sha256": "26c3a4f0668457e51e27bbbdc475835b899fe6fa5b93a6ef4b112fc58cfb285f",
+      "size_bytes": 92596
+    },
+    "original_agg_source_provider": "Matplotlib 3.11.2",
+    "packed_array_bytes": 2146592,
+    "python_runtime_required": false,
+    "startup_asset_build": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-child-entry/assets/startup-build.json",
+      "sha256": "5eb2cb978c8c078b68933bd7806338dd06f17ba1f22ba50a1a4573c4a64e0aae",
+      "size_bytes": 12666
+    }
+  },
+  "verified": {
+    "cases": [
+      {
+        "cpu_ids": [
+          0
+        ],
+        "final_array_outputs": [
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-a/input_0.out",
+            "sha256": "0ee55607176a05e8dce8fe5adda3c1523a8917120b78cbccea0c8bf15798af8f",
+            "size_bytes": 536648
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-a/input_1.out",
+            "sha256": "8b970f8fe804ce0016181aaad30a289c0b8e9c2e5e63eebf3f27b32ef5a646a8",
+            "size_bytes": 536648
+          }
+        ],
+        "png_mp4_numeric_state_byte_equal": true,
+        "report": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-a/result.json",
+          "sha256": "4208f49e1b7f620feef4c50d17af3fa933bc7aed3aa915aaf4ac192707632846",
+          "size_bytes": 3016
+        },
+        "runtime_rates": {
+          "death": 0.0625,
+          "feed": 0.033
+        },
+        "steps": 1
+      },
+      {
+        "cpu_ids": [
+          0
+        ],
+        "final_array_outputs": [
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-b/input_0.out",
+            "sha256": "d3da1bf05f459c029c86dbaff28c3d8f3bf107bef04ae5d0b28d515708444331",
+            "size_bytes": 536648
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-b/input_1.out",
+            "sha256": "d9ab2d35de98ff3a6d7455ed9758136bdb0a72369b5ea1c0566ea2fe146bfaef",
+            "size_bytes": 536648
+          }
+        ],
+        "png_mp4_numeric_state_byte_equal": true,
+        "report": {
+          "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-startup-media-b/result.json",
+          "sha256": "66b3c172525060d46941236d2d7993bd1e8866c23f14dc8c54cbb839177f040b",
+          "size_bytes": 3037
+        },
+        "runtime_rates": {
+          "death": 0.081,
+          "feed": 0.058
+        },
+        "steps": 1
+      }
+    ],
+    "changing_rates_change_both_final_arrays": true,
+    "original_agg_pixel_replay": true,
+    "original_scene_production_lowered": false,
+    "previous_console_replay_passed": true,
+    "relocated_native_raster_passes": true,
+    "scene_from_original_observed_draws": true,
+    "whole_application_ab_performance_measured": false
+  },
+  "workload": "Gray-Scott CPU"
+}

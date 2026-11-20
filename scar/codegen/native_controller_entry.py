@@ -6,6 +6,7 @@ import re
 
 from scar.codegen.native_controller_child import NativeControllerChild
 from scar.codegen.native_controller_console import NativeControllerConsole
+from scar.codegen.native_controller_startup import NativeControllerStartup
 from scar.codegen.native_update_entry import NativeUpdate, prepare as prepare_update
 from scar.compiler.plan_native_controller import read_native_controller_plan
 from scar.ir.execution_recipe import read_artifact
@@ -42,6 +43,7 @@ class NativeController:
     carried_index: int
     console: NativeControllerConsole | None = None
     child: NativeControllerChild | None = None
+    startup: NativeControllerStartup | None = None
 
     def members(self):
         members = {
@@ -53,6 +55,8 @@ class NativeController:
             members.update(self.console.members())
         if self.child is not None:
             members.update(self.child.members())
+        if self.startup is not None:
+            members.update(self.startup.members())
         return members
 
     def artifacts(self):
@@ -71,10 +75,13 @@ class NativeController:
         if self.child is not None:
             report['child'] = self.child.artifacts()
             report['child']['directory_argument'] = '.'.join(self.child.contract['directory_field_path'])
+        if self.startup is not None:
+            report['startup'] = self.startup.artifacts()
         return report
 
 
-def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None):
+def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None,
+            startup_reference=None, package=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -117,15 +124,22 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
         raise ValueError('controller and update dispatch guard require one common state slot')
     if console_reference is not None and child_reference is not None:
         raise ValueError('child and buffered console need a shared inherited stdout contract')
-    console = child = None
+    console = child = startup = None
     if console_reference is not None:
         from scar.codegen.native_controller_console import prepare as prepare_console
         console = prepare_console(console_reference, controller_reference=reference, controller_plan=plan)
     if child_reference is not None:
         from scar.codegen.native_controller_child import prepare as prepare_child
         child = prepare_child(child_reference, controller_reference=reference, controller_plan=plan)
+    if startup_reference is not None:
+        from scar.codegen.native_controller_startup import prepare as prepare_startup
+        startup = prepare_startup(startup_reference, controller_reference=reference, controller_plan=plan,
+                                  ports=ports, package=package)
+        for path, expected in guards:
+            if path in startup.guard_values and startup.guard_values[path] != expected:
+                raise ValueError('initial constructor guard differs from the original numerical branch')
     return NativeController(reference, plan, update, source, tuple(numeric_slots), tuple(extra_inputs),
-                            guards, tuple(outputs), site, carried_index, console, child)
+                            guards, tuple(outputs), site, carried_index, console, child, startup)
 
 
 def render(controller, setup, selected):
@@ -156,6 +170,7 @@ def render(controller, setup, selected):
     plan = controller.plan
     with_console = controller.console is not None
     with_child = controller.child is not None
+    startup = controller.startup
     effect_arguments = ''
     if with_console:
         effect_arguments = '''    require(next < argc && std::string_view(argv[next]) == "--exclusive-stdout",
@@ -170,17 +185,31 @@ def render(controller, setup, selected):
     const auto* child_directory = argv[next+2];
     next += 3;
 '''
+    read_inputs = controller.extra_inputs
+    read_guards = controller.guards
+    initialize = ''
+    if startup is not None:
+        read_inputs = tuple(row for row in read_inputs if row[0] not in startup.slot_ordinals)
+        read_guards = tuple(row for row in read_guards if row[0] not in startup.guard_values)
+        initialize = '    ControllerStartup startup;\n'
     entry = _render('native_controller_arguments_v1.cpp.in', {
         'SLOT_COUNT': len(plan['slots']),
         'EFFECT_ARGUMENTS': effect_arguments,
         'CONTROLLER_INPUTS': ''.join(f'    controller_slots[{index}] = read({quote(path)});\n'
-                                     for index, path in controller.extra_inputs),
+                                     for index, path in read_inputs),
         'GUARDS': ''.join(f'''    require(next + 2 < argc && std::string_view(argv[next]) == "--guard" &&
             std::string_view(argv[next+1]) == {quote(path)} &&
             std::string_view(argv[next+2]) == "{str(value).lower()}", "original update branch guard differs");
     next += 3;
-''' for path, value in controller.guards),
+''' for path, value in read_guards),
+        'STARTUP': initialize,
+        'STARTUP_SCALARS': ''.join(
+            f'    require(startup.initialize_scalar({index}, arguments.values[{index}]), "missing startup scalar");\n'
+            for index in startup.numeric_ordinals) if startup is not None else '',
         'NUMBER_INPUTS': '\n'.join(initial_numbers),
+        'STARTUP_SLOTS': ''.join(
+            f'\n    require(startup.initialize_slot({index}, controller_slots[{index}]), "missing startup field");'
+            for index in startup.slot_ordinals) if startup is not None else '',
     })
     declarations = '''#include "controller_effect_abi_v1.h"
 #include "native_controller_effects.hpp"
@@ -237,5 +266,19 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
 '''
     finalize = '''    require(console.finish() == 0, "native console declined final stdout publication");
 ''' if with_console else ''
-    return dict(UPDATE_DECLARATIONS=declarations, ENTRY_ARGUMENTS=entry, RUN_BODY=body,
-                UPDATE_OUTPUT_COUNT=' + 1', UPDATE_OUTPUT=output, FINALIZE_EFFECTS=finalize)
+    rendered = dict(UPDATE_DECLARATIONS=declarations, ENTRY_ARGUMENTS=entry, RUN_BODY=body,
+                    UPDATE_OUTPUT_COUNT=' + 1', UPDATE_OUTPUT=output, FINALIZE_EFFECTS=finalize)
+    if startup is not None:
+        rendered['UPDATE_DECLARATIONS'] = '#include "native_controller_startup.hpp"\n' + declarations
+        rendered['BIND_COUNT'] = (f'1 + 3 * (arrays.size() + scalars.size() + output_count'
+                                  f' - {len(startup.array_ordinals) + len(startup.numeric_ordinals)})')
+        if startup.numeric_ordinals:
+            reject = ' && '.join(f'slot != {index}' for index in startup.numeric_ordinals)
+            rendered['CHECK_SCALAR_INGRESS'] = f'            require({reject}, "startup owns this scalar");\n'
+        if startup.array_ordinals:
+            reject = ' && '.join(f'slot != {index}' for index in startup.array_ordinals)
+            rendered['CHECK_ARRAY_INGRESS'] = f'            require({reject}, "startup owns this array");\n'
+        rendered['MAY_INITIALIZE_ARRAY'] = (
+            '        if (startup.initialize_array(i, payloads[i], descriptors[i])) continue;\n')
+        rendered['AFTER_ARRAYS_READY'] = '    startup.release_image();\n'
+    return rendered
