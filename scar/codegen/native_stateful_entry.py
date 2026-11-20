@@ -124,15 +124,21 @@ def _project(root, plan, provider, update, controller=None):
         from scar.codegen.native_controller_entry import SOURCE
         sources += (SOURCE,)
         libraries += ('dl',)
+        if controller.child is not None:
+            libraries += ('crypto',)
     write_native_project(root, _TARGET, sources=sources, compile_options=(*options, *parallel),
                          link_options=parallel, libraries=libraries,
                          install_dirs=(('licenses', '.'),) if provider is not None else ())
 
 
-def _linkage(executable):
+def _host_libraries(controller):
+    return _HOST_LIBS | {'libcrypto.so.3'} if controller is not None and controller.child is not None else _HOST_LIBS
+
+
+def _linkage(executable, controller):
     dynamic = cpu_executable_dynamic(executable)
     _need(dynamic['runpath'] is None and dynamic['rpath'] is None
-          and 'libc.so.6' in dynamic['needed'] and set(dynamic['needed']) <= _HOST_LIBS,
+          and 'libc.so.6' in dynamic['needed'] and set(dynamic['needed']) <= _host_libraries(controller),
           'standalone ELF must use only host runtime dependencies')
     return dynamic
 
@@ -154,7 +160,7 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
     report = dict(schema=SCHEMA, schema_version=1, cxx_standard=20, stateful_abi_version=1, original=reference,
                   original_build_id=metadata['build_id'],
                   identity={key: metadata[key] for key in ('region_sha256', 'plan_sha256', 'contract_sha256')},
-                  ports=ports, files=_members(root, provider, update, controller), linkage=_linkage(root / _EXE),
+                  ports=ports, files=_members(root, provider, update, controller), linkage=_linkage(root / _EXE, controller),
                   cpu_ids=metadata['cpu_ids'], array_payload_bytes=plan['total_region_array_payload_bytes'],
                   array_encoding='C_ORDER_LITTLE_ENDIAN_BINARY64', status='REGION_ENTRY_EXPERIMENT',
                   effects='EXPLICIT_WRITTEN_ROOT_FILES_AFTER_NATIVE_SUCCESS',
@@ -172,28 +178,35 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
         report['effects'] = 'SYNCHRONOUS_NATIVE_EFFECT_CALLBACKS_THEN_FINAL_ROOT_AND_STATE_FILES'
         if controller.console is not None:
             report['effects'] += '_THEN_BUFFERED_CONSOLE_PUBLICATION'
+        if controller.child is not None:
+            report['effects'] = 'SYNCHRONOUS_EFFECTS_WITH_NATIVE_CHILD_THEN_FINAL_ROOT_AND_STATE_FILES'
     return report
 
 
 @replay_transaction()
-def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None):
+def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None):
     """Publish a CMake project and executable using the original replayed ABI code."""
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
     _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
-    _need(console_plan is None or controller_plan is not None, 'console plan requires its original controller plan')
+    _need((console_plan is None and child_plan is None) or controller_plan is not None,
+          'effect plan requires its original controller plan')
+    _need(console_plan is None or child_plan is None, 'choose one effect plan until inherited stdout is qualified')
     from scar.codegen.native_update_entry import COPY_SOURCE
     update = controller = None
     if controller_plan is not None:
         from scar.codegen.native_controller_entry import prepare
         from scar.compiler.plan_native_controller import SCHEMA as PLANNING
-        console_ref = None
+        console_ref = child_ref = None
         if console_plan is not None:
             from scar.compiler.plan_controller_console import SCHEMA as CONSOLE
             console_ref = artifact_reference(Path(console_plan).resolve(strict=True), CONSOLE)
+        if child_plan is not None:
+            from scar.compiler.plan_controller_child import SCHEMA as CHILD
+            child_ref = artifact_reference(Path(child_plan).resolve(strict=True), CHILD)
         controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
-                             metadata, ports, console_reference=console_ref)
+                             metadata, ports, console_reference=console_ref, child_reference=child_ref)
         update = controller.update
     elif update_plan is not None:
         from scar.codegen.native_update_entry import prepare
@@ -225,7 +238,7 @@ def export(native, out, *, update_plan=None, controller_plan=None, console_plan=
                 (root / name).write_bytes(payload)
         _project(root, plan, provider, update, controller)
         _, dependencies = build_native_project(root, _TARGET, (compiler,))
-        _need({Path(name).name for name in dependencies} <= _HOST_LIBS,
+        _need({Path(name).name for name in dependencies} <= _host_libraries(controller),
               'native executable has a non-host dependency')
         report = _report(reference, metadata, plan, ports, root, provider, update, controller)
         (root / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
@@ -247,8 +260,10 @@ def check(package):
     if 'controller' in original:
         from scar.codegen.native_controller_entry import prepare
         console = original['controller'].get('console')
+        child = original['controller'].get('child')
         controller = prepare(original['controller']['planning'], metadata, ports,
-                             console_reference=console['planning'] if console is not None else None)
+                             console_reference=console['planning'] if console is not None else None,
+                             child_reference=child['planning'] if child is not None else None)
         update = controller.update
     elif 'update' in original:
         from scar.codegen.native_update_entry import prepare
@@ -292,13 +307,16 @@ def main(argv=None):
     plans = parser.add_mutually_exclusive_group()
     plans.add_argument('--update-plan')
     plans.add_argument('--controller-plan')
-    parser.add_argument('--console-plan')
+    effects = parser.add_mutually_exclusive_group()
+    effects.add_argument('--console-plan')
+    effects.add_argument('--child-plan')
     args = parser.parse_args(argv)
-    if args.check and not (args.native or args.out or args.update_plan or args.controller_plan or args.console_plan):
+    if args.check and not (args.native or args.out or args.update_plan or args.controller_plan
+                           or args.console_plan or args.child_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
         report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan,
-                        console_plan=args.console_plan)
+                        console_plan=args.console_plan, child_plan=args.child_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

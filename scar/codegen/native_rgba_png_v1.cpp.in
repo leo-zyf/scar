@@ -1,0 +1,83 @@
+#include <zlib.h>
+
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string_view>
+#include <unistd.h>
+#include <vector>
+
+extern "C" int scar_rgba_png_idat_v1(const void*, int, int, void*,
+    void (*)(void*, const unsigned char*, unsigned int));
+
+namespace {
+constexpr int width = @WIDTH@, height = @HEIGHT@;
+constexpr unsigned char prefix[]{@PREFIX@};
+
+void bytes(std::FILE* file, const void* data, std::size_t length) {
+    if (length) std::fwrite(data, 1, length, file);
+}
+
+void be32(std::FILE* file, std::uint32_t value) {
+    const std::array<char, 4> fields{
+        static_cast<char>(value >> 24), static_cast<char>(value >> 16),
+        static_cast<char>(value >> 8), static_cast<char>(value)};
+    bytes(file, fields.data(), fields.size());
+}
+
+void chunk(std::FILE* file, const char* type, const unsigned char* data, unsigned length) {
+    be32(file, length);
+    bytes(file, type, 4);
+    bytes(file, data, length);
+    auto crc = crc32(0, reinterpret_cast<const Bytef*>(type), 4);
+    if (length) crc = crc32(crc, data, length);
+    be32(file, crc);
+}
+
+void idat(void* file, const unsigned char* data, unsigned length) {
+    chunk(static_cast<std::FILE*>(file), "IDAT", data, length);
+}
+
+void save(const char* filename, const void* rgba) {
+    const auto requested = std::filesystem::absolute(filename);
+    if (requested.filename().empty()) throw std::runtime_error("PNG output requires a file");
+    auto temporary = (requested.parent_path() / ".scar-png.XXXXXX").string();
+    const auto descriptor = ::mkstemp(temporary.data());
+    if (descriptor < 0) throw std::runtime_error("cannot stage PNG output");
+    const auto file = ::fdopen(descriptor, "wb");
+    if (!file) {
+        ::close(descriptor);
+        ::unlink(temporary.c_str());
+        throw std::runtime_error("cannot open PNG stream");
+    }
+    bytes(file, prefix, sizeof prefix);
+    const auto status = scar_rgba_png_idat_v1(rgba, width, height, file, idat);
+    chunk(file, "IEND", nullptr, 0);
+    const auto write_error = std::ferror(file);
+    const auto close_error = std::fclose(file);
+    const bool published = status == 0 && !write_error && close_error == 0 &&
+        ::link(temporary.c_str(), requested.c_str()) == 0;
+    ::unlink(temporary.c_str());
+    if (!published) throw std::runtime_error("cannot publish fresh PNG output");
+}
+}
+
+int main(int argc, char** argv) {
+    try {
+        if (argc != 3) throw std::runtime_error("expected RGBA_FILE OUTPUT_PNG");
+        if (std::string_view(zlibVersion()) != "@ZLIB_VERSION@")
+            throw std::runtime_error("retained zlib version differs");
+        std::vector<char> rgba(std::size_t{4} * width * height);
+        std::ifstream input(argv[1], std::ios::binary);
+        if (!input.read(rgba.data(), rgba.size()) || input.peek() != EOF)
+            throw std::runtime_error("expected the declared number of packed RGBA bytes");
+        save(argv[2], rgba.data());
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        return 1;
+    }
+}

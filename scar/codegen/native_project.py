@@ -23,13 +23,17 @@ def _cmake_arg(value):
 
 def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=(),
                          compile_options=(), link_options=(), libraries=(), runtime_dirs=(),
-                         install_dirs=(), install_launcher=False, preserve_install_permissions=False):
+                         install_dirs=(), install_launcher=False, preserve_install_permissions=False,
+                         with_c_provider=False):
     """Write the shared project format with profile-specific source and link inputs."""
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
         raise ValueError('expected a CMake target name')
-    lines = ['cmake_minimum_required(VERSION 3.20)', f'project({name} LANGUAGES CXX)',
+    languages = 'C CXX' if with_c_provider else 'CXX'
+    lines = ['cmake_minimum_required(VERSION 3.20)', f'project({name} LANGUAGES {languages})',
              f'add_executable({name} ' + ' '.join(map(_cmake_arg, sources)) + ')',
              f'set_target_properties({name} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)']
+    if with_c_provider:
+        lines.append(f'set_target_properties({name} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)')
     for command, args in (('target_include_directories', ('include/scar_generated', 'src', *include_dirs)),
                           ('target_compile_options', compile_options), ('target_link_options', link_options),
                           ('target_link_libraries', libraries)):

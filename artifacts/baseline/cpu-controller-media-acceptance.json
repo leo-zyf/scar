@@ -1,0 +1,106 @@
+{
+  "schema": "scar.cpu-controller-media-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "changed_field_paths": [
+      [
+        "self",
+        "F"
+      ],
+      [
+        "self",
+        "kappa"
+      ]
+    ],
+    "controller_ports_connected": 9,
+    "future_invariance_proven": false,
+    "heldout_raster_capture": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-png-heldout/result.json",
+      "sha256": "a2d12c006ec3dabeed7810c85164bbc76deb45c48687b4c3d51588a98730c674",
+      "size_bytes": 858
+    },
+    "primary_raster_capture": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-png-observation/result.json",
+      "sha256": "e7d9b9daa6ff6b85b768c25ebead1c5d851108bda9293b0eee1327dc9c56f49d",
+      "size_bytes": 862
+    },
+    "same_source_constructor_cold_replay_passed": true,
+    "startup_boundary_observations": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-startup-handoff/comparison.json",
+      "sha256": "345d685ab7e2901e637805a982624e0e4bba01056027183c275627e0eb7e1425",
+      "size_bytes": 17686
+    },
+    "startup_source": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-initialization-release.json",
+      "sha256": "a10e41130b9800832d5f6a7ac35a18f1a196b4a434e9c2ec2d07cc8df87914c6",
+      "size_bytes": 1111817
+    }
+  },
+  "stage2": {
+    "child_plan": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-child-plan.json",
+      "sha256": "b93f13ae5ec3cbdc3bd47c4d2e821f948227a791b5efe8f1da8d56d48f0b3753",
+      "size_bytes": 16052
+    },
+    "complete_entry_cost": null,
+    "default_backend": "NO_OP",
+    "mode": "CONDITIONAL_EXPLICIT_TRIAL_ONLY",
+    "original_source_arguments": 10,
+    "whole_entry_authorized": false
+  },
+  "stage3": {
+    "child_status_component": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-child-overlay-component.json",
+      "sha256": "fa328d6509801f92f44898223306cf1fde5e08ba758cdd2f1a0966840b03f544",
+      "size_bytes": 2015
+    },
+    "controller": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-child-entry/result.json",
+      "sha256": "0f0e75ba5e3297c60be90c82ebbfaf860e8869293371942c2825da2609cc8010",
+      "size_bytes": 35299
+    },
+    "cxx_standard": 20,
+    "png_encoder": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-rgba-png/result.json",
+      "sha256": "b2f52e760e1de28b5f54ebfc69e060474a63c1794160922510074dba3977eb5b",
+      "size_bytes": 7591
+    },
+    "png_encoder_upstream": "Pillow 12.3.0 ZipEncode.c",
+    "python_runtime_required": false,
+    "synchronous_native_media_provider": true,
+    "zlib_version": "1.3.2"
+  },
+  "verified": {
+    "child_outputs_depend_on_context": {
+      "single_cpu_bytes": 114412,
+      "wide_cpu_mask_bytes": 114645
+    },
+    "heldout_generated": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-rgba-png-relocated/heldout.png",
+      "sha256": "0e5d6f19b6d6a82066151dc7fe868ccffe78ec019975c656a4e43c8f03ed4bb0",
+      "size_bytes": 107781
+    },
+    "heldout_original": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-png-heldout/original/frame_000001.png",
+      "sha256": "0e5d6f19b6d6a82066151dc7fe868ccffe78ec019975c656a4e43c8f03ed4bb0",
+      "size_bytes": 107781
+    },
+    "independent_updated_raster_png_equal": true,
+    "integrated_validation": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-media-validation-release/result.json",
+      "sha256": "e96979ebddb8f5c590b92b06f361c60ab516ca5667dd40717823f7b7667af334",
+      "size_bytes": 2571
+    },
+    "native_constructor_lowered": false,
+    "native_rasterizer_lowered": false,
+    "numerical_steps": 1,
+    "paired_cpu_affinity": [
+      0
+    ],
+    "performance_measured": false,
+    "png_and_mp4_byte_equal": true,
+    "runtime_rgba_source": "ORIGINAL_RENDERER_OBSERVED_BUFFER",
+    "terminal_numeric_and_controller_state_equal": true
+  },
+  "workload": "Gray-Scott CPU"
+}

@@ -1,5 +1,11 @@
 # 当前状态
 
+`project-controller-initialization` 已把 Gray–Scott 的实际构造和初始化写入接到 9 个控制器输入。两次零步运行在原入口各取一次状态，所观测到的字段变化仅有 `F`、`kappa`，四个数组逐字节一致。依赖独立性与数值算子合同仍待验证，初始化保持原路径。
+
+`plan-controller-child` 从原 F4 和子进程证据绑定 8 个字面量、2 个运行时目录参数与 FFmpeg 可执行文件。`export-native-stateful-entry --controller-plan PLAN --child-plan CHILD` 从原调用点同步启动并等待。C++ 使用原继承配置和 `check=False` 规则，区分退出码、信号和启动失败。
+
+`export-native-rgba-png` 复用 Pillow 编码源码和同版本 zlib，由运行时 RGBA 重新压缩。原始帧及更新后的留出帧都逐字节一致。CPU 0 上，原程序和组合入口的一次数值更新、PNG、MP4 及最终数值状态通过对照。本次组合由验证夹具提供原渲染器的 RGBA。原生栅格化、启动数值生成及同边界 A/B 仍待完成。宽 CPU 掩码实测会改变视频字节，整应用默认仍为 `NO_OP`。见 `artifacts/baseline/cpu-controller-media-acceptance.json`。
+
 Gray–Scott 的输出路径继续分层接入。前端 `project-controller-effects` 将快照和渲染的实际调用接到原 F4 函数体，保留字段读写、原实参及默认值。单步 CPU 运行生成 PNG 和 MP4。`project-controller-children` 按同一次调用的作用域标记连接进程创建和等待，重放了 FFmpeg 的原始参数及退出状态 0。
 
 `observe-controller-console` 在真实入口记录两次内置 `print`，并与程序返回后的单次 53 字节 stdout 写入核对。`plan-controller-console` 允许在显式独占、空的常规文件 stdout 上试验原生实现，整入口默认 `NO_OP`。`export-native-stateful-entry --controller-plan PLAN --console-plan CONSOLE` 保留原结束发布点，运行时需要 `--exclusive-stdout`。

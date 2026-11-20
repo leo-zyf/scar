@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 
+from scar.codegen.native_controller_child import NativeControllerChild
 from scar.codegen.native_controller_console import NativeControllerConsole
 from scar.codegen.native_update_entry import NativeUpdate, prepare as prepare_update
 from scar.compiler.plan_native_controller import read_native_controller_plan
@@ -40,6 +41,7 @@ class NativeController:
     call: dict
     carried_index: int
     console: NativeControllerConsole | None = None
+    child: NativeControllerChild | None = None
 
     def members(self):
         members = {
@@ -49,6 +51,8 @@ class NativeController:
         }
         if self.console is not None:
             members.update(self.console.members())
+        if self.child is not None:
+            members.update(self.child.members())
         return members
 
     def artifacts(self):
@@ -64,10 +68,13 @@ class NativeController:
                     whole_program_translated=False, deployment_authorized=False)
         if self.console is not None:
             report['console'] = self.console.artifacts()
+        if self.child is not None:
+            report['child'] = self.child.artifacts()
+            report['child']['directory_argument'] = '.'.join(self.child.contract['directory_field_path'])
         return report
 
 
-def prepare(reference, metadata, ports, *, console_reference=None):
+def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -108,12 +115,17 @@ def prepare(reference, metadata, ports, *, console_reference=None):
     guards = tuple(('.'.join(path), expected) for path, expected in guard_paths.items())
     if any(slot['kind'] == 'FIELD' and tuple(slot['path']) in guard_paths for slot in plan['slots']):
         raise ValueError('controller and update dispatch guard require one common state slot')
-    console = None
+    if console_reference is not None and child_reference is not None:
+        raise ValueError('child and buffered console need a shared inherited stdout contract')
+    console = child = None
     if console_reference is not None:
         from scar.codegen.native_controller_console import prepare as prepare_console
         console = prepare_console(console_reference, controller_reference=reference, controller_plan=plan)
+    if child_reference is not None:
+        from scar.codegen.native_controller_child import prepare as prepare_child
+        child = prepare_child(child_reference, controller_reference=reference, controller_plan=plan)
     return NativeController(reference, plan, update, source, tuple(numeric_slots), tuple(extra_inputs),
-                            guards, tuple(outputs), site, carried_index, console)
+                            guards, tuple(outputs), site, carried_index, console, child)
 
 
 def render(controller, setup, selected):
@@ -143,12 +155,24 @@ def render(controller, setup, selected):
         for index in controller.update.scalar_reads)
     plan = controller.plan
     with_console = controller.console is not None
-    entry = _render('native_controller_arguments_v1.cpp.in', {
-        'SLOT_COUNT': len(plan['slots']),
-        'CONSOLE_ARGUMENT': '''    require(next < argc && std::string_view(argv[next]) == "--exclusive-stdout",
+    with_child = controller.child is not None
+    effect_arguments = ''
+    if with_console:
+        effect_arguments = '''    require(next < argc && std::string_view(argv[next]) == "--exclusive-stdout",
             "native console requires an explicit --exclusive-stdout effect contract");
     ++next;
-''' if with_console else '',
+'''
+    if with_child:
+        path = quote('.'.join(controller.child.contract['directory_field_path']))
+        effect_arguments = f'''    require(next + 2 < argc && std::string_view(argv[next]) == "--effect-directory" &&
+            std::string_view(argv[next+1]) == {path},
+            "native child requires its explicit original directory field binding");
+    const auto* child_directory = argv[next+2];
+    next += 3;
+'''
+    entry = _render('native_controller_arguments_v1.cpp.in', {
+        'SLOT_COUNT': len(plan['slots']),
+        'EFFECT_ARGUMENTS': effect_arguments,
         'CONTROLLER_INPUTS': ''.join(f'    controller_slots[{index}] = read({quote(path)});\n'
                                      for index, path in controller.extra_inputs),
         'GUARDS': ''.join(f'''    require(next + 2 < argc && std::string_view(argv[next]) == "--guard" &&
@@ -166,14 +190,20 @@ extern "C" int scar_array_copy_run_v1(const scar_array_v1*, std::uint64_t) noexc
 extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
 
 '''
-    if with_console:
-        declarations = '#include "native_controller_console.hpp"\n' + declarations
+    selected_overlay = 'console' if with_console else 'child' if with_child else None
     dispatch = '''        return context.effects->call(call, values, count, roots, root_count);'''
-    if with_console:
-        dispatch = '''        return context.console->dispatch(call, values, count, roots, root_count,
+    overlay_setup = overlay_member = overlay_pointer = ''
+    if selected_overlay is not None:
+        declarations = f'#include "native_controller_{selected_overlay}.hpp"\n' + declarations
+        overlay_type = f'Controller{selected_overlay.title()}Overlay'
+        overlay_argument = 'stdout' if with_console else 'child_directory'
+        overlay_setup = f'    {overlay_type} {selected_overlay}({overlay_argument});\n'
+        overlay_member = f'        {overlay_type}* {selected_overlay};\n'
+        overlay_pointer = f'&{selected_overlay}, '
+        dispatch = f'        return context.{selected_overlay}->dispatch(call, values, count, roots, root_count,\n' + '''
             [&](auto ordinal, auto* args, auto nargs, auto* arrays, auto narrays) {
                 return context.effects->call(ordinal, args, nargs, arrays, narrays);
-            });'''
+            });'''.lstrip('\n')
     body = _render('native_controller_entry_v1.cpp.in', {
         'IDENTITY': plan['plan_sha256'],
         'COPY_IDENTITY': controller.update.copies['plan_sha256'],
@@ -181,9 +211,9 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
         'PROVIDER_SETUP': setup,
         'PROVIDER_POINTER': '&provider' if selected else 'nullptr',
         'PROVIDER_COUNT': int(selected),
-        'CONSOLE_SETUP': '    ControllerConsoleOverlay console(stdout);\n' if with_console else '',
-        'CONSOLE_CONTEXT_MEMBER': '        ControllerConsoleOverlay* console;\n' if with_console else '',
-        'CONSOLE_POINTER': '&console, ' if with_console else '',
+        'OVERLAY_SETUP': overlay_setup,
+        'OVERLAY_CONTEXT_MEMBER': overlay_member,
+        'OVERLAY_POINTER': overlay_pointer,
         'EFFECT_DISPATCH': dispatch,
         'UPDATE_ORDINAL': controller.call['ordinal'],
         'UPDATE_ARITY': controller.call['positional_count'] + len(controller.call['keywords']),
