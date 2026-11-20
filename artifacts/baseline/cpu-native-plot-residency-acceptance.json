@@ -1,0 +1,234 @@
+{
+  "next": "Localize the frame-only regression at title, contour, AGG and PNG boundaries before considering promotion.",
+  "schema": "scar.cpu-native-plot-residency-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "baseline_diagnostic": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/v1-eight-frames-opens-cpu0/result.json",
+      "sha256": "e741843efb1cf44422b723873db4c23558ec22e1e1c5fbbd32ec25088228ce40",
+      "size_bytes": 6560
+    },
+    "current_z_and_time_remain_frame_inputs": true,
+    "lifetime_plan": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-plot-residency-qualified.json",
+      "sha256": "666589eec4d3d8e4bc2447273b55758a4d05c91672aad3fb3f9cd4299d7d116c",
+      "size_bytes": 22740
+    },
+    "retained_coordinate_layout_matches_original_profile": true,
+    "status": "OBSERVED"
+  },
+  "stage2": {
+    "default_backend": "NO_OP",
+    "individual_phase_costs_known": false,
+    "model": {
+      "duplicate_asset_full_read_bytes": 2574357,
+      "io_bytes_measured": false,
+      "performance_measured": false,
+      "removed_coordinate_copy_payload_bytes": 2113568,
+      "resident_payload_bytes": 1914903,
+      "resident_payload_excludes_library_and_decode_allocations": true,
+      "retained_coordinate_bytes": 1056784
+    },
+    "observed_decision": "KEEP_INCUMBENT",
+    "performance_scope": "TESTED_SAME_CPU_NATIVE_V1_V2_ONLY",
+    "status": "CONDITIONAL_EXPLICIT_TRIAL_WITH_IMMUTABLE_COMPILER_OWNED_PACKAGE"
+  },
+  "stage3": {
+    "abi_version": 2,
+    "application_source": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-resident-v2/src/main.cpp",
+      "sha256": "ca63b6c02bf2ef64f75ab6083895f38689b967d693faf71958ac8362c6e0aae3",
+      "size_bytes": 18759
+    },
+    "compiled_application": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-resident-v2/result.json",
+      "sha256": "2dd36490dc614e834ff4465f33d90cbb0b51370cd0ac98751410c96476fb3c0d",
+      "size_bytes": 54469
+    },
+    "compiled_executable": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-resident-v2/bin/scar_stateful_entry",
+      "sha256": "1533f0088848379febcf92bc8f458228b12ecf0fe91e5107e61b07711872fab8",
+      "size_bytes": 170928
+    },
+    "corrupted_asset_guard": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-resident-controller-guard.json",
+      "sha256": "d0b6b22076fc6e2f04eddfd1ad3844167fcc2361ea7a8e0adc740534a2d96a08",
+      "size_bytes": 380
+    },
+    "deployment_authorized": false,
+    "provider": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-plot-resident/result.json",
+      "sha256": "8bd157949264d7090507f9205cd0493d4902863e7cb56f659164525001a29b60",
+      "size_bytes": 161901
+    },
+    "python_runtime_required": false,
+    "requires_compiler_owned_immutable_bytes": true,
+    "resident_context_lifetime": "ONE_CONTROLLER",
+    "status": "IMPLEMENTED"
+  },
+  "validation": {
+    "benchmark": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/paired-clean-cpu0/result.json",
+      "sha256": "e6ea8483625e75afa32aea9f8916d23f6a1e2c5e079583a8ed88319e8c80d13f",
+      "size_bytes": 123674
+    },
+    "cases": [
+      {
+        "case": "eight_frames_no_movie",
+        "exact_stdout_and_published_outputs": true,
+        "median_ratio": 0.9812076143359636,
+        "median_resident_minus_existing_ns": 47049385,
+        "paired_cost_reduction_ns": [
+          -62343803,
+          -46240874,
+          -46585634,
+          -48574401,
+          -44523357
+        ],
+        "sample_ranges_overlap": false,
+        "scope": {
+          "dump_freq": 1,
+          "end_time": 4.5,
+          "expected_frames": 8,
+          "movie": false
+        },
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 2518935299,
+            "median_ns": 2503640881,
+            "min_ns": 2496501499,
+            "population_stdev_ns": 7505829.036212125,
+            "repetitions": 5
+          },
+          "original": {
+            "max_ns": 2462578197,
+            "median_ns": 2456591496,
+            "min_ns": 2447927098,
+            "population_stdev_ns": 4721482.012487799,
+            "repetitions": 5
+          }
+        },
+        "stderr_byte_equal_for_each_pair": true,
+        "strict_entry_selection": {
+          "challenger": "V2_RESIDENT",
+          "deployment_authorized": false,
+          "gain_fraction": -0.01915230313082546,
+          "incumbent": "V1_PER_FRAME",
+          "measurement_pairs": 5,
+          "metrics": {
+            "V1_PER_FRAME": {
+              "max_ns": 2462578197,
+              "median_ns": 2456591496,
+              "median_ns_twice": 4913182992,
+              "min_ns": 2447927098,
+              "samples_ns": [
+                2456591496,
+                2457400007,
+                2455143540,
+                2447927098,
+                2462578197
+              ]
+            },
+            "V2_RESIDENT": {
+              "max_ns": 2518935299,
+              "median_ns": 2503640881,
+              "median_ns_twice": 5007281762,
+              "min_ns": 2496501499,
+              "samples_ns": [
+                2518935299,
+                2503640881,
+                2501729174,
+                2496501499,
+                2507101554
+              ]
+            }
+          },
+          "observed_envelopes_separated": false,
+          "paired_improvement_ns": [
+            -62343803,
+            -46240874,
+            -46585634,
+            -48574401,
+            -44523357
+          ],
+          "policy": {
+            "minimum_gain": 0.05,
+            "strict_observed_separation": true
+          },
+          "reasons": [
+            "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+            "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+          ],
+          "schema": "scar.paired-entry-selection",
+          "schema_version": 1,
+          "verdict": "KEEP_INCUMBENT",
+          "warmup_pairs": 1
+        }
+      },
+      {
+        "case": "three_frames_movie",
+        "exact_stdout_and_published_outputs": true,
+        "median_ratio": 1.0105684615419155,
+        "median_resident_minus_existing_ns": -15317920,
+        "paired_cost_reduction_ns": [
+          15774944,
+          16592539,
+          16133886,
+          15411485,
+          15317920
+        ],
+        "sample_ranges_overlap": false,
+        "scope": {
+          "dump_freq": 1,
+          "end_time": 1.3,
+          "expected_frames": 3,
+          "movie": true
+        },
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 1450988146,
+            "median_ns": 1449399228,
+            "min_ns": 1448090062,
+            "population_stdev_ns": 979994.4978294522,
+            "repetitions": 5
+          },
+          "original": {
+            "max_ns": 1467122032,
+            "median_ns": 1464717148,
+            "min_ns": 1464413714,
+            "population_stdev_ns": 988589.4883641845,
+            "repetitions": 5
+          }
+        },
+        "stderr_byte_equal_for_each_pair": false
+      }
+    ],
+    "cpu_affinity": [
+      0
+    ],
+    "instrumented_timings_used": false,
+    "measured_pairs": 5,
+    "opens": [
+      {
+        "asset": "assets/plot/assets/font.ttf",
+        "file_bytes": 756072,
+        "resident_opens": 1,
+        "stateless_opens": 9
+      },
+      {
+        "asset": "assets/plot/assets/layout.ctt",
+        "file_bytes": 102047,
+        "resident_opens": 1,
+        "stateless_opens": 9
+      }
+    ],
+    "resident_diagnostic": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-plot-residency-benchmark/v2-eight-frames-opens-cpu0/result.json",
+      "sha256": "2be691f314490b3dabe714871e5c2b90993f8ad33ab1bbe425917846bada4aca",
+      "size_bytes": 6620
+    },
+    "status": "VERIFIED",
+    "warmup_pairs": 1
+  },
+  "whole_program_domain_verified": false
+}

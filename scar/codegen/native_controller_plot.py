@@ -10,8 +10,10 @@ from scar.ir.execution_recipe import read_artifact
 
 HEADER = 'include/scar_generated/native_controller_plot.hpp'
 ABI = 'include/scar_generated/native_live_plot_abi_v1.h'
+RESIDENT_ABI = 'include/scar_generated/native_live_plot_resident_abi_v2.h'
 ASSETS = Path('assets/plot')
 _SOURCE = Path(__file__).with_name('native_controller_plot_v1.hpp.in')
+_RESIDENT = Path(__file__).with_name('native_controller_plot_resident_v2.hpp.in')
 
 
 def _need(condition, reason):
@@ -52,7 +54,7 @@ def _coords(bindings, startup):
     return offsets
 
 
-def _provider_files(manifest, root):
+def _provider_files(manifest, root, *, resident=False):
     files = manifest['files']
     explicit = {manifest[key] for key in ('library', 'layout', 'font')}
     names = explicit | {name for name in files if name.startswith(('lib/', 'licenses/'))}
@@ -67,9 +69,37 @@ def _provider_files(manifest, root):
         out = str(ASSETS / path)
         package[out] = reference['schema'], read_artifact(
             {**reference, 'uri': str(root / path)}, json_document=False)
-        if not name.startswith('licenses/'):
+        if not name.startswith('licenses/') and (not resident or name not in (manifest['layout'], manifest['font'])):
             guards.append('{' + f'{_literal(out)}, {reference["size_bytes"]}, "{reference["sha256"]}"' + '}')
+    if resident:
+        abi = files[RESIDENT_ABI]
+        _need(abi['uri'] == RESIDENT_ABI, 'resident ABI header moved')
+        package[RESIDENT_ABI] = abi['schema'], read_artifact(
+            {**abi, 'uri': str(root / RESIDENT_ABI)}, json_document=False)
     return package, guards
+
+
+def _template(resident):
+    source = _SOURCE.read_text()
+    if not resident:
+        return source
+    from scar.codegen.native_live_plot import _between, _replace
+
+    source = _replace(source, '#include "native_live_plot_abi_v1.h"',
+                      '#include "native_live_plot_resident_abi_v2.h"')
+    source = _between(source, '    class Library {', '    const scar_array_v1 x_, y_;',
+                      _RESIDENT.read_text() + '\n')
+    source = _replace(source, '    std::filesystem::path layout_, font_;\n', '')
+    source = _replace(source, '''        const auto result = render_(&x_, &y_, &roots[@Z_ROOT@], time, layout_.c_str(), font_.c_str(),
+                                    path.c_str(), error.data(), error.size());''',
+                      '''        const auto result = library_.render(roots[@Z_ROOT@], time, path.c_str(),
+                                            error.data(), error.size());''')
+    return _replace(source, '''        layout_ = package / @LAYOUT@;
+        font_ = package / @FONT@;
+        render_ = library_.load((package / @LIBRARY@).c_str());''',
+                    '''        const auto layout = package / @LAYOUT@;
+        const auto font = package / @FONT@;
+        library_.load((package / @LIBRARY@).c_str(), x_, y_, layout.c_str(), font.c_str());''')
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,22 +109,32 @@ class NativeControllerPlot:
     binding: dict
     source: bytes
     files: dict
+    residency: dict | None = None
 
     def members(self):
-        return {HEADER: ('scar.cpp-header', self.source),
-                ABI: ('scar.cpp-header', Path(__file__).with_name('native_live_plot_abi_v1.h').read_bytes()),
-                **self.files}
+        members = {HEADER: ('scar.cpp-header', self.source), **self.files}
+        if self.residency is None:
+            members[ABI] = ('scar.cpp-header', Path(__file__).with_name('native_live_plot_abi_v1.h').read_bytes())
+        return members
 
     def artifacts(self):
-        return dict(planning=self.reference, provider=self.provider, binding=self.binding,
-                    materializes_runtime_paths_and_pixels=True, borrows_current_controller_roots=True,
-                    synchronous=True, external_effect_library_required=False, whole_entry_authorized=False,
-                    deployment_authorized=False, python_runtime_required=False)
+        report = dict(planning=self.reference, provider=self.provider, binding=self.binding,
+                      materializes_runtime_paths_and_pixels=True, borrows_current_controller_roots=True,
+                      synchronous=True, external_effect_library_required=False, whole_entry_authorized=False,
+                      deployment_authorized=False, python_runtime_required=False)
+        if self.residency is not None:
+            report['residency'] = self.residency
+        return report
 
 
-def prepare(reference, provider_ref, *, controller_plan, startup, console, child, ports):
+def prepare(reference, provider_ref, *, controller_plan, startup, console, child, ports, residency=None):
     from scar.analysis.source_controller_plot import check as check_plot
-    from scar.codegen.native_live_plot import check as check_provider
+
+    if residency is None:
+        from scar.codegen.native_live_plot import check as check_provider
+    else:
+        from scar.analysis.source_controller_plot_residency import check as check_residency
+        from scar.codegen.native_live_plot_resident import check as check_provider
 
     source = check_plot(reference['uri'])
     _need(source == read_artifact(reference) and source['startup'] == startup.reference,
@@ -103,6 +143,12 @@ def prepare(reference, provider_ref, *, controller_plan, startup, console, child
     provider = check_provider(root)
     _need(provider == read_artifact(provider_ref) and provider['python_runtime_required'] is False,
           'native provider receipt differs')
+    if residency is not None:
+        admitted = check_residency(residency['uri'])
+        _need(admitted == read_artifact(residency) and admitted['source_plot'] == reference
+              and admitted['source_provider'] == provider['source_provider'] and provider['abi_version'] == 2
+              and admitted['legality'] == 'CONDITIONAL_EXPLICIT_TRIAL_WITH_IMMUTABLE_COMPILER_OWNED_PACKAGE',
+              'resident provider must implement the exact admitted plot and stateless provider')
     layout = read_artifact(provider['sources']['layout'])
     _need(layout['contour_plan'] == source['contour'] and layout['title_plan'] == source['text'],
           'renderer must lower the exact original contour and title bindings')
@@ -133,7 +179,7 @@ def prepare(reference, provider_ref, *, controller_plan, startup, console, child
           and filename['format'] == f"0{filename['minimum_width']}d"
           and all(re.fullmatch(r'[A-Za-z0-9_.-]*', filename[key]) for key in ('prefix', 'suffix')),
           'unsupported original persistent counter or filename contract')
-    package, guards = _provider_files(provider, root)
+    package, guards = _provider_files(provider, root, resident=residency is not None)
     replacements = dict(
         ASSET_COUNT=len(guards), ASSETS=', '.join(guards), ROOT_COUNT=len(array_ports),
         INITIAL_COUNTER=counter['initial'], PLOT_ORDINAL=plot_site['ordinal'], PLOT_ARITY=2,
@@ -145,9 +191,11 @@ def prepare(reference, provider_ref, *, controller_plan, startup, console, child
            for axis, row in roots.items() for key, value in zip(('OFFSET', 'ROWS', 'COLS'),
                                                                 (row['offset'], *row['shape']), strict=True)},
     )
-    code = re.sub(r'@([A-Z_]+)@', lambda match: str(replacements[match[1]]), _SOURCE.read_text())
+    code = re.sub(r'@([A-Z_]+)@', lambda match: str(replacements[match[1]]), _template(residency is not None))
     binding = dict(plot_ordinal=plot_site['ordinal'], print_ordinal=console.site['ordinal'],
                    child_ordinal=child.site['ordinal'], time_argument=time_idx, step_argument=step_idx,
                    ordered_filename_counter=filename, read_only_roots=roots, current_root_ordinal=z_ordinal,
                    directory_argument=directory['path'], provider_members=sorted(package))
-    return NativeControllerPlot(reference, provider_ref, binding, code.encode(), package)
+    if residency is not None:
+        binding['provider_lifetime'] = 'ONE_CONTEXT_PER_CONTROLLER_WITH_LIVE_Z_AND_TIME'
+    return NativeControllerPlot(reference, provider_ref, binding, code.encode(), package, residency)

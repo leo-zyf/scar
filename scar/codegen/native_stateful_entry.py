@@ -197,16 +197,18 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
 
 
 def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None,
-           startup_plan=None, plot_plan=None, plot_provider=None, argv_plan=None):
+           startup_plan=None, plot_plan=None, plot_provider=None, plot_residency_plan=None, argv_plan=None):
     """Publish a CMake project and executable using the original replayed ABI code."""
     _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
-    _need(not any((console_plan, child_plan, startup_plan, plot_plan, plot_provider, argv_plan))
+    _need(not any((console_plan, child_plan, startup_plan, plot_plan, plot_provider, plot_residency_plan, argv_plan))
           or controller_plan is not None,
           'effect plan requires its original controller plan')
     _need(console_plan is None or child_plan is None or plot_plan is not None,
           'choose one effect plan until inherited stdout is qualified')
     _need(argv_plan is None or all((startup_plan, plot_plan, plot_provider, child_plan, console_plan)),
           'public arguments require the qualified startup and all native effects')
+    _need(plot_residency_plan is None or all((plot_plan, plot_provider, startup_plan, child_plan, console_plan)),
+          'resident plot requires the original live plot, residency and native effects proofs')
     out = Path(out).absolute()
     _need(out.parent.resolve(strict=True) == out.parent and not out.exists() and not out.is_symlink(),
           'fresh output directory in an existing canonical parent required')
@@ -216,14 +218,15 @@ def export(native, out, *, update_plan=None, controller_plan=None, console_plan=
         root = Path(temporary) / 'entry'
         report = _stage_entry(native, root, compiler, update_plan=update_plan, controller_plan=controller_plan,
                               console_plan=console_plan, child_plan=child_plan, startup_plan=startup_plan,
-                              plot_plan=plot_plan, plot_provider=plot_provider, argv_plan=argv_plan)
+                              plot_plan=plot_plan, plot_provider=plot_provider,
+                              plot_residency_plan=plot_residency_plan, argv_plan=argv_plan)
         root.rename(out)
     return report
 
 
 @replay_transaction()
 def _stage_entry(native, root, compiler, *, update_plan, controller_plan, console_plan, child_plan,
-                 startup_plan, plot_plan, plot_provider, argv_plan):
+                 startup_plan, plot_plan, plot_provider, plot_residency_plan, argv_plan):
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
@@ -232,7 +235,7 @@ def _stage_entry(native, root, compiler, *, update_plan, controller_plan, consol
     if controller_plan is not None:
         from scar.codegen.native_controller_entry import prepare
         from scar.compiler.plan_native_controller import SCHEMA as PLANNING
-        console_ref = child_ref = startup_ref = plot_ref = renderer_ref = argv_ref = None
+        console_ref = child_ref = startup_ref = plot_ref = renderer_ref = residency_ref = argv_ref = None
         if console_plan is not None:
             from scar.compiler.plan_controller_console import SCHEMA as CONSOLE
             console_ref = artifact_reference(Path(console_plan).resolve(strict=True), CONSOLE)
@@ -246,7 +249,13 @@ def _stage_entry(native, root, compiler, *, update_plan, controller_plan, consol
             from scar.analysis.source_controller_plot import SCHEMA as PLOT
             plot_ref = artifact_reference(Path(plot_plan).resolve(strict=True), PLOT)
         if plot_provider is not None:
-            from scar.codegen.native_live_plot import SCHEMA as RENDERER
+            if plot_residency_plan is None:
+                from scar.codegen.native_live_plot import SCHEMA as RENDERER
+            else:
+                from scar.analysis.source_controller_plot_residency import SCHEMA as RESIDENCY
+                from scar.codegen.native_live_plot_resident import SCHEMA as RENDERER
+
+                residency_ref = artifact_reference(Path(plot_residency_plan).resolve(strict=True), RESIDENCY)
             renderer_ref = artifact_reference(Path(plot_provider).resolve(strict=True) / 'result.json', RENDERER)
         if argv_plan is not None:
             from scar.analysis.source_controller_argv import SCHEMA as ARGV
@@ -254,7 +263,7 @@ def _stage_entry(native, root, compiler, *, update_plan, controller_plan, consol
         controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
                              metadata, ports, console_reference=console_ref, child_reference=child_ref,
                              startup_reference=startup_ref, plot_reference=plot_ref, plot_provider=renderer_ref,
-                             argv_reference=argv_ref)
+                             plot_residency=residency_ref, argv_reference=argv_ref)
         update = controller.update
     elif update_plan is not None:
         from scar.codegen.native_update_entry import prepare
@@ -311,6 +320,7 @@ def check(package):
                              startup_reference=startup['planning'] if startup is not None else None,
                              plot_reference=plot['planning'] if plot is not None else None,
                              plot_provider=plot['provider'] if plot is not None else None,
+                             plot_residency=plot.get('residency') if plot is not None else None,
                              argv_reference=public_argv['planning'] if public_argv is not None else None,
                              package=root)
         update = controller.update
@@ -356,17 +366,19 @@ def main(argv=None):
     plans = parser.add_mutually_exclusive_group()
     plans.add_argument('--update-plan')
     plans.add_argument('--controller-plan')
-    for name in ('console-plan', 'child-plan', 'startup-plan', 'plot-plan', 'plot-provider', 'argv-plan'):
+    for name in ('console-plan', 'child-plan', 'startup-plan', 'plot-plan', 'plot-provider',
+                 'plot-residency-plan', 'argv-plan'):
         parser.add_argument('--' + name)
     args = parser.parse_args(argv)
     if args.check and not (args.native or args.out or args.update_plan or args.controller_plan
                            or args.console_plan or args.child_plan or args.startup_plan or args.plot_plan
-                           or args.plot_provider or args.argv_plan):
+                           or args.plot_provider or args.plot_residency_plan or args.argv_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
         report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan,
                         console_plan=args.console_plan, child_plan=args.child_plan, startup_plan=args.startup_plan,
-                        plot_plan=args.plot_plan, plot_provider=args.plot_provider, argv_plan=args.argv_plan)
+                        plot_plan=args.plot_plan, plot_provider=args.plot_provider,
+                        plot_residency_plan=args.plot_residency_plan, argv_plan=args.argv_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

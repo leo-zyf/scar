@@ -1,0 +1,40 @@
+    class Library {
+        void* handle_ = nullptr;
+        void* context_ = nullptr;
+        decltype(&scar_live_plot_render_v2) render_ = nullptr;
+        decltype(&scar_live_plot_destroy_v2) destroy_ = nullptr;
+
+        template<class Signature>
+        Signature symbol(const char* name) {
+            const auto result = reinterpret_cast<Signature>(::dlsym(handle_, name));
+            if (!result) throw std::runtime_error(std::string("native resident plot ABI is missing ") + name);
+            return result;
+        }
+
+    public:
+        Library() = default;
+        Library(const Library&) = delete;
+        ~Library() {
+            if (context_) destroy_(context_);
+            if (handle_) ::dlclose(handle_);
+        }
+
+        void load(const char* path, const scar_array_v1& x, const scar_array_v1& y,
+                  const char* layout, const char* font) {
+            handle_ = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
+            if (!handle_) throw std::runtime_error(::dlerror());
+            const auto prepare = symbol<decltype(&scar_live_plot_prepare_v2)>("scar_live_plot_prepare_v2");
+            render_ = symbol<decltype(render_)>("scar_live_plot_render_v2");
+            destroy_ = symbol<decltype(destroy_)>("scar_live_plot_destroy_v2");
+            std::array<char, 512> error{};
+            if (prepare(&x, &y, layout, font, &context_, error.data(), error.size()) || !context_)
+                throw std::runtime_error(std::string("cannot prepare native plot context: ") + error.data());
+        }
+
+        int render(const scar_array_v1& z, double time, const char* png,
+                   char* error, std::uint64_t error_capacity) const {
+            return render_(context_, &z, time, png, error, error_capacity);
+        }
+    };
+
+    Library library_;

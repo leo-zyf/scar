@@ -157,7 +157,8 @@ def _prepare_public_argv(reference, controller_source, startup, child, plot, ext
 
 
 def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None,
-            startup_reference=None, plot_reference=None, plot_provider=None, argv_reference=None, package=None):
+            startup_reference=None, plot_reference=None, plot_provider=None, plot_residency=None,
+            argv_reference=None, package=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -200,7 +201,7 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
         raise ValueError('controller and update dispatch guard require one common state slot')
     if console_reference is not None and child_reference is not None and plot_reference is None:
         raise ValueError('child and buffered console need a shared inherited stdout contract')
-    if (plot_reference is not None or plot_provider is not None) and not all(
+    if any((plot_reference, plot_provider, plot_residency)) and not all(
             (plot_reference, plot_provider, startup_reference, console_reference, child_reference)):
         raise ValueError('native plot entry needs source, provider, startup, console and child proofs')
     console = child = startup = None
@@ -222,7 +223,7 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
         from scar.codegen.native_controller_plot import prepare as prepare_plot
 
         plot = prepare_plot(plot_reference, plot_provider, controller_plan=plan,
-                            startup=startup, console=console, child=child, ports=ports)
+                            startup=startup, console=console, child=child, ports=ports, residency=plot_residency)
     public_argv = None
     if argv_reference is not None:
         public_argv = _prepare_public_argv(argv_reference, report['source'],
