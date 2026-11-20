@@ -1,5 +1,11 @@
 # 当前状态
 
+Gray–Scott 的输出路径继续分层接入。前端 `project-controller-effects` 将快照和渲染的实际调用接到原 F4 函数体，保留字段读写、原实参及默认值。单步 CPU 运行生成 PNG 和 MP4。`project-controller-children` 按同一次调用的作用域标记连接进程创建和等待，重放了 FFmpeg 的原始参数及退出状态 0。
+
+`observe-controller-console` 在真实入口记录两次内置 `print`，并与程序返回后的单次 53 字节 stdout 写入核对。`plan-controller-console` 允许在显式独占、空的常规文件 stdout 上试验原生实现，整入口默认 `NO_OP`。`export-native-stateful-entry --controller-plan PLAN --console-plan CONSOLE` 保留原结束发布点，运行时需要 `--exclusive-stdout`。
+
+搬迁后的 C++20 入口在空环境完成 75 步。实际 stdout、最终数组及标量与原程序逐字节一致。其余效果继续由同步提供者接收，本次用记录探针验证快照边界。原生渲染、初始化和完整应用 A/B 仍待闭合。见 `artifacts/baseline/cpu-controller-output-acceptance.json`。
+
 CPU 原循环入口使用三份可独立重放的记录。前端 `project-native-controller` 从 F4 恢复共享循环、条件、动态步长与调用实参，循环体只存一份。中端 `plan-native-controller` 合并完整更新和同一次采集的效果顺序与资源约束。Gray–Scott 的 75 次完整更新及首帧写入可回接原调用端口。首帧位于第一次更新之前，字节校验只能作为验收依据。完整入口成本保留为 `UNKNOWN`，规划默认 `NO_OP`。
 
 `export-native-stateful-entry --controller-plan PLAN` 生成 C++20 项目。数组保持在原生进程内存，步长字段由共享循环实时更新。三个原外部调用点按源条件同步分发，入口要求显式提供与控制计划标识匹配的 C ABI 效果库。最终数组及标量状态在成功返回后发布。发布帧、日志及视频的实际提供者需另行验证。

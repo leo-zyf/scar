@@ -1,0 +1,119 @@
+{
+  "schema": "scar.cpu-controller-output-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "body_count": 2,
+    "body_projection": {
+      "bytes": 1278754,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-source-effects-release.json",
+      "sha256": "6770ca93d628f7a882fe390d3855fb17bf41f5297b63f3bab67cf1ba6a93d522"
+    },
+    "child_executable": "/usr/bin/ffmpeg",
+    "child_exit_status": 0,
+    "child_graph": {
+      "bytes": 8447,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-children-release.json",
+      "sha256": "6e6ec24e1369732280986678cc42b2a9d16e2cc82f0f991c8341865f7360a7c2"
+    },
+    "console_observation": {
+      "bytes": 6730,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-observation/result.json",
+      "sha256": "e250df27425d3a04a2b3267b30773517994b7e16bae4a5aa23af84590ea5638b"
+    },
+    "observed_effect_occurrences": [
+      2,
+      3,
+      1
+    ],
+    "original_console_calls": 2,
+    "original_movie_outputs": [
+      {
+        "bytes": 106172,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-movie-files/frame_000000.png",
+        "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18"
+      },
+      {
+        "bytes": 114412,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-movie-files/movie.mp4",
+        "sha256": "db9c70254264525b530838ab068ac1b4bf1e1efd34ea6b753278abbda2f364f6"
+      }
+    ],
+    "original_single_fd1_write_bytes": 53,
+    "outcome_semantics_proven": false,
+    "same_scope_spawn_and_wait": true
+  },
+  "stage2": {
+    "body_evidence_composition": {
+      "bytes": 6155,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-plan-with-opaque.json",
+      "sha256": "50a3b04a82f49cd4e109b93c388b8911e1243713cad29347407e3feccd5a7c9c"
+    },
+    "console_contract": {
+      "append_lf": true,
+      "ascii_only": true,
+      "destination_fd": 1,
+      "destination_kind": "REGULAR_FILE",
+      "encoding": "UTF-8",
+      "errors": "surrogateescape",
+      "exclusive_destination_contract_required": true,
+      "max_buffer_bytes": 53,
+      "publication_horizon": "NORMAL_PROCESS_EXIT",
+      "runtime_guards": [
+        "MATCH_ORIGINAL_SOURCE_CALL_AND_BUILTIN_PRINT_CONTRACT",
+        "EXACT_ONE_ASCII_STRING_AND_DEFAULT_NEWLINE_PER_ORIGINAL_CALL",
+        "EXCLUSIVE_FRESH_ORIGINAL_KIND_STDOUT_THROUGH_NORMAL_PROCESS_EXIT",
+        "REJECT_BEFORE_PUBLICATION_IF_OWNED_BUFFER_WOULD_EXCEED_OBSERVED_DOMAIN",
+        "PUBLISH_ONLY_AFTER_REMAINING_SYNCHRONOUS_EFFECTS_AND_SUCCESS_OUTPUT_COMMITS"
+      ]
+    },
+    "current_cost_status": "UNKNOWN",
+    "default_backend": "NO_OP",
+    "plan": {
+      "bytes": 5511,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-plan.json",
+      "sha256": "65021e8ce26b6cfc85796eda710e6facbc263b284036dc66c95ff97c0fb05b18"
+    },
+    "status": "CONDITIONAL_EXPLICIT_TRIAL_ONLY",
+    "whole_entry_authorized": false
+  },
+  "stage3": {
+    "cold_package_replayed": true,
+    "cxx_standard": 20,
+    "linked_libraries": [
+      "libstdc++.so.6",
+      "libm.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6"
+    ],
+    "native_console_source": {
+      "bytes": 3407,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-entry/include/scar_generated/native_controller_console.hpp",
+      "sha256": "29006f516766a0acf38015f011ec06c58395fc88b9cdb12a3fa87291cf65c366"
+    },
+    "package": {
+      "bytes": 34222,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-entry/result.json",
+      "sha256": "e0b67a64233de729eed60b9968694789bce130c3f259335d5bddc597906bf90c"
+    },
+    "python_runtime_required": false,
+    "whole_program_translated": false
+  },
+  "verified": {
+    "complete_entry_performance_measured": false,
+    "missing_exclusivity_declined_before_effects": true,
+    "moved_executable_empty_environment": true,
+    "native_png_or_mp4_rendered": false,
+    "native_steps": 75,
+    "other_effects_verified_with_trace_probe": true,
+    "report": {
+      "bytes": 2980,
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-console-validation/result.json",
+      "sha256": "eec9b40f8eefe040505aa3cbc994dce4bf212826173c3d8be3cf8f64384f58c9"
+    },
+    "stdout_byte_identical": true,
+    "stdout_bytes": 53,
+    "terminal_array_bytes_identical": true,
+    "terminal_controller_state_identical": true
+  },
+  "workload": "Gray-Scott CPU"
+}

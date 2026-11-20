@@ -203,7 +203,7 @@ void run(int argc, char* argv[]) {
     }
 @UPDATE_OUTPUT@    for (auto& output : pending) output->publish();
     for (auto& output : pending) output->keep();
-}
+@FINALIZE_EFFECTS@}
 }
 
 int main(int argc, char* argv[]) {

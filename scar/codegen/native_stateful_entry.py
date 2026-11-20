@@ -95,6 +95,7 @@ def _render(ports, metadata, provider, update=None, controller=None):
     declarations.update(
         PROVIDER_DECLARATIONS='scar_provider_v1 scar_numpy_power_provider();\n\n' if selected else '',
         PROVIDER_COUNT=str(int(selected)), UPDATE_DECLARATIONS='', UPDATE_OUTPUT_COUNT='', UPDATE_OUTPUT='',
+        FINALIZE_EFFECTS='',
         ENTRY_ARGUMENTS='    const auto arguments = bind(argc, argv);',
         RUN_BODY=setup + f'''    const auto status = table->run(descriptors.data(), descriptors.size(),
                                    arguments.values.data(), arguments.values.size(), {provider_args});
@@ -169,23 +170,30 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
         report['controller'] = controller.artifacts()
         report['status'] = 'SOURCE_CONTROLLED_NATIVE_ENTRY_EXPERIMENT'
         report['effects'] = 'SYNCHRONOUS_NATIVE_EFFECT_CALLBACKS_THEN_FINAL_ROOT_AND_STATE_FILES'
+        if controller.console is not None:
+            report['effects'] += '_THEN_BUFFERED_CONSOLE_PUBLICATION'
     return report
 
 
 @replay_transaction()
-def export(native, out, *, update_plan=None, controller_plan=None):
+def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None):
     """Publish a CMake project and executable using the original replayed ABI code."""
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
     _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
+    _need(console_plan is None or controller_plan is not None, 'console plan requires its original controller plan')
     from scar.codegen.native_update_entry import COPY_SOURCE
     update = controller = None
     if controller_plan is not None:
         from scar.codegen.native_controller_entry import prepare
         from scar.compiler.plan_native_controller import SCHEMA as PLANNING
+        console_ref = None
+        if console_plan is not None:
+            from scar.compiler.plan_controller_console import SCHEMA as CONSOLE
+            console_ref = artifact_reference(Path(console_plan).resolve(strict=True), CONSOLE)
         controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
-                             metadata, ports)
+                             metadata, ports, console_reference=console_ref)
         update = controller.update
     elif update_plan is not None:
         from scar.codegen.native_update_entry import prepare
@@ -221,7 +229,9 @@ def export(native, out, *, update_plan=None, controller_plan=None):
               'native executable has a non-host dependency')
         report = _report(reference, metadata, plan, ports, root, provider, update, controller)
         (root / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
-        check(root)
+        # All inputs were cold-admitted once in this transaction. Compare the
+        # emitted package to those inputs without rerunning the planning graph.
+        _verify_package(root, report, reference, metadata, plan, ports, original, provider, update, controller)
         root.rename(out)
     return report
 
@@ -236,13 +246,22 @@ def check(package):
     update = controller = None
     if 'controller' in original:
         from scar.codegen.native_controller_entry import prepare
-        controller = prepare(original['controller']['planning'], metadata, ports)
+        console = original['controller'].get('console')
+        controller = prepare(original['controller']['planning'], metadata, ports,
+                             console_reference=console['planning'] if console is not None else None)
         update = controller.update
-        for name, (_, payload) in controller.members().items():
-            _need((root / name).read_bytes() == payload, 'original controller member differs: ' + name)
     elif 'update' in original:
         from scar.codegen.native_update_entry import prepare
         update = prepare(original['update']['planning'], metadata, ports)
+    _verify_package(root, original, reference, metadata, plan, ports, native, provider, update, controller)
+    return original
+
+
+def _verify_package(root, original, reference, metadata, plan, ports, native, provider, update, controller):
+    _need(read_artifact(_local(root, 'result.json', SCHEMA)) == original, 'written package receipt differs')
+    if controller is not None:
+        for name, (_, payload) in controller.members().items():
+            _need((root / name).read_bytes() == payload, 'original controller member differs: ' + name)
     if update is not None:
         from scar.codegen.native_update_entry import COPY_SOURCE
         _need((root / COPY_SOURCE).read_bytes() == update.copy_source, 'original array copy source differs')
@@ -263,7 +282,6 @@ def check(package):
         _project(Path(temporary), plan, provider, update, controller)
         _need((root / 'CMakeLists.txt').read_bytes() == (Path(temporary) / 'CMakeLists.txt').read_bytes(),
               'CMake project differs from replay')
-    return original
 
 
 def main(argv=None):
@@ -274,11 +292,13 @@ def main(argv=None):
     plans = parser.add_mutually_exclusive_group()
     plans.add_argument('--update-plan')
     plans.add_argument('--controller-plan')
+    parser.add_argument('--console-plan')
     args = parser.parse_args(argv)
-    if args.check and not (args.native or args.out or args.update_plan or args.controller_plan):
+    if args.check and not (args.native or args.out or args.update_plan or args.controller_plan or args.console_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
-        report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan)
+        report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan,
+                        console_plan=args.console_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

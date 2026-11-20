@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 
+from scar.codegen.native_controller_console import NativeControllerConsole
 from scar.codegen.native_update_entry import NativeUpdate, prepare as prepare_update
 from scar.compiler.plan_native_controller import read_native_controller_plan
 from scar.ir.execution_recipe import read_artifact
@@ -38,17 +39,21 @@ class NativeController:
     outputs: tuple[int, ...]
     call: dict
     carried_index: int
+    console: NativeControllerConsole | None = None
 
     def members(self):
-        return {
+        members = {
             SOURCE: ('scar.cpp-source', self.source),
             ABI: ('scar.cpp-header', Path(__file__).with_name('controller_effect_abi_v1.h').read_bytes()),
             LOADER: ('scar.cpp-header', Path(__file__).with_name('native_controller_effects.hpp.in').read_bytes()),
         }
+        if self.console is not None:
+            members.update(self.console.members())
+        return members
 
     def artifacts(self):
         summary = self.plan
-        return dict(planning=self.reference, controller_sha256=summary['plan_sha256'],
+        report = dict(planning=self.reference, controller_sha256=summary['plan_sha256'],
                     effects=summary['effect_sites'], update=self.call,
                     guard_inputs=[dict(argument=path, expected=value) for path, value in self.guards],
                     scalar_inputs=[dict(slot=i, argument=path) for i, path in self.extra_inputs],
@@ -57,9 +62,12 @@ class NativeController:
                     state_encoding='LE_RECORDS_U32_KIND_U32_RESERVED_I64_INTEGER_F64_FLOATING',
                     opaque_effect_provider='REQUIRED_EXPLICIT_NATIVE_ABI_V1',
                     whole_program_translated=False, deployment_authorized=False)
+        if self.console is not None:
+            report['console'] = self.console.artifacts()
+        return report
 
 
-def prepare(reference, metadata, ports):
+def prepare(reference, metadata, ports, *, console_reference=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -100,8 +108,12 @@ def prepare(reference, metadata, ports):
     guards = tuple(('.'.join(path), expected) for path, expected in guard_paths.items())
     if any(slot['kind'] == 'FIELD' and tuple(slot['path']) in guard_paths for slot in plan['slots']):
         raise ValueError('controller and update dispatch guard require one common state slot')
+    console = None
+    if console_reference is not None:
+        from scar.codegen.native_controller_console import prepare as prepare_console
+        console = prepare_console(console_reference, controller_reference=reference, controller_plan=plan)
     return NativeController(reference, plan, update, source, tuple(numeric_slots), tuple(extra_inputs),
-                            guards, tuple(outputs), site, carried_index)
+                            guards, tuple(outputs), site, carried_index, console)
 
 
 def render(controller, setup, selected):
@@ -130,8 +142,13 @@ def render(controller, setup, selected):
         f'        if (arguments.values[{index}].integer) return -2;'
         for index in controller.update.scalar_reads)
     plan = controller.plan
+    with_console = controller.console is not None
     entry = _render('native_controller_arguments_v1.cpp.in', {
         'SLOT_COUNT': len(plan['slots']),
+        'CONSOLE_ARGUMENT': '''    require(next < argc && std::string_view(argv[next]) == "--exclusive-stdout",
+            "native console requires an explicit --exclusive-stdout effect contract");
+    ++next;
+''' if with_console else '',
         'CONTROLLER_INPUTS': ''.join(f'    controller_slots[{index}] = read({quote(path)});\n'
                                      for index, path in controller.extra_inputs),
         'GUARDS': ''.join(f'''    require(next + 2 < argc && std::string_view(argv[next]) == "--guard" &&
@@ -149,6 +166,14 @@ extern "C" int scar_array_copy_run_v1(const scar_array_v1*, std::uint64_t) noexc
 extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
 
 '''
+    if with_console:
+        declarations = '#include "native_controller_console.hpp"\n' + declarations
+    dispatch = '''        return context.effects->call(call, values, count, roots, root_count);'''
+    if with_console:
+        dispatch = '''        return context.console->dispatch(call, values, count, roots, root_count,
+            [&](auto ordinal, auto* args, auto nargs, auto* arrays, auto narrays) {
+                return context.effects->call(ordinal, args, nargs, arrays, narrays);
+            });'''
     body = _render('native_controller_entry_v1.cpp.in', {
         'IDENTITY': plan['plan_sha256'],
         'COPY_IDENTITY': controller.update.copies['plan_sha256'],
@@ -156,6 +181,10 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
         'PROVIDER_SETUP': setup,
         'PROVIDER_POINTER': '&provider' if selected else 'nullptr',
         'PROVIDER_COUNT': int(selected),
+        'CONSOLE_SETUP': '    ControllerConsoleOverlay console(stdout);\n' if with_console else '',
+        'CONSOLE_CONTEXT_MEMBER': '        ControllerConsoleOverlay* console;\n' if with_console else '',
+        'CONSOLE_POINTER': '&console, ' if with_console else '',
+        'EFFECT_DISPATCH': dispatch,
         'UPDATE_ORDINAL': controller.call['ordinal'],
         'UPDATE_ARITY': controller.call['positional_count'] + len(controller.call['keywords']),
         'SLOT_COUNT': len(plan['slots']),
@@ -176,5 +205,7 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
     controller_output->write(state_words);
     pending.push_back(std::move(controller_output));
 '''
+    finalize = '''    require(console.finish() == 0, "native console declined final stdout publication");
+''' if with_console else ''
     return dict(UPDATE_DECLARATIONS=declarations, ENTRY_ARGUMENTS=entry, RUN_BODY=body,
-                UPDATE_OUTPUT_COUNT=' + 1', UPDATE_OUTPUT=output)
+                UPDATE_OUTPUT_COUNT=' + 1', UPDATE_OUTPUT=output, FINALIZE_EFFECTS=finalize)

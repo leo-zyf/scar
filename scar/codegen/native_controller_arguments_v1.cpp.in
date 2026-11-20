@@ -10,7 +10,7 @@
     const auto controller_out = fs::canonical(requested.parent_path()) / requested.filename();
     std::array<scar_controller_value_v1, @SLOT_COUNT@> controller_slots{};
     int next = 7;
-    const auto read = [&](std::string_view path) -> scar_controller_value_v1 {
+@CONSOLE_ARGUMENT@    const auto read = [&](std::string_view path) -> scar_controller_value_v1 {
         require(next + 2 < argc && std::string_view(argv[next+1]) == path,
                 "expected a typed scalar controller input in declared order");
         const std::string_view flag = argv[next], value = argv[next+2];
