@@ -19,7 +19,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace {
+@PROVIDER_DECLARATIONS@@UPDATE_DECLARATIONS@namespace {
 namespace fs = std::filesystem;
 static_assert(std::endian::native == std::endian::little &&
               sizeof(double) == 8 && std::numeric_limits<double>::is_iec559 &&
@@ -177,11 +177,11 @@ public:
 };
 
 void run(int argc, char* argv[]) {
-    const auto arguments = bind(argc, argv);
+@ENTRY_ARGUMENTS@
     const auto* table = scar_get_stateful_table_v1();
     require(table && table->run && table->abi_version == 1 && table->struct_size == sizeof(*table) &&
             table->array_count == arrays.size() && table->scalar_count == scalars.size() &&
-            table->provider_count == 0 && table->region_sha256 && table->plan_sha256 && table->contract_sha256 &&
+            table->provider_count == @PROVIDER_COUNT@ && table->region_sha256 && table->plan_sha256 && table->contract_sha256 &&
             table->region_sha256 == std::string_view("@REGION_SHA256@") &&
             table->plan_sha256 == std::string_view("@PLAN_SHA256@") &&
             table->contract_sha256 == std::string_view("@CONTRACT_SHA256@"), "native table identity differs");
@@ -191,19 +191,17 @@ void run(int argc, char* argv[]) {
     for (std::size_t i = 0; i < arrays.size(); ++i) {
         descriptors[i] = load(arguments.inputs[i], arrays[i], payloads[i]);
     }
-    const auto status = table->run(descriptors.data(), descriptors.size(),
-                                   arguments.values.data(), arguments.values.size(), nullptr, 0);
-    if (status != 0) throw std::runtime_error("native stateful region declined: " + std::to_string(status));
+@RUN_BODY@
 
     std::vector<std::unique_ptr<PendingFile>> pending;
-    pending.reserve(output_count);
+    pending.reserve(output_count@UPDATE_OUTPUT_COUNT@);
     for (std::size_t i = 0; i < arrays.size(); ++i) {
         if (!arrays[i].output) continue;
         auto output = std::make_unique<PendingFile>(arguments.outputs[i]);
         output->write(payloads[i]);
         pending.push_back(std::move(output));
     }
-    for (auto& output : pending) output->publish();
+@UPDATE_OUTPUT@    for (auto& output : pending) output->publish();
     for (auto& output : pending) output->keep();
 }
 }
