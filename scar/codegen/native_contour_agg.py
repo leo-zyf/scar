@@ -17,6 +17,7 @@ SCHEMA = 'scar.native-contour-agg'
 _TARGET = 'scar_contour_agg'
 _EXE = 'bin/' + _TARGET
 _SOURCES = ('src/main.cpp', 'src/contour_scene.cpp', 'vendor/contour_generator.cpp', 'vendor/mpl2014.cpp')
+_TEMPLATES = Path(__file__).parent
 
 
 def _require(ok, detail):
@@ -80,10 +81,7 @@ def _template(sample, observation):
     return bytes(output), removed, roots
 
 
-def _prepare(plan_ref, provider_ref):
-    plan = read_contour_scene_plan(plan_ref['uri'])
-    _require(plan == read_artifact(plan_ref) and plan['status'] == 'CONDITIONAL_EXPLICIT_TRIAL_ONLY'
-             and plan['whole_entry_authorized'] is False, 'requires the exact scoped contour scene plan')
+def contour_members(provider_ref):
     provider_path = Path(provider_ref['uri']).parent
     provider = native_contour_scene.check(provider_path)
     _require(provider == read_artifact(provider_ref) and provider['algorithm'] == 'mpl2014',
@@ -93,7 +91,19 @@ def _prepare(plan_ref, provider_ref):
         if name not in ('CMakeLists.txt', native_contour_scene._EXECUTABLE, 'src/main.cpp'):
             _require(reference['uri'] == name, 'native contour member path differs')
             members[name] = read_artifact({**reference, 'uri': str(provider_path / name)}, json_document=False)
-    members['src/main.cpp'] = Path(__file__).with_name('native_contour_agg_v1.cpp.in').read_bytes()
+    return provider, members
+
+
+def _prepare(plan_ref, provider_ref):
+    plan = read_contour_scene_plan(plan_ref['uri'])
+    _require(plan == read_artifact(plan_ref) and plan['status'] == 'CONDITIONAL_EXPLICIT_TRIAL_ONLY'
+             and plan['whole_entry_authorized'] is False, 'requires the exact scoped contour scene plan')
+    provider, members = contour_members(provider_ref)
+    members['src/main.cpp'] = (
+        (_TEMPLATES / 'native_contour_agg_io.hpp.in').read_bytes()
+        + b'\n'
+        + (_TEMPLATES / 'native_contour_agg_v1.cpp.in').read_bytes()
+    )
     observation = read_artifact(plan['observation'])
     samples = []
     for index, sample in enumerate(plan['samples']):
@@ -172,16 +182,31 @@ def check(package):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('check', 'plan', 'provider', 'out'):
+    for name in ('check', 'plan', 'provider', 'out', 'style-observation', 'style-provider', 'title-plan'):
         parser.add_argument('--' + name)
     args = parser.parse_args(argv)
     if args.check:
-        report = check(args.check)
+        result = Path(args.check) / 'result.json'
+        if json.loads(result.read_bytes())['schema'] == SCHEMA:
+            report = check(args.check)
+        else:
+            from scar.codegen import native_contour_agg_live
+
+            report = native_contour_agg_live.check(args.check)
     elif args.plan and args.provider and args.out:
-        report = export(args.plan, args.provider, args.out)
+        if args.style_observation and args.style_provider:
+            from scar.codegen import native_contour_agg_live
+
+            report = native_contour_agg_live.export(args.plan, args.provider, args.style_observation,
+                                                    args.style_provider, args.out, title_plan=args.title_plan)
+        elif args.style_observation or args.style_provider or args.title_plan:
+            parser.error('live styles require both --style-observation and --style-provider')
+        else:
+            report = export(args.plan, args.provider, args.out)
     else:
         parser.error('provide --check PACKAGE or --plan PLAN --provider PACKAGE --out OUTPUT')
-    print(json.dumps(dict(samples=len(report['samples']), exact_draw_tapes=True)))
+    print(json.dumps(dict(samples=len(report.get('samples', report.get('scenes', ()))),
+                          exact_draw_tapes=True)))
 
 
 if __name__ == '__main__':

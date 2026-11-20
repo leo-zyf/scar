@@ -1,0 +1,163 @@
+// Adapted from Matplotlib 3.11.2 ticker.py, transforms.py, contour.py and colors.py.
+// The original license is installed with the generated provider.
+#include "contour_style.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cfenv>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+namespace scar::contour {
+namespace {
+
+static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559);
+constexpr std::size_t max_ticks = 16384;
+
+void require(bool valid, const char* reason) {
+    if (!valid) throw std::invalid_argument(reason);
+}
+
+std::pair<double, double> nonsingular(double low, double high) {
+    // transforms._nonsingular with the MaxNLocator arguments.
+    constexpr double expander = 1e-13;
+    constexpr double tiny = 1e-14;
+    const auto maximum = std::max(std::abs(low), std::abs(high));
+    if (maximum < (1e6 / tiny) * std::numeric_limits<double>::min())
+        return {-expander, expander};
+    if (high - low <= maximum * tiny) {
+        low -= expander * std::abs(low);
+        high += expander * std::abs(high);
+    }
+    return {low, high};
+}
+
+std::pair<double, double> divide_with_remainder(double value, double step) {
+    // NumPy's float divmod and floor_divide share this rounding sequence.
+    double mod = std::fmod(value, step);
+    double div = (value - mod) / step;
+    if (mod != 0.0) {
+        if (mod < 0.0) {
+            mod += step;
+            div -= 1.0;
+        }
+    } else {
+        mod = 0.0;
+    }
+    if (div == 0.0)
+        return {std::copysign(0.0, value / step), mod};
+    double floored = std::floor(div);
+    if (div - floored > 0.5) floored += 1.0;
+    return {floored, mod};
+}
+
+double edge_tick(double value, double step, bool upper) {
+    constexpr double tolerance = 1e-10;
+    const auto [quotient, remainder] = divide_with_remainder(value, step);
+    if (upper) return remainder / step < tolerance ? quotient : quotient + 1.0;
+    return std::abs(remainder / step - 1.0) < tolerance ? quotient + 1.0 : quotient;
+}
+
+std::vector<double> raw_ticks(double vmin, double vmax, const StyleParameters& parameters) {
+    // ticker.scale_range and MaxNLocator._staircase, with offset==0 guarded.
+    const double range = std::abs(vmax - vmin);
+    const double midpoint = (vmax + vmin) / 2.0;
+    const double unit = range / static_cast<double>(parameters.nbins);
+    require(std::isfinite(range) && unit > 0.0 && std::abs(midpoint) / range < 100.0,
+            "contour locator range requires an unsupported nonzero offset or scale");
+    const double scale = std::pow(10.0, std::floor(std::log10(unit)));
+    require(std::isnormal(scale), "contour locator scale is outside supported binary64 range");
+    constexpr std::array<double, 10> defaults{1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10};
+    std::array<double, 2 * defaults.size()> steps{};
+    for (std::size_t i = 0; i + 1 < defaults.size(); ++i) steps[i] = (0.1 * defaults[i]) * scale;
+    for (std::size_t i = 0; i < defaults.size(); ++i) steps[defaults.size() - 1 + i] = defaults[i] * scale;
+    steps.back() = (10.0 * defaults[1]) * scale;
+
+    const auto first = std::lower_bound(steps.begin(), steps.end(), unit);
+    auto current = first == steps.end() ? steps.end() - 1 : first;
+    std::vector<double> ticks;
+    for (;;) {
+        const double step = *current;
+        require(std::isnormal(step), "contour locator step is outside supported binary64 range");
+        const double best_vmin = divide_with_remainder(vmin, step).first * step;
+        const double low = edge_tick(vmin - best_vmin, step, false);
+        const double high = edge_tick(vmax - best_vmin, step, true);
+        const double size = high + 1.0 - low;
+        require(size > 0.0 && size <= max_ticks && std::abs(low) < 0x1p52 && std::abs(high) < 0x1p52,
+                "contour locator produces an unsupported tick allocation");
+        ticks.resize(static_cast<std::size_t>(size));
+        std::size_t in_range = 0;
+        for (std::size_t i = 0; i < ticks.size(); ++i) {
+            // numpy.arange followed by separate multiply and add arrays.
+            const double index = i == 0 ? low : low + static_cast<double>(i);
+            const double tick = index * step + best_vmin;
+            ticks[i] = tick + 0.0;
+            if (vmin <= tick && tick <= vmax) ++in_range;
+        }
+        if (in_range >= parameters.min_n_ticks || current == steps.begin()) return ticks;
+        --current;
+    }
+}
+
+std::vector<double> autolev(double zmin, double zmax, const StyleParameters& parameters) {
+    const auto [vmin, vmax] = nonsingular(zmin, zmax);
+    const auto ticks = raw_ticks(vmin, vmax, parameters);
+    std::size_t start = 0, end = ticks.size();
+    for (std::size_t i = 0; i < ticks.size(); ++i) {
+        if (ticks[i] < zmin) start = i;
+        if (ticks[i] > zmax) {
+            end = i + 1;
+            break;
+        }
+    }
+    if (end - start < 3) {
+        start = 0;
+        end = ticks.size();
+    }
+    return {ticks.begin() + start, ticks.begin() + end};
+}
+
+Rgba colormap(double normalized, std::span<const Rgba> lut) {
+    const std::size_t count = lut.size() - 3;
+    double index = normalized * static_cast<double>(count);
+    if (index == static_cast<double>(count)) index = static_cast<double>(count - 1);
+    if (index < 0.0) return lut[count];
+    if (index >= count) return lut[count + 1];
+    if (std::isnan(index)) return lut[count + 2];
+    return lut[static_cast<std::size_t>(index)];
+}
+
+}
+
+ContourStyle make_style(double zmin, double zmax, const StyleParameters& parameters,
+                        std::span<const Rgba> lut) {
+    require(std::fegetround() == FE_TONEAREST && std::isfinite(zmin) && std::isfinite(zmax) && zmin <= zmax,
+            "unsupported floating-point environment or contour data range");
+    require(parameters.nbins >= 1 && parameters.nbins <= 1000 &&
+            parameters.min_n_ticks >= 1 && parameters.min_n_ticks <= parameters.nbins + 1,
+            "unsupported MaxNLocator parameter limits");
+    require(lut.size() > 3 && lut.size() <= max_ticks, "unsupported contour colormap table");
+    ContourStyle style;
+    style.levels = autolev(zmin, zmax, parameters);
+    require(style.levels.size() >= 2, "filled contours require at least two levels");
+    style.contour_levels = style.levels;
+    if (zmin == style.contour_levels.front()) style.contour_levels.front() -= 1.0;
+    const double minimum = style.levels.front(), maximum = style.levels.back();
+    const double width = maximum - minimum;
+    require(std::isfinite(width) && width > 0.0, "contour normalization range differs");
+    const auto n = style.levels.size() - 1;
+    style.layers.reserve(n);
+    style.colors.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        require(style.levels[i] < style.levels[i+1], "contour levels are not strictly increasing");
+        const auto middle = 0.5 * (style.levels[i] + style.levels[i + 1]);
+        require(std::isfinite(middle), "contour layer midpoint exceeds binary64 range");
+        style.layers.push_back(middle);
+        style.colors.push_back(colormap((middle - minimum) / width, lut));
+    }
+    return style;
+}
+
+}

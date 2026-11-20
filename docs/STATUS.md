@@ -1,5 +1,9 @@
 # 当前状态
 
+`capture-agg-text --with-contour-style` 从同一次原始运行把输入数组、等值定位、归一化、调色表、格式化标量及字体接到原 AGG 槽。源码位置按原 CodeID 和调用端口复验。中端独立核对两处颜色字段、路径表和标题绘制区间，再将这些区间从模板移除。模板只留当前适用范围的版面和绘制状态，运行时检查坐标数组摘要。
+
+C++20 从初始数组、一次和两次原生更新后的状态计算了 50、48、45 个填充区间，标题实际读取对应的时间标量。三帧共享同一份布局模板，完整 AGG、RGBA 和 PNG 与原程序逐字节一致。第三帧单独作为组合验证。标题试验使用版本匹配的 FreeType 和不同小版本的 HarfBuzz，资格限于已测单字体 ASCII 路径。当前仍由分开的原生组件完成，整入口保持 `NO_OP`，完整成本未测。见 `artifacts/baseline/cpu-live-plot-layout-acceptance.json`。
+
 `capture-agg-scene --contours` 接通了原始三路数组视图、ContourPy 的填充区间、逐带路径和 AGG 的实际调用槽。两帧的输入均为 257×257，填充区间数分别为 50 和 48。`analyze-agg-scene-layout` 重放有序绘制字段，记录两帧间的变化。坐标轴和静态文字的一致性只覆盖所测场景。
 
 `plan-contour-scene` 验证原路径表的位区间和逐带次序。`export-native-contour-scene` 复用上游 ContourPy MPL2014 C++，两帧的顶点和路径代码与原提供者逐字节一致。`export-native-contour-agg` 从场景模板移除对应路径表，并在运行时由数值数组重新生成。空环境中，从构建期数组和一步 C++ 更新后的数组分别重算了两帧，最终 AGG 绘制记录、RGBA 和 PNG 均与原程序逐字节一致。

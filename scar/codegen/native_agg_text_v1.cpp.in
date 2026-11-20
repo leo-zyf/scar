@@ -1,0 +1,192 @@
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <charconv>
+#include <cfenv>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <iomanip>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_GLYPH_H
+#include FT_TRUETYPE_TABLES_H
+#include <hb.h>
+#include <hb-ft.h>
+
+namespace {
+static_assert(std::endian::native == std::endian::little);
+
+void require(bool condition, const char *message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+std::string scientific(double value) {
+    require(std::isfinite(value), "finite runtime binary64 required");
+    std::array<char, 64> buffer{};
+    const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
+                                            std::chars_format::scientific, 6);
+    require(error == std::errc{}, "scientific format exceeded bounded span");
+    return std::string(buffer.data(), end);
+}
+
+struct Font {
+    FT_Library library{};
+    FT_Face face{};
+    explicit Font(const char* filename) {
+        require(!FT_Init_FreeType(&library), "cannot initialize FreeType");
+        require(!FT_New_Face(library, filename, 0, &face), "cannot open original font");
+    }
+    ~Font() { FT_Done_Face(face); FT_Done_FreeType(library); }
+};
+
+void reset_size(FT_Face face, double size, unsigned dpi) {
+    require(!FT_Set_Char_Size(face, static_cast<FT_F26Dot6>(size * 64), 0, dpi, dpi),
+            "invalid original sizing options");
+    FT_Set_Transform(face, nullptr, nullptr);
+}
+
+struct Glyph {
+    unsigned id;
+    long x, y;
+};
+
+struct Layout {
+    double width;
+    double height;
+    double descent;
+    std::vector<Glyph> glyphs;
+};
+
+Layout shape(FT_Face face, const std::string& text, FT_Int32 flags) {
+    const std::unique_ptr<hb_font_t, decltype(&hb_font_destroy)> font{
+        hb_ft_font_create_referenced(face), &hb_font_destroy};
+    const std::unique_ptr<hb_buffer_t, decltype(&hb_buffer_destroy)> buffer{
+        hb_buffer_create(), &hb_buffer_destroy};
+    require(font && buffer, "cannot allocate native shape context");
+    hb_ft_font_set_load_flags(font.get(), flags);
+    std::vector<std::uint32_t> characters;
+    for (const auto character : text) {
+        require(character >= 32 && character <= 126, "outside plain single-run ASCII profile");
+        characters.push_back(static_cast<unsigned char>(character));
+    }
+    require(!characters.empty() && characters.size() <= 128, "outside bounded title length");
+    hb_buffer_add_utf32(buffer.get(), characters.data(), static_cast<int>(characters.size()),
+                         0, static_cast<int>(characters.size()));
+    hb_buffer_set_script(buffer.get(), HB_SCRIPT_LATIN);
+    hb_buffer_set_language(buffer.get(), hb_language_get_default());
+    hb_buffer_set_direction(buffer.get(), HB_DIRECTION_LTR);
+    hb_buffer_set_flags(buffer.get(), hb_buffer_flags_t(HB_BUFFER_FLAG_BOT | HB_BUFFER_FLAG_EOT));
+    require(hb_shape_full(font.get(), buffer.get(), nullptr, 0, nullptr), "native shaping failed");
+    unsigned count = 0;
+    const auto* infos = hb_buffer_get_glyph_infos(buffer.get(), &count);
+    const auto* offsets = hb_buffer_get_glyph_positions(buffer.get(), nullptr);
+    require(count && infos && offsets, "native shaping has no glyphs");
+    FT_Vector pen{0, 0};
+    FT_BBox bounds{32000, 32000, -32000, -32000};
+    std::vector<Glyph> glyphs;
+    glyphs.reserve(count);
+    for (unsigned i = 0; i < count; ++i) {
+        require(infos[i].codepoint && !FT_Load_Glyph(face, infos[i].codepoint, flags),
+                "missing original glyph in selected single-face font");
+        FT_Glyph glyph{};
+        require(!FT_Get_Glyph(face->glyph, &glyph), "cannot inspect original glyph bounds");
+        FT_Vector position{pen.x + offsets[i].x_offset, pen.y + offsets[i].y_offset};
+        require(!FT_Glyph_Transform(glyph, nullptr, &position), "cannot place glyph bounds in font layout");
+        FT_BBox local{};
+        FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_SUBPIXELS, &local);
+        FT_Done_Glyph(glyph);
+        bounds.yMin = std::min(bounds.yMin, local.yMin);
+        bounds.yMax = std::max(bounds.yMax, local.yMax);
+        glyphs.push_back({infos[i].codepoint, position.x, position.y});
+        pen.x += offsets[i].x_advance;
+        pen.y += offsets[i].y_advance;
+    }
+    return {pen.x / 64.0, (bounds.yMax - bounds.yMin) / 64.0, -bounds.yMin / 64.0, std::move(glyphs)};
+}
+
+double min_ascent(FT_Face face, double size, unsigned dpi) {
+    require(face->units_per_EM != 0, "missing original em metric");
+    const double scale = 1.0 / face->units_per_EM * size * dpi / 72.0;
+    if (const auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(face, FT_SFNT_OS2)))
+        return os2->sTypoAscender * scale;
+    const auto* hhea = static_cast<TT_HoriHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_HHEA));
+    require(hhea, "font ascent source remains unqualified");
+    return hhea->Ascender * scale;
+}
+}
+
+int main(int argc, char** argv) {
+    try {
+        const bool agg_wire = argc == 13 && std::string_view(argv[12]) == "--agg-wire";
+        require((argc == 12 || agg_wire) && std::fegetround() == FE_TONEAREST,
+                "expected FONT PREFIX SUFFIX SCALAR X_ANCHOR Y_ANCHOR HEIGHT POINT_SIZE DPI LOAD_FLAGS OUTPUT [--agg-wire]");
+        const std::string text = std::string(argv[2]) + scientific(std::stod(argv[4])) + argv[3];
+        const double x_anchor = std::stod(argv[5]);
+        const double y_anchor = std::stod(argv[6]);
+        const int height = std::stoi(argv[7]);
+        const double size = std::stod(argv[8]);
+        const unsigned dpi = std::stoul(argv[9]);
+        const FT_Int32 flags = std::stoi(argv[10]);
+        Font provider{argv[1]};
+        reset_size(provider.face, size, dpi);
+        const auto layout = shape(provider.face, text, flags);
+        const double ascent = std::max(layout.height - layout.descent, min_ascent(provider.face, size, dpi));
+        const double x = x_anchor - layout.width / 2;
+        const double y = height - (y_anchor - ascent);
+        std::ofstream bitmaps(argv[11], std::ios::binary);
+        require(bool(bitmaps), "cannot write native glyph witness");
+        if (agg_wire) {
+            const auto count = static_cast<std::uint32_t>(layout.glyphs.size());
+            bitmaps.write("SCARGLY1", 8);
+            bitmaps.write(reinterpret_cast<const char*>(&count), sizeof count);
+        }
+
+        FT_Int ft_major{}, ft_minor{}, ft_patch{};
+        FT_Library_Version(provider.library, &ft_major, &ft_minor, &ft_patch);
+        std::cout << text << '\n' << ft_major << '.' << ft_minor << '.' << ft_patch
+                  << ' ' << hb_version_string() << '\n' << std::setprecision(17)
+                  << layout.width << ' ' << layout.height << ' ' << layout.descent
+                  << ' ' << x << ' ' << y << '\n';
+        for (const auto& glyph : layout.glyphs) {
+            reset_size(provider.face, size, dpi);
+            FT_Vector delta{static_cast<long>(std::nearbyint(64.0 * (x + glyph.x / 64.0))),
+                            static_cast<long>(std::nearbyint(64.0 * (height - y + glyph.y / 64.0)))};
+            FT_Set_Transform(provider.face, nullptr, &delta);
+            require(!FT_Load_Glyph(provider.face, glyph.id, flags)
+                    && !FT_Render_Glyph(provider.face->glyph, FT_RENDER_MODE_NORMAL),
+                    "native antialiased font rendering failed");
+            const auto* slot = provider.face->glyph;
+            const auto& b = slot->bitmap;
+            require((!b.width && !b.rows) || (b.pixel_mode == FT_PIXEL_MODE_GRAY && b.pitch >= 0
+                    && static_cast<unsigned>(b.pitch) >= b.width), "unexpected original bitmap storage");
+            const auto left = static_cast<std::int32_t>(slot->bitmap_left);
+            const auto bottom = static_cast<std::int32_t>(height - slot->bitmap_top + int(b.rows));
+            std::cout << glyph.id << ' ' << glyph.x << ' ' << glyph.y << ' '
+                      << left << ' ' << bottom
+                      << ' ' << b.rows << ' ' << b.width << '\n';
+            if (agg_wire) {
+                const std::array<std::uint32_t, 2> shape{b.rows, b.width};
+                bitmaps.write(reinterpret_cast<const char*>(shape.data()), sizeof shape);
+            }
+            for (unsigned row = 0; row < b.rows; ++row)
+                bitmaps.write(reinterpret_cast<const char*>(b.buffer + row * b.pitch), b.width);
+            if (agg_wire) {
+                const std::array<std::int32_t, 2> origin{left, bottom};
+                bitmaps.write(reinterpret_cast<const char*>(origin.data()), sizeof origin);
+            }
+        }
+        require(bool(bitmaps), "cannot publish native glyph witness");
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}

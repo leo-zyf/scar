@@ -1,0 +1,46 @@
+#include "contour_style.hpp"
+#include "contour_style_lut.hpp"
+
+#include <bit>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+namespace {
+static_assert(std::endian::native == std::endian::little);
+
+template<class T>
+void write(std::ofstream& stream, const T* values, std::size_t count) {
+    stream.write(reinterpret_cast<const char*>(values), static_cast<std::streamsize>(sizeof(T) * count));
+}
+}
+
+int main(int argc, char** argv) {
+    if (argc != 4) {
+        std::cerr << "usage: scar_contour_style ZMIN ZMAX OUTPUT\n";
+        return 2;
+    }
+    try {
+        std::size_t a{}, b{};
+        const auto zmin = std::stod(argv[1], &a);
+        const auto zmax = std::stod(argv[2], &b);
+        if (a != std::string(argv[1]).size() || b != std::string(argv[2]).size())
+            throw std::invalid_argument("invalid contour data range");
+        using namespace scar::contour;
+        const auto style = make_style(zmin, zmax, style_parameters, style_lut);
+        std::ofstream stream(argv[3], std::ios::binary);
+        stream.exceptions(std::ios::badbit | std::ios::failbit);
+        write(stream, "SCARCST1", 8);
+        const auto count = static_cast<std::uint64_t>(style.levels.size());
+        write(stream, &count, 1);
+        write(stream, style.levels.data(), style.levels.size());
+        write(stream, style.contour_levels.data(), style.contour_levels.size());
+        write(stream, style.layers.data(), style.layers.size());
+        for (const auto& rgba : style.colors) write(stream, rgba.data(), rgba.size());
+        stream.close();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}
