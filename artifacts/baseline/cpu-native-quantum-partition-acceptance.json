@@ -1,0 +1,158 @@
+{
+  "default_entry_backend": "NO_OP",
+  "delivery": {
+    "exact_native_outputs": 10,
+    "holdouts": 2,
+    "package": {
+      "schema": "scar.native-numpy-partition",
+      "sha256": "fb6aa3968f5a9b1daffae6b3f16a94ddf912c3bf9d082400bf2f6c28ca770a58",
+      "size_bytes": 62245,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/standalone-release/result.json"
+    },
+    "profile_requalification": {
+      "schema": "scar.native-numpy-complex",
+      "sha256": "b8aeb6964bb83f4810ac9a2f267fe3f1ad287def66085c82d6538496f472ddd8",
+      "size_bytes": 3454,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/qualified-provider.json"
+    },
+    "provider": {
+      "schema": "scar.native-numpy-complex",
+      "sha256": "0bdb8a77d82f7d57c9d0a70b216096af78969823b098ab8768c20221ed34c26d",
+      "size_bytes": 3454,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/numpy-complex-provider/provider.json"
+    },
+    "python_runtime_required": false,
+    "relocation": {
+      "schema": "scar.native-numpy-partition-relocation",
+      "sha256": "35447da0cbc1550cfa6a3be986c8463d7b440d8f6e9efcb348505a53bf5eeeb5",
+      "size_bytes": 1448,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/relocated-selected/result.json"
+    },
+    "runtime_dependencies": [
+      "libstdc++.so.6",
+      "libm.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6"
+    ],
+    "stock_cpu_isa": "x86-64-v3"
+  },
+  "deployed_original_entry_changed": false,
+  "frontend": {
+    "calls": 231,
+    "cpu_ids": [
+      13
+    ],
+    "focus": {
+      "code_id": "pycode-v2:b286e59e4efb8f9dd72f5a02414a4e7f63525bece9a8592f9324636327fd8be9",
+      "first_line": 310,
+      "module": "cirq.linalg.transformations",
+      "parameters": {
+        "matrix": "matrix",
+        "out": "out",
+        "slices": "slices",
+        "target": "target"
+      },
+      "qualname": "apply_matrix_to_slices",
+      "source": {
+        "schema": "scar.python-source",
+        "sha256": "a26af425a7d3e65f6488fd7923bd0ef6c6b6660a42d90eb887e44468476b62a5",
+        "size_bytes": 32710,
+        "uri": "/home/zyf/AAA/cirq/.scar-runtime/cirq/linalg/transformations.py"
+      },
+      "symbol": "apply_matrix_to_slices"
+    },
+    "input_records_retained": 6,
+    "original_entry": {
+      "schema": "scar.python-source",
+      "sha256": "89c98a323ea07cdf5dddd492a8c8e7d4726a0d97c42a92304de11488d6ea4801",
+      "size_bytes": 4590,
+      "uri": "/home/zyf/AAA/scar-testcases/cpu_quantum/run.py"
+    },
+    "retained_geometries": 14,
+    "witness": {
+      "schema": "scar.numpy-partition-witness",
+      "sha256": "f30650923146d4fb34bc3f6a7f9af776f45a3bf8ddbda9adc7acaecfd55c7805",
+      "size_bytes": 57840,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/witness/result.json"
+    }
+  },
+  "full_program_speedup_measured": false,
+  "planning": {
+    "arithmetic_order": "STOCK_MULTIPLY_THEN_STOCK_ADD",
+    "calibration": {
+      "schema": "scar.native-numpy-partition-calibration",
+      "sha256": "4ad95c5cf8ecc5512f623b1729095316995ecb6fdc71f7824df7749bc6cd8c92",
+      "size_bytes": 19319,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/clean-calibration/result.json"
+    },
+    "calls_per_sample": 10000,
+    "frontiers": [
+      {
+        "case": "DISCOVERY",
+        "id": "call-000001",
+        "reason": "SCALAR_DISPATCH_NOT_ADMITTED"
+      }
+    ],
+    "iteration": {
+      "schema": "scar.numpy-partition-iteration",
+      "sha256": "d75515611ad35079a89b8e8a62c1aa3615e2d7ca948f64429b695a6fdb0131c6",
+      "size_bytes": 43316,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/iterations.json"
+    },
+    "measurement_rounds": 3,
+    "median_ns_per_call": {
+      "elided-copy": 5489.5925,
+      "preserved-copy": 6935.9516,
+      "source-call": 40205.114
+    },
+    "mode_selected_by_replayed_evidence": "elided-copy",
+    "modeled_private_array_payload_bytes": 49152,
+    "removed_logical_copy_bytes_per_call": 65536,
+    "stock_signatures": [
+      {
+        "op": "ADD",
+        "strides": [
+          16,
+          16,
+          16
+        ]
+      },
+      {
+        "op": "ADD",
+        "strides": [
+          32,
+          16,
+          32
+        ]
+      },
+      {
+        "op": "MULTIPLY",
+        "strides": [
+          16,
+          0,
+          16
+        ]
+      },
+      {
+        "op": "MULTIPLY",
+        "strides": [
+          32,
+          0,
+          16
+        ]
+      },
+      {
+        "op": "MULTIPLY",
+        "strides": [
+          32,
+          0,
+          32
+        ]
+      }
+    ],
+    "timing_scope": "PREPARED_REPEAT_CALLS_EXCLUDING_INGRESS_AND_PUBLICATION",
+    "warmup_rounds": 1
+  },
+  "schema": "scar.cpu-native-quantum-partition-acceptance",
+  "schema_version": 1
+}
