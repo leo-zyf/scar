@@ -1,5 +1,9 @@
 # 当前状态
 
+`export-native-live-plot-phase` 与 `observe-native-plot-entry` 已把绘图分段诊断接到两个真实 C++20 控制器上。八帧无视频，各做 3 对诊断，stdout 和 PNG 与原干净运行逐字节一致。按独占时间计，已有入口的 PNG 编码和发布约 1.949 s，占绘图 ABI 时间约 79%。常驻版减少约 17.9 ms 的资产读取和 21.6 ms 的坐标处理。分段数据只用于定位。
+
+相同正式二进制和参数的未插桩复跑中，八帧中位数为 2.454 → 2.401 s，方向与上轮 2.457 → 2.504 s 反转。两轮均通过输出对照。现有证据无法归因上轮回退，默认继续采用已有入口。见 `artifacts/baseline/cpu-native-plot-phase-attribution.json`。
+
 `project-controller-plot-residency` 从原循环、已准入启动镜像及打开记录建立绘图资源的生命周期。布局、字体和打包后的 X/Y 在一个控制器上下文中保留，Z 和时间继续逐帧读取。ABI v2 复用 FreeType 字体对象及 Z 缓冲区。完整入口已通过篡改字体试验，在首帧或日志发布前拒绝异常资产。这条路径限定为编译器包内不可变资产。
 
 八帧诊断中，布局和字体各打开 9 → 1 次。CPU 0 的非插桩实测各预热 1 对、交替测 5 对，所有配对的标准输出、PNG 和约定的 MP4 均逐字节一致。已有 C++20 入口与常驻版的中位数在八帧无视频时为 2.457 → 2.504 s，在三帧加视频时为 1.465 → 1.449 s。八帧样例回退到已有方案，常驻版继续作为显式试验。见 `artifacts/baseline/cpu-native-plot-residency-acceptance.json`。

@@ -1,0 +1,85 @@
+#include "native_live_plot_phase.hpp"
+
+#include <cstdio>
+#include <memory>
+
+namespace {
+using namespace scar::plot_phase;
+
+struct Frame {
+    Root z;
+    double time;
+    std::string prefix;
+
+    Frame(char** arguments)
+        : z(arguments[0], arguments[1], scar::live::root_shapes[2]), prefix(arguments[3]) {
+        std::size_t parsed{};
+        time = std::stod(arguments[2], &parsed);
+        if (parsed != std::string_view(arguments[2]).size()) throw std::runtime_error("invalid render time");
+    }
+};
+
+void header(std::FILE* trace) {
+    std::fputs("backend\tsequence\toperation\tframe\twall_ns", trace);
+    for (const auto* phase : names) std::fprintf(trace, "\t%s_ns\t%s_count", phase, phase);
+    std::fputc('\n', trace);
+}
+
+template<class Action>
+void timed(std::FILE* trace, unsigned sequence, const char* operation, int frame, Action&& action) {
+    scar_plot_phase_reset_v1();
+    const auto before = Clock::now();
+    std::forward<Action>(action)();
+    const auto wall = nanoseconds(before, Clock::now());
+    Metrics metrics;
+    scar_plot_phase_snapshot_v1(&metrics);
+    std::fprintf(trace, "%s\t%u\t%s\t%d\t%llu", backend, sequence, operation, frame,
+                 static_cast<unsigned long long>(wall));
+    for (std::size_t i = 0; i < names.size(); ++i)
+        std::fprintf(trace, "\t%llu\t%llu", static_cast<unsigned long long>(metrics.ns[i]),
+                     static_cast<unsigned long long>(metrics.count[i]));
+    std::fputc('\n', trace);
+}
+
+@OWNER@
+}
+
+int main(int argc, char** argv) {
+    try {
+        if (argc < 13 || (argc - 9) % 4)
+            throw std::runtime_error("expected LAYOUT FONT TRACE_TSV REPS X OFF Y OFF (Z OFF TIME OUTPUT_PREFIX)+");
+        const std::string_view text(argv[4]);
+        unsigned repeats{};
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), repeats);
+        if (error != std::errc{} || end != text.data() + text.size() || !repeats || repeats > 1000)
+            throw std::runtime_error("expected repeat count in 1..1000");
+        Root x_store(argv[5], argv[6], scar::live::root_shapes[0]);
+        Root y_store(argv[7], argv[8], scar::live::root_shapes[1]);
+        const auto x = x_store.descriptor(scar::live::root_shapes[0]);
+        const auto y = y_store.descriptor(scar::live::root_shapes[1]);
+        std::vector<Frame> frames;
+        frames.reserve((argc - 9) / 4);
+        for (int i = 9; i < argc; i += 4) frames.emplace_back(argv + i);
+        std::unique_ptr<std::FILE, decltype(&std::fclose)> trace(std::fopen(argv[3], "wbx"), std::fclose);
+        if (!trace) throw std::runtime_error("expected fresh phase trace path");
+        header(trace.get());
+        std::array<char, 512> detail{};
+        for (unsigned sequence = 0; sequence < repeats; ++sequence) {
+@PREPARE@
+            for (std::size_t i = 0; i < frames.size(); ++i) {
+                auto& frame = frames[i];
+                const auto z = frame.z.descriptor(scar::live::root_shapes[2]);
+                const auto output = frame.prefix + "." + std::to_string(sequence) + ".png";
+                timed(trace.get(), sequence, "render", static_cast<int>(i), [&] {
+                    if (@RENDER@) throw std::runtime_error(detail.data());
+                });
+            }
+@DESTROY@
+        }
+        if (std::fflush(trace.get()) != 0) throw std::runtime_error("cannot publish complete phase trace");
+        return 0;
+    } catch (const std::exception& failure) {
+        std::cerr << failure.what() << '\n';
+        return 1;
+    }
+}
