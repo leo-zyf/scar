@@ -77,6 +77,9 @@ def _trace(args) -> int:
     compile_events = getattr(args, 'compile_events', False)
     python_targets = getattr(args, 'python_call_targets', False) or lean_plan is not None or stream_interfaces or program_ports or native_callables or compile_events or resource_scopes
     operands = getattr(args, 'call_operands', False) or python_targets or torch_call_scopes
+    epoch_region = getattr(args, 'stateful_allocation_epochs', None)
+    if epoch_region is not None and not operands:
+        raise SystemExit('--stateful-allocation-epochs requires --call-operands')
     os_capture_root = getattr(args, 'os_capture_root', None)
     if resource_scopes and os_capture_root is None:
         raise SystemExit('--resource-scopes requires --os-capture-root')
@@ -118,6 +121,7 @@ def _trace(args) -> int:
     env.pop('SCAR_CAPTURE_TRANSPORT',None)
     env.pop('SCAR_SNAPSHOT_BUFFER_BYTES',None)
     env.pop('SCAR_CAPTURE_PHASES',None)
+    env.pop('SCAR_REGION_METADATA_EPOCH_TRACKER',None)
     for key in ('SCAR_OS_CAPTURE_NONCE','SCAR_OS_CAPTURE_INTENT','SCAR_OS_CAPTURE_INTENT_SHA256'):
         env.pop(key,None)
     execution_evidence = getattr(args, "execution_evidence", False)
@@ -156,6 +160,15 @@ def _trace(args) -> int:
                 or (execution_evidence and any(out.glob('execution-evidence.*.json')))):
             raise SystemExit("calls-only requires a fresh output directory")
         env['SCAR_TRACE_CALL_EDGES'] = '1'
+        if epoch_region is not None:
+            from scar.compiler.input_metadata import read_input_boundary
+            from scar.trace.numpy_allocation_epochs import build_tracker
+            region = Path(epoch_region).resolve()
+            if not read_input_boundary(region).stateful_inputs:
+                raise SystemExit('--stateful-allocation-epochs requires a stateful array region')
+            env['SCAR_REGION_METADATA_PLAN'] = str(region)
+            env['SCAR_REGION_METADATA_OUT'] = str(out)
+            env['SCAR_REGION_METADATA_EPOCH_TRACKER'] = str(build_tracker(out / 'numpy-epochs'))
         if resumptions:env['SCAR_RESUMPTIONS']='1'
         env['SCAR_CALL_PROJECT_ROOT'] = str(Path(args.project_root or (
             lean_plan.namespace_root if lean_plan is not None else Path.cwd())).resolve())
@@ -819,6 +832,8 @@ def main(argv=None) -> int:
         'project-pipeline-temporal': 'scar.compiler.project_pipeline_temporal',
         'time-schedule': 'scar.compiler.time_schedule',
         'bind-time-resources': 'scar.compiler.bind_time_resources',
+        'plan-entry-effects': 'scar.compiler.plan_entry_effects',
+        'export-native-stateful-entry': 'scar.codegen.native_stateful_entry',
         'cost-activities': 'scar.compiler.cost_activities',
         'refine-time-envelope': 'scar.compiler.refine_time_envelope',
         'view-graph': 'scar.visualization.cli',
@@ -1140,6 +1155,8 @@ def main(argv=None) -> int:
             ('project-pipeline-temporal', 'project original source, hardware, storage and cost constraints without solving or native execution'),
             ('time-schedule', 'attach event, readiness, occupancy and symbolic-loop time relations to original CPU graphs'),
             ('bind-time-resources', 'map semantic-time occupancies to original CPU/core/memory domains and budget scopes'),
+            ('plan-entry-effects', 'retain original external-effect order in a CPU planning envelope'),
+            ('export-native-stateful-entry', 'build a standalone C++20 entry from a verified provider-free array region'),
             ('cost-activities', 'replay independent canonical component evidence into conditional activity-group costs'),
             ('refine-time-envelope', 'model existing CPU backend boundary phases in the original task/time graph without execution'),
             ('view-graph', 'export first-stage graph shards to an offline interactive expandable canvas'),
@@ -1486,6 +1503,8 @@ def main(argv=None) -> int:
         help='also observe exact builtin stream backing handles; requires --stream-interfaces')
     trace.add_argument('--resource-scopes',action='store_true',
         help='opt in to exact Python and native call scope markers for OS/source joins; requires --os-capture-root')
+    trace.add_argument('--stateful-allocation-epochs', metavar='REGION',
+        help='observe bounded NumPy allocation epochs at accepted original stateful frame entries')
     trace.add_argument('--max-os-lines',type=int,default=2000000)
     trace.add_argument('--max-capture-bytes',type=int,default=256000000)
     trace.add_argument('--max-archive-bytes',type=int,default=128000000)

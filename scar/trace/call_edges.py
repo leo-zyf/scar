@@ -65,6 +65,7 @@ class CallEdgeRecorder:
         self.limits = limits
         self.lock = threading.RLock()
         self.active, self.codes, self.references = {}, set(), {}
+        self.region_metadata = None
         self.invocation = self.index = self.epoch = self.bytes = self.written = 0
         self.entered = self.unclosed_written = 0
         self.dropped = self.codes_dropped = self.unknown_exits = self.suspended_exits = 0
@@ -495,6 +496,8 @@ class CallEdgeRecorder:
                         self.entered += 1
                         self.unclosed_written += 1
                         self.active[thread,id(frame)] = invocation,code,suspended
+                        if self.region_metadata is not None:
+                            self.region_metadata.on_recorded_entry(frame,thread,invocation,code)
                         if self.resumptions is not None:
                             self.resumptions.profile_event(frame, 'call', invocation, code, self.index)
                         if forward_root is not None:

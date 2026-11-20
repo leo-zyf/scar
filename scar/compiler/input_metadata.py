@@ -85,12 +85,13 @@ def boundary_callee_metadata(boundary,namespace):
 
 class InputMetadataObserver:
     def __init__(self,max_calls_per_code=2,*,scalar_parameters=(),stateful_inputs=(),
-                 region_id=None,region_sha256=None):
+                 region_id=None,region_sha256=None,allocation_epochs=None):
         if type(max_calls_per_code)is not int or max_calls_per_code<1:raise ValueError('positive metadata observation limit required')
         self.limit=max_calls_per_code;self.counts={};self.records=[]
         self.scalar_parameters=frozenset(scalar_parameters)
         self.stateful_inputs=tuple(stateful_inputs)
         self.region_id=region_id;self.region_sha256=region_sha256
+        self.allocation_epochs=allocation_epochs
         self.run='metadata:'+uuid.uuid4().hex
         self._storage_observations={}
 
@@ -138,6 +139,9 @@ class InputMetadataObserver:
                             owners.append(storage.owner)
                         geometry=storage.geometry()
                         item['storage_observation']=dict(geometry,owner_ordinal=ordinal)
+                        if self.allocation_epochs is not None:
+                            epoch=self.allocation_epochs(storage.owner)
+                            if epoch is not None:item['allocator_epoch']=epoch
                         if identifier in previous:
                             index, owner, old_geometry=previous[identifier]
                             item['previous_storage_observation']=dict(boundary_ordinal=index,

@@ -1,8 +1,8 @@
 """Selective, bounded input metadata at an original plan's code boundary.
 
-Only exec-audited exact code objects receive local PY_START events. No global
-call hook, program execution, native plan loading or tensor content collection
-is performed here. Collector failures leave the original program running.
+Exact code objects qualify through the exec audit. The collector uses local
+PY_START, or shares an accepted entry with an existing call recorder for an
+allocator capture. Collector failures leave the original program running.
 """
 import atexit
 from hashlib import sha256
@@ -34,6 +34,8 @@ class RegionMetadataCollector:
         self.exec_checks=0;self.hook_installed=False;self._marker=object()
         self.closed=False;self.stopped=False;self._busy=False;self.status='WAITING'
         self.window_flushed=False;self.fork_resets=0
+        self.allocation_epochs=None;self.frame_recorder=None
+        self.combined=False
 
     def _error(self,stage,error):
         record=dict(stage=stage,error=error if type(error)is str else type(error).__name__)
@@ -56,22 +58,15 @@ class RegionMetadataCollector:
                     or len(set(self.parameters))!=len(self.parameters)):
                 raise ValueError('exact source/code identity and unique parameters required')
             self.source_path=str(Path(self.source.path).resolve())
-            self.monitor=getattr(sys,'monitoring',None)
-            if self.monitor is None:
-                self.status='UNAVAILABLE';self.stopped=True
-                self._error('monitoring','SYS_MONITORING_UNAVAILABLE');self.flush();return self
-            for tool in range(5,-1,-1):
-                if self.monitor.get_tool(tool) is not None:continue
-                try:self.monitor.use_tool_id(tool,self.tool_name)
-                except ValueError:continue
-                self.tool_id=tool;break
-            if self.tool_id is None:
-                self.status='UNAVAILABLE';self.stopped=True
-                self._error('monitoring','NO_FREE_MONITORING_TOOL_ID');self.flush();return self
-            # A newly claimed tool starts with zero global events. Never call
-            # set_events: local target events are the entire observation scope.
-            if self.monitor.get_events(self.tool_id)!=0:raise RuntimeError('nonzero global monitoring events')
-            self.monitor.register_callback(self.tool_id,self.monitor.events.PY_START,self._on_start)
+            tracker=os.environ.get('SCAR_REGION_METADATA_EPOCH_TRACKER')
+            if tracker is None:
+                if not self._start_monitor():return self
+            else:
+                from scar.trace.numpy_allocation_epochs import AllocationEpochTracker
+                if not self.plan.stateful_inputs:raise ValueError('stateful input ports are needed for allocation epochs')
+                self.combined=True
+                self.allocation_epochs=AllocationEpochTracker(tracker)
+                self.observer.allocation_epochs=self.allocation_epochs
             sys.addaudithook(self._audit)
             sys.audit('scar.region_metadata.install',self._marker)
             if not self.hook_installed:raise RuntimeError('exec audit hook was not installed')
@@ -81,8 +76,26 @@ class RegionMetadataCollector:
             self._disable();self.flush()
         return self
 
+    def _start_monitor(self):
+        self.monitor=getattr(sys,'monitoring',None)
+        reason='SYS_MONITORING_UNAVAILABLE'
+        if self.monitor is not None:
+            for tool in range(5,-1,-1):
+                if self.monitor.get_tool(tool) is not None:continue
+                try:self.monitor.use_tool_id(tool,self.tool_name)
+                except ValueError:continue
+                self.tool_id=tool;break
+            reason='NO_FREE_MONITORING_TOOL_ID'
+        if self.tool_id is None:
+            self.status='UNAVAILABLE';self.stopped=True
+            self._error('monitoring',reason);self.flush();return False
+        if self.monitor.get_events(self.tool_id)!=0:raise RuntimeError('nonzero global monitoring events')
+        self.monitor.register_callback(self.tool_id,self.monitor.events.PY_START,self._on_start)
+        return True
+
     def _after_fork(self):
         try:
+            self.allocation_epochs=None;self.frame_recorder=None
             self.pid=os.getpid();self.observer=InputMetadataObserver(max_calls_per_code=self.plan.max_calls if self.plan else 2,
                 scalar_parameters=self.plan.scalar_parameters if self.plan else (),
                 stateful_inputs=self.plan.stateful_inputs if self.plan else (),
@@ -128,35 +141,37 @@ class RegionMetadataCollector:
                 names=code.co_varnames[:code.co_argcount+code.co_kwonlyargcount]
                 if code.co_flags&(inspect.CO_VARARGS|inspect.CO_VARKEYWORDS) or tuple(names)!=self.parameters:
                     self._error('exec','PARAMETER_LAYOUT_MISMATCH');self.status='REJECTED';continue
-                if not self._owns_tool() or self.monitor.get_events(self.tool_id)!=0:
+                if not self.combined and (not self._owns_tool() or self.monitor.get_events(self.tool_id)!=0):
                     raise RuntimeError('monitoring tool or global event mask changed')
                 if id(code) not in self.codes:
                     self.codes[id(code)]=code;self.matched+=1
-                    self.monitor.set_local_events(self.tool_id,code,self.monitor.events.PY_START)
+                    if not self.combined:self.monitor.set_local_events(self.tool_id,code,self.monitor.events.PY_START)
                     self.status='ARMED'
         except Exception as error:
             self._error('exec',error);self.status='ERROR';self.stopped=True
             self._disable();self.flush()
 
     def _on_start(self,code,offset):
+        self._capture_frame(sys._getframe(1),code)
+
+    def _capture_frame(self,frame,code,coordinate=None):
         try:
             if os.getpid()!=self.pid:self._after_fork()
             if self.closed or self.stopped or self._busy or self.codes.get(id(code))is not code:return
             self._busy=True
-            if not self._owns_tool() or self.monitor.get_events(self.tool_id)!=0:
+            if not self.combined and (not self._owns_tool() or self.monitor.get_events(self.tool_id)!=0):
                 raise RuntimeError('monitoring tool or global event mask changed')
-            # PY_START places the entered callee directly below its callback.
-            # The code identity check keeps another stack frame from donating
-            # parameters if an implementation changes this documented event.
-            frame=sys._getframe(1)
-            if frame.f_code is not code:raise RuntimeError('PY_START frame does not match target code')
+            if frame.f_code is not code:raise RuntimeError('observation frame does not match target code')
             values=tuple(frame.f_locals[name] for name in self.parameters)
             self.callbacks+=1
             more=self.observer(self.source,self.parameters,values)
+            if coordinate is not None:self.observer.records[-1]['trace_invocation']=coordinate
             if self.plan.callees:
                 self.observer.records[-1]['callee_bindings']=boundary_callee_metadata(self.plan,frame.f_globals)
             if not more:
                 self.status='COMPLETE';self.stopped=True;self._disable()
+                if self.allocation_epochs is not None:self.allocation_epochs.close()
+                if self.frame_recorder is not None:self.frame_recorder.region_metadata=None
                 self.window_flushed=True
                 if not self.flush():self.window_flushed=False
         except Exception as error:
@@ -164,6 +179,16 @@ class RegionMetadataCollector:
             self._disable();self.flush()
         finally:
             self._busy=False
+
+    def attach_frame_recorder(self, recorder):
+        if self.allocation_epochs is not None and recorder.pid==self.pid:
+            self.frame_recorder=recorder
+            recorder.region_metadata=self
+
+    def on_recorded_entry(self, frame, thread, invocation, code):
+        if self.closed or self.stopped or self.codes.get(id(frame.f_code)) is not frame.f_code:return
+        self._capture_frame(frame,frame.f_code,dict(trace_directory=str(self.frame_recorder.out),
+            process_id=self.pid,thread_id=thread,invocation_id=invocation,code_key=code))
 
     def _disable(self):
         try:
@@ -173,10 +198,12 @@ class RegionMetadataCollector:
 
     def document(self):
         result=self.observer.document()
+        if self.allocation_epochs is not None:result['allocation_epoch_tracker']=self.allocation_epochs.reference
         result.update(status=self.status,matched=self.matched,errors=list(self.errors),collector=dict(
             status=self.status,process_id=self.pid,plan=None if self.plan_path is None else str(self.plan_path),
             matched=self.matched,callbacks=self.callbacks,exec_source_hash_checks=self.exec_checks,
-            local_event='PY_START',global_events_enabled=False,profile_hook_installed=False,
+            local_event='ACCEPTED_FRAME_ENTRY' if self.combined else 'PY_START',
+            global_events_enabled=False,profile_hook_installed=False,
             max_calls=self.observer.limit,window_flushed=self.window_flushed,closed=self.closed,
             audit_hook_installed=self.hook_installed,resumable_code_supported=False,
             fork_observer_resets=self.fork_resets))
@@ -197,6 +224,7 @@ class RegionMetadataCollector:
             if os.getpid()!=self.pid:self._after_fork()
             if self.closed:return
             self.closed=True;self.stopped=True;self._disable()
+            if self.allocation_epochs is not None:self.allocation_epochs.close()
             if self.status in ('WAITING','ARMED'):self.status='PARTIAL' if self.observer.records else 'NO_MATCH'
             if self._owns_tool():
                 self.monitor.register_callback(self.tool_id,self.monitor.events.PY_START,None)

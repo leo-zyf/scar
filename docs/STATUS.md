@@ -1,5 +1,9 @@
 # 当前状态
 
+`trace --stateful-allocation-epochs REGION` 将 NumPy 原分配器的成功分配、重分配和释放接到同一次调用采集。Gray–Scott 两个 `_euler` 检查点之间，两块实际拥有者分配保持同一分配代。两次 `update` 及各自三次子调用都回接原 F4 端口并核对正常返回。字段绑定在区间内是否变化、检查点是否恰好跨一个回边、未选分支和中间效果仍待证明。
+
+`plan-entry-effects --loop-content` 将该区间和同一采集中的首帧发布顺序接到共享规划问题。重放会拒绝把数组区域移到首帧发布之前，完整时间与资源需求未定时保留 `NO_OP`。`export-native-stateful-entry` 已将通用无回调数组区域交付为独立 C++20 项目，搬迁后在空环境运行，输出 160 字节与原区域逐字节一致。Gray–Scott 的计算区域仍有 NumPy provider 回调。见 `artifacts/baseline/cpu-allocation-effect-native-entry-acceptance.json`。
+
 公共前端已用真实 Gray–Scott 验证源码调用与系统接口的接线。快照采集重放了 570 个区间，其中 479 个是 Python 调用，全部接回原 F4 端口。按同线程的原始标记顺序，将打开、写入 106,172 字节和关闭 PNG 的记录接到 `_dump` 调用的 Matplotlib `Figure.savefig`。PNG 与保留基线逐字节一致。进程尾部的 53 字节 stdout 写入仍保留为未归属效果。
 
 `resource-scopes` 以实际帧退出或原生完成记录闭合区间。`buffered-stream-publications` 可查询同一文本流中可能被显式刷新发布的早期写入。独立小程序观察到两次源写入对应的一次 10 字节内核写入，字节来源与隐式刷新仍为开放项。采集耗时仅用于核验采集流程。见 `artifacts/baseline/cpu-source-effect-scope-acceptance.json`。

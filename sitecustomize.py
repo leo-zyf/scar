@@ -1,6 +1,8 @@
 """Auto-loaded by Python child processes launched by SCAR."""
 import os
 
+_scar_region_metadata = None
+
 if os.environ.get('SCAR_CALL_BINDING_PLAN'):
     try:
         from scar.trace.call_binding import install as _scar_install_call_binding
@@ -29,6 +31,8 @@ if os.environ.get("SCAR_TRACE_DIR"):
                     max_codes=int(os.environ.get('SCAR_CALL_MAX_CODES','4096')))
             _scar_recorder = install(os.environ['SCAR_TRACE_DIR'],os.environ['SCAR_CALL_PROJECT_ROOT'],
                                      lean_plan=_scar_lean_plan)
+            if _scar_recorder is not None and _scar_region_metadata is not None:
+                _scar_region_metadata.attach_frame_recorder(_scar_recorder)
             if _scar_recorder is not None and getattr(_scar_recorder, 'collector_witness', None) is not None:
                 import sys as _scar_sys
                 _scar_recorder.collector_witness.register_loader(_scar_sys._getframe())

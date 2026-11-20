@@ -162,7 +162,7 @@ def _enclosing_loop(view, declarations, inner):
 
 
 @replay_transaction()
-def project(entry_calls, accesses):
+def project(entry_calls, accesses, *, allocation_trace=None, project_root=None):
     source_ref = artifact_reference(Path(entry_calls).resolve(strict=True), ENTRY_CALLS)
     report = read_artifact(source_ref)
     storage_ref = artifact_reference(Path(accesses).resolve(strict=True), storage.SCHEMA)
@@ -188,8 +188,21 @@ def project(entry_calls, accesses):
             order, paths, rows = compose(view, decode(F.CodeScopeRef, scope),
                 (declarations[i][1] for i in siblings), region, siblings.index(index), bindings)
             parent, loop = _enclosing_loop(view, declarations, scope)
+            if allocation_trace is not None:
+                from scar.analysis.observed_allocation_epochs import observe_allocation_epochs
+                from scar.analysis.observed_loop_calls import observed_loop_calls
+                from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
+                from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
+
+                observed = ObservedSourceCallsiteIndex(ObservedSourceCodeProvider(view, allocation_trace, project_root))
+                metadata = approved['storage_evidence']['artifact']
+                lifetime = observe_allocation_epochs(region, metadata['uri'], observed.codes.trace,
+                    observation=approved['observation'], expected_sha256=metadata['sha256'])
+                calls = observed_loop_calls(observed, declarations[parent][1],
+                    tuple(declarations[siblings[i]][1] for i in order), order.index(siblings.index(index)),
+                    lifetime['endpoints'])
     reads, intervals = storage._repeated_read_records(analyze_loop_content(row.access for row in rows))
-    return dict(schema=SCHEMA, schema_version=1, entry_calls=source_ref, storage=storage_ref,
+    result = dict(schema=SCHEMA, schema_version=1, entry_calls=source_ref, storage=storage_ref,
                 original_loop_header=loop['header'], original_loop_body=loop['body'],
                 original_control_backedges=loop['control_backedges'],
                 loop_body_interface=f'#/interfaces/{parent}',
@@ -201,11 +214,23 @@ def project(entry_calls, accesses):
                            'SLOT_AND_ALLOCATION_CONTINUITY_ACROSS_BACKEDGE',
                            'UNSELECTED_BRANCHES_AND_INTERVENING_EFFECTS'],
                 reads_selected_on_whole_loop=False, loop_unrolled=False, transformation_authorized=False)
+    if allocation_trace is not None:
+        result['observed_interval'] = dict(trace_directory=str(Path(allocation_trace).resolve()),
+            project_root=str(Path(project_root).resolve()), allocation_lifetime=lifetime, actual_calls=calls)
+        result['remaining'] = ['SLOT_BINDING_CONTINUITY_ACROSS_BACKEDGE',
+            'EXACT_BACKEDGE_OCCURRENCE_AND_INTERVENING_EFFECTS', 'UNSELECTED_BRANCHES']
+        if not lifetime['covered_observed_interval']:
+            result['remaining'].append('ALLOCATION_LIFETIME_AT_SELECTED_INTERVAL')
+        if not calls['all_selected_windows_bound']:
+            result['remaining'].append('OBSERVED_PARENT_AND_CHILD_COMPLETIONS')
+    return result
 
 
 def check(path):
     saved = read_artifact(artifact_reference(Path(path).resolve(strict=True), SCHEMA))
-    rebuilt = project(saved['entry_calls']['uri'], saved['storage']['uri'])
+    scope = saved.get('observed_interval')
+    options = {} if scope is None else dict(allocation_trace=scope['trace_directory'], project_root=scope['project_root'])
+    rebuilt = project(saved['entry_calls']['uri'], saved['storage']['uri'], **options)
     if saved != rebuilt:
         raise ValueError('original loop content projection differs from replay')
     return rebuilt
@@ -215,12 +240,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('entry-calls', 'storage', 'out', 'check'):
         parser.add_argument('--' + name, type=Path)
+    parser.add_argument('--allocation-trace', type=Path)
+    parser.add_argument('--project-root', type=Path)
     args = parser.parse_args(argv)
     inputs = (args.entry_calls, args.storage, args.out)
-    if args.check and not any(inputs):
+    if (args.allocation_trace is None) != (args.project_root is None):
+        parser.error('--allocation-trace and --project-root must be provided together')
+    if args.check and not any((*inputs, args.allocation_trace)):
         result = check(args.check)
     elif not args.check and all(inputs):
-        result = project(args.entry_calls, args.storage)
+        result = project(args.entry_calls, args.storage, allocation_trace=args.allocation_trace,
+                         project_root=args.project_root)
         with args.out.open('x', encoding='utf-8') as stream:
             json.dump(result, stream, separators=(',', ':'), sort_keys=True, allow_nan=False)
             stream.write('\n')
