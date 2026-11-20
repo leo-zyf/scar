@@ -35,6 +35,12 @@ _PROVIDERS = {
         'scar.cpu-fixed-grid-entry-compilation',
         'provider',
     ),
+    'scar.cpu-recursive-stream-source-provider': _Provider(
+        'scar.compiler.recursive_stream_source_provider',
+        'scar.compiler.recursive_stream_source_provider',
+        'scar.cpu-recursive-stream-entry-compilation',
+        'provider',
+    ),
 }
 
 
@@ -62,7 +68,9 @@ def _resolve(paths, source):
         raise ValueError('entry requires exactly one CPU provider qualified for its path and bytes')
     (reference, declared), = matching
     provider = _PROVIDERS[reference['schema']]
-    if import_module(provider.qualifier).check(reference['uri']) != declared:
+    # These provider modules revalidate the exact authority in compile_entry.
+    # The separate family qualifier is still required before delegating.
+    if provider.qualifier != provider.compiler and import_module(provider.qualifier).check(reference['uri']) != declared:
         raise ValueError('CPU provider authority changed during qualification')
     return reference, provider
 

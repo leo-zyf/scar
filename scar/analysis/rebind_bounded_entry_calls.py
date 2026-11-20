@@ -26,6 +26,9 @@ RUN = 'scar.call-binding-run'
 _PLAN = 'scar.call-binding-plan'
 _RAW = 'scar.call-binding-observations'
 _REF_FIELDS = {'uri', 'schema', 'size_bytes', 'sha256'}
+_RESOURCE_SCOPE_READERS = frozenset((
+    'source_resource_scopes.py', 'source_resource_scope_view.py', '../ir/program/resource_scopes.py',
+))
 
 
 class ReuseMiss(ValueError):
@@ -128,7 +131,13 @@ def _templates(materials, root, units):
 def _static_materials(graph, program, plan):
     spec = program['f4']
     catalog_ref = spec['catalog']
-    _require(plan['catalog'] == catalog_ref and program['rules'] == _rules() and program['trace'] is None,
+    recorded, current = program['rules'], _rules()
+    # F4 installs observed resource-scope readers only for an explicit
+    # component. Source-only bounded CALL correspondence uses no such reader.
+    inactive = (_RESOURCE_SCOPE_READERS if 'resource_scopes' not in spec['components'] else ())
+    _require(plan['catalog'] == catalog_ref and program['trace'] is None
+             and recorded.keys() == current.keys()
+             and all(recorded[name] == digest for name, digest in current.items() if name not in inactive),
              'F4 catalog, reader rules or source-only projection profile changed')
     _require(artifact_reference(projection.__file__, 'scar.python-producer') == graph['producer'],
              'bounded source projection semantics changed')
