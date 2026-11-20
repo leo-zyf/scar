@@ -1,0 +1,181 @@
+{
+  "next_observed_candidate": {
+    "evidence": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-asset-opens/result.json",
+      "sha256": "53cecf5039ca1d8992cb117b4408be9f04059851a44d745a3d974ea3923699c9",
+      "size_bytes": 793
+    },
+    "measured_latency_ns": null,
+    "status": "OBSERVED"
+  },
+  "schema": "scar.cpu-native-public-argv-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "finite_numeric_and_normal_cli_scope": true,
+    "native_ingress_routes": 8,
+    "original_alias_capture": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-argv-original-alias.json",
+      "sha256": "ab2d07b5afb2af3201c78a1a52bd5ed6ee0558281df159324cb0b5cb721f7727",
+      "size_bytes": 5484
+    },
+    "original_default_capture": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-argv-original-default.json",
+      "sha256": "7624f4bf1e059c7d5ef10f48f443e4b01dc2b9c4612a2911866c5cc58823911d",
+      "size_bytes": 5087
+    },
+    "source_argv": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-argv-release.json",
+      "sha256": "b7bf449c14720b468f4458b5dbaa3896e61490e62a55d1ec6032ff5ade60df17",
+      "size_bytes": 23867
+    },
+    "source_options": 7,
+    "status": "OBSERVED"
+  },
+  "stage2": {
+    "compiled_artifact_dependencies_revalidated_before_publication": true,
+    "default_backend": "NO_OP",
+    "full_export": {
+      "cpu_affinity": [
+        2,
+        3
+      ],
+      "elapsed_seconds": 183.79,
+      "max_rss_kib": 271764,
+      "receipt": {
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-final-export.time",
+        "sha256": "b11d0f20d462af0baefd86e85d60fa6cbd59920dcd543798e72e2a5660036b22",
+        "size_bytes": 64
+      }
+    },
+    "repeated_source_replay_after": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/cold-replay-dedup/qualified-source.json",
+      "sha256": "1f232dd138cb404b9b9ff6302c4a6f15e399043ff48b36aa0168adb3e7446407",
+      "size_bytes": 359
+    },
+    "repeated_source_replay_before": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/cold-replay-dedup/before-source.json",
+      "sha256": "cd312b9970f7cf003c9e0330a6f08c38f2baa0eecfafa0931f8bb6b9059cd2f7",
+      "size_bytes": 352
+    },
+    "repeated_source_replay_elapsed_seconds": {
+      "after": 39.502446489059366,
+      "before": 74.02870210108813
+    },
+    "replay_cpu_affinity": [
+      5
+    ],
+    "replay_qualification": "EXACT_SAME_TRANSACTION_DETACHED_RESULT",
+    "status": "CONDITIONAL_EXPLICIT_TRIAL_ONLY"
+  },
+  "stage3": {
+    "binary": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-final/bin/scar_stateful_entry",
+      "sha256": "7c9d37c14a17d5d009b2e1c9a9bc24365e0cde8a3dbc4d75c7eb9494c92a7227",
+      "size_bytes": 170816
+    },
+    "generated_argv": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-final/include/scar_generated/native_controller_argv.hpp",
+      "sha256": "c214ced4f5988c4026621ebc34cded77ebf9aa541e78c8f48c2fc7d60b76ce81",
+      "size_bytes": 11752
+    },
+    "manifest": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-final/result.json",
+      "sha256": "f5e6af7cbb0be590bf4815e6b481e7e3fac32e4ef167c2b314c5942fb949575c",
+      "size_bytes": 53933
+    },
+    "no_hidden_slots_in_public_invocation": true,
+    "python_runtime_required": false,
+    "runtime_members_equal_to_timed_package": true,
+    "source": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-final/src/main.cpp",
+      "sha256": "ca63b6c02bf2ef64f75ab6083895f38689b967d693faf71958ac8362c6e0aae3",
+      "size_bytes": 18759
+    },
+    "source_alternate_branch": "UNADMITTED",
+    "status": "IMPLEMENTED"
+  },
+  "validation": {
+    "argv_conformance": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-controller-argv-conformance.json",
+      "sha256": "e44f5752f708fc7e40d4d1ce0b9de6aa3861114085140ddf869a96d4c8f58d75",
+      "size_bytes": 1883
+    },
+    "benchmark_stderr_recorded_separately": true,
+    "cpu_affinity": [
+      0
+    ],
+    "includes_ffmpeg": true,
+    "paired_runs": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-paired/result.json",
+      "sha256": "02ddfa12257459e26804019125ce8b1600e24f502b1e09fcbb04b7332f4d0db6",
+      "size_bytes": 69075
+    },
+    "repetitions": 3,
+    "report": [
+      {
+        "args": {
+          "death_rate": 0.06,
+          "dump_freq": 1,
+          "end_time": 1.3,
+          "feed_rate": 0.04,
+          "movie": true
+        },
+        "case": "all_frames_default",
+        "exact_stdout_and_files": true,
+        "observed_median_ratio": 1.5667917507665916,
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 1475642064,
+            "median_ns": 1466064033,
+            "min_ns": 1459773350,
+            "population_stdev_ns": 6524547.276395216,
+            "repetitions": 3
+          },
+          "original": {
+            "max_ns": 2298215251,
+            "median_ns": 2297017033,
+            "min_ns": 2289266250,
+            "population_stdev_ns": 3966456.330370333,
+            "repetitions": 3
+          }
+        }
+      },
+      {
+        "args": {
+          "death_rate": 0.0625,
+          "dump_freq": 2,
+          "end_time": 2.5,
+          "feed_rate": 0.033,
+          "movie": true
+        },
+        "case": "sparse_frames_rates",
+        "exact_stdout_and_files": true,
+        "observed_median_ratio": 1.5677305297764792,
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 1481255433,
+            "median_ns": 1473677599,
+            "min_ns": 1469890272,
+            "population_stdev_ns": 4725043.191953158,
+            "repetitions": 3
+          },
+          "original": {
+            "max_ns": 2314429050,
+            "median_ns": 2310329363,
+            "min_ns": 2301109661,
+            "population_stdev_ns": 5569923.8155581225,
+            "repetitions": 3
+          }
+        }
+      }
+    ],
+    "smoke": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-public-argv-validation/result.json",
+      "sha256": "5acd725737855dc988a9a8809e3e7e9ad58559431f664357cbbbadd02d08eac0",
+      "size_bytes": 1057
+    },
+    "status": "VERIFIED",
+    "warmups": 1
+  },
+  "whole_program_domain_verified": false
+}

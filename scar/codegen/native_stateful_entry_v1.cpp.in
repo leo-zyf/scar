@@ -208,9 +208,9 @@ void run(int argc, char* argv[]) {
 
 int main(int argc, char* argv[]) {
     try {
-        run(argc, argv);
+@MAIN_DISPATCH@
         return 0;
-    } catch (const std::exception& error) {
+    }@MAIN_ARGV_ERROR@ catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }

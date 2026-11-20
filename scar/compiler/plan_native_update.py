@@ -4,6 +4,7 @@ import json
 from math import prod
 from pathlib import Path
 
+from scar.analysis.replay_transaction import detached_replay
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import (
     CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem, PlanningResource,
@@ -218,14 +219,18 @@ def prepare_native_update_plan(source, recipe, out):
 
 def read_native_update_plan(path):
     reference = _reference(path, SCHEMA)
-    report = read_artifact(reference)
-    problem, replay = _derive(report['source'], report['numeric_recipe'])
-    problem_ref = _reference(Path(reference['uri']).with_name('problem.json'), PROBLEM)
-    if (report != _report(report['source'], report['numeric_recipe'], problem_ref, problem, replay)
-            or problem_from_dict(read_artifact(problem_ref)) != problem):
-        raise ValueError('planning envelope differs from original update and numerical recipe replay')
-    read_artifact(reference)
-    return report, problem
+
+    def replay():
+        report = read_artifact(reference)
+        problem, replay_summary = _derive(report['source'], report['numeric_recipe'])
+        problem_ref = _reference(Path(reference['uri']).with_name('problem.json'), PROBLEM)
+        if (report != _report(report['source'], report['numeric_recipe'], problem_ref, problem, replay_summary)
+                or problem_from_dict(read_artifact(problem_ref)) != problem):
+            raise ValueError('planning envelope differs from original update and numerical recipe replay')
+        read_artifact(reference)
+        return report, problem
+
+    return detached_replay('scar.native-update-planning/v1', tuple(sorted(reference.items())), replay)
 
 
 def main(argv=None):

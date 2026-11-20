@@ -56,6 +56,20 @@ def _unique(items, reason):
 
 
 @dataclass(frozen=True, slots=True)
+class PublicControllerArgv:
+    reference: dict
+    header: str
+    source: bytes
+
+    def members(self):
+        return {self.header: ('scar.cpp-header', self.source)}
+
+    def artifacts(self):
+        return dict(planning=self.reference, header=self.header, driver='NATIVE_ORIGINAL_OPTION_SPELLINGS',
+                    same_process=True, whole_program_translated=False, deployment_authorized=False)
+
+
+@dataclass(frozen=True, slots=True)
 class NativeController:
     reference: dict
     plan: dict
@@ -71,6 +85,7 @@ class NativeController:
     child: NativeControllerChild | None = None
     startup: NativeControllerStartup | None = None
     plot: NativeControllerPlot | None = None
+    public_argv: PublicControllerArgv | None = None
 
     def members(self):
         members = {
@@ -86,6 +101,8 @@ class NativeController:
             members.update(self.startup.members())
         if self.plot is not None:
             members.update(self.plot.members())
+        if self.public_argv is not None:
+            members.update(self.public_argv.members())
         return members
 
     def artifacts(self):
@@ -112,11 +129,35 @@ class NativeController:
             report['console']['mode'] = 'NATIVE_ASCII_STDOUT_WITH_INHERITED_CHILD'
             report['console']['runtime_requires_exclusive_stdout'] = False
             report['final_state_files_optional'] = True
+        if self.public_argv is not None:
+            report['public_argv'] = self.public_argv.artifacts()
         return report
 
 
+def _prepare_public_argv(reference, controller_source, startup, child, plot, extra_inputs, guards, ports):
+    from scar.analysis.source_controller_argv import check
+    from scar.codegen.native_controller_argv import HEADER, render
+
+    if startup is None or child is None or plot is None:
+        raise ValueError('public original arguments require the qualified startup and native effects')
+    recipe = check(reference['uri'])
+    if (recipe != read_artifact(reference) or recipe['startup'] != startup.reference
+            or recipe['controller'] != controller_source):
+        raise ValueError('public original arguments must bind the current startup/controller route')
+    arrays = [row for row in ports if row['kind'] == 'array']
+    if set(startup.array_ordinals) != set(range(len(arrays))) or any(
+            path not in startup.guard_values for path, _ in guards):
+        raise ValueError('public arguments leave a numerical array or branch ingress unbound')
+    slots = [path for index, path in extra_inputs if index not in startup.slot_ordinals]
+    numerics = [row['id'] for index, row in enumerate(item for item in ports if item['kind'] == 'scalar')
+                if index not in startup.numeric_ordinals]
+    directory = '.'.join(child.contract['directory_field_path'])
+    return PublicControllerArgv(reference, HEADER, render(recipe, slot_arguments=slots,
+                                                          numeric_ports=numerics, directory_argument=directory))
+
+
 def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None,
-            startup_reference=None, plot_reference=None, plot_provider=None, package=None):
+            startup_reference=None, plot_reference=None, plot_provider=None, argv_reference=None, package=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -182,8 +223,12 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
 
         plot = prepare_plot(plot_reference, plot_provider, controller_plan=plan,
                             startup=startup, console=console, child=child, ports=ports)
+    public_argv = None
+    if argv_reference is not None:
+        public_argv = _prepare_public_argv(argv_reference, report['source'],
+                                          startup, child, plot, extra_inputs, guards, ports)
     return NativeController(reference, plan, update, source, tuple(numeric_slots), tuple(extra_inputs),
-                            guards, tuple(outputs), site, carried_index, console, child, startup, plot)
+                            guards, tuple(outputs), site, carried_index, console, child, startup, plot, public_argv)
 
 
 def render(controller, setup, selected):
@@ -359,4 +404,18 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
         rendered['UPDATE_OUTPUT'] = '    if (!controller_out.empty()) {\n' + ''.join(
             '    ' + line for line in output.splitlines(keepends=True)) + '    }\n'
         rendered['FINALIZE_EFFECTS'] = '    require(std::fflush(stdout) == 0, "cannot publish original stdout");\n'
+    if controller.public_argv is not None:
+        header = Path(controller.public_argv.header).name
+        rendered['UPDATE_DECLARATIONS'] = f'#include "{header}"\n' + rendered['UPDATE_DECLARATIONS']
+        rendered['MAIN_DISPATCH'] = '''        auto lowered = lower_controller_argv(argc, argv);
+        if (lowered.empty()) return 0;
+        std::vector<char*> internal;
+        internal.reserve(lowered.size() + 1);
+        for (auto& argument : lowered) internal.push_back(argument.data());
+        internal.push_back(nullptr);
+        run(static_cast<int>(lowered.size()), internal.data());'''
+        rendered['MAIN_ARGV_ERROR'] = ''' catch (const ScarPublicArgvError& error) {
+        std::cerr << error.what() << '\\n';
+        return 2;
+    }'''
     return rendered

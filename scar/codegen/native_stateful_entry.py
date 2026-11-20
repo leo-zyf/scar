@@ -100,6 +100,7 @@ def _render(ports, metadata, provider, update=None, controller=None):
         ALTERNATE_BIND_COUNT='', CHECK_BINDINGS='', OPTIONAL_ARRAY_OUTPUT='',
         CHECK_SCALAR_INGRESS='', CHECK_ARRAY_INGRESS='', MAY_INITIALIZE_ARRAY='', AFTER_ARRAYS_READY='',
         ENTRY_ARGUMENTS='    const auto arguments = bind(argc, argv);',
+        MAIN_DISPATCH='        run(argc, argv);', MAIN_ARGV_ERROR='',
         RUN_BODY=setup + f'''    const auto status = table->run(descriptors.data(), descriptors.size(),
                                    arguments.values.data(), arguments.values.size(), {provider_args});
     if (status != 0) throw std::runtime_error("native stateful region declined: " + std::to_string(status));''',
@@ -190,27 +191,48 @@ def _report(reference, metadata, plan, ports, root, provider, update, controller
         if controller.plot is not None:
             report['status'] = 'SOURCE_CONTROLLED_NATIVE_APPLICATION_TRIAL'
             report['effects'] = 'LIVE_NATIVE_RASTER_STDOUT_AND_ORIGINAL_SYNCHRONOUS_CHILD'
+        if controller.public_argv is not None:
+            report['status'] = 'SOURCE_ARGV_NATIVE_APPLICATION_TRIAL'
+    return report
+
+
+def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None,
+           startup_plan=None, plot_plan=None, plot_provider=None, argv_plan=None):
+    """Publish a CMake project and executable using the original replayed ABI code."""
+    _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
+    _need(not any((console_plan, child_plan, startup_plan, plot_plan, plot_provider, argv_plan))
+          or controller_plan is not None,
+          'effect plan requires its original controller plan')
+    _need(console_plan is None or child_plan is None or plot_plan is not None,
+          'choose one effect plan until inherited stdout is qualified')
+    _need(argv_plan is None or all((startup_plan, plot_plan, plot_provider, child_plan, console_plan)),
+          'public arguments require the qualified startup and all native effects')
+    out = Path(out).absolute()
+    _need(out.parent.resolve(strict=True) == out.parent and not out.exists() and not out.is_symlink(),
+          'fresh output directory in an existing canonical parent required')
+    compiler = shutil.which('g++')
+    _need(compiler is not None, 'GNU C++20 compiler unavailable')
+    with TemporaryDirectory(prefix='.scar-stateful-entry-', dir=out.parent) as temporary:
+        root = Path(temporary) / 'entry'
+        report = _stage_entry(native, root, compiler, update_plan=update_plan, controller_plan=controller_plan,
+                              console_plan=console_plan, child_plan=child_plan, startup_plan=startup_plan,
+                              plot_plan=plot_plan, plot_provider=plot_provider, argv_plan=argv_plan)
+        root.rename(out)
     return report
 
 
 @replay_transaction()
-def export(native, out, *, update_plan=None, controller_plan=None, console_plan=None, child_plan=None,
-           startup_plan=None, plot_plan=None, plot_provider=None):
-    """Publish a CMake project and executable using the original replayed ABI code."""
+def _stage_entry(native, root, compiler, *, update_plan, controller_plan, console_plan, child_plan,
+                 startup_plan, plot_plan, plot_provider, argv_plan):
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
-    _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
-    _need(not any((console_plan, child_plan, startup_plan, plot_plan, plot_provider)) or controller_plan is not None,
-          'effect plan requires its original controller plan')
-    _need(console_plan is None or child_plan is None or plot_plan is not None,
-          'choose one effect plan until inherited stdout is qualified')
     from scar.codegen.native_update_entry import COPY_SOURCE
     update = controller = None
     if controller_plan is not None:
         from scar.codegen.native_controller_entry import prepare
         from scar.compiler.plan_native_controller import SCHEMA as PLANNING
-        console_ref = child_ref = startup_ref = plot_ref = renderer_ref = None
+        console_ref = child_ref = startup_ref = plot_ref = renderer_ref = argv_ref = None
         if console_plan is not None:
             from scar.compiler.plan_controller_console import SCHEMA as CONSOLE
             console_ref = artifact_reference(Path(console_plan).resolve(strict=True), CONSOLE)
@@ -226,50 +248,45 @@ def export(native, out, *, update_plan=None, controller_plan=None, console_plan=
         if plot_provider is not None:
             from scar.codegen.native_live_plot import SCHEMA as RENDERER
             renderer_ref = artifact_reference(Path(plot_provider).resolve(strict=True) / 'result.json', RENDERER)
+        if argv_plan is not None:
+            from scar.analysis.source_controller_argv import SCHEMA as ARGV
+            argv_ref = artifact_reference(Path(argv_plan).resolve(strict=True), ARGV)
         controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
                              metadata, ports, console_reference=console_ref, child_reference=child_ref,
-                             startup_reference=startup_ref, plot_reference=plot_ref, plot_provider=renderer_ref)
+                             startup_reference=startup_ref, plot_reference=plot_ref, plot_provider=renderer_ref,
+                             argv_reference=argv_ref)
         update = controller.update
     elif update_plan is not None:
         from scar.codegen.native_update_entry import prepare
         from scar.compiler.plan_native_update import SCHEMA as PLANNING
         update_ref = artifact_reference(Path(update_plan).resolve(strict=True), PLANNING)
         update = prepare(update_ref, metadata, ports)
-    out = Path(out).absolute()
-    _need(out.parent.resolve(strict=True) == out.parent and not out.exists() and not out.is_symlink(),
-          'fresh output directory in an existing canonical parent required')
-    compiler = shutil.which('g++')
-    _need(compiler is not None, 'GNU C++20 compiler unavailable')
-    with TemporaryDirectory(prefix='.scar-stateful-entry-', dir=out.parent) as temporary:
-        root = Path(temporary) / 'entry'
-        (root / 'src').mkdir(parents=True)
-        include = root / 'include/scar_generated'
-        include.mkdir(parents=True)
-        (root / 'src/main.cpp').write_bytes(_render(ports, metadata, provider, update, controller))
-        shutil.copyfile(original / metadata['files']['source'], root / 'src/stateful.cpp')
-        for name in _HEADERS:
-            shutil.copyfile(original / metadata['files'][name], include / name)
-        if provider is not None:
-            for name, payload in zip((stateful_numpy_provider.SOURCE, stateful_numpy_provider.LICENSE), provider[1:], strict=True):
-                (root / name).parent.mkdir(exist_ok=True)
-                (root / name).write_bytes(payload)
-        if update is not None:
-            (root / COPY_SOURCE).write_bytes(update.copy_source)
-        if controller is not None:
-            for name, (_, payload) in controller.members().items():
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(payload)
-        _project(root, plan, provider, update, controller)
-        _, dependencies = build_native_project(root, _TARGET, (compiler,))
-        _need({Path(name).name for name in dependencies} <= _host_libraries(controller),
-              'native executable has a non-host dependency')
-        report = _report(reference, metadata, plan, ports, root, provider, update, controller)
-        (root / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
-        # All inputs were cold-admitted once in this transaction. Compare the
-        # emitted package to those inputs without rerunning the planning graph.
-        _verify_package(root, report, reference, metadata, plan, ports, original, provider, update, controller)
-        root.rename(out)
+    (root / 'src').mkdir(parents=True)
+    include = root / 'include/scar_generated'
+    include.mkdir(parents=True)
+    (root / 'src/main.cpp').write_bytes(_render(ports, metadata, provider, update, controller))
+    shutil.copyfile(original / metadata['files']['source'], root / 'src/stateful.cpp')
+    for name in _HEADERS:
+        shutil.copyfile(original / metadata['files'][name], include / name)
+    if provider is not None:
+        for name, payload in zip((stateful_numpy_provider.SOURCE, stateful_numpy_provider.LICENSE), provider[1:], strict=True):
+            (root / name).parent.mkdir(exist_ok=True)
+            (root / name).write_bytes(payload)
+    if update is not None:
+        (root / COPY_SOURCE).write_bytes(update.copy_source)
+    if controller is not None:
+        for name, (_, payload) in controller.members().items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+    _project(root, plan, provider, update, controller)
+    _, dependencies = build_native_project(root, _TARGET, (compiler,))
+    _need({Path(name).name for name in dependencies} <= _host_libraries(controller),
+          'native executable has a non-host dependency')
+    report = _report(reference, metadata, plan, ports, root, provider, update, controller)
+    (root / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
+    # Compare against the admitted inputs before the transaction closes.
+    _verify_package(root, report, reference, metadata, plan, ports, original, provider, update, controller)
     return report
 
 
@@ -287,12 +304,14 @@ def check(package):
         child = original['controller'].get('child')
         startup = original['controller'].get('startup')
         plot = original['controller'].get('plot')
+        public_argv = original['controller'].get('public_argv')
         controller = prepare(original['controller']['planning'], metadata, ports,
                              console_reference=console['planning'] if console is not None else None,
                              child_reference=child['planning'] if child is not None else None,
                              startup_reference=startup['planning'] if startup is not None else None,
                              plot_reference=plot['planning'] if plot is not None else None,
                              plot_provider=plot['provider'] if plot is not None else None,
+                             argv_reference=public_argv['planning'] if public_argv is not None else None,
                              package=root)
         update = controller.update
     elif 'update' in original:
@@ -337,17 +356,17 @@ def main(argv=None):
     plans = parser.add_mutually_exclusive_group()
     plans.add_argument('--update-plan')
     plans.add_argument('--controller-plan')
-    for name in ('console-plan', 'child-plan', 'startup-plan', 'plot-plan', 'plot-provider'):
+    for name in ('console-plan', 'child-plan', 'startup-plan', 'plot-plan', 'plot-provider', 'argv-plan'):
         parser.add_argument('--' + name)
     args = parser.parse_args(argv)
     if args.check and not (args.native or args.out or args.update_plan or args.controller_plan
                            or args.console_plan or args.child_plan or args.startup_plan or args.plot_plan
-                           or args.plot_provider):
+                           or args.plot_provider or args.argv_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
         report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan,
                         console_plan=args.console_plan, child_plan=args.child_plan, startup_plan=args.startup_plan,
-                        plot_plan=args.plot_plan, plot_provider=args.plot_provider)
+                        plot_plan=args.plot_plan, plot_provider=args.plot_provider, argv_plan=args.argv_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

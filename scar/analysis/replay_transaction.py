@@ -1,7 +1,7 @@
 """Bounded, detached reuse inside one synchronous metadata replay.
 
-Each transaction owns its cache and content guards. Hits re-hash dependencies;
-successful exit rechecks them again. Optional Python file-open observation is
+Each transaction owns its cache and content guards. Hits check file versions;
+the outer transaction checks full contents on exit. Optional file observation is
 limited to a requested pure metadata factory; it is neither a native-I/O
 tracker nor a sandbox, and never observes workload execution on our behalf.
 """
@@ -36,8 +36,33 @@ def current_transaction():
     return value if value is not None and not value.closed and value.owner == get_ident() else None
 
 
-def _file_version(path):
+def _root(transaction):
+    while transaction is not None and transaction.parent is not None:
+        transaction = transaction.parent
+    return transaction
+
+
+def _stamp(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _directory_version(path):
+    try:
+        info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return ('ABSENT',)
+    return ('DIRECTORY' if stat.S_ISDIR(info.st_mode) else 'NOT_DIRECTORY', _stamp(info))
+
+
+def _file_version(path, *, rehash=False):
     path = str(Path(path).absolute())
+    owner = _root(current_transaction())
+    if owner is not None and not rehash:
+        previous = owner._file_versions.get(path)
+        if previous is not None:
+            current = os.stat(path)
+            if stat.S_ISREG(current.st_mode) and _stamp(current) == previous[3]:
+                return previous
     token = _READING.set(True)
     try:
         with open(path, 'rb') as stream:
@@ -48,11 +73,12 @@ def _file_version(path):
             while chunk := stream.read(1024*1024):
                 digest.update(chunk); size += len(chunk)
             after = os.fstat(stream.fileno())
-        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
-                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+        if _stamp(before) != _stamp(after) or _stamp(after) != _stamp(os.stat(path)):
             raise ValueError('metadata dependency changed while hashing: '+path)
-        signature = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-        return path, digest.hexdigest(), size, signature
+        version = path, digest.hexdigest(), size, _stamp(after)
+        if owner is not None:
+            owner._file_versions[path] = version
+        return version
     finally:
         _READING.reset(token)
 
@@ -65,6 +91,8 @@ class _Capture:
     reusable: bool = True
     pipe_processes: set = field(default_factory=set)
     query_processes: set = field(default_factory=set)
+    observe_directories: bool = False
+    directories: dict = field(default_factory=dict)
 
 
 def _popen_frame(code, descriptor=None):
@@ -104,6 +132,8 @@ def _audit(event, args):
                 transaction._opened(*args)
             elif event == 'subprocess.Popen':
                 transaction._process(*args)
+            elif event in ('os.listdir', 'os.scandir'):
+                transaction._listed(args[0] if args else None)
             else:
                 # Directory membership and side effects need separate proof;
                 # a collection of observed file reads cannot establish them.
@@ -137,7 +167,9 @@ class ReplayTransaction:
         self.owner = get_ident()
         self.closed = False
         self._documents = OrderedDict()
+        self._file_versions = {}
         self._watched = {}
+        self._directories = {}
         self._captures = []
         self.statistics = dict(hits=0, misses=0, bypasses=0, watched_files=0, evictions=0)
         self.by_namespace = {}
@@ -154,13 +186,43 @@ class ReplayTransaction:
         if self.parent is not None:
             self.parent._remember(version)
 
-    def watch(self, path, sha256, size_bytes):
+    def watch(self, path, sha256, size_bytes, *, rehash=False):
         if self.closed or self.owner != get_ident():
             raise ValueError('replay dependency needs its live owner transaction')
-        version = _file_version(path)
+        version = _file_version(path, rehash=rehash)
         if version[1:3] != (sha256, size_bytes):
             raise ValueError('metadata dependency byte identity differs: '+version[0])
         self._remember(version)
+
+    def _watch_directory(self, path, signature):
+        if _directory_version(path) != signature:
+            raise ValueError('metadata path or membership version changed within replay: '+path)
+        previous = self._directories.setdefault(path, signature)
+        if previous != signature:
+            raise ValueError('metadata path or membership version changed within replay: '+path)
+        for capture in self._captures:
+            capture.directories[path] = signature
+        if self.parent is not None:
+            self.parent._watch_directory(path, signature)
+
+    def _listed(self, path):
+        supported = path is None or isinstance(path, (str, bytes, os.PathLike))
+        for capture in self._captures:
+            if not capture.observe_directories or not supported:
+                capture.reusable = False
+        if supported and any(capture.observe_directories for capture in self._captures):
+            path = str(Path(os.fsdecode(path) if path is not None else '.').absolute())
+            if any(path == root or path.startswith(root+'/') for root in ('/proc', '/sys', '/dev')):
+                for capture in self._captures:
+                    capture.reusable = False
+                return
+            try:
+                signature = _directory_version(path)
+            except OSError:
+                for capture in self._captures:
+                    capture.reusable = False
+                return
+            self._watch_directory(path, signature)
 
     def _opened(self, path, mode, flags):
         if not self._captures:
@@ -190,6 +252,12 @@ class ReplayTransaction:
             return
         try:
             version = _file_version(absolute)
+        except (FileNotFoundError, NotADirectoryError):
+            # Pure metadata discovery may try both listdir and open on an
+            # optional path. Its absence is an input just like a returned
+            # directory listing; reappearance invalidates the detached result.
+            self._absent(absolute)
+            return
         except (OSError, ValueError):
             # Missing/volatile inputs keep the original factory behavior and
             # diagnostics, but cannot create a reusable proof document.
@@ -197,6 +265,13 @@ class ReplayTransaction:
                 row.reusable = False
             return
         self._remember(version)
+
+    def _absent(self, path):
+        for row in self._captures:
+            if not row.observe_directories:
+                row.reusable = False
+        if any(row.observe_directories for row in self._captures):
+            self._watch_directory(path, ('ABSENT',))
 
     def _process(self, executable, args, cwd, env):
         command = tuple(args) if type(args) in (tuple, list) else ()
@@ -209,7 +284,8 @@ class ReplayTransaction:
             else:
                 row.reusable = False
 
-    def memo(self, namespace, key, factory, *, clone=True, capture_reads=False, identity_queries=()):
+    def memo(self, namespace, key, factory, *, clone=True, capture_reads=False, identity_queries=(),
+             observe_directories=False):
         """Reuse a pure result; optional identity query output must be in key.
 
         Non-file live state remains the caller's responsibility. Only explicit
@@ -228,7 +304,7 @@ class ReplayTransaction:
         if self.closed or self.owner != get_ident() or clone is not True:
             self.statistics['bypasses'] += 1
             return factory()
-        cache_key = namespace, key, capture_reads, identity_queries
+        cache_key = namespace, key, capture_reads, identity_queries, observe_directories
         try:
             hash(cache_key)
         except TypeError:
@@ -239,16 +315,18 @@ class ReplayTransaction:
             return factory()
         cached = self._documents.get(cache_key)
         if cached is not None:
-            value, dependencies = cached
+            value, dependencies, directories = cached
             for path, digest, size in dependencies:
                 self.watch(path, digest, size)
+            for path, signature in directories:
+                self._watch_directory(path, signature)
             self._documents.move_to_end(cache_key)
             self.statistics['hits'] += 1
             counts['hits'] += 1
             return deepcopy(value)
         self.statistics['misses'] += 1
         counts['misses'] += 1
-        capture = _Capture(capture_reads, identity_queries)
+        capture = _Capture(capture_reads, identity_queries, observe_directories=observe_directories)
         self._captures.append(capture)
         try:
             result = factory()
@@ -264,7 +342,7 @@ class ReplayTransaction:
                 self.statistics['bypasses'] += 1
             else:
                 dependencies = tuple((path, *version) for path, version in capture.dependencies.items())
-                self._documents[cache_key] = stored, dependencies
+                self._documents[cache_key] = stored, dependencies, tuple(capture.directories.items())
                 while len(self._documents) > self.max_entries:
                     self._documents.popitem(last=False)
                     self.statistics['evictions'] += 1
@@ -274,13 +352,26 @@ class ReplayTransaction:
 
     def validate(self):
         for path, (digest, size, _) in tuple(self._watched.items()):
-            self.watch(path, digest, size)
+            self.watch(path, digest, size, rehash=self.parent is None)
+        for path, signature in tuple(self._directories.items()):
+            self._watch_directory(path, signature)
 
     def close(self):
         self.closed = True
         self._documents.clear()
+        self._file_versions.clear()
         self._captures.clear()
         self._watched.clear()
+        self._directories.clear()
+
+
+def detached_replay(namespace, key, factory):
+    """Reuse only byte-validated detached metadata within its export owner."""
+    owner = _root(current_transaction())
+    if owner is None:
+        return factory()
+    context = (sys.version_info, sys.flags.optimize, sys.executable, os.getcwd(), tuple(sys.path))
+    return owner.memo(namespace, (context, key), factory, capture_reads=True, observe_directories=True)
 
 
 @contextmanager
@@ -296,4 +387,4 @@ def replay_transaction(*, max_entries=32):
         _ACTIVE.reset(token)
 
 
-__all__ = ['ReplayTransaction', 'current_transaction', 'replay_transaction']
+__all__ = ['ReplayTransaction', 'current_transaction', 'detached_replay', 'replay_transaction']

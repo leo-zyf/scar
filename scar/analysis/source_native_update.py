@@ -9,7 +9,7 @@ from scar.analysis.array_copy_effects import derive_array_copy_effects
 from scar.analysis.bounded_entry_calls import SCHEMA as ENTRY_CALLS, _admit_entry_calls
 from scar.analysis.build import BuildSession
 from scar.analysis.call_operand_reader import read_call_operands
-from scar.analysis.replay_transaction import replay_transaction
+from scar.analysis.replay_transaction import detached_replay, replay_transaction
 from scar.analysis.session_scalar_flow import derive_scalar_flow
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_ordered_call_content import SCHEMA as ORDERED, check as check_ordered
@@ -331,11 +331,16 @@ def project(ordered_graph, *, entry_calls=None):
 
 
 def check(path):
-    saved = read_artifact(artifact_reference(Path(path).resolve(strict=True), SCHEMA))
-    rebuilt = project(saved['ordered_graph']['uri'], entry_calls=saved['entry_calls']['uri'])
-    if saved != rebuilt:
-        raise ValueError('source update composition differs from original source and observed order')
-    return rebuilt
+    reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+
+    def replay():
+        saved = read_artifact(reference)
+        rebuilt = project(saved['ordered_graph']['uri'], entry_calls=saved['entry_calls']['uri'])
+        if saved != rebuilt or saved != read_artifact(reference):
+            raise ValueError('source update composition differs from original source and observed order')
+        return rebuilt
+
+    return detached_replay('scar.source-native-update/v1', tuple(sorted(reference.items())), replay)
 
 
 def main(argv=None):
