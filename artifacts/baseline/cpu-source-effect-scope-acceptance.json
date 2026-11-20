@@ -219,6 +219,80 @@
         "unassigned_work": 2966,
         "unclosed_scopes": 0
       }
+    },
+    "second_stage": {
+      "caller_schedule_changed": false,
+      "cost": {
+        "bytes": 6568,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-estimate.json",
+        "sha256": "549c1ca918ae7689c0a7ed183a1967b792be051244c74c33c7002c77526d5e2c"
+      },
+      "cost_status": "UNKNOWN",
+      "modified_duration_receipt_rejected": true,
+      "observed_external_write_order": "WRITE_SCOPE_EXIT_BEFORE_FIRST_REGION_ENTRY",
+      "observed_original_region_occurrences": 75,
+      "physical_resource_projection": {
+        "bytes": 1330,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/entry-effect-resources/result.json",
+        "sha256": "96d33fd30eaa94ac690eb18b595527a7ece307b9cea9f08e948350b980cb2601"
+      },
+      "publication_service_duration_ns": null,
+      "recipe": {
+        "bytes": 196632,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-recipe/recipe.json",
+        "sha256": "a729d5a982085696de154f404cac5b44f9b36f850e1e8b2812263ca73c53bb16"
+      },
+      "recipe_fingerprint_reissue": {
+        "bytes": 817,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-recipe-reissue.json",
+        "sha256": "7becc91d78a67a651f4a61bfb6d1c9ab81b7a8ef9e7f453b99a553507e49e45c"
+      },
+      "same_capture_order_only": true,
+      "semantic_time": {
+        "bytes": 7254,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/entry-effect-time/result.json",
+        "sha256": "00d61f4aa1806b2f2dd0d1d9bbff9592a7d317cae0e6c5579cc75d67bee189c0"
+      },
+      "storage_slots": 6,
+      "tasks": 20,
+      "unknown_task_durations": 20,
+      "unresolved_resource_requirements": 48
+    },
+    "third_stage": {
+      "correctness": {
+        "bytes": 1556,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-validation/result.json",
+        "sha256": "a3f718a26587cd7b85d93298abc9a611b1cc57555715c554d4fadd928cfac1b8"
+      },
+      "cpp_standard": 20,
+      "fallback_calls": 0,
+      "library": {
+        "bytes": 21248,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-native/native/stateful_72cd61d282f24c5f8b29.so",
+        "sha256": "82bff382230f82d8289aba4921df5fccfee3ea4c6837175b418c5052201fd4b6"
+      },
+      "lowering": {
+        "bytes": 10720,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-native/lowering-receipt.json",
+        "sha256": "ecc1a42631b6eedf2a5271fd6b3dd5bfea6a9e75ed8aa34dfd430482fed4d752"
+      },
+      "matched": [
+        "final arrays including halo and scalar types",
+        "each call pre/post inputs",
+        "stdout",
+        "stderr",
+        "file names and bytes"
+      ],
+      "native_calls": 4,
+      "operator_abi": 1,
+      "original_driver_runs_in_python": true,
+      "recipe_id": "recipe-v1:95540688d2c8aa8711955a3440f85d42305b302812dcb264fb676abc861985ee",
+      "source": {
+        "bytes": 14639,
+        "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/current-array-native/native/stateful.cpp",
+        "sha256": "2b3a9335a6af9c46115ac7c76e7cec66bf596aaee6e8ce12babc8c786c6e4d00"
+      },
+      "standalone_application": false
     }
   }
 }
