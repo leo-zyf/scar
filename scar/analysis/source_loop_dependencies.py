@@ -15,16 +15,21 @@ from scar.ir.record_codec import encode
 
 
 def _enclosed(start, adjacency, stops, *, max_states=20000, max_stack=128):
+    return {port for port, _ in _control_states(((start, ()),), adjacency, stops,
+                                               max_states=max_states, max_stack=max_stack)}
+
+
+def _control_states(seeds, adjacency, stops, *, max_states=20000, max_stack=128):
     # Shared child templates can return to several distinct callers. A plain
     # port BFS would splice one caller's entry to another caller's return and
     # leak membership past the selected loop. Keep original CallSite stacks;
     # they are structural recipe contexts, not runtime invocation identities.
-    seen=set(); pending=deque(((start,()),)); ports=set()
+    seen=set(); pending=deque(seeds)
     while pending:
         node,stack=pending.popleft(); coordinate=node,stack
         if node in stops or coordinate in seen:continue
         if len(seen)>=max_states:raise ValueError('loop membership control-state budget exhausted')
-        seen.add(coordinate);ports.add(node)
+        seen.add(coordinate)
         for edge in adjacency.get(node,()):
             following=stack
             if edge.transition is G.Transition.RESUME:
@@ -39,7 +44,7 @@ def _enclosed(start, adjacency, stops, *, max_states=20000, max_stack=128):
                 if not stack or stack[-1]!=edge.site:continue
                 following=stack[:-1]
             pending.append((edge.target,following))
-    return ports
+    return seen
 
 
 def loop_dependencies(material, function, *, flow=None):

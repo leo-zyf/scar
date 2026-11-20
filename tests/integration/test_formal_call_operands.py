@@ -5,9 +5,11 @@ from scar.analysis.source_call_operands import call_operands
 from scar.analysis.source_frontend import build_frontend
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.call_binding import plan_call_bindings
+from scar.ir.effects import Knowledge
 from scar.ir.program.dependencies import DependencyKind as K
 from scar.ir.program.reference_consumers import ArgumentRole
-from scar.ir.program.source_productions import ApplyPythonProtocol, ProductionStep
+from scar.ir.program.source_content import ContentRequestKind, WholeOwner
+from scar.ir.program.source_productions import ApplyInplaceOperator, ApplyPythonProtocol, ProductionStep
 from scar.ir.program.structured import PythonProtocolKind
 
 
@@ -23,6 +25,10 @@ def render(name):
     consume("caption")
     consume(f"caption")
     consume(text=f"caption {name}")
+
+def accumulate(view, delta):
+    view += delta
+    return view
 ''', encoding='utf-8')
     frontend = tmp_path / 'frontend'
     report = build_frontend((root,), frontend, sources=(source,))
@@ -55,3 +61,17 @@ def render(name):
             assert {PythonProtocolKind.FSTRING_FORMAT, PythonProtocolKind.BUILD_STRING} <= protocols
             assert any(not row.write and row.namespace.name == 'name' and
                        view.source_port(source_port(facts, row.value)) in reach.points for row in facts.names)
+
+    unit = sites[0]['unit']
+    provider = view.unit(unit)
+    function, = [fn for fn in provider.facts.functions if fn.parameter_names == ('view', 'delta')]
+    key, step = next((key, step) for key, plan in provider.material.closure(function.template).items()
+                     for step in plan.steps if type(step.instruction) is ApplyInplaceOperator)
+    operation = provider._node(key, step.id)
+    content = view.state(unit).content(complete=False)
+    index, = content.ensure_operation(operation)
+    request = content.accesses[index]
+    assert request.kind is ContentRequestKind.UPDATE and request.result is not None
+    assert isinstance(content.addresses[request.address].selector, WholeOwner)
+    assert request.payload != request.result
+    assert view.effects(operation).writes.knowledge is Knowledge.UNKNOWN

@@ -89,11 +89,19 @@ class ContentInterfaceIndex:
         protocol = type(ins) is P.ApplyPythonProtocol
         if not (language and (ins.action in _ATTRIBUTES or ins.action in _ITEMS or ins.action in _UPDATES)
                 or protocol and ins.protocol in _PROTOCOLS or type(ins) is P.ApplyNamespaceAction
+                or type(ins) is P.ApplyInplaceOperator
                 or type(ins) in _ASSOCIATIONS):
             return None
         if (context.unit != self.source.unit or context.steps.get(step.id) != step
                 or self.source.plans.get(context.key) != context.plan):
             raise ValueError('content request context is outside its original source unit/plan')
+
+        if type(ins) is P.ApplyInplaceOperator:
+            _shape(context, step, 2, 1)
+            # Augmented assignment attempts the in-place protocol. Python can
+            # produce a replacement result without changing the left operand.
+            return IdentifiedContent('UPDATE', context.value(step.arguments[0]), 0,
+                O.WholeOwner(), context.value(step.arguments[1]), context.result(step), None)
 
         if type(ins) is P.ApplyNamespaceAction:
             ensure=ins.kind is P.NamespaceActionKind.ENSURE_ANNOTATIONS

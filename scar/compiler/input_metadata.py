@@ -11,6 +11,8 @@ import json
 import math
 import os
 import uuid
+from threading import get_ident
+from weakref import ref
 from .model import SourceRef
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class InputMetadataObserver:
         self.stateful_inputs=tuple(stateful_inputs)
         self.region_id=region_id;self.region_sha256=region_sha256
         self.run='metadata:'+uuid.uuid4().hex
+        self._storage_observations={}
 
     def __call__(self,source,parameters,values):
         import numpy as np
@@ -112,7 +115,12 @@ class InputMetadataObserver:
             # Share delivery's exact ordinary-instance field protocol. Never
             # use getattr or evaluate a property to obtain observed inputs.
             from scar.runtime.stateful_guard import _input
+            from scar.analysis.ndarray_view_contract import NdarrayView, ndarray_view_contract
             inputs={}
+            owners=[]
+            history_key=(key,get_ident())
+            previous=self._storage_observations.get(history_key,{})
+            current={}
             for identifier,path,declared_kind in self.stateful_inputs:
                 item=dict(input_path=list(path),declared_kind=declared_kind,contents_recorded=False)
                 try:value=_input(path,bound)
@@ -123,6 +131,21 @@ class InputMetadataObserver:
                     item.update(kind='EXACT_NUMPY_NDARRAY',shape=list(value.shape),dtype=value.dtype.str,
                         strides=list(value.strides),nbytes=value.nbytes,c_contiguous=bool(value.flags.c_contiguous),
                         aligned=bool(value.flags.aligned),device='cpu')
+                    storage=ndarray_view_contract(value)
+                    if type(storage) is NdarrayView:
+                        ordinal=next((i for i, owner in enumerate(owners) if owner is storage.owner), len(owners))
+                        if ordinal==len(owners):
+                            owners.append(storage.owner)
+                        geometry=storage.geometry()
+                        item['storage_observation']=dict(geometry,owner_ordinal=ordinal)
+                        if identifier in previous:
+                            index, owner, old_geometry=previous[identifier]
+                            item['previous_storage_observation']=dict(boundary_ordinal=index,
+                                same_owner=owner() is storage.owner,
+                                same_geometry=old_geometry==geometry)
+                        current[identifier]=(len(self.records)+1,ref(storage.owner),geometry)
+                    else:
+                        item['storage_frontier']=storage.reason
                 elif type(value) in (int,float,np.float64):
                     # Scalars remain fresh runtime inputs, never compile-time
                     # constants inferred from this bounded observation.
@@ -132,6 +155,10 @@ class InputMetadataObserver:
                     if type(value)is int:item['within_exact_float64_integer_range']=abs(value)<=2**53
                 else:item.update(kind='UNKNOWN',reason='UNSUPPORTED_METADATA_TYPE')
                 inputs[identifier]=item
+            if self.counts[key]<self.limit:
+                self._storage_observations[history_key]=current
+            else:
+                self._storage_observations.pop(history_key,None)
         self.records.append(dict(boundary_observation=dict(run=self.run,process_id=os.getpid(),ordinal=len(self.records)+1),
             source=dict(path=source.path,sha256=source.sha256,code_key=source.code_key,qualname=source.qualname),inputs=inputs))
         if self.stateful_inputs:
