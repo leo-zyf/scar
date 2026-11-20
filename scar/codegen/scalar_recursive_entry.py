@@ -463,17 +463,10 @@ def _snapshot_codec(driver, native, sorted_plan):
                          position, score_type, entries[score_type])
 
 
-def project_observation(artifact_path, directory):
-    """Recompute the original differential from the executable's typed trace."""
+def _read_trace(directory, driver, native, sorted_plan, expected_sessions):
     from scar.runtime.scalar_recursive_driver_observe import ordered_map_digest
     from scar.runtime.scalar_recursive_observe import _pod
 
-    artifact_ref = _ref(artifact_path, SCHEMA)
-    artifact = read_artifact(artifact_ref)
-    plan = read_artifact(artifact['entry_plan'])
-    driver = read_artifact(plan['scope']['source_driver'])
-    native = read_artifact(artifact['driver_library'])
-    _, sorted_plan = _sorted(native)
     codec = _snapshot_codec(driver, native, sorted_plan)
     root = Path(directory).resolve(strict=True)
     states = {name:native['world'][name] for name in native['world_order']}
@@ -483,7 +476,7 @@ def project_observation(artifact_path, directory):
     history_field = driver['initialization']['history']['field']
     node_field = driver['initialization']['counter']['field']
     results, files = [], []
-    for index, expected in enumerate(driver['sessions']):
+    for index, expected in enumerate(expected_sessions):
         probes, snapshot = (_ref(root / f'{index}.{suffix}', 'application/octet-stream')
                             for suffix in ('probes','world'))
         _require(probes['uri'] == str(root / f'{index}.probes')
@@ -514,6 +507,18 @@ def project_observation(artifact_path, directory):
                             final_nodes=decoded[node_field], final_move_entries=len(decoded[move_field]),
                             final_score_entries=len(decoded[score_field]), ordered_map_digests=published))
         files.extend((probes, snapshot))
+    return results, files
+
+
+def project_observation(artifact_path, directory):
+    """Recompute the original differential from the executable's typed trace."""
+    artifact_ref = _ref(artifact_path, SCHEMA)
+    artifact = read_artifact(artifact_ref)
+    plan = read_artifact(artifact['entry_plan'])
+    driver = read_artifact(plan['scope']['source_driver'])
+    native = read_artifact(artifact['driver_library'])
+    _, sorted_plan = _sorted(native)
+    results, files = _read_trace(directory, driver, native, sorted_plan, driver['sessions'])
     return dict(schema=OBSERVATION, schema_version=1, artifact=artifact_ref, observed_from_exact_launch=True,
                 original_sessions_matched=True, sessions=results, trace_files=files)
 

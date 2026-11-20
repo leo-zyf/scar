@@ -1,0 +1,121 @@
+#include "source_position.inc"
+
+namespace {
+
+constexpr std::string_view command_position = @SCAR_POSITION@;
+constexpr std::string_view position_start = @SCAR_START@;
+constexpr std::string_view command_search = @SCAR_GO@;
+constexpr std::string_view search_depth = @SCAR_DEPTH@;
+constexpr std::string_view command_ident = @SCAR_IDENT@;
+constexpr std::string_view command_ready = @SCAR_READY@;
+constexpr std::string_view command_reset = @SCAR_RESET@;
+constexpr std::string_view command_quit = @SCAR_QUIT@;
+constexpr std::string_view identity_reply = @SCAR_IDENT_REPLY@;
+constexpr std::string_view ready_reply = @SCAR_READY_REPLY@;
+constexpr Integer minimum_depth = @SCAR_MIN_DEPTH@;
+constexpr Integer maximum_depth = @SCAR_MAX_DEPTH@;
+constexpr double normal_budget = @SCAR_BUDGET@;
+constexpr double hard_limit = @SCAR_HARD@;
+constexpr double initial_soft_epoch = @SCAR_SOFT@;
+constexpr std::array<Integer, @SCAR_CONFIG_COUNT@> source_defaults{@SCAR_CONFIG@};
+
+std::vector<std::string> words(std::string_view command) {
+    for (unsigned char byte : command) {
+        if (!((byte >= 0x20 && byte <= 0x7e) || (byte >= 9 && byte <= 13))) throw Decline{};
+    }
+    std::istringstream input{std::string(command)};
+    std::vector<std::string> tokens;
+    std::string token;
+    while (input >> token) tokens.push_back(std::move(token));
+    return tokens;
+}
+
+Integer read_depth(std::string_view text) {
+    if (text.size() > 1 && text.front() == '+' && text[1] >= '0' && text[1] <= '9') text.remove_prefix(1);
+    const auto depth = parse_integer(text);
+    if (depth < minimum_depth || depth > maximum_depth) throw Decline{};
+    return depth;
+}
+
+std::string seed_for(const ScarEntryPosition& position, std::size_t table) {
+    const auto& root = position.history.back();
+    World fresh;
+    fresh.@SCAR_HISTORY@.insert(position.history.begin(), position.history.end());
+    fresh.@SCAR_ROOT@ = root;
+    std::ostringstream wire;
+    wire << "SCAR_RECURSIVE_INPUT_V1\n" << tables[table].version << '\n';
+    publish(wire, std::tuple{root, Integer{0}, Integer{0}, true});
+    publish_state(wire, fresh);
+    for (auto parameter : source_defaults) publish(wire, parameter);
+    return std::move(wire).str();
+}
+
+void emit(std::string_view text) {
+    std::cout << text << std::flush;
+    if (!std::cout) throw Decline{};
+}
+
+void observe_position(const std::filesystem::path& directory, std::size_t session,
+                      const ScarEntryPosition& position, std::size_t scoring_epoch) {
+    if (directory.empty()) return;
+    std::ofstream file(directory / (std::to_string(session) + ".prepare"), std::ios::binary | std::ios::trunc);
+    file << "SCAR_ENTRY_POSITION_V1\n";
+    publish(file, checked_size(scoring_epoch));
+    publish(file, position.hclock);
+    publish(file, checked_size(position.history.size()));
+    for (const auto& item : position.history) publish(file, item);
+    if (!file) throw Decline{};
+}
+
+int dispatch(const std::filesystem::path& observations) {
+    Owner owner(nullptr, scar_recursive_driver_close_v1);
+    auto table = scar_entry_initial_table_slot();
+    const std::array start{std::string(command_position), std::string(position_start)};
+    auto position = scar_entry_position(tables[table], start);
+    std::size_t session = 0;
+    std::string line_buffer;
+    while (std::getline(std::cin, line_buffer)) {
+        const auto tokens = words(line_buffer);
+        if (tokens.empty()) continue;
+        const auto& command = tokens.front();
+        if (command == command_position) {
+            position = scar_entry_position(tables[table], tokens);
+        } else if (command == command_search && tokens.size() == 3 && tokens[1] == search_depth) {
+            const auto depth = read_depth(tokens[2]);
+            const auto selected = choose_version(position.history.back());
+            const auto seed = seed_for(position, selected);
+            const SearchInput input{seed, depth, position.hclock, (position.history.size() % 2 == 1),
+                                    normal_budget, hard_limit, initial_soft_epoch};
+            observe_position(observations, session, position, table);
+            Trace trace(observations, session++);
+            search(owner, input, trace);
+            table = selected;
+        } else if (tokens.size() == 1) {
+            if (command == command_ident) emit(identity_reply);
+            else if (command == command_ready) emit(ready_reply);
+            else if (command == command_reset) owner.reset();
+            else if (command == command_quit) return 0;
+            else return 77;
+        } else {
+            return 77;
+        }
+    }
+    return std::cin.eof() ? 0 : 77;
+}
+
+}
+
+int main(int argc, char** argv) {
+    try {
+        std::filesystem::path observations;
+        if (argc == 3 && std::string_view(argv[1]) == "--observe") {
+            observations = argv[2];
+            if (!std::filesystem::is_directory(observations)) return 77;
+        } else if (argc != 1) {
+            return 77;
+        }
+        return dispatch(observations);
+    } catch (...) {
+        return 77;
+    }
+}
