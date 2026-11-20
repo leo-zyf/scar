@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <utility>
 
+#define SCAR_PLOT_PHASE_DETAIL @PNG_DETAIL@
+
 namespace scar::plot_phase {
 
 enum class Phase : std::size_t {
@@ -19,13 +21,24 @@ enum class Phase : std::size_t {
     ContourScene,
     AggRaster,
     PngEncodePublish,
+#if SCAR_PLOT_PHASE_DETAIL
+    PngFilterSelection,
+    PngDeflate,
+    PngZlibLifecycle,
+    PngTempIo,
+    PngFinalPublish,
+#endif
 };
 
 inline constexpr std::array names{
     "asset_read_verify", "font_setup", "coordinates_pack_guard", "glyphs",
     "z_pack", "contour_scene", "agg_raster", "png_encode_publish",
+#if SCAR_PLOT_PHASE_DETAIL
+    "png_filter_selection", "png_deflate", "png_zlib_lifecycle", "png_temp_io", "png_final_publish",
+#endif
 };
 inline constexpr char backend[] = "@BACKEND@";
+inline constexpr unsigned row_schema_version = 1 + SCAR_PLOT_PHASE_DETAIL;
 using Clock = std::chrono::steady_clock;
 static_assert(Clock::is_steady);
 
@@ -42,6 +55,9 @@ public:
     explicit Scope(Phase phase) noexcept;
     Scope(const Scope&) = delete;
     ~Scope();
+#if SCAR_PLOT_PHASE_DETAIL
+    static void record_leaf(Phase phase, std::uint64_t elapsed) noexcept;
+#endif
 };
 
 template<class Action>

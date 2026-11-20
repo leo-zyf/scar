@@ -59,9 +59,11 @@ def _inputs(probe_ref, bench_ref, case):
           and row['original']['argv'][1:] == row['candidate']['argv'][1:]
           and row['original']['outputs'] == row['candidate']['outputs'],
           'proof must compare both variants under one CPU, argv and output contract')
-    _need(probe['schema_version'] == 1 and tuple(probe['phases']) == native_plot_phases.PHASES
+    row_version = probe.get('row_schema_version', 1)
+    _need(probe['schema_version'] == 1 and tuple(probe['phases']) == native_plot_phases.phases(row_version)
           and set(probe['arms']) == set(_SIDES), 'incompatible plot probe protocol')
     arms = {}
+    canvases = set()
     for arm, side in _SIDES.items():
         argv = row[side]['argv']
         exe = Path(argv[0]).resolve(strict=True)
@@ -78,11 +80,20 @@ def _inputs(probe_ref, bench_ref, case):
         _need(provider == diagnostic['original_provider']
               and original['files']['bin/' + _TARGET]['sha256'] == pinned['sha256'],
               'probe, measured ELF and qualified native provider do not share one original input')
-        library = str(ASSETS / read_artifact(provider)['library'])
+        provider_report = read_artifact(provider)
+        library = str(ASSETS / provider_report['library'])
+        if row_version == 2:
+            canvases.add(tuple(provider_report['profile']['canvas']))
         arms[arm] = dict(application=reference, library=original['files'][library],
                          diagnostic_library=diagnostic['diagnostic_library'],
                          argv=argv, outputs=row[side]['outputs'])
-    return arms, config, measured['samples']['original'][0]
+    canvas = None
+    if row_version == 2:
+        _need(len(canvases) == 1, 'detailed probe requires matching canvas geometry')
+        canvas, = canvases
+        _need(len(canvas) == 2 and all(type(extent) is int and extent > 0 for extent in canvas),
+              'expected a bounded RGB alpha canvas')
+    return arms, config, measured['samples']['original'][0], row_version, canvas
 
 
 def _diagnostic_members(arm, probe_root):
@@ -137,7 +148,14 @@ def _observe(arm, exe, out, config):
                 outputs=files)
 
 
-def _summary(runs, frames, oracle):
+def _summary(runs, frames, oracle, row_version, canvas):
+    expected_png = []
+    if row_version == 2:
+        for index in range(frames):
+            frame = _benchmark_ref(oracle['outputs'][f'frame:{index}'], 'image/png')
+            height, writes = native_plot_phases.png_call_counts(read_artifact(frame, json_document=False))
+            _need(height == canvas[1], 'original output differs from the admitted PNG canvas')
+            expected_png.append((height, writes))
     pairs = []
     for pair in runs:
         for sample in pair.values():
@@ -150,13 +168,13 @@ def _summary(runs, frames, oracle):
                       'diagnostic bytes differ from the clean application')
             read_artifact(sample['stderr'], json_document=False)
         pairs.append({side: pair[side]['trace'] for side in _SIDES})
-    return native_plot_phases.compare(pairs, frames)
+    return native_plot_phases.compare(pairs, frames, schema_version=row_version, png_counts=expected_png)
 
 
 def capture(probe, benchmark, case, out, *, repetitions=3):
     _need(type(repetitions) is int and 2 <= repetitions <= 16, 'bounded paired repetitions required')
     probe_ref, bench_ref = _ref(probe, PROBE), _ref(benchmark, BENCHMARK)
-    arms, config, oracle = _inputs(probe_ref, bench_ref, case)
+    arms, config, oracle, row_version, canvas = _inputs(probe_ref, bench_ref, case)
     frames = sum(name.startswith('frame:') for name in oracle['outputs'])
     _need(frames > 0, 'an original frame oracle is required')
     out = Path(out).resolve()
@@ -174,16 +192,18 @@ def capture(probe, benchmark, case, out, *, repetitions=3):
     result = dict(schema=SCHEMA, schema_version=1, probe=probe_ref, benchmark=bench_ref, case=case,
                   arms=arms, executable={side: _ref(path, 'scar.recompiled-diagnostic-executable')
                       for side, path in executables.items()}, cpu_ids=config['cpu_ids'], frames=frames, runs=runs,
-                  summary=_summary(runs, frames, oracle), diagnostics_recompiled=True,
+                  summary=_summary(runs, frames, oracle, row_version, canvas), diagnostics_recompiled=True,
                   changes='ONLY_PLOT_DSO_AND_ITS_BINARY_DIGEST_GUARD',
                   clean_performance_claim=False, default_backend='NO_OP')
+    if row_version == 2:
+        result.update(row_schema_version=row_version, canvas=list(canvas))
     (out / 'result.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
     return result
 
 
 def check(path):
     saved = read_artifact(_ref(path, SCHEMA))
-    arms, config, oracle = _inputs(saved['probe'], saved['benchmark'], saved['case'])
+    arms, config, oracle, row_version, canvas = _inputs(saved['probe'], saved['benchmark'], saved['case'])
     probe_root = Path(saved['probe']['uri']).parent
     for side, executable in saved['executable'].items():
         read_artifact(executable, json_document=False)
@@ -194,7 +214,10 @@ def check(path):
     frames = sum(name.startswith('frame:') for name in oracle['outputs'])
     _need(saved['schema_version'] == 1 and saved['arms'] == arms and saved['frames'] == frames
           and set(saved['executable']) == set(arms)
-          and saved['cpu_ids'] == config['cpu_ids'] and saved['summary'] == _summary(saved['runs'], frames, oracle),
+          and saved['cpu_ids'] == config['cpu_ids']
+          and saved.get('row_schema_version', 1) == row_version
+          and saved.get('canvas') == (list(canvas) if canvas is not None else None)
+          and saved['summary'] == _summary(saved['runs'], frames, oracle, row_version, canvas),
           'diagnostic report differs from its raw saved observations')
     return saved
 

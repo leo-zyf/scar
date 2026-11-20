@@ -1,5 +1,9 @@
 # 当前状态
 
+`export-native-live-plot-phase --png-detail` 在两份独立 C++20 诊断包里记录了 Pillow 的逐行滤波、zlib 压缩、临时文件操作和最终发布。真实 CPU 0 八帧运行共做 3 对。两版的所有 PNG 和 stdout 与清洁入口逐字节一致。已有版的 PNG 区间中位数为 1.877 s，其中压缩约 1.229 s、滤波约 0.624 s，临时文件操作及发布合计的中位数约 1.9 ms。此处耗时用于定位。
+
+`plan-native-plot-boundary` 冷重放原 F4 保存端口、控制器作用域、首次数值更新前的发布证据及目标 CPU 拓扑，将诊断接到共享规划问题的既有操作。保持同步发布约束，绘图工作区上界及同次文件系统资源仍待测定，完整成本为 `UNKNOWN`，选择为 `NO_OP`。原生交付保持已有算子和发布路径。见 `artifacts/baseline/cpu-native-png-boundary-acceptance.json`。
+
 `export-native-live-plot-phase` 与 `observe-native-plot-entry` 已把绘图分段诊断接到两个真实 C++20 控制器上。八帧无视频，各做 3 对诊断，stdout 和 PNG 与原干净运行逐字节一致。按独占时间计，已有入口的 PNG 编码和发布约 1.949 s，占绘图 ABI 时间约 79%。常驻版减少约 17.9 ms 的资产读取和 21.6 ms 的坐标处理。分段数据只用于定位。
 
 相同正式二进制和参数的未插桩复跑中，八帧中位数为 2.454 → 2.401 s，方向与上轮 2.457 → 2.504 s 反转。两轮均通过输出对照。现有证据无法归因上轮回退，默认继续采用已有入口。见 `artifacts/baseline/cpu-native-plot-phase-attribution.json`。
