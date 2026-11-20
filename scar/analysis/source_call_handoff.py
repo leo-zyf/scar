@@ -1,7 +1,6 @@
 """Join a bounded live handoff to original F4 return and formal ports."""
 
 import argparse
-import ast
 import json
 from pathlib import Path
 
@@ -9,12 +8,15 @@ from scar.analysis.entry_call_dependence import _index, _path
 from scar.analysis.normal_graph import normal_edges
 from scar.analysis.program_view import ProgramView
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+from scar.analysis.source_call_operands import call_operands
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G
 from scar.ir.program.call_edges import CapturedCode, InvocationKey
 from scar.ir.program.control import LanguageCompletionKind
+from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.reference_consumers import ArgumentRole
 from scar.ir.program.source_invocations import SourceCallScope, SourceInvocationPort
 from scar.ir.record_codec import decode, encode
 from scar.runtime.source_call_handoff_observe import SCHEMA as CAPTURE
@@ -33,22 +35,6 @@ def _one(rows, detail):
     return rows[0]
 
 
-def _ast_position(node):
-    return [node.lineno, node.end_lineno, node.col_offset, node.end_col_offset]
-
-
-def _direct_argument(raw, caller, producer, consumer):
-    tree = ast.parse(raw, filename=caller['filename'])
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    invocation = _one((node for node in calls if _ast_position(node) == consumer['position']),
-                      'consumer CALL must select one exact source expression')
-    _require(not invocation.keywords and not any(isinstance(node, ast.Starred) for node in invocation.args),
-             'only unpacked positional actuals are admitted')
-    return _one((index for index, node in enumerate(invocation.args)
-                 if isinstance(node, ast.Call) and _ast_position(node) == producer['position']),
-                'producer is not the direct expression for an original positional actual')
-
-
 def _body(index, code):
     descriptor = decode(CapturedCode, code)
     body, frontier = index.match(descriptor)
@@ -62,15 +48,13 @@ def _body(index, code):
     return body, proof['matches'][0]['function_fact'], facts, function
 
 
-def _plan(view, design):
+def _plan(view, design, caller_facts, caller_fn):
     caller = design['caller']
     caller_ref = artifact_reference(caller['filename'], 'scar.python-source')
-    raw = read_artifact(caller_ref, json_document=False)
     producer, consumer = (design[role]['caller_site'] for role in ('producer', 'consumer'))
     _require(producer['code'] == consumer['code'] == caller['key'] and
              producer['opname'] == consumer['opname'] == 'CALL' and producer['offset'] < consumer['offset'],
              'a direct positional handoff needs ordered original CALL instructions')
-    argument = _direct_argument(raw, caller, producer, consumer)
     plan = plan_call_bindings(view, caller_ref['uri'], entry=caller['qualname'])
     producer_row, consumer_row = (
         _one((row for row in plan['sites'] if row['site'] == selected),
@@ -80,23 +64,38 @@ def _plan(view, design):
              producer_row['code_scope']['owner'] == consumer_row['code_scope']['owner'],
              'selected calls do not share the original caller body')
     unit = view.unit(producer_row['unit'])
+    _require(caller_facts.unit == unit.unit and encode(caller_fn.body_scope.owner) == producer_row['code_scope']['owner'],
+             'original compiled caller does not own the two source CALLs')
     producer_call = unit.facts.calls[producer_row['query']]
     consumer_call = unit.facts.calls[consumer_row['query']]
     _require(consumer_call.positional_pack is None and consumer_call.keyword_pack is None and
-             not consumer_call.keywords and argument < len(consumer_call.positional),
+             not consumer_call.keywords,
              'source F4 call requires a different argument protocol')
     output = source_port(unit.facts, producer_call.result)
-    actual = source_port(unit.facts, consumer_call.positional[argument])
-    return unit, argument, producer_row, consumer_row, output, actual
+    index = _route_index(unit, caller_fn)
+    matches = []
+    for operand in call_operands(view, unit.unit, consumer_row['query']):
+        if operand.role is ArgumentRole.POSITIONAL:
+            actual = GlobalPort(unit.unit, view.original(operand.edge.source))
+            route = _path(output.port, actual.port, index)
+            if route is not None:
+                matches.append((operand.ordinal, actual, route))
+    argument, actual, route = _one(matches, 'original positional actual carried by the producer result')
+    unit.material.validate_parents()
+    return argument, producer_row, consumer_row, output, actual, route
 
 
-def _original_route(unit, caller_fn, output, actual):
+def _route_index(unit, caller_fn):
     material = unit.material
     edges = (edge for plan in material.closure(caller_fn.template).values()
              for edge in normal_edges(plan, material.interfaces) if edge.kind is G.EdgeKind.DATA)
-    relation = _path(output.port, actual.port, _index((edge.source, edge.target, encode(edge)) for edge in edges))
+    return _index((edge.source, edge.target, encode(edge)) for edge in edges)
+
+
+def _original_route(unit, caller_fn, output, actual):
+    relation = _path(output.port, actual.port, _route_index(unit, caller_fn))
     _require(relation is not None, 'F4 lacks a data-carry path from the producer result to positional actual')
-    material.validate_parents()
+    unit.material.validate_parents()
     return relation
 
 
@@ -116,17 +115,15 @@ def project(catalog, capture):
              and launch['decision'] == 'NO_OP' and launch['exit_code'] == 0,
              'handoff requires the original source launch and live reference test')
     read_artifact(selection['source'], json_document=False)
-    unit, argument, producer_site, consumer_site, output, actual = _plan(view, selection)
     proofs = RetainedCodeBodyIndex(view)
     caller_body, caller_fact, caller_facts, caller_fn = _body(proofs, selection['caller'])
+    argument, producer_site, consumer_site, output, actual, route = _plan(
+        view, selection, caller_facts, caller_fn)
     producer_body, producer_fact, producer_facts, producer_fn = _body(proofs, selection['producer']['code'])
     consumer_body, consumer_fact, consumer_facts, consumer_fn = _body(proofs, selection['consumer']['code'])
-    _require(caller_facts.unit == unit.unit and encode(caller_fn.body_scope.owner) == producer_site['code_scope']['owner'],
-             'original compiled caller does not own the two source CALLs')
     _require(producer_fn.returns is not None, 'selected callee has no normal return value')
     returned = source_port(producer_facts, producer_fn.returns)
     _require(returned.port.completion is LanguageCompletionKind.RETURN, 'selected producer is not a normal return')
-    route = _original_route(unit, caller_fn, output, actual)
 
     run = capture_ref['sha256']
     process, thread = observed['process_id'], observed['thread_id']

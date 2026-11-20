@@ -9,11 +9,13 @@ from scar.analysis.bounded_entry_calls import SCHEMA as ENTRY_CALLS, _admit_entr
 from scar.analysis.build import BuildSession
 from scar.analysis.normal_graph import _Emitter, normal_edges
 from scar.analysis.replay_transaction import replay_transaction
+from scar.analysis.source_call_operands import call_operands
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_world_flow import STRUCTURAL, _state, _walk
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
 from scar.ir.program.control import LanguageCompletionKind as C
+from scar.ir.program.reference_consumers import ArgumentRole
 from scar.ir.record_codec import decode, encode
 
 
@@ -202,14 +204,16 @@ def _project(view, report, interface_index):
         if result == link.result.port:
             continue
         other_index, other = flow.calls[result]
-        operands = [('POSITIONAL', n, v) for n, v in enumerate(other.positional)]
-        operands.extend(('KEYWORD', name, v) for name, v in other.keywords)
-        for role, slot, operand in operands:
-            path = _path(link.result.port, flow.port(operand), flow.carries)
+        for operand in call_operands(view, flow.facts.unit, other_index):
+            if operand.role not in (ArgumentRole.POSITIONAL, ArgumentRole.KEYWORD):
+                continue
+            slot = operand.ordinal if operand.role is ArgumentRole.POSITIONAL else operand.keyword
+            actual = view.original(operand.edge.source)
+            path = _path(link.result.port, actual, flow.carries)
             if path is not None:
                 before, after = flow.port(other.world), flow.port(other.result_world)
                 consumers.append(dict(observations=attempts, call_fact=flow.fact('calls', other_index),
-                    role=role, slot=slot, input=encode(flow.port(operand)), data_route=path,
+                    role=operand.role.value, slot=slot, input=encode(actual), data_route=path,
                     world_before=encode(before), world_after=encode(after),
                     world_route=_path(flow.port(call.result_world), before, flow.state),
                     effect_discharge_proven=False))
