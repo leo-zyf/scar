@@ -1,0 +1,54 @@
+
+namespace {
+std::string scar_pv_ascii(Integer value) {
+    if (value < 0 || value > 127) throw Decline{};
+    return std::string(1, static_cast<char>(value));
+}
+
+std::string scar_pv_lower(std::string value) {
+    for (auto& byte : value) {
+        if (byte >= 'A' && byte <= 'Z') byte = static_cast<char>(byte - 'A' + 'a');
+    }
+    return value;
+}
+
+std::string scar_pv_render_point(Integer value) { return @SCAR_POINT@; }
+Integer scar_pv_color(const State& position) { return @SCAR_COLOR@; }
+bool scar_pv_quiet(const State& position, const Move& move) { return @SCAR_QUIET@; }
+
+bool scar_pv_reject(const State& position) {
+    return !visit_records(position, [&](const Move& move) { return !(@SCAR_LEGAL@); });
+}
+}  // namespace
+
+std::string scar_render_entry_move(const Move& move, bool white) {
+    Integer first = @SCAR_INITIAL_FIRST@;
+    Integer second = @SCAR_INITIAL_SECOND@;
+    if (!white) {
+        const Integer flipped_first = @SCAR_FLIP_FIRST@;
+        const Integer flipped_second = @SCAR_FLIP_SECOND@;
+        first = flipped_first;
+        second = flipped_second;
+    }
+    return @SCAR_RECORD@;
+}
+
+std::vector<std::string> scar_entry_pv(const scar_recursive_driver_v1& owner, Integer hclock) {
+    std::vector<std::string> path;
+    History seen;
+    auto position = owner.query.position;
+    const auto& table = tables[owner.query.table];
+    while (true) {
+        const auto match = find_move(owner.world.@SCAR_MAP@, position);
+        if (!match) break;
+        const auto& move = *match;
+        auto next = state_move(table, position, move);
+        if (scar_pv_reject(next)) break;
+        path.push_back(scar_render_entry_move(move, @SCAR_ORIENTATION@));
+        hclock = @SCAR_COUNTER@;
+        position = std::move(next);
+        if (@SCAR_STOP@) break;
+        if (!seen.insert(position).second) break;
+    }
+    return path;
+}
