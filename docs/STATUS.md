@@ -1,5 +1,11 @@
 # 当前状态
 
+`capture-agg-scene --contours` 接通了原始三路数组视图、ContourPy 的填充区间、逐带路径和 AGG 的实际调用槽。两帧的输入均为 257×257，填充区间数分别为 50 和 48。`analyze-agg-scene-layout` 重放有序绘制字段，记录两帧间的变化。坐标轴和静态文字的一致性只覆盖所测场景。
+
+`plan-contour-scene` 验证原路径表的位区间和逐带次序。`export-native-contour-scene` 复用上游 ContourPy MPL2014 C++，两帧的顶点和路径代码与原提供者逐字节一致。`export-native-contour-agg` 从场景模板移除对应路径表，并在运行时由数值数组重新生成。空环境中，从构建期数组和一步 C++ 更新后的数组分别重算了两帧，最终 AGG 绘制记录、RGBA 和 PNG 均与原程序逐字节一致。
+
+当前模板仍接收原流程确定的等值层、颜色、版面和字形。不同场景需要各自的相应输入。全应用默认 `NO_OP`，完整时序成本未知。见 `artifacts/baseline/cpu-contour-live-acceptance.json`。
+
 `project-controller-startup-slice` 已闭合 9 个控制器输入的原始值来源。所选构造分支上，`F` 和 `kappa` 独立流入各自的标量字段。`plan-controller-startup` 将默认值和选定数值提供者接入构建期物化，隔离执行原构造器两次。原先观测的数组用于校验摘要。4 个独立数组根生成 2,146,592 字节的启动映像，其中 `u/v` 接到原生更新端口，`x/y` 保留为辅助数据。变化的参数继续由调用方提供。
 
 `capture-agg-scene` 采集原 AGG 绘制操作及像素参考。`export-native-agg-scene` 复用原 AGG 的 C++ 栅格化实现。两个不同的实测场景用同一可执行文件重新生成 RGBA，随后编码为 PNG，两层输出均逐字节一致。场景的布局、等值线几何和字形位图仍由原流程提供。

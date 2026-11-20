@@ -2,6 +2,7 @@
 
 import argparse
 from collections import Counter
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -16,8 +17,9 @@ _BUDGET = 64_000_000
 
 
 class _Scene:
-    def __init__(self, numpy):
+    def __init__(self, numpy, contour=None):
         self.np = numpy
+        self.contour = contour
         self.data = bytearray()
         self.operations = Counter()
 
@@ -114,9 +116,12 @@ class _Scene:
             self.word('B', 4)
             self.gc(gc)
             self.transform(transform)
+            start = len(self.data) + 28  # SCARAGG1 surface header
             self.word('I', len(paths))
             for path in paths:
                 self.path(path)
+            if self.contour is not None:
+                self.contour.collection(paths, self.operations.total() - 1, start, len(self.data) + 28)
             self.values(matrices, 3)
             self.values(offsets, 2)
             self.transform(ot)
@@ -132,21 +137,25 @@ class _Scene:
             raise ValueError('unmodeled original AGG operation: ' + name)
 
 
-def capture(out, target):
+def capture(out, target, *, contours=False):
     import matplotlib
     from matplotlib.backends import backend_agg as module
     import numpy
 
     out = Path(out).resolve()
     out.mkdir()
+    source = Path(target[0]).resolve(strict=True)
+    contour = None
+    if contours:
+        from scar.trace.contour_scene import ContourProbe
+        contour = ContourProbe(out, numpy, source.parent)
     original = module._RendererAgg
     frames = []
-    source = Path(target[0]).resolve(strict=True)
 
     class RendererProbe:
         def __init__(self, width, height, dpi):
             self.renderer = original(width, height, dpi)
-            self.scene = _Scene(numpy)
+            self.scene = _Scene(numpy, contour)
             self.geometry = width, height, dpi
 
         def __getattr__(self, name):
@@ -175,7 +184,9 @@ def capture(out, target):
                 operations=dict(self.scene.operations), raster=raster_name,
                 raster_sha256=hashlib.sha256(raw).hexdigest(), scene=scene_name,
                 scene_sha256=hashlib.sha256(scene).hexdigest(), scene_bytes=len(scene)))
-            self.scene = _Scene(numpy)
+            if contour is not None:
+                contour.finish_frame(index)
+            self.scene = _Scene(numpy, contour)
             return raster
 
     prior_argv, prior_path = sys.argv, sys.path[0]
@@ -183,7 +194,8 @@ def capture(out, target):
     sys.path[0] = str(source.parent)
     module._RendererAgg = RendererProbe
     try:
-        runpy.run_path(str(source), run_name='__main__')
+        with contour.instrument() if contour is not None else nullcontext():
+            runpy.run_path(str(source), run_name='__main__')
     finally:
         module._RendererAgg = original
         sys.argv, sys.path[0] = prior_argv, prior_path
@@ -195,18 +207,21 @@ def capture(out, target):
         frames=frames, open_effects=['LAYOUT', 'CONTOUR_GEOMETRY', 'GLYPH_BITMAP_PRODUCTION'],
         capture_is_diagnostic=True, performance_measured=False)
     (out / 'result.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+    if contour is not None:
+        contour.report(out / 'result.json')
     return result
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', required=True)
+    parser.add_argument('--contours', action='store_true')
     parser.add_argument('target', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     target = args.target[1:] if args.target[:1] == ['--'] else args.target
     if not target:
         parser.error('provide -- SCRIPT [ARGS]')
-    result = capture(args.out, target)
+    result = capture(args.out, target, contours=args.contours)
     print(json.dumps(dict(frames=len(result['frames']), provider=result['matplotlib_version'])))
 
 
