@@ -33,12 +33,23 @@ _SONAME = 'libscar_recursive_driver_v1.so'
 _LIBRARY = 'lib/' + _SONAME
 _SOURCE = 'src/driver.cpp'
 _HEADER = 'include/scar_recursive_driver_v1.h'
+_REBIND = 'scar_recursive_driver_rebind_v2'
+_REUSE_SONAME = 'libscar_recursive_driver_v2.so'
+_REUSE_HEADER = 'include/scar_recursive_driver_v2.h'
 _MAP = 'exports.map'
 _NATIVE = ('-std=c++20', *_FLAGS, '-shared', '-fPIC', '-fvisibility=hidden', '-fvisibility-inlines-hidden',
            *_LINK_FLAGS, '-Wl,-soname,' + _SONAME, '-Wl,--version-script,exports.map')
 _STATUS = dict(yielded=0, exhausted=1, declined=2, internal=3, source_stop=4)
 _WORLD_HEADER = b'SCAR_DRIVER_WORLD_V1\n'
 _TYPE = {'int': 'Integer', 'bool': 'bool', 'str': 'std::string', 'float': 'double', 'state': 'State'}
+
+
+def _release(version):
+    if version == 1:
+        return _SYMBOLS, _LIBRARY, _HEADER, _NATIVE
+    _require(version == 2, 'unsupported native recursive driver package version')
+    flags = tuple(flag.replace(_SONAME, _REUSE_SONAME) for flag in _NATIVE)
+    return (*_SYMBOLS, _REBIND), 'lib/' + _REUSE_SONAME, _REUSE_HEADER, flags
 
 
 def _member(node, name):
@@ -361,7 +372,29 @@ def _kernel(original, deadline):
     return prefix.replace(clock, clock_with_reader) + serialization + stop + suffix
 
 
-def _basis(path):
+def _render_rebind(source, world, configuration):
+    fields = {spec['type']: spec['field'] for spec in world.values()}
+    _require(len(world) == len(fields) and set(fields) == {'float', 'state', 'int', 'set', 'move_map', 'entry_map'},
+             'resident rebind requires one exact world port per lifetime role')
+    setup = 'Query setup(std::string_view payload, World& world) {'
+    _require(source.count(setup) == 1, 'resident rebind requires the checked seed parser')
+    source = source.replace(setup, 'Query setup(std::string_view payload, World& world, bool empty_maps = false) {')
+    for kind in ('move_map', 'entry_map'):
+        receive = f'    receive_field(input, world.{fields[kind]});'
+        _require(source.count(receive) == 1, 'resident rebind map parser differs from the exact ABI')
+        source = source.replace(receive, '    if (empty_maps) {\n'
+                                '        if (receive<Integer>(input) != 0) throw Decline{};\n'
+                                '    } else {\n' + '    ' + receive + '\n    }')
+    extension = Path(__file__).with_name('scalar_recursive_driver_v2.cpp.in').read_text()
+    ports = dict(HISTORY=fields['set'], SCORE=fields['entry_map'], DEADLINE=fields['float'],
+                 NODES=fields['int'], ROOT=fields['state'], CONFIGURATION='\n'.join(
+                    f'        handle->world.{port} = incoming.{port};' for port in configuration.values()))
+    for name, content in ports.items():
+        extension = extension.replace('@SCAR_' + name + '@', content)
+    return source.replace('#include "scar_recursive_driver_v1.h"', '#include "scar_recursive_driver_v2.h"', 1) + extension
+
+
+def _basis(path, version=1):
     native_ref = _ref(path, kernel.SCHEMA)
     original = read_artifact(native_ref)
     root = Path(native_ref['uri']).parent
@@ -381,10 +414,15 @@ def _basis(path):
     generated = Path(__file__).with_name('scalar_recursive_driver_v1.cpp.in').read_text()
     for name, content in fields.items():
         generated = generated.replace('@SCAR_' + name + '@', content)
+    symbols, _, _, _ = _release(version)
+    extra = {}
+    if version == 2:
+        generated = _render_rebind(generated, metadata['world'], lower['constant_ports'])
+        extra[_REUSE_HEADER] = Path(__file__).with_name('scalar_recursive_driver_v2.h.in').read_bytes()
     _require('@SCAR_' not in generated, 'native driver source material is incomplete')
     support = {name: data for name, data in members.items() if name.startswith('include/')}
     support.update({_SOURCE: generated.encode(), _HEADER: Path(__file__).with_name('scalar_recursive_driver_v1.h.in').read_bytes(),
-                    _MAP: ('{ global: ' + '; '.join(_SYMBOLS) + '; local: *; };\n').encode()})
+                    _MAP: ('{ global: ' + '; '.join(symbols) + '; local: *; };\n').encode(), **extra})
     inputs = [(index, row) for index, row in enumerate(cases['cases']) if row['oracle_kind'] == 'CAPTURED_DRIVER_ACTIVATION']
     seeds = [(row, (root / 'samples' / f'{index}.stdin').read_bytes()) for index, row in inputs]
     _require(all(raw == kernel._case(row, lower, sorted_plan, abi['table_slots'])[0] for row, raw in seeds),
@@ -451,28 +489,150 @@ def _verify(path, metadata, abi, seeds, sorted_plan):
     return records
 
 
-def _links(path):
+def _snapshot_parts(handle, snapshot, plan, layout):
+    size = ffi.c_size_t()
+    _require(snapshot(handle, None, 0, ffi.byref(size)) == 1 and size.value, 'resident snapshot capacity query failed')
+    raw = ffi.create_string_buffer(size.value)
+    _require(snapshot(handle, raw, len(raw), ffi.byref(size)) == 0 and size.value == len(raw),
+             'resident ordered world snapshot failed')
+    marker, *lines = raw.raw.splitlines(keepends=True)
+    _require(marker == _WORLD_HEADER, 'resident world wire header differs')
+    state = sum(2 if kind == 'bool_pair' else 1 for kind in plan['state_fields'].values())
+    counted = {'set': state, 'move_map': state + len(plan['record_types']), 'entry_map': state + 3}
+    cursor, result = 0, {}
+    for field in layout.values():
+        kind = field['type']
+        width = (1 + int(lines[cursor]) * counted[kind]) if kind in counted else (state if kind == 'state' else 1)
+        result[kind] = b''.join(lines[cursor:cursor + width])
+        cursor += width
+    _require(cursor == len(lines), 'resident snapshot values do not exhaust the ordered world layout')
+    return result
+
+
+def _rebind_seed(case, metadata, sorted_plan, fields):
+    position, _, _, _ = metadata['probe_formals']
+    operands = (kernel._state(case['actuals'][position], sorted_plan), 0, 0, True)
+    constants = tuple(case['module_i64'][name] for name in metadata['configuration_ports'])
+    return (b'SCAR_RECURSIVE_INPUT_V1\n' + case['table_version'].encode('ascii') + b'\n'
+            + kernel._encoded(operands).encode('ascii') + b''.join(fields.values())
+            + kernel._encoded(constants).encode('ascii'))
+
+
+def _verify_rebind(path, metadata, abi, seeds, sorted_plan):
+    _, record = sorted_library.pod_types(abi)
+
+    class Row(ffi.Structure):
+        _fields_ = [(port, ffi.c_int64) for port in ('depth', 'threshold', 'score', 'nodes')] + [
+            ('has_move', ffi.c_uint32), ('table_slot', ffi.c_uint32), ('move', record)]
+
+    lib = ffi.CDLL(str(path))
+    ptr, count, status = ffi.c_void_p, ffi.c_size_t, ffi.c_int
+    create = _attach(lib, 'create', status, ffi.c_char_p, count, ffi.POINTER(ptr))
+    advance = _attach(lib, 'advance', status, ptr, ffi.c_double, ffi.c_double, ffi.POINTER(Row))
+    snapshot = _attach(lib, 'snapshot', status, ptr, ptr, count, ffi.POINTER(count))
+    close = _attach(lib, 'close', None, ptr)
+    rebind = getattr(lib, _REBIND)
+    rebind.argtypes, rebind.restype = (ptr, ffi.c_char_p, count), status
+    layout = metadata['world']
+
+    def world(handle):
+        return _snapshot_parts(handle, snapshot, sorted_plan, layout)
+
+    def opened(raw):
+        handle = ptr()
+        _require(create(raw, len(raw), ffi.byref(handle)) == 0 and handle.value, 'rebind control seed declined')
+        return handle
+
+    def probe(handle):
+        row = Row()
+        _require(advance(handle, 1e100, 1e100, ffi.byref(row)) == 0, 'rebind sample did not return an original probe')
+        return row
+
+    def entries(fields, kind):
+        return int(fields[kind].split(b'\n', 1)[0])
+
+    results = []
+    for (old, raw), (new, fresh_raw) in zip(seeds, reversed(seeds), strict=True):
+        handles = []
+        try:
+            owner = opened(raw)
+            handles.append(owner)
+            control = opened(raw)
+            handles.append(control)
+            fresh = opened(fresh_raw)
+            handles.append(fresh)
+            empty = world(fresh)
+            _require(empty['move_map'] == empty['entry_map'] == b'0\n', 'fresh source rebind requires empty maps')
+            for _ in range(16):
+                _require(bytes(probe(owner)) == bytes(probe(control)), 'source-equivalent rebind fixtures diverged')
+                previous = world(owner)
+                if entries(previous, 'move_map') >= 3 and entries(previous, 'entry_map') > 0:
+                    break
+            else:
+                raise ValueError('no real retained ordered table in the bounded rebind fixtures')
+            seed = _rebind_seed(new, metadata, sorted_plan, empty)
+            wrong_table = seed.replace(new['table_version'].encode(), old['table_version'].encode(), 1)
+            rejected = (seed + b'x', wrong_table,
+                        _rebind_seed(new, metadata, sorted_plan, {**empty, 'move_map': previous['move_map']}),
+                        _rebind_seed(new, metadata, sorted_plan, {**empty, 'entry_map': previous['entry_map']}))
+            for invalid in rejected:
+                _require(rebind(owner, invalid, len(invalid)) == 2 and world(owner) == previous,
+                         'declined rebind changed resident state')
+            _require(bytes(probe(owner)) == bytes(probe(control)) and world(owner) == world(control),
+                     'declined rebind changed the suspended continuation')
+            keep = world(owner)['move_map']
+            expected = {**empty, 'move_map': keep}
+            clone = opened(_rebind_seed(new, metadata, sorted_plan, expected))
+            handles.append(clone)
+            _require(rebind(owner, seed, len(seed)) == 0 and world(owner) == world(clone) == expected,
+                     'resident rebind did not preserve exact move bytes or reset the fresh world')
+            probes = []
+            for _ in range(2):
+                actual = probe(owner)
+                _require(bytes(actual) == bytes(probe(clone)) and world(owner) == world(clone),
+                         'resident continuation differs from independently recreated ordered state')
+                probes.append(dict(depth=actual.depth, threshold=actual.threshold, score=actual.score, nodes=actual.nodes))
+            results.append(dict(before_table=metadata['table_slots'].index(old['table_version']),
+                                after_table=actual.table_slot, preserved_move_rows=entries(expected, 'move_map'),
+                                preserved_move_wire_bytes=len(keep), refused_inputs=len(rejected), probes=probes))
+        finally:
+            for handle in reversed(handles):
+                close(handle)
+    return results
+
+
+def _links(path, symbols):
     elf = cpu_executable_dynamic(path)
     linked = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(path)], env={}, text=True))
     sonames = {Path(name).name for name in linked}
     _require(elf['runpath'] is None and elf['rpath'] is None and set(elf['needed']) <= sonames <= _HOST
              and len(sonames) == len(linked),
              f'native driver has unexpected host ELF linkage: {elf!r} {linked!r}')
-    symbols = subprocess.check_output(['/usr/bin/nm', '-D', '--defined-only', '--format=posix', str(path)], env={}, text=True)
-    _require(sorted(line.split()[0] for line in symbols.splitlines()) == sorted(_SYMBOLS), 'native driver exports a different ABI')
+    listing = subprocess.check_output(['/usr/bin/nm', '-D', '--defined-only', '--format=posix', str(path)], env={}, text=True)
+    _require(sorted(line.split()[0] for line in listing.splitlines()) == sorted(symbols), 'native driver exports a different ABI')
     return linked
 
 
-def _abi(ordered):
-    return dict(symbols=list(_SYMBOLS), seed_protocol='SCAR_RECURSIVE_INPUT_V1', world_protocol='SCAR_DRIVER_WORLD_V1',
-                lookup_protocol='OLD_STATE_LEAF_LINES_WITHOUT_HEADER', move=ordered['record'], statuses=_STATUS,
-                clock='SOURCE_EPOCH_WITH_OPTIONAL_DEADLINE_CALLBACK_AT_RECURSIVE_CHECK',
-                control='ONE_WORLD_PER_SOURCE_GENERATOR')
+def _abi(ordered, version):
+    symbols, _, _, _ = _release(version)
+    abi = dict(symbols=list(symbols), seed_protocol='SCAR_RECURSIVE_INPUT_V1', world_protocol='SCAR_DRIVER_WORLD_V1',
+               lookup_protocol='OLD_STATE_LEAF_LINES_WITHOUT_HEADER', move=ordered['record'], statuses=_STATUS,
+               clock='SOURCE_EPOCH_WITH_OPTIONAL_DEADLINE_CALLBACK_AT_RECURSIVE_CHECK',
+               control='ONE_WORLD_PER_SOURCE_GENERATOR')
+    if version == 2:
+        abi.update(control='ONE_WORLD_ACROSS_REBOUND_SOURCE_GENERATORS', rebind=dict(
+            symbol=_REBIND, seed_protocol=abi['seed_protocol'], incoming_ordered_map_counts=0,
+            move_map='PRESERVE_ORDERED_OWNER_STORAGE', score_map='RESET_ON_SUCCESS',
+            prior_continuation='DESTROY_WITHOUT_RESUME_ON_SUCCESS',
+            callback='CLEAR_ON_SUCCESS', refusal='UNCHANGED_WORLD_AND_CONTINUATION'))
+    return abi
 
 
-def export(native_path, out):
+def export(native_path, out, *, rebind=False):
     """Produce a persistent driver DSO from the exact old recursive kernel scope."""
-    native, metadata, ordered, members, seeds, sorted_plan = _basis(native_path)
+    schema_version = 2 if rebind else 1
+    symbols, library, header, flags = _release(schema_version)
+    native, metadata, ordered, members, seeds, sorted_plan = _basis(native_path, schema_version)
     out = Path(out).resolve()
     if out.exists():
         raise FileExistsError(out)
@@ -487,17 +647,19 @@ def export(native_path, out):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
-        (root / _LIBRARY).parent.mkdir()
-        subprocess.run([*compiler, *_NATIVE, '-Iinclude', _SOURCE, '-o', _LIBRARY], cwd=root, env=environment, check=True)
+        (root / library).parent.mkdir()
+        subprocess.run([*compiler, *flags, '-Iinclude', _SOURCE, '-o', library], cwd=root, env=environment, check=True)
         moved = Path(temporary) / 'relocated recursive driver.so'
-        copy2(root / _LIBRARY, moved)
+        copy2(root / library, moved)
         verified = _verify(moved, metadata, ordered, seeds, sorted_plan)
-        artifact = dict(schema=SCHEMA, schema_version=1, cxx_standard=20, native=native, abi=_abi(ordered),
-                        **metadata, validation=verified, linkage=_links(moved),
-                        compiler=dict(command=compiler, version=version, flags=list(_NATIVE)),
-                        library=_local(root, _LIBRARY, 'scar.native-library-file'), header=_local(root, _HEADER, 'scar.c-header'),
+        artifact = dict(schema=SCHEMA, schema_version=schema_version, cxx_standard=20, native=native,
+                        abi=_abi(ordered, schema_version), **metadata, validation=verified, linkage=_links(moved, symbols),
+                        compiler=dict(command=compiler, version=version, flags=list(flags)),
+                        library=_local(root, library, 'scar.native-library-file'), header=_local(root, header, 'scar.c-header'),
                         members={name: _local(root, name, 'application/octet-stream') for name in members},
                         whole_driver_cpp=True, deployment_authorized=False)
+        if rebind:
+            artifact['rebind_validation'] = _verify_rebind(moved, metadata, ordered, seeds, sorted_plan)
         (root / 'artifact.json').write_text(json.dumps(artifact, indent=2, sort_keys=True) + '\n')
         if out.exists():
             raise FileExistsError(out)
@@ -509,18 +671,23 @@ def check(path):
     ref = _ref(path, SCHEMA)
     document = read_artifact(ref)
     root = Path(ref['uri']).parent
-    native, metadata, ordered, members, seeds, sorted_plan = _basis(document['native']['uri'])
-    executable = root / _LIBRARY
-    _require(document['schema_version'] == 1 and document['cxx_standard'] == 20 and document['native'] == native
+    version = document['schema_version']
+    symbols, library, header, flags = _release(version)
+    native, metadata, ordered, members, seeds, sorted_plan = _basis(document['native']['uri'], version)
+    executable = root / library
+    _require(document['cxx_standard'] == 20 and document['native'] == native
              and document['whole_driver_cpp'] is True and document['deployment_authorized'] is False
-             and all(document[key] == value for key, value in metadata.items()) and document['abi'] == _abi(ordered)
-             and document['compiler']['flags'] == list(_NATIVE) and document['linkage'] == _links(executable)
-             and document['library'] == _local(root, _LIBRARY, 'scar.native-library-file')
-             and document['header'] == _local(root, _HEADER, 'scar.c-header')
+             and all(document[key] == value for key, value in metadata.items()) and document['abi'] == _abi(ordered, version)
+             and document['compiler']['flags'] == list(flags) and document['linkage'] == _links(executable, symbols)
+             and document['library'] == _local(root, library, 'scar.native-library-file')
+             and document['header'] == _local(root, header, 'scar.c-header')
              and document['members'] == {name: _local(root, name, 'application/octet-stream') for name in members}
              and all((root / name).read_bytes() == value for name, value in members.items()), 'native driver package differs')
     _require(document['validation'] == _verify(executable, metadata, ordered, seeds, sorted_plan),
              'native driver persistent sample results differ from fresh verification')
+    if version == 2:
+        _require(document['rebind_validation'] == _verify_rebind(executable, metadata, ordered, seeds, sorted_plan),
+                 'resident rebind validation differs from fresh verification')
     return document
 
 
@@ -529,11 +696,12 @@ def main(argv=None):
     parser.add_argument('--native')
     parser.add_argument('--out')
     parser.add_argument('--check')
+    parser.add_argument('--rebind', action='store_true')
     args = parser.parse_args(argv)
-    if args.check and not (args.native or args.out):
+    if args.check and not (args.native or args.out or args.rebind):
         result = check(args.check)
     elif args.native and args.out and not args.check:
-        result = export(args.native, args.out)
+        result = export(args.native, args.out, rebind=args.rebind)
     else:
         parser.error('provide --native and --out or --check ARTIFACT')
     print(json.dumps(result, sort_keys=True))

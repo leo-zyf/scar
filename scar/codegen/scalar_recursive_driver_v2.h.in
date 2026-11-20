@@ -1,0 +1,22 @@
+#ifndef SCAR_RECURSIVE_DRIVER_V2_H
+#define SCAR_RECURSIVE_DRIVER_V2_H
+
+#include "scar_recursive_driver_v1.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Rebind the serial owner after its previous source consumer has stopped.
+ * The seed uses SCAR_RECURSIVE_INPUT_V1 with both ordered map counts zero.
+ * Success discards the old continuation, retains the ordered move map,
+ * installs the fresh state and clears the deadline callback. Refusal
+ * preserves the previous handle, its continuation and all of its state.
+ */
+int scar_recursive_driver_rebind_v2(struct scar_recursive_driver_v1* handle, const uint8_t* seed, size_t bytes);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
