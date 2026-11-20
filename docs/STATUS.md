@@ -1,5 +1,11 @@
 # 当前状态
 
+scikit-fem 的稀疏扫描已能用同一个 C++20 程序接收运行时迭代数。源图把 `argv` 连到循环、缩放系数、求解结果和有序摘要。96/128 轮两个原始归档的网格与数值载荷一致。新计数进入 CSR 协议头及每轮缩放，网格准备保持不变，旧求解结果前缀无法复用。重放验证了具备 4,225 行、20,865 个非零元的 CSR 数值载荷在新信封中逐字节一致。
+
+同一 7 核组上，直接原 Python 脚本与原生应用分别做一对预热、三对清洁测量。留出计数 37 的中位数为 **1.037 → 1.003 秒，1.03×**，173 为 **3.203 → 1.297 秒，2.47×**。两组 65 字节的 SHA-256 输出均逐字节一致。搬迁后还用 3 和 37 核对完整应用。当前计划固定一个控制进程、六个工作进程和六个在途额度，计数范围为 1–512。下一轮分开测量准备、派发和批内求解成本，推进按计数选择工作进程数。见 `artifacts/baseline/cpu-parameterized-sparse-entry-acceptance.json`。
+
+复跑使用 `project-source-sparse-count`、`plan-native-parameterized-sparse-entry`、`export-native-parameterized-sparse-solver` 与 `export-native-parameterized-sparse-entry`。计算沿用 LibTorch CPU、SuperLU 和 OpenBLAS，摘要沿用 OpenSSL。
+
 独立 C++20 入口已能从运行时命令构造新局面。源图绑定八类命令、两种 FEN 朝向、后续走子和半回合更新。计划单独跟踪接收者和模块评分表。局面构造读取当前表，搜索可重新选择表，新游戏释放走子和分数状态并保留当前局面及模块表。构建沿用已经核验的搜索和 PV 后端。
 
 留出输入包含四场不同深度的搜索，逐条核对 42 次探测、四组历史和半回合计数、根状态及最终有序表。直接原脚本与 ELF 在同一逻辑核一对预热、四对清洁测量，中位数 **0.922 → 0.123 秒，7.50×**。同一个裸 ELF 搬迁后通过旧输入和留出输入。当前范围是按应答顺序发送的 `go depth 1–4`、已实现的位置命令及默认配置，异步停止、限时和选项变更仍在范围外。见 `artifacts/baseline/cpu-parameterized-recursive-entry-acceptance.json`。
