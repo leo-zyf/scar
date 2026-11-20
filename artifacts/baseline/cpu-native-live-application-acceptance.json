@@ -1,0 +1,242 @@
+{
+  "environment": {
+    "cpu": "Intel Xeon E5-2680 v4 @ 2.40 GHz",
+    "cpu_affinity": [
+      0
+    ],
+    "ffmpeg": "6.1.1-3ubuntu5",
+    "gnu_cxx": "13.3.0",
+    "matplotlib": "3.11.2",
+    "python_launcher": "/home/zyf/miniconda3/envs/lewm/bin/python"
+  },
+  "next": [
+    "Bind the native public argv to the existing original parser declarations and F4 controller formals.",
+    "Reuse validated detached source and update receipts once per export while retaining version guards.",
+    "Extend generic IR coverage before default deployment decisions."
+  ],
+  "schema": "scar.cpu-native-live-application-acceptance",
+  "schema_version": 1,
+  "stage1": {
+    "controller": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-controller-plan/result.json",
+      "sha256": "ff67a3f876227346d5edaf7a7a64190fa90a16299ce58529bf222fed133baa00",
+      "size_bytes": 15093
+    },
+    "current_root_dispatch": "BORROW_SELECTED_CONTROLLER_ARRAY_WITH_ORIGINAL_VIEW",
+    "effect_id": "effect:0",
+    "media_child": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-child-plan.json",
+      "sha256": "b93f13ae5ec3cbdc3bd47c4d2e821f948227a791b5efe8f1da8d56d48f0b3753",
+      "size_bytes": 16052
+    },
+    "original_effects": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-source-effects-release.json",
+      "sha256": "6770ca93d628f7a882fe390d3855fb17bf41f5297b63f3bab67cf1ba6a93d522",
+      "size_bytes": 1278754
+    },
+    "output_filename_counter_distinct_from_step": true,
+    "source_plot_effect": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-controller-plot-final.json",
+      "sha256": "b87c8c5f0415b863de62182ffc5d919c72d763853f9427ff82a3b5b0bfd55a5e",
+      "size_bytes": 310760
+    },
+    "status": "OBSERVED"
+  },
+  "stage2": {
+    "candidate_reduces_wall_clock_on_both_verified_cases": true,
+    "clean_cost_status": "MEASURED_MATCHED_PUBLICATION_BOUNDARY",
+    "default_backend": "NO_OP",
+    "open": [
+      "ORIGINAL_ARGV_NORMAL_ENTRY_TRANSLATION",
+      "DEMO_AND_OTHER_SOURCE_BRANCHES",
+      "UNQUALIFIED_LAYOUTS_AND_GRAPHICS_PROVIDERS",
+      "CROSS_HARDWARE_AND_GENERAL_RESOURCE_SCHEDULE",
+      "ORIGINAL_ERROR_AND_LOG_INTERLEAVING_DOMAIN"
+    ],
+    "original_resource_scope": "OBSERVED_CPU_LANE_0_AND_SYNCHRONOUS_FILE_PUBLICATIONS",
+    "status": "CONDITIONAL_EXPLICIT_TRIAL_ONLY"
+  },
+  "stage3": {
+    "cxx_standard": 20,
+    "executable": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application/bin/scar_stateful_entry",
+      "sha256": "5ee07344486d868f7e0e8cc4c5fb023cb6bcfa4a29f11e13a62196e40fe6f50c",
+      "size_bytes": 147568
+    },
+    "ffmpeg_contract": "ORIGINAL_ABSOLUTE_EXECUTABLE_AND_SYNCHRONOUS_WAIT",
+    "generated_cpp": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application/src/main.cpp",
+      "sha256": "442bad97b819eb5a2b7ef29dae87f4167e3f1c85eb48e49c92db78ed3e27fc60",
+      "size_bytes": 18279
+    },
+    "inplace_plot_reads": true,
+    "native_plot_library": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application/assets/plot/lib/libscar_live_plot.so",
+      "sha256": "4a4c72fb5440dfc14a5ebb6248d5c191ed8d96e2a328f11b5739ecb401976dda",
+      "size_bytes": 428536
+    },
+    "package": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application/result.json",
+      "sha256": "63671b817e72421132c3d4393168cbb3ed9c1d6f6f1772b2a183d278c9f3ac34",
+      "size_bytes": 53087
+    },
+    "plot_provider": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-plot-provider/result.json",
+      "sha256": "3a77591f8b673768bcff63033158edb05d6ae94a4808d4dc94868492dd627d3a",
+      "size_bytes": 161130
+    },
+    "python_runtime_required": false,
+    "runtime_domain": "SCOPED_BINARY64_STATE_AND_PINNED_LAYOUT_FRESH_OR_EMPTY_OUTPUT_DIRECTORY",
+    "status": "IMPLEMENTED",
+    "user_effect_callback_required": false
+  },
+  "verification": {
+    "cases": [
+      {
+        "arguments": {
+          "death_rate": 0.06,
+          "dump_freq": 1,
+          "end_time": 1.3,
+          "feed_rate": 0.04,
+          "movie": true
+        },
+        "byte_equal_state_in_separate_diagnostic": true,
+        "exact_stdout_and_all_published_files": true,
+        "executed_steps": 3,
+        "final_time": 1.3,
+        "id": "all_frames_default",
+        "paired_ratios": [
+          1.5746453985224302,
+          1.559041462901286,
+          1.5687580819749332
+        ],
+        "public_output_files": [
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-0/native/frame_000000.png",
+            "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18",
+            "size_bytes": 106172
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-0/native/frame_000001.png",
+            "sha256": "aba6eca77bc90dde7518c1bc58353733c0cd688c4a4724212754bbe1ccdd8361",
+            "size_bytes": 108073
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-0/native/frame_000002.png",
+            "sha256": "669a8a1b7b17d0f35873b77249812a7716dce92f685849017258b740c4a8701a",
+            "size_bytes": 105293
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-0/native/movie.mp4",
+            "sha256": "60620f33a657a9eafff0235df67d484ab29c132915804c86f015fbbf1203ca61",
+            "size_bytes": 248143
+          }
+        ],
+        "speedup_median": 1.5687580819749332,
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 1470979143,
+            "median_ns": 1466805001,
+            "min_ns": 1465326593,
+            "population_stdev_ns": 2393520.725094869,
+            "repetitions": 3
+          },
+          "original": {
+            "max_ns": 2307369777,
+            "median_ns": 2301062200,
+            "min_ns": 2293317475,
+            "population_stdev_ns": 5746820.226445597,
+            "repetitions": 3
+          }
+        },
+        "stderr_byte_equal": false
+      },
+      {
+        "arguments": {
+          "death_rate": 0.0625,
+          "dump_freq": 2,
+          "end_time": 2.5,
+          "feed_rate": 0.033,
+          "movie": true
+        },
+        "byte_equal_state_in_separate_diagnostic": true,
+        "exact_stdout_and_all_published_files": true,
+        "executed_steps": 5,
+        "final_time": 2.5,
+        "id": "sparse_frames_rates",
+        "paired_ratios": [
+          1.5706162923597808,
+          1.5709772367778974,
+          1.5696859952751427
+        ],
+        "public_output_files": [
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-1/native/frame_000000.png",
+            "sha256": "1383231d8d0e9c2afa88f7143678604f094feac467c674a28bf7eebcbbdd8e18",
+            "size_bytes": 106172
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-1/native/frame_000001.png",
+            "sha256": "0f40ec127b74009f654697e47226d83b6d593a3dd6c88e79a0980148edc0f7dd",
+            "size_bytes": 105261
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-1/native/frame_000002.png",
+            "sha256": "45478a1b35ccca2e92d12c626448fe4d2ed02c3279322f4210386df1d99fb1c5",
+            "size_bytes": 105995
+          },
+          {
+            "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/case-1/native/movie.mp4",
+            "sha256": "577b646e7d6415feb0f27d5556f8741363af6af603e9ec647409d21d5babdf84",
+            "size_bytes": 280494
+          }
+        ],
+        "speedup_median": 1.5699794903754003,
+        "stats_ns": {
+          "candidate": {
+            "max_ns": 1473654382,
+            "median_ns": 1470637839,
+            "min_ns": 1470041573,
+            "population_stdev_ns": 1581400.704160924,
+            "repetitions": 3
+          },
+          "original": {
+            "max_ns": 2315077489,
+            "median_ns": 2308871245,
+            "min_ns": 2308439620,
+            "population_stdev_ns": 3032510.3203877145,
+            "repetitions": 3
+          }
+        },
+        "stderr_byte_equal": false
+      }
+    ],
+    "clean_benchmark_repetitions": 3,
+    "clean_benchmark_warmups": 1,
+    "clean_boundaries": "PROCESS_STARTUP_TO_FFMPEG_COMPLETION_AND_EXIT",
+    "clean_comparisons": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-live-entry-paired-clean/result.json",
+      "sha256": "f665d870b64b53ba4d71398c2d3a4c21400b0a730ba794e58a12a38c86c5cb67",
+      "size_bytes": 76773
+    },
+    "full_application_domain_verified": false,
+    "instrumented": false,
+    "original_boundary": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-live-entry-baseline-clean/result.json",
+      "sha256": "e2032c55758eb4844b5e0442b3d7752aa28bb0fd97373f5db0b0a5ed7e5c9bc9",
+      "size_bytes": 35369
+    },
+    "relocated_diagnostic": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-native-live-application-validation/result.json",
+      "sha256": "a158531ef2d19edbfa2c2bf45385202003029a26e835318a1e4dd1a19ddc931f",
+      "size_bytes": 4946
+    },
+    "status": "VERIFIED",
+    "stderr_diagnostics": {
+      "path": "artifacts/current/experiments/cpu-source-effect-scope-v1/gray-live-entry-paired-clean/stderr-interpretation.json",
+      "sha256": "d7f307be123983112d330c3240e36c89b2fb2c3d0c1c66565871ed7e2b5ee319",
+      "size_bytes": 1156
+    },
+    "stderr_policy": "RECORDED_SEPARATELY_PATHS_AND_TIMING_VARY"
+  }
+}

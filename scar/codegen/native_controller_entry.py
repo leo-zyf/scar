@@ -6,6 +6,7 @@ import re
 
 from scar.codegen.native_controller_child import NativeControllerChild
 from scar.codegen.native_controller_console import NativeControllerConsole
+from scar.codegen.native_controller_plot import NativeControllerPlot
 from scar.codegen.native_controller_startup import NativeControllerStartup
 from scar.codegen.native_update_entry import NativeUpdate, prepare as prepare_update
 from scar.compiler.plan_native_controller import read_native_controller_plan
@@ -15,6 +16,31 @@ from scar.ir.execution_recipe import read_artifact
 SOURCE = 'src/controller.cpp'
 ABI = 'include/scar_generated/controller_effect_abi_v1.h'
 LOADER = 'include/scar_generated/native_controller_effects.hpp'
+_EXTERNAL_ARGS = '''    require(argc >= 7 && std::string_view(argv[1]) == "--effect-library" &&
+            std::string_view(argv[3]) == "--iteration-limit" && std::string_view(argv[5]) == "--state-out",
+            "expected --effect-library FILE --iteration-limit N --state-out FILE");
+    const auto* effect_path = argv[2];
+    const auto iteration_limit = number<std::uint64_t>(argv[4]);
+    require(iteration_limit > 0, "positive iteration limit required");
+    const auto requested = fs::absolute(fs::path(argv[6]));
+    require(!requested.filename().empty() && requested.filename() != "." && requested.filename() != "..",
+            "controller state output must be a file");
+    const auto controller_out = fs::canonical(requested.parent_path()) / requested.filename();
+'''
+_BUILTIN_ARGS = '''    require(argc >= 6 && std::string_view(argv[1]) == "--iteration-limit",
+            "expected --iteration-limit N [--state-out FILE] --effect-directory PORT DIRECTORY");
+    const auto iteration_limit = number<std::uint64_t>(argv[2]);
+    require(iteration_limit > 0, "positive iteration limit required");
+    fs::path controller_out;
+    int next = 3;
+    if (std::string_view(argv[next]) == "--state-out") {
+        const auto requested = fs::absolute(fs::path(argv[next + 1]));
+        require(!requested.filename().empty() && requested.filename() != "." && requested.filename() != "..",
+                "controller state output must be a file");
+        controller_out = fs::canonical(requested.parent_path()) / requested.filename();
+        next += 2;
+    }
+'''
 
 
 def _render(name, values):
@@ -44,6 +70,7 @@ class NativeController:
     console: NativeControllerConsole | None = None
     child: NativeControllerChild | None = None
     startup: NativeControllerStartup | None = None
+    plot: NativeControllerPlot | None = None
 
     def members(self):
         members = {
@@ -51,12 +78,14 @@ class NativeController:
             ABI: ('scar.cpp-header', Path(__file__).with_name('controller_effect_abi_v1.h').read_bytes()),
             LOADER: ('scar.cpp-header', Path(__file__).with_name('native_controller_effects.hpp.in').read_bytes()),
         }
-        if self.console is not None:
+        if self.console is not None and self.plot is None:
             members.update(self.console.members())
         if self.child is not None:
             members.update(self.child.members())
         if self.startup is not None:
             members.update(self.startup.members())
+        if self.plot is not None:
+            members.update(self.plot.members())
         return members
 
     def artifacts(self):
@@ -77,11 +106,17 @@ class NativeController:
             report['child']['directory_argument'] = '.'.join(self.child.contract['directory_field_path'])
         if self.startup is not None:
             report['startup'] = self.startup.artifacts()
+        if self.plot is not None:
+            report['plot'] = self.plot.artifacts()
+            report['opaque_effect_provider'] = 'NONE_IN_ADMITTED_NATIVE_CONTROLLER_SCOPE'
+            report['console']['mode'] = 'NATIVE_ASCII_STDOUT_WITH_INHERITED_CHILD'
+            report['console']['runtime_requires_exclusive_stdout'] = False
+            report['final_state_files_optional'] = True
         return report
 
 
 def prepare(reference, metadata, ports, *, console_reference=None, child_reference=None,
-            startup_reference=None, package=None):
+            startup_reference=None, plot_reference=None, plot_provider=None, package=None):
     from scar.codegen.native_controller import prepare as generate
 
     report, _ = read_native_controller_plan(reference['uri'])
@@ -122,8 +157,11 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
     guards = tuple(('.'.join(path), expected) for path, expected in guard_paths.items())
     if any(slot['kind'] == 'FIELD' and tuple(slot['path']) in guard_paths for slot in plan['slots']):
         raise ValueError('controller and update dispatch guard require one common state slot')
-    if console_reference is not None and child_reference is not None:
+    if console_reference is not None and child_reference is not None and plot_reference is None:
         raise ValueError('child and buffered console need a shared inherited stdout contract')
+    if (plot_reference is not None or plot_provider is not None) and not all(
+            (plot_reference, plot_provider, startup_reference, console_reference, child_reference)):
+        raise ValueError('native plot entry needs source, provider, startup, console and child proofs')
     console = child = startup = None
     if console_reference is not None:
         from scar.codegen.native_controller_console import prepare as prepare_console
@@ -134,12 +172,18 @@ def prepare(reference, metadata, ports, *, console_reference=None, child_referen
     if startup_reference is not None:
         from scar.codegen.native_controller_startup import prepare as prepare_startup
         startup = prepare_startup(startup_reference, controller_reference=reference, controller_plan=plan,
-                                  ports=ports, package=package)
+                                  ports=ports, package=package, borrow_arrays=plot_reference is not None)
         for path, expected in guards:
             if path in startup.guard_values and startup.guard_values[path] != expected:
                 raise ValueError('initial constructor guard differs from the original numerical branch')
+    plot = None
+    if plot_reference is not None:
+        from scar.codegen.native_controller_plot import prepare as prepare_plot
+
+        plot = prepare_plot(plot_reference, plot_provider, controller_plan=plan,
+                            startup=startup, console=console, child=child, ports=ports)
     return NativeController(reference, plan, update, source, tuple(numeric_slots), tuple(extra_inputs),
-                            guards, tuple(outputs), site, carried_index, console, child, startup)
+                            guards, tuple(outputs), site, carried_index, console, child, startup, plot)
 
 
 def render(controller, setup, selected):
@@ -170,9 +214,10 @@ def render(controller, setup, selected):
     plan = controller.plan
     with_console = controller.console is not None
     with_child = controller.child is not None
+    with_plot = controller.plot is not None
     startup = controller.startup
     effect_arguments = ''
-    if with_console:
+    if with_console and not with_plot:
         effect_arguments = '''    require(next < argc && std::string_view(argv[next]) == "--exclusive-stdout",
             "native console requires an explicit --exclusive-stdout effect contract");
     ++next;
@@ -193,8 +238,12 @@ def render(controller, setup, selected):
         read_guards = tuple(row for row in read_guards if row[0] not in startup.guard_values)
         initialize = '    ControllerStartup startup;\n'
     entry = _render('native_controller_arguments_v1.cpp.in', {
+        'PREFIX': _BUILTIN_ARGS if with_plot else _EXTERNAL_ARGS,
+        'LEGACY_NEXT': '' if with_plot else '    int next = 7;\n',
         'SLOT_COUNT': len(plan['slots']),
         'EFFECT_ARGUMENTS': effect_arguments,
+        'OPTIONAL_STATE_BEGIN': 'controller_out.empty() || (' if with_plot else '',
+        'OPTIONAL_STATE_END': ')' if with_plot else '',
         'CONTROLLER_INPUTS': ''.join(f'    controller_slots[{index}] = read({quote(path)});\n'
                                      for index, path in read_inputs),
         'GUARDS': ''.join(f'''    require(next + 2 < argc && std::string_view(argv[next]) == "--guard" &&
@@ -219,13 +268,13 @@ extern "C" int scar_array_copy_run_v1(const scar_array_v1*, std::uint64_t) noexc
 extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
 
 '''
-    selected_overlay = 'console' if with_console else 'child' if with_child else None
+    selected_overlay = 'console' if with_console and not with_plot else 'child' if with_child else None
     dispatch = '''        return context.effects->call(call, values, count, roots, root_count);'''
     overlay_setup = overlay_member = overlay_pointer = ''
     if selected_overlay is not None:
         declarations = f'#include "native_controller_{selected_overlay}.hpp"\n' + declarations
         overlay_type = f'Controller{selected_overlay.title()}Overlay'
-        overlay_argument = 'stdout' if with_console else 'child_directory'
+        overlay_argument = 'stdout' if selected_overlay == 'console' else 'child_directory'
         overlay_setup = f'    {overlay_type} {selected_overlay}({overlay_argument});\n'
         overlay_member = f'        {overlay_type}* {selected_overlay};\n'
         overlay_pointer = f'&{selected_overlay}, '
@@ -233,10 +282,26 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
             [&](auto ordinal, auto* args, auto nargs, auto* arrays, auto narrays) {
                 return context.effects->call(ordinal, args, nargs, arrays, narrays);
             });'''.lstrip('\n')
+    loader = f'    ControllerEffects effects(effect_path, identity, {len(plan["effect_sites"])});\n'
+    effect_member = '        const ControllerEffects* effects;\n'
+    effect_pointer = '&effects, '
+    if with_plot:
+        declarations = '#include "native_controller_plot.hpp"\n' + declarations
+        overlay_setup += '    ControllerPlotOverlay plot(startup, child_directory);\n'
+        overlay_member += '        ControllerPlotOverlay* plot;\n'
+        overlay_pointer += '&plot, '
+        loader = effect_member = effect_pointer = ''
+        dispatch = '''        return context.plot->dispatch(call, values, count, roots, root_count,
+            [&](auto ordinal, auto* args, auto nargs, auto* arrays, auto narrays) {
+                return context.child->dispatch(ordinal, args, nargs, arrays, narrays,
+                    [](auto, auto*, auto, auto*, auto) { return -1; });
+            });'''
     body = _render('native_controller_entry_v1.cpp.in', {
         'IDENTITY': plan['plan_sha256'],
         'COPY_IDENTITY': controller.update.copies['plan_sha256'],
-        'EFFECT_COUNT': len(plan['effect_sites']),
+        'EFFECT_LOADER': loader,
+        'EFFECT_MEMBER': effect_member,
+        'EFFECT_POINTER': effect_pointer,
         'PROVIDER_SETUP': setup,
         'PROVIDER_POINTER': '&provider' if selected else 'nullptr',
         'PROVIDER_COUNT': int(selected),
@@ -265,7 +330,7 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
     pending.push_back(std::move(controller_output));
 '''
     finalize = '''    require(console.finish() == 0, "native console declined final stdout publication");
-''' if with_console else ''
+''' if with_console and not with_plot else ''
     rendered = dict(UPDATE_DECLARATIONS=declarations, ENTRY_ARGUMENTS=entry, RUN_BODY=body,
                     UPDATE_OUTPUT_COUNT=' + 1', UPDATE_OUTPUT=output, FINALIZE_EFFECTS=finalize)
     if startup is not None:
@@ -280,5 +345,18 @@ extern "C" const char* scar_array_copy_plan_sha256_v1() noexcept;
             rendered['CHECK_ARRAY_INGRESS'] = f'            require({reject}, "startup owns this array");\n'
         rendered['MAY_INITIALIZE_ARRAY'] = (
             '        if (startup.initialize_array(i, payloads[i], descriptors[i])) continue;\n')
-        rendered['AFTER_ARRAYS_READY'] = '    startup.release_image();\n'
+        if not with_plot:
+            rendered['AFTER_ARRAYS_READY'] = '    startup.release_image();\n'
+    if with_plot:
+        rendered['ALTERNATE_BIND_COUNT'] = f' || static_cast<std::size_t>(argc) == {rendered["BIND_COUNT"]} - 3 * output_count'
+        rendered['CHECK_BINDINGS'] = f'''    require(std::count_if(result.inputs.begin(), result.inputs.end(),
+        [](const auto& path) {{ return !path.empty(); }}) == arrays.size() - {len(startup.array_ordinals)},
+        "original array input is missing");
+    require(std::count(seen.begin(), seen.end(), true) == scalars.size() - {len(startup.numeric_ordinals)},
+        "original numerical input is missing");
+'''
+        rendered['OPTIONAL_ARRAY_OUTPUT'] = ' || arguments.outputs[i].empty()'
+        rendered['UPDATE_OUTPUT'] = '    if (!controller_out.empty()) {\n' + ''.join(
+            '    ' + line for line in output.splitlines(keepends=True)) + '    }\n'
+        rendered['FINALIZE_EFFECTS'] = '    require(std::fflush(stdout) == 0, "cannot publish original stdout");\n'
     return rendered

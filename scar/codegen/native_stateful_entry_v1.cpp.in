@@ -72,7 +72,7 @@ struct Bindings {
 };
 
 Bindings bind(int argc, char* argv[]) {
-    require(static_cast<std::size_t>(argc) == @BIND_COUNT@,
+    require(static_cast<std::size_t>(argc) == @BIND_COUNT@@ALTERNATE_BIND_COUNT@,
             "expected --in PORT FILE, --int/--float PORT VALUE, and --out PORT FILE triples");
     Bindings result;
     std::array<bool, scalars.size()> seen{};
@@ -116,7 +116,7 @@ Bindings bind(int argc, char* argv[]) {
             result.outputs[slot] = output;
         }
     }
-    return result;
+@CHECK_BINDINGS@    return result;
 }
 
 scar_array_v1 load(const fs::path& path, const ArrayPort& port, std::vector<double>& payload) {
@@ -196,7 +196,7 @@ void run(int argc, char* argv[]) {
     std::vector<std::unique_ptr<PendingFile>> pending;
     pending.reserve(output_count@UPDATE_OUTPUT_COUNT@);
     for (std::size_t i = 0; i < arrays.size(); ++i) {
-        if (!arrays[i].output) continue;
+        if (!arrays[i].output@OPTIONAL_ARRAY_OUTPUT@) continue;
         auto output = std::make_unique<PendingFile>(arguments.outputs[i]);
         output->write(payloads[i]);
         pending.push_back(std::move(output));

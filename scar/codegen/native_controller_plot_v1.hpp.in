@@ -1,0 +1,147 @@
+#pragma once
+
+#include "controller_effect_abi_v1.h"
+#include "native_controller_startup.hpp"
+#include "native_live_plot_abi_v1.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <dlfcn.h>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <memory>
+#include <openssl/evp.h>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+class ControllerPlotOverlay {
+    struct Asset {
+        const char* path;
+        std::uint64_t size;
+        std::string_view digest;
+    };
+    static constexpr std::array<Asset, @ASSET_COUNT@> assets{{@ASSETS@}};
+
+    class Library {
+        void* handle_ = nullptr;
+    public:
+        Library() = default;
+        Library(const Library&) = delete;
+        ~Library() { if (handle_) ::dlclose(handle_); }
+
+        decltype(&scar_live_plot_v1) load(const char* path) {
+            handle_ = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
+            if (!handle_) throw std::runtime_error(::dlerror());
+            const auto symbol = reinterpret_cast<decltype(&scar_live_plot_v1)>(
+                ::dlsym(handle_, "scar_live_plot_v1"));
+            if (!symbol) throw std::runtime_error("native plot ABI function is missing");
+            return symbol;
+        }
+    };
+
+    Library library_;
+    decltype(&scar_live_plot_v1) render_ = nullptr;
+    const scar_array_v1 x_, y_;
+    const std::filesystem::path directory_;
+    std::filesystem::path layout_, font_;
+    std::int64_t counter_ = @INITIAL_COUNTER@;
+
+    static void verify_asset(const std::filesystem::path& root, const Asset& asset) {
+        const auto path = root / asset.path;
+        if (std::filesystem::symlink_status(path).type() != std::filesystem::file_type::regular ||
+            std::filesystem::file_size(path) != asset.size)
+            throw std::runtime_error("native plot package member differs: " + path.string());
+        std::ifstream file(path, std::ios::binary);
+        std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> hash(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+        if (!hash || EVP_DigestInit_ex(hash.get(), EVP_sha256(), nullptr) != 1)
+            throw std::runtime_error("cannot initialize plot member digest");
+        std::array<char, 64 * 1024> block;
+        auto remaining = asset.size;
+        while (remaining != 0) {
+            const auto size = std::min<std::uint64_t>(block.size(), remaining);
+            if (!file.read(block.data(), size) || EVP_DigestUpdate(hash.get(), block.data(), size) != 1)
+                throw std::runtime_error("cannot read full native plot package member");
+            remaining -= size;
+        }
+        std::array<unsigned char, 32> actual;
+        unsigned int length = 0;
+        if (file.peek() != EOF || !file.eof() ||
+            EVP_DigestFinal_ex(hash.get(), actual.data(), &length) != 1 || length != actual.size())
+            throw std::runtime_error("native plot package member read differed");
+        constexpr std::string_view hex = "0123456789abcdef";
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            if (asset.digest[2 * i] != hex[actual[i] >> 4] ||
+                asset.digest[2 * i + 1] != hex[actual[i] & 0xf])
+                throw std::runtime_error("native plot package member digest differs: " + path.string());
+        }
+    }
+
+    int snapshot(const scar_controller_value_v1* values, std::uint64_t count,
+                 const scar_array_v1* roots, std::uint64_t root_count) {
+        if (!values || count != @PLOT_ARITY@ || !roots || root_count != @ROOT_COUNT@
+            || values[@STEP_ORDINAL@].kind != SCAR_CONTROLLER_INT64_V1
+            || values[@STEP_ORDINAL@].integer < 0 || counter_ == std::numeric_limits<std::int64_t>::max())
+            return -60;
+        const auto& operand = values[@TIME_ORDINAL@];
+        constexpr auto exact_integer = std::int64_t{1} << 53;
+        if (operand.kind != SCAR_CONTROLLER_FLOAT64_V1 &&
+            (operand.kind != SCAR_CONTROLLER_INT64_V1 ||
+             operand.integer < -exact_integer || operand.integer > exact_integer))
+            return -60;
+        const double time = operand.kind == SCAR_CONTROLLER_FLOAT64_V1
+            ? operand.floating : static_cast<double>(operand.integer);
+        if (!std::isfinite(time)) return -60;
+        if (!std::filesystem::is_directory(directory_)) std::filesystem::create_directories(directory_);
+        const auto digits = std::to_string(counter_);
+        constexpr std::size_t width = @INDEX_WIDTH@;
+        const auto padding = digits.size() < width ? width - digits.size() : 0;
+        const auto path = directory_ / (@PREFIX@ + std::string(padding, '0') + digits + @SUFFIX@);
+        std::array<char, 512> error{};
+        const auto result = render_(&x_, &y_, &roots[@Z_ROOT@], time, layout_.c_str(), font_.c_str(),
+                                    path.c_str(), error.data(), error.size());
+        if (result != 0) {
+            std::fputs(error.data(), stderr);
+            std::fputc('\n', stderr);
+            return -61;
+        }
+        ++counter_;
+        return 0;
+    }
+
+    static int print(const scar_controller_value_v1* values, std::uint64_t count) noexcept {
+        if (!values || count != 1 || values->kind != SCAR_CONTROLLER_UTF8_V1 ||
+            values->reserved || (!values->text && values->text_size)) return -62;
+        for (std::uint64_t i = 0; i < values->text_size; ++i)
+            if (static_cast<unsigned char>(values->text[i]) > 0x7f) return -62;
+        if (values->text_size && std::fwrite(values->text, 1, values->text_size, stdout) != values->text_size)
+            return -63;
+        return std::fputc('\n', stdout) == EOF ? -63 : 0;
+    }
+
+public:
+    ControllerPlotOverlay(ControllerStartup& startup, const char* directory)
+        : x_(startup.borrow_array(@X_OFFSET@, @X_ROWS@, @X_COLS@)),
+          y_(startup.borrow_array(@Y_OFFSET@, @Y_ROWS@, @Y_COLS@)), directory_(directory) {
+        if (!directory_.is_absolute() || directory_.filename().empty() ||
+            (std::filesystem::exists(directory_) &&
+             (!std::filesystem::is_directory(directory_) || !std::filesystem::is_empty(directory_))))
+            throw std::runtime_error("native plot requires a fresh or empty absolute output directory");
+        const auto package = std::filesystem::read_symlink("/proc/self/exe").parent_path().parent_path();
+        for (const auto& asset : assets) verify_asset(package, asset);
+        layout_ = package / @LAYOUT@;
+        font_ = package / @FONT@;
+        render_ = library_.load((package / @LIBRARY@).c_str());
+    }
+
+    template<class Delegate>
+    int dispatch(std::uint32_t ordinal, const scar_controller_value_v1* values, std::uint64_t count,
+                 const scar_array_v1* roots, std::uint64_t root_count, Delegate&& forward) {
+        if (ordinal == @PLOT_ORDINAL@) return snapshot(values, count, roots, root_count);
+        if (ordinal == @PRINT_ORDINAL@) return print(values, count);
+        return forward(ordinal, values, count, roots, root_count);
+    }
+};

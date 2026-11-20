@@ -3,14 +3,12 @@
     const auto* copy_identity = scar_array_copy_plan_sha256_v1();
     require(copy_identity && std::string_view(copy_identity) == "@COPY_IDENTITY@", "copy plan identity differs");
     require(scar_array_copy_preflight_v1(descriptors.data(), descriptors.size()) == 0, "array copy preflight failed");
-@PROVIDER_SETUP@@OVERLAY_SETUP@    ControllerEffects effects(effect_path, identity, @EFFECT_COUNT@);
-    struct ControllerContext {
+@PROVIDER_SETUP@@OVERLAY_SETUP@@EFFECT_LOADER@    struct ControllerContext {
         const scar_stateful_table_v1* table;
         const scar_provider_v1* provider;
-        const ControllerEffects* effects;
-@OVERLAY_CONTEXT_MEMBER@        Bindings* numbers;
+@EFFECT_MEMBER@@OVERLAY_CONTEXT_MEMBER@        Bindings* numbers;
     };
-    ControllerContext context{table, @PROVIDER_POINTER@, &effects, @OVERLAY_POINTER@&arguments};
+    ControllerContext context{table, @PROVIDER_POINTER@, @EFFECT_POINTER@@OVERLAY_POINTER@&arguments};
     const auto update = +[](void* opaque, std::uint32_t call, const scar_controller_value_v1* values,
                             std::uint64_t count, const scar_controller_value_v1* current,
                             std::uint64_t current_count, const scar_array_v1* roots, std::uint64_t root_count,

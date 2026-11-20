@@ -1,16 +1,5 @@
-    require(argc >= 7 && std::string_view(argv[1]) == "--effect-library" &&
-            std::string_view(argv[3]) == "--iteration-limit" && std::string_view(argv[5]) == "--state-out",
-            "expected --effect-library FILE --iteration-limit N --state-out FILE");
-    const auto* effect_path = argv[2];
-    const auto iteration_limit = number<std::uint64_t>(argv[4]);
-    require(iteration_limit > 0, "positive iteration limit required");
-    const auto requested = fs::absolute(fs::path(argv[6]));
-    require(!requested.filename().empty() && requested.filename() != "." && requested.filename() != "..",
-            "controller state output must be a file");
-    const auto controller_out = fs::canonical(requested.parent_path()) / requested.filename();
-    std::array<scar_controller_value_v1, @SLOT_COUNT@> controller_slots{};
-    int next = 7;
-@EFFECT_ARGUMENTS@    const auto read = [&](std::string_view path) -> scar_controller_value_v1 {
+@PREFIX@    std::array<scar_controller_value_v1, @SLOT_COUNT@> controller_slots{};
+@LEGACY_NEXT@@EFFECT_ARGUMENTS@    const auto read = [&](std::string_view path) -> scar_controller_value_v1 {
         require(next + 2 < argc && std::string_view(argv[next+1]) == path,
                 "expected a typed scalar controller input in declared order");
         const std::string_view flag = argv[next], value = argv[next+2];
@@ -26,7 +15,7 @@
         return {SCAR_CONTROLLER_BOOL_V1, 0, value == "true", 0, nullptr, 0};
     };
 @CONTROLLER_INPUTS@@GUARDS@@STARTUP@    auto arguments = bind(argc - next + 1, argv + next - 1);
-    require(!fs::exists(fs::symlink_status(controller_out)) &&
-            std::find(arguments.outputs.begin(), arguments.outputs.end(), controller_out) == arguments.outputs.end(),
+    require(@OPTIONAL_STATE_BEGIN@!fs::exists(fs::symlink_status(controller_out)) &&
+            std::find(arguments.outputs.begin(), arguments.outputs.end(), controller_out) == arguments.outputs.end()@OPTIONAL_STATE_END@,
             "controller output must have a fresh distinct path");
 @STARTUP_SCALARS@@NUMBER_INPUTS@@STARTUP_SLOTS@

@@ -347,7 +347,7 @@ class NativeControllerStartup:
                     whole_program_translated=False, deployment_authorized=False)
 
 
-def _lower(specification, ports, controller_plan, receipt):
+def _lower(specification, ports, controller_plan, receipt, *, borrow_arrays=False):
     arrays = {row['id']: (ordinal, row) for ordinal, row in enumerate(port for port in ports if port['kind'] == 'array')}
     numbers = {row['id']: ordinal for ordinal, row in enumerate(port for port in ports if port['kind'] == 'scalar')}
     slots = {tuple(row['path']): row['ordinal'] for row in controller_plan['slots'] if row['input']}
@@ -393,13 +393,26 @@ def _lower(specification, ports, controller_plan, receipt):
     replacements = dict(ARRAY_COUNT=len(selected_arrays), ARRAYS=', '.join(selected_arrays.values()),
                         SCALAR_COUNT=len(selected_numbers), SCALARS=', '.join(selected_numbers.values()),
                         SLOT_COUNT=len(selected_slots), SLOTS=', '.join(selected_slots.values()),
-                        IMAGE_SIZE=receipt['size_bytes'], IMAGE_SHA256=receipt['sha256'])
+                        IMAGE_SIZE=receipt['size_bytes'], IMAGE_SHA256=receipt['sha256'],
+                        BORROW_ARRAY='''    scar_array_v1 borrow_array(std::size_t offset, std::int64_t rows, std::int64_t columns) {
+        if (rows <= 0 || columns <= 0 || offset % sizeof(double) || offset > image_.size() ||
+            static_cast<std::size_t>(rows) > (image_.size() - offset) / sizeof(double) / columns)
+            throw std::runtime_error("borrowed startup array lies outside its original asset");
+        const auto stride = columns * sizeof(double);
+        const auto bytes = rows * stride;
+        auto* data = image_.data() + offset;
+        const auto address = reinterpret_cast<std::uintptr_t>(data);
+        return {data, 2, {rows, columns}, {static_cast<std::int64_t>(stride), sizeof(double)},
+                address, address + bytes};
+    }
+
+''' if borrow_arrays else '')
     for key, value in replacements.items():
         source = source.replace(f'@{key}@', str(value))
     return source.encode(), tuple(selected_arrays), tuple(selected_numbers), tuple(selected_slots), guards, tuple(auxiliary)
 
 
-def prepare(reference, *, controller_reference, controller_plan, ports, package=None):
+def prepare(reference, *, controller_reference, controller_plan, ports, package=None, borrow_arrays=False):
     """Materialize once for export or replay a previously published package."""
     from scar.compiler.plan_controller_startup import read_controller_startup_plan
 
@@ -417,5 +430,6 @@ def prepare(reference, *, controller_reference, controller_plan, ports, package=
     else:
         receipt, data = _recover(Path(package).resolve(strict=True), reference, specification, cases)
     _need(len(data) == report['array_resources']['asset_bytes'], 'startup asset extent differs from the plan')
-    source, arrays, numeric, slots, guards, auxiliary = _lower(specification, ports, controller_plan, receipt)
+    source, arrays, numeric, slots, guards, auxiliary = _lower(
+        specification, ports, controller_plan, receipt, borrow_arrays=borrow_arrays)
     return NativeControllerStartup(reference, specification, receipt, source, data, arrays, numeric, slots, guards, auxiliary)
