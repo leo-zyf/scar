@@ -1,0 +1,228 @@
+{
+  "benchmark": {
+    "baseline": "DIRECT_ORIGINAL_PYTHON",
+    "clean_pairs": 4,
+    "comparison": "DIRECT_STANDALONE_CXX20",
+    "cpu_ids": [
+      7
+    ],
+    "cpu_model": "Intel Xeon E5-2680 v4",
+    "measurements_ns": {
+      "entry_native": {
+        "max_ns": 123370030,
+        "median_ns": 122901471.0,
+        "min_ns": 121650296,
+        "sample_stdev_ns": 827595.7883721577,
+        "samples_ns": [
+          123361297,
+          123370030,
+          121650296,
+          122441645
+        ]
+      },
+      "original": {
+        "max_ns": 922334244,
+        "median_ns": 922078051.5,
+        "min_ns": 914537649,
+        "sample_stdev_ns": 3820212.4529759684,
+        "samples_ns": [
+          922334244,
+          921829361,
+          922326742,
+          914537649
+        ]
+      }
+    },
+    "median_speedup": 7.502579456514398,
+    "original_interpreter": {
+      "python_executable": "/home/zyf/miniconda3/envs/lewm/bin/python3.14",
+      "python_version": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]"
+    },
+    "run": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/paired/run.json",
+      "sha256": "96bd28aef015dc1a52c5f4d46b6aa7134fff64d998a2d43003ba76837ebc6d33",
+      "size_bytes": 14774
+    },
+    "stdin": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/held-out.stdin",
+      "sha256": "a69dc6c0946e3e417ae6810b2e7938770c04d36113a7b8c5c9b4399fc927683e",
+      "size_bytes": 342
+    },
+    "warmup_pairs": 1
+  },
+  "correctness": {
+    "command_features": [
+      "BLACK_FEN",
+      "WHITE_FEN",
+      "STARTPOS_MOVES",
+      "EN_PASSANT",
+      "CASTLING",
+      "NEW_GAME_OWNER_RESET",
+      "REPEATED_HANDSHAKE",
+      "SIGNED_DEPTH"
+    ],
+    "exact_probe_records": 42,
+    "exact_typed_inputs_and_ordered_outputs": 4,
+    "native_observation": {
+      "schema": "scar.scalar-recursive-parameterized-observation",
+      "sha256": "6d9fc761939a4eae63d304ebd95b9731d5e14ed77bac0c911a7663934dd71978",
+      "size_bytes": 15830,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-parameterized-entry-v1/paired/native-observation/observation.json"
+    },
+    "observed_searches": [
+      {
+        "final_move_entries": 15,
+        "final_nodes": 52,
+        "halfmove_clock": 7,
+        "history_entries": 2,
+        "initial_move_entries": 0,
+        "prior_table_version": "5d70478a0cc5d779d6fdce57da3fd2941d033c116f5089f92fc8081c115517ba",
+        "requested_depth": 1,
+        "table_version": "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7"
+      },
+      {
+        "final_move_entries": 563,
+        "final_nodes": 8494,
+        "halfmove_clock": 1,
+        "history_entries": 4,
+        "initial_move_entries": 15,
+        "prior_table_version": "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7",
+        "requested_depth": 3,
+        "table_version": "5d70478a0cc5d779d6fdce57da3fd2941d033c116f5089f92fc8081c115517ba"
+      },
+      {
+        "final_move_entries": 1288,
+        "final_nodes": 3864,
+        "halfmove_clock": 1,
+        "history_entries": 3,
+        "initial_move_entries": 563,
+        "prior_table_version": "5d70478a0cc5d779d6fdce57da3fd2941d033c116f5089f92fc8081c115517ba",
+        "requested_depth": 4,
+        "table_version": "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7"
+      },
+      {
+        "final_move_entries": 4,
+        "final_nodes": 29,
+        "halfmove_clock": 32,
+        "history_entries": 3,
+        "initial_move_entries": 0,
+        "prior_table_version": "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7",
+        "requested_depth": 2,
+        "table_version": "c6fd2119236f0c8e914cb505f26a5cfb859eabd837414e3d750b8b5d67a4f8f7"
+      }
+    ],
+    "original_canonical_stdout_sha256": "985a453ef5cd36baea543b01533ed8c9471d4c0d4ff33b91cf8d46862d9b313b",
+    "source_capture": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/held-out-source-capture.bound.json",
+      "sha256": "432242ec6deeb343068f2734dcc81754b12422171ee1675e8e4e116b859ba5b2",
+      "size_bytes": 105613
+    }
+  },
+  "delivery": {
+    "artifact": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native/artifact.json",
+      "sha256": "091b5660646d5fbbd44060ffda970094fb9273550b8938223ea725ce54276f63",
+      "size_bytes": 11441
+    },
+    "binary": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native/bin/scar_recursive_parameterized",
+      "sha256": "e3d44ce1b26a998e34c155aa0c2cc009a48027dffa3f7b4bdeffb5e776a9cd5b",
+      "size_bytes": 213552
+    },
+    "cmake": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native/CMakeLists.txt",
+      "sha256": "a3f5f749a26bf2ed18306a913af59f9a2e1e92babeb38a56f5ad858b65d37396",
+      "size_bytes": 591
+    },
+    "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "dependencies": [
+      "/lib64/ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libstdc++.so.6",
+      "linux-vdso.so.1"
+    ],
+    "generated_main": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native/src/main.cpp",
+      "sha256": "fb446e50d4076eb99326478ff808ddf0c073e4ff053d45472fae52dbc4cedc03",
+      "size_bytes": 93311
+    },
+    "native_replay": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native.check.json",
+      "sha256": "5fdf305447156e97ff0fbdd9b19e9980c1c3009c8653a461418e17828456d1a6",
+      "size_bytes": 632
+    },
+    "position_source": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/native/src/source_position.inc",
+      "sha256": "cccd9f6e76972f48c77c76ee032c2e811aa66f084a144394dfc9fbe12e42af2a",
+      "size_bytes": 7523
+    },
+    "python_runtime_required": false,
+    "relocation": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/relocation.json",
+      "sha256": "8fb0f2e70845d0f0ecc3a3971cb979e0d93906e02c790ac32c3b0f7b57fa703c",
+      "size_bytes": 764
+    }
+  },
+  "deployment_authorized": false,
+  "frontend": {
+    "checked_lookup_depths": {
+      "authority": "DECLARED_EXPERIMENTAL_DOMAIN",
+      "maximum": 4,
+      "minimum": 1
+    },
+    "command_kinds": [
+      "EMPTY",
+      "UCI",
+      "ISREADY",
+      "POSITION_START",
+      "POSITION_FEN",
+      "GO_DEPTH",
+      "NEW_GAME",
+      "QUIT"
+    ],
+    "grammar": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/source-grammar.json",
+      "sha256": "ce5040e44b53613876fc9b8dbad2b6fd568206996754920e556a0fcd9e572076",
+      "size_bytes": 71221
+    },
+    "held_out_stream_used_for_lowering": false,
+    "source_ports_live": true
+  },
+  "gpu_verified": false,
+  "optimization": {
+    "independent_comparison_replay": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/paired/selection.check.json",
+      "sha256": "158b31855c80c6d63bbcddd7d238a87c266357071e5769d9bb3d005405624f86",
+      "size_bytes": 513
+    },
+    "matched_comparison": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/paired/selection.json",
+      "sha256": "07f31b355aab11233b961e38210850c16eb46ccceaa8df23d094557b635c1f74",
+      "size_bytes": 6016
+    },
+    "observed_scheduling_cpu_lanes": 1,
+    "plan": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/parameterized-plan.json",
+      "sha256": "f143a74e00b691a2087ff7f46da454ed4502b647c7ff964ddbfe2aea6943dfb5",
+      "size_bytes": 84943
+    },
+    "plan_replay": {
+      "path": "artifacts/current/experiments/cpu-parameterized-entry-v1/parameterized-plan.check.json",
+      "sha256": "597cafdf23710cb5f8b6ab00264443bdd95480c78db51fd221e8cfadec735317",
+      "size_bytes": 125
+    },
+    "resident_move_until_new_game": true,
+    "selected_for_study": "entry_native"
+  },
+  "schema": "scar.scalar-recursive-parameterized-entry-acceptance",
+  "schema_version": 1,
+  "scope": "MATCHED_DIRECT_HELD_OUT_PARAMETERIZED_PROCESS",
+  "source": {
+    "schema": "scar.python-source",
+    "sha256": "5d9ba12a615e6394b634b22ca2ad33fd4720bb6ca38e327717be7891060e2819",
+    "size_bytes": 32941,
+    "uri": "/home/zyf/AAA/sunfish/sunfish.py"
+  }
+}

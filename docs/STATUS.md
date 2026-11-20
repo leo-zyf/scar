@@ -1,8 +1,14 @@
 # 当前状态
 
+独立 C++20 入口已能从运行时命令构造新局面。源图绑定八类命令、两种 FEN 朝向、后续走子和半回合更新。计划单独跟踪接收者和模块评分表。局面构造读取当前表，搜索可重新选择表，新游戏释放走子和分数状态并保留当前局面及模块表。构建沿用已经核验的搜索和 PV 后端。
+
+留出输入包含四场不同深度的搜索，逐条核对 42 次探测、四组历史和半回合计数、根状态及最终有序表。直接原脚本与 ELF 在同一逻辑核一对预热、四对清洁测量，中位数 **0.922 → 0.123 秒，7.50×**。同一个裸 ELF 搬迁后通过旧输入和留出输入。当前范围是按应答顺序发送的 `go depth 1–4`、已实现的位置命令及默认配置，异步停止、限时和选项变更仍在范围外。见 `artifacts/baseline/cpu-parameterized-recursive-entry-acceptance.json`。
+
+复跑使用 `project-scalar-recursive-parameterized-entry`、`plan-scalar-recursive-parameterized-entry`、`export-scalar-recursive-parameterized-entry` 和 `scripts/measure_scalar_recursive_parameterized.py`。下一步把独立交付推进到另一类纯 CPU 工作负载，复用当前的输入端口、状态所有权和运行验证机制。
+
 纯 CPU 已生成独立 C++20 Sunfish 入口。建图把 7 条有应答顺序的输入命令接到原控制分支、启动输出、位置准备和实际搜索的输入端口。规划在命令匹配后才执行对应效果。11 行启动回复和两个初始局面经原源码与观察证据固定，搜索分数、PV、走法及状态由原生算法实时计算。
 
-交付依次使用 `project-scalar-recursive-entry`、`observe-scalar-recursive-entry`、`plan-scalar-recursive-entry` 和 `export-scalar-recursive-entry`。包内包含 CMake、源码、头文件和宿主 ELF。前端分析发生在构建与复验，独立入口只依赖宿主 C/C++ 库。当前准入范围包括固定命令、应答顺序和已绑定的输入。下一轮降低源位置构造和命令参数的数据流，扩大输入域。
+固定输入版本的复跑入口为 `project-scalar-recursive-entry`、`observe-scalar-recursive-entry`、`plan-scalar-recursive-entry` 和 `export-scalar-recursive-entry`。包内包含 CMake、源码、头文件和宿主 ELF。前端分析发生在构建与复验，独立入口只依赖宿主 C/C++ 库。
 
 直接运行原 Python 脚本和生成 ELF，固定同一逻辑核，一对预热、四对清洁测量的中位数为 **1.957 → 0.262 秒，7.45×**。观察轮逐条核对 39 次探测，两局历史、根位置、节点数及有序表一致。发布的 ELF 单独搬迁并在空环境通过，未知命令返回 77，已发布的合法前缀保留。见 `artifacts/baseline/cpu-standalone-recursive-entry-acceptance.json`。
 
