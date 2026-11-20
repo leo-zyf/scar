@@ -1,0 +1,154 @@
+
+struct ScarEntryPosition {
+    std::vector<State> history;
+    Integer hclock;
+};
+
+namespace {
+constexpr std::size_t scar_pos_ranks = @SCAR_RANKS@;
+constexpr std::size_t scar_pos_files = @SCAR_FILES@;
+constexpr std::size_t scar_pos_size = @SCAR_SIZE@;
+constexpr std::string_view scar_pos_pieces = @SCAR_PIECES@;
+constexpr std::string_view scar_pos_castling = @SCAR_CASTLING@;
+
+bool scar_pos_upper(char value) { return value >= 'A' && value <= 'Z'; }
+bool scar_pos_lower(char value) { return value >= 'a' && value <= 'z'; }
+char scar_pos_uppercase(char value) {
+    return scar_pos_lower(value) ? static_cast<char>(value - 'a' + 'A') : value;
+}
+
+Integer scar_pos_ord(std::string_view character) {
+    if (character.size() != 1) throw Decline{};
+    return static_cast<unsigned char>(character.front());
+}
+
+Integer scar_pos_point(const std::string& square) {
+    if (square.size() != 2 || square[0] < 'a' || square[0] >= 'a' + static_cast<Integer>(scar_pos_files)
+            || square[1] < '1' || square[1] >= '1' + static_cast<Integer>(scar_pos_ranks)) throw Decline{};
+    return @SCAR_POINT@;
+}
+
+Move scar_pos_move(const std::string& token, bool white) {
+    if (token.size() != 4 && token.size() != 5) throw Decline{};
+    Integer first = scar_pos_point(token.substr(0, 2));
+    Integer second = scar_pos_point(token.substr(2, 2));
+    auto promotion = upper_ascii(token.substr(4));
+    if (!promotion.empty() && scar_pos_pieces.find(promotion.front()) == std::string_view::npos) throw Decline{};
+    if (!white) {
+        const Integer mapped_first = @SCAR_FLIP_FIRST@;
+        const Integer mapped_second = @SCAR_FLIP_SECOND@;
+        first = mapped_first;
+        second = mapped_second;
+    }
+    return Move{first, second, std::move(promotion)};
+}
+
+Integer scar_pos_count(std::string_view token) {
+    if (token.empty() || !std::ranges::all_of(token, [](char byte) { return byte >= '0' && byte <= '9'; })) throw Decline{};
+    return parse_integer(token);
+}
+
+std::string scar_pos_board(std::string_view ranks) {
+    std::string board(@SCAR_LEFT@, @SCAR_BORDER@[0]);
+    board.reserve(scar_pos_size);
+    std::size_t rank = 0;
+    std::size_t files = 0;
+    for (const auto byte : ranks) {
+        if (byte == @SCAR_DELIMITER@[0]) {
+            if (files != scar_pos_files || ++rank >= scar_pos_ranks) throw Decline{};
+            board += @SCAR_SEP@;
+            files = 0;
+        } else if (byte >= '1' && byte <= '9') {
+            const auto count = static_cast<std::size_t>(byte - '0');
+            if (count > scar_pos_files - files) throw Decline{};
+            board.append(count, @SCAR_FILL@[0]);
+            files += count;
+        } else {
+            if (files == scar_pos_files || scar_pos_pieces.find(scar_pos_uppercase(byte)) == std::string_view::npos) throw Decline{};
+            board.push_back(byte);
+            ++files;
+        }
+    }
+    if (rank + 1 != scar_pos_ranks || files != scar_pos_files) throw Decline{};
+    board.append(@SCAR_RIGHT@, @SCAR_BORDER@[0]);
+    if (board.size() != scar_pos_size) throw Decline{};
+    for (std::size_t i = @SCAR_OFFSET@; i < board.size(); i += @SCAR_STRIDE@) board[i] = @SCAR_MARK@[0];
+    return board;
+}
+
+bool has_flag(std::string_view flags, char byte) { return flags.find(byte) != std::string_view::npos; }
+
+State scar_pos_fen(const Table& table, std::span<const std::string> fields) {
+    const auto& side = fields[1];
+    if (side != @SCAR_WHITE_TOKEN@ && side != @SCAR_BLACK_TOKEN@) throw Decline{};
+    const auto& rights = fields[2];
+    if (rights != @SCAR_NO_CASTLING@) {
+        for (std::size_t i = 0; i < rights.size(); ++i) {
+            if (!has_flag(scar_pos_castling, rights[i]) || rights.find(rights[i]) != i) throw Decline{};
+        }
+        if (rights.empty()) throw Decline{};
+    }
+    const BoolPair white_rights{@SCAR_WHITE_RIGHTS@};
+    const BoolPair black_rights{@SCAR_BLACK_RIGHTS@};
+    const auto ep = fields[3] == @SCAR_NO_EP@ ? Integer{@SCAR_ZERO_EP@} : scar_pos_point(fields[3]);
+    auto board = scar_pos_board(fields[0]);
+    Integer score = 0;
+    for (Integer offset = 0; offset < static_cast<Integer>(board.size()); ++offset) {
+        const auto byte = board[static_cast<std::size_t>(offset)];
+        if (scar_pos_upper(byte)) {
+            const std::string piece(1, byte);
+            score = add(score, @SCAR_SCORE_POS@);
+        }
+    }
+    Integer negative = 0;
+    for (Integer offset = 0; offset < static_cast<Integer>(board.size()); ++offset) {
+        const auto byte = board[static_cast<std::size_t>(offset)];
+        if (scar_pos_lower(byte)) {
+            const std::string piece(1, byte);
+            negative = add(negative, @SCAR_SCORE_NEG@);
+        }
+    }
+    score = sub(score, negative);
+    auto position = @SCAR_FEN_STATE@;
+    return side == @SCAR_WHITE_TOKEN@ ? position : evaluate_rotation(position, @SCAR_ROTATION_DEFAULT@);
+}
+
+void scar_pos_append(ScarEntryPosition& next, const Table& table, const std::string& text, bool white) {
+    const auto move = scar_pos_move(text, white);
+    const auto& prior = next.history.back();
+    if (visit_records(prior, [&](const Move& candidate) { return candidate != move; })) throw Decline{};
+    next.hclock = scar_pv_quiet(prior, move) ? add(next.hclock, @SCAR_CLOCK_ADVANCE@) : @SCAR_CLOCK_RESET@;
+    auto prepared = state_move(table, prior, move);
+    next.history.push_back(std::move(prepared));
+}
+}  // namespace
+
+std::size_t scar_entry_initial_table_slot() { return @SCAR_INITIAL_SLOT@; }
+
+ScarEntryPosition scar_entry_position(const Table& preceding_table, std::span<const std::string> command) {
+    if (command.size() < 2 || command[0] != @SCAR_COMMAND@) throw Decline{};
+    if (command[1] == @SCAR_START@) {
+        if (command.size() > 2 && command[2] != @SCAR_MOVES@) throw Decline{};
+        ScarEntryPosition next{{@SCAR_START_STATE@}, @SCAR_INITIAL_CLOCK@};
+        for (std::size_t i = 3; i < command.size(); ++i) {
+            scar_pos_append(next, preceding_table, command[i], (i - 3) % 2 == @SCAR_START_PARITY@);
+        }
+        return next;
+    }
+    if (command[1] != @SCAR_FEN@ || command.size() < 8 || (command.size() > 8 && command[8] != @SCAR_MOVES@)) {
+        throw Decline{};
+    }
+    const auto fields = command.subspan(2, 6);
+    const auto hclock = scar_pos_count(fields[4]);
+    if (scar_pos_count(fields[5]) == 0) throw Decline{};
+    auto position = scar_pos_fen(preceding_table, fields);
+    ScarEntryPosition next{{}, hclock};
+    if (scar_pv_color(position) != @SCAR_WHITE_COLOR@) {
+        next.history.push_back(evaluate_rotation(position, @SCAR_ROTATION_DEFAULT@));
+    }
+    next.history.push_back(std::move(position));
+    for (std::size_t i = 9; i < command.size(); ++i) {
+        scar_pos_append(next, preceding_table, command[i], next.history.size() % 2 == @SCAR_HISTORY_PARITY@);
+    }
+    return next;
+}
