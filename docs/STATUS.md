@@ -1,5 +1,11 @@
 # 当前状态
 
+Sunfish 的原图已接通两次搜索之间的状态边。原 UCI 在第一次关闭后执行 6 次走子表查找和 6 次属性检查。第二次搜索继续使用同一份 714 条走子记录，在首个探测前换掉旧分数表。已经观察到的按键读取可直接走 C ABI。其他消费路径和外部别名仍是准入边界。
+
+C++20 v2 在一次原生分配中执行两场搜索。第一次关闭保留有序走子表，第二次原初始化后原子重绑并清空原生分数表。最后一个关闭点回写仍可见的状态。四对无插桩运行的整进程中位数 **1.990 → 1.684 秒，1.18×**，基线为上一版每局回写。独立观察核对 39 次探测、两局最终字典摘要和 6 次跨搜索查找。发布快照累计从 6,563,979 B 降到 361,965 B。见 `artifacts/baseline/cpu-recursive-owner-continuity-acceptance.json`。
+
+复跑使用 `project-scalar-recursive-owner-continuity`、`observe-scalar-recursive-owner-continuity`、`plan-scalar-recursive-owner`、`export-scalar-recursive-driver --rebind` 与 `scripts/measure_scalar_recursive_owner.py`。下一轮先补入口的命令状态、位置构造和输出依赖，再规划 C++20 入口。启动诊断已定位到桥接入口会载入前端分析，部署工作应在构建期完成。完整独立 C++ 入口仍待实现。
+
 纯 CPU 主链已扩到 Sunfish 的整个迭代搜索驱动。建图把原 UCI 调用、共享的循环体、递归探测、暂停/恢复和关闭接在一起。两次深度 4 搜索共观察 39 次探测，含两次关闭前的深度 5 探测。每局使用新的分数表，第二局继续使用走子表。
 
 规划把状态的原生所有权覆盖到一次生成器的完整生命周期。C++20 共享库在同一状态空间执行多次探测，通过 C ABI 返回原驱动约定的记录。原 UCI 仍负责输入、输出和停止控制，生成器关闭时回写字典。独立 C 调用方验证了状态快照、暂停恢复和硬截止检查。该路径保留原 Python UCI。生产部署、任意局面和跨搜索原生驻留仍待验证。
@@ -7,8 +13,6 @@
 相同两局在逻辑 CPU 7 上各跑一对观察预热、四对交替清洁测量。整进程中位数 **3.248 → 1.990 秒，1.63×**。原输出除 `time` 和 `nps` 外一致。观察轮逐条核对 39 次探测、节点数和两局最终有序字典摘要。详情见 `artifacts/baseline/cpu-recursive-driver-acceptance.json`。
 
 复跑入口依次为 `observe-scalar-recursive-driver`、`project-scalar-recursive-driver`、`plan-scalar-recursive-driver` 与 `export-scalar-recursive-driver`。`run-scalar-recursive-driver-study --project-ui` 绑定已观察到的外层消费端口。`scripts/measure_scalar_recursive_driver.py` 采集独立进程 A/B，规划器用 `--plan` 和 `--benchmark` 发布验收，`--check` 独立重算。
-
-下一轮先在原图中追完两场搜索之间的走子表读写与外部观察，再判定能否延后物化。观察轮两次回写累计输出 6,563,979 B，用时约 297 ms。只有状态可见性、内存容量和回退都能重放时，才降低新的所有权边界并重跑整入口。
 
 Sunfish 的整个递归函数已生成独立 C++20 入口。原程序采样验证了三个递归调用点，以及同一字典实例上的查询、写入和淘汰。原生产物读取类型化输入，保留节点计数、按插入顺序更新的字典和时钟检查顺序。六个用例的返回值与完整共享状态逐字段匹配，其中两个取自原驱动真实根调用，还验证了已有状态、容量 32 的两个有序字典和停止时的状态前缀。
 

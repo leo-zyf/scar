@@ -1,0 +1,201 @@
+{
+  "benchmark": {
+    "clean_pairs": 4,
+    "cpu_model": "Intel Xeon E5-2680 v4",
+    "data": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/paired/run.json",
+      "sha256": "623f5eb9f3cfa857c73488857d22da00bf22cb7f3165f8557cfc456516c91549",
+      "size_bytes": 26124
+    },
+    "logical_cpu": 7,
+    "measurements_ns": {
+      "driver_native": {
+        "max_ns": 2000286655,
+        "median_ns": 1989577969.0,
+        "min_ns": 1986691073,
+        "sample_stdev_ns": 5997993.883370144,
+        "samples_ns": [
+          1989904134,
+          1986691073,
+          1989251804,
+          2000286655
+        ]
+      },
+      "owner_native": {
+        "max_ns": 1692249182,
+        "median_ns": 1683581433.5,
+        "min_ns": 1680440516,
+        "sample_stdev_ns": 5290621.850985091,
+        "samples_ns": [
+          1692249182,
+          1680440516,
+          1681763017,
+          1685399850
+        ]
+      }
+    },
+    "median_speedup": 1.1817533321592073,
+    "minimum_paired_gain_ns": 297654952,
+    "observed_only": {
+      "baseline_snapshot_ns": 298748937,
+      "extra_validation_snapshots_excluded_from_published_bytes": true,
+      "materialized_bytes_continuous_owner": 361965,
+      "materialized_bytes_per_generator_baseline": 6563979,
+      "terminal_snapshot_ns": 11908054
+    },
+    "warmup_pairs": 1
+  },
+  "correctness": {
+    "canonical_stdout_sha256": "7b108d57533b5dbf37e4f9a7e680ce077cd910f8018f17a47d6e70311821c559",
+    "exact_probe_sequence": true,
+    "idle_move_gets": 6,
+    "native_worlds": 1,
+    "normalization": "UCI_INFO_TIME_AND_NPS_ONLY",
+    "ordered_map_digest_matches": 2,
+    "probes": 39,
+    "rebinds": 1,
+    "terminal_flushes": 1
+  },
+  "cpp20": {
+    "cold_check": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/native.check.json",
+      "sha256": "5521116278617d3cf9651da72147b723fa75051534e245070b02f7d5eedf504f",
+      "size_bytes": 6772
+    },
+    "generated_cpp": {
+      "path": "artifacts/current/experiments/cpu-recursive-driver-v1/native-library-v2/src/driver.cpp",
+      "sha256": "ec15f5c06ec9f91c62288ba298ea97a427d6fe8694429aa7897e7ad7c0d09704",
+      "size_bytes": 82229
+    },
+    "header": {
+      "path": "artifacts/current/experiments/cpu-recursive-driver-v1/native-library-v2/include/scar_recursive_driver_v2.h",
+      "sha256": "a7bf46c9708eb863356feaeb0e37919a42bf88f2b2b5154bf0e237385b26f28a",
+      "size_bytes": 670
+    },
+    "manifest": {
+      "path": "artifacts/current/experiments/cpu-recursive-driver-v1/native-library-v2/artifact.json",
+      "sha256": "a13035f33629e116503fdc85c7093e9da1be32eeaf8676f506f8fc2c69bd43c7",
+      "size_bytes": 8580
+    },
+    "original_python_uci_retained": true,
+    "pure_c_driver_abi": "scar_recursive_driver_rebind_v2",
+    "rebind_checks": [
+      {
+        "after_table": 1,
+        "before_table": 0,
+        "preserved_move_rows": 21,
+        "preserved_move_wire_bytes": 5541,
+        "probes": [
+          {
+            "depth": 1,
+            "nodes": 2,
+            "score": 1288,
+            "threshold": 0
+          },
+          {
+            "depth": 1,
+            "nodes": 3,
+            "score": 1408,
+            "threshold": 35289
+          }
+        ],
+        "refused_inputs": 4
+      },
+      {
+        "after_table": 0,
+        "before_table": 1,
+        "preserved_move_rows": 26,
+        "preserved_move_wire_bytes": 6901,
+        "probes": [
+          {
+            "depth": 1,
+            "nodes": 2,
+            "score": 0,
+            "threshold": 0
+          },
+          {
+            "depth": 1,
+            "nodes": 3,
+            "score": 46,
+            "threshold": 34645
+          }
+        ],
+        "refused_inputs": 4
+      }
+    ],
+    "shared_library": {
+      "path": "artifacts/current/experiments/cpu-recursive-driver-v1/native-library-v2/lib/libscar_recursive_driver_v2.so",
+      "sha256": "d05750d47155476a3d1e9a6dba00b5c52d208462cb0a25608b8b898ffe7dc285",
+      "size_bytes": 163856
+    }
+  },
+  "deployment_authorized": false,
+  "frontend": {
+    "graph": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/source-owner.json",
+      "sha256": "21a11df1f30a793d8268bcc4e92d95350439d3d1b72c518e6af92733fc178269",
+      "size_bytes": 23580
+    },
+    "move_entries_carried": 714,
+    "old_score_entries_revoked": 22285,
+    "ordered_original_anchors": [
+      "close",
+      "worker_return",
+      "submit",
+      "consumer_start",
+      "driver_start",
+      "fresh_score_reset",
+      "first_probe"
+    ],
+    "original_capture": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/capture.json",
+      "sha256": "2568ac4306d6dd888a686a04386e2539e0429b98afe35c5cf78f3353749474dc",
+      "size_bytes": 15166
+    },
+    "outside_scope": [
+      "REFLECTIVE_OR_FOREIGN_RECEIVER_ALIASES",
+      "CALLBACKS_OUTSIDE_ORIGINAL_CODE_FAMILY",
+      "OTHER_COMMAND_BRANCHES_AND_UNKNOWN_DYNAMIC_CALLS"
+    ],
+    "permitted_original_idle_accesses": {
+      "KEYED_GET": 6,
+      "PRESENCE_TEST": 6
+    },
+    "stdin": {
+      "schema": "application/octet-stream",
+      "sha256": "5785093a546c485083553050d13c4a5eff190ad9b76b544a7daddb3e9a7150ba",
+      "size_bytes": 126,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-driver-v1/qualified-v2/paired/commands.stdin"
+    }
+  },
+  "gpu_verified": false,
+  "planning": {
+    "historical_cost_used_for_selection": false,
+    "independent_cold_replay": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/paired/selection.check.json",
+      "sha256": "0de12c5b0c10b1c0d8345e406dc1fb43223f85a89b55fac667689907e2214e15",
+      "size_bytes": 531
+    },
+    "ownership": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/owner-plan.json",
+      "sha256": "a89642a912bd116c82adbaa14d1ebd696eac9a81bcc5c7f6f0b245c6c3980685",
+      "size_bytes": 23042
+    },
+    "paired_selection": {
+      "path": "artifacts/current/experiments/cpu-search-owner-v1/paired/selection.json",
+      "sha256": "3b5b7d0ef3efda4951eb41dd3e72137973ba3245dc09e7bed8ea48ddd2bea8d1",
+      "size_bytes": 6565
+    },
+    "peak_resident_bytes": null,
+    "selected_for_study": "owner_native"
+  },
+  "schema": "scar.scalar-recursive-owner-continuity-acceptance",
+  "schema_version": 1,
+  "scope": "SAME_FIXED_DEPTH_WHOLE_UCI_PROCESS",
+  "source": {
+    "schema": "scar.python-source",
+    "sha256": "5d9ba12a615e6394b634b22ca2ad33fd4720bb6ca38e327717be7891060e2819",
+    "size_bytes": 32941,
+    "uri": "/home/zyf/AAA/sunfish/sunfish.py"
+  }
+}
