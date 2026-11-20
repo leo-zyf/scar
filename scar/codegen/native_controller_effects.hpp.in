@@ -1,0 +1,39 @@
+#pragma once
+
+#include "controller_effect_abi_v1.h"
+
+#include <cstdint>
+#include <dlfcn.h>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+class ControllerEffects {
+    void* library_;
+    const scar_controller_effect_table_v1* table_;
+
+public:
+    ControllerEffects(const char* path, std::string_view identity, std::uint64_t effects)
+        : library_(::dlopen(path, RTLD_NOW | RTLD_LOCAL)), table_(nullptr) {
+        if (!library_) throw std::runtime_error("cannot load native effect provider");
+        const auto get_table = reinterpret_cast<scar_controller_effect_getter_v1>(
+            ::dlsym(library_, "scar_get_controller_effects_v1"));
+        if (get_table) table_ = get_table();
+        if (!table_ || table_->abi_version != 1 || table_->struct_size != sizeof(*table_) ||
+            !table_->controller_sha256 || table_->controller_sha256 != identity ||
+            table_->effect_count != effects || !table_->dispatch) {
+            ::dlclose(library_);
+            throw std::runtime_error("native effect provider contract differs");
+        }
+    }
+
+    ControllerEffects(const ControllerEffects&) = delete;
+    ControllerEffects& operator=(const ControllerEffects&) = delete;
+    ~ControllerEffects() { ::dlclose(library_); }
+
+    int call(std::uint32_t ordinal, const scar_controller_value_v1* arguments,
+             std::uint64_t argument_count, const scar_array_v1* roots, std::uint64_t root_count) const {
+        if (ordinal >= table_->effect_count) return -1;
+        return table_->dispatch(table_->context, ordinal, arguments, argument_count, roots, root_count);
+    }
+};

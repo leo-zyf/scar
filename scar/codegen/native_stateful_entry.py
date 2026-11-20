@@ -22,7 +22,7 @@ _TEMPLATE = Path(__file__).with_name('native_stateful_entry_v1.cpp.in')
 _HEADERS = ('scar_abi_v1.h', 'stateful_abi_v1.h')
 _ORIGINAL = {'region', 'plan', 'source', 'library', *_HEADERS}
 _HOST_LIBS = {'libc.so.6', 'libm.so.6', 'libstdc++.so.6', 'libgcc_s.so.1', 'libgomp.so.1',
-              'libpthread.so.0', 'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1', 'linux-vdso.so.1'}
+              'libdl.so.2', 'libpthread.so.0', 'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1', 'linux-vdso.so.1'}
 _MEMBERS = {
     'CMakeLists.txt': 'scar.cmake-project',
     'src/main.cpp': 'scar.cpp-source',
@@ -76,7 +76,7 @@ def _admit(reference, *, observe_provider=False):
     return metadata, plan, ports, root, provider
 
 
-def _render(ports, metadata, provider, update=None):
+def _render(ports, metadata, provider, update=None, controller=None):
     arrays = [row for row in ports if row['kind'] == 'array']
     scalars = [row for row in ports if row['kind'] == 'scalar']
     declarations = {
@@ -100,13 +100,16 @@ def _render(ports, metadata, provider, update=None):
                                    arguments.values.data(), arguments.values.size(), {provider_args});
     if (status != 0) throw std::runtime_error("native stateful region declined: " + std::to_string(status));''',
     )
-    if update is not None:
+    if controller is not None:
+        from scar.codegen.native_controller_entry import render
+        declarations.update(render(controller, setup, selected))
+    elif update is not None:
         from scar.codegen.native_update_entry import render
         declarations.update(render(update, setup, provider_args))
     return re.sub(r'@([A-Z0-9_]+)@', lambda match: declarations[match[1]], _TEMPLATE.read_text()).encode()
 
 
-def _project(root, plan, provider, update):
+def _project(root, plan, provider, update, controller=None):
     options = tuple(option for option in cpp.COMPILER_OPTIONS if option not in ('-std=c++20', '-shared', '-fPIC'))
     parallel = ('-fopenmp',) if plan['cpu_threads'] > 1 else ()
     sources = ('src/main.cpp', 'src/stateful.cpp')
@@ -115,8 +118,13 @@ def _project(root, plan, provider, update):
     if update is not None:
         from scar.codegen.native_update_entry import COPY_SOURCE
         sources += (COPY_SOURCE,)
+    libraries = ('m',)
+    if controller is not None:
+        from scar.codegen.native_controller_entry import SOURCE
+        sources += (SOURCE,)
+        libraries += ('dl',)
     write_native_project(root, _TARGET, sources=sources, compile_options=(*options, *parallel),
-                         link_options=parallel, libraries=('m',),
+                         link_options=parallel, libraries=libraries,
                          install_dirs=(('licenses', '.'),) if provider is not None else ())
 
 
@@ -128,7 +136,7 @@ def _linkage(executable):
     return dynamic
 
 
-def _members(root, provider, update):
+def _members(root, provider, update, controller=None):
     members = _MEMBERS
     if provider is not None:
         members = {**members, stateful_numpy_provider.SOURCE: 'scar.cpp-source',
@@ -136,14 +144,16 @@ def _members(root, provider, update):
     if update is not None:
         from scar.codegen.native_update_entry import COPY_SOURCE
         members = {**members, COPY_SOURCE: 'scar.cpp-source'}
+    if controller is not None:
+        members = {**members, **{name: row[0] for name, row in controller.members().items()}}
     return {name: {**_local(root, name, schema), 'uri': name} for name, schema in members.items()}
 
 
-def _report(reference, metadata, plan, ports, root, provider, update):
+def _report(reference, metadata, plan, ports, root, provider, update, controller=None):
     report = dict(schema=SCHEMA, schema_version=1, cxx_standard=20, stateful_abi_version=1, original=reference,
                   original_build_id=metadata['build_id'],
                   identity={key: metadata[key] for key in ('region_sha256', 'plan_sha256', 'contract_sha256')},
-                  ports=ports, files=_members(root, provider, update), linkage=_linkage(root / _EXE),
+                  ports=ports, files=_members(root, provider, update, controller), linkage=_linkage(root / _EXE),
                   cpu_ids=metadata['cpu_ids'], array_payload_bytes=plan['total_region_array_payload_bytes'],
                   array_encoding='C_ORDER_LITTLE_ENDIAN_BINARY64', status='REGION_ENTRY_EXPERIMENT',
                   effects='EXPLICIT_WRITTEN_ROOT_FILES_AFTER_NATIVE_SUCCESS',
@@ -155,18 +165,30 @@ def _report(reference, metadata, plan, ports, root, provider, update):
         report['update'] = update.artifacts()
         report['status'] = 'COMPOSED_UPDATE_ENTRY_EXPERIMENT'
         report['effects'] = 'ARRAY_AND_CARRIED_SCALAR_FILES_AFTER_ALL_UPDATES_SUCCEED'
+    if controller is not None:
+        report['controller'] = controller.artifacts()
+        report['status'] = 'SOURCE_CONTROLLED_NATIVE_ENTRY_EXPERIMENT'
+        report['effects'] = 'SYNCHRONOUS_NATIVE_EFFECT_CALLBACKS_THEN_FINAL_ROOT_AND_STATE_FILES'
     return report
 
 
 @replay_transaction()
-def export(native, out, *, update_plan=None):
+def export(native, out, *, update_plan=None, controller_plan=None):
     """Publish a CMake project and executable using the original replayed ABI code."""
     path = Path(native).resolve(strict=True)
     reference = artifact_reference(path / 'artifact.json' if path.is_dir() else path, stateful.SCHEMA)
     metadata, plan, ports, original, provider = _admit(reference, observe_provider=True)
-    update = None
-    if update_plan is not None:
-        from scar.codegen.native_update_entry import COPY_SOURCE, prepare
+    _need(update_plan is None or controller_plan is None, 'provide only one enclosing plan')
+    from scar.codegen.native_update_entry import COPY_SOURCE
+    update = controller = None
+    if controller_plan is not None:
+        from scar.codegen.native_controller_entry import prepare
+        from scar.compiler.plan_native_controller import SCHEMA as PLANNING
+        controller = prepare(artifact_reference(Path(controller_plan).resolve(strict=True), PLANNING),
+                             metadata, ports)
+        update = controller.update
+    elif update_plan is not None:
+        from scar.codegen.native_update_entry import prepare
         from scar.compiler.plan_native_update import SCHEMA as PLANNING
         update_ref = artifact_reference(Path(update_plan).resolve(strict=True), PLANNING)
         update = prepare(update_ref, metadata, ports)
@@ -180,7 +202,7 @@ def export(native, out, *, update_plan=None):
         (root / 'src').mkdir(parents=True)
         include = root / 'include/scar_generated'
         include.mkdir(parents=True)
-        (root / 'src/main.cpp').write_bytes(_render(ports, metadata, provider, update))
+        (root / 'src/main.cpp').write_bytes(_render(ports, metadata, provider, update, controller))
         shutil.copyfile(original / metadata['files']['source'], root / 'src/stateful.cpp')
         for name in _HEADERS:
             shutil.copyfile(original / metadata['files'][name], include / name)
@@ -190,11 +212,14 @@ def export(native, out, *, update_plan=None):
                 (root / name).write_bytes(payload)
         if update is not None:
             (root / COPY_SOURCE).write_bytes(update.copy_source)
-        _project(root, plan, provider, update)
+        if controller is not None:
+            for name, (_, payload) in controller.members().items():
+                (root / name).write_bytes(payload)
+        _project(root, plan, provider, update, controller)
         _, dependencies = build_native_project(root, _TARGET, (compiler,))
         _need({Path(name).name for name in dependencies} <= _HOST_LIBS,
               'native executable has a non-host dependency')
-        report = _report(reference, metadata, plan, ports, root, provider, update)
+        report = _report(reference, metadata, plan, ports, root, provider, update, controller)
         (root / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
         check(root)
         root.rename(out)
@@ -208,14 +233,22 @@ def check(package):
     original = read_artifact(_local(root, 'result.json', SCHEMA))
     reference = original['original']
     metadata, plan, ports, native, provider = _admit(reference)
-    update = None
-    if 'update' in original:
-        from scar.codegen.native_update_entry import COPY_SOURCE, prepare
+    update = controller = None
+    if 'controller' in original:
+        from scar.codegen.native_controller_entry import prepare
+        controller = prepare(original['controller']['planning'], metadata, ports)
+        update = controller.update
+        for name, (_, payload) in controller.members().items():
+            _need((root / name).read_bytes() == payload, 'original controller member differs: ' + name)
+    elif 'update' in original:
+        from scar.codegen.native_update_entry import prepare
         update = prepare(original['update']['planning'], metadata, ports)
+    if update is not None:
+        from scar.codegen.native_update_entry import COPY_SOURCE
         _need((root / COPY_SOURCE).read_bytes() == update.copy_source, 'original array copy source differs')
-    _need(original == _report(reference, metadata, plan, ports, root, provider, update),
+    _need(original == _report(reference, metadata, plan, ports, root, provider, update, controller),
           'package contract, artifact bytes or ELF linkage differs')
-    _need((root / 'src/main.cpp').read_bytes() == _render(ports, metadata, provider, update),
+    _need((root / 'src/main.cpp').read_bytes() == _render(ports, metadata, provider, update, controller),
           'native command ports differ from replay')
     for key, name in (('source', 'src/stateful.cpp'),
                       *((name, f'include/scar_generated/{name}') for name in _HEADERS)):
@@ -227,7 +260,7 @@ def check(package):
               'provider source or upstream notice differs')
         stateful_numpy_provider.audit(root / _EXE, provider[0])
     with TemporaryDirectory(prefix='scar-stateful-cmake-') as temporary:
-        _project(Path(temporary), plan, provider, update)
+        _project(Path(temporary), plan, provider, update, controller)
         _need((root / 'CMakeLists.txt').read_bytes() == (Path(temporary) / 'CMakeLists.txt').read_bytes(),
               'CMake project differs from replay')
     return original
@@ -238,12 +271,14 @@ def main(argv=None):
     parser.add_argument('--check')
     parser.add_argument('--native')
     parser.add_argument('--out')
-    parser.add_argument('--update-plan')
+    plans = parser.add_mutually_exclusive_group()
+    plans.add_argument('--update-plan')
+    plans.add_argument('--controller-plan')
     args = parser.parse_args(argv)
-    if args.check and not (args.native or args.out or args.update_plan):
+    if args.check and not (args.native or args.out or args.update_plan or args.controller_plan):
         report = check(args.check)
     elif args.native and args.out and not args.check:
-        report = export(args.native, args.out, update_plan=args.update_plan)
+        report = export(args.native, args.out, update_plan=args.update_plan, controller_plan=args.controller_plan)
     else:
         parser.error('provide --native ARTIFACT --out PACKAGE, or --check PACKAGE')
     print(json.dumps(report, sort_keys=True, indent=2))

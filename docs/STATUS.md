@@ -1,5 +1,11 @@
 # 当前状态
 
+CPU 原循环入口使用三份可独立重放的记录。前端 `project-native-controller` 从 F4 恢复共享循环、条件、动态步长与调用实参，循环体只存一份。中端 `plan-native-controller` 合并完整更新和同一次采集的效果顺序与资源约束。Gray–Scott 的 75 次完整更新及首帧写入可回接原调用端口。首帧位于第一次更新之前，字节校验只能作为验收依据。完整入口成本保留为 `UNKNOWN`，规划默认 `NO_OP`。
+
+`export-native-stateful-entry --controller-plan PLAN` 生成 C++20 项目。数组保持在原生进程内存，步长字段由共享循环实时更新。三个原外部调用点按源条件同步分发，入口要求显式提供与控制计划标识匹配的 C ABI 效果库。最终数组及标量状态在成功返回后发布。发布帧、日志及视频的实际提供者需另行验证。
+
+用 Gray–Scott 的真实数组对照原 `integrate`，在 75 步、末步缩短的 6 步和零步三个输入上验证搬迁后的可执行文件。最终数组、时间、步长、步数，以及回调的顺序、实参与当时的数组均逐字节匹配。身份错误的探针在回调和输出发布之前被拒绝。验收以探针代替外部发布，尚无该完整入口的 A/B。见 `artifacts/baseline/cpu-native-controller-acceptance.json`。
+
 原 F4 图已接通一个完整的 Gray–Scott `update`。受布尔分支守卫约束的原路径依次执行数值区域、两次边界更新及标量返回。共享规划图核对八次有序复制，逻辑读取与写入各 16,576 B。完整步耗时仍未知，规划保留 `NO_OP`。
 
 `export-native-stateful-entry --update-plan PLAN` 可生成独立 C++20 更新入口。在同一组常驻数组上执行显式步数，并按原返回表达式携带标量。用真实初始化数据，搬迁后的产物在空环境通过 1 步和 75 步验证，最终数组含边界单元、返回标量和输入文件均逐字节核对。原 `integrate` 的终止条件、步长调整和文件发布仍在交付边界外。见 `artifacts/baseline/cpu-standalone-update-acceptance.json`。
