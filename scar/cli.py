@@ -77,6 +77,12 @@ def _trace(args) -> int:
     compile_events = getattr(args, 'compile_events', False)
     python_targets = getattr(args, 'python_call_targets', False) or lean_plan is not None or stream_interfaces or program_ports or native_callables or compile_events or resource_scopes
     operands = getattr(args, 'call_operands', False) or python_targets or torch_call_scopes
+    control_codes = tuple(dict.fromkeys(getattr(args, 'control_code', ()) or ()))
+    if control_codes:
+        import re
+        if not operands or len(control_codes) > 32 or any(re.fullmatch(r'pycode-v2:[0-9a-f]{64}', key) is None
+                for key in control_codes):
+            raise SystemExit('--control-code requires --call-operands and up to 32 exact CodeIDs')
     epoch_region = getattr(args, 'stateful_allocation_epochs', None)
     if epoch_region is not None and not operands:
         raise SystemExit('--stateful-allocation-epochs requires --call-operands')
@@ -122,6 +128,7 @@ def _trace(args) -> int:
     env.pop('SCAR_SNAPSHOT_BUFFER_BYTES',None)
     env.pop('SCAR_CAPTURE_PHASES',None)
     env.pop('SCAR_REGION_METADATA_EPOCH_TRACKER',None)
+    env.pop('SCAR_CONTROL_CODES',None)
     for key in ('SCAR_OS_CAPTURE_NONCE','SCAR_OS_CAPTURE_INTENT','SCAR_OS_CAPTURE_INTENT_SHA256'):
         env.pop(key,None)
     execution_evidence = getattr(args, "execution_evidence", False)
@@ -160,6 +167,7 @@ def _trace(args) -> int:
                 or (execution_evidence and any(out.glob('execution-evidence.*.json')))):
             raise SystemExit("calls-only requires a fresh output directory")
         env['SCAR_TRACE_CALL_EDGES'] = '1'
+        if control_codes:env['SCAR_CONTROL_CODES'] = json.dumps(control_codes)
         if epoch_region is not None:
             from scar.compiler.input_metadata import read_input_boundary
             from scar.trace.numpy_allocation_epochs import build_tracker
@@ -1505,6 +1513,8 @@ def main(argv=None) -> int:
         help='opt in to exact Python and native call scope markers for OS/source joins; requires --os-capture-root')
     trace.add_argument('--stateful-allocation-epochs', metavar='REGION',
         help='observe bounded NumPy allocation epochs at accepted original stateful frame entries')
+    trace.add_argument('--control-code', action='append', metavar='CODE_ID',
+        help='capture local branches and jumps in this original code, repeatable')
     trace.add_argument('--max-os-lines',type=int,default=2000000)
     trace.add_argument('--max-capture-bytes',type=int,default=256000000)
     trace.add_argument('--max-archive-bytes',type=int,default=128000000)

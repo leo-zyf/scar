@@ -66,6 +66,7 @@ class CallEdgeRecorder:
         self.lock = threading.RLock()
         self.active, self.codes, self.references = {}, set(), {}
         self.region_metadata = None
+        self.control_transfers = None
         self.invocation = self.index = self.epoch = self.bytes = self.written = 0
         self.entered = self.unclosed_written = 0
         self.dropped = self.codes_dropped = self.unknown_exits = self.suspended_exits = 0
@@ -498,6 +499,8 @@ class CallEdgeRecorder:
                         self.active[thread,id(frame)] = invocation,code,suspended
                         if self.region_metadata is not None:
                             self.region_metadata.on_recorded_entry(frame,thread,invocation,code)
+                        if self.control_transfers is not None:
+                            self.control_transfers.enter(frame,thread,invocation,code,suspended)
                         if self.resumptions is not None:
                             self.resumptions.profile_event(frame, 'call', invocation, code, self.index)
                         if forward_root is not None:
@@ -537,6 +540,8 @@ class CallEdgeRecorder:
                         self.unclosed_written -= 1
                         self.unknown_exits += completion == 'UNKNOWN'
                         self.suspended_exits += completion == 'SUSPENDED'
+                        if self.control_transfers is not None:
+                            self.control_transfers.exit(frame,thread,invocation)
                         if self.resumptions is not None:
                             self.resumptions.profile_event(frame, 'return', invocation, code, self.index)
                     else:
@@ -646,6 +651,9 @@ def install(out, project_root, *, lean_plan=None):
         max_references=int(os.environ.get('SCAR_CALL_MAX_REFERENCES',8192)),
         capture_profile=profile, source_limits=source_limits)
     os.environ['SCAR_CALL_TRACE_OWNER_PID'] = str(os.getpid())
+    if os.environ.get('SCAR_CONTROL_CODES'):
+        from scar.trace.control_transfers import ControlTransfers
+        recorder.control_transfers = ControlTransfers(recorder,json.loads(os.environ['SCAR_CONTROL_CODES']))
     if os.environ.get('SCAR_CAPTURE_PHASES') is not None:
         from scar.trace.capture_phases import CapturePhases
         recorder.phase_events = CapturePhases.from_environment(recorder)
@@ -723,6 +731,8 @@ def install(out, project_root, *, lean_plan=None):
         recorder.close()
         if observer is not None:
             observer.close()
+        if recorder.control_transfers is not None:
+            recorder.control_transfers.close()
         if sampler is not None:
             sampler.stop()
         if recorder.collector_witness is not None:

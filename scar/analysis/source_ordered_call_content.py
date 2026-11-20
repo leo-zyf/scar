@@ -191,6 +191,7 @@ def project(entry_calls, accesses, *, allocation_trace=None, project_root=None):
             if allocation_trace is not None:
                 from scar.analysis.observed_allocation_epochs import observe_allocation_epochs
                 from scar.analysis.observed_loop_calls import observed_loop_calls
+                from scar.analysis.observed_loop_control import observed_loop_control
                 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
                 from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
 
@@ -201,6 +202,11 @@ def project(entry_calls, accesses, *, allocation_trace=None, project_root=None):
                 calls = observed_loop_calls(observed, declarations[parent][1],
                     tuple(declarations[siblings[i]][1] for i in order), order.index(siblings.index(index)),
                     lifetime['endpoints'])
+                control = observed_loop_control(observed, declarations[parent][1], loop, calls['windows'], lifetime)
+                if control is not None:
+                    from scar.analysis.source_slot_continuity import project_slot_continuity
+                    slots = project_slot_continuity(view, region, decode(F.CodeScopeRef, declarations[parent][0]['caller_scope']),
+                        declarations[parent][1], declarations[index][1], decode(T.GlobalPort, loop['header']))
     reads, intervals = storage._repeated_read_records(analyze_loop_content(row.access for row in rows))
     result = dict(schema=SCHEMA, schema_version=1, entry_calls=source_ref, storage=storage_ref,
                 original_loop_header=loop['header'], original_loop_body=loop['body'],
@@ -219,6 +225,11 @@ def project(entry_calls, accesses, *, allocation_trace=None, project_root=None):
             project_root=str(Path(project_root).resolve()), allocation_lifetime=lifetime, actual_calls=calls)
         result['remaining'] = ['SLOT_BINDING_CONTINUITY_ACROSS_BACKEDGE',
             'EXACT_BACKEDGE_OCCURRENCE_AND_INTERVENING_EFFECTS', 'UNSELECTED_BRANCHES']
+        if control is not None:
+            result['observed_interval']['control'] = control
+            result['observed_interval']['direct_slots'] = slots
+            if control['exact_source_backedges'] == 1:
+                result['remaining'][1] = 'INTERVENING_EFFECTS_AND_CALLBACKS'
         if not lifetime['covered_observed_interval']:
             result['remaining'].append('ALLOCATION_LIFETIME_AT_SELECTED_INTERVAL')
         if not calls['all_selected_windows_bound']:

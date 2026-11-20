@@ -1,8 +1,14 @@
 # 当前状态
 
-`trace --stateful-allocation-epochs REGION` 将 NumPy 原分配器的成功分配、重分配和释放接到同一次调用采集。Gray–Scott 两个 `_euler` 检查点之间，两块实际拥有者分配保持同一分配代。两次 `update` 及各自三次子调用都回接原 F4 端口并核对正常返回。字段绑定在区间内是否变化、检查点是否恰好跨一个回边、未选分支和中间效果仍待证明。
+Gray–Scott 的两次数组更新已在同一次调用中定位到一次原始 `while` 回边。`trace --control-code CODE_ID` 只采集所选代码的实际分支和跳转。冷重放把回边接到原 F4 端口，并核对两次 `update` 之间的外层路径。该路径未执行直接字段写入或其他 `CALL`。数组字段的区间内绑定、协议与回调效果仍独立保留。
 
-`plan-entry-effects --loop-content` 将该区间和同一采集中的首帧发布顺序接到共享规划问题。重放会拒绝把数组区域移到首帧发布之前，完整时间与资源需求未定时保留 `NO_OP`。`export-native-stateful-entry` 已将通用无回调数组区域交付为独立 C++20 项目，搬迁后在空环境运行，输出 160 字节与原区域逐字节一致。Gray–Scott 的计算区域仍有 NumPy provider 回调。见 `artifacts/baseline/cpu-allocation-effect-native-entry-acceptance.json`。
+相同 CPU 核上各预热 2 对、测量 7 对。75 步时，预加载后的整段原驱动中位数为 523.445 → 455.624 ms（1.15×），其中受守卫区域从 135.531 → 58.643 ms。75 步进入发布评审。留出的 6 步输入中，整段驱动时间区间重叠，保留原执行。`plan-entry-effects --paired-benchmark` 重算各自的判定。全图时长与调度资源需求仍未闭合。
+
+独立 C++20 入口已执行真实 Gray–Scott 的一个数值步。导出重放已选 NumPy 原生算子的代码、重定位和库符号版本。产物移到新目录后在空环境运行，两个含 halo 的数组逐字节一致。准入限定在经过核对的 NumPy 二进制、签名和 CPU 条件。见 `artifacts/baseline/cpu-exact-loop-native-region-acceptance.json`。
+
+`trace --stateful-allocation-epochs REGION` 将 NumPy 原分配器的成功分配、重分配和释放接到同一次调用采集。Gray–Scott 两个 `_euler` 检查点之间，两块实际拥有者分配保持同一分配代。两次 `update` 及各自三次子调用都回接原 F4 端口并核对正常返回。分配代与字段绑定分别保存。
+
+`plan-entry-effects --loop-content` 将该区间和同一采集中的首帧发布顺序接到共享规划问题。重放会拒绝把数组区域移到首帧发布之前，完整时间与资源需求未定时保留 `NO_OP`。独立 C++20 入口也通过无回调数组区域的回归验收。见 `artifacts/baseline/cpu-allocation-effect-native-entry-acceptance.json`。
 
 公共前端已用真实 Gray–Scott 验证源码调用与系统接口的接线。快照采集重放了 570 个区间，其中 479 个是 Python 调用，全部接回原 F4 端口。按同线程的原始标记顺序，将打开、写入 106,172 字节和关闭 PNG 的记录接到 `_dump` 调用的 Matplotlib `Figure.savefig`。PNG 与保留基线逐字节一致。进程尾部的 53 字节 stdout 写入仍保留为未归属效果。
 

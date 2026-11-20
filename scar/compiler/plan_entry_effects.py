@@ -83,12 +83,15 @@ def _loop_interval(reference, time):
             or loop['storage']['schema'] != STORAGE or storage['catalog']['uri'] != str(Path(scope_report['catalog']) / 'result.json')
             or read_artifact(storage['boundary']) != region):
         raise ValueError('loop-content, external effects, and region must have the same original source and capture')
-    return dict(covered_allocation_interval=interval['allocation_lifetime']['covered_observed_interval'],
+    result = dict(covered_allocation_interval=interval['allocation_lifetime']['covered_observed_interval'],
         original_call_windows=len(interval['actual_calls']['windows']),
         unresolved_loop_conditions=loop['remaining'])
+    if 'control' in interval:
+        result['observed_backedges'] = interval['control']['exact_source_backedges']
+    return result
 
 
-def _derive(resource_ref, loop_ref=None):
+def _derive(resource_ref, loop_ref=None, benchmark_ref=None):
     resources = read_resource_bindings(resource_ref['uri'])
     if resources != read_artifact(resource_ref):
         raise ValueError('original resource preparation changed during replay')
@@ -177,6 +180,9 @@ def _derive(resource_ref, loop_ref=None):
     )
     if loop_context is not None:
         replay['observed_loop_interval'] = loop_context
+    if benchmark_ref is not None:
+        from scar.optimization.stateful_entry_benchmark import replay_entry_benchmark
+        replay['paired_benchmark'] = replay_entry_benchmark(benchmark_ref, time['source'])
     return problem, replay
 
 
@@ -201,27 +207,33 @@ def _write(path, value):
     return artifact_reference(path, value['schema'])
 
 
-def _report(resources, problem_ref, problem, replay, loop_ref=None):
+def _report(resources, problem_ref, problem, replay, loop_ref=None, benchmark_ref=None):
     report = dict(schema=SCHEMA, schema_version=1, resources=resources, problem=problem_ref,
                 problem_sha256=digest(problem), replay=replay, native_compiled=False,
                 target_program_executed=False, performance_measured=False,
                 deployment_authorized=False)
     if loop_ref is not None:
         report['loop_content'] = loop_ref
+    if benchmark_ref is not None:
+        report['paired_benchmark'] = benchmark_ref
     return report
 
 
-def prepare_entry_effect_plan(resources, out, *, loop_content=None):
+def prepare_entry_effect_plan(resources, out, *, loop_content=None, benchmark=None):
     reference = artifact_reference(Path(resources).resolve(), RESOURCES)
     loop_ref = None
     if loop_content is not None:
         from scar.analysis.source_ordered_call_content import SCHEMA as LOOP
         loop_ref = artifact_reference(Path(loop_content).resolve(), LOOP)
-    problem, replay = _derive(reference, loop_ref)
+    benchmark_ref = None
+    if benchmark is not None:
+        from scar.optimization.stateful_entry_benchmark import SCHEMA as BENCHMARK
+        benchmark_ref = artifact_reference(Path(benchmark).resolve(), BENCHMARK)
+    problem, replay = _derive(reference, loop_ref, benchmark_ref)
     output = Path(out).resolve()
     output.mkdir(parents=True, exist_ok=False)
     problem_ref = _write(output / 'problem.json', problem_document(problem))
-    report = _report(reference, problem_ref, problem, replay, loop_ref)
+    report = _report(reference, problem_ref, problem, replay, loop_ref, benchmark_ref)
     _write(output / 'result.json', report)
     return report
 
@@ -232,12 +244,13 @@ def read_entry_effect_plan(path):
     if type(report.get('schema_version')) is not int or report['schema_version'] != 1:
         raise ValueError('versioned entry-effect planning receipt required')
     loop_ref = report.get('loop_content')
-    problem, replay = _derive(report['resources'], loop_ref)
+    benchmark_ref = report.get('paired_benchmark')
+    problem, replay = _derive(report['resources'], loop_ref, benchmark_ref)
     retained_ref = report['problem']
     expected_ref = artifact_reference(Path(reference['uri']).parent / 'problem.json', PROBLEM)
     if retained_ref != expected_ref or problem_from_dict(read_artifact(retained_ref)) != problem:
         raise ValueError('saved planning graph differs from replayed original call ordering')
-    if report != _report(report['resources'], retained_ref, problem, replay, loop_ref):
+    if report != _report(report['resources'], retained_ref, problem, replay, loop_ref, benchmark_ref):
         raise ValueError('saved entry-effect receipt differs from original evidence and planner replay')
     read_artifact(reference)
     return report, problem
@@ -250,16 +263,18 @@ def main(argv=None):
     source.add_argument('--check')
     parser.add_argument('--out')
     parser.add_argument('--loop-content', help='replay allocation and call-window evidence from the same capture')
+    parser.add_argument('--paired-benchmark', help='replay a matched comparison for validation without rebasing costs')
     parser.add_argument('--proposed-order', nargs='+', metavar='OPERATION')
     args = parser.parse_args(argv)
     if args.check:
-        if args.out or args.loop_content:
+        if args.out or args.loop_content or args.paired_benchmark:
             parser.error('--check consumes only the retained receipt')
         report, problem = read_entry_effect_plan(args.check)
     else:
         if not args.out or args.proposed_order:
             parser.error('prepare requires --out and proposed-order review requires --check')
-        report = prepare_entry_effect_plan(args.resources, args.out, loop_content=args.loop_content)
+        report = prepare_entry_effect_plan(args.resources, args.out, loop_content=args.loop_content,
+                                           benchmark=args.paired_benchmark)
     result = {key: report['replay'][key] for key in (
         'region_operation', 'external_operations', 'boundary_constraints',
         'search_status', 'makespan_ns', 'default_backend', 'deployment_authorized',
