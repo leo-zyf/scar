@@ -37,37 +37,108 @@ def runner_identity():
         'runtime/caller_pipeline_cli.py', 'runtime/caller_pipeline_guard.py',
         'runtime/compiled_deployment.py', 'runtime/entry_runner.py', 'runtime/native_loop.py',
         'runtime/stateful_guard.py', 'runtime/native_stateful.py', 'runtime/stateful_contract.py',
-        'runtime/bundle_metadata.py', 'trace/code_snapshot.py')
+        'runtime/bundle_metadata.py', 'runtime/aten_provider_identity.py', 'trace/code_snapshot.py')
     return sha256(json.dumps([(name, sha256((root/name).read_bytes()).hexdigest()) for name in names],
         separators=(',', ':')).encode()).hexdigest()
 
 
-def provider_identity():
-    """Pin NumPy distribution declarations and the actual ndarray/ufunc core.
+_NUMPY_SCOPE = 'DISTRIBUTION_DECLARATIONS_AND_ACTUAL_NDARRAY_UFUNC_CORE_NOT_FULL_MODULE_OR_SYSTEM_LIBRARY_CLOSURE'
+_NUMPY_MODULES = ('numpy', 'numpy._core', 'numpy._core._multiarray_umath')
 
-    Irrelevant tests and unused extension modules are not hashed. Declarations
-    are not claimed to prove every imported module's actual bytes; the actual
-    loaded math provider has a separate source/binary receipt.
-    """
+
+def _provider_member(path, expected=None, old_identity=None):
+    from .aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
+
+    with path.open('rb') as member:
+        baseline = file_stat_identity(os.fstat(member.fileno()))
+        current = local_file_identity(member)
+        if (expected is not None and current is not None and current == old_identity
+                and current['size_bytes'] == expected['bytes']):
+            digest = expected['sha256']
+        else:
+            observed = verify_library_file(member)
+            if observed['size_bytes'] != baseline['size_bytes']:
+                raise ValueError('NumPy core member size changed while hashing')
+            digest = observed['sha256']
+        if baseline != file_stat_identity(os.fstat(member.fileno())) or baseline != file_stat_identity(path.stat()):
+            raise ValueError('NumPy core member changed while verifying')
+    receipt = dict(path=str(path), sha256=digest, bytes=baseline['size_bytes'])
+    if expected is not None and receipt != expected:
+        raise ValueError('NumPy source/binary identity changed')
+    return receipt, current
+
+
+def provider_snapshot():
+    """Read installed NumPy bytes and retain optional trusted local file witnesses."""
     from importlib.metadata import distribution
+
     dist = distribution('numpy')
     files = dist.files
-    if files is None: raise ValueError('NumPy distribution files are not declared')
-    names = [str(name) for name in files if str(name) in ('numpy/__init__.py', 'numpy/_core/__init__.py')
-        or str(name).startswith('numpy/_core/_multiarray_umath.') and str(name).endswith('.so')]
-    if len(names) != 3: raise ValueError('NumPy declared ndarray/ufunc core receipts required')
-    rows = []
-    for name in sorted(names):
-        path = Path(dist.locate_file(name)).resolve()
-        rows.append(dict(path=str(path), sha256=sha256(path.read_bytes()).hexdigest(), bytes=path.stat().st_size))
+    if files is None:
+        raise ValueError('NumPy distribution files are not declared')
+    names = sorted(str(name) for name in files if str(name) in ('numpy/__init__.py', 'numpy/_core/__init__.py')
+        or str(name).startswith('numpy/_core/_multiarray_umath.') and str(name).endswith('.so'))
+    if len(names) != 3 or names[:2] != ['numpy/__init__.py', 'numpy/_core/__init__.py']:
+        raise ValueError('NumPy declared ndarray/ufunc core receipts required')
+    rows, file_identities = [], []
+    for name in names:
+        receipt, identity = _provider_member(Path(dist.locate_file(name)).resolve())
+        rows.append(receipt)
+        file_identities.append(identity)
     declarations = {}
     for name in ('METADATA', 'RECORD'):
         text = dist.read_text(name)
-        if text is None: raise ValueError('NumPy distribution declaration missing')
+        if text is None:
+            raise ValueError('NumPy distribution declaration missing')
         declarations[name] = sha256(text.encode()).hexdigest()
-    return dict(name='numpy', version=dist.version, distribution_declarations=declarations,
-        actual_ndarray_ufunc_core=rows,
-        scope='DISTRIBUTION_DECLARATIONS_AND_ACTUAL_NDARRAY_UFUNC_CORE_NOT_FULL_MODULE_OR_SYSTEM_LIBRARY_CLOSURE')
+    expected = dict(name='numpy', version=dist.version, distribution_declarations=declarations,
+        actual_ndarray_ufunc_core=rows, scope=_NUMPY_SCOPE)
+    metadata_dir = getattr(dist, '_path', None)
+    witness = None
+    if isinstance(metadata_dir, Path) and metadata_dir.is_dir():
+        witness = dict(distribution_directory=str(metadata_dir.resolve()), core_files=file_identities)
+    return expected, witness
+
+
+def provider_identity():
+    """Pin NumPy declarations and core members with a full byte check."""
+    return provider_snapshot()[0]
+
+
+def verify_provider_snapshot(expected, witness=None, *, entry=None):
+    """Validate the producer-pinned provider on an exact local import route."""
+    if witness is None:
+        live, witness = provider_snapshot()
+        if live != expected:
+            raise ValueError('NumPy distribution/core identity changed')
+        return witness
+
+    from importlib.machinery import PathFinder
+
+    directory = Path(witness['distribution_directory'])
+    rows = expected['actual_ndarray_ufunc_core']
+    fingerprints = witness['core_files']
+    if expected['name'] != 'numpy' or expected['scope'] != _NUMPY_SCOPE or len(fingerprints) != 3 or len(rows) != 3:
+        raise ValueError('original NumPy provider snapshot required')
+    for name in ('METADATA', 'RECORD'):
+        text = (directory/name).read_text(encoding='utf-8')
+        if sha256(text.encode()).hexdigest() != expected['distribution_declarations'][name]:
+            raise ValueError('NumPy distribution declarations changed')
+    search = [str(Path(entry).resolve().parent), *sys.path[1:]] if entry is not None else sys.path
+    updated = []
+    for name, row, old in zip(_NUMPY_MODULES, rows, fingerprints, strict=True):
+        path = Path(row['path'])
+        spec = PathFinder.find_spec(name, search)
+        loaded = sys.modules.get(name)
+        loaded_path = getattr(loaded, '__file__', None)
+        if (not path.is_relative_to(directory.parent) or spec is None or type(spec.origin) is not str
+                or Path(spec.origin).resolve() != path or loaded is not None
+                and (type(loaded_path) is not str or Path(loaded_path).resolve() != path)):
+            raise ValueError('NumPy import route differs from the admitted provider')
+        search = spec.submodule_search_locations
+        _, current = _provider_member(path, row, old)
+        updated.append(current)
+    return dict(distribution_directory=str(directory), core_files=updated)
 
 
 def source_references(entry, contract, source_paths=()):

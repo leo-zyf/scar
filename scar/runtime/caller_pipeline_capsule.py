@@ -15,7 +15,7 @@ import re
 import statistics
 
 from .caller_pipeline_deployment import (entry_context, environment_sha256,
-    provider_identity, bundle_reference, runner_identity as _base_identity)
+    verify_provider_snapshot, _bundle_identity, runner_identity as _base_identity)
 from .compiled_deployment import _raw
 
 
@@ -106,15 +106,17 @@ def evaluate_slot(slot, payload, payload_sha256):
     valid_count = sum(map(int, valid)); validation_bound = slot['validation_sha256'] != '0'*64
     unknown_count = sum(map(int, unmeasured)); trial_unknown = unknown_count == len(unmeasured) and not validation_bound
     meets_gain = gain >= policy['minimum_gain']
+    separated = max(candidate) < min(original)
     _need(slot['role'] != TRIAL or trial_unknown, 'trial coordinates must remain explicitly unmeasured')
     complete = valid_count == len(valid) and validation_bound
-    profitable = complete and meets_gain
+    profitable = complete and meets_gain and separated
     approved = slot['role'] == RELEASE and profitable
-    return dict(complete=complete, profitable=profitable, approved=approved, role=slot['role'])
+    return dict(complete=complete, profitable=profitable, approved=approved, role=slot['role'],
+        sampled_ranges_separated=separated)
 
 
 def _admit(capsule, slot_path, *, expected_payload_sha256, expected_slot_sha256,
-        entry, argv, report):
+        entry, argv, report, live=None, bundle_admission=None, identify_provider=None):
     _need(type(expected_payload_sha256) is str and _HEX.fullmatch(expected_payload_sha256) is not None
         and type(expected_slot_sha256) is str and _HEX.fullmatch(expected_slot_sha256) is not None,
         'explicit expected payload and slot hashes required')
@@ -132,15 +134,24 @@ def _admit(capsule, slot_path, *, expected_payload_sha256, expected_slot_sha256,
         'one original fixed-page capsule slot required')
     raw = slot_path.read_bytes(); _need(sha256(raw).hexdigest() == expected_slot_sha256, 'cost slot trust pin differs')
     slot = _json(raw); evaluation = evaluate_slot(slot, payload, expected_payload_sha256)
-    _need(payload['entry_context'] == entry_context(entry, argv), 'entry argv/context changed')
-    _need(payload['environment_sha256'] == environment_sha256(), 'inherited environment changed')
-    _need(payload['runtime_identity'] == implementation_identity(), 'final delivery implementation changed')
+    if live is None:
+        live = entry_context(entry, argv), environment_sha256(), implementation_identity()
+    context, environment, identity = live
+    _need(payload['entry_context'] == context, 'entry argv/context changed')
+    _need(payload['environment_sha256'] == environment, 'inherited environment changed')
+    _need(payload['runtime_identity'] == identity, 'final delivery implementation changed')
     report = Path(report).resolve()
     _need(not report.exists() and report.is_relative_to(Path(payload['reporting']['allowed_root']).resolve())
         and payload['reporting']['required'] is True, 'fresh report in frozen storage scope required')
     for source in payload['source_refs']: _raw(source)
-    _need(payload['provider_identity'] == provider_identity(), 'NumPy distribution/core identity changed')
-    frozen_bundle, _ = bundle_reference(payload['bundle']['directory'], payload['bundle']['admission_sha256'])
+    identify_provider = verify_provider_snapshot if identify_provider is None else identify_provider
+    identify_provider(payload['provider_identity'], payload.get('provider_file_witness'), entry=entry)
+    directory, pin = (payload['bundle'][key] for key in ('directory', 'admission_sha256'))
+    if bundle_admission is None:
+        from .caller_pipeline_guard import _admit as admit_bundle
+        bundle_admission = admit_bundle
+    admitted = bundle_admission(directory, pin)
+    frozen_bundle = _bundle_identity(admitted.directory, admitted.pin, admitted.contract, admitted.admission)
     _need(payload['bundle'] == frozen_bundle, 'original guarded ABI bundle changed')
     return payload, slot, evaluation
 
@@ -158,9 +169,29 @@ def run_capsule_entry(entry, argv, *, capsule, slot, expected_payload_sha256,
     _need(not report.exists(), 'fresh execution report required')
     payload = slot_value = evaluation = None; selected = False; reason = 'cost_capsule_not_admitted'
     before = entry_context(entry, argv); environment = environment_sha256(); identity = implementation_identity()
+    admitted = None
+    provider_witness = None
+
+    def admission(directory, pin):
+        nonlocal admitted
+        if admitted is None:
+            from .caller_pipeline_guard import _admit as admit_bundle
+            admitted = admit_bundle(directory, pin)
+        else:
+            _need(Path(directory).resolve() == admitted.directory and pin == admitted.pin,
+                'original guarded ABI bundle changed')
+            admitted.require_unchanged()
+        return admitted
+
+    def provider(expected, witness, *, entry):
+        nonlocal provider_witness
+        provider_witness = verify_provider_snapshot(expected, witness if provider_witness is None else provider_witness,
+            entry=entry)
+
     try:
         payload, slot_value, evaluation = _admit(capsule, slot, expected_payload_sha256=expected_payload_sha256,
-            expected_slot_sha256=expected_slot_sha256, entry=entry, argv=argv, report=report)
+            expected_slot_sha256=expected_slot_sha256, entry=entry, argv=argv, report=report,
+            live=(before, environment, identity), bundle_admission=admission, identify_provider=provider)
         trial_allowed = slot_value['role'] == TRIAL and measure_candidate is True
         release_allowed = slot_value['role'] == RELEASE and evaluation['approved'] is True and measure_candidate is False
         selected = exclusive_inputs is True and (trial_allowed or release_allowed)
@@ -168,20 +199,20 @@ def run_capsule_entry(entry, argv, *, capsule, slot, expected_payload_sha256,
     except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
         reason = 'capsule_scope_or_cost_not_admitted:' + str(error)
     if selected:
-        from .caller_pipeline_cli import run_caller_entry
-        result = run_caller_entry(entry, argv, bundle=payload['bundle']['directory'],
-            expected_admission_sha256=payload['bundle']['admission_sha256'], exclusive_inputs=True, measure_candidate=True)
+        from .caller_pipeline_cli import _run_with_admission
+        result = _run_with_admission(entry, argv, admitted, exclusive_inputs=True, measure_candidate=True)
         execution = result['execution']; loaded = result['native_libraries_loaded']
     else:
         execution = run_original_script(entry, argv); loaded = False
-    stable = (entry_context(entry, argv) == before and environment_sha256() == environment
-        and implementation_identity() == identity)
     # Same post-run admission in both trial and release, including source and
-    # provider hashes. The report has constant keys and integer role codes.
+    # provider identities. The report has constant keys and integer role codes.
     try:
+        after_live = entry_context(entry, argv), environment_sha256(), implementation_identity()
+        stable = after_live == (before, environment, identity)
         if payload is not None:
             after, after_slot, _ = _admit(capsule, slot, expected_payload_sha256=expected_payload_sha256,
-                expected_slot_sha256=expected_slot_sha256, entry=entry, argv=argv, report=report)
+                expected_slot_sha256=expected_slot_sha256, entry=entry, argv=argv, report=report,
+                live=after_live, bundle_admission=admission, identify_provider=provider)
             stable = stable and after == payload and after_slot == slot_value
     except (OSError, ValueError, KeyError, TypeError, ImportError): stable = False
     value = dict(schema=EXECUTION, schema_version=1, payload_sha256=expected_payload_sha256,
