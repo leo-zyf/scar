@@ -1,8 +1,12 @@
 # 当前状态
 
+`project-native-array-mpi-graph → plan-independent-array-task-mpi → retain-native-array-task-entry` 已接通同一任务图上的本机 MPI 成本判定。任务按序号分给 rank，每个 rank 有独立核和工作区。rank 0 汇齐 56 B/任务的结果记录，再恢复原任务顺序。当前使用单机 Open MPI 4.1.6，每个 rank 和 launcher 各计 384 MiB 地址空间上限。成本证据分开记录 rank 内并发数值服务与从启动到退出的空汇聚，整体只计一次 MPI 启动。 [Open MPI 汇聚例程](https://www.open-mpi.org/doc/current/man3/MPI_Gatherv.3.php)
+
+2 电路最佳 MPI 估计为 **569.7 ms**，已验证的两线程 OpenMP 同口径估计为 **30.5 ms**。8 电路的 2、3、4 rank 估计分别为 **841.9、764.8、708.0 ms**，保留的四进程方案为 **155.3 ms**。这两组的 MPI 空汇聚本身中位数在 **526.8–550.5 ms**，所有可用 rank 方案的估计下界都高于保留实现的上界。交付层复验并引用已有 C++20 二进制，本次生成的 MPI 整入口为 0。当前结论限于本机两组一次性入口。 [验收记录](../artifacts/baseline/cpu-local-mpi-cost-rejection.json)
+
 `project-native-array-thread-safety → plan-independent-array-task-team → export-native-array-task-entry` 在同一任务图上比较串行、本机进程和 OpenMP。线程准入复验数值库的具体调用路径、任务私有工作区和浮点环境。成本模型先用独立样本估计核上并发服务时间和调度成本，再提名候选。OpenMP 主线程参与计算，新建线程各按 8 MiB 栈预算，整进程受地址空间上限约束。 [OpenMP 栈规约](https://www.openmp.org/spec-html/6.0/openmpsu19.html)
 
-真实 CPU Cirq 的三组提名分别为 2、4、4 个 OpenMP 线程，均通过原输出和实际核绑定验收。2 电路的两线程与两进程为 **28.582 / 32.213 ms**，分别通过同一批 26 份完整轮末状态的逐字节对照，两线程通过 5% 切换门槛。8 电路的串行、四进程、四线程为 **544.094 / 148.109 / 143.889 ms**，四线程比四进程快 2.85%，该配置保留进程结论。4 电路只做了原入口对照。三组各预热 1 轮、测量 3 轮，原入口仍是默认。MPI 需要先建模 rank 放置、通信和数据归属，再进入同一成本与交付接口。 [验收记录](../artifacts/baseline/cpu-openmp-task-team-acceptance.json)
+真实 CPU Cirq 的三组提名分别为 2、4、4 个 OpenMP 线程，均通过原输出和实际核绑定验收。2 电路的两线程与两进程为 **28.582 / 32.213 ms**，分别通过同一批 26 份完整轮末状态的逐字节对照，两线程通过 5% 切换门槛。8 电路的串行、四进程、四线程为 **544.094 / 148.109 / 143.889 ms**，四线程比四进程快 2.85%，该配置保留进程结论。4 电路只做了原入口对照。三组各预热 1 轮、测量 3 轮，原入口仍是默认。 [验收记录](../artifacts/baseline/cpu-openmp-task-team-acceptance.json)
 
 `project-seeded-array-task-family → plan-independent-array-tasks → export-native-array-task-entry` 已接通外层独立任务。前端从原参数、任务序号、局部状态和有序发布推导任务族。排程结合独立测得的数值与进程通信成本、同 NUMA 节点上的核及地址空间上限，分别提名 2、4、4 个本机进程。每次进程间调用的请求正文 16 B、结果正文 56 B，状态数组留在每个进程的私有工作区。
 

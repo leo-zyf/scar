@@ -16,11 +16,15 @@ _ENTRY = 'scar.native-seeded-array-task-entry'
 _ORIGINAL = 'scar.array-entry-task-family-holdout'
 _STATES = 'scar.array-entry-task-state-oracle'
 _LANES = 'scar.native-array-openmp-lanes'
+_MPI_RANKS = 'scar.native-array-mpi-ranks'
 _TIMING_SCOPE = 'FRESH_EXEC_THROUGH_EXIT_INCLUDES_ORDERED_STDOUT_AND_FILE_PUBLICATION'
 _OPENMP = 'ORDERED_OPENMP'
 _SERIAL = 'IN_PROCESS_SERIAL'
 _PROCESSES = 'ORDERED_LOCAL_PROCESSES'
-_CONTROL_LABELS = {_OPENMP: 'openmp', _SERIAL: 'serial', _PROCESSES: 'processes'}
+_MPI = 'ORDERED_LOCAL_MPI'
+_PROCESS_TEAMS = {_PROCESSES, _MPI}
+_PLACEMENT_REPORTS = {_OPENMP: ('openmp-lanes.json', _LANES), _MPI: ('mpi-ranks.json', _MPI_RANKS)}
+_CONTROL_LABELS = {_OPENMP: 'openmp', _SERIAL: 'serial', _PROCESSES: 'processes', _MPI: 'mpi'}
 _OUTPUT_FIELDS = {'results', 'pid_list', 'ordinal', 'effective_seed', 'worker_round_count'}
 _INPUT_OPTIONS = {'task_count', 'worker_limit', 'seed', 'round_count'}
 
@@ -30,10 +34,45 @@ def _need(condition, detail):
         raise ValueError('array task entry calibration: ' + detail)
 
 
+def _load_schedule(reference):
+    from scar.optimization import independent_array_task_schedule as process_schedule
+    from scar.optimization import independent_array_task_team_schedule as team_schedule
+
+    schema = reference['schema']
+    if schema == process_schedule.SCHEMA:
+        return process_schedule.check(reference['uri'])
+    if schema == team_schedule.SCHEMA:
+        return team_schedule.check(reference['uri'])
+    from scar.optimization import independent_array_task_mpi_schedule as mpi_schedule
+
+    _need(schema == mpi_schedule.SCHEMA, 'unrecognized task schedule')
+    return mpi_schedule.check(reference['uri'])
+
+
+def _check_mpi_launch(package, schedule):
+    selected = package['decision']
+    prefix = package.get('launch_prefix')
+    graph = package.get('mpi_graph')
+    if selected['mode'] != _MPI:
+        _need(prefix in (None, []) and graph is None, 'unexpected MPI launcher for a non-MPI mode')
+        return
+    _need(not schedule['decision'].get('all_eligible_mpi_rejected'),
+          'MPI launch is unavailable because the schedule rejected every eligible rank plan')
+    _need(schedule['decision']['status'] == 'NOMINATE_MPI_FOR_INDEPENDENT_VALIDATION'
+          and schedule['decision']['selected'] == selected,
+          'MPI launch requires the exact nominated rank plan')
+    _need(graph == schedule.get('mpi_graph') and graph is not None
+          and type(prefix) is list and prefix and prefix == selected['launch_prefix'],
+          'MPI launcher differs from the priced rank plan')
+    runtime = read_artifact(graph)['runtime']['libmpi']
+    dependencies = package['linkage']['qualified_runtime_dependencies']
+    _need(runtime in dependencies.values(), 'MPI runtime differs from the modeled launcher')
+    read_artifact(runtime, json_document=False)
+
+
 def _load(path, *, checked_source=None):
     from scar.codegen.native_seeded_array_entry import LOOP_SCHEMA
     from scar.compiler.calibrate_seeded_array_entry import _load as load_seeded
-    from scar.optimization import independent_array_task_schedule as process_schedule
 
     reference = _ref(path, _ENTRY)
     package = read_artifact(reference)
@@ -46,13 +85,7 @@ def _load(path, *, checked_source=None):
         schedule = read_artifact(plan_ref)
     else:
         serial, native, recipe = load_seeded(package['native']['uri'])
-        if plan_ref['schema'] == process_schedule.SCHEMA:
-            schedule = process_schedule.check(plan_ref['uri'])
-        else:
-            from scar.optimization import independent_array_task_team_schedule as team_schedule
-
-            _need(plan_ref['schema'] == team_schedule.SCHEMA, 'unrecognized task schedule')
-            schedule = team_schedule.check(plan_ref['uri'])
+        schedule = _load_schedule(plan_ref)
     selected = package['decision']
     control = package.get('execution_control')
     if package.get('serial_control'):
@@ -99,6 +132,7 @@ def _load(path, *, checked_source=None):
         libgomp = package['linkage']['qualified_runtime_dependencies']['libgomp.so.1']
         _need(libgomp == schedule['openmp_runtime'], 'OpenMP runtime differs from the modeled dispatcher')
         read_artifact(libgomp, json_document=False)
+    _check_mpi_launch(package, schedule)
     for artifact in package['files'].values():
         read_artifact(artifact, json_document=False)
     return reference, package, recipe, native, source['report']['parameters']['field'], self_pid[-1]
@@ -134,8 +168,8 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
     source_seeds = {row['parameters'][options['seed']] for row in recipe['profiles']}
     schedule = read_artifact(package['schedule'])
     related_seeds = source_seeds | set(read_artifact(schedule['evidence'])['seeds'])
-    thread_ref = schedule.get('thread_evidence')
-    team_seeds = read_artifact(thread_ref)['seeds'] if thread_ref else ()
+    team_seeds = [base for key in ('thread_evidence', 'mpi_evidence') if key in schedule
+                  for base in read_artifact(schedule[key])['seeds']]
     seed = parameters[options['seed']]
     domain = prior['seed_range']
     count = parameters[options['task_count']]
@@ -173,14 +207,14 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
 def _commands(package, recipe):
     launcher = ['/usr/bin/taskset', '-c', ','.join(map(str, package['cpu_ids']))]
     return dict(original=[*launcher, recipe['source_python']['uri'], '-B', recipe['entry']['uri']],
-                native=[*launcher, package['files'][package['binary']]['uri']])
+                native=[*(package.get('launch_prefix') or launcher), package['files'][package['binary']]['uri']])
 
 
 def _validate_runs(runs, package, recipe, case, expected, parameters_field, pid_field, *, native_label='native'):
     commands = _commands(package, recipe)
     commands[native_label] = commands.pop('native')
     selected = package['decision']
-    native_process_count = selected['worker_count'] if selected['mode'] == _PROCESSES else 1
+    native_process_count = selected['worker_count'] if selected['mode'] in _PROCESS_TEAMS else 1
     checked, pids = [], []
     for run in runs:
         mode = run['mode']
@@ -194,13 +228,16 @@ def _validate_runs(runs, package, recipe, case, expected, parameters_field, pid_
                    range(1, package['scope']['requested_workers'] + 1))
         tasks, active = _report(read_artifact(run['stdout'], json_document=False), package,
                                 parameters_field, pid_field, case['parameters'], workers)
-        if mode == native_label and selected['mode'] == _PROCESSES:
+        observation = dict(pair=run['pair'], mode=mode, active_worker_pids=active)
+        if mode == native_label and selected['mode'] in _PROCESS_TEAMS:
             width = native_process_count
             lanes = [row[pid_field] for row in tasks[:width]]
             _need(len(set(lanes)) == width and all(row[pid_field] == lanes[index % width]
                                                   for index, row in enumerate(tasks)),
                   'native ordinal-to-process routing differs from the selected plan')
-        pids.append(dict(pair=run['pair'], mode=mode, active_worker_pids=active))
+            if selected['mode'] == _MPI:
+                observation['mpi_rank_pids'] = lanes
+        pids.append(observation)
     return checked, pids
 
 
@@ -243,42 +280,52 @@ def _equal_states(oracle_rows, checkpoints):
               f'complete state bytes differ for task {ordinal} round {index}')
 
 
-def _lane_assignments(reference, package, active_processes):
+def _lane_assignments(reference, package, observation):
     detail = read_artifact(reference)
     selected = package['decision']
     width, cpus = selected['worker_count'], selected['worker_cpu_ids']
     tasks = detail['tasks']
-    _need(selected['mode'] == _OPENMP and type(detail['schema_version']) is int and detail['schema_version'] == 1
+    active_processes = observation['active_worker_pids']
+    mpi = selected['mode'] == _MPI
+    _need(selected['mode'] in _PLACEMENT_REPORTS and reference['schema'] == _PLACEMENT_REPORTS[selected['mode']][1]
+          and type(detail['schema_version']) is int and detail['schema_version'] == 1
           and type(detail['team_size']) is int and detail['team_size'] == width
           and 1 < len(cpus) == width and len(set(cpus)) == width
-          and cpus[0] == selected['owner_cpu_id'] and len(active_processes) == 1
+          and cpus[0] == selected['owner_cpu_id'] and len(active_processes) == (width if mpi else 1)
           and len(tasks) == package['scope']['task_count'] >= width,
-          'OpenMP workers disagree with the selected core map')
+          'native workers disagree with the selected core map')
     tids = []
     for ordinal, row in enumerate(tasks):
         lane = ordinal % width
         _need(all(type(row[key]) is int for key in ('ordinal', 'lane', 'cpu', 'tid'))
               and row['ordinal'] == ordinal and row['lane'] == lane and row['cpu'] == cpus[lane]
-              and row['tid'] > 0, f'OpenMP task {ordinal} did not use its planned core and logical lane')
+              and row['tid'] > 0, f'native task {ordinal} used an unplanned core or logical lane')
         if ordinal < width:
             tids.append(row['tid'])
         else:
-            _need(row['tid'] == tids[lane], 'OpenMP lane changed Linux thread during the task team')
+            _need(row['tid'] == tids[lane], 'logical lane changed Linux thread during the task team')
+    if mpi:
+        publisher = detail['publisher_pid']
+        _need(tids == observation['mpi_rank_pids'] and sorted(tids) == active_processes
+              and type(publisher) is int and publisher == tids[0],
+              'MPI rank routing or rank zero publisher differs from the visible report')
+        return dict(rank_pids=tids, cpu_ids=cpus, observed_tasks=len(tasks), publisher_pid=publisher)
     _need(len(set(tids)) == width and tids[0] == active_processes[0],
           'OpenMP task lanes did not run on distinct threads of the owning process')
     return dict(linux_tids=tids, cpu_ids=cpus, observed_tasks=len(tasks))
 
 
 def _diagnostics(package, recipe, case, expected, params, pid, out, label, state_ref, original_states):
-    if original_states is None and package['decision']['mode'] != _OPENMP:
+    placement = _PLACEMENT_REPORTS.get(package['decision']['mode'])
+    if original_states is None and placement is None:
         return {}
     directory = out / ('state-diagnostic' if original_states is not None else 'lane-diagnostic')
     override = package.get('launch_environment', {})
     environment = dict(recipe['environment'], **override)
-    lane_report = directory / 'openmp-lanes.json'
     if original_states is not None:
         environment['SCAR_ARRAY_ENTRY_STATES'] = str(directory / 'state')
-    if package['decision']['mode'] == _OPENMP:
+    if placement:
+        lane_report = directory / placement[0]
         environment['SCAR_ARRAY_ENTRY_LANE_REPORT'] = str(lane_report)
     run = _run(_commands(package, recipe)['native'], case['argv'], environment, directory, 0, label)
     if override:
@@ -291,9 +338,9 @@ def _diagnostics(package, recipe, case, expected, params, pid, out, label, state
         _equal_states(original_states, checkpoints)
         diagnostics['state_diagnostic'] = dict(oracle=state_ref, run=run, checkpoints=checkpoints,
             complete_state_count=len(checkpoints), exact_bytes=sum(row['size_bytes'] for row in checkpoints))
-    if package['decision']['mode'] == _OPENMP:
-        ref = _ref(lane_report, _LANES)
-        assignments = _lane_assignments(ref, package, observations[0]['active_worker_pids'])
+    if placement:
+        ref = _ref(lane_report, placement[1])
+        assignments = _lane_assignments(ref, package, observations[0])
         diagnostics['lane_diagnostic'] = dict(run=run, sidecar=ref, assignments=assignments)
     return diagnostics
 
@@ -369,7 +416,7 @@ def calibrate(package_path, holdout_path, out, *, state_oracle=None, control_pat
                    verified_processes=identities, pairing=comparison,
                    selected_vs_control=_pair(compared, label, 'native', warmups, repetitions),
                    deployment_authorized=False)
-        if state_reference is not None or alternate['decision']['mode'] == _OPENMP:
+        if state_reference is not None or alternate['decision']['mode'] in _PLACEMENT_REPORTS:
             directory = out / f'{label}-diagnostics'
             directory.mkdir()
             row.update(_diagnostics(alternate, recipe, case, expected, params, pid, directory, label,
@@ -381,17 +428,17 @@ def calibrate(package_path, holdout_path, out, *, state_oracle=None, control_pat
 
 def _check_diagnostics(report, holdout, package, recipe, case, expected, params, pid, label):
     lane = report.get('lane_diagnostic')
-    _need(bool(lane) == (package['decision']['mode'] == _OPENMP),
-          'OpenMP launch requires a retained thread placement diagnostic')
+    placement = _PLACEMENT_REPORTS.get(package['decision']['mode'])
+    _need(bool(lane) == bool(placement), 'parallel launch requires a retained placement diagnostic')
     clean_outputs = {row['stdout']['uri'] for row in report['clean_pairs']}
     if lane:
         run = lane['run']
         _need(run['stdout']['uri'] not in clean_outputs
-              and Path(lane['sidecar']['uri']) == Path(run['stdout']['uri']).with_name('openmp-lanes.json'),
-              'thread placement evidence must come from a separate diagnostic invocation')
+              and Path(lane['sidecar']['uri']) == Path(run['stdout']['uri']).with_name(placement[0]),
+              'placement evidence must come from a separate diagnostic invocation')
         _, observations = _validate_runs([run], package, recipe, case, expected, params, pid, native_label=label)
-        _need(lane['assignments'] == _lane_assignments(lane['sidecar'], package, observations[0]['active_worker_pids']),
-              'retained thread placement replay disagrees with recorded lanes')
+        _need(lane['assignments'] == _lane_assignments(lane['sidecar'], package, observations[0]),
+              'retained placement replay disagrees with recorded lanes')
     if diagnostic := report.get('state_diagnostic'):
         _need(diagnostic['run']['stdout']['uri'] not in clean_outputs and (not lane or diagnostic['run'] == lane['run']),
               'diagnostic states must share the separate lane observation when present')

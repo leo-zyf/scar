@@ -1,0 +1,497 @@
+{
+  "boundary": {
+    "application_publication_shared_excluded_from_modeled_cost": true,
+    "component_timing": "FRESH_EXEC_TO_EXIT",
+    "deployment_authorized": false,
+    "further_mpi_artifacts_generated": 0,
+    "host_count": 1,
+    "launch_cost_counted_once_per_whole_plan": true,
+    "network_and_multinode_modeled": false,
+    "original_default_retained": true,
+    "task_wave_service_extrapolated": true
+  },
+  "cohorts": [
+    {
+      "component_evidence": {
+        "schema": "scar.independent-array-task-mpi-cost-evidence",
+        "sha256": "370f8bf767465c02b880df31a801e25cc9105d83a88c9f2a60d63e2348133e96",
+        "size_bytes": 23709,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/evidence-2/result.json"
+      },
+      "execution_cpu_ids": [
+        18,
+        19
+      ],
+      "mpi_graph": {
+        "schema": "scar.native-array-mpi-graph",
+        "sha256": "1cf3c790f25b046b557b7fe5e8f99af761e97385db810ad3640762ad6fc02880",
+        "size_bytes": 14760,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/graph-2.json"
+      },
+      "mpi_options": [
+        {
+          "aggregate_address_space_cap_bytes": 1207959552,
+          "components_ns": {
+            "finalize_ns": {
+              "estimate_ns": 45303001,
+              "lower_ns": 44884168,
+              "upper_ns": 45878793
+            },
+            "launcher_and_return_tail_ns": {
+              "estimate_ns": 161823725,
+              "lower_ns": 158780867,
+              "upper_ns": 162531861
+            },
+            "max_rank_bootstrap_ns": {
+              "estimate_ns": 339558682,
+              "lower_ns": 338316110,
+              "upper_ns": 341368831
+            },
+            "rank0_entry_ns": {
+              "estimate_ns": 385525781,
+              "lower_ns": 383274793,
+              "upper_ns": 386729176
+            },
+            "status_and_gather_ns": {
+              "estimate_ns": 71560,
+              "lower_ns": 54681,
+              "upper_ns": 85432
+            }
+          },
+          "empty_launch_exchange_exit_ns": {
+            "estimate_ns": 548057642,
+            "lower_ns": 542055660,
+            "upper_ns": 548552901
+          },
+          "empty_sample_population_variance_ns2": 8720356668609.556,
+          "empty_samples_wall_ns": [
+            542055660,
+            548552901,
+            548057642
+          ],
+          "independent_full_entry_launched": false,
+          "modeled_wall_ns": {
+            "estimate_ns": 569662294,
+            "lower_ns": 563652414,
+            "upper_ns": 570184763
+          },
+          "pre_launch_rejection_verified": true,
+          "rank_count": 2,
+          "rank_cpu_ids": [
+            18,
+            19
+          ],
+          "receive_payload_bytes": 56
+        }
+      ],
+      "original_output_normalized_sha256": "25366cbaba12185d89c2e75b1b6c1ab99c73c798b888fe35e8a1aaee4194b719",
+      "resolution": {
+        "schema": "scar.retained-native-array-task-entry",
+        "sha256": "bb404ec887e1cebaf7885cd17a7919bcee796552cc43d149d0e1816cbe2b4f80",
+        "size_bytes": 5737,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-2.json"
+      },
+      "retained_binary_named": {
+        "schema": "scar.native-project-member",
+        "sha256": "d5061f9b65b9b9f0bdce512b78145a6f6b968022062da03e07a07ae67dd80803",
+        "size_bytes": 412024,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-2/selected/bin/scar_native_array_entry"
+      },
+      "retained_local_modeled_wall_ns": {
+        "estimate_ns": 30517693,
+        "lower_ns": 27968065,
+        "upper_ns": 31145367
+      },
+      "retained_local_previous_entry_comparison": {
+        "native": {
+          "max_ns": 29256821,
+          "median_ns": 28581847,
+          "median_ns_twice": 57163694,
+          "min_ns": 28143321,
+          "samples_ns": [
+            29256821,
+            28143321,
+            28581847
+          ]
+        },
+        "original": {
+          "max_ns": 2542451709,
+          "median_ns": 2520220230,
+          "median_ns_twice": 5040440460,
+          "min_ns": 2519767896,
+          "samples_ns": [
+            2519767896,
+            2542451709,
+            2520220230
+          ]
+        }
+      },
+      "retained_mode": "ORDERED_OPENMP",
+      "retained_rerun": {
+        "argv": [
+          "--qubits",
+          "11",
+          "--depth",
+          "7",
+          "--rounds",
+          "13",
+          "--circuits",
+          "2",
+          "--workers",
+          "2",
+          "--seed",
+          "32779",
+          "--out",
+          "published.json"
+        ],
+        "command": [
+          "/usr/bin/taskset",
+          "-c",
+          "18,19,20,21,22,23",
+          "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-2/selected/bin/scar_native_array_entry"
+        ],
+        "duration_ns": 27989018,
+        "mode": "native",
+        "pair": 0,
+        "published": {
+          "schema": "application/json",
+          "sha256": "5bb0f3b681ab1b8f8391bcc3b51838b70900c1e9e598af8b6fc10902811677e9",
+          "size_bytes": 1294,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-2/published.json"
+        },
+        "returncode": 0,
+        "schema": "scar.native-array-entry-run",
+        "schema_version": 1,
+        "stderr": {
+          "schema": "application/octet-stream",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-2/stderr.log"
+        },
+        "stdout": {
+          "schema": "application/json",
+          "sha256": "466eef14453408f20d00f5dddb56f97454f6570ad51e0e706be94f2b49ba1f4f",
+          "size_bytes": 1056,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-2/stdout.json"
+        }
+      },
+      "schedule": {
+        "schema": "scar.independent-array-task-mpi-schedule",
+        "sha256": "a336d4a8ff9d83db1a11218c85ae96608ac1408b75ba96d5fdb4e84545501112",
+        "size_bytes": 17444,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/plan-2.json"
+      },
+      "scope": {
+        "requested_workers": 2,
+        "round_count": 13,
+        "task_count": 2
+      },
+      "worker_repetitions": 3,
+      "worker_warmups": 1
+    },
+    {
+      "component_evidence": {
+        "schema": "scar.independent-array-task-mpi-cost-evidence",
+        "sha256": "618c363d699d113c1d6a2b5a5c89ee1e4f81e8939d2ca8b8918efdddb337b160",
+        "size_bytes": 54588,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/evidence-8/result.json"
+      },
+      "execution_cpu_ids": [
+        19,
+        20,
+        21,
+        22
+      ],
+      "mpi_graph": {
+        "schema": "scar.native-array-mpi-graph",
+        "sha256": "fde58b3e4a0799fc7d0be3835ace55bb5708f37994d4eb457cdcb88bb2dd6faa",
+        "size_bytes": 24355,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/graph-8.json"
+      },
+      "mpi_options": [
+        {
+          "aggregate_address_space_cap_bytes": 1207959552,
+          "components_ns": {
+            "finalize_ns": {
+              "estimate_ns": 45370676,
+              "lower_ns": 45321413,
+              "upper_ns": 45433435
+            },
+            "launcher_and_return_tail_ns": {
+              "estimate_ns": 147602042,
+              "lower_ns": 142129682,
+              "upper_ns": 150990987
+            },
+            "max_rank_bootstrap_ns": {
+              "estimate_ns": 333545922,
+              "lower_ns": 331561150,
+              "upper_ns": 333756753
+            },
+            "rank0_entry_ns": {
+              "estimate_ns": 378903780,
+              "lower_ns": 377050198,
+              "upper_ns": 379164951
+            },
+            "status_and_gather_ns": {
+              "estimate_ns": 33705,
+              "lower_ns": 32686,
+              "upper_ns": 37303
+            }
+          },
+          "empty_launch_exchange_exit_ns": {
+            "estimate_ns": 526766993,
+            "lower_ns": 521033462,
+            "upper_ns": 528041185
+          },
+          "empty_sample_population_variance_ns2": 9289458291728.223,
+          "empty_samples_wall_ns": [
+            521033462,
+            528041185,
+            526766993
+          ],
+          "independent_full_entry_launched": false,
+          "modeled_wall_ns": {
+            "estimate_ns": 841875193,
+            "lower_ns": 835621394,
+            "upper_ns": 843395237
+          },
+          "pre_launch_rejection_verified": true,
+          "rank_count": 2,
+          "rank_cpu_ids": [
+            18,
+            19
+          ],
+          "receive_payload_bytes": 224
+        },
+        {
+          "aggregate_address_space_cap_bytes": 1610612736,
+          "components_ns": {
+            "finalize_ns": {
+              "estimate_ns": 45700846,
+              "lower_ns": 45593005,
+              "upper_ns": 45812000
+            },
+            "launcher_and_return_tail_ns": {
+              "estimate_ns": 143815040,
+              "lower_ns": 136503727,
+              "upper_ns": 154959696
+            },
+            "max_rank_bootstrap_ns": {
+              "estimate_ns": 339747575,
+              "lower_ns": 338533446,
+              "upper_ns": 345272367
+            },
+            "rank0_entry_ns": {
+              "estimate_ns": 385519551,
+              "lower_ns": 384451645,
+              "upper_ns": 390917119
+            },
+            "status_and_gather_ns": {
+              "estimate_ns": 102423,
+              "lower_ns": 48462,
+              "upper_ns": 104211
+            }
+          },
+          "empty_launch_exchange_exit_ns": {
+            "estimate_ns": 528266685,
+            "lower_ns": 522023278,
+            "upper_ns": 545876815
+          },
+          "empty_sample_population_variance_ns2": 102009781888324.22,
+          "empty_samples_wall_ns": [
+            528266685,
+            545876815,
+            522023278
+          ],
+          "independent_full_entry_launched": false,
+          "modeled_wall_ns": {
+            "estimate_ns": 764761707,
+            "lower_ns": 757971910,
+            "upper_ns": 782483641
+          },
+          "pre_launch_rejection_verified": true,
+          "rank_count": 3,
+          "rank_cpu_ids": [
+            18,
+            19,
+            20
+          ],
+          "receive_payload_bytes": 280
+        },
+        {
+          "aggregate_address_space_cap_bytes": 2013265920,
+          "components_ns": {
+            "finalize_ns": {
+              "estimate_ns": 45798670,
+              "lower_ns": 45479882,
+              "upper_ns": 45803091
+            },
+            "launcher_and_return_tail_ns": {
+              "estimate_ns": 145823168,
+              "lower_ns": 145167716,
+              "upper_ns": 157622168
+            },
+            "max_rank_bootstrap_ns": {
+              "estimate_ns": 358190205,
+              "lower_ns": 357620668,
+              "upper_ns": 359065689
+            },
+            "rank0_entry_ns": {
+              "estimate_ns": 404032983,
+              "lower_ns": 403481864,
+              "upper_ns": 404629258
+            },
+            "status_and_gather_ns": {
+              "estimate_ns": 59283,
+              "lower_ns": 37401,
+              "upper_ns": 81159
+            }
+          },
+          "empty_launch_exchange_exit_ns": {
+            "estimate_ns": 550452426,
+            "lower_ns": 549200699,
+            "upper_ns": 561104032
+          },
+          "empty_sample_population_variance_ns2": 28523651930072.668,
+          "empty_samples_wall_ns": [
+            561104032,
+            550452426,
+            549200699
+          ],
+          "independent_full_entry_launched": false,
+          "modeled_wall_ns": {
+            "estimate_ns": 708043652,
+            "lower_ns": 706461081,
+            "upper_ns": 718784746
+          },
+          "pre_launch_rejection_verified": true,
+          "rank_count": 4,
+          "rank_cpu_ids": [
+            18,
+            19,
+            20,
+            21
+          ],
+          "receive_payload_bytes": 336
+        }
+      ],
+      "original_output_normalized_sha256": "dbfdfac78f6e9148074a742ab65e856ad998b1b3c9c41eb5739f20c80311dcae",
+      "resolution": {
+        "schema": "scar.retained-native-array-task-entry",
+        "sha256": "843533e1748501eead5aae3a621aa067821a166dae99ee4228324025d5d6ec5f",
+        "size_bytes": 6013,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-8.json"
+      },
+      "retained_binary_named": {
+        "schema": "scar.native-project-member",
+        "sha256": "ed615cb143e503d59a204385849a887751b5746fce5c13da76fdece14f8f23ed",
+        "size_bytes": 416864,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-8/processes/bin/scar_native_array_entry"
+      },
+      "retained_local_modeled_wall_ns": {
+        "estimate_ns": 155278317,
+        "lower_ns": 148468351,
+        "upper_ns": 168364540
+      },
+      "retained_local_previous_entry_comparison": {
+        "original": {
+          "max_ns": 4524213113,
+          "median_ns": 4467884897,
+          "median_ns_twice": 8935769794,
+          "min_ns": 4463432376,
+          "samples_ns": [
+            4467884897,
+            4524213113,
+            4463432376
+          ]
+        },
+        "processes": {
+          "max_ns": 149470461,
+          "median_ns": 148108751,
+          "median_ns_twice": 296217502,
+          "min_ns": 146798705,
+          "samples_ns": [
+            148108751,
+            149470461,
+            146798705
+          ]
+        }
+      },
+      "retained_mode": "ORDERED_LOCAL_PROCESSES",
+      "retained_rerun": {
+        "argv": [
+          "--qubits",
+          "11",
+          "--depth",
+          "7",
+          "--rounds",
+          "48",
+          "--circuits",
+          "8",
+          "--workers",
+          "4",
+          "--seed",
+          "131071",
+          "--out",
+          "published.json"
+        ],
+        "command": [
+          "/usr/bin/taskset",
+          "-c",
+          "18,19,20,21,22,23",
+          "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-8/processes/bin/scar_native_array_entry"
+        ],
+        "duration_ns": 145830056,
+        "mode": "native",
+        "pair": 0,
+        "published": {
+          "schema": "application/json",
+          "sha256": "674ca4e6c6327cf63a09cebdf327f76dc2cc0e5d3a2a6129cc9f229caa6e3aff",
+          "size_bytes": 3626,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-8/published.json"
+        },
+        "returncode": 0,
+        "schema": "scar.native-array-entry-run",
+        "schema_version": 1,
+        "stderr": {
+          "schema": "application/octet-stream",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-8/stderr.log"
+        },
+        "stdout": {
+          "schema": "application/json",
+          "sha256": "f8acb1b6d259bb8466bed823d3c2f5582cb07d6d56a729f667cb87cada711351",
+          "size_bytes": 2884,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/retained-smoke-8/stdout.json"
+        }
+      },
+      "schedule": {
+        "schema": "scar.independent-array-task-mpi-schedule",
+        "sha256": "7f7093f9c454ada1fde4c2c98700a97325abc14643cfbf918844ac283a40fc5d",
+        "size_bytes": 43941,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-mpi-v1/plan-8.json"
+      },
+      "scope": {
+        "requested_workers": 4,
+        "round_count": 48,
+        "task_count": 8
+      },
+      "worker_repetitions": 3,
+      "worker_warmups": 1
+    }
+  ],
+  "cpu": "Intel Xeon E5-2680 v4",
+  "launch_cpu_ids": [
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "mpi_rank_and_launcher_address_space_limit_bytes": 402653184,
+  "runtime": "Open MPI 4.1.6",
+  "schema": "scar.cpu-local-mpi-cost-rejection",
+  "schema_version": 1
+}
