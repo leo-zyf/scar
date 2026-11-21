@@ -592,6 +592,10 @@ CPU/cache 足迹也已有结构化推导：共享缓存域、SMT、按 storage �
 
 冻结环境下，未修改的 `split_reaction` 513×513/64 步整进程中位数从 285.63 降至 249.99 ms，导出的正式槽实际执行 64 次原生调用。16 步从 194.91 增至 228.47 ms，导出 `NO_OP`。修改 argv 和跨环境复跑均保留原执行。两组验收覆盖 stdout、stderr、`final.npy` 字节及 `seconds.txt` 的有限非负值。F4 另保留了循环、输出调用和顺序证据，未闭合的外部效果继续标记为未知。报告见 `artifacts/baseline/cpu-pipeline-final-handoff.json`。
 
+### 独立 C++ 的原入口合同
+
+`aten-source-entry` 将原 argv、七个文件端口、唯一循环携带状态及终态发布接到已有 LibTorch CPU 固定网格求解器。源码入口图有 22 节点和 36 条边。已有三物理核计划及计算正文按字节保留，图持有 Tensor 峰值 40,108,040 B，预算 41,000,000 B。对原 `torchdiffeq` 固定网格入口的 16 步和 96 步终态均逐字节相同，stdout、stderr 和退出状态一致。96 步整进程中位数 29.71 → 12.44 s，通过发布评审门槛。运行追踪和 ELF 检查覆盖实际独立入口。授权范围仍由原可见效果与输入域决定。报告见 `artifacts/baseline/aten-source-cli.json`。
+
 ## 接下来仍需开发
 
 1. 建图：已连接封闭状态循环的参数化内容递推；继续补有写入的条件 state-path、callback、对象协议与外部算子效果摘要，再扩大原循环替换证明。相同引用仍不证明跨激活内容相同。

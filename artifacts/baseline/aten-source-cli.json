@@ -1,0 +1,213 @@
+{
+  "automatic_deployment_authorized": false,
+  "compared_complete_entry_variants": 1,
+  "correctness": "EXACT_FINAL_FILE_STDOUT_STDERR_AND_SUCCESS_EXIT",
+  "exact_file_and_argv_contract": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/source-entry-abi.json",
+    "sha256": "95e704c4f47f88159a1088ef274205d34424caeda226b28c2665132d2f95e856",
+    "size_bytes": 11337
+  },
+  "examined_original_and_one_cpp": true,
+  "filesystem_cache_flushed": false,
+  "focused_tests_passed": 4,
+  "general_python_compilation_coverage_complete": false,
+  "generated_cpp": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/src/main.cpp",
+    "sha256": "0f1b284ee110989849ccc6192228b94631d15296da585dffecbccd4bee99c11a",
+    "size_bytes": 3963
+  },
+  "gpu_run_performed": false,
+  "has_cpu_only_elf_closure": true,
+  "implementation_reused": true,
+  "independent_archived_and_live_source_replay": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-entry-v1/frontend/source-abi.json",
+    "sha256": "95e704c4f47f88159a1088ef274205d34424caeda226b28c2665132d2f95e856",
+    "size_bytes": 11337
+  },
+  "independent_negative_scope": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native-qualification.json",
+    "sha256": "f582ae55102daa2474c0b811590e772f41fdf01f038d55a6d22dec1d44361e95",
+    "size_bytes": 2950
+  },
+  "measured_median_saving": 0.5813170435287336,
+  "measured_pairs": 3,
+  "measured_shape": [
+    768,
+    768
+  ],
+  "measurement_96_steps": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/validate-96/result.json",
+    "sha256": "456c640047770747406a2207fa60794af6675f820d3b7bcf12c33466cb25750d",
+    "size_bytes": 10624
+  },
+  "metrics": {
+    "NATIVE_CPP": {
+      "max_ns": 12466502449,
+      "median_ns": 12438327091,
+      "median_ns_twice": 24876654182,
+      "min_ns": 12349185645,
+      "samples_ns": [
+        12466502449,
+        12438327091,
+        12349185645
+      ],
+      "variance_ns2": 3750546782362249.5
+    },
+    "ORIGINAL_PYTHON": {
+      "max_ns": 29758951639,
+      "median_ns": 29708224084,
+      "median_ns_twice": 59416448168,
+      "min_ns": 29696918551,
+      "samples_ns": [
+        29708224084,
+        29758951639,
+        29696918551
+      ],
+      "variance_ns2": 1091533986584643
+    }
+  },
+  "minimum_gain": 0.05,
+  "native_executable": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/bin/aten-recurrence",
+    "sha256": "5ec11ee98943e62a98ae139464cdea65bf37242e12bb0c8d4c93230b91040d6e",
+    "size_bytes": 118608
+  },
+  "native_manifest": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/artifact.json",
+    "sha256": "d0d2172922620d14e7e45c47e7f4b0c27ed9bebf67a2e46a10a049143a8068c0",
+    "size_bytes": 12966
+  },
+  "numerical_provider": "LibTorch",
+  "observed_python_processes_in_native_entry": false,
+  "original_plan": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-only-libtorch-v1/rk4-41mb/artifact.json",
+    "sha256": "d0a865d3f2d55ecc65b2f407c139ffc3aaabf3885e0593d1b23be205706c53c7",
+    "size_bytes": 12085
+  },
+  "original_source_changed": false,
+  "physical_binding": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/source-entry-physical-binding.json",
+    "sha256": "ef9294b62fd533cfa2124e8d5c6793d7786024ed412084bd4ff2ba917a65248a",
+    "size_bytes": 8820
+  },
+  "qualification_16_steps": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/validate-16/result.json",
+    "sha256": "b9f363f0ccb908b95be2f935e43ab83340842f8ca7ac3ca0239a3e64993fee9b",
+    "size_bytes": 4582
+  },
+  "repinned_source_io_tamper": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/repin-rejection.json",
+    "sha256": "ece770bd86740b3970fed29f0712f2577373779ee1afa7d8c7e3db08e70cc742",
+    "size_bytes": 183
+  },
+  "reused_bytewise": [
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/program.json",
+      "sha256": "3088a013b8782e0ceabae89267a89515fb2459cbc4ae992792866f57f8aadf94",
+      "size_bytes": 87249
+    },
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/problem.json",
+      "sha256": "936fd7a1ab4ba143569d5b1cf657e1723713c78b66841d5c058932d3acaa223f",
+      "size_bytes": 69447
+    },
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/execution.json",
+      "sha256": "113d81f0e7570d9e0ab2d2413701a5458ccf60471cb01bf37f0cc43e49c762a0",
+      "size_bytes": 16312
+    },
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/schedule.json",
+      "sha256": "304e827203c82ec7de3470b5016c3295bb329583174ba8a2e776e7a7c4f74e86",
+      "size_bytes": 12117
+    },
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/plan/rhs-schedule.json",
+      "sha256": "54d61728ab2e9ec975274109f084cec6bb06922ec0348251bb22dc6d531faf36",
+      "size_bytes": 6270
+    },
+    {
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/src/regions/step.hpp",
+      "sha256": "6d186d3fc6289b6347176ca23e5c8089648e0276826da2701d7cc1e7c43081ec",
+      "size_bytes": 6864
+    }
+  ],
+  "sample_ranges_separated": true,
+  "schedule": {
+    "costs_before_full_entry": {
+      "body_estimate_scope": "REPLAYED_NATIVE_STEP_SCHEDULE_ONLY",
+      "complete_process_ns": null,
+      "file_publication_ns": null,
+      "input_load_ns": null,
+      "logical_final_payload_bytes": 2359296,
+      "logical_input_payload_bytes": 16515072,
+      "native_body_per_step_estimate_ns": 129988300,
+      "physical_io_bytes_proven": false,
+      "process_startup_ns": null
+    },
+    "placement": {
+      "cpus": [
+        14,
+        15,
+        16
+      ],
+      "lanes": [
+        0,
+        0,
+        2,
+        2,
+        1,
+        1,
+        0,
+        2
+      ],
+      "mode": "READY_DAG",
+      "operation_order": null
+    },
+    "storage": {
+      "budget_bytes": 41000000,
+      "excluded": [
+        "PROVIDER_INTERNAL_WORKSPACE",
+        "ALLOCATOR_RESERVES",
+        "OTHER_PROCESS_MEMORY"
+      ],
+      "peak_bytes": 40108040,
+      "scope": "GRAPH_HELD_TENSOR_BACKING_STORAGE"
+    }
+  },
+  "schema": "scar.aten-source-cli-acceptance",
+  "schema_version": 1,
+  "solver": {
+    "fixed_grid": true,
+    "method": "rk4",
+    "step_size": 0.015625
+  },
+  "source_entry": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-fullgraph-v1/workload/fixture/subject.py",
+    "sha256": "99999227bcacf8b9552dafd1948628c2a32c214523c5acff3aeecf3f82dc502d",
+    "size_bytes": 1454
+  },
+  "source_graph": {
+    "edges": 36,
+    "input_ports": 7,
+    "nodes": 22
+  },
+  "source_launcher": {
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/aten-source-cli-v1/native/launch-source.sh",
+    "sha256": "6d1309075a7adb9dac64ac8bcede67777e9a8fbd7d28f24ef13882e1a51ed8bd",
+    "size_bytes": 166
+  },
+  "source_profile_domain": {
+    "file_effect_scope": "LOGICAL_CONTENT_NOT_FAILURE_TIMING_OR_FILESYSTEM_METADATA",
+    "inputs": "STABLE_READ_ONLY_EXACT_SIZE_REGULAR_CPU_FLOAT32_NATIVE_ENDIAN_FILES",
+    "normal_completion_only": true,
+    "output": "FRESH_FILE_WITH_EXISTING_PARENT",
+    "step_count_max": 2147483647,
+    "step_count_min": 1,
+    "step_count_syntax": "ASCII_DECIMAL_DIGITS_WITHOUT_SIGN_OR_WHITESPACE"
+  },
+  "speedup": 2.3884421005052987,
+  "status": "VERIFIED_STANDALONE_CPU_SOURCE_ENTRY_CANDIDATE_FOR_REVIEW",
+  "wall_clock_scope": "SOURCE_CLI_PROCESS_LAUNCH_TO_EXIT_INCLUDING_FILE_IO",
+  "warmup_pairs": 1
+}
