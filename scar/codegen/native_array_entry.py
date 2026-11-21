@@ -98,6 +98,8 @@ def _report_writer(document, routes):
                 lines.append(f'    binary64(out, result.{role});')
             elif role in _INTEGER_FIELDS:
                 lines.append(f'    out << result.{role};')
+            elif role == 'runtime_seed':
+                lines.append('    out << result.seed;')
             elif role == 'pid_list':
                 lines.append(f'    out << "["; line(out, pretty, {depth + 1}); out << result.pid;')
                 lines.append(f'    line(out, pretty, {depth}); out << "]";')
@@ -130,7 +132,7 @@ def _report_writer(document, routes):
     return '\n'.join(lines)
 
 
-def _render(recipe):
+def _render(recipe, *, seeded_option=None):
     argv, indices = _argv_header(recipe['options'], recipe['allow_abbrev'])
     tolerance_scope = recipe['tolerance_option']
     output_scope = recipe['output_option']
@@ -138,6 +140,18 @@ def _render(recipe):
     _need(len(routes) == len(recipe['report_bindings']), 'duplicate output field route')
     tables, declarations, functions = [], [], []
     sources = {'include/scar_generated/array_entry_argv.hpp': argv}
+    seed_ingress = ''
+    if seeded_option is not None:
+        _need(seeded_option in indices and len(recipe['profiles']) == 1, 'one typed seed ingress is required')
+        seed_index = indices[seeded_option]
+        seed_ingress = f'''        const auto& seed_text = values[{seed_index}].text;
+        const auto* end = seed_text.data() + seed_text.size();
+        const auto parsed_seed = std::from_chars(seed_text.data(), end, result.seed);
+        if (parsed_seed.ec != std::errc{{}} || parsed_seed.ptr != end ||
+                result.seed > std::numeric_limits<std::uint32_t>::max()) {{
+            std::cerr << "SCAR_PROFILE_UNAVAILABLE\\n";
+            return 2;
+        }}'''
     for index, profile in enumerate(recipe['profiles']):
         reference = profile['package']
         data = tape_backend.check(reference['uri'])
@@ -146,9 +160,9 @@ def _render(recipe):
         sources[f'src/tape_{index}.inc'] = read_artifact(data['files']['src/main.cpp'], json_document=False)
         sources[f'src/profile_{index}.cpp'] = _PROFILE.read_text().replace('@INDEX@', str(index)).encode()
         declaration = f'scar_array_entry_profile_{index}'
-        declarations.append(f'extern "C" int {declaration}(double*, double*, const char*);')
+        declarations.append(f'extern "C" int {declaration}(double*, double*, const char*, std::uint64_t);')
         predicates = [f'values[{indices[key]}].text == {argv_backend._quote(_text(value))}'
-                      for key, value in profile['parameters'].items()]
+                      for key, value in profile['parameters'].items() if key != seeded_option]
         _need(predicates and set(profile['parameters']) == set(indices) - {tolerance_scope, output_scope},
               'profile selectors omit original input arguments')
         guards = ' &&\n        '.join(predicates)
@@ -161,37 +175,31 @@ def _render(recipe):
         tables.append(f'    {{matches_{index}, {declaration}, write_{index}, {tolerance.hex()}}},')
     values = dict(PROFILE_DECLARATIONS='\n'.join(declarations), PROFILES='\n'.join((
         *functions, 'constexpr Profile profiles[]{', *tables, '};')),
-        OUTPUT_INDEX=indices[output_scope], TOLERANCE_INDEX=indices[tolerance_scope])
+        OUTPUT_INDEX=indices[output_scope], TOLERANCE_INDEX=indices[tolerance_scope], SEED_INGRESS=seed_ingress)
     sources['src/main.cpp'] = _substitute(_TEMPLATE.read_text(), values).encode()
     return sources
 
 
-def _project(root, profiles, library):
+def _project(root, profiles, library, *, extra_sources=(), archives=()):
     source_files = [f'src/profile_{i}.cpp' for i in range(profiles)]
     write_native_project(root, _TARGET, sources=(
-        'src/main.cpp', 'src/numpy_vector_normalize.cpp', 'src/numpy_observables.cpp', stock.SOURCE, *source_files),
+        'src/main.cpp', 'src/numpy_vector_normalize.cpp', 'src/numpy_observables.cpp',
+        stock.SOURCE, *source_files, *extra_sources),
         compile_options=('-fno-fast-math', '-ffp-contract=off', '-DSCAR_ARRAY_TAPE_NORMALIZE'),
         link_options=('-Wl,--disable-new-dtags,-rpath,$ORIGIN/../provider/objects',),
         libraries=('-l:' + library, 'm'), install_dirs=(('licenses', '.'), ('provider', '.')))
     with (root / 'CMakeLists.txt').open('a', encoding='utf-8') as output:
         output.write(f'target_link_directories({_TARGET} PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/provider/objects")\n')
         output.write(f'target_link_options({_TARGET} PRIVATE "-Wl,-rpath-link,${{CMAKE_CURRENT_SOURCE_DIR}}/provider/objects")\n')
+        for archive in archives:
+            _need(re.fullmatch(r'lib/[A-Za-z0-9_.-]+\.a', archive), 'unsupported bundled static archive path')
+            output.write(f'target_link_libraries({_TARGET} PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/{archive}")\n')
 
 
-def export(recipe_path, out):
-    from scar.analysis.native_array_entry_recipe import check
-    from scar.codegen.native_numpy_observables import render
+def _build(out, members, *, profiles, library, libraries, stock_provider, normal_provider, report,
+           extra_sources=(), archives=(), random_provider=None):
     from scar.codegen.native_numpy_vector_normalize import _audit_divide
 
-    recipe_ref = _ref(recipe_path, RECIPE)
-    recipe = check(recipe_ref['uri'])
-    _need(recipe == read_artifact(recipe_ref), 'entry recipe changed during replay')
-    members = _render(recipe)
-    normal, libraries, library, normal_provider = tape_backend._normalize(recipe['normalize'])
-    members.update(normal)
-    members.update(render(normal_provider))
-    provider = read_artifact(recipe['profiles'][0]['package'])['stock_provider']
-    members.update(stock.render(provider))
     compiler = shutil.which('g++')
     root = Path(out).absolute()
     _need(compiler and not root.exists() and not root.is_symlink(), 'C++20 compiler and fresh package required')
@@ -206,23 +214,46 @@ def export(recipe_path, out):
         bundle.mkdir(parents=True)
         for name, file in libraries.items():
             shutil.copyfile(file, bundle / name)
-        _project(release, len(recipe['profiles']), library)
+        _project(release, profiles, library, extra_sources=extra_sources, archives=archives)
         executable, _ = build_native_project(release, _TARGET, (compiler,),
             expected_libraries=tuple(bundle / name for name in libraries))
-        linkage = dict(dynamic=cpu_executable_dynamic(executable), stock=stock.audit(executable, provider),
+        linkage = dict(dynamic=cpu_executable_dynamic(executable), stock=stock.audit(executable, stock_provider),
                        normalization=_audit_divide(executable, normal_provider))
+        if random_provider is not None:
+            from scar.codegen.native_numpy_random import _audit
+
+            _audit(executable, random_provider)
+            linkage['random'] = 'EXACT_STOCK_PCG64_AND_UNIFORM'
         files = {}
         for name in sorted({*members, 'CMakeLists.txt', _BINARY, *(f'provider/objects/{key}' for key in libraries)}):
             ref = _ref(release / name, 'scar.native-project-member')
             files[name] = dict(ref, uri=str(root / name))
-        report = dict(schema=SCHEMA, schema_version=1, recipe=recipe_ref, files=files, linkage=linkage,
-            binary=_BINARY, cpu_ids=recipe['cpu_ids'], cxx_standard=20, python_runtime_required=False,
-            runtime_arguments_supported=True, holds_source_interpreter_metadata=True,
-            preserves_report_schema=True, independent_runtime_seeds=False,
-            scope='EXPLICIT_QUALIFIED_PROFILE_SELECTION', deployment_authorized=False)
+        report = dict(report, files=files, linkage=linkage, binary=_BINARY, cxx_standard=20,
+                      python_runtime_required=False, runtime_arguments_supported=True,
+                      holds_source_interpreter_metadata=True, preserves_report_schema=True,
+                      deployment_authorized=False)
         (release / 'result.json').write_text(json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + '\n')
         release.rename(root)
     return report
+
+
+def export(recipe_path, out):
+    from scar.analysis.native_array_entry_recipe import check
+    from scar.codegen.native_numpy_observables import render
+
+    recipe_ref = _ref(recipe_path, RECIPE)
+    recipe = check(recipe_ref['uri'])
+    _need(recipe == read_artifact(recipe_ref), 'entry recipe changed during replay')
+    members = _render(recipe)
+    normal, libraries, library, normal_provider = tape_backend._normalize(recipe['normalize'])
+    members.update(normal)
+    members.update(render(normal_provider))
+    provider = read_artifact(recipe['profiles'][0]['package'])['stock_provider']
+    members.update(stock.render(provider))
+    report = dict(schema=SCHEMA, schema_version=1, recipe=recipe_ref, cpu_ids=recipe['cpu_ids'],
+                  independent_runtime_seeds=False, scope='EXPLICIT_QUALIFIED_PROFILE_SELECTION')
+    return _build(out, members, profiles=len(recipe['profiles']), library=library, libraries=libraries,
+                  stock_provider=provider, normal_provider=normal_provider, report=report)
 
 
 def main(argv=None):

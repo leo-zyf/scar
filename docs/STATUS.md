@@ -1,10 +1,14 @@
 # 当前状态
 
+`project-seeded-array-tape-binding → project-seeded-array-tape-memory → export-native-seeded-array-entry` 已把运行时种子接入同一个独立 C++20 入口。前端按原构造层、门类型与量子位定位抽样，运行时生成 154 个采样值，231 份系数每个入口只构造一次。排程选择 150,080 B 的私有 arena，保留原归一化分支，三轮遇到不同分支时的交接复制上界为 98,304 B。
+
+构建只使用种子 1729 与 137 的形状和来源证据。独立种子 811 与 `2³²−1` 的六个完整轮末状态、stdout 和 JSON 文件均通过原始对照。每组在 CPU 5 上预热 1 对、交替测量 3 对，整入口中位数为 **2.062 s → 9.991 ms** 与 **2.088 s → 9.665 ms**。计时包含运行时抽样、系数计算和报告发布。范围仍为 11 量子位、7 层、3 轮、单 worker，默认保留原入口。两份源轨迹后两轮的 546 个事件已通过结构对照，下一关是共享重复正文和验证运行时轮数。见 [验收记录](../artifacts/baseline/cpu-native-runtime-seed-acceptance.json)。
+
 `project-source-array-entry-contract → project-native-array-entry-recipe → export-native-array-entry → calibrate-native-array-entry` 已接通单个 C++20 可执行程序的入口参数、数值循环和 JSON 发布。原入口固定为 11 量子位、7 层、3 轮、1 worker，运行时可选择已验证的种子 1729 和 137。两组保留原报告语义，另验显式容差 `1e-8`。搬迁后的工件通过六个完整轮末状态的逐字节对照。报告中的后端文字来自原源码，解释器文字来自已绑定的原运行环境。
 
 CPU 5 各预热 1 对、交替测量 3 对，整入口中位数为 **2.014 s → 9.728 ms** 和 **2.020 s → 10.283 ms**，约 **207×** 和 **196×**。计时包含原 Python 启动、原电路构造以及双方的 stdout 与文件发布。C++ 工件提前固定了两组电路系数，构建耗时在计时范围外。其它配置在发布前拒绝，默认继续保留原程序。
 
-独立 C++20 随机数接口已对 6 种种子的 924 次采样验收，系数接口已逐字节核对 231 个矩阵和 538 个标量相位。下一关由原构造层、门类型和量子位把运行时抽样接到执行图，再以未参与生成计划的种子验证整入口。见 [验收记录](../artifacts/baseline/cpu-native-array-entry-acceptance.json)。
+在固定配置阶段，独立 C++20 随机数接口对 6 种种子的 924 次采样验收，系数接口逐字节核对了 231 个矩阵和 538 个标量相位。见 [验收记录](../artifacts/baseline/cpu-native-array-entry-acceptance.json)。
 
 `project-ndarray-tape → export-native-array-tape` 已将真实 CPU Cirq 的三轮数值循环交付为独立 C++20。两组种子各观测 576 个门，采集保留原始操作位置、布局、存储关联、小型系数及逐轮状态摘要。原轮次顺序、首次因子合并以及每轮归一化的分支均进入交付计划。外积使用原 NumPy 复数乘法，归一化使用原 NumPy 复数除法和同一套 OpenBLAS ILP64。两份二进制搬迁复跑后，六个完整轮末状态均与独立原始运行逐字节一致。
 
