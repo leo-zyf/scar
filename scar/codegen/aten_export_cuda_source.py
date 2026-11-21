@@ -3,13 +3,16 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from scar.codegen.cuda_copy_schedule import render_cuda_cublas_schedule, render_cuda_hybrid_schedule
+from scar.codegen.cuda_copy_schedule import (
+    LIBTORCH_HOST, NVHPC_HOST, render_cuda_cublas_schedule, render_cuda_hybrid_schedule,
+)
 
 
 _ROOT = Path(__file__).parent
 _TEMPLATE = _ROOT / 'aten_export_cuda_cli_v1.cpp.in'
 _CPU_FILE_ABI = _ROOT / 'aten_native_cli_v1.cpp.in'
 _RUNTIME_HEADERS = ('cuda_copy_schedule_v1.h', 'cuda_cublas_schedule_v1.h')
+_NVHPC_HOST_HEADER = 'cuda_nvhpc_host_v1.h'
 ACTIVITY_CALIBRATION_SCHEMA = 'scar.hybrid-native-activity-observation'
 
 # Only materialize the header and typed host branch for a plan that selected CPU MM.
@@ -32,6 +35,17 @@ static_assert(std::string_view(at::_ops::mm_out::schema_str) ==
         output = host_view(output_slot, buffers);
         at::_ops::mm_out::call(host_view(mm->left, buffers), host_view(mm->right, buffers), output);
     }''',
+}
+
+_NVHPC_HOST_PARTS = {
+    'INCLUDES': f'#include "{_NVHPC_HOST_HEADER}"',
+    'TYPES': 'using cuda_nvhpc_host_v1::HostMm;',
+    'VARIANT': 'HostMm',
+    'PREDICATE': 'std::holds_alternative<HostMm>(operation)',
+    'CALL': '''inline void host_call(const Step& step, std::span<Buffer* const> buffers) {
+    cuda_nvhpc_host_v1::multiply(std::get<HostMm>(step.operation), buffers);
+}''',
+    'SETUP': 'cuda_nvhpc_host_v1::configure({threads});',
 }
 
 # Empty expansions preserve the established C++ bytes for archived bundles.
@@ -110,6 +124,22 @@ def _apply_hooks(source, prefix, hooks, enabled):
     return source
 
 
+def _host_runtime(host_provider, requires_host_mm, host_threads, calibrate):
+    source = (_ROOT / 'cuda_hybrid_schedule_v1.h').read_text()
+    for key, replacement in _NVHPC_HOST_PARTS.items():
+        begin, end = f'/* SCAR_PROVIDER_{key}_BEGIN */', f'/* SCAR_PROVIDER_{key}_END */'
+        if source.count(begin) != 1 or source.count(end) != 1 or source.index(begin) >= source.index(end):
+            raise ValueError(f'hybrid executor requires one ordered {key} provider section')
+        before, _, tail = source.partition(begin)
+        original, _, after = tail.partition(end)
+        if host_provider == NVHPC_HOST:
+            original = replacement.replace('{threads}', str(host_threads))
+        source = before + original + after
+    if host_provider == LIBTORCH_HOST:
+        source = _apply_hooks(source, 'HOST_MM', _HOST_MM_HOOKS, requires_host_mm)
+    return _apply_hooks(source, 'ACTIVITY', _EXECUTOR_HOOKS, calibrate)
+
+
 def _file_ports(ports, planned_bytes, indices, kind):
     if not ports:
         raise ValueError(f'CUDA native entry needs at least one file {kind}')
@@ -150,17 +180,26 @@ def _host_boundary(problem, schedule, memory_kinds):
 
 
 def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, stream_channels, compute_resource,
-                               input_ports, output_ports, host_compute_resource=None, calibrate=False):
+                               input_ports, output_ports, host_compute_resource=None, calibrate=False,
+                               host_provider=LIBTORCH_HOST, host_threads=None):
     """Emit an explicit-trial CUDA executable and its ordered file-to-buffer bindings."""
     if type(calibrate) is not bool or calibrate and host_compute_resource is None:
         raise ValueError('native activity calibration requires an opted-in mixed CPU/CUDA plan')
+    if host_provider == NVHPC_HOST:
+        if host_compute_resource is None or type(host_threads) is not int or not 0 < host_threads < 2**31:
+            raise ValueError('the NVHPC host lane needs a qualified execution resource and planned BLAS team size')
+    elif host_provider != LIBTORCH_HOST or host_threads is not None:
+        raise ValueError('unrecognized host provider or unexpected host thread plan')
     kwargs = dict(device=device, memory_kinds=memory_kinds, stream_channels=stream_channels,
                   compute_resource=compute_resource)
     runtime_headers = _RUNTIME_HEADERS
     if host_compute_resource is None:
         lowered = render_cuda_cublas_schedule(problem, schedule, **kwargs)
     else:
-        lowered = render_cuda_hybrid_schedule(problem, schedule, host_compute_resource=host_compute_resource, **kwargs)
+        lowered = render_cuda_hybrid_schedule(problem, schedule, host_compute_resource=host_compute_resource,
+                                               host_provider=host_provider, **kwargs)
+        if host_provider == NVHPC_HOST and not lowered.requires_host_mm:
+            raise ValueError('an NVHPC hybrid schedule requires at least one selected host GEMM')
     indices = {value: index for index, value in enumerate(lowered.buffer_values)}
     input_bytes, output_bytes = _host_boundary(problem, schedule, memory_kinds)
     input_slots, inputs = _file_ports(input_ports, input_bytes, indices, 'input')
@@ -190,8 +229,9 @@ def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, strea
                **{f'src/{name}': (_ROOT / name).read_text() for name in runtime_headers}}
     if host_compute_resource is not None:
         header = 'cuda_hybrid_schedule_v1.h'
-        runtime = _apply_hooks((_ROOT / header).read_text(), 'HOST_MM', _HOST_MM_HOOKS, lowered.requires_host_mm)
-        sources[f'src/{header}'] = _apply_hooks(runtime, 'ACTIVITY', _EXECUTOR_HOOKS, calibrate)
+        sources[f'src/{header}'] = _host_runtime(host_provider, lowered.requires_host_mm, host_threads, calibrate)
+        if host_provider == NVHPC_HOST:
+            sources[f'src/{_NVHPC_HOST_HEADER}'] = (_ROOT / _NVHPC_HOST_HEADER).read_text()
     if calibrate:
         header = 'cuda_hybrid_activity_v1.h'
         sources[f'src/{header}'] = (_ROOT / header).read_text()

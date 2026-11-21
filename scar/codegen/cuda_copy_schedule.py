@@ -15,6 +15,10 @@ _DIRECTIONS = {
 }
 _SGEMM = 'CUBLAS_SGEMM_F32_COLUMN_MAJOR_V1'
 _HOST_ATEN = 'LIBTORCH_ATEN_CPU_OUT_F32_V1'
+_HOST_NVHPC = 'NVHPC_CBLAS_SGEMM_F32_ROW_MAJOR_V1'
+LIBTORCH_HOST = 'LIBTORCH_ATEN'
+NVHPC_HOST = 'NVIDIA_HPC_CBLAS_LP64'
+_HOST_LOWERING = {LIBTORCH_HOST: _HOST_ATEN, NVHPC_HOST: _HOST_NVHPC}
 _RELU = FUNCTIONAL_EXPORT_SCHEMAS['aten.relu.default']
 _ADD = FUNCTIONAL_EXPORT_SCHEMAS['aten.add.Tensor']
 _MM = FUNCTIONAL_EXPORT_SCHEMAS['aten.mm.default']
@@ -104,11 +108,13 @@ def render_cuda_cublas_schedule(problem, schedule, *, device, memory_kinds, stre
 
 
 def render_cuda_hybrid_schedule(problem, schedule, *, device, memory_kinds, stream_channels, compute_resource,
-                                host_compute_resource):
-    """Emit a cuBLAS and LibTorch schedule with dependency-local host waits."""
-    if not isinstance(compute_resource, str) or not isinstance(host_compute_resource, str):
-        raise ValueError('hybrid scheduling needs bound device and host execution resources')
-    return _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource)
+                                host_compute_resource, host_provider=LIBTORCH_HOST):
+    """Emit cuBLAS and a qualified synchronous host lane with dependency-local waits."""
+    if (not isinstance(compute_resource, str) or not isinstance(host_compute_resource, str)
+            or type(host_provider) is not str or host_provider not in _HOST_LOWERING):
+        raise ValueError('hybrid scheduling needs bound execution resources and a qualified host provider')
+    return _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource,
+                   host_compute_resource, host_lowering=_HOST_LOWERING[host_provider])
 
 
 def _sgemm_ports(mode, incoming, outgoing, output, destination):
@@ -149,6 +155,8 @@ def _host_ports(mode, incoming, outgoing, output, destination):
         raise ValueError('ATen host operation requires a synchronous out-port contract')
     schema = parameters['schema']
     arguments = parameters['arguments']
+    if mode.lowering == _HOST_NVHPC and schema != _MM:
+        raise ValueError('NVHPC host lowering requires the typed FP32 MM contract')
     if type(arguments) is not list or type(schema) is not str or _HOST_OPERANDS.get(schema) != len(arguments):
         raise ValueError('ATen host operation has no qualified provider binding')
     count = 1 if schema == _RELU else 2
@@ -194,7 +202,8 @@ def _host_ports(mode, incoming, outgoing, output, destination):
     return operation, (*ports, (output, *result)), alpha
 
 
-def _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource=None):
+def _render(problem, schedule, device, memory_kinds, stream_channels, compute_resource, host_compute_resource=None,
+            *, host_lowering=None):
     verify_execution_plan(problem, schedule)
     if type(device) is not int or not 0 <= device < 2**31:
         raise ValueError('CUDA copy lowering requires an explicit device ordinal')
@@ -245,7 +254,9 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
             returns.append(op.id)
             continue
         is_compute = mode.lowering == _SGEMM and compute_resource is not None
-        is_host = mode.lowering == _HOST_ATEN and host_compute_resource is not None
+        is_host = mode.lowering == host_lowering and host_compute_resource is not None
+        if mode.lowering in _HOST_LOWERING.values() and not is_host:
+            raise ValueError('selected host operation differs from the qualified hybrid provider')
         if ((mode.lowering != 'CUDA_MEMCPY_ASYNC' and not (is_compute or is_host)) or mode.cost.estimate_ns <= 0
                 or not outgoing[op.id] or len(mode.output_locations) != 1):
             raise ValueError('CUDA operation requires positive service and a single explicit output material')
@@ -342,7 +353,7 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
             lines.append(f'inline constexpr std::array<std::size_t, {len(row)}> wait_{index}{{{entries}}};')
     lines.append(f'inline constexpr std::array<Step, {len(operations)}> steps{{{{')
     for index, (op, mode) in enumerate(operations):
-        if mode.lowering == _HOST_ATEN:
+        if mode.lowering == host_lowering:
             operation, ports, alpha = operands[op.id]
             fields = [f'{{{buffer_indices[name]}, {rows}, {columns}}}' for name, rows, columns in ports]
             if alpha is not None:
@@ -362,7 +373,7 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
                   f'    detail::execute(device, {stream_resource}, buffers, steps, materializations);', '}', '',
                   '}  // namespace scar_cuda_generated', ''])
     activity_operations = tuple(op.id for op, _ in operations)
-    requires_host_mm = any(mode.lowering == _HOST_ATEN and mode.parameters['schema'] == _MM
+    requires_host_mm = any(mode.lowering == host_lowering and mode.parameters['schema'] == _MM
                            for _, mode in operations)
     return CudaCopySource('\n'.join(lines), buffers, used_streams, activity_operations,
                           tuple(stream_keys[name] for name in activity_operations), tuple(waits), requires_host_mm)

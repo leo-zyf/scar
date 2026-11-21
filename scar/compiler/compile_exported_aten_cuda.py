@@ -25,6 +25,8 @@ CUDA_ENVIRONMENT = ('CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER', 'CUDA_MPS_PIPE_
 _MODEL_PATH = 'plan/cuda-model.json'
 _PROGRAM_PATH = 'plan/program.json'
 _HYBRID_MODEL = 'scar.aten-export-hybrid-offline-profile'
+_NVHPC_HYBRID_MODEL = 'scar.aten-export-nvhpc-hybrid-offline-profile'
+NVHPC_HYBRID_CANDIDATE = 'OFFLINE_CPP20_NVHPC_HYBRID_CANDIDATE'
 _PLACEMENT_MODEL = 'scar.aten-export-placement-offline-profile'
 _PLACEMENT_CANDIDATE = 'OFFLINE_CPP20_PLACEMENT_CANDIDATE'
 _PLACEMENT_TREATMENT = 'OFFLINE_CPP20_PLACEMENT_CALIBRATION_TREATMENT'
@@ -53,6 +55,12 @@ def _pipeline(model, *, treatment=False):
         from scar.compiler.aten_export_hybrid_source import qualify_hybrid_export
 
         return qualify_hybrid_export, plan_hybrid_export, replay_hybrid_export, 'OFFLINE_CPP20_HYBRID_CANDIDATE'
+    if schema == _NVHPC_HYBRID_MODEL:
+        from scar.compiler.aten_export_nvhpc_hybrid_plan import (
+            plan_nvhpc_hybrid_export, qualify_nvhpc_hybrid_export, replay_nvhpc_hybrid_export,
+        )
+
+        return qualify_nvhpc_hybrid_export, plan_nvhpc_hybrid_export, replay_nvhpc_hybrid_export, NVHPC_HYBRID_CANDIDATE
     from scar.compiler.aten_export_cuda_plan import plan_cuda_export, replay_cuda_export
     from scar.compiler.aten_export_cuda_source import qualify_cuda_export
 
@@ -97,13 +105,14 @@ def verify_cuda_operator_stack(root, manifest):
     executable = root / EXECUTABLE
     listing = subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={})
     dependencies = _dependencies(listing)
-    linkage = verify_operator_stack_linkage(document, dependencies, 'CUDA')
+    route = 'HYBRID' if manifest['status'] == NVHPC_HYBRID_CANDIDATE else 'CUDA'
+    linkage = verify_operator_stack_linkage(document, dependencies, route)
     if dependencies != manifest['dependencies'] or retained != dict(reference=reference, linkage=linkage):
         raise ValueError('CUDA operator stack or loaded NVIDIA dependencies differ from the retained receipt')
     return retained
 
 
-def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False, stack_sha256=None):
+def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False, stack_sha256=None, host_cpus=()):
     weight_checks = '\n'.join(
         f'test "$(sha256sum < "$root/{row["path"]}" | cut -d " " -f 1)" = {row["payload"]["sha256"]}'
         for row in inputs if row['kind'] == 'WEIGHT')
@@ -115,6 +124,11 @@ def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False, st
     arguments.extend('"${' + str(next(ports)) + '}"' for _ in range(output_count))
     user_count = sum(row['kind'] == 'INPUT' for row in inputs)
     host_limits = 'OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ' if host_lane else ''
+    runner = f'"$root/{EXECUTABLE}"'
+    if host_cpus:
+        mask = ','.join(map(str, host_cpus))
+        host_limits = f'OMP_NUM_THREADS={len(host_cpus)} OPENBLAS_NUM_THREADS={len(host_cpus)} OMP_DYNAMIC=FALSE '
+        runner = f'/usr/bin/taskset -c {mask} {runner}'
     file_mode = '--trial|--calibrate) mode=$1; shift' if calibrate else '--trial) shift'
     mode = '"$mode"' if calibrate else '--trial'
     mode_help = '--trial|--calibrate' if calibrate else '--trial'
@@ -123,7 +137,7 @@ def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False, st
 {stack_marker}set -eu
 root=$(dirname -- "$0")
 run_cuda() {{
-  set -- "$root/{EXECUTABLE}" "$@"
+  set -- {runner} "$@"
 {cuda_scope}
   exec env -i {host_limits}"$@"
 }}
@@ -151,6 +165,8 @@ def _native_sources(projection, problem, schedule, bindings, *, calibrate=False)
     keywords = {key: bindings[key] for key in ('device', 'memory_kinds', 'stream_channels', 'compute_resource')}
     if 'host_resource' in bindings:
         keywords['host_compute_resource'] = bindings['host_resource']
+    if bindings.get('host_provider') == 'NVIDIA_HPC_CBLAS_LP64':
+        keywords.update(host_provider=bindings['host_provider'], host_threads=bindings['host_threads'])
     if calibrate:
         keywords['calibrate'] = True
     return render_exported_cuda_entry(problem_from_dict(problem), schedule, **keywords,
@@ -173,9 +189,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         )
 
         if cuda_root is not None or with_activity_calibration or placement_ordinal is not None:
-            raise ValueError('the NVIDIA operator stack pins CUDA paths and requires direct CUDA execution')
+            raise ValueError('the NVIDIA operator stack pins CUDA paths and excludes legacy activity profiles')
         stack_reference, stack_document = load_operator_stack(operator_stack)
-        stack_build = nvidia_stack_build(stack_document, 'CUDA')
 
     model = Path(model).resolve(strict=True)
     source_lock = _content(model)
@@ -187,6 +202,12 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
     if model_lock['sha256'] != cuda_model_sha256:
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
+    nvhpc_hybrid = isinstance(declared, dict) and declared.get('schema') == _NVHPC_HYBRID_MODEL
+    if nvhpc_hybrid and operator_stack is None:
+        raise ValueError('the NVIDIA hybrid profile requires one pinned operator stack')
+    stack_route = 'HYBRID' if nvhpc_hybrid else 'CUDA'
+    if operator_stack is not None:
+        stack_build = nvidia_stack_build(stack_document, stack_route)
     treatment = placement_ordinal is not None
     qualify, plan, _, status = _pipeline(declared, treatment=treatment)
     plan_options = {'ordinal': placement_ordinal} if treatment else {}
@@ -216,7 +237,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
         problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref, **plan_options)
         host_lane = 'host_resource' in bindings
-        if operator_stack is not None and host_lane:
+        if operator_stack is not None and host_lane and not nvhpc_hybrid:
             raise ValueError('the NVIDIA operator stack requires direct CUDA lowering without the LibTorch host lane')
         if with_activity_calibration and not host_lane:
             raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
@@ -232,7 +253,9 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             libraries = stack_build['libraries']
             include_dirs = stack_build['include_dirs']
             runtime_dirs = stack_build['runtime_dirs']
-        if host_lane:
+        if nvhpc_hybrid:
+            options.append('-Kieee')
+        if host_lane and not nvhpc_hybrid:
             _, cpu_libraries, compiler, flags, _ = _build_interface(torch)
             libraries.extend(cpu_libraries)
             options.extend(flags[1:])
@@ -258,7 +281,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         launch = root / 'launch.sh'
         launch.write_text(_render_launch(inputs, len(projection['outputs']), host_lane=host_lane,
             calibrate=with_activity_calibration,
-            stack_sha256=None if operator_stack is None else stack_reference['sha256']))
+            stack_sha256=None if operator_stack is None else stack_reference['sha256'],
+            host_cpus=bindings.get('host_cpu_ids', ()) if nvhpc_hybrid else ()))
         launch.chmod(0o755)
         for name, content in generated.sources.items():
             path = root / name
@@ -271,7 +295,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         stack = None
         if operator_stack is not None:
             stack = dict(reference=stack_reference,
-                linkage=verify_operator_stack_linkage(stack_document, dependencies, 'CUDA'))
+                linkage=verify_operator_stack_linkage(stack_document, dependencies, stack_route))
             if load_operator_stack(stack_reference) != (stack_reference, stack_document):
                 raise ValueError('CUDA operator stack changed during native compilation')
             records['execution']['operator_stack'] = stack
@@ -317,6 +341,7 @@ def replay_cuda_project(root, manifest, member):
             or execution.get('operator_stack') != manifest.get('operator_stack')):
         raise ValueError('CUDA execution disagrees with the retained operator stack receipt')
     declared = json.loads(member(_MODEL_PATH).read_bytes())
+    nvhpc_hybrid = declared.get('schema') == _NVHPC_HYBRID_MODEL
     treatment = manifest['status'] == _PLACEMENT_TREATMENT
     qualify, _, replay, status = _pipeline(declared, treatment=treatment)
     policy = dict(actual_device_timing='UNKNOWN', default_backend='NO_OP', deployment_authorized=False)
@@ -345,7 +370,9 @@ def replay_cuda_project(root, manifest, member):
         if expected != observed:
             raise ValueError('CUDA file input differs from the qualified ordered port')
     problem, schedule, bindings = (read(name) for name in ('problem', 'schedule', 'bindings'))
-    if 'operator_stack' in manifest and 'host_resource' in bindings:
+    if nvhpc_hybrid and ('operator_stack' not in manifest or bindings.get('host_provider') != 'NVIDIA_HPC_CBLAS_LP64'):
+        raise ValueError('NVIDIA hybrid execution is missing its pinned host provider')
+    if not nvhpc_hybrid and 'operator_stack' in manifest and 'host_resource' in bindings:
         raise ValueError('the NVIDIA operator stack excludes the LibTorch host lane')
     record_name = PLACEMENT_RECORDS.get(status)
     expected_records = set() if record_name is None else {record_name}
@@ -368,7 +395,8 @@ def replay_cuda_project(root, manifest, member):
     stack = verify_cuda_operator_stack(root, manifest)
     sources = dict(generated.sources)
     sources['launch.sh'] = _render_launch(inputs, len(projection['outputs']), host_lane='host_resource' in bindings,
-        calibrate=abi is not None, stack_sha256=None if stack is None else stack['reference']['sha256'])
+        calibrate=abi is not None, stack_sha256=None if stack is None else stack['reference']['sha256'],
+        host_cpus=bindings.get('host_cpu_ids', ()) if nvhpc_hybrid else ())
     if any(member(name).read_text() != content for name, content in sources.items()):
         raise ValueError('CUDA source differs from its replayed copy and cuBLAS lowering')
     description = json.loads(member('validation/description.json').read_bytes())
@@ -382,6 +410,8 @@ def replay_cuda_project(root, manifest, member):
     if 'host_resource' in bindings:
         regions = projection['cuda_regions'] if placement is None else placement['selected_cuda_regions']
         result.update(cuda_regions=len(regions), host_provider_calls=description['host_provider_calls'])
+    if nvhpc_hybrid:
+        result['host_cpu_ids'] = bindings['host_cpu_ids']
     if placement is not None:
         result['device_placements_replayed'] = True
     if treatment:

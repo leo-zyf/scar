@@ -27,7 +27,8 @@ _MM = FUNCTIONAL_EXPORT_SCHEMAS['aten.mm.default']
 _GEMM = 'CUBLAS_SGEMM_F32_COLUMN_MAJOR_V1'
 
 
-def _operator_mode(row, definitions, edge_ids, origin, profile_ref, model, cost, *, placement, host):
+def _operator_mode(row, definitions, edge_ids, origin, profile_ref, model, cost, *, placement, host,
+                   host_resource=HOST_RESOURCE, host_lowering=None):
     shape = _matrix(row)
     proof = (*origin, profile_ref)
     schema = row['schema']
@@ -49,8 +50,8 @@ def _operator_mode(row, definitions, edge_ids, origin, profile_ref, model, cost,
         raise ValueError('hybrid source operator is outside the qualified CPU and CUDA placement contracts')
     operands = [dict(edge=edge_ids[arg['value']], shape=definitions[arg['value']][1]) if 'value' in arg
                 else dict(scalar=arg['scalar']) for arg in row['arguments']]
-    lowering = HOST_LOWERING if host == _HOST else 'NATIVE_ATEN_CALL'
-    return ImplementationOption('host', lowering, proof, {HOST_RESOURCE: 1}, {},
+    lowering = host_lowering or (HOST_LOWERING if host == _HOST else 'NATIVE_ATEN_CALL')
+    return ImplementationOption('host', lowering, proof, {host_resource: 1}, {},
         dict.fromkeys(edge_ids, host), {row['result']: host}, cost('cpu_mm' if schema == _MM else 'cpu_aten'),
         dict(schema=schema, arguments=operands, shape=shape, completion='HOST_SYNCHRONOUS'))
 
@@ -93,7 +94,7 @@ def _certify_placement(problem, bindings):
     return problem_document(problem), schedule, bindings
 
 
-def _build_placement(projection, model, model_ref, target, placement):
+def _build_placement(projection, model, model_ref, target, placement, *, nvhpc_host=None):
     if (projection.get('schema') != SOURCE_SCHEMA or type(projection.get('schema_version')) is not int
             or projection['schema_version'] != 1 or projection.get('layout') != 'CONTIGUOUS_ROW_MAJOR'
             or projection.get('dtype') != 'FLOAT32'
@@ -116,13 +117,20 @@ def _build_placement(projection, model, model_ref, target, placement):
     host = _HOST if cuda else _PAGEABLE_HOST
     program = projection['program']
     qualification = 'SYNTHETIC_PLACEMENT_OFFLINE' if explicit else 'SYNTHETIC_HYBRID_OFFLINE'
+    host_resource, host_lowering = HOST_RESOURCE, None
+    if nvhpc_host is not None:
+        if set(choices.values()) != {'CPU', 'CUDA'} or any(row['schema'] != _MM for row in projection['operations']):
+            raise ValueError('NVIDIA hybrid host and device placements require only qualified MM operations')
+        qualification = 'SYNTHETIC_NVHPC_HYBRID_OFFLINE'
+        host_resource, host_lowering = nvhpc_host['host_resource'], nvhpc_host['host_lowering']
     profile_ref = dict(model_ref, qualification=qualification + '_PROFILE')
     pool_rows = (
         (_HOST, 'MEMORY', model['pinned_host_bytes']), (_DEVICE, 'MEMORY', model['device_bytes']),
         (_UPLOAD, 'CHANNEL', 1), (_COMPUTE, 'CHANNEL', 1), (_DOWNLOAD, 'CHANNEL', 1),
         (_GPU, 'EXECUTION', 1)) if cuda else ((_PAGEABLE_HOST, 'MEMORY', model['host_memory_bytes']),)
-    resources = tuple(PlanningResource(name, kind, capacity, (profile_ref,)) for name, kind, capacity in (
-        *pool_rows, (HOST_RESOURCE, 'EXECUTION', 1)))
+    resources = tuple(PlanningResource(name, kind, capacity, (profile_ref,)) for name, kind, capacity in pool_rows)
+    host_evidence = (profile_ref,) if nvhpc_host is None else (profile_ref, nvhpc_host)
+    resources = (*resources, PlanningResource(host_resource, 'EXECUTION', 1, host_evidence))
 
     def cost(key):
         context = qualification + '_' + key.upper()
@@ -154,7 +162,8 @@ def _build_placement(projection, model, model_ref, target, placement):
         origin = (dict(program, operation=row['operation']),)
         ports = {name: f'{operation}:input:{index}' for index, name in enumerate(names)}
         mode = _operator_mode(row, definitions, ports, origin, profile_ref, model, cost,
-                              placement=choices[operation], host=host)
+                              placement=choices[operation], host=host,
+                              host_resource=host_resource, host_lowering=host_lowering)
         for name, edge_id in ports.items():
             edge(name, operation, edge_id, mode.input_locations[name], origin)
         predecessors = (operations[-1].id,) if not cuda and operations else ()
@@ -189,9 +198,11 @@ def _build_placement(projection, model, model_ref, target, placement):
 
             raise PlacementCapacityExceeded('hybrid file ABI backing and workspace exceed the declared capacity')
         raise ValueError('hybrid file ABI backing and workspace exceed the declared capacity')
+    host_contract = ('SINGLE_SYNCHRONOUS_HOST_ATEN_LANE',) if nvhpc_host is None else (
+        'SINGLE_SYNCHRONOUS_NVHPC_CBLAS_LP64_LANE', 'NVHPC_PROVIDER_INTERNAL_WORKSPACE_UNKNOWN')
     problem = PlanningProblem(target, (program,), resources, tuple(operations), tuple(edges), assumptions=(
         'OFFLINE_SYNTHETIC_ONLY', 'ACTUAL_DEVICE_TIMING_UNKNOWN', 'NORMAL_COMPLETION_FP32_MATRIX_GRAPH',
-        'SINGLE_SYNCHRONOUS_HOST_ATEN_LANE', 'ROW_MAJOR_STORAGE_VIA_TRANSPOSED_COLUMN_MAJOR_SGEMM',
+        *host_contract, 'ROW_MAJOR_STORAGE_VIA_TRANSPOSED_COLUMN_MAJOR_SGEMM',
         'ONE_COPY_PER_LOGICAL_VALUE_AND_DESTINATION', 'ALL_FILE_ABI_BUFFERS_AND_PROVIDER_WORKSPACE_RETAINED_THROUGH_RETURN'))
     upload = TransferOption('h2d', _HOST, _DEVICE, {_UPLOAD: 1}, cost('h2d'), 'CUDA_MEMCPY_ASYNC', (profile_ref,))
     download = TransferOption('d2h', _DEVICE, _HOST, {_DOWNLOAD: 1}, cost('d2h'), 'CUDA_MEMCPY_ASYNC', (profile_ref,))
@@ -199,8 +210,10 @@ def _build_placement(projection, model, model_ref, target, placement):
         problem = expand_shared_material_route(problem, edge_ids, (upload if destination == _DEVICE else download,))
     published = {row.id: row.value for row in problem.data_edges if row.consumer == _RETURN}
     bindings = dict(device=model['device'], memory_kinds={_HOST: 'PinnedHost', _DEVICE: 'Device'},
-        stream_channels=[_UPLOAD, _COMPUTE, _DOWNLOAD], compute_resource=_GPU, host_resource=HOST_RESOURCE,
+        stream_channels=[_UPLOAD, _COMPUTE, _DOWNLOAD], compute_resource=_GPU, host_resource=host_resource,
         input_values=inputs, output_values=[published[f'{_RETURN}:{name}'] for name in projection['outputs']])
+    if nvhpc_host is not None:
+        bindings.update(nvhpc_host)
     return problem, bindings
 
 

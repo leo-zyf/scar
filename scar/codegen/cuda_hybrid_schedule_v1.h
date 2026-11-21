@@ -2,11 +2,11 @@
 
 #include "cuda_cublas_schedule_v1.h"/* SCAR_ACTIVITY_INCLUDE */
 
-#include <ATen/Parallel.h>
+/* SCAR_PROVIDER_INCLUDES_BEGIN */#include <ATen/Parallel.h>
 #include <ATen/core/grad_mode.h>
 #include <ATen/ops/add_ops.h>
 #include <ATen/ops/from_blob.h>/* SCAR_HOST_MM_INCLUDE */
-#include <ATen/ops/relu_ops.h>
+#include <ATen/ops/relu_ops.h>/* SCAR_PROVIDER_INCLUDES_END */
 
 #include <cstdint>
 #include <string_view>
@@ -19,7 +19,7 @@ using cuda_cublas_v1::Copy;
 using cuda_cublas_v1::MatrixMultiply;
 using cuda_cublas_v1::Memory;
 
-struct HostTensor {
+/* SCAR_PROVIDER_TYPES_BEGIN */struct HostTensor {
     std::size_t slot;
     std::int64_t rows;
     std::int64_t columns;
@@ -35,22 +35,22 @@ struct HostAdd {
     HostTensor right;
     HostTensor output;
     std::int64_t alpha;
-};/* SCAR_HOST_MM_STRUCT */
+};/* SCAR_HOST_MM_STRUCT *//* SCAR_PROVIDER_TYPES_END */
 
 struct Step {
     std::size_t stream;
-    std::variant<Copy, MatrixMultiply, HostRelu, HostAdd/* SCAR_HOST_MM_VARIANT */> operation;
+    std::variant<Copy, MatrixMultiply, /* SCAR_PROVIDER_VARIANT_BEGIN */HostRelu, HostAdd/* SCAR_HOST_MM_VARIANT *//* SCAR_PROVIDER_VARIANT_END */> operation;
     std::span<const std::size_t> wait_for;
     bool record_completion;
 
     bool host() const noexcept {
-        return std::holds_alternative<HostRelu>(operation) || std::holds_alternative<HostAdd>(operation)/* SCAR_HOST_MM_PREDICATE */;
+        return /* SCAR_PROVIDER_PREDICATE_BEGIN */std::holds_alternative<HostRelu>(operation) || std::holds_alternative<HostAdd>(operation)/* SCAR_HOST_MM_PREDICATE *//* SCAR_PROVIDER_PREDICATE_END */;
     }
 };
 
 namespace detail {
 
-static_assert(std::string_view(at::_ops::relu_out::schema_str) ==
+/* SCAR_PROVIDER_CALL_BEGIN */static_assert(std::string_view(at::_ops::relu_out::schema_str) ==
               "relu.out(Tensor self, *, Tensor(a!) out) -> Tensor(a!)");
 static_assert(std::string_view(at::_ops::add_out::schema_str) ==
               "add.out(Tensor self, Tensor other, *, Scalar alpha=1, Tensor(a!) out) -> Tensor(a!)");/* SCAR_HOST_MM_SCHEMA */
@@ -77,7 +77,7 @@ inline void host_call(const Step& step, std::span<Buffer* const> buffers) {
             || output.size(0) != output_slot.rows || output.size(1) != output_slot.columns || !output.is_contiguous()) {
         throw std::runtime_error("ATen output differs from its pinned material contract");
     }
-}
+}/* SCAR_PROVIDER_CALL_END */
 
 /* SCAR_ACTIVITY_TEMPLATE */inline void execute(int device, std::span<const std::size_t> workspace_bytes, std::span<const BufferSpec> specs,
                     std::span<const Step> steps, std::span<Buffer* const> buffers/* SCAR_ACTIVITY_ARGUMENT */) {/* SCAR_ACTIVITY_SETUP_START */
@@ -92,8 +92,8 @@ inline void host_call(const Step& step, std::span<Buffer* const> buffers) {
             throw std::invalid_argument("hybrid buffer identity, device, memory kind or byte extent differs");
         }
     }
-    at::set_num_threads(1);
-    const at::NoGradGuard no_grad;
+    /* SCAR_PROVIDER_SETUP_BEGIN */at::set_num_threads(1);
+    const at::NoGradGuard no_grad;/* SCAR_PROVIDER_SETUP_END */
     const cuda_copy_v1::detail::DeviceScope scope(device);/* SCAR_ACTIVITY_INIT */
     cuda_copy_v1::detail::Queues queues(workspace_bytes.size(), steps.size());
     cuda_cublas_v1::detail::Dispatcher gpu(device, workspace_bytes);
