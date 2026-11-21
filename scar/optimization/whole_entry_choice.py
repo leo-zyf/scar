@@ -9,6 +9,7 @@ from dataclasses import asdict, replace
 
 from scar.ir.execution_recipe import read_artifact
 from .deployment_cost import _pointer
+from .entry_mandatory_bound import KIND as MANDATORY_SUBGRAPH, mandatory_entry_lower_bound
 from .resource_solver import semantic_sha256
 
 
@@ -284,6 +285,9 @@ def _cost(reference, option, scope, scope_sha, facts, *, baseline):
         _need(_duration(lower) and cost.get('basis') in _MODEL_BASIS
               and _identity(cost.get('required_work')), 'proven mandatory-work lower bound required')
         return lower, None, 'RETAINED_MANDATORY_WORK_LOWER_BOUND', None
+    if kind == MANDATORY_SUBGRAPH:
+        lower, proof = mandatory_entry_lower_bound(cost, scope, facts)
+        return lower, None, 'MANDATORY_SUBGRAPH_MODEL_LOWER_BOUND', proof
     lifecycle = _phases(cost, scope)
     if kind in ('OPTIMIZED_POINT_SCHEDULE', 'BOUNDED_MONOTONE_SCHEDULE'):
         _need(cost.get('baseline_only', False) is baseline,

@@ -125,6 +125,49 @@ def test_pending_competitor_is_only_excluded_by_strict_mandatory_work_bound(tmp_
         verify_whole_entry_choice(domain, forged, expected_option_ids=names)
 
 
+def test_mandatory_subgraph_prunes_with_capacity_even_with_unknown_launch(tmp_path):
+    domain = _domain()
+    target = _artifact(tmp_path/'target.json', {'schema': 'scar.target-hardware-graph'})
+    domain['scope']['target'] = target
+    scope = dict(option_id='native', scope_sha256=semantic_sha256(domain['scope']))
+    proof = _artifact(tmp_path/'mandatory-proof.json', dict(schema='test.mandatory-model',
+        cpu=dict(scope, kind='MANDATORY_RESOURCE_CAPACITY', resource_id='cpu', upper_capacity=1),
+        **{name: dict(scope, kind='MANDATORY_ACTIVITY_LOWER_BOUND', activity_id=name, lower_ns=52)
+           for name in ('x', 'y')}))
+
+    def refs(name):
+        return (dict(artifact=proof, locator=f'#/{name}'),)
+
+    def stage(name, parents, lower):
+        cost = CostEstimate(None, lower, None, 'UNKNOWN' if lower is None else 'ANALYTICAL_MODEL',
+            name, () if lower is None else refs(name))
+        mode = ImplementationOption('fixed', 'DECLARED', _REFS, {'cpu': 1}, {}, {}, {}, cost, {})
+        return PlanningOperation(name, _REFS, parents, (mode,), mode.id)
+
+    problem = PlanningProblem(ProviderArtifact(**target), _REFS, (PlanningResource('cpu', 'EXECUTION', 1, refs('cpu')),),
+        (stage('launch', (), None), stage('x', ('launch',), 52), stage('y', ('launch',), 52)), ())
+    _option(domain, tmp_path, 'original', _interval(90, 99))
+    cost = dict(kind='MANDATORY_SUBGRAPH_LOWER_BOUND', basis='ANALYTICAL_MODEL',
+        problem=_artifact(tmp_path/'mandatory.json', problem_document(problem)))
+    _option(domain, tmp_path, 'native', cost, 'UNRESOLVED')
+    names = ['original', 'native']
+    result = solve_whole_entry_choice(domain, expected_option_ids=names)
+    native, original = result['alternatives']
+    assert result['selected_option_id'] == original['option_id'] == 'original'
+    assert native['interval_ns'] == {'lower': 104, 'upper': None}
+    assert native['schedule_certificate']['critical_path_ns'] == 52
+    assert native['schedule_certificate']['activities_without_positive_bound'] == ['launch']
+    assert verify_whole_entry_choice(domain, result, expected_option_ids=names) == result
+
+    domain['options'].pop()
+    widened = replace(problem, resources=(replace(problem.resources[0], capacity=2),))
+    cost['problem'] = _artifact(tmp_path/'no-exact-capacity.json', problem_document(widened))
+    _option(domain, tmp_path, 'native', cost, 'UNRESOLVED')
+    result = solve_whole_entry_choice(domain, expected_option_ids=names)
+    assert result['alternatives'][0]['interval_ns'] == {'lower': 52, 'upper': None}
+    assert result['selected_option_id'] is None
+
+
 def test_process_phase_contract_and_deterministic_exact_tie(tmp_path):
     domain = _domain()
     _option(domain, tmp_path, 'z-native', _interval(10, 10))

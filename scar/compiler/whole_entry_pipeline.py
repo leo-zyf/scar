@@ -343,6 +343,30 @@ def _bind_cpu_observation(plan, scope, discovery):
     return flow
 
 
+def _retain_projection(out, filename, report, retained):
+    if retained is None:
+        return _write(out/filename, report)
+    if read_artifact(retained) != report:
+        raise ValueError('retained planning projection differs from original evidence: ' + filename)
+    return retained
+
+
+def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None):
+    if 'cpu_provider_catalog' not in scope or plan.get('entry_obligations') is None:
+        return {}
+    from scar.analysis.entry_effect_frontier import derive_entry_effect_frontier
+    from scar.optimization.cpu_entry_decision_ledger import derive_cpu_entry_decision_ledger
+
+    graph = entry.get('cpu_provider_graph')
+    effect = _retain_projection(out, 'whole-entry-effect-frontier.json',
+        derive_entry_effect_frontier(plan['entry_obligations'], graph), entry.get('entry_effect_frontier'))
+    domain = priced_domain or entry['domain']
+    decision = _retain_projection(out, 'whole-entry-decision-ledger.json',
+        derive_cpu_entry_decision_ledger(domain, entry['legalities'], provider_graph=graph, effect_frontier=effect),
+        entry.get('cpu_decision_ledger') if domain == entry['domain'] else None)
+    return dict(entry_effect_frontier=effect, cpu_decision_ledger=decision)
+
+
 @verify_stack_components_once()
 def prepare_whole_entry(plan, request, out):
     reference, document, candidates = read_request(request)
@@ -365,6 +389,7 @@ def prepare_whole_entry(plan, request, out):
     cpu_observation = _bind_cpu_observation(plan, scope, discovery)
     if cpu_observation is not None:
         entry['cpu_provider_graph'] = _write(out/'whole-entry-cpu-provider-graph.json', cpu_observation)
+    entry.update(_cpu_frontiers(plan, scope, entry, out))
     return entry
 
 
@@ -555,6 +580,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
+    cpu_frontiers = _cpu_frontiers(plan, live_scope, entry, out, priced_domain=priced_domain)
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
@@ -582,7 +608,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         retained_validation_audit=audit,
         trial=trial, plan_only=plan_only,
         native_compiled=any(row.get('native_compiled', False) for row in (delivery, trial, device_trial) if row is not None),
-        target_executed=(trial or device_trial or delivery).get('target_executed', False))
+        target_executed=(trial or device_trial or delivery).get('target_executed', False), **cpu_frontiers)
     if 'nvhpc_device_profile' in request:
         report['device_trial'] = device_trial
     if flow_ref is not None:
