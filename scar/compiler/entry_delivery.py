@@ -23,6 +23,8 @@ CALLER_EXPORT = 'scar.caller-pipeline-final-slot-export'
 STATEFUL = 'scar.final-entry-capsule-payload'
 SPARSE = 'scar.native-parameterized-sparse-executable'
 NVHPC = 'scar.native-exported-nvhpc-cpu'
+NVHPC_DEVICE = 'scar.native-exported-aten-cuda'
+NVHPC_DEVICE_ROUTE = 'NVHPC_SOURCE_DEVICE_ENTRY'
 _HEX = re.compile('[0-9a-f]{64}')
 _PROFILE_ERRORS = (OSError, ValueError, KeyError, TypeError, IndexError, ImportError, SubprocessError)
 _ORIGINAL_OPTIONS = (None, 'NO_OP', 'KEEP_ORIGINAL', 'original')
@@ -220,12 +222,19 @@ def _nvhpc(scope, reference, document):
         memory=memory, python_runtime_required=False)
 
 
+def _nvhpc_device(scope, reference, document):
+    from scar.compiler.nvhpc_source_device_validation import qualify_source_device
+
+    return qualify_source_device(scope, reference, document)
+
+
 _ADAPTERS = {
     'ATEN_SOURCE_ENTRY': ((ATEN,), _aten),
     'CALLER_CAPSULE': ((CALLER_EXPORT, CALLER_PAYLOAD), _caller),
     'STATEFUL_CAPSULE': ((STATEFUL,), _stateful),
     'PARAMETERIZED_SPARSE': ((SPARSE,), _sparse),
     'NVHPC_SOURCE_ENTRY': ((NVHPC,), _nvhpc),
+    NVHPC_DEVICE_ROUTE: ((NVHPC_DEVICE,), _nvhpc_device),
 }
 
 
@@ -458,11 +467,19 @@ def _nvhpc_validation(scope, evidence, reference, minimum_gain):
     return timing, None, context
 
 
+def _nvhpc_device_validation(scope, evidence, reference, minimum_gain):
+    from scar.compiler.nvhpc_source_device_validation import replay_source_device
+
+    timing, status = replay_source_device(reference, evidence, scope, minimum_gain=minimum_gain)
+    return timing, None, status
+
+
 _VALIDATORS = {
     'ATEN_SOURCE_ENTRY': _aten_validation,
     'CALLER_CAPSULE': _caller_validation,
     'PARAMETERIZED_SPARSE': _sparse_validation,
     'NVHPC_SOURCE_ENTRY': _nvhpc_validation,
+    NVHPC_DEVICE_ROUTE: _nvhpc_device_validation,
 }
 
 
@@ -493,7 +510,11 @@ def replay_entry_delivery(scope, *, selected_id, candidate=None, minimum_gain=0.
         timing, release, launch = _VALIDATORS[route](scope, evidence, validation, minimum_gain)
     except _PROFILE_ERRORS as error:
         return dict(result, reason='whole-process validation could not replay: ' + str(error))
-    result['validation'] = dict(reference=validation, timing=timing, launch=launch, exact_declared_effects_replayed=True)
+    checked_effects = route != NVHPC_DEVICE_ROUTE or launch['output_contract_verified']
+    result['validation'] = dict(reference=validation, timing=timing, launch=launch,
+                                exact_declared_effects_replayed=checked_effects)
+    if not checked_effects:
+        return dict(result, reason='CUDA source comparison remains open: ' + launch['phase'])
     if timing is None:
         return dict(result, final_action='ADVANCE_TO_RELEASE_REVIEW',
                     reason='whole-process correctness replayed without performance observations')

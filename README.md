@@ -198,6 +198,10 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 `scar.aten-export-nvhpc-placement-offline-profile` 按固定模型自动枚举 CPU、CUDA 和混合放置。在模型内选中包含 CUDA 的方案时生成工件，覆盖前沿开放或 CPU 更合适时保留原路径。完整布局、物化和证书留在 `placement-search.json`。
 
+放置模型可选 `host_calibration`，填写 `operator_stack` 和 `observations`。匹配的 SGEMM 探针只为普通主存中的同形状纯 CPU 运算提供点估计。混合路线的固定页主存和设备活动仍使用单独的模型项。缺少匹配几何时，该项继续未知。
+
+`scar validate-nvhpc-source-device --project CPP_PROJECT --manifest-sha256 SHA256 --domain DOMAINS/whole-entry-domain.json --out TRIAL` 使用原核组、冻结环境、参数和文件发布路径。先核对链接、计划内存和设备身份，预检通过才交替运行原 Python 和 C++20。`--check TRIAL/result.json` 复核保存的证据。`observe-nvhpc-source-effects --tensor-flow` 可对已有 CPU 整程收据独立采集原 Tensor 调用和数据边。证据包 v2 加入 `tensor_flow` 引用，作用域为单次插桩调用。
+
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
 本机现有入口：`artifacts/current/experiments/graph-viewer-v1/program/index.html`；共享循环及时间/资源视图：`artifacts/current/experiments/workspace-time-v1/view/index.html`。画布按需加载子图，循环只保留一份正文；完整覆盖范围见各自收据。

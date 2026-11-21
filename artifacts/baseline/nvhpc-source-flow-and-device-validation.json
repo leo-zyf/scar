@@ -1,0 +1,100 @@
+{
+  "placement": {
+    "artifact": {
+      "schema": "scar.native-exported-aten-cuda",
+      "sha256": "805f1c781039b70a4dd88fbd190fa6d60ff0894a126b4b934274926de8127286",
+      "size_bytes": 10356,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-pageable-calibrated-placement-v1/device-choice/artifact.json"
+    },
+    "device_timing_measured": false,
+    "evaluated": 8,
+    "evidence": {
+      "observations": [
+        {
+          "schema": "scar.cpu-sgemm-provider-observation",
+          "sha256": "5a562f9ce657e8abd6e1c154471ccad568bc6f9d437a1da80a2847269a168be8",
+          "size_bytes": 6352,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-stack-v1/component-cpu14/result.json"
+        }
+      ],
+      "operator_stack": {
+        "schema": "scar.operator-stack",
+        "sha256": "de525f53021c5b48a8cb1e510664a38548ea564a152ae70ae198e4006906c866",
+        "size_bytes": 5396,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-stack-v1/operator-stack.json"
+      },
+      "pageable_cpu_points_ns": {
+        "mm_0": 11217378,
+        "mm_1": 11217378,
+        "mm_2": 11217378
+      },
+      "physical_duration_bounds_proven": false,
+      "pinned_host_points_admitted": false,
+      "scope": "WARM_PAGEABLE_ROW_MAJOR_FP32_SGEMM_POINT_FORECAST"
+    },
+    "hybrid_declared_forecast_ns": 26650000,
+    "pageable_cpu_forecast_ns": 33652134,
+    "replayable_plan": {
+      "schema": "scar.nvhpc-placement-proposal",
+      "sha256": "44aecf4af71f70a2253fce4ccd82801f9c6d8b4cbea884ca429027a3200b08d9",
+      "size_bytes": 7951,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-pageable-calibrated-placement-v1/device-choice/plan/placement-search.json"
+    },
+    "selected": {
+      "mm_0": "CPU",
+      "mm_1": "CPU",
+      "mm_2": "CUDA"
+    }
+  },
+  "schema": "scar.nvhpc-source-flow-and-device-validation-acceptance",
+  "schema_version": 1,
+  "source_graph": {
+    "consumer": {
+      "schema": "scar.entry-delivery-handoff",
+      "sha256": "86c9d2758986683c6d5aeaa119123e92ccc6febe9e0e7af54a82bc0bbfebd7c2",
+      "size_bytes": 16495,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-cohort-choice-v1/replayed-evidence-v2.json"
+    },
+    "effect_evidence": {
+      "schema": "scar.nvhpc-source-effect-observation",
+      "sha256": "178503c23a6a9df36a4fb790c06901b082eedb27ea7be658e92a156014507c40",
+      "size_bytes": 51633,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-cohort-choice-v1/effects/result.json"
+    },
+    "global_effect_closure": false,
+    "tensor_flow": {
+      "data_edges": 8,
+      "global_effect_closure": false,
+      "reference": {
+        "schema": "scar.nvhpc-source-tensor-flow-observation",
+        "sha256": "2d1f101d3590ef1e0f29ec3615ffe4ae8f3ba12cdf711d73436f8917812b423e",
+        "size_bytes": 3871,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-cohort-choice-v1/tensor-flow/result.json"
+      },
+      "scope": "SINGLE_INSTRUMENTED_CPU_SOURCE_ACTIVATION",
+      "source_nodes": 9
+    }
+  },
+  "validation": {
+    "deployment_authorized": false,
+    "device_payload_bytes": 7110656,
+    "entry_default": "KEEP_ORIGINAL",
+    "handoff": {
+      "schema": "scar.entry-delivery-handoff",
+      "sha256": "20f43f663d2bec862a7b3798e52dd9b48ef51223f8fb2151c0694c987e0f4444",
+      "size_bytes": 11301,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-source-device-validation-v1/handoff.json"
+    },
+    "host_payload_bytes": 16515072,
+    "measured_speedup": null,
+    "observation": {
+      "schema": "scar.nvhpc-source-device-process-observation",
+      "sha256": "376fbc4837d910a700802583c676af70579081d122f281b63015670038c13711",
+      "size_bytes": 4306,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvhpc-source-device-validation-v1/calibrated/result.json"
+    },
+    "original_and_native_entry_runs": 0,
+    "output_contract_verified": false,
+    "phase": "DEVICE_UNAVAILABLE"
+  }
+}

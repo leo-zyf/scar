@@ -19,7 +19,7 @@ FIXED_GRID_CPU = 'ATEN_FIXED_GRID_CPU_FILE_ENTRY'
 NVIDIA_HPC = 'NVIDIA_HPC'
 LIBTORCH = 'LIBTORCH_ATEN'
 _ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT',
-                 'NVHPC_SOURCE_ENTRY': NVIDIA_HPC}
+                 'NVHPC_SOURCE_ENTRY': NVIDIA_HPC, 'NVHPC_SOURCE_DEVICE_ENTRY': NVIDIA_HPC}
 
 
 def _write(path, value):
@@ -194,7 +194,7 @@ def _legalities(candidates, scope, discovery):
             evidence = qualification.get('evidence') or {}
             status, reason = _check_operator_stack(scope, _ROUTE_STACKS.get(item['route']), status, reason,
                                                    reference=evidence.get('operator_stack'))
-            if item['route'] == 'NVHPC_SOURCE_ENTRY' and status == 'LEGAL':
+            if item['route'] in ('NVHPC_SOURCE_ENTRY', 'NVHPC_SOURCE_DEVICE_ENTRY') and status == 'LEGAL':
                 status, reason = 'UNRESOLVED', 'ORIGINAL_IMPORT_INITIALIZATION_EFFECTS_OPEN'
             facts.append(dict(option_id=id_, scope_sha256=scope_sha,
                 legal_status=status, reason=reason, qualification=qualification))
