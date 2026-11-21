@@ -144,7 +144,7 @@ def calibrate(inputs, out, *, repetitions=9, warmup=3, build_jobs=4,
     reference = inputs if type(inputs) is dict else artifact_reference(Path(inputs).resolve(), INPUTS)
     cpus = sorted(os.sched_getaffinity(0))
     started = time.monotonic()
-    pipeline, region, blueprint, _, budget = _derive(reference, None, cpus, None, .05)
+    pipeline, region, blueprint, _, budget, _ = _derive(reference, None, cpus, None, .05)
     demand = derive_pipeline_demand(pipeline, blueprint)
     shapes = list(blueprint['input_shapes'].values())
     if not shapes or any(shape != shapes[0] for shape in shapes) or not all(shapes[0]) or np.prod(shapes[0]) > 1024*1024:
