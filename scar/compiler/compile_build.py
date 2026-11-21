@@ -21,7 +21,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                   enforce_cpu_capacity=False,cpu_entry_forward=False,cpu_launch_probes=(),cpu_team_probe=None,
                   cpu_native_phase_cost=None,cpu_python_import_cost=None,cpu_paired_evidence=None,
                   cpu_import_bindings=None,cpu_import_sources=None,cpu_initializer_observation=None,
-                  cpu_native_array_route=None):
+                  cpu_native_array_route=None,cpu_native_array_route_cost=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -40,8 +40,10 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             or cpu_native_phase_cost is not None or cpu_python_import_cost is not None
             or cpu_paired_evidence is not None or cpu_import_bindings is not None
             or cpu_import_sources is not None or cpu_initializer_observation is not None
-            or cpu_native_array_route is not None) and 'whole_entry' not in document:
+            or cpu_native_array_route is not None or cpu_native_array_route_cost is not None) and 'whole_entry' not in document:
         raise ValueError('CPU entry evidence requires a whole-entry plan')
+    if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
+        raise ValueError('CPU native array route costs require the exact C++ route package')
     version=document.get('schema_version')
     if version not in (1,2):raise ValueError('supported program planning domain required')
     read_artifact(document['program']);_check(document['hardware'])
@@ -76,7 +78,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                                  cpu_native_phase_cost=cpu_native_phase_cost,cpu_python_import_cost=cpu_python_import_cost,
                                  cpu_paired_evidence=cpu_paired_evidence,cpu_import_bindings=cpu_import_bindings,
                                  cpu_import_sources=cpu_import_sources,cpu_initializer_observation=cpu_initializer_observation,
-                                 cpu_native_array_route=cpu_native_array_route)
+                                 cpu_native_array_route=cpu_native_array_route,cpu_native_array_route_cost=cpu_native_array_route_cost)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
             program=document['program'],hardware=document['hardware'],source_admission=source_admission,
@@ -87,6 +89,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             three_stages_complete=False,seconds=time.monotonic()-started)
         if cpu_native_array_route is not None:
             report['cpu_native_array_route'] = whole['cpu_native_array_route']
+        if cpu_native_array_route_cost is not None:
+            report['cpu_native_array_route_cost'] = whole['cpu_native_array_route_cost']
         (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
         return report
     if entry_costs is not None or verify_entry:
@@ -268,6 +272,8 @@ def main(argv=None):
         help='bind observed module code entry and exit to their admitted F4 initializer bodies')
     parser.add_argument('--cpu-native-array-route',
         help='bind a scoped C++20 array task route to its exact CPU catalog option')
+    parser.add_argument('--cpu-native-array-route-cost',
+        help='attach a replayed forward timeline to the exact native array route')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
@@ -285,7 +291,8 @@ def main(argv=None):
         cpu_team_probe=args.cpu_team_probe,cpu_native_phase_cost=args.cpu_native_phase_cost,
         cpu_python_import_cost=args.cpu_python_import_cost,cpu_paired_evidence=args.cpu_paired_evidence,
         cpu_import_bindings=args.cpu_import_bindings,cpu_import_sources=args.cpu_import_sources,
-        cpu_initializer_observation=args.cpu_initializer_observation,cpu_native_array_route=args.cpu_native_array_route)
+        cpu_initializer_observation=args.cpu_initializer_observation,cpu_native_array_route=args.cpu_native_array_route,
+        cpu_native_array_route_cost=args.cpu_native_array_route_cost)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],

@@ -437,7 +437,7 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
     frontiers['cpu_python_import_cost'] = reference
 
 
-def _attach_cpu_native_array_route(scope, generated, frontiers, path):
+def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=None):
     from scar.codegen.cpu_array_native_route_package import SCHEMA, verify_cpu_array_native_route_package
 
     reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
@@ -465,6 +465,15 @@ def _attach_cpu_native_array_route(scope, generated, frontiers, path):
         raise ValueError('native array route must match one exact F4 source, provider profile and hardware scope')
     frontiers['cpu_native_array_route'] = reference
     frontiers['cpu_native_array_route_option_id'] = matching[0]
+    if cost_path is not None:
+        from scar.optimization.cpu_array_native_route_forward import SCHEMA, _verify
+
+        cost_ref = artifact_reference(Path(cost_path).resolve(strict=True), SCHEMA)
+        cost = _verify(cost_ref, (reference, package))
+        if (cost['package'] != reference or cost['proof'] != route_plan['proof']
+                or cost['scope'] != package['scope'] or cost['hardware'] != package['hardware']):
+            raise ValueError('native array route timeline differs from the exact F4 option and launch package')
+        frontiers['cpu_native_array_route_cost'] = cost_ref
 
 
 def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, activation_path=None):
@@ -752,7 +761,8 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
                        cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
-                       cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None):
+                       cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None,
+                       cpu_native_array_route_cost=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -772,6 +782,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('CPU paired evidence requires a CPU catalog domain')
     if cpu_native_array_route is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
         raise ValueError('CPU native array routes require a catalog domain with original F4 obligations')
+    if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
+        raise ValueError('CPU native array route costs require the exact C++ route package')
     if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
             and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None)):
         raise ValueError('CPU import bindings require a CPU catalog domain with original F4 obligations')
@@ -838,7 +850,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     if cpu_native_array_route is not None:
-        _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route)
+        _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route,
+                                       cpu_native_array_route_cost)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None

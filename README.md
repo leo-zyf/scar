@@ -224,6 +224,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar study-cpu-array-native-route --retention RETAINED.json --grouped GROUPED/result.json --out STUDY` 按同一入口、输入和核组验证已经准入的本地多进程与 OpenMP 分组路线。它单独记录逐轮状态，交替测量干净进程，并按既有收益门槛绑定一个明确的 C++20 启动方案。`--check STUDY/package/artifact.json` 冷回读证据。`compile-build --cpu-native-array-route STUDY/package/artifact.json` 将方案接回同一个 F4 入口与 CPU 目录选项，整入口替换继续由原效果合同决定。
 
+`scar calibrate-cpu-array-native-route-body --proof STUDY/proof.json --out BODY --seed SEED …` 用至少四个相互独立的种子采样分组版各核服务时间。`scar plan-cpu-array-native-route-cost --proof STUDY/proof.json --grouped-body BODY/result.json --package STUDY/package/artifact.json --out TIMELINE` 将分项成本连到两个 C++20 生命周期。可额外传入 `--diagnostics` 读取 `observe-cpu-array-native-route-phases` 保存的阶段时钟。`compile-build --cpu-native-array-route-cost TIMELINE/result.json` 将时序接回原 F4 方案。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
