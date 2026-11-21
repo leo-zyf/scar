@@ -1,0 +1,78 @@
+#include "numpy_vector_normalize.hpp"
+
+#include <cfenv>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <xmmintrin.h>
+
+extern "C" double scipy_cblas_ddot64_(std::int64_t, const double*, std::int64_t,
+                                     const double*, std::int64_t);
+extern "C" void scipy_cblas_zdotc_sub64_(std::int64_t, const void*, std::int64_t,
+                                       const void*, std::int64_t, void*);
+extern "C" int scipy_openblas_get_num_threads64_();
+extern "C" const char* scipy_openblas_get_corename64_();
+extern "C" double cabs(__complex__ double);
+extern "C" void scar_numpy_stock_c128_divide(char**, const std::int64_t*, const std::int64_t*, void*);
+
+asm(R"scar_div(
+@SCAR_DIVIDE@
+)scar_div");
+
+namespace {
+
+struct Complex {
+    double real;
+    double imag;
+};
+static_assert(sizeof(Complex) == 16);
+
+double round_off(std::int64_t n, const void* values) {
+    Complex value{};
+    scipy_cblas_zdotc_sub64_(n, values, 1, values, 1, &value);
+    __complex__ double delta;
+    __real__ delta = (0.0 + value.real) - 1.0;
+    __imag__ delta = 0.0 + value.imag;
+    return cabs(delta);
+}
+
+}  // namespace
+
+extern "C" int scar_numpy_normalize_v1(std::size_t n, const void* input, void* scratch) noexcept {
+    const auto begin = reinterpret_cast<std::uintptr_t>(input);
+    const auto destination = reinterpret_cast<std::uintptr_t>(scratch);
+    if (!input || !scratch || n == 0 || n > std::numeric_limits<std::int64_t>::max() / sizeof(Complex)
+        || begin % alignof(Complex) || destination % alignof(Complex)
+        || (begin < destination ? destination - begin : begin - destination) < n * sizeof(Complex)
+        || !__builtin_cpu_supports("x86-64-v3") || std::fegetround() != FE_TONEAREST
+        || (_mm_getcsr() & 0xe040U) != 0 || scipy_openblas_get_num_threads64_() != 1
+        || std::strcmp(scipy_openblas_get_corename64_(), "@SCAR_BLAS_CORE@") != 0) {
+        return -1;
+    }
+
+    std::fenv_t state;
+    if (std::feholdexcept(&state) != 0) return -1;
+    const auto elements = static_cast<std::int64_t>(n);
+    const auto* real = static_cast<const double*>(input);
+    const auto* imaginary = real + 1;
+    const double re_dot = 0.0 + scipy_cblas_ddot64_(elements, real, 2, real, 2);
+    const double im_dot = 0.0 + scipy_cblas_ddot64_(elements, imaginary, 2, imaginary, 2);
+    const double norm = std::sqrt(re_dot + im_dot);
+
+    int status = 2;
+    if (std::isfinite(norm) && norm > 0.0
+        && std::abs(norm - 1.0) <= std::sqrt(std::numeric_limits<double>::epsilon())) {
+        Complex divisor{norm, 0.0};
+        char* values[]{const_cast<char*>(static_cast<const char*>(input)),
+                       reinterpret_cast<char*>(&divisor), static_cast<char*>(scratch)};
+        const std::int64_t strides[]{16, 0, 16};
+        scar_numpy_stock_c128_divide(values, &elements, strides, nullptr);
+        const double after = round_off(elements, scratch);
+        const double before = round_off(elements, input);
+        status = after - before < 0.0 ? 1 : 0;
+    }
+    if (std::fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW)) status = 2;
+    if (std::fesetenv(&state) != 0) return -1;
+    return status;
+}

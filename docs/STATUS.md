@@ -1,5 +1,9 @@
 # 当前状态
 
+`project-ndarray-tape → export-native-array-tape` 已将真实 CPU Cirq 的三轮数值循环交付为独立 C++20。两组种子各观测 576 个门，采集保留原始操作位置、布局、存储关联、小型系数及逐轮状态摘要。原轮次顺序、首次因子合并以及每轮归一化的分支均进入交付计划。外积使用原 NumPy 复数乘法，归一化使用原 NumPy 复数除法和同一套 OpenBLAS ILP64。两份二进制搬迁复跑后，六个完整轮末状态均与独立原始运行逐字节一致。
+
+排程按私有数组的最后使用点和对齐约束复用缓冲，两个计划的数组工作区分别为 201,984 B 和 150,080 B。空间指标取自执行计划，范围为已映射的私有数组和对齐填充。每组种子的系数当前在构建期固定，采集点来自显式作用域。后续要接入运行时参数、随机电路构造和结果报告，再做同口径的整入口 A/B。默认保留原入口。见 [验收记录](../artifacts/baseline/cpu-native-returned-array-tape-acceptance.json)。
+
 `project-source-returned-loop → project-returned-state-witness → bind-returned-loop → project-returned-loop-time` 已接通真实 Cirq 的初值、方法返回、属性读取和下一轮实参。两种种子各跑三轮，四条边均观测到下一轮接收同一个 ndarray，完整状态摘要一致。时间图保留一份循环体和距离为 1 的回边，连接到 CPU 5 的硬件线程与物理核资料。同一模拟的轮次须保持依赖顺序。32,768 B 是观测到的逻辑数组字节数，分配容量、最后使用点及服务时间继续待定。
 
 `export-native-numpy-phase` 已为原地复数标量乘法交付独立 C++20 工件。78 组原始数据对照逐字节通过，其中 37 组留出。另验别名、舍入和溢出拒绝。输入来自指定源码位置的诊断采集。首轮分块合并、逐轮归一化和整循环交付仍在推进。本轮沿用原入口，未测新增整程提速。见 [验收记录](../artifacts/baseline/cpu-returned-loop-and-phase-acceptance.json)。
