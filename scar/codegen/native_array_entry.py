@@ -22,6 +22,8 @@ _BINARY = 'bin/' + _TARGET
 _TEMPLATE = Path(__file__).with_suffix('.cpp.in')
 _PROFILE = Path(__file__).with_name('native_array_entry_profile.cpp.in')
 _ARGV = Path(argv_backend.__file__).with_name('native_controller_argv_v1.hpp.in')
+_IO = Path(__file__).with_name('native_array_entry_io.hpp.in')
+_IO_MEMBER = 'include/scar_generated/native_array_entry_io.hpp'
 _KINDS = {'int': 'Int', 'float64': 'Float', 'str': 'String', 'path': 'String'}
 _FLOAT_FIELDS = {'norm', 'split_difference', 'norm_error', 'tolerance', 'elapsed', 'worker_cpu', 'worker_wall'}
 _INTEGER_FIELDS = {'pid', 'peak_rss'}
@@ -83,7 +85,7 @@ def _argv_header(options, abbreviate):
     return _substitute(template, members).encode(), indices
 
 
-def _report_writer(document, routes):
+def _report_writer(document, routes, *, extra=None, initial_depth=0):
     """Generate JSON for original fields and authorized output value ports."""
     lines, seen = [], set()
 
@@ -94,7 +96,9 @@ def _report_writer(document, routes):
         if path in routes:
             role = routes[path]
             seen.add(path)
-            if role in _FLOAT_FIELDS:
+            if extra is not None and role in extra:
+                lines.extend(extra[role](depth))
+            elif role in _FLOAT_FIELDS:
                 lines.append(f'    binary64(out, result.{role});')
             elif role in _INTEGER_FIELDS:
                 lines.append(f'    out << result.{role};')
@@ -129,7 +133,7 @@ def _report_writer(document, routes):
         else:
             emit(json.dumps(value, allow_nan=False, separators=(',', ':')))
 
-    walk(document)
+    walk(document, depth=initial_depth)
     _need(seen == routes.keys(), 'output fields do not cover the declared dynamic result routes')
     return '\n'.join(lines)
 
@@ -153,7 +157,7 @@ def _render(recipe, *, seeded_option=None, round_option=None):
     routes = {tuple(row['path']): row['role'] for row in recipe['report_bindings']}
     _need(len(routes) == len(recipe['report_bindings']), 'duplicate output field route')
     tables, declarations, functions = [], [], []
-    sources = {'include/scar_generated/array_entry_argv.hpp': argv}
+    sources = {'include/scar_generated/array_entry_argv.hpp': argv, _IO_MEMBER: _IO.read_bytes()}
     dynamic = {}
     if seeded_option is not None:
         dynamic[seeded_option] = ('seed', 'result.seed > std::numeric_limits<std::uint32_t>::max()')

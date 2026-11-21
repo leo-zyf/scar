@@ -1,4 +1,5 @@
 #include "array_entry_argv.hpp"
+#include "native_array_entry_io.hpp"
 #include "numpy_observables.hpp"
 
 #include <array>
@@ -14,7 +15,7 @@
 #include <unistd.h>
 
 namespace {
-using Clock = std::chrono::steady_clock;
+using namespace scar::array_entry_io;
 using scar::public_argv::ParsedValue;
 
 struct Result {
@@ -24,30 +25,6 @@ struct Result {
     std::uint64_t seed{}, round_count{};
     bool tolerance_given{};
 };
-
-void binary64(std::ostream& out, double value) {
-    std::array<char, 64> bytes{};
-    const auto converted = std::to_chars(bytes.data(), bytes.data() + bytes.size(), value);
-    if (converted.ec != std::errc{} || !std::isfinite(value)) throw std::runtime_error("nonfinite report");
-    const std::string_view text(bytes.data(), converted.ptr - bytes.data());
-    out << text;
-    if (text.find_first_of(".eE") == text.npos) out << ".0";
-}
-
-void line(std::ostream& out, bool pretty, std::size_t level) {
-    if (pretty) out << '\n' << std::string(level * 2, ' ');
-}
-
-double process_seconds() {
-    struct timespec result{};
-    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &result) != 0)
-        throw std::runtime_error("process clock unavailable");
-    return static_cast<double>(result.tv_sec) + static_cast<double>(result.tv_nsec) * 1e-9;
-}
-
-double seconds(Clock::duration value) {
-    return std::chrono::duration<double>(value).count();
-}
 
 using Run = int (*)(double*, double*, const char*, std::uint64_t, std::uint64_t);
 using Write = void (*)(std::ostream&, const Result&, bool);
