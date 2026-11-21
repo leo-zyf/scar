@@ -117,7 +117,10 @@ def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_
     sizes = [row['nbytes'] for row in contract['outputs']]
     if len(sizes) != len(projection['outputs']):
         raise ValueError('source publication count differs from the native ABI')
-    context = _context(execution['cpu_ids'])
+    original_cpus = execution['cpu_ids'] if entry_scope is None else entry_scope['process_affinity_cpu_ids']
+    if not set(execution['cpu_ids']).issubset(original_cpus):
+        raise ValueError('native CPU cohort exceeds the original entry affinity')
+    context = _context(original_cpus)
     out = Path(out).resolve()
     if entry_scope is not None:
         from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
@@ -153,7 +156,7 @@ def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_
     timing = _timing(runs, warmup_pairs, measurement_pairs) if accepted else None
     contract_ref = artifact_reference(root/'plan/source-entry.json', contract['schema'])
     if (_receipt(source) != original or [_receipt(path) for path in paths] != inputs
-            or _context(execution['cpu_ids']) != context or read_artifact(project_ref) != manifest):
+            or _context(original_cpus) != context or read_artifact(project_ref) != manifest):
         raise ValueError('source, input or provider identity changed during the paired process observations')
     check_nvhpc_project(root, manifest_sha256)
     report = dict(schema=SCHEMA, schema_version=1, artifact=project_ref, source_contract=contract_ref, source=original,
@@ -170,7 +173,7 @@ def replay_source_process(reference, evidence, scope, *, minimum_gain):
     import torch
 
     saved = read_artifact(reference)
-    context = _context(evidence['cpu_ids'])
+    context = _context(scope['process_affinity_cpu_ids'])
     env = sha256(json.dumps(sorted(context['environment'].items()), separators=(',', ':')).encode()).hexdigest()
     argv = scope['argv']
     input_records = [dict(path=ref['uri'], sha256=ref['sha256'], size_bytes=ref['size_bytes'])
@@ -236,6 +239,13 @@ def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
         diagnostics['effects'] = dict(reference=effects, status=journal['status'],
             uncovered=dict(Counter(row['kind'] for row in journal['projection']['uncovered_effects'])),
             global_effect_closure=False)
+        if 'effect_coverage' in journal:
+            coverage = journal['effect_coverage']
+            diagnostics['effects']['coverage'] = dict(
+                source_contract=coverage['source_contract'],
+                logical_boundary_witnessed=coverage['logical_boundary_witnessed'],
+                static_boundary_effects_closed=coverage['static_boundary_effects_closed'],
+                obligations_by_status=dict(Counter(row['status'] for row in coverage['obligations'])))
     lifecycle = document['lifecycle']
     if lifecycle is not None:
         from scar.optimization.nvhpc_source_lifecycle import replay_nvhpc_source_lifecycle

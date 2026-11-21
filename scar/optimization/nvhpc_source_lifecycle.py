@@ -232,6 +232,23 @@ def _commands(probe, context):
                 NATIVE=[str(probe/'native/launch.sh')])
 
 
+def _cohort(execution, target, original_cpu_ids):
+    native = execution['cpu_ids']
+    if original_cpu_ids is None:
+        return native, None
+    if (type(original_cpu_ids) is not list or any(type(cpu) is not int or cpu < 0 for cpu in original_cpu_ids)
+            or original_cpu_ids != sorted(set(original_cpu_ids)) or not set(native) <= set(original_cpu_ids)):
+        raise ValueError('the original lifecycle CPU scope must be canonical and include the native placement')
+    from scar.analysis.target_graph import TargetHardwareGraph
+    from scar.optimization.aten_native_schedule import recorded_cpu_domain
+
+    graph = TargetHardwareGraph(Path(target['uri']).parent)
+    _, domain = recorded_cpu_domain(graph)
+    if not set(original_cpu_ids).issubset(domain):
+        raise ValueError('the original lifecycle CPU scope is outside the retained hardware domain')
+    return original_cpu_ids, dict(cpu_ids=native, threads=execution['threads'])
+
+
 def _preparation(project, contract, manifest, probe, *, build):
     source = Path(contract['source']['path'])
     original, native = probe/'original.py', probe/'native'
@@ -265,8 +282,9 @@ def _preparation(project, contract, manifest, probe, *, build):
                 binary=_receipt(executable), linkage=linkage)
 
 
-def calibrate_nvhpc_source_lifecycle(project, manifest_sha256, arguments, out, *, warmups=1, repetitions=3):
-    """Measure only the supplied source-qualified normal-completion file entry."""
+def calibrate_nvhpc_source_lifecycle(project, manifest_sha256, arguments, out, *, warmups=1, repetitions=3,
+                                     original_cpu_ids=None):
+    """Measure the qualified file entry with a fixed original cohort if supplied."""
     import torch
 
     if (type(warmups) is not int or not 0 <= warmups <= 10
@@ -278,7 +296,9 @@ def calibrate_nvhpc_source_lifecycle(project, manifest_sha256, arguments, out, *
 
     contract_ref = artifact_reference(root/'plan/source-entry.json', SOURCE)
     contract = read_artifact(contract_ref)
-    context = _context(execution['cpu_ids'])
+    target = json.loads((root/'plan/problem.json').read_bytes())['target']
+    original_cpus, native_placement = _cohort(execution, target, original_cpu_ids)
+    context = _context(original_cpus)
     paths = _calibration_paths(arguments, execution['inputs'])
     inputs = _inputs(context, contract, paths)
     sizes = [port['nbytes'] for port in contract['outputs']]
@@ -320,9 +340,8 @@ def calibrate_nvhpc_source_lifecycle(project, manifest_sha256, arguments, out, *
     if _inputs(context, contract, paths) != inputs:
         raise ValueError('source matrix inputs changed while observing lifecycle costs')
     check_nvhpc_project(root, manifest_sha256)
-    if _context(execution['cpu_ids']) != context or _preparation(root, contract, manifest, probe, build=False) != preparation:
+    if _context(original_cpus) != context or _preparation(root, contract, manifest, probe, build=False) != preparation:
         raise ValueError('lifecycle process, probe or numerical provider identity changed during collection')
-    target = json.loads((root/'plan/problem.json').read_bytes())['target']
     report = dict(schema=SCHEMA, schema_version=1, artifact=project_ref, source_contract=contract_ref,
         target=target, context=context, inputs=inputs, probe=preparation, commands=commands,
         comparison_scratch_device=out.stat().st_dev, scope='PROCESS_LAUNCH_THROUGH_EXIT',
@@ -331,6 +350,8 @@ def calibrate_nvhpc_source_lifecycle(project, manifest_sha256, arguments, out, *
         limitations=_LIMITATIONS, warmups=warmups, repetitions=repetitions,
         comparisons=comparisons, runs=runs, summary=_summary(runs, warmups),
         model_bounds_proven=False, clean_ab=False, deployment_authorized=False)
+    if native_placement is not None:
+        report['native_placement'] = native_placement
     _write_record(out/'result.json', report)
     return report
 
@@ -343,13 +364,16 @@ def replay_nvhpc_source_lifecycle(reference):
     manifest = read_artifact(artifact)
     contract = read_artifact(report['source_contract'])
     path = Path(reference['uri']).parent
-    context = _context(execution['cpu_ids'])
     target = json.loads((root/'plan/problem.json').read_bytes())['target']
+    explicit = 'native_placement' in report
+    original_cpus, native_placement = _cohort(execution, target, report['context']['cpu_ids'] if explicit else None)
+    context = _context(original_cpus)
     if (reference['schema'] != SCHEMA or report['schema_version'] != 1
             or report['scope'] != 'PROCESS_LAUNCH_THROUGH_EXIT'
             or report['sample_kind'] != 'INSTRUMENTED_PHASE_OBSERVATIONS'
             or report['cache_regime'] != 'FRESH_PROCESSES_REUSE_INPUT_FILES_NO_CACHE_FLUSH'
             or report['limitations'] != _LIMITATIONS or report['context'] != context or report['target'] != target
+            or explicit and report['native_placement'] != native_placement
             or report['commands'] != _commands(path/'probe', context)
             or report['comparison_scratch_device'] != path.stat().st_dev
             or report['source_contract'] != artifact_reference(root/'plan/source-entry.json', contract['schema'])
@@ -395,14 +419,18 @@ def main(argv=None):
     parser.add_argument('--out')
     parser.add_argument('--warmups', type=int, default=1)
     parser.add_argument('--repetitions', type=int, default=3)
+    parser.add_argument('--original-cpus', type=int, nargs='+',
+                        help='fixed original CPU cohort for comparing native placements within that cohort')
     args = parser.parse_args(argv)
     if args.check:
+        if args.original_cpus is not None:
+            parser.error('--check consumes the original CPU scope retained by calibration')
         report = replay_nvhpc_source_lifecycle(artifact_reference(args.check, SCHEMA))
     else:
         if not args.manifest_sha256 or not args.out:
             parser.error('--project requires --manifest-sha256 and --out')
         report = calibrate_nvhpc_source_lifecycle(args.project, args.manifest_sha256, args.input,
-                                                args.out, warmups=args.warmups, repetitions=args.repetitions)
+            args.out, warmups=args.warmups, repetitions=args.repetitions, original_cpu_ids=args.original_cpus)
     print(json.dumps(dict(sample_kind=report['sample_kind'], repetitions=report['repetitions'], summary=report['summary'])))
     return 0
 

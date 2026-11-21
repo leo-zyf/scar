@@ -34,7 +34,7 @@ def read_request(value):
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
-                'numerical_contract', 'sgemm_observations'}
+                'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -64,6 +64,8 @@ def read_request(value):
         read_artifact(variant_source['proof'])
     space = document.get('option_space', 'DISCOVER_ALL')
     infer_nvhpc = _infer_nvhpc(document)
+    if 'search_cpu_cohorts' in document and (not infer_nvhpc or type(document['search_cpu_cohorts']) is not bool):
+        raise ValueError('CPU cohort search requires a source-derived NVIDIA domain')
     if 'sgemm_observations' in document:
         from scar.optimization.cpu_sgemm_probe import SCHEMA as SGEMM_OBSERVATION
 
@@ -120,6 +122,8 @@ def _scope(plan, request):
         scope['operator_stack'] = request.get('operator_stack', NVIDIA_HPC)
     if 'numerical_contract' in request:
         scope['numerical_contract'] = request['numerical_contract']
+    if request.get('search_cpu_cohorts', False):
+        scope['search_cpu_cohorts'] = True
     return scope
 
 
@@ -386,14 +390,18 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
     audit = []
     trial = None
-    # A caller may explicitly measure the unique source-derived hypothesis on
-    # the original boundary even when the decision retains the original.
+    # Price the finite body domain before emitting a single trial. This never
+    # upgrades body evidence to whole-entry legality or cost.
     hypotheses = [generated[row['id']] for row in domain['options']
                   if row['id'] in generated and row['legal_status'] != 'INELIGIBLE'
                   and _nvhpc_option(generated[row['id']])]
+    search = (discovery or {}).get('cohort_search')
+    if search is not None:
+        hypotheses = [option for option in hypotheses if option['id'] == search['trial_option_id']]
     if selected is None and verify_entry and not plan_only and len(hypotheses) == 1:
-        trial = _emit_generated(hypotheses[0], live_scope, out, plan_only=False, verify_entry=True)
-        audit.append(dict(option_id=trial['selected_id'], legal_status=hypotheses[0]['legal_status'],
+        hypothesis, = hypotheses
+        trial = _emit_generated(hypothesis, live_scope, out, plan_only=False, verify_entry=True)
+        audit.append(dict(option_id=trial['selected_id'], legal_status=hypothesis['legal_status'],
                           validation=trial['validation'], reason=trial['reason']))
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:

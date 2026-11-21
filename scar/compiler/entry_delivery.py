@@ -190,7 +190,7 @@ def _sparse(scope, reference, document):
 def _nvhpc(scope, reference, document):
     from scar.analysis.nvhpc_source_entry import SCHEMA
     from scar.compiler.compile_exported_nvhpc import check_nvhpc_project
-    from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
+    from scar.compiler.nvhpc_entry_variant import _cpu_cohorts, matrix_entry_inputs
 
     root, checked, execution, _, _ = check_nvhpc_project(Path(reference['uri']).parent, reference['sha256'])
     _require(checked == reference and 'entry_obligations_sha256' in scope,
@@ -204,8 +204,10 @@ def _nvhpc(scope, reference, document):
     _target(scope, problem['target'])
     memory = execution['storage']
     _budget(scope, memory['serial_peak_bytes'])
-    _require(memory['budget_bytes'] == scope['memory_budget_bytes']
-             and execution['cpu_ids'] == scope['process_affinity_cpu_ids'],
+    process_cpus = scope['process_affinity_cpu_ids']
+    allowed = (_cpu_cohorts(Path(scope['target']['uri']).parent, process_cpus)
+               if scope.get('search_cpu_cohorts', False) else [process_cpus])
+    _require(memory['budget_bytes'] == scope['memory_budget_bytes'] and execution['cpu_ids'] in allowed,
              'NVHPC CPU cohort or memory budget differs from the entry scope')
     numerical = execution['numerical_contract']
     _require(numerical == scope.get('numerical_contract', {'kind': 'EXACT_BYTES'}),
