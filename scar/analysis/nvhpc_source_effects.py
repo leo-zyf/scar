@@ -3,18 +3,24 @@
 import argparse
 import ast
 from collections import Counter, defaultdict
+from itertools import count
 import json
+from math import prod
 import os
 from pathlib import Path
 import re
 from shutil import move
 import subprocess
+import sys
+from types import CodeType
 
 from scar.compiler.nvhpc_source_validation import SCHEMA as PROCESS, _receipt
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
 SCHEMA = 'scar.nvhpc-source-effect-observation'
+TENSOR_FLOW = 'scar.nvhpc-source-tensor-flow-observation'
+_TENSOR_CAPTURE = 'scar.nvhpc-source-dispatch-capture'
 _LATEST_VERSION = 2
 _TRACE_PREFIX = 'syscalls'
 _TRACE_LIMIT = 32 * 1024 * 1024
@@ -483,6 +489,262 @@ def verify_nvhpc_source_effects(reference, *, process):
     return expected
 
 
+_TENSOR_SCHEMAS = {
+    'from_file': ('aten::from_file(str filename, bool? shared=None, int? size=0, *, ScalarType? dtype=None, '
+                  'Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor'),
+    'view': 'aten::view(Tensor(a) self, SymInt[] size) -> Tensor(a)',
+    'mm': 'aten::mm(Tensor self, Tensor mat2) -> Tensor',
+    'detach': 'aten::detach(Tensor(a) self) -> Tensor(a)',
+}
+_DISPATCH_CHILD = ('import sys; from scar.analysis.nvhpc_source_effects import _record_tensor_flow; '
+                   '_record_tensor_flow(*sys.argv[1:])')
+
+
+def _entry_code(contract):
+    from scar.trace.code_snapshot import code_key
+
+    source = contract['source']
+    root = compile(Path(source['path']).read_bytes(), source['path'], 'exec', dont_inherit=True)
+    body, = (item for item in root.co_consts if type(item) is CodeType and item.co_qualname == source['function'])
+    _need(code_key(body) == source['function_code_key'], 'tensor diagnostic needs its exact original CodeID')
+    return body
+
+
+def _record_tensor_flow(process, output):
+    """Subprocess observer. Arm dispatch after the original import phase."""
+    from threading import get_ident
+    from weakref import ref
+
+    from scar.runtime.entry_runner import run_original_script
+    from scar.trace.code_snapshot import code_key, site
+
+    scope, contract_ref, contract = _original(_ref(process, PROCESS))
+    target = _entry_code(contract)
+    callbacks, activation, objects, storage = [], {}, {}, {}
+    object_ordinals = count(1)
+    scope_owner = get_ident()
+    max_calls = 2 * len(contract['inputs']) + len(contract['projection']['operations']) + len(contract['outputs'])
+    _need(max_calls <= 256 and 'torch' not in sys.modules, 'bounded diagnostic needs the original Torch import')
+    monitor = sys.monitoring
+    events = monitor.events
+    slot = next(number for number in range(5, -1, -1) if monitor.get_tool(number) is None)
+    mode = frame = selected = None
+
+    def attach(event, args):
+        nonlocal selected
+        if event == 'exec' and args and type(args[0]) is CodeType and args[0].co_filename == target.co_filename:
+            selected, = (code for code in args[0].co_consts if type(code) is CodeType
+                         and code.co_qualname == target.co_qualname and code_key(code) == code_key(target))
+            monitor.set_local_events(slot, selected, events.PY_START | events.PY_RETURN)
+
+    def begin(code, offset):
+        nonlocal mode, frame
+        _need(not activation and get_ident() == scope_owner, 'tensor diagnostic source invoked repeatedly or on a new thread')
+        frame = sys._getframe(1)
+        torch = sys.modules['torch']
+        from torch.multiprocessing.reductions import StorageWeakRef
+        from torch.utils._python_dispatch import TorchDispatchMode, _get_current_dispatch_mode
+
+        provider = dict(torch=_receipt(torch.__file__), torch_native=_receipt(torch._C.__file__),
+                        torch_version=str(torch.__version__))
+        _need(all(scope['context']['providers'][name] == value for name, value in provider.items())
+              and _get_current_dispatch_mode() is None, 'unexpected actual Tensor provider or dispatch mode')
+        activation.update(code=code_key(code), entered=site(code, offset), provider=provider)
+        operations = {getattr(torch.ops.aten, name).default: name for name in _TENSOR_SCHEMAS}
+
+        def metadata(value):
+            _need(type(value) is torch.Tensor and value.dtype is torch.float32 and value.device.type == 'cpu'
+                  and value.layout is torch.strided, 'tensor diagnostic requires a plain CPU FP32 Tensor')
+            identity = id(value)
+            if identity not in objects or objects[identity][0]() is not value:
+                objects[identity] = ref(value), next(object_ordinals)
+            backing = value.untyped_storage()
+            owner = StorageWeakRef(backing)
+            if owner not in storage:
+                storage[owner] = len(storage)+1
+            return dict(object=objects[identity][1], storage=storage[owner], shape=list(value.shape),
+                        strides=list(value.stride()), offset=value.storage_offset(), storage_nbytes=backing.nbytes(),
+                        dtype='FLOAT32', device='CPU')
+
+        class Observe(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                kwargs = {} if kwargs is None else kwargs
+                _need(frame is not None and get_ident() == scope_owner and len(callbacks) < max_calls,
+                      'Tensor dispatch escaped its bounded invocation')
+                caller = sys._getframe(1)
+                while caller is not None and caller is not frame:
+                    caller = caller.f_back
+                _need(caller is frame, 'Tensor dispatch has no selected source caller')
+                name = operations.get(func)
+                _need(name is not None and str(func._schema) == _TENSOR_SCHEMAS[name],
+                      'Tensor dispatch selected an unsupported callable or schema')
+                position = site(frame.f_code, frame.f_lasti)
+                incoming = [metadata(item) for item in args if type(item) is torch.Tensor]
+                result = func(*args, **kwargs)
+                callback = dict(operator=name, schema=str(func._schema), site=position, operands=incoming,
+                                result=metadata(result))
+                if name == 'from_file':
+                    callback['filename'] = args[0]
+                    callback['shared'] = args[1] if len(args) > 1 else kwargs.get('shared')
+                callbacks.append(callback)
+                return result
+
+        mode = Observe()
+        mode.__enter__()
+
+    def finish(code, offset, returned):
+        nonlocal mode, frame
+        _need(sys._getframe(1) is frame and mode is not None and returned is None,
+              'unexpected source activation return during Tensor capture')
+        mode.__exit__(None, None, None)
+        mode = frame = None
+        activation['returned'] = site(code, offset)
+
+    monitor.use_tool_id(slot, _TENSOR_CAPTURE)
+    monitor.register_callback(slot, events.PY_START, begin)
+    monitor.register_callback(slot, events.PY_RETURN, finish)
+    sys.addaudithook(attach)
+    try:
+        run_original_script(scope['source']['path'], [*scope['inputs'], *scope['outputs']])
+    finally:
+        if mode is not None:
+            mode.__exit__(None, None, None)
+        if selected is not None:
+            monitor.set_local_events(slot, selected, 0)
+        monitor.free_tool_id(slot)
+    _need('returned' in activation and len(callbacks) == max_calls, 'incomplete original source Tensor observation')
+    Path(output).write_text(json.dumps(dict(schema=_TENSOR_CAPTURE, schema_version=1, source_contract=contract_ref,
+        activation=activation, dispatches=callbacks), sort_keys=True, allow_nan=False)+'\n')
+
+
+def _view_metadata(row, shape):
+    expected_stride = [prod(shape[index+1:]) for index in range(len(shape))]
+    _need(row['shape'] == shape and row['strides'] == expected_stride and row['offset'] == 0
+          and row['storage_nbytes'] == 4 * prod(shape) and row['dtype'] == 'FLOAT32' and row['device'] == 'CPU'
+          and all(type(row[name]) is int and row[name] > 0 for name in ('object', 'storage')),
+          'observed Tensor geometry differs from the source value')
+
+
+def _project_tensor_flow(raw, original):
+    from scar.trace.code_snapshot import site
+
+    scope, contract_ref, contract = original
+    code = _entry_code(contract)
+    activation = raw['activation']
+    _need(raw['schema_version'] == 1 and raw['source_contract'] == contract_ref and
+          activation['code'] == contract['source']['function_code_key'] and
+          all(scope['context']['providers'][name] == activation['provider'][name]
+              for name in ('torch', 'torch_native', 'torch_version')), 'dispatch capture differs from original source/provider scope')
+    for name, opcodes in (('entered', ('RESUME',)), ('returned', ('RETURN_VALUE', 'RETURN_CONST'))):
+        row = activation[name]
+        _need(site(code, row['offset']) == row and row['opname'] in opcodes, 'invalid selected source activation event')
+    rows = iter(enumerate(raw['dispatches']))
+    links, source_routes = [], []
+    last_offset = -1
+
+    def pull(name, node, *, entire=False):
+        nonlocal last_offset
+        index, row = next(rows, (None, None))
+        _need(row is not None and row['operator'] == name and row['schema'] == _TENSOR_SCHEMAS[name],
+              'dispatch order does not cover the original source effect graph')
+        actual = row['site']
+        _need(site(code, actual['offset']) == actual and actual['opname'] in ('CALL', 'CALL_KW')
+              and actual['position'] is not None and actual['offset'] > last_offset,
+              'dispatch lacks an exact ordered original CALL position')
+        last_offset = actual['offset']
+        start, end, col, end_col = actual['position']
+        line0, col0, line1, col1 = node['source_span']
+        matches = [start, col, end, end_col] == node['source_span'] if entire else (
+            (line0, col0) <= (start, col) <= (end, end_col) <= (line1, col1))
+        _need(matches, 'dispatch CALL falls outside its admitted source node')
+        return index, row
+
+    producer = {}
+    for index, node in enumerate(contract['graph']['nodes']):
+        identity, kind = node['id'], node['kind']
+        row = dict(source_pointer='#/graph/nodes/'+str(index), source=identity)
+        if kind == 'PRIVATE_FILE_MAPPING_AND_TENSOR_VIEW':
+            load_id, load = pull('from_file', node)
+            view_id, view = pull('view', node, entire=True)
+            _need(load['filename'] == scope['inputs'][node['argv']-1] and load['shared'] is False
+                  and load['operands'] == [] and view['operands'] == [load['result']]
+                  and view['result']['storage'] == load['result']['storage'], 'original file Tensor/view alias boundary differs')
+            _view_metadata(load['result'], [prod(node['shape'])])
+            _view_metadata(view['result'], node['shape'])
+            producer[identity] = view['result']
+            source_routes.append(dict(row, dispatches=[load_id, view_id], relation='SAME_WEAK_STORAGE_LIFETIME'))
+        elif kind in ('FUNCTIONAL_MM', 'SYNC_FILE_CONTENT_PUBLICATION'):
+            publication = kind == 'SYNC_FILE_CONTENT_PUBLICATION'
+            dispatch_id, event = pull('detach' if publication else 'mm', node, entire=not publication)
+            incoming = sorted((edge for edge in contract['graph']['edges'] if edge['target'] == identity
+                               and edge['kind'] == 'DATA'), key=lambda edge: edge.get('operand', 0))
+            args = [producer[edge['source']] for edge in incoming]
+            _need(event['operands'] == args, 'actual dispatched Tensor operands do not follow original source data edges')
+            shape = node['shape'] if publication else [args[0]['shape'][0], args[1]['shape'][1]]
+            _view_metadata(event['result'], shape)
+            if publication:
+                _need(event['result']['storage'] == args[0]['storage'], 'publication does not alias its actual input value')
+            else:
+                _need(event['result']['storage'] not in {value['storage'] for value in producer.values()},
+                      'matrix result unexpectedly aliases an existing source value')
+                producer[identity] = event['result']
+            source_routes.append(dict(row, dispatches=[dispatch_id], relation='PUBLICATION_ALIAS' if publication else 'ATEN_MM'))
+            links.extend(dict(source=edge['source'], target=identity, operand=position,
+                              observation=dispatch_id, object=args[position]['object'])
+                         for position, edge in enumerate(incoming))
+    _need(next(rows, None) is None, 'additional Tensor dispatch outside the admitted source graph')
+    return dict(source_nodes=source_routes, observed_data_dependencies=links)
+
+
+def _tensor_flow_report(folder, process, original, returncode):
+    scope, contract, _ = original
+    capture = artifact_reference(folder/'dispatch.json', _TENSOR_CAPTURE)
+    projection = _project_tensor_flow(read_artifact(capture), original)
+    outcome = _outcome(folder, scope, returncode)
+    _need(outcome['original_outcome_reproduced'], 'instrumented Tensor flow did not reproduce original files and streams')
+    return dict(schema=TENSOR_FLOW, schema_version=1, process=process, source_contract=contract,
+        capture=capture, projection=projection, outcome=outcome,
+        scope='SINGLE_INSTRUMENTED_CPU_SOURCE_ACTIVATION', original_clean_timing_measured=False,
+        cross_run_identity_established=False, global_effect_closure=False, deployment_authorized=False)
+
+
+def observe_nvhpc_tensor_flow(process, out):
+    """Observe the exact original CPU Tensor dispatch routes in a separate run."""
+    process = _ref(process, PROCESS)
+    original = _original(process)
+    scope = original[0]
+    outputs = tuple(map(Path, scope['outputs']))
+    _need(all(path.parent.is_dir() and not path.exists() and not path.is_symlink() for path in outputs),
+          'Tensor diagnostic needs the exact original fresh publication paths')
+    folder = Path(out).resolve()
+    folder.mkdir(parents=True, exist_ok=False)
+    context = scope['context']
+    command = [*context['prefix'], context['python']['path'], '-B', '-c', _DISPATCH_CHILD,
+               process['uri'], str(folder/'dispatch.json')]
+    run = subprocess.run(command, env=context['environment'], cwd=context['working_directory'],
+                         capture_output=True, timeout=120)
+    for name in ('stdout', 'stderr'):
+        (folder/name).write_bytes(getattr(run, name))
+    for index, path in enumerate(outputs):
+        if path.is_file() and not path.is_symlink():
+            move(path, folder/f'publication-{index}')
+    _need(run.returncode == 0, 'original Tensor diagnostic failed, see retained stderr')
+    _need(_original(process) == original, 'original evidence changed during Tensor diagnosis')
+    report = _tensor_flow_report(folder, process, original, run.returncode)
+    (folder/'result.json').write_text(json.dumps(report, sort_keys=True, allow_nan=False)+'\n')
+    return report
+
+
+def verify_nvhpc_tensor_flow(reference, *, process):
+    reference = _ref(reference, TENSOR_FLOW)
+    process = _ref(process, PROCESS)
+    saved = read_artifact(reference)
+    report = _tensor_flow_report(Path(reference['uri']).parent, process, _original(process), saved['outcome']['returncode'])
+    _need(report == saved, 'Tensor flow report differs from its retained capture and original typed graph')
+    read_artifact(reference, json_document=False)
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='scar observe-nvhpc-source-effects', description=__doc__)
     parser.add_argument('--process', required=True, type=Path)
@@ -490,7 +752,16 @@ def main(argv=None):
     action.add_argument('--out', type=Path)
     action.add_argument('--check', type=Path)
     parser.add_argument('--strace', default='/usr/bin/strace')
+    parser.add_argument('--tensor-flow', action='store_true', help='observe or replay exact CPU Tensor data edges')
     args = parser.parse_args(argv)
+    if args.tensor_flow:
+        path = args.check if args.check is not None else args.out/'result.json'
+        report = (verify_nvhpc_tensor_flow(path, process=args.process) if args.check is not None
+                  else observe_nvhpc_tensor_flow(args.process, args.out))
+        projection = report['projection']
+        print(json.dumps(dict(result=str(path.resolve()), source_nodes=len(projection['source_nodes']),
+            data_edges=len(projection['observed_data_dependencies']), performance_measured=False)))
+        return 0
     if args.check is None:
         report = observe_nvhpc_source_effects(args.process, args.out, strace=args.strace)
         path = args.out/'result.json'

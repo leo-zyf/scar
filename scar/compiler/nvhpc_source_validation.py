@@ -4,6 +4,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from shutil import move
 import subprocess
 import sys
 from time import perf_counter_ns
@@ -33,7 +34,7 @@ def _receipt(path):
     return dict(path=str(path), **_content(path))
 
 
-def _context(cpus):
+def _context(cpus, *, cuda_environment=None):
     if not set(cpus) <= os.sched_getaffinity(0):
         raise ValueError('original and native process pair requires its admitted CPU affinity')
     python = str(Path(sys.executable).resolve())
@@ -42,6 +43,8 @@ def _context(cpus):
                        OPENBLAS_NUM_THREADS=str(len(cpus)), OMP_DYNAMIC='FALSE')
     if 'PYTHONPATH' in os.environ:
         environment['PYTHONPATH'] = os.environ['PYTHONPATH']
+    if cuda_environment:
+        environment.update(cuda_environment)
     prefix = ['/usr/bin/taskset', '-c', ','.join(map(str, cpus))]
     provider = json.loads(subprocess.check_output([*prefix, python, '-B', '-c', _PROBE],
                                                   env=environment, text=True, timeout=60))
@@ -65,7 +68,7 @@ def _arm(command, context, path, publication, pair, mode):
             outputs.append(None)
             continue
         retained = path/f'output-{index}.f32'
-        file.rename(retained)
+        move(file, retained)
         outputs.append(_receipt(retained))
     return dict(pair=pair, mode=mode, wall_ns=wall_ns, returncode=process.returncode,
         stdout_sha256=sha256(process.stdout).hexdigest(), stderr_sha256=sha256(process.stderr).hexdigest(),
@@ -92,6 +95,43 @@ def _timing(runs, warmup, count, *, minimum_gain=0.05):
     return compare_entry_pairs([{key: run[key] for key in _TIMING_FIELDS} for run in runs],
         incumbent='ORIGINAL', challenger='NATIVE', warmup_pairs=warmup, measurement_pairs=count,
         minimum_gain=minimum_gain)
+
+
+def _collect_pairs(commands, context, out, publication, contract, sizes, count, torch):
+    runs, comparisons = [], []
+    labels = tuple(commands)
+    for pair in range(count):
+        order = labels if pair % 2 == 0 else labels[::-1]
+        arms = {mode: _arm(commands[mode], context, out/f'{pair}-{mode}', publication, pair, mode) for mode in order}
+        runs.extend(arms.values())
+        comparisons.append(_assess(arms, contract, sizes, torch))
+        if not comparisons[-1]['accepted']:
+            break
+    return runs, comparisons
+
+
+def _replay_pairs(folder, runs, comparisons, contract, sizes, count, torch):
+    if not (0 < len(comparisons) <= count and len(comparisons) * 2 == len(runs)):
+        raise ValueError('incomplete retained source process pairs')
+    for index, run in enumerate(runs):
+        pair, slot = divmod(index, 2)
+        mode = ('ORIGINAL', 'NATIVE')[(pair+slot) % 2]
+        arm = folder/f'{pair}-{mode}'
+        if (run['pair'], run['mode'], len(run['outputs'])) != (pair, mode, len(sizes)):
+            raise ValueError('source process observation order differs from its pair')
+        for name in ('stdout', 'stderr'):
+            if run[name] != _receipt(arm/name) or run[name]['sha256'] != run[name+'_sha256']:
+                raise ValueError('source process stream receipt changed')
+        for ordinal, file in enumerate(run['outputs']):
+            path = arm/f'output-{ordinal}.f32'
+            expected = _receipt(path) if path.exists() else None
+            if path.is_symlink() or file != expected:
+                raise ValueError('source process ordered output receipt changed')
+        if slot:
+            assessed = _assess({row['mode']: row for row in runs[index-1:index+1]}, contract, sizes, torch)
+            if assessed != comparisons[pair] or not assessed['accepted'] and pair != len(comparisons)-1:
+                raise ValueError('source and native process output contracts did not replay')
+    return len(comparisons) == count and comparisons[-1]['accepted']
 
 
 def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_pairs=1, measurement_pairs=3,
@@ -143,15 +183,8 @@ def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_
         raise ValueError('source process arguments differ from the structural ABI')
     commands = dict(ORIGINAL=[*context['prefix'], context['python']['path'], '-B', str(source), *argv],
                     NATIVE=[str(root/'launch.sh'), *argv])
-    runs, comparisons = [], []
-    labels = tuple(commands)
-    for pair in range(warmup_pairs + measurement_pairs):
-        order = labels if pair % 2 == 0 else labels[::-1]
-        arms = {mode: _arm(commands[mode], context, out/f'{pair}-{mode}', publish, pair, mode) for mode in order}
-        runs.extend(arms.values())
-        comparisons.append(_assess(arms, native_contract, sizes, torch))
-        if not comparisons[-1]['accepted']:
-            break
+    runs, comparisons = _collect_pairs(commands, context, out, publish, native_contract, sizes,
+                                        warmup_pairs + measurement_pairs, torch)
     accepted = all(row['accepted'] for row in comparisons) and len(comparisons) == warmup_pairs + measurement_pairs
     timing = _timing(runs, warmup_pairs, measurement_pairs) if accepted else None
     contract_ref = artifact_reference(root/'plan/source-entry.json', contract['schema'])
@@ -195,24 +228,8 @@ def replay_source_process(reference, evidence, scope, *, minimum_gain):
     warmup, count = saved['warmup_pairs'], saved['measurement_pairs']
     sizes = evidence['output_sizes']
     folder = Path(reference['uri']).parent
-    if len(runs) != 2 * (warmup + count) or len(saved['comparisons']) * 2 != len(runs):
-        raise ValueError('incomplete retained source process pairs')
-    for index, run in enumerate(runs):
-        pair, slot = divmod(index, 2)
-        mode = ('ORIGINAL', 'NATIVE')[(pair+slot) % 2]
-        arm = folder/f'{pair}-{mode}'
-        if (run['pair'], run['mode'], len(run['outputs'])) != (pair, mode, len(sizes)):
-            raise ValueError('source process observation order differs from its pair')
-        for name in ('stdout', 'stderr'):
-            if run[name] != _receipt(arm/name) or run[name]['sha256'] != run[name+'_sha256']:
-                raise ValueError('source process stream receipt changed')
-        for ordinal, file in enumerate(run['outputs']):
-            if file != _receipt(arm/f'output-{ordinal}.f32'):
-                raise ValueError('source process ordered output receipt changed')
-        if slot:
-            assessed = _assess({row['mode']: row for row in runs[index-1:index+1]}, contract, sizes, torch)
-            if not assessed['accepted'] or assessed != saved['comparisons'][pair]:
-                raise ValueError('source and native process output contracts did not replay')
+    if not _replay_pairs(folder, runs, saved['comparisons'], contract, sizes, warmup + count, torch):
+        raise ValueError('incomplete or failed retained source process pairs')
     if _timing(runs, warmup, count) != saved['timing']:
         raise ValueError('retained process timing summary changed')
     read_artifact(reference, json_document=False)
@@ -224,8 +241,11 @@ def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
     if reference['schema'] == SCHEMA:
         return replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain)
     document = read_artifact(reference)
-    if (reference['schema'] != EVIDENCE or document['schema_version'] != 1
-            or set(document) != {'schema', 'schema_version', 'process', 'effects', 'lifecycle'}):
+    version = document['schema_version']
+    fields = {'schema', 'schema_version', 'process', 'effects', 'lifecycle'}
+    if version == 2:
+        fields.add('tensor_flow')
+    if reference['schema'] != EVIDENCE or type(version) is not int or version not in (1, 2) or set(document) != fields:
         raise ValueError('a versioned NVIDIA source evidence bundle is required')
     process = document['process']
     timing, context = replay_source_process(process, evidence, scope, minimum_gain=minimum_gain)
@@ -246,6 +266,15 @@ def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
                 logical_boundary_witnessed=coverage['logical_boundary_witnessed'],
                 static_boundary_effects_closed=coverage['static_boundary_effects_closed'],
                 obligations_by_status=dict(Counter(row['status'] for row in coverage['obligations'])))
+    tensor_flow = document.get('tensor_flow')
+    if tensor_flow is not None:
+        from scar.analysis.nvhpc_source_effects import verify_nvhpc_tensor_flow
+
+        flow = verify_nvhpc_tensor_flow(tensor_flow, process=process)
+        projection = flow['projection']
+        diagnostics['tensor_flow'] = dict(reference=tensor_flow, scope=flow['scope'],
+            source_nodes=len(projection['source_nodes']), data_edges=len(projection['observed_data_dependencies']),
+            global_effect_closure=False)
     lifecycle = document['lifecycle']
     if lifecycle is not None:
         from scar.optimization.nvhpc_source_lifecycle import replay_nvhpc_source_lifecycle
