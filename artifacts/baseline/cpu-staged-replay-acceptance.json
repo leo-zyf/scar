@@ -1,0 +1,136 @@
+{
+  "delivery": {
+    "compile_command_wall_seconds": 267.88981512002647,
+    "cpp_source": {
+      "schema": "scar.cpp-source",
+      "sha256": "fb446e50d4076eb99326478ff808ddf0c073e4ff053d45472fae52dbc4cedc03",
+      "size_bytes": 93311,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-compiled/native-entry/native/runtime/src/main.cpp"
+    },
+    "cxx_standard": 20,
+    "decision": "KEEP_ORIGINAL",
+    "deployment_authorized": false,
+    "handoff": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "57b3fbb105d3f091ef2ee8a3327bb6bb25252b709ebf452e834020df1534f23e",
+      "size_bytes": 38976,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-compiled/whole-entry-selection.json"
+    },
+    "measured_pairs": 3,
+    "metrics_ns": {
+      "candidate": {
+        "max_ns": 119724582,
+        "median_ns": 119705154,
+        "median_ns_twice": 239410308,
+        "min_ns": 119680096,
+        "samples_ns": [
+          119724582,
+          119680096,
+          119705154
+        ]
+      },
+      "original": {
+        "max_ns": 923161971,
+        "median_ns": 918581062,
+        "median_ns_twice": 1837162124,
+        "min_ns": 914569853,
+        "samples_ns": [
+          918581062,
+          914569853,
+          923161971
+        ]
+      }
+    },
+    "reported_verdict": "ADVANCE_TO_RELEASE_REVIEW",
+    "speedup": 7.6736968401544345,
+    "validation": {
+      "schema": "scar.cpu-entry-paired-replay",
+      "sha256": "82aa006a7216de56cd1bffe7e2218610555db8f7674f71550f404878cb339878",
+      "size_bytes": 17769,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-compiled/native-validation/result.json"
+    },
+    "warmup_pairs": 1
+  },
+  "open_frontier": [
+    "COMPLETE_ORIGINAL_EFFECTS",
+    "PROVIDER_PEAK_OWNER_MEMORY",
+    "MATCHED_WHOLE_ENTRY_FORWARD_COSTS",
+    "GPU_DEVICE_VALIDATION"
+  ],
+  "schema": "scar.cpu-staged-replay-acceptance",
+  "schema_version": 1,
+  "source_launch": {
+    "acknowledgements": 8,
+    "commands": 14,
+    "compile_builder_cpu_ids": [
+      7,
+      8
+    ],
+    "full_original_launch_equal_to_ambient_pinned_reference": true,
+    "graph": {
+      "schema": "scar.f4-cpu-stream-capture",
+      "sha256": "32915ce5f2773cd323077fdf798c53d191bd58c614eef5259ce1ac63065d55ac",
+      "size_bytes": 45146,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-plan/whole-entry-cpu-provider-graph.json"
+    },
+    "observed_edges": 37,
+    "original_capture": {
+      "schema": "scar.scalar-recursive-driver-capture",
+      "sha256": "f8ade9730bd83e682804c3c8e3ade874237eee6571166eef8cabb24059362dd0",
+      "size_bytes": 105601,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/paced-capture/result.json"
+    },
+    "original_workload_cpu_ids": [
+      7
+    ],
+    "plan": {
+      "schema": "scar.program-optimization-domains",
+      "sha256": "42ef3100b593e4827183e310eee4f4f076e14cc71b81472600d2533bd2e864ae",
+      "size_bytes": 63900,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-plan/result.json"
+    },
+    "plan_builder_cpu_ids": [
+      8
+    ],
+    "plan_wall_seconds": 308.51505999895744,
+    "request": {
+      "schema": "scar.whole-entry-request",
+      "sha256": "6fd7b1b4aceb9e2edb55cce0b9d434a97230e272ed05f98f93ccd4998ffeb2b6",
+      "size_bytes": 868,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/host-independent-request.json"
+    },
+    "search_invocations": 4,
+    "unavailable_target_cpu_refused_before_build": true
+  },
+  "source_replay": {
+    "cirq_clean_plan_only_wall_seconds": {
+      "bounded_decoded_body_reuse": 50.93532542302273,
+      "one_source_admission": 67.85195580299478,
+      "original": 68.46911196410656
+    },
+    "decisions": [
+      {
+        "schema": "scar.whole-entry-main-chain",
+        "sha256": "845ee5f6082d9323879361c6fc07682ffd8cf510a5fce15165d7190085b1d5c5",
+        "size_bytes": 7101,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-plan-only-before/whole-entry-selection.json"
+      },
+      {
+        "schema": "scar.whole-entry-main-chain",
+        "sha256": "845ee5f6082d9323879361c6fc07682ffd8cf510a5fce15165d7190085b1d5c5",
+        "size_bytes": 7101,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-plan-only-once-admitted/whole-entry-selection.json"
+      },
+      {
+        "schema": "scar.whole-entry-main-chain",
+        "sha256": "845ee5f6082d9323879361c6fc07682ffd8cf510a5fce15165d7190085b1d5c5",
+        "size_bytes": 7101,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-plan-only-cached/whole-entry-selection.json"
+      }
+    ],
+    "identical_decision_bytes": true,
+    "samples_each": 1,
+    "speedup": 1.3442362720855134,
+    "target_workloads_executed": 0
+  }
+}
