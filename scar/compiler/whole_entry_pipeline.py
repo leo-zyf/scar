@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from subprocess import CalledProcessError
 
+from scar.compiler.operator_stack import verify_stack_components_once
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
@@ -34,7 +35,7 @@ def read_request(value):
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
-                'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts'}
+                'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts', 'nvhpc_device_profile', 'tensor_flow'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -75,6 +76,20 @@ def read_request(value):
             raise ValueError('CPU SGEMM observations require a source-derived NVIDIA domain')
         for observation in observations:
             read_artifact(observation)
+    if 'nvhpc_device_profile' in document:
+        from scar.compiler.nvhpc_device_entry_variant import PROFILE_SCHEMAS
+
+        profile = document['nvhpc_device_profile']
+        if not infer_nvhpc or type(profile) is not dict or profile.get('schema') not in PROFILE_SCHEMAS:
+            raise ValueError('a device profile requires the source-derived NVIDIA entry domain')
+        read_artifact(profile)
+    if 'tensor_flow' in document:
+        from scar.analysis.nvhpc_source_effects import TENSOR_FLOW
+
+        flow = document['tensor_flow']
+        if not infer_nvhpc or type(flow) is not dict or flow.get('schema') != TENSOR_FLOW:
+            raise ValueError('Tensor-flow evidence requires an observed source-derived NVIDIA entry')
+        read_artifact(flow)
     if ((space == 'EXACT_GENERATED_FAMILY' and
             ((variant_source is None and not infer_nvhpc) or document['registered_implementations'])) or
             (space == 'EXACT_REGISTERED_SET' and variant_source is not None)):
@@ -124,6 +139,10 @@ def _scope(plan, request):
         scope['numerical_contract'] = request['numerical_contract']
     if request.get('search_cpu_cohorts', False):
         scope['search_cpu_cohorts'] = True
+    if 'nvhpc_device_profile' in request:
+        scope['nvhpc_device_profile'] = request['nvhpc_device_profile']
+    if 'tensor_flow' in request:
+        scope['tensor_flow'] = request['tensor_flow']
     return scope
 
 
@@ -155,7 +174,14 @@ def _discover(scope, request):
     if _infer_nvhpc(request):
         from scar.compiler.nvhpc_entry_variant import derive_nvhpc_entries
 
-        return derive_nvhpc_entries(scope, request.get('sgemm_observations', []))
+        cpu = derive_nvhpc_entries(scope, request.get('sgemm_observations', []))
+        if 'nvhpc_device_profile' not in request:
+            return cpu
+        from scar.compiler.nvhpc_device_entry_variant import derive_nvhpc_device_entry
+
+        device = derive_nvhpc_device_entry(scope, request['nvhpc_device_profile'])
+        return dict(cpu, options=[*cpu['options'], *device['options']], device_discovery=device,
+                    coverage_frontier=[*cpu['coverage_frontier'], *device['coverage_frontier']])
     source = request.get('variant_source')
     if source is None:
         return None
@@ -205,7 +231,7 @@ def _legalities(candidates, scope, discovery):
             if id_ in known:
                 raise ValueError('duplicate discovered entry option identity')
             known.add(id_)
-            nvhpc = _nvhpc_option(option)
+            nvhpc = _nvhpc_option(option) or _nvhpc_device_option(option)
             stack_reference = option['proof']['emission_plan']['operator_stack'] if nvhpc else None
             status, reason = _check_operator_stack(scope, NVIDIA_HPC if nvhpc else LIBTORCH,
                 option['legal_status'], option['reason'], reference=stack_reference)
@@ -233,6 +259,18 @@ def _derive(plan, request, candidates, scope, legalities, legality_reference, di
         coverage_frontier=frontier)
 
 
+def _bind_tensor_flow(plan, scope):
+    if 'tensor_flow' not in scope:
+        return None
+    from scar.analysis.entry_tensor_flow import bind_source_tensor_flow
+
+    if plan.get('entry_obligations') is None:
+        raise ValueError('Tensor-flow binding requires original F4 entry obligations')
+    return bind_source_tensor_flow(plan['program'], scope, scope['tensor_flow'],
+                                   entry_obligations=plan['entry_obligations'])
+
+
+@verify_stack_components_once()
 def prepare_whole_entry(plan, request, out):
     reference, document, candidates = read_request(request)
     scope = _scope(plan, document)
@@ -248,6 +286,9 @@ def prepare_whole_entry(plan, request, out):
         legalities=legal_ref, scope=scope, complete_declared_domain=not domain['coverage_frontier'])
     if discovery is not None:
         entry['variant_discovery'] = _write(out/'whole-entry-variants.json', discovery)
+    flow = _bind_tensor_flow(plan, scope)
+    if flow is not None:
+        entry['tensor_flow_binding'] = _write(out/'whole-entry-tensor-flow.json', flow)
     return entry
 
 
@@ -279,11 +320,19 @@ def _nvhpc_option(option):
     return option.get('implementation_family') == 'NVIDIA_CPU_MATRIX_FILE_ENTRY'
 
 
+def _nvhpc_device_option(option):
+    return option.get('implementation_family') == 'NVIDIA_DEVICE_MATRIX_FILE_ENTRY'
+
+
 def _emit_generated(option, scope, out, *, plan_only, verify_entry):
     if _nvhpc_option(option):
         from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
 
         return emit_nvhpc_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
+    if _nvhpc_device_option(option):
+        from scar.compiler.nvhpc_device_entry_trial import emit_nvhpc_device_entry
+
+        return emit_nvhpc_device_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
 
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
@@ -354,6 +403,31 @@ def _observed_costs(audit, delivery, scope_sha, out):
         comparisons=comparisons, separate_component_times_available=False))
 
 
+def _review_source_trials(discovery, generated, domain, scope, out):
+    """Try only the nominated device body, then a nominated CPU if no entry ran."""
+    eligible = [generated[row['id']] for row in domain['options']
+                if row['id'] in generated and row['legal_status'] != 'INELIGIBLE']
+    cpu = [option for option in eligible if _nvhpc_option(option)]
+    device = [option for option in eligible if _nvhpc_device_option(option)]
+    search = (discovery or {}).get('cohort_search')
+    if search is not None:
+        cpu = [option for option in cpu if option['id'] == search['trial_option_id']]
+    audit = []
+
+    def emit(option, folder):
+        folder.mkdir(parents=True, exist_ok=True)
+        trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True)
+        audit.append(dict(option_id=trial['selected_id'], legal_status=option['legal_status'],
+                          validation=trial['validation'], reason=trial['reason']))
+        return trial
+
+    device_trial = emit(device[0], out/'device-trial') if len(device) == 1 else None
+    can_try_cpu = device_trial is None or device_trial['target_executed'] is False
+    cpu_trial = emit(cpu[0], out) if can_try_cpu and len(cpu) == 1 else None
+    return cpu_trial, device_trial, audit
+
+
+@verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False):
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -371,6 +445,14 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         retained = entry['scope']
         changed = sorted(key for key in live_scope.keys() | retained.keys() if live_scope.get(key) != retained.get(key))
         raise ValueError('whole-entry scope changed in ' + ', '.join(changed))
+    flow = _bind_tensor_flow(plan, live_scope)
+    flow_ref = entry.get('tensor_flow_binding')
+    if (flow_ref is None) != (flow is None) or flow_ref is not None and read_artifact(flow_ref) != flow:
+        raise ValueError('Tensor-flow binding differs from original graph replay')
+    if flow is None and plan.get('entry_obligations') is not None:
+        from scar.analysis.entry_obligations import verify_entry_obligations
+
+        verify_entry_obligations(plan['entry_obligations'], program=plan['program'])
     discovery = _discover(live_scope, request)
     if (('variant_discovery' in entry) != (discovery is not None) or discovery is not None
             and read_artifact(entry['variant_discovery']) != discovery):
@@ -389,20 +471,9 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
     audit = []
-    trial = None
-    # Price the finite body domain before emitting a single trial. This never
-    # upgrades body evidence to whole-entry legality or cost.
-    hypotheses = [generated[row['id']] for row in domain['options']
-                  if row['id'] in generated and row['legal_status'] != 'INELIGIBLE'
-                  and _nvhpc_option(generated[row['id']])]
-    search = (discovery or {}).get('cohort_search')
-    if search is not None:
-        hypotheses = [option for option in hypotheses if option['id'] == search['trial_option_id']]
-    if selected is None and verify_entry and not plan_only and len(hypotheses) == 1:
-        hypothesis, = hypotheses
-        trial = _emit_generated(hypothesis, live_scope, out, plan_only=False, verify_entry=True)
-        audit.append(dict(option_id=trial['selected_id'], legal_status=hypothesis['legal_status'],
-                          validation=trial['validation'], reason=trial['reason']))
+    trial, device_trial = None, None
+    if selected is None and verify_entry and not plan_only:
+        trial, device_trial, audit = _review_source_trials(discovery, generated, domain, live_scope, out)
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
             id_ = fact['option_id']
@@ -417,7 +488,11 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         selection=choice, delivery=delivery,
         retained_validation_audit=audit,
         trial=trial, plan_only=plan_only,
-        native_compiled=delivery.get('native_compiled', False) or bool(trial and trial['native_compiled']),
-        target_executed=trial['target_executed'] if trial is not None else delivery.get('target_executed', False))
+        native_compiled=any(row.get('native_compiled', False) for row in (delivery, trial, device_trial) if row is not None),
+        target_executed=(trial or device_trial or delivery).get('target_executed', False))
+    if 'nvhpc_device_profile' in request:
+        report['device_trial'] = device_trial
+    if flow_ref is not None:
+        report['tensor_flow_binding'] = flow_ref
     report['observed_costs'] = _observed_costs(audit, delivery, choice['scope_sha256'], out)
     return dict(reference=_write(out/'whole-entry-selection.json', report), **report)

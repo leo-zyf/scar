@@ -13,6 +13,7 @@ from scar.ir.implementation_plan import (
 )
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.resource_solver import semantic_sha256
+from scar.compiler import whole_entry_pipeline
 from scar.optimization.whole_entry_choice import (
     DOMAIN, LIFECYCLE_PHASES, solve_whole_entry_choice, verify_whole_entry_choice,
 )
@@ -48,6 +49,29 @@ def _option(domain, tmp_path, name, cost=None, status='LEGAL'):
     domain['options'].append(dict(id=name, legal_status=status,
         legality_evidence=[dict(artifact=ref, locator='#/legality')],
         cost=None if cost is None else dict(artifact=ref, locator='#/cost')))
+
+
+@pytest.mark.parametrize('executed', (False, None, True))
+def test_device_trial_allows_cpu_only_when_neither_entry_ran(monkeypatch, tmp_path, executed):
+    generated = {device: dict(id=device, legal_status='UNRESOLVED', implementation_family=family)
+                 for device, family in (('cpu', 'NVIDIA_CPU_MATRIX_FILE_ENTRY'),
+                                        ('device', 'NVIDIA_DEVICE_MATRIX_FILE_ENTRY'))}
+    attempted = []
+
+    def emit(option, scope, folder, *, plan_only, verify_entry):
+        name = option['id']
+        attempted.append(name)
+        assert not plan_only and verify_entry
+        return dict(selected_id=name, target_executed=executed if name == 'device' else True,
+                    validation=None, reason='test')
+
+    monkeypatch.setattr(whole_entry_pipeline, '_emit_generated', emit)
+    cpu, device, audit = whole_entry_pipeline._review_source_trials(
+        {}, generated, {'options': list(generated.values())}, {}, tmp_path)
+    assert device['target_executed'] is executed
+    assert (cpu is not None) == (executed is False)
+    assert attempted == (['device', 'cpu'] if executed is False else ['device'])
+    assert [row['option_id'] for row in audit] == attempted
 
 
 def test_open_scope_and_unknown_cost_never_claim_model_optimality(tmp_path):

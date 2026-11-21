@@ -47,10 +47,6 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             raise ValueError('whole-entry request already fixes the scope and declared implementation evidence')
         if plan_only and verify_entry:
             raise ValueError('process validation requires native emission')
-        entry_obligations=document.get('entry_obligations')
-        if entry_obligations is not None:
-            from scar.analysis.entry_obligations import verify_entry_obligations
-            verify_entry_obligations(entry_obligations,program=document['program'])
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
         started=time.monotonic();out.mkdir(parents=True)
         whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry)
@@ -220,7 +216,7 @@ def main(argv=None):
     parser.add_argument('--loop-max-threads',type=int,help='explicit maximum team size for the cost model; all representative masks within that limit remain visible')
     parser.add_argument('--entry-costs',help='original whole-entry domain reference with late-bound model cost facts')
     parser.add_argument('--verify-entry',action='store_true',
-        help='validate the selected entry or a unique source-derived NVIDIA hypothesis')
+        help='validate the selected entry or the source-derived NVIDIA device and CPU nominations')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),

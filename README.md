@@ -200,6 +200,8 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 放置模型可选 `host_calibration`，填写 `operator_stack` 和 `observations`。匹配的 SGEMM 探针只为普通主存中的同形状纯 CPU 运算提供点估计。混合路线的固定页主存和设备活动仍使用单独的模型项。缺少匹配几何时，该项继续未知。
 
+整入口请求可以用 `nvhpc_device_profile` 引用同一 SDK 的设备放置模型。`plan-build` 从原入口生成设备方案并保留物化和调度证据。`compile-build --verify-entry` 构建获提名的设备方案并预检。若确认原入口和设备入口都未执行，且 CPU 侧有提名，再验证 CPU 方案。可选的 `tensor_flow` 引用同一调用边界的 Tensor 观测，`plan-build` 将其绑定到原 F4 调用和数据边。
+
 `scar validate-nvhpc-source-device --project CPP_PROJECT --manifest-sha256 SHA256 --domain DOMAINS/whole-entry-domain.json --out TRIAL` 使用原核组、冻结环境、参数和文件发布路径。先核对链接、计划内存和设备身份，预检通过才交替运行原 Python 和 C++20。`--check TRIAL/result.json` 复核保存的证据。`observe-nvhpc-source-effects --tensor-flow` 可对已有 CPU 整程收据独立采集原 Tensor 调用和数据边。证据包 v2 加入 `tensor_flow` 引用，作用域为单次插桩调用。
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
