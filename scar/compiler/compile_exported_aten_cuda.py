@@ -94,13 +94,16 @@ def _provider_libraries(toolkit):
     return libraries
 
 
-def _library_locks(libraries, dependencies, runtime_dirs):
+def _library_locks(libraries, dependencies, runtime_dirs, *, operator_stack_locked=False):
+    from scar.compiler.operator_stack import stack_component_content
+
+    content = stack_component_content if operator_stack_locked else _content
     locks = set(libraries)
     for directory in map(Path, runtime_dirs):
         for name, resolved in dependencies.items():
             if Path(name).name == name and resolved is not None and (directory / name).resolve() == Path(resolved):
                 locks.add(directory / name)
-    return [dict(path=str(path), **_content(path)) for path in sorted(locks)]
+    return [dict(path=str(path), **content(path)) for path in sorted(locks)]
 
 
 def verify_cuda_operator_stack(root, manifest):
@@ -363,7 +366,8 @@ def compile_exported_aten_cuda(model=None, *, model_sha256=None, cuda_model, cud
             _write_record(root / f'plan/{name}.json', value)
         # Include the transitive libraries from the same qualified provider directories.
         lock_dirs = runtime_dirs if operator_stack is not None else [str(toolkit / 'lib64')]
-        _write_record(root / 'plan/dependencies.json', _library_locks(libraries, dependencies, lock_dirs))
+        _write_record(root / 'plan/dependencies.json', _library_locks(libraries, dependencies, lock_dirs,
+                                                                    operator_stack_locked=stack is not None))
         _write_record(root / 'validation/description.json', _describe(root))
         if with_activity_calibration:
             from scar.compiler.native_device_activity_binding import derive_activity_binding

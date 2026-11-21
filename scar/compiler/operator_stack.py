@@ -1,6 +1,8 @@
 """Pin the installed NVIDIA host compiler and numerical providers for one entry."""
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,7 @@ import subprocess
 from scar.codegen.aten_provider import _dependencies
 from scar.codegen.native_provider_bundle import _content, _elf
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
 
 
 SCHEMA = 'scar.operator-stack'
@@ -18,11 +21,48 @@ _ROUTES = {'CPU': ('cpu_blas',), 'CUDA': ('cudart', 'cublas'),
            'HYBRID': ('cpu_blas', 'cudart', 'cublas')}
 _SYSTEM = {'libc', 'libm', 'libmvec', 'libdl', 'libpthread', 'librt', 'libstdc++',
            'libgcc_s', 'libatomic', 'libutil', 'libresolv'}
+_VERIFIED_COMPONENTS = ContextVar('verified_nvidia_stack_components', default=None)
+
+
+@contextmanager
+def verify_stack_components_once():
+    """Reuse a verified local file identity during one stack admission or replay."""
+    active = _VERIFIED_COMPONENTS.get()
+    if active is not None:
+        yield
+        return
+    token = _VERIFIED_COMPONENTS.set({})
+    try:
+        yield
+    finally:
+        _VERIFIED_COMPONENTS.reset(token)
+
+
+def stack_component_content(path):
+    """Hash a component once per unchanged local identity in the active replay."""
+    active = _VERIFIED_COMPONENTS.get()
+    if active is None:
+        return _content(path)
+    resolved = path.resolve(strict=True)
+    with resolved.open('rb') as member:
+        status = file_stat_identity(os.fstat(member.fileno()))
+        identity = local_file_identity(member)
+        previous = active.get(resolved) if identity is not None else None
+        if previous is not None and previous[0] == identity:
+            content = previous[1]
+        else:
+            content = verify_library_file(member)
+        if (status != file_stat_identity(os.fstat(member.fileno())) or status != file_stat_identity(resolved.stat())
+                or path.resolve(strict=True) != resolved):
+            raise ValueError('NVIDIA stack component changed during verification: ' + str(path))
+        if identity is not None:
+            active[resolved] = (identity, content)
+    return dict(content)
 
 
 def _pin(path):
     path = Path(path).resolve(strict=True)
-    return dict(path=str(path), **_content(path))
+    return dict(path=str(path), **stack_component_content(path))
 
 
 def _run(command):

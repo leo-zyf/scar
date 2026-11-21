@@ -534,9 +534,14 @@ def verify_native_project(directory, manifest_sha256):
             raise ValueError('CPU-only linkage differs from the replayed ELF dependency closure')
         receipt['cpu_linkage'] = cpu_linkage
     locks = json.loads(member('plan/dependencies.json').read_text())
+    content = _content
+    if 'operator_stack' in manifest:
+        from scar.compiler.operator_stack import stack_component_content
+
+        content = stack_component_content
     for lock in locks['libraries'] if type(locks) is dict else locks:
         library = Path(lock['path'])
-        if current.get(library.name) != str(library.resolve()) or _content(library) != {
+        if current.get(library.name) != str(library.resolve()) or content(library) != {
                 key: lock[key] for key in ('sha256', 'size_bytes')}:
             raise ValueError(f'native operator library differs from the build lock: {library.name}')
     if 'source_entry_cli' in manifest:
