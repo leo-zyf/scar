@@ -24,8 +24,8 @@ def _need(ok, detail):
         raise ValueError('CPU arithmetic dispatch study: ' + detail)
 
 
-def _commands(runtime, recipe, baseline, variant):
-    commands = validation._commands(runtime, recipe, variant, (_ORIGINAL, _CANDIDATE))
+def _commands(runtime, recipe, baseline, variant, candidate=_CANDIDATE):
+    commands = validation._commands(runtime, recipe, variant, (_ORIGINAL, candidate))
     binary = baseline['executable']
     _need(read_artifact(binary, json_document=False).startswith(b'\x7fELF'), 'grouped baseline needs an exact ELF')
     commands[_BASELINE] = [*commands[_ORIGINAL][:-1], binary['uri']]
@@ -46,6 +46,30 @@ def _environment(runtime, recipe):
     _need(not set(environment).intersection(('SCAR_ARRAY_ENTRY_STATES', 'SCAR_ARRAY_ENTRY_LANE_REPORT')),
           'clean timing requires the original diagnostics to be off')
     return environment
+
+
+def _measure_comparisons(out, commands, runtime, recipe, case, expected, pairs, campaigns):
+    environment, argv = _environment(runtime, recipe), case['argv']
+    states = validation._diagnostics(out/'state-check', commands, argv, environment, runtime, recipe, expected,
+                                     next(iter(campaigns.values())))
+    measured = {
+        name: validation._campaign(out/name.replace('_', '-'), modes, pairs, commands, argv,
+                                   environment, environment, recipe, expected)
+        for name, modes in campaigns.items()
+    }
+    return dict(state_diagnostics=states, **measured)
+
+
+def _check_comparisons(report, commands, runtime, recipe, case, expected, campaigns):
+    states = report['state_diagnostics']
+    expected_states = validation._compare_checkpoints(states['runs'], runtime, commands, case['argv'], recipe,
+                                                    expected, next(iter(campaigns.values())))
+    _need(all(states[key] == value for key, value in expected_states.items()), 'state replay differs')
+    for name, modes in campaigns.items():
+        rows = report[name]
+        pairs = rows['selection']['measurement_pairs']
+        expected_rows = validation._summarize(rows['runs'], modes, commands, case['argv'], recipe, expected, pairs)
+        _need(all(rows[key] == value for key, value in expected_rows.items()), 'native performance replay differs')
 
 
 def study(acceptance, baseline_ref, out, *, pairs=7):
@@ -69,18 +93,10 @@ def study(acceptance, baseline_ref, out, *, pairs=7):
         _need(variant['baseline'] == baseline_ref and variant['plan'] == plan_ref,
               'released members differ from the planned shapes')
         commands = _commands(runtime, recipe, baseline, variant)
-    environment = _environment(runtime, recipe)
-    argv = case['argv']
-    states = validation._diagnostics(out/'state-check', commands, argv, environment, runtime, recipe, expected,
-                                     _CAMPAIGNS['dispatch_pairs'])
-    comparisons = {
-        name: validation._campaign(out/name.replace('_', '-'), modes, pairs, commands, argv,
-                                   environment, environment, recipe, expected)
-        for name, modes in _CAMPAIGNS.items()
-    }
+    comparisons = _measure_comparisons(out, commands, runtime, recipe, case, expected, pairs, _CAMPAIGNS)
     return dict(schema=SCHEMA, schema_version=1, status='VALIDATED_SCOPED_ARITHMETIC_DISPATCH',
                 acceptance=acceptance, baseline=baseline_ref, proof=proof_ref, plan=plan_ref, variant=variant_ref,
-                argv=argv, cpu_ids=runtime['cpu_ids'], state_diagnostics=states, **comparisons,
+                argv=case['argv'], cpu_ids=runtime['cpu_ids'], **comparisons,
                 target_executed=True, default_action='KEEP_ORIGINAL', deployment_authorized=False)
 
 
@@ -99,15 +115,7 @@ def check(path):
               and plan['proof'] == report['proof'] and report['argv'] == case['argv']
               and report['cpu_ids'] == runtime['cpu_ids'], 'confirmed program, plan or argv differs')
         commands = _commands(runtime, recipe, baseline, variant)
-    states = report['state_diagnostics']
-    expected_states = validation._compare_checkpoints(states['runs'], runtime, commands, case['argv'], recipe,
-                                                    expected, _CAMPAIGNS['dispatch_pairs'])
-    _need(all(states[key] == value for key, value in expected_states.items()), 'state replay differs')
-    for name, modes in _CAMPAIGNS.items():
-        rows = report[name]
-        pairs = rows['selection']['measurement_pairs']
-        expected_rows = validation._summarize(rows['runs'], modes, commands, case['argv'], recipe, expected, pairs)
-        _need(all(rows[key] == value for key, value in expected_rows.items()), 'native performance replay differs')
+    _check_comparisons(report, commands, runtime, recipe, case, expected, _CAMPAIGNS)
     return report
 
 

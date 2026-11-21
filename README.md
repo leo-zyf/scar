@@ -220,6 +220,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar study-cpu-arithmetic-dispatch --acceptance TASK_ACCEPTANCE.json --baseline FP_STUDY/native/result.json --out STUDY` 把现有算子调用的重复形状编译成共享 C++20 路径。它回读首轮和稳态的地址及浮点守卫合同，并分别与已有分组版和分组前的原生版做配对。`--check STUDY/result.json` 冷回读执行和性能证据。
 
+`scar study-cpu-coefficient-dispatch --acceptance TASK_ACCEPTANCE.json --baseline FP_STUDY/native/result.json --out STUDY` 将已证明的系数装载和数值操作放进同一个 C++20 循环，并移除已证明字节仍有效的重复静态写入。它保留系数、调用顺序、浮点检查及逐轮输出，按同一核组做原生 A/B，支持 `--check` 冷回读。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
