@@ -13,11 +13,13 @@ SELECTION = 'scar.whole-entry-main-chain'
 LEGALITIES = 'scar.whole-entry-source-legalities'
 COST_INPUTS = 'scar.whole-entry-cost-inputs'
 STACK_TARGET = 'scar.whole-entry-stack-target'
+OBSERVED_COSTS = 'scar.whole-entry-observed-costs'
 OPTION_SPACES = ('DISCOVER_ALL', 'EXACT_REGISTERED_SET', 'EXACT_GENERATED_FAMILY')
 FIXED_GRID_CPU = 'ATEN_FIXED_GRID_CPU_FILE_ENTRY'
 NVIDIA_HPC = 'NVIDIA_HPC'
 LIBTORCH = 'LIBTORCH_ATEN'
-_ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT'}
+_ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT',
+                 'NVHPC_SOURCE_ENTRY': NVIDIA_HPC}
 
 
 def _write(path, value):
@@ -31,7 +33,8 @@ def read_request(value):
     ref = value if isinstance(value, dict) else artifact_reference(Path(value).resolve(), REQUEST)
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
-    optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock'}
+    optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
+                'numerical_contract'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -47,6 +50,12 @@ def read_request(value):
         if (type(stack) is not dict or stack.get('schema') != 'scar.operator-stack'
                 or document.get('operator_stack', NVIDIA_HPC) != NVIDIA_HPC):
             raise ValueError('the NVIDIA stack policy requires an exact SDK lock reference')
+    if 'numerical_contract' in document:
+        from scar.compiler.compile_exported_nvhpc import _contract
+
+        contract = document['numerical_contract']
+        if type(contract) is not dict or contract != _contract(contract.get('atol'), contract.get('rtol')):
+            raise ValueError('a declared entry numerical contract is required')
     variant_source = document.get('variant_source')
     if variant_source is not None:
         if (type(variant_source) is not dict or set(variant_source) != {'family', 'proof'}
@@ -93,6 +102,8 @@ def _scope(plan, request):
         scope['entry_obligations_sha256'] = plan['entry_obligations']['sha256']
     if request['schema_version'] == 2 or 'operator_stack' in request or 'operator_stack_lock' in request:
         scope['operator_stack'] = request.get('operator_stack', NVIDIA_HPC)
+    if 'numerical_contract' in request:
+        scope['numerical_contract'] = request['numerical_contract']
     return scope
 
 
@@ -159,6 +170,8 @@ def _legalities(candidates, scope, discovery):
             evidence = qualification.get('evidence') or {}
             status, reason = _check_operator_stack(scope, _ROUTE_STACKS.get(item['route']), status, reason,
                                                    reference=evidence.get('operator_stack'))
+            if item['route'] == 'NVHPC_SOURCE_ENTRY' and status == 'LEGAL':
+                status, reason = 'UNRESOLVED', 'ORIGINAL_IMPORT_INITIALIZATION_EFFECTS_OPEN'
             facts.append(dict(option_id=id_, scope_sha256=scope_sha,
                 legal_status=status, reason=reason, qualification=qualification))
     if discovery is not None:
@@ -279,6 +292,32 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry):
     return dict(result, **inspected, target_executed=True)
 
 
+def _observed_costs(audit, delivery, scope_sha, out):
+    from scar.optimization.whole_entry_choice import LIFECYCLE_PHASES
+
+    results = [*audit, dict(option_id=delivery.get('selected_id'), validation=delivery.get('validation'))]
+    comparisons = []
+    for row in results:
+        validation = row.get('validation') or {}
+        timing = validation.get('timing')
+        if timing is None:
+            continue
+        facts = []
+        for option, mode in (('original', 'ORIGINAL'), (row['option_id'], 'NATIVE')):
+            observed = timing['metrics'][mode]
+            facts.append(dict(option_id=option, scope_sha256=scope_sha, kind='COMPLETE_INTERVAL',
+                basis='EMPIRICAL_ENVELOPE', interval_ns=dict(lower=observed['min_ns'], upper=observed['max_ns']),
+                lifecycle_coverage=dict.fromkeys(LIFECYCLE_PHASES, 'ACCOUNTED'),
+                coverage_basis='WHOLE_PROCESS_ELAPSED_INCLUDING_ALL_ACTUAL_PHASES',
+                process_validation=validation['reference'], median_ns=observed['median_ns'],
+                physical_duration_bounds=False))
+        comparisons.append(dict(challenger=row['option_id'], facts=facts))
+    if not comparisons:
+        return None
+    return _write(out/'whole-entry-observed-costs.json', dict(schema=OBSERVED_COSTS, schema_version=1,
+        comparisons=comparisons, separate_component_times_available=False))
+
+
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False):
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -329,4 +368,5 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         retained_validation_audit=audit,
         plan_only=plan_only, native_compiled=delivery.get('native_compiled', False),
         target_executed=delivery.get('target_executed', False))
+    report['observed_costs'] = _observed_costs(audit, delivery, choice['scope_sha256'], out)
     return dict(reference=_write(out/'whole-entry-selection.json', report), **report)

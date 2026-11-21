@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
+from subprocess import SubprocessError
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.paired_entry_selection import compare_entry_pairs
@@ -21,8 +22,9 @@ CALLER_PAYLOAD = 'scar.caller-pipeline-final-payload'
 CALLER_EXPORT = 'scar.caller-pipeline-final-slot-export'
 STATEFUL = 'scar.final-entry-capsule-payload'
 SPARSE = 'scar.native-parameterized-sparse-executable'
+NVHPC = 'scar.native-exported-nvhpc-cpu'
 _HEX = re.compile('[0-9a-f]{64}')
-_PROFILE_ERRORS = (OSError, ValueError, KeyError, TypeError, IndexError, ImportError)
+_PROFILE_ERRORS = (OSError, ValueError, KeyError, TypeError, IndexError, ImportError, SubprocessError)
 _ORIGINAL_OPTIONS = (None, 'NO_OP', 'KEEP_ORIGINAL', 'original')
 
 
@@ -185,11 +187,54 @@ def _sparse(scope, reference, document):
                 memory=memory, python_runtime_required=False)
 
 
+def _nvhpc(scope, reference, document):
+    from scar.analysis.nvhpc_source_entry import SCHEMA
+    from scar.codegen.native_provider_bundle import _content
+    from scar.compiler.compile_exported_nvhpc import check_nvhpc_project
+
+    root, checked, execution, _, _ = check_nvhpc_project(Path(reference['uri']).parent, reference['sha256'])
+    _require(checked == reference and 'entry_obligations_sha256' in scope,
+             'standalone NVHPC source delivery requires its original F4 entry obligations')
+    contract_ref = _ref_with_path(dict(path=str(root/'plan/source-entry.json'),
+        **document['files']['plan/source-entry.json']), SCHEMA)
+    contract = read_artifact(contract_ref)
+    source = _ref_with_path(contract['source'], 'scar.python-source')
+    _entry(scope, source['uri'], source['sha256'])
+    problem = json.loads((root/'plan/problem.json').read_bytes())
+    _target(scope, problem['target'])
+    memory = execution['storage']
+    _budget(scope, memory['serial_peak_bytes'])
+    _require(memory['budget_bytes'] == scope['memory_budget_bytes']
+             and execution['cpu_ids'] == scope['process_affinity_cpu_ids'],
+             'NVHPC CPU cohort or memory budget differs from the entry scope')
+    numerical = execution['numerical_contract']
+    _require(numerical == scope.get('numerical_contract', {'kind': 'EXACT_BYTES'}),
+             'NVHPC numerical contract differs from the original entry scope')
+    argv = list(map(Path, scope['argv']))
+    _require(len(argv) == contract['argv_count'] and all(path.is_absolute() for path in argv),
+             'NVHPC file ABI needs the exact number of absolute arguments')
+    inputs = []
+    for path, port in zip(argv[:len(contract['inputs'])], contract['inputs'], strict=True):
+        _require(path.is_file() and path.resolve(strict=True) == path and path.stat().st_size == port['nbytes'],
+                 'NVHPC input is outside the stable file size and identity domain')
+        inputs.append(_ref_with_path(dict(path=str(path), **_content(path)), 'scar.source-entry-input'))
+    outputs = argv[len(inputs):]
+    _require(len(set(outputs)) == len(outputs) and all(path.parent.is_dir() and path.resolve() == path
+             and not path.exists() and not path.is_symlink() for path in outputs),
+             'NVHPC file outputs must be fresh, distinct and canonical')
+    return dict(kind='STANDALONE_CPP', target=problem['target'], source=source, source_contract=contract_ref,
+        operator_stack=document['stack'], file_inputs=inputs, numerical_contract=numerical,
+        cpu_ids=execution['cpu_ids'], output_sizes=[row['nbytes'] for row in contract['outputs']],
+        launcher=artifact_reference(root/'launch.sh', 'scar.native-source-launcher'),
+        memory=memory, python_runtime_required=False)
+
+
 _ADAPTERS = {
     'ATEN_SOURCE_ENTRY': ((ATEN,), _aten),
     'CALLER_CAPSULE': ((CALLER_EXPORT, CALLER_PAYLOAD), _caller),
     'STATEFUL_CAPSULE': ((STATEFUL,), _stateful),
     'PARAMETERIZED_SPARSE': ((SPARSE,), _sparse),
+    'NVHPC_SOURCE_ENTRY': ((NVHPC,), _nvhpc),
 }
 
 
@@ -415,10 +460,18 @@ def _sparse_validation(scope, evidence, reference, minimum_gain):
     return _paired(timings, 1, len(rows) // 2 - 1, minimum_gain), None, launch
 
 
+def _nvhpc_validation(scope, evidence, reference, minimum_gain):
+    from scar.compiler.nvhpc_source_validation import replay_source_process
+
+    timing, context = replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain)
+    return timing, None, context
+
+
 _VALIDATORS = {
     'ATEN_SOURCE_ENTRY': _aten_validation,
     'CALLER_CAPSULE': _caller_validation,
     'PARAMETERIZED_SPARSE': _sparse_validation,
+    'NVHPC_SOURCE_ENTRY': _nvhpc_validation,
 }
 
 

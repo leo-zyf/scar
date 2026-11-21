@@ -144,23 +144,49 @@ def _actual_linkage(stack, dependencies):
     return verify_operator_stack_linkage(stack, dependencies, 'CPU')
 
 
-def compile_exported_nvhpc(model, *, model_sha256, stack, stack_sha256, target, cpus, threads, tensor_budget_bytes,
-                           out, input_shapes=(), atol=None, rtol=None, sgemm_observations=()):
-    import torch
-
+def compile_exported_nvhpc(model=None, *, model_sha256=None, stack, stack_sha256, target, cpus, threads, tensor_budget_bytes,
+                           out, input_shapes=(), atol=None, rtol=None, sgemm_observations=(), source_entry=None):
     from scar.compiler.operator_stack import load_operator_stack, nvidia_stack_build
 
-    source = _source(model, model_sha256)
+    direct_source = model is None
+    if (direct_source and (source_entry is None or model_sha256 is not None or input_shapes)
+            or not direct_source and model_sha256 is None):
+        raise ValueError('request a static Python entry or a pinned functional export and its shape profile')
     stack_ref, stack_doc = load_operator_stack(stack)
     if stack_ref['sha256'] != stack_sha256:
         raise ValueError('operator stack differs from its pinned digest')
     build = nvidia_stack_build(stack_doc, 'CPU')
     profiles = _shape_profiles(input_shapes)
-    recipe, shapes, weights, symbols, graph = _functional(torch.export.load(source['path']), profiles, torch)
+    if direct_source:
+        from scar.analysis.nvhpc_source_entry import build_nvhpc_source_recipe
+
+        path = Path(source_entry).resolve(strict=True)
+        source = dict(path=str(path), **_content(path))
+        recipe = build_nvhpc_source_recipe(path)
+        shapes = {row['id']: row['shape'] for row in recipe['inputs']}
+        for row in recipe['operations']:
+            left, right = (shapes[arg['value']] for arg in row['arguments'])
+            shapes[row['id']] = [left[0], right[1]]
+        graph = straight_line_graph(recipe, {key: tensor_type(shape) for key, shape in shapes.items()})
+        weights, symbols = {}, {}
+    else:
+        import torch
+
+        source = _source(model, model_sha256)
+        recipe, shapes, weights, symbols, graph = _functional(torch.export.load(source['path']), profiles, torch)
     graph_content = (codec.dumps(graph) + '\n').encode()
     program = dict(path=_PROGRAM, sha256=sha256(graph_content).hexdigest(), size_bytes=len(graph_content))
     kinds = {row['id']: 'WEIGHT' if row['id'] in weights else 'INPUT' for row in recipe['inputs']}
     projection = qualify_cuda_export(recipe, shapes, graph=graph, program_ref=program, input_kinds=kinds)
+    source_contract = None
+    if source_entry is not None:
+        from scar.analysis.nvhpc_source_entry import derive_nvhpc_source_entry
+
+        if weights:
+            raise ValueError('source file entry proof requires every original matrix as an input port')
+        source_contract = derive_nvhpc_source_entry(source_entry, recipe)
+        if direct_source and any(source[key] != source_contract['source'][key] for key in source):
+            raise ValueError('original Python entry changed while the numerical graph was built')
     cpus = list(cpus)
     from scar.optimization.nvhpc_sgemm_cost import SCHEMA as OBSERVATION
 
@@ -191,6 +217,10 @@ def compile_exported_nvhpc(model, *, model_sha256, stack, stack_sha256, target, 
         if observations:
             records['execution'].update(sgemm_observations=observations, time_status='COMPONENT_MODEL')
             records['body-forecast'] = _estimate_body(problem)
+        if source_contract is not None:
+            records['source-entry'] = source_contract
+        if direct_source:
+            records['execution']['source_kind'] = 'ORIGINAL_PYTHON_FILE_ENTRY'
         for name, data in records.items():
             _write_record(root / f'plan/{name}.json', data)
         (root / 'include/scar_generated/matrix_plan.hpp').write_text(_generate(projection, footprint, threads))
@@ -204,7 +234,7 @@ def compile_exported_nvhpc(model, *, model_sha256, stack, stack_sha256, target, 
             install_launcher=True)
         _, dependencies = build_native_project(root, _NAME, build['compiler'], expected_libraries=libraries)
         linkage = _actual_linkage(stack_doc, dependencies)
-        if _source(model, model_sha256) != source or load_operator_stack(stack_ref) != (stack_ref, stack_doc):
+        if _source(source['path'], source['sha256']) != source or load_operator_stack(stack_ref) != (stack_ref, stack_doc):
             raise ValueError('functional source export or toolchain changed during native compilation')
         manifest = dict(schema=SCHEMA, schema_version=1, status='STANDALONE_CPP20_NVHPC_CPU_CANDIDATE',
             cxx_standard=20, executable=_EXECUTABLE, stack=stack_ref, linkage=linkage, dependencies=dependencies,
@@ -254,6 +284,18 @@ def check_nvhpc_project(project, manifest_sha256):
         input_kinds={row['id']: row['kind'] for row in inputs})
     if projection != read('projection'):
         raise ValueError('NVHPC saved projection differs from the original typed graph')
+    if 'plan/source-entry.json' in manifest['files']:
+        from scar.analysis.nvhpc_source_entry import build_nvhpc_source_recipe, derive_nvhpc_source_entry
+
+        contract = read('source-entry')
+        if (any(row['kind'] != 'INPUT' for row in inputs)
+                or derive_nvhpc_source_entry(contract['source']['path'], recipe) != contract):
+            raise ValueError('original Python file ABI differs from its structural proof')
+        if execution.get('source_kind') == 'ORIGINAL_PYTHON_FILE_ENTRY' and (
+                contract['source']['path'] != source['path'] or recipe != build_nvhpc_source_recipe(source['path'])):
+            raise ValueError('NVHPC graph differs from direct original source normalization')
+    elif execution.get('source_kind') == 'ORIGINAL_PYTHON_FILE_ENTRY':
+        raise ValueError('direct original Python entry requires its source effect record')
     for row, port in zip(inputs, projection['inputs'], strict=True):
         expected = dict(port)
         if row['kind'] == 'WEIGHT':
@@ -298,6 +340,8 @@ def validate_nvhpc_project(project, manifest_sha256, arguments, out):
     import torch
 
     root, artifact, execution, recipe, projection = check_nvhpc_project(project, manifest_sha256)
+    if execution.get('source_kind') == 'ORIGINAL_PYTHON_FILE_ENTRY':
+        raise ValueError('use validate-source to compare the direct original Python process')
     inputs = execution['inputs']
     paths = _calibration_paths(arguments, inputs)
     receipts = [dict(path=str(path), **_content(path)) for path in paths]
@@ -354,7 +398,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog='scar compile-exported-nvhpc', description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     build = actions.add_parser('compile')
-    for name in ('model', 'model-sha256', 'stack', 'stack-sha256', 'target', 'out'):
+    build.add_argument('--model')
+    build.add_argument('--model-sha256')
+    for name in ('stack', 'stack-sha256', 'target', 'out'):
         build.add_argument('--' + name, required=True)
     build.add_argument('--tensor-budget-bytes', type=int, required=True)
     build.add_argument('--cpu-id', dest='cpus', type=int, action='append', required=True)
@@ -363,6 +409,7 @@ def main(argv=None):
     build.add_argument('--atol', type=float)
     build.add_argument('--rtol', type=float)
     build.add_argument('--sgemm-observation', dest='sgemm_observations', action='append', default=[])
+    build.add_argument('--source-entry', help='original Python file entry for structural source-to-export replay')
     check = actions.add_parser('check')
     validate = actions.add_parser('validate')
     for command in (check, validate):
@@ -370,6 +417,13 @@ def main(argv=None):
         command.add_argument('--manifest-sha256', required=True)
     validate.add_argument('--input', action='append', default=[])
     validate.add_argument('--out', required=True)
+    source = actions.add_parser('validate-source')
+    source.add_argument('--project', required=True)
+    source.add_argument('--manifest-sha256', required=True)
+    source.add_argument('--input', action='append', default=[])
+    source.add_argument('--out', required=True)
+    source.add_argument('--warmup-pairs', type=int, default=1)
+    source.add_argument('--measurement-pairs', type=int, default=3)
     parsed = parser.parse_args(argv)
     action, args = parsed.action, vars(parsed).copy()
     del args['action']
@@ -379,9 +433,18 @@ def main(argv=None):
     elif action == 'check':
         _, ref, *_ = check_nvhpc_project(**args)
         print(json.dumps(dict(project=ref, checked=True)))
-    else:
+    elif action == 'validate':
         result = validate_nvhpc_project(parsed.project, parsed.manifest_sha256, parsed.input, parsed.out)
         print(json.dumps(dict(accepted=result['accepted'], output=str(Path(parsed.out).resolve() / 'result.json'))))
+        if not result['accepted']:
+            return 2
+    else:
+        from scar.compiler.nvhpc_source_validation import validate_source_process
+
+        result = validate_source_process(parsed.project, parsed.manifest_sha256, parsed.input, parsed.out,
+            warmup_pairs=parsed.warmup_pairs, measurement_pairs=parsed.measurement_pairs)
+        print(json.dumps(dict(accepted=result['accepted'], timing=result['timing'],
+                              output=str(Path(parsed.out).resolve() / 'result.json'))))
         if not result['accepted']:
             return 2
     return 0
