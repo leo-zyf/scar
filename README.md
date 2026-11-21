@@ -190,7 +190,13 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 `--source-entry ENTRY.py` 可以直接从受支持的 Python FP32 文件入口生成矩阵图。此时省略 `--model`，参数名由输入顺序确定为 `input_0`、`input_1` 等。也可同时提供已导出的模型，交叉核对参数、矩阵数据流和发布顺序。随后的 `validate-source` 在同一核组以同一输入和发布路径交替运行两个进程，保留正确性和启动至退出的观测。`NVHPC_SOURCE_ENTRY` 路由可将这些记录接入 `plan-build` 和 `compile-build`。`whole-entry-observed-costs.json` 保存整程样本区间。原导入初始化效果未闭合时保留原入口。
 
+当请求固定 `operator_stack_lock`、`option_space: EXACT_GENERATED_FAMILY` 和空注册列表时，主链可以从原入口自动推导 CPU 矩阵实现。可选的 `sgemm_observations` 指向同形状和同核组的成本观测。`compile-build --verify-entry` 独立编译并对照唯一的已推导假设，试验和选型结果分别保存在同一报告内。
+
+`observe-nvhpc-source-effects` 和 `measure-nvhpc-lifecycle` 分别采集效果和成本诊断。注册实现的 `validation` 可引用 `scar.nvhpc-source-entry-evidence` v1，包含原整程 `process` 引用和诊断 `effects`、`lifecycle` 引用。两个诊断字段可为空。冷读在同一源码、参数、输入和设备作用域下复核，组件时间用于条件预测。
+
 `scar compile-exported-aten-cuda --operator-stack STACK.json` 使用同一 SDK 构建纯 CUDA 项目。`scar.aten-export-nvhpc-hybrid-offline-profile` 还支持 CPU CBLAS 和 GPU cuBLAS 共同执行的 FP32 GEMM 图。冷读同时核对形状、放置、显存和固定主存预算、事件依赖、CPU 核组及实际 ELF 链接。合成离线时长与设备预检结果分别保存。
+
+`scar.aten-export-nvhpc-placement-offline-profile` 按固定模型自动枚举 CPU、CUDA 和混合放置。在模型内选中包含 CUDA 的方案时生成工件，覆盖前沿开放或 CPU 更合适时保留原路径。完整布局、物化和证书留在 `placement-search.json`。
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
