@@ -4,16 +4,22 @@
 BUILD_TRANSITION = {
     'build.py': (
         'ffe32e2f9f15a2a7ba652309dbda5f71b7c5f35f8b9cc2bc5bef1925958b3425',
-        '14ebe380a60123229f410a817b650412b1eb2d51331665abf867adc1da444042',
+        '7365d3d10936b00fb6970277e566d9ea384195e5eb5106849ca8c9e500b8b4ef',
     ),
     'build_f4.py': (
         '31196fab20f5f75f335e7f23935df33e495aecf2b8da7ac6063faa1cedb0b525',
-        'a77718605d3c7f399b4f85dfdb047c0d07cc69f62e88bdfff20cb3b544251c24',
+        '1370a359755aba7655a986ff0a33d14dda481be5beebb8b0a3760874353850f5',
     ),
     'source_call_binding_view.py': (
         '00bcffb9b9ab02e03275c6221b938d12028865036db2870f26d63b84b68ece44',
         '1ac363cc7db0c4bb04a8fc17923947dd1bc61136f5c582c055141c60633babcd',
     ),
+}
+
+_BUILD_PREDECESSOR = {
+    'build.py': '14ebe380a60123229f410a817b650412b1eb2d51331665abf867adc1da444042',
+    'build_f4.py': 'a77718605d3c7f399b4f85dfdb047c0d07cc69f62e88bdfff20cb3b544251c24',
+    'build_reader_versions.py': 'a76a12c4ca908ce080bfaa9ff76684ce379e2f07dac008468ed57ff7f26cdb61',
 }
 
 LOOP_TRANSFER_TRANSITION = {
@@ -56,6 +62,13 @@ def compatible_pins(recorded, active, transition, *, added=()):
     previous = {name: digest for name, digest in active.items() if name not in added}
     previous.update({name: old for name, (old, _) in transition.items()})
     return recorded == previous
+
+
+def compatible_build_pins(recorded, active):
+    if compatible_pins(recorded, active, BUILD_TRANSITION, added=('build_reader_versions.py',)):
+        return True
+    return (all(active.get(name) == new for name, (_, new) in BUILD_TRANSITION.items())
+            and recorded == dict(active, **_BUILD_PREDECESSOR))
 
 
 def compatible_entry_producer(recorded, active):

@@ -619,7 +619,7 @@ class F4BuildSession:
 
 
 def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3600,max_input_bytes=16*1024**3,target=None,
-        bounded_call_bindings=(),catalog_handoff=None):
+        bounded_call_bindings=(),catalog_handoff=None,configuration_roots=None):
     from scar.analysis.build import _rules,_receipt,_write,_configuration_inputs,_build_target
     from scar.analysis.program_dependency_export import export_dependency_walk
     started=time.monotonic();bounded_inputs=_bounded_call_binding_inputs(bounded_call_bindings);out.mkdir(parents=True)
@@ -638,7 +638,9 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
             byte_scope='DIRECT_PUBLICATION_RECEIPTS',time_enforcement='COOPERATIVE_STAGE_BOUNDARIES'),
         entry_probe_limits=dict(max_points=max_points,max_edges=512,max_depth=8))
     _write(out/'manifest.json',report)
-    gaps=[];configuration=_configuration_inputs((entry.parent,*(Path(p).resolve() for p in source_roots)),out,gaps)
+    roots = (entry.parent, *(Path(p).resolve() for p in source_roots)) if configuration_roots is None else configuration_roots
+    gaps = []
+    configuration = _configuration_inputs(roots, out, gaps)
     session=F4BuildSession(out,_publishing=True,seconds=max_seconds,input_bytes=max_input_bytes,
         _catalog_handoff=catalog_handoff)
     try:

@@ -50,11 +50,10 @@ def _rules():
 
 
 def _admit_rules(recorded, *, publishing=False):
-    from scar.analysis.build_reader_versions import BUILD_TRANSITION, compatible_pins
+    from scar.analysis.build_reader_versions import compatible_build_pins
 
     active = _rules()
-    if recorded != active and (publishing or not compatible_pins(
-            recorded, active, BUILD_TRANSITION, added=('build_reader_versions.py',))):
+    if recorded != active and (publishing or not compatible_build_pins(recorded, active)):
         raise ValueError('build resource or assembly rules differ')
     return active
 
@@ -253,7 +252,7 @@ def _model_for(entry, explicit):
 
 def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
           max_seconds=3600, max_input_bytes=16 * 1024**3,catalog=None,cache_roots=(),target=None,
-          body_scope='all', call_binding=None, bounded_call_bindings=()):
+          body_scope='all', call_binding=None, bounded_call_bindings=(), configuration_roots=None):
     from scar.analysis.static_program import build_static_program, link_static_program, read_static_program
     from scar.analysis.static_calls import StaticCallBudget
     from scar.analysis.program_dependency_export import export_dependency_walk
@@ -288,7 +287,10 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
     if f4 is not None:
         return build_f4(entry,trace_path,out,f4,source_roots=source_roots,
             max_seconds=max_seconds,max_input_bytes=max_input_bytes,target=target_path,
-            bounded_call_bindings=bounded_call_bindings,catalog_handoff=catalog_handoff)
+            bounded_call_bindings=bounded_call_bindings,catalog_handoff=catalog_handoff,
+            configuration_roots=configuration_roots)
+    if configuration_roots is not None:
+        raise ValueError('explicit configuration roots require an admitted F4 catalog')
     if bounded_call_bindings:
         raise ValueError('bounded CALL metadata requires an admitted F4 catalog; legacy backend is unsupported')
     selected = _model_for(entry, model) if model or not source_roots else None
