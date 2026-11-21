@@ -59,6 +59,25 @@ def _paired(reference, entry, argv, stream_capture):
     return _context(original['executable']['uri'], spec['cpu_ids'], spec['cwd'], original['environment'])
 
 
+def verify_paired_original_scope(scope, reference):
+    """Check exact original launch identity for evidence added after planning."""
+    report = read_artifact(reference)
+    spec = report['invocation']
+    original = spec['arms']['original']
+    compilation = read_artifact(report['compilation'])
+    environment = sha256(json.dumps(sorted(original['environment'].items()), separators=(',', ':')).encode()).hexdigest()
+    _require(reference['schema'] == PAIRED_REPLAY
+             and compilation['entry'] == spec['entry']
+             and (spec['entry']['uri'], spec['entry']['sha256']) == (scope['entry'], scope['entry_sha256'])
+             and compilation['argv'] == scope['argv']
+             and spec['cpu_ids'] == scope['process_affinity_cpu_ids']
+             and spec['cwd'] == scope['working_directory']
+             and str(Path(original['executable']['uri']).resolve(strict=True)) == scope['python_executable']
+             and environment == scope['environment_sha256'],
+             'paired evidence must match the original entry, argv, CPU cohort and environment')
+    return report, compilation
+
+
 def _stream(reference, scope, entry, paired):
     capture = read_artifact(reference)
     _require(reference['schema'] == CAPTURE and capture['source'] == entry,

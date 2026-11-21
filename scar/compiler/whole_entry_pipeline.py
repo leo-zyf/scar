@@ -321,8 +321,9 @@ def _bind_tensor_flow(plan, scope):
                                    entry_obligations=plan['entry_obligations'])
 
 
-def _bind_cpu_observation(plan, scope, discovery):
-    paired, capture = scope.get('cpu_paired_observation'), scope.get('cpu_stream_capture')
+def _bind_cpu_observation(plan, scope, discovery, *, paired_evidence=None):
+    paired = paired_evidence or scope.get('cpu_paired_observation')
+    capture = scope.get('cpu_stream_capture')
     if paired is None and capture is None:
         return None
     from scar.analysis.cpu_provider_graph import bind_cpu_provider_graph, bind_cpu_stream_capture_graph
@@ -341,6 +342,35 @@ def _bind_cpu_observation(plan, scope, discovery):
     if flow['provider'] != (discovery or {}).get('matched_authority'):
         raise ValueError('retained CPU observation belongs to a different catalog authority')
     return flow
+
+
+def _attach_cpu_pair(plan, scope, discovery, path, current, out):
+    from scar.compiler.cpu_catalog_entry_trial import _compilation, _observation_summary
+    from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
+    from scar.compiler.cpu_entry_replay import SCHEMA
+
+    reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    paired, compilation = verify_paired_original_scope(scope, reference)
+    pinned = scope.get('cpu_paired_observation')
+    matches = [row for row in discovery['options'] if _cpu_catalog_option(row)
+               and row['proof']['emission_plan']['authority'] == compilation['provider']]
+    if (pinned not in (None, reference) or paired['capture'] != scope.get('cpu_stream_capture')
+            or compilation['catalog'] != scope['cpu_provider_catalog']
+            or len(matches) != 1):
+        raise ValueError('paired evidence differs from the retained CPU provider, capture or catalog')
+    option, = matches
+    emission = option['proof']['emission_plan']
+    compiled = _compilation(paired['compilation'], emission)
+    review = _observation_summary(reference, paired, compiled, emission, scope)
+    if pinned == reference:
+        graph_ref = current
+    else:
+        graph = _bind_cpu_observation(plan, scope, discovery, paired_evidence=reference)
+        graph_ref = _write(out/'whole-entry-cpu-provider-graph.json', graph)
+    audit = dict(option_id=option['id'], legal_status=option['legal_status'], reason='RETAINED_SCOPED_CPU_PAIR',
+        provider_replay=review, validation=dict(reference=reference, timing=None,
+            exact_declared_effects_replayed=False, provider_boundary_replayed=True))
+    return graph_ref, audit
 
 
 def _retain_projection(out, filename, report, retained):
@@ -386,7 +416,7 @@ def _attach_native_phase_cost(frontiers, nomination, path):
 
 
 def _attach_python_import_cost(plan, scope, frontiers, path):
-    from scar.compiler.cpu_python_import_diagnostic import check_original_import_scope
+    from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
     from scar.optimization.cpu_python_import_cost import SCHEMA, verify_cpu_python_import_cost
     from scar.optimization.resource_solver import semantic_sha256
 
@@ -397,7 +427,7 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
     if (cost['scope_sha256'] != semantic_sha256(scope) or graph['program'] != plan['program']
             or graph['entry_obligations']['sha256'] != plan['entry_obligations']['sha256']):
         raise ValueError('import diagnostic belongs to a different F4 program or entry proof')
-    check_original_import_scope(scope, observed['paired'])
+    verify_paired_original_scope(scope, observed['paired'])
     frontiers['cpu_python_import_cost'] = reference
 
 
@@ -406,9 +436,18 @@ def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cos
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
 
     ledger = frontiers['cpu_decision_ledger']
+    if phase_cost is not None:
+        from scar.analysis.cpu_native_publication_order import derive_cpu_native_publication_order
+        from scar.optimization.cpu_native_lifecycle_cost import SCHEMA
+
+        diagnostic = read_artifact(artifact_reference(Path(phase_cost).resolve(strict=True), SCHEMA))
+        frontiers['cpu_native_publication_order'] = _write(out/'whole-entry-native-publication-order.json',
+            derive_cpu_native_publication_order(diagnostic['phase_sites']))
     lifecycle = _write(out/'whole-entry-cpu-lifecycle.json',
         derive_cpu_entry_lifecycle_graph(frontiers['cpu_launch_resources'], decision_ledger=ledger,
-                                         capacity_contract=frontiers.get('cpu_capacity_contract')))
+            capacity_contract=frontiers.get('cpu_capacity_contract'),
+            original_publication_order=frontiers.get('cpu_original_publication_order'),
+            native_publication_order=frontiers.get('cpu_native_publication_order')))
     frontiers['cpu_entry_lifecycle'] = lifecycle
     if nomination is None:
         if probes or team_probe is not None or phase_cost is not None:
@@ -597,7 +636,7 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 @verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
-                       cpu_python_import_cost=None):
+                       cpu_python_import_cost=None, cpu_paired_evidence=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -611,7 +650,9 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('CPU forward cost analysis requires a CPU catalog domain')
     if cpu_python_import_cost is not None and not _infer_cpu_catalog(request):
         raise ValueError('CPU Python import observations require a CPU catalog domain')
-    if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
+    if cpu_paired_evidence is not None and not _infer_cpu_catalog(request):
+        raise ValueError('CPU paired evidence requires a CPU catalog domain')
+    if cpu_paired_evidence is None and 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
     live_scope = _scope(plan, request)
@@ -638,7 +679,15 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if ((cpu_observation_ref is None) != (cpu_observation is None) or cpu_observation_ref is not None
             and read_artifact(cpu_observation_ref) != cpu_observation):
         raise ValueError('CPU provider observation differs from original graph replay')
-    if flow is None and cpu_observation is None and plan.get('entry_obligations') is not None:
+    frontier_entry, paired_audit = entry, None
+    if cpu_paired_evidence is not None:
+        attached, paired_audit = _attach_cpu_pair(plan, live_scope, discovery, cpu_paired_evidence,
+                                                cpu_observation_ref, out)
+        if attached != cpu_observation_ref:
+            cpu_observation_ref = attached
+            frontier_entry = dict(entry, cpu_provider_graph=attached, entry_effect_frontier=None,
+                                  cpu_decision_ledger=None)
+    if flow is None and cpu_observation_ref is None and plan.get('entry_obligations') is not None:
         from scar.analysis.entry_obligations import verify_entry_obligations
 
         verify_entry_obligations(plan['entry_obligations'], program=plan['program'])
@@ -647,7 +696,12 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
-    cpu_frontiers = _cpu_frontiers(plan, live_scope, entry, out, priced_domain=priced_domain)
+    cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain)
+    if paired_audit is not None:
+        from scar.analysis.cpu_entry_publication_order import derive_cpu_entry_publication_order
+
+        cpu_frontiers['cpu_original_publication_order'] = _write(out/'whole-entry-original-publication-order.json',
+            derive_cpu_entry_publication_order(cpu_observation_ref))
     if cpu_python_import_cost is not None:
         _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
@@ -679,11 +733,12 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     else:
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
-    audit = []
+    audit = [] if paired_audit is None else [paired_audit]
     trial, device_trial = None, None
     if selected is None and verify_entry and not plan_only:
-        trial, device_trial, audit = _review_source_trials(discovery, generated, domain, live_scope, out,
-                                                          capacity_contract=capacity_contract)
+        trial, device_trial, new_audit = _review_source_trials(discovery, generated, domain, live_scope, out,
+                                                              capacity_contract=capacity_contract)
+        audit.extend(new_audit)
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
             id_ = fact['option_id']

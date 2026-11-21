@@ -138,8 +138,21 @@ def _graph(reference, scope, provider, threads, effects):
                  and graph['original_observer']['argv'] == scope['argv'], 'capture or original argv differs')
     else:
         source, cpu = graph['entry']['source'], graph['observed_launch_cpu_ids']
-        _require(graph['replay'] == scope.get('cpu_paired_observation') and graph['argv'] == scope['argv'],
+        pinned = scope.get('cpu_paired_observation')
+        _require(pinned in (None, graph['replay']) and graph['argv'] == scope['argv'],
                  'paired observation or original argv differs')
+        if pinned is None:
+            from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
+
+            paired, composition = verify_paired_original_scope(scope, graph['replay'])
+            _require(paired['capture'] == scope.get('cpu_stream_capture')
+                     and composition['catalog'] == scope['cpu_provider_catalog']
+                     and composition['provider'] == graph['provider']
+                     and [row['cpu_id'] for row in cpu] == paired['invocation']['cpu_ids']
+                     and graph['compilation'] == paired['compilation']
+                     and graph['working_directory'] == scope['working_directory']
+                     and graph['original_environment_sha256'] == scope['environment_sha256'],
+                     'late paired graph differs from the exact original launch and provider')
     _require((source['uri'], source['sha256']) == (scope['entry'], scope['entry_sha256'])
              and {row['cpu_id'] for row in cpu} <= set(scope['process_affinity_cpu_ids'])
              and all(row['target_thread'] is None or row['target_thread'] == threads.get(row['cpu_id']) for row in cpu),

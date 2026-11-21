@@ -116,7 +116,32 @@ def _stream_edges(lane, graph, prefix, nodes, graph_ref):
                       _fact(graph_ref, f'{base}/edges/{index}'))
 
 
-def _original_lane(resources, resources_ref, effects, option):
+def _source_publication(lane, work, named, anchors, nodes, graph_ref, order_ref):
+    from scar.analysis.cpu_entry_publication_order import verify_cpu_entry_publication_order
+
+    proof = verify_cpu_entry_publication_order(order_ref)
+    _need(proof['provider_graph'] == graph_ref, 'publication proof belongs to another original effect graph')
+    if proof['status'] != 'PROVEN_SCOPED_NORMAL_SUCCESS':
+        return
+    calls = []
+    for role, kind in (('file', 'FILE_PUBLICATION'), ('stdout', 'STDOUT_BYTES')):
+        pointer = proof['anchors'][f'{role}_role']
+        observed = [row for row in named if row['kind'] == kind
+                    and any(anchors[index]['original'] == pointer for index in row['source_anchors'])]
+        _need(len(observed) == 1, 'source publication proof needs one named effect for each call')
+        fact = _fact(order_ref, f'#/anchors/{role}_operation')
+        call = lane.operation(f'publication:source:{role}', f'SOURCE_{role.upper()}_PUBLICATION_CALL',
+                              'publication', 'F4_SOURCE_CALL', fact)
+        lane.edge(work, call, _Relation.CONTAINS, 'PROJECTED_SOURCE_CALL', fact)
+        lane.edge(call, nodes[observed[0]['original']], _Relation.OBSERVABLE_ASSOCIATION,
+                  'COMPATIBLE_NAMED_OUTPUT_OBSERVATION', fact)
+        calls.append(call)
+    condition, = proof['edge']['conditions']
+    lane.edge(*calls, _Relation.HAPPENS_BEFORE, 'ORIGINAL_FILE_CALL_COMPLETION_BEFORE_STDOUT_CALL_ENTRY',
+              _fact(order_ref, '#/edge'), when=condition['name'])
+
+
+def _original_lane(resources, resources_ref, effects, option, order_ref=None):
     effects_ref = resources['entry_effect_frontier']
     lane = _Lane(option, 'ORIGINAL')
     envelope = lane.operation('boundary', 'PROCESS_ENTRY_LIFECYCLE', None, 'F4_ENTRY_BOUNDARY',
@@ -158,10 +183,32 @@ def _original_lane(resources, resources_ref, effects, option):
             _stream_edges(lane, graph, '#', nodes, graph_ref)
         elif graph.get('stream_capture') is not None:
             _stream_edges(lane, graph['stream_capture'], '#/stream_capture', nodes, graph_ref)
+    if order_ref is not None:
+        _source_publication(lane, work, named, effects['observed']['source_anchors'], nodes, graph_ref, order_ref)
     return lane.finish()
 
 
-def _candidate_lane(capacity, capacity_ref):
+def _native_publication(lane, publication, capacity, order_ref):
+    from scar.analysis.cpu_native_publication_order import verify_cpu_native_publication_order
+
+    proof = verify_cpu_native_publication_order(order_ref)
+    _need(proof['scope_sha256'] == capacity['scope_sha256'] and proof['option_id'] == capacity['option_id']
+          and proof['runtime'] == capacity['evidence']['runtime']
+          and proof['binary'] == capacity['native_launch']['executable'],
+          'native publication proof differs from the nominated entry')
+    calls = {}
+    for index, row in enumerate(proof['operations']):
+        name = row['id']
+        fact = _fact(order_ref, f'#/operations/{index}')
+        calls[name] = call = lane.operation(f'publication:native:{name.lower()}', name, 'publication',
+                                            'GENERATED_CPP_CALL', fact)
+        lane.edge(publication, call, _Relation.CONTAINS, 'GENERATED_PUBLICATION_STATEMENT', fact)
+    for index, row in enumerate(proof['edges']):
+        lane.edge(calls[row['source']], calls[row['target']], _Relation.HAPPENS_BEFORE,
+                  'EXACT_GENERATED_CPP_PUBLICATION_ORDER', _fact(order_ref, f'#/edges/{index}'), when=row['when'])
+
+
+def _candidate_lane(capacity, capacity_ref, order_ref=None):
     lane = _Lane(capacity['option_id'], 'CONDITIONAL_NATIVE_CANDIDATE')
     ref = capacity['evidence']['runtime']
     runtime = read_artifact(ref)
@@ -210,10 +257,13 @@ def _candidate_lane(capacity, capacity_ref):
         lane.edge(left, right, _Relation.HAPPENS_BEFORE, basis, fact, when=condition)
     lane.edge(work, publication, _Relation.DATA, 'ORDERED_RESULTS_RETAINED_IN_OWNER',
               _fact(ref, '#/decision/scheduled_pod_result_lifetime'), publication_fact, when=condition)
+    if order_ref is not None:
+        _native_publication(lane, publication, capacity, order_ref)
     return lane.finish()
 
 
-def derive_cpu_entry_lifecycle_graph(launch_resources, *, decision_ledger=None, capacity_contract=None):
+def derive_cpu_entry_lifecycle_graph(launch_resources, *, decision_ledger=None, capacity_contract=None,
+                                     original_publication_order=None, native_publication_order=None):
     """Cold-build source and optional candidate operation lanes without measuring time."""
     resources = verify_cpu_launch_resources(launch_resources)
     effects_ref = resources['entry_effect_frontier']
@@ -231,7 +281,7 @@ def derive_cpu_entry_lifecycle_graph(launch_resources, *, decision_ledger=None, 
         _need(ledger['effect_frontier'] == effects_ref and ledger['target']['graph'] == resources['target']
               and ledger['provider_graph'] == resources['cpu_graph'], 'decision ledger belongs to another entry scope')
         baseline, scope = ledger['baseline_id'], ledger['scope_sha256']
-    lanes = [_original_lane(resources, launch_resources, effects, baseline)]
+    lanes = [_original_lane(resources, launch_resources, effects, baseline, original_publication_order)]
     frontier = [
         dict(kind='ORIGINAL_EFFECT_REQUIREMENTS_OPEN', evidence=[_fact(effects_ref, '#/static')]),
         dict(kind='RESOURCE_ENTRY_AND_DESCENDANT_LIMITS_OPEN',
@@ -239,19 +289,26 @@ def derive_cpu_entry_lifecycle_graph(launch_resources, *, decision_ledger=None, 
         dict(kind='LIFECYCLE_TIME_AND_UNOBSERVED_OVERLAP_OPEN', evidence=[_fact(launch_resources, '#')]),
     ]
     if capacity is not None and capacity['status'] == ADMISSIBLE:
-        lanes.append(_candidate_lane(capacity, capacity_contract))
+        lanes.append(_candidate_lane(capacity, capacity_contract, native_publication_order))
     else:
+        _need(native_publication_order is None, 'native publication order requires a nominated candidate')
         frontier.append(dict(kind='EXACT_CANDIDATE_SCHEDULE_NOT_PROJECTED', evidence=[] if capacity is None
                              else [_fact(capacity_contract, '#/reason')]))
-    return dict(schema=SCHEMA, schema_version=1, launch_resources=launch_resources, decision_ledger=decision_ledger,
+    report = dict(schema=SCHEMA, schema_version=1, launch_resources=launch_resources, decision_ledger=decision_ledger,
         capacity_contract=capacity_contract, program=resources['program'], target=resources['target'],
         effect_frontier=effects_ref, scope_sha256=scope, lanes=lanes, coverage_frontier=frontier,
         time_bounds_proven=False, whole_entry_equivalence_proven=False, transformation_authorized=False)
+    if original_publication_order is not None:
+        report['original_publication_order'] = original_publication_order
+    if native_publication_order is not None:
+        report['native_publication_order'] = native_publication_order
+    return report
 
 
 def verify_cpu_entry_lifecycle_graph(reference):
     report = read_artifact(reference)
     _need(reference['schema'] == SCHEMA and report == derive_cpu_entry_lifecycle_graph(
         report['launch_resources'], decision_ledger=report['decision_ledger'],
-        capacity_contract=report['capacity_contract']), 'saved lifecycle differs at replay')
+        capacity_contract=report['capacity_contract'], original_publication_order=report.get('original_publication_order'),
+        native_publication_order=report.get('native_publication_order')), 'saved lifecycle differs at replay')
     return report

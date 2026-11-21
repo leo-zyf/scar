@@ -4,27 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
 from scar.compiler.cpu_entry_replay import SCHEMA as PAIRED
-from scar.compiler.entry_delivery import _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.cpu_entry_decision_ledger import SCHEMA as LEDGER, verify_cpu_entry_decision_ledger
-
-
-def check_original_import_scope(scope, paired_reference):
-    """Bind a diagnostic to the original arm rather than the native candidate."""
-    paired = read_artifact(paired_reference)
-    launch = paired['invocation']
-    original = launch['arms']['original']
-    compiled = read_artifact(paired['compilation'])
-    if (paired_reference['schema'] != PAIRED
-            or compiled['entry'] != launch['entry']
-            or (launch['entry']['uri'], launch['entry']['sha256']) != (scope['entry'], scope['entry_sha256'])
-            or compiled['argv'] != scope['argv']
-            or launch['cpu_ids'] != scope['process_affinity_cpu_ids']
-            or launch['cwd'] != scope['working_directory']
-            or str(Path(original['executable']['uri']).resolve(strict=True)) != scope['python_executable']
-            or _environment_digest(original['environment']) != scope['environment_sha256']):
-        raise ValueError('import diagnostic does not match the original entry, argv, CPU cohort or environment')
 
 
 def _write(path, document):
@@ -66,7 +49,7 @@ def main(argv=None):
     ledger = verify_cpu_entry_decision_ledger(ledger_ref)
     obligations = read_artifact(ledger['effect_frontier'])['entry_obligations']
     paired = artifact_reference(args.paired.resolve(strict=True), PAIRED)
-    check_original_import_scope(read_artifact(ledger['domain'])['scope'], paired)
+    verify_paired_original_scope(read_artifact(ledger['domain'])['scope'], paired)
     out = args.out.resolve()
     samples = out/'samples'
     if args.recover:

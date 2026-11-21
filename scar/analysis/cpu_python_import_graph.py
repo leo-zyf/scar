@@ -81,7 +81,7 @@ def _verify_scope(original, entry_obligations, observation, decision_ledger):
 
     scope_id = None
     if decision_ledger is not None:
-        from scar.compiler.cpu_python_import_diagnostic import check_original_import_scope
+        from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
 
         ledger = verify_cpu_entry_decision_ledger(decision_ledger)
         scope = read_artifact(ledger['domain'])['scope']
@@ -89,7 +89,7 @@ def _verify_scope(original, entry_obligations, observation, decision_ledger):
               and scope['entry_obligations_sha256'] == entry_obligations['sha256']
               and scope['target'] == target and ledger['target']['graph'] == target,
               'decision ledger belongs to another source, invocation or target')
-        check_original_import_scope(scope, observation['paired'])
+        verify_paired_original_scope(scope, observation['paired'])
         scope_id = ledger['scope_sha256']
     return source, target, scope_id
 
