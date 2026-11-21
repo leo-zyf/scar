@@ -1,4 +1,4 @@
-"""Compile an offline CUDA or hybrid candidate from a functional torch.export."""
+"""Compile an offline CUDA candidate from an export or a qualified Python entry."""
 
 import argparse
 import json
@@ -24,6 +24,8 @@ EXECUTABLE = 'bin/aten-inference-cuda'
 CUDA_ENVIRONMENT = ('CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER', 'CUDA_MPS_PIPE_DIRECTORY')
 _MODEL_PATH = 'plan/cuda-model.json'
 _PROGRAM_PATH = 'plan/program.json'
+_SOURCE_ENTRY = 'plan/source-entry.json'
+_ORIGINAL_ENTRY = 'ORIGINAL_PYTHON_FILE_ENTRY'
 _HYBRID_MODEL = 'scar.aten-export-hybrid-offline-profile'
 _NVHPC_HYBRID_MODEL = 'scar.aten-export-nvhpc-hybrid-offline-profile'
 _NVHPC_PLACEMENT_MODEL = 'scar.aten-export-nvhpc-placement-offline-profile'
@@ -193,10 +195,28 @@ def _describe(root):
     return json.loads(observation)
 
 
-def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sha256,
+def _original_entry(path):
+    from scar.analysis.nvhpc_source_entry import build_nvhpc_source_recipe, derive_nvhpc_source_entry
+
+    recipe = build_nvhpc_source_recipe(path)
+    return recipe, derive_nvhpc_source_entry(path, recipe)
+
+
+def _require_source_profile(profile, operator_stack):
+    from scar.compiler.aten_export_cuda_plan import OFFLINE_PROFILE
+
+    if operator_stack is None or not isinstance(profile, dict) or profile.get('schema') not in (
+            OFFLINE_PROFILE, _NVHPC_HYBRID_MODEL, _NVHPC_PLACEMENT_MODEL):
+        raise ValueError('original Python CUDA entry requires a pinned NVIDIA stack and an admitted offline profile')
+
+
+def compile_exported_aten_cuda(model=None, *, model_sha256=None, cuda_model, cuda_model_sha256,
                                out, input_shapes=(), cuda_root=None, with_activity_calibration=False,
-                               placement_ordinal=None, operator_stack=None):
-    import torch
+                               placement_ordinal=None, operator_stack=None, source_entry=None):
+    direct_source = source_entry is not None
+    if ((model is None) != direct_source or direct_source and (model_sha256 is not None or input_shapes)
+            or not direct_source and model_sha256 is None):
+        raise ValueError('request an original Python file entry or a pinned functional export with its shape profile')
 
     if operator_stack is not None:
         from scar.compiler.operator_stack import (
@@ -207,9 +227,10 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             raise ValueError('the NVIDIA operator stack pins CUDA paths and excludes legacy activity profiles')
         stack_reference, stack_document = load_operator_stack(operator_stack)
 
-    model = Path(model).resolve(strict=True)
-    source_lock = _content(model)
-    if source_lock['sha256'] != model_sha256:
+    source_path = Path(source_entry if direct_source else model).resolve(strict=True)
+    source_lock = _content(source_path)
+    source = dict(path=str(source_path), **source_lock)
+    if not direct_source and source_lock['sha256'] != model_sha256:
         raise ValueError('exported model differs from its declared digest')
     model_file = Path(cuda_model).resolve(strict=True)
     model_bytes = model_file.read_bytes()
@@ -217,6 +238,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
     if model_lock['sha256'] != cuda_model_sha256:
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
+    if direct_source:
+        _require_source_profile(declared, operator_stack)
     nvhpc_profile = isinstance(declared, dict) and declared.get('schema') in (_NVHPC_HYBRID_MODEL, _NVHPC_PLACEMENT_MODEL)
     if nvhpc_profile and operator_stack is None:
         raise ValueError('the NVIDIA placement profile requires one pinned operator stack')
@@ -224,10 +247,21 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
     qualify, plan, _, status = _pipeline(declared, treatment=treatment)
     plan_options = {'ordinal': placement_ordinal} if treatment else {}
     with_activity_calibration = with_activity_calibration or treatment
-    exported = torch.export.load(model)
-    recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
-    include = Path(torch.__file__).resolve().parent / 'include'
-    recipe = normalize_recipe(recipe, _resolve([op['schema'] for op in recipe['operations']], torch, include), torch)
+    source_contract = None
+    if direct_source:
+        recipe, source_contract = _original_entry(source_path)
+        if any(value != source_contract['source'][key] for key, value in source.items()):
+            raise ValueError('original Python entry changed during source qualification')
+        projected = source_contract['projection']
+        shapes = {row['id']: row['shape'] for row in (*projected['inputs'], *projected['operations'])}
+        weights, symbols = {}, {}
+    else:
+        import torch
+
+        exported = torch.export.load(source_path)
+        recipe, shapes, weights, symbols = _project(exported, _shape_profiles(input_shapes), torch)
+        include = Path(torch.__file__).resolve().parent / 'include'
+        recipe = normalize_recipe(recipe, _resolve([op['schema'] for op in recipe['operations']], torch, include), torch)
     graph = straight_line_graph(recipe, {name: tensor_type(shape) for name, shape in shapes.items()})
     kinds = {row['id']: 'WEIGHT' if row['id'] in weights else 'INPUT' for row in recipe['inputs']}
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
@@ -246,6 +280,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         model_ref = dict(path=_MODEL_PATH, **_content(root / _MODEL_PATH))
         if model_ref != dict(path=_MODEL_PATH, **model_lock):
             raise ValueError('declared CUDA model changed when it was read')
+        if source_contract is not None and program_ref != source_contract['program']:
+            raise ValueError('CUDA source geometry differs from the original Python entry graph')
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
         problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref, **plan_options)
         host_lane = 'host_resource' in bindings
@@ -284,11 +320,13 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
                 weights[row['id']].numpy().tofile(path)
                 row.update(path=relative, payload=_content(path))
             inputs.append(row)
-        source = dict(path=str(model), **source_lock)
         records = {'recipe': recipe, 'projection': projection, 'problem': problem, 'schedule': schedule,
                    'bindings': bindings, 'execution': dict(source=source, program=program_ref, model=model_ref,
                        inputs=inputs, symbolic_profile=symbols,
                        actual_device_timing='UNKNOWN', deployment_authorized=False, default_backend='NO_OP')}
+        if source_contract is not None:
+            records['source-entry'] = source_contract
+            records['execution']['source_kind'] = _ORIGINAL_ENTRY
         if with_activity_calibration:
             records['execution']['activity_calibration_abi'] = 1
         if placement:
@@ -326,7 +364,7 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             members = {role: dict(path=path, **_content(root / path)) for role, path in _ACTIVITY_MEMBERS.items()}
             _write_record(root / ACTIVITY_BINDING,
                           derive_activity_binding(graph, problem, schedule, bindings, references=members))
-        if _content(model) != source_lock or _content(model_file) != model_lock:
+        if _content(source_path) != source_lock or _content(model_file) != model_lock:
             raise ValueError('exported source or CUDA profile changed during native compilation')
         report = dict(schema=SCHEMA, schema_version=1, status=status,
             cxx_standard=20, executable=EXECUTABLE, source=source, dependencies=dependencies,
@@ -337,6 +375,8 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             report['activity_calibration_abi'] = 1
         if stack is not None:
             report['operator_stack'] = stack
+        if source_contract is not None:
+            report['source_kind'] = _ORIGINAL_ENTRY
         _write_record(root / 'artifact.json', report)
         if stack is not None:
             from scar.runtime.validate_native_project import verify_native_project
@@ -368,10 +408,23 @@ def replay_cuda_project(root, manifest, member):
     if (execution['program'] != dict(path=_PROGRAM_PATH, **files[_PROGRAM_PATH])
             or execution['model'] != dict(path=_MODEL_PATH, **files[_MODEL_PATH])):
         raise ValueError('CUDA candidate has a different source graph or declared profile')
+    source_kind = manifest.get('source_kind')
+    if (source_kind != execution.get('source_kind') or source_kind not in (None, _ORIGINAL_ENTRY)
+            or (_SOURCE_ENTRY in files) != (source_kind == _ORIGINAL_ENTRY)):
+        raise ValueError('CUDA artifact does not carry the declared original source-entry proof')
     graph = codec.loads(member(_PROGRAM_PATH).read_text())
     inputs = execution['inputs']
     kinds = {row['id']: row['kind'] for row in inputs}
-    projection = qualify(read('recipe'), graph=graph, program_ref=execution['program'], input_kinds=kinds)
+    recipe = read('recipe')
+    if source_kind == _ORIGINAL_ENTRY:
+        _require_source_profile(declared, manifest.get('operator_stack'))
+        source = execution['source']
+        expected_recipe, contract = _original_entry(source['path'])
+        if (recipe != expected_recipe or contract != read('source-entry') or contract['program'] != execution['program']
+                or source != {key: contract['source'][key] for key in ('path', 'sha256', 'size_bytes')}
+                or execution['symbolic_profile'] != {} or any(kind != 'INPUT' for kind in kinds.values())):
+            raise ValueError('CUDA source entry differs from the original Python code or ordered file effects')
+    projection = qualify(recipe, graph=graph, program_ref=execution['program'], input_kinds=kinds)
     if projection != read('projection'):
         raise ValueError('CUDA projection differs from the replayed typed source graph')
     for observed, port in zip(inputs, projection['inputs'], strict=True):
@@ -431,6 +484,8 @@ def replay_cuda_project(root, manifest, member):
         result['host_cpu_ids'] = bindings['host_cpu_ids']
     if placement is not None:
         result['device_placements_replayed'] = True
+    if source_kind == _ORIGINAL_ENTRY:
+        result['original_source_entry_replayed'] = True
     if treatment:
         result['calibration_placement_ordinal'] = placement['ordinal']
     if abi is not None:
@@ -449,7 +504,11 @@ def replay_cuda_project(root, manifest, member):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='scar compile-exported-aten-cuda', description=__doc__)
-    for name in ('model', 'model-sha256', 'cuda-model', 'cuda-model-sha256', 'out'):
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--model', help='functional torch.export file')
+    source.add_argument('--source-entry', help='original Python matrix-file entry for a pinned NVIDIA stack')
+    parser.add_argument('--model-sha256')
+    for name in ('cuda-model', 'cuda-model-sha256', 'out'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--input-shape', action='append', default=[], dest='input_shapes')
     cuda_provider = parser.add_mutually_exclusive_group()
@@ -460,6 +519,10 @@ def main(argv=None):
     parser.add_argument('--placement-ordinal', type=int,
                         help='build a capacity-feasible GPU placement for calibration in CPU-first source order')
     args = parser.parse_args(argv)
+    if args.model is not None and args.model_sha256 is None:
+        parser.error('--model requires --model-sha256')
+    if args.source_entry is not None and (args.model_sha256 is not None or args.input_shapes):
+        parser.error('--source-entry derives its original source identity and input shapes')
     report = compile_exported_aten_cuda(**vars(args))
     print(json.dumps(dict(status=report['status'], executable=str(Path(args.out) / report['executable']),
                           deployment_authorized=report['deployment_authorized'])))
