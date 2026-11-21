@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 from threading import get_ident
 from types import CodeType
@@ -258,13 +259,74 @@ def capture(plan_path,out,configuration_ports=()):
         original_execution=True,performance_measurement=False))
 
 
+def capture_stream(design, stdin, protocol_plan, cpu, out, configuration_ports=()):
+    """Bind the original diagnostic, raw command input and its process launch."""
+    from scar.compiler.cpu_entry_replay import _pace, _paced_transcript
+    from scar.optimization.scalar_recursive_parameterized_plan import SCHEMA as PROTOCOL, _load_plan, _stdout
+
+    if type(cpu) is not int or cpu not in os.sched_getaffinity(0):
+        raise ValueError('captured stream requires one available CPU')
+    design = Path(design).resolve(strict=True)
+    design_ref = _ref(design, SCHEMA)
+    stdin = _ref(Path(stdin).resolve(strict=True), 'application/octet-stream')
+    protocol = _ref(Path(protocol_plan).resolve(strict=True), PROTOCOL)
+    plan = _load_plan(protocol['uri'])
+    if plan['scope']['source'] != read_artifact(design_ref)['source']:
+        raise ValueError('pacing plan identifies a different original source')
+    payload = read_artifact(stdin, json_document=False)
+    transcript, effects, depths = _paced_transcript(payload, plan)
+    out = Path(out).resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    raw, stdout, stderr = (out/name for name in ('raw.json', 'stdout.bin', 'stderr.bin'))
+    command = ['/usr/bin/taskset', '-c', str(cpu), '/usr/bin/timeout', '-k', '2', '120',
+               str(Path(sys.executable).resolve()), '-B', '-u', '-m',
+               'scar.runtime.scalar_recursive_driver_observe',
+               '--design', str(design), '--out', str(raw)]
+    for port in configuration_ports:
+        command.extend(('--configuration-port', port))
+    environment = dict(PATH=os.defpath, LANG='C.UTF-8', LC_ALL='C', PYTHONDONTWRITEBYTECODE='1', PYTHONHASHSEED='0')
+    cwd = str(Path.cwd().resolve())
+    with stdout.open('xb') as output, stderr.open('xb') as errors:
+        with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+                              env=environment, cwd=cwd) as process:
+            events = _pace(process, output, transcript, record=True)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command)
+    if stderr.stat().st_size or read_artifact(stdin, json_document=False) != payload:
+        raise ValueError('stream capture changed its input or emitted diagnostic stderr')
+    launch = out/'launch.json'
+    launch.write_text(json.dumps(dict(command=command, cwd=cwd, environment=environment, stdin=stdin['uri'],
+        protocol_plan=protocol, pacing='WAIT_FOR_MATCHED_STDOUT_PREFIX',
+        stdin_mode='PACED_PIPE', pacing_events=events,
+        normalized_stdout_sha256=_stdout(stdout.read_bytes(), effects)),
+                                 indent=2, sort_keys=True)+'\n')
+    raw_ref = _ref(raw, CAPTURE)
+    observation = read_artifact(raw_ref)
+    if (observation['design'] != design_ref or observation['frontiers'] or observation['launch']['exit_code'] != 0
+            or len(observation['sessions']) != len(depths)):
+        raise ValueError('stream capture did not observe a complete original diagnostic')
+    read_artifact(design_ref, json_document=False)
+    read_artifact(protocol, json_document=False)
+    return _write(out/'result.json', dict(observation, raw_capture=raw_ref, stdin=stdin,
+        stdout=_ref(stdout, 'application/octet-stream'), captured_launch=_ref(launch, 'application/octet-stream')))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--design',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--configuration-port',action='append',default=[])
+    parser.add_argument('--stdin',type=Path,help='capture a sealed original input stream into an output directory')
+    parser.add_argument('--cpu',type=int,help='exact CPU for a sealed stream capture')
+    parser.add_argument('--protocol-plan',type=Path,help='original typed command and acknowledgement plan')
     args = parser.parse_args()
-    capture(args.design,args.out,args.configuration_port)
+    specified = (args.stdin, args.cpu, args.protocol_plan)
+    if any(value is not None for value in specified) and any(value is None for value in specified):
+        parser.error('--stdin, --cpu and --protocol-plan must be provided together')
+    if args.stdin is None:
+        capture(args.design,args.out,args.configuration_port)
+    else:
+        print(capture_stream(args.design,args.stdin,args.protocol_plan,args.cpu,args.out,args.configuration_port)['uri'])
 
 
 if __name__ == '__main__':

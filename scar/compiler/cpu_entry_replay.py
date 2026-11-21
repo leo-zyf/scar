@@ -34,8 +34,24 @@ def _raw(reference):
     return read_artifact(reference, json_document=False)
 
 
+def _paced_transcript(tape, plan):
+    from scar.optimization.scalar_recursive_parameterized_plan import _tape
+
+    effects, depths = _tape(tape, plan)
+    heads = {row['kind']: row['tokens'] for row in plan['grammar']['commands']}
+    markers = {tuple(heads[kind]): last['lines'][-1]
+               for kind, last in zip(('UCI', 'ISREADY'), plan['startup']['static_replies'], strict=True)}
+    transcript = []
+    go = heads['GO_DEPTH']
+    for line in tape.decode('ascii').splitlines(keepends=True):
+        tokens = line.split()
+        marker = 'bestmove ' if tokens[:len(go)] == go else markers.get(tuple(tokens))
+        transcript.append(dict(line=line, acknowledgement=marker))
+    return transcript, effects, depths
+
+
 def _recursive(record, compiled, capture_ref, cpu):
-    from scar.optimization.scalar_recursive_parameterized_plan import _stdout, _tape
+    from scar.optimization.scalar_recursive_parameterized_plan import _stdout
 
     capture = read_artifact(capture_ref)
     runtime = read_artifact(compiled['runtime'])
@@ -51,17 +67,7 @@ def _recursive(record, compiled, capture_ref, cpu):
     _need(command[observer - 3:observer] == ['-B', '-u', '-m'] and context['stdin'] == capture['stdin']['uri'],
           'original interpreter and source command stream must be bound by the capture')
     python = artifact_reference(Path(command[observer - 4]).absolute(), 'application/x-executable')
-    tape = _raw(capture['stdin'])
-    effects, depths = _tape(tape, plan)
-    heads = {row['kind']: row['tokens'] for row in plan['grammar']['commands']}
-    markers = {tuple(heads[kind]): last['lines'][-1]
-               for kind, last in zip(('UCI', 'ISREADY'), plan['startup']['static_replies'], strict=True)}
-    transcript = []
-    go = heads['GO_DEPTH']
-    for line in tape.decode('ascii').splitlines(keepends=True):
-        tokens = line.split()
-        marker = 'bestmove ' if tokens[:len(go)] == go else markers.get(tuple(tokens))
-        transcript.append(dict(line=line, acknowledgement=marker))
+    transcript, effects, depths = _paced_transcript(_raw(capture['stdin']), plan)
     _need(len(depths) == len(capture['sessions']) and type(cpu) is int and cpu >= 0,
           'one bound CPU and original observations for the complete stream required')
     native = compiled['invocation']['executable']
@@ -126,21 +132,32 @@ def _layout(spec, root, warmups, pairs):
             yield dict(pair=pair, mode=mode, cwd=spec['cwd'], argv=cmd, environment=arm['environment']), run
 
 
-def _pace(process, output, transcript):
+def _pace(process, output, transcript, *, record=False):
+    events, input_offset = [], 0
     for phase in transcript:
-        process.stdin.write(phase['line'].encode('ascii'))
+        payload = phase['line'].encode('ascii')
+        process.stdin.write(payload)
         process.stdin.flush()
+        ack_offset, ack_bytes = None, None
         marker = phase['acknowledgement']
         if marker is not None:
             expected = marker.encode('ascii')
             while line := process.stdout.readline():
+                matched = line.startswith(expected)
+                if record and matched:
+                    ack_offset, ack_bytes = output.tell(), len(line)
                 output.write(line)
-                if line.startswith(expected):
+                if matched:
                     break
             else:
                 raise ValueError('CPU entry replay: process exited before ' + marker)
+        if record:
+            events.append(dict(input_offset=input_offset, input_bytes=len(payload),
+                               ack_stdout_offset=ack_offset, ack_stdout_bytes=ack_bytes))
+            input_offset += len(payload)
     rest, _ = process.communicate()
     output.write(rest)
+    return events
 
 
 def _published(run):
