@@ -1,5 +1,11 @@
 # 当前状态
 
+## 将实际模块初始化接回 F4 与选型账本
+
+- **建图。** 复用原 Cirq 两 worker 启动范围，核对模块初始化体实际进入、正常返回、代码结构和标准源码加载器。两个 worker 都直接初始化 Cirq，并在同一导入请求内传递初始化 NumPy。四次初始化均对应之前准入的 F4 主体。
+- **化简。** 随后的两个显式 NumPy 导入均命中该 worker 中刚初始化的同一个模块实例。进程内请求与返回顺序经过冷回读。模块内容版本、嵌套调用和外部效果仍需证明。
+- **交付。** `compile-build --cpu-initializer-observation` 在 **86.31 s** 内回读新证据与既有独立 C++20 对照，当前整入口为 `KEEP_ORIGINAL`。 [验收记录](../artifacts/baseline/cpu-initializer-activation-acceptance.json)
+
 ## 从 worker 导入来源补建 F4 初始化图
 
 - **建图。** 从 Cirq 的原导入观测自动选择两份实际源码，共 53,767 B，逐层通过现有 F0–F4 前端。Cirq 初始化体有 1,981 个操作、8,179 条边，NumPy 有 2,753 个操作、14,995 条边。两份独立子图均冷回读通过。
