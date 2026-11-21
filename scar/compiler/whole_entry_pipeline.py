@@ -429,7 +429,7 @@ def _cpu_catalog_option(option):
     return option.get('implementation_family') == 'CATALOG_CPU_ENTRY'
 
 
-def _emit_generated(option, scope, out, *, plan_only, verify_entry):
+def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_contract=None):
     if _nvhpc_option(option):
         from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
 
@@ -441,7 +441,8 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry):
     if _cpu_catalog_option(option):
         from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
 
-        return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
+        return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry,
+                                      capacity_contract=capacity_contract)
 
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
@@ -512,7 +513,7 @@ def _observed_costs(audit, delivery, scope_sha, out):
         comparisons=comparisons, separate_component_times_available=False))
 
 
-def _review_source_trials(discovery, generated, domain, scope, out):
+def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_contract=None):
     """Review the nominated device and permit a CPU trial if no entry ran."""
     eligible = [generated[row['id']] for row in domain['options']
                 if row['id'] in generated and row['legal_status'] != 'INELIGIBLE']
@@ -525,7 +526,8 @@ def _review_source_trials(discovery, generated, domain, scope, out):
 
     def emit(option, folder):
         folder.mkdir(parents=True, exist_ok=True)
-        trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True)
+        capacity = {} if capacity_contract is None else dict(capacity_contract=capacity_contract)
+        trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True, **capacity)
         audit.append(dict(option_id=trial['selected_id'], legal_status=option['legal_status'],
                           validation=trial['validation'], reason=trial['reason']))
         return trial
@@ -537,13 +539,15 @@ def _review_source_trials(discovery, generated, domain, scope, out):
 
 
 @verify_stack_components_once()
-def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False):
+def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False):
     from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
 
     entry = plan['whole_entry']
     _, request, candidates = read_request(entry['request'])
+    if enforce_cpu_capacity and not (verify_entry and not plan_only and _infer_cpu_catalog(request)):
+        raise ValueError('CPU capacity enforcement requires an explicit CPU catalog trial')
     if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
@@ -584,15 +588,31 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
+    capacity_contract = None
+    if enforce_cpu_capacity and selected != domain['baseline_id']:
+        from scar.analysis.cpu_launch_resources import derive_cpu_launch_resources
+        from scar.optimization.cpu_entry_capacity_contract import derive_cpu_entry_capacity_contract
+
+        eligible = [row['id'] for row in domain['options'] if row['legal_status'] != 'INELIGIBLE'
+                    and row['id'] in generated and _cpu_catalog_option(generated[row['id']])]
+        nomination = selected if selected in eligible else eligible[0] if selected is None and len(eligible) == 1 else None
+        if nomination is not None:
+            cpu_frontiers['cpu_launch_resources'] = _write(out/'whole-entry-cpu-launch-resources.json',
+                derive_cpu_launch_resources(cpu_frontiers['entry_effect_frontier']))
+            capacity_contract = _write(out/'whole-entry-cpu-capacity-contract.json',
+                derive_cpu_entry_capacity_contract(cpu_frontiers['cpu_decision_ledger'], nomination))
+            cpu_frontiers['cpu_capacity_contract'] = capacity_contract
     if selected in generated:
-        delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry)
+        delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry,
+                                   capacity_contract=capacity_contract)
     else:
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
     audit = []
     trial, device_trial = None, None
     if selected is None and verify_entry and not plan_only:
-        trial, device_trial, audit = _review_source_trials(discovery, generated, domain, live_scope, out)
+        trial, device_trial, audit = _review_source_trials(discovery, generated, domain, live_scope, out,
+                                                          capacity_contract=capacity_contract)
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
             id_ = fact['option_id']

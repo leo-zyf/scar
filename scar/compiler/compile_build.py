@@ -16,7 +16,8 @@ from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
                   loop_trip_count=None,loop_inputs=None,prepare_stateful_validation=False,stateful_cpu_threads=1,
                   loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
-                  loop_max_threads=None,stateful_interval_plans=None,entry_costs=None,verify_entry=False):
+                  loop_max_threads=None,stateful_interval_plans=None,entry_costs=None,verify_entry=False,
+                  enforce_cpu_capacity=False):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -29,6 +30,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if out.exists():raise ValueError('fresh compile-build output required')
     started=time.monotonic()
     parent=artifact_reference(domains,'scar.program-optimization-domains');document=read_artifact(parent)
+    if enforce_cpu_capacity and (not verify_entry or plan_only or 'whole_entry' not in document):
+        raise ValueError('CPU capacity enforcement requires a whole-entry process trial')
     version=document.get('schema_version')
     if version not in (1,2):raise ValueError('supported program planning domain required')
     read_artifact(document['program']);_check(document['hardware'])
@@ -52,7 +55,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             raise ValueError('process validation requires native emission')
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
         out.mkdir(parents=True)
-        whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry)
+        whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry,
+                                 enforce_cpu_capacity=enforce_cpu_capacity)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
             program=document['program'],hardware=document['hardware'],source_admission=source_admission,
@@ -220,6 +224,8 @@ def main(argv=None):
     parser.add_argument('--entry-costs',help='original whole-entry domain reference with late-bound model cost facts')
     parser.add_argument('--verify-entry',action='store_true',
         help='validate the selected entry or the eligible source-derived device and CPU nominations')
+    parser.add_argument('--enforce-cpu-capacity',action='store_true',
+        help='require a proved native CPU address-space contract for the entry trial')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
@@ -231,7 +237,7 @@ def main(argv=None):
         loop_no_op_profiles=None if args.loop_no_op_profiles is None else json.loads(Path(args.loop_no_op_profiles).read_bytes()),
         loop_max_threads=args.loop_max_threads,
         stateful_interval_plans=None if args.stateful_interval_plans is None else json.loads(Path(args.stateful_interval_plans).read_bytes()),
-        entry_costs=args.entry_costs,verify_entry=args.verify_entry)
+        entry_costs=args.entry_costs,verify_entry=args.verify_entry,enforce_cpu_capacity=args.enforce_cpu_capacity)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],

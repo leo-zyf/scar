@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from shutil import which
 import subprocess
 import sys
 
@@ -25,6 +26,8 @@ _WAIT4_AVAILABLE = sys.platform == 'linux' and hasattr(os, 'wait4')
 _RESOURCE_UNITS = dict(peak_rss_bytes=1024, user_cpu_ns=1000, system_cpu_ns=1000)
 _RUNNER_RSS = 'runner_rss_before_launch_bytes'
 _ISOLATED_RUNNER = 'resource-runner.py'
+_CAPACITY_SOURCE = 'capacity-guard.cpp'
+_CAPACITY_EXECUTABLE = 'capacity-guard'
 
 
 def _need(ok, detail):
@@ -144,33 +147,105 @@ def _published(run):
     return {item.name: _ref(item, _RAW) for item in paths}
 
 
-def _runner_receipt(root, executable, source):
+def _capacity_guard_receipt(root, compiler, source, executable):
+    _need(source == _ref(root/_CAPACITY_SOURCE, 'scar.cpp-source')
+          and executable == _ref(root/_CAPACITY_EXECUTABLE, 'application/x-executable')
+          and _raw(executable).startswith(b'\x7fELF'), 'native capacity guard source or ELF differs')
+    _raw(compiler)
+    return dict(compiler=compiler, source=source, executable=executable, cxx_standard=20,
+                build_argv=[compiler['uri'], '-std=c++20', '-O2', source['uri'], '-o', executable['uri']])
+
+
+def _build_capacity_guard(root):
+    compiler_path = which('c++')
+    _need(compiler_path is not None, 'native capacity guard requires a C++20 compiler')
+    compiler = _ref(compiler_path, 'application/x-executable')
+    source = root/_CAPACITY_SOURCE
+    original = Path(__file__).resolve().parents[1]/'native/cpu_capacity_exec.cpp'
+    source.write_bytes(original.read_bytes())
+    binary = root/_CAPACITY_EXECUTABLE
+    subprocess.run([compiler['uri'], '-std=c++20', '-O2', str(source), '-o', str(binary)], check=True)
+    return _capacity_guard_receipt(root, compiler, _ref(source, 'scar.cpp-source'),
+                                   _ref(binary, 'application/x-executable'))
+
+
+def _runner_receipt(root, executable, source, *, native_capacity_guard=None):
     script = root / _ISOLATED_RUNNER
     _need(type(executable) is dict and executable.get('schema') == 'application/x-executable'
           and type(source) is dict and source.get('uri') == str(script)
           and source == _ref(script, 'scar.python-source'), 'wait4 runner source or executable differs')
     _raw(executable)
-    return dict(executable=executable, source=source, argv=[executable['uri'], '-I', '-S', '-B', source['uri']],
-                startups=1, startup_in_arm_clock=False)
+    receipt = dict(executable=executable, source=source, argv=[executable['uri'], '-I', '-S', '-B', source['uri']],
+                   startups=1, startup_in_arm_clock=False)
+    if native_capacity_guard is not None:
+        receipt['native_capacity_guard'] = _capacity_guard_receipt(root, native_capacity_guard['compiler'],
+            native_capacity_guard['source'], native_capacity_guard['executable'])
+    return receipt
 
 
-def _run_rows(root, layout, transcript, collect_resources):
+def _run_rows(root, layout, transcript, collect_resources, *, candidate_address_space_limit_bytes=None):
     runner = None
     if collect_resources:
         script = root / _ISOLATED_RUNNER
         script.write_bytes(Path(cpu_paired_runner.__file__).read_bytes())
-        runner = _runner_receipt(root, _ref(sys.executable, 'application/x-executable'), _ref(script, 'scar.python-source'))
+        native_guard = _build_capacity_guard(root) if candidate_address_space_limit_bytes is not None else None
+        runner = _runner_receipt(root, _ref(sys.executable, 'application/x-executable'), _ref(script, 'scar.python-source'),
+                                 native_capacity_guard=native_guard)
         request = dict(layout=[(execution, str(run)) for execution, run in layout], transcript=transcript)
+        if native_guard is not None:
+            request['candidate_address_space_limit_bytes'] = candidate_address_space_limit_bytes
+            request['native_capacity_guard_executable'] = native_guard['executable']['uri']
         invocation = subprocess.run(runner['argv'], cwd=root, env={}, input=json.dumps(request),
                                     stdout=subprocess.PIPE, text=True, encoding='utf-8', check=True)
         results = json.loads(invocation.stdout)
-        _need(_runner_receipt(root, runner['executable'], runner['source']) == runner, 'wait4 runner changed during trial')
+        _need(_runner_receipt(root, runner['executable'], runner['source'], native_capacity_guard=native_guard) == runner,
+              'wait4 runner changed during trial')
     else:
         results = [cpu_paired_runner.run_arm(execution, run, transcript) for execution, run in layout]
     rows = [dict(execution=execution, **result, stdout=_ref(run / 'stdout.bin', _RAW),
                  stderr=_ref(run / 'stderr.bin', _RAW), publications=_published(run))
             for (execution, run), result in zip(layout, results, strict=True)]
     return rows, runner
+
+
+def _capacity_limit(reference, compilation, spec):
+    if reference is None:
+        return None
+    from scar.compiler.entry_delivery import _environment_digest
+    from scar.optimization.cpu_entry_capacity_contract import verify_cpu_entry_capacity_contract
+
+    contract = verify_cpu_entry_capacity_contract(reference)
+    _need(contract['status'] == 'CANDIDATE_GUARD_ADMISSIBLE' and contract['provider_process_count'] == 1,
+          'bounded single-address-space candidate contract required')
+    launch = contract['native_launch']
+    candidate = spec['arms']['candidate']
+    argv = list(launch['argv'])
+    slot = launch['output_index'] + 1
+    leaf = argv[slot]
+    argv[slot] = _OUTPUT + '/' + leaf
+    record = read_artifact(compilation)
+    _need(launch['executable'] == candidate['executable'] and launch['cpu_ids'] == spec['cpu_ids']
+          and launch['cwd'] == spec['cwd'] and candidate['output_slot'] == slot and leaf in spec['files']
+          and launch['environment_sha256'] == _environment_digest(candidate['environment'])
+          and argv == candidate['argv'] and record['provider'] == contract['evidence']['provider'],
+          'capacity contract differs from the independently qualified native launch')
+    return contract['candidate_address_space_limit_bytes']
+
+
+def _check_capacity_samples(rows, runner, limit):
+    _need(limit is None or runner is not None, 'verified address-space guard requires the isolated runner')
+    for row in rows:
+        if limit is None or row['execution']['mode'] != 'candidate':
+            _need('capacity_guard' not in row, 'unexpected address-space guard on this entry arm')
+            continue
+        guard = row.get('capacity_guard')
+        _need(type(guard) is dict and type(guard.get('receipt_fd')) is int and guard['receipt_fd'] > 2,
+              'native address-space guard receipt required')
+        native = runner.get('native_capacity_guard')
+        launcher = {} if native is None else dict(native_capacity_guard_executable=native['executable']['uri'])
+        expected = cpu_paired_runner.capacity_receipt(row['execution']['argv'], runner['argv'],
+                                                       limit, guard['receipt_fd'], **launcher)
+        _need(guard == expected, 'native address-space guard differs from its pre-exec readback')
 
 
 def _resource_observation(rows, warmups, *, runner=None):
@@ -240,7 +315,7 @@ def _results(spec, samples, layout, warmups, pairs):
 
 
 def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3, collect_resources=None,
-            _admit_invocation=None):
+            capacity_contract=None, _admit_invocation=None):
     from scar.analysis.scalar_recursive_driver import CAPTURE
 
     _need(type(warmups) is int and warmups >= 0 and type(pairs) is int and pairs >= 3,
@@ -251,20 +326,25 @@ def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3, col
     if _admit_invocation is not None:
         _admit_invocation(spec)
     return _measure_checked(reference, captured, cpu, spec, out, warmups=warmups, pairs=pairs,
-                            collect_resources=collect_resources)
+                            collect_resources=collect_resources, capacity_contract=capacity_contract)
 
 
-def _measure_checked(reference, captured, cpu, spec, out, *, warmups=1, pairs=3, collect_resources=None):
+def _measure_checked(reference, captured, cpu, spec, out, *, warmups=1, pairs=3, collect_resources=None,
+                     capacity_contract=None):
     """Run an invocation already cold-admitted by this command."""
     _need(set(spec['cpu_ids']) <= os.sched_getaffinity(0), 'qualified CPU mask is unavailable')
     if collect_resources is None:
         collect_resources = _WAIT4_AVAILABLE
     _need(type(collect_resources) is bool and (not collect_resources or _WAIT4_AVAILABLE),
           'resource collection requires Linux wait4')
+    limit = _capacity_limit(capacity_contract, reference, spec)
+    _need(limit is None or collect_resources, 'address-space guard requires the isolated Linux runner')
     root = Path(out).resolve()
     root.mkdir()
     layout = list(_layout(spec, root, warmups, pairs))
-    rows, runner = _run_rows(root, layout, spec['transcript'], collect_resources)
+    rows, runner = _run_rows(root, layout, spec['transcript'], collect_resources,
+                            candidate_address_space_limit_bytes=limit)
+    _check_capacity_samples(rows, runner, limit)
     _pins(spec)
     read_artifact(reference)
     report = dict(schema=SCHEMA, schema_version=1, compilation=reference, capture=captured, cpu_override=cpu,
@@ -273,6 +353,8 @@ def _measure_checked(reference, captured, cpu, spec, out, *, warmups=1, pairs=3,
                   whole_program_equivalence_proven=False, deployment_authorized=False)
     if observation := _resource_observation(rows, warmups, runner=runner):
         report['resource_observation'] = observation
+    if capacity_contract is not None:
+        report['capacity_contract'] = capacity_contract
     with (root / 'result.json').open('x') as output:
         output.write(json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + '\n')
     return report
@@ -294,7 +376,10 @@ def check(path):
     runner = None if recorded_observation is None else recorded_observation.get('runner')
     if runner is not None:
         _need(type(runner) is dict, 'invalid wait4 runner receipt')
-        runner = _runner_receipt(root, runner.get('executable'), runner.get('source'))
+        runner = _runner_receipt(root, runner.get('executable'), runner.get('source'),
+                                 native_capacity_guard=runner.get('native_capacity_guard'))
+    limit = _capacity_limit(report.get('capacity_contract'), report['compilation'], spec)
+    _check_capacity_samples(report['runs'], runner, limit)
     observation = _resource_observation(report['runs'], warmups, runner=runner)
     _need((observation is None and 'resource_observation' not in report) or (observation is not None
           and json.dumps(observation, sort_keys=True) == json.dumps(recorded_observation, sort_keys=True)),
@@ -313,12 +398,20 @@ def main(argv=None):
     parser.add_argument('--warmups', type=int, default=1)
     parser.add_argument('--pairs', type=int, default=3)
     parser.add_argument('--no-resources', action='store_true', help='skip optional Linux wait4 resource accounting')
+    parser.add_argument('--capacity-contract', type=Path, help='exact native address-space contract from compile-build')
     args = parser.parse_args(argv)
+    if args.capacity_contract is not None and args.no_resources:
+        parser.error('--capacity-contract requires the isolated resource runner')
     if args.check:
+        if args.capacity_contract is not None:
+            parser.error('--check uses the contract pinned by the validation report')
         report = check(args.check)
     elif args.out:
+        from scar.optimization.cpu_entry_capacity_contract import SCHEMA as CAPACITY
+
         report = measure(args.compilation, args.out, capture=args.original_capture, cpu=args.cpu,
-                         warmups=args.warmups, pairs=args.pairs, collect_resources=False if args.no_resources else None)
+                         warmups=args.warmups, pairs=args.pairs, collect_resources=False if args.no_resources else None,
+                         capacity_contract=_ref(args.capacity_contract, CAPACITY) if args.capacity_contract else None)
     else:
         parser.error('--compilation requires --out')
     print(json.dumps(report['selection'], sort_keys=True))

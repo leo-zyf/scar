@@ -1,5 +1,6 @@
 """Run admitted CPU trials in a small interpreter with no SCAR imports."""
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,9 @@ from shutil import copyfileobj
 import subprocess
 import sys
 from time import perf_counter_ns
+
+
+_CAPACITY_FLAG = '--exec-address-space-limit'
 
 
 class _ResourceProcess(subprocess.Popen):
@@ -33,6 +37,50 @@ def _current_rss():
                 if unit == b'kB' and int(value) > 0:
                     return int(value) * 1024
     raise OSError('could not read current CPU trial runner resident size')
+
+
+def _check_limit(limit):
+    if type(limit) is not int or not 0 < limit < 1 << 63:
+        raise ValueError('candidate address-space limit must be a positive finite byte count')
+
+
+def capacity_receipt(argv, runner_argv, limit, receipt_fd, *, native_capacity_guard_executable=None):
+    _check_limit(limit)
+    if (type(receipt_fd) is not int or receipt_fd <= 2 or len(argv) <= 7 or not os.path.isabs(argv[7])
+            or argv[:2] != ['/usr/bin/taskset', '-c'] or argv[3:6] != ['/usr/bin/timeout', '-k', '2']):
+        raise ValueError('candidate address-space guard requires the exact timed entry command and private receipt fd')
+    launcher = runner_argv
+    if native_capacity_guard_executable is not None:
+        if type(native_capacity_guard_executable) is not str or not os.path.isabs(native_capacity_guard_executable):
+            raise ValueError('native address-space guard requires an absolute executable path')
+        launcher = [native_capacity_guard_executable]
+    launch_argv = [*argv[:7], *launcher, _CAPACITY_FLAG, str(limit), str(receipt_fd), *argv[7:]]
+    receipt = dict(method='LINUX_RLIMIT_AS_BEFORE_EXEC', limit_bytes=limit, soft_bytes=limit, hard_bytes=limit,
+                   scope='PER_PROCESS_VIRTUAL_ADDRESS_SPACE', process_tree_aggregate_enforced=False,
+                   may_raise_inherited_limits=False, launch_argv=launch_argv, receipt_fd=receipt_fd)
+    if native_capacity_guard_executable is not None:
+        receipt['implementation'] = 'NATIVE_CXX20'
+    return receipt
+
+
+@contextmanager
+def _guarded_launch(execution, limit, native_capacity_guard_executable):
+    if limit is None or execution['mode'] != 'candidate':
+        yield None, None, None
+        return
+    if sys.platform != 'linux':
+        raise ValueError('candidate address-space enforcement requires Linux')
+    if native_capacity_guard_executable is None:
+        raise ValueError('fresh address-space enforcement requires the native C++20 guard')
+    reader, writer = os.pipe()
+    with os.fdopen(reader, 'rb') as readback, os.fdopen(writer, 'wb') as receipt_stream:
+        receipt = capacity_receipt(execution['argv'], (), limit, writer,
+                                   native_capacity_guard_executable=native_capacity_guard_executable)
+        yield receipt, readback, receipt_stream
+
+
+def _limit_marker(soft, hard):
+    return f'{soft} {hard}\n'.encode('ascii')
 
 
 def pace(process, output, transcript, *, record=False):
@@ -64,19 +112,28 @@ def pace(process, output, transcript, *, record=False):
     return events
 
 
-def run_arm(execution, run, transcript, *, collect_resources=False):
+def run_arm(execution, run, transcript, *, collect_resources=False,
+            candidate_address_space_limit_bytes=None, native_capacity_guard_executable=None):
     (run / 'published').mkdir(parents=True)
     launch = _ResourceProcess if collect_resources else subprocess.Popen
-    with (run / 'stdout.bin').open('xb') as out, (run / 'stderr.bin').open('xb') as err:
-        runner_rss = _current_rss() if collect_resources else None
-        started = perf_counter_ns()
-        with launch(execution['argv'], cwd=execution['cwd'], env=execution['environment'],
-                    stdin=subprocess.PIPE if transcript else subprocess.DEVNULL,
-                    stdout=subprocess.PIPE if transcript else out, stderr=err) as process:
-            if transcript:
-                pace(process, out, transcript)
-            status = process.wait()
-        elapsed = perf_counter_ns() - started
+    with _guarded_launch(execution, candidate_address_space_limit_bytes,
+                         native_capacity_guard_executable) as (receipt, readback, receipt_stream):
+        command = execution['argv'] if receipt is None else receipt['launch_argv']
+        pass_fds = () if receipt is None else (receipt['receipt_fd'],)
+        with (run / 'stdout.bin').open('xb') as out, (run / 'stderr.bin').open('xb') as err:
+            runner_rss = _current_rss() if collect_resources else None
+            started = perf_counter_ns()
+            with launch(command, cwd=execution['cwd'], env=execution['environment'], pass_fds=pass_fds,
+                        stdin=subprocess.PIPE if transcript else subprocess.DEVNULL,
+                        stdout=subprocess.PIPE if transcript else out, stderr=err) as process:
+                if receipt_stream is not None:
+                    receipt_stream.close()
+                if transcript:
+                    pace(process, out, transcript)
+                status = process.wait()
+            elapsed = perf_counter_ns() - started
+        if receipt is not None and readback.read(128) != _limit_marker(receipt['soft_bytes'], receipt['hard_bytes']):
+            raise ValueError('candidate address-space guard did not attest exact readback before exec')
     result = dict(elapsed_ns=elapsed, status=status)
     if collect_resources:
         usage = process.usage
@@ -86,11 +143,20 @@ def run_arm(execution, run, transcript, *, collect_resources=False):
             user_cpu_ns=round(usage.ru_utime * 1_000_000) * 1000,
             system_cpu_ns=round(usage.ru_stime * 1_000_000) * 1000,
             runner_rss_before_launch_bytes=runner_rss)
+    if receipt is not None:
+        result['capacity_guard'] = receipt
     return result
 
 
 if __name__ == '__main__':
     request = json.load(sys.stdin)
-    results = [run_arm(execution, Path(directory), request['transcript'], collect_resources=True)
+    limit = request.get('candidate_address_space_limit_bytes')
+    native_guard = request.get('native_capacity_guard_executable')
+    if limit is not None:
+        _check_limit(limit)
+        if native_guard is None:
+            raise ValueError('fresh address-space enforcement requires the native C++20 guard')
+    results = [run_arm(execution, Path(directory), request['transcript'], collect_resources=True,
+                       candidate_address_space_limit_bytes=limit, native_capacity_guard_executable=native_guard)
                for execution, directory in request['layout']]
     json.dump(results, sys.stdout, allow_nan=False)

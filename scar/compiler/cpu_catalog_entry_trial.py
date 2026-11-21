@@ -154,6 +154,8 @@ def _observation_summary(reference, report, record, plan, scope):
         deployment_authorized=False)
     if 'resource_observation' in report:
         summary['resource_observation'] = report['resource_observation']
+    if 'capacity_contract' in report:
+        summary['capacity_contract'] = report['capacity_contract']
     return summary
 
 
@@ -175,7 +177,7 @@ def _trial_result(result, review, *, retained):
                         provider_boundary_replayed=True))
 
 
-def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
+def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capacity_contract=None):
     """Materialize the exact provider choice or replay its original sealed trial."""
     plan = option['proof']['emission_plan']
     result = dict(schema=HANDOFF, schema_version=1, selected_id=option['id'], scope=scope,
@@ -186,12 +188,23 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
     try:
         _plan_scope(plan, scope)
         capture, cpu, _ = _replay_inputs(plan, scope)
+        if capacity_contract is not None:
+            from scar.optimization.cpu_entry_capacity_contract import verify_cpu_entry_capacity_contract
+            from scar.optimization.resource_solver import semantic_sha256
+
+            capacity = verify_cpu_entry_capacity_contract(capacity_contract)
+            if (capacity['option_id'] != option['id'] or capacity['scope_sha256'] != semantic_sha256(scope)
+                    or plan_only or not verify_entry):
+                raise ValueError('CPU capacity contract differs from its native trial nomination')
+            result['capacity_contract'] = capacity_contract
+            if capacity['status'] != 'CANDIDATE_GUARD_ADMISSIBLE':
+                return dict(result, final_action='KEEP_ORIGINAL', reason='candidate address-space contract is unresolved')
     except _ERRORS as error:
         return dict(result, final_action='KEEP_ORIGINAL', reason='CPU catalog plan scope failed: ' + str(error))
     if plan_only:
         return result
 
-    if verify_entry and scope.get('cpu_paired_observation') is not None:
+    if verify_entry and capacity_contract is None and scope.get('cpu_paired_observation') is not None:
         try:
             replay = replay_cpu_catalog_observation(scope['cpu_paired_observation'], plan, scope)
         except _ERRORS as error:
@@ -235,7 +248,8 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
 
     validation = out/'native-validation'
     try:
-        observed = cpu_entry_replay._measure_checked(compilation, capture, cpu, spec, validation)
+        observed = cpu_entry_replay._measure_checked(compilation, capture, cpu, spec, validation,
+                                                    capacity_contract=capacity_contract)
         reference = artifact_reference(validation/'result.json', cpu_entry_replay.SCHEMA)
         if read_artifact(reference) != observed or observed['compilation'] != compilation:
             raise ValueError('fresh provider observation differs from its admitted compilation or saved receipt')

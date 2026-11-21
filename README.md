@@ -190,6 +190,8 @@ CPU 目录主链输出 `whole-entry-effect-frontier.json` 和 `whole-entry-decis
 
 Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收进程的单进程峰值 RSS，并附上测量进程启动各臂前的 RSS。测量进程的启动和内存读取位于各臂计时之外。单独运行 `verify-cpu-entry --no-resources` 可关闭采集。[Linux 资源计数定义](https://man7.org/linux/man-pages/man2/getrusage.2.html)
 
+`compile-build --verify-entry --enforce-cpu-capacity` 可要求候选通过 CPU 地址空间门禁。当前支持已证明共享单一地址空间的 CPU 线程组。命令保存目标资源回读、执行合同以及候选 ELF 执行前的软硬限额记录。原入口沿用原启动命令。候选计时包括 C++20 门禁启动。`verify-cpu-entry --capacity-contract CONTRACT.json` 可对同一个已核验工件重新执行限额试验。[Linux RLIMIT_AS 定义](https://man7.org/linux/man-pages/man2/getrlimit.2.html)
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
