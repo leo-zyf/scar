@@ -9,6 +9,26 @@
         "size_bytes": 274121,
         "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/numeric-release/seed-1729/src/main.cpp"
       },
+      "independent_original_checkpoint_files": [
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "45052dbd7d76330350b7560f020b78e1392b078f12aad262b311d21f1f8cd236",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-1729-0-output.bin"
+        },
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "fb43fd3821d02d5f7e825af234ad57a980fd4dc023e2dfcd6163ee25d8b40373",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-1729-1-output.bin"
+        },
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "6e1bf8f023940fc980ffaffc4fb95fd7d735b6c60744d5a54bdb4d8dd265f6ce",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-1729-2-output.bin"
+        }
+      ],
       "independent_state_witness": {
         "schema": "scar.returned-state-recurrence-witness",
         "sha256": "a100781f7bd2ff675a90f2da49f601506090e8954db039317873a58c6dedc7b6",
@@ -104,6 +124,26 @@
         "size_bytes": 273961,
         "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/numeric-release/seed-137/src/main.cpp"
       },
+      "independent_original_checkpoint_files": [
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "da729da51673fbe02abf8a027196635986a6e8c06b618c30b8c08c7940f23eba",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-137-3-output.bin"
+        },
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "aa4d90964f68c84f2a4ac1a4e70ef50ef0d3748d98b01fa6d94ef234894777f4",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-137-4-output.bin"
+        },
+        {
+          "schema": "scar.numpy-normalization-vector",
+          "sha256": "37b06a2f2ffe9e4ca3316b3c3805755a8f376b496ab17219e53e334cb12f6fab",
+          "size_bytes": 32768,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/normalization-witness/source-137-5-output.bin"
+        }
+      ],
       "independent_state_witness": {
         "schema": "scar.returned-state-recurrence-witness",
         "sha256": "44b909457592d536d725085e74b23011b182494cfd6d25f180176f455a83fd2f",
@@ -195,6 +235,7 @@
   "cxx_standard": 20,
   "default_entry_backend": "NO_OP",
   "deployment_authorized": false,
+  "direct_full_state_byte_comparison": true,
   "hardware_target": {
     "schema": "scar.target-hardware-graph",
     "sha256": "fa7a07f190c15e5258ccb87e2a0fac6df36268fe668c0700dddeb831ac35eb98",
