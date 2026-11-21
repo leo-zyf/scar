@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT, NVHPC_HYBRID_CANDIDATE, verify_cuda_operator_stack
+from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT, verify_cuda_operator_stack
 from scar.optimization.native_device_comparison import native_device_probe_reason, native_device_run_reason
 
 
@@ -163,8 +163,8 @@ def _launch_scope(cpu_ids):
 
 
 def _observe_cuda_preflight(cuda, manifest, device, cpu_ids, scope):
-    verify_cuda_operator_stack(cuda, manifest)
-    if manifest['status'] == NVHPC_HYBRID_CANDIDATE:
+    stack = verify_cuda_operator_stack(cuda, manifest)
+    if stack is not None and stack['linkage']['route'] == 'HYBRID':
         host = _locked_json(cuda, manifest, 'plan/bindings.json')['host_cpu_ids']
         if host != sorted(cpu_ids):
             raise ValueError('the pinned NVIDIA hybrid host cohort differs from the comparison cohort')

@@ -119,18 +119,20 @@ def _build_placement(projection, model, model_ref, target, placement, *, nvhpc_h
     qualification = 'SYNTHETIC_PLACEMENT_OFFLINE' if explicit else 'SYNTHETIC_HYBRID_OFFLINE'
     host_resource, host_lowering = HOST_RESOURCE, None
     if nvhpc_host is not None:
-        if set(choices.values()) != {'CPU', 'CUDA'} or any(row['schema'] != _MM for row in projection['operations']):
-            raise ValueError('NVIDIA hybrid host and device placements require only qualified MM operations')
+        if any(row['schema'] != _MM for row in projection['operations']):
+            raise ValueError('NVIDIA host and device placements require only qualified MM operations')
         qualification = 'SYNTHETIC_NVHPC_HYBRID_OFFLINE'
         host_resource, host_lowering = nvhpc_host['host_resource'], nvhpc_host['host_lowering']
+    host_used = nvhpc_host is None or 'CPU' in choices.values()
     profile_ref = dict(model_ref, qualification=qualification + '_PROFILE')
     pool_rows = (
         (_HOST, 'MEMORY', model['pinned_host_bytes']), (_DEVICE, 'MEMORY', model['device_bytes']),
         (_UPLOAD, 'CHANNEL', 1), (_COMPUTE, 'CHANNEL', 1), (_DOWNLOAD, 'CHANNEL', 1),
         (_GPU, 'EXECUTION', 1)) if cuda else ((_PAGEABLE_HOST, 'MEMORY', model['host_memory_bytes']),)
     resources = tuple(PlanningResource(name, kind, capacity, (profile_ref,)) for name, kind, capacity in pool_rows)
-    host_evidence = (profile_ref,) if nvhpc_host is None else (profile_ref, nvhpc_host)
-    resources = (*resources, PlanningResource(host_resource, 'EXECUTION', 1, host_evidence))
+    if host_used:
+        host_evidence = (profile_ref,) if nvhpc_host is None else (profile_ref, nvhpc_host)
+        resources = (*resources, PlanningResource(host_resource, 'EXECUTION', 1, host_evidence))
 
     def cost(key):
         context = qualification + '_' + key.upper()
@@ -184,7 +186,7 @@ def _build_placement(projection, model, model_ref, target, placement, *, nvhpc_h
         raise ValueError('hybrid file ABI requires each input and produced value to have a consumer')
 
     if not cuda:
-        return _plan_pageable_host(projection, model, target, resources, operations, edges, inputs)
+        return _plan_pageable_host(projection, model, target, resources, operations, edges, inputs, nvhpc_host=nvhpc_host)
 
     # The executor retains each buffer and the cuBLAS workspace until return.
     backing = {_HOST: 0, _DEVICE: model['workspace_bytes']}
@@ -198,8 +200,10 @@ def _build_placement(projection, model, model_ref, target, placement, *, nvhpc_h
 
             raise PlacementCapacityExceeded('hybrid file ABI backing and workspace exceed the declared capacity')
         raise ValueError('hybrid file ABI backing and workspace exceed the declared capacity')
-    host_contract = ('SINGLE_SYNCHRONOUS_HOST_ATEN_LANE',) if nvhpc_host is None else (
-        'SINGLE_SYNCHRONOUS_NVHPC_CBLAS_LP64_LANE', 'NVHPC_PROVIDER_INTERNAL_WORKSPACE_UNKNOWN')
+    host_contract = ()
+    if host_used:
+        host_contract = ('SINGLE_SYNCHRONOUS_HOST_ATEN_LANE',) if nvhpc_host is None else (
+            'SINGLE_SYNCHRONOUS_NVHPC_CBLAS_LP64_LANE', 'NVHPC_PROVIDER_INTERNAL_WORKSPACE_UNKNOWN')
     problem = PlanningProblem(target, (program,), resources, tuple(operations), tuple(edges), assumptions=(
         'OFFLINE_SYNTHETIC_ONLY', 'ACTUAL_DEVICE_TIMING_UNKNOWN', 'NORMAL_COMPLETION_FP32_MATRIX_GRAPH',
         *host_contract, 'ROW_MAJOR_STORAGE_VIA_TRANSPOSED_COLUMN_MAJOR_SGEMM',
@@ -210,14 +214,16 @@ def _build_placement(projection, model, model_ref, target, placement, *, nvhpc_h
         problem = expand_shared_material_route(problem, edge_ids, (upload if destination == _DEVICE else download,))
     published = {row.id: row.value for row in problem.data_edges if row.consumer == _RETURN}
     bindings = dict(device=model['device'], memory_kinds={_HOST: 'PinnedHost', _DEVICE: 'Device'},
-        stream_channels=[_UPLOAD, _COMPUTE, _DOWNLOAD], compute_resource=_GPU, host_resource=host_resource,
+        stream_channels=[_UPLOAD, _COMPUTE, _DOWNLOAD], compute_resource=_GPU,
         input_values=inputs, output_values=[published[f'{_RETURN}:{name}'] for name in projection['outputs']])
-    if nvhpc_host is not None:
+    if host_used:
+        bindings['host_resource'] = host_resource
+    if nvhpc_host is not None and host_used:
         bindings.update(nvhpc_host)
     return problem, bindings
 
 
-def _plan_pageable_host(projection, model, target, resources, operations, edges, inputs):
+def _plan_pageable_host(projection, model, target, resources, operations, edges, inputs, *, nvhpc_host=None):
     from scar.optimization.native_device_placement_search import PlacementCapacityExceeded
 
     budget = model['host_memory_bytes']
@@ -226,13 +232,20 @@ def _plan_pageable_host(projection, model, target, resources, operations, edges,
         output_bytes=[item['nbytes'] for item in projection['operations']], candidates=())
     if footprint['serial_peak_bytes'] > budget:
         raise PlacementCapacityExceeded('pageable host Tensor backing exceeds the declared capacity')
+    host_contract = ('SINGLE_SYNCHRONOUS_HOST_ATEN_LANE', 'PAGEABLE_HOST_SOURCE_ORDER_ATEN_CALLS')
+    if nvhpc_host is not None:
+        host_contract = ('SINGLE_SYNCHRONOUS_NVHPC_CBLAS_LP64_LANE', 'PAGEABLE_HOST_SOURCE_ORDER_CBLAS_CALLS',
+                         'NVHPC_PROVIDER_INTERNAL_WORKSPACE_UNKNOWN')
     problem = PlanningProblem(target, (projection['program'],), resources, tuple(operations), tuple(edges), assumptions=(
         'OFFLINE_SYNTHETIC_ONLY', 'ACTUAL_DEVICE_TIMING_UNKNOWN', 'NORMAL_COMPLETION_FP32_MATRIX_GRAPH',
-        'SINGLE_SYNCHRONOUS_HOST_ATEN_LANE', 'PAGEABLE_HOST_SOURCE_ORDER_ATEN_CALLS',
+        *host_contract,
         'HOST_TENSOR_BACKING_EXCLUDES_PROVIDER_WORKSPACE'),
         reserved_memory={_PAGEABLE_HOST: footprint['persistent_input_bytes']})
-    return problem, dict(deployment='CPU', host_resource=HOST_RESOURCE, input_values=inputs,
-                         output_values=list(projection['outputs']))
+    bindings = dict(deployment='CPU', host_resource=HOST_RESOURCE, input_values=inputs,
+                    output_values=list(projection['outputs']))
+    if nvhpc_host is not None:
+        bindings.update(nvhpc_host)
+    return problem, bindings
 
 
 def replay_hybrid_export(projection, model, *, model_ref, problem, schedule, bindings):
