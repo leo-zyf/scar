@@ -10,7 +10,8 @@ from pathlib import Path
 
 
 def validate_caller_delivery(program,bundle,out,argv,*,expected_admission_sha256,
-        warmup=1,repetitions=3,minimum_gain=.05):
+        warmup=1,repetitions=3,minimum_gain=.05,publication_directory=None,
+        publication_bytes=(),publication_nonnegative_seconds=()):
     from scar.analysis.build import BuildSession
     from scar.compiler.caller_pipeline_capsule import prepare_capsule,validate_capsule,export_cost_slot
     out=Path(out).resolve()
@@ -27,7 +28,8 @@ def validate_caller_delivery(program,bundle,out,argv,*,expected_admission_sha256
     out.mkdir(parents=True)
     prepared=prepare_capsule(bundle,entry,argv,out/'capsule',
         expected_admission_sha256=expected_admission_sha256,source_paths=source,
-        warmup=warmup,repetitions=repetitions,minimum_gain=minimum_gain)
+        warmup=warmup,repetitions=repetitions,minimum_gain=minimum_gain,publication_directory=publication_directory,
+        publication_bytes=publication_bytes,publication_nonnegative_seconds=publication_nonnegative_seconds)
     validated=validate_capsule(out/'capsule',out/'validation',
         expected_payload_sha256=prepared['payload']['sha256'],
         expected_trial_slot_sha256=prepared['trial_slot']['sha256'])
@@ -42,15 +44,19 @@ def validate_caller_delivery(program,bundle,out,argv,*,expected_admission_sha256
 
 
 def main(argv=None):
+    from scar.compiler.caller_pipeline_capsule import _add_publication_options
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build',required=True);parser.add_argument('--bundle',required=True)
     parser.add_argument('--admission-sha256',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--warmup',type=int,default=1);parser.add_argument('--repetitions',type=int,default=3)
-    parser.add_argument('--minimum-gain',type=float,default=.05);parser.add_argument('args',nargs=argparse.REMAINDER)
+    parser.add_argument('--minimum-gain',type=float,default=.05)
+    _add_publication_options(parser)
+    parser.add_argument('args',nargs=argparse.REMAINDER)
     args=parser.parse_args(argv);command=args.args[1:]if args.args[:1]==['--']else args.args
     result=validate_caller_delivery(args.build,args.bundle,args.out,command,
         expected_admission_sha256=args.admission_sha256,warmup=args.warmup,
-        repetitions=args.repetitions,minimum_gain=args.minimum_gain)
+        repetitions=args.repetitions,minimum_gain=args.minimum_gain,publication_directory=args.publication_directory,
+        publication_bytes=args.publication_bytes,publication_nonnegative_seconds=args.publication_nonnegative_seconds)
     print(json.dumps(dict(decision=result['decision']['decision'],source_files=result['source_files'])));return 0
 
 
