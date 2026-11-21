@@ -1,0 +1,178 @@
+{
+  "delivery": {
+    "cirq_main_chain": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "ae26a4ec64c6d2d0c40a217d63551545f866daee45e32fdeb1ddad182911c051",
+      "size_bytes": 1869,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/result.json"
+    },
+    "launch_proxy": {
+      "cirq": {
+        "abi": "ARGV",
+        "median_startup_ns": 3900052.0,
+        "reference": {
+          "schema": "scar.cpu-launch-proxy-observation",
+          "sha256": "d66a820b591d82820620597eb571b649d6d11ddbb09851753c7af6aed475b090",
+          "size_bytes": 4940,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-launch-final/result.json"
+        },
+        "samples": 5
+      },
+      "sunfish": {
+        "abi": "PACED_STDIN",
+        "median_startup_ns": 2650819.0,
+        "reference": {
+          "schema": "scar.cpu-launch-proxy-observation",
+          "sha256": "b1c6499f5554f0a2262ff00367641bb6ddc29f014681be992d1eb4b9d374be5c",
+          "size_bytes": 4741,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/sunfish-launch-final/result.json"
+        },
+        "samples": 5
+      }
+    },
+    "release_decision": "KEEP_ORIGINAL",
+    "target_workloads_executed": 0
+  },
+  "frontend": {
+    "cirq": {
+      "schema": "scar.f4-cpu-entry-lifecycle-graph",
+      "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+      "size_bytes": 30195,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+    },
+    "cirq_counts": [
+      {
+        "operations": 5,
+        "option": "original",
+        "required_edges": 1
+      },
+      {
+        "operations": 8,
+        "option": "planned:4610cfd5a62f52463159d51688193e7567b17a9225740298068225692be0168f",
+        "required_edges": 5
+      }
+    ],
+    "sunfish": {
+      "schema": "scar.f4-cpu-entry-lifecycle-graph",
+      "sha256": "8d057e80a6822c9a6bec4932b1d78c78d3ce8a7d1fc5afc5678c6d9bd4c4b160",
+      "size_bytes": 80172,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/stage1-lifecycle-stream.json"
+    },
+    "sunfish_counts": [
+      {
+        "operations": 33,
+        "option": "original",
+        "required_edges": 9
+      }
+    ]
+  },
+  "planner": {
+    "body_placement_comparison": {
+      "alternatives": [
+        {
+          "capacity_reasons": [],
+          "conditional_interval_ns": {
+            "estimate_ns": 42737698,
+            "lower_ns": 42654216,
+            "upper_ns": 42758554
+          },
+          "id": "IN_PROCESS_SERIAL:1",
+          "mode": "IN_PROCESS_SERIAL",
+          "owner_cpu_id": 18,
+          "repeat_interval_ns": {
+            "estimate_ns": 42737698,
+            "lower_ns": 42654216,
+            "upper_ns": 42758554
+          },
+          "worker_count": 1,
+          "worker_cpu_ids": []
+        },
+        {
+          "capacity_reasons": [],
+          "conditional_interval_ns": {
+            "estimate_ns": 24824599,
+            "lower_ns": 24097300,
+            "upper_ns": 25421946
+          },
+          "id": "ORDERED_LOCAL_PROCESSES:2",
+          "mode": "ORDERED_LOCAL_PROCESSES",
+          "owner_cpu_id": 18,
+          "repeat_interval_ns": {
+            "estimate_ns": 24838828,
+            "lower_ns": 24097300,
+            "upper_ns": 25246006
+          },
+          "worker_count": 2,
+          "worker_cpu_ids": [
+            19,
+            20
+          ]
+        },
+        {
+          "capacity_reasons": [],
+          "conditional_interval_ns": {
+            "estimate_ns": 23445155,
+            "lower_ns": 22436895,
+            "upper_ns": 24063850
+          },
+          "id": "ORDERED_OPENMP:2",
+          "mode": "ORDERED_OPENMP",
+          "owner_cpu_id": 18,
+          "repeat_interval_ns": {
+            "estimate_ns": 23474834,
+            "lower_ns": 23183570,
+            "upper_ns": 24063850
+          },
+          "worker_count": 2,
+          "worker_cpu_ids": [
+            18,
+            19
+          ]
+        }
+      ],
+      "calibration_campaigns": 2,
+      "envelope_policy": "UNION_OF_REPLAYED_CAMPAIGN_ENVELOPES",
+      "physical_optimality_proven": false,
+      "provisional_body_nomination_id": "ORDERED_OPENMP:2",
+      "separation": [
+        {
+          "margin_ns": 33450,
+          "other_id": "ORDERED_LOCAL_PROCESSES:2"
+        },
+        {
+          "margin_ns": 18590366,
+          "other_id": "IN_PROCESS_SERIAL:1"
+        }
+      ],
+      "status": "STRICTLY_SEPARATED_CONDITIONAL_BODY_MODEL",
+      "whole_entry_choice_proven": false
+    },
+    "cirq_report": {
+      "schema": "scar.cpu-entry-forward-cost",
+      "sha256": "e4673cbc9ae67a2f588ab73ad87daacd709bedb4a34ff176b55000439020af73",
+      "size_bytes": 12070,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-forward-cost.json"
+    },
+    "full_entry_ranked": false,
+    "old_conditioned_estimate_ns": {
+      "estimate_ns": 23445155,
+      "lower_ns": 22436895,
+      "upper_ns": 23827913
+    },
+    "repeated_team_model": {
+      "schema": "scar.independent-array-task-team-schedule",
+      "sha256": "14b47ddfab0f95368a5b7e9c2550a82e3f59f98dbe62554e98fbf55b6b2121ad",
+      "size_bytes": 13991,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-body-model-repeat.json"
+    },
+    "serial_scalar_service_reused": true,
+    "sunfish_report": {
+      "schema": "scar.cpu-entry-forward-cost",
+      "sha256": "c18b972aa28445aff28a1610f7e4ff23d44767553628e565fd071ba533a5e41a",
+      "size_bytes": 4688,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/sunfish-forward-final.json"
+    }
+  },
+  "schema": "scar.cpu-entry-forward-acceptance",
+  "schema_version": 1
+}
