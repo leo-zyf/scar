@@ -204,6 +204,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar export-cpu-catalog-runtime --selection SELECTION.json --out PACKAGE` 把已核验的 CPU 目录候选封装为同主机可迁移的 C++20 包，包含 CMake 源码、原 ELF、数值库及适用的限额守卫。`--check PACKAGE/artifact.json --manifest-sha256 SHA256` 在迁移后重查文件、宿主依赖和启动范围。验证运行将输出定向到外部新目录。原入口仍由整入口决策控制。
 
+`scar study-cpu-task-arena --acceptance TASK_ACCEPTANCE.json --out STUDY` 从已验收的 C++20 OpenMP 任务入口证明每个任务的工作区读写与生命周期，判断是否有同线程重复分配，并为适用范围生成独立 C++20 候选。报告包含任务逐轮字节对照、原生与原 Python 两组配对测量。使用 `--check STUDY/result.json` 可回读原证明、工程和样本。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
