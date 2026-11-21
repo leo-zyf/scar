@@ -149,9 +149,12 @@ def _observation_summary(reference, report, record, plan, scope):
         raise ValueError('retained CPU trial differs from the selected stdin or CPU binding')
     context = _provider_scope(report['invocation'], plan, scope)
     read_artifact(reference, json_document=False)
-    return dict(reference=reference, compilation=report['compilation'], provider_compilation=record['compilation'],
+    summary = dict(reference=reference, compilation=report['compilation'], provider_compilation=record['compilation'],
         scope=context, selection=report['selection'], same_boundary_whole_entry_timing=False,
         deployment_authorized=False)
+    if 'resource_observation' in report:
+        summary['resource_observation'] = report['resource_observation']
+    return summary
 
 
 def replay_cpu_catalog_observation(reference, plan, scope):

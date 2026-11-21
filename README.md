@@ -186,6 +186,10 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 带原始采集或配对观测的 CPU 目录请求可设置 `use_captured_launch: true`。核组、工作目录和环境按留存的启动证据绑定，Python 解释器须指向同一个可执行文件。规划可在其它核组运行，执行对照时原核组须落在当前进程的可用 CPU 集合内。
 
+CPU 目录主链输出 `whole-entry-effect-frontier.json` 和 `whole-entry-decision-ledger.json`。前者引用源码操作与命名观测，后者列出各方案的核组、内存口径和缺失的生命周期成本。只有必经工作的下界可用时，可用 `MANDATORY_SUBGRAPH_LOWER_BOUND` 从已绑定目标的固定实现图重算关键路径和资源容量下界。各项正时长须引用同方案、同作用域的 `MANDATORY_ACTIVITY_LOWER_BOUND`，资源容量须引用 `MANDATORY_RESOURCE_CAPACITY`。
+
+Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收进程的单进程峰值 RSS，并附上测量进程启动各臂前的 RSS。测量进程的启动和内存读取位于各臂计时之外。单独运行 `verify-cpu-entry --no-resources` 可关闭采集。[Linux 资源计数定义](https://man7.org/linux/man-pages/man2/getrusage.2.html)
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
