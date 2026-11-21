@@ -180,6 +180,8 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 `EXACT_GENERATED_FAMILY` 支持固定网格 CPU 文件入口。请求设置 `variant_source` 为 `{family: "ATEN_FIXED_GRID_CPU_FILE_ENTRY", proof: <CPU recurrence ArtifactRef>}`，`registered_implementations` 置空。`plan-build` 输出共享正文及效果义务，并从已证明的计算正文枚举 CPU 排程。`compile-build --entry-costs COST_INPUTS.json` 接收 `scar.whole-entry-cost-inputs` v1，其中 `domain` 是原 `whole-entry-domain.json` 的 ArtifactRef，`costs` 以方案 ID 映射至成本 FactRef。获选的方案才生成独立 C++20，可用 `--verify-entry` 做一次同参数、同发布路径的原入口对照。
 
+已有 CPU 提供者目录可以直接进入 `plan-build`。在 v1 整入口请求中设置 `cpu_provider_catalog` 为目录 ArtifactRef，保持注册列表为空，并使用目录中提供者的数值合同。规划按原 F4 源码、参数和硬件选择唯一已准入的提供者。`compile-build --verify-entry` 验证该方案。可选 `cpu_paired_observation` 引用同一来源的留存对照，用来复验已有工件及其可观测边界。输出位置替换和报告字段规范化保留在独立收据中，其计时仅用于该对照边界。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈

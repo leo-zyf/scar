@@ -35,7 +35,8 @@ def read_request(value):
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
-                'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts', 'nvhpc_device_profile', 'tensor_flow'}
+                'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts', 'nvhpc_device_profile', 'tensor_flow',
+                'cpu_provider_catalog', 'cpu_paired_observation'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -65,6 +66,23 @@ def read_request(value):
         read_artifact(variant_source['proof'])
     space = document.get('option_space', 'DISCOVER_ALL')
     infer_nvhpc = _infer_nvhpc(document)
+    infer_catalog = _infer_cpu_catalog(document)
+    if 'cpu_provider_catalog' in document:
+        from scar.compiler.compile_cpu_entry import CATALOG_SCHEMA
+
+        catalog = document['cpu_provider_catalog']
+        if not infer_catalog or type(catalog) is not dict or catalog.get('schema') != CATALOG_SCHEMA:
+            raise ValueError('a CPU provider catalog requires an unregistered CPU-only entry domain')
+        if 'numerical_contract' in document:
+            raise ValueError('CPU catalog entries use the provider’s declared numerical contract')
+        read_artifact(catalog)
+    if 'cpu_paired_observation' in document:
+        from scar.compiler.cpu_entry_replay import SCHEMA as CPU_REPLAY
+
+        observation = document['cpu_paired_observation']
+        if not infer_catalog or type(observation) is not dict or observation.get('schema') != CPU_REPLAY:
+            raise ValueError('a retained CPU observation requires its original provider catalog')
+        read_artifact(observation)
     if 'search_cpu_cohorts' in document and (not infer_nvhpc or type(document['search_cpu_cohorts']) is not bool):
         raise ValueError('CPU cohort search requires a source-derived NVIDIA domain')
     if 'sgemm_observations' in document:
@@ -91,7 +109,7 @@ def read_request(value):
             raise ValueError('Tensor-flow evidence requires an observed source-derived NVIDIA entry')
         read_artifact(flow)
     if ((space == 'EXACT_GENERATED_FAMILY' and
-            ((variant_source is None and not infer_nvhpc) or document['registered_implementations'])) or
+            ((variant_source is None and not (infer_nvhpc or infer_catalog)) or document['registered_implementations'])) or
             (space == 'EXACT_REGISTERED_SET' and variant_source is not None)):
         raise ValueError('finite option policy and variant provenance must agree')
     candidates = {}
@@ -113,6 +131,13 @@ def read_request(value):
 def _infer_nvhpc(request):
     return ('operator_stack_lock' in request and request.get('variant_source') is None
             and not request['registered_implementations']
+            and request.get('option_space') != 'EXACT_REGISTERED_SET')
+
+
+def _infer_cpu_catalog(request):
+    return ('cpu_provider_catalog' in request and request.get('variant_source') is None
+            and 'operator_stack_lock' not in request and 'operator_stack' not in request
+            and request['schema_version'] == 1 and not request['registered_implementations']
             and request.get('option_space') != 'EXACT_REGISTERED_SET')
 
 
@@ -143,6 +168,9 @@ def _scope(plan, request):
         scope['nvhpc_device_profile'] = request['nvhpc_device_profile']
     if 'tensor_flow' in request:
         scope['tensor_flow'] = request['tensor_flow']
+    for key in ('cpu_provider_catalog', 'cpu_paired_observation'):
+        if key in request:
+            scope[key] = request[key]
     return scope
 
 
@@ -182,6 +210,10 @@ def _discover(scope, request):
         device = derive_nvhpc_device_entry(scope, request['nvhpc_device_profile'])
         return dict(cpu, options=[*cpu['options'], *device['options']], device_discovery=device,
                     coverage_frontier=[*cpu['coverage_frontier'], *device['coverage_frontier']])
+    if _infer_cpu_catalog(request):
+        from scar.compiler.cpu_catalog_entry_variant import derive_cpu_catalog_entry
+
+        return derive_cpu_catalog_entry(scope, request['cpu_provider_catalog'])
     source = request.get('variant_source')
     if source is None:
         return None
@@ -270,6 +302,18 @@ def _bind_tensor_flow(plan, scope):
                                    entry_obligations=plan['entry_obligations'])
 
 
+def _bind_cpu_observation(plan, scope, discovery):
+    if 'cpu_paired_observation' not in scope:
+        return None
+    from scar.analysis.cpu_provider_graph import bind_cpu_provider_graph
+
+    flow = bind_cpu_provider_graph(plan['program'], scope, scope['cpu_paired_observation'],
+        source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'))
+    if flow['provider'] != (discovery or {}).get('matched_authority'):
+        raise ValueError('retained CPU observation belongs to a different catalog authority')
+    return flow
+
+
 @verify_stack_components_once()
 def prepare_whole_entry(plan, request, out):
     reference, document, candidates = read_request(request)
@@ -289,6 +333,9 @@ def prepare_whole_entry(plan, request, out):
     flow = _bind_tensor_flow(plan, scope)
     if flow is not None:
         entry['tensor_flow_binding'] = _write(out/'whole-entry-tensor-flow.json', flow)
+    cpu_observation = _bind_cpu_observation(plan, scope, discovery)
+    if cpu_observation is not None:
+        entry['cpu_provider_graph'] = _write(out/'whole-entry-cpu-provider-graph.json', cpu_observation)
     return entry
 
 
@@ -324,6 +371,10 @@ def _nvhpc_device_option(option):
     return option.get('implementation_family') == 'NVIDIA_DEVICE_MATRIX_FILE_ENTRY'
 
 
+def _cpu_catalog_option(option):
+    return option.get('implementation_family') == 'CATALOG_CPU_ENTRY'
+
+
 def _emit_generated(option, scope, out, *, plan_only, verify_entry):
     if _nvhpc_option(option):
         from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
@@ -333,6 +384,10 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry):
         from scar.compiler.nvhpc_device_entry_trial import emit_nvhpc_device_entry
 
         return emit_nvhpc_device_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
+    if _cpu_catalog_option(option):
+        from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
+
+        return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
 
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
@@ -404,10 +459,10 @@ def _observed_costs(audit, delivery, scope_sha, out):
 
 
 def _review_source_trials(discovery, generated, domain, scope, out):
-    """Try only the nominated device body, then a nominated CPU if no entry ran."""
+    """Review the nominated device and permit a CPU trial if no entry ran."""
     eligible = [generated[row['id']] for row in domain['options']
                 if row['id'] in generated and row['legal_status'] != 'INELIGIBLE']
-    cpu = [option for option in eligible if _nvhpc_option(option)]
+    cpu = [option for option in eligible if _nvhpc_option(option) or _cpu_catalog_option(option)]
     device = [option for option in eligible if _nvhpc_device_option(option)]
     search = (discovery or {}).get('cohort_search')
     if search is not None:
@@ -445,18 +500,23 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         retained = entry['scope']
         changed = sorted(key for key in live_scope.keys() | retained.keys() if live_scope.get(key) != retained.get(key))
         raise ValueError('whole-entry scope changed in ' + ', '.join(changed))
-    flow = _bind_tensor_flow(plan, live_scope)
-    flow_ref = entry.get('tensor_flow_binding')
-    if (flow_ref is None) != (flow is None) or flow_ref is not None and read_artifact(flow_ref) != flow:
-        raise ValueError('Tensor-flow binding differs from original graph replay')
-    if flow is None and plan.get('entry_obligations') is not None:
-        from scar.analysis.entry_obligations import verify_entry_obligations
-
-        verify_entry_obligations(plan['entry_obligations'], program=plan['program'])
     discovery = _discover(live_scope, request)
     if (('variant_discovery' in entry) != (discovery is not None) or discovery is not None
             and read_artifact(entry['variant_discovery']) != discovery):
         raise ValueError('entry variant set differs from mechanical proof replay')
+    flow = _bind_tensor_flow(plan, live_scope)
+    flow_ref = entry.get('tensor_flow_binding')
+    if (flow_ref is None) != (flow is None) or flow_ref is not None and read_artifact(flow_ref) != flow:
+        raise ValueError('Tensor-flow binding differs from original graph replay')
+    cpu_observation = _bind_cpu_observation(plan, live_scope, discovery)
+    cpu_observation_ref = entry.get('cpu_provider_graph')
+    if ((cpu_observation_ref is None) != (cpu_observation is None) or cpu_observation_ref is not None
+            and read_artifact(cpu_observation_ref) != cpu_observation):
+        raise ValueError('CPU provider observation differs from original graph replay')
+    if flow is None and cpu_observation is None and plan.get('entry_obligations') is not None:
+        from scar.analysis.entry_obligations import verify_entry_obligations
+
+        verify_entry_obligations(plan['entry_obligations'], program=plan['program'])
     legalities = _legalities(candidates, live_scope, discovery)
     domain = _derive(plan, request, candidates, live_scope, legalities, entry['legalities'], discovery)
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
@@ -494,5 +554,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         report['device_trial'] = device_trial
     if flow_ref is not None:
         report['tensor_flow_binding'] = flow_ref
+    if cpu_observation_ref is not None:
+        report['cpu_provider_graph'] = cpu_observation_ref
     report['observed_costs'] = _observed_costs(audit, delivery, choice['scope_sha256'], out)
     return dict(reference=_write(out/'whole-entry-selection.json', report), **report)

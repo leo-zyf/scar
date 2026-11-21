@@ -216,7 +216,7 @@ def main(argv=None):
     parser.add_argument('--loop-max-threads',type=int,help='explicit maximum team size for the cost model; all representative masks within that limit remain visible')
     parser.add_argument('--entry-costs',help='original whole-entry domain reference with late-bound model cost facts')
     parser.add_argument('--verify-entry',action='store_true',
-        help='validate the selected entry or the source-derived NVIDIA device and CPU nominations')
+        help='validate the selected entry or the eligible source-derived device and CPU nominations')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
