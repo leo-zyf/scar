@@ -14,7 +14,7 @@ import time
 def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
                   loop_trip_count=None,loop_inputs=None,prepare_stateful_validation=False,stateful_cpu_threads=1,
                   loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
-                  loop_max_threads=None,stateful_interval_plans=None):
+                  loop_max_threads=None,stateful_interval_plans=None,entry_costs=None,verify_entry=False):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -45,18 +45,27 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                 or stateful_cpu_threads!=1 or any(value is not None for value in (no_op_profiles,
                 loop_trip_count,loop_inputs,loop_cpu_threads,loop_no_op_profiles,loop_max_threads,stateful_interval_plans))):
             raise ValueError('whole-entry request already fixes the scope and declared implementation evidence')
+        if plan_only and verify_entry:
+            raise ValueError('process validation requires native emission')
+        entry_obligations=document.get('entry_obligations')
+        if entry_obligations is not None:
+            from scar.analysis.entry_obligations import verify_entry_obligations
+            verify_entry_obligations(entry_obligations,program=document['program'])
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
         started=time.monotonic();out.mkdir(parents=True)
-        whole=replay_whole_entry(document,out,plan_only=plan_only)
+        whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
             program=document['program'],hardware=document['hardware'],source_admission=source_admission,
             whole_entry=whole['reference'],regions=[],invariant_loops=[],composite_invariant_loops=[],
             whole_entry_status=whole['selection']['status'],whole_entry_action=whole['delivery']['final_action'],
-            scope='REPLAYED_WHOLE_ENTRY_OPTION_DOMAIN',selected_for_use=False,whole_program_compiled=False,
-            target_program_executed=False,three_stages_complete=False,seconds=time.monotonic()-started)
+            scope='REPLAYED_WHOLE_ENTRY_OPTION_DOMAIN',selected_for_use=False,
+            whole_program_compiled=whole['native_compiled'],target_program_executed=whole['target_executed'],
+            three_stages_complete=False,seconds=time.monotonic()-started)
         (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
         return report
+    if entry_costs is not None or verify_entry:
+        raise ValueError('entry cost evidence and process validation require a whole-entry domain')
     no_op_profiles={} if no_op_profiles is None else no_op_profiles
     stateful_interval_plans={} if stateful_interval_plans is None else stateful_interval_plans
     if not isinstance(stateful_interval_plans,dict):raise ValueError('interval plans require a region-id to plan mapping')
@@ -209,6 +218,8 @@ def main(argv=None):
     parser.add_argument('--loop-calibration',action='append',default=[],help='independent fixed-family temporal resource observations or projected component facts')
     parser.add_argument('--loop-no-op-profiles',help='JSON mapping original loop IDs to retained same-boundary original-call cost profiles')
     parser.add_argument('--loop-max-threads',type=int,help='explicit maximum team size for the cost model; all representative masks within that limit remain visible')
+    parser.add_argument('--entry-costs',help='original whole-entry domain reference with late-bound model cost facts')
+    parser.add_argument('--verify-entry',action='store_true',help='run one exact-output pair for a selected native entry')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
@@ -219,7 +230,8 @@ def main(argv=None):
         loop_calibrations=args.loop_calibration,
         loop_no_op_profiles=None if args.loop_no_op_profiles is None else json.loads(Path(args.loop_no_op_profiles).read_bytes()),
         loop_max_threads=args.loop_max_threads,
-        stateful_interval_plans=None if args.stateful_interval_plans is None else json.loads(Path(args.stateful_interval_plans).read_bytes()))
+        stateful_interval_plans=None if args.stateful_interval_plans is None else json.loads(Path(args.stateful_interval_plans).read_bytes()),
+        entry_costs=args.entry_costs,verify_entry=args.verify_entry)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],

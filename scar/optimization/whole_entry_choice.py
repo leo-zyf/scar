@@ -5,7 +5,7 @@ can still win unless an independently sourced lower bound rules it out.
 """
 
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from scar.ir.execution_recipe import read_artifact
 from .deployment_cost import _pointer
@@ -122,10 +122,8 @@ def _boundary_order(problem, cost, scope, phases):
           'every accounted activity must be ordered inside unconditional entry/exit boundaries')
 
 
-def _point_cost(cost, scope, lifecycle, facts):
+def _scheduled_problem(cost, scope, lifecycle, facts):
     from scar.ir.implementation_plan import problem_from_dict
-    from .constructive_planner import construct_implementations
-    from .joint_planner import solve_implementations, verify_execution_plan
 
     problem = problem_from_dict(facts.read(cost['problem']))
     target = scope.get('target')
@@ -139,13 +137,34 @@ def _point_cost(cost, scope, lifecycle, facts):
     _need(not activities & transfers, 'transfer and lifecycle activity identities must be distinct')
     activities |= transfers
     binding = cost.get('phase_bindings')
-    _need(type(binding) is dict and set(binding) == {name for name, state in lifecycle.items() if state == 'ACCOUNTED'}
+    included = cost.get('included_phases', {})
+    accounted = {name for name, state in lifecycle.items() if state == 'ACCOUNTED'}
+    _need(type(binding) is dict and type(included) is dict and not set(binding) & set(included)
+          and set(binding) | set(included) == accounted
           and all(type(rows) is list and rows and all(_identity(row) for row in rows) for rows in binding.values()),
           'full-entry phases must bind their accounted activities')
+    for phase, owner in included.items():
+        _need(type(owner) is dict and set(owner) == {'phase', 'evidence'} and owner['phase'] in binding,
+              'included phase must point to a directly charged activity group')
+        evidence = facts.fact(owner['evidence'])
+        _need(evidence.get('included_phase') == phase and evidence.get('charged_phase') == owner['phase']
+              and _matching(evidence, cost['option_id'], cost['scope_sha256']),
+              'included lifecycle cost needs original exact-scope grouping evidence')
+    if scope['boundary'] == 'PROCESS_LAUNCH_THROUGH_EXIT':
+        _need({'startup', 'teardown'} <= set(binding), 'process boundary activities require direct phase bindings')
     sources = [row for values in binding.values() for row in values]
     _need(set(sources) == activities and len(sources) == len(activities),
           'each original activity and transfer must be covered exactly once')
     _boundary_order(problem, cost, scope, binding)
+    return problem
+
+
+def _point_cost(cost, scope, lifecycle, facts):
+    from .constructive_planner import construct_implementations
+    from .joint_planner import solve_implementations, verify_execution_plan
+
+    problem = _scheduled_problem(cost, scope, lifecycle, facts)
+    baseline_only = cost.get('baseline_only', False)
     timed = [row for op in problem.operations for row in op.options
              if not baseline_only or row.id == op.baseline_option]
     transfer_costs = [route.cost for edge in problem.data_edges for route in edge.transfers]
@@ -188,6 +207,72 @@ def _point_cost(cost, scope, lifecycle, facts):
         proof='CP_SAT_CLOSED_DOMAIN_ZERO_GAP', constructive_upper_ns=constructed_upper, plan=plan)
 
 
+def _endpoint_problem(problem, endpoint):
+    def pin(cost):
+        duration = getattr(cost, endpoint)
+        return replace(cost, estimate_ns=duration, lower_ns=duration, upper_ns=duration)
+
+    operations = tuple(replace(op, options=(replace(op.options[0], cost=pin(op.options[0].cost)),))
+                       for op in problem.operations)
+    activities = tuple(replace(row, cost=pin(row.cost)) for row in problem.activities)
+    data_edges = tuple(replace(edge, transfers=tuple(replace(row, cost=pin(row.cost))
+                       for row in edge.transfers)) for edge in problem.data_edges)
+    return replace(problem, operations=operations, activities=activities, data_edges=data_edges)
+
+
+def _monotone_cost(cost, scope, lifecycle, facts):
+    from .constructive_planner import construct_implementations
+    from .joint_planner import solve_implementations, verify_execution_plan
+
+    problem = _scheduled_problem(cost, scope, lifecycle, facts)
+    _need(all(len(op.options) == 1 for op in problem.operations)
+          and all(not activity.when and activity.duration_kind == 'FIXED' for activity in problem.activities)
+          and all(not relation.when and relation.maximum_ns is None
+                  and (relation.before_endpoint, relation.after_endpoint) == ('END', 'START')
+                  for relation in problem.timing_constraints),
+          'interval replay requires one fixed implementation and unconditional end-to-start order')
+    modes = {op.id: op.options[0] for op in problem.operations}
+    for edge in problem.data_edges:
+        source = edge.external_location if edge.producer is None else modes[edge.producer].output_locations[edge.value]
+        destination = modes[edge.consumer].input_locations[edge.value]
+        _need((source == destination and not edge.transfers) or (len(edge.transfers) == 1
+              and (edge.transfers[0].source_memory, edge.transfers[0].destination_memory) == (source, destination)),
+              'interval replay requires an exact materialization route for every edge')
+    estimates = [mode.cost for mode in modes.values()] + [row.cost for row in problem.activities]
+    estimates.extend(row.cost for edge in problem.data_edges for row in edge.transfers)
+    if (any(row.basis not in _MODEL_BASIS or row.missing_terms or not row.source_refs
+            or not _duration(row.lower_ns) or not _duration(row.upper_ns) for row in estimates)
+            or any(mode.unresolved_resources for mode in modes.values())):
+        return 0, None, 'BOUNDED_SCHEDULE_COST_OR_RESOURCE_FRONTIER', None
+    for row in estimates:
+        for reference in row.source_refs:
+            facts.fact(reference)
+
+    baseline = cost.get('baseline_only', False)
+    budget = cost.get('seconds', 30)
+    lower_problem = _endpoint_problem(problem, 'lower_ns')
+    lower = construct_implementations(lower_problem, baseline_only=baseline, max_seconds=budget)
+    upper_problem = _endpoint_problem(problem, 'upper_ns')
+    upper = construct_implementations(upper_problem, baseline_only=baseline, max_seconds=budget)
+    if upper['makespan_ns'] is None:
+        try:
+            upper = solve_implementations(upper_problem, baseline_only=baseline, max_seconds=budget, workers=1)
+        except RuntimeError as error:
+            if not isinstance(error.__cause__, ImportError):
+                raise
+    bounds = [lower.get(key) for key in ('model_lower_bound_ns', 'fixed_selection_lower_bound_ns')]
+    lower_bound = max((bound for bound in bounds if bound is not None), default=0)
+    if upper['makespan_ns'] is None or not upper['domain_complete']:
+        return lower_bound, None, 'BOUNDED_SCHEDULE_FEASIBLE_UPPER_UNRESOLVED', None
+    # Keeping the upper plan's starts and shortening individual activities
+    # preserves end-to-start order and only shrinks the occupied intervals.
+    verify_execution_plan(upper_problem, upper)
+    upper.pop('elapsed_seconds', None)
+    return lower_bound, upper['makespan_ns'], 'FIXED_SCHEDULE_MODEL_INTERVAL', dict(
+        problem=cost['problem'], proof='LOWER_ENDPOINT_RELAXATION_AND_FEASIBLE_UPPER_SCHEDULE',
+        relaxed_lower_bounds_ns=bounds, plan=upper)
+
+
 def _cost(reference, option, scope, scope_sha, facts, *, baseline):
     if reference is None:
         return 0, None, 'COMPLETE_ENTRY_COST_UNKNOWN', None
@@ -200,10 +285,11 @@ def _cost(reference, option, scope, scope_sha, facts, *, baseline):
               and _identity(cost.get('required_work')), 'proven mandatory-work lower bound required')
         return lower, None, 'RETAINED_MANDATORY_WORK_LOWER_BOUND', None
     lifecycle = _phases(cost, scope)
-    if kind == 'OPTIMIZED_POINT_SCHEDULE':
+    if kind in ('OPTIMIZED_POINT_SCHEDULE', 'BOUNDED_MONOTONE_SCHEDULE'):
         _need(cost.get('baseline_only', False) is baseline,
               'only original implementations may populate the original execution option')
-        return _point_cost(cost, scope, lifecycle, facts)
+        replay = _point_cost if kind == 'OPTIMIZED_POINT_SCHEDULE' else _monotone_cost
+        return replay(cost, scope, lifecycle, facts)
     interval = cost.get('interval_ns')
     basis = cost.get('basis')
     _need(kind == 'COMPLETE_INTERVAL' and (basis in _MODEL_BASIS or basis == 'EMPIRICAL_ENVELOPE')

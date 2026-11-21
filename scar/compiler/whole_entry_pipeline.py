@@ -2,6 +2,7 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+from subprocess import CalledProcessError
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
@@ -10,7 +11,13 @@ REQUEST = 'scar.whole-entry-request'
 DOMAIN = 'scar.whole-entry-option-domain'
 SELECTION = 'scar.whole-entry-main-chain'
 LEGALITIES = 'scar.whole-entry-source-legalities'
-OPTION_SPACES = ('DISCOVER_ALL', 'EXACT_REGISTERED_SET')
+COST_INPUTS = 'scar.whole-entry-cost-inputs'
+STACK_TARGET = 'scar.whole-entry-stack-target'
+OPTION_SPACES = ('DISCOVER_ALL', 'EXACT_REGISTERED_SET', 'EXACT_GENERATED_FAMILY')
+FIXED_GRID_CPU = 'ATEN_FIXED_GRID_CPU_FILE_ENTRY'
+NVIDIA_HPC = 'NVIDIA_HPC'
+LIBTORCH = 'LIBTORCH_ATEN'
+_ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT'}
 
 
 def _write(path, value):
@@ -24,15 +31,33 @@ def read_request(value):
     ref = value if isinstance(value, dict) else artifact_reference(Path(value).resolve(), REQUEST)
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
-    optional = {'option_space', 'audit_retained_validation'}
-    if (set(document) - optional != required or document['schema'] != REQUEST or document['schema_version'] != 1
+    optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock'}
+    if (set(document) - optional != required or document['schema'] != REQUEST
+            or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
             or any(type(arg) is not str or '\x00' in arg for arg in document['argv'])
             or type(document['registered_implementations']) is not list):
         raise ValueError('exact original entry argv and whole-process evidence request required')
     if (document.get('option_space', 'DISCOVER_ALL') not in OPTION_SPACES
-            or type(document.get('audit_retained_validation', False)) is not bool):
-        raise ValueError('unrecognized whole-entry option space or validation audit mode')
+            or type(document.get('audit_retained_validation', False)) is not bool
+            or 'operator_stack' in document and document['operator_stack'] not in (NVIDIA_HPC, LIBTORCH)):
+        raise ValueError('unrecognized whole-entry option space, audit mode or operator stack')
+    if 'operator_stack_lock' in document:
+        stack = document['operator_stack_lock']
+        if (type(stack) is not dict or stack.get('schema') != 'scar.operator-stack'
+                or document.get('operator_stack', NVIDIA_HPC) != NVIDIA_HPC):
+            raise ValueError('the NVIDIA stack policy requires an exact SDK lock reference')
+    variant_source = document.get('variant_source')
+    if variant_source is not None:
+        if (type(variant_source) is not dict or set(variant_source) != {'family', 'proof'}
+                or variant_source['family'] != FIXED_GRID_CPU):
+            raise ValueError('known whole-entry variant family and its pinned source proof required')
+        read_artifact(variant_source['proof'])
+    space = document.get('option_space', 'DISCOVER_ALL')
+    if ((space == 'EXACT_GENERATED_FAMILY' and
+            (variant_source is None or document['registered_implementations'])) or
+            (space == 'EXACT_REGISTERED_SET' and variant_source is not None)):
+        raise ValueError('finite option policy and variant provenance must agree')
     candidates = {}
     for item in document['registered_implementations']:
         if type(item) is not dict or set(item) != {'route', 'artifact', 'validation', 'cost'}:
@@ -55,7 +80,7 @@ def _scope(plan, request):
     manifest = read_artifact(plan['program'])
     context = entry_context(manifest['entry'], request['argv'])
     target = plan['hardware']
-    return dict(context, boundary=request['boundary'], entry=context['entry_path'],
+    scope = dict(context, boundary=request['boundary'], entry=context['entry_path'],
         target_sha256=target['sha256'],
         target=dict(uri=target['path'], sha256=target['sha256'], size_bytes=target['bytes'],
                     schema='scar.target-hardware-graph'),
@@ -64,13 +89,59 @@ def _scope(plan, request):
         program_sha256=plan['program']['sha256'], source_admission_sha256=plan['source_admission']['sha256'],
         memory_budget_bytes=plan['memory_budget_bytes'], input_shapes=plan['input_shape_constraints'],
         environment_sha256=environment_sha256())
+    if plan.get('entry_obligations') is not None:
+        scope['entry_obligations_sha256'] = plan['entry_obligations']['sha256']
+    if request['schema_version'] == 2 or 'operator_stack' in request or 'operator_stack_lock' in request:
+        scope['operator_stack'] = request.get('operator_stack', NVIDIA_HPC)
+    return scope
 
 
 def _candidate(id_, row):
     return dict(id=id_, route=row['route'], artifact=row['artifact'], validation=row['validation'])
 
 
-def _legalities(candidates, scope):
+def _stack_target(scope, reference, *, device=None):
+    from scar.analysis.nvidia_stack_target import probe_nvidia_target, verify_nvidia_target
+    from scar.compiler.operator_stack import load_operator_stack
+
+    stack, document = load_operator_stack(reference)
+    if device is None:
+        device = probe_nvidia_target(target=scope['target'])
+    else:
+        verify_nvidia_target(device, target=scope['target'])
+    libraries = document['libraries']
+    visible = device['status'] == 'DEVICE_QUERY_SUCCEEDED'
+    bound = [row['ordinal'] for row in device['visible_devices']
+             if row['retained_target']['status'] == 'UUID_AND_PCI_MATCH']
+    return dict(schema=STACK_TARGET, schema_version=1, stack=stack, target=scope['target'],
+        device=device, cpu_blas_installed='cpu_blas' in libraries,
+        cuda_provider_installed={'cudart', 'cublas', 'cublaslt'} <= libraries.keys(),
+        cuda_device_evidence='TARGET_DEVICE_BOUND' if bound else 'VISIBLE_DEVICE_UNBOUND' if visible else device['status'],
+        bound_cuda_ordinals=bound, allocation_or_performance_qualified=False)
+
+
+def _discover(scope, request):
+    source = request.get('variant_source')
+    if source is None:
+        return None
+    from scar.compiler.aten_entry_variants import derive_aten_entry_variants
+
+    return derive_aten_entry_variants(scope, source['proof'])
+
+
+def _check_operator_stack(scope, stack, status, reason, *, reference=None):
+    if 'operator_stack' not in scope or status != 'LEGAL':
+        return status, reason
+    if stack != scope['operator_stack']:
+        return 'INELIGIBLE', 'OPERATOR_STACK_DIFFERS_FROM_WHOLE_ENTRY_POLICY'
+    if stack == NVIDIA_HPC:
+        target = scope.get('stack_target')
+        if target is None or reference != read_artifact(target)['stack']:
+            return 'INELIGIBLE', 'OPERATOR_STACK_LOCK_DIFFERS_FROM_ENTRY_TARGET'
+    return status, reason
+
+
+def _legalities(candidates, scope, discovery):
     from scar.optimization.resource_solver import semantic_sha256
 
     scope_sha = semantic_sha256(scope)
@@ -85,24 +156,39 @@ def _legalities(candidates, scope):
                 status, reason = 'LEGAL', 'STANDALONE_CPP_ARTIFACT_REPLAYED'
                 if qualification['evidence']['python_runtime_required']:
                     status, reason = 'INELIGIBLE', 'NATIVE_ROUTE_REQUIRES_PYTHON_AT_RUNTIME'
+            evidence = qualification.get('evidence') or {}
+            status, reason = _check_operator_stack(scope, _ROUTE_STACKS.get(item['route']), status, reason,
+                                                   reference=evidence.get('operator_stack'))
             facts.append(dict(option_id=id_, scope_sha256=scope_sha,
                 legal_status=status, reason=reason, qualification=qualification))
+    if discovery is not None:
+        known = set(candidates) | {'original'}
+        for option in discovery['options']:
+            id_ = option['id']
+            if id_ in known:
+                raise ValueError('duplicate discovered entry option identity')
+            known.add(id_)
+            status, reason = _check_operator_stack(scope, LIBTORCH, option['legal_status'], option['reason'])
+            facts.append(dict(option_id=id_, scope_sha256=scope_sha,
+                legal_status=status, reason=reason,
+                generated_option=option))
     return dict(schema=LEGALITIES, schema_version=1, scope_sha256=scope_sha, options=facts)
 
 
-def _derive(plan, request, candidates, scope, legalities, legality_reference):
+def _derive(plan, request, candidates, scope, legalities, legality_reference, discovery):
     options = [dict(id='original', legal_status='LEGAL', legality_evidence=[], cost=request['original_cost'])]
     for index, fact in enumerate(legalities['options']):
         id_, legal = fact['option_id'], fact['legal_status']
-        item = candidates[id_]
-        options.append(dict(id=id_, legal_status=legal, cost=item['cost'] if legal == 'LEGAL' else None,
+        item = candidates.get(id_)
+        options.append(dict(id=id_, legal_status=legal, cost=item['cost'] if item and legal == 'LEGAL' else None,
             legality_evidence=[dict(artifact=legality_reference, locator=f'#/options/{index}')]))
-    # A regional candidate, or even a complete native executable, cannot by
-    # itself attest that all legal whole-entry compositions were generated.
-    frontier = [] if scope['option_space'] == 'EXACT_REGISTERED_SET' else [dict(
-        layer='ENTRY_IMPLEMENTATION_DOMAIN', reason='NO_COMPLETE_WHOLE_ENTRY_OPTION_GENERATOR',
-        regional_domains=len(plan['regions']), invariant_loops=len(plan['invariant_loops']),
-        composite_invariant_loops=len(plan['composite_invariant_loops']))]
+    frontier = [] if discovery is None else list(discovery['coverage_frontier'])
+    if scope['option_space'] == 'DISCOVER_ALL':
+        reason = ('NO_COMPLETE_WHOLE_ENTRY_OPTION_GENERATOR' if discovery is None
+                  else 'UNENUMERATED_ENTRY_IMPLEMENTATION_FAMILIES')
+        frontier.append(dict(layer='ENTRY_IMPLEMENTATION_DOMAIN', reason=reason,
+            regional_domains=len(plan['regions']), invariant_loops=len(plan['invariant_loops']),
+            composite_invariant_loops=len(plan['composite_invariant_loops'])))
     return dict(schema=DOMAIN, schema_version=1, scope=scope, baseline_id='original', options=options,
         coverage_frontier=frontier)
 
@@ -110,43 +196,137 @@ def _derive(plan, request, candidates, scope, legalities, legality_reference):
 def prepare_whole_entry(plan, request, out):
     reference, document, candidates = read_request(request)
     scope = _scope(plan, document)
-    legalities = _legalities(candidates, scope)
+    stack_target = None
+    if 'operator_stack_lock' in document:
+        stack_target = _write(out/'whole-entry-stack-target.json', _stack_target(scope, document['operator_stack_lock']))
+        scope['stack_target'] = stack_target
+    discovery = _discover(scope, document)
+    legalities = _legalities(candidates, scope, discovery)
     legal_ref = _write(out/'whole-entry-legalities.json', legalities)
-    domain = _derive(plan, document, candidates, scope, legalities, legal_ref)
-    return dict(request=reference, domain=_write(out/'whole-entry-domain.json', domain),
+    domain = _derive(plan, document, candidates, scope, legalities, legal_ref, discovery)
+    entry = dict(request=reference, domain=_write(out/'whole-entry-domain.json', domain),
         legalities=legal_ref, scope=scope, complete_declared_domain=not domain['coverage_frontier'])
+    if discovery is not None:
+        entry['variant_discovery'] = _write(out/'whole-entry-variants.json', discovery)
+    return entry
 
 
-def replay_whole_entry(plan, out, *, plan_only):
+def _attach_costs(domain, original_ref, source, out):
+    if source is None:
+        return domain, original_ref, None
+    reference = artifact_reference(Path(source).resolve(), COST_INPUTS)
+    document = read_artifact(reference)
+    if (set(document) != {'schema', 'schema_version', 'domain', 'costs'} or document['schema_version'] != 1
+            or document['domain'] != original_ref or type(document['costs']) is not dict):
+        raise ValueError('cost inputs must cite the exact original entry option domain')
+    pending = dict(document['costs'])
+    options = []
+    for row in domain['options']:
+        id_ = row['id']
+        if id_ in pending:
+            cost = pending.pop(id_)
+            if row['legal_status'] == 'INELIGIBLE' or row['cost'] not in (None, cost) or type(cost) is not dict:
+                raise ValueError('a cost input cannot replace evidence or price an ineligible option: ' + id_)
+            row = dict(row, cost=cost)
+        options.append(row)
+    if pending:
+        raise ValueError('cost inputs name options outside the independently replayed domain')
+    priced = dict(domain, options=options)
+    return priced, _write(out/'whole-entry-priced-domain.json', priced), reference
+
+
+def _emit_generated(option, scope, out, *, plan_only, verify_entry):
+    from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
+
+    plan = option['proof']['emission_plan']
+    result = dict(schema=HANDOFF, schema_version=1, selected_id=option['id'], scope=scope,
+        final_action='NATIVE_COMPILATION_DEFERRED', reason='plan-only preserved the selected C++ emission plan',
+        selected_emission=plan, native_compiled=False, target_executed=False,
+        operator_stack=dict(family=LIBTORCH, retained_body=plan['body']),
+        qualification=None, validation=None, deployment_authorized=False)
+    if plan_only:
+        return result
+
+    from scar.compiler.aten_source_entry_plan import emit_planned_source_entry
+
+    try:
+        native = emit_planned_source_entry(plan, out/'native-entry')
+    except (OSError, ValueError, CalledProcessError) as error:
+        return dict(result, final_action='KEEP_ORIGINAL', reason='native emission failed: ' + str(error))
+    if read_artifact(native['artifact'])['source_entry_plan'] != plan:
+        raise ValueError('generated C++ project differs from the selected entry plan')
+    candidate = dict(id=option['id'], route='ATEN_SOURCE_ENTRY', artifact=native['artifact'], validation=None)
+    admission = replay_entry_delivery(scope, selected_id=option['id'], candidate=candidate)
+    result.update(admission, native=native, native_compiled=True)
+    if not verify_entry or admission['final_action'] != 'CANDIDATE_VALIDATION_REQUIRED':
+        return result
+
+    from scar.compiler.aten_source_entry import validate_source_entry
+
+    inputs = scope['argv'][plan['abi']['argv']['input_root'] - 1]
+    steps = option['proof']['steps']
+    validation_dir = out/'native-validation'
+    try:
+        validation = validate_source_entry(native['project'], native['manifest_sha256'], inputs, validation_dir,
+            steps=steps, argv=scope['argv'], original_cpu_ids=scope['process_affinity_cpu_ids'],
+            expected_environment_sha256=scope['environment_sha256'])
+    except (OSError, ValueError, CalledProcessError) as error:
+        return dict(result, final_action='KEEP_ORIGINAL', reason='native validation failed: ' + str(error),
+                    validation_attempted=True, target_executed=None)
+    receipt = artifact_reference(validation_dir/'result.json', validation['schema'])
+    candidate['validation'] = receipt
+    inspected = replay_entry_delivery(scope, selected_id=option['id'], candidate=candidate)
+    return dict(result, **inspected, target_executed=True)
+
+
+def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False):
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
 
     entry = plan['whole_entry']
     _, request, candidates = read_request(entry['request'])
     live_scope = _scope(plan, request)
+    if 'operator_stack_lock' in request:
+        stack_target = entry['scope']['stack_target']
+        retained = read_artifact(stack_target)
+        if retained != _stack_target(live_scope, request['operator_stack_lock'], device=retained['device']):
+            raise ValueError('NVIDIA operator stack and original device scope differ from retained evidence')
+        live_scope['stack_target'] = stack_target
     if live_scope != entry['scope']:
         retained = entry['scope']
         changed = sorted(key for key in live_scope.keys() | retained.keys() if live_scope.get(key) != retained.get(key))
         raise ValueError('whole-entry scope changed in ' + ', '.join(changed))
-    legalities = _legalities(candidates, live_scope)
-    domain = _derive(plan, request, candidates, live_scope, legalities, entry['legalities'])
+    discovery = _discover(live_scope, request)
+    if (('variant_discovery' in entry) != (discovery is not None) or discovery is not None
+            and read_artifact(entry['variant_discovery']) != discovery):
+        raise ValueError('entry variant set differs from mechanical proof replay')
+    legalities = _legalities(candidates, live_scope, discovery)
+    domain = _derive(plan, request, candidates, live_scope, legalities, entry['legalities'], discovery)
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
-    choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates)])
+    domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
+    generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
+    choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
-    candidate = None if selected in (None, 'original') else _candidate(selected, candidates[selected])
-    delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
+    if selected in generated:
+        delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry)
+    else:
+        candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
+        delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
     audit = []
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
             id_ = fact['option_id']
-            if id_ != selected and fact['qualification']['status'] == 'QUALIFIED':
+            if id_ != selected and fact.get('qualification', {}).get('status') == 'QUALIFIED':
                 observation = replay_entry_delivery(live_scope, selected_id=id_,
                     candidate=_candidate(id_, candidates[id_]))
                 audit.append(dict(option_id=id_, legal_status=fact['legal_status'],
                     validation=observation['validation'], reason=observation['reason']))
-    report = dict(schema=SELECTION, schema_version=1, domain=entry['domain'],
-        source_admission=plan['source_admission'], selection=choice, delivery=delivery,
+    report = dict(schema=SELECTION, schema_version=1, domain=priced_domain, original_domain=entry['domain'],
+        cost_inputs=cost_inputs, variant_discovery=entry.get('variant_discovery'),
+        source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
+        selection=choice, delivery=delivery,
         retained_validation_audit=audit,
-        plan_only=plan_only, native_compiled=False, target_executed=False)
+        plan_only=plan_only, native_compiled=delivery.get('native_compiled', False),
+        target_executed=delivery.get('target_executed', False))
     return dict(reference=_write(out/'whole-entry-selection.json', report), **report)

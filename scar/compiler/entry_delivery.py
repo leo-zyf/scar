@@ -232,16 +232,28 @@ def _aten_validation(scope, evidence, reference, minimum_gain):
     original, native = 'ORIGINAL_PYTHON', 'NATIVE_CPP'
     artifact = evidence['artifact']
     root = str(Path(artifact['uri']).parent)
+    measured = v['full_process_measured']
+    original_cpus = v.get('original_cpu_ids', v['cpu_ids'])
     _require(v['schema_version'] == 1 and v['project'] == root and v['manifest_sha256'] == artifact['sha256']
              and v['argv'] == scope['argv'] and v['steps'] == evidence['steps'] and v['inputs'] == evidence['file_inputs']
-             and v['cpu_ids'] == evidence['cpu_ids'] and v['full_process_measured'] is True
+             and v['cpu_ids'] == evidence['cpu_ids'] and type(measured) is bool
+             and v['exact_publication_stdout_stderr_exit_verified'] is True
+             and v['deployment_authorized'] is False
              and v['timing_scope'] == 'SOURCE_CLI_PROCESS_LAUNCH_TO_EXIT_INCLUDING_FILE_IO',
              'standalone validation does not bind the same C++ project, invocation and inputs')
+    _require(type(original_cpus) is list and all(type(cpu) is int and cpu >= 0 for cpu in original_cpus)
+             and len(set(original_cpus)) == len(original_cpus) and set(v['cpu_ids']) <= set(original_cpus),
+             'standalone native placement is outside the original CPU cohort')
     if 'process_affinity_cpu_ids' in scope:
-        _require(scope['process_affinity_cpu_ids'] == v['cpu_ids'], 'standalone paired process placement differs')
+        _require(scope['process_affinity_cpu_ids'] == original_cpus, 'standalone paired process placement differs')
+    if not measured:
+        _require('original_cpu_ids' in v and Path(v['working_directory']).is_absolute(),
+                 'unmeasured standalone validation requires its explicit launch scope')
+    if 'working_directory' in v and 'working_directory' in scope:
+        _require(scope['working_directory'] == v['working_directory'], 'standalone paired working directory differs')
     argv = scope['argv']
     python_command = v['commands'][original]
-    _require(python_command == ['/usr/bin/taskset', '-c', ','.join(map(str, v['cpu_ids'])),
+    _require(python_command == ['/usr/bin/taskset', '-c', ','.join(map(str, original_cpus)),
                                 python_command[3], '-B', scope['entry'], *argv]
              and Path(python_command[3]).is_file() and Path(python_command[3]).is_absolute()
              and Path(python_command[3]).resolve() == Path(scope.get('python_executable', python_command[3])).resolve()
@@ -252,23 +264,36 @@ def _aten_validation(scope, evidence, reference, minimum_gain):
                  'standalone validation provider environment differs')
     _frozen_environment(scope, _environment_digest(v['python_provider_environment']))
     ordered, publication_hashes = [], set()
-    _require(len(v['observations']) == len(v['runs']) == 8, 'complete standalone pair evidence required')
+    _require(len(v['observations']) == len(v['runs']) == (8 if measured else 2),
+             'complete standalone pair evidence required')
+    output_root = Path(reference['uri']).parent
     for ordinal, (run, output) in enumerate(zip(v['runs'], v['observations'])):
         pair, slot = divmod(ordinal, 2)
         labels = (original, native) if pair % 2 == 0 else (native, original)
         _require((output['pair'], output['mode']) == (pair, labels[slot]), 'standalone pair order changed')
         stdout, stderr = output['stdout'].encode(), output['stderr'].encode()
-        _require(not stderr and run == _timing_row(pair, labels[slot], run['wall_ns'], run['returncode'], stdout, stderr),
+        wall = run['wall_ns']
+        _require(not stderr and run['returncode'] == 0
+                 and (type(wall) is int and wall > 0 if measured else wall is None)
+                 and run == _timing_row(pair, labels[slot], wall, 0, stdout, stderr),
                  'standalone exit or output digest differs from retained observation')
         publication = _ref_with_path(output['output'], 'scar.source-entry-publication')
+        _require(Path(publication['uri']) == output_root / f'pair-{pair}-{labels[slot]}.f32'
+                 and publication['size_bytes'] == evidence['scoped_cost_evidence']['logical_final_payload_bytes'],
+                 'standalone file publication differs from the admitted scope')
         read_artifact(publication, json_document=False)
         publication_hashes.add(publication['sha256'])
         ordered.append(dict(run, mode='ORIGINAL' if labels[slot] == original else 'NATIVE'))
     _require(len(publication_hashes) == 1, 'standalone final publication differs across invocations')
+    launch = dict(commands=v['commands'], cpu_ids=v['cpu_ids'], original_cpu_ids=original_cpus,
+                  working_directory=v.get('working_directory'), provider_environment=v['python_provider_environment'],
+                  timing_scope=v['timing_scope'])
+    if not measured:
+        _require(v['decision'] is None and ordered[0]['stdout_sha256'] == ordered[1]['stdout_sha256'],
+                 'standalone correctness observation does not preserve stdout')
+        return None, None, launch
     prior = compare_entry_pairs(v['runs'], incumbent=original, challenger=native, warmup_pairs=1, measurement_pairs=3)
     _require(prior == v['decision'], 'standalone stored policy decision differs from replay')
-    launch = dict(commands=v['commands'], cpu_ids=v['cpu_ids'],
-                  provider_environment=v['python_provider_environment'], timing_scope=v['timing_scope'])
     return _paired(ordered, 1, 3, minimum_gain), None, launch
 
 
@@ -425,6 +450,9 @@ def replay_entry_delivery(scope, *, selected_id, candidate=None, minimum_gain=0.
     except _PROFILE_ERRORS as error:
         return dict(result, reason='whole-process validation could not replay: ' + str(error))
     result['validation'] = dict(reference=validation, timing=timing, launch=launch, exact_declared_effects_replayed=True)
+    if timing is None:
+        return dict(result, final_action='ADVANCE_TO_RELEASE_REVIEW',
+                    reason='whole-process correctness replayed without performance observations')
     if timing['verdict'] != 'ADVANCE_TO_RELEASE_REVIEW':
         return dict(result, reason='whole-process paired observations did not satisfy the gain policy')
     if release:

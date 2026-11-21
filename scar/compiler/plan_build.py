@@ -97,6 +97,10 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         regions,rejected=discover_stateful_regions(session.view,source=source_filter)
         out.mkdir(parents=True)
         source_admission=publish_build_admission(session,out/'source-admission.json',source_filter=source_filter)
+        entry_obligations=None
+        if entry_request is not None:
+            from scar.analysis.entry_obligations import publish_entry_obligations
+            entry_obligations=publish_entry_obligations(session,out/'entry-obligations.json')
         loops=_planning_loops(session.view,sources,source_filter)
         if session._f4 is not None:
             providers=tuple(p for name,p in session._f4.providers.items() if name.startswith('bounded_call_bindings:'))
@@ -184,6 +188,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         first_stage_complete=False,seconds=time.monotonic()-started)
     if entry_request is not None:
         from scar.compiler.whole_entry_pipeline import prepare_whole_entry
+        report['entry_obligations']=entry_obligations
         report['whole_entry']=prepare_whole_entry(report,entry_request,out)
     (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     return report

@@ -450,8 +450,13 @@ def _replay_single(manifest, member):
             if rhs_schedule is not None and execution['rhs_schedule']['sha256'] != files['plan/rhs-schedule.json']['sha256']:
                 raise ValueError('parallel RHS schedule differs from the archived selection')
             replay_recurrence_placement(problem, placement, rhs_recipe, rhs_problem, rhs_schedule)
-            _replay_recurrence_selection(manifest, member, execution, observation, schedule, rhs_recipe,
-                                         lifetimes=lifetimes)
+            if 'source_entry_plan' in manifest:
+                from scar.compiler.aten_source_entry_plan import verify_source_entry_emission
+
+                verify_source_entry_emission(manifest, member)
+            else:
+                _replay_recurrence_selection(manifest, member, execution, observation, schedule, rhs_recipe,
+                                             lifetimes=lifetimes)
             source_abi = None
             if 'source_entry_cli' in manifest:
                 from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry

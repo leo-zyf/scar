@@ -1,6 +1,7 @@
 """Exact entry scope, interval dominance and resource-timeline replay."""
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import (
     SCHEMA as PROBLEM, CostEstimate, ImplementationOption, PlanningOperation,
-    PlanningProblem, PlanningResource, problem_document,
+    PlanningProblem, PlanningResource, PlanningTimingConstraint, problem_document,
 )
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.resource_solver import semantic_sha256
@@ -169,3 +170,47 @@ def test_exact_resource_optimum_includes_launch_and_exit_and_replays(tmp_path):
     assert schedule['proof'] == 'CONSTRUCTIVE_UPPER_MEETS_ANALYTIC_LOWER_BOUND'
     assert schedule['plan']['makespan_ns'] == 130
     assert not report['model_optimality_proven']
+
+
+def test_fixed_entry_interval_replays_overlapping_workers_and_lifecycle(tmp_path):
+    domain = _domain()
+    target = _artifact(tmp_path / 'target.json', {'schema': 'scar.target-hardware-graph'})
+    domain['scope']['target'] = target
+    evidence = _artifact(tmp_path / 'components.json', {'schema': 'test.component-cost-model'})
+    refs = ({'artifact': evidence, 'locator': '#'},)
+
+    def operation(name, parents, low, high, demands):
+        duration = CostEstimate(None, low, high, 'ANALYTICAL_MODEL', name, refs)
+        mode = ImplementationOption('fixed', 'LOWERED', _REFS, demands, {}, {}, {}, duration, {})
+        return PlanningOperation(name, _REFS, parents, (mode,), 'fixed')
+
+    operations = (operation('launch', (), 10, 15, {'cpu:0': 1}),
+                  operation('x', ('launch',), 30, 40, {'cpu:0': 1}),
+                  operation('y', ('launch',), 32, 45, {'cpu:1': 1}),
+                  operation('exit', ('x', 'y'), 5, 8, {'cpu:0': 1}))
+    resources = tuple(PlanningResource(f'cpu:{i}', 'EXECUTION', 1, _REFS) for i in range(2))
+    problem = PlanningProblem(ProviderArtifact(**target), _REFS, resources, operations, ())
+    grouped = _artifact(tmp_path/'grouped.json', dict(schema='test.grouped-phase', option_id='native',
+        scope_sha256=semantic_sha256(domain['scope']), included_phase='allocation', charged_phase='execution'))
+    coverage = dict(_phase_coverage(), allocation='ACCOUNTED')
+    cost = dict(kind='BOUNDED_MONOTONE_SCHEDULE', lifecycle_coverage=coverage,
+        problem=_artifact(tmp_path / 'problem.json', problem_document(problem)),
+        phase_bindings=dict(startup=['launch'], execution=['x', 'y'], teardown=['exit']),
+        included_phases=dict(allocation=dict(phase='execution', evidence=dict(artifact=grouped, locator='#'))),
+        boundary_anchors={'entry': 'launch', 'exit': 'exit'})
+    _option(domain, tmp_path, 'original', _interval(100, 130))
+    _option(domain, tmp_path, 'native', cost)
+    names = ['original', 'native']
+    report = solve_whole_entry_choice(domain, expected_option_ids=names)
+    assert report['selected_option_id'] == 'native'
+    native = report['alternatives'][0]
+    assert native['interval_ns'] == {'lower': 47, 'upper': 68}
+    assert native['schedule_certificate']['plan']['makespan_ns'] == 68
+
+    non_monotone = replace(problem, timing_constraints=(PlanningTimingConstraint(
+        'deadline', 'x', 'END', 'exit', 'START', maximum_ns=4, source_refs=_REFS),))
+    cost['problem'] = _artifact(tmp_path / 'bounded-lag.json', problem_document(non_monotone))
+    domain['options'].pop()
+    _option(domain, tmp_path, 'native', cost)
+    with pytest.raises(ValueError, match='unconditional end-to-start'):
+        solve_whole_entry_choice(domain, expected_option_ids=names)

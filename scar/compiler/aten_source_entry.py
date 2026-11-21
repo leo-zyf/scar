@@ -2,7 +2,9 @@
 import argparse
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import stat
@@ -155,7 +157,8 @@ def _inputs(abi, input_root):
     return receipts
 
 
-def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, measure=False):
+def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, measure=False,
+                          argv=None, original_cpu_ids=None, expected_environment_sha256=None):
     """Compare the unchanged Python entry and one selected C++ under the same argv."""
     from scar.optimization.paired_entry_selection import compare_entry_pairs
     from scar.runtime.validate_native_project import verify_native_project
@@ -168,7 +171,34 @@ def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, m
     if 'source_entry_cli' not in manifest:
         raise ValueError('replayed native source-entry project required')
     abi = _read(root/ABI_FILE)
+    explicit = argv is not None or original_cpu_ids is not None
+    if explicit and (type(argv) is not list or len(argv) != abi['argv']['count']
+            or any(type(arg) is not str or '\x00' in arg for arg in argv)):
+        raise ValueError('exact source-entry argv required with an explicit CPU cohort')
     input_root = Path(input_root).resolve(strict=True)
+    publication = out/'publication.f32'
+    if explicit:
+        input_argument = Path(argv[abi['argv']['input_root'] - 1])
+        publication = Path(argv[abi['argv']['output'] - 1])
+        step_argument = argv[abi['argv']['steps'] - 1]
+        significant = step_argument.lstrip('0')
+        if (not input_argument.is_absolute() or input_argument.resolve(strict=True) != input_root
+                or re.fullmatch('[0-9]+', step_argument) is None or not significant or len(significant) > 10
+                or type(steps) is not int or int(significant) != steps or not 1 <= steps < 2**31
+                or not publication.is_absolute() or not publication.parent.is_dir()
+                or publication.exists() or publication.is_symlink()):
+            raise ValueError('explicit argv differs from the admitted input, legal count or fresh publication scope')
+        input_root = input_argument
+    else:
+        argv = source_argv(abi, input_root, steps, publication)
+    if original_cpu_ids is None:
+        original_cpu_ids = manifest['cpus']
+    if (type(original_cpu_ids) is not list or not original_cpu_ids
+            or any(type(cpu) is not int or cpu < 0 for cpu in original_cpu_ids)
+            or len(set(original_cpu_ids)) != len(original_cpu_ids)
+            or not set(manifest['cpus']) <= set(original_cpu_ids)
+            or explicit and not set(original_cpu_ids) <= os.sched_getaffinity(0)):
+        raise ValueError('original and native CPU cohorts differ from the permitted validation scope')
     inputs = _inputs(abi, input_root)
     source = Path(abi['solver']['source']['path'])
     expected_source = {key: abi['solver']['source'][key] for key in ('sha256', 'size_bytes')}
@@ -178,10 +208,11 @@ def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, m
     if any(_content(path) != expected for path, expected in source_files.items()):
         raise ValueError('original Python entry or fixed-grid provider differs from its admitted bytes')
     env = _original_environment(manifest)
+    if (expected_environment_sha256 is not None and expected_environment_sha256 !=
+            sha256(json.dumps(sorted(env.items()), separators=(',', ':')).encode()).hexdigest()):
+        raise ValueError('validation provider environment differs from the selected entry scope')
     out.mkdir(parents=True)
-    publication = out/'publication.f32'
-    argv = source_argv(abi, input_root, steps, publication)
-    cpus = ','.join(map(str, manifest['cpus']))
+    cpus = ','.join(map(str, original_cpu_ids))
     commands = dict(ORIGINAL_PYTHON=['/usr/bin/taskset', '-c', cpus, sys.executable, '-B', str(source), *argv],
                     NATIVE_CPP=[str(root/LAUNCHER), *argv])
     runs, observations = [], []
@@ -191,12 +222,17 @@ def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, m
         outputs = {}
         order = tuple(commands) if index % 2 == 0 else tuple(reversed(commands))
         for mode in order:
-            start = perf_counter_ns()
+            if publication.exists() or publication.is_symlink():
+                raise ValueError('source-entry comparison requires an absent publication before every launch')
+            if measure:
+                start = perf_counter_ns()
             result = subprocess.run(commands[mode], env=env, check=True, capture_output=True)
-            elapsed = perf_counter_ns()-start
+            elapsed = perf_counter_ns()-start if measure else None
+            if not stat.S_ISREG(publication.lstat().st_mode):
+                raise ValueError('source-entry comparison produced a non-file publication')
             outputs[mode] = (result.stdout, result.stderr, publication.read_bytes())
             retained = out/f'pair-{index}-{mode}.f32'
-            publication.rename(retained)
+            shutil.move(publication, retained)
             runs.append(dict(pair=index, mode=mode, wall_ns=elapsed, returncode=result.returncode,
                 stdout_sha256=sha256(result.stdout).hexdigest(), stderr_sha256=sha256(result.stderr).hexdigest()))
             observations.append(dict(pair=index, mode=mode, stdout=result.stdout.decode(), stderr=result.stderr.decode(),
@@ -212,10 +248,12 @@ def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, m
     report = dict(schema='scar.aten-source-entry-validation', schema_version=1,
         project=str(root), manifest_sha256=manifest_sha256, steps=steps, inputs=inputs, argv=argv,
         commands=commands, cpu_ids=manifest['cpus'], python_provider_environment=env,
-        observations=observations, runs=runs if measure else [],
+        observations=observations, runs=runs if measure or explicit else [],
         exact_publication_stdout_stderr_exit_verified=True,
         full_process_measured=measure, timing_scope='SOURCE_CLI_PROCESS_LAUNCH_TO_EXIT_INCLUDING_FILE_IO',
         decision=decision, deployment_authorized=False)
+    if explicit:
+        report.update(original_cpu_ids=original_cpu_ids, working_directory=str(Path.cwd().resolve()))
     _write(out/'result.json', report)
     return report
 
