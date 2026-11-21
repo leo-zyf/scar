@@ -1,0 +1,153 @@
+{
+  "default_entry_backend": "NO_OP",
+  "delivery": {
+    "collection": "TARGETED_DIAGNOSTIC_WITH_EXPLICIT_SOURCE_SITE_SELECTORS",
+    "cxx_standard": 20,
+    "holdouts": 37,
+    "independent_guard_validation": {
+      "schema": "scar.native-numpy-phase-guard-validation",
+      "sha256": "30bb6c899d6020ecd40c9591e20a807a39d145440c427e86ee529357f53a6649",
+      "size_bytes": 1451,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-phase-v1/guard-validation.json"
+    },
+    "max_scratch_bytes": 32800,
+    "native_byte_matches": 78,
+    "original_ndarray_operations": 559,
+    "performance_measured": false,
+    "phase_release": {
+      "schema": "scar.native-numpy-phase",
+      "sha256": "6ec1c84811d50e8962981ddee01547f1b05288b7956ad7d03d484376f31751c2",
+      "size_bytes": 239740,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-phase-v1/release-qualified/result.json"
+    },
+    "runtime_cpu_ids": [
+      7
+    ],
+    "stock_strides": [
+      [
+        16,
+        0,
+        16
+      ],
+      [
+        32,
+        0,
+        32
+      ],
+      [
+        64,
+        0,
+        64
+      ]
+    ],
+    "whole_loop_cpp": false
+  },
+  "deployment_authorized": false,
+  "frontend": {
+    "binary_source_effects_closed": false,
+    "binding": {
+      "schema": "scar.returned-loop-binding",
+      "sha256": "5d2124e94ade967e26c5f0aec4e2f7d99d0dd64b2ddcaf115fa4fcfefe810a85",
+      "size_bytes": 10399,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/binding.json"
+    },
+    "matched_activations": 2,
+    "method_call_site_offset": 792,
+    "natural_property_read_offset": 804,
+    "observations": [
+      {
+        "schema": "scar.returned-state-recurrence-witness",
+        "sha256": "a100781f7bd2ff675a90f2da49f601506090e8954db039317873a58c6dedc7b6",
+        "size_bytes": 19096,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/diagnostic/seed-1729/result.json"
+      },
+      {
+        "schema": "scar.returned-state-recurrence-witness",
+        "sha256": "44b909457592d536d725085e74b23011b182494cfd6d25f180176f455a83fd2f",
+        "size_bytes": 19093,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/diagnostic/seed-137/result.json"
+      }
+    ],
+    "rounds": [
+      3,
+      3
+    ],
+    "source": {
+      "schema": "scar.source-returned-loop-carry",
+      "sha256": "6ac2991535d9fa1a4fa2fdc4925eaee0b000a90eab1735f99047789391a23f27",
+      "size_bytes": 205687,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-carry-v1/source-loop.json"
+    }
+  },
+  "lewm_benchmarked": false,
+  "planning": {
+    "clock_summary": {
+      "activities": 2,
+      "activities_without_execution_demand": 0,
+      "activity_task_coverage_complete": true,
+      "events": 9,
+      "execution_authorized_by_temporal_model": false,
+      "execution_demand_coverage_complete": true,
+      "indexed_boundary_constraints": 2,
+      "indexed_bounds_feasibility_proven": false,
+      "iteration_local_materializations": 0,
+      "iteration_local_values": 0,
+      "iterations_unrolled": 0,
+      "known_timestamps": 0,
+      "loop_scopes": 1,
+      "materialization_carry_count": 0,
+      "mode": "SEMANTIC",
+      "occupancies": 2,
+      "path_condition": "NORMAL_COMPLETE",
+      "periodic_feasibility_proven": false,
+      "physical_slot_coverage_complete": true,
+      "physical_slots_counted_once": 0,
+      "resource_capacity_feasibility_proven": false,
+      "same_iteration_bounds_consistent": true,
+      "scopes": 2,
+      "symbolic_iteration_constraints": 1,
+      "task_dependency_interpretation": "SAME_ITERATION_COMPLETION_WITH_EXPLICIT_FIRST_LAST_BOUNDARIES",
+      "unbound_materialization_ready_events": 0,
+      "unknown_durations": 2,
+      "unknown_execution_demands": 2
+    },
+    "cpu_ids": [
+      5
+    ],
+    "decision": "NO_OP",
+    "platform_cpu_cores": 28,
+    "platform_hardware_threads": 56,
+    "platform_memory_domains": 2,
+    "platform_resource_records": 204,
+    "quantitative_costs": "UNKNOWN",
+    "recurrence": {
+      "cross_activation_independence": "UNKNOWN",
+      "may_parallelize_rounds_in_one_activation": false,
+      "reason": "NEXT_CALL_CONSUMES_PREVIOUS_PROPERTY_RESULT"
+    },
+    "state_lifetime": {
+      "actual_last_use": null,
+      "backing_capacity_bytes": null,
+      "memory_ranking": "UNKNOWN",
+      "minimum_live_until": "NEXT_CONSUMER_ENTRY_ON_EVERY_OBSERVED_BACKEDGE",
+      "observed_logical_payload_bytes": [
+        32768
+      ],
+      "same_object_transfers": 4
+    },
+    "target": {
+      "schema": "scar.target-hardware-graph",
+      "sha256": "fa7a07f190c15e5258ccb87e2a0fac6df36268fe668c0700dddeb831ac35eb98",
+      "size_bytes": 8695,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/target/result.json"
+    },
+    "time_graph": {
+      "schema": "scar.returned-loop-time",
+      "sha256": "52d393d38ec97bc66844930e6e88bc7d98ca7e050816fc153c3f1764ab042e14",
+      "size_bytes": 43099,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/time.json"
+    }
+  },
+  "schema": "scar.cpu-returned-loop-and-phase-acceptance",
+  "schema_version": 1
+}

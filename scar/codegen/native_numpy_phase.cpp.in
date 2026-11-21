@@ -1,0 +1,110 @@
+#include "numpy_complex.hpp"
+#include "numpy_phase.hpp"
+
+#include <array>
+#include <cfenv>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <span>
+#include <string_view>
+
+namespace {
+struct Step {
+    std::int64_t offset, count, stride, repetitions, advance;
+};
+
+struct Phase {
+    std::string_view name;
+    std::size_t size, residue;
+    std::span<const Step> steps;
+};
+
+@PHASES@
+
+const Phase* find(const char* name) noexcept {
+    if (name) for (const auto& phase : phases) if (phase.name == name) return &phase;
+    return nullptr;
+}
+
+struct Extent {
+    std::uintptr_t first{}, last{};
+};
+
+bool extent(const void* data, std::size_t size, Extent& result) noexcept {
+    const auto first = reinterpret_cast<std::uintptr_t>(data);
+    if (!first || !size || size > std::numeric_limits<std::uintptr_t>::max() - first) return false;
+    result = {first, first + size};
+    return true;
+}
+
+bool disjoint(Extent a, Extent b) noexcept {
+    return a.last <= b.first || b.last <= a.first;
+}
+
+template <class Visit>
+void segments(const Phase& phase, Visit visit) noexcept {
+    for (const auto& step : phase.steps) {
+        for (std::int64_t index = 0; index < step.repetitions; ++index) {
+            visit(step.offset + index * step.advance, step.count, step.stride);
+        }
+    }
+}
+
+void copy_view(const Phase& phase, char* destination, const char* source) noexcept {
+    segments(phase, [&](auto offset, auto count, auto stride) {
+        if (stride == 16) {
+            std::memcpy(destination + offset, source + offset, count * 16);
+        } else {
+            for (std::int64_t index = 0; index < count; ++index) {
+                const auto point = offset + index * stride;
+                std::memcpy(destination + point, source + point, 16);
+            }
+        }
+    });
+}
+}
+
+extern "C" std::size_t scar_numpy_phase_workspace_v1(const char* profile) noexcept {
+    if (const auto* phase = find(profile)) return phase->size + phase->residue;
+    return 0;
+}
+
+extern "C" std::size_t scar_numpy_phase_residue_v1(const char* profile) noexcept {
+    if (const auto* phase = find(profile)) return phase->residue;
+    return 64;
+}
+
+extern "C" int scar_numpy_phase_apply_v1(
+    const char* profile, void* view, std::size_t size, const void* coefficient,
+    std::size_t coefficient_size, void* scratch, std::size_t scratch_size) noexcept {
+    const auto* phase = find(profile);
+    if (!phase || size != phase->size || coefficient_size != 16 ||
+            scratch_size < phase->size + phase->residue || !scar_numpy_complex_runtime_supported()) return 1;
+    Extent value, scalar, work;
+    if (!extent(view, size, value) || !extent(coefficient, coefficient_size, scalar) ||
+            !extent(scratch, scratch_size, work) || value.first % 64 != phase->residue || work.first % 64 != 0 ||
+            !disjoint(value, scalar) || !disjoint(value, work) || !disjoint(scalar, work)) return 1;
+    auto* target = static_cast<char*>(view);
+    auto* private_value = static_cast<char*>(scratch) + phase->residue;
+    alignas(64) std::array<char, 16> factor{};
+    std::memcpy(factor.data(), coefficient, factor.size());
+    copy_view(*phase, private_value, target);
+
+    std::fenv_t saved{}, ignored{};
+    if (std::fegetenv(&saved) != 0) return 1;
+    if (std::feholdexcept(&ignored) != 0) {
+        std::fesetenv(&saved);
+        return 1;
+    }
+    segments(*phase, [&](auto offset, auto count, auto stride) {
+        auto* data = private_value + offset;
+        char* arguments[]{data, factor.data(), data};
+        const std::int64_t strides[]{stride, 0, stride};
+        scar_numpy_complex_multiply(arguments, &count, strides, nullptr);
+    });
+    const int errors = std::fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INVALID);
+    if (std::fesetenv(&saved) != 0 || errors) return 1;
+    copy_view(*phase, target, private_value);
+    return 0;
+}

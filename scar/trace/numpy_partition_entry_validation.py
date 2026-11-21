@@ -9,12 +9,15 @@ import os
 from pathlib import Path
 import sys
 from types import FunctionType, ModuleType
+import weakref
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.trace.code_snapshot import code_key
 
 
 SCHEMA = 'scar.numpy-partition-entry-trajectory'
+RETURN_RELATION_OBSERVATION = 'NATURAL_GETTER_CALLER_AND_WEAK_PREVIOUS_VALUE'
+WEAK_RETURN_IDENTITY = 'PYTHON_IS_WITH_WEAK_PREVIOUS_PROPERTY_VALUE'
 _SOURCE = 'scar.python-source'
 _SUSPENDED = inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
 
@@ -75,9 +78,10 @@ def _state(value, max_bytes, *, allow_scalar=False):
 
 
 class _Trajectory:
-    def __init__(self, spec, arguments, max_rounds, max_bytes):
+    def __init__(self, spec, arguments, max_rounds, max_bytes, retain_return_relation):
         self.spec, self.arguments = spec, arguments
         self.max_rounds, self.max_bytes = max_rounds, max_bytes
+        self.retain_return_relation = retain_return_relation
         self.call, self.result = spec['call'], spec['result']
         if self.call['kind'] != 'METHOD' or self.result['kind'] not in ('PROPERTY_GETTER', 'CACHED_PROPERTY_GETTER'):
             raise ValueError('expected a call and a naturally read result property')
@@ -93,6 +97,7 @@ class _Trajectory:
         self.call_function = self.result_function = self.call_code = self.result_code = None
         self.result_class = None
         self.active, self.completed, self.callers = {}, {}, {}
+        self.previous_outputs = {}
         self.records = []
         self.calls, self.normal_returns = 0, 0
         self.cpu_ids = sorted(os.sched_getaffinity(0))
@@ -133,7 +138,8 @@ class _Trajectory:
             if self.calls >= self.max_rounds:
                 raise ValueError('trajectory round budget exceeded')
             values = frame.f_locals
-            state = _state(values[self.spec['input_parameter']], self.max_bytes, allow_scalar=True)
+            input_value = values[self.spec['input_parameter']]
+            state = _state(input_value, self.max_bytes, allow_scalar=True)
             args = {name: project(values[name]) for name, project in self.arguments.items()}
             args = json.loads(json.dumps(args, sort_keys=True, allow_nan=False))
             key = id(caller)
@@ -141,6 +147,12 @@ class _Trajectory:
             self.callers[key] = activation, round_index + 1, caller
             row = dict(index=self.calls, activation=activation, round_index=round_index, input=state,
                        caller=dict(code_id=code_key(caller.f_code), offset=caller.f_lasti), arguments=args)
+            previous = self.previous_outputs.get(activation)
+            if self.retain_return_relation and previous is not None and previous[1] == round_index - 1:
+                previous_value = previous[2]()
+                row['input_object_relation'] = dict(method=WEAK_RETURN_IDENTITY, producer_index=previous[0],
+                                                    previous_alive=previous_value is not None,
+                                                    same_object=previous_value is input_value)
             self.active[id(frame)] = frame, caller, row
             self.calls += 1
         except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
@@ -157,14 +169,16 @@ class _Trajectory:
                     return
                 if matched[0] is not frame or type(value) is not self.result_class or id(value) in self.completed:
                     raise ValueError('normal return does not bind one fresh result token')
+                if self.retain_return_relation:
+                    matched[2]['returned_state'] = dict(method_return_offset=offset)
                 self.completed[id(value)] = value, matched[1], matched[2]
                 self.normal_returns += 1
             elif code is self.result_code:
-                self._read_result(frame, value)
+                self._read_result(frame, offset, value)
         except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
             self.error = str(error)
 
-    def _read_result(self, frame, value):
+    def _read_result(self, frame, offset, value):
         receiver = frame.f_locals[frame.f_code.co_varnames[0]]
         match = self.completed.get(id(receiver))
         if match is None or match[0] is not receiver:
@@ -174,8 +188,13 @@ class _Trajectory:
             caller = caller.f_back
         if caller is None:
             raise ValueError('result property was read outside the observed caller activation')
-        match[2]['output'] = _state(value, self.max_bytes)
-        self.records.append(match[2])
+        row = match[2]
+        row['output'] = _state(value, self.max_bytes)
+        if self.retain_return_relation:
+            row['returned_state'].update(result_return_offset=offset,
+                                         result_caller=dict(code_id=code_key(caller.f_code), offset=caller.f_lasti))
+            self.previous_outputs[row['activation']] = (row['index'], row['round_index'], weakref.ref(value))
+        self.records.append(row)
         del self.completed[id(receiver)]
 
     def close(self):
@@ -186,6 +205,7 @@ class _Trajectory:
         self.active.clear()
         self.completed.clear()
         self.callers.clear()
+        self.previous_outputs.clear()
 
     def report(self):
         """Return ordered detached read evidence after the natural endpoint completes."""
@@ -201,20 +221,24 @@ class _Trajectory:
                       records=sorted(self.records, key=lambda row: row['index']), calls=self.calls,
                       natural_result_property_reads=self.normal_returns,
                       performance_measured=False, capture_is_diagnostic=True)
+        if self.retain_return_relation:
+            report['return_relation_observation'] = RETURN_RELATION_OBSERVATION
         return json.loads(_canonical(report))
 
 
 @contextmanager
-def observe_states(spec, *, arguments=None, max_rounds=128, max_bytes=256 << 20):
+def observe_states(spec, *, arguments=None, max_rounds=128, max_bytes=256 << 20, retain_return_relation=False):
     """Hash original method inputs and exact arrays returned by natural property reads.
 
-    Optional argument projectors must be read-only and return JSON values. They
-    run only in this diagnostic context, never in a clean timing cohort.
+    Optional argument projectors must be read-only and return JSON values.
+    The opt-in relation records the natural getter site and weak previous value.
     """
     if (type(max_rounds) is not int or max_rounds < 1 or type(max_bytes) is not int or max_bytes < 1):
         raise ValueError('positive trajectory bounds required')
+    if type(retain_return_relation) is not bool:
+        raise ValueError('return relation observation requires an exact bool')
     spec = json.loads(json.dumps(spec, sort_keys=True, allow_nan=False))
-    observer = _Trajectory(spec, dict(arguments or {}), max_rounds, max_bytes)
+    observer = _Trajectory(spec, dict(arguments or {}), max_rounds, max_bytes, retain_return_relation)
     observer.monitor.use_tool_id(observer.tool, 'scar-numpy-partition-entry-validation')
     try:
         observer.monitor.register_callback(observer.tool, observer.events.PY_START, observer.start)

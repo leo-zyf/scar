@@ -23,6 +23,7 @@ class VersionedTaskKind(str, Enum):
     COPY = 'COPY'
     EXPORT = 'EXPORT'
     IMPLEMENTATION_PHASE = 'IMPLEMENTATION_PHASE'
+    SOURCE_OPERATION = 'SOURCE_OPERATION'
 
 
 @dataclass(frozen=True, slots=True)
@@ -796,6 +797,10 @@ def validate_versioned_schedule(schedule):
             raise ValueError('state transition requires prior data/state and a new materialized version')
         if task.kind is K.COMPUTE and not task.writes and task.capability != 'CPU_SCALAR_SETUP':
             raise ValueError('compute requires outputs, except explicit scalar setup without array payload')
+        if task.kind is K.SOURCE_OPERATION:
+            if (schedule.executable or task.capability is not None or not task.source_refs
+                    or task.reads or task.writes or task.allocates or task.releases or task.validates):
+                raise ValueError('source operation has original ports and no admitted physical implementation')
         if task.kind is K.IMPLEMENTATION_PHASE:
             attrs = task.attrs
             if (schedule.executable or task.capability != 'CPU_IMPLEMENTATION_PHASE'

@@ -1,5 +1,9 @@
 # 当前状态
 
+`project-source-returned-loop → project-returned-state-witness → bind-returned-loop → project-returned-loop-time` 已接通真实 Cirq 的初值、方法返回、属性读取和下一轮实参。两种种子各跑三轮，四条边均观测到下一轮接收同一个 ndarray，完整状态摘要一致。时间图保留一份循环体和距离为 1 的回边，连接到 CPU 5 的硬件线程与物理核资料。同一模拟的轮次须保持依赖顺序。32,768 B 是观测到的逻辑数组字节数，分配容量、最后使用点及服务时间继续待定。
+
+`export-native-numpy-phase` 已为原地复数标量乘法交付独立 C++20 工件。78 组原始数据对照逐字节通过，其中 37 组留出。另验别名、舍入和溢出拒绝。输入来自指定源码位置的诊断采集。首轮分块合并、逐轮归一化和整循环交付仍在推进。本轮沿用原入口，未测新增整程提速。见 [验收记录](../artifacts/baseline/cpu-returned-loop-and-phase-acceptance.json)。
+
 `project-numpy-partition-live-profile → export-native-numpy-partition-live → calibrate-native-numpy-partition-live` 将同一复数切片计划接回未修改的 Cirq 入口。直接借用受实际对齐约束，三次清洁试验分别命中 0、1、0 次。按需重排输入地址后，两种种子及全部清洁试验每次命中 **19/231**，其余沿原路径执行。两种种子的全部六轮状态摘要与原程序逐位一致，轮间输入也逐一匹配上一轮输出。矩阵和原数组经守卫后才借用或重排，候选先写私有输出，再发布至原 `out`。
 
 CPU 13 上各预热 1 对、交替测量 3 对。直接借用的整入口中位数是 2.143 → 2.305 s，按需重排是 **2.119 → 2.307 s**。重排候选绑定约 38 ms，整入口耗时增加 **8.9%**，保持 `NO_OP`。重排额外输入复制上界为 32,832 B，每次成功调用仍有完整输出发布复制。见 [验收记录](../artifacts/baseline/cpu-native-quantum-live-partition-acceptance.json)。
