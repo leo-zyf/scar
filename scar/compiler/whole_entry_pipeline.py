@@ -36,7 +36,7 @@ def read_request(value):
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
                 'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts', 'nvhpc_device_profile', 'tensor_flow',
-                'cpu_provider_catalog', 'cpu_paired_observation'}
+                'cpu_provider_catalog', 'cpu_paired_observation', 'cpu_stream_capture'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -82,7 +82,16 @@ def read_request(value):
         observation = document['cpu_paired_observation']
         if not infer_catalog or type(observation) is not dict or observation.get('schema') != CPU_REPLAY:
             raise ValueError('a retained CPU observation requires its original provider catalog')
-        read_artifact(observation)
+        paired = read_artifact(observation)
+        if paired['capture'] != document.get('cpu_stream_capture'):
+            raise ValueError('a retained CPU observation must use the declared stream capture')
+    if 'cpu_stream_capture' in document:
+        from scar.analysis.scalar_recursive_driver import CAPTURE
+
+        capture = document['cpu_stream_capture']
+        if not infer_catalog or type(capture) is not dict or capture.get('schema') != CAPTURE:
+            raise ValueError('a captured CPU stream requires its original provider catalog')
+        read_artifact(capture)
     if 'search_cpu_cohorts' in document and (not infer_nvhpc or type(document['search_cpu_cohorts']) is not bool):
         raise ValueError('CPU cohort search requires a source-derived NVIDIA domain')
     if 'sgemm_observations' in document:
@@ -168,7 +177,7 @@ def _scope(plan, request):
         scope['nvhpc_device_profile'] = request['nvhpc_device_profile']
     if 'tensor_flow' in request:
         scope['tensor_flow'] = request['tensor_flow']
-    for key in ('cpu_provider_catalog', 'cpu_paired_observation'):
+    for key in ('cpu_provider_catalog', 'cpu_paired_observation', 'cpu_stream_capture'):
         if key in request:
             scope[key] = request[key]
     return scope
@@ -303,11 +312,16 @@ def _bind_tensor_flow(plan, scope):
 
 
 def _bind_cpu_observation(plan, scope, discovery):
-    if 'cpu_paired_observation' not in scope:
+    paired, capture = scope.get('cpu_paired_observation'), scope.get('cpu_stream_capture')
+    if paired is None and capture is None:
         return None
-    from scar.analysis.cpu_provider_graph import bind_cpu_provider_graph
+    from scar.analysis.cpu_provider_graph import bind_cpu_provider_graph, bind_cpu_stream_capture_graph
 
-    flow = bind_cpu_provider_graph(plan['program'], scope, scope['cpu_paired_observation'],
+    if paired is None:
+        return bind_cpu_stream_capture_graph(plan['program'], scope, capture,
+            source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
+            provider=(discovery or {}).get('matched_authority'))
+    flow = bind_cpu_provider_graph(plan['program'], scope, paired,
         source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'))
     if flow['provider'] != (discovery or {}).get('matched_authority'):
         raise ValueError('retained CPU observation belongs to a different catalog authority')

@@ -182,6 +182,8 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 已有 CPU 提供者目录可以直接进入 `plan-build`。在 v1 整入口请求中设置 `cpu_provider_catalog` 为目录 ArtifactRef，保持注册列表为空，并使用目录中提供者的数值合同。规划按原 F4 源码、参数和硬件选择唯一已准入的提供者。`compile-build --verify-entry` 验证该方案。可选 `cpu_paired_observation` 引用同一来源的留存对照，用来复验已有工件及其可观测边界。输出位置替换和报告字段规范化保留在独立收据中，其计时仅用于该对照边界。
 
+交互式 stdin 使用 `observe-scalar-recursive-driver --design DESIGN --protocol-plan PLAN --stdin INPUT --cpu CPU --out CAPTURE` 采集原入口。采集器按协议等待 stdout 确认，并记录实际输入和确认字节范围。整入口请求中的 `cpu_stream_capture` 引用 `CAPTURE/result.json`。`plan-build` 将命令、应答及可定位的源码调用接回 F4，`compile-build --verify-entry` 在原单核和相同协议上对照新生成的独立 C++20。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
