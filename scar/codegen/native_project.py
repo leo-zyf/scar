@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -57,13 +58,18 @@ def build_native_project(root, name, compiler, *, expected_libraries=(), require
     if not compiler:
         raise ValueError('an available C++ compiler is required')
     env = {key: value for key, value in os.environ.items() if not key.startswith('LD_')}
+    env.setdefault('PATH', os.defpath)
+    cmake = shutil.which('cmake', path=env['PATH'])
+    if cmake is None:
+        raise ValueError('CMake is required to build the native project')
+    cmake = str(Path(cmake).resolve())
     # CXX can name a compiler with options or a compiler launcher.
     env['CXX'] = shlex.join(compiler)
     with TemporaryDirectory(prefix='.scar-cmake-', dir=root.parent) as temporary:
-        configure = ['cmake', '-S', str(root), '-B', temporary, '-DCMAKE_BUILD_TYPE=Release']
-        build = ['cmake', '--build', temporary, '--parallel', '2']
+        configure = [cmake, '-S', str(root), '-B', temporary, '-DCMAKE_BUILD_TYPE=Release']
+        build = [cmake, '--build', temporary, '--parallel', '2']
         prefix = Path(temporary) / 'install'
-        install = ['cmake', '--install', temporary, '--prefix', str(prefix)]
+        install = [cmake, '--install', temporary, '--prefix', str(prefix)]
         logs = []
         for command in (configure, build, install):
             result = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -75,7 +81,8 @@ def build_native_project(root, name, compiler, *, expected_libraries=(), require
         (prefix / 'bin' / name).rename(executable)
     listing = subprocess.check_output(['ldd', str(executable)], env=env, text=True)
     dependencies = _dependencies(listing)
-    if (any(dependencies.get(path.name) != str(path.resolve()) for path in expected_libraries)
+    if (any(not dependencies.get(path.name) or Path(dependencies[path.name]).resolve() != path.resolve()
+            for path in expected_libraries)
             or any(name.startswith(('libpython', 'libtorch_python')) for name in dependencies)):
         raise ValueError('native project did not link the required non-Python provider libraries')
     if require_cpu_only:
