@@ -206,7 +206,7 @@ def _results(spec, samples, layout, warmups, pairs):
                                warmup_pairs=warmups, measurement_pairs=pairs)
 
 
-def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3):
+def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3, _admit_invocation=None):
     from scar.analysis.scalar_recursive_driver import CAPTURE
 
     _need(type(warmups) is int and warmups >= 0 and type(pairs) is int and pairs >= 3,
@@ -214,6 +214,8 @@ def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3):
     reference = _ref(compilation, compile_cpu_entry.SCHEMA)
     captured = _ref(capture, CAPTURE) if capture else None
     spec = _spec(reference, captured, cpu)
+    if _admit_invocation is not None:
+        _admit_invocation(spec)
     _need(set(spec['cpu_ids']) <= os.sched_getaffinity(0), 'qualified CPU mask is unavailable')
     root = Path(out).resolve()
     root.mkdir()
