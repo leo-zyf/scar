@@ -178,7 +178,25 @@ def _cost(row):
                         if lifecycle[name] == 'UNRESOLVED'], schedule_certificate=row['schedule_certificate'])
 
 
-def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_graph=None, effect_frontier=None):
+def _import_bindings(reference, scope, effects):
+    from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
+    from scar.optimization.cpu_entry_import_frontier import verify_cpu_entry_import_frontier
+
+    frontier = verify_cpu_entry_import_frontier(reference)
+    paired, composition = verify_paired_original_scope(scope, frontier['paired'])
+    _require(effects is not None and frontier['program'] == effects['program']
+             and frontier['entry_obligations'] == effects['entry_obligations']
+             and scope.get('cpu_paired_observation') in (None, frontier['paired'])
+             and paired['capture'] == scope.get('cpu_stream_capture')
+             and composition['catalog'] == scope['cpu_provider_catalog']
+             and frontier['whole_entry_effect_equivalence_proven'] is False
+             and frontier['transformation_authorized'] is False and frontier['deployment_authorized'] is False,
+             'import bindings differ from the original effects, CPU catalog or launch')
+    return dict(reference=reference, summary=frontier['summary'], coverage_frontier=frontier['coverage_frontier'])
+
+
+def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_graph=None, effect_frontier=None,
+                                     import_frontier=None):
     """Project a read-only evidence ledger from exact original domain receipts."""
     domain, legalities = read_artifact(domain_ref), read_artifact(legalities_ref)
     scope = domain['scope']
@@ -250,18 +268,23 @@ def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_gra
             legality_evidence=row['legality_evidence'], cpu_placement=lanes,
             memory=_memory(plan, scope, authority_document), cost=_cost(row), timing_context_only=timing_context))
     graph = _graph(provider_graph, scope, provider, threads, effects)
-    return dict(schema=SCHEMA, schema_version=1, domain=domain_ref, legalities=legalities_ref,
+    report = dict(schema=SCHEMA, schema_version=1, domain=domain_ref, legalities=legalities_ref,
         provider_graph=provider_graph, effect_frontier=effect_frontier, scope_sha256=scope_sha, baseline_id=baseline,
         original_observation=graph, target=dict(graph=scope['target'], process_constraint=encode(constraint.evidence),
             allowed_target_cpu_ids=list(target_cpus), original_cpu_ids=original_cpus, reported_host_memory=host_memory),
         options=rows, domain_frontier=choice['coverage_frontier'], ranking_frontier=choice['cost_frontier'],
         ranking_status=choice['status'], execution_default='NO_OP', deployment_authorized=False)
+    if import_frontier is not None:
+        report['original_import_bindings'] = _import_bindings(import_frontier, scope, effects)
+    return report
 
 
 def verify_cpu_entry_decision_ledger(ledger_ref):
     saved = read_artifact(ledger_ref)
     _require(ledger_ref['schema'] == SCHEMA and saved['schema_version'] == 1, 'unsupported decision ledger')
+    bindings = saved.get('original_import_bindings')
     replay = derive_cpu_entry_decision_ledger(saved['domain'], saved['legalities'],
-                                             provider_graph=saved['provider_graph'], effect_frontier=saved['effect_frontier'])
+        provider_graph=saved['provider_graph'], effect_frontier=saved['effect_frontier'],
+        import_frontier=None if bindings is None else bindings['reference'])
     _require(saved == replay, 'retained decision ledger differs at cold replay')
     return replay

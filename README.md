@@ -202,6 +202,8 @@ Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收�
 
 CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保留常量、延迟函数体、原调用点与嵌套导入。运行时选中哪个模块及初始化效果单独核验。使用 `--verify-entry --cpu-paired-evidence VALIDATION.json` 可回读同一候选的配对验收。`--enforce-cpu-capacity` 同时核对旧配对实际使用的 C++20 守卫及其限额。回读成功时复用候选二进制和样本。
 
+`scar observe-cpu-import-bindings --paired VALIDATION.json --initializers COMPILED/whole-entry-import-initializers.json --out IMPORTS` 对同一原入口诊断一次。`compile-build --cpu-import-bindings IMPORTS/result.json` 用源码位置、导入参数和模块来源连接动态记录与 F4 初始化体。选型账本记录已连接的导入以及常量替换、删除导入需要补齐的依赖。诊断执行的耗时不进入成本模型。
+
 `scar export-cpu-catalog-runtime --selection SELECTION.json --out PACKAGE` 把已核验的 CPU 目录候选封装为同主机可迁移的 C++20 包，包含 CMake 源码、原 ELF、数值库及适用的限额守卫。`--check PACKAGE/artifact.json --manifest-sha256 SHA256` 在迁移后重查文件、宿主依赖和启动范围。验证运行将输出定向到外部新目录。原入口仍由整入口决策控制。
 
 `scar study-cpu-task-arena --acceptance TASK_ACCEPTANCE.json --out STUDY` 从已验收的 C++20 OpenMP 任务入口证明每个任务的工作区读写与生命周期，判断是否有同线程重复分配，并为适用范围生成独立 C++20 候选。报告包含任务逐轮字节对照、原生与原 Python 两组配对测量。使用 `--check STUDY/result.json` 可回读原证明、工程和样本。

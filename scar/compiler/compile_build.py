@@ -19,7 +19,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                   loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
                   loop_max_threads=None,stateful_interval_plans=None,entry_costs=None,verify_entry=False,
                   enforce_cpu_capacity=False,cpu_entry_forward=False,cpu_launch_probes=(),cpu_team_probe=None,
-                  cpu_native_phase_cost=None,cpu_python_import_cost=None,cpu_paired_evidence=None):
+                  cpu_native_phase_cost=None,cpu_python_import_cost=None,cpu_paired_evidence=None,
+                  cpu_import_bindings=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -36,7 +37,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
         raise ValueError('CPU capacity enforcement requires a whole-entry process trial')
     if (cpu_entry_forward or cpu_launch_probes or cpu_team_probe is not None
             or cpu_native_phase_cost is not None or cpu_python_import_cost is not None
-            or cpu_paired_evidence is not None) and 'whole_entry' not in document:
+            or cpu_paired_evidence is not None or cpu_import_bindings is not None) and 'whole_entry' not in document:
         raise ValueError('CPU entry evidence requires a whole-entry plan')
     version=document.get('schema_version')
     if version not in (1,2):raise ValueError('supported program planning domain required')
@@ -62,13 +63,14 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
         from scar.analysis.replay_transaction import replay_transaction
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
         out.mkdir(parents=True)
-        paired = cpu_paired_evidence is not None or 'cpu_paired_observation' in document['whole_entry']['scope']
+        paired = (cpu_paired_evidence is not None or cpu_import_bindings is not None
+                  or 'cpu_paired_observation' in document['whole_entry']['scope'])
         with replay_transaction() if paired else nullcontext():
             whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry,
                                  enforce_cpu_capacity=enforce_cpu_capacity,cpu_entry_forward=cpu_entry_forward,
                                  cpu_launch_probes=cpu_launch_probes,cpu_team_probe=cpu_team_probe,
                                  cpu_native_phase_cost=cpu_native_phase_cost,cpu_python_import_cost=cpu_python_import_cost,
-                                 cpu_paired_evidence=cpu_paired_evidence)
+                                 cpu_paired_evidence=cpu_paired_evidence,cpu_import_bindings=cpu_import_bindings)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
             program=document['program'],hardware=document['hardware'],source_admission=source_admission,
@@ -250,6 +252,8 @@ def main(argv=None):
         help='attach original CPython import observations to the exact entry scope')
     parser.add_argument('--cpu-paired-evidence',
         help='attach checked original/native CPU observations to an existing exact entry scope')
+    parser.add_argument('--cpu-import-bindings',
+        help='bind exact observed import selectors to the original F4 initializer graph')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
@@ -265,7 +269,8 @@ def main(argv=None):
         cpu_entry_forward=args.cpu_entry_forward,
         cpu_launch_probes=() if args.cpu_launch_probe is None else (args.cpu_launch_probe,),
         cpu_team_probe=args.cpu_team_probe,cpu_native_phase_cost=args.cpu_native_phase_cost,
-        cpu_python_import_cost=args.cpu_python_import_cost,cpu_paired_evidence=args.cpu_paired_evidence)
+        cpu_python_import_cost=args.cpu_python_import_cost,cpu_paired_evidence=args.cpu_paired_evidence,
+        cpu_import_bindings=args.cpu_import_bindings)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],

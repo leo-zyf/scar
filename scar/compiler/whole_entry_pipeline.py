@@ -384,7 +384,7 @@ def _retain_projection(out, filename, report, retained):
     return retained
 
 
-def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None):
+def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None, import_frontier=None):
     if 'cpu_provider_catalog' not in scope or plan.get('entry_obligations') is None:
         return {}
     from scar.analysis.entry_effect_frontier import derive_entry_effect_frontier
@@ -395,8 +395,9 @@ def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None):
         derive_entry_effect_frontier(plan['entry_obligations'], graph), entry.get('entry_effect_frontier'))
     domain = priced_domain or entry['domain']
     decision = _retain_projection(out, 'whole-entry-decision-ledger.json',
-        derive_cpu_entry_decision_ledger(domain, entry['legalities'], provider_graph=graph, effect_frontier=effect),
-        entry.get('cpu_decision_ledger') if domain == entry['domain'] else None)
+        derive_cpu_entry_decision_ledger(domain, entry['legalities'], provider_graph=graph,
+                                         effect_frontier=effect, import_frontier=import_frontier),
+        entry.get('cpu_decision_ledger') if domain == entry['domain'] and import_frontier is None else None)
     return dict(entry_effect_frontier=effect, cpu_decision_ledger=decision)
 
 
@@ -432,6 +433,39 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
         raise ValueError('import diagnostic belongs to a different F4 program or entry proof')
     verify_paired_original_scope(scope, observed['paired'])
     frontiers['cpu_python_import_cost'] = reference
+
+
+def _cpu_import_frontiers(plan, scope, out, binding_path):
+    from scar.analysis.cpu_entry_import_effects import derive_cpu_entry_import_effects
+    from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
+
+    graph = derive_cpu_entry_import_initializers(plan['entry_obligations'])
+    if binding_path is None:
+        initializers = _write(out/'whole-entry-import-initializers.json', graph)
+    else:
+        from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
+        from scar.compiler.cpu_import_binding_observation import SCHEMA as OBSERVATION
+
+        observation_ref = artifact_reference(Path(binding_path).resolve(strict=True), OBSERVATION)
+        observation = read_artifact(observation_ref)
+        initializers = observation['initializer_graph']
+        paired, _ = verify_paired_original_scope(scope, observation['paired'])
+        if (read_artifact(initializers) != graph
+                or scope.get('cpu_paired_observation') not in (None, observation['paired'])
+                or paired['capture'] != scope.get('cpu_stream_capture')):
+            raise ValueError('import bindings differ from the original F4 initializer graph or captured launch')
+    effects = _write(out/'whole-entry-import-effects.json', derive_cpu_entry_import_effects(initializers))
+    result = dict(cpu_entry_import_initializers=initializers, cpu_entry_import_effects=effects)
+    if binding_path is not None:
+        from scar.analysis.cpu_entry_import_bindings import derive_cpu_entry_import_bindings
+        from scar.optimization.cpu_entry_import_frontier import derive_cpu_entry_import_frontier
+
+        bindings = _write(out/'whole-entry-import-bindings.json',
+                          derive_cpu_entry_import_bindings(initializers, observation_ref))
+        result['cpu_entry_import_bindings'] = bindings
+        result['cpu_entry_import_frontier'] = _write(out/'whole-entry-import-frontier.json',
+                                                      derive_cpu_entry_import_frontier(effects, bindings))
+    return result
 
 
 def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
@@ -653,7 +687,7 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 @verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
-                       cpu_python_import_cost=None, cpu_paired_evidence=None):
+                       cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -671,6 +705,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('CPU Python import observations require a CPU catalog domain')
     if cpu_paired_evidence is not None and not _infer_cpu_catalog(request):
         raise ValueError('CPU paired evidence requires a CPU catalog domain')
+    if cpu_import_bindings is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
+        raise ValueError('CPU import bindings require a CPU catalog domain with original F4 obligations')
     if cpu_paired_evidence is None and 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
@@ -717,16 +753,11 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
-    cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain)
-    if cpu_frontiers:
-        from scar.analysis.cpu_entry_import_effects import derive_cpu_entry_import_effects
-        from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
-
-        initializers = _write(out/'whole-entry-import-initializers.json',
-            derive_cpu_entry_import_initializers(plan['entry_obligations']))
-        cpu_frontiers['cpu_entry_import_initializers'] = initializers
-        cpu_frontiers['cpu_entry_import_effects'] = _write(out/'whole-entry-import-effects.json',
-            derive_cpu_entry_import_effects(initializers))
+    import_frontiers = (_cpu_import_frontiers(plan, live_scope, out, cpu_import_bindings)
+                        if _infer_cpu_catalog(request) and plan.get('entry_obligations') is not None else {})
+    cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain,
+                                  import_frontier=import_frontiers.get('cpu_entry_import_frontier'))
+    cpu_frontiers.update(import_frontiers)
     if paired_audit is not None:
         from scar.analysis.cpu_entry_publication_order import derive_cpu_entry_publication_order
 
