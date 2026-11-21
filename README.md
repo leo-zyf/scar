@@ -167,6 +167,17 @@ scar compile-build --domains DOMAINS --stateful-interval-plans REGION_TO_INTERVA
 
 `plan-build` 自动保存正文、caller 接口、局部内容 epoch、生命期和共享循环 carry。`compile-build` 独立重放后消费，并校验同源硬件域的 URI 别名；未知成本不冒充零时长。标量与区间计划共用原 C++ lowering。
 
+### 整入口选型
+
+```bash
+scar plan-build --build PROGRAM --shape ROWS COLS --memory-budget-bytes BYTES --entry-request REQUEST.json --out DOMAINS
+scar compile-build --domains DOMAINS --plan-only --out COMPILED
+```
+
+`REQUEST.json` 的 schema 为 `scar.whole-entry-request`，`schema_version` 为 `1`。填写完整 `argv`（入口脚本名以后）、`boundary`（`PROCESS_LAUNCH_THROUGH_EXIT`）、`registered_implementations`（各项 `{route, artifact, validation, cost}`）及 `original_cost`。`artifact` 是原生项目的 ArtifactRef，`validation` 是同边界验收的 ArtifactRef 或 `null`。成本使用 `{artifact, locator}` 引用原始成本记录，`null` 保持未知。`whole-entry-domain.json` 中可查看固定的 scope、硬件引用和方案 ID，成本记录须绑定该 scope 的语义摘要与方案 ID。
+
+默认 `option_space` 为 `DISCOVER_ALL`，会保留尚未生成的整入口实现。`EXACT_REGISTERED_SET` 只声明比较请求中固定的实现与原入口。`audit_retained_validation: true` 可附带重放历史 A/B。两个命令在同一工作目录、解释器、CPU 核组和固定环境下运行，继承的完整环境以摘要记录。对于独立 C++ 交付，需在有限域内证明选型，再核对原入口、硬件、二进制和声明效果。缺少覆盖或完整成本时保留原入口。详细结论记录在 `whole-entry-selection.json`。
+
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
 本机现有入口：`artifacts/current/experiments/graph-viewer-v1/program/index.html`；共享循环及时间/资源视图：`artifacts/current/experiments/workspace-time-v1/view/index.html`。画布按需加载子图，循环只保留一份正文；完整覆盖范围见各自收据。

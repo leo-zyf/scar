@@ -63,8 +63,9 @@ def _planning_loops(view,sources,source_filter):
 
 
 def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
-               memory_budget_bytes, affinity=None, max_threads=None):
+               memory_budget_bytes, affinity=None, max_threads=None, entry_request=None):
     from scar.analysis.build import BuildSession,_check
+    from scar.analysis.build_admission import publish_build_admission
     from scar.analysis.build_f4 import _validate_catalog_parents
     from scar.compiler.stateful_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
@@ -95,6 +96,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         sources=_planning_sources(session.view.catalog,source_filter)
         regions,rejected=discover_stateful_regions(session.view,source=source_filter)
         out.mkdir(parents=True)
+        source_admission=publish_build_admission(session,out/'source-admission.json',source_filter=source_filter)
         loops=_planning_loops(session.view,sources,source_filter)
         if session._f4 is not None:
             providers=tuple(p for name,p in session._f4.providers.items() if name.startswith('bounded_call_bindings:'))
@@ -164,10 +166,13 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         _check(target)
         if artifact_reference(program/'manifest.json',parent['schema'])!=parent:
             raise ValueError('program build changed during graph planning')
-    report=dict(schema='scar.program-optimization-domains',schema_version=1,
+    report=dict(schema='scar.program-optimization-domains',schema_version=2,
         program=parent,source=str(source_filter or Path(manifest['entry']).absolute()),
         source_filter=None if source_filter is None else str(source_filter),sources=sources,
         source_unit_scope=loops['source_unit_scope'],hardware=target,regions=rows,rejections=rejected,
+        source_admission=source_admission,memory_budget_bytes=memory_budget_bytes,
+        input_shape_constraints=dict(common_shape=None if shape is None else list(shape),
+            named_shapes=input_shapes),
         invariant_loops=invariant_rows,invariant_loop_rejections=invariant_rejected,
         composite_invariant_loops=composite_rows,composite_rejections=composite_rejected,
         semantics='ORIGINAL_F4_FUNCTION_WORLD_AND_SOURCE_PORTS',
@@ -177,6 +182,9 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         source_ast_fallback_used=False,target_program_executed=False,
         target_variants_compiled=False,whole_program_compiled=False,
         first_stage_complete=False,seconds=time.monotonic()-started)
+    if entry_request is not None:
+        from scar.compiler.whole_entry_pipeline import prepare_whole_entry
+        report['whole_entry']=prepare_whole_entry(report,entry_request,out)
     (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     return report
 
@@ -189,13 +197,15 @@ def main(argv=None):
     shapes.add_argument('--input-shapes',help='JSON mapping region IDs to array-ID shape maps')
     parser.add_argument('--memory-budget-bytes',type=int,required=True)
     parser.add_argument('--max-threads',type=int);parser.add_argument('--out',required=True)
+    parser.add_argument('--entry-request',help='retained whole-entry argv and implementation evidence request')
     args=parser.parse_args(argv)
     result=plan_build(args.build,args.out,source=args.source,shape=args.shape,
         input_shapes=None if args.input_shapes is None else json.loads(Path(args.input_shapes).read_bytes()),
-        memory_budget_bytes=args.memory_budget_bytes,max_threads=args.max_threads)
+        memory_budget_bytes=args.memory_budget_bytes,max_threads=args.max_threads,entry_request=args.entry_request)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         rejections=len(result['rejections']),
+        whole_entry=None if 'whole_entry' not in result else result['whole_entry']['domain']['uri'],
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2))
     return 0
 

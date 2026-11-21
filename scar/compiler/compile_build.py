@@ -26,10 +26,37 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if domains.is_dir():domains=domains/'result.json'
     if out.exists():raise ValueError('fresh compile-build output required')
     parent=artifact_reference(domains,'scar.program-optimization-domains');document=read_artifact(parent)
-    if document.get('schema_version')!=1:raise ValueError('supported program planning domain required')
+    version=document.get('schema_version')
+    if version not in (1,2):raise ValueError('supported program planning domain required')
     read_artifact(document['program']);_check(document['hardware'])
+    source_admission=document.get('source_admission')
+    if version==2 and source_admission is None:
+        raise ValueError('program planning domain is missing original graph admission')
+    if source_admission is not None:
+        from scar.analysis.build_admission import verify_build_admission
+        verify_build_admission(source_admission,program=document['program'],hardware=document['hardware'],
+            source_filter=document.get('source_filter'))
     loop_ref=document.get('loop_dependencies')
     if loop_ref is not None:read_artifact(loop_ref)
+    if 'whole_entry' in document:
+        if source_admission is None:
+            raise ValueError('whole-entry lowering requires a replayed original graph admission')
+        if (calibrations or loop_calibrations or prepare_stateful_validation or loop_cpu_model
+                or stateful_cpu_threads!=1 or any(value is not None for value in (no_op_profiles,
+                loop_trip_count,loop_inputs,loop_cpu_threads,loop_no_op_profiles,loop_max_threads,stateful_interval_plans))):
+            raise ValueError('whole-entry request already fixes the scope and declared implementation evidence')
+        from scar.compiler.whole_entry_pipeline import replay_whole_entry
+        started=time.monotonic();out.mkdir(parents=True)
+        whole=replay_whole_entry(document,out,plan_only=plan_only)
+        read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
+        report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
+            program=document['program'],hardware=document['hardware'],source_admission=source_admission,
+            whole_entry=whole['reference'],regions=[],invariant_loops=[],composite_invariant_loops=[],
+            whole_entry_status=whole['selection']['status'],whole_entry_action=whole['delivery']['final_action'],
+            scope='REPLAYED_WHOLE_ENTRY_OPTION_DOMAIN',selected_for_use=False,whole_program_compiled=False,
+            target_program_executed=False,three_stages_complete=False,seconds=time.monotonic()-started)
+        (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
+        return report
     no_op_profiles={} if no_op_profiles is None else no_op_profiles
     stateful_interval_plans={} if stateful_interval_plans is None else stateful_interval_plans
     if not isinstance(stateful_interval_plans,dict):raise ValueError('interval plans require a region-id to plan mapping')
@@ -159,6 +186,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
         source_graph_unrolled=False,target_variants_ranked_by_measurement=False,
         target_program_executed=False,whole_program_compiled=False,three_stages_complete=False,
         selected_for_use=False,seconds=time.monotonic()-started)
+    if source_admission is not None:
+        report['source_admission']=source_admission
     (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     return report
 
@@ -194,6 +223,7 @@ def main(argv=None):
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],
+        whole_entry_status=result.get('whole_entry_status'),whole_entry_action=result.get('whole_entry_action'),
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2));return 0
 
 
