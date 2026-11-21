@@ -9,7 +9,7 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _build_interface, _resolve
+from scar.codegen.aten_provider import _build_interface, _dependencies, _resolve
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe
@@ -75,7 +75,35 @@ def _provider_libraries(toolkit):
     return libraries
 
 
-def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False):
+def _library_locks(libraries, dependencies, runtime_dirs):
+    locks = set(libraries)
+    for directory in map(Path, runtime_dirs):
+        for name, resolved in dependencies.items():
+            if Path(name).name == name and resolved is not None and (directory / name).resolve() == Path(resolved):
+                locks.add(directory / name)
+    return [dict(path=str(path), **_content(path)) for path in sorted(locks)]
+
+
+def verify_cuda_operator_stack(root, manifest):
+    """Recheck stack identity and the clean ELF loader's resolution before execution."""
+    if 'operator_stack' not in manifest:
+        return None
+    from scar.compiler.operator_stack import load_operator_stack, verify_operator_stack_linkage
+
+    retained = manifest['operator_stack']
+    if type(retained) is not dict or set(retained) != {'reference', 'linkage'}:
+        raise ValueError('CUDA project requires its original operator stack and linkage receipt')
+    reference, document = load_operator_stack(retained['reference'])
+    executable = root / EXECUTABLE
+    listing = subprocess.check_output(['/usr/bin/ldd', str(executable)], text=True, env={})
+    dependencies = _dependencies(listing)
+    linkage = verify_operator_stack_linkage(document, dependencies, 'CUDA')
+    if dependencies != manifest['dependencies'] or retained != dict(reference=reference, linkage=linkage):
+        raise ValueError('CUDA operator stack or loaded NVIDIA dependencies differ from the retained receipt')
+    return retained
+
+
+def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False, stack_sha256=None):
     weight_checks = '\n'.join(
         f'test "$(sha256sum < "$root/{row["path"]}" | cut -d " " -f 1)" = {row["payload"]["sha256"]}'
         for row in inputs if row['kind'] == 'WEIGHT')
@@ -90,8 +118,9 @@ def _render_launch(inputs, output_count, *, host_lane=False, calibrate=False):
     file_mode = '--trial|--calibrate) mode=$1; shift' if calibrate else '--trial) shift'
     mode = '"$mode"' if calibrate else '--trial'
     mode_help = '--trial|--calibrate' if calibrate else '--trial'
+    stack_marker = '' if stack_sha256 is None else f'# Operator stack SHA256: {stack_sha256}\n'
     return f'''#!/bin/sh
-set -eu
+{stack_marker}set -eu
 root=$(dirname -- "$0")
 run_cuda() {{
   set -- "$root/{EXECUTABLE}" "$@"
@@ -134,9 +163,19 @@ def _describe(root):
 
 
 def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sha256,
-                               out, input_shapes=(), cuda_root='/usr/local/cuda', with_activity_calibration=False,
-                               placement_ordinal=None):
+                               out, input_shapes=(), cuda_root=None, with_activity_calibration=False,
+                               placement_ordinal=None, operator_stack=None):
     import torch
+
+    if operator_stack is not None:
+        from scar.compiler.operator_stack import (
+            load_operator_stack, nvidia_stack_build, verify_operator_stack_linkage,
+        )
+
+        if cuda_root is not None or with_activity_calibration or placement_ordinal is not None:
+            raise ValueError('the NVIDIA operator stack pins CUDA paths and requires direct CUDA execution')
+        stack_reference, stack_document = load_operator_stack(operator_stack)
+        stack_build = nvidia_stack_build(stack_document, 'CUDA')
 
     model = Path(model).resolve(strict=True)
     source_lock = _content(model)
@@ -177,13 +216,22 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
         projection = qualify(recipe, shapes, graph=graph, program_ref=program_ref, input_kinds=kinds)
         problem, schedule, bindings, *placement = plan(projection, declared, model_ref=model_ref, **plan_options)
         host_lane = 'host_resource' in bindings
+        if operator_stack is not None and host_lane:
+            raise ValueError('the NVIDIA operator stack requires direct CUDA lowering without the LibTorch host lane')
         if with_activity_calibration and not host_lane:
             raise ValueError('activity calibration requires a hybrid CPU and CUDA plan')
         generated = _native_sources(projection, problem, schedule, bindings, calibrate=with_activity_calibration)
-        toolkit = Path(cuda_root).resolve(strict=True)
-        libraries = _provider_libraries(toolkit)
         options = ['-O2']
-        runtime_dirs = [str(toolkit / 'lib64')]
+        if operator_stack is None:
+            toolkit = Path(cuda_root or '/usr/local/cuda').resolve(strict=True)
+            libraries = _provider_libraries(toolkit)
+            include_dirs = [str(toolkit / 'include')]
+            runtime_dirs = [str(toolkit / 'lib64')]
+        else:
+            compiler = stack_build['compiler']
+            libraries = stack_build['libraries']
+            include_dirs = stack_build['include_dirs']
+            runtime_dirs = stack_build['runtime_dirs']
         if host_lane:
             _, cpu_libraries, compiler, flags, _ = _build_interface(torch)
             libraries.extend(cpu_libraries)
@@ -207,26 +255,31 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
             records['execution']['activity_calibration_abi'] = 1
         if placement:
             records[PLACEMENT_RECORDS[status]], = placement
-        for name, value in records.items():
-            _write_record(root / f'plan/{name}.json', value)
         launch = root / 'launch.sh'
         launch.write_text(_render_launch(inputs, len(projection['outputs']), host_lane=host_lane,
-                                         calibrate=with_activity_calibration))
+            calibrate=with_activity_calibration,
+            stack_sha256=None if operator_stack is None else stack_reference['sha256']))
         launch.chmod(0o755)
         for name, content in generated.sources.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-        write_native_project(root, Path(EXECUTABLE).name, include_dirs=(str(toolkit / 'include'),),
+        write_native_project(root, Path(EXECUTABLE).name, include_dirs=include_dirs,
             compile_options=options, libraries=tuple(map(str, libraries)),
             runtime_dirs=runtime_dirs, install_dirs=(('data', '.'),), install_launcher=True)
         _, dependencies = build_native_project(root, Path(EXECUTABLE).name, compiler, expected_libraries=libraries)
-        # Include any CUDA toolkit libraries introduced transitively by the provider.
-        lib = toolkit / 'lib64'
-        locks = [lib / name for name, path in dependencies.items() if path is not None
-                 and Path(path).is_relative_to(toolkit) and (lib / name).resolve() == Path(path)]
-        _write_record(root / 'plan/dependencies.json',
-                      [dict(path=str(path), **_content(path)) for path in sorted(set(libraries) | set(locks))])
+        stack = None
+        if operator_stack is not None:
+            stack = dict(reference=stack_reference,
+                linkage=verify_operator_stack_linkage(stack_document, dependencies, 'CUDA'))
+            if load_operator_stack(stack_reference) != (stack_reference, stack_document):
+                raise ValueError('CUDA operator stack changed during native compilation')
+            records['execution']['operator_stack'] = stack
+        for name, value in records.items():
+            _write_record(root / f'plan/{name}.json', value)
+        # Include the transitive libraries from the same qualified provider directories.
+        lock_dirs = runtime_dirs if operator_stack is not None else [str(toolkit / 'lib64')]
+        _write_record(root / 'plan/dependencies.json', _library_locks(libraries, dependencies, lock_dirs))
         _write_record(root / 'validation/description.json', _describe(root))
         if with_activity_calibration:
             from scar.compiler.native_device_activity_binding import derive_activity_binding
@@ -243,7 +296,13 @@ def compile_exported_aten_cuda(model, *, model_sha256, cuda_model, cuda_model_sh
                    for path in sorted(root.rglob('*')) if path.is_file()})
         if with_activity_calibration:
             report['activity_calibration_abi'] = 1
+        if stack is not None:
+            report['operator_stack'] = stack
         _write_record(root / 'artifact.json', report)
+        if stack is not None:
+            from scar.runtime.validate_native_project import verify_native_project
+
+            verify_native_project(root, _content(root / 'artifact.json')['sha256'])
         root.rename(out)
     return report
 
@@ -254,6 +313,9 @@ def replay_cuda_project(root, manifest, member):
         return json.loads(member(f'plan/{name}.json').read_bytes())
 
     execution = read('execution')
+    if (('operator_stack' in manifest) != ('operator_stack' in execution)
+            or execution.get('operator_stack') != manifest.get('operator_stack')):
+        raise ValueError('CUDA execution disagrees with the retained operator stack receipt')
     declared = json.loads(member(_MODEL_PATH).read_bytes())
     treatment = manifest['status'] == _PLACEMENT_TREATMENT
     qualify, _, replay, status = _pipeline(declared, treatment=treatment)
@@ -283,6 +345,8 @@ def replay_cuda_project(root, manifest, member):
         if expected != observed:
             raise ValueError('CUDA file input differs from the qualified ordered port')
     problem, schedule, bindings = (read(name) for name in ('problem', 'schedule', 'bindings'))
+    if 'operator_stack' in manifest and 'host_resource' in bindings:
+        raise ValueError('the NVIDIA operator stack excludes the LibTorch host lane')
     record_name = PLACEMENT_RECORDS.get(status)
     expected_records = set() if record_name is None else {record_name}
     declared_records = {name for name in PLACEMENT_RECORDS.values() if f'plan/{name}.json' in files}
@@ -301,9 +365,10 @@ def replay_cuda_project(root, manifest, member):
             or (abi is not None and (type(abi) is not int or abi != 1 or 'host_resource' not in bindings))):
         raise ValueError('CUDA activity calibration ABI differs from its archived binding')
     generated = _native_sources(projection, problem, schedule, bindings, calibrate=abi is not None)
+    stack = verify_cuda_operator_stack(root, manifest)
     sources = dict(generated.sources)
     sources['launch.sh'] = _render_launch(inputs, len(projection['outputs']), host_lane='host_resource' in bindings,
-                                          calibrate=abi is not None)
+        calibrate=abi is not None, stack_sha256=None if stack is None else stack['reference']['sha256'])
     if any(member(name).read_text() != content for name, content in sources.items()):
         raise ValueError('CUDA source differs from its replayed copy and cuBLAS lowering')
     description = json.loads(member('validation/description.json').read_bytes())
@@ -312,6 +377,8 @@ def replay_cuda_project(root, manifest, member):
     result = dict(graph_regions=len(graph.regions), graph_operations=len(graph.operations),
                 physical_activities=len(problem['operations']), offline_schedule_replayed=True,
                 executed_schedule_replayed=False, device_result_verified=False, **policy)
+    if stack is not None:
+        result['operator_stack'] = stack
     if 'host_resource' in bindings:
         regions = projection['cuda_regions'] if placement is None else placement['selected_cuda_regions']
         result.update(cuda_regions=len(regions), host_provider_calls=description['host_provider_calls'])
@@ -338,7 +405,9 @@ def main(argv=None):
     for name in ('model', 'model-sha256', 'cuda-model', 'cuda-model-sha256', 'out'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--input-shape', action='append', default=[], dest='input_shapes')
-    parser.add_argument('--cuda-root', default='/usr/local/cuda')
+    cuda_provider = parser.add_mutually_exclusive_group()
+    cuda_provider.add_argument('--cuda-root', help='unlocked CUDA toolkit root, defaults to /usr/local/cuda')
+    cuda_provider.add_argument('--operator-stack', help='pinned NVIDIA compiler and CUDA operator stack')
     parser.add_argument('--with-activity-calibration', action='store_true',
                         help='include explicit activity timing alongside the clean hybrid entry')
     parser.add_argument('--placement-ordinal', type=int,

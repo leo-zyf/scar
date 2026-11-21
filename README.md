@@ -174,9 +174,19 @@ scar plan-build --build PROGRAM --shape ROWS COLS --memory-budget-bytes BYTES --
 scar compile-build --domains DOMAINS --plan-only --out COMPILED
 ```
 
-`REQUEST.json` 的 schema 为 `scar.whole-entry-request`，`schema_version` 为 `1`。填写完整 `argv`（入口脚本名以后）、`boundary`（`PROCESS_LAUNCH_THROUGH_EXIT`）、`registered_implementations`（各项 `{route, artifact, validation, cost}`）及 `original_cost`。`artifact` 是原生项目的 ArtifactRef，`validation` 是同边界验收的 ArtifactRef 或 `null`。成本使用 `{artifact, locator}` 引用原始成本记录，`null` 保持未知。`whole-entry-domain.json` 中可查看固定的 scope、硬件引用和方案 ID，成本记录须绑定该 scope 的语义摘要与方案 ID。
+`REQUEST.json` 使用 `scar.whole-entry-request`。填写完整 `argv`（入口脚本名以后）、`boundary`（`PROCESS_LAUNCH_THROUGH_EXIT`）、`registered_implementations`（各项 `{route, artifact, validation, cost}`）及 `original_cost`。成本用 `{artifact, locator}` 绑定 `whole-entry-domain.json` 中的范围与方案 ID，`null` 保持未知。`schema_version: 2` 默认要求 NVIDIA 库栈，`operator_stack_lock` 接收已锁定 SDK 的 ArtifactRef 并将其与原硬件图和当前设备可见性一同回读。需要复验以前的 LibTorch 范围时可显式使用 `operator_stack: LIBTORCH_ATEN`。
 
 默认 `option_space` 为 `DISCOVER_ALL`，会保留尚未生成的整入口实现。`EXACT_REGISTERED_SET` 只声明比较请求中固定的实现与原入口。`audit_retained_validation: true` 可附带重放历史 A/B。两个命令在同一工作目录、解释器、CPU 核组和固定环境下运行，继承的完整环境以摘要记录。对于独立 C++ 交付，需在有限域内证明选型，再核对原入口、硬件、二进制和声明效果。缺少覆盖或完整成本时保留原入口。详细结论记录在 `whole-entry-selection.json`。
+
+`EXACT_GENERATED_FAMILY` 支持固定网格 CPU 文件入口。请求设置 `variant_source` 为 `{family: "ATEN_FIXED_GRID_CPU_FILE_ENTRY", proof: <CPU recurrence ArtifactRef>}`，`registered_implementations` 置空。`plan-build` 输出共享正文及效果义务，并从已证明的计算正文枚举 CPU 排程。`compile-build --entry-costs COST_INPUTS.json` 接收 `scar.whole-entry-cost-inputs` v1，其中 `domain` 是原 `whole-entry-domain.json` 的 ArtifactRef，`costs` 以方案 ID 映射至成本 FactRef。获选的方案才生成独立 C++20，可用 `--verify-entry` 做一次同参数、同发布路径的原入口对照。
+
+`scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
+
+### 单一 NVIDIA 库栈
+
+`scar operator-stack --nvhpc-root SDK --out STACK.json` 固定一个 SDK 版本、C++ 编译器、CPU BLAS 和同版本 CUDA 组件。`scar probe-nvidia-target --target HARDWARE` 单独检查当前驱动看到的设备。已安装的 CUDA 库与实际可用设备是两项证据。
+
+`scar compile-exported-nvhpc compile` 从纯 FP32 `aten.mm` 功能图生成独立 C++20 CPU 文件入口。`probe-cpu-sgemm --target HARDWARE` 的结果可以通过 `--sgemm-observation OBSERVATIONS/result.json` 接入同形状、同核组的正文排程。`validate` 默认做逐位对照。只有调用方声明 `--atol` 和 `--rtol` 的项目才按该误差合同验收。`scar compile-exported-aten-cuda --operator-stack STACK.json` 使用同一 SDK 构建纯 CUDA 项目并回读已选时序和链接。固定的 NVIDIA 路径排除会引入 LibTorch 数值运算的混合方案。
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 

@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT
+from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT, verify_cuda_operator_stack
 from scar.optimization.native_device_comparison import native_device_probe_reason, native_device_run_reason
 
 
@@ -163,6 +163,7 @@ def _launch_scope(cpu_ids):
 
 
 def _observe_cuda_preflight(cuda, manifest, device, cpu_ids, scope):
+    verify_cuda_operator_stack(cuda, manifest)
     prefix, environment, available = scope
     host = os.uname()
     context = dict(cpu_model=_cpu_model(), architecture=host.machine, kernel_release=host.release,
@@ -222,6 +223,8 @@ def probe_native_device_pair(cpu_root, cuda_root, *, inputs, references, cpu_pro
     for root, manifest in ((cpu, cpu_manifest), (cuda, cuda_manifest)):
         protected.update(str(root / name) for name in ('artifact.json', *manifest['files']))
         protected.update(path for path in manifest['dependencies'].values() if path is not None)
+        if 'operator_stack' in manifest:
+            protected.add(manifest['operator_stack']['reference']['uri'])
     before = _stat_locks(protected)
     context, probe, phase = _observe_cuda_preflight(cuda, cuda_manifest, device, cpu_ids, scope)
     runs = []

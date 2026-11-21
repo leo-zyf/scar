@@ -1,0 +1,99 @@
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#ifdef SCAR_ATEN_PROBE
+#include <ATen/ATen.h>
+#include <ATen/Parallel.h>
+#else
+#include <dlfcn.h>
+
+template <class Function> Function symbol(void* library, const char* name) {
+    auto address = dlsym(library, name);
+    if (!address) throw std::runtime_error(std::string("missing library symbol ") + name);
+    return reinterpret_cast<Function>(address);
+}
+
+template <class Index>
+void sgemm(void* address, Index m, Index n, Index k, const float* left,
+           const float* right, float* output) {
+    using Gemm = void (*)(int, int, int, Index, Index, Index, float, const float*, Index,
+                         const float*, Index, float, float*, Index);
+    constexpr int row_major = 101;
+    constexpr int no_transpose = 111;
+    reinterpret_cast<Gemm>(address)(row_major, no_transpose, no_transpose, m, n, k,
+        1.0F, left, k, right, n, 0.0F, output, n);
+}
+#endif
+
+std::vector<float> read_matrix(const char* path, std::size_t size) {
+    std::vector<float> values(size);
+    std::ifstream file(path, std::ios::binary);
+    if (!file.read(reinterpret_cast<char*>(values.data()), size * sizeof(float)) ||
+        file.peek() != std::ifstream::traits_type::eof()) {
+        throw std::runtime_error("input size differs from the matrix contract");
+    }
+    return values;
+}
+
+int main(int argc, char** argv) try {
+    if (argc != 15) throw std::runtime_error("expected exact probe arguments");
+    const int m = std::stoi(argv[1]);
+    const int n = std::stoi(argv[2]);
+    const int k = std::stoi(argv[3]);
+    const int threads = std::stoi(argv[4]);
+    const int warmups = std::stoi(argv[5]);
+    const int repetitions = std::stoi(argv[6]);
+    const auto left = read_matrix(argv[7], std::size_t(m) * k);
+    const auto right = read_matrix(argv[8], std::size_t(k) * n);
+    std::vector<float> output(std::size_t(m) * n);
+
+#ifdef SCAR_ATEN_PROBE
+    at::set_num_threads(threads);
+    at::set_num_interop_threads(1);
+    const int actual_threads = at::get_num_threads();
+    auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCPU);
+    // from_blob borrows these read-only data for mm_out's lifetime.
+    const auto a = at::from_blob(const_cast<float*>(left.data()), {m, k}, options);
+    const auto b = at::from_blob(const_cast<float*>(right.data()), {k, n}, options);
+    auto c = at::from_blob(output.data(), {m, n}, options);
+    const auto multiply = [&] { at::mm_out(c, a, b); };
+#else
+    auto library = dlopen(argv[10], RTLD_NOW | RTLD_LOCAL);
+    if (!library) throw std::runtime_error(dlerror());
+    const int abi = std::stoi(argv[12]);
+    if (abi != 32 && abi != 64) throw std::runtime_error("unrecognized CBLAS integer ABI");
+    auto operation = symbol<void*>(library, argv[11]);
+    int actual_threads = 1;
+    if (std::string(argv[13]) != "-") {
+        symbol<void (*)(int)>(library, argv[13])(threads);
+        actual_threads = symbol<int (*)()>(library, argv[14])();
+    }
+    const auto multiply = [&] {
+        if (abi == 32) sgemm<std::int32_t>(operation, m, n, k, left.data(), right.data(), output.data());
+        else sgemm<std::int64_t>(operation, m, n, k, left.data(), right.data(), output.data());
+    };
+#endif
+    if (actual_threads != threads) throw std::runtime_error("library did not match the requested thread count");
+    for (int index = 0; index < warmups; ++index) multiply();
+    std::cout << actual_threads;
+    for (int index = 0; index < repetitions; ++index) {
+        const auto start = std::chrono::steady_clock::now();
+        multiply();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        std::cout << ' ' << std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+    }
+    std::cout << '\n';
+    std::ofstream file(argv[9], std::ios::binary);
+    if (!file.write(reinterpret_cast<const char*>(output.data()), output.size() * sizeof(float))) {
+        throw std::runtime_error("could not write complete output");
+    }
+    return 0;
+} catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+}
