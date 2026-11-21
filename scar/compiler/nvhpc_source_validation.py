@@ -16,6 +16,7 @@ from scar.optimization.paired_entry_selection import compare_entry_pairs
 
 
 SCHEMA = 'scar.nvhpc-source-process-observation'
+EVIDENCE = 'scar.nvhpc-source-entry-evidence'
 _TIMING_FIELDS = ('pair', 'mode', 'wall_ns', 'returncode', 'stdout_sha256', 'stderr_sha256')
 _PROBE = '''
 import json
@@ -59,11 +60,11 @@ def _arm(command, context, path, publication, pair, mode):
     stdout.write_bytes(process.stdout)
     stderr.write_bytes(process.stderr)
     outputs = []
-    for file in publication:
+    for index, file in enumerate(publication):
         if not file.is_file() or file.is_symlink():
             outputs.append(None)
             continue
-        retained = path/file.name
+        retained = path/f'output-{index}.f32'
         file.rename(retained)
         outputs.append(_receipt(retained))
     return dict(pair=pair, mode=mode, wall_ns=wall_ns, returncode=process.returncode,
@@ -93,7 +94,8 @@ def _timing(runs, warmup, count, *, minimum_gain=0.05):
         minimum_gain=minimum_gain)
 
 
-def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_pairs=1, measurement_pairs=3):
+def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_pairs=1, measurement_pairs=3,
+                            entry_scope=None):
     """Retain comparable process observations, separate from forward costs and release."""
     import torch
 
@@ -117,9 +119,23 @@ def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_
         raise ValueError('source publication count differs from the native ABI')
     context = _context(execution['cpu_ids'])
     out = Path(out).resolve()
+    if entry_scope is not None:
+        from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
+        from scar.compiler.entry_delivery import _environment_digest
+
+        argv = entry_scope['argv']
+        facts = matrix_entry_inputs(contract, argv)
+        if ([row['uri'] for row in facts] != list(map(str, paths))
+                or _environment_digest(context['environment']) != entry_scope['environment_sha256']
+                or context['working_directory'] != entry_scope['working_directory']
+                or context['python']['path'] != entry_scope['python_executable']
+                or context['cpu_ids'] != entry_scope['process_affinity_cpu_ids']):
+            raise ValueError('source process inputs or provider environment differ from the admitted trial scope')
+        publish = list(map(Path, argv[len(paths):]))
+    else:
+        publish = [out/f'output-{index}.f32' for index in range(len(sizes))]
+        argv = [*map(str, paths), *map(str, publish)]
     out.mkdir(parents=True, exist_ok=False)
-    publish = [out/f'output-{index}.f32' for index in range(len(sizes))]
-    argv = [*map(str, paths), *map(str, publish)]
     if len(argv) != contract['argv_count']:
         raise ValueError('source process arguments differ from the structural ABI')
     commands = dict(ORIGINAL=[*context['prefix'], context['python']['path'], '-B', str(source), *argv],
@@ -187,8 +203,8 @@ def replay_source_process(reference, evidence, scope, *, minimum_gain):
         for name in ('stdout', 'stderr'):
             if run[name] != _receipt(arm/name) or run[name]['sha256'] != run[name+'_sha256']:
                 raise ValueError('source process stream receipt changed')
-        for file, published in zip(run['outputs'], argv[len(input_records):], strict=True):
-            if file != _receipt(arm/Path(published).name):
+        for ordinal, file in enumerate(run['outputs']):
+            if file != _receipt(arm/f'output-{ordinal}.f32'):
                 raise ValueError('source process ordered output receipt changed')
         if slot:
             assessed = _assess({row['mode']: row for row in runs[index-1:index+1]}, contract, sizes, torch)
@@ -198,3 +214,44 @@ def replay_source_process(reference, evidence, scope, *, minimum_gain):
         raise ValueError('retained process timing summary changed')
     read_artifact(reference, json_document=False)
     return _timing(runs, warmup, count, minimum_gain=minimum_gain), context
+
+
+def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
+    """Attach diagnostic effects and a scoped component forecast to the clean comparison."""
+    if reference['schema'] == SCHEMA:
+        return replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain)
+    document = read_artifact(reference)
+    if (reference['schema'] != EVIDENCE or document['schema_version'] != 1
+            or set(document) != {'schema', 'schema_version', 'process', 'effects', 'lifecycle'}):
+        raise ValueError('a versioned NVIDIA source evidence bundle is required')
+    process = document['process']
+    timing, context = replay_source_process(process, evidence, scope, minimum_gain=minimum_gain)
+    diagnostics = {}
+    effects = document['effects']
+    if effects is not None:
+        from collections import Counter
+        from scar.analysis.nvhpc_source_effects import verify_nvhpc_source_effects
+
+        journal = verify_nvhpc_source_effects(effects, process=process)
+        diagnostics['effects'] = dict(reference=effects, status=journal['status'],
+            uncovered=dict(Counter(row['kind'] for row in journal['projection']['uncovered_effects'])),
+            global_effect_closure=False)
+    lifecycle = document['lifecycle']
+    if lifecycle is not None:
+        from scar.optimization.nvhpc_source_lifecycle import replay_nvhpc_source_lifecycle
+
+        model = replay_nvhpc_source_lifecycle(lifecycle)
+        raw = read_artifact(process)
+        output_devices = {Path(path).parent.stat().st_dev for path in scope['argv'][len(raw['inputs']):]}
+        if (model['artifact'] != evidence['artifact'] or model['source_contract'] != evidence['source_contract']
+                or model['context'] != context or model['inputs'] != raw['inputs']
+                or model['target'] != evidence['target'] or output_devices != {model['comparison_scratch_device']}):
+            raise ValueError('lifecycle probe and clean run differ in source, inputs, provider or output device')
+        phases = {mode: {name: measure['median_ns'] for name, measure in rows.items()}
+                  for mode, rows in model['summary'].items()}
+        diagnostics['lifecycle_forecast'] = dict(reference=lifecycle,
+            basis='SUM_OF_MATCHED_INSTRUMENTED_COMPONENT_MEDIANS', median_components_ns=phases,
+            predicted_process_ns={mode: sum(row.values()) for mode, row in phases.items()},
+            limitations=model['limitations'], physical_bounds_proven=False)
+    read_artifact(reference, json_document=False)
+    return timing, dict(context, diagnostics=diagnostics)

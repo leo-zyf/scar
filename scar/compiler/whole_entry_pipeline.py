@@ -34,7 +34,7 @@ def read_request(value):
     document = read_artifact(ref)
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
-                'numerical_contract'}
+                'numerical_contract', 'sgemm_observations'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -63,8 +63,18 @@ def read_request(value):
             raise ValueError('known whole-entry variant family and its pinned source proof required')
         read_artifact(variant_source['proof'])
     space = document.get('option_space', 'DISCOVER_ALL')
+    infer_nvhpc = _infer_nvhpc(document)
+    if 'sgemm_observations' in document:
+        from scar.optimization.cpu_sgemm_probe import SCHEMA as SGEMM_OBSERVATION
+
+        observations = document['sgemm_observations']
+        if (not infer_nvhpc or type(observations) is not list
+                or any(type(row) is not dict or row.get('schema') != SGEMM_OBSERVATION for row in observations)):
+            raise ValueError('CPU SGEMM observations require a source-derived NVIDIA domain')
+        for observation in observations:
+            read_artifact(observation)
     if ((space == 'EXACT_GENERATED_FAMILY' and
-            (variant_source is None or document['registered_implementations'])) or
+            ((variant_source is None and not infer_nvhpc) or document['registered_implementations'])) or
             (space == 'EXACT_REGISTERED_SET' and variant_source is not None)):
         raise ValueError('finite option policy and variant provenance must agree')
     candidates = {}
@@ -81,6 +91,12 @@ def read_request(value):
             raise ValueError('duplicate registered native implementation')
         candidates[candidate_id] = item
     return ref, document, candidates
+
+
+def _infer_nvhpc(request):
+    return ('operator_stack_lock' in request and request.get('variant_source') is None
+            and not request['registered_implementations']
+            and request.get('option_space') != 'EXACT_REGISTERED_SET')
 
 
 def _scope(plan, request):
@@ -132,6 +148,10 @@ def _stack_target(scope, reference, *, device=None):
 
 
 def _discover(scope, request):
+    if _infer_nvhpc(request):
+        from scar.compiler.nvhpc_entry_variant import derive_nvhpc_entries
+
+        return derive_nvhpc_entries(scope, request.get('sgemm_observations', []))
     source = request.get('variant_source')
     if source is None:
         return None
@@ -181,7 +201,10 @@ def _legalities(candidates, scope, discovery):
             if id_ in known:
                 raise ValueError('duplicate discovered entry option identity')
             known.add(id_)
-            status, reason = _check_operator_stack(scope, LIBTORCH, option['legal_status'], option['reason'])
+            nvhpc = _nvhpc_option(option)
+            stack_reference = option['proof']['emission_plan']['operator_stack'] if nvhpc else None
+            status, reason = _check_operator_stack(scope, NVIDIA_HPC if nvhpc else LIBTORCH,
+                option['legal_status'], option['reason'], reference=stack_reference)
             facts.append(dict(option_id=id_, scope_sha256=scope_sha,
                 legal_status=status, reason=reason,
                 generated_option=option))
@@ -248,7 +271,16 @@ def _attach_costs(domain, original_ref, source, out):
     return priced, _write(out/'whole-entry-priced-domain.json', priced), reference
 
 
+def _nvhpc_option(option):
+    return option.get('implementation_family') == 'NVIDIA_CPU_MATRIX_FILE_ENTRY'
+
+
 def _emit_generated(option, scope, out, *, plan_only, verify_entry):
+    if _nvhpc_option(option):
+        from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
+
+        return emit_nvhpc_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
+
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
     plan = option['proof']['emission_plan']
@@ -353,6 +385,16 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
     audit = []
+    trial = None
+    # A caller may explicitly measure the unique source-derived hypothesis on
+    # the original boundary even when the decision retains the original.
+    hypotheses = [generated[row['id']] for row in domain['options']
+                  if row['id'] in generated and row['legal_status'] != 'INELIGIBLE'
+                  and _nvhpc_option(generated[row['id']])]
+    if selected is None and verify_entry and not plan_only and len(hypotheses) == 1:
+        trial = _emit_generated(hypotheses[0], live_scope, out, plan_only=False, verify_entry=True)
+        audit.append(dict(option_id=trial['selected_id'], legal_status=hypotheses[0]['legal_status'],
+                          validation=trial['validation'], reason=trial['reason']))
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
             id_ = fact['option_id']
@@ -366,7 +408,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
         selection=choice, delivery=delivery,
         retained_validation_audit=audit,
-        plan_only=plan_only, native_compiled=delivery.get('native_compiled', False),
-        target_executed=delivery.get('target_executed', False))
+        trial=trial, plan_only=plan_only,
+        native_compiled=delivery.get('native_compiled', False) or bool(trial and trial['native_compiled']),
+        target_executed=trial['target_executed'] if trial is not None else delivery.get('target_executed', False))
     report['observed_costs'] = _observed_costs(audit, delivery, choice['scope_sha256'], out)
     return dict(reference=_write(out/'whole-entry-selection.json', report), **report)

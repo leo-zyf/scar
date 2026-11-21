@@ -189,8 +189,8 @@ def _sparse(scope, reference, document):
 
 def _nvhpc(scope, reference, document):
     from scar.analysis.nvhpc_source_entry import SCHEMA
-    from scar.codegen.native_provider_bundle import _content
     from scar.compiler.compile_exported_nvhpc import check_nvhpc_project
+    from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
 
     root, checked, execution, _, _ = check_nvhpc_project(Path(reference['uri']).parent, reference['sha256'])
     _require(checked == reference and 'entry_obligations_sha256' in scope,
@@ -210,18 +210,7 @@ def _nvhpc(scope, reference, document):
     numerical = execution['numerical_contract']
     _require(numerical == scope.get('numerical_contract', {'kind': 'EXACT_BYTES'}),
              'NVHPC numerical contract differs from the original entry scope')
-    argv = list(map(Path, scope['argv']))
-    _require(len(argv) == contract['argv_count'] and all(path.is_absolute() for path in argv),
-             'NVHPC file ABI needs the exact number of absolute arguments')
-    inputs = []
-    for path, port in zip(argv[:len(contract['inputs'])], contract['inputs'], strict=True):
-        _require(path.is_file() and path.resolve(strict=True) == path and path.stat().st_size == port['nbytes'],
-                 'NVHPC input is outside the stable file size and identity domain')
-        inputs.append(_ref_with_path(dict(path=str(path), **_content(path)), 'scar.source-entry-input'))
-    outputs = argv[len(inputs):]
-    _require(len(set(outputs)) == len(outputs) and all(path.parent.is_dir() and path.resolve() == path
-             and not path.exists() and not path.is_symlink() for path in outputs),
-             'NVHPC file outputs must be fresh, distinct and canonical')
+    inputs = matrix_entry_inputs(contract, scope['argv'])
     return dict(kind='STANDALONE_CPP', target=problem['target'], source=source, source_contract=contract_ref,
         operator_stack=document['stack'], file_inputs=inputs, numerical_contract=numerical,
         cpu_ids=execution['cpu_ids'], output_sizes=[row['nbytes'] for row in contract['outputs']],
@@ -461,9 +450,9 @@ def _sparse_validation(scope, evidence, reference, minimum_gain):
 
 
 def _nvhpc_validation(scope, evidence, reference, minimum_gain):
-    from scar.compiler.nvhpc_source_validation import replay_source_process
+    from scar.compiler.nvhpc_source_validation import replay_source_entry_evidence
 
-    timing, context = replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain)
+    timing, context = replay_source_entry_evidence(reference, evidence, scope, minimum_gain=minimum_gain)
     return timing, None, context
 
 
