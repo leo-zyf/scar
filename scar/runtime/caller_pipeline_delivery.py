@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from .caller_pipeline_deployment import (EXECUTION, DESIGN, deployment_gate,
-    entry_context, runner_identity, environment_sha256, reference, bundle_reference,
+    entry_context, runner_identity, environment_sha256, reference, _bundle_identity,
     provider_identity)
 from .compiled_deployment import _raw
 
@@ -32,12 +32,14 @@ def run_caller_entry(entry, argv, *, bundle, expected_admission_sha256,
     entry, argv = _arguments(entry, argv)
     context = entry_context(entry, argv); identity = runner_identity(); environment = environment_sha256()
     gate = dict(decision='NO_OP', deployment_authorized=False, reason='entry_performance_receipt_not_provided')
-    selected = False; frozen_bundle = None; frozen_design = None; design = None
+    selected = False; frozen_bundle = None; frozen_design = None; design = None; admitted = None
     if measure_candidate is True:
         gate = dict(decision='MEASURE_ADMITTED_CANDIDATE', deployment_authorized=False,
             reason='explicit_trial_is_not_deployment_authority')
         try:
-            frozen_bundle, _ = bundle_reference(bundle, expected_admission_sha256)
+            from .caller_pipeline_guard import _admit
+            admitted = _admit(bundle, expected_admission_sha256)
+            frozen_bundle = _bundle_identity(admitted.directory, admitted.pin, admitted.contract, admitted.admission)
             if validation_design is not None:
                 frozen_design = reference(validation_design, DESIGN)
                 if frozen_design['sha256'] != expected_design_sha256:
@@ -54,11 +56,13 @@ def run_caller_entry(entry, argv, *, bundle, expected_admission_sha256,
         gate = deployment_gate(deployment_receipt, expected_deployment_sha256=expected_deployment_sha256,
             bundle=bundle, expected_admission_sha256=expected_admission_sha256, entry=entry, argv=argv)
         selected = gate['deployment_authorized'] is True
-        if selected: frozen_bundle, _ = bundle_reference(bundle, expected_admission_sha256)
+        if selected:
+            from .caller_pipeline_guard import _admit
+            admitted = _admit(bundle, expected_admission_sha256)
+            frozen_bundle = _bundle_identity(admitted.directory, admitted.pin, admitted.contract, admitted.admission)
     if selected:
-        from .caller_pipeline_cli import run_caller_entry as run_candidate
-        result = run_candidate(entry, argv, bundle=bundle,
-            expected_admission_sha256=expected_admission_sha256,
+        from .caller_pipeline_cli import _run_with_admission
+        result = _run_with_admission(entry, argv, admitted,
             exclusive_inputs=True, measure_candidate=True)
         execution = result['execution']; loaded = result['native_libraries_loaded']
     else:

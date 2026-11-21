@@ -15,7 +15,7 @@ import time
 from .validate_build import _reference, _save, _equal_files, _statistics
 from scar.runtime.caller_pipeline_deployment import (SCHEMA, DESIGN, SAMPLE, TRUST,
     entry_context, runner_identity, environment_sha256, provider_identity,
-    source_references, bundle_reference, execution_counts, reference)
+    source_references, bundle_reference, execution_counts, reference, whole_entry_gain)
 from scar.runtime.compiled_deployment import _raw
 
 
@@ -121,7 +121,11 @@ def validate_caller_pipeline(bundle, entry, argv, out, *, expected_admission_sha
     gain = 1-b/a if a and b else None; speedup = a/b if a and b else None
     complete = len(samples) == warmup+repetitions and len(measured) == repetitions
     valid = complete and all(row['valid'] for row in samples)
-    profitable = valid and gain is not None and gain >= minimum_gain
+    ranges_separated = False
+    profitable = False
+    if valid:
+        gain, ranges_separated, profitable = whole_entry_gain(
+            original['samples_ns'], optimized['samples_ns'], minimum_gain)
     if not complete: reasons.append('PREDECLARED_MEASUREMENTS_INCOMPLETE')
     if valid and not profitable: reasons.append('NOT_PROFITABLE_AT_FROZEN_WHOLE_ENTRY_GAIN')
     if profitable: reasons.append('FINAL_DELIVERY_ADMISSION_REPLAY_COST_NOT_COVERED')
@@ -132,6 +136,7 @@ def validate_caller_pipeline(bundle, entry, argv, out, *, expected_admission_sha
             'source_refs', 'source_scope', 'provider_identity', 'policy', 'validator_implementation')},
         samples=samples, evidence=evidence, reasons=reasons,
         performance=dict(baseline=original, optimized=optimized, speedup=speedup, gain_fraction=gain,
+            sampled_ranges_separated=ranges_separated,
             clock='PARENT_MONOTONIC_FULL_PROCESS_LIFETIME', warmup_pairs_excluded_from_statistics=warmup),
         validation=dict(validated=valid, complete=complete, measurement_pairs=len(measured),
             stdout_stderr_exit_match=all(row['stdout_match'] and row['stderr_match'] and row['successful_returncodes'] for row in samples),

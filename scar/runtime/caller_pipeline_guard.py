@@ -79,11 +79,15 @@ def _contract_cpu_available(contract):
         raise GuardFailure('inherited caller CPU domain differs from compact cost scope')
 
 
-def implementation_sha256():
+def _implementation_sources():
     root=Path(__file__).resolve().parents[1]
     names=('runtime/caller_pipeline_guard.py','runtime/native_loop.py','runtime/stateful_guard.py',
         'runtime/array_copy_guard.py','trace/code_snapshot.py')
-    rows=[(name,sha256((root/name).read_bytes()).hexdigest())for name in names]
+    return [(name,root/name) for name in names]
+
+
+def implementation_sha256():
+    rows=[(name,sha256(path.read_bytes()).hexdigest())for name,path in _implementation_sources()]
     return sha256(json.dumps(rows,separators=(',',':')).encode()).hexdigest()
 
 
@@ -249,46 +253,77 @@ class NativeCallerPipeline:
         return output
 
 
+def _file_identity(path):
+    stat=path.lstat()
+    return stat.st_dev,stat.st_ino,stat.st_mode,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns
+
+
+@dataclass(frozen=True,slots=True)
+class _AdmittedBundle:
+    directory:Path
+    contract:dict
+    admission:dict
+    pin:str
+    file_identities:dict
+
+    def require_unchanged(self):
+        _need(all(_file_identity(path)==identity for path,identity in self.file_identities.items()),
+            'caller bundle or runtime files changed since admission')
+
+
 def _admit(bundle,expected_admission_sha256):
     _need(_hash(expected_admission_sha256),'explicit expected admission SHA256 required')
-    directory=Path(bundle).resolve();raw=_small_raw(directory/'admission.json')
+    identities={}
+    def watch(path):
+        identities[path]=_file_identity(path)
+        return path
+    directory=watch(Path(bundle).resolve());raw=_small_raw(watch(directory/'admission.json'))
     _need(sha256(raw).hexdigest()==expected_admission_sha256,'caller admission trust pin differs')
     admission=_json(raw)
     _need(admission.get('schema')==ADMISSION and type(admission.get('schema_version'))is int
         and admission['schema_version']in(1,2)and admission['trust_policy']==TRUST,
         'supported caller runtime admission required')
+    for _,path in _implementation_sources():watch(path)
     _need(admission['runtime_implementation_sha256']==implementation_sha256(),'caller runtime implementation changed')
-    raw=_small_raw(directory/'runtime.json')
+    raw=_small_raw(watch(directory/'runtime.json'))
     _need(sha256(raw).hexdigest()==admission['runtime_sha256'],'caller runtime contract bytes changed')
     contract=validate_contract(_json(raw));native=contract['native']
     _need(contract['schema_version']==admission['schema_version'],'runtime/admission version differs')
     _need(native==admission['native'],'caller native identities differ from admission')
     def verify_library(row):
-        path=directory/row['library'];digest,header=_file_hash_and_header(path)
-        _need(digest==row['sha256']and path.stat().st_size==row['bytes']and len(header)>=64
+        path=watch(directory/row['library']);digest,header=_file_hash_and_header(path)
+        _need(digest==row['sha256']and identities[path][3]==row['bytes']and len(header)>=64
             and header[:6]==b'\x7fELF\x02\x01'and struct.unpack_from('<H',header,16)[0]==3
             and struct.unpack_from('<H',header,18)[0]==62,'caller library bytes or ELF64 ABI changed')
     libraries=native['operators']if _fused(contract)else(native['host'],*native['operators'])
     members={'runtime.json','admission.json',*(row['library']for row in libraries)}
     _need(members<={p.name for p in directory.iterdir()}<=members|{'export-report.json'},'unexpected caller bundle members')
     for row in libraries:verify_library(row)
-    return directory,contract,admission
+    result=_AdmittedBundle(directory,contract,admission,expected_admission_sha256,identities)
+    result.require_unchanged()
+    return result
 
 
 def inspect_bundle(bundle,*,expected_admission_sha256):
     """Validate compact metadata and ELF receipts without loading libraries."""
-    directory,contract,admission=_admit(bundle,expected_admission_sha256)
-    return dict(directory=str(directory),contract=deepcopy(contract),admission=deepcopy(admission),
-        admission_sha256=expected_admission_sha256,metadata_only=True,library_bytes_checked=True,library_loaded=False)
+    ready=_admit(bundle,expected_admission_sha256)
+    return dict(directory=str(ready.directory),contract=deepcopy(ready.contract),admission=deepcopy(ready.admission),
+        admission_sha256=ready.pin,metadata_only=True,library_bytes_checked=True,library_loaded=False)
 
 
 def load(bundle,*,expected_admission_sha256):
     """Load unchanged ELF/ABI tables using only producer-pinned compact bytes."""
-    directory,contract,admission=_admit(bundle,expected_admission_sha256);native=contract['native']
+    return _load_admitted(_admit(bundle,expected_admission_sha256))
+
+
+def _load_admitted(ready):
+    directory,contract,admission=ready.directory,ready.contract,ready.admission
+    native=contract['native']
     _need(sys.platform=='linux'and platform.machine().lower()in('x86_64','amd64')and sys.byteorder=='little'
         and struct.calcsize('P')==8 and ctypes.sizeof(_Array)==64 and ctypes.sizeof(_OperatorTable)==32,
         'caller host requires the original Linux x86_64 ABI1')
     _contract_cpu_available(contract)
+    ready.require_unchanged()
     def library(row):return ctypes.CDLL(str(directory/row['library']))
     operators=[];pointers=[]
     for row in native['operators']:
@@ -313,7 +348,7 @@ def load(bundle,*,expected_admission_sha256):
         run=host.scar_pipeline_run_v1
         run.argtypes=[ctypes.POINTER(_Array),ctypes.c_uint64,ctypes.POINTER(_Array),ctypes.POINTER(_TablePointer),
             ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint64)];run.restype=ctypes.c_int32
-    report=dict(admission_sha256=expected_admission_sha256,runtime_sha256=admission['runtime_sha256'],
+    report=dict(admission_sha256=ready.pin,runtime_sha256=admission['runtime_sha256'],
         pipeline_sha256=native['pipeline_sha256'],memory_plan_sha256=native['memory_plan_sha256'],
         automatic_deployment_authorized=False,cost_status='UNKNOWN',native_bytes_preserved=True)
     if _fused(contract):report.update(execution_family=FUSED_FAMILY,cost_scope=contract['cost_scope'])

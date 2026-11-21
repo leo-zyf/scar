@@ -77,12 +77,16 @@ def source_references(entry, contract, source_paths=()):
     return [reference(path, 'scar.caller-pipeline-program-source') for path in sorted(paths)]
 
 
+def _bundle_identity(directory, pin, contract, admission):
+    return dict(directory=str(directory), admission_sha256=pin,
+        runtime_sha256=admission['runtime_sha256'], native=contract['native'])
+
+
 def bundle_reference(directory, expected_admission_sha256):
     from .caller_pipeline_guard import inspect_bundle
     metadata = inspect_bundle(directory, expected_admission_sha256=expected_admission_sha256)
-    return dict(directory=metadata['directory'], admission_sha256=metadata['admission_sha256'],
-        runtime_sha256=metadata['admission']['runtime_sha256'],
-        native=metadata['contract']['native']), metadata
+    return _bundle_identity(metadata['directory'], metadata['admission_sha256'],
+        metadata['contract'], metadata['admission']), metadata
 
 
 def execution_counts(report, *, bundle, context, identity, environment, design=None):
@@ -104,6 +108,17 @@ def execution_counts(report, *, bundle, context, identity, environment, design=N
         and not inner.get('frontier') and inner.get('decision') == 'GUARDED_ATTACHMENT'
         and inner.get('observed_boundary_calls') == native)
     return native if type(native) is int else 0, fallback if type(fallback) is int else 0, bool(valid)
+
+
+def whole_entry_gain(original_ns, candidate_ns, minimum_gain):
+    """Require both a material median gain and separated clean process samples."""
+    if not original_ns or len(original_ns) != len(candidate_ns):
+        raise ValueError('paired complete-process durations required')
+    if any(type(ns) is not int or ns <= 0 for ns in (*original_ns, *candidate_ns)):
+        raise ValueError('positive integer process durations required')
+    gain = 1 - statistics.median(candidate_ns) / statistics.median(original_ns)
+    separated = max(candidate_ns) < min(original_ns)
+    return gain, separated, separated and gain >= minimum_gain
 
 
 def deployment_gate(receipt, *, expected_deployment_sha256, bundle,
@@ -167,9 +182,9 @@ def deployment_gate(receipt, *, expected_deployment_sha256, bundle,
                     or sample['fallback_calls'] != fallback):
                 raise ValueError('whole-entry candidate or guarded-boundary observations invalid')
             if sample['phase'] == 'MEASUREMENT': measurements.append(sample)
-        gain = 1 - statistics.median(row['optimized']['wall_ns'] for row in measurements) / statistics.median(
-            row['baseline']['wall_ns'] for row in measurements)
-        if gain < minimum: return rejected('not_profitable_at_frozen_whole_entry_gain')
+        gain, _, profitable = whole_entry_gain([row['baseline']['wall_ns'] for row in measurements],
+            [row['optimized']['wall_ns'] for row in measurements], minimum)
+        if not profitable: return rejected('not_profitable_at_frozen_whole_entry_gain')
         return dict(**rejected('positive_candidate_gain_only_final_delivery_admission_cost_not_covered'),
             candidate_gain_fraction=gain, evidence_status='PRELIMINARY_CANDIDATE_ONLY',
             final_delivery_cost_admission_supported=False)

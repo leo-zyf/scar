@@ -63,11 +63,48 @@ def test_exact_pinned_entry_and_missing_cost_default_no_op(tmp_path, monkeypatch
     assert gate()['deployment_authorized'] is False
 
     # No cost authority: no admission, library load or import attachment.
-    from scar.runtime import caller_pipeline_delivery as delivery, entry_runner
+    from scar.runtime import caller_pipeline_delivery as delivery, caller_pipeline_guard, entry_runner
     monkeypatch.setattr(entry_runner, 'run_original_script', lambda *args: {'original_calls': 1})
-    monkeypatch.setattr(delivery, 'bundle_reference', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('unexpected bundle access')))
+    monkeypatch.setattr(caller_pipeline_guard, '_admit', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('unexpected bundle access')))
     result = delivery.run_caller_entry(entry, [], bundle='unavailable', expected_admission_sha256='0'*64,
         exclusive_inputs=True)
     assert result['execution'] == {'original_calls': 1}
     assert result['deployment_gate']['deployment_authorized'] is False
     assert result['native_libraries_loaded'] is False and result['import_attachment_enabled'] is False
+
+
+def test_trial_reuses_one_admission_only_for_eligible_entry(tmp_path, monkeypatch):
+    from scar.runtime import caller_pipeline_delivery as delivery, caller_pipeline_guard as guard, entry_runner
+
+    entry = tmp_path/'entry.py'; entry.write_text('print(1)\n')
+    source = tmp_path/'source.py'; source.write_text('def f(): pass\n')
+    pin = '0'*64
+    contract = {'source': {'path': str(source), 'qualname': 'f'}, 'native': {}}
+    admitted = guard._AdmittedBundle(tmp_path, contract, {'runtime_sha256': '1'*64}, pin, {})
+    checks, loads = [], []
+    def admit(bundle, expected_pin):
+        checks.append((bundle, expected_pin))
+        return admitted
+    def load(ready):
+        assert ready is admitted
+        loads.append(ready)
+        return object()
+
+    monkeypatch.setattr(guard, '_admit', admit)
+    monkeypatch.setattr(guard, '_load_admitted', load)
+    monkeypatch.setattr(entry_runner, '_execute', lambda *args: {'candidate': True})
+    monkeypatch.setattr(entry_runner, 'run_original_script', lambda *args: {'candidate': False})
+    options = dict(bundle=tmp_path, expected_admission_sha256=pin,
+        exclusive_inputs=True, measure_candidate=True)
+    explicit = delivery.run_caller_entry(entry, [], **options)
+    assert explicit['execution'] == {'candidate': True}
+    assert checks == [(tmp_path, pin)] and loads == [admitted]
+
+    # The entry itself cannot be attached, and an invalid design pin cannot
+    # authorize a candidate load even after the bundle was inspected.
+    entry_defined = delivery.run_caller_entry(source, [], **options)
+    design = tmp_path/'design.json'; design.write_text('{}')
+    bad_design = delivery.run_caller_entry(entry, [], validation_design=design,
+        expected_design_sha256=pin, **options)
+    assert entry_defined['execution'] == bad_design['execution'] == {'candidate': False}
+    assert len(checks) == 3 and loads == [admitted]

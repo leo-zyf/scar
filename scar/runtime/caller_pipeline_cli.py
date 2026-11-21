@@ -10,11 +10,18 @@ from pathlib import Path
 
 def run_caller_entry(entry, argv, *, bundle, expected_admission_sha256,
         exclusive_inputs=False, measure_candidate=False):
-    from .caller_pipeline_guard import inspect_bundle,load,guarded_caller_pipeline
-    from .entry_runner import _Scope,_execute,_arguments,run_original_script
+    from .caller_pipeline_guard import _admit
+    from .entry_runner import _arguments
     entry,argv=_arguments(entry,argv)
-    metadata=inspect_bundle(bundle,expected_admission_sha256=expected_admission_sha256)
-    contract=metadata['contract']
+    admission=_admit(bundle,expected_admission_sha256)
+    return _run_with_admission(entry,argv,admission,
+        exclusive_inputs=exclusive_inputs,measure_candidate=measure_candidate)
+
+
+def _run_with_admission(entry,argv,admission,*,exclusive_inputs,measure_candidate):
+    from .caller_pipeline_guard import _load_admitted,guarded_caller_pipeline
+    from .entry_runner import _Scope,_execute,run_original_script
+    contract=admission.contract
     gate=dict(decision='NO_OP',deployment_authorized=False,
         reasons=['caller_pipeline_cost_and_deployment_plan_not_admitted'])
     scope=None
@@ -24,7 +31,7 @@ def run_caller_entry(entry, argv, *, bundle, expected_admission_sha256,
         elif Path(contract['source']['path']).resolve()==entry:
             gate['reasons']=['entry_defined_caller_attachment_not_supported']
         else:
-            artifact=load(bundle,expected_admission_sha256=expected_admission_sha256)
+            artifact=_load_admitted(admission)
 
             class CallerScope(_Scope):
                 def __init__(self):
