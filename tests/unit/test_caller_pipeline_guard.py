@@ -61,6 +61,11 @@ def test_plain_caller_guards_recompute_or_fall_back_once(tmp_path):
     module.first.__signature__=object()
     fallback_case(lambda:guarded(x,y),x+y*y)
     del module.first.__signature__
+    source_bytes=path.read_bytes()
+    path.write_bytes(source_bytes+b'\n# changed on disk\n')
+    fallback_case(lambda:guarded(y=y,x=x),x+y*y)
+    path.write_bytes(source_bytes)
+    assert np.array_equal(guarded(y=y,x=x),module.caller(x,y))
     fallback_case(lambda:guarded(x.T,y.T),x.T+y.T*y.T)
     old_profile=sys.getprofile();sys.setprofile(lambda *args:None)
     try:fallback_case(lambda:guarded(x,y),x+y*y)

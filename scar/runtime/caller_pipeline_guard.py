@@ -322,6 +322,10 @@ def load(bundle,*,expected_admission_sha256):
 
 def _plain(function,source):
     _function(source,function)
+    _plain_metadata(function)
+
+
+def _plain_metadata(function):
     if (type(function.__globals__)is not dict or type(function.__builtins__)is not dict
             or function.__closure__ is not None
             or function.__defaults__ is not None or function.__kwdefaults__ is not None
@@ -349,14 +353,22 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
     contract=validate_contract(artifact.contract)
     if type(original)is not FunctionType:raise ValueError('ordinary original function required')
     stats=dict(native_calls=0,fallback_calls=0,reasons={});binding_reason=None;callees=[];signature=None
+    sources={}
+    parameters=tuple(contract['parameters'])
     try:
         _plain(original,contract['source']);original_state=_function_state(original)
         shadow=FunctionType(original.__code__,original.__globals__);signature=inspect.signature(shadow,follow_wrapped=False)
-        if tuple(signature.parameters)!=tuple(contract['parameters']):raise ValueError('original caller parameter order differs')
+        if tuple(signature.parameters)!=parameters:raise ValueError('original caller parameter order differs')
+        source=contract['source'];sources[Path(source['path'])]=source['sha256']
         for row in contract['callees']:
             function=original.__globals__.get(row['global_name']);_plain(function,row['source'])
-            callees.append((row,function,_function_state(function)))
+            source=row['source'];path=Path(source['path'])
+            if sources.setdefault(path,source['sha256'])!=source['sha256']:
+                raise ValueError('conflicting caller and callee source snapshots')
+            callees.append((row['global_name'],function,_function_state(function)))
     except (OSError,ValueError,TypeError,KeyError):binding_reason='initial_source_callable_or_abi_not_admitted'
+    positional=signature is not None and all(param.kind in (inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD) for param in signature.parameters.values())
     def fallback(reason,args,kwargs):
         stats['fallback_calls']+=1;stats['reasons'][reason]=stats['reasons'].get(reason,0)+1
         return original(*args,**kwargs)
@@ -369,19 +381,27 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
         try:
             if _observers((original.__code__,*(function.__code__ for _,function,_ in callees))):
                 raise ValueError('global or local metadata observer active')
-            _plain(original,contract['source'])
+            _plain_metadata(original)
             if not _same_function_state(original,original_state):raise ValueError('original caller state changed')
-            for row,function,state in callees:
-                _plain(function,row['source'])
-                if original.__globals__.get(row['global_name'])is not function or not _same_function_state(function,state):
+            for name,function,state in callees:
+                _plain_metadata(function)
+                if original.__globals__.get(name)is not function or not _same_function_state(function,state):
                     raise ValueError('original global callee binding/default/code changed')
-            bound=signature.bind(*args,**kwargs);bound.apply_defaults()
-            arrays=[bound.arguments[name]for name in contract['parameters']]
+            # Exact code object identities were admitted at attachment. Read
+            # each pinned source once per invocation even when it defines
+            # several participating functions.
+            if any(sha256(path.read_bytes()).hexdigest()!=digest for path,digest in sources.items()):
+                raise ValueError('live source file differs from the admitted snapshot')
+            if positional and not kwargs and len(args)==len(parameters):
+                arrays=args
+            else:
+                bound=signature.bind(*args,**kwargs)
+                arrays=[bound.arguments[name]for name in parameters]
             if 'array_copy_contract'in contract:
                 from .array_copy_guard import guard_copy_inputs
                 guard_copy_inputs(arrays)
             import numpy as np
-            for name,value in zip(contract['parameters'],arrays):
+            for name,value in zip(parameters,arrays):
                 if (type(value)is not np.ndarray or value.dtype!=np.dtype('float64')or not value.dtype.isnative
                         or value.ndim!=2 or list(value.shape)!=contract['inputs'][name]['shape']
                         or not value.flags.c_contiguous or not value.flags.aligned):
