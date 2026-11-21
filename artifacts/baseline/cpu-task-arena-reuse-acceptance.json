@@ -1,0 +1,252 @@
+{
+  "allocation_counts": {
+    "lane_reuse": {
+      "calls": 4,
+      "calls_by_debugger_thread": {
+        "1": 1,
+        "2": 1,
+        "3": 1,
+        "4": 1
+      },
+      "observation": {
+        "schema": "scar.cpu-task-arena-allocation-observation",
+        "sha256": "87aa00398a8e1ad322af32717765d8d213281a20f1610953a508c725d9bd7892",
+        "size_bytes": 2614,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/allocator-observation-lane-reuse/counts.json"
+      },
+      "transcript": {
+        "schema": "application/octet-stream",
+        "sha256": "d07677f8f5c10b5ac5d56fc543265b5bdb0d4da634c538b88ff5957e3d2dd0a6",
+        "size_bytes": 3856,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/allocator-observation-lane-reuse/transcript.log"
+      }
+    },
+    "task_private": {
+      "calls": 8,
+      "calls_by_debugger_thread": {
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "4": 2
+      },
+      "observation": {
+        "schema": "scar.cpu-task-arena-allocation-observation",
+        "sha256": "03cb203bb00762f6a00f88ec2a16882652dcee1736d997bbfe2e82dd739f1c73",
+        "size_bytes": 670,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/allocator-observation-task-private/counts.json"
+      },
+      "transcript": {
+        "schema": "application/octet-stream",
+        "sha256": "c8342952203cc1c397151aaac8927c8381133d923dfb098316e9bde2bba585cd",
+        "size_bytes": 4106,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/allocator-observation-task-private/transcript.log"
+      }
+    }
+  },
+  "arena": {
+    "alignment_bytes": 64,
+    "bytes": 150080
+  },
+  "cold_replay": {
+    "checked": [
+      "source_proof",
+      "placement_plan",
+      "rewritten_and_preserved_cpp_members",
+      "executable_and_host_dependency_digests",
+      "raw_pair_outputs_and_timing_summary",
+      "every_round_state_and_cpu_lane"
+    ],
+    "status": "PASSED",
+    "target_executions": 0
+  },
+  "compute_cpu_ids": [
+    18,
+    19,
+    20,
+    21
+  ],
+  "cpu_ids": [
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "cxx20_executable": {
+    "schema": "scar.native-project-member",
+    "sha256": "a636721f9a448aaab3c66c660ddf76dc7704f10a44a5dde0de537470af32a0dd",
+    "size_bytes": 412248,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-8/native/bin/scar_native_array_entry"
+  },
+  "cxx20_variant": {
+    "schema": "scar.native-cpu-task-arena-reuse",
+    "sha256": "d636fe88eda5617d5393eff9cfe97ab6cd4f3671932aaf6fa38a1eb8d1e5804a",
+    "size_bytes": 21982,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-8/native/result.json"
+  },
+  "deployment_authorized": false,
+  "native_only_clean_ab": {
+    "baseline_over_candidate": 0.9908383880659896,
+    "measured_pairs": 7,
+    "metrics": {
+      "lane_reuse": {
+        "max_ns": 145257747,
+        "median_ns": 143993438,
+        "median_ns_twice": 287986876,
+        "min_ns": 143526663,
+        "samples_ns": [
+          143938667,
+          143993438,
+          143571808,
+          145257747,
+          144590670,
+          144433341,
+          143526663
+        ]
+      },
+      "task_private": {
+        "max_ns": 144154242,
+        "median_ns": 142674226,
+        "median_ns_twice": 285348452,
+        "min_ns": 142170775,
+        "samples_ns": [
+          142523505,
+          142320928,
+          144105826,
+          144154242,
+          143154662,
+          142674226,
+          142170775
+        ]
+      }
+    },
+    "reasons": [
+      "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+      "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+    ],
+    "variance_ns2": {
+      "lane_reuse": 326253226345.6326,
+      "task_private": 579917873878.8163
+    },
+    "verdict": "KEEP_INCUMBENT",
+    "warmup_pairs": 1
+  },
+  "native_report_timing": {
+    "allocation_or_cache_causality_proven": false,
+    "by_arm": {
+      "lane_reuse": {
+        "execute_region_observed_median_ns": 138234184,
+        "launch_exit_minus_execute_observed_median_ns": 5908556,
+        "max_lane_compute_sum_observed_median_ns": 137703742
+      },
+      "task_private": {
+        "execute_region_observed_median_ns": 137322125,
+        "launch_exit_minus_execute_observed_median_ns": 5766098,
+        "max_lane_compute_sum_observed_median_ns": 136767952
+      }
+    },
+    "path_roles": {
+      "elapsed": [
+        "wall_seconds"
+      ],
+      "worker_wall": [
+        "results",
+        0,
+        "wall_seconds"
+      ]
+    },
+    "provenance": "CXX20_REPORT_CLOCKS_OF_THE_CLEAN_PAIRS"
+  },
+  "negative": {
+    "cxx20_candidates_generated": 0,
+    "plan": {
+      "schema": "scar.cpu-task-arena-plan",
+      "sha256": "1ce565b404d9ce305157cc83201de19756c2ff6aab00ce31403d45dd8fcd4d80",
+      "size_bytes": 1274,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-2/plan.json"
+    },
+    "reason": "NO_REPEATED_TASKS_ON_ANY_LANE",
+    "target_executions": 0,
+    "trial": {
+      "schema": "scar.cpu-task-arena-study",
+      "sha256": "9fcab08c2e6c634067bd6f1f2bd3dc7e45f2f4cb448857dda07d0900c0bd2572",
+      "size_bytes": 1078,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-2/result.json"
+    }
+  },
+  "original_python_clean_ab": {
+    "baseline_over_candidate": 31.249577501378702,
+    "measured_pairs": 3,
+    "metrics": {
+      "lane_reuse": {
+        "max_ns": 145105174,
+        "median_ns": 144809940,
+        "median_ns_twice": 289619880,
+        "min_ns": 143784113,
+        "samples_ns": [
+          143784113,
+          145105174,
+          144809940
+        ]
+      },
+      "original": {
+        "max_ns": 4618891193,
+        "median_ns": 4525249443,
+        "median_ns_twice": 9050498886,
+        "min_ns": 4428924656,
+        "samples_ns": [
+          4618891193,
+          4525249443,
+          4428924656
+        ]
+      }
+    },
+    "reasons": [],
+    "variance_ns2": {
+      "lane_reuse": 320520701600.6667,
+      "original": 6014947457047804.0
+    },
+    "verdict": "ADVANCE_TO_RELEASE_REVIEW",
+    "warmup_pairs": 1
+  },
+  "planning": {
+    "schema": "scar.cpu-task-arena-plan",
+    "sha256": "62ebd6c0fe75d025954262966f96631363aed5fe0f6d21c0c2cf55d49ecc6c9e",
+    "size_bytes": 3958,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-8/plan.json"
+  },
+  "profitability_of_arena_rewrite": "NOT_PROFITABLE_IN_THIS_SCOPE",
+  "removed_allocation_failure_equivalence_proven": false,
+  "schema": "scar.cpu-task-arena-reuse-acceptance",
+  "schema_version": 1,
+  "scope": {
+    "requested_workers": 4,
+    "round_count": 48,
+    "task_count": 8
+  },
+  "source_proof": {
+    "schema": "scar.cpu-task-arena-reuse",
+    "sha256": "5abb093ef9b5badbf6786e09e0fa10253b394b1d41a1c5ab190ef0e8f0a9d319",
+    "size_bytes": 12529,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-8/proof.json"
+  },
+  "state_diagnostics": {
+    "both_sets_exact": true,
+    "checkpoints": 384,
+    "copied_carry_payload_bytes_per_arm": 5996544,
+    "distinct_fixed_lanes": true,
+    "exact_bytes_per_arm": 12582912,
+    "loop_state_handoffs": {
+      "copies": 183,
+      "same_span_transfers": 193
+    }
+  },
+  "tracked_extra_lane_owner_bytes": 32,
+  "trial": {
+    "schema": "scar.cpu-task-arena-study",
+    "sha256": "7cec234b9f2483bffc062b4abe8b837bdbf733d6661863b18b15e2e708bf795b",
+    "size_bytes": 318432,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-scratch-arena-reuse-v1/cirq-8/result.json"
+  }
+}
