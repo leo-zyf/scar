@@ -1,0 +1,132 @@
+{
+  "cpu": {
+    "artifact": {
+      "schema": "scar.native-exported-nvhpc-cpu",
+      "sha256": "7e2b834d557945bf67d873d9b98a11b170c57c80d8b631ef9434a57ae7eccc57",
+      "size_bytes": 7146,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/native-direct/artifact.json"
+    },
+    "default_execution": "KEEP_ORIGINAL",
+    "empirical_cost_application": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "5418340618b76321681d68567755f89b10f70e44d18bc1b51fe61e6296bdc440",
+      "size_bytes": 12426,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/modeled-final/whole-entry-selection.json"
+    },
+    "entry_replay": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "39eaecfcca873f8f09c7788cd4262bf6ad08a370a897359aee1b7b4296ebbe49",
+      "size_bytes": 11349,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/compiled-direct/whole-entry-selection.json"
+    },
+    "forward_physical_costs_complete": false,
+    "fresh_process": {
+      "schema": "scar.nvhpc-source-process-observation",
+      "sha256": "0336f0164218052416acf28e3cabef42b4cf65d64e00d3f4c6827b63e8f6c2ee",
+      "size_bytes": 19573,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/process-direct/result.json"
+    },
+    "import_effects_closed": false,
+    "measured_pairs": 3,
+    "median_ratio": 35.1847112211041,
+    "metrics": {
+      "NATIVE": {
+        "max_ns": 61055830,
+        "median_ns": 57256175,
+        "median_ns_twice": 114512350,
+        "min_ns": 57180941,
+        "samples_ns": [
+          57180941,
+          61055830,
+          57256175
+        ]
+      },
+      "ORIGINAL": {
+        "max_ns": 2026270898,
+        "median_ns": 2014541983,
+        "median_ns_twice": 4029083966,
+        "min_ns": 1988329956,
+        "samples_ns": [
+          1988329956,
+          2014541983,
+          2026270898
+        ]
+      }
+    },
+    "observed_costs": {
+      "schema": "scar.whole-entry-observed-costs",
+      "sha256": "162f511ec13bc41c080f1bbd6f3fb6655bf3c3252664f676f0d5995d17eb2e31",
+      "size_bytes": 3194,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/compiled-direct/whole-entry-observed-costs.json"
+    },
+    "warmups": 1
+  },
+  "deployment_authorized": false,
+  "focused_checks_passed": 26,
+  "hybrid": [
+    {
+      "artifact": {
+        "schema": "scar.native-exported-aten-cuda",
+        "sha256": "9f1c250414a1c27813eb6e9c40dc6f8ea2b4d1b7d6b139aac969dad67c5acb6f",
+        "size_bytes": 10418,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid/artifact.json"
+      },
+      "cold_replay": {
+        "schema": "scar.native-project-validation",
+        "sha256": "dc211e7e7247a882b5971cf9433c0e1fd39c17dbed10dec23efda76e3db7bf1d",
+        "size_bytes": 5385,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid-replay.json"
+      },
+      "device_preflight": {
+        "schema": "scar.nvidia-hybrid-preflight",
+        "sha256": "020b57e626ba85a23855d56066f50721bedceced939414f7f743ef8fbffd783c",
+        "size_bytes": 1127,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid-preflight.json"
+      },
+      "direction": "CPU_TO_GPU",
+      "gpu_samples": 0,
+      "host_provider_calls": 1,
+      "physical_activities": 9
+    },
+    {
+      "artifact": {
+        "schema": "scar.native-exported-aten-cuda",
+        "sha256": "44bd73db34f1dd6cd723fbacabafc564f201c7dd3097f0533f56f14887c1d22e",
+        "size_bytes": 10418,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid-device-first/artifact.json"
+      },
+      "cold_replay": {
+        "schema": "scar.native-project-validation",
+        "sha256": "2a19eb5a447644de9e0bbad08ce0943e2e8aacbd37f2e12c3567bba9374b109e",
+        "size_bytes": 5385,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid-device-first-replay.json"
+      },
+      "device_preflight": {
+        "schema": "scar.nvidia-hybrid-preflight",
+        "sha256": "020b57e626ba85a23855d56066f50721bedceced939414f7f743ef8fbffd783c",
+        "size_bytes": 1127,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/hybrid-device-first-preflight.json"
+      },
+      "direction": "GPU_TO_CPU",
+      "gpu_samples": 0,
+      "host_provider_calls": 2,
+      "physical_activities": 7
+    }
+  ],
+  "schema": "scar.nvidia-entry-closure-acceptance",
+  "schema_version": 1,
+  "source": {
+    "contract": {
+      "schema": "scar.nvhpc-source-matrix-file-entry",
+      "sha256": "f1f23ca0f40a5c9e6a587d54b081ce42337f6447ced64da0d37152218d90aa24",
+      "size_bytes": 12616,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/native-direct/plan/source-entry.json"
+    },
+    "obligations": {
+      "schema": "scar.f4-entry-obligations",
+      "sha256": "0379b600b3aaa8e6e2b66500bbada4c36d484be4154a1e60830ff358d26e5406",
+      "size_bytes": 1277954,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/nvidia-entry-closure-v1/planned-direct/entry-obligations.json"
+    }
+  }
+}

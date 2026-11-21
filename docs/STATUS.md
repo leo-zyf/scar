@@ -1,12 +1,18 @@
 # 当前状态
 
+## 原入口回读和同栈混合排程
+
+直接从原 Python FP32 文件入口生成了包含 4 个输入、3 次 GEMM 和 2 个有序文件发布的图。F4 建图、CPU C++20 编译和整入口冷读均通过。同一核组各预热 1 次、交替测量 3 对。768×768 样例的整进程中位数为 **2,014.54 → 57.26 ms（35.18×）**。所有对照都满足声明容差、退出状态及输出流合同。样本涵盖从启动到退出，原导入初始化效果和独立的前向阶段成本仍开放，当前选择为 `KEEP_ORIGINAL`。
+
+同一个 NVIDIA SDK 的 CBLAS 和 cuBLAS 已用于 CPU→GPU 和 GPU→CPU 两种离线 C++20 调度。回读检查实际链接、唯一目的地物化和必要的就绪等待。本机预检返回 `DEVICE_UNAVAILABLE`，两条路线仍需真实设备上的输出和时间验收。 [验收记录](../artifacts/baseline/nvidia-entry-closure-acceptance.json)
+
 ## NVIDIA 单库栈验收
 
 - **建图。** 整入口接入 NVIDIA HPC SDK 26.3 的文件锁，与原硬件快照一起回读。CPU BLAS、CUDA 13.1 Runtime 和 cuBLAS 均已安装。本机驱动初始化返回 `CUDA_ERROR_NO_DEVICE`，可见设备为 0。
 - **化简。** 固定库栈、同形状及同核组的 SGEMM 探针进入正文排程。三次 768×768 FP32 GEMM 的单核正文预测为约 **33.65 ms**。进程启动、输入输出和库工作区等整入口成本仍待建模。CUDA 可回读数据上传、显存中的算子依赖及结果回传，离线时长来自声明模型。
 - **交付。** NVHPC CPU C++20 工件通过了小图逐位验证。768×768 图在位级合同下被拒绝，显式容差版本通过，最大绝对差 `1.86e-8`。锁定的纯 CUDA C++20 工件完成冷验，设备预检跳过实际运行。基于 LibTorch 的旧 CPU/GPU 混合方案在 NVIDIA 单库栈下被拒绝。两个新目标路径保留原入口作为默认。
 
-下一步把更多源入口的效果证明接到直接 NVIDIA 后端，再闭合整进程成本和真正的同栈 CPU/GPU 混合排程。物理 GPU 验收需要可见设备。 [验收记录](../artifacts/baseline/nvidia-stack-acceptance.json)
+此轮验收建立了 SDK 文件身份和纯 CPU、纯 CUDA 路径的兼容基线。 [验收记录](../artifacts/baseline/nvidia-stack-acceptance.json)
 
 ## 整入口三阶段主链
 

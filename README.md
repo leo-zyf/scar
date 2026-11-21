@@ -186,7 +186,11 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 `scar operator-stack --nvhpc-root SDK --out STACK.json` 固定一个 SDK 版本、C++ 编译器、CPU BLAS 和同版本 CUDA 组件。`scar probe-nvidia-target --target HARDWARE` 单独检查当前驱动看到的设备。已安装的 CUDA 库与实际可用设备是两项证据。
 
-`scar compile-exported-nvhpc compile` 从纯 FP32 `aten.mm` 功能图生成独立 C++20 CPU 文件入口。`probe-cpu-sgemm --target HARDWARE` 的结果可以通过 `--sgemm-observation OBSERVATIONS/result.json` 接入同形状、同核组的正文排程。`validate` 默认做逐位对照。只有调用方声明 `--atol` 和 `--rtol` 的项目才按该误差合同验收。`scar compile-exported-aten-cuda --operator-stack STACK.json` 使用同一 SDK 构建纯 CUDA 项目并回读已选时序和链接。固定的 NVIDIA 路径排除会引入 LibTorch 数值运算的混合方案。
+`scar compile-exported-nvhpc compile` 从纯 FP32 `aten.mm` 功能图生成独立 C++20 CPU 文件入口。`probe-cpu-sgemm --target HARDWARE` 的结果可以通过 `--sgemm-observation OBSERVATIONS/result.json` 接入同形状、同核组的正文排程。`validate` 默认做逐位对照。只有调用方声明 `--atol` 和 `--rtol` 的项目才按该误差合同验收。
+
+`--source-entry ENTRY.py` 可以直接从受支持的 Python FP32 文件入口生成矩阵图。此时省略 `--model`，参数名由输入顺序确定为 `input_0`、`input_1` 等。也可同时提供已导出的模型，交叉核对参数、矩阵数据流和发布顺序。随后的 `validate-source` 在同一核组以同一输入和发布路径交替运行两个进程，保留正确性和启动至退出的观测。`NVHPC_SOURCE_ENTRY` 路由可将这些记录接入 `plan-build` 和 `compile-build`。`whole-entry-observed-costs.json` 保存整程样本区间。原导入初始化效果未闭合时保留原入口。
+
+`scar compile-exported-aten-cuda --operator-stack STACK.json` 使用同一 SDK 构建纯 CUDA 项目。`scar.aten-export-nvhpc-hybrid-offline-profile` 还支持 CPU CBLAS 和 GPU cuBLAS 共同执行的 FP32 GEMM 图。冷读同时核对形状、放置、显存和固定主存预算、事件依赖、CPU 核组及实际 ELF 链接。合成离线时长与设备预检结果分别保存。
 
 查看第一阶段的图：`scar view-graph --build PROGRAM --out GRAPH_VIEW`，随后打开 `GRAPH_VIEW/index.html`。支持拖动、缩放、双击展开/收起、关系筛选、原记录查看和本地布局保存；程序图与原硬件库存分别浏览，离线使用，不修改 IR。默认有导出范围限制，可用 `--depth`、`--max-parts`、`--max-nodes` 调整，未导出的边界会保留标记。已有任务图也可用 `--schedule SCHEDULE.json` 查看。
 
