@@ -208,6 +208,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar admit-cpu-import-sources --frontier COMPILED/whole-entry-import-frontier.json --out SOURCES` 把已定位的源码文件送入形式前端，生成补充的 F4 初始化子图。`compile-build --cpu-import-sources SOURCES/result.json` 绑定同一原入口观测，并用选型账本记录已建好的初始化图以及仍需核对的实际调用和效果。用 `--check SOURCES/result.json` 可冷回读源码和图。
 
+`scar observe-cpu-import-initializers --admission SOURCES/result.json --out ACTIVATIONS` 在同一启动范围内采集已准入模块体的进入与退出。`compile-build --cpu-initializer-observation ACTIVATIONS/result.json` 将代码结构核验、直接或传递触发的初始化，以及同一进程后续的缓存命中接到选型账本。导入合法性仍依赖各项效果义务。
+
 `scar export-cpu-catalog-runtime --selection SELECTION.json --out PACKAGE` 把已核验的 CPU 目录候选封装为同主机可迁移的 C++20 包，包含 CMake 源码、原 ELF、数值库及适用的限额守卫。`--check PACKAGE/artifact.json --manifest-sha256 SHA256` 在迁移后重查文件、宿主依赖和启动范围。验证运行将输出定向到外部新目录。原入口仍由整入口决策控制。
 
 `scar study-cpu-task-arena --acceptance TASK_ACCEPTANCE.json --out STUDY` 从已验收的 C++20 OpenMP 任务入口证明每个任务的工作区读写与生命周期，判断是否有同线程重复分配，并为适用范围生成独立 C++20 候选。报告包含任务逐轮字节对照、原生与原 Python 两组配对测量。使用 `--check STUDY/result.json` 可回读原证明、工程和样本。
