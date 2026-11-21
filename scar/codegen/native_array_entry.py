@@ -196,13 +196,13 @@ def _render(recipe, *, seeded_option=None, round_option=None):
     return sources
 
 
-def _project(root, profiles, library, *, extra_sources=(), archives=()):
+def _project(root, profiles, library, *, extra_sources=(), archives=(), compile_options=(), link_options=()):
     source_files = [f'src/profile_{i}.cpp' for i in range(profiles)]
     write_native_project(root, _TARGET, sources=(
         'src/main.cpp', 'src/numpy_vector_normalize.cpp', 'src/numpy_observables.cpp',
         stock.SOURCE, *source_files, *extra_sources),
-        compile_options=('-fno-fast-math', '-ffp-contract=off', '-DSCAR_ARRAY_TAPE_NORMALIZE'),
-        link_options=('-Wl,--disable-new-dtags,-rpath,$ORIGIN/../provider/objects',),
+        compile_options=('-fno-fast-math', '-ffp-contract=off', '-DSCAR_ARRAY_TAPE_NORMALIZE', *compile_options),
+        link_options=('-Wl,--disable-new-dtags,-rpath,$ORIGIN/../provider/objects', *link_options),
         libraries=('-l:' + library, 'm'), install_dirs=(('licenses', '.'), ('provider', '.')))
     with (root / 'CMakeLists.txt').open('a', encoding='utf-8') as output:
         output.write(f'target_link_directories({_TARGET} PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/provider/objects")\n')
@@ -213,12 +213,15 @@ def _project(root, profiles, library, *, extra_sources=(), archives=()):
 
 
 def _build(out, members, *, profiles, library, libraries, stock_provider, normal_provider, report,
-           extra_sources=(), archives=(), random_provider=None):
+           extra_sources=(), archives=(), random_provider=None, compile_options=(), link_options=(),
+           runtime_dependencies=None, compiler_reference=None):
     from scar.codegen.native_numpy_vector_normalize import _audit_divide
 
     compiler = shutil.which('g++')
     root = Path(out).absolute()
     _need(compiler and not root.exists() and not root.is_symlink(), 'C++20 compiler and fresh package required')
+    if compiler_reference is not None:
+        _need(_ref(compiler, compiler_reference['schema']) == compiler_reference, 'compiler differs from cost evidence')
     root.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-array-entry-', dir=root.parent) as temp:
         release = Path(temp) / 'release'
@@ -230,11 +233,16 @@ def _build(out, members, *, profiles, library, libraries, stock_provider, normal
         bundle.mkdir(parents=True)
         for name, file in libraries.items():
             shutil.copyfile(file, bundle / name)
-        _project(release, profiles, library, extra_sources=extra_sources, archives=archives)
-        executable, _ = build_native_project(release, _TARGET, (compiler,),
-            expected_libraries=tuple(bundle / name for name in libraries))
+        _project(release, profiles, library, extra_sources=extra_sources, archives=archives,
+                 compile_options=compile_options, link_options=link_options)
+        executable, dependencies = build_native_project(release, _TARGET, (compiler,),
+                                                        expected_libraries=tuple(bundle / name for name in libraries))
         linkage = dict(dynamic=cpu_executable_dynamic(executable), stock=stock.audit(executable, stock_provider),
                        normalization=_audit_divide(executable, normal_provider))
+        if runtime_dependencies:
+            _need(all(name in dependencies and _ref(dependencies[name], reference['schema']) == reference
+                      for name, reference in runtime_dependencies.items()), 'runtime library differs from cost evidence')
+            linkage['qualified_runtime_dependencies'] = runtime_dependencies
         if random_provider is not None:
             from scar.codegen.native_numpy_random import _audit
 

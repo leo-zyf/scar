@@ -15,6 +15,12 @@ SCHEMA = 'scar.native-array-task-entry-calibration'
 _ENTRY = 'scar.native-seeded-array-task-entry'
 _ORIGINAL = 'scar.array-entry-task-family-holdout'
 _STATES = 'scar.array-entry-task-state-oracle'
+_LANES = 'scar.native-array-openmp-lanes'
+_TIMING_SCOPE = 'FRESH_EXEC_THROUGH_EXIT_INCLUDES_ORDERED_STDOUT_AND_FILE_PUBLICATION'
+_OPENMP = 'ORDERED_OPENMP'
+_SERIAL = 'IN_PROCESS_SERIAL'
+_PROCESSES = 'ORDERED_LOCAL_PROCESSES'
+_CONTROL_LABELS = {_OPENMP: 'openmp', _SERIAL: 'serial', _PROCESSES: 'processes'}
 _OUTPUT_FIELDS = {'results', 'pid_list', 'ordinal', 'effective_seed', 'worker_round_count'}
 _INPUT_OPTIONS = {'task_count', 'worker_limit', 'seed', 'round_count'}
 
@@ -24,22 +30,49 @@ def _need(condition, detail):
         raise ValueError('array task entry calibration: ' + detail)
 
 
-def _load(path):
+def _load(path, *, checked_source=None):
     from scar.codegen.native_seeded_array_entry import LOOP_SCHEMA
     from scar.compiler.calibrate_seeded_array_entry import _load as load_seeded
-    from scar.optimization.independent_array_task_schedule import check as check_schedule
+    from scar.optimization import independent_array_task_schedule as process_schedule
 
     reference = _ref(path, _ENTRY)
     package = read_artifact(reference)
-    serial, native, recipe = load_seeded(package['native']['uri'])
-    schedule = check_schedule(package['schedule']['uri'])
-    selected = schedule['decision']['selected']
+    plan_ref = package['schedule']
+    if checked_source is not None:
+        parent, native, recipe = checked_source
+        serial = parent['native']
+        _need(package['native'] == serial and plan_ref == parent['schedule'],
+              'validation control changed the independently checked source or schedule')
+        schedule = read_artifact(plan_ref)
+    else:
+        serial, native, recipe = load_seeded(package['native']['uri'])
+        if plan_ref['schema'] == process_schedule.SCHEMA:
+            schedule = process_schedule.check(plan_ref['uri'])
+        else:
+            from scar.optimization import independent_array_task_team_schedule as team_schedule
+
+            _need(plan_ref['schema'] == team_schedule.SCHEMA, 'unrecognized task schedule')
+            schedule = team_schedule.check(plan_ref['uri'])
+    selected = package['decision']
+    control = package.get('execution_control')
+    if package.get('serial_control'):
+        _need(control in (None, _SERIAL), 'serial control conflicts with execution mode')
+        control = _SERIAL
+    if control is None:
+        _need(checked_source is None and selected == schedule['decision']['selected'],
+              'compiled mode differs from selected schedule')
+    else:
+        _need(checked_source is not None and control == selected['mode'] and selected in schedule['alternatives']
+              and not selected['capacity_reasons'] and selected['cost'] is not None,
+              'execution control differs from feasible priced schedule alternative')
     _need(serial == package['native'] and native['recipe'] == package['recipe']
           and native['schema'] == LOOP_SCHEMA
           and package['numerical_body_reused'] == native['files']['src/profile_0.cpp']
-          and read_artifact(package['schedule']) == schedule
+          and all(package['files'][name]['sha256'] == native['files'][name]['sha256']
+                  for name in ('src/profile_0.cpp', 'src/tape_0.inc'))
+          and read_artifact(plan_ref) == schedule
           and schedule['native'] == serial and schedule['family'] == package['family']
-          and schedule['scope'] == package['scope'] and selected is not None and selected == package['decision']
+          and schedule['scope'] == package['scope']
           and package['python_runtime_required'] is False and package['no_worker_visible_output'] is True
           and package['deployment_authorized'] is False and package['original_default_retained'] is True
           and selected['launch_cpu_ids'] == package['cpu_ids'],
@@ -55,8 +88,17 @@ def _load(path):
     pids, = (field['path'] for field in recipe['report_bindings'] if field['role'] == 'pid_list')
     _need(self_pid[:2] == [fields['results'], 0] and pids == [fields['pid_list']]
           and selected['worker_count'] <= package['scope']['task_count']
-          and selected['mode'] in ('IN_PROCESS_SERIAL', 'ORDERED_LOCAL_PROCESSES'),
+          and selected['mode'] in _CONTROL_LABELS
+          and package.get('thread_contract') == (schedule['thread_contract'] if selected['mode'] == _OPENMP else None),
           'source process reporting or selected task ownership differs')
+    override = package.get('launch_environment', {})
+    _need(override == ({'OMP_STACKSIZE': '8M'} if selected['mode'] == _OPENMP else {})
+          and (selected['mode'] != _OPENMP or 'GOMP_STACKSIZE' not in recipe['environment']),
+          'native launch environment differs from the bounded OpenMP stack contract')
+    if selected['mode'] == _OPENMP:
+        libgomp = package['linkage']['qualified_runtime_dependencies']['libgomp.so.1']
+        _need(libgomp == schedule['openmp_runtime'], 'OpenMP runtime differs from the modeled dispatcher')
+        read_artifact(libgomp, json_document=False)
     for artifact in package['files'].values():
         read_artifact(artifact, json_document=False)
     return reference, package, recipe, native, source['report']['parameters']['field'], self_pid[-1]
@@ -90,8 +132,10 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
     prior_fixed = {key: value for key, value in prior['source_parameters'].items() if key not in options.values()}
     worker_count = case['executed_worker_process_count']
     source_seeds = {row['parameters'][options['seed']] for row in recipe['profiles']}
-    evidence = read_artifact(read_artifact(package['schedule'])['evidence'])
-    related_seeds = source_seeds | set(evidence['seeds'])
+    schedule = read_artifact(package['schedule'])
+    related_seeds = source_seeds | set(read_artifact(schedule['evidence'])['seeds'])
+    thread_ref = schedule.get('thread_evidence')
+    team_seeds = read_artifact(thread_ref)['seeds'] if thread_ref else ()
     seed = parameters[options['seed']]
     domain = prior['seed_range']
     count = parameters[options['task_count']]
@@ -108,7 +152,8 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
                                        round_count=parameters[options['round_count']])
           and 1 < worker_count <= min(count, requested)
           and type(seed) is int and domain['minimum'] <= seed <= domain['maximum'] - (count - 1)
-          and all(seed + ordinal not in related_seeds for ordinal in range(count)),
+          and all(not seed <= related < seed + count for related in related_seeds)
+          and all(not (seed < base + count and base < seed + count) for base in team_seeds),
           'holdout crosses the original process, task scope or seed boundary')
     original = read_artifact(case['stdout'], json_document=False)
     tasks, _ = _report(original, package, parameters_field, pid_field, parameters, (worker_count,))
@@ -131,21 +176,26 @@ def _commands(package, recipe):
                 native=[*launcher, package['files'][package['binary']]['uri']])
 
 
-def _validate_runs(runs, package, recipe, case, expected, parameters_field, pid_field):
+def _validate_runs(runs, package, recipe, case, expected, parameters_field, pid_field, *, native_label='native'):
     commands = _commands(package, recipe)
+    commands[native_label] = commands.pop('native')
+    selected = package['decision']
+    native_process_count = selected['worker_count'] if selected['mode'] == _PROCESSES else 1
     checked, pids = [], []
     for run in runs:
         mode = run['mode']
+        override = package.get('launch_environment', {}) if mode == native_label else {}
         _need(mode in commands and run['command'] == commands[mode] and run['argv'] == case['argv'],
               'paired process command or original arguments differ')
+        _need(run.get('launch_environment', {}) == override, 'runtime override differs from published package')
         checked.append(_replay(run, recipe, expected))
         # In a fresh original run, the process pool may leave a late process idle.
-        workers = ((package['decision']['worker_count'],) if mode == 'native' else
+        workers = ((native_process_count,) if mode == native_label else
                    range(1, package['scope']['requested_workers'] + 1))
         tasks, active = _report(read_artifact(run['stdout'], json_document=False), package,
                                 parameters_field, pid_field, case['parameters'], workers)
-        if mode == 'native':
-            width = package['decision']['worker_count']
+        if mode == native_label and selected['mode'] == _PROCESSES:
+            width = native_process_count
             lanes = [row[pid_field] for row in tasks[:width]]
             _need(len(set(lanes)) == width and all(row[pid_field] == lanes[index % width]
                                                   for index, row in enumerate(tasks)),
@@ -193,47 +243,165 @@ def _equal_states(oracle_rows, checkpoints):
               f'complete state bytes differ for task {ordinal} round {index}')
 
 
-def calibrate(package_path, holdout_path, out, *, state_oracle=None, warmups=1, repetitions=3):
+def _lane_assignments(reference, package, active_processes):
+    detail = read_artifact(reference)
+    selected = package['decision']
+    width, cpus = selected['worker_count'], selected['worker_cpu_ids']
+    tasks = detail['tasks']
+    _need(selected['mode'] == _OPENMP and type(detail['schema_version']) is int and detail['schema_version'] == 1
+          and type(detail['team_size']) is int and detail['team_size'] == width
+          and 1 < len(cpus) == width and len(set(cpus)) == width
+          and cpus[0] == selected['owner_cpu_id'] and len(active_processes) == 1
+          and len(tasks) == package['scope']['task_count'] >= width,
+          'OpenMP workers disagree with the selected core map')
+    tids = []
+    for ordinal, row in enumerate(tasks):
+        lane = ordinal % width
+        _need(all(type(row[key]) is int for key in ('ordinal', 'lane', 'cpu', 'tid'))
+              and row['ordinal'] == ordinal and row['lane'] == lane and row['cpu'] == cpus[lane]
+              and row['tid'] > 0, f'OpenMP task {ordinal} did not use its planned core and logical lane')
+        if ordinal < width:
+            tids.append(row['tid'])
+        else:
+            _need(row['tid'] == tids[lane], 'OpenMP lane changed Linux thread during the task team')
+    _need(len(set(tids)) == width and tids[0] == active_processes[0],
+          'OpenMP task lanes did not run on distinct threads of the owning process')
+    return dict(linux_tids=tids, cpu_ids=cpus, observed_tasks=len(tasks))
+
+
+def _diagnostics(package, recipe, case, expected, params, pid, out, label, state_ref, original_states):
+    if original_states is None and package['decision']['mode'] != _OPENMP:
+        return {}
+    directory = out / ('state-diagnostic' if original_states is not None else 'lane-diagnostic')
+    override = package.get('launch_environment', {})
+    environment = dict(recipe['environment'], **override)
+    lane_report = directory / 'openmp-lanes.json'
+    if original_states is not None:
+        environment['SCAR_ARRAY_ENTRY_STATES'] = str(directory / 'state')
+    if package['decision']['mode'] == _OPENMP:
+        environment['SCAR_ARRAY_ENTRY_LANE_REPORT'] = str(lane_report)
+    run = _run(_commands(package, recipe)['native'], case['argv'], environment, directory, 0, label)
+    if override:
+        run['launch_environment'] = override
+    _, observations = _validate_runs([run], package, recipe, case, expected, params, pid, native_label=label)
+    diagnostics = {}
+    if original_states is not None:
+        checkpoints = [_ref(directory / f'state.{ordinal}.{index}.bin', 'scar.ndarray-native-checkpoint')
+                       for ordinal, index, _ in original_states]
+        _equal_states(original_states, checkpoints)
+        diagnostics['state_diagnostic'] = dict(oracle=state_ref, run=run, checkpoints=checkpoints,
+            complete_state_count=len(checkpoints), exact_bytes=sum(row['size_bytes'] for row in checkpoints))
+    if package['decision']['mode'] == _OPENMP:
+        ref = _ref(lane_report, _LANES)
+        assignments = _lane_assignments(ref, package, observations[0]['active_worker_pids'])
+        diagnostics['lane_diagnostic'] = dict(run=run, sidecar=ref, assignments=assignments)
+    return diagnostics
+
+
+def _load_control(path, package, recipe, prior):
+    reference, alternate, _, _, _, _ = _load(path, checked_source=(package, prior, recipe))
+    _need(all(alternate[key] == package[key] for key in (
+              'native', 'family', 'schedule', 'scope', 'recipe', 'cpu_ids', 'input_options', 'output_fields',
+              'numerical_body_reused'))
+          and alternate['decision']['mode'] != package['decision']['mode'],
+          'validation control must share the numerical body and change execution mode only')
+    return _CONTROL_LABELS[alternate['decision']['mode']], reference, alternate
+
+
+def _pair(checked, incumbent, challenger, warmups, repetitions):
+    return compare_entry_pairs(checked, incumbent=incumbent, challenger=challenger,
+                               warmup_pairs=warmups, measurement_pairs=repetitions)
+
+
+def calibrate(package_path, holdout_path, out, *, state_oracle=None, control_paths=(), warmups=1, repetitions=3):
     _need(type(warmups) is int and warmups >= 1 and type(repetitions) is int and repetitions >= 3,
           'at least one warmup pair and three clean pairs required')
     reference, package, recipe, prior, params, pid = _load(package_path)
     heldout = _ref(holdout_path, _ORIGINAL)
     case, expected = _holdout(heldout, package, recipe, prior, params, pid)
     commands = _commands(package, recipe)
+    overrides = {'original': {}, 'native': package.get('launch_environment', {})}
+    controls = {}
+    for path in control_paths:
+        label, control_ref, alternate = _load_control(path, package, recipe, prior)
+        _need(label not in controls, 'duplicate alternate mode')
+        controls[label] = (control_ref, alternate)
+        commands[label] = _commands(alternate, recipe)['native']
+        overrides[label] = alternate.get('launch_environment', {})
+    clean_env = recipe['environment']
+    _need(not {'SCAR_ARRAY_ENTRY_STATES', 'SCAR_ARRAY_ENTRY_LANE_REPORT'} & clean_env.keys(),
+          'diagnostic output requested in the clean execution environment')
     state_reference = _ref(state_oracle, _STATES) if state_oracle is not None else None
     original_states = _state_oracle(state_reference, heldout, case, package, recipe) if state_reference else None
     out = Path(out).resolve()
     out.mkdir(parents=True)
-    runs = []
+    native_runs, control_runs = [], {label: [] for label in controls}
     for pair in range(warmups + repetitions):
-        order = ('original', 'native') if pair % 2 == 0 else ('native', 'original')
+        modes = tuple(commands)
+        order = modes if pair % 2 == 0 else reversed(modes)
         for mode in order:
-            runs.append(_run(commands[mode], case['argv'], recipe['environment'],
-                             out / f'{pair}-{mode}', pair, mode))
-    checked, pids = _validate_runs(runs, package, recipe, case, expected, params, pid)
-    pairing = compare_entry_pairs(checked, incumbent='original', challenger='native',
-                                  warmup_pairs=warmups, measurement_pairs=repetitions)
+            rows = control_runs.get(mode, native_runs)
+            override = overrides[mode]
+            run = _run(commands[mode], case['argv'], dict(clean_env, **override), out / f'{pair}-{mode}', pair, mode)
+            if override:
+                run['launch_environment'] = override
+            rows.append(run)
+    checked, pids = _validate_runs(native_runs, package, recipe, case, expected, params, pid)
+    pairing = _pair(checked, 'original', 'native', warmups, repetitions)
     report = dict(schema=SCHEMA, schema_version=1, entry=reference, holdout=heldout,
                   schedule=package['schedule'], selected=package['decision'], cpu_ids=package['cpu_ids'],
-                  clean_pairs=runs, verified_processes=pids, parameters=case['parameters'], pairing=pairing,
+                  clean_pairs=native_runs, verified_processes=pids, parameters=case['parameters'], pairing=pairing,
                   population_variance_ns2={name: pvariance(row['samples_ns'])
                                            for name, row in pairing['metrics'].items()},
                   normalized_only=recipe['runtime_fields'],
-                  timing_scope='FRESH_EXEC_THROUGH_EXIT_INCLUDES_ORDERED_STDOUT_AND_FILE_PUBLICATION',
+                  timing_scope=_TIMING_SCOPE,
                   instrumentation_in_timing=False, compiled_from_holdout=False, deployment_authorized=False)
-    if original_states is not None:
-        directory = out / 'state-diagnostic'
-        prefix = directory / 'state'
-        observed = _run(commands['native'], case['argv'], dict(recipe['environment'], SCAR_ARRAY_ENTRY_STATES=str(prefix)),
-                        directory, 0, 'native')
-        _validate_runs([observed], package, recipe, case, expected, params, pid)
-        checkpoints = [_ref(directory / f'state.{ordinal}.{index}.bin', 'scar.ndarray-native-checkpoint')
-                       for ordinal, index, _ in original_states]
-        _equal_states(original_states, checkpoints)
-        report['state_diagnostic'] = dict(oracle=state_reference, run=observed, checkpoints=checkpoints,
-            complete_state_count=len(checkpoints), exact_bytes=sum(row['size_bytes'] for row in checkpoints))
+    report.update(_diagnostics(package, recipe, case, expected, params, pid, out, 'native',
+                               state_reference, original_states))
+    if controls:
+        report['validation_controls'] = {}
+    for label, (control_ref, alternate) in controls.items():
+        observed, identities = _validate_runs(control_runs[label], alternate, recipe, case, expected,
+                                              params, pid, native_label=label)
+        compared = [row for row in checked if row['mode'] == 'native'] + observed
+        comparison = _pair(compared, 'native', label, warmups, repetitions)
+        row = dict(entry=control_ref, selected=alternate['decision'], clean_pairs=control_runs[label],
+                   verified_processes=identities, pairing=comparison,
+                   selected_vs_control=_pair(compared, label, 'native', warmups, repetitions),
+                   deployment_authorized=False)
+        if state_reference is not None or alternate['decision']['mode'] == _OPENMP:
+            directory = out / f'{label}-diagnostics'
+            directory.mkdir()
+            row.update(_diagnostics(alternate, recipe, case, expected, params, pid, directory, label,
+                                    state_reference, original_states))
+        report['validation_controls'][label] = row
     _write(out / 'result.json', report)
     return report
+
+
+def _check_diagnostics(report, holdout, package, recipe, case, expected, params, pid, label):
+    lane = report.get('lane_diagnostic')
+    _need(bool(lane) == (package['decision']['mode'] == _OPENMP),
+          'OpenMP launch requires a retained thread placement diagnostic')
+    clean_outputs = {row['stdout']['uri'] for row in report['clean_pairs']}
+    if lane:
+        run = lane['run']
+        _need(run['stdout']['uri'] not in clean_outputs
+              and Path(lane['sidecar']['uri']) == Path(run['stdout']['uri']).with_name('openmp-lanes.json'),
+              'thread placement evidence must come from a separate diagnostic invocation')
+        _, observations = _validate_runs([run], package, recipe, case, expected, params, pid, native_label=label)
+        _need(lane['assignments'] == _lane_assignments(lane['sidecar'], package, observations[0]['active_worker_pids']),
+              'retained thread placement replay disagrees with recorded lanes')
+    if diagnostic := report.get('state_diagnostic'):
+        _need(diagnostic['run']['stdout']['uri'] not in clean_outputs and (not lane or diagnostic['run'] == lane['run']),
+              'diagnostic states must share the separate lane observation when present')
+        original_states = _state_oracle(diagnostic['oracle'], holdout, case, package, recipe)
+        checkpoints = diagnostic['checkpoints']
+        _validate_runs([diagnostic['run']], package, recipe, case, expected, params, pid, native_label=label)
+        _equal_states(original_states, checkpoints)
+        _need(len(checkpoints) == diagnostic['complete_state_count']
+              and diagnostic['exact_bytes'] == sum(row['size_bytes'] for row in checkpoints),
+              'diagnostic state accounting differs')
 
 
 def check(path):
@@ -242,24 +410,32 @@ def check(path):
     case, expected = _holdout(stored['holdout'], package, recipe, prior, params, pid)
     checked, processes = _validate_runs(stored['clean_pairs'], package, recipe, case, expected, params, pid)
     previous = stored['pairing']
-    pairing = compare_entry_pairs(checked, incumbent='original', challenger='native',
-                                  warmup_pairs=previous['warmup_pairs'], measurement_pairs=previous['measurement_pairs'])
+    warmups, repetitions = previous['warmup_pairs'], previous['measurement_pairs']
+    pairing = _pair(checked, 'original', 'native', warmups, repetitions)
     _need(stored['entry'] == reference and stored['schedule'] == package['schedule']
           and stored['selected'] == package['decision'] and stored['cpu_ids'] == package['cpu_ids']
           and stored['parameters'] == case['parameters'] and stored['normalized_only'] == recipe['runtime_fields']
           and stored['verified_processes'] == processes and stored['pairing'] == pairing
+          and stored['timing_scope'] == _TIMING_SCOPE and stored['instrumentation_in_timing'] is False
+          and stored['compiled_from_holdout'] is False and warmups >= 1
           and stored['deployment_authorized'] is False
           and stored['population_variance_ns2'] == {name: pvariance(row['samples_ns'])
                                                   for name, row in pairing['metrics'].items()},
           'stored scheduling, output or timing facts differ on cold replay')
-    if diagnostic := stored.get('state_diagnostic'):
-        original_states = _state_oracle(diagnostic['oracle'], stored['holdout'], case, package, recipe)
-        checkpoints = diagnostic['checkpoints']
-        _validate_runs([diagnostic['run']], package, recipe, case, expected, params, pid)
-        _equal_states(original_states, checkpoints)
-        _need(len(checkpoints) == diagnostic['complete_state_count']
-              and diagnostic['exact_bytes'] == sum(row['size_bytes'] for row in checkpoints),
-              'diagnostic state accounting differs')
+    _check_diagnostics(stored, stored['holdout'], package, recipe, case, expected, params, pid, 'native')
+    for label, row in stored.get('validation_controls', {}).items():
+        actual_label, entry, alternate = _load_control(row['entry']['uri'], package, recipe, prior)
+        alternate_runs, identities = _validate_runs(row['clean_pairs'], alternate, recipe, case, expected,
+                                                    params, pid, native_label=label)
+        compared = [item for item in checked if item['mode'] == 'native'] + alternate_runs
+        comparison = _pair(compared, 'native', label, warmups, repetitions)
+        _need(actual_label == label and entry == row['entry'] and alternate['decision'] == row['selected']
+              and identities == row['verified_processes'] and comparison == row['pairing']
+              and row['deployment_authorized'] is False, 'validation control replay differs')
+        if 'selected_vs_control' in row:
+            _need(row['selected_vs_control'] == _pair(compared, label, 'native', warmups, repetitions),
+                  'selected backend did not reproduce its control comparison')
+        _check_diagnostics(row, stored['holdout'], alternate, recipe, case, expected, params, pid, label)
     return stored
 
 
@@ -270,15 +446,21 @@ def main(argv=None):
     entry.add_argument('--check')
     parser.add_argument('--holdout')
     parser.add_argument('--state-oracle')
+    parser.add_argument('--control', action='append', default=[],
+                        help='calibrate another feasible compiled mode from the same schedule')
     parser.add_argument('--out')
     args = parser.parse_args(argv)
-    if args.check and not any((args.holdout, args.state_oracle, args.out)):
+    if args.check and not any((args.holdout, args.state_oracle, args.out, args.control)):
         result = check(args.check)
     elif args.package and args.holdout and args.out:
-        result = calibrate(args.package, args.holdout, args.out, state_oracle=args.state_oracle)
+        result = calibrate(args.package, args.holdout, args.out, state_oracle=args.state_oracle,
+                           control_paths=args.control)
     else:
         parser.error('use --check RESULT or --package FILE --holdout FILE --out DIRECTORY')
-    print(json.dumps(dict(selected=result['selected'], metrics=result['pairing']['metrics']), sort_keys=True))
+    output = dict(selected=result['selected'], metrics=result['pairing']['metrics'])
+    if controls := result.get('validation_controls'):
+        output['validation_controls'] = {key: row['pairing']['metrics'][key] for key, row in controls.items()}
+    print(json.dumps(output, sort_keys=True))
 
 
 if __name__ == '__main__':

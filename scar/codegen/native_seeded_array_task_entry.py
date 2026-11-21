@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 
 from scar.codegen import native_array_entry as entry, native_array_tape, native_seeded_array_entry as seeded
 from scar.codegen import native_controller_argv as argv_backend
@@ -12,8 +13,11 @@ from scar.ir.execution_recipe import read_artifact
 SCHEMA = 'scar.native-seeded-array-task-entry'
 _TEMPLATE = Path(__file__).with_suffix('.cpp.in')
 _DISPATCH = Path(__file__).with_name('native_ordered_dispatch_v1.h.in')
+_OPENMP = Path(__file__).with_name('native_ordered_openmp_v1.h.in')
 _MODE_SERIAL = 'IN_PROCESS_SERIAL'
 _MODE_PROCESSES = 'ORDERED_LOCAL_PROCESSES'
+_MODE_OPENMP = 'ORDERED_OPENMP'
+_MODES = (_MODE_SERIAL, _MODE_PROCESSES, _MODE_OPENMP)
 
 
 def _need(condition, reason):
@@ -67,26 +71,52 @@ def _cpu_plan(choice, scope):
     cpus, workers, owner = (choice[key] for key in ('launch_cpu_ids', 'worker_cpu_ids', 'owner_cpu_id'))
     _need(cpus and len(set(cpus)) == len(cpus) and owner in cpus
           and all(type(cpu) is int and 0 <= cpu < 1024 for cpu in cpus)
-          and len(set(workers)) == len(workers) and set(workers) <= set(cpus) - {owner},
+          and len(set(workers)) == len(workers) and set(workers) <= set(cpus),
           'invalid owner/worker CPU placement')
-    _need(mode == _MODE_SERIAL and choice['worker_count'] == 1 and not workers and choice['window'] == 0
-          or mode == _MODE_PROCESSES and 1 < choice['worker_count'] == len(workers)
-             <= min(scope['task_count'], scope['requested_workers']) and 0 < choice['window'] <= len(workers)
-             and choice['window'] == len(workers), 'process placement does not meet the fixed service shape')
+    parallel_shape = (1 < choice['worker_count'] == len(workers) <= min(scope['task_count'], scope['requested_workers']))
+    _need((mode == _MODE_SERIAL and choice['worker_count'] == 1 and not workers and choice['window'] == 0)
+          or (mode == _MODE_PROCESSES and parallel_shape and owner not in workers and choice['window'] == len(workers))
+          or (mode == _MODE_OPENMP and parallel_shape and workers[0] == owner and choice['window'] == len(workers)),
+          'CPU placement does not meet the fixed service shape')
     mem = choice['memory']
     _need(mem['request_bytes'] == 16 and mem['result_bytes'] == 56
           and mem['retained_result_payload_bytes'] == 56 * scope['task_count']
           and 0 < mem['coordinator_address_space_limit_bytes'] < 2**63
-          and 0 < mem['worker_address_space_limit_bytes'] < 2**63
-          and 0 <= mem['payload_budget_bytes'] < 2**63
-          and mem['payload_budget_bytes'] >= choice['window'] * 72, 'invalid wire or address-space budget')
+          and 0 <= mem['worker_address_space_limit_bytes'] < 2**63
+          and 0 <= mem['payload_budget_bytes'] < 2**63, 'invalid wire or address-space budget')
+    if mode == _MODE_OPENMP:
+        _need(mem['payload_budget_bytes'] == 0 and mem['thread_stack_bytes'] == 8 << 20
+              and mem['retained_status_bytes'] == 4 * scope['task_count']
+              and mem['required_headroom_bytes'] == mem['coordinator_address_space_limit_bytes'],
+              'OpenMP requires the qualified shared address space and private thread stacks')
+    elif mode == _MODE_PROCESSES:
+        _need(mem['worker_address_space_limit_bytes'] > 0 and mem['payload_budget_bytes'] >= choice['window'] * 72,
+              'process plan cannot bound the worker or transport memory')
     return dict(LAUNCH_CPUS=', '.join(map(str, cpus)), WORKER_CPUS=', '.join(map(str, workers)), WIDTH=len(workers),
         OWNER_CPU=owner, COORDINATOR_LIMIT=mem['coordinator_address_space_limit_bytes'],
         USE_PROCESS_TEAM=str(mode == _MODE_PROCESSES).lower(), WINDOW=choice['window'],
         CHILD_LIMIT=mem['worker_address_space_limit_bytes'], TRANSPORT_BUDGET=mem['payload_budget_bytes'])
 
 
-def _render(recipe, prior, family, choice, scope):
+def _openmp_values(contract):
+    # The tokens only appear in the preprocessor's OpenMP branch.
+    inactive = dict.fromkeys(('BLAS_PARALLEL_SYMBOL', 'BLAS_THREADS_SYMBOL', 'BLAS_CORE_SYMBOL',
+                              'BLAS_PARALLEL_VALUE', 'BLAS_THREADS_VALUE', 'BLAS_CORE_VALUE'), '0')
+    if contract is None:
+        return inactive
+    guards = contract['runtime_guards']
+    return dict(BLAS_CORE_VALUE=argv_backend._quote(guards['core_value']),
+                **{f'BLAS_{kind.upper()}_SYMBOL': _provider_symbol(guards[f'{kind}_symbol'])
+                   for kind in ('parallel', 'threads', 'core')},
+                **{f'BLAS_{kind.upper()}_VALUE': int(guards[f'{kind}_value']) for kind in ('parallel', 'threads')})
+
+
+def _provider_symbol(symbol):
+    _need(type(symbol) is str and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', symbol), 'invalid provider symbol')
+    return symbol
+
+
+def _render(recipe, prior, family, choice, scope, thread_contract=None):
     profile, worker_report, outer_report = _reports(recipe, prior, family)
     options = family['input_options']
     _need(len(set(options.values())) == 4 and options['seed'] == prior['seed_option']
@@ -112,35 +142,58 @@ def _render(recipe, prior, family, choice, scope):
     upper = prior['seed_range']['maximum'] - (task_count - 1)
     ingress = '\n'.join([entry._uint_ingress(indices[options['seed']], 'seed', f'result.seed > {upper}ULL'),
                         *(f'        result.{key} = {value}ULL;' for key, value in fields.items())])
-    values = dict(_cpu_plan(choice, scope), STATIC_SCOPE=' &&\n             '.join(guards), INGRESS=ingress,
+    values = dict(_cpu_plan(choice, scope), **_openmp_values(thread_contract),
+                  STATIC_SCOPE=' &&\n             '.join(guards), INGRESS=ingress,
                   DEFAULT_TOLERANCE=profile['default_tolerance'].hex(),
                   TOLERANCE_INDEX=indices[recipe['tolerance_option']], OUTPUT_INDEX=indices[recipe['output_option']],
                   WORKER_REPORT=worker_report, OUTER_REPORT=outer_report)
     members.update({'include/scar_generated/array_entry_argv.hpp': argv, entry._IO_MEMBER: entry._IO.read_bytes(),
         'include/scar_generated/native_ordered_dispatch.hpp': _DISPATCH.read_bytes(),
         'src/main.cpp': entry._substitute(_TEMPLATE.read_text(), values).encode()})
+    if thread_contract is not None:
+        members['include/scar_generated/native_ordered_openmp.hpp'] = _OPENMP.read_bytes()
     return profile, members
 
 
-def export(schedule_path, out, *, serial_control=False):
-    from scar.analysis import native_array_entry_recipe, seeded_array_task_family
-    from scar.codegen import native_numpy_random, native_numpy_random_coefficients
-    from scar.optimization import independent_array_task_schedule as scheduler
+def _schedule(path):
+    from scar.optimization import independent_array_task_schedule, independent_array_task_team_schedule
 
-    ref = entry._ref(schedule_path, scheduler.SCHEMA)
-    plan = scheduler.check(ref['uri'])
+    schema = json.loads(Path(path).read_bytes())['schema']
+    for planner in (independent_array_task_schedule, independent_array_task_team_schedule):
+        if schema == planner.SCHEMA:
+            ref = entry._ref(path, schema)
+            return ref, planner.check(ref['uri'])
+    raise ValueError('native array task entry: unsupported schedule schema')
+
+
+def export(schedule_path, out, *, serial_control=False, execution_control=None, worker_count=None):
+    from scar.analysis import native_array_entry_recipe
+    from scar.codegen import native_numpy_random, native_numpy_random_coefficients
+    ref, plan = _schedule(schedule_path)
     selected = plan['decision']['selected']
     _need(selected is not None, 'task cost evidence has no qualified choice')
-    if serial_control:
-        selected, = (row for row in plan['alternatives'] if row['mode'] == _MODE_SERIAL)
-        _need(not selected['capacity_reasons'], 'serial control has no feasible capacity')
-    family = seeded_array_task_family.check(plan['family']['uri'])
+    _need(not (serial_control and execution_control is not None) and (worker_count is None or execution_control in _MODES),
+          'one explicit control alternative required')
+    control_mode = _MODE_SERIAL if serial_control else execution_control
+    if control_mode is not None:
+        alternatives = [row for row in plan['alternatives'] if row['mode'] == control_mode
+                        and (worker_count is None or row['worker_count'] == worker_count)
+                        and not row['capacity_reasons'] and row.get('cost') is not None]
+        _need(len(alternatives) == 1, 'control alternative requires one feasible priced width')
+        selected, = alternatives
+    # Both schedule verifiers replay source legality before returning these references.
+    family = read_artifact(plan['family'])
     prior = read_artifact(plan['native'])
     recipe = native_array_entry_recipe.check(prior['recipe']['uri'])
     _need(prior['schema'] == seeded.LOOP_SCHEMA and family['loop'] == prior['loop']
           and family['source_contract'] == recipe['source_contract']
           and recipe == read_artifact(prior['recipe']), 'task plan does not close over the bound array loop')
-    profile, members = _render(recipe, prior, family, selected, plan['scope'])
+    thread_ref = None
+    thread_contract = None
+    if selected['mode'] == _MODE_OPENMP:
+        thread_ref = plan['thread_contract']
+        thread_contract = read_artifact(thread_ref)
+    profile, members = _render(recipe, prior, family, selected, plan['scope'], thread_contract)
     _, libraries, library, normal_provider = native_array_tape._normalize(recipe['normalize'])
     stock = read_artifact(profile['package'])['stock_provider']
     random = read_artifact(read_artifact(prior['binding'])['random'])['provider']
@@ -149,11 +202,18 @@ def export(schedule_path, out, *, serial_control=False):
                   output_fields=family['output_fields'], input_options=family['input_options'],
                   original_default_retained=True, automatic_deployment=False,
                   numerical_body_reused=prior['files']['src/profile_0.cpp'], no_worker_visible_output=True,
-                  explicit_checkpoint_diagnostics=True, serial_control=serial_control)
+                  explicit_checkpoint_diagnostics=True, serial_control=serial_control,
+                  execution_control=control_mode, thread_contract=thread_ref,
+                  launch_environment={'OMP_STACKSIZE': '8M'} if thread_ref is not None else {})
+    openmp_options = dict(compile_options=('-fopenmp', '-DSCAR_ARRAY_TASK_OPENMP'),
+                         link_options=('-fopenmp',),
+                         runtime_dependencies={'libgomp.so.1': plan['openmp_runtime']}) if thread_ref is not None else {}
+    if 'thread_evidence' in plan:
+        openmp_options['compiler_reference'] = read_artifact(plan['thread_evidence'])['compiler_binary']
     return entry._build(out, members, profiles=1, library=library, libraries=libraries, stock_provider=stock,
                         normal_provider=normal_provider, report=result, random_provider=random,
                         extra_sources=(native_numpy_random.SOURCE, native_numpy_random_coefficients.SOURCE),
-                        archives=(native_numpy_random.ARCHIVE,))
+                        archives=(native_numpy_random.ARCHIVE,), **openmp_options)
 
 
 def main(argv=None):
@@ -161,8 +221,11 @@ def main(argv=None):
     parser.add_argument('--schedule', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--serial-control', action='store_true', help='publish the feasible serial alternative for A/B')
+    parser.add_argument('--execution-control', choices=_MODES, help='publish one feasible execution alternative for A/B')
+    parser.add_argument('--worker-count', type=int, help='width of the explicit execution alternative')
     args = parser.parse_args(argv)
-    result = export(args.schedule, args.out, serial_control=args.serial_control)
+    result = export(args.schedule, args.out, serial_control=args.serial_control,
+                    execution_control=args.execution_control, worker_count=args.worker_count)
     print(json.dumps(dict(mode=result['decision']['mode'], workers=result['decision']['worker_count'],
                           binary=result['files'][result['binary']]['uri'])))
 

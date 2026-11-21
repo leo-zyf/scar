@@ -1,5 +1,9 @@
 # 当前状态
 
+`project-native-array-thread-safety → plan-independent-array-task-team → export-native-array-task-entry` 在同一任务图上比较串行、本机进程和 OpenMP。线程准入复验数值库的具体调用路径、任务私有工作区和浮点环境。成本模型先用独立样本估计核上并发服务时间和调度成本，再提名候选。OpenMP 主线程参与计算，新建线程各按 8 MiB 栈预算，整进程受地址空间上限约束。 [OpenMP 栈规约](https://www.openmp.org/spec-html/6.0/openmpsu19.html)
+
+真实 CPU Cirq 的三组提名分别为 2、4、4 个 OpenMP 线程，均通过原输出和实际核绑定验收。2 电路的两线程与两进程为 **28.582 / 32.213 ms**，分别通过同一批 26 份完整轮末状态的逐字节对照，两线程通过 5% 切换门槛。8 电路的串行、四进程、四线程为 **544.094 / 148.109 / 143.889 ms**，四线程比四进程快 2.85%，该配置保留进程结论。4 电路只做了原入口对照。三组各预热 1 轮、测量 3 轮，原入口仍是默认。MPI 需要先建模 rank 放置、通信和数据归属，再进入同一成本与交付接口。 [验收记录](../artifacts/baseline/cpu-openmp-task-team-acceptance.json)
+
 `project-seeded-array-task-family → plan-independent-array-tasks → export-native-array-task-entry` 已接通外层独立任务。前端从原参数、任务序号、局部状态和有序发布推导任务族。排程结合独立测得的数值与进程通信成本、同 NUMA 节点上的核及地址空间上限，分别提名 2、4、4 个本机进程。每次进程间调用的请求正文 16 B、结果正文 56 B，状态数组留在每个进程的私有工作区。
 
 真实 CPU Cirq 的 2、4、8 电路三组用原输出和实际进程分配复验。前一组另核对 26 份完整轮末状态，逐字节一致。各组预热 1 对、测量 3 对，原 Python 与并行 C++20 的整入口中位数为 **2.519 s → 30.668 ms、2.889 s → 44.431 ms、4.521 s → 146.734 ms**。8 电路用同一数值正文比较串行与 4 进程 C++，预热 1 对、测量 5 对，中位数 **547.647 → 145.236 ms（3.77×）**。当前资格限于这三组负载规模和指定核组，默认保留原入口。模型尚未独立刻画并发数值争用。下一关是在同一任务图上联合比较共享内存线程和进程。见 [验收记录](../artifacts/baseline/cpu-independent-array-task-acceptance.json)。

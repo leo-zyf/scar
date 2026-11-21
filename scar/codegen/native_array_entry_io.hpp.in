@@ -26,10 +26,10 @@ inline void line(std::ostream& out, bool pretty, std::size_t level) {
     if (pretty) out << '\n' << std::string(level * 2, ' ');
 }
 
-inline double process_seconds() {
+inline double process_seconds(clockid_t clock = CLOCK_PROCESS_CPUTIME_ID) {
     struct timespec result{};
-    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &result) != 0)
-        throw std::runtime_error("process clock unavailable");
+    if (clock_gettime(clock, &result) != 0)
+        throw std::runtime_error("CPU clock unavailable");
     return static_cast<double>(result.tv_sec) + static_cast<double>(result.tv_nsec) * 1e-9;
 }
 
