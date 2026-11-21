@@ -233,6 +233,11 @@ def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3, _ad
     spec = _spec(reference, captured, cpu)
     if _admit_invocation is not None:
         _admit_invocation(spec)
+    return _measure_checked(reference, captured, cpu, spec, out, warmups=warmups, pairs=pairs)
+
+
+def _measure_checked(reference, captured, cpu, spec, out, *, warmups=1, pairs=3):
+    """Run an invocation already cold-admitted by this command."""
     _need(set(spec['cpu_ids']) <= os.sched_getaffinity(0), 'qualified CPU mask is unavailable')
     root = Path(out).resolve()
     root.mkdir()

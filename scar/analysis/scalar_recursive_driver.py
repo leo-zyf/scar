@@ -11,6 +11,7 @@ from scar.analysis import scalar_loop_score_provenance as loop
 from scar.analysis import scalar_recursive_region as recursive
 from scar.analysis import scalar_score_reuse_evidence as source
 from scar.analysis import scalar_table_handoff as tables
+from scar.analysis.replay_transaction import detached_replay
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
 from scar.analysis.source_call_handoff import _body
 from scar.ir.execution_recipe import read_artifact
@@ -352,13 +353,18 @@ def _replay(sessions, plan):
 
 
 def check(path):
-    result = read_artifact(tables._ref(path,SCHEMA))
-    capture = result['capture']
-    if capture is not None:
-        read_artifact(capture)
-    _require(result==project(result['recursive_region']['uri'],None if capture is None else capture['uri']),
-             'stored driver differs from independent original source replay')
-    return result
+    reference = tables._ref(path, SCHEMA)
+
+    def replay():
+        result = read_artifact(reference)
+        capture = result['capture']
+        if capture is not None:
+            read_artifact(capture)
+        _require(result == project(result['recursive_region']['uri'], None if capture is None else capture['uri']),
+                 'stored driver differs from independent original source replay')
+        return result
+
+    return detached_replay(SCHEMA, tuple(sorted(reference.items())), replay)
 
 
 def main():

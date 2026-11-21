@@ -188,11 +188,12 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         catalog_reader_reused_for_region_discovery=True,
         source_ast_fallback_used=False,target_program_executed=False,
         target_variants_compiled=False,whole_program_compiled=False,
-        first_stage_complete=False,seconds=time.monotonic()-started)
+        first_stage_complete=False)
     if entry_request is not None:
         from scar.compiler.whole_entry_pipeline import prepare_whole_entry
         report['entry_obligations']=entry_obligations
         report['whole_entry']=prepare_whole_entry(report,entry_request,out)
+    report['seconds']=time.monotonic()-started
     (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     return report
 

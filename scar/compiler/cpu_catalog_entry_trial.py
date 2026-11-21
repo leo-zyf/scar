@@ -1,9 +1,12 @@
 """Emit a catalog-selected CPU entry and retain its provider-scoped trial."""
 
+from contextlib import nullcontext
 import json
+import os
 from pathlib import Path
 from subprocess import SubprocessError
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler import compile_cpu_entry, cpu_entry_replay
 from scar.compiler.entry_delivery import HANDOFF, _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
@@ -199,36 +202,37 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
     if acquisition and not verify_entry:
         return dict(result, final_action='CANDIDATE_VALIDATION_REQUIRED',
                     reason='this CPU provider requires an explicit entry trial for its fresh acquisition')
+    if verify_entry and not set(plan['context']['cpu_ids']) <= os.sched_getaffinity(0):
+        return dict(result, final_action='KEEP_ORIGINAL', reason='qualified CPU mask is unavailable')
     out = Path(out).resolve()
+    replay_scope = replay_transaction() if capture is not None else nullcontext()
+    phase = 'emission'
     try:
-        compilation = compile_cpu_entry.compile_cpu_entry((), plan['entry']['uri'], plan['argv'], out/'native-entry',
-                                                          catalog=plan['catalog']['uri'])
-        record = _compilation(compilation, plan)
-    except _ERRORS as error:
-        return dict(result, final_action='KEEP_ORIGINAL', target_executed=None if acquisition else False,
-                    reason='CPU catalog emission failed: ' + str(error))
-    material = read_artifact(record['compilation'])
-    reused = material.get('runtime_reused') is True
-    result.update(native_compiled=not reused, target_executed=acquisition, native=dict(compilation=compilation,
-        artifact=record['compilation'], reused=reused))
-
-    def admit(spec):
-        context = _provider_scope(spec, plan, scope)
+        with replay_scope:
+            compilation = compile_cpu_entry.compile_cpu_entry((), plan['entry']['uri'], plan['argv'], out/'native-entry',
+                                                              catalog=plan['catalog']['uri'])
+            record = _compilation(compilation, plan)
+            material = read_artifact(record['compilation'])
+            reused = material.get('runtime_reused') is True
+            result.update(native_compiled=not reused, target_executed=acquisition, native=dict(compilation=compilation,
+                artifact=record['compilation'], reused=reused))
+            phase = 'admission'
+            spec = cpu_entry_replay._spec(compilation, capture, cpu)
+            context = _provider_scope(spec, plan, scope)
         result['native']['executable'] = context['candidate']['executable']
         result['qualification'] = dict(status='QUALIFIED_PROVIDER_BOUNDARY', scope=context)
+    except _ERRORS as error:
+        if acquisition and 'native' not in result:
+            result['target_executed'] = None
+        return dict(result, final_action='KEEP_ORIGINAL', reason=f'CPU catalog {phase} failed: {error}')
 
     if not verify_entry:
-        try:
-            admit(cpu_entry_replay._spec(compilation, capture, cpu))
-        except _ERRORS as error:
-            return dict(result, final_action='KEEP_ORIGINAL', reason='CPU catalog admission failed: ' + str(error))
         return dict(result, final_action='CANDIDATE_VALIDATION_REQUIRED',
                     reason='CPU catalog receipt replayed; provider trial required')
 
     validation = out/'native-validation'
     try:
-        observed = cpu_entry_replay.measure(compilation['uri'], validation,
-            capture=None if capture is None else capture['uri'], cpu=cpu, _admit_invocation=admit)
+        observed = cpu_entry_replay._measure_checked(compilation, capture, cpu, spec, validation)
         reference = artifact_reference(validation/'result.json', cpu_entry_replay.SCHEMA)
         if read_artifact(reference) != observed or observed['compilation'] != compilation:
             raise ValueError('fresh provider observation differs from its admitted compilation or saved receipt')

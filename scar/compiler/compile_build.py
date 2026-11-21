@@ -27,6 +27,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     domains=Path(domains).resolve();out=Path(out).resolve()
     if domains.is_dir():domains=domains/'result.json'
     if out.exists():raise ValueError('fresh compile-build output required')
+    started=time.monotonic()
     parent=artifact_reference(domains,'scar.program-optimization-domains');document=read_artifact(parent)
     version=document.get('schema_version')
     if version not in (1,2):raise ValueError('supported program planning domain required')
@@ -50,7 +51,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
         if plan_only and verify_entry:
             raise ValueError('process validation requires native emission')
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
-        started=time.monotonic();out.mkdir(parents=True)
+        out.mkdir(parents=True)
         whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
@@ -74,7 +75,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if set(stateful_interval_plans)-identifiers:raise ValueError('interval plans must name retained original regions')
     if set(stateful_interval_plans)&set(no_op_profiles):
         raise ValueError('one region cannot consume both an interval plan and scalar NO_OP profiles')
-    started=time.monotonic();out.mkdir(parents=True);rows=[]
+    out.mkdir(parents=True);rows=[]
     for index,original in enumerate(document['regions']):
         directory=out/('region-'+str(index));directory.mkdir()
         row=dict(region_id=original['region_id'],selected_for_use=False,validation='NOT_EXECUTED')
