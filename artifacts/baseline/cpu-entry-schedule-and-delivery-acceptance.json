@@ -1,0 +1,177 @@
+{
+  "cirq": {
+    "compiler_result": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "e8280397b083c2339ce099fbb18b040964f01270acedbd37f40324079ce996e0",
+      "size_bytes": 1867,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/result.json"
+    },
+    "delivery": {
+      "capacity_bytes": 268435456,
+      "compile_replay_seconds": 145.63689524296205,
+      "decision": "KEEP_ORIGINAL",
+      "executable": {
+        "schema": "scar.native-project-member",
+        "sha256": "d5061f9b65b9b9f0bdce512b78145a6f6b968022062da03e07a07ae67dd80803",
+        "size_bytes": 412024,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-2/selected/bin/scar_native_array_entry"
+      },
+      "guard_reexecuted": false,
+      "native_compilations": 0,
+      "native_reused": true,
+      "previous_capacity": {
+        "schema": "scar.cpu-entry-capacity-contract",
+        "sha256": "db4e0e95fd59b255b94f22c651a01c5aa44260880c3624105fe58eebde62abf7",
+        "size_bytes": 4807,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-guarded-capacity/whole-entry-cpu-capacity-contract.json"
+      },
+      "provider_pair": {
+        "schema": "scar.cpu-entry-paired-replay",
+        "sha256": "cb37100aa4e216f6137b25c2f27880dd0ddc27ed9378f9b7e6a4bc2bb5a24a47",
+        "size_bytes": 35550,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/result.json"
+      },
+      "reviewed_capacity": {
+        "schema": "scar.cpu-entry-capacity-contract",
+        "sha256": "23c25c19ba6a85f3b1a2552e29411abc9e371791bc65c036e71587c78484a871",
+        "size_bytes": 4800,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/whole-entry-cpu-capacity-contract.json"
+      },
+      "target_executions": 0
+    },
+    "open_import_requests": 11,
+    "schedule": {
+      "forward_cost": {
+        "schema": "scar.cpu-entry-forward-cost",
+        "sha256": "ed8e0367a6e43a328c6e29d71e684a62fff5eb46b2bdf1e61559a1e571631fd1",
+        "size_bytes": 13940,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/whole-entry-cpu-forward-cost.json"
+      },
+      "lane_work_model": {
+        "conditional_elapsed_ns": {
+          "estimate_ns": 23445155,
+          "lower_ns": 22436895,
+          "upper_ns": 23827913
+        },
+        "cost_basis": "MATCHED_PROBE_SERVICE_PER_FIXED_LANE",
+        "critical_path_ns": {
+          "estimate_ns": 23200908,
+          "lower_ns": 22221608,
+          "upper_ns": 23570588
+        },
+        "per_lane": [
+          {
+            "cpu_id": 18,
+            "modeled_service_ns": {
+              "estimate_ns": 23200908,
+              "lower_ns": 22221608,
+              "upper_ns": 23570588
+            },
+            "task_count": 1
+          },
+          {
+            "cpu_id": 19,
+            "modeled_service_ns": {
+              "estimate_ns": 21682367,
+              "lower_ns": 21314954,
+              "upper_ns": 22421717
+            },
+            "task_count": 1
+          }
+        ],
+        "physical_duration_bound": false
+      },
+      "reference": {
+        "schema": "scar.cpu-entry-schedule-constraints",
+        "sha256": "cc5141cb0fd3793c49556284ebe15ee205b99c1b26c2b2977b9430d36c8d3287",
+        "size_bytes": 7130,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/whole-entry-cpu-schedule-constraints.json"
+      },
+      "slots": [
+        {
+          "cpu_id": 18,
+          "first_ordinal": 0,
+          "lane_index": 0,
+          "stride": 2,
+          "target_core": "target_resource:cpu-core/1/1/4",
+          "target_thread": "target_resource:cpu-thread/18",
+          "task_count": 1
+        },
+        {
+          "cpu_id": 19,
+          "first_ordinal": 1,
+          "lane_index": 1,
+          "stride": 2,
+          "target_core": "target_resource:cpu-core/1/1/5",
+          "target_thread": "target_resource:cpu-thread/19",
+          "task_count": 1
+        }
+      ],
+      "whole_entry_model_bound_ns": {
+        "lower": null,
+        "upper": null
+      }
+    },
+    "selection": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "f64183a0fd3e3324bc0d6bb4fd20eb1dc97e7d05069cf90bf4034c66884c0d19",
+      "size_bytes": 58096,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/whole-entry-selection.json"
+    },
+    "source_initializers": {
+      "schema": "scar.f4-cpu-entry-import-initializers",
+      "sha256": "a51114f5e5d4dd6a974c34efc7c3da4ef512ba8e49b81cec97435e6570e84e5c",
+      "size_bytes": 3074,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/cirq/whole-entry-import-initializers.json"
+    }
+  },
+  "schema": "scar.cpu-entry-schedule-and-delivery-acceptance",
+  "schema_version": 1,
+  "sunfish": {
+    "compile_replay_seconds": 169.90840519801714,
+    "compiler_result": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "76fefd3d9036e3775dee676641418476c35811f3c240dbd00ed0f2d2aaa44d8e",
+      "size_bytes": 1903,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/sunfish/result.json"
+    },
+    "decision": "KEEP_ORIGINAL",
+    "graph_edge_counts": {
+      "CONTAINS_ORIGINAL_CALL_SITE": 10,
+      "CONTAINS_ORIGINAL_IMPORT_REQUEST": 7,
+      "MAY_SELECT_SOURCE_INITIALIZER": 2
+    },
+    "import_requests": 12,
+    "initializers": [
+      {
+        "body": "#/bodies/2",
+        "deferred_bodies": 0,
+        "exact_literals": 3,
+        "nested_imports": 0,
+        "operations": 13,
+        "source_calls": 0
+      },
+      {
+        "body": "#/bodies/3",
+        "deferred_bodies": 15,
+        "exact_literals": 60,
+        "nested_imports": 7,
+        "operations": 562,
+        "source_calls": 10
+      }
+    ],
+    "selection": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "b1968982eefad50739d7598e10469640c6fae9bd2169f3cd852856d00f579adc",
+      "size_bytes": 10026,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/sunfish/whole-entry-selection.json"
+    },
+    "source_initializers": {
+      "schema": "scar.f4-cpu-entry-import-initializers",
+      "sha256": "dbc083c2863f3d8f67295251044c673b5032da34f0109f0dbfd216a5df656bc7",
+      "size_bytes": 76092,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-schedule-and-delivery-v1/sunfish/whole-entry-import-initializers.json"
+    },
+    "target_executions": 0
+  }
+}
