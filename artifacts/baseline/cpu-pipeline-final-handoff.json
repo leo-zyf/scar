@@ -1,0 +1,212 @@
+{
+  "acceptance_driver": {
+    "bytes": 4115,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/accept-final.py",
+    "sha256": "6af3518486c8957530b2a4ea5587e1cbec7ad4f1052c59ac70d9b60027cd2663"
+  },
+  "declaration_scope": "VALIDATION_POLICY_NOT_AUTOMATIC_INFERENCE_OF_ALL_EFFECTS",
+  "disjoint_sample_ranges_required": true,
+  "environment": {
+    "LANG": "C.UTF-8",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "exact_cases": [
+    {
+      "actual_modes": [
+        {
+          "deployment_authorized": false,
+          "mode": "no-op",
+          "native_calls": 0,
+          "report": {
+            "bytes": 2379,
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-16/actual-no-op.json",
+            "sha256": "29e777c9fd1b929caa0aa4947d3494085aa97799f3754ea818420b4dd53990c7"
+          },
+          "selected": false
+        }
+      ],
+      "capsule": {
+        "bytes": 8630,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-16/capsule/payload.json",
+        "sha256": "723e8d5771bc27ef4c87a08d8a4a19e6f502314017c089c36d31d06a32b1b0e9"
+      },
+      "decision": "NO_OP",
+      "decision_slot": {
+        "bytes": 4096,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-16/capsule/decision.slot",
+        "sha256": "294beb39a11e76af690d8803037a08b150d6892b07bfc49d4b795d4d6aae4953"
+      },
+      "grid": 513,
+      "offline_export": {
+        "bytes": 1469,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-16/capsule/decision-export.json",
+        "sha256": "ab03735c743be5233b413c7be3a4d93185ee2b1aaf0f706639fa38fb2b45ca09"
+      },
+      "original_publication_effects_fully_closed": false,
+      "performance": {
+        "baseline": {
+          "max_ns": 204024289,
+          "median_ns": 194914273,
+          "min_ns": 193300467,
+          "samples_ns": [
+            194914273,
+            204024289,
+            193300467
+          ],
+          "stdev_ns": 5782114.94774441
+        },
+        "gain_fraction": -0.17213568038703864,
+        "optimized": {
+          "max_ns": 237099386,
+          "median_ns": 228465974,
+          "min_ns": 228293999,
+          "samples_ns": [
+            228293999,
+            237099386,
+            228465974
+          ],
+          "stdev_ns": 5034881.964557163
+        },
+        "sampled_ranges_separated": false,
+        "speedup": 0.8531435538843084
+      },
+      "source_graph": {
+        "bytes": 95368,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frontend/publication-source-frozen-16.json",
+        "sha256": "1b92ef6e6791c6adb9da07aa5c5c9ce61b43300bc46f2c5ea860e290cacc7ddc"
+      },
+      "steps": 16,
+      "validation": {
+        "bytes": 35382,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-16/validation/result.json",
+        "sha256": "e838ddfa0a5a19122bb7511e28c9ee3c8c7f351833b28b96ce8e94225d34edb2"
+      }
+    },
+    {
+      "actual_modes": [
+        {
+          "deployment_authorized": false,
+          "mode": "default",
+          "native_calls": 0,
+          "report": {
+            "bytes": 2379,
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/actual-default.json",
+            "sha256": "79cef1d7f464efd1c484dd1cae2456019507adf5212abf24ef4ba0fc9a0f0c23"
+          },
+          "selected": false
+        },
+        {
+          "deployment_authorized": true,
+          "mode": "release",
+          "native_calls": 64,
+          "report": {
+            "bytes": 2475,
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/actual-release.json",
+            "sha256": "2294ab92351b653ecfaef2c2e805d66102b2c38c3e35e16370a5836018fa0126"
+          },
+          "selected": true
+        },
+        {
+          "deployment_authorized": false,
+          "mode": "changed-argv",
+          "native_calls": 0,
+          "report": {
+            "bytes": 2390,
+            "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/actual-changed-argv.json",
+            "sha256": "2a2cb1f9590b163b8a5dd0cf73dc8d7ae8b89d7876308737ddd9c3d41da96010"
+          },
+          "selected": false
+        }
+      ],
+      "capsule": {
+        "bytes": 8630,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/capsule/payload.json",
+        "sha256": "09c8567b337fd3f6b0386b0631793050a9313df48cc303d604c77a09bcfc96ef"
+      },
+      "decision": "RELEASE",
+      "decision_slot": {
+        "bytes": 4096,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/capsule/decision.slot",
+        "sha256": "bfbe1dfd4e9edbad6d868bda2a34eed26f510f9485f5e21963f0f8fb374d51df"
+      },
+      "grid": 513,
+      "offline_export": {
+        "bytes": 1470,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/capsule/decision-export.json",
+        "sha256": "c655c2ac26150918dfaec1993ab244a3754aa5cf8624ec7e240371c82cbbeee7"
+      },
+      "original_publication_effects_fully_closed": false,
+      "performance": {
+        "baseline": {
+          "max_ns": 285929789,
+          "median_ns": 285633576,
+          "min_ns": 282982757,
+          "samples_ns": [
+            285633576,
+            285929789,
+            282982757
+          ],
+          "stdev_ns": 1622733.3484563425
+        },
+        "gain_fraction": 0.12477700100635225,
+        "optimized": {
+          "max_ns": 260928976,
+          "median_ns": 249993075,
+          "min_ns": 247577629,
+          "samples_ns": [
+            260928976,
+            247577629,
+            249993075
+          ],
+          "stdev_ns": 7114384.217615347
+        },
+        "sampled_ranges_separated": true,
+        "speedup": 1.1425659530769001
+      },
+      "source_graph": {
+        "bytes": 95467,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frontend/publication-source-frozen-64.json",
+        "sha256": "98e8326b197642a24c85693658b17ce193341eb688b9743624f0e90665c7af27"
+      },
+      "steps": 64,
+      "validation": {
+        "bytes": 35360,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/frozen-64/validation/result.json",
+        "sha256": "5caac18d951c6aac88185c743f23c2dcb29528aa6758254fcebd2936267912c4"
+      }
+    }
+  ],
+  "file_validation": {
+    "final.npy": "EXACT_BYTES",
+    "seconds.txt": "FINITE_NONNEGATIVE_SECONDS"
+  },
+  "first_launch_fallback": {
+    "bytes": 2393,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/final-64/actual-release.json",
+    "sha256": "acc11acde03ae225b7ed0bde2a858ceeff7b5d5cce9b2cfa736df09ab2d8d679"
+  },
+  "first_launch_fallback_reason": "INHERITED_ENVIRONMENT_DIGEST_DIFFERS",
+  "focused_tests_passed": 6,
+  "minimum_gain": 0.05,
+  "provider_checks": {
+    "bytes": 277,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-final-handoff-v1/provider-qualification.json",
+    "sha256": "5adf580952651902367294edece8002d75045b42f815e91469da67ea55091b58"
+  },
+  "schema": "scar.cpu-pipeline-final-handoff-acceptance",
+  "schema_version": 1,
+  "scope": {
+    "arbitrary_external_effects_closed": false,
+    "lewm_or_gpu_run_performed": false,
+    "python_entry_retained": true,
+    "three_stage_program_coverage_complete": false,
+    "whole_program_cpp": false
+  },
+  "source_revision": "c87a7e68986fbe8dab05ed446e8cfd5b7f8ec4b6",
+  "target_scope": "EXACT_FROZEN_ENTRY_OF_UNCHANGED_EXTERNAL_CPU_PROGRAM",
+  "timed_pairs": 3,
+  "timing_includes": "COMPLETE_PROCESS_WITH_FINAL_CAPSULE_ADMISSION_NATIVE_AND_REPORT",
+  "warmup_pairs": 1
+}
