@@ -10,7 +10,9 @@ import json
 from pathlib import Path
 import time
 
+from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 
+@reuse_decoded_source_bodies()
 def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_only=False,
                   loop_trip_count=None,loop_inputs=None,prepare_stateful_validation=False,stateful_cpu_threads=1,
                   loop_cpu_threads=None,loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,
@@ -32,7 +34,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     source_admission=document.get('source_admission')
     if version==2 and source_admission is None:
         raise ValueError('program planning domain is missing original graph admission')
-    if source_admission is not None:
+    if source_admission is not None and 'whole_entry' not in document:
         from scar.analysis.build_admission import verify_build_admission
         verify_build_admission(source_admission,program=document['program'],hardware=document['hardware'],
             source_filter=document.get('source_filter'))

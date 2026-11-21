@@ -184,6 +184,8 @@ scar compile-build --domains DOMAINS --plan-only --out COMPILED
 
 交互式 stdin 使用 `observe-scalar-recursive-driver --design DESIGN --protocol-plan PLAN --stdin INPUT --cpu CPU --out CAPTURE` 采集原入口。采集器按协议等待 stdout 确认，并记录实际输入和确认字节范围。整入口请求中的 `cpu_stream_capture` 引用 `CAPTURE/result.json`。`plan-build` 将命令、应答及可定位的源码调用接回 F4，`compile-build --verify-entry` 在原单核和相同协议上对照新生成的独立 C++20。
 
+带原始采集或配对观测的 CPU 目录请求可设置 `use_captured_launch: true`。核组、工作目录和环境按留存的启动证据绑定，Python 解释器须指向同一个可执行文件。规划可在其它核组运行，执行对照时原核组须落在当前进程的可用 CPU 集合内。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈

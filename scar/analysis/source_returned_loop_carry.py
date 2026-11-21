@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.session_caller_effects import _source
+from scar.analysis.source_decoded_bodies import source_body_access
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_loop_dependencies import _enclosed, loop_dependencies
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
@@ -37,7 +38,7 @@ class _Projection:
     def __init__(self, view, unit, function, syntax):
         self.original = view.unit(unit)
         self.catalog, self.unit, self.syntax = view.catalog, unit, syntax
-        self.facts, self.material = self.original.facts, self.original.material
+        self.facts, self.material = self.original.facts, source_body_access(self.original.material)
         self.function = function
         self._definitions = {}
         body = T.Body(unit, function.template, function.body)

@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import time
 
+from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
+
 
 def _invariant_loop_links(proof,loops,reference):
     """Join original F4 identifiers, never function/source-name similarity."""
@@ -62,6 +64,7 @@ def _planning_loops(view,sources,source_filter):
         loops_unrolled=False,first_stage_complete=False)
 
 
+@reuse_decoded_source_bodies()
 def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                memory_budget_bytes, affinity=None, max_threads=None, entry_request=None):
     from scar.analysis.build import BuildSession,_check

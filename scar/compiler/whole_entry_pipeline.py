@@ -36,7 +36,7 @@ def read_request(value):
     required = {'schema', 'schema_version', 'argv', 'boundary', 'registered_implementations', 'original_cost'}
     optional = {'option_space', 'audit_retained_validation', 'variant_source', 'operator_stack', 'operator_stack_lock',
                 'numerical_contract', 'sgemm_observations', 'search_cpu_cohorts', 'nvhpc_device_profile', 'tensor_flow',
-                'cpu_provider_catalog', 'cpu_paired_observation', 'cpu_stream_capture'}
+                'cpu_provider_catalog', 'cpu_paired_observation', 'cpu_stream_capture', 'use_captured_launch'}
     if (set(document) - optional != required or document['schema'] != REQUEST
             or type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['boundary'] != 'PROCESS_LAUNCH_THROUGH_EXIT' or type(document['argv']) is not list
@@ -92,6 +92,11 @@ def read_request(value):
         if not infer_catalog or type(capture) is not dict or capture.get('schema') != CAPTURE:
             raise ValueError('a captured CPU stream requires its original provider catalog')
         read_artifact(capture)
+    if 'use_captured_launch' in document:
+        value = document['use_captured_launch']
+        if (type(value) is not bool or not infer_catalog
+                or not ({'cpu_stream_capture', 'cpu_paired_observation'} & document.keys())):
+            raise ValueError('captured launch projection requires an original CPU stream or paired observation')
     if 'search_cpu_cohorts' in document and (not infer_nvhpc or type(document['search_cpu_cohorts']) is not bool):
         raise ValueError('CPU cohort search requires a source-derived NVIDIA domain')
     if 'sgemm_observations' in document:
@@ -180,6 +185,11 @@ def _scope(plan, request):
     for key in ('cpu_provider_catalog', 'cpu_paired_observation', 'cpu_stream_capture'):
         if key in request:
             scope[key] = request[key]
+    if request.get('use_captured_launch', False):
+        from scar.compiler.cpu_entry_launch_scope import project_cpu_entry_launch_scope
+
+        scope.update(project_cpu_entry_launch_scope(scope, stream_capture=request.get('cpu_stream_capture'),
+                                                    paired_observation=request.get('cpu_paired_observation')))
     return scope
 
 
@@ -317,6 +327,11 @@ def _bind_cpu_observation(plan, scope, discovery):
         return None
     from scar.analysis.cpu_provider_graph import bind_cpu_provider_graph, bind_cpu_stream_capture_graph
 
+    program = read_artifact(plan['program'])
+    admission = read_artifact(plan['source_admission'])
+    if (program['target'] != plan['hardware']
+            or admission['source']['filter_path'] != plan.get('source_filter')):
+        raise ValueError('CPU observation admission differs from the original hardware or source filter')
     if paired is None:
         return bind_cpu_stream_capture_graph(plan['program'], scope, capture,
             source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
@@ -498,11 +513,15 @@ def _review_source_trials(discovery, generated, domain, scope, out):
 
 @verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False):
+    from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
 
     entry = plan['whole_entry']
     _, request, candidates = read_request(entry['request'])
+    if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
+        verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
+                               source_filter=plan.get('source_filter'))
     live_scope = _scope(plan, request)
     if 'operator_stack_lock' in request:
         stack_target = entry['scope']['stack_target']
