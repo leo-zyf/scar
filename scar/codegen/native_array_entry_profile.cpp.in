@@ -5,7 +5,7 @@
 #include "numpy_observables.hpp"
 
 extern "C" int scar_array_entry_profile_@INDEX@(double* norm, double* difference, const char* state_prefix,
-                                                  std::uint64_t) {
+                                                  std::uint64_t, std::uint64_t) {
     if (!scar_numpy_complex_runtime_supported()) return 1;
     std::unique_ptr<void, decltype(&std::free)> arena(std::aligned_alloc(64, arena_bytes), &std::free);
     if (!arena) return 1;

@@ -1,8 +1,14 @@
 # 当前状态
 
+`project-seeded-array-loop → project-seeded-array-loop-memory → export-native-seeded-array-entry --loop` 已将原循环的首轮与稳态分别编译一次。稳态通过距离为 1 的回边读取上一轮实际选中的数组。内存计划保持 150,080 B 私有工作区，每次交接至多复制 32 KiB。同址时直接沿用该区间。
+
+真实 CPU Cirq 的 1 轮与 5 轮留出试验共核对六份完整状态，均逐字节一致。5 轮试验的四次交接中复制一次。100 轮另验最终报告及文件。各组固定 CPU 5，预热 1 对、交替测量 3 对，整入口中位数分别为 **1.993 s → 6.272 ms**、**2.123 s → 13.568 ms**、**4.123 s → 147.243 ms**。计时包含进程启动并排除构建及诊断。支持正整数轮数和运行时种子，形状限 11 量子位、7 层、单 worker，默认保留原入口。下一关是分离单电路数值计划与外层独立电路的多核调度。见 [验收记录](../artifacts/baseline/cpu-native-runtime-loop-acceptance.json)。
+
+100 轮进程内的 worker 段从 **2.134 s 降到 141.381 ms**，约 **15.1×**。该段从原程序导入 Cirq 和 NumPy 后开始，包含电路或系数构造、数值循环和终值核对。新旧两个 C++20 入口按相同三轮输入各做 2 对预热、5 对测量，中位数为 7.948 → 8.162 ms 和 8.208 → 8.376 ms。共享正文扩大了可运行的轮数范围，两组固定三轮均保持原有选择。见 [验收记录](../artifacts/baseline/cpu-native-runtime-loop-acceptance.json)。
+
 `project-seeded-array-tape-binding → project-seeded-array-tape-memory → export-native-seeded-array-entry` 已把运行时种子接入同一个独立 C++20 入口。前端按原构造层、门类型与量子位定位抽样，运行时生成 154 个采样值，231 份系数每个入口只构造一次。排程选择 150,080 B 的私有 arena，保留原归一化分支，三轮遇到不同分支时的交接复制上界为 98,304 B。
 
-构建只使用种子 1729 与 137 的形状和来源证据。独立种子 811 与 `2³²−1` 的六个完整轮末状态、stdout 和 JSON 文件均通过原始对照。每组在 CPU 5 上预热 1 对、交替测量 3 对，整入口中位数为 **2.062 s → 9.991 ms** 与 **2.088 s → 9.665 ms**。计时包含运行时抽样、系数计算和报告发布。范围仍为 11 量子位、7 层、3 轮、单 worker，默认保留原入口。两份源轨迹后两轮的 546 个事件已通过结构对照，下一关是共享重复正文和验证运行时轮数。见 [验收记录](../artifacts/baseline/cpu-native-runtime-seed-acceptance.json)。
+构建只使用种子 1729 与 137 的形状和来源证据。独立种子 811 与 `2³²−1` 的六个完整轮末状态、stdout 和 JSON 文件均通过原始对照。每组在 CPU 5 上预热 1 对、交替测量 3 对，整入口中位数为 **2.062 s → 9.991 ms** 与 **2.088 s → 9.665 ms**。计时包含运行时抽样、系数计算和报告发布。这次验收的范围为 11 量子位、7 层、3 轮、单 worker，默认保留原入口。两份源轨迹后两轮的 546 个事件已通过结构对照。见 [验收记录](../artifacts/baseline/cpu-native-runtime-seed-acceptance.json)。
 
 `project-source-array-entry-contract → project-native-array-entry-recipe → export-native-array-entry → calibrate-native-array-entry` 已接通单个 C++20 可执行程序的入口参数、数值循环和 JSON 发布。原入口固定为 11 量子位、7 层、3 轮、1 worker，运行时可选择已验证的种子 1729 和 137。两组保留原报告语义，另验显式容差 `1e-8`。搬迁后的工件通过六个完整轮末状态的逐字节对照。报告中的后端文字来自原源码，解释器文字来自已绑定的原运行环境。
 

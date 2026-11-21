@@ -60,7 +60,7 @@ bool run_seeded(char* bytes, const std::array<Coefficient, coefficient_count>& p
 }
 
 extern "C" int scar_array_entry_profile_0(double* norm, double* difference,
-                                              const char* state_prefix, std::uint64_t seed) {
+                                              const char* state_prefix, std::uint64_t seed, std::uint64_t) {
     if (seed > std::numeric_limits<std::uint32_t>::max() || !scar_numpy_complex_runtime_supported()) return 1;
     std::array<Coefficient, coefficient_count> prepared{};
     if (!prepare_coefficients(seed, prepared)) return 1;

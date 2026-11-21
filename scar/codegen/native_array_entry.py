@@ -100,6 +100,8 @@ def _report_writer(document, routes):
                 lines.append(f'    out << result.{role};')
             elif role == 'runtime_seed':
                 lines.append('    out << result.seed;')
+            elif role == 'runtime_round_count':
+                lines.append('    out << result.round_count;')
             elif role == 'pid_list':
                 lines.append(f'    out << "["; line(out, pretty, {depth + 1}); out << result.pid;')
                 lines.append(f'    line(out, pretty, {depth}); out << "]";')
@@ -132,7 +134,19 @@ def _report_writer(document, routes):
     return '\n'.join(lines)
 
 
-def _render(recipe, *, seeded_option=None):
+def _uint_ingress(index, field, invalid):
+    return f'''        {{
+            const auto& text = values[{index}].text;
+            const auto* end = text.data() + text.size();
+            const auto parsed = std::from_chars(text.data(), end, result.{field});
+            if (parsed.ec != std::errc{{}} || parsed.ptr != end || {invalid}) {{
+                std::cerr << "SCAR_PROFILE_UNAVAILABLE\\n";
+                return 2;
+            }}
+        }}'''
+
+
+def _render(recipe, *, seeded_option=None, round_option=None):
     argv, indices = _argv_header(recipe['options'], recipe['allow_abbrev'])
     tolerance_scope = recipe['tolerance_option']
     output_scope = recipe['output_option']
@@ -140,18 +154,16 @@ def _render(recipe, *, seeded_option=None):
     _need(len(routes) == len(recipe['report_bindings']), 'duplicate output field route')
     tables, declarations, functions = [], [], []
     sources = {'include/scar_generated/array_entry_argv.hpp': argv}
-    seed_ingress = ''
+    dynamic = {}
     if seeded_option is not None:
-        _need(seeded_option in indices and len(recipe['profiles']) == 1, 'one typed seed ingress is required')
-        seed_index = indices[seeded_option]
-        seed_ingress = f'''        const auto& seed_text = values[{seed_index}].text;
-        const auto* end = seed_text.data() + seed_text.size();
-        const auto parsed_seed = std::from_chars(seed_text.data(), end, result.seed);
-        if (parsed_seed.ec != std::errc{{}} || parsed_seed.ptr != end ||
-                result.seed > std::numeric_limits<std::uint32_t>::max()) {{
-            std::cerr << "SCAR_PROFILE_UNAVAILABLE\\n";
-            return 2;
-        }}'''
+        dynamic[seeded_option] = ('seed', 'result.seed > std::numeric_limits<std::uint32_t>::max()')
+    if round_option is not None:
+        _need(round_option != seeded_option, 'separate seed and round ingress required')
+        dynamic[round_option] = ('round_count', 'result.round_count == 0')
+    _need(not dynamic or len(recipe['profiles']) == 1, 'one exact structural profile required for runtime ingress')
+    _need(all(recipe['options'][name]['kind'] == 'int' for name in dynamic), 'integer runtime ingress required')
+    ingress = '\n'.join(_uint_ingress(indices[name], field, invalid)
+                        for name, (field, invalid) in dynamic.items())
     for index, profile in enumerate(recipe['profiles']):
         reference = profile['package']
         data = tape_backend.check(reference['uri'])
@@ -160,9 +172,9 @@ def _render(recipe, *, seeded_option=None):
         sources[f'src/tape_{index}.inc'] = read_artifact(data['files']['src/main.cpp'], json_document=False)
         sources[f'src/profile_{index}.cpp'] = _PROFILE.read_text().replace('@INDEX@', str(index)).encode()
         declaration = f'scar_array_entry_profile_{index}'
-        declarations.append(f'extern "C" int {declaration}(double*, double*, const char*, std::uint64_t);')
+        declarations.append(f'extern "C" int {declaration}(double*, double*, const char*, std::uint64_t, std::uint64_t);')
         predicates = [f'values[{indices[key]}].text == {argv_backend._quote(_text(value))}'
-                      for key, value in profile['parameters'].items() if key != seeded_option]
+                      for key, value in profile['parameters'].items() if key not in dynamic]
         _need(predicates and set(profile['parameters']) == set(indices) - {tolerance_scope, output_scope},
               'profile selectors omit original input arguments')
         guards = ' &&\n        '.join(predicates)
@@ -175,7 +187,7 @@ def _render(recipe, *, seeded_option=None):
         tables.append(f'    {{matches_{index}, {declaration}, write_{index}, {tolerance.hex()}}},')
     values = dict(PROFILE_DECLARATIONS='\n'.join(declarations), PROFILES='\n'.join((
         *functions, 'constexpr Profile profiles[]{', *tables, '};')),
-        OUTPUT_INDEX=indices[output_scope], TOLERANCE_INDEX=indices[tolerance_scope], SEED_INGRESS=seed_ingress)
+        OUTPUT_INDEX=indices[output_scope], TOLERANCE_INDEX=indices[tolerance_scope], RUNTIME_INGRESS=ingress)
     sources['src/main.cpp'] = _substitute(_TEMPLATE.read_text(), values).encode()
     return sources
 

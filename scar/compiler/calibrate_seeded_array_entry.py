@@ -1,4 +1,4 @@
-"""Validate runtime seed ingress against original observations reserved for holdout."""
+"""Validate runtime seeds and optional loop counts against independent original runs."""
 
 import argparse
 import json
@@ -16,7 +16,9 @@ from scar.optimization.paired_entry_selection import compare_entry_pairs
 
 SCHEMA = 'scar.native-seeded-array-entry-calibration'
 _NATIVE = 'scar.native-seeded-array-entry'
+_LOOP = 'scar.native-seeded-array-loop-entry'
 _HOLDOUT = 'scar.array-entry-full-state-holdout'
+_HANDOFFS = 'scar.array-loop-handoff-counts'
 
 
 def _need(condition, detail):
@@ -25,7 +27,9 @@ def _need(condition, detail):
 
 
 def _load(path):
-    entry = _ref(path, _NATIVE)
+    schema = json.loads(Path(path).read_bytes())['schema']
+    _need(schema in (_NATIVE, _LOOP), 'expected a compiled seeded entry')
+    entry = _ref(path, schema)
     native = read_artifact(entry)
     base = native_array_entry_recipe.check(native['recipe']['uri'])
     _need(base == read_artifact(native['recipe']) and native['cpu_ids'] == base['cpu_ids']
@@ -40,7 +44,8 @@ def _heldout(reference, native, base):
     case = read_artifact(reference)
     seed_option = native['seed_option']
     seed = case['parameters'][seed_option]
-    params = {key: value for key, value in case['parameters'].items() if key != seed_option}
+    round_option = native.get('round_option')
+    params = {key: value for key, value in case['parameters'].items() if key not in (seed_option, round_option)}
     _need(case['entry'] == base['entry'] and case['cpu_ids'] == base['cpu_ids']
           and case['source_contract'] == base['source_contract'] and case['interpreter'] == base['source_python']
           and case['independent_original_run'] is True and case['valid_for'] == 'VALIDATION_ONLY'
@@ -48,6 +53,10 @@ def _heldout(reference, native, base):
           and case['executed_worker_process_count'] == 1
           and all(seed != row['parameters'][seed_option] for row in base['profiles'])
           and params == native['source_parameters'], 'holdout crosses the original entry or seed domain')
+    if round_option is not None:
+        rounds = case['parameters'][round_option]
+        _need(type(rounds) is int and rounds >= 1 and rounds == len(case['states']),
+              'holdout must record every original round')
     _need(not read_artifact(case['stderr'], json_document=False), 'original holdout reported a frontier')
     expected = read_artifact(case['stdout'], json_document=False)
     decoded = json.loads(expected)
@@ -72,6 +81,24 @@ def _prepare_relocation(native, directory):
             out.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(reference['uri'], out)
     return directory / native['binary']
+
+
+def _loop_handoffs(reference, native, case):
+    counts = json.loads(read_artifact(reference, json_document=False))
+    _need(set(counts) == {'copies', 'same_span_transfers'}
+          and all(type(count) is int and count >= 0 for count in counts.values())
+          and sum(counts.values()) == case['parameters'][native['round_option']] - 1,
+          'round transitions do not match the diagnostic')
+    return dict(artifact=reference, counts=counts,
+                carried_bytes=counts['copies'] * native['maximum_carry_copy_bytes_per_transition'])
+
+
+def _require_decline(command, environment, directory):
+    directory.mkdir()
+    result = subprocess.run(command, cwd=directory, env=environment, capture_output=True, timeout=30)
+    _need(result.returncode == 2 and result.stderr == b'SCAR_PROFILE_UNAVAILABLE\n'
+          and not result.stdout and not (directory / 'published.json').exists(),
+          'out-of-scope invocation published effects')
 
 
 def calibrate(package, holdouts, out, *, warmups=1, repetitions=3):
@@ -108,20 +135,22 @@ def calibrate(package, holdouts, out, *, warmups=1, repetitions=3):
         checkpoints = [_ref(diagnostic / f'state.{round_}.bin', 'scar.ndarray-native-checkpoint')
                        for round_ in range(len(case['states']))]
         _state_compare(case['states'], checkpoints)
-        rows.append(dict(holdout=reference, parameters=case['parameters'], clean_pairs=raw,
-            relocation=observed, checkpoints=checkpoints, pairing=pairing, population_variance_ns2=variance))
+        row = dict(holdout=reference, parameters=case['parameters'], clean_pairs=raw,
+                   relocation=observed, checkpoints=checkpoints, pairing=pairing, population_variance_ns2=variance)
+        if native.get('round_option') is not None:
+            row['handoffs'] = _loop_handoffs(_ref(diagnostic / 'state.handoffs.json', _HANDOFFS), native, case)
+        rows.append(row)
 
-    invalid = out / 'outside-source-seed-range'
-    invalid.mkdir()
     seed_flag, = base['options'][native['seed_option']]['flags']
-    result = subprocess.run([*binary, *argv, seed_flag, str(2**32)], cwd=invalid, env=env,
-                            capture_output=True, timeout=30)
-    _need(result.returncode == 2 and result.stderr == b'SCAR_PROFILE_UNAVAILABLE\n'
-          and not result.stdout and not (invalid / 'published.json').exists(), 'seed guard published effects')
+    _require_decline([*binary, *argv, seed_flag, str(2**32)], env, out / 'outside-source-seed-range')
     report = dict(schema=SCHEMA, schema_version=1, entry=entry, cases=rows, cpu_ids=native['cpu_ids'],
         timing_scope='FRESH_PROCESS_WITH_SEED_CONSTRUCTION_NUMERIC_LOOP_TERMINAL_REPORT_AND_FILE_OUTPUT',
         excluded_original_timing_fields=base['runtime_fields'], seed_guard_verified=True,
         compiled_from_holdout=False, deployment_authorized=False)
+    if native.get('round_option') is not None:
+        round_flag, = base['options'][native['round_option']]['flags']
+        _require_decline([*binary, *argv, round_flag, '0'], env, out / 'outside-positive-round-count')
+        report['positive_round_count_guard_verified'] = True
     _write(out / 'result.json', report)
     return report
 
@@ -141,6 +170,9 @@ def check(path):
         _need(rebuilt == prior, 'clean pairing differs')
         _replay(row['relocation'], base, expected)
         _state_compare(case['states'], row['checkpoints'])
+        if native.get('round_option') is not None:
+            _need(_loop_handoffs(row['handoffs']['artifact'], native, case) == row['handoffs'],
+                  'recorded loop transitions differ')
     return stored
 
 

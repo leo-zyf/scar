@@ -21,7 +21,7 @@ struct Result {
     double norm{}, split_difference{}, norm_error{}, tolerance{};
     double elapsed{}, worker_wall{}, worker_cpu{};
     long pid{}, peak_rss{};
-    std::uint64_t seed{};
+    std::uint64_t seed{}, round_count{};
     bool tolerance_given{};
 };
 
@@ -49,7 +49,7 @@ double seconds(Clock::duration value) {
     return std::chrono::duration<double>(value).count();
 }
 
-using Run = int (*)(double*, double*, const char*, std::uint64_t);
+using Run = int (*)(double*, double*, const char*, std::uint64_t, std::uint64_t);
 using Write = void (*)(std::ostream&, const Result&, bool);
 using Match = bool (*)(const std::vector<ParsedValue>&);
 
@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
             return 2;
         }
         Result result{};
-@SEED_INGRESS@
+@RUNTIME_INGRESS@
         const auto& tolerance = values[@TOLERANCE_INDEX@].text;
         result.tolerance_given = !tolerance.empty();
         result.tolerance = result.tolerance_given ? std::strtod(tolerance.c_str(), nullptr)
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
         const auto worker_start = Clock::now();
         const auto cpu = process_seconds();
         if (profile->run(&result.norm, &result.split_difference, std::getenv("SCAR_ARRAY_ENTRY_STATES"),
-                         result.seed) != 0) {
+                         result.seed, result.round_count) != 0) {
             std::cerr << "SCAR_NATIVE_NUMERICAL_FRONTIER\n";
             return 3;
         }
