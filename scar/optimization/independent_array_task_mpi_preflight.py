@@ -61,6 +61,26 @@ def _local_bounds(team, donor_rows):
     return bounds
 
 
+def _accepted_local_bound(reference, target, team):
+    from scar.compiler import calibrate_array_task_entry as calibration
+
+    accepted = calibration._check(reference['uri'], already_replayed_schedule=(target['team_plan'], team))
+    selected = accepted['selected']
+    pairing = accepted['pairing']
+    _need(accepted['schedule'] == target['team_plan'] and selected == team['decision']['selected']
+          and selected['mode'] != mpi.MODE and not selected['capacity_reasons']
+          and accepted['cpu_ids'] == selected['launch_cpu_ids']
+          and pairing['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW',
+          'local acceptance must qualify a feasible implementation for the exact target team plan')
+    # Keeping publication in the local observation is conservative for pruning.
+    metrics = pairing['metrics']['native']
+    return dict(mode=selected['mode'], worker_count=selected['worker_count'], worker_cpu_ids=selected['worker_cpu_ids'],
+                modeled_upper_ns=metrics['max_ns'], bound_source='REPLAYED_LOCAL_WHOLE_ENTRY_CLEAN_MAX',
+                whole_entry_acceptance=reference, entry=accepted['entry'], holdout=accepted['holdout'],
+                launch_cpu_ids=accepted['cpu_ids'], timing_scope=accepted['timing_scope'],
+                warmup_pairs=pairing['warmup_pairs'], clean_candidate_samples_ns=metrics['samples_ns'])
+
+
 def _outcome(row, donor_rows, local):
     width = row['worker_count']
     base_row = dict(rank_count=width, rank_cpu_ids=row['worker_cpu_ids'],
@@ -84,7 +104,7 @@ def _outcome(row, donor_rows, local):
                 optimistic_unpriced_work_ns=0, local_upper_ns=local['modeled_upper_ns'] if local else None)
 
 
-def project(graph_path, platform_plan_path):
+def project(graph_path, platform_plan_path, *, local_acceptance_path=None):
     """Replay a checked platform receipt without running the target MPI plan."""
     target_ref, target, team, _, _ = mpi._inputs(graph_path)
     donor_ref = base._ref(platform_plan_path, mpi.SCHEMA)
@@ -95,6 +115,12 @@ def project(graph_path, platform_plan_path):
 
     donor_rows = {(row['mode'], row['worker_count']): row for row in donor_plan['alternatives']}
     bounds = _local_bounds(team, donor_rows)
+    acceptance_ref = None
+    if local_acceptance_path is not None:
+        from scar.compiler import calibrate_array_task_entry as calibration
+
+        acceptance_ref = base._ref(local_acceptance_path, calibration.SCHEMA)
+        bounds.append(_accepted_local_bound(acceptance_ref, target, team))
     best = min(bounds, key=lambda row: row['modeled_upper_ns'], default=None)
     outcomes = [_outcome(row, donor_rows, best) for row in target['alternatives']]
     eligible = [row for row in outcomes if not row['capacity_reasons']]
@@ -111,21 +137,27 @@ def project(graph_path, platform_plan_path):
         if not any(row['mode'] == selected['mode'] and row['worker_count'] == selected['worker_count']
                    and row['modeled_upper_ns'] < minimum for row in bounds):
             selected = None
-    return dict(schema=SCHEMA, schema_version=1, mpi_graph=target_ref, team_plan=target['team_plan'],
-                scope=target['scope'], platform_plan=donor_ref, platform_mpi_graph=donor_plan['mpi_graph'],
-                platform_evidence=donor_plan['mpi_evidence'], platform_scope=donor_plan['scope'],
-                local_bounds=bounds, best_local_bound=best,
-                decision=dict(status=status, all_eligible_mpi_rejected=rejected, mpi_outcomes=outcomes,
-                              selected=selected, deployment_authorized=False),
-                cost_boundary=dict(basis='REUSED_EMPIRICAL_SAMPLE_ENVELOPES_ON_IDENTICAL_PLATFORM_CONTRACT',
-                    mpi_cost='MIN_OBSERVED_MAX_RANK_BOOTSTRAP_BEFORE_FIRST_NUMERICAL_CALL',
-                    local_cost='TARGET_TEAM_INTERNAL_UPPER_PLUS_MATCHED_PLATFORM_OUTSIDE_DISPATCH_UPPER',
-                    empirical_ranges_are_universal_bounds=False, target_mpi_trial_run=False,
-                    target_mpi_executable_generated=False), deployment_authorized=False)
+    report = dict(schema=SCHEMA, schema_version=1, mpi_graph=target_ref, team_plan=target['team_plan'],
+                  scope=target['scope'], platform_plan=donor_ref, platform_mpi_graph=donor_plan['mpi_graph'],
+                  platform_evidence=donor_plan['mpi_evidence'], platform_scope=donor_plan['scope'],
+                  local_bounds=bounds, best_local_bound=best,
+                  decision=dict(status=status, all_eligible_mpi_rejected=rejected, mpi_outcomes=outcomes,
+                                selected=selected, deployment_authorized=False),
+                  cost_boundary=dict(basis='REUSED_EMPIRICAL_SAMPLE_ENVELOPES_ON_IDENTICAL_PLATFORM_CONTRACT',
+                      mpi_cost='MIN_OBSERVED_MAX_RANK_BOOTSTRAP_BEFORE_FIRST_NUMERICAL_CALL',
+                      local_cost='TARGET_TEAM_INTERNAL_UPPER_PLUS_MATCHED_PLATFORM_OUTSIDE_DISPATCH_UPPER',
+                      empirical_ranges_are_universal_bounds=False, target_mpi_trial_run=False,
+                      target_mpi_executable_generated=False), deployment_authorized=False)
+    if acceptance_ref is not None:
+        report['local_acceptance'] = acceptance_ref
+        report['cost_boundary']['local_cost'] = 'MATCHED_MODEL_OR_REPLAYED_LOCAL_WHOLE_ENTRY_CLEAN_MAX'
+    return report
 
 
 def check(path):
     stored = read_artifact(base._ref(path, SCHEMA))
-    actual = project(stored['mpi_graph']['uri'], stored['platform_plan']['uri'])
+    acceptance = stored.get('local_acceptance')
+    actual = project(stored['mpi_graph']['uri'], stored['platform_plan']['uri'],
+                     local_acceptance_path=acceptance['uri'] if acceptance is not None else None)
     _need(stored == actual, 'stored preflight differs during replay')
     return actual

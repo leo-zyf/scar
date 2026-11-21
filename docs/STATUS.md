@@ -1,5 +1,7 @@
 # 当前状态
 
+`measure --preflight` 可按 rank 方案筛掉已判定的测量。4 电路仅借用已有 2 rank 平台证据时，2 rank 初始化估计下界为 **338.316 ms**，此前验收的同配置 OpenMP 清洁样本上界为 **44.272 ms**，所以跳过 2 rank。对仍未定的 3、4 rank 各补运行空汇聚和数值服务探针，各预热 1 次、测量 3 次，MPI 启动次数从全测的 24 次降到 16 次。最终本地 OpenMP 模型上界为 **48.580 ms**，2 rank 的淘汰条件依然成立，3、4 rank 补测后的估计下界为 **611.087、594.003 ms**。三种 MPI 方案均被淘汰，原入口仍是默认。此处的时间区间均以匹配平台的组件观测为依据。 [验收记录](../artifacts/baseline/cpu-mpi-partial-preflight-acceptance.json)
+
 `plan-independent-array-task-mpi preflight` 先按原任务图和硬件容量筛选，再复用环境匹配的平台成本区间。4 电路的 OpenMP 四线程模型上界为 **49.154 ms**。MPI 2、3、4 rank 仅初始化的估计下界分别为 **331.561、338.533、357.621 ms**，其余 MPI 工作按零成本计也无法进入候选。`measure --preflight` 直接返回淘汰结果。这组的目标 MPI 探针和整程执行均为零。缺少匹配成本或区间重叠时保持未决。这是同平台的样本区间，精度依赖核组、运行库、启动方式和地址空间上限匹配。 [验收记录](../artifacts/baseline/cpu-entry-catalog-and-prior-cost-acceptance.json)
 
 `compile-cpu-entry --catalog` 已接通独立数组任务与既有 RK4 固定网格入口。目录只记录已注册的提供者身份，入口按源码路径与字节唯一选择。数组任务按完整 argv 选已验收的配置并复用 C++20 二进制。统一 `verify-cpu-entry` 在同一进程核组分别复验两组 Cirq 和 RK4，保留各自的 stdout 和文件合同。各组预热 1 对、测量 3 对，整入口中位数为 **2.521 s → 31.161 ms、4.481 s → 147.507 ms、6.674 s → 2.321 s**。这些试验复验方案行为和收益；MPI 的四电路筛选先于目标运行。原入口继续作为默认。 [验收记录](../artifacts/baseline/cpu-entry-catalog-and-prior-cost-acceptance.json)

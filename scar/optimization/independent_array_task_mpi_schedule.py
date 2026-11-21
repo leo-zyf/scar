@@ -155,11 +155,15 @@ def _need(condition, detail):
         raise ValueError('independent array task MPI schedule: ' + detail)
 
 
-def _inputs(graph_path):
+def _inputs(graph_path, *, replayed_graph=None):
     from scar.analysis import native_array_mpi_graph as analysis
 
     graph_ref = base._ref(graph_path, analysis.SCHEMA)
-    graph = analysis.check(graph_ref['uri'])
+    if replayed_graph is None:
+        graph = analysis.check(graph_ref['uri'])
+    else:
+        _need(graph_ref == replayed_graph, 'preflight does not identify the target graph')
+        graph = read_artifact(graph_ref)
     prior = read_artifact(graph['team_plan'])
     native = read_artifact(graph['native'])
     _need(all(graph[key] == prior[key] for key in ('scope', 'family', 'native', 'hardware')),
@@ -188,12 +192,21 @@ def _runtime_identity(probe, graph, native, environment):
     return base._ref(libmpi[0], runtime['libmpi']['schema'])
 
 
-def _seeds(seeds, prior, native):
+def _seeds(seeds, prior, native, screened=None):
     team._seeds(seeds, prior, native)
-    previous = read_artifact(prior['thread_evidence'])['seeds']
     width = prior['scope']['task_count']
-    _need(not any(max(seed, old) < min(seed + width, old + width) for seed in seeds for old in previous),
-          'MPI component samples must have seeds disjoint from prior team components')
+    previous = [(seed, width) for seed in read_artifact(prior['thread_evidence'])['seeds']]
+    if screened:
+        platform_width = screened['platform_scope']['task_count']
+        previous.extend((seed, platform_width) for seed in read_artifact(screened['platform_evidence'])['seeds'])
+        if 'local_acceptance' in screened:
+            local = read_artifact(screened['local_acceptance'])
+            heldout = read_artifact(local['holdout'])
+            seed_argument = read_artifact(prior['family'])['input_options']['seed']
+            previous.append((heldout['parameters'][seed_argument], width))
+    _need(not any(max(seed, old) < min(seed + width, old + old_width)
+                  for seed in seeds for old, old_width in previous),
+          'MPI component samples must be disjoint from prior evidence and accepted inputs')
 
 
 def _mpi_command(graph, probe, row, seed, part):
@@ -241,12 +254,35 @@ def _choices(rows):
     return {(row['mode'], row['worker_count']): row for row in rows if not row['capacity_reasons']}
 
 
-def measure(graph_path, out, *, seeds, plan_out=None):
+def _screening(reference):
+    if reference is None:
+        return None, {}
+    from scar.optimization import independent_array_task_mpi_preflight as preflight
+
+    checked = preflight.check(reference['uri'])
+    _need(read_artifact(reference) == checked, 'preflight differs from the retained evidence')
+    pruned = {row['rank_count']: row for row in checked['decision']['mpi_outcomes']
+              if row['outcome'] == preflight._REJECTED}
+    return checked, pruned
+
+
+def measure(graph_path, out, *, seeds=None, plan_out=None, preflight_path=None):
     """Sample only exact-launch empty exchange and isolated contended kernel calls."""
-    inputs = _inputs(graph_path)
+    preflight_ref = None
+    if preflight_path is not None:
+        from scar.optimization import independent_array_task_mpi_preflight as preflight
+
+        preflight_ref = base._ref(preflight_path, preflight.SCHEMA)
+    screened, pruned = _screening(preflight_ref)
+    inputs = _inputs(graph_path, replayed_graph=screened['mpi_graph'] if screened else None)
     graph_ref, graph, prior, native, recipe = inputs
-    _seeds(seeds, prior, native)
-    mpi_rows = _choices(graph['alternatives'])
+    mpi_rows = {key: row for key, row in _choices(graph['alternatives']).items() if key[1] not in pruned}
+    if screened and not mpi_rows:
+        if plan_out is not None:
+            base._write(plan_out, screened)
+        return dict(screened['decision'], action='SKIP_TARGET_MPI_PROBE')
+    _need(seeds is not None, 'measure requires --seeds for unresolved MPI rank plans')
+    _seeds(seeds, prior, native, screened)
     local_rows = _choices(prior['alternatives'])
     out = Path(out).resolve()
     out.mkdir(parents=True)
@@ -275,12 +311,15 @@ def measure(graph_path, out, *, seeds, plan_out=None):
             env = environment if mode == 'IN_PROCESS_SERIAL' else old['thread_environment']
             raw = _capture(command, env, out / f'{mode}-{width}-startup-{index}.txt')
             samples.append(dict(mode=mode, width=width, seed=seed, part='startup', **raw))
-    cost_ref = base._write(out / 'result.json', dict(schema=EVIDENCE, schema_version=1, mpi_graph=graph_ref,
+    evidence = dict(schema=EVIDENCE, schema_version=1, mpi_graph=graph_ref,
         team_plan=graph['team_plan'], native=graph['native'], boundary=_BOUNDARY, seeds=seeds, samples=samples,
         timeout_seconds=_TIMEOUT_SECONDS, environment=environment, team_probe=team_probe, compiler=compiler,
-        probe=probe, probe_source=base._ref(out / 'probe.cpp', 'text/x-c++'), loaded_libmpi=provider))
+        probe=probe, probe_source=base._ref(out / 'probe.cpp', 'text/x-c++'), loaded_libmpi=provider)
+    if preflight_ref is not None:
+        evidence.update(preflight=preflight_ref, measured_mpi_rank_counts=sorted(width for _, width in mpi_rows))
+    cost_ref = base._write(out / 'result.json', evidence)
     if plan_out is not None:
-        plan = _project(inputs, cost_ref)
+        plan = _project(inputs, cost_ref, preflight_ref=preflight_ref, pruned=pruned)
         base._write(plan_out, plan)
         return plan['decision']
     return cost_ref
@@ -307,7 +346,7 @@ def _series(raw, wall_ns, cpus, count, numeric):
                 status_and_gather_ns=collected, finalize_ns=finalized)
 
 
-def _comparable(prior, graph, evidence, native, recipe):
+def _comparable(prior, graph, evidence, native, recipe, *, screened, pruned):
     team_probe = read_artifact(prior['thread_evidence'])['probe']
     probe = evidence['probe']
     directory = Path(probe['uri']).parent
@@ -321,8 +360,12 @@ def _comparable(prior, graph, evidence, native, recipe):
     _need(_runtime_identity(probe['uri'], graph, native, evidence['environment']) == evidence['loaded_libmpi'],
           'loaded MPI library changed')
     seeds = evidence['seeds']
-    _seeds(seeds, prior, native)
-    mpi, local = _choices(graph['alternatives']), _choices(prior['alternatives'])
+    _seeds(seeds, prior, native, screened)
+    mpi = {key: row for key, row in _choices(graph['alternatives']).items() if key[1] not in pruned}
+    local = _choices(prior['alternatives'])
+    if 'preflight' in evidence:
+        _need(evidence['measured_mpi_rank_counts'] == sorted(width for _, width in mpi),
+              'measurement domain differs from unresolved eligible MPI rank plans')
     parameter_field = read_artifact(recipe['source_contract'])['report']['parameters']['field']
     spans, seen = {}, set()
     for sample in evidence['samples']:
@@ -384,9 +427,13 @@ def _estimate_local(choice, samples):
                 modeled_elapsed_ns={side: internal['modeled_elapsed_ns'][side] + startup[side] for side in base._SIDES})
 
 
-def _decide(previous, locals_, mpi):
+def _decide(previous, locals_, mpi, *, screened=None):
     selectable = [row for row in locals_ if not row['capacity_reasons'] and row['cost'] is not None]
     finite = [row for row in mpi if not row['capacity_reasons']]
+    screened = {} if screened is None else screened
+    _need(type(screened) is dict and all(type(width) is int for width in screened)
+          and screened.keys() <= {row['worker_count'] for row in finite if row['cost'] is None},
+          'bootstrap screening may only price unmeasured feasible ranks')
     incumbent = next((row for row in selectable if previous and (row['mode'], row['worker_count']) ==
                       (previous['mode'], previous['worker_count'])), None)
 
@@ -394,34 +441,50 @@ def _decide(previous, locals_, mpi):
         return choice['cost']['modeled_elapsed_ns'][side]
 
     best_local = min(selectable, key=lambda row: estimate(row, 'upper_ns'), default=None)
+    local_upper = estimate(best_local, 'upper_ns') if best_local else None
     outcomes = []
     for row in mpi:
+        width = row['worker_count']
+        screening = screened.get(width)
+        mpi_lower = estimate(row, 'lower_ns') if row['cost'] else None
+        provenance = {}
+        if screening is not None:
+            mpi_lower = screening['mpi_lower_ns']
+            screened_upper = screening['local_upper_ns']
+            _need(screening['rank_count'] == width and screening['outcome'] == 'DOMINATED_BY_LOCAL_WITH_BOOTSTRAP_ALONE'
+                  and type(mpi_lower) is int and type(screened_upper) is int and mpi_lower > screened_upper >= 0,
+                  'invalid bootstrap screening bound')
+            provenance = dict(screening=dict(preflight_local_upper_ns=screened_upper, mpi_probe_measured=False))
         if row['capacity_reasons']:
             outcome = 'INSUFFICIENT_RESOURCE_CAPACITY'
-        elif best_local is None or row['cost'] is None:
+        elif screening is not None:
+            outcome = ('DOMINATED_BY_LOCAL_WITH_BOOTSTRAP_ALONE' if local_upper is not None and mpi_lower > local_upper
+                       else 'UNRESOLVED_SCREENED_BOOTSTRAP_OVERLAPS_LOCAL')
+        elif local_upper is None or mpi_lower is None:
             outcome = 'UNRESOLVED_WITHOUT_COMPARABLE_INTERVALS'
-        elif estimate(row, 'lower_ns') > estimate(best_local, 'upper_ns'):
+        elif mpi_lower > local_upper:
             outcome = 'DOMINATED_BY_EXISTING_LOCAL_BACKEND'
         else:
             outcome = 'NO_DEFINITE_DOMINATION'
         local_bounds = [dict(mode=local['mode'], worker_count=local['worker_count'],
                              upper_ns=estimate(local, 'upper_ns'),
-                             dominates_mpi=(estimate(row, 'lower_ns') > estimate(local, 'upper_ns')
-                                            if row['cost'] is not None else None)) for local in selectable]
-        outcomes.append(dict(rank_count=row['worker_count'], outcome=outcome,
-                             mpi_lower_ns=estimate(row, 'lower_ns') if row['cost'] else None,
-                             local_upper_ns=estimate(best_local, 'upper_ns') if best_local else None,
+                             dominates_mpi=(mpi_lower > estimate(local, 'upper_ns') if mpi_lower is not None else None))
+                        for local in selectable]
+        outcomes.append(dict(rank_count=width, outcome=outcome, mpi_lower_ns=mpi_lower, local_upper_ns=local_upper,
                              local_mode=best_local['mode'] if best_local else None,
                              local_worker_count=best_local['worker_count'] if best_local else None,
-                             competing_local_bounds=local_bounds))
+                             competing_local_bounds=local_bounds, **provenance))
+    confirmed_screening = [row for row in outcomes if row['outcome'] == 'DOMINATED_BY_LOCAL_WITH_BOOTSTRAP_ALONE']
     dominated = bool(finite) and all(row['outcome'] in ('INSUFFICIENT_RESOURCE_CAPACITY',
+                                                      'DOMINATED_BY_LOCAL_WITH_BOOTSTRAP_ALONE',
                                                       'DOMINATED_BY_EXISTING_LOCAL_BACKEND') for row in outcomes)
     measured = [row for row in (*selectable, *finite) if row['cost'] is not None]
     proposal = min((row for row in finite if row['cost'] is not None),
                    key=lambda row: estimate(row, 'estimate_ns'), default=None)
-    separated = proposal is not None and len(measured) == len(finite) + len(
+    separated = proposal is not None and len(measured) + len(confirmed_screening) == len(finite) + len(
         [row for row in locals_ if not row['capacity_reasons']]) and all(
-            estimate(proposal, 'upper_ns') < estimate(row, 'lower_ns') for row in measured if row is not proposal)
+            estimate(proposal, 'upper_ns') < estimate(row, 'lower_ns') for row in measured if row is not proposal) and all(
+            estimate(proposal, 'upper_ns') < row['mpi_lower_ns'] for row in confirmed_screening)
     if dominated:
         status = 'ALL_ELIGIBLE_MPI_DOMINATED'
     elif not finite:
@@ -435,29 +498,43 @@ def _decide(previous, locals_, mpi):
                 mpi_outcomes=outcomes, deployment_authorized=False)
 
 
-def _project(inputs, cost_ref):
+def _project(inputs, cost_ref, *, preflight_ref=None, pruned=None):
     graph_ref, graph, prior, native, recipe = inputs
     evidence = read_artifact(cost_ref)
+    pruned = pruned or {}
+    screened = read_artifact(preflight_ref) if preflight_ref is not None else None
     _need(evidence['mpi_graph'] == graph_ref and evidence['team_plan'] == graph['team_plan']
-          and evidence['native'] == graph['native'], 'MPI cost evidence crosses task graph')
-    samples = _comparable(prior, graph, evidence, native, recipe)
+          and evidence['native'] == graph['native'] and evidence.get('preflight') == preflight_ref
+          and ('measured_mpi_rank_counts' in evidence) == (preflight_ref is not None),
+          'MPI cost evidence crosses task graph or screening context')
+    samples = _comparable(prior, graph, evidence, native, recipe, screened=screened, pruned=pruned)
     locals_ = [dict(row, cost=_estimate_local(row, samples)) for row in prior['alternatives']]
-    mpi = [dict(row, cost=None if row['capacity_reasons'] else _estimate_mpi(row, graph['scope']['task_count'], samples))
+    mpi = [dict(row, cost=None if row['capacity_reasons'] or row['worker_count'] in pruned
+                else _estimate_mpi(row, graph['scope']['task_count'], samples))
            for row in graph['alternatives']]
-    return dict(schema=SCHEMA, schema_version=1, mpi_graph=graph_ref, mpi_evidence=cost_ref,
+    report = dict(schema=SCHEMA, schema_version=1, mpi_graph=graph_ref, mpi_evidence=cost_ref,
         **{key: graph[key] for key in ('scope', 'family', 'native', 'hardware', 'team_plan')},
-        alternatives=[*locals_, *mpi], decision=_decide(prior['decision']['selected'], locals_, mpi),
+        alternatives=[*locals_, *mpi], decision=_decide(prior['decision']['selected'], locals_, mpi, screened=pruned),
         cost_boundary=dict(basis=_BOUNDARY, kernel_service='ONE_NUMERIC_TASK_PER_RANK_MEASURED_CONCURRENTLY',
                            multi_wave_service='EXTRAPOLATE_PER_RANK_ORDINAL_COUNT',
                            mpi_launch_is_charged_once=True, publication_cost_common_and_excluded=True,
                            components_within_mpi_empty_launch_not_added_again=True,
                            envelopes_are_sample_extrema=True, input_holdouts_used=False,
                            executable_validation_required_after_nomination=True))
+    if preflight_ref is not None:
+        report.update(mpi_preflight=preflight_ref, measured_mpi_rank_counts=evidence['measured_mpi_rank_counts'],
+                      unmeasured_mpi_rank_counts=sorted(pruned))
+        report['cost_boundary']['input_holdouts_used'] = 'local_acceptance' in screened
+    return report
 
 
 def project(graph_path, cost_path):
     """Replay source, resources and independent components to reject or nominate MPI."""
-    return _project(_inputs(graph_path), base._ref(cost_path, EVIDENCE))
+    cost_ref = base._ref(cost_path, EVIDENCE)
+    preflight_ref = read_artifact(cost_ref).get('preflight')
+    screened, pruned = _screening(preflight_ref)
+    inputs = _inputs(graph_path, replayed_graph=screened['mpi_graph'] if screened else None)
+    return _project(inputs, cost_ref, preflight_ref=preflight_ref, pruned=pruned)
 
 
 def check(path):
@@ -483,26 +560,13 @@ def main(argv=None):
     preflight = commands.add_parser('preflight', help='price optimistic MPI completion without a target run')
     preflight.add_argument('--mpi-graph', required=True)
     preflight.add_argument('--platform-plan', required=True)
+    preflight.add_argument('--local-acceptance', help='use a previously accepted local entry as an upper estimate')
     preflight.add_argument('--out', required=True)
     commands.add_parser('check').add_argument('receipt')
     args = parser.parse_args(argv)
     if args.command == 'measure':
-        if args.preflight:
-            from scar.analysis import native_array_mpi_graph
-            from scar.optimization import independent_array_task_mpi_preflight
-
-            screened = independent_array_task_mpi_preflight.check(args.preflight)
-            _need(screened['mpi_graph'] == base._ref(args.mpi_graph, native_array_mpi_graph.SCHEMA),
-                  'preflight does not identify the target graph')
-            decision = screened['decision']
-            if decision['all_eligible_mpi_rejected'] or decision['status'] == 'NO_MPI_CANDIDATE_FITS_RESOURCE_BOUNDS':
-                if args.plan_out:
-                    base._write(args.plan_out, screened)
-                print(json.dumps(dict(decision, action='SKIP_TARGET_MPI_PROBE'), sort_keys=True))
-                return
-        if args.seeds is None:
-            parser.error('measure requires --seeds when the preflight has not ruled out every rank plan')
-        result = measure(args.mpi_graph, args.out, seeds=list(map(int, args.seeds.split(','))), plan_out=args.plan_out)
+        seeds = list(map(int, args.seeds.split(','))) if args.seeds is not None else None
+        result = measure(args.mpi_graph, args.out, seeds=seeds, plan_out=args.plan_out, preflight_path=args.preflight)
     elif args.command == 'project':
         result = project(args.mpi_graph, args.mpi_cost)
         base._write(args.out, result)
@@ -510,7 +574,8 @@ def main(argv=None):
     elif args.command == 'preflight':
         from scar.optimization import independent_array_task_mpi_preflight
 
-        report = independent_array_task_mpi_preflight.project(args.mpi_graph, args.platform_plan)
+        report = independent_array_task_mpi_preflight.project(
+            args.mpi_graph, args.platform_plan, local_acceptance_path=args.local_acceptance)
         base._write(args.out, report)
         result = report['decision']
     else:

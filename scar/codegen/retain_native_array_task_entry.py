@@ -73,12 +73,15 @@ def resolve(schedule_path, acceptance_path):
           and package['decision']['mode'] != 'ORDERED_LOCAL_MPI' and package['python_runtime_required'] is False,
           'retained binary crosses the graph, proven numerical body, or execution domain')
     matches = [row for row in plan['alternatives'] if _same_placement(row, package['decision']) and row['cost']]
-    mpi_rows = [row for row in plan['alternatives']
-                if row['mode'] == 'ORDERED_LOCAL_MPI' and not row['capacity_reasons']]
-    _need(len(matches) == 1 and mpi_rows and all(row['cost'] for row in mpi_rows),
-          'retained implementation and all eligible MPI alternatives require comparable costs')
+    eligible_widths = {row['worker_count'] for row in plan['alternatives']
+                       if row['mode'] == 'ORDERED_LOCAL_MPI' and not row['capacity_reasons']}
+    mpi_lowers = {row['rank_count']: row['mpi_lower_ns'] for row in decision['mpi_outcomes']
+                  if row['rank_count'] in eligible_widths}
+    _need(len(matches) == 1 and eligible_widths and mpi_lowers.keys() == eligible_widths
+          and all(type(value) is int and value > 0 for value in mpi_lowers.values()),
+          'retained implementation and all eligible MPI alternatives require replayable cost bounds')
     local_upper = matches[0]['cost']['modeled_elapsed_ns']['upper_ns']
-    mpi_lower = min(row['cost']['modeled_elapsed_ns']['lower_ns'] for row in mpi_rows)
+    mpi_lower = min(mpi_lowers.values())
     _need(local_upper < mpi_lower, 'MPI is not separated from the independently qualified local implementation')
     return dict(schema=SCHEMA, schema_version=1, schedule=schedule_ref, existing_acceptance=accepted_ref,
                 mpi_decision=decision['status'], retained_release=release, selected=package['decision'],

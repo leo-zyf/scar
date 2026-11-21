@@ -70,6 +70,10 @@ def _check_mpi_launch(package, schedule):
     read_artifact(runtime, json_document=False)
 
 
+def _local_team(schedule):
+    return read_artifact(schedule['team_plan']) if 'mpi_graph' in schedule else schedule
+
+
 def _load(path, *, checked_source=None, already_replayed_schedule=None):
     from scar.codegen.native_seeded_array_entry import LOOP_SCHEMA
     from scar.compiler.calibrate_seeded_array_entry import _load as load_seeded
@@ -122,12 +126,13 @@ def _load(path, *, checked_source=None, already_replayed_schedule=None):
           'entry has an incomplete task report or parameter binding')
     source = read_artifact(recipe['source_contract'])
     fields = package['output_fields']
+    local_team = _local_team(schedule)
     self_pid, = (field['path'] for field in recipe['report_bindings'] if field['role'] == 'pid')
     pids, = (field['path'] for field in recipe['report_bindings'] if field['role'] == 'pid_list')
     _need(self_pid[:2] == [fields['results'], 0] and pids == [fields['pid_list']]
           and selected['worker_count'] <= package['scope']['task_count']
           and selected['mode'] in _CONTROL_LABELS
-          and package.get('thread_contract') == (schedule['thread_contract'] if selected['mode'] == _OPENMP else None),
+          and package.get('thread_contract') == (local_team['thread_contract'] if selected['mode'] == _OPENMP else None),
           'source process reporting or selected task ownership differs')
     override = package.get('launch_environment', {})
     _need(override == ({'OMP_STACKSIZE': '8M'} if selected['mode'] == _OPENMP else {})
@@ -135,7 +140,7 @@ def _load(path, *, checked_source=None, already_replayed_schedule=None):
           'native launch environment differs from the bounded OpenMP stack contract')
     if selected['mode'] == _OPENMP:
         libgomp = package['linkage']['qualified_runtime_dependencies']['libgomp.so.1']
-        _need(libgomp == schedule['openmp_runtime'], 'OpenMP runtime differs from the modeled dispatcher')
+        _need(libgomp == local_team['openmp_runtime'], 'OpenMP runtime differs from the modeled dispatcher')
         read_artifact(libgomp, json_document=False)
     _check_mpi_launch(package, schedule)
     for artifact in package['files'].values():
@@ -172,9 +177,19 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
     worker_count = case['executed_worker_process_count']
     source_seeds = {row['parameters'][options['seed']] for row in recipe['profiles']}
     schedule = read_artifact(package['schedule'])
-    related_seeds = source_seeds | set(read_artifact(schedule['evidence'])['seeds'])
-    team_seeds = [base for key in ('thread_evidence', 'mpi_evidence') if key in schedule
-                  for base in read_artifact(schedule[key])['seeds']]
+    local_team = _local_team(schedule)
+    related_seeds = source_seeds | set(read_artifact(local_team['evidence'])['seeds'])
+    width = package['scope']['task_count']
+    evidence = [(owner[key], width) for owner, key in ((local_team, 'thread_evidence'), (schedule, 'mpi_evidence'))
+                if key in owner]
+    team_seeds = []
+    if 'mpi_preflight' in schedule:
+        preflight = read_artifact(schedule['mpi_preflight'])
+        evidence.append((preflight['platform_evidence'], preflight['platform_scope']['task_count']))
+        if 'local_acceptance' in preflight:
+            earlier_acceptance = read_artifact(preflight['local_acceptance'])['holdout']
+            team_seeds.append((read_artifact(earlier_acceptance)['parameters'][options['seed']], width))
+    team_seeds.extend((base, old_width) for ref, old_width in evidence for base in read_artifact(ref)['seeds'])
     seed = parameters[options['seed']]
     domain = prior['seed_range']
     count = parameters[options['task_count']]
@@ -192,7 +207,7 @@ def _holdout(reference, package, recipe, prior, parameters_field, pid_field):
           and 1 < worker_count <= min(count, requested)
           and type(seed) is int and domain['minimum'] <= seed <= domain['maximum'] - (count - 1)
           and all(not seed <= related < seed + count for related in related_seeds)
-          and all(not (seed < base + count and base < seed + count) for base in team_seeds),
+          and all(not (seed < base + old_width and base < seed + count) for base, old_width in team_seeds),
           'holdout crosses the original process, task scope or seed boundary')
     original = read_artifact(case['stdout'], json_document=False)
     tasks, _ = _report(original, package, parameters_field, pid_field, parameters, (worker_count,))
