@@ -452,8 +452,31 @@ def _replay_single(manifest, member):
             replay_recurrence_placement(problem, placement, rhs_recipe, rhs_problem, rhs_schedule)
             _replay_recurrence_selection(manifest, member, execution, observation, schedule, rhs_recipe,
                                          lifetimes=lifetimes)
+            source_abi = None
+            if 'source_entry_cli' in manifest:
+                from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
+                from scar.compiler.aten_source_entry import (
+                    ABI_FILE, BINDING_FILE, LAUNCHER, render_source_launcher, source_entry_description,
+                )
+                from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
+                from scar.compiler.compile_aten_recurrence import _render_recurrence_launch
+
+                descriptor = manifest['source_entry_cli']
+                parent = descriptor['parent_manifest_sha256']
+                if (not manifest.get('source_entry_inferred') or not manifest.get('source_entry_replayable')
+                        or not isinstance(parent, str) or re.fullmatch('[a-f0-9]{64}', parent) is None
+                        or descriptor != source_entry_description(parent)):
+                    raise ValueError('invalid source-entry delivery descriptor')
+                source_abi = derive_fixed_grid_file_entry(source, boundary['entry'],
+                    source_bytes=member('plan/source-entry.py').read_bytes())
+                if (source_abi != json.loads(member(ABI_FILE).read_bytes())
+                        or verify_source_entry_binding(source_abi, execution, rhs_recipe, manifest=manifest)
+                        != json.loads(member(BINDING_FILE).read_bytes())):
+                    raise ValueError('source-entry ABI or physical binding differs from original replay')
+                _require_generated(member, {LAUNCHER: render_source_launcher(placement['cpus']),
+                                            'launch.sh': _render_recurrence_launch(placement['cpus'])})
             generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
-                lanes=placement['lanes'], operation_order=placement['operation_order'])
+                lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=source_abi)
         else:
             raise ValueError('native schedule is missing a source replay implementation')
         _require_generated(member, generated)
@@ -468,6 +491,9 @@ def verify_native_project(directory, manifest_sha256):
         raise ValueError('native project manifest differs from its declared digest')
     manifest = json.loads(path.read_bytes())
     files = manifest['files']
+    if 'source_entry_cli' in manifest and (manifest['schema'] != 'scar.aten-recurrence-delivery'
+            or 'profiles' in manifest or 'cpu_linkage' not in manifest or 'plan/schedule.json' not in files):
+        raise ValueError('standalone source CLI requires the CPU-only recurrence schedule')
 
     def member(relative):
         path = root / relative
@@ -508,6 +534,8 @@ def verify_native_project(directory, manifest_sha256):
         if current.get(library.name) != str(library.resolve()) or _content(library) != {
                 key: lock[key] for key in ('sha256', 'size_bytes')}:
             raise ValueError(f'native operator library differs from the build lock: {library.name}')
+    if 'source_entry_cli' in manifest:
+        receipt['source_entry_cli_replayed'] = True
     return root, dict(receipt, native_dependencies_checked=True)
 
 

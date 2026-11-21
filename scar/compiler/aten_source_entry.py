@@ -1,0 +1,244 @@
+"""Bind a source-proved CLI to one replayed standalone ATen recurrence."""
+import argparse
+from hashlib import sha256
+import json
+from pathlib import Path
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+from time import perf_counter_ns
+
+from scar.codegen.native_provider_bundle import _content
+
+
+ABI_FILE = 'plan/source-entry-abi.json'
+BINDING_FILE = 'plan/source-entry-physical-binding.json'
+LAUNCHER = 'launch-source.sh'
+_ENTRY_SOURCES = {'src/main.cpp', 'src/runtime/file_io.hpp'}
+
+
+def _read(path):
+    return json.loads(path.read_bytes())
+
+
+def _write(path, document):
+    with path.open('x') as stream:
+        json.dump(document, stream, sort_keys=True, indent=2, allow_nan=False)
+        stream.write('\n')
+
+
+def source_entry_description(manifest_sha256):
+    return dict(abi=ABI_FILE, physical_binding=BINDING_FILE, launcher=LAUNCHER,
+        parent_manifest_sha256=manifest_sha256,
+        scope='PROVEN_SOURCE_CLI_NORMAL_COMPLETION_WITH_FRESH_OUTPUT',
+        source_cli_performance_measured=False, deployment_authorized=False)
+
+
+def render_source_launcher(cpus):
+    from scar.compiler.compile_aten_recurrence import _render_recurrence_launch
+
+    original = _render_recurrence_launch(cpus)
+    marker = ' "$@"\n'
+    if not original.endswith(marker):
+        raise ValueError('original native launcher argument boundary differs')
+    return original.removesuffix(marker) + ' --source-entry "$@"\n'
+
+
+def bind_source_entry(project, manifest_sha256, out, *, compiler='g++'):
+    """Rebuild one verified physical schedule with a source-derived argument mode."""
+    from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
+    from scar.codegen.aten_recurrence_source import render_recurrence
+    from scar.codegen.native_project import build_native_project
+    from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
+    from scar.compiler.tensor_execution import scheduled_tensor_body
+    from scar.runtime.validate_native_project import verify_native_project
+
+    out = Path(out).resolve()
+    if out.exists():
+        raise ValueError('fresh source-entry project required')
+    root, receipt = verify_native_project(project, manifest_sha256)
+    manifest = _read(root/'artifact.json')
+    if (manifest['schema'] != 'scar.aten-recurrence-delivery' or 'source_entry_cli' in manifest
+            or not manifest.get('source_entry_replayable') or 'cpu_linkage' not in receipt):
+        raise ValueError('a verified CPU-only recurrence with its original archived source is required')
+    source = _read(root/'plan/source-entry-binding.json')
+    original_entry = _read(root/'plan/source-entry.json')
+    abi = derive_fixed_grid_file_entry(source, original_entry['entry'],
+        source_bytes=(root/'plan/source-entry.py').read_bytes())
+    execution = _read(root/'plan/execution.json')
+    recipe = _read(root/'plan/rhs-recipe.json')
+    binding = verify_source_entry_binding(abi, execution, recipe, manifest=manifest)
+    lowered = scheduled_tensor_body(_read(root/'plan/problem.json'), _read(root/'plan/schedule.json'), execution)
+    placement = execution['placement']
+    generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
+        lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=abi)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix='.scar-source-aten-', dir=out.parent) as scratch:
+        stage = Path(scratch)/'project'
+        stage.mkdir()
+        replaced = {*_ENTRY_SOURCES, manifest['executable'], 'validation/build.log', 'validation/ldd.txt'}
+        for name, expected in manifest['files'].items():
+            if name not in replaced:
+                path = stage/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(root/name, path)
+                if _content(path) != expected:
+                    raise ValueError('native input member changed during source-entry build: '+name)
+        for name, source_text in generated.items():
+            path = stage/name
+            if name in _ENTRY_SOURCES:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source_text)
+            elif path.read_text() != source_text:
+                raise ValueError('source-entry lowering would change the planned recurrence body')
+        _write(stage/ABI_FILE, abi)
+        _write(stage/BINDING_FILE, binding)
+        launcher = stage/LAUNCHER
+        launcher.write_text(render_source_launcher(placement['cpus']))
+        launcher.chmod(0o755)
+        dependencies = manifest['dependencies']
+        libraries = tuple(Path(dependencies[name]) for name in ('libtorch_cpu.so', 'libc10.so'))
+        _, emitted = build_native_project(stage, Path(manifest['executable']).name, shlex.split(compiler),
+            expected_libraries=libraries, require_cpu_only=True)
+        if dependencies != emitted:
+            raise ValueError('source-entry ELF changed the original qualified CPU dependency closure')
+        manifest['source_entry_cli'] = source_entry_description(manifest_sha256)
+        manifest['files'] = {path.relative_to(stage).as_posix(): _content(path)
+                             for path in sorted(stage.rglob('*')) if path.is_file()}
+        _write(stage/'artifact.json', manifest)
+        digest = _content(stage/'artifact.json')['sha256']
+        verify_native_project(stage, digest)
+        stage.rename(out)
+    return dict(project=str(out), manifest_sha256=digest, entry_launcher=str(out/LAUNCHER),
+        reused_placement=placement, native_schedule_replayed=True, source_cli_performance_measured=False)
+
+
+def source_argv(abi, input_root, steps, output):
+    if type(steps) is not int or not 1 <= steps <= 2**31-1:
+        raise ValueError('positive signed 32-bit step count required for the normal entry contract')
+    args = [''] * abi['argv']['count']
+    for name, value in (('input_root', str(input_root)), ('steps', str(steps)), ('output', str(output))):
+        args[abi['argv'][name]-1] = value
+    return args
+
+
+def _original_environment(manifest):
+    libraries = Path(manifest['dependencies']['libtorch_cpu.so']).parent
+    odeint = Path(manifest['method_provider']['sources']['odeint']['path'])
+    pythonpath = [str(libraries.parents[1]), str(odeint.parents[2])]
+    env = dict(LANG='C.UTF-8', OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1', MKL_NUM_THREADS='1',
+               PYTHONDONTWRITEBYTECODE='1', PYTHONPATH=':'.join(pythonpath))
+    check = subprocess.run([sys.executable, '-B', '-c',
+        'from pathlib import Path; import json, torch, importlib; '
+        'm = importlib.import_module("torchdiffeq._impl.odeint"); '
+        'print(json.dumps([str(Path(torch.__file__).resolve().parent / "lib"), '
+        'str(Path(m.__file__).resolve()), torch.version.cuda]))'], env=env, check=True, capture_output=True)
+    if json.loads(check.stdout) != [str(libraries), str(odeint), None]:
+        raise ValueError('original Python resolves a different Torch or fixed-grid provider')
+    return env
+
+
+def _inputs(abi, input_root):
+    from math import prod
+
+    receipts = []
+    for row in abi['inputs']:
+        path = input_root/row['path']
+        metadata = path.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 4*prod(row['shape'])):
+            raise ValueError('original Tensor input must be a regular file of its exact admitted size: '+str(path))
+        receipts.append(dict(port=row['port'], path=str(path), **_content(path)))
+    return receipts
+
+
+def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, measure=False):
+    """Compare the unchanged Python entry and one selected C++ under the same argv."""
+    from scar.optimization.paired_entry_selection import compare_entry_pairs
+    from scar.runtime.validate_native_project import verify_native_project
+
+    out = Path(out).resolve()
+    if out.exists():
+        raise ValueError('fresh validation output directory required')
+    root, _ = verify_native_project(project, manifest_sha256)
+    manifest = _read(root/'artifact.json')
+    if 'source_entry_cli' not in manifest:
+        raise ValueError('replayed native source-entry project required')
+    abi = _read(root/ABI_FILE)
+    input_root = Path(input_root).resolve(strict=True)
+    inputs = _inputs(abi, input_root)
+    source = Path(abi['solver']['source']['path'])
+    expected_source = {key: abi['solver']['source'][key] for key in ('sha256', 'size_bytes')}
+    source_files = {source: expected_source, **{
+        Path(row['path']): {key: row[key] for key in ('sha256', 'size_bytes')}
+        for row in manifest['method_provider']['sources'].values()}}
+    if any(_content(path) != expected for path, expected in source_files.items()):
+        raise ValueError('original Python entry or fixed-grid provider differs from its admitted bytes')
+    env = _original_environment(manifest)
+    out.mkdir(parents=True)
+    publication = out/'publication.f32'
+    argv = source_argv(abi, input_root, steps, publication)
+    cpus = ','.join(map(str, manifest['cpus']))
+    commands = dict(ORIGINAL_PYTHON=['/usr/bin/taskset', '-c', cpus, sys.executable, '-B', str(source), *argv],
+                    NATIVE_CPP=[str(root/LAUNCHER), *argv])
+    runs, observations = [], []
+    count = 4 if measure else 1
+    original_bytes = None
+    for index in range(count):
+        outputs = {}
+        order = tuple(commands) if index % 2 == 0 else tuple(reversed(commands))
+        for mode in order:
+            start = perf_counter_ns()
+            result = subprocess.run(commands[mode], env=env, check=True, capture_output=True)
+            elapsed = perf_counter_ns()-start
+            outputs[mode] = (result.stdout, result.stderr, publication.read_bytes())
+            retained = out/f'pair-{index}-{mode}.f32'
+            publication.rename(retained)
+            runs.append(dict(pair=index, mode=mode, wall_ns=elapsed, returncode=result.returncode,
+                stdout_sha256=sha256(result.stdout).hexdigest(), stderr_sha256=sha256(result.stderr).hexdigest()))
+            observations.append(dict(pair=index, mode=mode, stdout=result.stdout.decode(), stderr=result.stderr.decode(),
+                output=dict(path=str(retained), **_content(retained))))
+        baseline = outputs['ORIGINAL_PYTHON']
+        if baseline != outputs['NATIVE_CPP'] or baseline[1] or original_bytes is not None and original_bytes != baseline[2]:
+            raise ValueError('source-entry stdout, stderr or exact final publication differs')
+        original_bytes = baseline[2]
+    if _inputs(abi, input_root) != inputs or any(_content(path) != expected for path, expected in source_files.items()):
+        raise ValueError('original inputs or source authority changed while comparing the entry')
+    decision = compare_entry_pairs(runs, incumbent='ORIGINAL_PYTHON', challenger='NATIVE_CPP',
+        warmup_pairs=1, measurement_pairs=3, minimum_gain=.05) if measure else None
+    report = dict(schema='scar.aten-source-entry-validation', schema_version=1,
+        project=str(root), manifest_sha256=manifest_sha256, steps=steps, inputs=inputs, argv=argv,
+        commands=commands, cpu_ids=manifest['cpus'], python_provider_environment=env,
+        observations=observations, runs=runs if measure else [],
+        exact_publication_stdout_stderr_exit_verified=True,
+        full_process_measured=measure, timing_scope='SOURCE_CLI_PROCESS_LAUNCH_TO_EXIT_INCLUDING_FILE_IO',
+        decision=decision, deployment_authorized=False)
+    _write(out/'result.json', report)
+    return report
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    subs = parser.add_subparsers(dest='command', required=True)
+    bind = subs.add_parser('bind')
+    validate = subs.add_parser('validate')
+    for command in (bind, validate):
+        command.add_argument('--project', required=True)
+        command.add_argument('--manifest-sha256', required=True)
+        command.add_argument('--out', required=True)
+    bind.add_argument('--compiler', default='g++')
+    validate.add_argument('--input-root', required=True)
+    validate.add_argument('--steps', required=True, type=int)
+    validate.add_argument('--measure', action='store_true')
+    args = vars(parser.parse_args(argv))
+    action = bind_source_entry if args.pop('command') == 'bind' else validate_source_entry
+    result = action(**args)
+    print(json.dumps({key: result[key] for key in ('project', 'manifest_sha256')}, sort_keys=True))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

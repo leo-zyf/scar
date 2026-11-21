@@ -1,7 +1,7 @@
 """Render an ordered Tensor recurrence using the native ATen file ABI."""
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 _FILE_CLI = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
@@ -50,7 +50,125 @@ def _placement(rhs_mode, cpus, lanes, operation_order):
     return definitions, constructor, 'graph::run_ready_ordered(rhs_inputs, team, rhs_lanes, rhs_order)'
 
 
-def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None):
+def _source_file_abi(file_cli):
+    """Share the raw tensor reader and publisher with the source entry."""
+    signature = 'template <class Runner>\nint invoke(char** paths, Runner&& runner) {'
+    load = '    for (std::size_t i = 0; i < inputs.size(); ++i) {\n'
+    stdout = '    constexpr auto byte_order = std::endian::native'
+    if any(file_cli.count(marker) != 1 for marker in (signature, load, stdout)):
+        raise ValueError('native file ABI template differs from the source-entry adapter')
+    file_cli = file_cli.replace(signature, '''template <class Runner, class Stdout>
+int invoke(char** paths, Runner&& runner, std::span<const std::size_t> load_order, Stdout&& stdout_record) {''')
+    file_cli = file_cli.replace(load, '''    for (std::size_t ordinal = 0; ordinal < inputs.size(); ++ordinal) {
+        const auto i = load_order.empty() ? ordinal : load_order[ordinal];
+        if (!load_order.empty() && !fs::is_regular_file(paths[i])) {
+            throw std::runtime_error(std::string("expected a regular source input file: ") + paths[i]);
+        }
+''')
+    prefix, _, suffix = file_cli.partition(stdout)
+    raw_stdout, terminator, closing = suffix.partition('    return 0;\n}')
+    if not terminator:
+        raise ValueError('native file ABI template is missing its stdout record')
+    # The legacy argv mode keeps the old stdout and the native port read order.
+    raw_stdout = '\n'.join('        ' + line for line in (stdout + raw_stdout).splitlines())
+    return prefix + '''    stdout_record(outputs, sizes);
+    return 0;
+}
+
+template <class Runner>
+int invoke(char** paths, Runner&& runner) {
+    return invoke(paths, std::forward<Runner>(runner), {}, [](const auto& outputs, const auto& sizes) {
+''' + raw_stdout + '''
+    });
+}''' + closing
+
+
+def _cpp_text(value):
+    """Emit a literal with stable UTF-8 bytes independently of source encoding."""
+    return '"' + ''.join(chr(byte) if 32 <= byte < 127 and byte not in (34, 92)
+                         else f'\\{byte:03o}' for byte in value.encode('utf-8')) + '"'
+
+
+def _source_entry(plan, abi, team_argument):
+    if (abi.get('schema'), abi.get('schema_version')) != ('scar.fixed-grid-file-entry', 1):
+        raise ValueError('expected an admitted fixed-grid source entry ABI')
+    argv, inputs, publication = abi['argv'], abi['inputs'], abi['publication']
+    roles = [argv[name] for name in ('input_root', 'steps', 'output')]
+    if argv['count'] != 3 or any(type(index) is not int for index in roles) or sorted(roles) != [1, 2, 3]:
+        raise ValueError('source entry requires one root, step count and output argv port')
+    if (abi['solver']['state_input_index'] != plan['state_input_index']
+            or abi['solver']['step_size'] != plan['step_size']
+            or abi['domain']['step_count_syntax'] != 'ASCII_DECIMAL_DIGITS_WITHOUT_SIGN_OR_WHITESPACE'
+            or (abi['domain']['step_count_min'], abi['domain']['step_count_max']) != (1, 2147483647)):
+        raise ValueError('source recurrence count and state contract differs from the plan')
+    if (not inputs or not 0 <= plan['state_input_index'] < len(inputs)
+            or any(row['port'] != index or row['dtype'] != 'FLOAT32'
+                   or len(row['shape']) != 2 or any(type(n) is not int or not 0 < n < 1 << 63 for n in row['shape'])
+                   for index, row in enumerate(inputs))):
+        raise ValueError('source recurrence requires one ordered CPU float32 input row per native port')
+    load_order = sorted(range(len(inputs)), key=lambda index: inputs[index]['load_order'])
+    if [inputs[index]['load_order'] for index in load_order] != list(range(len(inputs))):
+        raise ValueError('source input load order is not a permutation')
+    files = []
+    for row in inputs:
+        path = PurePosixPath(row['path'])
+        if (not path.parts or path.is_absolute() or '..' in path.parts or str(path) != row['path']
+                or '\x00' in row['path']):
+            raise ValueError('source input requires a normalized relative path')
+        files.append(_cpp_text(row['path']))
+
+    fields = publication['stdout']
+    if (publication['file'] != 'FINAL_TENSOR_RAW_BYTES' or publication['order'] != ['FILE', 'STDOUT']
+            or not fields or [row['key'] for row in fields] != sorted({row['key'] for row in fields})):
+        raise ValueError('source recurrence requires file publication followed by a sorted JSON record')
+    result_shape = inputs[plan['state_input_index']]['shape']
+    pieces = ['{']
+    for index, field in enumerate(fields):
+        if index:
+            pieces.append(', ')
+        pieces.append(json.dumps(field['key']) + ': ')
+        kind = field['kind']
+        if kind == 'STEP_COUNT':
+            pieces.append(None)
+        elif kind == 'FINAL_SHAPE':
+            pieces.append(json.dumps(result_shape))
+        elif kind == 'LITERAL':
+            pieces.append(json.dumps(field['value'], allow_nan=False))
+        else:
+            raise ValueError('unsupported source recurrence stdout field')
+    pieces.append('}\n')
+    stdout = ' << '.join('count' if item is None else _cpp_text(item) for item in pieces)
+    lengths = ', '.join(map(str, result_shape))
+    checks = [f'        static_assert(std::ranges::equal(graph::input_shapes[{index}], '
+              f'std::array<std::int64_t, 2>{{{", ".join(map(str, row["shape"]))}}}));'
+              for index, row in enumerate(inputs)]
+    checks = '\n'.join(checks)
+    return f'''        if (source_entry) {{
+            static_assert(graph::input_count == {len(inputs)});
+{checks}
+            constexpr std::array<const char*, graph::input_count> names{{{', '.join(files)}}};
+            constexpr std::array<std::size_t, graph::input_count> load_order{{{', '.join(map(str, load_order))}}};
+            const fs::path root(argv[{roles[0] + 1}]);
+            std::array<std::string, graph::input_count> paths;
+            std::array<char*, graph::input_count + 1> arguments;
+            for (std::size_t index = 0; index < paths.size(); ++index) {{
+                paths[index] = (root / names[index]).string();
+                arguments[index] = paths[index].data();
+            }}
+            arguments.back() = argv[{roles[2] + 1}];
+            return invoke(arguments.data(), [&](const auto& inputs) {{
+                auto result = repeat(inputs, count{team_argument}, [](auto, auto&& run) {{ return run(); }});
+                constexpr std::array<std::int64_t, 2> expected{{{lengths}}};
+                if (!std::ranges::equal(result[0].sizes(), expected)) {{
+                    throw std::runtime_error("recurrence result differs from the source output shape");
+                }}
+                return result;
+            }}, load_order, [&](const auto&, const auto&) {{ std::cout << {stdout}; }});
+        }}
+'''
+
+
+def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None, source_entry_abi=None):
     """Use an admitted recurrence plan to emit one shared loop body and native main."""
     definitions, constructor, call = _placement(rhs_mode, cpus, lanes, operation_order)
     state_index = plan['state_input_index']
@@ -95,6 +213,18 @@ def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None)
     parallel_rhs = rhs_mode == 'READY_DAG'
     team_parameter = ', graph::CpuTeam& team' if parallel_rhs else ''
     team_argument = ', team' if parallel_rhs else ''
+    cli_mode = ''
+    first = 'probe ? 2 : 1'
+    argc_test = 'static_cast<std::size_t>(argc) != first + 1 + graph::input_count + graph::output_count'
+    count_arg = 'first'
+    source_call = ''
+    if source_entry_abi is not None:
+        file_cli = _source_file_abi(file_cli)
+        source_call = _source_entry(plan, source_entry_abi, team_argument)
+        cli_mode = '    const bool source_entry = argc > 1 && std::string_view(argv[1]) == "--source-entry";\n'
+        first = '(probe || source_entry) ? 2 : 1'
+        argc_test = f'source_entry ? argc != 5 : {argc_test}'
+        count_arg = f"source_entry ? {source_entry_abi['argv']['steps'] + 1} : first"
     serial_guard = ''
     if rhs_mode == 'SERIAL' and cpus:
         serial_guard = '''
@@ -162,21 +292,21 @@ std::array<at::Tensor, graph::output_count> repeat(
 
 int main(int argc, char** argv) {{
     const bool probe = argc > 1 && std::string_view(argv[1]) == "--calibrate";
-    const int first = probe ? 2 : 1;
-    if (static_cast<std::size_t>(argc) != first + 1 + graph::input_count + graph::output_count) {{
+{cli_mode}    const int first = {first};
+    if ({argc_test}) {{
         std::fputs("usage: aten-recurrence <count> <input.f32>... <new-output.f32>\\n", stderr);
         return 2;
     }}
     try {{
         ScarTensorBodyProbe<{len(plan['operations'])}> measurement(probe);
-        const auto count = parse_step_count(argv[first]);
+        const auto count = parse_step_count(argv[{count_arg}]);
         if (std::fegetround() != FE_TONEAREST) {{
             throw std::runtime_error("native recurrence requires default floating-point rounding");
         }}
         at::set_num_threads(1);
         at::set_num_interop_threads(1);
         at::NoGradGuard no_grad;
-{constructor}        if (!probe) {{
+{constructor}{source_call}        if (!probe) {{
             return invoke(argv + first + 1, [&](const auto& inputs) {{
                 return repeat(inputs, count{team_argument}, [](auto, auto&& run) {{ return run(); }});
             }});
