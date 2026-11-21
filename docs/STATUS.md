@@ -1,5 +1,11 @@
 # 当前状态
 
+`project-numpy-partition-live-profile → export-native-numpy-partition-live → calibrate-native-numpy-partition-live` 将同一复数切片计划接回未修改的 Cirq 入口。直接借用受实际对齐约束，三次清洁试验分别命中 0、1、0 次。按需重排输入地址后，两种种子及全部清洁试验每次命中 **19/231**，其余沿原路径执行。两种种子的全部六轮状态摘要与原程序逐位一致，轮间输入也逐一匹配上一轮输出。矩阵和原数组经守卫后才借用或重排，候选先写私有输出，再发布至原 `out`。
+
+CPU 13 上各预热 1 对、交替测量 3 对。直接借用的整入口中位数是 2.143 → 2.305 s，按需重排是 **2.119 → 2.307 s**。重排候选绑定约 38 ms，整入口耗时增加 **8.9%**，保持 `NO_OP`。重排额外输入复制上界为 32,832 B，每次成功调用仍有完整输出发布复制。见 [验收记录](../artifacts/baseline/cpu-native-quantum-live-partition-acceptance.json)。
+
+接下来的 CPU 关口依次是把原入口的门序列、首次状态合并和逐轮归一化接到循环回边，再联合安排数组布局、缓冲生命周期和独立实验的 CPU 容量，最后生成固定作用域的独立 C++20 入口。先逐轮验证两个独立输入，再验收多 worker 排程。运行时可变种子的 RNG 还需要原契约证据。
+
 `capture-numpy-partition` 在真实 CPU Cirq 中识别了 231 次复数分区调用，只保存 6 组样本的输入和正常输出。`project-numpy-partition-iteration` 将原 F4 调用接到步幅、别名、临时结果布局和原 NumPy 迭代顺序。5 组数组样本进入规划，其中 2 组是留出输入。标量下标留作待验证。
 
 `export-native-numpy-partition` 用 C++20 编排 NumPy 2.5.2 实际选中的原生复数乘、加循环。保留预复制和省略预复制的两套计划共通过 10 次逐字节验证。独立 ELF 搬迁后可在空环境运行。CPU 13 上十一维样本按每次进程 10,000 调用、1 轮预热、3 轮测量复验。原函数、保留复制的 C++20 和省略复制的 C++20 中位数分别为 **40.21、6.94、5.49 µs/调用**。选择省略复制，省去每次调用 64 KiB 的逻辑读写。当前采用范围为已验证切片区域的显式试验，整程继续保留原入口。见 `artifacts/baseline/cpu-native-quantum-partition-acceptance.json`。

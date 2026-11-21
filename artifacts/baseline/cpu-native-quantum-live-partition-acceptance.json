@@ -1,0 +1,500 @@
+{
+  "default_entry_backend": "NO_OP",
+  "deployed": false,
+  "dynamic_contract": {
+    "default_numpy_error_policy": {
+      "divide": "warn",
+      "invalid": "warn",
+      "over": "warn",
+      "under": "ignore"
+    },
+    "exact_provider_image": {
+      "schema": "scar.native-provider-library",
+      "sha256": "27bd88fd60f4b9fcd5c938572e9b9e3df0aed9cfed4888e57d94c516b45512b7",
+      "size_bytes": 10624953,
+      "uri": "/home/zyf/miniconda3/envs/lewm/lib/python3.14/site-packages/numpy/_core/_multiarray_umath.cpython-314-x86_64-linux-gnu.so"
+    },
+    "exclusive_input_and_output_access": true,
+    "requires_unobserved_source_sticky_status": true
+  },
+  "frontend": {
+    "coverage": {
+      "exact_geometry_independent_holdouts": 0,
+      "identical_geometry_calls": 19,
+      "live_accepted_call_count_proven": false,
+      "matched_samples": [
+        {
+          "caller": {
+            "code_id": "pycode-v2:4854aff438848b0b295046db6209f9054117e8e8f4aff7ac80d7ddf5752c8b01",
+            "file": "/home/zyf/AAA/cirq/.scar-runtime/cirq/protocols/apply_unitary_protocol.py",
+            "line": 455,
+            "offset": 688
+          },
+          "case": "DISCOVERY",
+          "id": "call-000023",
+          "ordinal": 23
+        }
+      ],
+      "original_observed_calls": 231,
+      "other_or_unclassified_geometry_calls": 212,
+      "scope": "ORIGINAL_CAPTURE_GEOMETRY_COUNTS_BEFORE_LIVE_GUARDS"
+    },
+    "entry": {
+      "schema": "scar.python-source",
+      "sha256": "89c98a323ea07cdf5dddd492a8c8e7d4726a0d97c42a92304de11488d6ea4801",
+      "size_bytes": 4590,
+      "uri": "/home/zyf/AAA/scar-testcases/cpu_quantum/run.py"
+    },
+    "experiment": {
+      "schema": "scar.numpy-partition-live-experiment",
+      "sha256": "237c5031648833cfc73c1f11b974229e790b91a653cec1485c203122552bd2f7",
+      "size_bytes": 2348,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/experiment.json"
+    },
+    "profile": {
+      "schema": "scar.numpy-partition-live-profile",
+      "sha256": "c8348803bccaeeb94b877df193c1ea26523d26a2a1eed03359e455bef8545fdc",
+      "size_bytes": 34577,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/profile.json"
+    },
+    "source": {
+      "code_id": "pycode-v2:b286e59e4efb8f9dd72f5a02414a4e7f63525bece9a8592f9324636327fd8be9",
+      "first_line": 310,
+      "module": "cirq.linalg.transformations",
+      "parameters": {
+        "matrix": "matrix",
+        "out": "out",
+        "slices": "slices",
+        "target": "target"
+      },
+      "qualname": "apply_matrix_to_slices",
+      "source": {
+        "schema": "scar.python-source",
+        "sha256": "a26af425a7d3e65f6488fd7923bd0ef6c6b6660a42d90eb887e44468476b62a5",
+        "size_bytes": 32710,
+        "uri": "/home/zyf/AAA/cirq/.scar-runtime/cirq/linalg/transformations.py"
+      },
+      "symbol": "apply_matrix_to_slices"
+    }
+  },
+  "full_program_cpp": false,
+  "independent_boundary_validation": {
+    "schema": "scar.native-numpy-partition-live-validation",
+    "sha256": "7c04dba121e267928af1b92b6b5933c91078afe1b61739fbeeec4cfce1451c1e",
+    "size_bytes": 894,
+    "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/extension-repack-independent-validation.json"
+  },
+  "lewm_benchmarked": false,
+  "planning": {
+    "live_partition_profitability": "NOT_PROFITABLE",
+    "prepared_scope_timing_excludes_ingress_and_publication": true,
+    "previous_prepared_calibration": {
+      "schema": "scar.native-numpy-partition-calibration",
+      "sha256": "4ad95c5cf8ecc5512f623b1729095316995ecb6fdc71f7824df7749bc6cd8c92",
+      "size_bytes": 19319,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-native-partition-v1/clean-calibration/result.json"
+    },
+    "timing_run": "FRESH_PINNED_SUBPROCESSES_WITHOUT_TRAJECTORY_TRACING",
+    "workstation_original_default": true
+  },
+  "platform": {
+    "cpu_ids": [
+      13
+    ],
+    "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+    "cxx_standard": 20,
+    "isa": "X86_64_V3",
+    "numpy": "2.5.2",
+    "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]"
+  },
+  "policies": {
+    "aligned_repack": {
+      "clean_fallback_calls": [
+        212,
+        212,
+        212
+      ],
+      "clean_native_calls": [
+        19,
+        19,
+        19
+      ],
+      "decision": "KEEP_INCUMBENT",
+      "extension": {
+        "schema": "scar.native-numpy-partition-live-extension",
+        "sha256": "89c2d9a7ac367f868797de4cfd787db7590ad419bc69138aed6336b7f161da66",
+        "size_bytes": 40104,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/extension-repack/_scar_numpy_partition_live_v1.cpython-314-x86_64-linux-gnu.so"
+      },
+      "max_input_copy_bytes": 32832,
+      "observation": {
+        "schema": "scar.numpy-partition-live-calibration",
+        "sha256": "c1c06ba71b7edbfa1d4ce3d53d89b01d9a02d2cd52f72218f05e9d5a049315f8",
+        "size_bytes": 22796,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/repack-acceptance/result.json"
+      },
+      "output_publication": "PRIVATE_RESULT_FULL_COPY",
+      "package": {
+        "schema": "scar.native-numpy-partition-live",
+        "sha256": "9c40cdaad7401b3db9f112c49dd5c14a3b6bad0ddd5cdf09c949bcb8e79e00e8",
+        "size_bytes": 17350,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/extension-repack/result.json"
+      },
+      "private_workspace_bytes": 82176,
+      "runtime_attachment_median_ms": 37.900175,
+      "validation": [
+        {
+          "case": 0,
+          "native_execution_observed": true,
+          "normalized_stdout_equal": true,
+          "reads": 3,
+          "stderr_equal": true,
+          "trajectory": {
+            "calls_per_activation": [
+              3
+            ],
+            "cpu_ids": [
+              13
+            ],
+            "full_state_digests_equal": true,
+            "matched": true,
+            "matched_calls": 3,
+            "performance_measured": false,
+            "recurrence_checked": true
+          },
+          "trial_statistics": {
+            "fallback_calls": 212,
+            "native_calls": 19,
+            "reasons": {
+              "NATIVE_GUARD": 212
+            }
+          }
+        },
+        {
+          "case": 1,
+          "native_execution_observed": true,
+          "normalized_stdout_equal": true,
+          "reads": 3,
+          "stderr_equal": true,
+          "trajectory": {
+            "calls_per_activation": [
+              3
+            ],
+            "cpu_ids": [
+              13
+            ],
+            "full_state_digests_equal": true,
+            "matched": true,
+            "matched_calls": 3,
+            "performance_measured": false,
+            "recurrence_checked": true
+          },
+          "trial_statistics": {
+            "fallback_calls": 212,
+            "native_calls": 19,
+            "reasons": {
+              "NATIVE_GUARD": 212
+            }
+          }
+        }
+      ],
+      "whole_process_population_variance_ns2": {
+        "original": 124716279396840.22,
+        "trial": 82269467715330.89
+      },
+      "whole_process_timing": {
+        "challenger": "trial",
+        "deployment_authorized": false,
+        "gain_fraction": -0.0886093254029614,
+        "incumbent": "original",
+        "measurement_pairs": 3,
+        "metrics": {
+          "original": {
+            "max_ns": 2141954276,
+            "median_ns": 2118899192,
+            "median_ns_twice": 4237798384,
+            "min_ns": 2117676417,
+            "samples_ns": [
+              2117676417,
+              2141954276,
+              2118899192
+            ]
+          },
+          "trial": {
+            "max_ns": 2324697945,
+            "median_ns": 2306653420,
+            "median_ns_twice": 4613306840,
+            "min_ns": 2304450312,
+            "samples_ns": [
+              2324697945,
+              2304450312,
+              2306653420
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -207021528,
+          -162496036,
+          -187754228
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      },
+      "worker_entry_timing": {
+        "challenger": "trial",
+        "deployment_authorized": false,
+        "gain_fraction": -0.11261406423149199,
+        "incumbent": "original",
+        "measurement_pairs": 3,
+        "metrics": {
+          "original": {
+            "max_ns": 1661329457,
+            "median_ns": 1646155285,
+            "median_ns_twice": 3292310570,
+            "min_ns": 1644252951,
+            "samples_ns": [
+              1644252951,
+              1661329457,
+              1646155285
+            ]
+          },
+          "trial": {
+            "max_ns": 1848571616,
+            "median_ns": 1831535522,
+            "median_ns_twice": 3663071044,
+            "min_ns": 1829235098,
+            "samples_ns": [
+              1848571616,
+              1829235098,
+              1831535522
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -204318665,
+          -167905641,
+          -185380237
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      }
+    },
+    "borrowed": {
+      "clean_fallback_calls": [
+        231,
+        230,
+        231
+      ],
+      "clean_native_calls": [
+        0,
+        1,
+        0
+      ],
+      "decision": "KEEP_INCUMBENT_INCOMPLETE_LIVE_ADMISSION",
+      "extension": {
+        "schema": "scar.native-numpy-partition-live-extension",
+        "sha256": "919021ddc05dcddf3183424de1c20c51ef5d54f95203849500de770f1b5d70ba",
+        "size_bytes": 40056,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/extension/_scar_numpy_partition_live_v1.cpython-314-x86_64-linux-gnu.so"
+      },
+      "max_input_copy_bytes": 0,
+      "observation": {
+        "schema": "scar.numpy-partition-live-calibration",
+        "sha256": "e1905597f7186d0e18baa7afbff5fb9c154b7daec67f32984c42f7bd8cd0b0c0",
+        "size_bytes": 22908,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/borrowed-acceptance/result.json"
+      },
+      "output_publication": "PRIVATE_RESULT_FULL_COPY",
+      "package": {
+        "schema": "scar.native-numpy-partition-live",
+        "sha256": "bcafceffa2647e690580a605e60d26dfb2081ffff9e48d3bd29cb6eb2ae73265",
+        "size_bytes": 16675,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-live-partition-v1/extension/result.json"
+      },
+      "private_workspace_bytes": 49216,
+      "runtime_attachment_median_ms": 38.054579,
+      "validation": [
+        {
+          "case": 0,
+          "native_execution_observed": true,
+          "normalized_stdout_equal": true,
+          "reads": 3,
+          "stderr_equal": true,
+          "trajectory": {
+            "calls_per_activation": [
+              3
+            ],
+            "cpu_ids": [
+              13
+            ],
+            "full_state_digests_equal": true,
+            "matched": true,
+            "matched_calls": 3,
+            "performance_measured": false,
+            "recurrence_checked": true
+          },
+          "trial_statistics": {
+            "fallback_calls": 225,
+            "native_calls": 6,
+            "reasons": {
+              "NATIVE_GUARD": 225
+            }
+          }
+        },
+        {
+          "case": 1,
+          "native_execution_observed": false,
+          "normalized_stdout_equal": true,
+          "reads": 3,
+          "stderr_equal": true,
+          "trajectory": {
+            "calls_per_activation": [
+              3
+            ],
+            "cpu_ids": [
+              13
+            ],
+            "full_state_digests_equal": true,
+            "matched": true,
+            "matched_calls": 3,
+            "performance_measured": false,
+            "recurrence_checked": true
+          },
+          "trial_statistics": {
+            "fallback_calls": 231,
+            "native_calls": 0,
+            "reasons": {
+              "NATIVE_GUARD": 231
+            }
+          }
+        }
+      ],
+      "whole_process_population_variance_ns2": {
+        "original": 24217553864709.555,
+        "trial": 51334972337208.22
+      },
+      "whole_process_timing": {
+        "challenger": "trial",
+        "deployment_authorized": false,
+        "gain_fraction": -0.07540195266546434,
+        "incumbent": "original",
+        "measurement_pairs": 3,
+        "metrics": {
+          "original": {
+            "max_ns": 2149684293,
+            "median_ns": 2143101661,
+            "median_ns_twice": 4286203322,
+            "min_ns": 2137647652,
+            "samples_ns": [
+              2149684293,
+              2143101661,
+              2137647652
+            ]
+          },
+          "trial": {
+            "max_ns": 2319040390,
+            "median_ns": 2304695711,
+            "median_ns_twice": 4609391422,
+            "min_ns": 2303111338,
+            "samples_ns": [
+              2303111338,
+              2304695711,
+              2319040390
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -153427045,
+          -161594050,
+          -181392738
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      },
+      "worker_entry_timing": {
+        "challenger": "trial",
+        "deployment_authorized": false,
+        "gain_fraction": -0.10588531815826535,
+        "incumbent": "original",
+        "measurement_pairs": 3,
+        "metrics": {
+          "original": {
+            "max_ns": 1668251829,
+            "median_ns": 1655381228,
+            "median_ns_twice": 3310762456,
+            "min_ns": 1654100165,
+            "samples_ns": [
+              1668251829,
+              1655381228,
+              1654100165
+            ]
+          },
+          "trial": {
+            "max_ns": 1836033056,
+            "median_ns": 1830661796,
+            "median_ns_twice": 3661323592,
+            "min_ns": 1828207942,
+            "samples_ns": [
+              1828207942,
+              1830661796,
+              1836033056
+            ]
+          }
+        },
+        "observed_envelopes_separated": false,
+        "paired_improvement_ns": [
+          -159956113,
+          -175280568,
+          -181932891
+        ],
+        "policy": {
+          "minimum_gain": 0.05,
+          "strict_observed_separation": true
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD",
+          "CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS"
+        ],
+        "schema": "scar.paired-entry-selection",
+        "schema_version": 1,
+        "verdict": "KEEP_INCUMBENT",
+        "warmup_pairs": 1
+      }
+    }
+  },
+  "schema": "scar.cpu-native-quantum-live-partition-acceptance",
+  "schema_version": 1
+}
