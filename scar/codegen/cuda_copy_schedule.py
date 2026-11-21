@@ -33,6 +33,7 @@ class CudaCopySource:
     activity_operations: tuple[str, ...]
     activity_streams: tuple[str, ...]
     activity_waits: tuple[tuple[int, ...], ...]
+    reserved_payload_bytes: dict[str, int]
     requires_host_mm: bool = False
 
 
@@ -376,4 +377,4 @@ def _render(problem, schedule, device, memory_kinds, stream_channels, compute_re
     requires_host_mm = any(mode.lowering == host_lowering and mode.parameters['schema'] == _MM
                            for _, mode in operations)
     return CudaCopySource('\n'.join(lines), buffers, used_streams, activity_operations,
-                          tuple(stream_keys[name] for name in activity_operations), tuple(waits), requires_host_mm)
+                          tuple(stream_keys[name] for name in activity_operations), tuple(waits), occupied, requires_host_mm)

@@ -1,6 +1,6 @@
 """Plan one NVIDIA CPU/CUDA FP32 entry with explicit host and device placements."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from scar.compiler.aten_export_cuda_plan import _profile_target
@@ -8,7 +8,9 @@ from scar.compiler.aten_export_device_placement import placement_choices, placem
 from scar.compiler.aten_export_hybrid_plan import _MM, _build_placement, _certify_placement
 from scar.compiler.aten_export_hybrid_source import qualify_hybrid_export
 from scar.ir.execution_recipe import read_artifact
-from scar.ir.implementation_plan import problem_from_dict
+from scar.ir.implementation_plan import problem_document, problem_from_dict
+from scar.ir.program.providers import ProviderArtifact
+from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
 from scar.optimization.native_device_placement_search import search_native_device_placements
 
@@ -19,7 +21,7 @@ HOST_RESOURCE = 'cpu:nvhpc'
 HOST_LOWERING = 'NVHPC_CBLAS_SGEMM_F32_ROW_MAJOR_V1'
 HOST_PROVIDER = 'NVIDIA_HPC_CBLAS_LP64'
 _CPU_FIELDS = frozenset(('host_cpu_ids', 'host_target', 'placement'))
-_SEARCH_FIELDS = frozenset(('host_cpu_ids', 'host_target', 'host_memory_bytes', 'max_placements'))
+_SEARCH_FIELDS = frozenset(('host_cpu_ids', 'host_target', 'host_memory_bytes', 'max_placements', 'host_calibration'))
 
 
 def qualify_nvhpc_hybrid_export(recipe, shapes=None, *, graph, program_ref, input_kinds):
@@ -74,6 +76,39 @@ def replay_nvhpc_hybrid_export(projection, model, *, model_ref, problem, schedul
     return verify_execution_plan(problem_from_dict(problem), schedule)
 
 
+def _pageable_calibration(projection, calibration, host):
+    from scar.compiler.operator_stack import load_operator_stack
+    from scar.optimization.nvhpc_sgemm_cost import sgemm_body_costs
+
+    if (type(calibration) is not dict or set(calibration) != {'operator_stack', 'observations'}
+            or type(calibration['operator_stack']) is not dict or type(calibration['observations']) is not list
+            or not calibration['observations'] or 'host_target' not in host):
+        raise ValueError('pageable SGEMM calibration requires an operator stack, observations and a pinned host target')
+    stack, sdk = load_operator_stack(calibration['operator_stack'])
+    costs = sgemm_body_costs(projection, calibration['observations'], stack=sdk,
+        target=ProviderArtifact(**host['host_target']), cpus=host['host_cpu_ids'])
+    points = {id_: cost if cost.estimate_ns is None else replace(cost, basis='DECLARED_MODEL',
+        context='OFFLINE_POINT_FROM_MATCHED_WARM_PAGEABLE_CPU_SGEMM') for id_, cost in costs.items()}
+    receipt = dict(operator_stack=stack, observations=calibration['observations'],
+        scope='WARM_PAGEABLE_ROW_MAJOR_FP32_SGEMM_POINT_FORECAST',
+        pageable_cpu_points_ns={id_: cost.estimate_ns for id_, cost in points.items()},
+        physical_duration_bounds_proven=False, pinned_host_points_admitted=False)
+    return points, receipt
+
+
+def _apply_pageable_points(problem, bindings, points):
+    def priced(operation):
+        if operation.id not in points:
+            return operation
+        option, = operation.options
+        return replace(operation, options=(replace(option, cost=points[operation.id]),))
+
+    problem = replace(problem, operations=tuple(priced(operation) for operation in problem.operations))
+    if any(cost.estimate_ns is None for cost in points.values()):
+        return problem_document(problem), construct_implementations(problem), bindings
+    return _certify_placement(problem, bindings)
+
+
 def propose_nvhpc_placement(projection, model, *, model_ref):
     """Compare CPU, CUDA and mixed placements under one declared FP32 body model."""
     if type(model) is not dict or type(model.get('host_memory_bytes')) is not int or not 0 < model['host_memory_bytes'] < 2**63:
@@ -87,10 +122,16 @@ def propose_nvhpc_placement(projection, model, *, model_ref):
     physical = dict(base, host_memory_bytes=model['host_memory_bytes'])
     costs = base['model_durations_ns']
     pageable = dict(physical, model_durations_ns=dict(costs, cpu_mm=costs['cpu_mm_pageable']))
+    calibration = None if 'host_calibration' not in model else _pageable_calibration(
+        projection, model['host_calibration'], host)
 
     def build(placement):
-        selected = physical if 'CUDA' in placement.values() else pageable
-        return _certify_placement(*_build_placement(projection, selected, model_ref, target, placement, nvhpc_host=host))
+        cuda = 'CUDA' in placement.values()
+        selected = physical if cuda else pageable
+        problem, bindings = _build_placement(projection, selected, model_ref, target, placement, nvhpc_host=host)
+        if calibration is not None and not cuda:
+            return _apply_pageable_points(problem, bindings, calibration[0])
+        return _certify_placement(problem, bindings)
 
     analysis, selected = search_native_device_placements(choices, build, max_placements=model.get('max_placements'))
     report = placement_proposal(projection, choices, analysis, selected)
@@ -101,6 +142,8 @@ def propose_nvhpc_placement(projection, model, *, model_ref):
         runtime_requirements=['MATCHED_OPERATOR_STACK', 'MATCHED_CUDA_DEVICE_IDENTITY_FOR_GPU_ROUTES',
             'SUFFICIENT_LIVE_HOST_AND_DEVICE_STORAGE', 'SAME_ENTRY_NUMERICAL_AND_PUBLICATION_VALIDATION'],
         execution_authorized=False)
+    if calibration is not None:
+        report['host_calibration'] = calibration[1]
     return report, selected
 
 

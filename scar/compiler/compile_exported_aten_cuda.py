@@ -210,6 +210,12 @@ def _require_source_profile(profile, operator_stack):
         raise ValueError('original Python CUDA entry requires a pinned NVIDIA stack and an admitted offline profile')
 
 
+def _check_host_calibration_stack(profile, stack):
+    calibration = profile.get('host_calibration') if isinstance(profile, dict) else None
+    if calibration is not None and (type(calibration) is not dict or calibration.get('operator_stack') != stack):
+        raise ValueError('CPU placement calibration differs from the linked NVIDIA operator stack')
+
+
 def compile_exported_aten_cuda(model=None, *, model_sha256=None, cuda_model, cuda_model_sha256,
                                out, input_shapes=(), cuda_root=None, with_activity_calibration=False,
                                placement_ordinal=None, operator_stack=None, source_entry=None):
@@ -238,6 +244,7 @@ def compile_exported_aten_cuda(model=None, *, model_sha256=None, cuda_model, cud
     if model_lock['sha256'] != cuda_model_sha256:
         raise ValueError('declared CUDA model differs from its pinned digest')
     declared = json.loads(model_bytes)
+    _check_host_calibration_stack(declared, None if operator_stack is None else stack_reference)
     if direct_source:
         _require_source_profile(declared, operator_stack)
     nvhpc_profile = isinstance(declared, dict) and declared.get('schema') in (_NVHPC_HYBRID_MODEL, _NVHPC_PLACEMENT_MODEL)
@@ -396,6 +403,7 @@ def replay_cuda_project(root, manifest, member):
             or execution.get('operator_stack') != manifest.get('operator_stack')):
         raise ValueError('CUDA execution disagrees with the retained operator stack receipt')
     declared = json.loads(member(_MODEL_PATH).read_bytes())
+    _check_host_calibration_stack(declared, (manifest.get('operator_stack') or {}).get('reference'))
     nvhpc_profile = declared.get('schema') in (_NVHPC_HYBRID_MODEL, _NVHPC_PLACEMENT_MODEL)
     treatment = manifest['status'] == _PLACEMENT_TREATMENT
     qualify, _, replay, status = _pipeline(declared, treatment=treatment)
@@ -486,6 +494,7 @@ def replay_cuda_project(root, manifest, member):
         result['device_placements_replayed'] = True
     if source_kind == _ORIGINAL_ENTRY:
         result['original_source_entry_replayed'] = True
+        result['reserved_payload_bytes'] = generated.reserved_payload_bytes
     if treatment:
         result['calibration_placement_ordinal'] = placement['ordinal']
     if abi is not None:

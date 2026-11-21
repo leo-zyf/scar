@@ -112,6 +112,7 @@ class CudaExportSource:
     output_slots: tuple[int, ...]
     buffer_values: tuple[str, ...]
     stream_channels: tuple[str, ...]
+    reserved_payload_bytes: dict[str, int]
 
 
 def _apply_hooks(source, prefix, hooks, enabled):
@@ -235,4 +236,5 @@ def render_exported_cuda_entry(problem, schedule, *, device, memory_kinds, strea
     if calibrate:
         header = 'cuda_hybrid_activity_v1.h'
         sources[f'src/{header}'] = (_ROOT / header).read_text()
-    return CudaExportSource(sources, input_slots, output_slots, lowered.buffer_values, lowered.stream_channels)
+    return CudaExportSource(sources, input_slots, output_slots, lowered.buffer_values, lowered.stream_channels,
+                            lowered.reserved_payload_bytes)
