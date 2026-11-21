@@ -570,10 +570,18 @@ CPU/cache 足迹也已有结构化推导：共享缓存域、SMT、按 storage �
 
 报告分别在 `artifacts/current/experiments/whole-loop-delivery-current-v1/`、`stateful-final-delivery-v1/`；旧的单 profile 验收仅作历史材料。
 
+### CPU 资源事件闭环
+
+`project-pipeline-temporal` 复用 F4 源码和有限 CALL 绑定，把调用的值版本、物理槽位与 CPU 资源引用交给 `solve-pipeline-temporal --resource-events`。有限域含原执行及单核、同 NUMA 双物理核各两种内存布局。布局和 CPU 合法性可重放，先按实际依赖计算关键路径，再用同一作用域的组件成本区间做决策。缺失的原始区域成本保留为未知，当前两种网格均保留 `NO_OP`。
+
+`refine-pipeline-temporal --resource-domain … --mode resource-events` 消费重放选出的方案，也可用 `--trial-case` 显式验证合法方案。`compile-pipeline-refinement --mode resource-events` 生成 C++20/ABI1。计算由成功事件推进，最后一个读者完成后退役槽位版本，worker 退出和 workspace 释放后才发布结果。原始 ABI1 和五调用的旧计算顺序模式继续可用。历史 compact 包固定了旧运行时的字节签名，需要重导。
+
+本轮五调用实际诊断验证 16 个任务和 34 条事件，三份改动证书均在生成前拒绝。未修改外部 `split_reaction`，用原入口验证 257×257/8 步及 513×513/16 步。两组最终数组逐字节一致，整进程中位时间分别为 158.35 → 206.15 ms 与 200.41 → 297.29 ms。两组都保持原执行。四段计算形成依赖链，当前两核布局没有跨调用并发空间；具体执行器开销仍待独立组件归因。验收和原始样本索引见 `artifacts/baseline/cpu-pipeline-resource-events.json`。
+
 ## 接下来仍需开发
 
 1. 建图：已连接封闭状态循环的参数化内容递推；继续补有写入的条件 state-path、callback、对象协议与外部算子效果摘要，再扩大原循环替换证明。相同引用仍不证明跨激活内容相同。
-2. 化简：已有两种有明确等待/容量权衡的 pool 模型。现有 `resource_solver` 已支持 v2 图和最短 makespan，但 ready 主链仍缺完整 task 成本、精确预算映射及 solver 顺序到 C++ 的执行证书；必须先接通这些，再进行联合内存/放置/时间选择。NUMA、多进程、MPI 和 GPU offload 尚未完成。
+2. 化简：固定 CPU lane、两种内存布局及事件证书已连通。下一层补齐原始边界、串行宿主和并发组件的可重放成本，再扩大联合内存、放置和时间规划。NUMA 页放置、多进程、MPI 和 GPU offload 尚未在此主链闭合。
 3. 交付：扩大可降低的数据类型、控制/对象和外部接口，统一更多已准入 artifact。当前不是任意 Python 的独立 C++ 主程序；Sunfish/Cirq 未获得完整编译闭环，当前也没有 GPU/LeWM 新验证。
 
 当前首先补核心能力与接口，之后才恢复新路径的性能准入。历史 A/B、失败模型和诊断材料保持原样，详见既有 baseline JSON；不将它们改写为当前版本结果。
