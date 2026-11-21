@@ -167,7 +167,8 @@ def main(argv=None):
             parser.error('new source preparation requires unit, function, shapes, budget and CPU lanes')
         result = prepare_pipeline_temporal(args.build, args.out, caller_unit=args.unit,
             function_ordinal=args.function_ordinal, provider_name=args.provider,
-            interface_ordinals=args.interface_ordinal, input_shapes=args.input_shapes,
+            interface_ordinals=None if args.interface_ordinal is None else tuple(args.interface_ordinal),
+            input_shapes=args.input_shapes,
             memory_budget_bytes=args.memory_budget_bytes, pipeline_workers=args.pipeline_workers,
             memory_order=args.pipeline_memory_order or 'dependencies', cost_model=args.cost_model)
     else:
