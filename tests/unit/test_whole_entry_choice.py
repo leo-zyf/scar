@@ -14,6 +14,7 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.resource_solver import semantic_sha256
 from scar.compiler import whole_entry_pipeline
+from scar.optimization.cpu_entry_forward_cost import _team_rank
 from scar.optimization.whole_entry_choice import (
     DOMAIN, LIFECYCLE_PHASES, solve_whole_entry_choice, verify_whole_entry_choice,
 )
@@ -40,6 +41,24 @@ def _phase_coverage():
 def _interval(low, high):
     return dict(kind='COMPLETE_INTERVAL', basis='ANALYTICAL_MODEL', interval_ns=dict(lower=low, upper=high),
                 model_gap_ns=0, lifecycle_coverage=_phase_coverage())
+
+
+def test_body_nomination_stays_open_when_independent_campaigns_overlap():
+    def placement(mode, low, point, high):
+        interval = dict(lower_ns=low, estimate_ns=point, upper_ns=high)
+        overhead = dict.fromkeys(interval, 0)
+        return dict(mode=mode, worker_count=2, owner_cpu_id=0, worker_cpu_ids=[0, 1], capacity_reasons=[],
+            cost=dict(ordered_numeric_completion_ns=interval, additive_transport_interval_ns=overhead,
+                      modeled_elapsed_ns=interval))
+
+    threads = placement('ORDERED_OPENMP', 4, 5, 6)
+    processes = placement('ORDERED_LOCAL_PROCESSES', 8, 9, 10)
+    schedule = dict(alternatives=[threads, processes])
+    assert _team_rank(schedule)['provisional_body_nomination_id'] == 'ORDERED_OPENMP:2'
+    repeat = [placement('ORDERED_OPENMP', 5, 6, 9), placement('ORDERED_LOCAL_PROCESSES', 8, 10, 11)]
+    result = _team_rank(schedule, repeat)
+    assert result['provisional_body_nomination_id'] is None
+    assert result['status'] == 'EMPIRICAL_MODEL_ENVELOPES_OVERLAP'
 
 
 def _option(domain, tmp_path, name, cost=None, status='LEGAL'):

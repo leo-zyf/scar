@@ -367,6 +367,26 @@ def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None):
     return dict(entry_effect_frontier=effect, cpu_decision_ledger=decision)
 
 
+def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe):
+    from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
+    from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
+
+    ledger = frontiers['cpu_decision_ledger']
+    lifecycle = _write(out/'whole-entry-cpu-lifecycle.json',
+        derive_cpu_entry_lifecycle_graph(frontiers['cpu_launch_resources'], decision_ledger=ledger,
+                                         capacity_contract=frontiers.get('cpu_capacity_contract')))
+    frontiers['cpu_entry_lifecycle'] = lifecycle
+    if nomination is None:
+        if probes or team_probe is not None:
+            raise ValueError('CPU component probes require one independently nominated native entry')
+        return
+    refs = [artifact_reference(Path(path).resolve(strict=True), LAUNCH_PROXY) for path in probes]
+    if team_probe is not None:
+        refs.append(artifact_reference(Path(team_probe).resolve(strict=True), TEAM_PROBE))
+    frontiers['cpu_entry_forward_cost'] = _write(out/'whole-entry-cpu-forward-cost.json',
+        derive_cpu_entry_forward_cost(ledger, nomination, refs, lifecycle_graph=lifecycle))
+
+
 @verify_stack_components_once()
 def prepare_whole_entry(plan, request, out):
     reference, document, candidates = read_request(request)
@@ -539,7 +559,8 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 
 
 @verify_stack_components_once()
-def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False):
+def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
+                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -548,6 +569,9 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     _, request, candidates = read_request(entry['request'])
     if enforce_cpu_capacity and not (verify_entry and not plan_only and _infer_cpu_catalog(request)):
         raise ValueError('CPU capacity enforcement requires an explicit CPU catalog trial')
+    forward = cpu_entry_forward or bool(cpu_launch_probes) or cpu_team_probe is not None
+    if forward and not _infer_cpu_catalog(request):
+        raise ValueError('CPU forward cost analysis requires a CPU catalog domain')
     if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
@@ -589,19 +613,25 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None
-    if enforce_cpu_capacity and selected != domain['baseline_id']:
+    if forward or enforce_cpu_capacity and selected != domain['baseline_id']:
         from scar.analysis.cpu_launch_resources import derive_cpu_launch_resources
         from scar.optimization.cpu_entry_capacity_contract import derive_cpu_entry_capacity_contract
 
         eligible = [row['id'] for row in domain['options'] if row['legal_status'] != 'INELIGIBLE'
                     and row['id'] in generated and _cpu_catalog_option(generated[row['id']])]
-        nomination = selected if selected in eligible else eligible[0] if selected is None and len(eligible) == 1 else None
-        if nomination is not None:
+        fallback = eligible[0] if len(eligible) == 1 and (selected is None or forward) else None
+        nomination = selected if selected in eligible else fallback
+        if forward or nomination is not None:
             cpu_frontiers['cpu_launch_resources'] = _write(out/'whole-entry-cpu-launch-resources.json',
                 derive_cpu_launch_resources(cpu_frontiers['entry_effect_frontier']))
-            capacity_contract = _write(out/'whole-entry-cpu-capacity-contract.json',
+        if nomination is not None:
+            capacity = _write(out/'whole-entry-cpu-capacity-contract.json',
                 derive_cpu_entry_capacity_contract(cpu_frontiers['cpu_decision_ledger'], nomination))
-            cpu_frontiers['cpu_capacity_contract'] = capacity_contract
+            cpu_frontiers['cpu_capacity_contract'] = capacity
+            if enforce_cpu_capacity:
+                capacity_contract = capacity
+        if forward:
+            _forward_cpu_entry(out, cpu_frontiers, nomination, cpu_launch_probes, cpu_team_probe)
     if selected in generated:
         delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry,
                                    capacity_contract=capacity_contract)
