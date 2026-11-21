@@ -1,6 +1,7 @@
 """Project original F4 source initializer candidates and their local effects."""
 
 from collections import defaultdict
+from contextlib import nullcontext
 from pathlib import Path
 
 from scar.analysis.build import BuildSession
@@ -171,7 +172,7 @@ def _initializers(session, original, candidates, edges):
 
 
 @reuse_decoded_source_bodies()
-def derive_cpu_entry_import_initializers(entry_obligations_ref):
+def derive_cpu_entry_import_initializers(entry_obligations_ref, *, session=None):
     """Read sealed source candidates and executable initializer operations mechanically."""
     original = read_artifact(entry_obligations_ref)
     _need(entry_obligations_ref['schema'] == OBLIGATIONS and original['schema_version'] == 1
@@ -184,9 +185,10 @@ def derive_cpu_entry_import_initializers(entry_obligations_ref):
     requests, edges, candidates = _requests(original)
     initializers = []
     if candidates:
-        with BuildSession(Path(program['uri']).parent) as session:
-            _need(session.report == manifest, 'original F4 build differs')
-            initializers = _initializers(session, original, candidates, edges)
+        build_path = Path(program['uri']).parent
+        with (BuildSession(build_path) if session is None else nullcontext(session)) as active:
+            _need(active.path == build_path.resolve() and active.report == manifest, 'original F4 build differs')
+            initializers = _initializers(active, original, candidates, edges)
     return dict(schema=SCHEMA, schema_version=1, entry_obligations=entry_obligations_ref, program=program,
         status='SOURCE_INITIALIZER_INVENTORIES_PROJECTED' if any(row['operation_inventory'] is not None
             for row in initializers) else 'SOURCE_INITIALIZER_BODIES_OPEN',
@@ -195,10 +197,10 @@ def derive_cpu_entry_import_initializers(entry_obligations_ref):
         transformation_authorized=False, target_executed=False)
 
 
-def verify_cpu_entry_import_initializers(reference):
+def verify_cpu_entry_import_initializers(reference, *, session=None):
     """Cold-replay the manifest against the exact original F4 material."""
     saved = read_artifact(reference)
     _need(reference['schema'] == SCHEMA
-          and saved == derive_cpu_entry_import_initializers(saved['entry_obligations']),
+          and saved == derive_cpu_entry_import_initializers(saved['entry_obligations'], session=session),
           'saved initializer projection differs from original F4 replay')
     return saved

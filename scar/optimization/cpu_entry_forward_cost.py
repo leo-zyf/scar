@@ -252,7 +252,7 @@ def _phase_order(reference, ledger_ref, scope, option_id):
 
 
 def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle_graph=None,
-                                  schedule_constraints=None):
+                                  schedule_constraints=None, memory_lifetimes=None):
     """Replay the scoped service prediction and retain the unpriced entry lifecycle."""
     ledger = verify_cpu_entry_decision_ledger(ledger_ref)
     scope = read_artifact(ledger['domain'])['scope']
@@ -285,12 +285,26 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
     if LAUNCH_PROXY in grouped:
         diagnostics.append(_launch_probe(grouped[LAUNCH_PROXY], scope, plan, option['original']))
     phase_order = _phase_order(lifecycle_graph, ledger_ref, ledger['scope_sha256'], option_id)
+    memory = None
+    if memory_lifetimes is not None:
+        from .cpu_entry_memory_lifetimes import verify_cpu_entry_memory_lifetimes
+
+        memory = verify_cpu_entry_memory_lifetimes(memory_lifetimes)
+        _require(schedule_constraints is not None and memory['schedule_constraints'] == schedule_constraints
+                 and memory['lifecycle_graph'] == lifecycle_graph
+                 and memory['scope_sha256'] == ledger['scope_sha256']
+                 and memory['option_id'] in (None, option_id),
+                 'memory lifetimes must bind the same entry and fixed task schedule')
     covered = None
     if body is not None:
         covered = dict(group='DISPATCHED_NUMERIC_BODY', phase_overlap=['worker_lifecycle', 'execution', 'synchronization'],
             graph_operations=[] if phase_order is None else phase_order.get('numerical_team_operations', []),
             composition='CONTENDED_LANE_CRITICAL_PATH_PLUS_ISOLATED_EMPTY_DISPATCH',
             conditional_interval_ns=body['conditional_interval_ns'], sampled_interval_is_physical_bound=False)
+        if memory is not None and memory['status'] == 'EXACT_TRACKED_PAYLOAD_LIFETIMES':
+            phase_bytes = memory['phase_payload_upper_bytes']
+            covered['tracked_payload_upper_bytes'] = dict(
+                while_tasks_run=phase_bytes['running_tasks'], during_publication=phase_bytes['publication'])
     result = dict(schema=SCHEMA, schema_version=1, ledger=ledger_ref, option_id=option_id, probes=list(probes),
         lifecycle_graph=lifecycle_graph, scope_sha256=ledger['scope_sha256'], exact_legality=option['legality'],
         phase_order=phase_order, launch_diagnostics=diagnostics, body_model=body, covered_subgraph=covered,
@@ -303,6 +317,8 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
         execution_default='NO_OP', deployment_authorized=False)
     if schedule_constraints is not None:
         result['schedule_constraints'] = schedule_constraints
+    if memory_lifetimes is not None:
+        result['memory_lifetimes'] = memory_lifetimes
     return result
 
 
@@ -311,6 +327,7 @@ def verify_cpu_entry_forward_cost(report_ref):
     _require(report_ref['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
              'unsupported forward cost report')
     replay = derive_cpu_entry_forward_cost(saved['ledger'], saved['option_id'], saved['probes'],
-        lifecycle_graph=saved['lifecycle_graph'], schedule_constraints=saved.get('schedule_constraints'))
+        lifecycle_graph=saved['lifecycle_graph'], schedule_constraints=saved.get('schedule_constraints'),
+        memory_lifetimes=saved.get('memory_lifetimes'))
     _require(replay == saved, 'forward cost differs at cold replay')
     return replay

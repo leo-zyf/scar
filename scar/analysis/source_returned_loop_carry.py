@@ -269,8 +269,14 @@ def project(catalog_path, source_path, code_id=None):
 
 
 def check(path):
+    from scar.analysis.replay_transaction import detached_replay
+
     stored = read_artifact(_ref(path, SCHEMA))
-    if stored != project(Path(stored['catalog']['uri']).parent, stored['source']['uri'], stored['code_id']):
+    catalog, source, code_id = stored['catalog'], stored['source'], stored['code_id']
+    key = (catalog['uri'], catalog['sha256'], source['uri'], source['sha256'], code_id)
+    expected = detached_replay('F4 returned loop carry', key,
+        lambda: project(Path(catalog['uri']).parent, source['uri'], code_id))
+    if stored != expected:
         raise ValueError('source loop carry differs from cold F4 replay')
     return stored
 

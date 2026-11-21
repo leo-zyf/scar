@@ -321,7 +321,7 @@ def _bind_tensor_flow(plan, scope):
                                    entry_obligations=plan['entry_obligations'])
 
 
-def _bind_cpu_observation(plan, scope, discovery, *, paired_evidence=None):
+def _bind_cpu_observation(plan, scope, discovery, *, paired_evidence=None, checked_pair=None):
     paired = paired_evidence or scope.get('cpu_paired_observation')
     capture = scope.get('cpu_stream_capture')
     if paired is None and capture is None:
@@ -338,16 +338,18 @@ def _bind_cpu_observation(plan, scope, discovery, *, paired_evidence=None):
             source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
             provider=(discovery or {}).get('matched_authority'))
     flow = bind_cpu_provider_graph(plan['program'], scope, paired,
-        source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'))
+        source_admission=plan['source_admission'], entry_obligations=plan.get('entry_obligations'),
+        checked_pair=checked_pair)
     if flow['provider'] != (discovery or {}).get('matched_authority'):
         raise ValueError('retained CPU observation belongs to a different catalog authority')
     return flow
 
 
-def _attach_cpu_pair(plan, scope, discovery, path, current, out):
+def _attach_cpu_pair(plan, scope, discovery, path, current, out, checked_pair):
+    from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_catalog_entry_trial import _compilation, _observation_summary
     from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
-    from scar.compiler.cpu_entry_replay import SCHEMA
+    from scar.compiler.cpu_entry_replay import CheckedCpuPair, SCHEMA
 
     reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
     paired, compilation = verify_paired_original_scope(scope, reference)
@@ -365,12 +367,13 @@ def _attach_cpu_pair(plan, scope, discovery, path, current, out):
     if pinned == reference:
         graph_ref = current
     else:
-        graph = _bind_cpu_observation(plan, scope, discovery, paired_evidence=reference)
+        checked_pair = CheckedCpuPair(reference) if current_transaction() is not None else None
+        graph = _bind_cpu_observation(plan, scope, discovery, paired_evidence=reference, checked_pair=checked_pair)
         graph_ref = _write(out/'whole-entry-cpu-provider-graph.json', graph)
     audit = dict(option_id=option['id'], legal_status=option['legal_status'], reason='RETAINED_SCOPED_CPU_PAIR',
         provider_replay=review, validation=dict(reference=reference, timing=None,
             exact_declared_effects_replayed=False, provider_boundary_replayed=True))
-    return graph_ref, audit
+    return graph_ref, audit, checked_pair
 
 
 def _retain_projection(out, filename, report, retained):
@@ -434,6 +437,7 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
 def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
     from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
+    from scar.optimization.cpu_entry_memory_lifetimes import derive_cpu_entry_memory_lifetimes
     from scar.optimization.cpu_entry_schedule_constraints import derive_cpu_entry_schedule_constraints
 
     ledger = frontiers['cpu_decision_ledger']
@@ -460,9 +464,11 @@ def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cos
     constraints = _write(out/'whole-entry-cpu-schedule-constraints.json',
                          derive_cpu_entry_schedule_constraints(lifecycle))
     frontiers['cpu_entry_schedule_constraints'] = constraints
+    memory = _write(out/'whole-entry-cpu-memory-lifetimes.json', derive_cpu_entry_memory_lifetimes(constraints))
+    frontiers['cpu_entry_memory_lifetimes'] = memory
     frontiers['cpu_entry_forward_cost'] = _write(out/'whole-entry-cpu-forward-cost.json',
         derive_cpu_entry_forward_cost(ledger, nomination, refs, lifecycle_graph=lifecycle,
-                                     schedule_constraints=constraints))
+                                     schedule_constraints=constraints, memory_lifetimes=memory))
     if phase_cost is not None:
         _attach_native_phase_cost(frontiers, nomination, phase_cost)
 
@@ -529,7 +535,8 @@ def _cpu_catalog_option(option):
     return option.get('implementation_family') == 'CATALOG_CPU_ENTRY'
 
 
-def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_contract=None, retained_pair_ref=None):
+def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_contract=None, retained_pair_ref=None,
+                    checked_pair=None):
     if _nvhpc_option(option):
         from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
 
@@ -542,7 +549,7 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_con
         from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
 
         return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry,
-                                      capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref)
+            capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref, checked_pair=checked_pair)
 
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
@@ -613,7 +620,8 @@ def _observed_costs(audit, delivery, scope_sha, out):
         comparisons=comparisons, separate_component_times_available=False))
 
 
-def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_contract=None, paired_audit=None):
+def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_contract=None, paired_audit=None,
+                          checked_pair=None):
     """Review the nominated device and permit a CPU trial if no entry ran."""
     eligible = [generated[row['id']] for row in domain['options']
                 if row['id'] in generated and row['legal_status'] != 'INELIGIBLE']
@@ -629,6 +637,8 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
         evidence = {} if capacity_contract is None else dict(capacity_contract=capacity_contract)
         if paired_audit is not None and paired_audit['option_id'] == option['id']:
             evidence['retained_pair_ref'] = paired_audit['validation']['reference']
+        if checked_pair is not None and _cpu_catalog_option(option):
+            evidence['checked_pair'] = checked_pair
         trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True, **evidence)
         audit.append(dict(option_id=trial['selected_id'], legal_status=option['legal_status'],
                           validation=trial['validation'], reason=trial['reason']))
@@ -645,6 +655,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
                        cpu_python_import_cost=None, cpu_paired_evidence=None):
     from scar.analysis.build_admission import verify_build_admission
+    from scar.analysis.replay_transaction import current_transaction
+    from scar.compiler.cpu_entry_replay import CheckedCpuPair
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
 
@@ -681,15 +693,17 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     flow_ref = entry.get('tensor_flow_binding')
     if (flow_ref is None) != (flow is None) or flow_ref is not None and read_artifact(flow_ref) != flow:
         raise ValueError('Tensor-flow binding differs from original graph replay')
-    cpu_observation = _bind_cpu_observation(plan, live_scope, discovery)
+    pinned = live_scope.get('cpu_paired_observation')
+    checked_pair = CheckedCpuPair(pinned) if pinned is not None and current_transaction() is not None else None
+    cpu_observation = _bind_cpu_observation(plan, live_scope, discovery, checked_pair=checked_pair)
     cpu_observation_ref = entry.get('cpu_provider_graph')
     if ((cpu_observation_ref is None) != (cpu_observation is None) or cpu_observation_ref is not None
             and read_artifact(cpu_observation_ref) != cpu_observation):
         raise ValueError('CPU provider observation differs from original graph replay')
     frontier_entry, paired_audit = entry, None
     if cpu_paired_evidence is not None:
-        attached, paired_audit = _attach_cpu_pair(plan, live_scope, discovery, cpu_paired_evidence,
-                                                cpu_observation_ref, out)
+        attached, paired_audit, checked_pair = _attach_cpu_pair(plan, live_scope, discovery, cpu_paired_evidence,
+                                                              cpu_observation_ref, out, checked_pair)
         if attached != cpu_observation_ref:
             cpu_observation_ref = attached
             frontier_entry = dict(entry, cpu_provider_graph=attached, entry_effect_frontier=None,
@@ -705,10 +719,14 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain)
     if cpu_frontiers:
+        from scar.analysis.cpu_entry_import_effects import derive_cpu_entry_import_effects
         from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
 
-        cpu_frontiers['cpu_entry_import_initializers'] = _write(out/'whole-entry-import-initializers.json',
+        initializers = _write(out/'whole-entry-import-initializers.json',
             derive_cpu_entry_import_initializers(plan['entry_obligations']))
+        cpu_frontiers['cpu_entry_import_initializers'] = initializers
+        cpu_frontiers['cpu_entry_import_effects'] = _write(out/'whole-entry-import-effects.json',
+            derive_cpu_entry_import_effects(initializers))
     if paired_audit is not None:
         from scar.analysis.cpu_entry_publication_order import derive_cpu_entry_publication_order
 
@@ -743,7 +761,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         retained_pair_ref = paired_audit['validation']['reference'] if (
             paired_audit is not None and paired_audit['option_id'] == selected) else None
         delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry,
-                                   capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref)
+            capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref, checked_pair=checked_pair)
     else:
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
@@ -751,7 +769,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     trial, device_trial = None, None
     if selected is None and verify_entry and not plan_only:
         trial, device_trial, new_audit = _review_source_trials(discovery, generated, domain, live_scope, out,
-            capacity_contract=capacity_contract, paired_audit=paired_audit)
+            capacity_contract=capacity_contract, paired_audit=paired_audit, checked_pair=checked_pair)
         audit.extend(new_audit)
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:

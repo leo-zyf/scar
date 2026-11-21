@@ -166,12 +166,15 @@ def replay_cpu_catalog_observation(reference, plan, scope):
     return _replay_cpu_catalog_observation(reference, plan, scope)
 
 
-def _replay_cpu_catalog_observation(reference, plan, scope, *, strict_binding=False):
+def _replay_cpu_catalog_observation(reference, plan, scope, *, strict_binding=False, checked_pair=None):
     report = read_artifact(reference)
     record = _compilation(report['compilation'], plan)
     if strict_binding and record.get('catalog') != plan['catalog']:
         raise ValueError('retained CPU trial does not bind the selected catalog')
-    if cpu_entry_replay.check(reference['uri']) != report:
+    if checked_pair is not None and type(checked_pair) is not cpu_entry_replay.CheckedCpuPair:
+        raise ValueError('expected a checked CPU pair for this review')
+    checked = cpu_entry_replay.check(reference['uri']) if checked_pair is None else checked_pair.report(reference)
+    if checked != report:
         raise ValueError('CPU provider replay changed while checking the retained observation')
     review = _observation_summary(reference, report, record, plan, scope)
     if strict_binding and not all(review['scope']['scope_matches'].values()):
@@ -207,7 +210,7 @@ def _trial_result(result, review, *, retained):
 
 
 def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capacity_contract=None,
-                           retained_pair_ref=None):
+                           retained_pair_ref=None, checked_pair=None):
     """Materialize the exact provider choice or replay its original sealed trial."""
     plan = option['proof']['emission_plan']
     result = dict(schema=HANDOFF, schema_version=1, selected_id=option['id'], scope=scope,
@@ -248,7 +251,8 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capac
                 if explicit and option['id'] != 'planned:' + semantic_sha256(
                         dict(scope_sha256=semantic_sha256(scope), plan=plan)):
                     raise ValueError('retained CPU trial does not match the scoped catalog option ID')
-                replay = _replay_cpu_catalog_observation(pair, plan, scope, strict_binding=explicit)
+                replay = _replay_cpu_catalog_observation(pair, plan, scope, strict_binding=explicit,
+                                                        checked_pair=checked_pair)
                 if capacity is not None:
                     replay['capacity_replay'] = _retained_capacity(replay, capacity_contract, capacity)
                 result['native'] = dict(compilation=replay['compilation'], artifact=replay['provider_compilation'],

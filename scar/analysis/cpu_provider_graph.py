@@ -13,7 +13,7 @@ from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_roles import SyntaxRoleView
 from scar.analysis.static_query import _Fragments
-from scar.compiler.cpu_entry_replay import SCHEMA as PAIRED, check as check_paired
+from scar.compiler.cpu_entry_replay import CheckedCpuPair, SCHEMA as PAIRED, check as check_paired
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.normal_links import FactTable
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
@@ -156,7 +156,8 @@ def _observable_contract(spec, anchors):
             else 'NO_DECLARED_FILE_OUTPUT', observed_effects_close_original_world=False)
 
 
-def bind_cpu_provider_graph(program_ref, scope, replay_ref, *, source_admission, entry_obligations=None):
+def bind_cpu_provider_graph(program_ref, scope, replay_ref, *, source_admission, entry_obligations=None,
+                            checked_pair=None):
     """Read back the same F4 entry, sealed provider and paired observable scope."""
     replay = read_artifact(replay_ref)
     program = read_artifact(program_ref)
@@ -179,7 +180,9 @@ def bind_cpu_provider_graph(program_ref, scope, replay_ref, *, source_admission,
           and set(spec['cpu_ids']) <= set(scope['process_affinity_cpu_ids']),
           'CPU paired observation differs from original source, argv, target or process scope')
     read_artifact(source, json_document=False)
-    _need(check_paired(replay_ref['uri']) == replay, 'paired observable result differs from current provider replay')
+    _need(checked_pair is None or type(checked_pair) is CheckedCpuPair, 'expected a checked CPU pair')
+    checked = check_paired(replay_ref['uri']) if checked_pair is None else checked_pair.report(replay_ref)
+    _need(checked == replay, 'paired observable result differs from current provider replay')
     provider = compilation['provider']
     authority = read_artifact(provider)
     compiled = read_artifact(compilation['compilation'])

@@ -1,6 +1,7 @@
 """Replay qualified CPU entry contracts in clean paired processes."""
 
 import argparse
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
@@ -385,6 +386,39 @@ def check(path):
           and json.dumps(observation, sort_keys=True) == json.dumps(recorded_observation, sort_keys=True)),
           'wait4 resource observation differs at replay')
     return report
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class CheckedCpuPair:
+    """Share one cold qualification between consumers in a build transaction."""
+
+    _identity: tuple
+    _transaction: object
+
+    def __init__(self, reference):
+        from scar.analysis.replay_transaction import current_transaction
+
+        transaction = current_transaction()
+        _need(transaction is not None, 'shared paired qualification requires an active metadata transaction')
+        report = read_artifact(reference)
+        _need(reference['schema'] == SCHEMA and check(reference['uri']) == report,
+              'paired observation changed during its shared replay')
+        transaction.watch(reference['uri'], reference['sha256'], reference['size_bytes'])
+        object.__setattr__(self, '_identity', self._key(reference))
+        object.__setattr__(self, '_transaction', transaction)
+
+    @staticmethod
+    def _key(reference):
+        return reference['uri'], reference['sha256'], reference['size_bytes'], reference['schema']
+
+    def report(self, reference):
+        from scar.analysis.replay_transaction import current_transaction
+
+        _need(current_transaction() is self._transaction and self._key(reference) == self._identity,
+              'paired qualification belongs to another reference or metadata transaction')
+        result = read_artifact(reference)
+        _pins(result['invocation'])
+        return result
 
 
 def main(argv=None):

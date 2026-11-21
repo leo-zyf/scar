@@ -6,6 +6,7 @@ or certify whole-program equivalence.
 """
 import argparse
 from collections import Counter
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import time
@@ -58,9 +59,12 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             raise ValueError('whole-entry request already fixes the scope and declared implementation evidence')
         if plan_only and verify_entry:
             raise ValueError('process validation requires native emission')
+        from scar.analysis.replay_transaction import replay_transaction
         from scar.compiler.whole_entry_pipeline import replay_whole_entry
         out.mkdir(parents=True)
-        whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry,
+        paired = cpu_paired_evidence is not None or 'cpu_paired_observation' in document['whole_entry']['scope']
+        with replay_transaction() if paired else nullcontext():
+            whole=replay_whole_entry(document,out,plan_only=plan_only,entry_costs=entry_costs,verify_entry=verify_entry,
                                  enforce_cpu_capacity=enforce_cpu_capacity,cpu_entry_forward=cpu_entry_forward,
                                  cpu_launch_probes=cpu_launch_probes,cpu_team_probe=cpu_team_probe,
                                  cpu_native_phase_cost=cpu_native_phase_cost,cpu_python_import_cost=cpu_python_import_cost,

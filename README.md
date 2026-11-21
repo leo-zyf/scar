@@ -202,6 +202,8 @@ Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收�
 
 CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保留常量、延迟函数体、原调用点与嵌套导入。运行时选中哪个模块及初始化效果单独核验。使用 `--verify-entry --cpu-paired-evidence VALIDATION.json` 可回读同一候选的配对验收。`--enforce-cpu-capacity` 同时核对旧配对实际使用的 C++20 守卫及其限额。回读成功时复用候选二进制和样本。
 
+`scar export-cpu-catalog-runtime --selection SELECTION.json --out PACKAGE` 把已核验的 CPU 目录候选封装为同主机可迁移的 C++20 包，包含 CMake 源码、原 ELF、数值库及适用的限额守卫。`--check PACKAGE/artifact.json --manifest-sha256 SHA256` 在迁移后重查文件、宿主依赖和启动范围。验证运行将输出定向到外部新目录。原入口仍由整入口决策控制。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
