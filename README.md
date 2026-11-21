@@ -194,6 +194,8 @@ Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收�
 
 使用 `compile-build --plan-only --cpu-entry-forward` 导出 CPU 生命周期图和已计价的候选子图。并行正文依据同硬件、同数值提供者的组件样本，复算各核组方案的完成时间区间。`--cpu-team-probe` 接收一次独立重采的组件记录，按两轮区间的并集重新判断正文方案是否严格分离。可用 `measure-cpu-entry-launch --out PROBE --cpu-ids IDS --cwd DIR --environment ENV.json` 采集空 C++20 进程，再用 `--cpu-launch-probe PROBE/result.json` 接入启动路径诊断。原入口导入、发布及未覆盖的活动继续保留在成本缺口中。
 
+`measure-cpu-native-lifecycle --lifecycle-graph GRAPH.json --out DIAGNOSTIC` 从已准入的 CPU 数组入口机械生成计时点，编译诊断副本并核对 stdout、文件发布、退出和地址空间限额。可用 `--forward-cost` 同时回读已有正文预测。诊断输出 `phase-cost.json` 可通过 `compile-build --cpu-native-phase-cost` 接入同一原入口、目标和提供者的规划报告。相邻计时点划分诊断窗口，整入口前向时间界仍由独立模型证明。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈

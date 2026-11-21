@@ -367,7 +367,25 @@ def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None):
     return dict(entry_effect_frontier=effect, cpu_decision_ledger=decision)
 
 
-def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe):
+def _attach_native_phase_cost(frontiers, nomination, path):
+    from scar.optimization.cpu_native_lifecycle_cost import SCHEMA, verify_cpu_native_lifecycle_cost
+
+    reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    diagnostic = verify_cpu_native_lifecycle_cost(reference)
+    measured = read_artifact(diagnostic['lifecycle_graph'])
+    planned = read_artifact(frontiers['cpu_entry_lifecycle'])
+    if measured['capacity_contract'] is None or planned['capacity_contract'] is None:
+        raise ValueError('native phase observations require a bound CPU candidate launch contract')
+    measured_capacity = read_artifact(measured['capacity_contract'])
+    planned_capacity = read_artifact(planned['capacity_contract'])
+    if (diagnostic['option_id'] != nomination or diagnostic['scope_sha256'] != planned['scope_sha256']
+            or any(measured[key] != planned[key] for key in ('program', 'target', 'scope_sha256'))
+            or any(measured_capacity[key] != planned_capacity[key] for key in ('native_launch', 'evidence', 'guard'))):
+        raise ValueError('native phase observations differ from the current CPU entry, provider or launch scope')
+    frontiers['cpu_native_phase_cost'] = reference
+
+
+def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
     from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
 
@@ -377,7 +395,7 @@ def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe):
                                          capacity_contract=frontiers.get('cpu_capacity_contract')))
     frontiers['cpu_entry_lifecycle'] = lifecycle
     if nomination is None:
-        if probes or team_probe is not None:
+        if probes or team_probe is not None or phase_cost is not None:
             raise ValueError('CPU component probes require one independently nominated native entry')
         return
     refs = [artifact_reference(Path(path).resolve(strict=True), LAUNCH_PROXY) for path in probes]
@@ -385,6 +403,8 @@ def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe):
         refs.append(artifact_reference(Path(team_probe).resolve(strict=True), TEAM_PROBE))
     frontiers['cpu_entry_forward_cost'] = _write(out/'whole-entry-cpu-forward-cost.json',
         derive_cpu_entry_forward_cost(ledger, nomination, refs, lifecycle_graph=lifecycle))
+    if phase_cost is not None:
+        _attach_native_phase_cost(frontiers, nomination, phase_cost)
 
 
 @verify_stack_components_once()
@@ -560,7 +580,7 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 
 @verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
-                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None):
+                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -569,7 +589,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     _, request, candidates = read_request(entry['request'])
     if enforce_cpu_capacity and not (verify_entry and not plan_only and _infer_cpu_catalog(request)):
         raise ValueError('CPU capacity enforcement requires an explicit CPU catalog trial')
-    forward = cpu_entry_forward or bool(cpu_launch_probes) or cpu_team_probe is not None
+    forward = cpu_entry_forward or bool(cpu_launch_probes) or cpu_team_probe is not None or cpu_native_phase_cost is not None
     if forward and not _infer_cpu_catalog(request):
         raise ValueError('CPU forward cost analysis requires a CPU catalog domain')
     if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
@@ -631,7 +651,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
             if enforce_cpu_capacity:
                 capacity_contract = capacity
         if forward:
-            _forward_cpu_entry(out, cpu_frontiers, nomination, cpu_launch_probes, cpu_team_probe)
+            _forward_cpu_entry(out, cpu_frontiers, nomination, cpu_launch_probes, cpu_team_probe, cpu_native_phase_cost)
     if selected in generated:
         delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry,
                                    capacity_contract=capacity_contract)
