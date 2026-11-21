@@ -218,6 +218,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar study-cpu-fp-guards --acceptance TASK_ACCEPTANCE.json --arena-proof ARENA_STUDY/proof.json --out STUDY` 在已有的 CPU 数值任务路径中识别可合并的浮点异常检查。它按首轮和稳态生成区域计划，核对数值库和本机浮点环境，生成独立 C++20 工程，再保存逐轮字节对照和原生配对计时。原入口默认保留，可用 `--check STUDY/result.json` 冷回读证据。
 
+`scar study-cpu-arithmetic-dispatch --acceptance TASK_ACCEPTANCE.json --baseline FP_STUDY/native/result.json --out STUDY` 把现有算子调用的重复形状编译成共享 C++20 路径。它回读首轮和稳态的地址及浮点守卫合同，并分别与已有分组版和分组前的原生版做配对。`--check STUDY/result.json` 冷回读执行和性能证据。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
