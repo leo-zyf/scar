@@ -132,7 +132,29 @@ def _replay_team_components(schedule, repeat_probe=None):
     return native['files']['src/profile_0.cpp'], initial['thread_environment'], repeated
 
 
-def _team_body(plan, option, repeat_probe=None):
+def _scheduled_lane_work(constraints, scope, selected):
+    lanes = constraints['lanes']
+    cost = selected['cost']
+    services = cost['worker_service_intervals_ns']
+    _require(constraints['task_count'] == scope['task_count']
+             and constraints['worker_count'] == selected['worker_count']
+             and [row['cpu_id'] for row in lanes] == selected['worker_cpu_ids']
+             and set(services) == {str(row['cpu_id']) for row in lanes},
+             'scoped lane allocation differs from calibrated service placement')
+    per_lane = []
+    for row in lanes:
+        service = _interval(services[str(row['cpu_id'])])
+        per_lane.append(dict(cpu_id=row['cpu_id'], task_count=row['task_count'],
+                             modeled_service_ns={side: service[side] * row['task_count'] for side in _SIDES}))
+    numeric = {side: max(row['modeled_service_ns'][side] for row in per_lane) for side in _SIDES}
+    elapsed = _sum([numeric, _interval(cost['additive_transport_interval_ns'])])
+    _require(numeric == cost['ordered_numeric_completion_ns'] and elapsed == cost['modeled_elapsed_ns'],
+             'lane-derived critical path does not reproduce the provider body model')
+    return dict(per_lane=per_lane, critical_path_ns=numeric, conditional_elapsed_ns=elapsed,
+                cost_basis='MATCHED_PROBE_SERVICE_PER_FIXED_LANE', physical_duration_bound=False)
+
+
+def _team_body(plan, option, repeat_probe=None, *, schedule_constraints=None):
     from .independent_array_task_team_schedule import MODE
 
     if plan is None or plan['provider_family'] != _ARRAY or not all(plan['context']['scope_matches'].values()):
@@ -157,13 +179,17 @@ def _team_body(plan, option, repeat_probe=None):
              and boundary['runtime_environment_and_publication_excluded'] is True,
              'team body timing requires exact provider placement, source scope and component boundaries')
     cost = selected['cost']
-    return dict(schedule=ref, provider=plan['authority'], runtime=compiled['runtime'],
+    body = dict(schedule=ref, provider=plan['authority'], runtime=compiled['runtime'],
         isolated_evidence=schedule['thread_evidence'], numeric_scope=schedule['scope'], model=boundary,
         mode=selected['mode'], worker_count=selected['worker_count'], worker_cpu_ids=selected['worker_cpu_ids'],
         estimated_components_ns=dict(contended_lane_waves=_interval(cost['ordered_numeric_completion_ns']),
                                      isolated_empty_dispatch=_interval(cost['additive_transport_interval_ns'])),
         conditional_interval_ns=_interval(cost['modeled_elapsed_ns']), repeat_probe=repeat_probe,
         placement_comparison=_team_rank(schedule, repeated))
+    if schedule_constraints is not None and schedule_constraints['status'] == 'EXACT_ORDINAL_LANE_CONSTRAINTS':
+        body['lane_work_model'] = _scheduled_lane_work(schedule_constraints, schedule['scope'], selected)
+        body['conditional_interval_ns'] = body['lane_work_model']['conditional_elapsed_ns']
+    return body
 
 
 def _launch_context(scope, plan, original):
@@ -225,7 +251,8 @@ def _phase_order(reference, ledger_ref, scope, option_id):
                              target_phase=operations[row['target']], basis=row['basis'], when=row['when']) for row in edges])
 
 
-def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle_graph=None):
+def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle_graph=None,
+                                  schedule_constraints=None):
     """Replay the scoped service prediction and retain the unpriced entry lifecycle."""
     ledger = verify_cpu_entry_decision_ledger(ledger_ref)
     scope = read_artifact(ledger['domain'])['scope']
@@ -243,7 +270,16 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
     _require(len(grouped) == len(probes) and set(grouped) <= {LAUNCH_PROXY, TEAM_PROBE},
              'at most one launch proxy and one independent team repeat may bind an option')
     repeat = grouped.get(TEAM_PROBE)
-    body = _team_body(plan, option, repeat)
+    constraints = None
+    if schedule_constraints is not None:
+        from .cpu_entry_schedule_constraints import verify_cpu_entry_schedule_constraints
+
+        constraints = verify_cpu_entry_schedule_constraints(schedule_constraints)
+        _require(constraints['scope_sha256'] == ledger['scope_sha256']
+                 and constraints['lifecycle_graph'] == lifecycle_graph
+                 and constraints['option_id'] in (None, option_id),
+                 'resource schedule must bind the same entry and option lifecycle')
+    body = _team_body(plan, option, repeat, schedule_constraints=constraints)
     _require(repeat is None or body is not None, 'independent team repeat needs an exact scoped body')
     diagnostics = []
     if LAUNCH_PROXY in grouped:
@@ -255,7 +291,7 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
             graph_operations=[] if phase_order is None else phase_order.get('numerical_team_operations', []),
             composition='CONTENDED_LANE_CRITICAL_PATH_PLUS_ISOLATED_EMPTY_DISPATCH',
             conditional_interval_ns=body['conditional_interval_ns'], sampled_interval_is_physical_bound=False)
-    return dict(schema=SCHEMA, schema_version=1, ledger=ledger_ref, option_id=option_id, probes=list(probes),
+    result = dict(schema=SCHEMA, schema_version=1, ledger=ledger_ref, option_id=option_id, probes=list(probes),
         lifecycle_graph=lifecycle_graph, scope_sha256=ledger['scope_sha256'], exact_legality=option['legality'],
         phase_order=phase_order, launch_diagnostics=diagnostics, body_model=body, covered_subgraph=covered,
         status='CONDITIONAL_COVERED_SUBGRAPH_PREDICTION' if covered is not None else 'NO_MATCHED_SERVICE_MODEL',
@@ -265,6 +301,9 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
         missing_lifecycle_terms=list(LIFECYCLE_PHASES), whole_entry_model_bound_ns=dict(lower=None, upper=None),
         complete_entry_modeled=False, whole_entry_ranked=False, physical_optimality_proven=False,
         execution_default='NO_OP', deployment_authorized=False)
+    if schedule_constraints is not None:
+        result['schedule_constraints'] = schedule_constraints
+    return result
 
 
 def verify_cpu_entry_forward_cost(report_ref):
@@ -272,6 +311,6 @@ def verify_cpu_entry_forward_cost(report_ref):
     _require(report_ref['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
              'unsupported forward cost report')
     replay = derive_cpu_entry_forward_cost(saved['ledger'], saved['option_id'], saved['probes'],
-                                           lifecycle_graph=saved['lifecycle_graph'])
+        lifecycle_graph=saved['lifecycle_graph'], schedule_constraints=saved.get('schedule_constraints'))
     _require(replay == saved, 'forward cost differs at cold replay')
     return replay

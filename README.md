@@ -192,13 +192,15 @@ Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收�
 
 `compile-build --verify-entry --enforce-cpu-capacity` 可要求候选通过 CPU 地址空间门禁。当前支持已证明共享单一地址空间的 CPU 线程组。命令保存目标资源回读、执行合同以及候选 ELF 执行前的软硬限额记录。原入口沿用原启动命令。候选计时包括 C++20 门禁启动。`verify-cpu-entry --capacity-contract CONTRACT.json` 可对同一个已核验工件重新执行限额试验。[Linux RLIMIT_AS 定义](https://man7.org/linux/man-pages/man2/getrlimit.2.html)
 
-使用 `compile-build --plan-only --cpu-entry-forward` 导出 CPU 生命周期图和已计价的候选子图。并行正文依据同硬件、同数值提供者的组件样本，复算各核组方案的完成时间区间。`--cpu-team-probe` 接收一次独立重采的组件记录，按两轮区间的并集重新判断正文方案是否严格分离。可用 `measure-cpu-entry-launch --out PROBE --cpu-ids IDS --cwd DIR --environment ENV.json` 采集空 C++20 进程，再用 `--cpu-launch-probe PROBE/result.json` 接入启动路径诊断。原入口导入、发布及未覆盖的活动继续保留在成本缺口中。
+使用 `compile-build --plan-only --cpu-entry-forward` 导出 CPU 生命周期图和已计价的候选子图。固定 OpenMP 方案按任务序号的余数确定硬件线程和物理核，再由同一数值提供者的组件样本复算各核串行工作量和并行正文的关键路径。`--cpu-team-probe` 接收一次独立重采的组件记录，按两轮区间的并集重新判断正文方案是否严格分离。可用 `measure-cpu-entry-launch --out PROBE --cpu-ids IDS --cwd DIR --environment ENV.json` 采集空 C++20 进程，再用 `--cpu-launch-probe PROBE/result.json` 接入启动路径诊断。原入口导入、发布及未覆盖的活动继续保留在成本缺口中。
 
 `measure-cpu-native-lifecycle --lifecycle-graph GRAPH.json --out DIAGNOSTIC` 从已准入的 CPU 数组入口机械生成计时点，编译诊断副本并核对 stdout、文件发布、退出和地址空间限额。可用 `--forward-cost` 同时回读已有正文预测。诊断输出 `phase-cost.json` 可通过 `compile-build --cpu-native-phase-cost` 接入同一原入口、目标和提供者的规划报告。相邻计时点划分诊断窗口，整入口前向时间界仍由独立模型证明。
 
 `measure-cpu-python-imports --decision-ledger LEDGER.json --paired VALIDATION.json --out DIAGNOSTIC` 使用已准入的原 Python 入口运行一次导入诊断，保存任务归属、模块记录和 F4 导入点关联。各进程分别汇总自耗时，缓存命中保留为计数。`--initializations-only` 省略缓存命中以减少采集量，`--recover` 从同一目录回读现有样本。`compile-build --cpu-python-import-cost DIAGNOSTIC/import-cost.json` 将诊断接回同一原入口。导入关键路径和初始化效果另行证明。 [CPython 导入计时定义](https://docs.python.org/3.14/using/cmdline.html#cmdoption-X)
 
 `compile-build --plan-only --cpu-paired-evidence VALIDATION.json` 可把已验收的 CPU 配对结果接回先前的入口计划。原作用域和选项 ID 保持不变。具备原 F4 发布点时，SCAR 尝试证明文件发布调用成功返回到 stdout 发布调用的顺序。结合 `--cpu-native-phase-cost` 可将对应 C++20 调用顺序接到候选生命周期图。配对结果沿用提供者的发布路径和输出合同。
+
+CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保留常量、延迟函数体、原调用点与嵌套导入。运行时选中哪个模块及初始化效果单独核验。使用 `--verify-entry --cpu-paired-evidence VALIDATION.json` 可回读同一候选的配对验收。`--enforce-cpu-capacity` 同时核对旧配对实际使用的 C++20 守卫及其限额。回读成功时复用候选二进制和样本。
 
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 

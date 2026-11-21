@@ -10,6 +10,7 @@ from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler import compile_cpu_entry, cpu_entry_replay
 from scar.compiler.entry_delivery import HANDOFF, _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.resource_solver import semantic_sha256
 
 
 _ACQUISITION_RUNS_ENTRY = frozenset(('scar.cpu-fixed-grid-source-provider', 'scar.triangle-profile-family'))
@@ -162,11 +163,39 @@ def _observation_summary(reference, report, record, plan, scope):
 def replay_cpu_catalog_observation(reference, plan, scope):
     """Cold-check a retained provider trial and its separate launch scope."""
     _plan_scope(plan, scope)
+    return _replay_cpu_catalog_observation(reference, plan, scope)
+
+
+def _replay_cpu_catalog_observation(reference, plan, scope, *, strict_binding=False):
     report = read_artifact(reference)
     record = _compilation(report['compilation'], plan)
+    if strict_binding and record.get('catalog') != plan['catalog']:
+        raise ValueError('retained CPU trial does not bind the selected catalog')
     if cpu_entry_replay.check(reference['uri']) != report:
         raise ValueError('CPU provider replay changed while checking the retained observation')
-    return _observation_summary(reference, report, record, plan, scope)
+    review = _observation_summary(reference, report, record, plan, scope)
+    if strict_binding and not all(review['scope']['scope_matches'].values()):
+        raise ValueError('retained CPU trial differs from the selected original process context')
+    return review
+
+
+def _retained_capacity(review, requested_ref, requested):
+    observed_ref = review.get('capacity_contract')
+    if observed_ref is None:
+        raise ValueError('retained CPU trial did not enforce a candidate address-space limit')
+    # The paired checker replays the historical capacity contract and checks
+    # candidate-only readbacks for every arm. A newly attached graph can move
+    # the ledger while preserving every fact used to constrain the launch.
+    observed = read_artifact(observed_ref)
+    if dict(observed, ledger=None) != dict(requested, ledger=None):
+        raise ValueError('retained CPU trial enforced a different capacity or launch contract')
+    runner = (review.get('resource_observation') or {}).get('runner') or {}
+    guard = runner.get('native_capacity_guard')
+    source = Path(__file__).resolve().parents[1]/'native/cpu_capacity_exec.cpp'
+    if (guard is None or guard['cxx_standard'] != 20
+            or read_artifact(guard['source'], json_document=False) != source.read_bytes()):
+        raise ValueError('retained CPU trial requires the current C++20 address-space guard')
+    return dict(requested=requested_ref, observed=observed_ref, guard=guard, enforcement_reexecuted=False)
 
 
 def _trial_result(result, review, *, retained):
@@ -177,7 +206,8 @@ def _trial_result(result, review, *, retained):
                         provider_boundary_replayed=True))
 
 
-def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capacity_contract=None):
+def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capacity_contract=None,
+                           retained_pair_ref=None):
     """Materialize the exact provider choice or replay its original sealed trial."""
     plan = option['proof']['emission_plan']
     result = dict(schema=HANDOFF, schema_version=1, selected_id=option['id'], scope=scope,
@@ -185,12 +215,12 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capac
         reason='plan-only preserved the selected CPU catalog plan', native_compiled=False,
         target_executed=False, validation_attempted=False, qualification=None, validation=None, launch_authority=None,
         deployment_authorized=False)
+    capacity = None
     try:
         _plan_scope(plan, scope)
         capture, cpu, _ = _replay_inputs(plan, scope)
         if capacity_contract is not None:
             from scar.optimization.cpu_entry_capacity_contract import verify_cpu_entry_capacity_contract
-            from scar.optimization.resource_solver import semantic_sha256
 
             capacity = verify_cpu_entry_capacity_contract(capacity_contract)
             if (capacity['option_id'] != option['id'] or capacity['scope_sha256'] != semantic_sha256(scope)
@@ -204,15 +234,29 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capac
     if plan_only:
         return result
 
-    if verify_entry and capacity_contract is None and scope.get('cpu_paired_observation') is not None:
+    pinned_pair = scope.get('cpu_paired_observation')
+    pair = retained_pair_ref if retained_pair_ref is not None else pinned_pair
+    if verify_entry and pair is not None:
         try:
-            replay = replay_cpu_catalog_observation(scope['cpu_paired_observation'], plan, scope)
+            explicit = retained_pair_ref is not None
+            # A historical unguarded pair can pin the original scope while
+            # requesting a fresh guarded trial. A pair supplied for this
+            # particular guarded review must qualify.
+            if explicit or capacity is None or read_artifact(pair).get('capacity_contract') is not None:
+                if pinned_pair not in (None, pair):
+                    raise ValueError('retained CPU trial conflicts with the pair pinned in the original scope')
+                if explicit and option['id'] != 'planned:' + semantic_sha256(
+                        dict(scope_sha256=semantic_sha256(scope), plan=plan)):
+                    raise ValueError('retained CPU trial does not match the scoped catalog option ID')
+                replay = _replay_cpu_catalog_observation(pair, plan, scope, strict_binding=explicit)
+                if capacity is not None:
+                    replay['capacity_replay'] = _retained_capacity(replay, capacity_contract, capacity)
+                result['native'] = dict(compilation=replay['compilation'], artifact=replay['provider_compilation'],
+                                        executable=replay['scope']['candidate']['executable'], reused=True)
+                result['qualification'] = dict(status='QUALIFIED_PROVIDER_BOUNDARY', scope=replay['scope'])
+                return _trial_result(result, replay, retained=True)
         except _ERRORS as error:
             return dict(result, final_action='KEEP_ORIGINAL', reason='retained CPU catalog trial failed: ' + str(error))
-        result['native'] = dict(compilation=replay['compilation'], artifact=replay['provider_compilation'],
-                                executable=replay['scope']['candidate']['executable'], reused=True)
-        result['qualification'] = dict(status='QUALIFIED_PROVIDER_BOUNDARY', scope=replay['scope'])
-        return _trial_result(result, replay, retained=True)
 
     acquisition = plan['provider_family'] in _ACQUISITION_RUNS_ENTRY
     if acquisition and not verify_entry:

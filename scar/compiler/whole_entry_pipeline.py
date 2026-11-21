@@ -434,6 +434,7 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
 def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
     from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
+    from scar.optimization.cpu_entry_schedule_constraints import derive_cpu_entry_schedule_constraints
 
     ledger = frontiers['cpu_decision_ledger']
     if phase_cost is not None:
@@ -456,8 +457,12 @@ def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cos
     refs = [artifact_reference(Path(path).resolve(strict=True), LAUNCH_PROXY) for path in probes]
     if team_probe is not None:
         refs.append(artifact_reference(Path(team_probe).resolve(strict=True), TEAM_PROBE))
+    constraints = _write(out/'whole-entry-cpu-schedule-constraints.json',
+                         derive_cpu_entry_schedule_constraints(lifecycle))
+    frontiers['cpu_entry_schedule_constraints'] = constraints
     frontiers['cpu_entry_forward_cost'] = _write(out/'whole-entry-cpu-forward-cost.json',
-        derive_cpu_entry_forward_cost(ledger, nomination, refs, lifecycle_graph=lifecycle))
+        derive_cpu_entry_forward_cost(ledger, nomination, refs, lifecycle_graph=lifecycle,
+                                     schedule_constraints=constraints))
     if phase_cost is not None:
         _attach_native_phase_cost(frontiers, nomination, phase_cost)
 
@@ -524,7 +529,7 @@ def _cpu_catalog_option(option):
     return option.get('implementation_family') == 'CATALOG_CPU_ENTRY'
 
 
-def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_contract=None):
+def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_contract=None, retained_pair_ref=None):
     if _nvhpc_option(option):
         from scar.compiler.nvhpc_entry_trial import emit_nvhpc_entry
 
@@ -537,7 +542,7 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_con
         from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
 
         return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry,
-                                      capacity_contract=capacity_contract)
+                                      capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref)
 
     from scar.compiler.entry_delivery import HANDOFF, replay_entry_delivery
 
@@ -608,7 +613,7 @@ def _observed_costs(audit, delivery, scope_sha, out):
         comparisons=comparisons, separate_component_times_available=False))
 
 
-def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_contract=None):
+def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_contract=None, paired_audit=None):
     """Review the nominated device and permit a CPU trial if no entry ran."""
     eligible = [generated[row['id']] for row in domain['options']
                 if row['id'] in generated and row['legal_status'] != 'INELIGIBLE']
@@ -621,8 +626,10 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 
     def emit(option, folder):
         folder.mkdir(parents=True, exist_ok=True)
-        capacity = {} if capacity_contract is None else dict(capacity_contract=capacity_contract)
-        trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True, **capacity)
+        evidence = {} if capacity_contract is None else dict(capacity_contract=capacity_contract)
+        if paired_audit is not None and paired_audit['option_id'] == option['id']:
+            evidence['retained_pair_ref'] = paired_audit['validation']['reference']
+        trial = _emit_generated(option, scope, folder, plan_only=False, verify_entry=True, **evidence)
         audit.append(dict(option_id=trial['selected_id'], legal_status=option['legal_status'],
                           validation=trial['validation'], reason=trial['reason']))
         return trial
@@ -697,6 +704,11 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain)
+    if cpu_frontiers:
+        from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
+
+        cpu_frontiers['cpu_entry_import_initializers'] = _write(out/'whole-entry-import-initializers.json',
+            derive_cpu_entry_import_initializers(plan['entry_obligations']))
     if paired_audit is not None:
         from scar.analysis.cpu_entry_publication_order import derive_cpu_entry_publication_order
 
@@ -728,8 +740,10 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         if forward:
             _forward_cpu_entry(out, cpu_frontiers, nomination, cpu_launch_probes, cpu_team_probe, cpu_native_phase_cost)
     if selected in generated:
+        retained_pair_ref = paired_audit['validation']['reference'] if (
+            paired_audit is not None and paired_audit['option_id'] == selected) else None
         delivery = _emit_generated(generated[selected], live_scope, out, plan_only=plan_only, verify_entry=verify_entry,
-                                   capacity_contract=capacity_contract)
+                                   capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref)
     else:
         candidate = _candidate(selected, candidates[selected]) if selected in candidates else None
         delivery = replay_entry_delivery(live_scope, selected_id=selected, candidate=candidate)
@@ -737,7 +751,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     trial, device_trial = None, None
     if selected is None and verify_entry and not plan_only:
         trial, device_trial, new_audit = _review_source_trials(discovery, generated, domain, live_scope, out,
-                                                              capacity_contract=capacity_contract)
+            capacity_contract=capacity_contract, paired_audit=paired_audit)
         audit.extend(new_audit)
     if request.get('audit_retained_validation', False):
         for fact in legalities['options']:
