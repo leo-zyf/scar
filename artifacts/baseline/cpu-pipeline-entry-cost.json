@@ -1,0 +1,157 @@
+{
+  "all_startup_cost_attributed": false,
+  "automatic_deployment_authorized": false,
+  "baseline_qualification": {
+    "bytes": 431,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/admission-qualification.json",
+    "sha256": "5b78e9c530ef9e3e66ff1c886648efad994c734e7b9c30ca00362ec92f3c8bb9"
+  },
+  "conditional_model_frozen_before_holdout": {
+    "bytes": 2330,
+    "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/conditional-entry-models.json",
+    "sha256": "570bb3edf5567be3157465ae56da2d43511de3b93a9f07f5bd1ff405e6e6e357"
+  },
+  "final_delivery_receipt_replay_cost_covered": false,
+  "holdout": {
+    "candidate_process_ns": {
+      "max": 251825493,
+      "median": 241499952,
+      "min": 239809060,
+      "samples": [
+        251825493,
+        241499952,
+        239809060
+      ],
+      "stdev": 6504749.223219319,
+      "variance": 42311762456972.336
+    },
+    "grid": 513,
+    "original_process_ns": {
+      "max": 294450476,
+      "median": 286532606,
+      "min": 282950123,
+      "samples": [
+        286532606,
+        282950123,
+        294450476
+      ],
+      "stdev": 5884796.3559610965,
+      "variance": 34630828151133
+    },
+    "release_review": true,
+    "speedup": 1.1864706540397159,
+    "steps": 64,
+    "validation": {
+      "bytes": 5955,
+      "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/513-64step-holdout/result.json",
+      "sha256": "52c48bbd7c532b5a650a21314072118584c080c0e1c7cbe6d9b5aa197b6a3191"
+    }
+  },
+  "schema": "scar.cpu-pipeline-entry-cost-acceptance",
+  "schema_version": 1,
+  "scope": "CPU_POINTWISE_CALLER_FULL_PROCESS_ENTRY_WITH_FINAL_OUTPUT",
+  "short_runs": [
+    {
+      "complete_candidate_ns": {
+        "max": 209348733,
+        "median": 203558308,
+        "min": 198840876,
+        "samples": [
+          209348733,
+          198840876,
+          203558308
+        ],
+        "stdev": 5263051.160174707,
+        "variance": 27699707514616.332
+      },
+      "complete_original_ns": {
+        "max": 169622345,
+        "median": 151692068,
+        "min": 148845853,
+        "samples": [
+          151692068,
+          148845853,
+          169622345
+        ],
+        "stdev": 11263942.419279154,
+        "variance": 126876398824836.33
+      },
+      "demand": {
+        "bytes": 2472,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/257-original-demand.json",
+        "sha256": "e43ba1e9d60e1b0e2ec93e2d5a3c3b40e7d6b820eda7e20fb05c2b60cba0eba0"
+      },
+      "grid": 257,
+      "previous_paired_median_ns": {
+        "extra_outside_window": 45472948,
+        "saved_in_repeated_window": 4055044,
+        "slower_end_to_end": 41417904
+      },
+      "reexport": {
+        "bytes": 4091,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/257-bundle/export-report.json",
+        "sha256": "9bc82898b8550c4c557befdfe0d0cde938d8be57c1f5c85d20cb52c8043b47cb"
+      },
+      "release_review": false,
+      "speedup": 0.745202047955714,
+      "steps": 8,
+      "validation": {
+        "bytes": 5997,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/257-entry-ab/result.json",
+        "sha256": "42074635ac7771d471ff719f3506bd51256ff852ac92020d7f0a7bc2a0f37181"
+      }
+    },
+    {
+      "complete_candidate_ns": {
+        "max": 216098815,
+        "median": 214867721,
+        "min": 214854880,
+        "samples": [
+          214854880,
+          216098815,
+          214867721
+        ],
+        "stdev": 714508.1772732439,
+        "variance": 510521935390.3333
+      },
+      "complete_original_ns": {
+        "max": 194528424,
+        "median": 194450252,
+        "min": 193410057,
+        "samples": [
+          194528424,
+          194450252,
+          193410057
+        ],
+        "stdev": 624347.8259082299,
+        "variance": 389810207716.3333
+      },
+      "demand": {
+        "bytes": 2474,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/513-original-demand.json",
+        "sha256": "ed30b073dc103c40a597a47792b8217993fe488d5b24633c4dc1651dfc3d3f6e"
+      },
+      "grid": 513,
+      "previous_paired_median_ns": {
+        "extra_outside_window": 45634411,
+        "saved_in_repeated_window": 27224134,
+        "slower_end_to_end": 18191902
+      },
+      "reexport": {
+        "bytes": 4091,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/513-bundle/export-report.json",
+        "sha256": "60a5be01e22c74d116652ba0a7629d00530864b4f45e936b3e7c2a74ec841757"
+      },
+      "release_review": false,
+      "speedup": 0.9049765646278717,
+      "steps": 16,
+      "validation": {
+        "bytes": 5984,
+        "path": "/home/zyf/AAA/scar/artifacts/current/experiments/pipeline-entry-cost-v1/513-entry-ab/result.json",
+        "sha256": "273f32ee8815cf7482d9cfa5f5610806bb4f0669d3ed75112c6d991385083ca1"
+      }
+    }
+  ],
+  "source_or_cuda_environment_modified": false,
+  "startup_duplicates_removed": true
+}
