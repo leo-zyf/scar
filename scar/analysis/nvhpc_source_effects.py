@@ -2,7 +2,7 @@
 
 import argparse
 import ast
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 import os
 from pathlib import Path
@@ -15,6 +15,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
 SCHEMA = 'scar.nvhpc-source-effect-observation'
+_LATEST_VERSION = 2
 _TRACE_PREFIX = 'syscalls'
 _TRACE_LIMIT = 32 * 1024 * 1024
 _ROW = re.compile(r'^([a-zA-Z0-9_]+)\((.*)\)\s+= (.+)$')
@@ -103,8 +104,9 @@ def _original(reference):
     _need(reference_run['returncode'] == 0 and all(_receipt(row['path']) == row for row in
           [reference_run['stdout'], reference_run['stderr'], *reference_run['outputs']]),
           'original outcome receipts changed or did not exit successfully')
-    return dict(command=command, context=context, source=source, inputs=inputs, outputs=outputs,
+    scope = dict(command=command, context=context, source=source, inputs=inputs, outputs=outputs,
         expected_sizes=[row['nbytes'] for row in contract['outputs']], reference_run=reference_run)
+    return scope, contract_ref, contract
 
 
 def _tool_command(tool, scope, folder):
@@ -188,7 +190,57 @@ def _trace_members(folder):
     return [_receipt(path) for path in paths]
 
 
-def _classify(traces, scope):
+class _Witnesses:
+    """Keep the source-accountable observations with exact trace coordinates."""
+
+    def __init__(self, scope):
+        self.source = scope['source']['path']
+        self.inputs = set(scope['inputs'])
+        self.provider_paths = {name: Path(row['path']) for name, row in scope['context']['providers'].items()
+            if type(row) is dict}
+        self.bootstrap = []
+        self.exit = []
+        self.source_reads = []
+        self.files = defaultdict(list)
+        self.providers = defaultdict(list)
+        self.stdio = defaultdict(list)
+
+    def record(self, name, args, result, kind, where):
+        if where['phase'] == 'FOLLOWED_CHILD_OR_THREAD':
+            return
+        if name == 'execve' and kind is None:
+            self.bootstrap.append(dict(kind='BOOTSTRAP_EXEC', path=_path_argument(args), **where))
+        if name in ('open', 'openat') and kind is None and (descriptor := _FD.fullmatch(result)):
+            path = descriptor[2]
+            if path == self.source:
+                self.source_reads.append(dict(kind='SOURCE_OPEN', path=path, **where))
+            if path in self.inputs:
+                self.files[path].append(dict(kind='READ_ONLY_OPEN', fd=int(descriptor[1]), **where))
+            if path is not None and where['phase'] == 'BEFORE_FIRST_DECLARED_INPUT':
+                for provider, candidate in self.provider_paths.items():
+                    cache = str(candidate.parent/'__pycache__') + '/' + candidate.stem + '.cpython-'
+                    if path == str(candidate) or candidate.suffix == '.py' and path.startswith(cache) and path.endswith('.pyc'):
+                        self.providers[provider].append(dict(kind='PROVIDER_PATH_OPEN', path=path, **where))
+        if name == 'mmap':
+            fields = args.split(', ', 4)
+            if len(fields) == 5:
+                descriptor, _, offset = fields[-1].rpartition(', ')
+                match = _FD.fullmatch(descriptor)
+                if match and match[2] in self.inputs and fields[1].isdecimal() and offset.isdecimal():
+                    flags = fields[3].split('|')
+                    private = ('MAP_PRIVATE' in flags and 'MAP_ANONYMOUS' not in flags
+                               and 'PROT_READ' in fields[2].split('|'))
+                    self.files[match[2]].append(dict(kind='PRIVATE_MAP' if private
+                        else 'OTHER_MAP', fd=int(match[1]), length=int(fields[1]), offset=int(offset), **where))
+        if name == 'close':
+            fd, path = _child_fd(args)
+            if path in self.inputs:
+                self.files[path].append(dict(kind='CLOSE', fd=fd, **where))
+        if kind in ('STDOUT', 'STDERR') and result.isdecimal():
+            self.stdio[kind.lower()].append(dict(kind='STREAM_WRITE', syscall=name, bytes=int(result), **where))
+
+
+def _classify(traces, scope, *, witnesses=None):
     bootstrap = [scope['command'][0], scope['context']['python']['path']]
     observed, uncovered, publications = Counter(), [], []
     expected = dict(zip(scope['outputs'], scope['expected_sizes'], strict=True))
@@ -212,6 +264,9 @@ def _classify(traces, scope):
                 line = raw.strip()
                 if footer := _FOOTER.fullmatch(line):
                     exits.append(int(footer[1]))
+                    if witnesses is not None and is_parent:
+                        witnesses.exit.append(dict(kind='PROCESS_EXIT', trace=index, line=line_number,
+                            returncode=exits[-1]))
                     continue
                 if line.startswith('--- SIGCHLD'):
                     continue
@@ -230,6 +285,8 @@ def _classify(traces, scope):
                     spawn_targets.add(result)
                 try:
                     kind, resource = _event(name, args, result, state)
+                    if witnesses is not None:
+                        witnesses.record(name, args, result, kind, where)
                 except (SyntaxError, ValueError):
                     kind, resource = 'UNPARSED_EFFECT_ARGUMENT', None
                 if kind in ('PUBLICATION_OPEN', 'PUBLICATION_WRITE', 'PUBLICATION_CLOSE'):
@@ -287,24 +344,107 @@ def _outcome(folder, scope, returncode):
         original_outcome_reproduced=same)
 
 
-def _report(folder, process, scope, tool, returncode):
+def _input_status(events, nbytes):
+    if [row['kind'] for row in events] != ['READ_ONLY_OPEN', 'PRIVATE_MAP', 'CLOSE']:
+        return 'UNOBSERVED_OR_INCOMPLETE_MAPPING'
+    opened, mapped, closed = events
+    if ((opened['trace'], opened['fd']) == (mapped['trace'], mapped['fd']) == (closed['trace'], closed['fd'])
+            and (mapped['length'], mapped['offset']) == (nbytes, 0)):
+        return 'PRIVATE_FILE_MAPPING_OBSERVED'
+    return 'UNOBSERVED_OR_INCOMPLETE_MAPPING'
+
+
+def _coverage(contract_ref, contract, scope, projection, outcome, witnesses):
+    inputs = dict(zip((row['argv'] for row in contract['inputs']), scope['inputs'], strict=True))
+    outputs = dict(zip((row['argv'] for row in contract['outputs']), scope['outputs'], strict=True))
+    obligations = []
+    for index, node in enumerate(contract['graph']['nodes']):
+        kind = node['kind']
+        status, events, resource = 'UNOBSERVED_STATIC_BOUNDARY', [], None
+        if kind == 'PROCESS_LAUNCH':
+            events = [*witnesses.bootstrap, *witnesses.source_reads]
+            status = ('BOOTSTRAP_AND_SOURCE_OPEN_OBSERVED' if len(witnesses.bootstrap) == 2 and witnesses.source_reads
+                      else 'UNOBSERVED_OR_INCOMPLETE_BOOTSTRAP')
+        elif kind == 'IMPORT_INITIALIZATION':
+            resource = node['module']
+            events = witnesses.providers.get(resource, [])
+            status = 'PARTIAL_PROVIDER_PATH_OBSERVATION' if events else status
+        elif kind == 'PRIVATE_FILE_MAPPING_AND_TENSOR_VIEW':
+            resource = inputs[node['argv']]
+            events = witnesses.files.get(resource, [])
+            status = _input_status(events, node['nbytes'])
+        elif kind == 'SYNC_FILE_CONTENT_PUBLICATION':
+            resource = outputs[node['argv']]
+            events = [event for event in projection['publications'] if event['path'] == resource]
+            exact = [(row['kind'], row['bytes']) for row in events] == [
+                ('PUBLICATION_OPEN', None), ('PUBLICATION_WRITE', node['nbytes']), ('PUBLICATION_CLOSE', None)]
+            retained = outcome['publications'][node['argv']-len(inputs)-1]
+            expected = scope['reference_run']['outputs'][node['argv']-len(inputs)-1]
+            status = ('FILE_CONTENT_PUBLICATION_OBSERVED' if exact and _matches_digest(retained, expected)
+                      else 'UNOBSERVED_OR_INCOMPLETE_PUBLICATION')
+        elif kind == 'NORMAL_PROCESS_EXIT':
+            events = witnesses.exit
+            status = ('NORMAL_EXIT_OBSERVED' if len(events) == 1 and events[0]['returncode'] == outcome['returncode'] == 0
+                      else 'UNOBSERVED_OR_INCOMPLETE_EXIT')
+        obligations.append(dict(id='source:'+node['id'], origin='STATIC_SOURCE', kind=kind, status=status,
+            source_pointer=f'#/graph/nodes/{index}', resource=resource, witnesses=events))
+    for name in ('stdout', 'stderr'):
+        events = witnesses.stdio.get(name, [])
+        size = outcome[name]['size_bytes']
+        status = ('EMPTY_CAPTURE_OBSERVED' if size == 0 and not events
+                  else 'STREAM_WRITE_OBSERVED' if events and sum(row['bytes'] for row in events) == size
+                  else 'UNOBSERVED_OR_INCOMPLETE_STREAM')
+        obligations.append(dict(id='source:'+name, origin='STATIC_SOURCE', kind='PROCESS_STREAM_CAPTURE', status=status,
+            source_pointer='#/domain/'+name, resource=name, witnesses=events))
+    direct_imports = {row['module'] for row in contract['imports']}
+    for provider, events in witnesses.providers.items():
+        if provider not in direct_imports:
+            obligations.append(dict(id='provider:'+provider, origin='OBSERVED_PROVIDER', kind='PROVIDER_READ',
+                status='PATH_OBSERVATION_WITHOUT_SOURCE_CAUSAL_BINDING', source_pointer=None,
+                resource=provider, witnesses=events))
+    for index, effect in enumerate(projection['uncovered_effects']):
+        status = ('OBSERVED_UNREPRESENTED_EFFECT' if 'syscall' in effect and effect['kind'] != 'UNPARSED_EFFECT_ARGUMENT'
+                  else 'UNRESOLVED_OBSERVATION_GAP')
+        obligations.append(dict(id='observation:'+str(index), origin='OBSERVATION_FRONTIER', kind=effect['kind'],
+            status=status, source_pointer=None, resource=effect.get('resource'),
+            observation_pointer=f'#/projection/uncovered_effects/{index}', witnesses=[effect] if 'line' in effect else []))
+    unconfirmed_boundary = {'INCOMPLETE_OR_FAILED_PROCESS_TRACE', 'PUBLICATION_EVENT_ORDER_OR_COUNT_MISMATCH',
+                            'UNRECONCILED_PROCESS_TRACE', 'DECLARED_INPUT_OPEN_NOT_OBSERVED'}
+    logical_boundary_witnessed = (outcome['original_outcome_reproduced'] and not any(
+        row['status'].startswith('UNOBSERVED_OR_INCOMPLETE') or row['kind'] in unconfirmed_boundary for row in obligations))
+    return dict(source_contract=contract_ref, obligations=obligations,
+        logical_boundary_witnessed=logical_boundary_witnessed,
+        static_boundary_effects_closed=False, unobserved_source_nodes_preserved=True,
+        temporal_phase_is_source_causal_binding=False, memory_payload_reads_or_bandwidth_proven=False,
+        scope='PINNED_SINGLE_DIAGNOSTIC_SOURCE_ABI_AND_RETAINED_SYSCALL_WITNESSES')
+
+
+def _report(folder, process, original, tool, returncode, *, version):
+    scope, contract_ref, contract = original
     traces = _trace_members(folder)
-    projection = _classify(traces, scope)
+    witnesses = _Witnesses(scope) if version == 2 else None
+    projection = _classify(traces, scope, witnesses=witnesses)
     outcome = _outcome(folder, scope, returncode)
     consistent_stdio = all(projection['stdio_write_bytes'][name] == outcome[name]['size_bytes']
                            for name in ('stdout', 'stderr'))
     status = ('DIAGNOSTIC_OUTCOME_MISMATCH' if not outcome['original_outcome_reproduced'] or not consistent_stdio
               else 'OBSERVED_EXTRA_EFFECTS' if projection['uncovered_effects'] else 'OBSERVED_DECLARED_EFFECTS')
-    return dict(schema=SCHEMA, schema_version=1, original_process=process, scope=scope,
+    report = dict(schema=SCHEMA, schema_version=version, original_process=process, scope=scope,
         strace=tool, diagnostic_command=_tool_command(tool, scope, folder), traces=traces, outcome=outcome,
         projection=projection, status=status, diagnostic_only=True, performance_measured=False,
         global_effect_closure=False, deployment_authorized=False)
+    if witnesses is not None:
+        coverage = report['effect_coverage'] = _coverage(contract_ref, contract, scope, projection, outcome, witnesses)
+        if status == 'OBSERVED_DECLARED_EFFECTS' and not coverage['logical_boundary_witnessed']:
+            report['status'] = 'OBSERVATION_COVERAGE_OPEN'
+    return report
 
 
 def observe_nvhpc_source_effects(process, out, *, strace='/usr/bin/strace'):
     """Run one separate diagnostic observation on the exact original argv."""
     process = _ref(process, PROCESS)
-    scope = _original(process)
+    original = _original(process)
+    scope = original[0]
     cwd = Path(scope['context']['working_directory'])
     _need(cwd.is_dir() and cwd.resolve() == cwd and set(scope['context']['cpu_ids']) <= os.sched_getaffinity(0),
           'original diagnostic working directory or CPU scope is unavailable')
@@ -321,8 +461,8 @@ def observe_nvhpc_source_effects(process, out, *, strace='/usr/bin/strace'):
     for index, path in enumerate(outputs):
         if path.is_file() and not path.is_symlink():
             move(path, folder/f'publication-{index}')
-    _need(_receipt(tool['path']) == tool and _original(process) == scope, 'original evidence changed during diagnostic')
-    report = _report(folder, process, scope, tool, run.returncode)
+    _need(_receipt(tool['path']) == tool and _original(process) == original, 'original evidence changed during diagnostic')
+    report = _report(folder, process, original, tool, run.returncode, version=_LATEST_VERSION)
     (folder/'result.json').write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False)+'\n')
     return report
 
@@ -332,10 +472,12 @@ def verify_nvhpc_source_effects(reference, *, process):
     reference = _ref(reference, SCHEMA)
     process = _ref(process, PROCESS)
     saved = read_artifact(reference)
-    scope = _original(process)
+    original = _original(process)
+    version = saved.get('schema_version')
+    _need(type(version) is int and version in (1, _LATEST_VERSION), 'unsupported retained source-effect observation version')
     tool = saved['strace']
     _need(_receipt(tool['path']) == tool, 'strace diagnostic tool identity changed')
-    expected = _report(Path(reference['uri']).parent, process, scope, tool, saved['outcome']['returncode'])
+    expected = _report(Path(reference['uri']).parent, process, original, tool, saved['outcome']['returncode'], version=version)
     _need(saved == expected, 'retained source-effect observation differs from byte replay')
     read_artifact(reference, json_document=False)
     return expected
