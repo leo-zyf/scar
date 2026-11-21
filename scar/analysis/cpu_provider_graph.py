@@ -7,6 +7,8 @@ from types import CodeType
 
 from scar.analysis.build import BuildSession
 from scar.analysis.build_admission import verify_build_admission
+from scar.analysis.cpu_stream_graph import _bind_cpu_stream_capture_graph
+from scar.analysis.cpu_stream_graph import bind_cpu_stream_capture_graph as bind_cpu_stream_capture_graph
 from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_roles import SyntaxRoleView
@@ -210,17 +212,26 @@ def bind_cpu_provider_graph(program_ref, scope, replay_ref, *, source_admission,
         frontier.append(dict(kind='ORIGINAL_PLATFORM_THREAD_ENDPOINT_OPEN'))
     if not anchors:
         frontier.append(dict(kind='ORIGINAL_PUBLICATION_CALL_BINDING_OPEN'))
-    if spec['transcript']:
+    stream = None
+    if stream_ref := scope.get('cpu_stream_capture'):
+        _need(spec['transcript'] and stream_ref == replay['capture'],
+              'explicit stream capture differs from paired original observations')
+        stream = _bind_cpu_stream_capture_graph(program_ref, scope, stream_ref, source_admission=source_admission,
+            entry_obligations=entry_obligations, provider=provider, verified_paired=(replay_ref, replay))
+    elif spec['transcript']:
         frontier.append(dict(kind='PACED_STDIN_TRANSCRIPT_REMAINS_AN_EXTRA_REQUEST_CONSTRAINT'))
     if spec['files']:
         frontier.append(dict(kind='ORIGINAL_ARBITRARY_OUTPUT_PATH_EFFECTS_OPEN'))
     if scope['python_executable'] != original['executable']['uri']:
         frontier.append(dict(kind='ORIGINAL_INTERPRETER_LAUNCH_PATH_SPELLING_DIFFERS'))
     read_artifact(replay_ref, json_document=False)
-    return dict(schema=SCHEMA, schema_version=1, program=program_ref, source_admission=source_admission,
+    result = dict(schema=SCHEMA, schema_version=1, program=program_ref, source_admission=source_admission,
         entry_obligations=entry_obligations, entry=origin, target=target, replay=replay_ref, provider=provider,
         compilation=replay['compilation'], argv=compilation['argv'], source_launch=original['argv'],
         working_directory=spec['cwd'], original_environment_sha256=environment, observed_launch_cpu_ids=original_scope,
         observable_contract=_observable_contract(spec, anchors), coverage_frontier=frontier,
         status='ORIGINAL_SOURCE_AND_SCOPED_PROVIDER_OBSERVABLES_BOUND',
         native_argv_proven_for_unobserved_paths=False, whole_program_effects_closed=False, deployment_authorized=False)
+    if stream is not None:
+        result['stream_capture'] = stream
+    return result
