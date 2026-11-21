@@ -85,7 +85,8 @@ def _spec(reference, capture, cpu):
     else:
         _need(capture is None and cpu is None, 'argv providers use their admitted inputs and CPU mask')
         adapters = {'scar.triangle-profile-family': cpu_entry_replay_adapters.sparse,
-                    'scar.cpu-fixed-grid-source-provider': cpu_entry_replay_adapters.fixed_grid}
+                    'scar.cpu-fixed-grid-source-provider': cpu_entry_replay_adapters.fixed_grid,
+                    'scar.cpu-array-task-source-provider': cpu_entry_replay_adapters.array_tasks}
         spec = adapters[schema](doc, compiled, authority)
     spec['entry'] = doc['entry']
     _need(spec['cpu_ids'] and Path(spec['cwd']).is_absolute() and set(spec['arms']) == set(_MODES),
@@ -104,6 +105,8 @@ def _pins(spec):
     for name, reference in spec['files'].items():
         _need(Path(name).name == name and name not in ('', '.', '..'), 'publications need exact declared leaf names')
         _raw(reference)
+    if report := spec.get('json_report'):
+        _raw(report['oracle'])
 
 
 def _layout(spec, root, warmups, pairs):
@@ -111,7 +114,13 @@ def _layout(spec, root, warmups, pairs):
         for mode in _MODES[::(1 if pair % 2 == 0 else -1)]:
             run = root / f'{pair:02d}-{mode}'
             arm = spec['arms'][mode]
-            argv = [arg.replace(_OUTPUT, str(run / 'published')) for arg in arm['argv']]
+            directory = str(run / 'published')
+            if 'output_slot' in arm:
+                argv = list(arm['argv'])
+                index = arm['output_slot']
+                argv[index] = argv[index].replace(_OUTPUT, directory)
+            else:
+                argv = [arg.replace(_OUTPUT, directory) for arg in arm['argv']]
             cpus = ','.join(map(str, spec['cpu_ids']))
             cmd = ['/usr/bin/taskset', '-c', cpus, '/usr/bin/timeout', '-k', '2', str(_TIMEOUT), *argv]
             yield dict(pair=pair, mode=mode, cwd=spec['cwd'], argv=cmd, environment=arm['environment']), run
@@ -159,9 +168,14 @@ def _run(spec, execution, run):
 
 def _results(spec, samples, layout, warmups, pairs):
     observations = []
+    report = spec.get('json_report')
     # Compare the common result after each arm's own stdout format passes.
-    semantic_identity = sha256(json.dumps(dict(outputs=spec['files'],
-        stdout={name: arm['stdout'] for name, arm in spec['arms'].items()}), sort_keys=True).encode()).hexdigest()
+    if report:
+        expected = _raw(report['oracle'])
+        semantic_identity = sha256(expected).hexdigest()
+    else:
+        semantic_identity = sha256(json.dumps(dict(outputs=spec['files'],
+            stdout={name: arm['stdout'] for name, arm in spec['arms'].items()}), sort_keys=True).encode()).hexdigest()
     if spec['transcript']:
         from scar.optimization.scalar_recursive_parameterized_plan import _stdout
 
@@ -173,13 +187,19 @@ def _results(spec, samples, layout, warmups, pairs):
               and row['stdout'] == _ref(run / 'stdout.bin', _RAW) and row['stderr'] == _ref(run / 'stderr.bin', _RAW)
               and not _raw(row['stderr']), f'{mode} run failed or produced unexpected stderr: {run}')
         stdout = _raw(row['stdout'])
+        _need(row['publications'].keys() == spec['files'].keys(), f'{mode} changed the set of publications')
         if spec['transcript']:
             _need(_stdout(stdout, effects) == spec['eligible_stdout_digest'], 'source command effects or canonical output differ')
+        elif report:
+            publication, = row['publications'].values()
+            published = _raw(publication)
+            _need(cpu_entry_replay_adapters._match_json_report(stdout, published, report, expected),
+                  f'{mode} changed the qualified JSON report or its file publication')
         else:
             _need(stdout == _raw(spec['arms'][mode]['stdout']), f'{mode} changed the admitted stdout bytes')
-        _need(row['publications'].keys() == spec['files'].keys() and all(
-            _raw(artifact) == _raw(spec['files'][name]) for name, artifact in row['publications'].items()),
-            f'{mode} changed the exact publications')
+        if not report:
+            _need(all(_raw(artifact) == _raw(spec['files'][name]) for name, artifact in row['publications'].items()),
+                  f'{mode} changed the exact publications')
         observations.append(dict(pair=execution['pair'], mode=mode, wall_ns=row['elapsed_ns'],
                                  returncode=0, stdout_sha256=semantic_identity, stderr_sha256=_EMPTY))
     return compare_entry_pairs(observations, incumbent='original', challenger='candidate',

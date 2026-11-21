@@ -70,7 +70,7 @@ def _check_mpi_launch(package, schedule):
     read_artifact(runtime, json_document=False)
 
 
-def _load(path, *, checked_source=None):
+def _load(path, *, checked_source=None, already_replayed_schedule=None):
     from scar.codegen.native_seeded_array_entry import LOOP_SCHEMA
     from scar.compiler.calibrate_seeded_array_entry import _load as load_seeded
 
@@ -85,7 +85,12 @@ def _load(path, *, checked_source=None):
         schedule = read_artifact(plan_ref)
     else:
         serial, native, recipe = load_seeded(package['native']['uri'])
-        schedule = _load_schedule(plan_ref)
+        if already_replayed_schedule is None:
+            schedule = _load_schedule(plan_ref)
+        else:
+            checked_ref, schedule = already_replayed_schedule
+            _need(checked_ref == plan_ref and schedule == read_artifact(plan_ref),
+                  'acceptance does not use the schedule replayed in this transaction')
     selected = package['decision']
     control = package.get('execution_control')
     if package.get('serial_control'):
@@ -452,8 +457,13 @@ def _check_diagnostics(report, holdout, package, recipe, case, expected, params,
 
 
 def check(path):
+    return _check(path)
+
+
+def _check(path, *, already_replayed_schedule=None):
     stored = read_artifact(_ref(path, SCHEMA))
-    reference, package, recipe, prior, params, pid = _load(stored['entry']['uri'])
+    reference, package, recipe, prior, params, pid = _load(
+        stored['entry']['uri'], already_replayed_schedule=already_replayed_schedule)
     case, expected = _holdout(stored['holdout'], package, recipe, prior, params, pid)
     checked, processes = _validate_runs(stored['clean_pairs'], package, recipe, case, expected, params, pid)
     previous = stored['pairing']

@@ -1,5 +1,6 @@
 """Recover clean replay boundaries from already admitted native CPU entries."""
 
+import json
 import os
 from pathlib import Path
 
@@ -33,6 +34,21 @@ def _scope(record, compiled, authority):
     _require(record['entry'] == compiled['entry'] == authority['entry']
              and record['argv'] == compiled['argv'],
              'CPU replay requested a different original source or argv')
+
+
+def _match_json_report(stdout, published, recipe, expected):
+    from scar.compiler.calibrate_array_entry import _normalize
+
+    def unique_fields(pairs):
+        document = dict(pairs)
+        _require(len(document) == len(pairs), 'array task report has duplicate JSON fields')
+        return document
+
+    def canonical(raw):
+        document = json.loads(raw, object_pairs_hook=unique_fields)
+        return json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+    return canonical(stdout) == canonical(published) and _normalize(stdout, recipe) == expected
 
 
 def sparse(record, compiled, authority):
@@ -98,3 +114,52 @@ def fixed_grid(record, compiled, authority):
                                       native_environment, native['stdout']),
                 },
                 files={output_name: original['output']}, transcript=[])
+
+
+def array_tasks(record, compiled, authority):
+    """Replay a retained array executable against its independently observed report."""
+    _scope(record, compiled, authority)
+    invocation = compiled['invocation']
+    runtime = read_artifact(compiled['runtime'])
+    recipe = read_artifact(compiled['recipe'])
+    holdout = read_artifact(compiled['holdout'])
+    argv = list(record['argv'])
+    index = invocation['output_index']
+    flags = recipe['options'][recipe['output_option']]['flags']
+    original = invocation['original_executable']
+    native = invocation['executable']
+    _require(type(index) is int and index == len(argv) - 1 and index >= 1
+             and argv[index - 1] in flags and argv.count(argv[index - 1]) == 1,
+             'array task replay requires one qualified terminal output option')
+    name = argv[index]
+    _require(Path(name).name == name and name not in ('', '.', '..') and '{output_dir}' not in name,
+             'array task publication must be a relative leaf')
+    cpus = invocation['cpu_ids']
+    original_prefix = [original['uri'], '-B', record['entry']['uri']]
+    _require(compiled['provider'] == record['provider']
+             and compiled['recipe'] == runtime['recipe'] == holdout['recipe']
+             and record['entry'] == recipe['entry'] == holdout['entry'] and record['argv'] == holdout['argv']
+             and original == recipe['source_python'] == holdout['interpreter']
+             and native == runtime['files'][runtime['binary']]
+             and cpus == runtime['cpu_ids'] == holdout['cpu_ids']
+             and holdout['command'] == ['/usr/bin/taskset', '-c', ','.join(map(str, cpus)), *original_prefix]
+             and invocation['original_environment'] == recipe['environment'] == holdout['environment']
+             and invocation['environment'] == dict(recipe['environment'], **runtime.get('launch_environment', {}))
+             and compiled['normalization'] == recipe['runtime_fields'] == holdout['normalized_runtime_fields'],
+             'array task replay differs from its qualified source, launch or report contract')
+    output = holdout['files'][recipe['output_option']]
+    observed = read_artifact(holdout['stdout'], json_document=False)
+    published = read_artifact(output, json_document=False)
+    expected = read_artifact(holdout['normalized'], json_document=False)
+    _require(_match_json_report(observed, published, recipe, expected),
+             'array task holdout stdout and publication differ from the independently observed report')
+    argv[index] = '{output_dir}/' + name
+    return dict(cpu_ids=cpus, cwd=invocation['cwd'],
+                arms={
+                    'original': dict(_arm(original, [*original_prefix[1:], *argv],
+                                          invocation['original_environment'], holdout['stdout']), output_slot=index + 3),
+                    'candidate': dict(_arm(native, argv, invocation['environment'], holdout['stdout']),
+                                      output_slot=index + 1),
+                },
+                files={name: output}, transcript=[],
+                json_report=dict(runtime_fields=compiled['normalization'], oracle=holdout['normalized']))

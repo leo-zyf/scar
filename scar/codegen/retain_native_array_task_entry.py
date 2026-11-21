@@ -58,7 +58,7 @@ def resolve(schedule_path, acceptance_path):
     team = read_artifact(plan['team_plan'])
     local = read_artifact(team['process_plan'])
     accepted_ref = _ref(acceptance_path, validation.SCHEMA)
-    accepted = validation.check(accepted_ref['uri'])
+    accepted = validation._check(accepted_ref['uri'], already_replayed_schedule=(plan['team_plan'], team))
     _need(accepted['schedule'] == plan['team_plan'] and _same_placement(accepted['selected'], decision['selected'])
           and accepted['pairing']['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW',
           'independent qualification must match the retained team model and pass its original-entry comparison')

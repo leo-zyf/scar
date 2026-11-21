@@ -474,19 +474,53 @@ def main(argv=None):
         child = commands.add_parser(mode)
         child.add_argument('--mpi-graph', required=True)
         child.add_argument('--out', required=True)
-        child.add_argument('--seeds' if mode == 'measure' else '--mpi-cost', required=True)
         if mode == 'measure':
+            child.add_argument('--seeds')
+            child.add_argument('--preflight', help='apply a prior screening receipt before launching probes')
             child.add_argument('--plan-out', help='derive a plan immediately from these verified component receipts')
+        else:
+            child.add_argument('--mpi-cost', required=True)
+    preflight = commands.add_parser('preflight', help='price optimistic MPI completion without a target run')
+    preflight.add_argument('--mpi-graph', required=True)
+    preflight.add_argument('--platform-plan', required=True)
+    preflight.add_argument('--out', required=True)
     commands.add_parser('check').add_argument('receipt')
     args = parser.parse_args(argv)
     if args.command == 'measure':
+        if args.preflight:
+            from scar.analysis import native_array_mpi_graph
+            from scar.optimization import independent_array_task_mpi_preflight
+
+            screened = independent_array_task_mpi_preflight.check(args.preflight)
+            _need(screened['mpi_graph'] == base._ref(args.mpi_graph, native_array_mpi_graph.SCHEMA),
+                  'preflight does not identify the target graph')
+            decision = screened['decision']
+            if decision['all_eligible_mpi_rejected'] or decision['status'] == 'NO_MPI_CANDIDATE_FITS_RESOURCE_BOUNDS':
+                if args.plan_out:
+                    base._write(args.plan_out, screened)
+                print(json.dumps(dict(decision, action='SKIP_TARGET_MPI_PROBE'), sort_keys=True))
+                return
+        if args.seeds is None:
+            parser.error('measure requires --seeds when the preflight has not ruled out every rank plan')
         result = measure(args.mpi_graph, args.out, seeds=list(map(int, args.seeds.split(','))), plan_out=args.plan_out)
     elif args.command == 'project':
         result = project(args.mpi_graph, args.mpi_cost)
         base._write(args.out, result)
         result = result['decision']
+    elif args.command == 'preflight':
+        from scar.optimization import independent_array_task_mpi_preflight
+
+        report = independent_array_task_mpi_preflight.project(args.mpi_graph, args.platform_plan)
+        base._write(args.out, report)
+        result = report['decision']
     else:
-        result = check(args.receipt)['decision']
+        schema = json.loads(Path(args.receipt).read_bytes())['schema']
+        if schema == SCHEMA:
+            result = check(args.receipt)['decision']
+        else:
+            from scar.optimization import independent_array_task_mpi_preflight
+
+            result = independent_array_task_mpi_preflight.check(args.receipt)['decision']
     print(json.dumps(result, sort_keys=True))
 
 
