@@ -385,6 +385,22 @@ def _attach_native_phase_cost(frontiers, nomination, path):
     frontiers['cpu_native_phase_cost'] = reference
 
 
+def _attach_python_import_cost(plan, scope, frontiers, path):
+    from scar.compiler.cpu_python_import_diagnostic import check_original_import_scope
+    from scar.optimization.cpu_python_import_cost import SCHEMA, verify_cpu_python_import_cost
+    from scar.optimization.resource_solver import semantic_sha256
+
+    reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    cost = verify_cpu_python_import_cost(reference)
+    graph = read_artifact(cost['import_graph'])
+    observed = read_artifact(cost['observation'])
+    if (cost['scope_sha256'] != semantic_sha256(scope) or graph['program'] != plan['program']
+            or graph['entry_obligations']['sha256'] != plan['entry_obligations']['sha256']):
+        raise ValueError('import diagnostic belongs to a different F4 program or entry proof')
+    check_original_import_scope(scope, observed['paired'])
+    frontiers['cpu_python_import_cost'] = reference
+
+
 def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
     from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
@@ -580,7 +596,8 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 
 @verify_stack_components_once()
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
-                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None):
+                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
+                       cpu_python_import_cost=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.compiler.entry_delivery import replay_entry_delivery
     from scar.optimization.whole_entry_choice import solve_whole_entry_choice
@@ -592,6 +609,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     forward = cpu_entry_forward or bool(cpu_launch_probes) or cpu_team_probe is not None or cpu_native_phase_cost is not None
     if forward and not _infer_cpu_catalog(request):
         raise ValueError('CPU forward cost analysis requires a CPU catalog domain')
+    if cpu_python_import_cost is not None and not _infer_cpu_catalog(request):
+        raise ValueError('CPU Python import observations require a CPU catalog domain')
     if 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
@@ -629,6 +648,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
     domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, entry, out, priced_domain=priced_domain)
+    if cpu_python_import_cost is not None:
+        _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']

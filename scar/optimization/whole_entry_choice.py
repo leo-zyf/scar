@@ -172,10 +172,9 @@ def _point_cost(cost, scope, lifecycle, facts):
     activity_costs = [row.cost for row in problem.activities]
     estimates = [row.cost for row in timed] + transfer_costs + activity_costs
     if (any(not _duration(row.estimate_ns) or not row.lower_ns == row.estimate_ns == row.upper_ns
-            or row.basis == 'UNKNOWN' or row.missing_terms for row in estimates)
+            or row.basis not in _MODEL_BASIS or row.missing_terms for row in estimates)
             or any(row.unresolved_resources for row in timed)):
-        # An estimate sampled from an interval does not justify claiming that
-        # the best point schedule retains that cost for the whole interval.
+        # Equal sample endpoints do not establish an exact duration model.
         return 0, None, 'EXACT_SCHEDULE_COST_OR_RESOURCE_FRONTIER', None
 
     constructed = construct_implementations(problem, baseline_only=baseline_only,

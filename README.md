@@ -196,6 +196,8 @@ Linux 下新的 CPU 双跑在轻量独立进程中记录 CPU 时间及已回收�
 
 `measure-cpu-native-lifecycle --lifecycle-graph GRAPH.json --out DIAGNOSTIC` 从已准入的 CPU 数组入口机械生成计时点，编译诊断副本并核对 stdout、文件发布、退出和地址空间限额。可用 `--forward-cost` 同时回读已有正文预测。诊断输出 `phase-cost.json` 可通过 `compile-build --cpu-native-phase-cost` 接入同一原入口、目标和提供者的规划报告。相邻计时点划分诊断窗口，整入口前向时间界仍由独立模型证明。
 
+`measure-cpu-python-imports --decision-ledger LEDGER.json --paired VALIDATION.json --out DIAGNOSTIC` 使用已准入的原 Python 入口运行一次导入诊断，保存任务归属、模块记录和 F4 导入点关联。各进程分别汇总自耗时，缓存命中保留为计数。`--initializations-only` 省略缓存命中以减少采集量，`--recover` 从同一目录回读现有样本。`compile-build --cpu-python-import-cost DIAGNOSTIC/import-cost.json` 将诊断接回同一原入口。导入关键路径和初始化效果另行证明。 [CPython 导入计时定义](https://docs.python.org/3.14/using/cmdline.html#cmdoption-X)
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈

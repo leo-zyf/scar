@@ -15,6 +15,7 @@ from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.resource_solver import semantic_sha256
 from scar.compiler import whole_entry_pipeline
 from scar.optimization.cpu_entry_forward_cost import _team_rank
+from scar.optimization.cpu_python_import_cost import _run_cost
 from scar.optimization.whole_entry_choice import (
     DOMAIN, LIFECYCLE_PHASES, solve_whole_entry_choice, verify_whole_entry_choice,
 )
@@ -59,6 +60,24 @@ def test_body_nomination_stays_open_when_independent_campaigns_overlap():
     result = _team_rank(schedule, repeat)
     assert result['provisional_body_nomination_id'] is None
     assert result['status'] == 'EMPIRICAL_MODEL_ENVELOPES_OVERLAP'
+
+
+def test_import_accounting_uses_exclusive_rows_and_preserves_processes():
+    def task(identity, pid, rows):
+        return dict(task_id=identity, process_id=pid, events=[
+            dict(module=module, self_us=self_us, cumulative_us=cumulative, cached=self_us is None,
+                 clock_status='CACHED_NO_TIMING' if self_us is None else 'REPORTED_SELF_AND_CUMULATIVE_US')
+            for module, self_us, cumulative in rows])
+
+    run = dict(ordinal=0, tasks=[task(10, 10, [(0, 5, 12), (1, 7, 7), (0, None, None)]),
+                                 task(11, 11, [(0, 3, 3)]), task(12, None, [(1, 9, 9)])],
+               processes=[dict(process_id=10, task_ids=[10]), dict(process_id=11, task_ids=[11])])
+    observed = dict(ordinal=0, started_ns=1, reaped_ns=30_001)
+    result = _run_cost({'schema': 'test.import-graph'}, ('package', 'package.child'), 0, run, observed)
+    assert [row['recorded_self_us'] for row in result['process_accounting']] == [12, 3]
+    assert result['process_accounting'][0]['cached_imports'] == 1
+    assert result['unattributed_task_accounting'][0]['recorded_self_us'] == 9
+    assert not result['all_captured_timed_rows_process_attributed']
 
 
 def _option(domain, tmp_path, name, cost=None, status='LEGAL'):
@@ -202,6 +221,41 @@ def test_process_phase_contract_and_deterministic_exact_tie(tmp_path):
     _option(domain, tmp_path, 'original', regional)
     with pytest.raises(ValueError, match='process startup and exit'):
         solve_whole_entry_choice(domain, expected_option_ids=names)
+
+
+@pytest.mark.parametrize('work_basis', ('DECLARED_MODEL', 'EMPIRICAL_MODEL'))
+def test_equal_empirical_endpoints_cannot_price_an_exact_schedule(tmp_path, work_basis):
+    domain = _domain()
+    target = _artifact(tmp_path / 'target.json', {'schema': 'scar.target-hardware-graph'})
+    domain['scope']['target'] = target
+
+    def stage(name, predecessors, ns, basis):
+        cost = CostEstimate(ns, ns, ns, basis, name, _REFS)
+        mode = ImplementationOption('fixed', 'DECLARED', _REFS, {'cpu': 1}, {}, {}, {}, cost, {})
+        return PlanningOperation(name, _REFS, predecessors, (mode,), 'fixed')
+
+    stages = (stage('launch', (), 10, 'DECLARED_MODEL'), stage('work', ('launch',), 25, work_basis),
+              stage('exit', ('work',), 5, 'DECLARED_MODEL'))
+    problem = PlanningProblem(ProviderArtifact(**target), _REFS,
+        (PlanningResource('cpu', 'EXECUTION', 1, _REFS),), stages, ())
+    source = _artifact(tmp_path / 'problem.json', problem_document(problem))
+    _option(domain, tmp_path, 'original', _interval(45, 50))
+    _option(domain, tmp_path, 'native', dict(kind='OPTIMIZED_POINT_SCHEDULE', problem=source,
+        lifecycle_coverage=_phase_coverage(), phase_bindings=dict(startup=['launch'], execution=['work'], teardown=['exit']),
+        boundary_anchors=dict(entry='launch', exit='exit')))
+
+    report = solve_whole_entry_choice(domain, expected_option_ids=['original', 'native'])
+    native, = [row for row in report['alternatives'] if row['option_id'] == 'native']
+    if work_basis == 'DECLARED_MODEL':
+        assert native['interval_ns'] == {'lower': 40, 'upper': 40}
+        assert report['selected_option_id'] == 'native'
+        assert report['decision'] == 'CANDIDATE_FOR_VALIDATION'
+    else:
+        assert native['interval_ns'] == {'lower': 0, 'upper': None}
+        assert native['schedule_certificate'] is None
+        assert report['status'] == 'UNRESOLVED'
+        assert report['selected_option_id'] is None
+        assert report['decision'] == 'NO_OP'
 
 
 def test_exact_resource_optimum_includes_launch_and_exit_and_replays(tmp_path):
