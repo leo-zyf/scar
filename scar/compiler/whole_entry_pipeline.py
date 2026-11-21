@@ -437,6 +437,36 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
     frontiers['cpu_python_import_cost'] = reference
 
 
+def _attach_cpu_native_array_route(scope, generated, frontiers, path):
+    from scar.codegen.cpu_array_native_route_package import SCHEMA, verify_cpu_array_native_route_package
+
+    reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    package = verify_cpu_array_native_route_package(reference)
+    route_plan = read_artifact(package['plan'])
+    original = package['routes'][package['fallback_route']]
+    matching = []
+    for option in generated.values():
+        if not _cpu_catalog_option(option):
+            continue
+        emission = option['proof']['emission_plan']
+        contract, context = emission['contract'], emission['context']
+        profile = contract['profile']
+        if (emission['entry'] == package['source'] and emission['argv'] == package['argv']
+                and emission['catalog'] == scope['cpu_provider_catalog'] and emission['target'] == scope['target']
+                and profile.get('retention') == route_plan['retention']
+                and profile['runtime'] == original['package'] and profile['holdout'] == package['holdout']
+                and profile['recipe'] == package['recipe'] and contract['legacy_hardware'] == package['hardware']
+                and context['cpu_ids'] == package['cpu_ids']
+                and context['cwd'] == route_plan['workload']['cwd']
+                and context['original_environment'] == package['source_environment']
+                and all(context['scope_matches'].values())):
+            matching.append(option['id'])
+    if len(matching) != 1:
+        raise ValueError('native array route must match one exact F4 source, provider profile and hardware scope')
+    frontiers['cpu_native_array_route'] = reference
+    frontiers['cpu_native_array_route_option_id'] = matching[0]
+
+
 def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, activation_path=None):
     from scar.analysis.cpu_entry_import_effects import derive_cpu_entry_import_effects
     from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
@@ -722,7 +752,7 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
                        cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
-                       cpu_import_sources=None, cpu_initializer_observation=None):
+                       cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -740,6 +770,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('CPU Python import observations require a CPU catalog domain')
     if cpu_paired_evidence is not None and not _infer_cpu_catalog(request):
         raise ValueError('CPU paired evidence requires a CPU catalog domain')
+    if cpu_native_array_route is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
+        raise ValueError('CPU native array routes require a catalog domain with original F4 obligations')
     if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
             and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None)):
         raise ValueError('CPU import bindings require a CPU catalog domain with original F4 obligations')
@@ -805,6 +837,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if cpu_python_import_cost is not None:
         _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
+    if cpu_native_array_route is not None:
+        _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None
