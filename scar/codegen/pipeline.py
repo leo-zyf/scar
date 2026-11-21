@@ -1,9 +1,8 @@
 """One Python entry and one C++ host invocation for a pure array pipeline.
 
-The host calls existing operator ABI-1 tables in fixed source order. It owns
-workspace payload buffers; only the independent fresh NumPy final can escape.
-This is a synchronous CPU executor, without copies, asynchronous readiness,
-NUMA page placement, or calibrated pipeline-duration claims.
+The host calls existing operator ABI-1 tables in source order or under a
+replayed CPU schedule. It owns workspace payload buffers and returns the
+independent fresh NumPy final after successful execution.
 """
 
 from __future__ import annotations
@@ -29,6 +28,9 @@ from scar.optimization.pipeline_memory import verify_pipeline_memory
 from scar.optimization.hardware import validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
 from . import cpp
+from .pipeline_resource_events import (
+    DIAGNOSTIC_CAPACITY_PER_EVENT, DIAGNOSTIC_KINDS, RESOURCE_EVENTS_FAMILY,
+)
 
 GuardFailure = cpp.GuardFailure
 _DIRECTORY = Path(__file__).resolve().parent
@@ -36,6 +38,13 @@ _TablePointer = ctypes.POINTER(cpp._Table)
 PARALLEL_FAMILY = 'DEPENDENCY_WAVES_CPU_SERIAL_LEAVES_V1'
 READY_FAMILY = 'DEPENDENCY_READY_CPU_SERIAL_LEAVES_V1'
 SOLVER_ORDER_FAMILY = 'SOLVER_ORDER_CPU_SERIAL_LEAVES_V1'
+_RESOURCE_EVENT_SCOPE = 'RESOURCE_EVENTS_FIXED_CPU_LANES_AND_POOL_VERSIONS'
+_NO_VALUE = 2**64 - 1
+
+
+class _NativeEvent(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint64) for name in ('kind', 'event', 'timestamp_ns', 'value', 'slot')]
+    _fields_ += [(name, ctypes.c_int64) for name in ('cpu', 'status')]
 
 
 def _digest(raw):
@@ -50,6 +59,7 @@ def pipeline_implementation_sha256():
     files = [{"path": name, "sha256": _digest((_DIRECTORY / name).read_bytes())}
              for name in ("pipeline.py", "pipeline_v1.cpp.in", "pipeline_parallel_v1.cpp.in",
                           "pipeline_ready.py", "pipeline_ready_v1.cpp.in", "pipeline_solver_order.py",
+                          "pipeline_resource_events.py", "pipeline_resource_events_v1.cpp.in",
                           "kernel_v1.cpp.in", "scar_abi_v1.h")]
     return semantic_sha256(files)
 
@@ -143,7 +153,7 @@ def _admit_execution_schedule(pipeline, memory, operators, report):
         from scar.optimization.pipeline_ready_schedule import verify_pipeline_ready_schedule as verify
     elif report.get('execution_family')==PARALLEL_FAMILY:
         from scar.optimization.pipeline_schedule import verify_pipeline_schedule as verify
-    elif report.get('execution_family')==SOLVER_ORDER_FAMILY:
+    elif report.get('execution_family') in (SOLVER_ORDER_FAMILY, RESOURCE_EVENTS_FAMILY):
         from scar.optimization.pipeline_execution_refinement import verify_pipeline_execution_refinement as verify
     else:raise ValueError('unsupported explicit pipeline execution family')
     targets=set()
@@ -232,6 +242,9 @@ def _source(pipeline, memory, operators, execution_schedule=None):
     if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY:
         from .pipeline_solver_order import render_solver_order_source
         return render_solver_order_source(source,pipeline,memory,execution_schedule)
+    if execution_schedule['execution_family']==RESOURCE_EVENTS_FAMILY:
+        from .pipeline_resource_events import render_resource_events_source
+        return render_resource_events_source(source,pipeline,memory,execution_schedule)
     return _parallel_source(source,pipeline,memory,execution_schedule)
 
 
@@ -247,6 +260,7 @@ class PipelineArtifact:
     _tables: object
     _output_shape: tuple
     _execution_schedule: dict|None = None
+    _run_diagnostic: object = None
 
     @property
     def memory_plan(self):
@@ -264,6 +278,15 @@ class PipelineArtifact:
                 "metadata_path": str(self.directory / "artifact.json")}
 
     def run(self, *arrays):
+        return self._invoke(arrays)
+
+    def run_diagnostic(self, *arrays):
+        """Run the separate native event observer and return output and observed rows."""
+        if self._run_diagnostic is None:
+            raise GuardFailure('pipeline has no dedicated native resource-event diagnostic')
+        return self._invoke(arrays, diagnostic=True)
+
+    def _invoke(self, arrays, *, diagnostic=False):
         import numpy as np
         if len(arrays) != len(self.pipeline.parameters):
             raise GuardFailure("pipeline input count differs")
@@ -277,24 +300,44 @@ class PipelineArtifact:
             if array.shape != tuple(self._memory["input_shapes"][parameter]):
                 raise GuardFailure("pipeline input shape differs from memory plan")
             if self._execution_schedule is not None and not array.flags.c_contiguous:
-                raise GuardFailure('dependency-wave input layout must match its C-contiguous resource plan')
+                raise GuardFailure('scheduled pipeline input layout must match its C-contiguous resource plan')
         try:
             output = np.empty(self._output_shape, dtype=np.float64)
         except (MemoryError, ValueError, OverflowError) as error:
             raise GuardFailure("pipeline fresh final allocation failed") from error
         descriptor = cpp._descriptor(output)
         inputs = (cpp._Array * len(descriptors))(*descriptors)
-        failed = ctypes.c_uint64(2**64 - 1)
-        status = self._run(inputs, len(descriptors), ctypes.byref(descriptor), self._tables,
-                           len(self._operators), ctypes.byref(failed))
+        failed = ctypes.c_uint64(_NO_VALUE)
+        arguments = (inputs, len(descriptors), ctypes.byref(descriptor), self._tables,
+                     len(self._operators), ctypes.byref(failed))
+        if diagnostic:
+            events = self._execution_schedule['resource_events']
+            capacity = len(events) * DIAGNOSTIC_CAPACITY_PER_EVENT
+            buffer, used = (_NativeEvent * capacity)(), ctypes.c_uint64()
+            status = self._run_diagnostic(*arguments, buffer, capacity, ctypes.byref(used))
+            values = self._memory['values']
+            slots = [row['id'] for row in self._memory['workspace_slots']] + ['final:output']
+            observations = []
+            for sequence, row in enumerate(buffer[:used.value]):
+                event = events[row.event]
+                observations.append(dict(sequence=sequence, kind=DIAGNOSTIC_KINDS[row.kind],
+                    event_id=event['id'], call_id=event.get('call_id'), timestamp_ns=row.timestamp_ns,
+                    cpu_id=None if row.cpu < 0 else row.cpu,
+                    value_id=None if row.value == _NO_VALUE else values[row.value]['id'],
+                    slot_id=None if row.slot == _NO_VALUE else slots[row.slot], status=row.status))
+        else:
+            status = self._run(*arguments)
         if status:
             reasons = {10: "pointer/alias admission", 11: "shape/layout admission", 12: "payload budget",
                        13: "workspace lifetime/alias", 14: "operator ABI/source binding", 15: "workspace allocation",
                        101: "operator pointer/rank/bounds", 102: "operator shape", 103: "operator floating-point/nonfinite",
                        104: "operator CPU affinity",16:'worker creation or floating environment'}
-            where = f" at call {failed.value}" if failed.value != 2**64 - 1 else ""
-            raise GuardFailure("pipeline " + reasons.get(status, f"status {status}") + where)
-        return output
+            where = f" at call {failed.value}" if failed.value != _NO_VALUE else ""
+            failure = GuardFailure("pipeline " + reasons.get(status, f"status {status}") + where)
+            if diagnostic:
+                failure.observed_events = observations
+            raise failure
+        return (output, observations) if diagnostic else output
 
 
 def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
@@ -375,6 +418,8 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
                 if execution_schedule['execution_family']==READY_FAMILY else
                 'ONE_PYTHON_ENTRY_CPP_SOLVER_ORDER_FIXED_CPU_LANES_ABI1_SERIAL_OPERATORS'
                 if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY else
+                'ONE_PYTHON_ENTRY_CPP_RESOURCE_EVENTS_FIXED_CPU_LANES_ABI1_SERIAL_OPERATORS'
+                if execution_schedule['execution_family']==RESOURCE_EVENTS_FAMILY else
                 'ONE_PYTHON_ENTRY_CPP_DEPENDENCY_WAVES_JOINED_ABI1_SERIAL_OPERATORS'),
             failure_policy='JOIN_ALL_STARTED_WORKERS_WITHHOLD_OUTPUT_THEN_ORIGINAL_CALLER_ONCE',
             floating_environment='SAVE_CALLER_COPY_FULL_ENV_TO_WORKERS_HOLD_AND_RESTORE_ALL_SCOPES')
@@ -384,6 +429,14 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
                 task_model_makespan_is_native_runtime_prediction=False,
                 native_host_optimality_proven=False,
                 existing_host_envelope=execution_schedule['existing_host_envelope'])
+        if execution_schedule['execution_family'] == RESOURCE_EVENTS_FAMILY:
+            metadata.update(implementation_scope=_RESOURCE_EVENT_SCOPE,
+                native_resource_events_implemented=True, full_model_timeline_implemented=False,
+                task_model_makespan_is_native_runtime_prediction=False, native_host_optimality_proven=False,
+                workspace_lifetime='ALLOCATE_TO_RELEASE_RESOURCE_EVENTS_WITH_RAII_ON_FAILURE',
+                logical_release='LAST_SUCCESSFUL_CONSUMER_RETIRE_THEN_PHYSICAL_SLOT_RELEASE_EVENT',
+                final_storage_admission='ADOPT_PRIVATE_CALLER_DESCRIPTOR_AT_FINAL_ALLOCATE_EVENT',
+                native_diagnostic_symbol='scar_pipeline_run_diagnostic_v1')
     (directory / "artifact.json").write_bytes(_json_bytes(metadata))
     return load(directory)
 
@@ -416,7 +469,7 @@ def load(out):
     _require(all(parallel_fields)or not any(parallel_fields),'incomplete parallel pipeline metadata')
     execution_schedule=None
     if all(parallel_fields):
-        _require(metadata['execution_family']in(PARALLEL_FAMILY,READY_FAMILY,SOLVER_ORDER_FAMILY),
+        _require(metadata['execution_family']in(PARALLEL_FAMILY,READY_FAMILY,SOLVER_ORDER_FAMILY,RESOURCE_EVENTS_FAMILY),
                  'unsupported pipeline control family')
         execution_schedule=_admit_execution_schedule(pipeline,memory,operators,
             json.loads((directory/metadata['files']['execution_schedule']).read_bytes()))
@@ -430,6 +483,14 @@ def load(out):
                      and metadata.get('native_host_optimality_proven')is False
                      and metadata.get('existing_host_envelope')==execution_schedule['existing_host_envelope'],
                      'solver-order artifact must retain the original host envelope and compute-only scope')
+        if execution_schedule['execution_family'] == RESOURCE_EVENTS_FAMILY:
+            _require(metadata.get('implementation_scope') == _RESOURCE_EVENT_SCOPE
+                     and metadata.get('native_resource_events_implemented') is True
+                     and metadata.get('full_model_timeline_implemented') is False
+                     and metadata.get('task_model_makespan_is_native_runtime_prediction') is False
+                     and metadata.get('native_host_optimality_proven') is False
+                     and metadata.get('native_diagnostic_symbol') == 'scar_pipeline_run_diagnostic_v1',
+                     'resource-event artifact must retain its native implementation scope')
     source = _source(pipeline, memory, operators,execution_schedule).encode()
     _require(source == (directory / metadata["files"]["source"]).read_bytes(),
              "pipeline host source differs from call/operator/memory bindings")
@@ -450,9 +511,16 @@ def load(out):
     run.argtypes = [ctypes.POINTER(cpp._Array), ctypes.c_uint64, ctypes.POINTER(cpp._Array),
                     ctypes.POINTER(_TablePointer), ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
     run.restype = ctypes.c_int32
+    diagnostic = None
+    if metadata.get('execution_family') == RESOURCE_EVENTS_FAMILY:
+        diagnostic = library.scar_pipeline_run_diagnostic_v1
+        diagnostic.argtypes = [*run.argtypes, ctypes.POINTER(_NativeEvent), ctypes.c_uint64,
+                               ctypes.POINTER(ctypes.c_uint64)]
+        diagnostic.restype = ctypes.c_int32
     final = next(value for value in memory["values"] if value["id"] == pipeline.output)
     return PipelineArtifact(pipeline, directory, memory, metadata, library, run, tuple(operators),
-                            (_TablePointer * len(pointers))(*pointers), tuple(final["shape"]),execution_schedule)
+                            (_TablePointer * len(pointers))(*pointers), tuple(final["shape"]), execution_schedule,
+                            diagnostic)
 
 
 __all__ = ["PipelineArtifact", "GuardFailure", "build", "load", "pipeline_implementation_sha256"]
