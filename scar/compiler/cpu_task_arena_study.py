@@ -38,11 +38,12 @@ def _source(acceptance):
     return parent, runtime, recipe, case, expected
 
 
-def _commands(runtime, recipe, variant):
+def _commands(runtime, recipe, variant, native_modes=_MODES[1:]):
     raw = calibration._commands(runtime, recipe)
     binary = variant['executable']
     _need(read_artifact(binary, json_document=False).startswith(b'\x7fELF'), 'candidate needs a sealed native executable')
-    return dict(original=raw['original'], task_private=raw['native'], lane_reuse=[*raw['native'][:-1], binary['uri']])
+    baseline, candidate = native_modes
+    return {'original': raw['original'], baseline: raw['native'], candidate: [*raw['native'][:-1], binary['uri']]}
 
 
 def _summarize(runs, modes, commands, argv, recipe, expected, pairs):
@@ -78,8 +79,8 @@ def _checkpoint_files(folder, runtime):
             for task in range(scope['task_count']) for round_ in range(scope['round_count'])]
 
 
-def _compare_checkpoints(rows, runtime, commands, argv, recipe, expected):
-    _need([row['run']['mode'] for row in rows] == list(_MODES[1:]), 'expected both native state diagnostics')
+def _compare_checkpoints(rows, runtime, commands, argv, recipe, expected, native_modes=_MODES[1:]):
+    _need([row['run']['mode'] for row in rows] == list(native_modes), 'expected both native state diagnostics')
     for row in rows:
         run = row['run']
         _need(run['command'] == commands[run['mode']] and run['argv'] == argv
@@ -101,10 +102,10 @@ def _compare_checkpoints(rows, runtime, commands, argv, recipe, expected):
     return dict(checkpoints=len(control), exact_bytes=sum(row['size_bytes'] for row in control))
 
 
-def _diagnostics(folder, commands, argv, environment, runtime, recipe, expected):
+def _diagnostics(folder, commands, argv, environment, runtime, recipe, expected, native_modes=_MODES[1:]):
     folder.mkdir()
     runs = []
-    for mode in _MODES[1:]:
+    for mode in native_modes:
         output = folder/mode
         env = dict(environment, SCAR_ARRAY_ENTRY_STATES=str(output/'state'),
                    SCAR_ARRAY_ENTRY_LANE_REPORT=str(output/'placement.json'))
@@ -114,7 +115,7 @@ def _diagnostics(folder, commands, argv, environment, runtime, recipe, expected)
             runtime['output_fields']['pid_list']])
         runs.append(dict(run=run, placement=placement, checkpoints=_checkpoint_files(output, runtime),
                          placement_check=calibration._lane_assignments(placement, runtime, observation)))
-    return dict(runs=runs, **_compare_checkpoints(runs, runtime, commands, argv, recipe, expected))
+    return dict(runs=runs, **_compare_checkpoints(runs, runtime, commands, argv, recipe, expected, native_modes))
 
 
 def study(acceptance, out, *, native_pairs=5, original_pairs=3):

@@ -206,6 +206,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar study-cpu-task-arena --acceptance TASK_ACCEPTANCE.json --out STUDY` 从已验收的 C++20 OpenMP 任务入口证明每个任务的工作区读写与生命周期，判断是否有同线程重复分配，并为适用范围生成独立 C++20 候选。报告包含任务逐轮字节对照、原生与原 Python 两组配对测量。使用 `--check STUDY/result.json` 可回读原证明、工程和样本。
 
+`scar study-cpu-loop-carry --acceptance TASK_ACCEPTANCE.json --arena-proof ARENA_STUDY/proof.json --out STUDY` 在同一原任务程序上识别循环状态的物理读端。只有读写顺序、对齐、别名和提供者合同都通过时，SCAR 才会把已证明的读端直连到上一轮返回区。源地址超出证明范围时沿用原搬运路径。该命令保存逐轮状态、搬运计数、配对样本和独立 C++20 工程，支持 `--check STUDY/result.json` 冷回读。
+
 `scar probe-cpu-sgemm --libtorch LIBTORCH_ROOT --left A.f32 --right B.f32 --shape M N K --cpus CPU --out OBSERVATIONS` 在固定核组上比较已安装的 SGEMM 提供者。采样使用预分配输出并记录库文件、整数 ABI、线程和同输入下的位级差异。观测作为同一算子边界的成本证据保留。
 
 ### 单一 NVIDIA 库栈
