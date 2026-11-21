@@ -1,0 +1,131 @@
+#include "array_entry_argv.hpp"
+#include "numpy_observables.hpp"
+
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <sys/resource.h>
+#include <time.h>
+#include <unistd.h>
+
+namespace {
+using Clock = std::chrono::steady_clock;
+using scar::public_argv::ParsedValue;
+
+struct Result {
+    double norm{}, split_difference{}, norm_error{}, tolerance{};
+    double elapsed{}, worker_wall{}, worker_cpu{};
+    long pid{}, peak_rss{};
+    bool tolerance_given{};
+};
+
+void binary64(std::ostream& out, double value) {
+    std::array<char, 64> bytes{};
+    const auto converted = std::to_chars(bytes.data(), bytes.data() + bytes.size(), value);
+    if (converted.ec != std::errc{} || !std::isfinite(value)) throw std::runtime_error("nonfinite report");
+    const std::string_view text(bytes.data(), converted.ptr - bytes.data());
+    out << text;
+    if (text.find_first_of(".eE") == text.npos) out << ".0";
+}
+
+void line(std::ostream& out, bool pretty, std::size_t level) {
+    if (pretty) out << '\n' << std::string(level * 2, ' ');
+}
+
+double process_seconds() {
+    struct timespec result{};
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &result) != 0)
+        throw std::runtime_error("process clock unavailable");
+    return static_cast<double>(result.tv_sec) + static_cast<double>(result.tv_nsec) * 1e-9;
+}
+
+double seconds(Clock::duration value) {
+    return std::chrono::duration<double>(value).count();
+}
+
+using Run = int (*)(double*, double*, const char*);
+using Write = void (*)(std::ostream&, const Result&, bool);
+using Match = bool (*)(const std::vector<ParsedValue>&);
+
+struct Profile {
+    Match matches;
+    Run run;
+    Write write;
+    double default_tolerance;
+};
+}
+
+@PROFILE_DECLARATIONS@
+
+namespace {
+@PROFILES@
+}
+
+int main(int argc, char** argv) {
+    try {
+        const auto values = scar::public_argv::parse(argc, argv);
+        if (values.empty()) return 0;
+        const auto* profile = static_cast<const Profile*>(nullptr);
+        for (const auto& candidate : profiles) {
+            if (candidate.matches(values)) {
+                profile = &candidate;
+                break;
+            }
+        }
+        if (!profile) {
+            std::cerr << "SCAR_PROFILE_UNAVAILABLE\n";
+            return 2;
+        }
+        Result result{};
+        const auto& tolerance = values[@TOLERANCE_INDEX@].text;
+        result.tolerance_given = !tolerance.empty();
+        result.tolerance = result.tolerance_given ? std::strtod(tolerance.c_str(), nullptr)
+                                                  : profile->default_tolerance;
+        if (result.tolerance <= 0 || result.tolerance >= 1) {
+            std::cerr << "invalid norm tolerance\n";
+            return 2;
+        }
+        const auto start = Clock::now();
+        const auto worker_start = Clock::now();
+        const auto cpu = process_seconds();
+        if (profile->run(&result.norm, &result.split_difference, std::getenv("SCAR_ARRAY_ENTRY_STATES")) != 0) {
+            std::cerr << "SCAR_NATIVE_NUMERICAL_FRONTIER\n";
+            return 3;
+        }
+        result.norm_error = scar_numpy_norm_error_v1(result.norm);
+        if (!std::isfinite(result.norm) || result.norm_error > result.tolerance) {
+            std::cerr << "state norm failed\n";
+            return 1;
+        }
+        result.worker_cpu = process_seconds() - cpu;
+        result.worker_wall = seconds(Clock::now() - worker_start);
+        struct rusage usage{};
+        if (getrusage(RUSAGE_SELF, &usage) != 0) throw std::runtime_error("resource counters unavailable");
+        result.pid = static_cast<long>(getpid());
+        result.peak_rss = usage.ru_maxrss;
+        result.elapsed = seconds(Clock::now() - start);
+
+        const auto& path = values[@OUTPUT_INDEX@].text;
+        if (!path.empty()) {
+            std::ofstream file(path, std::ios::binary | std::ios::trunc);
+            file.exceptions(std::ios::failbit | std::ios::badbit);
+            profile->write(file, result, true);
+            file << '\n';
+            file.close();
+        }
+        profile->write(std::cout, result, false);
+        std::cout << '\n';
+        return std::cout ? 0 : 1;
+    } catch (const ScarPublicArgvError& error) {
+        std::cerr << error.what() << '\n';
+        return 2;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}

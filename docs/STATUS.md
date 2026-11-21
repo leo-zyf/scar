@@ -1,8 +1,14 @@
 # 当前状态
 
+`project-source-array-entry-contract → project-native-array-entry-recipe → export-native-array-entry → calibrate-native-array-entry` 已接通单个 C++20 可执行程序的入口参数、数值循环和 JSON 发布。原入口固定为 11 量子位、7 层、3 轮、1 worker，运行时可选择已验证的种子 1729 和 137。两组保留原报告语义，另验显式容差 `1e-8`。搬迁后的工件通过六个完整轮末状态的逐字节对照。报告中的后端文字来自原源码，解释器文字来自已绑定的原运行环境。
+
+CPU 5 各预热 1 对、交替测量 3 对，整入口中位数为 **2.014 s → 9.728 ms** 和 **2.020 s → 10.283 ms**，约 **207×** 和 **196×**。计时包含原 Python 启动、原电路构造以及双方的 stdout 与文件发布。C++ 工件提前固定了两组电路系数，构建耗时在计时范围外。其它配置在发布前拒绝，默认继续保留原程序。
+
+独立 C++20 随机数接口已对 6 种种子的 924 次采样验收，系数接口已逐字节核对 231 个矩阵和 538 个标量相位。下一关由原构造层、门类型和量子位把运行时抽样接到执行图，再以未参与生成计划的种子验证整入口。见 [验收记录](../artifacts/baseline/cpu-native-array-entry-acceptance.json)。
+
 `project-ndarray-tape → export-native-array-tape` 已将真实 CPU Cirq 的三轮数值循环交付为独立 C++20。两组种子各观测 576 个门，采集保留原始操作位置、布局、存储关联、小型系数及逐轮状态摘要。原轮次顺序、首次因子合并以及每轮归一化的分支均进入交付计划。外积使用原 NumPy 复数乘法，归一化使用原 NumPy 复数除法和同一套 OpenBLAS ILP64。两份二进制搬迁复跑后，六个完整轮末状态均与独立原始运行逐字节一致。
 
-排程按私有数组的最后使用点和对齐约束复用缓冲，两个计划的数组工作区分别为 201,984 B 和 150,080 B。空间指标取自执行计划，范围为已映射的私有数组和对齐填充。每组种子的系数当前在构建期固定，采集点来自显式作用域。后续要接入运行时参数、随机电路构造和结果报告，再做同口径的整入口 A/B。默认保留原入口。见 [验收记录](../artifacts/baseline/cpu-native-returned-array-tape-acceptance.json)。
+排程按私有数组的最后使用点和对齐约束复用缓冲，两个计划的数组工作区分别为 201,984 B 和 150,080 B。空间指标取自执行计划，范围为已映射的私有数组和对齐填充。每组种子的系数在构建期固定，采集点来自显式作用域。见 [验收记录](../artifacts/baseline/cpu-native-returned-array-tape-acceptance.json)。
 
 `project-source-returned-loop → project-returned-state-witness → bind-returned-loop → project-returned-loop-time` 已接通真实 Cirq 的初值、方法返回、属性读取和下一轮实参。两种种子各跑三轮，四条边均观测到下一轮接收同一个 ndarray，完整状态摘要一致。时间图保留一份循环体和距离为 1 的回边，连接到 CPU 5 的硬件线程与物理核资料。同一模拟的轮次须保持依赖顺序。32,768 B 是观测到的逻辑数组字节数，分配容量、最后使用点及服务时间继续待定。
 

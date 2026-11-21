@@ -1,0 +1,78 @@
+#include "numpy_observables.hpp"
+
+#include <cfenv>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <emmintrin.h>
+
+extern "C" void scipy_cblas_zdotc_sub64_(std::int64_t, const void*, std::int64_t,
+                                       const void*, std::int64_t, void*);
+extern "C" int scipy_openblas_get_num_threads64_();
+extern "C" const char* scipy_openblas_get_corename64_();
+
+namespace {
+constexpr std::size_t complex_size = 2 * sizeof(double);
+static_assert(complex_size == 16 && std::numeric_limits<double>::is_iec559);
+
+struct Extent { std::uintptr_t first{}, last{}; };
+
+bool span(const void* memory, std::size_t size, Extent& range) noexcept {
+    const auto address = reinterpret_cast<std::uintptr_t>(memory);
+    if (!address || address % alignof(double) || size > std::numeric_limits<std::uintptr_t>::max() - address)
+        return false;
+    range = {address, address + size};
+    return true;
+}
+
+bool disjoint(Extent a, Extent b) noexcept {
+    return a.last <= b.first || b.last <= a.first;
+}
+
+double vdot_real(std::int64_t n, const void* data) noexcept {
+    if (!n) return 0.0;
+    double complex_result[2]{};
+    scipy_cblas_zdotc_sub64_(n, data, 1, data, 1, complex_result);
+    // Keep both binary64 additions in stock CDOUBLE_vdot, including floating status.
+    volatile __m128d accumulated = _mm_add_pd(_mm_setzero_pd(), _mm_loadu_pd(complex_result));
+    return _mm_cvtsd_f64(accumulated);
+}
+}
+
+extern "C" int scar_numpy_split_observable_v1(std::size_t n, const void* data, double* squared_norm,
+                                             double* split_difference) noexcept {
+    if (!n || n > std::numeric_limits<std::int64_t>::max() / complex_size ||
+            !__builtin_cpu_supports("x86-64-v3") || std::fegetround() != FE_TONEAREST ||
+            (_mm_getcsr() & 0xe040U) != 0 || scipy_openblas_get_num_threads64_() != 1) return -1;
+    const auto* core = scipy_openblas_get_corename64_();
+    if (!core || std::strcmp(core, "@SCAR_BLAS_CORE@") != 0) return -1;
+    Extent input, first_output, second_output;
+    if (!span(data, n * complex_size, input) || !span(squared_norm, sizeof(double), first_output) ||
+            !span(split_difference, sizeof(double), second_output) ||
+            !disjoint(input, first_output) || !disjoint(input, second_output) ||
+            !disjoint(first_output, second_output)) return -1;
+
+    std::fenv_t original{}, ignored{};
+    if (std::fegetenv(&original) != 0) return -1;
+    if (std::feholdexcept(&ignored) != 0) {
+        std::fesetenv(&original);
+        return -1;
+    }
+    const auto half = n / 2;
+    const auto norm = vdot_real(n, data);
+    const auto first = vdot_real(half, data);
+    const auto second = vdot_real(n - half, static_cast<const std::byte*>(data) + complex_size * half);
+    // Materialize the subtraction before querying status and restoring the caller’s fenv.
+    volatile double difference = first - second;
+    const int errors = std::fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INVALID);
+    if (std::fesetenv(&original) != 0) return -1;
+    if (errors) return 1;
+    *squared_norm = norm;
+    *split_difference = difference;
+    return 0;
+}
+
+extern "C" double scar_numpy_norm_error_v1(double squared_norm) noexcept {
+    return std::fabs(squared_norm - 1.0);
+}
