@@ -1,0 +1,136 @@
+{
+  "delivery": {
+    "cold_replay": {
+      "replayed": true,
+      "seconds": 57.799051110981964,
+      "target_executed": false
+    },
+    "cpu_ids": [
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "deployment_authorized": false,
+    "matched_invocation": true,
+    "measurement_pairs": 3,
+    "native_candidate_runs_with_preexec_limit": 4,
+    "native_shim": {
+      "build_argv": [
+        "/usr/bin/x86_64-linux-gnu-g++-13",
+        "-std=c++20",
+        "-O2",
+        "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/capacity-guard.cpp",
+        "-o",
+        "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/capacity-guard"
+      ],
+      "compiler": {
+        "schema": "application/x-executable",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "size_bytes": 1027128,
+        "uri": "/usr/bin/x86_64-linux-gnu-g++-13"
+      },
+      "cxx_standard": 20,
+      "executable": {
+        "schema": "application/x-executable",
+        "sha256": "1f7a2fde867395f067452200a60396c33a61378c4b360569a6cfdc3f7a274b9f",
+        "size_bytes": 16336,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/capacity-guard"
+      },
+      "source": {
+        "schema": "scar.cpp-source",
+        "sha256": "9e767834e5d40d6a2da2155e76abb15e35fad38cc4ce6a36b900e5d538d91018",
+        "size_bytes": 2402,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/capacity-guard.cpp"
+      }
+    },
+    "native_validation": {
+      "schema": "scar.cpu-entry-paired-replay",
+      "sha256": "cb37100aa4e216f6137b25c2f27880dd0ddc27ed9378f9b7e6a4bc2bb5a24a47",
+      "size_bytes": 35550,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-native-capacity-validation/result.json"
+    },
+    "original_guarded_runs": 0,
+    "pipeline": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "0f171df641197841913659fdf33acb78f0e7068007f5343dd4090f342946ce77",
+      "size_bytes": 1872,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-guarded-capacity/result.json"
+    },
+    "python_guard_trial": {
+      "schema": "scar.cpu-entry-paired-replay",
+      "sha256": "51c4b6b8ee890209e8de8b532e9ea0571c18fe1a6520fb9c9452eca612991693",
+      "size_bytes": 34769,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-guarded-capacity/native-validation/result.json"
+    },
+    "python_pilot_candidate_median_ns": 69899530,
+    "speedup": 75.26523418327886,
+    "timing_ns": {
+      "candidate": {
+        "max_ns": 33386090,
+        "median_ns": 33330881,
+        "median_ns_twice": 66661762,
+        "min_ns": 31734716,
+        "samples_ns": [
+          31734716,
+          33330881,
+          33386090
+        ]
+      },
+      "original": {
+        "max_ns": 2545186404,
+        "median_ns": 2508656564,
+        "median_ns_twice": 5017313128,
+        "min_ns": 2499610543,
+        "samples_ns": [
+          2545186404,
+          2499610543,
+          2508656564
+        ]
+      }
+    },
+    "verdict": "KEEP_ORIGINAL",
+    "warmup_pairs": 1
+  },
+  "graph": {
+    "bound": "QUERYING_TASK_SNAPSHOT_AND_EXACT_TARGET_ENDPOINTS",
+    "cirq": {
+      "schema": "scar.f4-cpu-launch-resources",
+      "sha256": "0beb2c383b4d7ce0febca9e5fea578c770e1a9c666ecea6ab714b9f3c7b201c4",
+      "size_bytes": 6710,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-guarded-capacity/whole-entry-cpu-launch-resources.json"
+    },
+    "original_target_child_inheritance_proven": false,
+    "retained_stream_resource_link": {
+      "schema": "scar.f4-cpu-launch-resources",
+      "sha256": "95b75d1cf9041ed9eb5135688baad1898f0fe8e129bab536113ffa006d598dc6",
+      "size_bytes": 11051,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/stage1-launch-resources.json"
+    }
+  },
+  "planner": {
+    "cap_bytes": 268435456,
+    "configured_threads": 2,
+    "contract": {
+      "schema": "scar.cpu-entry-capacity-contract",
+      "sha256": "db4e0e95fd59b255b94f22c651a01c5aa44260880c3624105fe58eebde62abf7",
+      "size_bytes": 4807,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/cirq-guarded-capacity/whole-entry-cpu-capacity-contract.json"
+    },
+    "physical_dram_reservation_proven": false,
+    "process_tree_aggregate_enforced": false,
+    "provider_process_count": 1,
+    "scope": "PER_PROCESS_VIRTUAL_ADDRESS_SPACE",
+    "unresolved_stream": {
+      "schema": "scar.cpu-entry-capacity-contract",
+      "sha256": "b4ba5962ac7e14dbdff05ca350fa0558c0ff62007fa29ce468d689f412676a40",
+      "size_bytes": 1031,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-stream-and-replay-v1/sunfish-capacity-unresolved.json"
+    },
+    "unresolved_stream_target_executions": 0
+  },
+  "schema": "scar.cpu-entry-capacity-acceptance",
+  "schema_version": 1
+}
