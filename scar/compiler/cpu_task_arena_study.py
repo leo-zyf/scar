@@ -118,6 +118,33 @@ def _diagnostics(folder, commands, argv, environment, runtime, recipe, expected,
     return dict(runs=runs, **_compare_checkpoints(runs, runtime, commands, argv, recipe, expected, native_modes))
 
 
+def _measure_candidate(out, modes, runtime, recipe, case, expected, variant, native_pairs, original_pairs):
+    commands = _commands(runtime, recipe, variant, modes)
+    environment = recipe['environment']
+    native_env = dict(environment, **runtime['launch_environment'])
+    _need(not any(name in native_env for name in ('SCAR_ARRAY_ENTRY_STATES', 'SCAR_ARRAY_ENTRY_LANE_REPORT')),
+          'clean benchmark needs diagnostic capture disabled')
+    argv = case['argv']
+    diagnostics = _diagnostics(out/'state-check', commands, argv, native_env, runtime, recipe, expected, modes)
+    native = _campaign(out/'native-pairs', modes, native_pairs, commands, argv, environment,
+                       native_env, recipe, expected)
+    original = _campaign(out/'original-pairs', ('original', modes[1]), original_pairs, commands, argv,
+                         environment, native_env, recipe, expected)
+    return dict(cpu_ids=runtime['cpu_ids'], argv=argv, native_pairs=native, original_pairs=original,
+                state_diagnostics=diagnostics)
+
+
+def _check_measurements(report, modes, runtime, recipe, case, expected, commands):
+    for name, arms in (('native_pairs', modes), ('original_pairs', ('original', modes[1]))):
+        data = report[name]
+        compared = _summarize(data['runs'], arms, commands, case['argv'], recipe, expected,
+                              data['selection']['measurement_pairs'])
+        _need(all(data[key] == value for key, value in compared.items()), 'study timing receipts differ at replay')
+    diagnostic = report['state_diagnostics']
+    states = _compare_checkpoints(diagnostic['runs'], runtime, commands, case['argv'], recipe, expected, modes)
+    _need(all(diagnostic[key] == value for key, value in states.items()), 'study state comparison differs at replay')
+
+
 def study(acceptance, out, *, native_pairs=5, original_pairs=3):
     from scar.analysis.cpu_task_arena_reuse import derive_cpu_task_arena_reuse
     from scar.codegen.native_cpu_arena_reuse import export_native_cpu_arena_reuse, verify_native_cpu_arena_reuse
@@ -142,20 +169,9 @@ def study(acceptance, out, *, native_pairs=5, original_pairs=3):
         variant_ref = export_native_cpu_arena_reuse(_ref(out/'plan.json', plan['schema']), out/'native')
         variant = verify_native_cpu_arena_reuse(variant_ref)
         _need(variant['runtime'] == parent, 'candidate changed the original native task provider')
-        commands = _commands(runtime, recipe, variant)
-    environment = recipe['environment']
-    native_env = dict(environment, **runtime['launch_environment'])
-    _need(not any(name in native_env for name in ('SCAR_ARRAY_ENTRY_STATES', 'SCAR_ARRAY_ENTRY_LANE_REPORT')),
-          'clean benchmark needs diagnostic capture disabled')
-    argv = case['argv']
-    states = _diagnostics(out/'state-check', commands, argv, native_env, runtime, recipe, expected)
-    native = _campaign(out/'native-pairs', _MODES[1:], native_pairs, commands, argv, environment,
-                       native_env, recipe, expected)
-    original = _campaign(out/'original-pairs', (_MODES[0], _MODES[2]), original_pairs, commands, argv,
-                         environment, native_env, recipe, expected)
+    measurements = _measure_candidate(out, _MODES[1:], runtime, recipe, case, expected, variant, native_pairs, original_pairs)
     return dict(schema=SCHEMA, schema_version=1, acceptance=acceptance, proof=proof_ref,
-        plan=_ref(out/'plan.json', plan['schema']), variant=variant_ref, cpu_ids=runtime['cpu_ids'],
-        argv=argv, native_pairs=native, original_pairs=original, state_diagnostics=states,
+        plan=_ref(out/'plan.json', plan['schema']), variant=variant_ref, **measurements,
         status='VALIDATED_SCOPED_ARENA_REWRITE', target_executed=True, default_action='KEEP_ORIGINAL',
         deployment_authorized=False)
 
@@ -182,14 +198,7 @@ def check(path):
               and report['status'] == 'VALIDATED_SCOPED_ARENA_REWRITE' and report['target_executed'] is True,
               'study references a different executable, option or invocation')
         commands = _commands(runtime, recipe, variant)
-    for name, modes in (('native_pairs', _MODES[1:]), ('original_pairs', (_MODES[0], _MODES[2]))):
-        data = report[name]
-        compared = _summarize(data['runs'], modes, commands, case['argv'], recipe, expected,
-                              data['selection']['measurement_pairs'])
-        _need(all(data[key] == value for key, value in compared.items()), 'study timing receipts differ at replay')
-    diagnostic = report['state_diagnostics']
-    states = _compare_checkpoints(diagnostic['runs'], runtime, commands, case['argv'], recipe, expected)
-    _need(all(diagnostic[key] == value for key, value in states.items()), 'study state comparison differs at replay')
+    _check_measurements(report, _MODES[1:], runtime, recipe, case, expected, commands)
     return report
 
 
