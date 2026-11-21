@@ -1,0 +1,257 @@
+{
+  "cases": {
+    "cirq": {
+      "coverage_frontier": [
+        "ORIGINAL_WORLD_EFFECTS_OPEN",
+        "PROVIDER_ORIGINAL_F4_REFERENCE_ABSENT",
+        "PROVIDER_TARGET_REPRESENTATION_DIFFERS",
+        "ORIGINAL_ARBITRARY_OUTPUT_PATH_EFFECTS_OPEN"
+      ],
+      "domain": {
+        "schema": "scar.whole-entry-option-domain",
+        "sha256": "9f006132c71849f6c51ee245a1a332294ffb8afc51c3a8b9bc9e5112c234e3b0",
+        "size_bytes": 3367,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/cirq-final-plan/whole-entry-domain.json"
+      },
+      "executable": {
+        "schema": "scar.native-project-member",
+        "sha256": "d5061f9b65b9b9f0bdce512b78145a6f6b968022062da03e07a07ae67dd80803",
+        "size_bytes": 412024,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/outer-task-team-v1/release-2/selected/bin/scar_native_array_entry"
+      },
+      "graph": {
+        "schema": "scar.f4-cpu-provider-boundary",
+        "sha256": "46312aaa5fc70459b2c52c3f3cfb12d9db56c6bd917c547bcf2ab209f6c4b8f1",
+        "size_bytes": 13284,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/cirq-compiled/whole-entry-cpu-provider-graph.json"
+      },
+      "measurement_pairs": 3,
+      "metrics_ns": {
+        "candidate": {
+          "max_ns": 32792008,
+          "median_ns": 30050559,
+          "median_ns_twice": 60101118,
+          "min_ns": 28042256,
+          "samples_ns": [
+            28042256,
+            32792008,
+            30050559
+          ]
+        },
+        "original": {
+          "max_ns": 2519272641,
+          "median_ns": 2508050980,
+          "median_ns_twice": 5016101960,
+          "min_ns": 2501617488,
+          "samples_ns": [
+            2508050980,
+            2501617488,
+            2519272641
+          ]
+        }
+      },
+      "native_elf_reused": true,
+      "native_memory": {
+        "capacity_kind": "VIRTUAL_ADDRESS_SPACE_CAPS",
+        "declared_budget_bytes": 1073741824,
+        "explicit_payload_bytes": 8688888,
+        "memory": {
+          "bound_scope": "SINGLE_PROCESS_VAS_CAP_INCLUDING_PRIVATE_ARRAYS_AND_OPENMP_CHILD_STACKS",
+          "coordinator_address_space_limit_bytes": 268435456,
+          "explicit_owner_payload_bytes": 8688888,
+          "explicit_worker_payload_bytes": 150080,
+          "payload_budget_bytes": 0,
+          "physical_reservation": false,
+          "private_arena_bytes_per_numerical_worker": 150080,
+          "request_bytes": 16,
+          "request_frame_bytes": 0,
+          "required_headroom_bytes": 268435456,
+          "result_bytes": 56,
+          "result_frame_bytes": 0,
+          "retained_result_payload_bytes": 112,
+          "retained_status_bytes": 8,
+          "socket_kernel_buffer_capacity_proven": false,
+          "thread_stack_bytes": 8388608,
+          "worker_address_space_limit_bytes": 268435456
+        },
+        "physical_dram_reserved": false,
+        "required_address_space_headroom_bytes": 268435456,
+        "scope": "SINGLE_PROCESS_VAS_CAP_INCLUDING_PRIVATE_ARRAYS_AND_OPENMP_CHILD_STACKS"
+      },
+      "new_entry_runs": 8,
+      "normalized_runtime_fields": [
+        [
+          "wall_seconds"
+        ],
+        [
+          "worker_cpu_seconds"
+        ],
+        [
+          "active_worker_pids"
+        ],
+        [
+          "results",
+          "*",
+          "pid"
+        ],
+        [
+          "results",
+          "*",
+          "cpu_seconds"
+        ],
+        [
+          "results",
+          "*",
+          "wall_seconds"
+        ],
+        [
+          "results",
+          "*",
+          "max_rss_kib"
+        ]
+      ],
+      "paired_observation": {
+        "schema": "scar.cpu-entry-paired-replay",
+        "sha256": "1d0f0987867ba31cde6d05272cb0e5c3374be8700c73fa0f5055ca6aaf138abc",
+        "size_bytes": 25217,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/cirq-compiled/native-validation/result.json"
+      },
+      "planned_context": {
+        "affinity": true,
+        "cwd": true,
+        "environment": true,
+        "resolved_interpreter": true
+      },
+      "program": {
+        "schema": "scar.program-build",
+        "sha256": "a32440f0dfaaf74be54546c399b591c8ac1833fce36bd3c561168eaad5619902",
+        "size_bytes": 13548,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/cirq-program/manifest.json"
+      },
+      "provider": {
+        "schema": "scar.cpu-array-task-source-provider",
+        "sha256": "895386cfbbe0651b8632276da8598e3b982bb67ef6f56de10167d9794c795cb0",
+        "size_bytes": 7702,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/generic-cpu-entry-v1/provider.json"
+      },
+      "publication_slots": [
+        {
+          "argv_index": 13,
+          "replay_template": "{output_dir}/published.json",
+          "requested_argument": "published.json"
+        }
+      ],
+      "scoped_speedup": 83.46104243851171,
+      "selection": {
+        "schema": "scar.whole-entry-main-chain",
+        "sha256": "ecc576b05611b9ec746a342227f0353b6fb9fb3a70afdda28c20610268a2bc13",
+        "size_bytes": 35943,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/cirq-compiled/whole-entry-selection.json"
+      },
+      "source_calls": 2,
+      "warmup_pairs": 1,
+      "whole_entry_release": false
+    },
+    "rk4": {
+      "coverage_frontier": [
+        "ORIGINAL_WORLD_EFFECTS_OPEN",
+        "PROVIDER_ORIGINAL_F4_REFERENCE_ABSENT",
+        "ORIGINAL_ARBITRARY_OUTPUT_PATH_EFFECTS_OPEN",
+        "ORIGINAL_INTERPRETER_LAUNCH_PATH_SPELLING_DIFFERS"
+      ],
+      "domain": {
+        "schema": "scar.whole-entry-option-domain",
+        "sha256": "466a9d6852f9b78a55c36acf7c5b6c16d8924372fc605aa0762dbb74dab854e1",
+        "size_bytes": 3669,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/rk4-scoped-plan/whole-entry-domain.json"
+      },
+      "executable": {
+        "schema": "application/x-executable",
+        "sha256": "ab940bcf7decf8ebc162a0bd681cbe3cad71e5992c1ff639de1354ce23501355",
+        "size_bytes": 105032,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/generic-cpu-entry-v1/compiled-rk4/native/CPU runtime/bin/aten-recurrence"
+      },
+      "graph": {
+        "schema": "scar.f4-cpu-provider-boundary",
+        "sha256": "4d584e5c9fc612dd585a2a462e9b2031e0b1282d032953796c7d3616ca70ff22",
+        "size_bytes": 11912,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/rk4-scoped-plan/whole-entry-cpu-provider-graph.json"
+      },
+      "measurement_pairs": 3,
+      "metrics_ns": {
+        "candidate": {
+          "max_ns": 2342591971,
+          "median_ns": 2320948178,
+          "median_ns_twice": 4641896356,
+          "min_ns": 2302815906,
+          "samples_ns": [
+            2320948178,
+            2342591971,
+            2302815906
+          ]
+        },
+        "original": {
+          "max_ns": 6679411963,
+          "median_ns": 6673949525,
+          "median_ns_twice": 13347899050,
+          "min_ns": 6650831745,
+          "samples_ns": [
+            6673949525,
+            6650831745,
+            6679411963
+          ]
+        }
+      },
+      "native_elf_reused": true,
+      "native_memory": null,
+      "new_entry_runs": 0,
+      "normalized_runtime_fields": [],
+      "paired_observation": {
+        "schema": "scar.cpu-entry-paired-replay",
+        "sha256": "0328e63044a517952f6560edea48085f262c6739f316edec541db0b304861ccd",
+        "size_bytes": 25870,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/generic-cpu-entry-v1/verified-rk4/result.json"
+      },
+      "planned_context": {
+        "affinity": true,
+        "cwd": true,
+        "environment": true,
+        "resolved_interpreter": true
+      },
+      "program": {
+        "schema": "scar.program-build",
+        "sha256": "a5e5d99c62315ac0d1b9a812895d96fdebfc432565b6af2843fe2d5c3a850328",
+        "size_bytes": 13773,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/unified-entry-main-v1/aten-96-program/manifest.json"
+      },
+      "provider": {
+        "schema": "scar.cpu-fixed-grid-source-provider",
+        "sha256": "7722148511dc6b5f789a68ac04b68eca87e611e7e9dcb0d7c71d4a2c6cec65e3",
+        "size_bytes": 4897,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/native-cpu-end-to-end-v1/source-provider-v1/provider.json"
+      },
+      "publication_slots": [
+        {
+          "argv_index": 2,
+          "replay_template": "{output_dir}/final.f32",
+          "requested_argument": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-quantum-returned-loop-v1/generic-cpu-entry-v1/rk4-requested.f32"
+        }
+      ],
+      "scoped_speedup": 2.8755271609515445,
+      "selection": {
+        "schema": "scar.whole-entry-main-chain",
+        "sha256": "a385a0d211382651ed8c14d1a1494b447c0a01e3d4286cee61f967de19fea3e8",
+        "size_bytes": 34181,
+        "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-catalog-main-v1/rk4-compiled/whole-entry-selection.json"
+      },
+      "source_calls": 2,
+      "warmup_pairs": 1,
+      "whole_entry_release": false
+    }
+  },
+  "current_cirq_compile_and_replay_wall_seconds": 302.1183817469282,
+  "decision": "KEEP_ORIGINAL",
+  "measurement_boundary": "PROVIDER_SCOPED_PAIRED_PROCESSES",
+  "schema": "scar.cpu-catalog-main-acceptance",
+  "schema_version": 1
+}
