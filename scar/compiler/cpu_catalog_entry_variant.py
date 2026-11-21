@@ -18,6 +18,7 @@ _ARRAY = 'scar.cpu-array-task-source-provider'
 _GRID = 'scar.cpu-fixed-grid-source-provider'
 _SPARSE = 'scar.triangle-profile-family'
 _STREAM = 'scar.cpu-recursive-stream-source-provider'
+STREAM_CAPTURE_SCHEMA = 'scar.scalar-recursive-driver-capture'
 
 
 class _Frontier(ValueError):
@@ -162,7 +163,77 @@ def _sparse(scope, authority, entry, argv):
             dict(reason='FRESH_SPARSE_PROFILE_AND_SCHEDULING_REQUIRED')]
 
 
-_PROFILE = {_ARRAY: _array, _GRID: _fixed_grid, _SPARSE: _sparse}
+def _stream_capture(scope, entry, argv):
+    reference = scope.get('cpu_stream_capture')
+    _require(type(reference) is dict and reference.get('schema') == STREAM_CAPTURE_SCHEMA,
+             'LIVE_STDIN_PROTOCOL_REQUIRES_INVOCATION_SCOPE',
+             'the live command provider requires a pinned bound original stream capture')
+    capture = read_artifact(reference)
+    launch = capture['launch']
+    _require(capture['schema_version'] == 1 and capture['source'] == entry and launch['argv'] == argv
+             and launch['entry_path'] == entry['uri'] and launch['exit_code'] == 0
+             and launch['installed_bindings'] == 0 and not capture['frontiers']
+             and capture['original_execution'] is True and capture['performance_measurement'] is False,
+             'STREAM_CAPTURE_SCOPE_DIFFERS', 'captured source, argv or execution effects differ from the original entry')
+    raw = read_artifact(capture['raw_capture'])
+    _require(all(capture.get(key) == value for key, value in raw.items()), 'STREAM_CAPTURE_SCOPE_DIFFERS',
+             'bound stream record differs from the raw original observation')
+    context = json.loads(read_artifact(capture['captured_launch'], json_document=False))
+    command = context['command']
+    _require(type(command) is list and all(type(arg) is str and '\x00' not in arg for arg in command)
+             and len(command) >= 3 and command[:2] == ['/usr/bin/taskset', '-c']
+             and command[2].isascii() and command[2].isdecimal() and len(command[2]) <= 10
+             and command[2] == str(int(command[2])), 'STREAM_CAPTURE_CPU_UNBOUND',
+             'original capture launch did not pin one canonical taskset CPU')
+    cpu = int(command[2])
+    _require(scope['process_affinity_cpu_ids'] == [cpu] == context.get('cpu_ids', [cpu]), 'STREAM_CAPTURE_CPU_SCOPE_DIFFERS',
+             'captured stream CPU must equal the exact original invocation cohort')
+    expected = {'--design': capture['design']['uri'], '--out': capture['raw_capture']['uri']}
+    _require(all(command.count(arg) == 1 and command.index(arg) + 1 < len(command)
+                 and command[command.index(arg) + 1] == value for arg, value in expected.items())
+             and context['stdin'] == capture['stdin']['uri'], 'STREAM_CAPTURE_SCOPE_DIFFERS',
+             'stream capture launch does not bind the original observation and input files')
+    return reference, capture, cpu, context
+
+
+def _stream(scope, authority, entry, argv):
+    from scar.compiler.cpu_entry_replay import _recursive
+    from scar.compiler.recursive_stream_source_provider import _checked_provider, _invocation
+
+    reference, capture, cpu, captured_launch = _stream_capture(scope, entry, argv)
+    provider, seed = _checked_provider(authority)
+    _require(argv == provider['argv'], 'STREAM_PROVIDER_ARGV_DIFFERS',
+             'original argv differs from the sealed live-command provider')
+    runtime = provider['source_artifact']
+    invocation = _invocation(runtime, seed, provider, seed, entry, argv)
+    try:
+        spec = _recursive(dict(entry=entry, argv=argv), dict(runtime=runtime, invocation=invocation), reference, cpu)
+    except ValueError as error:
+        raise _Frontier('STREAM_CAPTURE_PACING_OR_PUBLICATION_OPEN', str(error)) from error
+    parameterized = provider['parameterized_plan']
+    _require(captured_launch.get('protocol_plan') == parameterized
+             and captured_launch.get('pacing') == 'WAIT_FOR_MATCHED_STDOUT_PREFIX'
+             and captured_launch.get('normalized_stdout_sha256') == spec['eligible_stdout_digest'],
+             'STREAM_CAPTURE_PACING_OR_PUBLICATION_OPEN', 'the original capture did not preserve the verified pacing and stdout proof')
+    original = spec['arms']['original']
+    context = _launch(scope, interpreter=original['executable'], cpu_ids=[cpu], cwd=spec['cwd'],
+                      original_environment=original['environment'])
+    resources = read_artifact(parameterized)['resources']
+    peak = resources['peak_owner_memory_bytes']
+    budget = scope['memory_budget_bytes']
+    _require(type(budget) is int and budget > 0 and (peak is None or type(peak) is int and 0 < peak <= budget),
+             'STREAM_STORAGE_BUDGET_EXCEEDED', 'retained owner memory bound exceeds the requested execution budget')
+    memory = dict(scope='PROVIDER_OWNER_MEMORY', peak_bytes=peak, declared_budget_bytes=budget,
+                  status='UNKNOWN' if peak is None else 'RETAINED_PROVIDER_BOUND')
+    return context, dict(capture=reference, cpu=cpu, parameterized_plan=parameterized, stdin=capture['stdin'],
+        stdout=capture['stdout'], normalization=provider['normalization'], protocol=provider['stdin']['protocol'],
+        stream_contract=provider['stdin'], pacing=captured_launch['pacing'],
+        depths=[value for kind, value in spec['ordered_effects'] if kind == 'SEARCH'], transcript=spec['transcript'],
+        eligible_stdout_digest=spec['eligible_stdout_digest'], memory=memory), [
+            dict(reason='PACED_SOURCE_CAPTURE_HAS_NO_CLEAN_PROCESS_TIME')]
+
+
+_PROFILE = {_ARRAY: _array, _GRID: _fixed_grid, _SPARSE: _sparse, _STREAM: _stream}
 
 
 def derive_cpu_catalog_entry(scope, catalog_ref):
@@ -183,9 +254,8 @@ def derive_cpu_catalog_entry(scope, catalog_ref):
         authority, _ = _match(authorities, entry)
         result['matched_authority'] = authority
         kind = authority['schema']
-        if kind == _STREAM:
-            raise _Frontier('LIVE_STDIN_PROTOCOL_REQUIRES_INVOCATION_SCOPE',
-                            'an argv-only original entry cannot bind the live command stream provider')
+        _require(kind == _STREAM or 'cpu_stream_capture' not in scope, 'STREAM_CAPTURE_PROVIDER_DIFFERS',
+                 'a captured stdin stream cannot qualify an argv-only CPU provider')
         argv = scope['argv']
         context, contract, costs = _PROFILE[kind](scope, authority, entry, argv)
         timing_frontier = [*costs, dict(reason='SAME_ENTRY_FORWARD_LIFECYCLE_COSTS_OPEN')]

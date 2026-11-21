@@ -1,5 +1,6 @@
 """Emit a catalog-selected CPU entry and retain its provider-scoped trial."""
 
+import json
 from pathlib import Path
 from subprocess import SubprocessError
 
@@ -9,6 +10,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
 _ACQUISITION_RUNS_ENTRY = frozenset(('scar.cpu-fixed-grid-source-provider', 'scar.triangle-profile-family'))
+_STREAM = 'scar.cpu-recursive-stream-source-provider'
 _ERRORS = (OSError, ValueError, SubprocessError)
 
 
@@ -36,7 +38,44 @@ def _compilation(reference, plan):
     profile = plan['contract'].get('profile')
     if profile is not None and read_artifact(record['compilation']) != profile:
         raise ValueError('CPU receipt differs from the selected retained provider profile')
+    if plan['provider_family'] == _STREAM:
+        material = read_artifact(record['compilation'])
+        contract = plan['contract']
+        if (material['normalization'] != contract['normalization']
+                or material['invocation']['stdin'] != contract['stream_contract']
+                or material['invocation']['stdin']['protocol'] != contract['protocol']
+                or read_artifact(material['runtime'])['parameterized_plan'] != contract['parameterized_plan']):
+            raise ValueError('CPU compilation differs from the selected stream protocol or runtime plan')
     return record
+
+
+def _replay_inputs(plan, scope):
+    capture = scope.get('cpu_stream_capture')
+    if plan['provider_family'] != _STREAM:
+        if capture is not None:
+            raise ValueError('stdin evidence cannot qualify an argv-only catalog entry')
+        return None, None, None
+    from scar.analysis.scalar_recursive_driver import CAPTURE
+
+    contract = plan['contract']
+    cpu = contract['cpu']
+    if (capture != contract['capture'] or not isinstance(capture, dict) or capture.get('schema') != CAPTURE
+            or type(cpu) is not int or plan['context']['cpu_ids'] != [cpu]
+            or scope['process_affinity_cpu_ids'] != [cpu] or plan['argv'] != []):
+        raise ValueError('selected stream plan differs from the original capture or CPU scope')
+    observed = read_artifact(capture)
+    if (observed['source'] != plan['entry'] or observed['stdin'] != contract['stdin']
+            or observed['stdout'] != contract['stdout']):
+        raise ValueError('selected stream capture differs from the exact stdin or stdout evidence')
+    launch_reference = observed['captured_launch']
+    launch = json.loads(read_artifact(launch_reference, json_document=False))
+    if launch['command'][:3] != ['/usr/bin/taskset', '-c', str(cpu)]:
+        raise ValueError('original stream capture was not acquired on the selected CPU')
+    if (launch['stdin'] != contract['stdin']['uri'] or launch.get('protocol_plan') != contract['parameterized_plan']
+            or launch.get('pacing') != contract['pacing']
+            or launch.get('normalized_stdout_sha256') != contract['eligible_stdout_digest']):
+        raise ValueError('original stream launch differs from the selected protocol, pacing or normalized stdout')
+    return capture, cpu, launch_reference
 
 
 def _provider_scope(spec, plan, scope):
@@ -46,12 +85,14 @@ def _provider_scope(spec, plan, scope):
             or spec['cwd'] != context['cwd'] or original['environment'] != context['original_environment']):
         raise ValueError('CPU provider replay differs from its selected original process context')
     invoked = original['argv']
-    if (spec['entry'] != plan['entry'] or spec['transcript']
-            or invoked[:3] != [original['executable']['uri'], '-B', plan['entry']['uri']]
-            or len(invoked[3:]) != len(plan['argv'])):
-        raise ValueError('CPU provider replay does not recover its admitted argv entry')
+    stream = plan['provider_family'] == _STREAM
+    flags = ['-B', '-u'] if stream else ['-B']
+    prefix = [original['executable']['uri'], *flags, plan['entry']['uri']]
+    if (spec['entry'] != plan['entry'] or bool(spec['transcript']) != stream or invoked[:len(prefix)] != prefix
+            or len(invoked[len(prefix):]) != len(plan['argv'])):
+        raise ValueError('CPU provider replay does not recover its admitted source invocation')
     slots = []
-    for index, (request, replay) in enumerate(zip(plan['argv'], invoked[3:], strict=True)):
+    for index, (request, replay) in enumerate(zip(plan['argv'], invoked[len(prefix):], strict=True)):
         if request == replay:
             continue
         leaf = replay.removeprefix(cpu_entry_replay._OUTPUT + '/')
@@ -60,7 +101,7 @@ def _provider_scope(spec, plan, scope):
             raise ValueError('CPU provider replay substituted a non-publication argument')
         slots.append(dict(argv_index=index, requested_argument=request, replay_template=replay))
     if len(slots) > 1 or ('output_slot' in original and
-            (len(slots) != 1 or slots[0]['argv_index'] + 3 != original['output_slot'])):
+            (len(slots) != 1 or slots[0]['argv_index'] + len(prefix) != original['output_slot'])):
         raise ValueError('CPU provider replay has a different publication slot contract')
     publication = plan['contract'].get('publication')
     normalized_fields = spec.get('json_report', {}).get('runtime_fields', [])
@@ -74,27 +115,50 @@ def _provider_scope(spec, plan, scope):
         environment=_environment_digest(original['environment']) == scope['environment_sha256'])
     if matches != context['scope_matches']:
         raise ValueError('CPU provider replay no longer has the selected scope relation')
-    return dict(requested_boundary=scope['boundary'], kind='PROVIDER_SCOPED_PAIRED_PROCESSES',
+    result = dict(requested_boundary=scope['boundary'],
+        kind='PACED_SOURCE_COMMAND_STREAM' if stream else 'PROVIDER_SCOPED_PAIRED_PROCESSES',
         cpu_ids=spec['cpu_ids'], working_directory=spec['cwd'], original=original,
         candidate=spec['arms']['candidate'], scope_matches=matches, publication_slots=slots,
         normalized_runtime_fields=normalized_fields,
         exact_original_argv_observed=not slots, exact_whole_entry_effects_proven=False)
+    if stream:
+        capture, cpu, launch = _replay_inputs(plan, scope)
+        contract = plan['contract']
+        depths = [depth for effect, depth in spec['ordered_effects'] if effect == 'SEARCH']
+        if (spec.get('scope') != 'PACED_SOURCE_COMMAND_STREAM' or spec['transcript'] != contract['transcript']
+                or spec['eligible_stdout_digest'] != contract['eligible_stdout_digest']
+                or depths != contract['depths'] or original['stdout'] != contract['stdout']):
+            raise ValueError('CPU provider replay differs from selected command pacing or normalized stdout')
+        result['stream'] = dict(capture=capture, captured_launch=launch, cpu=cpu, stdin=contract['stdin'],
+            protocol=contract['protocol'],
+            pacing=dict(method=contract['pacing'], transcript=spec['transcript'], ordered_effects=spec['ordered_effects'],
+                        paired_live_timestamps_retained=False),
+            stdout=dict(normalization=contract['normalization'], canonical_sha256=spec['eligible_stdout_digest']))
+    return result
+
+
+def _observation_summary(reference, report, record, plan, scope):
+    if (reference['schema'] != cpu_entry_replay.SCHEMA or report['schema_version'] != 1
+            or report['whole_program_equivalence_proven'] is not False or report['deployment_authorized'] is not False):
+        raise ValueError('CPU catalog review expects a provider-paired observation')
+    captured, cpu, _ = _replay_inputs(plan, scope)
+    if report['capture'] != captured or report['cpu_override'] != cpu:
+        raise ValueError('retained CPU trial differs from the selected stdin or CPU binding')
+    context = _provider_scope(report['invocation'], plan, scope)
+    read_artifact(reference, json_document=False)
+    return dict(reference=reference, compilation=report['compilation'], provider_compilation=record['compilation'],
+        scope=context, selection=report['selection'], same_boundary_whole_entry_timing=False,
+        deployment_authorized=False)
 
 
 def replay_cpu_catalog_observation(reference, plan, scope):
     """Cold-check a retained provider trial and its separate launch scope."""
     _plan_scope(plan, scope)
     report = read_artifact(reference)
-    if reference['schema'] != cpu_entry_replay.SCHEMA:
-        raise ValueError('CPU catalog review expects a provider-paired observation')
     record = _compilation(report['compilation'], plan)
     if cpu_entry_replay.check(reference['uri']) != report:
         raise ValueError('CPU provider replay changed while checking the retained observation')
-    context = _provider_scope(report['invocation'], plan, scope)
-    read_artifact(reference, json_document=False)
-    return dict(reference=reference, compilation=report['compilation'], provider_compilation=record['compilation'],
-        scope=context, selection=report['selection'], same_boundary_whole_entry_timing=False,
-        deployment_authorized=False)
+    return _observation_summary(reference, report, record, plan, scope)
 
 
 def _trial_result(result, review, *, retained):
@@ -115,6 +179,7 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
         deployment_authorized=False)
     try:
         _plan_scope(plan, scope)
+        capture, cpu, _ = _replay_inputs(plan, scope)
     except _ERRORS as error:
         return dict(result, final_action='KEEP_ORIGINAL', reason='CPU catalog plan scope failed: ' + str(error))
     if plan_only:
@@ -154,7 +219,7 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
 
     if not verify_entry:
         try:
-            admit(cpu_entry_replay._spec(compilation, None, None))
+            admit(cpu_entry_replay._spec(compilation, capture, cpu))
         except _ERRORS as error:
             return dict(result, final_action='KEEP_ORIGINAL', reason='CPU catalog admission failed: ' + str(error))
         return dict(result, final_action='CANDIDATE_VALIDATION_REQUIRED',
@@ -162,9 +227,12 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry):
 
     validation = out/'native-validation'
     try:
-        cpu_entry_replay.measure(compilation['uri'], validation, _admit_invocation=admit)
+        observed = cpu_entry_replay.measure(compilation['uri'], validation,
+            capture=None if capture is None else capture['uri'], cpu=cpu, _admit_invocation=admit)
         reference = artifact_reference(validation/'result.json', cpu_entry_replay.SCHEMA)
-        replay = replay_cpu_catalog_observation(reference, plan, scope)
+        if read_artifact(reference) != observed or observed['compilation'] != compilation:
+            raise ValueError('fresh provider observation differs from its admitted compilation or saved receipt')
+        replay = _observation_summary(reference, observed, record, plan, scope)
     except _ERRORS as error:
         return dict(result, final_action='KEEP_ORIGINAL', validation_attempted=True,
                     target_executed=True if acquisition else None, reason='CPU catalog trial failed: ' + str(error))
