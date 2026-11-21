@@ -1,0 +1,443 @@
+{
+  "graph": {
+    "offsets": [
+      14530,
+      15966,
+      16011,
+      16176,
+      16572
+    ],
+    "parent": {
+      "schema": "scar.f4-cpu-entry-lifecycle-graph",
+      "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+      "size_bytes": 30195,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+    },
+    "phase_sites": {
+      "schema": "scar.cpu-native-phase-sites",
+      "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+      "size_bytes": 14634,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+    }
+  },
+  "measurement": {
+    "checked_native_guard_limit_bytes": 268435456,
+    "cpu_ids": [
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "launch_to_reap": {
+      "max_ns": 32052367,
+      "median_ns_twice": 60405814,
+      "min_ns": 28847051,
+      "samples_ns": [
+        32052367,
+        30202907,
+        28847051
+      ]
+    },
+    "loader_images": [
+      "/lib64/ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libgfortran-83c28eba-468e71e5.so.5.0.0",
+      "libgomp.so.1",
+      "libm.so.6",
+      "libpthread.so.0",
+      "libquadmath-2284e583-a9307bba.so.0.0.0",
+      "libscipy_openblas64_-61654e39.so",
+      "libstdc++.so.6",
+      "libz.so.1",
+      "linux-vdso.so.1"
+    ],
+    "normalized_output_verified": true,
+    "observation": {
+      "schema": "scar.cpu-native-array-lifecycle-observation",
+      "sha256": "f1b51428a9d19885d6170c09dc69f7cee2aecc38ffdc7dc49518cb109d44d1cf",
+      "size_bytes": 39915,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/samples/result.json"
+    },
+    "original_binary_executed": false,
+    "phase_cost": {
+      "schema": "scar.cpu-native-lifecycle-cost",
+      "sha256": "a88fa52428de14a847b81057c125b6132ea1f94aee1e4b60bfe1b1ef071c36f3",
+      "size_bytes": 16022,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-cost.json"
+    },
+    "production_elf_help_control": {
+      "schema": "scar.same-native-elf-help-control",
+      "sha256": "cb4e44b60e6201d9e8e618b8ffa948aadb72cb463239cf0f45ad933c478bd8c1",
+      "size_bytes": 14513,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/same-elf-help-control/result.json"
+    },
+    "sample_count": 3,
+    "warmup_count": 1,
+    "windows": [
+      {
+        "basis": "PARENT_LAUNCH_GUARD_AND_LOADER_COMPOSITE",
+        "begin": {
+          "clock_event": "PARENT_START",
+          "source_site": null
+        },
+        "end": {
+          "clock_event": "MAIN_ENTER",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/0"
+          }
+        },
+        "id": "startup_to_main",
+        "max_ns": 7417505,
+        "median_ns_twice": 14590228,
+        "min_ns": 5070494,
+        "overlapping_graph_operations": [
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/1"
+          },
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/2"
+          }
+        ],
+        "phases": [
+          "startup",
+          "guards"
+        ],
+        "samples_ns": [
+          7417505,
+          7295114,
+          5070494
+        ],
+        "source_window": null
+      },
+      {
+        "basis": "NATIVE_ARGUMENT_AND_PROVIDER_GUARDS",
+        "begin": {
+          "clock_event": "MAIN_ENTER",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/0"
+          }
+        },
+        "end": {
+          "clock_event": "DISPATCH_BEGIN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/1"
+          }
+        },
+        "id": "native_ingress_guards",
+        "max_ns": 12704,
+        "median_ns_twice": 16318,
+        "min_ns": 6934,
+        "overlapping_graph_operations": [],
+        "phases": [
+          "guards"
+        ],
+        "samples_ns": [
+          6934,
+          8159,
+          12704
+        ],
+        "source_window": {
+          "artifact": {
+            "schema": "scar.cpu-native-phase-sites",
+            "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+            "size_bytes": 14634,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+          },
+          "locator": "#/timed_segments/0"
+        }
+      },
+      {
+        "basis": "NUMERICAL_TEAM_DISPATCH_AND_JOIN_COMPOSITE",
+        "begin": {
+          "clock_event": "DISPATCH_BEGIN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/1"
+          }
+        },
+        "end": {
+          "clock_event": "DISPATCH_RETURN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/2"
+          }
+        },
+        "id": "dispatch_and_join",
+        "max_ns": 23798607,
+        "median_ns_twice": 45914258,
+        "min_ns": 22244483,
+        "overlapping_graph_operations": [
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/3"
+          },
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/4"
+          },
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/5"
+          }
+        ],
+        "phases": [
+          "worker_lifecycle",
+          "execution",
+          "synchronization"
+        ],
+        "samples_ns": [
+          23798607,
+          22244483,
+          22957129
+        ],
+        "source_window": {
+          "artifact": {
+            "schema": "scar.cpu-native-phase-sites",
+            "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+            "size_bytes": 14634,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+          },
+          "locator": "#/timed_segments/1"
+        }
+      },
+      {
+        "basis": "SUCCESS_PATH_TRANSITION",
+        "begin": {
+          "clock_event": "DISPATCH_RETURN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/2"
+          }
+        },
+        "end": {
+          "clock_event": "PUBLICATION_BEGIN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/3"
+          }
+        },
+        "id": "post_dispatch",
+        "max_ns": 62,
+        "median_ns_twice": 94,
+        "min_ns": 45,
+        "overlapping_graph_operations": [],
+        "phases": [],
+        "samples_ns": [
+          47,
+          62,
+          45
+        ],
+        "source_window": {
+          "artifact": {
+            "schema": "scar.cpu-native-phase-sites",
+            "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+            "size_bytes": 14634,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+          },
+          "locator": "#/timed_segments/2"
+        }
+      },
+      {
+        "basis": "NATIVE_PUBLICATION_STATEMENTS",
+        "begin": {
+          "clock_event": "PUBLICATION_BEGIN",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/3"
+          }
+        },
+        "end": {
+          "clock_event": "PUBLICATION_END",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/4"
+          }
+        },
+        "id": "publication_statements",
+        "max_ns": 138330,
+        "median_ns_twice": 273926,
+        "min_ns": 136824,
+        "overlapping_graph_operations": [
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/6"
+          }
+        ],
+        "phases": [
+          "publication"
+        ],
+        "samples_ns": [
+          136963,
+          138330,
+          136824
+        ],
+        "source_window": {
+          "artifact": {
+            "schema": "scar.cpu-native-phase-sites",
+            "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+            "size_bytes": 14634,
+            "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+          },
+          "locator": "#/timed_segments/3"
+        }
+      },
+      {
+        "basis": "CLOCK_MARKER_OUTPUT_FLUSH_AND_PROCESS_REAP_COMPOSITE",
+        "begin": {
+          "clock_event": "PUBLICATION_END",
+          "source_site": {
+            "artifact": {
+              "schema": "scar.cpu-native-phase-sites",
+              "sha256": "e489aef8acb7f92d4956ff7bfde4a51e144dd524cd3ddd6c8841e23d560c45ab",
+              "size_bytes": 14634,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-diagnostic/phase-sites.json"
+            },
+            "locator": "#/sites/4"
+          }
+        },
+        "end": {
+          "clock_event": "PARENT_REAP",
+          "source_site": null
+        },
+        "id": "publication_end_to_reap",
+        "max_ns": 692311,
+        "median_ns_twice": 1339710,
+        "min_ns": 516759,
+        "overlapping_graph_operations": [
+          {
+            "artifact": {
+              "schema": "scar.f4-cpu-entry-lifecycle-graph",
+              "sha256": "a644f8073f912ee75f3bab529b769f5efdad2bd0843ceda70338e09931896baa",
+              "size_bytes": 30195,
+              "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-lifecycle.json"
+            },
+            "locator": "#/lanes/1/operations/7"
+          }
+        ],
+        "phases": [
+          "teardown"
+        ],
+        "samples_ns": [
+          692311,
+          516759,
+          669855
+        ],
+        "source_window": null
+      }
+    ]
+  },
+  "planning": {
+    "decision": "KEEP_ORIGINAL",
+    "dispatch_samples_outside_model_ns": [
+      22244483
+    ],
+    "forecast": {
+      "schema": "scar.cpu-entry-forward-cost",
+      "sha256": "e4673cbc9ae67a2f588ab73ad87daacd709bedb4a34ff176b55000439020af73",
+      "size_bytes": 12070,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-entry-forward-v1/cirq-plan-two-campaigns/whole-entry-cpu-forward-cost.json"
+    },
+    "forecast_ns": {
+      "estimate_ns": 23445155,
+      "lower_ns": 22436895,
+      "upper_ns": 23827913
+    },
+    "process_cost_bounds": {
+      "lower": null,
+      "upper": null
+    },
+    "resumed_main_chain": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "54119333dfd5a96cd41567cdd0bd93fed85f148defd2e1b397a0ada0b4e5207f",
+      "size_bytes": 1867,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-native-lifecycle-v1/cirq-attach-plan/result.json"
+    },
+    "target_workloads_executed_in_plan": 0,
+    "worker_and_join_window_indivisible": true
+  },
+  "schema": "scar.cpu-native-lifecycle-acceptance",
+  "schema_version": 1
+}
