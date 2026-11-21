@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 from time import monotonic_ns
 from types import CodeType
 
@@ -27,6 +28,15 @@ _RAW = 'application/octet-stream'
 _SOURCE = 'scar.python-source'
 _ORIGIN_KINDS = {'ABSOLUTE_FILE', 'BUILT_IN', 'FROZEN', 'NAMESPACE', 'UNKNOWN'}
 _BOOTSTRAP = Path(__file__).resolve().parents[1]/'runtime/original_import_bindings.py'
+_SPAWN_BOOTSTRAP = _BOOTSTRAP.with_name('original_import_bindings_spawn.py')
+_OBSERVER_CORE = 'observer-core.py'
+_PROCESSES = 'processes'
+_PROCESS_SCHEMA = 'scar.cpu-original-import-process'
+_SPAWN_LIMIT = 64
+_ENTRY_LIMIT = 4096
+_PROCESS_BYTES = 8 * 1024 * 1024
+_TOTAL_PROCESS_BYTES = 64 * 1024 * 1024
+_OBSERVED = 'OBSERVED'
 
 
 def _need(ok, reason):
@@ -81,7 +91,13 @@ def _admit(paired_ref, initializer_ref, watch):
     return spec, expected, _sites(expected)
 
 
-def _invocation(spec, root, sites):
+def _spawn_sources():
+    package = Path(sysconfig.get_path('stdlib'))/'multiprocessing'
+    return dict(spawn_launch_file=_ref(package/'popen_spawn_posix.py', _SOURCE),
+                spawn_util_file=_ref(package/'util.py', _SOURCE))
+
+
+def _invocation(spec, root, sites, *, follow_spawn=False):
     original = spec['arms']['original']
     argv = list(original['argv'])
     entry = spec['entry']['uri']
@@ -102,7 +118,12 @@ def _invocation(spec, root, sites):
         argv[index] = argv[index].replace(output, str(root/'published'))
     config = dict(original_argv=argv, source_index=source_index, script_directory=str(Path(entry).parent),
                   import_opcode=dis.opmap['IMPORT_NAME'], sites=sites)
-    bootstrap = [*prefix, str(root/_OBSERVER), str(root/_CONFIG), str(root/_CAPTURE)]
+    if follow_spawn:
+        config['observer_core'] = str(root/_OBSERVER_CORE)
+        config.update({key: value['uri'] for key, value in _spawn_sources().items()})
+        config.update(max_spawn_children=_SPAWN_LIMIT, max_entries_per_process=_ENTRY_LIMIT)
+    capture = _PROCESSES if follow_spawn else _CAPTURE
+    bootstrap = [*prefix, str(root/_OBSERVER), str(root/_CONFIG), str(root/capture)]
     launch = ['/usr/bin/taskset', '-c', ','.join(map(str, spec['cpu_ids'])), '/usr/bin/timeout', '-k', '2',
               str(cpu_entry_replay._TIMEOUT), *bootstrap]
     return config, launch
@@ -119,7 +140,10 @@ def _source(origin):
 
 
 def _project(raw, sites):
-    observed = ast.literal_eval(raw.decode('utf-8'))
+    return _project_entries(ast.literal_eval(raw.decode('utf-8')), sites)
+
+
+def _project_entries(observed, sites):
     _need(type(observed) is list, 'expected the raw watched import record list')
     result, sources = [], {}
     for row in observed:
@@ -149,25 +173,121 @@ def _project(raw, sites):
     return result
 
 
-def _record(root, paired_ref, initializer_ref, spec, watch, sites):
-    config, launch = _invocation(spec, root, sites)
+def _pid(value):
+    return type(value) is int and value > 0
+
+
+def _ordinal(value):
+    return type(value) is int and value >= 0
+
+
+def _process_path(folder, slot):
+    return folder/f'process-{slot:04d}.txt'
+
+
+def _process(path, slot, parent_pid, cpus, *, pid=None):
+    _need(path.resolve(strict=True) == path and path.is_file() and path.stat().st_size <= _PROCESS_BYTES,
+          'unqualified process sidecar path or size')
+    reference = _ref(path, _RAW)
+    raw = ast.literal_eval(_raw(reference).decode('utf-8'))
+    _need(type(raw) is dict and set(raw) == {'schema', 'schema_version', 'slot', 'pid', 'ppid', 'cpu_ids',
+              'entries', 'children', 'entries_omitted', 'direct_spawns_omitted', 'children_scope'}
+          and raw['schema'] == _PROCESS_SCHEMA and type(raw['schema_version']) is int and raw['schema_version'] == 1
+          and _ordinal(raw['slot']) and raw['slot'] == slot and _pid(raw['pid']) and raw['pid'] != parent_pid
+          and _pid(raw['ppid']) and raw['ppid'] == parent_pid and (pid is None or raw['pid'] == pid)
+          and type(raw['cpu_ids']) is list and all(_ordinal(cpu) for cpu in raw['cpu_ids']) and raw['cpu_ids'] == cpus
+          and type(raw['entries']) is list and len(raw['entries']) <= _ENTRY_LIMIT and _ordinal(raw['entries_omitted'])
+          and (not raw['entries_omitted'] or len(raw['entries']) == _ENTRY_LIMIT)
+          and type(raw['children']) is list and len(raw['children']) <= _SPAWN_LIMIT
+          and _ordinal(raw['direct_spawns_omitted']), 'process identity, affinity, or bounded sidecar differs')
+    if slot == 0:
+        _need(raw['children_scope'] == 'DIRECT_STANDARD_CPYTHON_SPAWN', 'root spawn selector differs')
+    else:
+        _need(raw['children_scope'] == 'NOT_INSTRUMENTED' and not raw['children']
+              and not raw['direct_spawns_omitted'], 'worker sidecar claims unsupported descendant coverage')
+    return raw, reference
+
+
+def _process_row(slot, pid, *, raw=None, reference=None, spawn=None):
+    return dict(slot=slot, parent_slot=None if slot == 0 else 0, pid=pid,
+                kind='ORIGINAL_ENTRY' if slot == 0 else 'CPYTHON_MULTIPROCESSING_SPAWN',
+                status=_OBSERVED if raw is not None else 'UNOBSERVED_MISSING_SIDECAR',
+                cpu_ids=None if raw is None else raw['cpu_ids'], ppid=None if raw is None else raw['ppid'],
+                capture=reference, spawn=spawn, entries_omitted=None if raw is None else raw['entries_omitted'])
+
+
+def _add_processes(report, root, spec, sites, timing):
+    from scar.runtime.original_import_bindings_spawn import diagnostic_spawn_argv, spawn_payload_fds
+
+    launcher = timing.get('launcher_pid')
+    _need(set(timing) == {'schema', 'started_ns', 'reaped_ns', 'status', 'launcher_pid'} and _pid(launcher),
+          'actual timeout launch PID is required')
+    folder = root/_PROCESSES
+    _need(folder.resolve(strict=True) == folder and folder.is_dir(), 'process sidecars must be a local directory')
+    paths = set(folder.iterdir())
+    _need(0 < len(paths) <= _SPAWN_LIMIT + 1 and
+          sum(p.stat().st_size for p in paths) <= _TOTAL_PROCESS_BYTES, 'process evidence exceeds the replay budget')
+    core = _ref(root/_OBSERVER_CORE, _SOURCE)
+    _need(_raw(core) == _BOOTSTRAP.read_bytes(), 'shared original import observer changed')
+
+    cpus = sorted(spec['cpu_ids'])
+    root_capture = _process_path(folder, 0)
+    original, capture = _process(root_capture, 0, launcher, cpus)
+    processes = [_process_row(0, original['pid'], raw=original, reference=capture)]
+    entries = [dict(row, process_slot=0) for row in _project_entries(original['entries'], sites)]
+    pids, expected_paths = {launcher, original['pid']}, {root_capture}
+    executable = spec['arms']['original']['executable']['uri']
+    for slot, child in enumerate(original['children'], 1):
+        _need(type(child) is dict and set(child) == {'slot', 'pid', 'executable', 'original_argv', 'diagnostic_argv'}
+              and _ordinal(child['slot']) and child['slot'] == slot and _pid(child['pid']) and child['pid'] not in pids
+              and child['executable'] == executable
+              and all(type(child[key]) is list and all(type(arg) is str and '\0' not in arg for arg in child[key])
+                      for key in ('original_argv', 'diagnostic_argv'))
+              and child['original_argv'] and child['original_argv'][0] == executable
+              and spawn_payload_fds(child['original_argv']) is not None
+              and child['diagnostic_argv'] == diagnostic_spawn_argv(child['original_argv'], str(root/_OBSERVER),
+                                                                  str(root/_CONFIG), str(folder), slot),
+              'child PID or exact standard CPython spawn selector differs')
+        pids.add(child['pid'])
+        path = _process_path(folder, slot)
+        expected_paths.add(path)
+        raw, reference = None, None
+        if path in paths:
+            raw, reference = _process(path, slot, original['pid'], cpus, pid=child['pid'])
+            entries.extend(dict(row, process_slot=slot) for row in _project_entries(raw['entries'], sites))
+        processes.append(_process_row(slot, child['pid'], raw=raw, reference=reference, spawn=child))
+    _need(paths <= expected_paths, 'process sidecar has no recorded direct spawn')
+    report['artifacts'].update(capture=capture, observer_core=core)
+    report.update(schema_version=2, entries=entries, processes=processes, launcher_pid=launcher,
+                  entry_order='PROCESS_SLOT_THEN_LOCAL_SEQUENCE',
+                  spawn_runtime_sources=_spawn_sources(),
+                  process_selectors=dict(kind='BOUNDED_DIRECT_CPYTHON_MULTIPROCESSING_SPAWN',
+                      max_spawn_children=_SPAWN_LIMIT, max_entries_per_process=_ENTRY_LIMIT,
+                      max_sidecar_bytes=_PROCESS_BYTES, max_total_sidecar_bytes=_TOTAL_PROCESS_BYTES,
+                      direct_spawns_omitted=original['direct_spawns_omitted'],
+                      descendant_topology_complete=False))
+
+
+def _record(root, paired_ref, initializer_ref, spec, watch, sites, *, follow_spawn=False):
+    config, launch = _invocation(spec, root, sites, follow_spawn=follow_spawn)
     script = _ref(root/_OBSERVER, _SOURCE)
     request = _ref(root/_CONFIG, _RAW)
-    _need(_raw(script) == _BOOTSTRAP.read_bytes() and _raw(request) == (repr(config) + '\n').encode(),
+    bootstrap = _SPAWN_BOOTSTRAP if follow_spawn else _BOOTSTRAP
+    _need(_raw(script) == bootstrap.read_bytes() and _raw(request) == (repr(config) + '\n').encode(),
           'observer bootstrap or exact watched request changed')
     run = _ref(root/'run.json', _STATUS)
     status = read_artifact(run)
     _need(type(status['status']) is int and status['status'] == 0
           and type(status['started_ns']) is type(status['reaped_ns']) is int
           and 0 <= status['started_ns'] < status['reaped_ns'], 'observed original process failed')
-    capture = _ref(root/_CAPTURE, _RAW)
+    capture = _ref(root/_CAPTURE, _RAW) if not follow_spawn else None
     stdout, stderr = (_ref(root/name, _RAW) for name in ('stdout.bin', 'stderr.bin'))
     _need(not _raw(stderr), 'diagnostic changed original stderr')
     publications = cpu_entry_replay._published(root)
     _observation(spec, stdout, publications)
     original = spec['arms']['original']
-    entries = _project(_raw(capture), sites)
-    return dict(schema=SCHEMA, schema_version=1, initializer_graph=initializer_ref, paired=paired_ref,
+    entries = _project(_raw(capture), sites) if not follow_spawn else []
+    report = dict(schema=SCHEMA, schema_version=1, initializer_graph=initializer_ref, paired=paired_ref,
         entry=spec['entry'], watch=watch, entries=entries, original_argv=original['argv'], diagnostic_argv=launch,
         interpreter=original['executable'], cwd=spec['cwd'], cpu_ids=spec['cpu_ids'],
         environment_sha256=_environment_digest(original['environment']),
@@ -177,16 +297,24 @@ def _record(root, paired_ref, initializer_ref, spec, watch, sites):
         origin_source_bytes='POST_RUN_SOURCE_PATH_READBACK', process_launches=1, instrumented=True,
         source_entry_executed=True, normalized_output_verified=True, clean_benchmark=False,
         module_initializer_execution_proven=False, importer_effects_closed=False, deployment_authorized=False)
+    if follow_spawn:
+        _add_processes(report, root, spec, sites, status)
+    return report
 
 
-def measure(paired_ref, initializer_ref, watch, out):
+def measure(paired_ref, initializer_ref, watch, out, *, follow_spawn=False):
     """Run one original entry with exact paired input, observing only approved imports."""
     spec, watch, sites = _admit(paired_ref, initializer_ref, watch)
     _need(sites and set(spec['cpu_ids']) <= os.sched_getaffinity(0), 'watched bytecode and bound CPUs must be available')
     root = Path(out).resolve()
-    config, launch = _invocation(spec, root, sites)
+    _need(type(follow_spawn) is bool, 'follow_spawn must be an explicit boolean')
+    config, launch = _invocation(spec, root, sites, follow_spawn=follow_spawn)
     (root/'published').mkdir(parents=True, exist_ok=False)
-    (root/_OBSERVER).write_bytes(_BOOTSTRAP.read_bytes())
+    bootstrap = _SPAWN_BOOTSTRAP if follow_spawn else _BOOTSTRAP
+    (root/_OBSERVER).write_bytes(bootstrap.read_bytes())
+    if follow_spawn:
+        (root/_OBSERVER_CORE).write_bytes(_BOOTSTRAP.read_bytes())
+        (root/_PROCESSES).mkdir()
     (root/_CONFIG).write_text(repr(config) + '\n', encoding='utf-8')
     transcript = spec['transcript']
     with (root/'stdout.bin').open('xb') as stdout, (root/'stderr.bin').open('xb') as stderr:
@@ -194,12 +322,16 @@ def measure(paired_ref, initializer_ref, watch, out):
         with subprocess.Popen(launch, cwd=spec['cwd'], env=spec['arms']['original']['environment'],
                 stdout=subprocess.PIPE if transcript else stdout, stderr=stderr,
                 stdin=subprocess.PIPE if transcript else subprocess.DEVNULL) as process:
+            launcher_pid = process.pid
             if transcript:
                 cpu_entry_replay._pace(process, stdout, transcript)
             status = process.wait()
         reaped = monotonic_ns()
-    _write(root/'run.json', dict(schema=_STATUS, started_ns=started, reaped_ns=reaped, status=status))
-    report = _record(root, paired_ref, initializer_ref, spec, watch, sites)
+    timing = dict(schema=_STATUS, started_ns=started, reaped_ns=reaped, status=status)
+    if follow_spawn:
+        timing['launcher_pid'] = launcher_pid
+    _write(root/'run.json', timing)
+    report = _record(root, paired_ref, initializer_ref, spec, watch, sites, follow_spawn=follow_spawn)
     _write(root/'result.json', report)
     return report
 
@@ -208,11 +340,13 @@ def verify_cpu_import_binding_observation(reference):
     """Replay the original launch input, watched bytecode and sealed diagnostic outputs."""
     saved = read_artifact(reference)
     path = Path(reference['uri'])
-    _need(reference['schema'] == SCHEMA and path.name == 'result.json' and path.resolve(strict=True) == path,
+    version = saved.get('schema_version')
+    _need(reference['schema'] == SCHEMA and type(version) is int and version in (1, 2)
+          and path.name == 'result.json' and path.resolve(strict=True) == path,
           'exact local import observation receipt required')
     paired, initializers = saved['paired'], saved['initializer_graph']
     spec, watch, sites = _admit(paired, initializers, saved['watch'])
-    rebuilt = _record(path.parent, paired, initializers, spec, watch, sites)
+    rebuilt = _record(path.parent, paired, initializers, spec, watch, sites, follow_spawn=version == 2)
     _need(saved == rebuilt, 'retained import cache observation differs on cold replay')
     return rebuilt
 
@@ -224,15 +358,17 @@ def main(argv=None):
     mode.add_argument('--check', type=Path)
     parser.add_argument('--initializers', type=Path)
     parser.add_argument('--out', type=Path)
+    parser.add_argument('--follow-spawn', action='store_true', help='observe bounded direct CPython spawn workers')
     args = parser.parse_args(argv)
     if args.paired and args.initializers and args.out:
-        report = measure(_ref(args.paired, cpu_entry_replay.SCHEMA), _ref(args.initializers, INITIALIZERS), None, args.out)
+        report = measure(_ref(args.paired, cpu_entry_replay.SCHEMA), _ref(args.initializers, INITIALIZERS),
+                         None, args.out, follow_spawn=args.follow_spawn)
         reference = _ref(args.out/'result.json', SCHEMA)
-    elif args.check and args.initializers is None and args.out is None:
+    elif args.check and args.initializers is None and args.out is None and not args.follow_spawn:
         reference = _ref(args.check, SCHEMA)
         report = verify_cpu_import_binding_observation(reference)
     else:
-        parser.error('use --paired, --initializers and --out, or --check alone')
+        parser.error('use --paired, --initializers and --out with optional --follow-spawn, or --check alone')
     print(json.dumps(dict(reference=reference, observed_imports=len(report['entries'])), sort_keys=True))
     return 0
 

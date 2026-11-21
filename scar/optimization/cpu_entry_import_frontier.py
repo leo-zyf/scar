@@ -17,7 +17,7 @@ def _require(condition, detail):
         raise ValueError('CPU entry import frontier: ' + detail)
 
 
-def _site(index, request, occurrences, observation_coverage):
+def _site(index, request, occurrences, observation_coverage, *, process_scoped):
     observed = defaultdict(list)
     alternatives = {row['original']: row for row in request['alternatives']}
     rows = []
@@ -37,7 +37,10 @@ def _site(index, request, occurrences, observation_coverage):
             modules.append(dict(binding=module_pointer, status=module['status'],
                                 observed_cache_transition=module['activation'], original_body=body,
                                 original_alternative=alternative))
-        rows.append(dict(binding=pointer, observation=row['observation'], modules=modules))
+        occurrence = dict(binding=pointer, observation=row['observation'], modules=modules)
+        if process_scoped:
+            occurrence['process_slot'] = row['process_slot']
+        rows.append(occurrence)
     return dict(
         original_import=request['original'], operation=request['operation'], initializer_request=f'#/requests/{index}',
         observation_coverage=observation_coverage,
@@ -95,6 +98,91 @@ def _initializer(index, body, effect_row, observed, lookup_conditions):
     return row
 
 
+def _admission_modules(bindings, processes):
+    original_modules, child_modules = set(), defaultdict(list)
+    for number, binding in enumerate(bindings):
+        if binding['status'] != _UNIQUE:
+            continue
+        slot = binding['process_slot']
+        kind = processes[slot]['kind']
+        for module_index, module in enumerate(binding['modules']):
+            source, origin = module['source'], module['origin']
+            if (source is None or not isinstance(origin, str) or not origin.startswith('/')
+                    or not origin.endswith('.py') or source['uri'] != origin):
+                continue
+            key = binding['original_import'], module['name'], origin, source['sha256']
+            if kind == 'ORIGINAL_ENTRY':
+                original_modules.add(key)
+            elif kind == 'CPYTHON_MULTIPROCESSING_SPAWN' and module['status'] == 'SOURCE_BODY_OPEN':
+                child_modules[key].append(dict(process_slot=slot, binding=f'#/bindings/{number}/modules/{module_index}'))
+    return {key: rows for key, rows in child_modules.items() if key not in original_modules}
+
+
+def _source_admissions(rows, original_ref):
+    if not rows:
+        return []
+    imports = read_artifact(original_ref)['imports']
+    # A mismatched runtime origin for an already declared body needs a binding proof.
+    declared_bodies = {
+        (f'#/imports/{index}', alternative['module'])
+        for index, request in enumerate(imports) for alternative in request['alternatives']
+        if alternative['body'] is not None}
+    return [
+        dict(original_import=site, module_name=name, source=observations[0]['binding'] + '/source',
+             observations=observations, status='SOURCE_ADMISSION_CANDIDATE',
+             basis='SPAWN_CHILD_MODULE_ORIGIN_WITHOUT_DECLARED_F4_BODY_AT_SITE',
+             obligations=['ADMIT_SOURCE_AND_PROJECT_F4_BODY', 'PROVE_REACH_AND_EFFECTS'])
+        for (site, name, _, _), observations in rows.items()
+        if (site, name) not in declared_bodies]
+
+
+def _process_projection(report, bindings):
+    projected = []
+    processes = {}
+    for ordinal, process in enumerate(bindings['processes']):
+        row = dict(process, binding_process=f'#/processes/{ordinal}')
+        projected.append(row)
+        processes[row['slot']] = row
+    _require(len(processes) == len(projected), 'process slot identities are not unique')
+    occurrences = defaultdict(list)
+    for binding in bindings['bindings']:
+        slot = binding['process_slot']
+        _require(slot in processes and processes[slot]['status'] == 'OBSERVED',
+                 'import occurrence has no observed process slot')
+        occurrences[slot].append(binding)
+    transitions = Counter()
+    for process in projected:
+        rows = occurrences[process['slot']]
+        unique = [row for row in rows if row['status'] == _UNIQUE]
+        counts = Counter(module['activation'] for row in rows for module in row['modules'])
+        transitions.update(counts)
+        process['summary'] = dict(
+            unique_observed_sites=len({row['original_import'] for row in unique}),
+            observed_import_occurrences=len(rows), unresolved_import_occurrences=len(rows) - len(unique),
+            module_cache_transitions=dict(counts))
+    admissions = _source_admissions(_admission_modules(bindings['bindings'], processes), report['entry_obligations'])
+    observed = sum(row['status'] == 'OBSERVED' for row in projected)
+    report.update(processes=projected, source_admission_candidates=admissions, process_cache_scope='PROCESS_SLOT',
+                  cross_process_order_proven=False, complete_execution_coverage=False)
+    report['summary'].update(
+        observed_site_process_pairs=sum(row['summary']['unique_observed_sites'] for row in projected),
+        observed_import_occurrences=len(bindings['bindings']),
+        module_cache_transitions=dict(transitions), initializer_activations_proven=0,
+        recorded_processes=len(projected), observed_processes=observed, missing_processes=len(projected) - observed,
+        processes_with_import_occurrences=sum(bool(rows) for rows in occurrences.values()),
+        unobserved_source_sites=sum(not row['occurrences'] for row in report['sites']),
+        source_origin_open_sites=sum(row['status'] == 'OBSERVED_SITE_WITH_SOURCE_ORIGIN_OPEN' for row in report['sites']),
+        source_admission_candidates=len(admissions))
+    report['coverage_frontier'].append(dict(
+        role='PROCESS_IMPORT_COVERAGE', status='OBSERVED_SLOTS_ONLY',
+        blockers=['UNOBSERVED_PROCESS_AND_IMPORT_OCCURRENCES', 'UNOBSERVED_RUNTIME_PATHS']))
+    if admissions:
+        report['coverage_frontier'].append(dict(
+            role='SOURCE_ADMISSION', status='CHILD_MODULE_ORIGINS_AWAIT_F4_PROJECTION',
+            candidates='#/source_admission_candidates',
+            blockers=['ADMIT_SOURCE_AND_PROJECT_F4_BODY', 'PROVE_REACH_AND_EFFECTS']))
+
+
 @reuse_decoded_source_bodies()
 def derive_cpu_entry_import_frontier(effects_ref, bindings_ref):
     """Use the original F4 locators and one bounded diagnostic cohort as evidence."""
@@ -104,6 +192,8 @@ def derive_cpu_entry_import_frontier(effects_ref, bindings_ref):
              'initializer effects and original-site import bindings required')
     effects = verify_cpu_entry_import_effects(effects_ref)
     bindings = verify_cpu_entry_import_bindings(bindings_ref)
+    version = bindings['schema_version']
+    _require(type(version) is int and version in (1, 2), 'unsupported import binding report')
     keys = ('initializer_graph', 'entry_obligations', 'program')
     _require(all(effects[key] == bindings[key] for key in keys),
              'the effects and runtime bindings must share the exact original F4 graph')
@@ -114,12 +204,15 @@ def derive_cpu_entry_import_frontier(effects_ref, bindings_ref):
         if row['status'] == _UNIQUE:
             occurrences[row['original_import']].append((number, row))
         else:
-            unresolved.append(dict(binding=f'#/bindings/{number}', status=row['status'],
-                                   candidate_imports=row['candidate_imports']))
+            occurrence = dict(binding=f'#/bindings/{number}', status=row['status'],
+                              candidate_imports=row['candidate_imports'])
+            if version == 2:
+                occurrence['process_slot'] = row['process_slot']
+            unresolved.append(occurrence)
     coverage = dict.fromkeys(bindings['unobserved_imports'], 'WATCHED_WITHOUT_UNIQUE_OBSERVATION')
     coverage.update(dict.fromkeys(bindings['unwatchable_imports'], 'NO_QUALIFIED_SOURCE_WATCH_SITE'))
     sites = [_site(index, request, occurrences.pop(request['original'], ()),
-                   coverage.get(request['original'], 'UNIQUE_SITE_OBSERVED'))
+                   coverage.get(request['original'], 'UNIQUE_SITE_OBSERVED'), process_scoped=version == 2)
              for index, request in enumerate(initializer_graph['requests'])]
     _require(not occurrences, 'matched runtime request has no original F4 import site')
     observed_bodies = defaultdict(list)
@@ -144,8 +237,8 @@ def derive_cpu_entry_import_frontier(effects_ref, bindings_ref):
     status = ('OBSERVED_SOURCE_IMPORT_ORIGINS_WITH_OPEN_REWRITE_OBLIGATIONS' if summary['source_body_matches']
               else 'OBSERVED_IMPORT_SITES_WITH_OPEN_SOURCE_ORIGINS' if summary['unique_observed_sites']
               else 'ORIGINAL_IMPORT_BINDINGS_UNRESOLVED')
-    return dict(
-        schema=SCHEMA, schema_version=1, status=status,
+    report = dict(
+        schema=SCHEMA, schema_version=version, status=status,
         effects=effects_ref, bindings=bindings_ref, initializer_graph=effects['initializer_graph'],
         entry_obligations=effects['entry_obligations'], program=effects['program'],
         observation=bindings['observation'], paired=bindings['paired'],
@@ -168,12 +261,16 @@ def derive_cpu_entry_import_frontier(effects_ref, bindings_ref):
         whole_entry_effect_equivalence_proven=False, transformation_authorized=False, deployment_authorized=False,
         runtime_import_effects_closed=False, forward_cost_proven=False, execution_default='NO_OP',
         target_executed=False)
+    if version == 2:
+        _process_projection(report, bindings)
+    return report
 
 
 def verify_cpu_entry_import_frontier(reference):
     """Recompute both parents and the exact locator joins without running the entry."""
     saved = read_artifact(reference)
-    _require(reference['schema'] == SCHEMA and saved['schema_version'] == 1,
+    _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int
+             and saved['schema_version'] in (1, 2),
              'unsupported import frontier report')
     replay = derive_cpu_entry_import_frontier(saved['effects'], saved['bindings'])
     _require(replay == saved, 'saved import frontier differs at cold replay')

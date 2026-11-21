@@ -188,6 +188,8 @@ def derive_cpu_entry_import_bindings(initializer_ref, observation_ref):
         pair = read_artifact(observed['paired'])
         _need(_identity(pair['invocation']['entry']) == _identity(source), 'paired source differs from the original F4 entry')
 
+    process_scoped = observed['schema_version'] == 2
+    process_slots = {row['slot'] for row in observed['processes'] if row['status'] == 'OBSERVED'} if process_scoped else None
     entries = defaultdict(list)
     for site in sites:
         entries[_key(site['file']['uri'], site['span'], site['requested_name'], site['level'], site['fromlist'])].append(site)
@@ -201,13 +203,18 @@ def derive_cpu_entry_import_bindings(initializer_ref, observation_ref):
             matched.add(selected['ordinal'])
         modules = [_module(f'{pointer}/modules/{i}', module, selected['alternatives'] if selected else ())
                    for i, module in enumerate(row['modules'])]
-        bindings.append(dict(observation=pointer, original_import=candidates[0] if selected else None,
+        binding = dict(observation=pointer, original_import=candidates[0] if selected else None,
             operation=selected['operation'] if selected else None, candidate_imports=candidates,
             status=_UNIQUE if selected else 'AMBIGUOUS_F4_IMPORT_REQUEST' if alternatives else 'UNMATCHED_F4_IMPORT_REQUEST',
-            modules=modules))
+            modules=modules)
+        if process_scoped:
+            _need(row['process_slot'] in process_slots, 'import request has no observed process instance')
+            binding['process_slot'] = row['process_slot']
+        bindings.append(binding)
     watched = {f"#/imports/{site['ordinal']}" for site in sites}
     positive = any(module['status'] == _MATCHED for binding in bindings for module in binding['modules'])
-    return dict(schema=SCHEMA, schema_version=1, initializer_graph=initializer_ref, observation=observation_ref,
+    report = dict(schema=SCHEMA, schema_version=2 if process_scoped else 1,
+                initializer_graph=initializer_ref, observation=observation_ref,
                 entry_obligations=initializers['entry_obligations'], program=initializers['program'], paired=observed['paired'],
                 status='OBSERVED_SOURCE_IMPORT_BINDINGS' if positive else 'SOURCE_IMPORT_BINDINGS_OPEN',
                 bindings=bindings,
@@ -217,6 +224,10 @@ def derive_cpu_entry_import_bindings(initializer_ref, observation_ref):
                 module_cache_identity_is_not_initializer_activation=True, initializer_execution_proven=False,
                 runtime_import_effects_closed=False, whole_entry_effect_equivalence_proven=False,
                 transformation_authorized=False, target_executed=False)
+    if process_scoped:
+        report.update(processes=observed['processes'], process_basis='VERIFIED_DIAGNOSTIC_SPAWN_LINEAGE',
+                      process_execution_completeness_proven=False)
+    return report
 
 
 def verify_cpu_entry_import_bindings(reference):

@@ -204,6 +204,8 @@ CPU 整入口编译将已解析的导入请求接到 F4 候选初始化体，保
 
 `scar observe-cpu-import-bindings --paired VALIDATION.json --initializers COMPILED/whole-entry-import-initializers.json --out IMPORTS` 对同一原入口诊断一次。`compile-build --cpu-import-bindings IMPORTS/result.json` 用源码位置、导入参数和模块来源连接动态记录与 F4 初始化体。选型账本记录已连接的导入以及常量替换、删除导入需要补齐的依赖。诊断执行的耗时不进入成本模型。
 
+在 Linux CPython 上可加 `--follow-spawn` 观测标准 `multiprocessing` 直接 spawn 的 worker。记录按进程保存各自的导入次序与缓存状态，选型账本将启动时允许的 CPU 集合接到原目标硬件图。尚未进入 F4 的模块源码保留为待纳入项。
+
 `scar export-cpu-catalog-runtime --selection SELECTION.json --out PACKAGE` 把已核验的 CPU 目录候选封装为同主机可迁移的 C++20 包，包含 CMake 源码、原 ELF、数值库及适用的限额守卫。`--check PACKAGE/artifact.json --manifest-sha256 SHA256` 在迁移后重查文件、宿主依赖和启动范围。验证运行将输出定向到外部新目录。原入口仍由整入口决策控制。
 
 `scar study-cpu-task-arena --acceptance TASK_ACCEPTANCE.json --out STUDY` 从已验收的 C++20 OpenMP 任务入口证明每个任务的工作区读写与生命周期，判断是否有同线程重复分配，并为适用范围生成独立 C++20 候选。报告包含任务逐轮字节对照、原生与原 Python 两组配对测量。使用 `--check STUDY/result.json` 可回读原证明、工程和样本。

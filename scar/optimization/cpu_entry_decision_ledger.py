@@ -178,7 +178,7 @@ def _cost(row):
                         if lifecycle[name] == 'UNRESOLVED'], schedule_certificate=row['schedule_certificate'])
 
 
-def _import_bindings(reference, scope, effects):
+def _import_bindings(reference, scope, effects, threads, cores):
     from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
     from scar.optimization.cpu_entry_import_frontier import verify_cpu_entry_import_frontier
 
@@ -192,7 +192,23 @@ def _import_bindings(reference, scope, effects):
              and frontier['whole_entry_effect_equivalence_proven'] is False
              and frontier['transformation_authorized'] is False and frontier['deployment_authorized'] is False,
              'import bindings differ from the original effects, CPU catalog or launch')
-    return dict(reference=reference, summary=frontier['summary'], coverage_frontier=frontier['coverage_frontier'])
+    result = dict(reference=reference, summary=frontier['summary'], coverage_frontier=frontier['coverage_frontier'])
+    bindings = read_artifact(frontier['bindings'])
+    if bindings['schema_version'] == 2:
+        allowed = set(scope['process_affinity_cpu_ids']) & threads.keys() & cores.keys()
+        placements, cpu_sets = [], {}
+        for process in bindings['processes']:
+            cpus = process['cpu_ids']
+            _require((process['status'] == 'OBSERVED' and type(cpus) is list and bool(cpus)
+                      and set(cpus) <= allowed) or (process['status'] != 'OBSERVED' and cpus is None),
+                     'import process affinity differs from the original target scope')
+            mask = None if cpus is None else cpu_sets.setdefault(tuple(cpus), len(cpu_sets))
+            placements.append(dict(process_slot=process['slot'], parent_slot=process['parent_slot'],
+                                   status=process['status'], cpu_set=mask))
+        result.update(process_affinity=placements, affinity_scope='PROCESS_START_ALLOWED_CPU_SET',
+                      cpu_sets=[[dict(cpu_id=cpu, thread=threads[cpu], core=cores[cpu]) for cpu in cpus]
+                                for cpus in cpu_sets])
+    return result
 
 
 def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_graph=None, effect_frontier=None,
@@ -275,7 +291,7 @@ def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_gra
         options=rows, domain_frontier=choice['coverage_frontier'], ranking_frontier=choice['cost_frontier'],
         ranking_status=choice['status'], execution_default='NO_OP', deployment_authorized=False)
     if import_frontier is not None:
-        report['original_import_bindings'] = _import_bindings(import_frontier, scope, effects)
+        report['original_import_bindings'] = _import_bindings(import_frontier, scope, effects, threads, cores)
     return report
 
 
