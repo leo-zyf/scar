@@ -22,7 +22,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                   cpu_native_phase_cost=None,cpu_python_import_cost=None,cpu_paired_evidence=None,
                   cpu_import_bindings=None,cpu_import_sources=None,cpu_initializer_observation=None,
                   cpu_native_array_route=None,cpu_native_array_route_cost=None,cpu_fixed_grid_cli_evidence=None,
-                  cpu_fixed_grid_mapped_input_plan=None):
+                  cpu_fixed_grid_mapped_input_plan=None,cpu_fixed_grid_lifecycle_cost=None):
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
@@ -43,6 +43,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             or cpu_import_sources is not None or cpu_initializer_observation is not None
             or cpu_native_array_route is not None or cpu_native_array_route_cost is not None
             or cpu_fixed_grid_cli_evidence is not None or cpu_fixed_grid_mapped_input_plan is not None
+            or cpu_fixed_grid_lifecycle_cost is not None
             ) and 'whole_entry' not in document:
         raise ValueError('CPU entry evidence requires a whole-entry plan')
     if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
@@ -84,7 +85,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                                  cpu_import_sources=cpu_import_sources,cpu_initializer_observation=cpu_initializer_observation,
                                  cpu_native_array_route=cpu_native_array_route,cpu_native_array_route_cost=cpu_native_array_route_cost,
                                  cpu_fixed_grid_cli_evidence=cpu_fixed_grid_cli_evidence,
-                                 cpu_fixed_grid_mapped_input_plan=cpu_fixed_grid_mapped_input_plan)
+                                 cpu_fixed_grid_mapped_input_plan=cpu_fixed_grid_mapped_input_plan,
+                                 cpu_fixed_grid_lifecycle_cost=cpu_fixed_grid_lifecycle_cost)
         read_artifact(parent);read_artifact(document['program']);_check(document['hardware'])
         report=dict(schema='scar.program-compiler-pipeline',schema_version=1,parent=parent,
             program=document['program'],hardware=document['hardware'],source_admission=source_admission,
@@ -101,6 +103,8 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             report['cpu_fixed_grid_cli_review'] = whole['cpu_fixed_grid_cli_review']
         if cpu_fixed_grid_mapped_input_plan is not None:
             report['cpu_fixed_grid_mapped_input_plan'] = whole['cpu_fixed_grid_mapped_input_plan']
+        if cpu_fixed_grid_lifecycle_cost is not None:
+            report['cpu_fixed_grid_lifecycle_cost'] = whole['cpu_fixed_grid_lifecycle_cost']
         (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
         return report
     if entry_costs is not None or verify_entry:
@@ -288,6 +292,8 @@ def main(argv=None):
         help='review a source-compatible fixed-grid C++ entry in its original catalog scope')
     parser.add_argument('--cpu-fixed-grid-mapped-input-plan',
         help='attach the scoped native copy versus mapping decision to the exact fixed-grid CLI review')
+    parser.add_argument('--cpu-fixed-grid-lifecycle-cost',
+        help='replay fixed-grid lifecycle evidence for the exact source CLI review')
     parser.add_argument('--plan-only',action='store_true');args=parser.parse_args(argv)
     result=compile_build(args.domains,args.out,calibrations=args.calibration,
         no_op_profiles=None if args.no_op_profiles is None else json.loads(Path(args.no_op_profiles).read_bytes()),
@@ -308,7 +314,8 @@ def main(argv=None):
         cpu_initializer_observation=args.cpu_initializer_observation,cpu_native_array_route=args.cpu_native_array_route,
         cpu_native_array_route_cost=args.cpu_native_array_route_cost,
         cpu_fixed_grid_cli_evidence=args.cpu_fixed_grid_cli_evidence,
-        cpu_fixed_grid_mapped_input_plan=args.cpu_fixed_grid_mapped_input_plan)
+        cpu_fixed_grid_mapped_input_plan=args.cpu_fixed_grid_mapped_input_plan,
+        cpu_fixed_grid_lifecycle_cost=args.cpu_fixed_grid_lifecycle_cost)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
         statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],

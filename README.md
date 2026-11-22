@@ -50,6 +50,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar fixed-grid-mapped-inputs prove` 回读固定网格的稳定文件输入及只读使用合同。`aten-source-entry bind --mapped-input-proof PROOF.json` 可从同一计算计划构建私有文件映射候选。`fixed-grid-mapped-inputs measure` 和 `plan` 比较两个 C++ 入口，并按收益门槛决定是否采用。可使用 `compile-build --cpu-fixed-grid-mapped-input-plan PLAN.json` 将决定接回同一份源 CLI 评审。
 
+`scar fixed-grid-lifecycle graph` 从同一份入口交付、效果和资源收据建立 Python 与 C++ 生命周期图。`fixed-grid-lifecycle plan` 将分段诊断与独立校准接到图上，`fixed-grid-lifecycle check COST.json` 可离线重放。通过 `compile-build --cpu-fixed-grid-cli-evidence REVIEW/result.json --cpu-fixed-grid-lifecycle-cost COST.json --plan-only` 接入整入口评审。诊断、前向估计与发布决定分别记录。[生命周期验收](artifacts/baseline/cpu-fixed-grid-lifecycle-acceptance.json)
+
 `scar export-native-cpu --project NATIVE --manifest-sha256 SHA256 --out RUNTIME` 打包已验收的 CPU-only 产物、LibTorch 依赖和权重。`scar export-native-cpu --check RUNTIME --manifest-sha256 SHA256` 校验迁移包，可加 `--reference FILE` 和 `-- ARGS` 验收输出。运行直接执行 `RUNTIME/launch.sh`。当前验收覆盖本机 Linux 下的目录迁移，并沿用原计划的 CPU 绑定。[纯 CPU 三阶段验收](artifacts/baseline/native-cpu-end-to-end.json)。
 
 重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。

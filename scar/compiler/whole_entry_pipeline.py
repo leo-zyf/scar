@@ -476,7 +476,8 @@ def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=
         frontiers['cpu_native_array_route_cost'] = cost_ref
 
 
-def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, mapped_path=None):
+def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, mapped_path=None,
+                               lifecycle_cost_path=None):
     from scar.analysis.cpu_fixed_grid_cli_effect_bridge import derive_cpu_fixed_grid_cli_effect_bridge
     from scar.analysis.cpu_fixed_grid_cli_resources import derive_cpu_fixed_grid_cli_resources
     from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA
@@ -513,6 +514,18 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
                 or read_artifact(mapped['observation'])['control_delivery'] != delivery_ref):
             raise ValueError('mapped inputs do not belong to the exact scoped fixed-grid native incumbent')
         frontiers['cpu_fixed_grid_mapped_input_plan'] = mapped_ref
+    if lifecycle_cost_path is not None:
+        from scar.optimization.cpu_fixed_grid_lifecycle_cost import SCHEMA as LIFECYCLE_COST, verify_cpu_fixed_grid_lifecycle_cost
+
+        cost_ref = artifact_reference(Path(lifecycle_cost_path).resolve(strict=True), LIFECYCLE_COST)
+        cost = verify_cpu_fixed_grid_lifecycle_cost(cost_ref)
+        graph = read_artifact(cost['lifecycle'])
+        old_review = read_artifact(cost['review'])
+        if (graph['delivery'] != delivery_ref or read_artifact(graph['effects']) != bridge
+                or read_artifact(graph['resources']) != resources
+                or dict(old_review, bridge=bridge_ref) != review):
+            raise ValueError('fixed-grid lifecycle costs belong to a different exact source CLI review')
+        frontiers['cpu_fixed_grid_lifecycle_cost'] = cost_ref
 
 
 def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, activation_path=None):
@@ -802,7 +815,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
                        cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
                        cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None,
                        cpu_native_array_route_cost=None, cpu_fixed_grid_cli_evidence=None,
-                       cpu_fixed_grid_mapped_input_plan=None):
+                       cpu_fixed_grid_mapped_input_plan=None, cpu_fixed_grid_lifecycle_cost=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -828,6 +841,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('fixed-grid source CLI evidence requires the frozen original paired launch')
     if cpu_fixed_grid_mapped_input_plan is not None and cpu_fixed_grid_cli_evidence is None:
         raise ValueError('mapped input decisions require the scoped fixed-grid source CLI evidence')
+    if cpu_fixed_grid_lifecycle_cost is not None and cpu_fixed_grid_cli_evidence is None:
+        raise ValueError('fixed-grid lifecycle costs require the scoped source CLI evidence')
     if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
         raise ValueError('CPU native array route costs require the exact C++ route package')
     if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
@@ -901,7 +916,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
                                        cpu_native_array_route_cost)
     if cpu_fixed_grid_cli_evidence is not None:
         _attach_cpu_fixed_grid_cli(plan, live_scope, generated, cpu_frontiers, cpu_fixed_grid_cli_evidence, out,
-                                   cpu_fixed_grid_mapped_input_plan)
+                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None
