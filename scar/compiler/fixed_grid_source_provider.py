@@ -7,10 +7,9 @@ from pathlib import Path
 import subprocess
 from time import perf_counter_ns
 
-from scar.codegen.native_cpu_package import export_native_cpu
+from scar.codegen.native_cpu_package import export_native_cpu, verify_native_cpu_package
 from scar.compiler.compile_aten_recurrence import compile_aten_recurrence
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.runtime.validate_native_cpu_package import verify_native_cpu_package
 from scar.runtime.validate_native_project import verify_native_project
 
 

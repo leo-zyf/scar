@@ -10,12 +10,11 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_cpu_elf import _name
+from scar.codegen.native_cpu_elf import _dynamic_tags, _name
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
@@ -24,9 +23,6 @@ FORMAT = 'ELF_DT_NEEDED_PRELOAD'
 _OBJECTS = 'objects'
 _MANIFEST = 'bundle.json'
 _ABI = ('class', 'data', 'machine')
-_DYNAMIC = re.compile(r'\((NEEDED|SONAME|RPATH|RUNPATH)\)')
-_DYNAMIC_VALUE = re.compile(r'[^\[]*\[([^\[\]]+)\]\s*\Z')
-_EXTRA_LOAD = re.compile(r'\((AUDIT|DEPAUDIT|FILTER|AUXILIARY)\)')
 _RTLD_DI_LINKMAP = 2
 
 
@@ -41,26 +37,9 @@ def _elf(path):
     header = dict(row.strip().split(':', 1) for row in output.splitlines()
                   if row.strip().startswith(('Class:', 'Data:', 'Machine:', 'Type:')))
     if (not header.get('Type', '').strip().startswith('DYN (Shared object file)')
-            or not all(header.get(key.title(), '').strip() for key in _ABI)
-            or _EXTRA_LOAD.search(output)):
+            or not all(header.get(key.title(), '').strip() for key in _ABI)):
         raise ValueError('expected an ELF shared object with ordinary DT_NEEDED dependencies: ' + str(path))
-    dynamic = dict(soname=None, rpath=None, runpath=None, needed=[])
-    for line in output.splitlines():
-        tag = _DYNAMIC.search(line)
-        if tag is None:
-            continue
-        parsed = _DYNAMIC_VALUE.fullmatch(line[tag.end():])
-        if parsed is None:
-            raise ValueError('cannot resolve ELF dynamic tag: ' + tag[1])
-        key, value = tag[1].lower(), parsed[1]
-        if key == 'needed':
-            dynamic[key].append(_name(value))
-        elif dynamic[key] is not None:
-            raise ValueError('ambiguous ELF dynamic tag: ' + tag[1])
-        else:
-            dynamic[key] = _name(value) if key == 'soname' else value
-    if len(set(dynamic['needed'])) != len(dynamic['needed']):
-        raise ValueError('duplicate ELF DT_NEEDED entry: ' + str(path))
+    dynamic = _dynamic_tags(output, shared=True)
     return {**{key: header[key.title()].strip() for key in _ABI}, **dynamic}
 
 

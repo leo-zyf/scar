@@ -42,14 +42,11 @@ def _dependencies(listing):
     return result
 
 
-def cpu_executable_dynamic(path) -> dict:
-    """Read ordinary ELF lookup tags without running the file."""
-    try:
-        listing = check_output(['/usr/bin/readelf', '-W', '-d', str(Path(path).absolute())],
-                               env={'LC_ALL': 'C'}, encoding='utf-8', errors='surrogateescape')
-    except CalledProcessError as error:
-        raise ValueError('cannot read ELF dynamic tags') from error
+def _dynamic_tags(listing, *, shared=False):
+    """Read lookup tags common to executable and shared-object receipts."""
     dynamic = dict(runpath=None, needed=[], rpath=None)
+    if shared:
+        dynamic['soname'] = None
     for row in listing.splitlines():
         tag = _TAG.match(row)
         if tag is None:
@@ -57,20 +54,31 @@ def cpu_executable_dynamic(path) -> dict:
         name = tag[1]
         if name in _EXTRA_LOAD:
             raise ValueError(f'unsupported ELF loader redirection: {name}')
-        if name not in ('NEEDED', 'RPATH', 'RUNPATH'):
+        key = name.lower()
+        if key not in dynamic:
             continue
         value = _STRING.fullmatch(row[tag.end():])
-        if value is None:
+        if value is None or shared and (not value[1] or '[' in value[1] or ']' in value[1]):
             raise ValueError(f'cannot decode ELF lookup tag: {name}')
-        if name == 'NEEDED':
-            dynamic['needed'].append(_name(value[1]))
-        elif dynamic[name.lower()] is None:
-            dynamic[name.lower()] = value[1]
+        if key == 'needed':
+            dynamic[key].append(_name(value[1]))
+        elif dynamic[key] is None:
+            dynamic[key] = _name(value[1]) if key == 'soname' else value[1]
         else:
             raise ValueError(f'duplicate ELF lookup tag: {name}')
     if len(set(dynamic['needed'])) != len(dynamic['needed']):
         raise ValueError('duplicate ELF dependency name')
     return dynamic
+
+
+def cpu_executable_dynamic(path) -> dict:
+    """Read ordinary ELF lookup tags without running the file."""
+    try:
+        listing = check_output(['/usr/bin/readelf', '-W', '-d', str(Path(path).absolute())],
+                               env={'LC_ALL': 'C'}, encoding='utf-8', errors='surrogateescape')
+    except CalledProcessError as error:
+        raise ValueError('cannot read ELF dynamic tags') from error
+    return _dynamic_tags(listing)
 
 
 def relocate_cpu_executable(source, target, *, original_runpath) -> None:
