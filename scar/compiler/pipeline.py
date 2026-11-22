@@ -179,8 +179,11 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
                      calls=asdict(frontend.calls), hardware=asdict(frontend.hardware))
     if frontend.program is not None:
         artifacts['program'] = asdict(frontend.program)
+    partial_graph = any(graph[key] for key in ('frontiers', 'frontend_frontiers', 'excluded_control'))
+    graph_status = ('BLOCKED' if frontend.program is None else
+                    'PARTIAL' if partial_graph else 'STRUCTURE_VALIDATED')
     layers = dict(source='LOCKED', compiler='CAPTURED',
-                  graph='PARTIAL' if frontend.program else 'BLOCKED',
+                  graph=graph_status,
                   calls='PARTIAL' if graph['call_frontiers'] or not frontend.program else 'BOUND',
                   hardware='OBSERVED')
     report = dict(schema='scar.native-entry-result', schema_version=1, graph={
@@ -188,7 +191,7 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
                                     'excluded_control', 'call_frontiers', 'call_sites', 'call_links',
                                     'reachable_regions')},
         frontend_frontiers=len(graph['frontend_frontiers']), cfg_frontiers=len(graph['frontiers']),
-        status='GRAPH_PARTIAL', selection='KEEP_ORIGINAL', artifacts=artifacts, layers=layers)
+        status=f'GRAPH_{graph_status}', selection='KEEP_ORIGINAL', artifacts=artifacts, layers=layers)
     if graph_only:
         if frontend.program is None:
             report.update(delivery='INCOMPLETE', delivery_error='no validated entry region')

@@ -445,6 +445,7 @@ class TerminatorKind(str, Enum):
     BRANCH = "BRANCH"
     RETURN = "RETURN"
     RAISE = "RAISE"
+    NO_RETURN = "NO_RETURN"
     INVOKE = "INVOKE"
     PENDING_DISPATCH = "PENDING_DISPATCH"
     CLEANUP_ROUTE = "CLEANUP_ROUTE"
@@ -633,6 +634,9 @@ class Terminator:
         elif self.kind is TerminatorKind.RAISE:
             if self.successors or self.condition is not None or self.exit is None:
                 raise ValueError("RAISE requires an exit name and no successors or condition")
+        elif self.kind is TerminatorKind.NO_RETURN:
+            if self.successors or self.condition is not None or self.exit is not None or self.values:
+                raise ValueError("NO_RETURN requires no control continuation or exit values")
 
 
 @dataclass(frozen=True, slots=True)

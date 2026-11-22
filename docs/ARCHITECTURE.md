@@ -15,7 +15,7 @@
 | 运行证据 | 对照实际调用与资源活动，记录静态分支中仍待判定的字段 | 有界 trace、调用锚点和资源观测 | 可重放的执行证据和绑定记录。Python 建图可消费这组材料 |
 | 硬件建模 | 发布平台容量、拓扑和访问关系 | 本机 CPU、NUMA、内存、存储和设备库存 | `hardware/result.json` 及其引用的资源表。实测带宽和时长作为独立成本证据 |
 
-Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/python.py` 和 `compiler/backend/python.py`。源码构造的降级规则与对应的结构校验集中在 `analysis/static/lowering/`，消费带类型和绑定的语法节点并生成图操作与源码锚点。原生语言适配器是 `compiler/frontend/clang.py` 和 `fortran.py`。`frontend/graph.py::build_graph` 接收锁定请求，交出程序图、跨单元连线、硬件和每个编译单元的证据。入口无法生成 IR 时，程序引用为空，流程在首个需要程序图的层给出阻塞原因。跨语言和间接调用的绑定覆盖以证据为准。
+Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/python.py` 和 `compiler/backend/python.py`。源码构造的降级规则与对应的结构校验集中在 `analysis/static/lowering/`，消费带类型和绑定的语法节点并生成图操作与源码锚点。原生语言适配器是 `compiler/frontend/clang.py` 和 `fortran.py`。`frontend/graph.py::build_graph` 接收锁定请求，交出程序图、跨单元连线、硬件和每个编译单元的证据。整数 `switch` 复用有序分支和 SSA 参数，编译器记录的无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。入口无法生成 IR 时，流程在首个需要程序图的层给出阻塞原因。
 
 ## 2. 中端
 
@@ -41,4 +41,4 @@ Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/py
 
 ## 共享职责
 
-`ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。前端的静态分析、观测关系和跨区域依赖查询分别归入 `analysis/static/`、`analysis/observed/`、`analysis/dependencies/`。`artifacts.py` 负责工件字节、摘要和原子发布。图查看由 `visualization/` 独立提供。构建证明记录分析实现摘要，历史源码保存在 Git，已有产物可按对应版本回读或重新构建。
+`ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。前端的静态分析、观测关系和跨区域依赖查询分别归入 `analysis/static/`、`analysis/observed/`、`analysis/dependencies/`。`artifacts.py` 统一管理工件摘要、原子发布和证据表读写。证据表以相对路径、压缩与解码摘要、字节数及记录数作为交接合同。图查看由 `visualization/` 独立提供。构建证明记录分析实现摘要，历史源码保存在 Git，已有产物可按对应版本回读或重新构建。

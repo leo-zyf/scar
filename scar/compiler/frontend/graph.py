@@ -19,7 +19,7 @@ from scar.artifacts import file_reference
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
-    AccessMode, Behavior, Block, BlockArgument, DataValue, ExitKind, ExitPort,
+    AccessMode, Behavior, Block, BlockArgument, DataValue, ExitKind, ExitPort, LiteralOrigin,
     Operation, OperationResult, ProgramGraph, Region, StateAccess, StateLocation,
     StateVersionValue, Successor, Terminator, TerminatorKind, Use, UseRole,
     ValueKind, ValueType,
@@ -43,6 +43,9 @@ _VDEF = re.compile(r'# (\.MEM_\d+) = VDEF <(\.MEM_\d+(?:\(D\))?)>')
 _STMT = re.compile(r'^(gimple_\w+)\s+<(.*)>$')
 _NAME = re.compile(r'^[\w.$]+$')
 _VALUE_TYPE = 'native.ssa'
+_CASE = re.compile(
+    r'(?:default|case ([+-]?\d+)(?: \.\.\. ([+-]?\d+))?): (<[\w.$]+>|[\w.$]+)(?: \[[^\]]*\])?')
+_PREDICATES = ('gimple_cond', 'native_switch_range')
 
 
 def _inputs(raw):
@@ -52,10 +55,10 @@ def _inputs(raw):
 def _read_block(number, depth, raw):
     operations, phi, jumps, outgoing = [], {}, [], []
     memory = None
-    in_successors = False
+    in_successors = successors_captured = False
     for line in raw.splitlines():
         if line.startswith(';;    succ:'):
-            in_successors = True
+            in_successors = successors_captured = True
             line = line.partition(':')[2]
         elif in_successors and line.startswith(';;                '):
             line = line[2:]
@@ -96,7 +99,9 @@ def _read_block(number, depth, raw):
         elif match := _JUMP.search(code):
             jumps.append(match[1])
     return dict(number=number, depth=int(depth), phi=phi, operations=operations,
-                successors=outgoing, jumps=jumps)
+                successors=outgoing, jumps=jumps,
+                no_return=bool(successors_captured and not outgoing and operations
+                               and operations[-1]['opcode'] == 'gimple_call'))
 
 
 def read_ssa(raw, unit):
@@ -134,15 +139,70 @@ def _function_identity(function):
     return sha256(json.dumps(identity).encode()).hexdigest()[:24]
 
 
+def _expand_switches(blocks):
+    if not any(op['opcode'] == 'gimple_switch' for block in blocks for op in block['operations']):
+        return blocks
+    labels = {op['text'].removeprefix('gimple_label <').removesuffix('>'): block['number']
+              for block in blocks for op in block['operations'] if op['opcode'] == 'gimple_label'}
+    expanded = []
+    predecessors = defaultdict(list)
+    for block in blocks:
+        statements = block['operations']
+        if not statements or statements[-1]['opcode'] != 'gimple_switch':
+            expanded.append(block)
+            continue
+        switch = statements[-1]
+        args = _STMT.fullmatch(switch['text'])[2].split(',')
+        selector = args[0].strip()
+        cases, default = [], None
+        for argument in args[1:]:
+            match = _CASE.fullmatch(argument.strip())
+            if match is None or match[3] not in labels:
+                raise ValueError('unbound integer switch case target')
+            lower, upper, label = match.groups()
+            target = labels[label]
+            if lower is None:
+                if default is not None:
+                    raise ValueError('multiple switch default labels')
+                default = target
+            else:
+                limits = int(lower), int(upper or lower)
+                if limits[0] > limits[1] or any(a <= limits[1] and limits[0] <= b for (a, b), _ in cases):
+                    raise ValueError('overlapping or reversed switch ranges')
+                cases.append((limits, target))
+        targets = {target for _, target in cases} | {default}
+        if (not _SSA.fullmatch(selector) or switch['memory'] or default is None
+                or targets != set(block['successors'])):
+            raise ValueError('switch selector or cases differ from the compiler CFG')
+        number = block['number']
+        if not cases:
+            expanded.append(dict(block, operations=[*statements[:-1], dict(switch, opcode='native_switch_default')]))
+            continue
+        tests = [number, *(f'{number}.case.{i}' for i in range(1, len(cases)))]
+        for index, ((limits, target), test, otherwise) in enumerate(
+                zip(cases, tests, [*tests[1:], default])):
+            predicate = dict(switch, opcode='native_switch_range', inputs=(selector,), limits=limits)
+            edges = [target, otherwise]
+            expanded.append(dict(block, number=test, phi=block['phi'] if index == 0 else {},
+                                 operations=[*statements[:-1], predicate] if index == 0 else [predicate],
+                                 successors=edges, jumps=edges))
+            predecessors[target, number].append(test)
+        predecessors[default, number].append(tests[-1])
+    return [dict(block, phi={
+        name: {replacement: value for prior, value in alternatives.items()
+               for replacement in predecessors.get((block['number'], prior), (prior,))}
+        for name, alternatives in block['phi'].items()}) for block in expanded]
+
+
 def _lower_function(function):
     identity = _function_identity(function)
     region = RegionID(identity)
     location = LocationID(identity + ':memory')
     exception_blocks = {row['number'] for row in function['blocks']
                         if any(op['opcode'] == 'gimple_resx' for op in row['operations'])}
-    source_blocks = [
+    source_blocks = _expand_switches([
         dict(row, successors=[s for s in row['successors'] if s not in exception_blocks])
-        for row in function['blocks'] if row['number'] not in exception_blocks]
+        for row in function['blocks'] if row['number'] not in exception_blocks])
     if not source_blocks:
         raise ValueError('no normal completion blocks')
     entry = source_blocks[0]['number']
@@ -179,8 +239,10 @@ def _lower_function(function):
                     defaults.add(before)
                 if after:
                     define(after, OperationResult(oid, int(bool(op['result']))))
-            if op['opcode'] == 'gimple_cond':
+            if op['opcode'] in _PREDICATES:
                 define(f'cond:{number}', OperationResult(oid, 0), 'builtins.bool')
+            for bound, value in enumerate(op.get('limits', ())):
+                define(f'switch:{number}:{bound}', LiteralOrigin(value), 'builtins.int')
     for name in sorted(defaults):
         supplied[entry].append(define(name, BlockArgument(blocks[entry], len(supplied[entry]))))
     has_state = any(isinstance(value, StateVersionValue) for value in values)
@@ -218,7 +280,7 @@ def _lower_function(function):
             uses = []
             operands = [use(name) for name in op['inputs']]
             opcode = op['opcode']
-            behaviors = [Behavior.COMPUTE] if opcode == 'gimple_assign' else [Behavior.CONTROL]
+            behaviors = [Behavior.COMPUTE] if opcode in ('gimple_assign', 'native_switch_range') else [Behavior.CONTROL]
             accesses, results = [], []
             if op['result']:
                 results.append(definitions[op['result']])
@@ -233,9 +295,12 @@ def _lower_function(function):
                     behaviors.append(Behavior.WRITE)
                     results.append(next_version)
                     state = after
-            if opcode == 'gimple_cond':
+            if opcode in _PREDICATES:
                 condition = f'cond:{number}'
                 results.append(definitions[condition])
+            if opcode == 'native_switch_range':
+                for bound in range(len(op['limits'])):
+                    use(f'switch:{number}:{bound}')
             if opcode == 'gimple_return':
                 if len(operands) > 1:
                     raise ValueError('unsupported return operand')
@@ -283,6 +348,8 @@ def _lower_function(function):
             if has_state:
                 returned += (use(state, UseRole.STATE_CONTENT),)
             term = Terminator(TerminatorKind.RETURN, exit='return', values=returned)
+        elif not edges and row.get('no_return'):
+            term = Terminator(TerminatorKind.NO_RETURN)
         else:
             raise ValueError(f'unlowered CFG terminator with successors {edges}')
         operations.append(Operation(oid, term.kind.value, (Behavior.CONTROL,), tuple(uses), terminator=term))
@@ -418,12 +485,18 @@ def _clang_declarations(units):
                 signatures[(unit['path'], _compact(display))].add(symbol)
     for unit in units:
         for record in unit['records']:
-            if record['kind'] != 'CallExpr':
-                continue
             reference = record.get('reference') or {}
             symbol = reference.get('symbol') or declarations.get(reference.get('usr'))
-            if symbol and reference.get('name'):
+            if record['kind'] == 'CallExpr' and symbol and reference.get('name'):
                 sites[(unit['path'], record['path'], record['line'], reference['name'])].add(symbol)
+            elif (record['kind'] == 'DeclRefExpr' and reference.get('kind') == 'FunctionDecl'
+                  and symbol and symbol == reference.get('name') and _SYMBOL.fullmatch(symbol)):
+                # A header may lie outside the retained source root while the
+                # compiler still records the exact referenced C declaration.
+                result, suffix, parameters = record['canonical_type'].partition('(')
+                if suffix:
+                    signature = _compact(f'{result} {symbol}({parameters}')
+                    signatures[(unit['path'], signature)].add(symbol)
     return signatures, sites
 
 
