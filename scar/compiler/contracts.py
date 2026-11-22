@@ -1,7 +1,6 @@
 """Products exchanged between analysis, planning and C++20 delivery."""
 
 from dataclasses import asdict, dataclass
-import json
 from pathlib import Path
 
 from scar.artifacts import file_reference
@@ -57,21 +56,19 @@ class GraphBundle:
         return cls(parts['request'], parts['program'], parts['hardware'], evidence, parts['calls'], report)
 
     @classmethod
-    def read_python(cls, directory: Path) -> 'GraphBundle':
-        """Adapt a retained F4 build without treating its catalog as lowered code."""
-        reference = ProviderArtifact(**file_reference(directory / 'manifest.json', 'scar.program-build'))
-        report = read_artifact(reference)
-        if report.get('schema_version') != 1 or report.get('backend') != 'F4':
+    def from_python_session(cls, session) -> 'GraphBundle':
+        """Use the admitted catalog and exact manifest from this graph session."""
+        reference = ProviderArtifact(**session.publication)
+        report = session.report
+        if (reference.schema != 'scar.program-build' or report.get('schema_version') != 1
+                or session._f4 is None):
             raise ValueError('original F4 program build required')
         if not report.get('workflow_complete'):
             raise ValueError('F4 build did not finish graph admission')
         if report.get('target') is None:
             raise ValueError('program build has no target hardware snapshot')
         hardware = _legacy_reference(report['target'], 'scar.target-hardware-graph')
-        catalog = _legacy_reference(report['f4']['catalog'], 'scar.source-catalog')
-        # Catalog schemas distinguish declared and observed or contextual input.
-        header = json.loads(read_artifact(catalog, json_document=False))
-        declarations = _legacy_reference(report['f4']['catalog'], header['schema'])
+        declarations = _legacy_reference(report['f4']['catalog'], session.view.catalog.report['schema'])
         return cls(reference, None, hardware, reference, None, report, declarations)
 
     def references(self) -> dict:

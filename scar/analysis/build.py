@@ -176,11 +176,16 @@ class BuildSession:
         from scar.analysis.program_dependency_session import ProgramDependencySession
         from scar.analysis.program_view import ProgramView, _RepresentationProvider
         self.path = Path(path).resolve()
-        self.report = json.loads((self.path / 'manifest.json').read_bytes())
+        manifest = self.path / 'manifest.json'
+        payload = manifest.read_bytes()
+        self.report = json.loads(payload)
+        self.publication = dict(uri=str(manifest), schema=self.report['schema'],
+                                size_bytes=len(payload), sha256=sha256(payload).hexdigest())
         self._f4=None
         if self.report.get('backend')=='F4':
             from scar.analysis.build_f4 import F4BuildSession
-            self._f4=F4BuildSession(path,seconds=seconds,input_bytes=input_bytes,_publishing=_publishing)
+            self._f4=F4BuildSession(self.path,seconds=seconds,input_bytes=input_bytes,
+                                    _publishing=_publishing,_manifest=self.report)
             self.session=self._f4;self.view=self._f4.view;self.resources=self._f4.resources
             self.entry=self._f4.entry;self.entries=self._f4.entries;return
         if self.report.get('bounded_call_bindings'):

@@ -221,11 +221,11 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         raise ValueError('declared or previously observed input shapes required')
     if out.exists():raise ValueError('fresh program planning output required')
     started=time.monotonic()
-    graph=GraphBundle.read_python(program)
-    parent=asdict(graph.evidence)
-    manifest=graph.report
     source_filter=None if source is None else Path(source).absolute()
     with BuildSession(program) as session:
+        graph=GraphBundle.from_python_session(session)
+        parent=asdict(graph.evidence)
+        manifest=graph.report
         target=manifest['target']
         _check(target)
         hardware=Path(graph.hardware.uri).parent

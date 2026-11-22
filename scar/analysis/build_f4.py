@@ -293,14 +293,16 @@ class _LazyState:
 
 
 class F4BuildSession:
-    def __init__(self,path,*,_publishing=False,seconds=3600,input_bytes=16*1024**3,_catalog_handoff=None):
+    def __init__(self,path,*,_publishing=False,seconds=3600,input_bytes=16*1024**3,
+                 _catalog_handoff=None,_manifest=None):
         from types import MappingProxyType
         from scar.analysis.build import _admit_rules
         from scar.analysis.source_declared_catalog import read_source_catalog
         from scar.analysis.program_view import ProgramView
         self._started=time.monotonic();self._seconds=seconds;self._input_bytes=input_bytes
         self.timings={};self._admitted={}
-        self.path=Path(path).resolve();self.report=json.loads((self.path/'manifest.json').read_bytes())
+        self.path=Path(path).resolve()
+        self.report=json.loads((self.path/'manifest.json').read_bytes()) if _manifest is None else _manifest
         if self.report['backend']!='F4':raise ValueError('expected an F4 build')
         self.reader_rules=MappingProxyType(_admit_rules(self.report['rules'],publishing=_publishing))
         if not _publishing and not self.report['workflow_complete']:raise ValueError('F4 build not published')
