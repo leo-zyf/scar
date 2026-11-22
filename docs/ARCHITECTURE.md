@@ -26,7 +26,7 @@
 | 资源与成本 | 把可实施选项、成本证据、核组、内存和时序约束表达成规划问题 | 图、改写清单、硬件引用和锁定用例 | `cost-observation.json` 与 `planning-problem.json` 中的 `PlanningProblem` |
 | 选型和重放 | 以完工时间为目标选择合法的排程，并校验依赖和资源占用 | `PlanningProblem` | `plan.json` 中的执行计划以及验证结果 |
 
-`compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。对于由同类型 `int` 参数初始化局部变量并立即返回的函数，`copy_source_edits` 将已消除的 SSA 操作接到同一函数的类型、名称绑定和源码区间。中端把这个规范形写入计划，其他情况用 `preserve_entry`。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。两种交付的原生整入口计价都只采用一次基准启动，性能收益须另测。
+`compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。`copy_source_edits` 把获准的 SSA 拷贝消除绑定到类型、名称和源码区间。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
 
 Python 的直接循环与跨函数组合循环共用 `plan_loop_region`。它从已准入的循环证明和硬件快照生成 `schedule.json`，记录输入形状、迭代次数、CPU 布局和内存预算。后端重读该引用并核对实际构建产物。
 

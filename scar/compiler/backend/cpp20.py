@@ -3,10 +3,13 @@
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
+import shutil
 
 from scar.artifacts import file_reference
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
-from scar.codegen.native_project import build_native_project, replay_cpp20_inputs, write_native_project
+from scar.codegen.native_project import (
+    build_native_project, publish_cpp20_inputs, replay_cpp20_inputs, write_native_project,
+)
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document, problem_from_dict
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, loads
@@ -15,17 +18,16 @@ from scar.optimization.joint_planner import verify_execution_plan
 from scar.compiler.model import CpuPlacement
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..middle.plan import copy_source_edits, entry_cpus, entry_problem, publish_plan
+from ..middle.plan import copy_source_edits, entry_baseline_only, entry_cpus, entry_problem, publish_plan
 
 
-def admit_entry(artifacts, entry):
-    """Replay the artifact and execution contracts before emitting source."""
+def replay_native_revision(artifacts):
+    """Verify the original graph, source lock and exact proposed rewrites."""
     schemas = {
         'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
         'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
         'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
-        'rewrites': 'scar.native-rewrites', 'cost': 'scar.native-entry-cost',
-        'planning_problem': PROBLEM_SCHEMA, 'execution_plan': PLAN_SCHEMA,
+        'rewrites': 'scar.native-rewrites',
     }
     documents = {}
     for role, schema in schemas.items():
@@ -37,7 +39,6 @@ def admit_entry(artifacts, entry):
                 raise ValueError(f'{role} artifact differs from the plan input')
         else:
             documents[role] = read_artifact(ref)
-    observation = documents['cost']
     manifest = documents['request']
     rewrite = documents['rewrites']
     if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
@@ -61,20 +62,6 @@ def admit_entry(artifacts, entry):
         regions = {region.id.wire for region in simplified.regions}
         if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
             raise ValueError('source edits do not match the simplified IR')
-    problem = problem_from_dict(documents['planning_problem'])
-    if (observation['schema_version'] != 1 or observation['request'] != artifacts['request']
-            or observation['exit'] != 0 or problem_document(entry_problem(entry, artifacts, observation, edits))
-            != documents['planning_problem']):
-        raise ValueError('native problem differs from the admitted inputs')
-    plan = documents['execution_plan']
-    verification = verify_execution_plan(problem, plan)
-    option = problem.operations[0].options[0]
-    if (not plan['baseline_only'] or plan['transfers'] or plan.get('activities')
-            or len(plan['selected']) != 1 or plan['selected'][0]['option'] != option.id):
-        raise ValueError('backend cannot lower the selected native schedule')
-    cpu = int(next(iter(option.demands)).removeprefix('cpu:'))
-    if cpu not in entry_cpus(artifacts['hardware']):
-        raise ValueError('scheduled CPU is unavailable')
     root = Path(manifest['source_root'])
     for name, lock in manifest['source_lock']['files'].items():
         path = (root / name).resolve(strict=True)
@@ -83,11 +70,45 @@ def admit_entry(artifacts, entry):
         ref = file_reference(path, 'scar.native-source')
         if any(ref[key] != lock[key] for key in ('sha256', 'size_bytes')):
             raise ValueError(f'locked source changed: {name}')
+    return manifest, edits, compiler_types
+
+
+def admit_entry(artifacts, entry):
+    """Reconstruct the cost domain and verify the selected implementation."""
+    manifest, edits, compiler_types = replay_native_revision(artifacts)
+    schemas = {'cost': 'scar.native-entry-cost', 'planning_problem': PROBLEM_SCHEMA, 'execution_plan': PLAN_SCHEMA}
+    documents = {}
+    for role, schema in schemas.items():
+        ref = artifacts[role]
+        if ref['schema'] != schema:
+            raise ValueError(f'invalid {role} artifact schema')
+        documents[role] = read_artifact(ref)
+    observation = documents['cost']
+    problem = entry_problem(entry, artifacts, observation, edits)
+    if (observation['request'] != artifacts['request'] or observation['exit'] != 0
+            or problem_document(problem) != documents['planning_problem']):
+        raise ValueError('native problem differs from the admitted inputs')
+    plan = documents['execution_plan']
+    verification = verify_execution_plan(problem, plan)
+    operation = problem.operations[0]
+    baseline_only = entry_baseline_only(problem)
+    eligible = (option for option in operation.options
+                if not baseline_only or option.id == operation.baseline_option)
+    option = min(eligible, key=lambda item: (item.cost.estimate_ns, item.id != operation.baseline_option))
+    if (plan['baseline_only'] != baseline_only or plan['transfers'] or plan.get('activities')
+            or len(plan['selected']) != 1 or plan['selected'][0]['option'] != option.id):
+        raise ValueError('backend cannot lower the selected native schedule')
+    cpu = int(next(iter(option.demands)).removeprefix('cpu:'))
+    if cpu not in entry_cpus(artifacts['hardware']):
+        raise ValueError('scheduled CPU is unavailable')
+    selected_edits = edits if option.id == 'canonical' else []
     delivery = dict(schema='scar.native-delivery', schema_version=1, cpus=[cpu],
                     plan=artifacts['execution_plan'], problem=artifacts['planning_problem'],
                     request=artifacts['request'], selected=plan['selected'],
-                    source_edits=edits, compiler_types=compiler_types,
+                    source_edits=selected_edits, compiler_types=compiler_types,
                     lowering=option.lowering, verification=verification)
+    if observation['schema_version'] == 2:
+        delivery['trial_variant'] = observation['variants'][option.id]
     return manifest, observation, delivery
 
 
@@ -102,6 +123,57 @@ def build_cpp20_project(project, inputs, *, plan):
         if any(provider in name for provider in ('libpython', 'libtorch', 'libgfortran')):
             raise ValueError(f'unqualified target dependency: {name}')
     return executable, dynamic
+
+
+def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *, mode):
+    from ..frontend.clang import stage_source_revision
+
+    directory.mkdir(parents=True)
+    plan = publish_plan(directory / 'source-variant.json', dict(
+        schema='scar.native-source-variant', schema_version=1,
+        request=artifacts['request'], rewrites=artifacts['rewrites'], mode=mode, source_edits=edits,
+    ))
+    project = directory / 'project'
+    inputs = stage_source_revision(manifest, project, edits, captures=compiler_types, plan=plan)
+    executable, _ = build_cpp20_project(project, inputs, plan=plan)
+    binary = file_reference(executable, 'scar.cpp20-executable')
+    variant = publish_plan(directory / 'result.json', dict(
+        schema='scar.native-compiled-variant', schema_version=1, plan=plan, inputs=inputs, binary=binary,
+    ))
+    return executable, variant
+
+
+def promote_cpp20_variant(project, artifacts, delivery):
+    """Deliver the scheduled executable byte for byte, without rebuilding it."""
+    reference = delivery['trial_variant']
+    if reference['schema'] != 'scar.native-compiled-variant':
+        raise ValueError('selected native trial receipt required')
+    variant = read_artifact(reference)
+    recipe = read_artifact(variant['plan'])
+    mode = delivery['selected'][0]['option']
+    if (recipe != dict(schema='scar.native-source-variant', schema_version=1,
+                       request=artifacts['request'], rewrites=artifacts['rewrites'],
+                       mode=mode, source_edits=delivery['source_edits'])
+            or variant['schema_version'] != 1):
+        raise ValueError('selected trial belongs to a different source revision')
+    staged = Path(reference['uri']).parent / 'project'
+    original = staged / 'bin/scar_entry'
+    binary = variant['binary']
+    if file_reference(original, 'scar.cpp20-executable') != binary:
+        raise ValueError('selected executable differs from the calibrated binary')
+    build = replay_cpp20_inputs(staged, variant['inputs'], plan=variant['plan'])
+    shutil.copytree(staged, project, ignore=shutil.ignore_patterns('cpp20-inputs.json'))
+    inputs = publish_cpp20_inputs(project, build, plan=delivery['plan'])
+    before = read_artifact(variant['inputs'])['files']
+    after = read_artifact(inputs)['files']
+    if ({name: (row['sha256'], row['size_bytes']) for name, row in before.items()}
+            != {name: (row['sha256'], row['size_bytes']) for name, row in after.items()}):
+        raise ValueError('delivered project sources differ from the calibrated variant')
+    executable = project / 'bin/scar_entry'
+    delivered = file_reference(executable, binary['schema'])
+    if delivered != dict(binary, uri=str(executable)):
+        raise ValueError('published executable differs from the calibrated binary')
+    return executable, inputs, cpu_executable_dynamic(executable)
 
 
 def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel, plan_only):

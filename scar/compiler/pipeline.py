@@ -18,13 +18,13 @@ from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.artifacts import file_reference
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PLANNING_SCHEMA
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA
+from scar.runtime.cpu_paired_runner import compare_native_outputs
 from .frontend.graph import build_graph
-from .middle.plan import (copy_source_edits, entry_cpus, plan_entry, plan_loop_region,
+from .middle.plan import (copy_source_edits, entry_cpus, native_cost_decision, plan_entry, plan_loop_region,
                           publish_plan, simplify_copies)
 
 
 _LANGUAGES = {'c', 'c++', 'fortran'}
-_TIMED_FIELD = re.compile(rb'(time:) +[0-9]+\.[0-9]+')
 
 
 def _write(path, document):
@@ -85,28 +85,6 @@ def _run(command, cwd, stdin, cpus, deadline):
     return result, time.perf_counter_ns() - start
 
 
-def _compare(case, original, generated):
-    if original.returncode or generated.returncode or original.stderr != generated.stderr:
-        return False
-    if original.stdout == generated.stdout:
-        return True
-    if case.get('comparison') == 'timed-fields':
-        return (_TIMED_FIELD.sub(rb'\1 <timing>', original.stdout)
-                == _TIMED_FIELD.sub(rb'\1 <timing>', generated.stdout))
-    if case.get('comparison') == 'scientific-text':
-        # The contract compares exact formatted decimal values, accepting the
-        # exponent-letter/padding representational differences of format runtimes.
-        from decimal import Decimal
-        notation = rb'[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+)[DEde][+-]?[0-9]+'
-        token = re.compile(notation)
-        def normalize(raw):
-            labels = token.sub(b'<decimal>', raw).split()
-            values = [Decimal(value.upper().replace(b'D', b'E').decode()) for value in token.findall(raw)]
-            return labels, values
-        return normalize(original.stdout) == normalize(generated.stdout)
-    return False
-
-
 def _case_input(case):
     return b'' if not case.get('stdin') else Path(case['stdin']).read_bytes()
 
@@ -139,7 +117,7 @@ def _paired(manifest, executable, out, cpus, observation, repetitions, case_seco
                 (case_dir / f'{index}-{arm}.stderr').write_bytes(result.stderr)
                 record[arm] = dict(ns=elapsed, exit=result.returncode)
             records.append(dict(warmup=index == 0, order=order, arms=record,
-                                matches=_compare(case, pair['original'], pair['generated'])))
+                                matches=compare_native_outputs(case, pair['original'], pair['generated'])))
             matched &= records[-1]['matches']
             if not matched:
                 break
@@ -169,6 +147,72 @@ def _observe_entry(manifest, artifacts, case_seconds):
     return dict(schema='scar.native-entry-cost', schema_version=1, request=artifacts['request'],
                 scope='ONE_BASELINE_LAUNCH', cpu=cpu, elapsed_ns=elapsed, exit=result.returncode,
                 baseline=executable, case=case['id'], case_inputs=inputs)
+
+
+def _calibrate_variants(manifest, artifacts, observation, directory, repetitions, case_seconds):
+    from scar.ir.execution_recipe import read_artifact
+
+    from .backend.cpp20 import build_trial_variant, replay_native_revision
+
+    _, source_edits, compiler_types = replay_native_revision(artifacts)
+    count = max(3, repetitions)
+    observation.update(schema_version=2, scope='PAIRED_CPP20_VARIANTS',
+                       measurement_pairs=count, variants={}, cases={})
+    original, original_variant = build_trial_variant(
+        directory / 'original', artifacts, manifest, [], compiler_types, mode='original')
+    observation['variants']['original'] = original_variant
+    try:
+        canonical, canonical_variant = build_trial_variant(
+            directory / 'canonical', artifacts, manifest, source_edits, compiler_types, mode='canonical')
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        observation['calibration_error'] = 'canonical build failed: ' + str(error)
+        return
+    observation['variants']['canonical'] = canonical_variant
+    routes = {'original': original, 'canonical': canonical}
+    baseline = manifest['baseline']
+    if _receipt(baseline['argv'][0]) != observation['baseline']:
+        raise ValueError('baseline executable differs from the original observation')
+    for case in manifest['cases']:
+        name = case['id']
+        folder = directory / 'measurements' / name
+        folder.mkdir(parents=True)
+        stdin = _case_input(case)
+        if sha256(stdin).hexdigest() != observation['case_inputs'][name]:
+            raise ValueError(f'case input differs from the original observation: {name}')
+        arguments = case.get('argv', [])
+        deadline = time.monotonic() + case_seconds
+
+        def retain(label, command, cwd):
+            result, elapsed = _run(command, cwd, stdin, [observation['cpu']], deadline)
+            refs = {}
+            for stream in ('stdout', 'stderr'):
+                path = folder / f'{label}.{stream}'
+                path.write_bytes(getattr(result, stream))
+                refs[stream] = file_reference(path, f'scar.native-{stream}')
+            return dict(ns=elapsed, exit=result.returncode, **refs)
+
+        try:
+            reference = retain('reference', baseline['argv'] + arguments, baseline['cwd'])
+            pairs = []
+            for index in range(count + 1):
+                order = tuple(routes) if index % 2 == 0 else tuple(reversed(routes))
+                pair = {}
+                for mode in order:
+                    label = f'{index}-{mode}'
+                    cwd = folder / label
+                    cwd.mkdir()
+                    pair[mode] = retain(label, [str(routes[mode]), *arguments], cwd)
+                pairs.append(pair)
+            observation['cases'][name] = dict(reference=reference, pairs=pairs)
+        except (TimeoutError, subprocess.TimeoutExpired) as error:
+            observation['calibration_error'] = f'incomplete paired calibration at {name}: {error}'
+            break
+    if _receipt(baseline['argv'][0]) != observation['baseline']:
+        raise ValueError('baseline executable changed during comparison')
+    for mode, reference in observation['variants'].items():
+        binary = read_artifact(reference)['binary']
+        if file_reference(routes[mode], binary['schema']) != binary:
+            raise ValueError('C++20 trial executable changed during comparison')
 
 
 def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph_only=False):
@@ -223,11 +267,15 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
         if not manifest.get('baseline') or not manifest.get('cases'):
             raise ValueError('baseline executable and cases are required to qualify native delivery')
         observation = _observe_entry(manifest, artifacts, case_seconds)
+        if observation['exit'] != 0:
+            raise ValueError(f'baseline exited with status {observation["exit"]}')
+        if source_edits:
+            _calibrate_variants(manifest, artifacts, observation, out / 'variants', repetitions, case_seconds)
         cost_path = out / 'cost-observation.json'
         _write(cost_path, observation)
         artifacts['cost'] = file_reference(cost_path, observation['schema'])
-        if observation['exit'] != 0:
-            raise ValueError(f'baseline exited with status {observation["exit"]}')
+        cost_decision = native_cost_decision(observation, manifest['cases'])
+        report['cost_decision'] = cost_decision
         layers[layer] = 'OBSERVED'
         layer = 'schedule'
         problem, schedule = plan_entry(graph['entry'], artifacts, observation, source_edits)
@@ -239,22 +287,26 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
             artifacts[role] = file_reference(path, schema)
         if not schedule.get('selected'):
             raise ValueError('no feasible native execution schedule')
-        report['planning_scope'] = 'BASELINE_ONLY'
+        report['planning_scope'] = 'BASELINE_ONLY' if observation['schema_version'] == 1 else cost_decision['scope']
         layers[layer] = 'SCHEDULED'
         layer = 'admission'
-        from .backend.cpp20 import admit_entry, build_cpp20_project
+        from .backend.cpp20 import admit_entry, build_cpp20_project, promote_cpp20_variant
         from .frontend.clang import stage_source_revision, verify_mixed_linkage
 
         manifest, observation, delivery = admit_entry(artifacts, graph['entry'])
         report['cpus'] = delivery['cpus']
         layers[layer] = 'REPLAYED'
         layer = 'source_revision'
-        inputs = stage_source_revision(manifest, out / 'project', delivery['source_edits'],
-                                       captures=delivery['compiler_types'], plan=delivery['plan'])
+        if 'trial_variant' in delivery:
+            executable, inputs, dynamic = promote_cpp20_variant(out / 'project', artifacts, delivery)
+        else:
+            inputs = stage_source_revision(manifest, out / 'project', delivery['source_edits'],
+                                           captures=delivery['compiler_types'], plan=delivery['plan'])
         artifacts['cpp20_inputs'] = delivery['cpp20_inputs'] = inputs
         layers[layer] = 'CPP20_STAGED'
         layer = 'build'
-        executable, dynamic = build_cpp20_project(out / 'project', inputs, plan=delivery['plan'])
+        if 'trial_variant' not in delivery:
+            executable, dynamic = build_cpp20_project(out / 'project', inputs, plan=delivery['plan'])
         report['executable'] = _receipt(executable)
         report['elf'] = dynamic
         delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
@@ -273,7 +325,8 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
                        repetitions, case_seconds)
         report['validation'] = rows
         report['delivery'] = 'COMPARED' if all(case['matches'] for case in rows) else 'MISMATCH'
-        if report['delivery'] == 'COMPARED' and source_edits:
+        report['applied_source_rewrites'] = len(delivery['source_edits'])
+        if report['delivery'] == 'COMPARED' and delivery['source_edits']:
             report['selection'] = 'CANONICALIZED'
         layers[layer] = 'MATCHED' if report['delivery'] == 'COMPARED' else 'MISMATCH'
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as error:

@@ -222,3 +222,29 @@ def test_async_entry_can_precede_submission_return_and_join_wait_is_not_extra_co
     mutant=deepcopy(result)
     next(row for row in mutant['activities']if row['activity']=='join')['end_ns']=rows['compute']['end_ns']
     with pytest.raises(ValueError):verify_execution_plan(long,mutant)
+
+
+def test_native_cost_replay_requires_output_match_and_separated_timings(tmp_path):
+    from scar.artifacts import file_reference
+    from scar.compiler.middle.plan import native_cost_decision
+
+    stdout = tmp_path / 'stdout'
+    stderr = tmp_path / 'stderr'
+    changed = tmp_path / 'changed'
+    stdout.write_bytes(b'output\n')
+    stderr.write_bytes(b'')
+    changed.write_bytes(b'different\n')
+    reference = dict(exit=0, ns=100, stdout=file_reference(stdout, 'scar.native-stdout'),
+                     stderr=file_reference(stderr, 'scar.native-stderr'))
+    locked = [dict(id='fixed')]
+    pairs = [dict(original=reference, canonical=dict(reference, ns=80)) for _ in range(4)]
+    observation = dict(schema_version=2, measurement_pairs=3, case_inputs={'fixed': 'unused'},
+                       variants={'original': {}, 'canonical': {}},
+                       cases={'fixed': dict(reference=reference, pairs=pairs)})
+    assert native_cost_decision(observation, locked)['admitted']
+    pairs[1]['canonical'] = dict(reference, ns=100)
+    assert not native_cost_decision(observation, locked)['admitted']
+    pairs[1]['canonical'] = dict(reference, ns=80, stdout=file_reference(changed, 'scar.native-stdout'))
+    rejected = native_cost_decision(observation, locked)
+    assert not rejected['admitted']
+    assert rejected['cases']['fixed']['modes'] == ['canonical']

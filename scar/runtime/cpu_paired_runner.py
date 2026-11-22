@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 from shutil import copyfileobj
 import subprocess
 import sys
@@ -11,6 +12,30 @@ from time import perf_counter_ns
 
 
 _CAPACITY_FLAG = '--exec-address-space-limit'
+_TIMED_FIELD = re.compile(rb'(time:) +[0-9]+\.[0-9]+')
+_SCIENTIFIC = re.compile(rb'[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+)[DEde][+-]?[0-9]+')
+
+
+def compare_native_outputs(case, original, generated):
+    """Apply the locked case's observable output contract."""
+    if original.returncode or generated.returncode or original.stderr != generated.stderr:
+        return False
+    if original.stdout == generated.stdout:
+        return True
+    if case.get('comparison') == 'timed-fields':
+        return (_TIMED_FIELD.sub(rb'\1 <timing>', original.stdout)
+                == _TIMED_FIELD.sub(rb'\1 <timing>', generated.stdout))
+    if case.get('comparison') == 'scientific-text':
+        from decimal import Decimal
+
+        def normalize(raw):
+            labels = _SCIENTIFIC.sub(b'<decimal>', raw).split()
+            values = [Decimal(value.upper().replace(b'D', b'E').decode())
+                      for value in _SCIENTIFIC.findall(raw)]
+            return labels, values
+
+        return normalize(original.stdout) == normalize(generated.stdout)
+    return False
 
 
 class _ResourceProcess(subprocess.Popen):

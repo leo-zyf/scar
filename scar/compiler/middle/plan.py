@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+from subprocess import CompletedProcess
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.codec import dumps, loads
@@ -16,6 +17,8 @@ from scar.ir.implementation_plan import (
 )
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.constructive_planner import construct_implementations
+from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.runtime.cpu_paired_runner import compare_native_outputs
 
 
 def entry_sources(artifacts):
@@ -154,27 +157,103 @@ def copy_source_edits(manifest, evidence, rewrites):
     return sorted(edits, key=lambda row: (row['unit'], row['span']))
 
 
+def _trial_output(run):
+    return CompletedProcess([], run['exit'],
+                            read_artifact(run['stdout'], json_document=False),
+                            read_artifact(run['stderr'], json_document=False))
+
+
+def native_cost_decision(observation, locked_cases):
+    """Qualify a challenger across every locked case using fresh-process pairs."""
+    if observation['schema_version'] == 1:
+        return dict(scope='ONE_BASELINE_LAUNCH', admitted=False, cases={})
+    if observation['schema_version'] != 2:
+        raise ValueError('unsupported native cost evidence')
+    variants, cases = observation['variants'], observation['cases']
+    if set(variants) - {'original', 'canonical'} or 'original' not in variants:
+        raise ValueError('native timing requires the original implementation')
+    if error := observation.get('calibration_error'):
+        return dict(scope='PAIRED_CPP20_VARIANTS', admitted=False, cases={}, reason=error)
+    count = observation['measurement_pairs']
+    case_by_id = {case['id']: case for case in locked_cases}
+    if (set(variants) != {'original', 'canonical'} or not cases
+            or set(cases) != set(observation['case_inputs']) or set(cases) != set(case_by_id)):
+        raise ValueError('paired calibration does not cover the locked cases and implementations')
+    decisions = {}
+    for name, case in cases.items():
+        if type(count) is not int or count < 3 or len(case['pairs']) != count + 1:
+            raise ValueError(f'incomplete fresh-process pairs: {name}')
+        reference = _trial_output(case['reference'])
+        runs, mismatches = [], set()
+        for index, pair in enumerate(case['pairs']):
+            if set(pair) != set(variants):
+                raise ValueError(f'unpaired implementation trial: {name}')
+            for mode, run in pair.items():
+                output = _trial_output(run)
+                if not compare_native_outputs(case_by_id[name], reference, output):
+                    mismatches.add(mode)
+                runs.append(dict(pair=index, mode=mode, wall_ns=run['ns'], returncode=run['exit'],
+                                 stdout_sha256=case['reference']['stdout']['sha256'],
+                                 stderr_sha256=case['reference']['stderr']['sha256']))
+        decisions[name] = (dict(verdict='VALIDATION_MISMATCH', modes=sorted(mismatches))
+                           if mismatches else compare_entry_pairs(
+                               runs, incumbent='original', challenger='canonical',
+                               warmup_pairs=1, measurement_pairs=count, minimum_gain=0.0))
+    return dict(scope='PAIRED_CPP20_VARIANTS', cases=decisions, admitted=all(
+        row['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for row in decisions.values()))
+
+
+def entry_baseline_only(problem):
+    return 'PHYSICAL_COST_BASELINE_ONLY' in problem.assumptions
+
+
 def entry_problem(entry, artifacts, observation, edits=()):
     source_refs = entry_sources(artifacts)
     core = f'cpu:{observation["cpu"]}'
     cost = CostEstimate(observation['elapsed_ns'], None, None, 'EMPIRICAL_MODEL',
                         'baseline_launch', (dict(role='cost', **artifacts['cost']),))
-    lowering = 'canonicalize_scalar_copies' if edits else 'preserve_entry'
-    parameters = {'region': entry}
-    if edits:
-        parameters['rewrites'] = [row['operation'] for row in edits]
-    implementation = ImplementationOption('canonical' if edits else 'original', lowering, source_refs,
-        {core: 1}, {}, {}, {}, cost, parameters=parameters)
+
+    def implementation(mode, estimate):
+        lowering = 'canonicalize_scalar_copies' if mode == 'canonical' else 'preserve_entry'
+        parameters = {'region': entry}
+        if mode == 'canonical':
+            parameters['rewrites'] = [row['operation'] for row in edits]
+        return ImplementationOption(mode, lowering, source_refs, {core: 1}, {}, {}, {}, estimate,
+                                    parameters=parameters)
+
+    baseline_only = True
+    if observation['schema_version'] == 1:
+        options = (implementation('canonical' if edits else 'original', cost),)
+    else:
+        if not edits:
+            raise ValueError('paired native variants require a certified source rewrite')
+        decision = native_cost_decision(observation, read_artifact(artifacts['request'])['cases'])
+        observed = decision['cases'].values()
+        if observed and all('metrics' in row for row in observed):
+            modes = ('original', 'canonical')
+            options = []
+            for mode in modes:
+                metrics = [row['metrics'][mode] for row in observed]
+                estimate = CostEstimate((1 + sum(row['median_ns_twice'] for row in metrics)) // 2,
+                    sum(row['min_ns'] for row in metrics), sum(row['max_ns'] for row in metrics),
+                    'EMPIRICAL_MODEL', 'sum_of_locked_case_pair_medians', cost.source_refs)
+                options.append(implementation(mode, estimate))
+            options = tuple(options)
+            baseline_only = not decision['admitted']
+        else:
+            options = (implementation('original', cost),)
+    assumptions = ('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY' if baseline_only
+                   else 'PAIRED_CPU_WALL_TIME_DOMINANCE')
     return PlanningProblem(
         ProviderArtifact(**artifacts['hardware']), source_refs,
         (PlanningResource(core, 'EXECUTION', 1, source_refs=cost.source_refs),),
-        (PlanningOperation('entry', source_refs, (), (implementation,), implementation.id),), (),
-        assumptions=('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY'))
+        (PlanningOperation('entry', source_refs, (), options, options[0].id),), (),
+        assumptions=assumptions)
 
 
 def plan_entry(entry, artifacts, observation, edits=()):
     problem = entry_problem(entry, artifacts, observation, edits)
-    return problem_document(problem), construct_implementations(problem, baseline_only=True)
+    return problem_document(problem), construct_implementations(problem, baseline_only=entry_baseline_only(problem))
 
 
 def project_loop_calibrations(domain,calibrations,out):
@@ -324,7 +403,7 @@ def main(argv=None):
     parser.add_argument('--exact', action='store_true', help='use the optional exact resource solver')
     args = parser.parse_args(argv)
     problem = problem_from_dict(json.loads(args.problem.read_bytes()))
-    baseline_only = 'PHYSICAL_COST_BASELINE_ONLY' in problem.assumptions
+    baseline_only = entry_baseline_only(problem)
     if args.exact:
         from scar.optimization.joint_planner import solve_implementations
         plan = solve_implementations(problem, baseline_only=baseline_only)
