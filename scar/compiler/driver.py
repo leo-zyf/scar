@@ -36,20 +36,23 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
     if graph_only and graph.program is None:
         result.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
     if not graph_only:
-        _compile_graph(inputs, graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+        _compile_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
     (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
     return result
 
 
-def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
-    from .backend.cpp20 import build_trial_variant, deliver, replay_native_revision
+def _plan_graph(graph, out, result, *, repetitions, case_seconds):
+    from scar.ir.execution_recipe import read_artifact
+    from .backend.cpp20 import build_trial_variant, replay_native_revision
+    from .contracts import verify_source_lock
     from .middle.plan import entry_cpus, publish_plan, rewrite_native, schedule_native
     from .qualification import NativeCases
 
-    request = inputs.manifest
     layers = result['layers']
     layer = 'rewrite'
     try:
+        request = read_artifact(graph.request)
+        verify_source_lock(request)
         revision = rewrite_native(graph, out)
         result.update(artifacts=revision.artifacts, graph_rewrites=len(revision.rules),
                       source_rewrites=len(revision.edits))
@@ -77,10 +80,26 @@ def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
         layer = 'schedule'
         schedule = schedule_native(revision, observation, request['cases'], out)
         retained_plan = publish_plan(out / 'compiler-plan.json', schedule.document())
-        result.update(artifacts=schedule.artifacts, cost_decision=schedule.decision,
+        result.update(artifacts=dict(schedule.artifacts, compiler_plan=retained_plan), cost_decision=schedule.decision,
                       planning_scope=schedule.scope)
         layers[layer] = 'SCHEDULED'
-        layer = 'build'
+        return schedule, cases
+    except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as error:
+        layers[layer] = 'BLOCKED'
+        result.update(delivery='INCOMPLETE', delivery_error=str(error))
+        return None, None
+
+
+def _compile_graph(graph, out, result, *, repetitions, case_seconds):
+    from .backend.cpp20 import deliver
+
+    schedule, cases = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+    if schedule is None:
+        return
+    layers = result['layers']
+    layer = 'build'
+    try:
+        retained_plan = result['artifacts']['compiler_plan']
         project = deliver(schedule, out / 'project')
         result.update(artifacts=dict(project.artifacts, compiler_plan=retained_plan),
                       cpus=project.delivery['cpus'], executable=project.receipt,
@@ -96,6 +115,39 @@ def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as error:
         layers[layer] = 'BLOCKED'
         result.update(delivery='INCOMPLETE', delivery_error=str(error))
+
+
+def plan_native_graph(directory, out, *, repetitions, case_seconds):
+    """Schedule a retained native graph without repeating frontend capture."""
+    from .contracts import GraphBundle
+
+    graph = GraphBundle.read_native(directory)
+    result = _graph_report(graph)
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    schedule, _ = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+    if schedule is not None:
+        result['status'] = 'PLAN_SCHEDULED'
+    (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+    return result
+
+
+def plan_main(argv=None):
+    parser = argparse.ArgumentParser(prog='scar plan', description='Plan a retained native program graph.')
+    parser.add_argument('--graph', required=True, type=Path)
+    parser.add_argument('--out', required=True, type=Path)
+    parser.add_argument('--repetitions', type=int, choices=range(1, 10), default=3)
+    parser.add_argument('--case-seconds', type=int, default=3600)
+    args = parser.parse_args(argv)
+    if not 1 <= args.case_seconds <= 3600:
+        parser.error('--case-seconds must be between 1 and 3600')
+    try:
+        result = plan_native_graph(args.graph, args.out, repetitions=args.repetitions,
+                                   case_seconds=args.case_seconds)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        parser.exit(1, f'{error}\n')
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0 if result['status'] == 'PLAN_SCHEDULED' else 1
 
 
 def _validate_delivery(project, cases, out, repetitions):

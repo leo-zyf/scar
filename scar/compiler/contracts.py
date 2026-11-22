@@ -26,6 +26,37 @@ class GraphBundle:
     declarations: ProviderArtifact | None = None
 
     @classmethod
+    def read_native(cls, directory: Path) -> 'GraphBundle':
+        """Open the graph-only publication and verify its role bindings."""
+        directory = directory.resolve(strict=True)
+        result = read_artifact(file_reference(directory / 'result.json', 'scar.native-entry-result'))
+        if result.get('schema_version') != 1 or result.get('artifacts') is None:
+            raise ValueError('expected a published native graph result')
+        references = result['artifacts']
+        schemas = {
+            'request': 'scar.native-entry', 'program': 'scar.program-graph',
+            'hardware': 'scar.target-hardware-graph', 'calls': 'scar.native-call-links',
+            'graph_evidence': 'scar.native-graph-evidence',
+        }
+        if not isinstance(references, dict) or set(references) != schemas.keys():
+            raise ValueError('native graph handoff requires request, program, hardware, calls and evidence')
+        if any(not isinstance(references[name], dict) or references[name].get('schema') != schema
+               for name, schema in schemas.items()):
+            raise ValueError('native graph artifact schema differs from its role')
+        parts = {name: ProviderArtifact(**reference) for name, reference in references.items()}
+        evidence = parts['graph_evidence']
+        if Path(evidence.uri) != directory / 'graph-report.json':
+            raise ValueError('native graph report is outside its publication')
+        report = read_artifact(evidence)
+        if report.get('schema_version') != 1 or not report.get('entry'):
+            raise ValueError('native graph report lacks a validated entry')
+        for name in ('request', 'program', 'hardware', 'calls'):
+            if report.get(name) != references[name]:
+                raise ValueError(f'native graph report and result disagree on {name}')
+        read_artifact(parts['calls'])
+        return cls(parts['request'], parts['program'], parts['hardware'], evidence, parts['calls'], report)
+
+    @classmethod
     def read_python(cls, directory: Path) -> 'GraphBundle':
         """Adapt a retained F4 build without treating its catalog as lowered code."""
         reference = ProviderArtifact(**file_reference(directory / 'manifest.json', 'scar.program-build'))

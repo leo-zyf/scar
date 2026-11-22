@@ -60,6 +60,8 @@ def _compile(arguments):
 def _plan(arguments):
     if _has_option(arguments, '--build'):
         from scar.compiler.middle.python import main as plan
+    elif _has_option(arguments, '--graph'):
+        from scar.compiler.driver import plan_main as plan
     else:
         from scar.compiler.middle.plan import main as plan
     return plan(arguments)
