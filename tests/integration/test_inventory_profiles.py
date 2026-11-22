@@ -1,10 +1,6 @@
 """Structured and environment inventories replay both source and observed calls."""
 import gzip
 import json
-import os
-from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
@@ -12,22 +8,12 @@ from scar.analysis.program_inventory import ProgramInventory, inventory_program
 from scar.analysis.program_lowering import SourceProgram, lower_source
 from scar.analysis.source_layers import reconstruct_source_layers
 from scar.ir.program.functions import BodyLoweringProfile
-
-
-ROOT = Path(__file__).resolve().parents[2]
+from tests.fixtures.capture_cli import run_trace
 
 
 def _captured_calls(entry):
-    project = entry.parent
-    trace = project / "trace"
-    environment = dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE="1")
-    for name in ("SCAR_TRACE_DIR", "SCAR_TRACE_CALL_EDGES", "SCAR_CALL_TRACE_OWNER_PID", "SCAR_CALL_OPERANDS"):
-        environment.pop(name, None)
-    captured = subprocess.run(
-        [sys.executable, "-m", "scar", "trace", "--calls-only", "--project-root", str(project),
-         "--out", str(trace), "--", sys.executable, str(entry)],
-        cwd=project, env=environment, capture_output=True, text=True, timeout=90,
-    )
+    trace = entry.parent / "trace"
+    captured = run_trace(entry, trace, "--calls-only")
     assert captured.returncode == 0, captured.stdout + captured.stderr
     return trace
 
