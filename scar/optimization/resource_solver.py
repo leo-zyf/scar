@@ -8,6 +8,7 @@ not to physical hardware, unmodeled transfers, or a production implementation.
 
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 
@@ -212,7 +213,34 @@ def _allocation_view(schedule):
         task.id: task.reads if task.kind is TaskKind.RELEASE else () for task in schedule.tasks}
 
 
-def _problem(schedule, task_costs, task_placements, resource_capacities,
+@dataclass(frozen=True, slots=True)
+class _FixedSchedule:
+    schedule: ResourceSchedule | VersionedResourceSchedule
+    document: dict
+    sha256: str
+    tasks: dict
+    task_ids: tuple[str, ...]
+    order: tuple[str, ...]
+    dependencies: dict[str, frozenset[str]]
+    allocation_records: dict
+    allocation_writes: dict
+    release_reads: dict
+
+
+def _prepare_fixed_schedule(schedule):
+    """Admit the graph once for all costs and placements in a fixed domain."""
+    order = tuple(validate_schedule(schedule)['topological_order'])
+    document = schedule_document(schedule)
+    tasks = {task.id: task for task in schedule.tasks}
+    allocation_records, allocation_writes, release_reads = _allocation_view(schedule)
+    return _FixedSchedule(
+        schedule, document, semantic_sha256(document), tasks, tuple(sorted(tasks)), order,
+        {key: frozenset(task.depends_on) for key, task in tasks.items()},
+        allocation_records, allocation_writes, release_reads,
+    )
+
+
+def _problem(graph, task_costs, task_placements, resource_capacities,
              memory_capacities, materialization_sizes, memory_locations):
     unresolved = []
 
@@ -238,7 +266,7 @@ def _problem(schedule, task_costs, task_placements, resource_capacities,
         if not isinstance(pool, str) or not pool or not _integer(budget):
             missing(f"memory_capacities.{pool}", "pool names and nonnegative incremental budgets required")
     durations, demands = {}, {}
-    for task in schedule.tasks:
+    for task in graph.tasks.values():
         raw = costs.get(task.id)
         duration = raw.get("duration_ticks") if isinstance(raw, Mapping) else raw
         if isinstance(raw, Mapping) and raw.get("status") in ("UNKNOWN", "UNRESOLVED"):
@@ -265,8 +293,8 @@ def _problem(schedule, task_costs, task_placements, resource_capacities,
             if not _integer(capacity, 1):
                 missing(f"resource_capacities.{resource}", "explicit positive integer capacity required")
             demands[task.id][resource] = units
-    allocations, _, _ = _allocation_view(schedule)
-    versioned = isinstance(schedule, VersionedResourceSchedule)
+    allocations = graph.allocation_records
+    versioned = isinstance(graph.schedule, VersionedResourceSchedule)
     if versioned:
         for field, values in (("materialization_sizes", sizes), ("memory_locations", locations)):
             for key in values.keys() - allocations.keys():
@@ -316,11 +344,22 @@ def solve_resource_schedule(schedule: ResourceSchedule | VersionedResourceSchedu
     makespan. Memoization merges identical running/completed/live-storage
     states; critical-path and resource-work lower bounds prune worse branches.
     """
-    validate_schedule(schedule)
+    graph = _prepare_fixed_schedule(schedule)
+    return _solve_fixed_schedule(
+        graph, task_costs=task_costs, task_placements=task_placements, resource_capacities=resource_capacities,
+        memory_capacities=memory_capacities, materialization_sizes=materialization_sizes,
+        memory_locations=memory_locations, model_instantiation=model_instantiation, search_budget=search_budget,
+    )
+
+
+def _solve_fixed_schedule(graph, *, task_costs, task_placements, resource_capacities,
+                          memory_capacities, materialization_sizes, memory_locations,
+                          model_instantiation, search_budget):
+    schedule = graph.schedule
     if not _integer(search_budget, 1):
         raise ValueError("search_budget must be a positive integer state budget")
     durations, demands, capacities, memory_caps, allocation_model, unresolved = _problem(
-        schedule, task_costs, task_placements, resource_capacities,
+        graph, task_costs, task_placements, resource_capacities,
         memory_capacities, materialization_sizes, memory_locations)
     if isinstance(schedule, VersionedResourceSchedule) and schedule.temporal is not None:
         unresolved.append({"field": "temporal", "reason":
@@ -338,7 +377,7 @@ def solve_resource_schedule(schedule: ResourceSchedule | VersionedResourceSchedu
         "schema": "scar.resource-solver", "schema_version": 1,
         "region_id": schedule.region_id, "objective": "MINIMIZE_MAKESPAN",
         "placement_optimization": "FIXED_INPUT_PLACEMENTS_NOT_JOINT",
-        "schedule_sha256": semantic_sha256(schedule_document(schedule)), "model_sha256": None,
+        "schedule_sha256": graph.sha256, "model_sha256": None,
         "time_unit": "CALLER_DECLARED_TICKS", "status": "UNRESOLVED",
         "optimality": "NOT_ESTABLISHED", "physical_optimality_proven": False,
         "model_assumptions": list(_MODEL_ASSUMPTIONS),
@@ -374,11 +413,9 @@ def solve_resource_schedule(schedule: ResourceSchedule | VersionedResourceSchedu
     if versioned:
         result["model"]["allocation_identity"] = "PHYSICAL_STORAGE_SLOT_ID"
     result["model_sha256"] = semantic_sha256(result["model"])
-    tasks = {task.id: task for task in schedule.tasks}
-    order = validate_schedule(schedule)["topological_order"]
-    ids = tuple(sorted(tasks))
-    dependencies = {key: set(tasks[key].depends_on) for key in ids}
-    allocation_records, allocation_writes, release_reads = _allocation_view(schedule)
+    tasks, ids, order, dependencies = graph.tasks, graph.task_ids, graph.order, graph.dependencies
+    allocation_records = graph.allocation_records
+    allocation_writes, release_reads = graph.allocation_writes, graph.release_reads
 
     def lower_bound(time, completed, running):
         remaining_finish = {}

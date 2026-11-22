@@ -14,23 +14,34 @@ from pathlib import Path
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.record_codec import decode, encode, loads
 from .cost_model import _pointer
-from .resource_solver import semantic_sha256, solve_resource_schedule
-from .schedule import validate_schedule, schedule_document
+from .resource_solver import _prepare_fixed_schedule, _solve_fixed_schedule, semantic_sha256
+from .schedule import validate_schedule
 
 
 def task_implementation_contract(schedule, task_id) -> dict:
     """Bind a choice to exact work/effects/dependencies and unchanged storage."""
     validate_schedule(schedule)
-    tasks = {task.id: task for task in schedule.tasks}
-    if task_id not in tasks:
+    task = next((task for task in schedule.tasks if task.id == task_id), None)
+    if task is None:
         raise ValueError('unknown task ID')
-    task = tasks[task_id]
-    materials = [m for m in schedule.materializations if m.id in task.reads + task.writes]
-    values = [v for v in schedule.values if v.id in {m.value for m in materials}]
-    return dict(schema='scar.task-implementation-contract', schema_version=1,
-                region_id=schedule.region_id, call_scope=schedule.call_scope,
-                task=encode(task), materializations=encode(materials), values=encode(values),
-                loop_axes=encode(schedule.loop_axes))
+    return _contract_reader(schedule)(task)
+
+
+def _contract_reader(schedule):
+    # Keep declaration order without walking unrelated graph values per task.
+    materials_by_id = {record.id: (position, record) for position, record in enumerate(schedule.materializations)}
+    values_by_id = {record.id: (position, record) for position, record in enumerate(schedule.values)}
+
+    def contract(task):
+        materials = [record for _, record in sorted(materials_by_id[key] for key in set(task.reads + task.writes))]
+        value_ids = {material.value for material in materials}
+        values = [record for _, record in sorted(values_by_id[key] for key in value_ids)]
+        return dict(schema='scar.task-implementation-contract', schema_version=1,
+                    region_id=schedule.region_id, call_scope=schedule.call_scope,
+                    task=encode(task), materializations=encode(materials), values=encode(values),
+                    loop_axes=encode(schedule.loop_axes))
+
+    return contract
 
 
 def solve_implementation_choices(schedule, *, task_options, resource_capacities,
@@ -50,11 +61,11 @@ def solve_implementation_choices(schedule, *, task_options, resource_capacities,
     counts choice branches plus fixed-solver states. Unknown options cannot
     yield full-domain optimality, even when a known-subset incumbent is found.
     """
-    validation = validate_schedule(schedule)
+    graph = _prepare_fixed_schedule(schedule)
     if type(search_budget) is not int or search_budget < 1:
         raise ValueError('search_budget must be a positive integer')
-    tasks = {task.id: task for task in schedule.tasks}
-    ids = tuple(sorted(tasks))
+    tasks, ids = graph.tasks, graph.task_ids
+    contract_for = _contract_reader(schedule)
     frontiers, model_issues, cache = [], [], {}
     if not isinstance(task_options, Mapping):
         task_options = {}
@@ -102,7 +113,7 @@ def solve_implementation_choices(schedule, *, task_options, resource_capacities,
             incomplete.add(key)
             continue
         seen = set()
-        contract_hash = semantic_sha256(task_implementation_contract(schedule, key))
+        contract_hash = semantic_sha256(contract_for(tasks[key]))
         for index, option in enumerate(options):
             field = f'task_options.{key}.{index}'
             reasons = []
@@ -173,7 +184,7 @@ def solve_implementation_choices(schedule, *, task_options, resource_capacities,
 
     def critical_bound(durations):
         finish = {}
-        for key in validation['topological_order']:
+        for key in graph.order:
             finish[key] = durations[key] + max((finish[d] for d in tasks[key].depends_on), default=0)
         return max(finish.values(), default=0)
 
@@ -189,13 +200,13 @@ def solve_implementation_choices(schedule, *, task_options, resource_capacities,
                        model_instantiation=deepcopy(model_instantiation))
     try:
         domain_hash = semantic_sha256(task_options)
-        model_hash = semantic_sha256(dict(schedule=schedule_document(schedule),
+        model_hash = semantic_sha256(dict(schedule=graph.document,
                                           option_domain=task_options, fixed_constraints=constraints))
     except (TypeError, ValueError):
         domain_hash, model_hash = None, None
         model_issues.append(dict(field='option_domain', reason='finite semantic JSON required'))
     result = dict(schema='scar.implementation-choice-solver', schema_version=1,
-                  region_id=schedule.region_id, schedule_sha256=semantic_sha256(schedule_document(schedule)),
+                  region_id=schedule.region_id, schedule_sha256=graph.sha256,
                   status='UNRESOLVED_OPTION_DOMAIN', optimality='NOT_ESTABLISHED',
                   objective='MINIMIZE_MAKESPAN', physical_optimality_proven=False,
                   time_unit='CALLER_DECLARED_COMMON_TICKS',
@@ -238,8 +249,8 @@ def solve_implementation_choices(schedule, *, task_options, resource_capacities,
         if used >= search_budget:
             exhausted = True
             break
-        fixed = solve_resource_schedule(
-            schedule, task_costs=durations,
+        fixed = _solve_fixed_schedule(
+            graph, task_costs=durations,
             task_placements={key: option['resource_demands'] for key, option in selected.items()},
             resource_capacities=resource_capacities, memory_capacities=memory_capacities,
             materialization_sizes=materialization_sizes, memory_locations=memory_locations,
