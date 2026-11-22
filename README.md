@@ -2,6 +2,8 @@
 
 SCAR 是基于程序图的宏观编译器。它把源码、运行绑定和硬件资源接到同一编译流程，再做合法的图改写和资源调度，最后交付 C++20 工程。
 
+CPU 编译可用 `python -m pip install .` 安装。采集 PyTorch 工作负载时使用已有的 PyTorch 环境，或用 `python -m pip install '.[torch]'` 安装采集所需的 PyTorch。
+
 | 入口 | 用途 |
 | --- | --- |
 | `scar build` | 只建图。用 `--manifest` 读取原生编译单元，用 `--entry` 读取 Python 入口，用 `--formal` 生成 Python 源码目录，或用 `--static` 构建静态源码和函数体图。 |

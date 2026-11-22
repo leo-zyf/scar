@@ -7,9 +7,10 @@ name = "scar"
 version = "0.1.0"
 description = "State-Control-Action-Resource execution analysis and optimization prototype"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.0", "numpy>=1.24", "networkx>=3.0,<4"]
+dependencies = ["numpy>=1.24", "networkx>=3.0,<4"]
 
 [project.optional-dependencies]
+torch = ["torch>=2.0"]
 planning = ["ortools==9.15.6755"]
 cpu-cost = ["scipy>=1.11,<2"]
 native-source = ["tree-sitter==0.26.0", "tree-sitter-cpp==0.23.4"]
