@@ -10,11 +10,11 @@ import shlex
 from shutil import copy2, copytree
 from struct import Struct
 import subprocess
-from tempfile import TemporaryDirectory
 
 from scar.analysis import source_triangle_seed
-from scar.codegen import native_basis_coo, native_coo_ingress, native_mesh_basis, native_triangle_topology, source_triangle_seed_wire
-from scar.codegen.native_project import build_native_project
+from scar.codegen import native_coo_ingress, native_mesh_basis, source_triangle_seed_wire
+from scar.codegen.aten_provider import stage_cpu_aten_libraries
+from scar.codegen.native_project import build_native_project, open_native_package, stage_native_package
 from scar.codegen.native_sparse_source import SOURCE_STREAM
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
@@ -23,7 +23,6 @@ SCHEMA = 'scar.native-parameterized-upstream'
 PROFILE = 'scar.native-upstream-wire-profile'
 _CSR = Struct('<8s32s4I')
 _NAMES = ('topology', 'mesh', 'basis', 'coo')
-_CHECKERS = (native_triangle_topology, native_mesh_basis, native_basis_coo, native_coo_ingress)
 _INPUT_PORTS = ('admitted_input', 'admitted_input', 'admitted_input', 'input_sample')
 _OUTPUT_PORTS = ('exact_mesh', 'exact_basis', 'original_coo', 'canonical_sample')
 _WIRES = ('seed.bin', 'wires/mesh.bin', 'wires/basis.bin', 'wires/coo.bin', 'canonical.csr')
@@ -96,8 +95,7 @@ def _render_stage(old, stage, doc, before, after):
         key = 'header' if stage == 'topology' else 'input_header'
         _require(bytes(doc['plan'][key]) == before, 'retained plan disagrees with its wire: ' + stage)
         doc['plan'][key] = list(after)
-        module = _CHECKERS[_NAMES.index(stage)]
-        _require(module._render(doc['plan']) == rewritten, 'native renderer changes more than the header: ' + stage)
+        _require(native_mesh_basis.render(stage, doc['plan']) == rewritten, 'native renderer changes more than the header: ' + stage)
     return rewritten
 
 
@@ -111,15 +109,8 @@ def _stage_build(previous, destination, stage, generated, doc, shared_stage):
         target = 'scar_coo_ingress'
         schema = 'scar.native-coo-member'
     else:
-        lib = destination / 'lib'
-        lib.mkdir()
-        for member in doc['libraries']:
-            if shared_stage is None:
-                copy2(previous / member['uri'], destination / member['uri'])
-            else:
-                os.link(shared_stage / member['uri'], destination / member['uri'])
-            _require(member == dict(uri=member['uri'], schema=member['schema'],
-                **native_basis_coo._content(destination / member['uri'])), 'same provider digest required for each rebinding')
+        providers = (shared_stage if shared_stage is not None else previous) / 'lib'
+        stage_cpu_aten_libraries(destination, providers, pins=doc['libraries'], link=shared_stage is not None)
         expected = tuple(destination / row['uri'] for row in doc['libraries'])
         target = Path(doc['executable']['uri']).name
     executable, linked = build_native_project(destination, target, shlex.split(os.environ.get('CXX', 'c++')),
@@ -173,9 +164,7 @@ def export(publication_path, source_seed_path, *, count, recipe_id, out, solver_
 
     out = Path(out).resolve()
     _require(not out.exists(), 'native upstream output must be fresh')
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='.scar-parameterized-upstream-', dir=out.parent) as name:
-        root = Path(name)
+    with stage_native_package(out) as root:
         (root / 'wires').mkdir()
         (root / 'source-seed.json').write_bytes(read_artifact(source_ref, json_document=False))
         profile = dict(schema=PROFILE, schema_version=1, recipe_id=recipe_id, case=dict(size=n, nnz=nnz, call_count=count),
@@ -188,7 +177,7 @@ def export(publication_path, source_seed_path, *, count, recipe_id, out, solver_
         wires = [_local(root, _WIRES[0], old_wire_refs[0]['schema'])]
         comparison = dict(seed=sha256(payload[_SIZES[0]:]).hexdigest())
         commands, packages = {}, {}
-        for index, (stage, module, doc) in enumerate(zip(_NAMES, _CHECKERS, legacy, strict=True)):
+        for index, (stage, doc) in enumerate(zip(_NAMES, legacy, strict=True)):
             size, next_size = _SIZES[index:index+2]
             previous = old / stage
             destination = root / stage
@@ -210,7 +199,7 @@ def export(publication_path, source_seed_path, *, count, recipe_id, out, solver_
                 doc['stream'] = stream_ref if stream_ref is not None else profile_ref
             _json(destination / 'artifact.json', doc)
             commands[stage] = [relative]
-            packages[stage] = _local(root, f'{stage}/artifact.json', module.SCHEMA)
+            packages[stage] = _local(root, f'{stage}/artifact.json', doc['schema'])
         result = dict(schema=SCHEMA, schema_version=1, base_publication=old_ref,
             source_seed=_local(root, 'source-seed.json', source_triangle_seed.SCHEMA), profile=profile_ref,
             count=count, recipe_id=recipe_id, case=profile['case'], source_count_verified=True,
@@ -218,13 +207,12 @@ def export(publication_path, source_seed_path, *, count, recipe_id, out, solver_
             identical_payload_sha256=comparison, measured_speedup=False, full_python_entry=False)
         _json(root / 'artifact.json', result)
         check(root)
-        root.rename(out)
     return artifact_reference(out / 'artifact.json', SCHEMA)
 
 
 def check(path):
     root = Path(path).resolve(strict=True)
-    doc = json.loads(_actual(root, _local(root, 'artifact.json', SCHEMA)))
+    _, doc = open_native_package(root, SCHEMA)
     profile = json.loads(_actual(root, doc['profile']))
     source = json.loads(_actual(root, doc['source_seed']))
     old, target = bytes(profile['legacy_header']), bytes(profile['target_header'])
@@ -240,10 +228,15 @@ def check(path):
         data = _actual(root, wire)
         _require(data.startswith(target[-size:]) and sha256(data[size:]).hexdigest() == doc['identical_payload_sha256'][role],
             'local native wire differs from its verified body: ' + role)
-    for index, (stage, module) in enumerate(zip(_NAMES, _CHECKERS, strict=True)):
-        bound = json.loads(_actual(root, doc['packages'][stage]))
-        _metadata_only((root / stage / 'main.cpp').read_bytes(), stage, target[-_SIZES[index]:])
-        _require(doc['packages'][stage]['uri'] == f'{stage}/artifact.json' and bound == module.check(root / stage)
+    for index, stage in enumerate(_NAMES):
+        directory = root / stage
+        _require(directory.resolve(strict=True) == directory, 'expected a local native upstream stage: ' + stage)
+        if stage == 'coo':
+            reference, bound = native_coo_ingress.read_package(directory)
+        else:
+            reference, bound = native_mesh_basis.read_package(directory, stage)
+        _metadata_only((directory / 'main.cpp').read_bytes(), stage, target[-_SIZES[index]:])
+        _require(doc['packages'][stage] == {**reference, 'uri': f'{stage}/artifact.json'}
             and bound['profile_binding'] == doc['profile'] and bound[_INPUT_PORTS[index]] == doc['wires'][index]
             and bound[_OUTPUT_PORTS[index]] == doc['wires'][index+1]
             and doc['commands'][stage] == [stage + '/' + (bound['executable']['uri'] if stage != 'coo' else 'bin/scar_coo_ingress')],

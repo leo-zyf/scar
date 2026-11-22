@@ -9,9 +9,10 @@ from pathlib import Path
 import shlex
 from struct import pack
 import tarfile
-from tempfile import TemporaryDirectory
 
-from scar.codegen.native_project import build_native_project, write_native_project
+from scar.codegen.native_project import (
+    build_native_project, open_native_package, render_cpp_template, stage_native_package, write_native_project,
+)
 from scar.codegen.native_sparse_source import SOURCE_STREAM
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
@@ -123,18 +124,11 @@ def export(observation_path, source_path, out):
     source = artifact_reference(source_path, 'scar.upstream-source-archive')
     values = _binding(observation)
     out = Path(out).absolute()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        raise FileExistsError(out)
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
-    with TemporaryDirectory(prefix='.coo-ingress-', dir=out.parent) as temp:
-        root = Path(temp) / 'bundle'
-        root.mkdir()
+    with stage_native_package(out) as root:
         _upstream(source, root)
-        code = Path(__file__).with_name('native_coo_ingress_v1.cpp.in').read_text()
-        for field, value in values.items():
-            code = code.replace(f'@{field}@', str(value))
-        (root / 'main.cpp').write_text(code)
+        template = Path(__file__).with_name('native_coo_ingress_v1.cpp.in')
+        (root / 'main.cpp').write_bytes(render_cpp_template(template, {f'@{key}@': value for key, value in values.items()}))
         write_native_project(root, _TARGET, sources=('main.cpp',), include_dirs=('vendor',), compile_options=_FLAGS)
         executable, dependencies = build_native_project(root, _TARGET, compiler)
         members = {}
@@ -151,13 +145,12 @@ def export(observation_path, source_path, out):
             boundary='CONTIGUOUS_COO_MATRIX_AND_LOAD_PLUS_SELECTED_ROWS_TO_CANONICAL_CSR',
             source_effects_discharged=False, deployment_authorized=False)
         (root/'artifact.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
-        root.rename(out)
     return artifact_reference(out/'artifact.json', SCHEMA)
 
 
-def check(package):
+def read_package(package):
     root = Path(package).resolve(strict=True)
-    result = read_artifact(artifact_reference(root/'artifact.json', SCHEMA))
+    reference, result = open_native_package(root, SCHEMA)
     members = ('bin/' + _TARGET, 'main.cpp', 'CMakeLists.txt',
         *(f'vendor/{name}' for name in (*_HEADERS, 'LICENSE.txt')))
     _require(result['schema_version'] == 1 and result['runtime'] == 'CXX20'
@@ -171,7 +164,7 @@ def check(package):
             'COO package member differs from the relative layout')
         read_artifact({**ref, 'uri': str(path)}, json_document=False)
     _require(os.access(root / members[0], os.X_OK), 'COO ingress member is not executable')
-    return result
+    return reference, result
 
 
 def main(argv=None):

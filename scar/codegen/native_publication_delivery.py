@@ -9,12 +9,11 @@ import re
 import shlex
 from shutil import copytree
 import subprocess
-from tempfile import TemporaryDirectory
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.codegen import native_coo_ingress, source_triangle_seed_wire
+from scar.codegen import native_coo_ingress, native_mesh_basis, source_triangle_seed_wire
 from scar.codegen.native_ordered_sparse_export import SCHEMA as ORDERED_PACKAGE, check_native_ordered_export
-from scar.codegen.native_project import build_native_project, write_native_project
+from scar.codegen.native_project import build_native_project, open_native_package, stage_native_package, write_native_project
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.native_ordered_publication import BASE, FUSED, SCHEMA as CHOICE, check as check_choice
 from scar.optimization.resource_solver import semantic_sha256
@@ -215,17 +214,13 @@ def _build(directory, plan):
 
 
 def _input_member(root, stage):
+    directory = root / _INPUT_STAGES[stage][0]
+    _require(directory.resolve(strict=True) == directory, 'expected a local native publication stage: ' + stage)
     if stage == 'ingress':
-        module = native_coo_ingress
-    elif stage == 'basis':
-        from scar.codegen import native_basis_coo as module
-    elif stage == 'mesh':
-        from scar.codegen import native_mesh_basis as module
+        reference, document = native_coo_ingress.read_package(directory)
     else:
-        from scar.codegen import native_triangle_topology as module
-
-    directory = _INPUT_STAGES[stage][0]
-    return _local(root, f'{directory}/artifact.json', module.SCHEMA), module.check(root / directory)
+        reference, document = native_mesh_basis.read_package(directory, stage)
+    return {**reference, 'uri': f'{directory.name}/artifact.json'}, document
 
 
 def _link_identical_providers(root, stages):
@@ -255,11 +250,7 @@ def export(choice, out, *, coo_observation=None, scipy_source=None, basis_packag
     design_ref = selected['design']
     design = read_artifact(design_ref)
     out = Path(out).resolve()
-    if out.exists():
-        raise FileExistsError(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='.scar-publication-delivery-', dir=out.parent) as temporary:
-        root = Path(temporary)
+    with stage_native_package(out) as root:
         (root / 'evidence').mkdir()
         evidence = dict(choice=_copy_evidence(root, 'choice', reference),
             design=_copy_evidence(root, 'design', design_ref))
@@ -296,9 +287,6 @@ def export(choice, out, *, coo_observation=None, scipy_source=None, basis_packag
             document[stage] = reference
         (root / 'artifact.json').write_text(json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + '\n')
         check(root)
-        if out.exists():
-            raise FileExistsError(out)
-        root.rename(out)
     return artifact_reference(out / 'artifact.json', SCHEMA)
 
 
@@ -316,10 +304,8 @@ def seal_source_seed(package, derivation, out):
     out = Path(out).resolve()
     if out.exists() or out.is_relative_to(source):
         raise ValueError('a fresh output outside the source package is required')
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='.scar-source-seed-', dir=out.parent) as temporary:
-        root = Path(temporary) / 'delivery'
-        copytree(source, root)
+    with stage_native_package(out) as root:
+        copytree(source, root, dirs_exist_ok=True)
         stages = {stage: _input_member(root, stage) for stage in ('basis', 'mesh', 'topology')}
         _link_identical_providers(root, stages)
         binary = check_native_ordered_export(root / 'binary')
@@ -342,15 +328,12 @@ def seal_source_seed(package, derivation, out):
             timeout=125, check=True)
         _require(probe.stdout == design['expected_stdout'].encode('ascii') and not probe.stderr,
             'source-seeded executable did not reproduce original publication')
-        if out.exists():
-            raise FileExistsError(out)
-        root.rename(out)
     return artifact_reference(out/'artifact.json', SCHEMA)
 
 
 def check(package):
     root = Path(package).resolve(strict=True)
-    doc = _read_local(root, _local(root, 'artifact.json', SCHEMA), 'artifact.json', SCHEMA)
+    _, doc = open_native_package(root, SCHEMA)
     ordered = tuple(reversed(_INPUT_STAGES))
     version = doc['schema_version']
     _require(type(version) is int and 1 <= version <= 6

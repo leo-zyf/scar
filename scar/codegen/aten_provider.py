@@ -6,13 +6,17 @@ import os
 from pathlib import Path
 import re
 import shlex
+from shutil import copy2
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_provider_bundle import _content, _dependencies
+from scar.codegen.native_project import build_native_project, native_package_member, write_native_project
+from scar.codegen.native_provider_bundle import PACKAGE_RUNPATH, _content, _dependencies
+from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
 
 _SCHEMA = 'scar.aten-provider-linkage'
+CPU_ATEN_LIBRARIES = ('libtorch_cpu.so', 'libc10.so', 'libgomp.so.1')
 _OPERATOR = re.compile(r'aten::([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\(')
 
 
@@ -72,6 +76,63 @@ def _build_interface(torch):
     link = ['-Wl,-z,defs', f'-Wl,-rpath,{lib}', *map(str, libraries)]
     return include, libraries, compiler, flags, link
 
+
+def _cpu_libraries(root):
+    return [native_package_member(root, 'lib/' + name, 'scar.elf-library') for name in CPU_ATEN_LIBRARIES]
+
+
+def stage_cpu_aten_libraries(root, source, *, pins=None, link=False):
+    """Stage the exact local provider set for a CPU ATen C++20 executable."""
+    (root / 'lib').mkdir()
+    for name in CPU_ATEN_LIBRARIES:
+        member = root / 'lib' / name
+        if link:
+            member.hardlink_to(source / name)
+        else:
+            copy2(source / name, member)
+    libraries = _cpu_libraries(root)
+    if pins is not None and libraries != pins:
+        raise ValueError('staged CPU ATen libraries differ from the admitted provider')
+    return libraries
+
+
+def build_cpu_aten_package(root, name, torch, *, pins=None, library_source=None):
+    if torch.version.cuda is not None or torch.version.hip is not None:
+        raise ValueError('a CPU-only ATen provider is required')
+    include, linked, compiler, abi_flags, _ = _build_interface(torch)
+    installed = include.parent / 'lib'
+    libraries = stage_cpu_aten_libraries(root, library_source or installed, pins=pins)
+    if library_source is not None and any(
+            _content(installed / name) != {key: row[key] for key in ('sha256', 'size_bytes')}
+            for name, row in zip(CPU_ATEN_LIBRARIES, libraries, strict=True)):
+        raise ValueError('installed CPU ATen libraries differ from the packaged provider ABI')
+    write_native_project(root, name, sources=('main.cpp',), include_dirs=(str(include),),
+        libraries=tuple(map(str, linked)), runtime_dirs=(PACKAGE_RUNPATH,),
+        compile_options=('-O2', '-fno-fast-math', '-ffp-contract=off', abi_flags[1]),
+        install_dirs=(('lib', '.'),))
+    executable, dependencies = build_native_project(root, name, compiler,
+        expected_libraries=tuple(root / row['uri'] for row in libraries), require_cpu_only=True)
+    return executable, dict(runtime='CPU_ONLY_ATEN',
+        source=native_package_member(root, 'main.cpp', 'scar.cpp-source'),
+        executable=native_package_member(root, 'bin/' + name, 'scar.native-executable-file'),
+        libraries=libraries, linker_members=sorted(dependencies))
+
+
+def verify_cpu_aten_package(root, name, document, source):
+    """Replay the generated source, executable and its package-local providers."""
+    binary = 'bin/' + name
+    if (document['runtime'] != 'CPU_ONLY_ATEN' or (root / 'main.cpp').read_bytes() != source
+            or document['source'] != native_package_member(root, 'main.cpp', 'scar.cpp-source')
+            or document['executable'] != native_package_member(root, binary, 'scar.native-executable-file')
+            or document['libraries'] != _cpu_libraries(root) or not os.access(root / binary, os.X_OK)):
+        raise ValueError('CPU ATen package differs from its replayed source or local providers')
+    listing = subprocess.check_output(['ldd', str(root / binary)],
+        env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, text=True)
+    dependencies = _dependencies(listing)
+    qualify_cpu_dependencies(dependencies)
+    if (sorted(dependencies) != document['linker_members'] or any(
+            dependencies.get(name) != str(root / 'lib' / name) for name in CPU_ATEN_LIBRARIES)):
+        raise ValueError('CPU ATen executable resolves a different package-local provider')
 
 
 def link_aten_provider(schemas, out, *, provider_revision):

@@ -10,7 +10,7 @@ from struct import Struct
 from types import CodeType
 
 from scar.analysis.bounded_entry_calls import SCHEMA as ENTRY
-from scar.codegen.native_basis_coo import SCHEMA as BASIS, check as check_basis
+from scar.codegen.native_mesh_basis import BASIS_SCHEMA, read_package
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.native_ordered_resources import SCHEMA as RESOURCES
 from scar.optimization.sparse_solve_cost import _duration
@@ -216,11 +216,11 @@ def _layouts(placed):
 
 def project(capture_path, basis_package, basis_witness, resources_path, *, stdout_path=None):
     capture_ref = _ref(capture_path, CAPTURE)
-    basis_ref = _ref(Path(basis_package) / 'artifact.json', BASIS)
+    basis_ref = _ref(Path(basis_package) / 'artifact.json', BASIS_SCHEMA)
     witness_ref = _ref(basis_witness, 'scar.basis-assembly-probe')
     resource_ref = _ref(resources_path, RESOURCES)
     capture, witness, resource = (read_artifact(ref) for ref in (capture_ref, witness_ref, resource_ref))
-    basis = check_basis(Path(basis_ref['uri']).parent)
+    _, basis = read_package(Path(basis_ref['uri']).parent, 'basis')
     read_artifact(capture['entry'], json_document=False)
     read_artifact(capture['instrument'], json_document=False)
     read_artifact(capture['reference_source'], json_document=False)

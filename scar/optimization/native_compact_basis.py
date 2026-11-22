@@ -24,17 +24,17 @@ def _ref(path, schema):
 
 
 def _derive(handoff_path, producer_path):
-    from scar.codegen import native_basis_coo as basis, native_mesh_basis as mesh
+    from scar.codegen.native_mesh_basis import MESH_SCHEMA, read_package
 
     source_ref = _ref(handoff_path, handoff.SCHEMA)
     source = handoff.check(source_ref['uri'])
     capture_ref = source['inputs']['capture']
     capture = read_artifact(capture_ref)
     witness = read_artifact(source['inputs']['basis_witness'])
-    producer = _ref(Path(producer_path) / 'artifact.json', mesh.SCHEMA)
+    producer = _ref(Path(producer_path) / 'artifact.json', MESH_SCHEMA)
     consumer = source['inputs']['basis_package']
-    native_producer = mesh.check(Path(producer['uri']).parent)
-    native_consumer = basis.check(Path(consumer['uri']).parent)
+    _, native_producer = read_package(Path(producer['uri']).parent, 'mesh')
+    _, native_consumer = read_package(Path(consumer['uri']).parent, 'basis')
     dense_ref = native_consumer['admitted_input']
     _require(native_producer['schema_version'] == native_consumer['schema_version'] == 1
         and native_producer['capture'] == capture_ref

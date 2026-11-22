@@ -1,5 +1,6 @@
 """Build and check an independent C++20 project from admitted native sources."""
 
+from contextlib import contextmanager
 from hashlib import sha256
 import json
 import os
@@ -11,8 +12,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.artifacts import _durable_bytes, file_reference
-from scar.codegen.native_provider_bundle import _dependencies
-from scar.ir.execution_recipe import read_artifact
+from scar.codegen.native_provider_bundle import _content, _dependencies
+from scar.ir.execution_recipe import open_artifact, read_artifact
 
 
 CPP20_INPUTS = 'scar.cpp20-project-inputs'
@@ -25,6 +26,42 @@ def read_native_manifest(path, manifest_sha256, *, mismatch, object_pairs_hook=N
     if sha256(raw).hexdigest() != manifest_sha256:
         raise ValueError(mismatch)
     return json.loads(raw, object_pairs_hook=object_pairs_hook)
+
+
+@contextmanager
+def stage_native_package(out):
+    """Publish the completed project atomically at a fresh destination."""
+    if out.exists():
+        raise FileExistsError(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix='.scar-native-package-', dir=out.parent) as name:
+        root = Path(name)
+        yield root
+        if out.exists():
+            raise FileExistsError(out)
+        root.rename(out)
+
+
+def native_package_member(root, name, schema):
+    member = root / name
+    if member.resolve(strict=True) != member or not member.is_relative_to(root):
+        raise ValueError('expected a local native package member: ' + name)
+    return dict(uri=name, schema=schema, **_content(member))
+
+
+def open_native_package(root, schema):
+    path = root / 'artifact.json'
+    if path.resolve(strict=True) != path:
+        raise ValueError('expected a local native package manifest')
+    reference, document = open_artifact(path, schema)
+    return {**reference, 'uri': path.name}, document
+
+
+def render_cpp_template(template, substitutions):
+    source = template.read_text()
+    for marker, value in substitutions.items():
+        source = source.replace(marker, str(value))
+    return source.encode()
 
 
 def _project_material(root, configuration):
