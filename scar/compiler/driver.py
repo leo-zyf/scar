@@ -208,13 +208,13 @@ def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan
     from .middle.python import schedule_loops
 
     if not (document.get('invariant_loops') or document.get('composite_invariant_loops')
-            or loop_inputs or loop_no_op_profiles):
-        return [], []
+            or document.get('array_loops') or loop_inputs or loop_no_op_profiles):
+        return [], [], []
     program, hardware = document['program'], document['hardware']
     read_artifact(program)
     _check(hardware)
     with BuildSession(Path(program['uri']).parent) as session:
-        direct, composite, work = schedule_loops(
+        direct, composite, arrays, work = schedule_loops(
             document, out, session.view, trip_count=loop_trip_count, input_specs=loop_inputs,
             cpu_threads=loop_cpu_threads, cpu_model=loop_cpu_model, calibrations=loop_calibrations,
             original_costs=loop_no_op_profiles, max_threads=loop_max_threads,
@@ -223,7 +223,7 @@ def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan
             row.update(deliver(loop, catalog=session.view, plan_only=plan_only))
     read_artifact(program)
     _check(hardware)
-    return direct, composite
+    return direct, composite, arrays
 
 
 def main(argv=None):

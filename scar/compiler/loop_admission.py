@@ -432,8 +432,8 @@ class _LoopLowerer(_GraphLowerer):
         return function.parameter_names[state],function.parameter_names[trip],body,CalleeGuard(body.source,(self.selected_body.name,)),tuple(self.origins)
 
 
-def discover_graph_loops(catalog,source=None):
-    discovery = _discovery_for(catalog, None)
+def discover_graph_loops(catalog,source=None,*,_discovery=None):
+    discovery = _discovery_for(catalog, _discovery)
     view, resolver = discovery.view, discovery.resolver
     pipelines, _ = discover_graph_pipelines(view, source, _discovery=discovery)
     bodies = {_source_occurrence(body.source): body for body in pipelines}
@@ -466,6 +466,25 @@ def discover_graph_loops(catalog,source=None):
                 rejected.append(dict(unit=unit,function=ordinal,path=model['path'],qualname=code.co_qualname
                     if code is not None else location.name,code=error.code,reason=error.code,detail=error.detail,origin=error.origin))
     return loops,rejected
+
+
+def read_array_loop_proof(reference, *, catalog):
+    """Independently recover the original F4 loop and all its component calls."""
+    from scar.ir.execution_recipe import read_artifact
+    from scar.optimization.resource_solver import semantic_sha256
+
+    _require(reference['schema'] == SCHEMA, 'exact original array loop proof required')
+    saved = read_artifact(reference)
+    retained = loop_from_dict(saved)
+    check_loop_sources(retained)
+    discovery = _discovery_for(catalog, None)
+    candidates, _ = discover_graph_loops(catalog, source=retained.source.path, _discovery=discovery)
+    discovery.validate()
+    matches = [loop for loop in candidates if loop.id == retained.id]
+    _require(len(matches) == 1 and loop_digest(matches[0]) == semantic_sha256(saved),
+             'array loop differs from original F4 loop, pipeline and callee replay')
+    read_artifact(reference, json_document=False)
+    return matches[0]
 
 
 # Original-F4 proof of a single array carry with invariant external inputs.
@@ -889,7 +908,30 @@ def verify_invariant_loop_motion(report,*,catalog):
     return proof,expected
 
 
-def validate_invariant_loop_links(proof,spec,loopsref):
+def loop_dependency_witnesses(proof):
+    """Return the original control and CALL witnesses for an admitted loop."""
+    if type(proof) is ArrayLoopPlan:
+        control = next(row for row in proof.origins if row.get('role') == 'single_shared_loop')
+        call = next(row for row in proof.origins if row.get('role') == 'body_pipeline_call')
+        result, = (value for value in call['results'] if value['port']['completion'] == 'FALLTHROUGH'
+                   and value['port']['ordinal'] == 0)
+        return control, dict(call, call_callee=call['arguments'][0], call_result=result)
+    control = next(row for row in proof.origins if row.get('role') == 'single_shared_invariant_loop')
+    call = next(row for row in proof.origins if row.get('role') == 'invariant_array_leaf_call')
+    return control, call
+
+
+def validate_array_loop_links(proof, spec, loopsref):
+    _require(type(proof) is ArrayLoopPlan, 'original F4 array loop required')
+    return _validate_loop_links(proof, spec, loopsref)
+
+
+def validate_invariant_loop_links(proof, spec, loopsref):
+    _require(type(proof) is InvariantLoopProof, 'original F4 invariant loop proof required')
+    return _validate_loop_links(proof, spec, loopsref)
+
+
+def _validate_loop_links(proof,spec,loopsref):
     """Join the retained loop/CALL facts to an already F4-replayed proof.
 
     No catalog is opened and no source graph is rebuilt here. Both FactRefs
@@ -897,7 +939,7 @@ def validate_invariant_loop_links(proof,spec,loopsref):
     ports must equal the proof's control/CALL witnesses, including world ABI.
     """
     from scar.ir.execution_recipe import read_artifact
-    if type(proof) is not InvariantLoopProof or spec.get('id')!=proof.id:
+    if spec.get('id')!=proof.id:
         raise ValueError('loop specification differs from its original proof ID')
     if spec.get('source_code_key')!=proof.source.code_key or spec.get('loop_link_frontier'):
         raise ValueError('original source code identity and closed loop links required')
@@ -919,8 +961,7 @@ def validate_invariant_loop_links(proof,spec,loopsref):
     try:
         function=document['functions'][int(match[1])]
         loop=function['loops'][int(match[2])];call=loop['body_calls'][int(call_match[1])]
-        control=next(row for row in proof.origins if row.get('role')=='single_shared_invariant_loop')
-        original=next(row for row in proof.origins if row.get('role')=='invariant_array_leaf_call')
+        control, original = loop_dependency_witnesses(proof)
         identity=next(row for row in proof.source.origins if row.get('kind')=='source_identity')
         header=loop['header'];port=header['port']
         normal_world=[value for value in original['results'] if value['port']['completion']=='FALLTHROUGH'
@@ -953,6 +994,9 @@ __all__ = [
     'digest',
     'read_loop',
     'write_loop',
+    'read_array_loop_proof',
+    'validate_array_loop_links',
+    'loop_dependency_witnesses',
     'admit_loop',
     'check_loop_sources',
     'SCHEMA',

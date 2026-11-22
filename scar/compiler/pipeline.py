@@ -88,7 +88,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             whole = replay_whole_entry(document, out, evidence=evidence, plan_only=plan_only,
                                        verify_entry=verify_entry, enforce_cpu_capacity=enforce_cpu_capacity)
         return _publish_result(out, parent, document, started,
-            whole_entry=whole['reference'],regions=[],invariant_loops=[],composite_invariant_loops=[],
+            whole_entry=whole['reference'],regions=[],invariant_loops=[],composite_invariant_loops=[],array_loops=[],
             whole_entry_status=whole['selection']['status'],whole_entry_action=whole['delivery']['final_action'],
             scope='REPLAYED_WHOLE_ENTRY_OPTION_DOMAIN',
             whole_program_compiled=whole['native_compiled'],target_program_executed=whole['target_executed'],
@@ -195,7 +195,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                 cpu_threads=stateful_cpu_threads)
             row['validation_candidate']=artifact_reference(directory/'validation-candidate/candidate.json',candidate['schema'])
         rows.append(row)
-    loops, composite_loops = compile_loops(
+    loops, composite_loops, array_loops = compile_loops(
         document, out, loop_trip_count=loop_trip_count, loop_inputs=loop_inputs,
         plan_only=plan_only, loop_cpu_threads=loop_cpu_threads, loop_cpu_model=loop_cpu_model,
         loop_calibrations=loop_calibrations, loop_no_op_profiles=loop_no_op_profiles,
@@ -207,8 +207,10 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             invariant_loops=dict(artifact=parent,locator='#/invariant_loop_rejections',
                 count=len(document.get('invariant_loop_rejections',[]))),
             composite_loops=dict(artifact=parent,locator='#/composite_rejections',
-                count=len(document.get('composite_rejections',[])))),
-        composite_invariant_loops=composite_loops,
+                count=len(document.get('composite_rejections',[]))),
+            array_loops=dict(artifact=parent,locator='#/array_loop_rejections',
+                count=len(document.get('array_loop_rejections',[])))),
+        composite_invariant_loops=composite_loops,array_loops=array_loops,
         scope='ORIGINAL_F4_STATEFUL_AND_PURE_LOOP_REGIONS_WITH_SCOPED_CALLER_COST_AND_RUNTIME_CONTRACTS',
         source_graph_unrolled=False,target_variants_ranked_by_measurement=False,
         target_program_executed=False,whole_program_compiled=False)
@@ -276,6 +278,8 @@ def compile_domains_main(argv=None):
         enforce_cpu_capacity=args.enforce_cpu_capacity)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
-        statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops']]],
+        array_loops=len(result['array_loops']),
+        statuses=[r['status'] for r in [*result['regions'],*result['invariant_loops'],*result['composite_invariant_loops'],
+                                      *result['array_loops']]],
         whole_entry_status=result.get('whole_entry_status'),whole_entry_action=result.get('whole_entry_action'),
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2));return 0

@@ -75,6 +75,9 @@ def guarded_loop_function(original,artifact,*,exclusive_inputs=False):
         if (not exclusive_inputs or threading.active_count()!=1
                 or sys.getprofile() is not None or sys.gettrace() is not None):
             return fallback('synchronous_exclusive_input_contract',args,kwargs)
+        monitoring = getattr(sys, 'monitoring', None)
+        if monitoring is not None and any(monitoring.get_tool(tool) is not None for tool in _RANGE(6)):
+            return fallback('monitoring_observer_active', args, kwargs)
         if not hasattr(os,'sched_getaffinity') or not cpus<=os.sched_getaffinity(0):
             return fallback('planned_cpu_allocation_unavailable',args,kwargs)
         if not _same_state(original,entry_state) or _range(original) is not _RANGE:

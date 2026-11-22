@@ -46,11 +46,15 @@ def _identities(value):
 
 
 def validate_contract(value):
-    _keys(value,('schema','schema_version','profile','native','source','parameters','state_parameter',
+    runtime_version = value.get('schema_version') if type(value) is dict else None
+    _need(type(runtime_version) is int and runtime_version in (1, 2), 'unsupported runtime contract version')
+    fields = ('schema','schema_version','profile','native','source','parameters','state_parameter',
         'trip_count_parameter','callee_guards','array','trip_count','memory_budget_bytes','cpu',
-        'external_assumptions','floating_environment_policy','selection'),'runtime contract')
-    _need(value['schema']==SCHEMA and type(value['schema_version']) is int
-          and value['schema_version']==1 and value['profile']=='cpu-f64-rank2-loop-v1',
+        'external_assumptions','floating_environment_policy','selection')
+    if runtime_version == 2:
+        fields += ('source_proof', 'execution_plan')
+    _keys(value, fields, 'runtime contract')
+    _need(value['schema']==SCHEMA and value['profile']=='cpu-f64-rank2-loop-v1',
           'unsupported runtime contract version/profile')
     native=value['native']
     _keys(native,('library','library_sha256','loop_abi_version','ids','contract'),'native')
@@ -118,6 +122,16 @@ def validate_contract(value):
                         'layout contract needs its hash and SSE2 implementation')
     else:_need(cpu['required_isa']=='BASELINE_X86_64','scalar contract cannot assert SIMD layout')
     selection=value['selection']
+    if runtime_version == 2:
+        _need(type(selection) is dict and selection == {'decision': 'UNQUALIFIED', 'selected': False}
+              and selection['selected'] is False, 'explicitly unqualified loop required')
+        for role, schema in (('source_proof', 'scar.array-loop-plan'), ('execution_plan', 'scar.execution-plan')):
+            reference = value[role]
+            _keys(reference, ('uri', 'sha256', 'size_bytes', 'schema'), role)
+            _need(reference['schema'] == schema and type(reference['uri']) is str
+                  and Path(reference['uri']).is_absolute() and _digest(reference['sha256'])
+                  and _integer(reference['size_bytes'], 1), 'original loop product required: ' + role)
+        return value
     _need(type(selection) is dict and selection.get('decision')=='TRANSFORM_UNDER_CONTRACT'
           and selection.get('selected') is True and type(selection.get('artifact')) is dict
           and all(selection['artifact'].get(k)==native['ids'][k]

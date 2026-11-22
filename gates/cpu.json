@@ -69,6 +69,7 @@
       "id": "B2_NATIVE_CONTRACT",
       "tests": [
         "tests/unit/test_native_temporal_invariant.py",
+        "tests/unit/test_export_loop.py",
         "tests/unit/test_caller_pipeline_capsule.py",
         "tests/unit/test_deployment_gate.py",
         "tests/unit/test_gate_runner.py"

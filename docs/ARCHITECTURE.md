@@ -34,6 +34,8 @@ Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。同一单�
 
 Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端根据循环证明和硬件快照发布 `schedule.json`，再发布锁定证明、特化和资源绑定的 `cpp20-lowering.json`。后端通过 `deliver` 消费 `ScheduledLoop` 或 `ExecutionPlanRef`。重放检查计划和证明，保留中端已经选定的实现。
 
+已有的单数组递推可沿用同一编译入口。中端从 F4 复核循环回边和调用端口，发布融合策略及绑定 CPU 的执行计划。指定核数会生成待测候选。自动选型缺少可比成本时采用原执行。`scar run` 只在显式试跑或同一入口通过测量准入后挂接候选。
+
 原生 `compiler-plan.json` 锁定规划问题、计划和各项证据。`scar compile --plan` 在独立进程重放交付并核对锁定用例。发布 wheel 时先生成源码分发包，再从该分发包构建，以便打包输入与当前源码版本一致。
 
 分阶段运行时，`scar build --manifest` 发布结果及 `graph-report.json` 的双向引用。`scar plan --graph` 核对各工件角色、重新确认源锁并使用已有图，发布改写、硬件成本和封存计划。`scar compile --plan` 消费该计划，重新验证排程、生成工程并比对锁定输入的结果。同一目标用 `scar compile --manifest` 可串接三阶段。

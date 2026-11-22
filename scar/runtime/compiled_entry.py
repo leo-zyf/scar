@@ -130,10 +130,26 @@ def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=
             execution=run_original_script(entry,argv),pipeline=reference,deployment_gate=gate)
     scopes=[]
     if all(row.get('bundle_export') for row in rows):
-        from scar.runtime.native_temporal_invariant import load
         for row in rows:
             exported=read_artifact(row['bundle_export'])
             if exported['bundle']!=row['bundle']:raise ValueError('bundle directory differs from retained export')
+            if row.get('selected_kind') == 'ARRAY_LOOP_TEMPORAL_FUSION':
+                from scar.runtime.native_loop import load as load_recurrence
+
+                if (exported['schema'] != 'scar.loop-runtime-export' or exported['schema_version'] != 2
+                        or exported['source_proof'] != row['proof'] or exported['execution_plan'] != row['schedule']
+                        or exported['deployment_authorized'] is not False):
+                    raise ValueError('recurrence export differs from the compiled source and plan')
+                artifact = load_recurrence(row['bundle'], expected_admission_sha256=exported['expected_admission_sha256'],
+                                           allow_unqualified=True)
+                contract = artifact.contract
+                if (contract['schema_version'] != 2 or contract['source_proof'] != row['proof']
+                        or contract['execution_plan'] != row['schedule'] or contract['trip_count'] != row['trip_count']
+                        or contract['memory_budget_bytes'] != row['memory_budget_bytes']
+                        or row['input_shapes'] != {contract['state_parameter']: contract['array']['shape']}):
+                    raise ValueError('recurrence runtime contract differs from the compiled boundary')
+                scopes.append(_Scope(artifact))
+                continue
             if row.get('selected_kind')=='ORDERED_STATEFUL_REGION':
                 from scar.runtime.native_stateful import load as stateful_load
                 artifact=stateful_load(row['bundle'],expected_admission_sha256=exported['expected_admission_sha256'])
@@ -143,6 +159,8 @@ def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=
                         or contract['memory']['memory_budget_bytes']!=row['memory_budget_bytes']):
                     raise ValueError('stateful export differs from retained validated implementation')
                 scopes.append(_Scope(artifact));continue
+            from scar.runtime.native_temporal_invariant import load
+
             artifact=load(row['bundle'],expected_admission_sha256=exported['expected_admission_sha256'])
             contract=artifact.contract
             if ((contract.get('proof_kind')=='COMPOSITE') !=

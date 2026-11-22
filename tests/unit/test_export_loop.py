@@ -7,10 +7,12 @@ from types import SimpleNamespace as NS
 
 import pytest
 
+from scar.artifacts import file_reference
 from scar.codegen import loop as complete
 from scar.compiler.invariant_loop_runtime import export_loop
 from scar.compiler.model import SourceRef
 from scar.runtime.loop_contract import ASSUMPTIONS,TRUST_POLICY,canonical_sha256,validate_contract,validate_admission
+from scar.runtime.native_loop import load as load_runtime
 
 
 def test_export_delegates_complete_loader_projects_guards_and_rejects_wrong_selection(tmp_path,monkeypatch):
@@ -65,3 +67,19 @@ def test_export_delegates_complete_loader_projects_guards_and_rejects_wrong_sele
         with pytest.raises(ValueError,match='selection'):export_loop(original,rejected,selection_path=selection_path)
         assert not rejected.exists()
     assert len(calls)==3
+
+    inputs = {}
+    for role, schema in (('source_proof', 'scar.array-loop-plan'), ('execution_plan', 'scar.execution-plan')):
+        path = tmp_path / f'{role}.json'
+        path.write_text(json.dumps({'schema': schema}))
+        inputs[role] = file_reference(path, schema)
+    monkeypatch.setattr('scar.compiler.loop_admission.loop_from_dict', lambda value: loop)
+    monkeypatch.setattr('scar.compiler.model.plan_from_dict', lambda value: artifact.execution_plan)
+    candidate = tmp_path / 'candidate'
+    trial = export_loop(original, candidate, **inputs)
+    assert trial['schema_version'] == 2 and trial['deployment_authorized'] is False
+    runtime = validate_contract(json.loads((candidate / 'runtime.json').read_bytes()))
+    assert runtime['selection'] == {'decision': 'UNQUALIFIED', 'selected': False}
+    assert {role: runtime[role] for role in inputs} == inputs
+    with pytest.raises(ValueError, match='unqualified loop'):
+        load_runtime(candidate, expected_admission_sha256=trial['expected_admission_sha256'])

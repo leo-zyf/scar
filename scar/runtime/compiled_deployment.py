@@ -27,7 +27,7 @@ def runner_identity():
     root=Path(__file__).resolve().parents[1]
     names=('cli.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_temporal_invariant.py','runtime/native_loop.py',
-        'runtime/loop_guard.py','runtime/native_stateful.py','runtime/stateful_guard.py',
+        'runtime/loop_guard.py','runtime/loop_contract.py','runtime/native_stateful.py','runtime/stateful_guard.py',
         'runtime/stateful_contract.py','runtime/array_copy_guard.py','trace/code_snapshot.py',
         'optimization/paired_entry_selection.py')
     values=[(name,sha256((root/name).read_bytes()).hexdigest()) for name in names]
@@ -39,7 +39,8 @@ def selected_rows(compiled):
     composites=[row for row in compiled.get('composite_invariant_loops',())
         if row['status']=='MODEL_SELECTED_COMPOSITE_LOOP_COMPILED']
     states=[row for row in compiled.get('stateful_regions',()) if row['status']=='MEASURED_STATEFUL_BUNDLE_READY']
-    return [*loops,*composites,*states]
+    recurrences = [row for row in compiled.get('array_loops', ()) if row['status'] == 'TEMPORAL_FUSION_COMPILED']
+    return [*loops, *composites, *states, *recurrences]
 
 
 def _raw(reference):

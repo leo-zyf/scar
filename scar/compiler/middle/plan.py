@@ -512,6 +512,49 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
     return report
 
 
+def plan_array_loop(loop, hardware, directory, *, shapes, count, budget, model=False, threads=None):
+    """Bind the existing single-carry fusion strategy to an observed CPU target."""
+    from scar.compiler.model import document
+    from scar.optimization.hardware import bind_cpu_placement, propose_cpu_placements
+    from scar.optimization.loop_strategy import loop_execution_plan, plan_loop_strategy
+
+    if model and threads is not None:
+        raise ValueError('automatic loop cost selection and an explicit CPU preview are separate modes')
+    strategy = plan_loop_strategy(loop, input_shapes=shapes, trip_count=count, memory_budget_bytes=budget)
+    report = dict(
+        strategy=publish_plan(directory / 'strategy.json', strategy),
+        status='ORIGINAL_ARRAY_LOOP_RETAINED', selected_kind='NO_OP',
+        input_shapes=strategy['input_shapes'], trip_count=strategy['trip_count'],
+        memory_budget_bytes=budget, physical_optimality_proven=False, performance_qualified=False,
+    )
+    if strategy['selected_strategy'] == 'NO_OP':
+        return dict(report, profitability_status='STRATEGY_NOT_ADMITTED',
+                    reason='exact temporal fusion or its input and payload bounds are unresolved')
+    if model:
+        return dict(report, profitability_status='MISSING_COMPATIBLE_COMPONENT_COSTS',
+                    reason='the single-carry temporal ABI has no complete comparable CPU and original costs')
+
+    execution = loop_execution_plan(loop, strategy)
+    target = Path(hardware['path']).parent
+    requested = 1 if threads is None else threads
+    placements = propose_cpu_placements(execution, target, memory_budget_bytes=budget, max_threads=requested)
+    binding = next((row for row in placements if len(row.cpu_ids) == requested
+                    and row.memory_budget_bytes >= strategy['final_bytes']), None)
+    if binding is None:
+        return dict(report, profitability_status='NO_FEASIBLE_CPU_PLACEMENT',
+                    reason='no admitted CPU cohort and memory domain fits the payload budget')
+    if (binding.target_path, binding.target_sha256) != (str(target), hardware['sha256']):
+        raise ValueError('array loop CPU placement differs from the original hardware snapshot')
+    bound = bind_cpu_placement(execution, binding)
+    return dict(report, status='ARRAY_LOOP_TEMPORAL_FUSION_SCHEDULED',
+                selected_kind='ARRAY_LOOP_TEMPORAL_FUSION', profitability_status='UNMEASURED',
+                selection_scope='EXPLICIT_CPU_COHORT_UNRANKED' if threads is not None
+                else 'SINGLE_CPU_STRUCTURAL_CANDIDATE',
+                schedule=publish_plan(directory / 'execution-plan.json', document(bound)),
+                cpu_ids=list(binding.cpu_ids), memory_budget_bytes=bound.cost['memory_budget_bytes'],
+                requested_memory_budget_bytes=budget)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='scar plan', description=__doc__,
                                      epilog='For a Python graph, use scar plan --build BUILD --help.')

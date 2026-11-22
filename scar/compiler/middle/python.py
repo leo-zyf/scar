@@ -13,8 +13,8 @@ import time
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.ir.execution_recipe import read_artifact
 
-from ..contracts import GraphBundle, ScheduledLoop
-from .plan import plan_loop_region, publish_plan
+from ..contracts import GraphBundle, ScheduledArrayLoop, ScheduledLoop
+from .plan import plan_array_loop, plan_loop_region, publish_plan
 
 
 def _prepare_loop_lowering(proof, folder, proof_ref, source_motion, schedule_ref, *, composite, parallel):
@@ -70,12 +70,14 @@ def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None,
         ('composite_invariant_loops', 'composite-loops', read_composite_invariant_loop_motion,
          validate_composite_invariant_loop_links),
     )
+    array_specs = document.get('array_loops', ())
     known = {spec['id'] for name, *_ in profiles for spec in document.get(name, ())}
+    known.update(spec['id'] for spec in array_specs)
     if (input_specs.keys() | original_costs.keys()) - known:
         raise ValueError('loop inputs and original costs must name retained loop IDs')
-    direct, composite, work = [], [], []
+    direct, composite, arrays, work = [], [], [], []
     if not known:
-        return direct, composite, work
+        return direct, composite, arrays, work
     if not cpu_model and (calibrations or original_costs or max_threads is not None):
         raise ValueError('loop calibration and CPU model limits require --loop-cpu-model')
     if cpu_model and cpu_threads is not None:
@@ -143,13 +145,50 @@ def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None,
                                                 composed, parallel, row['lowering'])))
             else:
                 row['status'] = retained
-    return direct, composite, work
+    _schedule_array_loops(array_specs, document, out, catalog, arrays, work,
+                          trip_count=trip_count, input_specs=input_specs,
+                          cpu_threads=cpu_threads, cpu_model=cpu_model)
+    return direct, composite, arrays, work
+
+
+def _schedule_array_loops(specs, document, out, catalog, rows, work, *,
+                          trip_count, input_specs, cpu_threads, cpu_model):
+    from scar.compiler.loop_admission import read_array_loop_proof, validate_array_loop_links
+
+    hardware = document['hardware']
+    for index, spec in enumerate(specs):
+        folder = out / 'array-loops' / f'loop-{index}'
+        folder.mkdir(parents=True)
+        reference = spec['proof']
+        loop = read_array_loop_proof(reference, catalog=catalog)
+        if spec['hardware'] != hardware:
+            raise ValueError('array loop hardware differs from the original program domain')
+        validate_array_loop_links(loop, spec, document['loop_dependencies'])
+        row = dict(id=loop.id, proof=reference, loop_links=spec['loop_links'],
+                   source_loop_authority='ORIGINAL_F4_LOOP_AND_PIPELINE_REPLAYED',
+                   native_directory=None, selected_for_use=False, whole_program_compiled=False)
+        rows.append(row)
+        inputs = input_specs.get(loop.id, {})
+        shapes = inputs.get('input_shapes', spec.get('input_shapes'))
+        count = inputs.get('trip_count', trip_count)
+        budget = inputs.get('memory_budget_bytes', spec.get('memory_budget_bytes'))
+        missing = [key for key, value in (('input_shapes', shapes), ('trip_count', count),
+                   ('memory_budget_bytes', budget)) if value is None]
+        if missing:
+            row.update(status='ARRAY_LOOP_INPUT_CONSTRAINTS_REQUIRED', missing=missing)
+            continue
+        row.update(plan_array_loop(loop, hardware, folder, shapes=shapes, count=count, budget=budget,
+                                   model=cpu_model, threads=inputs.get('cpu_threads', cpu_threads)))
+        if row['selected_kind'] == 'ARRAY_LOOP_TEMPORAL_FUSION':
+            work.append((row, ScheduledArrayLoop(loop.id, folder, reference, row['strategy'],
+                                                 row['schedule'], hardware)))
 
 
 def _invariant_loop_links(proof,loops,reference):
     """Join original F4 identifiers, never function/source-name similarity."""
-    control=next(row for row in proof.origins if row.get('role')=='single_shared_invariant_loop')
-    call=next(row for row in proof.origins if row.get('role')=='invariant_array_leaf_call')
+    from scar.compiler.loop_admission import loop_dependency_witnesses
+
+    control, call = loop_dependency_witnesses(proof)
     links=[];headers=0
     for i,function in enumerate(loops['functions']):
         for j,loop in enumerate(function['loops']):
@@ -207,7 +246,8 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.compiler.graph_frontend import RegionDiscovery
     from scar.compiler.frontend.stateful import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
-    from scar.compiler.loop_admission import discover_invariant_loops, write_invariant_loop_proof
+    from scar.compiler.loop_admission import (document as array_loop_document, discover_graph_loops,
+        discover_invariant_loops, write_invariant_loop_proof)
     from scar.compiler.pipeline_loop_frontend import (discover_pipeline_invariant_loops,
         write_composite_invariant_loop_proof)
     from scar.compiler.ordered_planning_graph import retain_ordered_planning_graph
@@ -236,6 +276,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         invariant_proofs,invariant_rejected=discover_invariant_loops(session.view,source=source_filter,_discovery=discovery)
         composite_proofs,composite_rejected=discover_pipeline_invariant_loops(
             session.view, source=source_filter, _discovery=discovery)
+        array_proofs,array_rejected=discover_graph_loops(session.view, source=source_filter, _discovery=discovery)
         discovery.validate()
         del discovery
         out.mkdir(parents=True)
@@ -307,6 +348,21 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                 loop_link_frontier=frontier,iterations_unrolled=False,
                 original_f4_replay_required_for_lowering=True,runtime_global_route_guards_required=True,
                 source_replacement_authorized=False,selected_for_use=False,lowering_authorized=False))
+        array_rows = []
+        for index, loop in enumerate(array_proofs):
+            folder = out / 'array-loop-{}'.format(index)
+            folder.mkdir()
+            reference = publish_plan(folder / 'proof.json', array_loop_document(loop))
+            links, frontier = _invariant_loop_links(loop, loops, loop_reference)
+            shapes = ({loop.state_parameter: list(shape)} if shape is not None
+                      else input_shapes.get(loop.id))
+            array_rows.append(dict(id=loop.id, source_code_key=loop.source.code_key,
+                status='SOURCE_ARRAY_LOOP_PROOF_RETAINED', proof=reference, body_pointer='#/body',
+                input_shapes=shapes, trip_count_status='REQUIRES_RUNTIME_OR_DECLARED_INPUT',
+                memory_budget_bytes=memory_budget_bytes, hardware=target, loop_links=links,
+                loop_link_frontier=frontier, iterations_unrolled=False,
+                original_f4_replay_required_for_lowering=True, source_replacement_authorized=False,
+                selected_for_use=False, lowering_authorized=False))
         _validate_catalog_parents(session.view.catalog)
         _check(target)
         if artifact_reference(program/'manifest.json',parent['schema'])!=parent:
@@ -320,6 +376,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
             named_shapes=input_shapes),
         invariant_loops=invariant_rows,invariant_loop_rejections=invariant_rejected,
         composite_invariant_loops=composite_rows,composite_rejections=composite_rejected,
+        array_loops=array_rows,array_loop_rejections=array_rejected,
         semantics='ORIGINAL_F4_FUNCTION_WORLD_AND_SOURCE_PORTS',
         loop_dependencies=loop_reference,
         loops=loops['loop_count'],loop_body_calls=loops['loop_body_call_count'],loops_unrolled=False,
@@ -351,6 +408,7 @@ def main(argv=None):
         memory_budget_bytes=args.memory_budget_bytes,max_threads=args.max_threads,entry_request=args.entry_request)
     print(json.dumps(dict(regions=len(result['regions']),invariant_loops=len(result['invariant_loops']),
         composite_invariant_loops=len(result['composite_invariant_loops']),
+        array_loops=len(result['array_loops']),
         rejections=len(result['rejections']),
         whole_entry=None if 'whole_entry' not in result else result['whole_entry']['domain']['uri'],
         result=str(Path(args.out)/'result.json'),seconds=result['seconds']),indent=2))

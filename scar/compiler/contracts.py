@@ -171,3 +171,15 @@ class ScheduledLoop:
     composite: bool
     parallel: bool
     lowering: dict
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledArrayLoop:
+    """A fixed-count array recurrence with its original proof and bound body plan."""
+
+    loop_id: str
+    folder: Path
+    proof: dict
+    strategy: dict
+    schedule: dict
+    hardware: dict

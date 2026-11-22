@@ -326,7 +326,7 @@ def _profile_artifacts(value):
         elif type(row)is list or type(row)is tuple:pending.extend(reversed(row))
 
 
-def export_loop(artifact_path,out,*,selection_path):
+def export_loop(artifact_path, out, *, selection_path=None, source_proof=None, execution_plan=None):
     """Replay full admission, then copy one ELF and project its runtime guards.
 
     The returned expected_admission_sha256 must be trusted separately by the
@@ -336,6 +336,11 @@ def export_loop(artifact_path,out,*,selection_path):
     from scar.runtime.loop_contract import (SCHEMA,ADMISSION_SCHEMA,TRUST_POLICY,IDENTITIES,
         validate_contract,validate_admission,canonical_sha256)
 
+    unqualified = selection_path is None
+    if unqualified and (source_proof is None or execution_plan is None):
+        raise ValueError('unqualified export requires the sealed source proof and execution plan')
+    if not unqualified and (source_proof is not None or execution_plan is not None):
+        raise ValueError('select an existing measured release or a sealed pipeline validation candidate')
     output=Path(out).absolute()
     if output.resolve()!=output or output.exists():raise ValueError('fresh canonical runtime bundle directory required')
     original=Path(artifact_path).resolve();directory=original if original.is_dir() else original.parent
@@ -361,12 +366,27 @@ def export_loop(artifact_path,out,*,selection_path):
     retain(directory/'artifact.json',manifest['role'],expected_sha256=manifest['sha256'],expected_bytes=manifest['bytes'])
     for key,name in report['files'].items():
         retain(directory/name,'original-native-'+key,expected_sha256=report['sha256'][key])
-    selection_file=Path(selection_path).absolute();selection_receipt=retain(selection_file,'selection:#')
-    document=_read_json(selection_file)
-    if type(document)is dict and 'selection' in document:
-        selection=document['selection'];pointer='#/selection'
-    else:selection=document;pointer='#'
-    selection_receipt['role']='selection:'+pointer
+    products = {}
+    if unqualified:
+        from scar.compiler.loop_admission import loop_from_dict
+        from scar.compiler.model import plan_from_dict
+        from scar.ir.execution_recipe import read_artifact
+
+        products = dict(source_proof=source_proof, execution_plan=execution_plan)
+        if (loop_from_dict(read_artifact(source_proof)) != loop
+                or plan_from_dict(read_artifact(execution_plan)) != plan):
+            raise ValueError('pipeline source proof or plan differs from the admitted native implementation')
+        for role, reference in products.items():
+            retain(reference['uri'], role, expected_sha256=reference['sha256'],
+                   expected_bytes=reference['size_bytes'])
+        selection = dict(decision='UNQUALIFIED', selected=False)
+    else:
+        selection_file=Path(selection_path).absolute();selection_receipt=retain(selection_file,'selection:#')
+        document=_read_json(selection_file)
+        if type(document)is dict and 'selection' in document:
+            selection=document['selection'];pointer='#/selection'
+        else:selection=document;pointer='#'
+        selection_receipt['role']='selection:'+pointer
     assumptions=list(strategy['external_assumptions'])
     if report['external_assumptions']!=assumptions:
         raise ValueError('native metadata and admitted strategy assumptions differ')
@@ -400,14 +420,16 @@ def export_loop(artifact_path,out,*,selection_path):
     ids={key:report[key] for key in sorted(IDENTITIES)}
     native_contract=_contract(loop,strategy,plan,layout)
     if canonical_sha256(native_contract)!=ids['contract_sha256']:raise ValueError('projected native contract differs from full admission')
-    runtime=validate_contract(dict(schema=SCHEMA,schema_version=1,profile='cpu-f64-rank2-loop-v1',
+    version = 2 if unqualified else 1
+    runtime=validate_contract(dict(schema=SCHEMA,schema_version=version,profile='cpu-f64-rank2-loop-v1',
         native=dict(library=library,library_sha256=library_sha256,loop_abi_version=report['loop_abi_version'],ids=ids,contract=native_contract),
         source=_source(loop.source),parameters=list(loop.parameters),state_parameter=loop.state_parameter,trip_count_parameter=loop.trip_count_parameter,
         callee_guards=guards,array=dict(shape=list(report['state_shape']),dtype='float64',device='cpu',layout='C',alignment_bytes=8,final_bytes=report['final_bytes']),
         trip_count=report['trip_count'],memory_budget_bytes=report['memory_budget_bytes'],
         cpu=dict(ids=list(report['cpu_ids']),threads=report['cpu_threads'],architecture='x86_64',os='linux',pointer_bits=64,byteorder='little',
             required_isa='SSE2_X86_64' if layout is not None else 'BASELINE_X86_64'),
-        external_assumptions=assumptions,floating_environment_policy=report['floating_environment_policy'],selection=selection))
+        external_assumptions=assumptions,floating_environment_policy=report['floating_environment_policy'],
+        selection=selection, **products))
     runtime_bytes=_json_bytes(runtime)
     admission=validate_admission(dict(schema=ADMISSION_SCHEMA,schema_version=1,runtime_contract_sha256=sha256(runtime_bytes).hexdigest(),
         library_sha256=library_sha256,native_ids=dict(ids),producer=dict(name='SCAR',version='0.1.0',exporter_sha256=sha256(Path(__file__).read_bytes()).hexdigest()),
@@ -416,11 +438,13 @@ def export_loop(artifact_path,out,*,selection_path):
     for row in evidence:_receipt(row['path'],row['role'],expected_sha256=row['sha256'],expected_bytes=row['bytes'])
     output.mkdir(parents=True)
     (output/library).write_bytes(library_bytes);(output/'runtime.json').write_bytes(runtime_bytes);(output/'admission.json').write_bytes(admission_bytes)
-    result=dict(schema='scar.loop-runtime-export',schema_version=1,bundle=str(output),runtime_contract=str(output/'runtime.json'),
+    result=dict(schema='scar.loop-runtime-export',schema_version=version,bundle=str(output),runtime_contract=str(output/'runtime.json'),
         admission=str(output/'admission.json'),library=str(output/library),expected_admission_sha256=sha256(admission_bytes).hexdigest(),
         runtime_contract_sha256=sha256(runtime_bytes).hexdigest(),library_sha256=library_sha256,build_id=ids['build_id'],
         admission_trust_policy=TRUST_POLICY,full_original_loader_admission=True,evidence_receipts=len(evidence),
         native_recompiled=False,target_executed=False,IR_or_profile_copied=False)
+    if unqualified:
+        result.update(products, deployment_authorized=False)
     (output/'export-report.json').write_bytes(_json_bytes(result))
     return result
 

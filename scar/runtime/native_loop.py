@@ -187,7 +187,7 @@ class NativeLoop:
         return output
 
 
-def load(bundle, *, expected_admission_sha256):
+def load(bundle, *, expected_admission_sha256, allow_unqualified=False):
     """Load exactly the bundle pinned by the build producer's admission hash."""
     _need(type(expected_admission_sha256) is str and
           re.fullmatch("[0-9a-f]{64}", expected_admission_sha256) is not None,
@@ -202,6 +202,8 @@ def load(bundle, *, expected_admission_sha256):
     _need(sha256(contract_raw).hexdigest() == admission["runtime_contract_sha256"], "runtime contract byte SHA256 differs")
     contract = _json(contract_raw)
     validate_contract(contract)
+    _need(contract['schema_version'] == 1 or allow_unqualified is True,
+          'unqualified loop requires explicit pipeline validation or release')
     native = contract["native"]
     _need(native["ids"] == admission["native_ids"] and
           native["library_sha256"] == admission["library_sha256"], "runtime/native admission identities differ")

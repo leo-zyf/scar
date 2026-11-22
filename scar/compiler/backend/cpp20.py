@@ -15,7 +15,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, loads
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..contracts import ExecutionPlanRef, ScheduledLoop, verify_source_lock
+from ..contracts import ExecutionPlanRef, ScheduledArrayLoop, ScheduledLoop, verify_source_lock
 from ..middle.plan import copy_source_edits, publish_plan, read_native_binding
 from ..operator_stack import (
     load_operator_stack, nvidia_stack_build, verify_operator_stack_linkage, verify_stack_components_once,
@@ -100,13 +100,15 @@ class NativeProject:
     artifacts: dict
 
 
-def deliver(plan: ExecutionPlanRef | ScheduledLoop, project: Path | None = None, *,
+def deliver(plan: ExecutionPlanRef | ScheduledLoop | ScheduledArrayLoop, project: Path | None = None, *,
             catalog=None, plan_only: bool = False) -> NativeProject | dict:
     """Lower a verified entry or region plan through the C++20 backend."""
     if isinstance(plan, ExecutionPlanRef) and project is not None and not plan_only:
         return _emit_native(plan, Path(project).resolve())
     if isinstance(plan, ScheduledLoop) and project is None and catalog is not None:
         return _lower_loop(plan, catalog=catalog, plan_only=plan_only)
+    if isinstance(plan, ScheduledArrayLoop) and project is None and catalog is not None:
+        return _lower_array_loop(plan, catalog=catalog, plan_only=plan_only)
     raise ValueError('C++20 delivery requires a project path for an entry or a source catalog for a loop')
 
 
@@ -383,3 +385,34 @@ def _lower_loop(work: ScheduledLoop, *, catalog, plan_only: bool) -> dict:
         bundle_export=artifact_reference(folder / 'bundle/export-report.json', exported['schema']),
         actual_target_executed=False,
     )
+
+
+def _lower_array_loop(work: ScheduledArrayLoop, *, catalog, plan_only: bool) -> dict:
+    from scar.codegen.loop import build, describe_capability
+    from scar.compiler.invariant_loop_runtime import export_loop
+    from scar.compiler.loop_admission import admit_loop, read_array_loop_proof
+    from scar.compiler.model import plan_from_dict
+
+    loop = read_array_loop_proof(work.proof, catalog=catalog)
+    strategy = read_artifact(work.strategy)
+    execution = plan_from_dict(read_artifact(work.schedule))
+    binding = execution.resource_binding
+    target = Path(work.hardware['path']).parent
+    if loop.id != work.loop_id or binding is None or (binding.target_path, binding.target_sha256) != (
+            str(target), work.hardware['sha256']):
+        raise ValueError('array loop lowering differs from the admitted source or hardware placement')
+    if plan_only:
+        admit_loop(loop, strategy, execution)
+        return dict(status='TEMPORAL_FUSION_PLAN_ONLY', capability=describe_capability(execution),
+                    actual_target_executed=False)
+
+    native = work.folder / 'native'
+    artifact = build(loop, native, strategy=strategy, execution_plan=execution)
+    report = artifact.report
+    bundle = work.folder / 'bundle'
+    exported = export_loop(native, bundle, source_proof=work.proof, execution_plan=work.schedule)
+    return dict(status='TEMPORAL_FUSION_COMPILED', native_directory=str(native),
+                native_artifact=artifact_reference(native / 'artifact.json', report['schema']),
+                bundle=exported['bundle'],
+                bundle_export=artifact_reference(bundle / 'export-report.json', exported['schema']),
+                actual_target_executed=False)
