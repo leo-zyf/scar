@@ -83,12 +83,8 @@ class ProgramDependencySession:
         if type(self.budget) is not ProgramDependencyBudget:
             raise TypeError("budget must be ProgramDependencyBudget")
         self.started, self.input_bytes, self.closed = time.monotonic(), 0, False
-        self._stamps, self._artifacts, self._logical, self._bases = {}, {}, {}, {}
-        self._evidence_artifacts = {}
-        self._descriptor_aliases = {}
-        # Explicit, receipt-bound routes only. Large typed graphs/indices live
-        # in the existing LRU, never in this namespace routing table.
-        self._implementation_graphs = {}
+        self._stamps, self._bases = {}, {}
+        self._init_artifact_routes()
         self._cache, self._cache_bytes = OrderedDict(), 0
         self._seen_graphs, self._seen_shards = set(), set()
         self._call_routing = None
@@ -142,6 +138,12 @@ class ProgramDependencySession:
             self._register_publication(self.call_publication, call_index_directory, "calls")
         if self.class_publication is not None:
             self._register_publication(self.class_publication, class_index_directory, "classes")
+
+    def _init_artifact_routes(self):
+        self._artifacts, self._logical, self._descriptor_aliases = {}, {}, {}
+        self._evidence_artifacts = {}
+        # Explicit receipt-bound routes. Typed graph payloads stay in the LRU.
+        self._implementation_graphs = {}
 
     def check(self):
         if self.closed:

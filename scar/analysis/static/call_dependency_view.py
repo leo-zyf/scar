@@ -111,8 +111,7 @@ class StaticCallDependencyView(ProgramDependencySession):
             for field in fields(ceiling)})
         self.started, self.closed = owner.started, False
         self._stamps = owner._stamps
-        self._artifacts, self._logical, self._descriptor_aliases = {}, {}, {}
-        self._implementation_graphs = {}
+        self._init_artifact_routes()
         self._uris_by_key = {}
         self._bases = _BasisInputs(self)
         self._body_paths = dict(owner._body_locations)
@@ -526,6 +525,7 @@ class StaticCallDependencyView(ProgramDependencySession):
                 self.owner._cache_bytes -= size
         self._bases.clear()
         self._implementation_graphs.clear()
+        self._evidence_artifacts.clear()
         self.closed = True
         if failure is not None:
             raise failure
