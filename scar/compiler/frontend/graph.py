@@ -370,10 +370,11 @@ def _lower_function(function):
     return graph, anchors, sorted(exception_blocks)
 
 
-def write_graph(functions, out, entry='main'):
+def _write_graph(functions, out, entry):
     regions, operations, values, locations, anchors, frontiers = [], [], [], [], [], []
     excluded_control = []
     root = None
+    model = None
     for function in functions:
         try:
             graph, mapping, exception_blocks = _lower_function(function)
@@ -395,10 +396,9 @@ def write_graph(functions, out, entry='main'):
         anchors.extend(mapping)
     if root is not None:
         regions = [region if region.id == root else replace(region, parent=root) for region in regions]
-        graph = ProgramGraph(root, tuple(regions), tuple(operations), tuple(values), tuple(locations))
-        require_valid(graph)
-        out.write_text(dumps(graph))
-    return dict(entry=None if root is None else root.wire,
+        model = ProgramGraph(root, tuple(regions), tuple(operations), tuple(values), tuple(locations))
+        out.write_text(dumps(model))
+    return model, dict(entry=None if root is None else root.wire,
                 regions=len(regions), operations=len(operations), values=len(values),
                 locations=len(locations), anchors=anchors, frontiers=frontiers,
                 excluded_control=excluded_control)
@@ -917,7 +917,7 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
     captured = capture_target(inputs, directory / 'frontend', jobs, adapters=adapters)
     verify_source_lock(manifest)
     program_path = directory / 'program.json'
-    report = write_graph(captured.functions, program_path, entry=manifest['entry'])
+    model, report = _write_graph(captured.functions, program_path, manifest['entry'])
     program = (file_reference(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None)
     target = file_reference(hardware / 'result.json', 'scar.target-hardware-graph')
     baseline = (manifest.get('baseline') or {}).get('argv') or [None]
@@ -941,7 +941,7 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
     return GraphBundle(request, None if program is None else ProviderArtifact(**program),
                        ProviderArtifact(**target),
                        ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
-                       ProviderArtifact(**call_receipt), report)
+                       ProviderArtifact(**call_receipt), report, native_model=model)
 
 
 def check_main(argv=None):

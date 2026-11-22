@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from scar.analysis.replay_transaction import pinned_file_reference
 from scar.artifacts import file_reference
 from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dynamic
 from scar.codegen.native_project import (
@@ -63,7 +64,7 @@ def bind_cpp20_toolchain(stack=None, *, route: str = 'CPU') -> Cpp20Toolchain:
     if stack is not None:
         reference, document = load_operator_stack(stack)
         build = nvidia_stack_build(document, route)
-        compiler = file_reference(build.pop('compiler')[0], 'scar.cpp20-compiler')
+        compiler = pinned_file_reference(build.pop('compiler')[0], 'scar.cpp20-compiler')
         inputs = {key: tuple(map(str, values)) for key, values in build.items()}
         return Cpp20Toolchain(compiler, reference, route, inputs, document)
     if route != 'CPU':
@@ -71,7 +72,7 @@ def bind_cpp20_toolchain(stack=None, *, route: str = 'CPU') -> Cpp20Toolchain:
     path = shutil.which('g++')
     if path is None:
         raise ValueError('g++ is required for the default CPU toolchain')
-    compiler = file_reference(Path(path).resolve(strict=True), 'scar.cpp20-compiler')
+    compiler = pinned_file_reference(Path(path).resolve(strict=True), 'scar.cpp20-compiler')
     return Cpp20Toolchain(compiler, None, route, {})
 
 
@@ -163,7 +164,7 @@ def _verify_linkage(executable, toolchain, dependencies=None):
 
 def build_cpp20_project(project, inputs, *, plan, toolchain=None):
     """Build source-adapter output with one target language and verify its ABI."""
-    configuration = replay_cpp20_inputs(project, inputs, plan=plan)
+    configuration = replay_cpp20_inputs(project, inputs, plan=plan)['configuration']
     toolchain = toolchain or bind_cpp20_toolchain()
     _verify_toolchain_inputs(toolchain, configuration)
     _verify_compiler(toolchain)
@@ -185,7 +186,7 @@ def _realize_entry(project, manifest, edits, compiler_types, *, plan, toolchain)
 
 def _verify_compiler(toolchain):
     compiler = toolchain.compiler
-    if file_reference(compiler['uri'], compiler['schema']) != compiler:
+    if pinned_file_reference(compiler['uri'], compiler['schema']) != compiler:
         raise ValueError('selected C++20 compiler changed during delivery')
 
 
@@ -207,7 +208,7 @@ def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *
         toolchain = _entry_toolchain(manifest)
         executable, inputs, _ = _realize_entry(directory / 'project', manifest, edits, compiler_types,
                                               plan=plan, toolchain=toolchain)
-    binary = file_reference(executable, 'scar.cpp20-executable')
+    binary = pinned_file_reference(executable, 'scar.cpp20-executable')
     variant = publish_plan(directory / 'result.json', dict(
         schema='scar.native-compiled-variant', schema_version=1, plan=plan, inputs=inputs, binary=binary,
         toolchain=toolchain.receipt(),
@@ -229,9 +230,10 @@ def promote_cpp20_variant(project, artifacts, delivery, *, toolchain):
     staged = Path(reference['uri']).parent / 'project'
     original = staged / _ENTRY_BINARY
     binary = variant['binary']
-    if file_reference(original, 'scar.cpp20-executable') != binary:
+    if pinned_file_reference(original, 'scar.cpp20-executable') != binary:
         raise ValueError('selected executable differs from the calibrated binary')
-    build = replay_cpp20_inputs(staged, variant['inputs'], plan=variant['plan'])
+    before = replay_cpp20_inputs(staged, variant['inputs'], plan=variant['plan'])
+    build = before['configuration']
     _verify_toolchain_inputs(toolchain, build)
     project.mkdir()
     for name in ('src', 'include', 'validation'):
@@ -247,12 +249,11 @@ def promote_cpp20_variant(project, artifacts, delivery, *, toolchain):
     executable.parent.mkdir()
     shutil.copy2(original, executable)
     inputs = publish_cpp20_inputs(project, build, plan=delivery['plan'])
-    before = read_artifact(variant['inputs'])
     after = read_artifact(inputs)
     if ({name: dict(row, uri=str(project / name)) for name, row in before['files'].items()} != after['files']
             or before['libraries'] != after['libraries']):
         raise ValueError('delivered project inputs differ from the calibrated variant')
-    delivered = file_reference(executable, binary['schema'])
+    delivered = pinned_file_reference(executable, binary['schema'])
     if delivered != dict(binary, uri=str(executable)):
         raise ValueError('published executable differs from the calibrated binary')
     _verify_compiler(toolchain)

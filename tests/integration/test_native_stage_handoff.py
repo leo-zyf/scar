@@ -283,6 +283,14 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_
                 stream.write(b"\n")
             replay_native_revision(revision)
 
+    unrelated = read_artifact(original)
+    unrelated["rules"].append(dict(operation="counterfeit", result="invented", forwarded="invented",
+                                   rule="SSA_COPY_PROPAGATION"))
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps(unrelated))
+    with pytest.raises(ValueError, match="original SSA copy proof"):
+        replay_native_revision(dict(frozen.artifacts, rewrites=file_reference(forged, original["schema"])))
+
 
 def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_request, native_plan, cpp20_delivery):
     _, _, request = native_request

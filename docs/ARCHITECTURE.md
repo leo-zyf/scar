@@ -32,7 +32,7 @@ Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。同一单�
 | 资源与成本 | 把可实施选项、成本证据、核组、内存和时序约束表达成规划问题 | 图、改写清单、硬件引用和锁定用例 | `cost-observation.json` 与 `planning-problem.json` 中的 `PlanningProblem` |
 | 选型和重放 | 以完工时间为目标选择合法的排程，并校验依赖和资源占用 | `PlanningProblem` | `plan.json` 中的执行计划以及验证结果 |
 
-`compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。`copy_source_edits` 把获准的 SSA 拷贝消除绑定到类型、名称和源码区间。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
+`compiler/middle/plan.py` 在同一次编译中直接消费前端的类型化图，派生一次 SSA 拷贝传播和源区间改写。独立进程从原图重算规则和简化图摘要，核对封存工件。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
 
 Python 的直接循环、跨函数组合循环和单数组递推由 `compiler/middle/python.py` 调度。中端根据循环证明和硬件快照发布 `schedule.json`，再发布锁定证明、特化和资源绑定的 `cpp20-lowering.json`。融合策略重放同时返回已验证的执行体，供后端直接使用。后端通过 `deliver` 消费类型化计划。一次编译中的源码准入与循环降级共用已打开的图会话。独立进程仍从原始证明和资源记录重放。
 
@@ -40,7 +40,7 @@ Python 的直接循环、跨函数组合循环和单数组递推由 `compiler/mi
 
 原生 `compiler-plan.json` 锁定规划问题、计划和各项证据。`scar compile --plan` 在独立进程重放交付并核对锁定用例。发布 wheel 时先生成源码分发包，再从该分发包构建，以便打包输入与当前源码版本一致。
 
-分阶段运行时，`scar build --manifest` 发布结果及 `graph-report.json` 的双向引用。`scar plan --graph` 核对各工件角色、重新确认源锁并使用已有图，发布改写、硬件成本和封存计划。`scar compile --plan` 消费该计划，重新验证排程、生成工程并比对锁定输入的结果。同一目标用 `scar compile --manifest` 可串接三阶段。
+分阶段运行时，`scar build --manifest` 发布结果及 `graph-report.json` 的双向引用。`scar plan --graph` 核对各工件角色、重新确认源锁并使用已有图，发布改写、硬件成本和封存计划。`scar compile --plan` 消费该计划，重新验证排程、生成工程并比对锁定输入的结果。同一目标用 `scar compile --manifest` 可串接三阶段。C++20 构建前后检查同一组源码和链接输入的身份，事务提交时复验内容。
 
 ## 3. 后端
 

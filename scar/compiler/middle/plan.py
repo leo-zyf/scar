@@ -57,15 +57,26 @@ def rewrite_native(graph: GraphBundle, out):
     artifacts = graph.references()
     manifest = _native_input(artifacts['request'])
     verify_source_lock(manifest)
-    rules = simplify_copies(graph.program, graph.report['anchors'], path)
+    original = graph.native_model
+    if original is None:
+        original = _read_program(artifacts['program'])
+    simplified_graph, rules = _copy_revision(original, graph.report['anchors'])
     edits = copy_source_edits(manifest, graph.report, rules)
-    simplified = file_reference(path, PROGRAM_SCHEMA) if rules else artifacts['program']
+    simplified = artifacts['program']
+    if rules:
+        path.write_text(dumps(simplified_graph))
+        simplified = file_reference(path, PROGRAM_SCHEMA)
     ledger = publish_plan(out / 'rewrites.json', dict(
         schema='scar.native-rewrites', schema_version=1, rules=rules, source_edits=edits,
         program=artifacts['program'], result=simplified,
     ))
     revision = NativeRevision(graph.report['entry'], dict(artifacts, simplified=simplified, rewrites=ledger),
                               tuple(rules), tuple(edits))
+    from scar.analysis.replay_transaction import current_transaction
+
+    if (transaction := current_transaction()) is not None:
+        _retain_native_revision(transaction, revision.artifacts, lambda: _revision_inputs(
+            revision.artifacts, manifest, graph.report, edits))
     return revision, manifest
 
 
@@ -169,12 +180,15 @@ def entry_cpus(hardware):
     return available
 
 
-def simplify_copies(program: ProviderArtifact, anchors, out):
-    """Publish the validated copy revision when the program graph changes."""
-    payload = Path(program.uri).read_bytes()
-    if len(payload) != program.size_bytes or sha256(payload).hexdigest() != program.sha256:
+def _read_program(reference):
+    payload = Path(reference['uri']).read_bytes()
+    if len(payload) != reference['size_bytes'] or sha256(payload).hexdigest() != reference['sha256']:
         raise ValueError('program graph differs from the frontend receipt')
-    graph = loads(payload.decode('utf-8'))
+    return loads(payload.decode('utf-8'))
+
+
+def _copy_revision(graph, anchors):
+    """Derive the canonical revision from validated SSA and original anchors."""
     source = {row['operation']: row['source'] for row in anchors}
     aliases, rewrites, removed = {}, [], set()
     retained = []
@@ -193,12 +207,18 @@ def simplify_copies(program: ProviderArtifact, anchors, out):
         else:
             retained.append(operation)
     if not rewrites:
-        return rewrites
+        return graph, rewrites
+
+    resolved = {}
 
     def resolve(value):
-        while value in aliases:
+        path = []
+        while value in aliases and value not in resolved:
+            path.append(value)
             value = aliases[value]
-        return value
+        root = resolved.get(value, value)
+        resolved.update((item, root) for item in path)
+        return root
 
     regions = []
     for region in graph.regions:
@@ -220,8 +240,7 @@ def simplify_copies(program: ProviderArtifact, anchors, out):
         operations.append(operation)
     simplified = replace(graph, regions=tuple(regions), operations=tuple(operations),
                          values=tuple(value for value in graph.values if value.id not in aliases))
-    out.write_text(dumps(simplified))
-    return rewrites
+    return simplified, rewrites
 
 
 _SIMPLE_COPY = re.compile(
@@ -309,56 +328,72 @@ def copy_source_edits(manifest, evidence, rewrites):
 
 def replay_native_revision(artifacts):
     """Verify the original graph, source lock and exact proposed rewrites."""
-    from scar.analysis.replay_transaction import detached_replay
+    from scar.analysis.replay_transaction import current_transaction, replay_transaction
 
+    if (transaction := current_transaction()) is not None:
+        material = _retain_native_revision(transaction, artifacts, lambda: _read_native_revision(artifacts))
+        verify_source_lock(material[0])
+        return material
+    with replay_transaction():
+        return replay_native_revision(artifacts)
+
+
+def _retain_native_revision(transaction, artifacts, produce):
     identity = tuple((role, tuple(sorted(artifacts[role].items()))) for role in _REVISION_SCHEMAS)
-    material = detached_replay('scar.cpp20-native-revision.v1', identity, lambda: _read_native_revision(artifacts))
-    verify_source_lock(material[0])
-    return material
+
+    def admit():
+        checked = set()
+        for role, schema in _REVISION_SCHEMAS.items():
+            reference = artifacts[role]
+            if reference['schema'] != schema:
+                raise ValueError(f'invalid {role} artifact schema')
+            path = reference['uri']
+            if str(Path(path).absolute()) != path:
+                raise ValueError(f'{role} artifact differs from the plan input')
+            key = path, reference['sha256'], reference['size_bytes']
+            if key not in checked:
+                transaction.watch(*key)
+                checked.add(key)
+        return produce()
+
+    return transaction.memo('scar.cpp20-native-revision.v1', identity, admit)
 
 
-def _read_native_revision(artifacts):
-    for role, schema in _REVISION_SCHEMAS.items():
-        ref = artifacts[role]
-        if ref['schema'] != schema:
-            raise ValueError(f'invalid {role} artifact schema')
-        if role in {'graph_evidence', 'simplified'} and str(Path(ref['uri']).absolute()) != ref['uri']:
-            raise ValueError(f'{role} artifact differs from the plan input')
-    manifest = _native_input(artifacts['request'])
-    rewrite = read_artifact(artifacts['rewrites'])
-    _native_input(artifacts['hardware'])
-    if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
-            or rewrite['result'] != artifacts['simplified']):
-        raise ValueError('rewrite ledger does not bind the admitted input and output graphs')
-    edits = rewrite.get('source_edits', [])
+def _revision_inputs(artifacts, manifest, evidence, edits):
+    if any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
+        raise ValueError('compiler evidence differs from the admitted frontend outputs')
     typed_units = {unit['path'] for unit in manifest['units']
                    if unit.get('language', manifest['language']) in ('c', 'fortran')}
-    inspect_evidence = bool(edits or typed_units)
-    hash_only = ['program', 'calls']
-    if not inspect_evidence:
-        hash_only.append('graph_evidence')
-    if not edits and artifacts['simplified'] != artifacts['program']:
-        hash_only.append('simplified')
-    for role in hash_only:
-        ref = artifacts[role]
-        if file_reference(ref['uri'], ref['schema']) != ref:
-            raise ValueError(f'{role} artifact differs from the plan input')
-    evidence = read_artifact(artifacts['graph_evidence']) if inspect_evidence else None
-    if evidence and any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
-        raise ValueError('compiler evidence differs from the admitted frontend outputs')
-    compiler_types = {row['unit']: row['artifacts']['types'] for row in (evidence or {}).get('units', ())
+    compiler_types = {row['unit']: row['artifacts']['types'] for row in evidence.get('units', ())
                       if row['unit'] in typed_units and 'types' in row['artifacts']}
     if compiler_types.keys() != typed_units:
         raise ValueError('C and Fortran translation require original type evidence for every unit')
-    if edits:
-        if copy_source_edits(manifest, evidence, rewrite['rules']) != edits:
-            raise ValueError('source copy edits differ from frontend and IR evidence')
-        simplified = loads(read_artifact(artifacts['simplified'], json_document=False).decode('utf-8'))
-        remaining = {op.id.wire for op in simplified.operations}
-        regions = {region.id.wire for region in simplified.regions}
-        if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
-            raise ValueError('source edits do not match the simplified IR')
     return manifest, edits, compiler_types
+
+
+def _read_native_revision(artifacts):
+    manifest = _native_input(artifacts['request'])
+    evidence = read_artifact(artifacts['graph_evidence'])
+    rewrite = read_artifact(artifacts['rewrites'])
+    if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
+            or rewrite['result'] != artifacts['simplified']):
+        raise ValueError('rewrite ledger does not bind the admitted input and output graphs')
+
+    expected = artifacts['program']
+    edits = []
+    if rewrite['rules']:
+        original = _read_program(artifacts['program'])
+        simplified, rules = _copy_revision(original, evidence['anchors'])
+        if rules != rewrite['rules']:
+            raise ValueError('rewrite rules differ from the original SSA copy proof')
+        encoded = dumps(simplified).encode('utf-8')
+        expected = dict(sha256=sha256(encoded).hexdigest(), size_bytes=len(encoded))
+        edits = copy_source_edits(manifest, evidence, rules)
+    if any(artifacts['simplified'][key] != expected[key] for key in ('sha256', 'size_bytes')):
+        raise ValueError('simplified graph differs from canonical SSA replay')
+    if edits != rewrite.get('source_edits', []):
+        raise ValueError('source copy edits differ from frontend and IR evidence')
+    return _revision_inputs(artifacts, manifest, evidence, edits)
 
 
 def _trial_output(run):

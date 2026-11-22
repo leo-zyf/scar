@@ -11,7 +11,8 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.artifacts import _durable_bytes, file_reference
+from scar.analysis.replay_transaction import pinned_file_reference
+from scar.artifacts import _durable_bytes
 from scar.codegen.native_provider_bundle import _content, _dependencies
 from scar.ir.execution_recipe import open_artifact, read_artifact
 
@@ -76,13 +77,13 @@ def _project_material(root, configuration):
             if path.is_symlink():
                 raise ValueError(f'staged C++20 inputs require original file bytes: {path}')
             if path.is_file():
-                files[path.relative_to(root).as_posix()] = file_reference(path, 'scar.cpp20-project-file')
+                files[path.relative_to(root).as_posix()] = pinned_file_reference(path, 'scar.cpp20-project-file')
     sources = configuration['sources']
     if (not sources or len(set(sources)) != len(sources)
             or any(name not in files or Path(name).suffix not in _CXX_SUFFIXES for name in sources)):
         raise ValueError('the backend requires unique staged C++ translation units')
     libraries = {
-        name: file_reference(name, 'scar.cpp20-link-input')
+        name: pinned_file_reference(name, 'scar.cpp20-link-input')
         for name in configuration.get('libraries', ()) if Path(name).is_absolute()
     }
     return files, libraries
@@ -96,7 +97,7 @@ def publish_cpp20_inputs(root, configuration, *, plan):
                     plan=plan, configuration=configuration, files=files, libraries=libraries)
     path = root / 'cpp20-inputs.json'
     _durable_bytes(path, (json.dumps(document, indent=2, sort_keys=True) + '\n').encode(), replace=False)
-    return file_reference(path, CPP20_INPUTS)
+    return pinned_file_reference(path, CPP20_INPUTS)
 
 
 def replay_cpp20_inputs(root, reference, *, plan):
@@ -106,11 +107,12 @@ def replay_cpp20_inputs(root, reference, *, plan):
     inputs = read_artifact(reference)
     if (inputs['schema_version'], inputs['cxx_standard'], inputs['plan']) != (1, 20, plan):
         raise ValueError('staged code, language standard or selected plan differs')
-    read_artifact(plan, json_document=False)
+    if pinned_file_reference(plan['uri'], plan['schema']) != plan:
+        raise ValueError('selected plan differs from the C++20 input receipt')
     files, libraries = _project_material(root, inputs['configuration'])
     if files != inputs['files'] or libraries != inputs['libraries']:
         raise ValueError('staged C++20 source or link input differs from its receipt')
-    return inputs['configuration']
+    return inputs
 
 
 def _cmake_arg(value):

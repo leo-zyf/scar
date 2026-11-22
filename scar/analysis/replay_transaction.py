@@ -382,6 +382,18 @@ def detached_replay(namespace, key, factory):
     return owner.memo(namespace, (context, key), factory, capture_reads=True, observe_directories=True)
 
 
+def pinned_file_reference(path, schema):
+    """Use one file identity for immutable inputs in the current transaction."""
+    transaction = current_transaction()
+    if transaction is None:
+        from scar.artifacts import file_reference
+
+        return file_reference(path, schema)
+    path = Path(path).absolute()
+    digest, size = transaction.pin_file(path)
+    return dict(uri=str(path), schema=schema, size_bytes=size, sha256=digest)
+
+
 @contextmanager
 def replay_transaction(*, max_entries=32):
     """Own a fresh cold scope; no memo entries survive successful or failed exit."""
@@ -395,4 +407,5 @@ def replay_transaction(*, max_entries=32):
         _ACTIVE.reset(token)
 
 
-__all__ = ['ReplayTransaction', 'current_transaction', 'detached_replay', 'replay_transaction']
+__all__ = ['ReplayTransaction', 'current_transaction', 'detached_replay',
+           'pinned_file_reference', 'replay_transaction']

@@ -1,14 +1,20 @@
 """Products exchanged between analysis, planning and C++20 delivery."""
 
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
 import shutil
+from typing import TYPE_CHECKING
 
 from scar.artifacts import file_reference
 from scar.ir.execution_recipe import open_artifact, read_artifact
 from scar.ir.program.providers import ProviderArtifact
+
+if TYPE_CHECKING:
+    from scar.ir.program.model import ProgramGraph
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +124,7 @@ class GraphBundle:
     calls: ProviderArtifact | None
     report: dict
     declarations: ProviderArtifact | None = None
+    native_model: ProgramGraph | None = None
 
     @classmethod
     def read_native(cls, directory: Path) -> 'GraphBundle':
