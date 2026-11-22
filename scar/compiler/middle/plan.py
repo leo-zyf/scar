@@ -41,7 +41,7 @@ def rewrite_native(graph: GraphBundle, out):
     manifest = read_artifact(artifacts['request'])
     rules = simplify_copies(graph.program, graph.report['anchors'], path)
     edits = copy_source_edits(manifest, graph.report, rules)
-    simplified = file_reference(path, PROGRAM_SCHEMA)
+    simplified = file_reference(path, PROGRAM_SCHEMA) if rules else artifacts['program']
     ledger = publish_plan(out / 'rewrites.json', dict(
         schema='scar.native-rewrites', schema_version=1, rules=rules, source_edits=edits,
         program=artifacts['program'], result=simplified,
@@ -151,12 +151,13 @@ def entry_cpus(hardware):
 
 
 def simplify_copies(program: ProviderArtifact, anchors, out):
+    """Publish the validated copy revision when the program graph changes."""
     payload = Path(program.uri).read_bytes()
     if len(payload) != program.size_bytes or sha256(payload).hexdigest() != program.sha256:
         raise ValueError('program graph differs from the frontend receipt')
     graph = loads(payload.decode('utf-8'))
     source = {row['operation']: row['source'] for row in anchors}
-    aliases, rewrites = {}, []
+    aliases, rewrites, removed = {}, [], set()
     retained = []
     for operation in graph.operations:
         # GCC's SSA copy is a value forwarding operation. A VUSE/VDEF
@@ -167,24 +168,38 @@ def simplify_copies(program: ProviderArtifact, anchors, out):
             copied = operation.results[0]
             forwarded = operation.uses[0].value
             aliases[copied] = forwarded
+            removed.add(operation.id)
             rewrites.append(dict(operation=operation.id.wire, result=copied.wire,
                                  forwarded=forwarded.wire, rule='SSA_COPY_PROPAGATION'))
         else:
             retained.append(operation)
+    if not rewrites:
+        return rewrites
 
     def resolve(value):
         while value in aliases:
             value = aliases[value]
         return value
 
-    kept = {operation.id for operation in retained}
-    regions = tuple(replace(region, blocks=tuple(
-        replace(block, operations=tuple(op for op in block.operations if op in kept))
-        for block in region.blocks)) for region in graph.regions)
-    operations = tuple(replace(operation, uses=tuple(
-        replace(use, value=resolve(use.value)) for use in operation.uses))
-        for operation in retained)
-    simplified = replace(graph, regions=regions, operations=operations,
+    regions = []
+    for region in graph.regions:
+        blocks = []
+        changed = False
+        for block in region.blocks:
+            if not removed.isdisjoint(block.operations):
+                block = replace(block, operations=tuple(op for op in block.operations if op not in removed))
+                changed = True
+            blocks.append(block)
+        regions.append(replace(region, blocks=tuple(blocks)) if changed else region)
+
+    operations = []
+    for operation in retained:
+        if any(use.value in aliases for use in operation.uses):
+            uses = tuple(replace(use, value=resolve(use.value)) if use.value in aliases else use
+                         for use in operation.uses)
+            operation = replace(operation, uses=uses)
+        operations.append(operation)
+    simplified = replace(graph, regions=tuple(regions), operations=tuple(operations),
                          values=tuple(value for value in graph.values if value.id not in aliases))
     out.write_text(dumps(simplified))
     return rewrites
@@ -196,6 +211,8 @@ _SIMPLE_COPY = re.compile(
 
 def copy_source_edits(manifest, evidence, rewrites):
     """Join a removed SSA copy to a typed, source-replayable function body."""
+    if not rewrites:
+        return []
     removed = {row['operation'] for row in rewrites}
     anchored = {}
     for row in evidence['anchors']:
