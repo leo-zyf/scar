@@ -10,8 +10,10 @@ from shutil import copy2
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen import scalar_transition_standalone as transition
-from scar.codegen.scalar_table_standalone import _dependencies_for, _FLAGS, _LINK_FLAGS, _local, _ref, _require
+from scar.codegen import scalar_source as scalar
+from scar.codegen.scalar_standalone import (
+    _dependencies_for, _FLAGS, _LINK_FLAGS, _local, _ref, _require, read_transition_plan,
+)
 from scar.ir.execution_recipe import read_artifact
 
 
@@ -31,11 +33,11 @@ _STATUS = dict(native=0, transported=1, declined=2, internal_error=3)
 
 
 def _layout(ports, records):
-    fields = transition._schema(ports)
+    fields = scalar._schema(ports)
     rows = []
     scalars = lengths = strings = 0
     for record in records:
-        _require(record.keys() == fields.keys() and all(transition._valid(record[name], kind)
+        _require(record.keys() == fields.keys() and all(scalar._valid(record[name], kind)
                   for name,kind in fields.items()), 'resident shape requires exact original typed records')
     for name, kind in fields.items():
         if kind == 'str':
@@ -85,7 +87,7 @@ def pack(layout, structure, values):
     for port in layout['ports']:
         kind, slot = port['type'], port['slot']
         value = values[port['name']]
-        _require(transition._valid(value, kind), 'resident value differs from the exact port type')
+        _require(scalar._valid(value, kind), 'resident value differs from the exact port type')
         if kind == 'str':
             size, start = len(value), port['offset']
             _require(size <= port['capacity'], 'resident string length exceeds the compiled capacity')
@@ -106,7 +108,7 @@ def load(path, types):
 
 
 def _computation(plan, scorer):
-    rendered = transition._render(plan, scorer).decode()
+    rendered = scalar.render_transition(plan, scorer).decode()
     boundary = '[[maybe_unused]] void append_field(std::string& output, const std::string& value) {\n'
     _require(rendered.count(boundary) == 1, 'transition lowering has no unique typed return boundary')
     return rendered.split(boundary, 1)[0]
@@ -117,7 +119,7 @@ def _transport(plan, scorer, proof, abi, args):
     if proof is None:
         return '', f'        (void)score;\n        constexpr bool use_score = false;\n        const auto state = {native};'
     lowered = dict(plan, inputs=proof['inputs'], body=proof['body'])
-    variant = transition._TransitionEmitter(lowered, scorer).evaluate(lowered['body']).split('\n\n', 1)[1]
+    variant = scalar.TransitionEmitter(lowered, scorer).evaluate(lowered['body']).split('\n\n', 1)[1]
     variant = variant.replace('State evaluate_transition(', 'State evaluate_transported(', 1)
     guard = ['bool score_matches(const scar_resident_score_v1& token, uint32_t slot, const scar_resident_input_v1& input) {',
              '    if (token.receipt_tag != SCAR_RESIDENT_SCORE_RECEIPT_TAG_V1 || token.table_slot != slot) return false;']
@@ -262,7 +264,7 @@ def _validation(root, abi, samples):
 
 def export(plan_path, out, *, transport_path=None):
     """Build the resident ABI, optionally enabling the explicitly isolated score study."""
-    ref, plan, scorer = transition._plan(plan_path)
+    ref, plan, scorer = read_transition_plan(plan_path)
     transport_ref, proof = _proof(transport_path, ref, plan)
     abi = _abi(plan, transport_ref)
     rendered = _render(plan, scorer, abi, proof)
@@ -307,7 +309,7 @@ def check(path):
     ref = _ref(path, SCHEMA)
     record = read_artifact(ref)
     root = Path(ref['uri']).parent
-    plan_ref, plan, scorer = transition._plan(record['plan']['uri'])
+    plan_ref, plan, scorer = read_transition_plan(record['plan']['uri'])
     transport = record['transport']
     transport_ref, proof = _proof(transport['uri'] if transport else None, plan_ref, plan)
     abi = _abi(plan, transport_ref)

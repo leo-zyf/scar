@@ -9,10 +9,10 @@ from shutil import copy2
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen import scalar_score_standalone as score
-from scar.codegen import scalar_transition_standalone as native
+from scar.codegen import scalar_source as scalar
 from scar.codegen.native_project import build_native_project, write_native_project
-from scar.codegen.scalar_table_standalone import _dependencies_for, _FLAGS, _i64, _integer, _LINK_FLAGS, _local
+from scar.codegen.scalar_source import _i64, _integer
+from scar.codegen.scalar_standalone import _dependencies_for, _FLAGS, _LINK_FLAGS, _local
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization import scalar_sorted_region as region
 
@@ -25,7 +25,7 @@ _MAX_ROWS = 65536
 _require = region._require
 
 
-class _Emitter(native._TransitionEmitter):
+class _Emitter(scalar.TransitionEmitter):
     def __init__(self, plan, scorer):
         super().__init__({**plan, 'outputs': plan['inputs']}, scorer)
 
@@ -34,11 +34,11 @@ class _Emitter(native._TransitionEmitter):
         if op == 'or':
             args = [self.expression(operand, local) for operand in node['args']]
             _require(len(args) >= 2 and all(kind == 'bool' for kind, _ in args), 'invalid short-circuit disjunction')
-            return score._types(node, 'bool'), '(' + ' || '.join(text for _, text in args) + ')'
+            return scalar._types(node, 'bool'), '(' + ' || '.join(text for _, text in args) + ')'
         if op == 'gt':
             args = [self.expression(operand, local) for operand in node['args']]
             _require([kind for kind, _ in args] == ['int', 'int'], 'invalid integer comparison')
-            return score._types(node, 'bool'), score._ordered(*(text for _, text in args), 'a > b')
+            return scalar._types(node, 'bool'), scalar._ordered(*(text for _, text in args), 'a > b')
         if op == 'contains_int':
             args = [self.expression(operand, local) for operand in node['args']]
             _require(len(args) > 1 and all(kind == 'int' for kind, _ in args), 'invalid integer membership')
@@ -46,7 +46,7 @@ class _Emitter(native._TransitionEmitter):
             choices = f'const std::array<Integer, {len(rows)}> choices{{{", ".join(rows)}}};'
             code = (f'([&] {{ const auto sought = {item}; {choices} '
                     'return std::ranges::find(choices, sought) != choices.end(); }())')
-            return score._types(node, 'bool'), code
+            return scalar._types(node, 'bool'), code
         return super().expression(node, local)
 
     def loop(self, row, local, depth):
@@ -123,7 +123,7 @@ class _Emitter(native._TransitionEmitter):
                 row_name = f'{word}_{k}'
                 values = ', '.join(_integer(value) for value in row)
                 constants.append(f'constexpr std::array<Integer, {len(row)}> {row_name}{{{values}}};')
-                references.append(f'Row{{{score._literal(key)}, {row_name}}}')
+                references.append(f'Row{{{scalar._literal(key)}, {row_name}}}')
             constants.append(f'constexpr std::array<Row, {len(references)}> {word}{{{", ".join(references)}}};')
         scorer_actuals = []
         for operand in scorer['inputs']:
@@ -146,7 +146,7 @@ class _Emitter(native._TransitionEmitter):
             FORMALS=', '.join(formals),
             DESCENDING='std::greater<>{}' if plan['descending'] else 'std::less<>{}',
             ARGC=str(len(formals) + 4),
-            ACTUALS=', '.join(f'{native._PARSERS[kind]}(argv[{i}])'
+            ACTUALS=', '.join(f'{scalar._PARSERS[kind]}(argv[{i}])'
                               for i, (kind, _) in enumerate(self.inputs.values(), 4)),
             MAX_ROWS=str(_MAX_ROWS),
         )
@@ -154,14 +154,11 @@ class _Emitter(native._TransitionEmitter):
 
 
 def _render(plan, table_plan, scorer):
-    shared, _ = score._TEMPLATE.read_text().split('@SCAR_EVALUATOR@', 1)
-    shared = shared.replace('@SCAR_TABLE_DEFINITION@', score._render_tables(table_plan['table_versions']))
-    scored = score._Emitter(scorer['inputs']).evaluate(scorer['body']).replace(
+    shared = scalar.score_prelude(table_plan['table_versions'])
+    scored = scalar.ScoreEmitter(scorer['inputs']).evaluate(scorer['body']).replace(
         'Integer evaluate(', 'Integer evaluate_score(', 1)
     chunks = _Emitter(plan, scorer).render(plan, scorer)
-    transition_text = native._TEMPLATE.read_text()
-    transition_runtime = transition_text.split('@SCAR_SHARED_RUNTIME@', 1)[1].split('@SCAR_SCORE@', 1)[0]
-    fields = dict(chunks, SHARED=shared + transition_runtime, SCORER=scored)
+    fields = dict(chunks, SHARED=shared + scalar.transition_support(), SCORER=scored)
     generated = _TEMPLATE.read_text()
     for name, value in fields.items():
         generated = generated.replace('@SCAR_' + name + '@', value)
@@ -184,7 +181,7 @@ def _cases(plan, table_plan, capture):
         argv = [version, str(row['threshold']), str(row['nonzero_capture'])]
         for field in plan['inputs']:
             value = flat[field['name']]
-            _require(native._valid(value, field['type']), 'invalid region input port')
+            _require(scalar._valid(value, field['type']), 'invalid region input port')
             argv.append(str(int(value)) if type(value) is bool else str(value))
         data = bytearray(b'SCAR_SORTED_V1\n')
         _require(len(row['records']) <= _MAX_ROWS, 'captured output exceeds the bounded region')
@@ -192,7 +189,7 @@ def _cases(plan, table_plan, capture):
             types = ['int', *plan['record_types']]
             _require(len(types) == len(record), 'captured score record differs from its ABI')
             for value, kind in zip(record, types, strict=True):
-                _require(native._valid(value, kind), 'invalid score record value')
+                _require(scalar._valid(value, kind), 'invalid score record value')
                 if kind == 'int':
                     data.extend(f'i:{value}\n'.encode())
                 else:

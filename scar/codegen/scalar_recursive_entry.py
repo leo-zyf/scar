@@ -379,7 +379,7 @@ def _materials(entry_plan, driver_library):
 
 
 def _elf(path):
-    from scar.codegen.scalar_table_standalone import _dependencies_for
+    from scar.codegen.scalar_standalone import _dependencies_for
 
     return _dependencies_for(path)
 

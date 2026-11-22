@@ -18,8 +18,8 @@ from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dy
 from scar.codegen import scalar_recursive_lowering as core
 from scar.codegen import scalar_recursive_standalone as kernel
 from scar.codegen import scalar_sorted_library as sorted_library
-from scar.codegen.scalar_score_standalone import _literal
-from scar.codegen.scalar_table_standalone import _FLAGS, _HOST, _LINK_FLAGS, _local, _ref, _require
+from scar.codegen.scalar_source import _literal
+from scar.codegen.scalar_standalone import _FLAGS, _HOST, _LINK_FLAGS, _local, _ref, _require
 from scar.ir.execution_recipe import read_artifact
 from scar.trace.code_snapshot import describe_code
 

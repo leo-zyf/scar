@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from scar.analysis.scalar_recursive_region import SCHEMA as REGION
 from scar.codegen import scalar_recursive_leaves, scalar_recursive_lowering, scalar_sorted_transition_library
 from scar.codegen.native_project import build_native_project, write_native_project
-from scar.codegen.scalar_table_standalone import _FLAGS, _LINK_FLAGS, _dependencies_for, _local, _require
+from scar.codegen.scalar_standalone import _FLAGS, _LINK_FLAGS, _dependencies_for, _local, _require
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization import scalar_transition_ir as transition
 

@@ -4,7 +4,7 @@ import ast
 
 from scar.analysis.scalar_score_reuse_evidence import _compile
 from scar.codegen import scalar_sorted_standalone as native_generator
-from scar.codegen.scalar_transition_standalone import _TransitionEmitter
+from scar.codegen.scalar_source import TransitionEmitter
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization import scalar_sorted_region as generator
@@ -69,7 +69,7 @@ def _rotate(module, code, fields, state_ports, scorer, evidence, capture):
         else:
             leaves.append(value)
     ports = [*state_ports, {'name': flag, 'type': 'bool'}]
-    emitter = _TransitionEmitter(dict(inputs=ports, outputs=state_ports), scorer)
+    emitter = TransitionEmitter(dict(inputs=ports, outputs=state_ports), scorer)
     lowering = emitter.evaluate([*materialized, dict(op='return', values=leaves)]).split('\n', 3)[3]
     setup = _bindings({name: slot for name, slot in emitter.inputs.items() if name != flag}, state_ports)
     setup.append(f'    const bool {emitter.inputs[flag][1]} = mode;')

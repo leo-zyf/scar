@@ -9,8 +9,8 @@ from scar.codegen.scalar_recursive_source_pv import (
     _UI, _Scalar, _assign, _body, _const, _equal, _formals, _method, _name, _named,
     _read_globals, _returned, _tuple,
 )
-from scar.codegen.scalar_score_standalone import _literal
-from scar.codegen.scalar_table_standalone import _ref, _require
+from scar.codegen.scalar_source import _literal
+from scar.codegen.scalar_standalone import _ref, _require
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact
 from scar.trace.code_snapshot import describe_code

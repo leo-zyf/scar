@@ -5,8 +5,8 @@ from pathlib import Path
 
 from scar.analysis.scalar_score_reuse_evidence import _compile, _one, _span
 from scar.codegen.scalar_recursive_driver import SCHEMA as NATIVE
-from scar.codegen.scalar_score_standalone import _literal
-from scar.codegen.scalar_table_standalone import _ref, _require
+from scar.codegen.scalar_source import _literal
+from scar.codegen.scalar_standalone import _ref, _require
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact
 from scar.trace.code_snapshot import describe_code

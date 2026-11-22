@@ -5,8 +5,7 @@ from dataclasses import dataclass
 import operator
 
 from scar.analysis import scalar_score_reuse_evidence as source
-from scar.codegen.scalar_score_standalone import _literal
-from scar.codegen.scalar_table_standalone import _integer
+from scar.codegen.scalar_source import _integer, _literal
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.scalar_score_ir import _int64, _require

@@ -17,7 +17,7 @@ from scar.analysis.replay_transaction import replay_transaction
 from scar.codegen import native_ordered_profile as fixed, native_ordered_sparse_export as ordered
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_sparse_source import render_source_scale
-from scar.codegen.scalar_table_standalone import _dependencies_for
+from scar.codegen.scalar_standalone import _dependencies_for
 from scar.codegen.sparse_native_export import check_sparse_export
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256

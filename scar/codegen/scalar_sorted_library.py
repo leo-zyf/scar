@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 from scar.codegen import scalar_sorted_standalone as standalone
 from scar.codegen import scalar_transition_resident as resident
-from scar.codegen.scalar_table_standalone import _dependencies_for, _FLAGS, _LINK_FLAGS, _local, _ref, _require
+from scar.codegen.scalar_standalone import _dependencies_for, _FLAGS, _LINK_FLAGS, _local, _ref, _require
 from scar.ir.execution_recipe import read_artifact
 
 
