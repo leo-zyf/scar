@@ -3,17 +3,29 @@
 This is a metadata decision.  Source admission belongs to the parent producer;
 native construction, live guards and deployment remain separate obligations.
 """
+from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import shlex
+import shutil
+from typing import TYPE_CHECKING
 
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.scope_accounting import _digest, plan_deployment, verify_deployment_plan
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
+if TYPE_CHECKING:
+    from scar.compiler.pipeline_frontend import PipelinePlan
+    from scar.ir.v2.optimization import OptimizationGraph, PlanAlternative
+
 
 SCHEMA = 'scar.macro-pass-report'
+BLUEPRINT_SCHEMA = 'scar.pipeline-fusion-blueprint'
 COST_SCOPE = 'PROTECTED_SOURCE_REGION_CALL_ENTRY_TO_RETURN_WARM'
 
 
@@ -35,6 +47,16 @@ class AnalysisFact:
     evidence: tuple[dict, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _AdmittedFusion:
+    region: dict
+    blueprint: dict
+    pipeline: PipelinePlan
+    graph: OptimizationGraph
+    alternative: PlanAlternative | None
+    legal: bool
+
+
 FUSION_PASS = PassSpec('pipeline-full-fusion', 1,
     ('original_source', 'call_membership', 'public_ports', 'conditional_effect_Q',
      'fusion_legal', 'shape', 'final_budget', 'lowering_capability'),
@@ -44,7 +66,7 @@ FUSION_PASS = PassSpec('pipeline-full-fusion', 1,
      'prior_lowering_and_native_identity'))
 
 _ENTRY_SOURCES = (
-    'compiler/pipeline_runtime.py', 'compiler/pipeline_runtime.py',
+    'compiler/pipeline_runtime.py',
     'codegen/fused_pipeline.py', 'codegen/cpp.py', 'codegen/kernel_v1.cpp.in',
     'codegen/scar_abi_v1.h', 'trace/code_snapshot.py', 'runtime/array_copy_guard.py',
 )
@@ -71,24 +93,145 @@ def _sources(names):
             for name in names}
 
 
+def _source_receipt(path):
+    path = Path(path).resolve()
+    return dict(path=str(path), sha256=sha256(path.read_bytes()).hexdigest())
+
+
+def _target_domain(target, available_cpu_ids):
+    from scar.ir.execution_recipe import read_artifact
+    from scar.ir.program import target_hardware as H
+    from scar.ir.record_codec import encode
+    from scar.optimization.hardware import _target_materials
+    if isinstance(target, dict):
+        _need(target.get('schema') == 'scar.target-hardware-graph',
+            'retained target hardware graph reference required')
+        read_artifact(target)
+        target = Path(target['uri']).parent
+    elif hasattr(target, 'uri'):
+        return _target_domain(encode(target), available_cpu_ids)
+    elif not hasattr(target, 'path'):
+        target = Path(target).resolve()
+        if target.is_file():
+            target = target.parent
+    graph, reference, resources, _ = _target_materials(target)
+    _need(type(available_cpu_ids) in (tuple, list) and bool(available_cpu_ids),
+        'explicit nonempty cost-applicable CPU domain required')
+    cpus = list(available_cpu_ids)
+    _need(all(type(cpu) is int and cpu >= 0 for cpu in cpus)
+        and len(set(cpus)) == len(cpus), 'distinct nonnegative CPU IDs required')
+    threads = {row.cpu_id:row for row in resources if type(row) is H.HardwareThread}
+    _need(all(cpu in threads and threads[cpu].online is not False for cpu in cpus),
+        'cost-applicable CPU absent or offline in retained target inventory')
+    return encode(reference), _document(graph.report['inventory']), sorted(cpus)
+
+
+def _backend(plan):
+    from scar.codegen import cpp, fused_pipeline
+    command = shlex.split(os.environ.get('CXX', 'g++'))
+    executable = shutil.which(command[0]) if command else None
+    _need(executable is not None, 'original C++ compiler unavailable')
+    source = cpp._source(plan, cpp._supported(plan)).encode()
+    header = Path(cpp.__file__).with_name('scar_abi_v1.h').read_bytes()
+    runtime = _source_receipt(Path(__file__).resolve().parents[1] / 'compiler/pipeline_runtime.py')
+    return dict(family='EXISTING_CPP_ABI1_FULL_PIPELINE_FUSION',
+        implementation_sha256=fused_pipeline.fused_implementation_sha256(),
+        operator_runtime_implementation_sha256=cpp.runtime_implementation_sha256(),
+        caller_guard_source=runtime, delivery_adapter_source=runtime,
+        blueprint_producer_source=_source_receipt(__file__),
+        compiler=dict(command=command, executable=str(Path(executable).resolve()),
+            executable_sha256=sha256(Path(executable).read_bytes()).hexdigest(),
+            options=list(cpp.COMPILER_OPTIONS), link_libraries=['m']),
+        generated_source_sha256=sha256(source).hexdigest(),
+        abi_header_sha256=sha256(header).hexdigest())
+
+
+def derive_fusion_blueprint(pipeline, memory, target, *, available_cpu_ids, source_refs=()):
+    """Reconstruct one conditional unbound fusion; do not compile or load it."""
+    from scar.compiler.model import document as plan_document
+    from scar.compiler.pipeline_frontend import document, pipeline_digest, validate_pipeline
+    from scar.ir.record_codec import encode
+    from scar.optimization.pipeline_memory import verify_pipeline_memory
+    from scar.optimization.pipeline_strategy import plan_pipeline_strategy, fused_execution_plan
+    pipeline = validate_pipeline(pipeline)
+    memory = verify_pipeline_memory(pipeline, memory)
+    _need(type(source_refs) in (tuple, list)
+        and all(type(row) is dict and row for row in source_refs),
+        'original source reference records required')
+    target_ref, inventory, cpus = _target_domain(target, available_cpu_ids)
+    strategy = plan_pipeline_strategy(pipeline, input_shapes=memory['input_shapes'],
+        memory_budget_bytes=memory['memory_budget_bytes'])
+    _need(strategy['selected_strategy'] == 'FULL_FUSION'
+        and strategy['fusion_frontier'] == [], 'complete supported fusion strategy required')
+    plan = fused_execution_plan(pipeline, strategy)
+    _need(plan.resource_binding is None and plan.cpu_threads == 1,
+        'fusion delivery must inherit the caller CPU without workers or pinning')
+    selected_memory = strategy['selected_memory_plan']
+    backend = _backend(plan)
+    return _document(dict(schema=BLUEPRINT_SCHEMA, schema_version=1,
+        pipeline=document(pipeline), pipeline_sha256=pipeline_digest(pipeline),
+        source=asdict(pipeline.source), source_refs=encode(source_refs),
+        original_memory_plan=memory, original_memory_plan_sha256=_digest(memory),
+        target=target_ref, target_inventory=inventory, available_cpu_ids=cpus,
+        strategy=strategy, strategy_sha256=_digest(strategy),
+        optimized_plan=plan_document(plan), optimized_plan_sha256=_digest(plan_document(plan)),
+        selected_memory_plan=selected_memory, memory_plan_sha256=_digest(selected_memory),
+        input_shapes=selected_memory['input_shapes'], backend=backend,
+        execution=dict(cpu_policy='INHERIT_CALLER_CPU', cpu_threads=1, resource_binding=None,
+            required_cpu_ids=[], allowed_cpu_ids=cpus, creates_workers=False,
+            cpu_domain_is_exclusive_reservation=False,
+            affinity_guard='EXACT_CALLER_AFFINITY_EQUALS_COST_APPLICABILITY_DOMAIN'),
+        qualification=dict(native_lowering_applicable=True,
+            semantic_scope='NORMAL_COMPLETION_UNDER_ORIGINAL_GUARDED_ARRAY_CONTRACT',
+            memory_budget_scope=selected_memory['budget_scope'],
+            native_payload_scope='INCREMENTAL_PAYLOAD_FRESH_FINAL_ONLY',
+            budget_excludes=selected_memory['budget_excludes'],
+            total_workspace_bytes=0, final_bytes=selected_memory['final_bytes'],
+            original_contract=dict(pipeline_assumptions=list(pipeline.assumptions),
+                leaf_assumptions={call.id:list(call.plan.region.assumptions) for call in pipeline.calls},
+                fused_assumptions=list(plan.region.assumptions),
+                source_fusion_semantics=strategy['fusion_certificate']['semantics'],
+                optimized_proof=plan.proof),
+            runtime_guards_executed=False,
+            source_admission='QUALIFIED_PARENT_SOURCE_PRODUCER_REPLAY_REQUIRED',
+            external_assumptions=['SYNCHRONOUS_CPU_EXECUTION', 'NO_FOREIGN_CONCURRENT_INPUT_WRITERS']),
+        source_replayed_by_parent_required=True, target_program_executed=False,
+        performance_measured=False, runtime_improvement_proven=False,
+        deployment_authorized=False, automatic_caller_installation_supported=False,
+        default_backend='NO_OP'))
+
+
+def verify_fusion_blueprint(pipeline, memory, target, blueprint, *, available_cpu_ids):
+    """Recompute the blueprint without CDLL, native compilation or workload execution."""
+    value = _document(blueprint)
+    _need((value.get('schema'), value.get('schema_version')) == (BLUEPRINT_SCHEMA, 1),
+        'versioned fusion blueprint required')
+    expected = derive_fusion_blueprint(pipeline, memory, target,
+        available_cpu_ids=available_cpu_ids, source_refs=value['source_refs'])
+    _need(value == expected, 'fusion blueprint differs from complete original lowering replay')
+    return expected
+
+
+def replay_fusion_blueprint(pipeline, blueprint):
+    return verify_fusion_blueprint(pipeline, blueprint['original_memory_plan'],
+        blueprint['target'], blueprint, available_cpu_ids=blueprint['execution']['allowed_cpu_ids'])
+
+
 def _admit(region_document, blueprint):
     from scar.analysis.source_pipeline_graph import read_fusion_region
     from scar.compiler.pipeline_frontend import pipeline_from_dict, pipeline_digest
-    from scar.compiler.pipeline_runtime import verify_fusion_blueprint
-    from scar.optimization.pipeline_strategy import verify_pipeline_strategy
 
     region, blueprint = _document(region_document), _document(blueprint)
     graph = read_fusion_region(region)
     pipeline = pipeline_from_dict(blueprint['pipeline'])
-    blueprint = verify_fusion_blueprint(pipeline, blueprint['original_memory_plan'],
-        blueprint['target'], blueprint,
-        available_cpu_ids=blueprint['execution']['allowed_cpu_ids'])
-    strategy = verify_pipeline_strategy(pipeline, region['strategy'])
+    blueprint = replay_fusion_blueprint(pipeline, blueprint)
+    strategy = blueprint['strategy']
+    _need(_digest(region['strategy']) == blueprint['strategy_sha256'],
+        'pipeline strategy differs from complete representation/source/shape replay')
     q = region['qualification']; memory = blueprint['selected_memory_plan']
     _need(q['pipeline_sha256'] == pipeline_digest(pipeline) == blueprint['pipeline_sha256']
         and q['memory_plan_sha256'] == _digest(blueprint['original_memory_plan'])
-        and q['source'] == blueprint['source']
-        and strategy == blueprint['strategy'],
+        and q['source'] == blueprint['source'],
         'region and lowering blueprint differ from the same original pipeline/strategy/pool')
     _need(q['input_shapes'] == memory['input_shapes']
         and q['output_shape'] == memory['output_shape']
@@ -123,7 +266,7 @@ def _admit(region_document, blueprint):
         and strategy['selected_strategy'] == 'FULL_FUSION'
         and not strategy['fusion_frontier']
         and memory['final_bytes'] <= q['memory_budget_bytes'])
-    return region, blueprint, graph, fusion, legal
+    return _AdmittedFusion(region, blueprint, pipeline, graph, fusion, legal)
 
 
 def _cost_context(region, blueprint, graph):
@@ -164,18 +307,26 @@ def _cost_context(region, blueprint, graph):
 
 def fusion_pass_cost_context(region_document, blueprint):
     """Exact warm protected-call context, without loading or executing native code."""
-    region, blueprint, graph, _, _ = _admit(region_document, blueprint)
-    return _cost_context(region, blueprint, graph)
+    admitted = _admit(region_document, blueprint)
+    return _cost_context(admitted.region, admitted.blueprint, admitted.graph)
 
 
 def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
                     available_cpu_ids, memory_budget_bytes, minimum_gain=DEFAULT_MINIMUM_GAIN,
                     strict_minimum_gain=True):
     """Replay one fusion's legality and reuse the existing exact deployment gate."""
+    return _run_admitted_fusion_pass(_admit(region_document, blueprint), cost_profile=cost_profile,
+        available_cpu_ids=available_cpu_ids, memory_budget_bytes=memory_budget_bytes,
+        minimum_gain=minimum_gain, strict_minimum_gain=strict_minimum_gain)
+
+
+def _run_admitted_fusion_pass(admitted, *, cost_profile, available_cpu_ids, memory_budget_bytes,
+                              minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     from scar.analysis.source_pipeline_graph import select_fusion_region
 
-    region, blueprint, graph, fusion, legal = _admit(region_document, blueprint)
-    context = _cost_context(region, blueprint, graph)
+    region, blueprint = admitted.region, admitted.blueprint
+    fusion, legal = admitted.alternative, admitted.legal
+    context = _cost_context(region, blueprint, admitted.graph)
     profitability = plan_deployment({} if cost_profile is None else cost_profile,
         context=context, reuse_count=1, available_cpu_ids=available_cpu_ids,
         memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain,
@@ -227,8 +378,8 @@ def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
         native_artifact_built=False, physical_optimality_proven=False)
 
 
-def verify_fusion_pass(report, region_document, blueprint):
-    """Replay the source/model correspondence and original cost evidence exactly."""
+def replay_fusion_pass(report, region_document, blueprint):
+    """Verify the pass and return its admitted material for the consuming stage."""
     report = _document(report)
     _need((report.get('schema'), report.get('schema_version')) == (SCHEMA, 1),
         'versioned single fusion pass report required')
@@ -238,10 +389,17 @@ def verify_fusion_pass(report, region_document, blueprint):
         source['reference'] if source['kind'] == 'FACT_REFERENCE' else plan['profile'])
     request = dict(report['request'])
     request.setdefault('strict_minimum_gain', False)
-    expected = run_fusion_pass(region_document, blueprint, cost_profile=profile, **request)
+    admitted = _admit(region_document, blueprint)
+    expected = _run_admitted_fusion_pass(admitted, cost_profile=profile, **request)
     _need(_digest(expected) == _digest(report), 'fusion pass differs from exact legality/cost/selection replay')
-    return expected
+    return admitted, expected
+
+
+def verify_fusion_pass(report, region_document, blueprint):
+    """Replay the source/model correspondence and original cost evidence exactly."""
+    return replay_fusion_pass(report, region_document, blueprint)[1]
 
 
 __all__ = ['SCHEMA', 'COST_SCOPE', 'PassSpec', 'AnalysisFact', 'FUSION_PASS',
-    'fusion_pass_cost_context', 'run_fusion_pass', 'verify_fusion_pass']
+    'BLUEPRINT_SCHEMA', 'derive_fusion_blueprint', 'verify_fusion_blueprint', 'replay_fusion_blueprint',
+    'fusion_pass_cost_context', 'run_fusion_pass', 'verify_fusion_pass', 'replay_fusion_pass']

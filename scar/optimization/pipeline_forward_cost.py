@@ -11,7 +11,10 @@ from scar.ir.execution_recipe import artifact_reference
 from scar.ir.record_codec import encode
 from scar.optimization.cost_model import evaluate_sourced_affine
 from scar.optimization.scope_accounting import _digest, _fact, _number, _profile
-from scar.optimization.macro_pass import COST_SCOPE, fusion_pass_cost_context
+from scar.optimization.macro_pass import COST_SCOPE, _admit, _cost_context
+from scar.optimization.semantic_region_demand import (
+    SUCCESSOR_SCHEMA, _verify_admitted_pipeline_demand, verify_successor_pipeline_cost_demand,
+)
 
 
 SCHEMA = 'scar.pipeline-forward-cost-prediction'
@@ -42,18 +45,15 @@ def _document(value):
 
 
 def _materials(region_document, blueprint, demand):
-    from scar.compiler.pipeline_frontend import pipeline_from_dict
-    from scar.optimization.pipeline_demand import (
-        SUCCESSOR_SCHEMA, verify_pipeline_demand, verify_successor_pipeline_cost_demand,
-    )
-
-    region, blueprint, demand = map(_document, (region_document, blueprint, demand))
-    context = fusion_pass_cost_context(region, blueprint)
+    admitted = _admit(region_document, blueprint)
+    region, blueprint = admitted.region, admitted.blueprint
+    context = _cost_context(region, blueprint, admitted.graph)
+    demand = _document(demand)
     if demand.get('schema') == SUCCESSOR_SCHEMA:
         demand = verify_successor_pipeline_cost_demand(region, blueprint, demand)
         _need(context['Q'] == demand['Q'], 'published successor and complete entry cost require the same Q')
     else:
-        demand = verify_pipeline_demand(pipeline_from_dict(blueprint['pipeline']), blueprint, demand)
+        demand = _verify_admitted_pipeline_demand(admitted, demand)
     return region, blueprint, demand, context
 
 
@@ -164,7 +164,7 @@ def predict_pipeline_forward_cost(region_document, blueprint, demand, coefficien
             basis='DECLARED_MODEL') for name, value in estimates.items()}
     root = Path(__file__).resolve().parents[1]
     implementations = {name:artifact_reference(root / name, 'scar.backend-implementation-source')
-        for name in ('optimization/pipeline_forward_cost.py', 'optimization/pipeline_demand.py',
+        for name in ('optimization/pipeline_forward_cost.py', 'optimization/semantic_region_demand.py',
                      'optimization/cost_model.py', 'optimization/scope_accounting.py',
                      'optimization/macro_pass.py')}
     successor = ({'macro_preparation': deepcopy(demand['macro_preparation']),

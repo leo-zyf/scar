@@ -176,9 +176,9 @@ def _pipeline_entry_cost(pass_report, original):
 def project_region_implementation(region_document, blueprint, pass_report, *, logical_analysis=False):
     """Replay the existing pipeline pass/blueprint and project its whole entry."""
     from scar.analysis.source_pipeline_graph import read_fusion_region
-    from scar.optimization.macro_pass import _admit, verify_fusion_pass
-    region, blueprint, _, _, _ = _admit(region_document, blueprint)
-    report = verify_fusion_pass(pass_report, region, blueprint)
+    from scar.optimization.macro_pass import replay_fusion_pass
+    admitted, report = replay_fusion_pass(pass_report, region_document, blueprint)
+    region, blueprint = admitted.region, admitted.blueprint
     graph = read_fusion_region(report['optimization_selection'])
     selection = next(iter(graph.plans.values()))
     original = graph.alternatives[selection.selected].original

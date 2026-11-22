@@ -32,7 +32,7 @@ def _pins():
     files = ('compiler/model_pipeline_cost.py', 'compiler/macro_pipeline.py',
         'compiler/project_pipeline_temporal.py', 'analysis/source_pipeline_graph.py',
         'compiler/pipeline_runtime.py', 'optimization/macro_pass.py',
-        'optimization/pipeline_demand.py', 'optimization/demand.py',
+        'optimization/demand.py',
         'optimization/pipeline_forward_cost.py', 'optimization/cost_model.py',
         'optimization/scope_accounting.py', 'compiler/semantic_revision.py',
         'optimization/semantic_region_demand.py')
@@ -40,7 +40,7 @@ def _pins():
 
 
 def _derive(inputs, preparation, coefficients, cpus, budget, gain, *, strict_minimum_gain=True):
-    from scar.optimization.pipeline_demand import (
+    from scar.optimization.semantic_region_demand import (
         derive_pipeline_demand, derive_successor_pipeline_cost_demand,
     )
     from scar.optimization.pipeline_forward_cost import (
