@@ -202,6 +202,10 @@ def stateful_cpu_cost_context(domain,candidate_id):
     """Exact context authority for future independent whole-call forward models."""
     base=read_artifact(domain['base_stage_plan'])
     row=next((row for row in domain['candidates'] if row['id']==candidate_id),None)
+    return _cpu_cost_context(domain, candidate_id, row, base)
+
+
+def _cpu_cost_context(domain, candidate_id, row, base):
     if candidate_id!='NO_OP' and row is None: raise ValueError('unknown stateful CPU implementation ID')
     variant='serial' if row is None or row['worker_count']==1 else 'parallel'
     backend=domain['backend_capabilities'][variant]
@@ -373,6 +377,10 @@ def component_key(component,parameters):
 def stateful_resource_context(domain,candidate_id):
     """Hardware/backend applicability, independent of program/region/domain IDs."""
     row=next((r for r in domain['candidates'] if r['id']==candidate_id),None)
+    return _resource_context(domain, candidate_id, row)
+
+
+def _resource_context(domain, candidate_id, row):
     if row is None and candidate_id!='NO_OP':raise ValueError('unknown CPU candidate')
     backend=domain['backend_capabilities']['serial' if row is None or row['worker_count']==1 else 'parallel']
     return dict(target_sha256=domain['target_snapshot']['sha256'],
@@ -388,10 +396,24 @@ def stateful_resource_context(domain,candidate_id):
 
 def stateful_cpu_demand(domain,candidate_id):
     """Count original stages and boundary work without deriving hardware time."""
-    region=stateful_from_dict(read_artifact(domain['region']));plan=read_artifact(domain['base_stage_plan'])
-    context=stateful_cpu_cost_context(domain,candidate_id)
-    row=next((r for r in domain['candidates'] if r['id']==candidate_id),None)
-    workers=1 if row is None else row['worker_count'];nodes={n.id:n for n in region.nodes}
+    region = stateful_from_dict(read_artifact(domain['region']))
+    plan = read_artifact(domain['base_stage_plan'])
+    row = next((candidate for candidate in domain['candidates'] if candidate['id'] == candidate_id), None)
+    workers = 1 if row is None else row['worker_count']
+    terms = _demand_terms(region, plan, original=row is None, workers=workers)
+    return _demand_document(domain, candidate_id, row, plan, terms)
+
+
+def _demand_document(domain, candidate_id, row, plan, terms):
+    context = _cpu_cost_context(domain, candidate_id, row, plan)
+    return dict(schema='scar.stateful-cpu-demand',schema_version=1,context=context,
+        resource_context=_resource_context(domain, candidate_id, row),terms=terms,
+        logical_bytes_are_dram_bytes=False,source_graph_unrolled=False,
+        scope='ONE_ORIGINAL_METHOD_CALL_SITE',costs_inferred=False)
+
+
+def _demand_terms(region, plan, *, original, workers):
+    nodes={n.id:n for n in region.nodes}
     shapes={};views={};origins={};available={};available_payloads={};terms=[]
     def term(component,parameters,source_ref=None):
         terms.append(dict(id='term:'+str(len(terms)),component=component,parameters=parameters,
@@ -414,7 +436,7 @@ def stateful_cpu_demand(domain,candidate_id):
             views[node.id]=dict(stride=source['stride'],offset=source['offset']+starts[0]*source['stride']+starts[1])
             origins[node.id]=origins[node.inputs[0]]
         else: shapes[node.id]=next((shapes[i] for i in node.inputs if shapes[i] is not None),None)
-    if row is None:
+    if original:
         term('ORIGINAL_METHOD_BINDINGS_SCALARS_AND_VIEWS',dict(inputs=len(region.inputs),
             descriptors=sum(n.op=='slice' for n in region.nodes)))
         for index,action in enumerate(region.actions):
@@ -507,10 +529,7 @@ def stateful_cpu_demand(domain,candidate_id):
             available_payloads={key:value for key,value in available_payloads.items() if key in available}
         term('SUCCESS_CHECK_AND_CALLER_RESTORATION',dict(workers=workers))
         term('RELEASE_FIXED_POOL',dict(capacities=capacities))
-    return dict(schema='scar.stateful-cpu-demand',schema_version=1,context=context,
-        resource_context=stateful_resource_context(domain,candidate_id),terms=terms,
-        logical_bytes_are_dram_bytes=False,source_graph_unrolled=False,
-        scope='ONE_ORIGINAL_METHOD_CALL_SITE',costs_inferred=False)
+    return terms
 
 
 def _save(path,value):
@@ -528,11 +547,8 @@ def predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
 
 def _predict_stateful_cpu_model(domain,candidate_id,calibrations,*,out):
     """Internal composition within an already admitted domain session."""
-    result=_evaluate_stateful_cpu_components(domain,candidate_id,calibrations)
-    demand=result['demand'];context=demand['context'];sources=result['source_calibrations']
-    evaluated=result['components'];issues=result['unresolved'];total=result['known_component_sum_ns']
-    rejected_calibrations=result['rejected_calibrations']
-    return _write_stateful_cpu_model(demand,context,sources,evaluated,issues,total,rejected_calibrations,out)
+    result = _evaluate_stateful_cpu_components(domain, candidate_id, calibrations)
+    return _write_stateful_cpu_model(result, out)
 
 
 def evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
@@ -545,21 +561,44 @@ def evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
 
 
 def _evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
-    demand=stateful_cpu_demand(domain,candidate_id);context=demand['context'];sources=[];records={};issues=[];rejected={}
-    inapplicable=[]
-    rejected_calibrations=[]
+    demand = stateful_cpu_demand(domain, candidate_id)
+    return _evaluate_demand(demand, _prepare_calibrations(calibrations), {})
+
+
+def _prepare_calibrations(calibrations):
+    prepared = []
     for value in calibrations:
-        document,source=_profile(value)
-        if document.get('schema')!='scar.stateful-resource-calibration' or document.get('schema_version')!=1:
+        document, source = _profile(value)
+        if (document.get('schema'), document.get('schema_version')) != ('scar.stateful-resource-calibration', 1):
             raise ValueError('stateful independent resource calibration required')
-        if semantic_sha256(document['resource_context'])!=semantic_sha256(demand['resource_context']):
+        prepared.append((document, source, semantic_sha256(document['resource_context'])))
+    return prepared
+
+
+def _calibration_reference(document, source, receipts):
+    if source['kind'] != 'PATH':
+        raise ValueError('retained calibration JSON path required')
+    path = source['path']
+    if path not in receipts:
+        receipts[path] = artifact_reference(path, document['schema'])
+    reference = receipts[path]
+    if (reference['sha256'], reference['size_bytes'], reference['schema']) != (
+        source['sha256'], source['bytes'], document['schema'],
+    ):
+        raise ValueError('retained calibration changed during cost evaluation')
+    return reference
+
+
+def _evaluate_demand(demand, calibrations, receipts):
+    sources, records, issues, rejected = [], {}, [], {}
+    inapplicable, rejected_calibrations = [], []
+    context_sha256 = semantic_sha256(demand['resource_context'])
+    for document, source, calibration_sha256 in calibrations:
+        if calibration_sha256 != context_sha256:
             inapplicable.append(dict(source=source,reason='ORIGINAL_RESOURCE_CONTEXT_MISMATCH',
-                offered_context_sha256=semantic_sha256(document['resource_context']),
-                required_context_sha256=semantic_sha256(demand['resource_context'])))
+                offered_context_sha256=calibration_sha256, required_context_sha256=context_sha256))
             continue
-        # The complete source document is retained through matching FactRefs.
-        artifact=artifact_reference(source['path'],document['schema']) if source['kind']=='PATH' else None
-        if artifact is None: raise ValueError('retained calibration JSON path required')
+        artifact = _calibration_reference(document, source, receipts)
         sources.append(artifact)
         independence=('target_workload_executed','target_variants_ranked')
         invalid=[name for name in independence if document.get(name) is not False]
@@ -582,10 +621,9 @@ def _evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
             rejected.setdefault(key,[]).append(dict(
                 point_estimate_ns=row.get('point_estimate_ns'),reason=row.get('rejection_reason'),
                 evidence=dict(artifact=artifact,locator=f'#/proposed_estimates/{index}')))
-        for index,row in enumerate(document['components']):
-            key=component_key(row['component'],row['parameters'])
+        for index,record in enumerate(document['components']):
+            key=component_key(record['component'],record['parameters'])
             if key in records: raise ValueError('ambiguous resource component observations')
-            record, _=_fact(dict(artifact=artifact,locator=f'#/components/{index}'))
             if (record['basis'] not in ('DIRECT_COMPONENT_TIMING','DECLARED_COMPONENT_MODEL')
                     or record.get('selectable') is False or record.get('precision_admitted') is False
                     or record.get('exportable_as_complete_cost') is False
@@ -609,13 +647,18 @@ def _evaluate_stateful_cpu_components(domain,candidate_id,calibrations):
         inapplicable_calibrations=inapplicable)
 
 
-def _write_stateful_cpu_model(demand,context,sources,evaluated,issues,total,rejected_calibrations,out):
+def _write_stateful_cpu_model(result, out):
+    demand = result['demand']
+    context = demand['context']
+    evaluated = result['components']
+    issues = result['unresolved']
+    total = result['known_component_sum_ns']
     out=Path(out).absolute()
     if out.exists(): raise ValueError('fresh stateful CPU model output required')
     report=dict(schema='scar.stateful-cpu-model',schema_version=1,context=context,demand=demand,
         resource_context=demand['resource_context'],components=evaluated,unresolved=issues,known_component_sum_ns=total,
         complete=not issues,duration_ticks=math.ceil(total) if not issues else None,tick_seconds=1e-9,
-        source_calibrations=sources,rejected_calibrations=rejected_calibrations,profile=None,
+        source_calibrations=result['source_calibrations'],rejected_calibrations=result['rejected_calibrations'],profile=None,
         assumptions=['EFFECTIVE_COMPONENT_SUM_IS_A_MODEL_NOT_AN_ADDITIVITY_THEOREM',
             'STAGE_MEASUREMENTS_INCLUDE_THEIR_OWN_IMPLICIT_BARRIER_NO_DOUBLE_CHARGE',
             'CACHE_NUMA_ALIGNMENT_CONTENTION_REGIMES_REMAIN_APPLICABILITY_ASSUMPTIONS',
@@ -643,18 +686,31 @@ def build_stateful_cpu_profiles(domain,calibrations,*,out):
     """Write the mapping consumed directly by choose-stateful-cpu, including gaps."""
     domain=_domain(domain);out=Path(out).absolute()
     if out.exists():raise ValueError('fresh CPU profile-set output required')
+    region = stateful_from_dict(read_artifact(domain['region']))
+    plan = read_artifact(domain['base_stage_plan'])
+    prepared = _prepare_calibrations(calibrations)
+    receipts, demand_terms = {}, {}
     mapping={};reports=[];baseline=None
-    for identifier in [r['id'] for r in domain['candidates']]+['NO_OP']:
-        report=_predict_stateful_cpu_model(domain,identifier,calibrations,out=out/identifier)
+    for row in (*domain['candidates'], None):
+        identifier = 'NO_OP' if row is None else row['id']
+        workers = 1 if row is None else row['worker_count']
+        demand_key = (row is None, workers)
+        # The stage graph and worker count determine the logical demand.
+        # Candidate resource contexts still carry their exact CPU masks.
+        if demand_key not in demand_terms:
+            demand_terms[demand_key] = _demand_terms(region, plan, original=row is None, workers=workers)
+        demand = _demand_document(domain, identifier, row, plan, demand_terms[demand_key])
+        report = _write_stateful_cpu_model(_evaluate_demand(demand, prepared, receipts), out / identifier)
         reports.append(dict(id=identifier,model=str(out/identifier/'model.json'),complete=report['complete'],
             known_components=sum(r['status']=='SOURCED_EFFECTIVE_COMPONENT' for r in report['components']),missing_components=len(report['unresolved'])))
         if report['profile'] is not None:
             if identifier=='NO_OP':baseline=report['profile']
             else:mapping[identifier]=report['profile']
-    # Recheck original hardware/source/ABI receipts before publishing the set.
-    # This avoids rebuilding the identical 106-mask domain for each estimate,
-    # without introducing a global cache or accepting caller-supplied flags.
+    # Recheck the original graph, hardware and cost evidence at publication.
     _domain(domain)
+    for reference in receipts.values():
+        if artifact_reference(reference['uri'], reference['schema']) != reference:
+            raise ValueError('retained calibration changed before profile-set publication')
     result=dict(schema='scar.stateful-cpu-profile-set',schema_version=1,cost_profiles=mapping,
         no_op_profile=baseline,reports=reports,complete_domain=len(mapping)==len(domain['candidates']) and baseline is not None,
         target_workload_executed=False,physical_optimality_proven=False)
