@@ -22,12 +22,12 @@ from scar.ir.program.delegation_signatures import resolve_delegation_signature
 from scar.ir.record_codec import decode, encode
 from scar.analysis.source_deferred_interfaces import (
     CaptureInterfaceIndex, DeclarationScopeIndex, DeferredInterfaceIndex, DefinitionInterfaceIndex,
+    EvaluationInterfaceIndex,
 )
 from scar.analysis.source_statement_interfaces import SourceStatementInterfaceIndex
 from scar.analysis.type_parameter_rules import TypeParameterInterfaceIndex
 from scar.analysis.source_pattern_interfaces import PatternInterfaceIndex
 from scar.analysis.source_root_interfaces import RootInterfaceIndex
-from scar.analysis.source_evaluation_interfaces import EvaluationInterfaceIndex
 from scar.analysis.source_class_namespace_interfaces import ClassNamespaceIndex
 from scar.analysis.source_scope_annotation_interfaces import AnnotationStateIndex, ScopeAnnotationIndex
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
@@ -74,7 +74,7 @@ def production_type_catalog():
                  'scar.ir.program.delegation_signatures', 'scar.analysis.source_deferred_interfaces',
                  'scar.analysis.source_statement_interfaces', 'scar.analysis.type_parameter_rules',
                  'scar.analysis.source_pattern_interfaces',
-                 'scar.analysis.source_root_interfaces','scar.analysis.source_evaluation_interfaces','scar.analysis.source_syntax',
+                 'scar.analysis.source_root_interfaces', 'scar.analysis.source_syntax',
                  'scar.analysis.source_class_namespace_interfaces',
                  'scar.analysis.source_scope_annotation_interfaces',
                  'scar.analysis.source_compilation_contexts',

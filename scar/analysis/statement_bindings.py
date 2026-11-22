@@ -5,7 +5,7 @@ from scar.analysis.type_parameter_rules import enter_factory, lazy_factory
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.structured import PythonProtocolKind as K
-from scar.analysis.source_callable_rules import prepare_defaults, complete_deferred_body
+from scar.analysis.source_callable_rules import build_request_body, complete_deferred_body, prepare_defaults
 
 
 # Class construction and lazy type-alias declarations over original scopes.
@@ -58,10 +58,7 @@ def _build_class(b,region,world,parameters):
     body=b.region(b.site('body'),(_REF,_REF,b.world),region,P.ProductionRegionKind.DEFERRED)
     code,=b.emit(region,P.DeferClassBody(body.id,interface),(),(_REF,),may_raise=False,source=owner)
     globals_ref,world=b.environment(region,P.GlobalsEnvironment(interface.globals_scope),world,source=owner)
-    cells=[]
-    for relay in interface.captures:
-        cell,world=b.environment(region,P.ClosureEnvironment(relay),world,source=owner)
-        cells.append(cell)
+    cells,world=b.closure_cells(region,interface.captures,world,source=owner)
     callback,world=b.emit(region,P.BuildClassBody(interface),
         (code,globals_ref,*cells,*(() if parameters is None else (parameters,)),world),(_REF,b.world),source=owner)
     name,world=b.emit(region,P.ConstructValue(P.ConstructionKind.LITERAL,(b.site('name'),)),
@@ -74,8 +71,8 @@ def _build_class(b,region,world,parameters):
 
     env,namespace=b.parameter(body,0),b.parameter(body,1)
     active,=b.emit(body,P.EnterClassBody(interface),(env,namespace,b.parameter(body,2)),(b.world,),may_raise=False)
-    from scar.analysis.source_class_namespace_rules import initialize,finalize
-    active=initialize(b,body,interface,active,env,namespace)
+    from scar.analysis.source_root_rules import finalize_class_namespace, initialize_class_namespace
+    active=initialize_class_namespace(b,body,interface,active,env,namespace)
     protected=b.region(body.source,(b.world,),body)
     b.suite(protected,'body',b.parameter(protected,0),metadata_prefix=int(interface.docstring is not None))
     b.mark('body',P.ProductionDispositionKind.DEFERRED_CHILD)
@@ -85,7 +82,7 @@ def _build_class(b,region,world,parameters):
     for completion in b.completions(protected):
         if completion.kind is C.FALLTHROUGH:
             final=b.region(body.source,(b.world,_REF,_REF),body,P.ProductionRegionKind.HANDLER)
-            finalize(b,final,interface,b.parameter(final,0),b.parameter(final,1),b.parameter(final,2))
+            finalize_class_namespace(b,final,interface,b.parameter(final,0),b.parameter(final,1),b.parameter(final,2))
             routes.append(P.CompletionRoute(C.FALLTHROUGH,None,final.id,(env,namespace)))
             outputs.extend(b.completions(final))
         else:
@@ -154,23 +151,16 @@ def _build_function(b,root,state,env,annotations,docstring,defaults,keywords):
     globals_ref,state=b.environment(root,P.GlobalsEnvironment(env.globals_scope),state,source=source)
     annotate=None
     if annotations is not None:
-        captures=[]
-        for relay in annotations.captures:
-            capture,state=b.environment(root,P.ClosureEnvironment(relay),state,source=source)
-            captures.append(capture)
+        captures,state=b.closure_cells(root,annotations.captures,state,source=source)
         for entry in annotations.entries:
             b.slots[entry.value]=P.ProductionDispositionKind.DEFERRED_CHILD
-        from scar.analysis.source_evaluation_rules import build_request_body
         request=build_request_body(b,root,annotations)
         annotate,state=b.emit(root,P.BuildFunctionAnnotations(annotations,b.rules.exception_abi,request.id),
             (globals_ref,*captures,state),(_REF,b.world),source=source)
     b.mark('body',P.ProductionDispositionKind.DEFERRED_CHILD)
     body=b.region(b.site('body'),(_REF,*(_REF for _ in env.parameters),b.world),root,P.ProductionRegionKind.DEFERRED)
     code,=b.emit(root,P.DeferRegion(body.id,env),(),(_REF,),may_raise=False,source=source)
-    cells=[]
-    for relay in env.captures:
-        cell,state=b.environment(root,P.ClosureEnvironment(relay),state,source=source)
-        cells.append(cell)
+    cells,state=b.closure_cells(root,env.captures,state,source=source)
     arguments=(code,globals_ref,*defaults,*keywords,*cells,*(() if annotate is None else (annotate,)),state)
     function,state=b.emit(root,P.BuildFunction(env,annotations,docstring),arguments,(_REF,b.world),source=source)
 

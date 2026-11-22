@@ -76,9 +76,7 @@ _RULE_MODULES = ('static/lowering/source_displays.py', 'static/lowering/source_s
                  'source_statement_exceptions.py',
                  'source_control.py', 'source_pattern_interfaces.py',
                  'source_root_interfaces.py',
-                 'source_root_rules.py', 'source_evaluation_interfaces.py',
-                 'source_evaluation_rules.py', 'source_class_namespace_interfaces.py',
-                 'source_class_namespace_rules.py',
+                 'source_root_rules.py', 'source_class_namespace_interfaces.py',
                  'source_scope_annotation_interfaces.py',
                  'annotation_state.py', 'source_compilation_contexts.py',
                  'source_core_interfaces.py')
@@ -415,6 +413,13 @@ class _Builder:
 
     def environment(self, region, handle, state, *, source=None):
         return self.emit(region, P.ReferenceEnvironment(handle), (state,), (_REF, self.world), may_raise=False,source=source)
+
+    def closure_cells(self, region, captures, state, *, source=None):
+        cells = []
+        for relay in captures:
+            cell, state = self.environment(region, P.ClosureEnvironment(relay), state, source=source)
+            cells.append(cell)
+        return cells, state
 
     def finish(self, region, values, types):
         self.transfer(region, C.FALLTHROUGH, values, types)

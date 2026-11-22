@@ -87,12 +87,9 @@ class TypeParameterInterfaceIndex:
 def lazy_factory(b,region,expression,world):
     owner=P.ProductionOccurrence(expression.source.occurrence)
     globals_ref,world=b.environment(region,P.GlobalsEnvironment(b.rules.source.context.material.root_context.environment),world,source=owner)
-    captures=[]
-    for relay in expression.captures:
-        capture,world=b.environment(region,P.ClosureEnvironment(relay),world,source=owner)
-        captures.append(capture)
+    captures,world=b.closure_cells(region,expression.captures,world,source=owner)
     b.slots[expression.source]=P.ProductionDispositionKind.DEFERRED_CHILD
-    from scar.analysis.source_evaluation_rules import build_request_body
+    from scar.analysis.source_callable_rules import build_request_body
     request=build_request_body(b,region,expression)
     return b.emit(region,P.BuildLazyExpression(expression,b.rules.exception_abi,request.id),
         (globals_ref,*captures,world),(_REF,b.world),source=expression.source)
@@ -123,10 +120,7 @@ def emit_type_parameters(b,region,world,environment):
 
 def enter_factory(b,root,world,inputs):
     environment=b.rules.source.type_parameters.environment(b.occurrence,b.world,b.rules.exception_abi)
-    captures=[]
-    for relay in environment.captures:
-        capture,world=b.environment(root,P.ClosureEnvironment(relay),world)
-        captures.append(capture)
+    captures,world=b.closure_cells(root,environment.captures,world)
     arguments=(*captures,*inputs,world)
     region=b.region(b.site('type_params'),(*(_REF for _ in range(len(arguments)-1)),b.world),root,P.ProductionRegionKind.TYPE_PARAMETERS)
     result=b.emit(root,P.InvokeTypeParameterFactory(P.ProductionRegionCall(region.id,arguments),environment),(),(_REF,b.world))
