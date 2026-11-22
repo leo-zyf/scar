@@ -6,7 +6,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 import ast
 import dis
-import hashlib
 from types import SimpleNamespace
 from scar.analysis.static.namespace import normal_reference
 from scar.ir.program.environments import EnvironmentRole as E
@@ -558,22 +557,17 @@ def derive_import_from_interfaces(body,*,text,semantic,module,metadata,links,pro
             'The original class IMPORT_NAME/FROM operations remain in their source graph; '
             'this reader has no class compiler-port adapter and does not infer a module source.',source)
             for _,source,_ in selected)
-    _need(type(text)is str and 'sha256:'+hashlib.sha256(text.encode()).hexdigest()==metadata.source.fingerprint,
-          'retained source fingerprint differs')
-    # Reuse the shared audited exact CodeRef/CodeEvidence replay; this verifies
-    # compiler identity, flags, both code keys and the complete constant path.
-    from scar.analysis.static.function_origins import _replay_compilation
-    root=compile(text,metadata.source.path,'exec',flags=0,dont_inherit=True,optimize=0)
+    from scar.analysis.static.compilation import RetainedSourceCompilation, replay_source_compilation
+    compilation=RetainedSourceCompilation(metadata.source,text,source_tree=tree)
     namespace_root=(module.declaration.unit.namespace_root if module is not None else
                     body.document['static_compilation']['namespace_root'])
     inputs=SimpleNamespace(document=body.document,sources=module if module is not None else metadata,
         metadata=metadata,namespace=body.namespace)
-    code_path,code=_replay_compilation(inputs,root,namespace_root)
+    evidence=replay_source_compilation(inputs,compilation,namespace_root)
+    code_path,code=evidence.code_path,evidence.code
     if body.namespace.source is not None:
-        from scar.analysis.static.compilation import _scope_nodes
-        found={};issues=[];_scope_nodes(tree,root,(),ast.Module,found,issues)
         source=body.namespace.source
-        matches=[row for row in found.get((source.start_line,source.end_line,source.start_column,source.end_column),())
+        matches=[row for row in compilation.scopes.get((source.start_line,source.end_line,source.start_column,source.end_column),())
                  if row[0]==code_path and row[1] is code and isinstance(row[2],(ast.FunctionDef,ast.AsyncFunctionDef))]
         _need(len(matches)==1,'function import owner is not its original lexical compiler scope')
     if module is not None:

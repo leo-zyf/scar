@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 import dis
 import hashlib
 import sys
-from types import CodeType
+from functools import cached_property
+from types import CodeType, MappingProxyType
 from typing import Any
 
 from scar.ir.record_codec import encode
@@ -274,6 +275,151 @@ class StaticCodeEvidence:
             },
             "runtime_code_instance_established": False,
         }
+
+
+@dataclass(frozen=True)
+class RetainedSourceCompilation:
+    """Compilation products for one checked snapshot, independent of any binding proof."""
+
+    snapshot: SourceSnapshot
+    text: str = field(repr=False)
+    source_tree: ast.Module | None = field(default=None, repr=False, compare=False)
+    compiled_module: CodeType | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        if (type(self.text) is not str or type(self.snapshot) is not SourceSnapshot
+                or 'sha256:' + hashlib.sha256(self.text.encode()).hexdigest() != self.snapshot.fingerprint):
+            raise ValueError('retained text differs from its original source snapshot')
+
+    def require(self, snapshot, text):
+        if snapshot != self.snapshot or text != self.text:
+            raise ValueError('retained text/source versions differ')
+
+    @cached_property
+    def root(self):
+        root = self.compiled_module
+        if root is None:
+            root = compile(self.text, self.snapshot.path, 'exec', flags=0, dont_inherit=True, optimize=0)
+        if type(root) is not CodeType:
+            raise TypeError('retained source compiler root must be a no-exec CodeType product')
+        return root
+
+    @cached_property
+    def layout_key(self):
+        return code_key(self.root)
+
+    @cached_property
+    def tree(self):
+        if self.source_tree is not None:
+            return self.source_tree
+        return ast.parse(self.text, filename=self.snapshot.path, type_comments=True)
+
+    @cached_property
+    def functions(self):
+        found = {}
+        for node in ast.walk(self.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found.setdefault(_span(node), []).append(node)
+        return MappingProxyType({span: tuple(rows) for span, rows in found.items()})
+
+    @cached_property
+    def scopes(self):
+        found = {}
+        _scope_nodes(self.tree, self.root, (), ast.Module, found, [])
+        return MappingProxyType({span: tuple(rows) for span, rows in found.items()})
+
+    def select_code(self, path):
+        code = self.root
+        for position in path:
+            if (type(position) is not int or not 0 <= position < len(code.co_consts)
+                    or type(code.co_consts[position]) is not CodeType):
+                raise ValueError('compiler path does not select an original code constant')
+            code = code.co_consts[position]
+        return code
+
+    def evidence(self, namespace_root, definition, source, path, compiler_python):
+        path = tuple(path)
+        code = self.select_code(path)
+        return StaticCodeEvidence(self.snapshot, namespace_root, definition, source, path,
+            code, code_key(code), sys.implementation.name, tuple(sys.version_info[:3]), compiler_python,
+            sys.implementation.cache_tag, root_code_layout_key=self.layout_key)
+
+
+def retained_compilation(context, snapshot):
+    """Reuse compilation data owned by an already verified source context."""
+    text = context.docs['source']['text']
+    compilation = getattr(context, 'retained_compilation', None)
+    if compilation is None:
+        compilation = RetainedSourceCompilation(snapshot, text, source_tree=context.tree)
+        context.retained_compilation = compilation
+    else:
+        compilation.require(snapshot, text)
+    return compilation
+
+
+def function_compiler_profile(compiler):
+    return (type(compiler) is dict and compiler.get('implementation') == sys.implementation.name
+            and compiler.get('version') == list(sys.version_info[:3])
+            and compiler.get('cache_tag') == sys.implementation.cache_tag)
+
+
+def function_compiler_flags(compiler):
+    return (compiler.get('mode') == 'exec' and compiler.get('flags') == 0
+            and compiler.get('dont_inherit') is True and compiler.get('optimize') == 0)
+
+
+def replay_function_compilation(compilation, namespace, wire):
+    path = wire.get('code_path')
+    if type(path) is not list or not path:
+        raise ValueError('function compilation needs an exact original compiler path')
+    evidence = compilation.evidence(wire['namespace_root'], namespace.definition,
+        namespace.source, path, wire['compiler']['python'])
+    retained = evidence.to_dict()
+    if 'layout' not in wire:
+        # Earlier records omitted these tables. Check all fields they retained.
+        retained.pop('layout')
+    if encode(retained) != wire:
+        raise ValueError('function compiler evidence differs from independent retained-source replay')
+    return evidence
+
+
+def replay_source_compilation(inputs, compilation, namespace_root):
+    """Replay a module/class CodeRef or a function's exact retained CodeEvidence."""
+    document, sources = inputs.document, inputs.sources
+    namespace = inputs.namespace
+    if compilation.snapshot != inputs.metadata.source:
+        raise ValueError('compiler source snapshot differs from the original body')
+    if document.get('module') is not None:
+        reference = sources.declaration.compilation
+    elif document.get('class') is not None:
+        from scar.ir.program.class_entries import decode_class_entry_overlay
+        reference = decode_class_entry_overlay(document['class']).compilation
+    else:
+        wire = document.get('static_compilation')
+        if type(wire) is not dict:
+            raise ValueError('factory origin body lacks original compiler evidence')
+        compiler = wire.get('compiler')
+        if (wire.get('namespace_root') != namespace_root or not function_compiler_profile(compiler)
+                or compiler.get('python') != sys.version or not function_compiler_flags(compiler)):
+            raise ValueError('factory origin source compiler profile differs')
+        return replay_function_compilation(compilation, namespace, wire)
+
+    if type(reference) is not SourceCompilationCodeRef:
+        raise TypeError('factory origin frame needs its exact source compilation CodeRef')
+    reference.__post_init__()
+    if (reference.definition != namespace.definition
+            or reference.compiler_implementation != sys.implementation.name
+            or reference.compiler_version != tuple(sys.version_info[:3])
+            or reference.compiler_python != sys.version
+            or reference.compiler_cache_tag != sys.implementation.cache_tag):
+        raise ValueError('factory origin frame compiler/definition differs')
+    if namespace.source is None and reference.source.namespace_root != namespace_root:
+        raise ValueError('factory origin module namespace root differs from its qualified definition')
+    replay = compilation.evidence(namespace_root, namespace.definition, reference.source,
+        reference.code_path, reference.compiler_python)
+    if replay.to_reference() != reference:
+        raise ValueError('factory origin frame CodeRef differs from independent source compilation')
+    return replay
 
 
 @dataclass(frozen=True, slots=True)

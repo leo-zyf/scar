@@ -6,13 +6,10 @@ compiled for code-layout evidence, never imported, executed or lowered again.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import hashlib
-import sys
 from types import SimpleNamespace
 
 from scar.analysis.static.lowering.source_class_construction import validate_class_constructions
-from scar.analysis.static.compilation import StaticCodeEvidence
-from scar.analysis.static.function_origins import _replay_compilation
+from scar.analysis.static.compilation import replay_source_compilation, retained_compilation
 from scar.ir.program.class_construction import ContextualClassStatementSource
 from scar.ir.program.dependencies import (
     DependencyCondition as Condition, DependencyEvidence as Evidence,
@@ -23,7 +20,6 @@ from scar.ir.program.model import ExitKind
 from scar.ir.program.source_language import decode_language_overlay
 from scar.ir.program.structured import PythonProtocol
 from scar.ir.record_codec import decode, encode
-from scar.trace.code_snapshot import code_key
 
 
 def _need(ok, detail):
@@ -92,23 +88,10 @@ class ClassStatementSourceExtractor:
 
     def _compiler(self, body):
         context = body.context
-        text = context.docs['source']['text']
-        _need(type(text) is str and 'sha256:' + hashlib.sha256(text.encode()).hexdigest()
-            == body.metadata.source.fingerprint, 'retained source fingerprint differs')
-        root = getattr(context, 'compiled_module_for_namespace', None)
-        if root is None:
-            root = compile(text, body.metadata.source.path, 'exec', flags=0,
-                dont_inherit=True, optimize=0)
-            context.compiled_module_for_namespace = root
-            context.compiled_module_layout_for_namespace = code_key(root)
+        compilation = retained_compilation(context, body.metadata.source)
         inputs = SimpleNamespace(document=body.document, metadata=body.metadata,
             sources=body.module if body.module is not None else body.metadata, namespace=body.namespace)
-        namespace_root = context.unit['namespace_root']
-        path, code = _replay_compilation(inputs, root, namespace_root)
-        source = body.module.declaration.unit if body.module is not None else body.namespace.source
-        return StaticCodeEvidence(body.metadata.source, namespace_root, body.namespace.definition,
-            source, path, code, code_key(code), sys.implementation.name, tuple(sys.version_info[:3]),
-            sys.version, sys.implementation.cache_tag, root_code_layout_key=code_key(root))
+        return replay_source_compilation(inputs, compilation, context.unit['namespace_root'])
 
     def _verify(self, body, inputs):
         self.resolver.owner._check()

@@ -27,9 +27,10 @@ from types import MappingProxyType, SimpleNamespace
 from scar.analysis.dependencies.classes import class_dependency_frames
 from scar.analysis.program_lowering import _Unsupported
 from scar.analysis.program_source_definitions import SourceDefinitionUnavailable
-from scar.analysis.static.function_creation import extract_function_creation
-from scar.analysis.static.function_origins import (
+from scar.analysis.static.compilation import retained_compilation
+from scar.analysis.static.function_creation import (
     derive_factory_entry_origins,
+    extract_function_creation,
     factory_entry_origin_evidence,
     factory_entry_origin_ports,
     validate_factory_entry_origin,
@@ -358,13 +359,6 @@ class AutomaticFactoryEntryOrigins:
 
     def _candidate_operations(self, creator, target, source_node):
         protocols = protocol_kinds(creator.document)
-        sources = creator.module if creator.module is not None else creator.metadata
-        links = defaultdict(list)
-        for row in sources.operation_links:
-            links[row.operation].append(row)
-        uses = defaultdict(list)
-        for row in sources.use_links:
-            uses[row.operation].append(row)
         for operation in creator.graph.operations:
             if protocols.get(operation.id) not in _MAKES:
                 continue
@@ -379,10 +373,12 @@ class AutomaticFactoryEntryOrigins:
             normal = normal_reference(creator.index, operation.id)
             if normal is None:
                 continue
-            if target is not None and not any(row.source == target.namespace.source for row in links[operation.id]):
+            if target is not None and not any(row.source == target.namespace.source
+                                             for row in creator.links_by_op[operation.id]):
                 continue
             if source_node is not None and source_node != normal[1] and not any(
-                    row.use == source_node and row.role == "function-globals" for row in uses[operation.id]):
+                    row.use == source_node and row.role == "function-globals"
+                    for row in creator.uses_by_op[operation.id]):
                 continue
             yield operation, normal
 
@@ -417,7 +413,7 @@ class AutomaticFactoryEntryOrigins:
             matched = False
             for creator in creators:
                 wrapper, definitions, text = self._extractor_body(creator, catalog)
-                for operation, (edge, value) in self._candidate_operations(creator, target, source_node):
+                for operation, (edge, value) in self._candidate_operations(wrapper, target, source_node):
                     self.session.check()
                     if admitted >= self.session.budget.max_origin_candidates:
                         raise OverflowError("factory origin candidate budget exhausted")
@@ -444,7 +440,8 @@ class AutomaticFactoryEntryOrigins:
                             body_document=child.document, body_namespace=child.namespace, body_index=child.index,
                             creation=creation, source_text=text, _facts=self.session._environment_facts,
                             _creator_inputs=getattr(creator,'environment_inputs',None),
-                            _body_inputs=getattr(child,'environment_inputs',None))
+                            _body_inputs=getattr(child,'environment_inputs',None),
+                            _compilation=retained_compilation(wrapper.context, creator.metadata.source))
                     except SourceDefinitionUnavailable as error:
                         self._note(point, outgoing, "FACTORY_ORIGIN_CHILD_SCOPE_UNAVAILABLE",
                             operation.id.wire + ": " + error.kind + ": " + error.detail)
@@ -507,7 +504,8 @@ class AutomaticFactoryEntryOrigins:
             body_document=body.document, body_namespace=body.namespace, body_index=body.index, source_text=text,
             _facts=self.session._environment_facts,
             _creator_inputs=getattr(creator,'environment_inputs',None),
-            _body_inputs=getattr(body,'environment_inputs',None))
+            _body_inputs=getattr(body,'environment_inputs',None),
+            _compilation=retained_compilation(wrapper.context, creator.metadata.source))
 
     def _class_contexts(self, creator, query, depth, seen):
         namespace = GraphNamespace.from_source(creator.namespace)

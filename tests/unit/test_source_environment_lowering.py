@@ -65,7 +65,7 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
     from copy import deepcopy
     from scar.analysis.static_program import link_static_program
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static.function_origins import (
+    from scar.analysis.static.function_creation import (
         derive_factory_entry_origins,
         validate_factory_entry_origin,
         factory_entry_origin_evidence,

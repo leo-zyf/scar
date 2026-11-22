@@ -189,7 +189,7 @@ def link_static_program(directory, *, budget=None, progress=None):
             name: hashlib.sha256((analysis / name).read_bytes()).hexdigest()
             for name in ("static/calls.py", "static/namespace.py", "static/function_environment.py",
                          "static/interprocedural.py", "static/crossbody_namespace.py",
-                         "static/nested_creation.py", "static/function_creation.py", "static/value_flows.py",
+                         "static/compilation.py", "static/function_creation.py", "static/value_flows.py",
                          "static/module_attributes.py", "static/imports.py", "static/fields.py",
                          "static/module_state.py",
                          "function_binding.py", "function_interfaces.py", "source_layers.py")}}

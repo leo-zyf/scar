@@ -289,6 +289,7 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
     from types import SimpleNamespace
     from scar.analysis.static.calls import input_basis_unit
     from scar.analysis.static.basis_compatibility import published_units_basis_compatible
+    from scar.analysis.static.compilation import RetainedSourceCompilation
     from scar.analysis.static_body import diagnostic_materializations
     from scar.analysis.static.function_environment import (
         derive_function_environment_routes,
@@ -417,7 +418,7 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
             raise ValueError("qualified endpoint differs from its original lexical definition/source")
         index = ProgramIndex(graph)
         loaded = SimpleNamespace(graph=graph, index=index, document=document, namespace=namespace,
-            unit=owner, row=row, unit_number=number, body_position=position, catalog=catalog,
+            unit=owner, row=row, unit_number=number, body_position=position, catalog=catalog, metadata=metadata,
             dependencies=NamespaceDependencies(graph, document, index=index))
         cache[uri] = loaded, descriptor["decoded_bytes"]
         cached_bytes += descriptor["decoded_bytes"]
@@ -482,7 +483,9 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
             raise ValueError("qualified definition has no unique original lexical source declaration")
 
     checked_creations = set()
+    compiled_source = None
     def check_creation(namespace, creation):
+        nonlocal compiled_source
         key = namespace, creation
         if key in checked_creations:
             return
@@ -535,15 +538,12 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
                         and tuple(record["constant_path"]) == creation.constant_path
                         for record in class_overlay["factories"]))
         if dependencies.protocols[creation.factory] == "MAKE_NESTED_FUNCTION":
-            from scar.analysis.static.nested_creation import validate_nested_function_creation
-            source = fragments.read(body.unit["artifacts"]["source"])
-            if (source.get("path") != body.unit["path"]
-                    or source.get("namespace_root") != body.unit["namespace_root"]
-                    or type(source.get("text")) is not str
-                    or hashlib.sha256(source["text"].encode()).hexdigest() != body.unit["decoded_sha256"]):
-                raise ValueError("nested factory source text differs from its original source unit")
+            from scar.analysis.static.function_creation import validate_nested_function_creation
+            text = source_text(body.unit)
+            if compiled_source is None or compiled_source.snapshot != body.metadata.source:
+                compiled_source = RetainedSourceCompilation(body.metadata.source, text)
             validate_nested_function_creation(creation, graph=body.graph, index=body.index,
-                document=document, namespace=body.namespace, source_text=source["text"])
+                document=document, namespace=body.namespace, source_text=text, _compilation=compiled_source)
             original_constant = True  # Shared source/compiler rule proved the exact parent/child code slot.
         constant = body.index.operations.get(creation.code_constant_operation)
         if not original_constant or constant is None or code.use.value not in constant.results:

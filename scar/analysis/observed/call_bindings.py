@@ -20,8 +20,7 @@ from scar.analysis.call_trace_reader import CallOperandTrace, read_call_operands
 from scar.analysis.program_dependency_export import _Tables
 from scar.analysis.python_call_targets import read_python_call_targets
 from scar.analysis.static.calls import StaticCallBudget, StaticCallSession
-from scar.analysis.static.function_origins import _replay_compilation
-from scar.analysis.static.compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import replay_source_compilation, retained_compilation
 from scar.ir.program.call_edges import (
     CallRecordAnchor,
     CapturedCode,
@@ -39,7 +38,7 @@ from scar.ir.program.python_call_targets import (
 from scar.ir.record_codec import decode, encode
 from scar.ir.semantics_v2 import Opcode
 from scar.ir.v2.common import SourceReference
-from scar.trace.code_snapshot import code_key, describe_code, site as code_site, code_parameters, site
+from scar.trace.code_snapshot import describe_code, site as code_site, code_parameters, site
 from bisect import bisect_left
 from scar.ir.program.call_operands import (
     CallableKind,
@@ -163,24 +162,12 @@ def _read_trace(trace):
 
 def _compiler(body):
     context = body.context
-    text = context.docs['source']['text']
-    if 'sha256:' + hashlib.sha256(text.encode()).hexdigest() != body.metadata.source.fingerprint:
-        raise ValueError('retained source fingerprint differs')
-    root = getattr(context, 'compiled_module_for_namespace', None)
-    if root is None:
-        root = compile(text, body.metadata.source.path, 'exec', flags=0,
-                       dont_inherit=True, optimize=0)
-        context.compiled_module_for_namespace = root
+    compilation = retained_compilation(context, body.metadata.source)
     inputs = SimpleNamespace(document=body.document, metadata=body.metadata,
         sources=body.module if body.module is not None else body.metadata, namespace=body.namespace)
-    path, code = _replay_compilation(inputs, root, context.unit['namespace_root'])
-    subject = (body.module.declaration.compilation.source if body.namespace.source is None
-               else body.namespace.source)
-    body.code_compilation = StaticCodeEvidence(body.metadata.source, context.unit['namespace_root'],
-        body.namespace.definition, subject, path, code, code_key(code), sys.implementation.name,
-        tuple(sys.version_info[:3]), sys.version, sys.implementation.cache_tag,
-        root_code_layout_key=code_key(root)).to_reference()
-    return code
+    evidence = replay_source_compilation(inputs, compilation, context.unit['namespace_root'])
+    body.code_compilation = evidence.to_reference()
+    return evidence.code
 
 
 def _checked_code(body, capture, cache, code=None):
