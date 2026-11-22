@@ -71,6 +71,8 @@ C++20 后端集中在 `compiler/backend/cpp20.py`，负责计划重放、工程�
 
 标量样本的内部采集入口为 `python -m scar.runtime.scalar_observe --selection FILE --out FILE`。根据选择工件的 schema 分派，同一入口共用原程序启动、监控清理和表快照。
 
+标量排序和融合启动共用同一次启动内的原程序编译结果。内部排序采集通过 `python -m scar.runtime.scalar_sorted_study capture` 进入同一个源码校验和执行路径。
+
 后续增加源语言沿用图与证据接口。新增 GPU 资源、传输与算子实现通过 `PlanningProblem` 和可重放的执行计划进入中端。C++20 交付消费计划选定的实现和资源绑定，并通过算子 ABI 接入外部高性能库。
 
 ## 共享职责

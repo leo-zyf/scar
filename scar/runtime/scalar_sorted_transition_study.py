@@ -18,9 +18,8 @@ from scar.compiler.scalar_table_region import _definition, code_tree
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.scalar_score_ir import _int64, _require
 from scar.runtime.csr_region_entry import _observer_active
-from scar.runtime.scalar_sorted_observe import _seal
-from scar.runtime.scalar_sorted_study import _MISSING, _Offer, _TypeBindings
-from scar.runtime.scalar_table_contract import OFFER, compile_original, replace_leaf
+from scar.runtime.scalar_sorted_study import _MISSING, _Offer, _TypeBindings, _original_source, _seal
+from scar.runtime.scalar_table_contract import OFFER, replace_leaf
 from scar.runtime.scalar_table_contract import _run_main
 from scar.runtime.sorted_study_epoch import load as load_epoch
 from scar.trace.code_snapshot import describe_code, site
@@ -29,13 +28,12 @@ from scar.trace.code_snapshot import describe_code, site
 SCHEMA = 'scar.scalar-sorted-transition-source-study'
 
 
-def _seal_sites(raw, recipe, sorted_plan, transition_evidence):
+def _seal_sites(raw, recipe, original_codes, sorted_plan, transition_evidence):
     """Splice two source calls without changing their receiver evaluation order."""
-    sorted_code = _seal(sorted_plan, raw, recipe, snapshot_inputs=False)
-    original_root = compile_original(raw, recipe)
+    sorted_code = _seal(sorted_plan, raw, recipe, original_codes, snapshot_inputs=False)
     caller = transition_evidence['caller']['code']
     transition_site = transition_evidence['original_calls']['producer']['site']
-    original = evidence._one((code for code in code_tree(original_root) if describe_code(code) == caller),
+    original = evidence._one((code for code in original_codes if describe_code(code) == caller),
                              'one original transition owner is required')
     _require(site(original, transition_site['offset']) == transition_site and transition_site['opname'] == 'CALL',
              'transition must keep its exact original caller site')
@@ -376,14 +374,16 @@ def run(entry, argv, options):
     score_capture = read_artifact(score_evidence['capture'])
     recipe = read_artifact(score_evidence['proof'])['cases'][score_evidence['proof_case']]['compile_recipe']
     raw = read_artifact(plan['source'], json_document=False)
-    original_key, owner_code, sort_code = _seal_sites(raw, recipe, plan, transition_evidence)
+    original_root, original_codes = _original_source(raw, recipe)
+    original_key, owner_code, sort_code = _seal_sites(raw, recipe, original_codes, plan, transition_evidence)
     _require({**plan['scalar_globals'], **score_capture['globals']} == guard['bindings']['immutable_i64'],
              'fused sort source bindings differ from guard closure')
     with epoch:
         offer = _FusedOffer(binary, package, plan, transition, transition_evidence, selected['constructor']['name'],
                             capture['globals'], owner_code, sort_code, epoch=epoch,
                             observe=options.observe or options.shadow, shadow=options.shadow)
-        execution = _run_main(entry,argv,dict(compile_recipe=recipe,original_code_key=original_key),raw,owner_code,offer)
+        execution = _run_main(entry, argv, dict(compile_recipe=recipe, original_code_key=original_key),
+                              raw, owner_code, offer, original_root=original_root)
         _require(not offer.leases, 'a sorted result lease outlived its source scope')
     return dict(schema=SCHEMA, schema_version=1, source=plan['source'], library=library_ref,
                 source_guard=flow['source_guard'], provenance=flow_ref, epoch_helper=epoch_ref,

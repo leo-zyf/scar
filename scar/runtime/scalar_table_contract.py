@@ -139,8 +139,14 @@ class _ImportScope:
                 del namespace[MISS]
 
 
-def _run_main(entry, argv, region, raw, leaf, offer):
-    root = compile_original(raw, region['compile_recipe'])
+def _run_main(entry, argv, region, raw, leaf, offer, *, original_root=None):
+    if original_root is None:
+        root = compile_original(raw, region['compile_recipe'])
+    else:
+        _require(type(original_root) is CodeType and original_root.co_name == '<module>'
+                 and original_root.co_filename == region['compile_recipe']['filename'],
+                 'prepared study source must be its original module code')
+        root = original_root
     code = replace_leaf(root, region['original_code_key'], leaf)
     exited = False
     with _script_state(entry, argv, None):
