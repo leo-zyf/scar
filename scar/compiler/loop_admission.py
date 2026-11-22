@@ -772,15 +772,9 @@ def write_invariant_loop_proof(proof,path):
     return artifact_reference(path,PROOF_SCHEMA)
 
 
-def read_invariant_loop_proof(path,*,catalog):
-    """Read only after replaying the same proof through an admitted F4 catalog.
-
-    Original IDs/provenance plus matching source bytes are not sufficient by
-    themselves: a forged marker or mapping must fail original graph replay.
-    The caller supplies its existing ProgramView to reuse one source session.
-    """
-    from scar.ir.execution_recipe import artifact_reference,read_artifact
-    reference=artifact_reference(path,PROOF_SCHEMA);document=read_artifact(reference)
+def _replay_invariant_loop_proof(path,*,catalog):
+    from scar.ir.execution_recipe import open_artifact,read_artifact
+    reference,document=open_artifact(path,PROOF_SCHEMA)
     fields={'schema','schema_version',*InvariantLoopProof.__dataclass_fields__}
     if set(document)!=fields or document['schema_version']!=1 or type(document['schema_version']) is not int:
         raise ValueError('unsupported original invariant loop proof fields/version')
@@ -795,7 +789,13 @@ def read_invariant_loop_proof(path,*,catalog):
         canonical(invariant_loop_proof_document(value))==canonical(document)]
     if len(matches)!=1:raise ValueError('invariant loop proof differs from original F4 rediscovery')
     read_artifact(reference,json_document=False)
-    return matches[0]
+    return matches[0],reference
+
+
+def read_invariant_loop_proof(path,*,catalog):
+    """Replay the original loop through the admitted F4 catalog and its source bytes."""
+    proof,_=_replay_invariant_loop_proof(path,catalog=catalog)
+    return proof
 
 
 def canonical_invariant_motion_interface(proof):
@@ -811,20 +811,6 @@ def canonical_invariant_motion_interface(proof):
         original_f4_proof=asdict(proof))
 
 
-def _motion_origin_entry(origin):
-    """Recover the original ENTER from its retained typed result coordinate."""
-    from scar.ir.record_codec import decode
-    from scar.ir.program.normal_graph import GlobalPort
-
-    results=[decode(GlobalPort, value) for value in origin['results']]
-    candidates=[value for value in results if value.unit==origin['unit']
-        and value.port.owner.wire==origin['step']]
-    if not candidates or len({(value.port.template,value.port.owner) for value in candidates})!=1:
-        raise ValueError('motion origin has no unique original step coordinate')
-    point=candidates[0]
-    return GlobalPort(point.unit,G.Port(point.port.template,point.port.owner,G.PortKind.ENTER))
-
-
 def read_invariant_loop_motion(path,*,catalog):
     """Join motion facts to one independently replayed original source loop.
 
@@ -834,44 +820,29 @@ def read_invariant_loop_motion(path,*,catalog):
     callable dispatch remain runtime obligations; a stable binding does not
     establish an immutable referent.
     """
-    from scar.analysis.array_motion import derive_array_motion
-    from scar.analysis.array_motion_legality import derive_array_motion_legality
-    from scar.analysis.source_motion_window import derive_source_motion_window
-    from scar.ir.execution_recipe import artifact_reference
+    from scar.analysis.array_motion_legality import derive_array_motion_and_legality
+    from scar.analysis.source_motion_window import project_loop_source_motion
     from scar.optimization.resource_solver import semantic_sha256
 
-    proof=read_invariant_loop_proof(path,catalog=catalog)
+    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
+    proof,reference=_replay_invariant_loop_proof(path,catalog=view)
     interface=canonical_invariant_motion_interface(proof)
-    motion=derive_array_motion(proof.body,carry_parameter=proof.carry_parameter,loop_interface=interface)
     roles={row['role']:row for row in proof.origins if row.get('kind')=='original_f4'
         and row.get('role') in ('builtin_range','lexical_carry_write',
             'invariant_array_leaf_call','single_shared_invariant_loop')}
-    call=roles['invariant_array_leaf_call']
-    identity=next(row for row in proof.source.origins if row.get('kind')=='source_identity')
-    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
-    source=view.unit(identity['unit'])
-    functions=[index for index,function in enumerate(source.facts.functions)
-        if function.template.occurrence==identity['occurrence']]
-    if len(functions)!=1:
-        raise ValueError('motion source identity lacks one original F4 function')
-    window=derive_source_motion_window(view,unit=identity['unit'],function_ordinal=functions[0],
-        loop_header=_motion_origin_entry(roles['single_shared_invariant_loop']),
-        call_entry=_motion_origin_entry(call))
-    legality=derive_array_motion_legality(proof.body,carry_parameter=proof.carry_parameter,
+    window,routes=project_loop_source_motion(view,proof,
+        roles['single_shared_invariant_loop'],roles['invariant_array_leaf_call'])
+    motion,legality=derive_array_motion_and_legality(proof.body,carry_parameter=proof.carry_parameter,
         loop_interface=interface,source_window=window)
     report=dict(schema='scar.source-loop-motion',schema_version=2,
-        proof=artifact_reference(path,PROOF_SCHEMA),proof_id=proof.id,
+        proof=reference,proof_id=proof.id,
         proof_sha256=semantic_sha256(asdict(proof)),body_sha256=motion['body_sha256'],
         source_identity=dict(path=proof.source.path,sha256=proof.source.sha256,
             code_key=proof.source.code_key),
         array_motion=motion,
         source_window=window,movement_legality=legality,
         canonical_interface_sha256=semantic_sha256(interface),
-        parameter_routes=[dict(leaf_formal=name,outer_parameter=proof.parameter_map[name],
-            original_actual=call['call_inputs'][index],
-            binding_role='CARRIED' if name==proof.carry_parameter else 'OUTER_LIVE_IN',
-            referent_content_invariance='CONDITIONAL_ON_EXACT_ARRAY_AND_NO_FOREIGN_WRITERS')
-            for index,name in enumerate(proof.body.parameters)],
+        parameter_routes=routes,
         source_witnesses=roles,
         source_facts=dict(authority='FULL_ORIGINAL_F4_REDISCOVERY',
             body_profile='ONE_RANGE_BODY_ONE_ADMITTED_ARRAY_CALL_ONE_LEXICAL_CARRY_WRITE',

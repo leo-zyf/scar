@@ -124,7 +124,7 @@ def test_composite_movement_consumes_pinned_materials_effects_and_optimized_plac
     from test_array_call_effects import _composite_case
     from test_array_motion_legality import _strict_window_case
     from scar.analysis.array_call_effects import derive_composite_call_effects
-    from scar.analysis.array_motion import derive_array_motion
+    from scar.analysis.source_motion_window import derive_array_motion
     from scar.analysis.array_motion_legality import derive_array_motion_legality
     from scar.compiler.invariant_loop_runtime import _loop_interface
     from scar.compiler.invariant_loop_runtime import _require_source_movement_binding

@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import asdict
 import json
 
-from scar.analysis.array_motion import derive_array_motion
+from scar.analysis.source_motion_window import derive_array_motion
 from scar.analysis.source_effects import classify_instruction
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
@@ -288,9 +288,9 @@ def _composite_callee_contract(proof, window, effects, binding):
         source_replacement_authorized=False)
 
 
-def derive_array_motion_legality(body, *, carry_parameter, loop_interface, source_window,
-                                callee_effects=None, callee_binding=None):
-    """Check source correspondence and expose precise remaining obligations."""
+def derive_array_motion_and_legality(body, *, carry_parameter, loop_interface, source_window,
+                                    callee_effects=None, callee_binding=None):
+    """Materialize the array motion facts once and bind them to source evidence."""
     motion = derive_array_motion(body, carry_parameter=carry_parameter, loop_interface=loop_interface)
     window = json.loads(_canonical(source_window))
     proof, witness_indices, proof_kind = _bind(body, carry_parameter, loop_interface, window, motion)
@@ -511,7 +511,16 @@ def derive_array_motion_legality(body, *, carry_parameter, loop_interface, sourc
         source_replacement_authorized=False, whole_python_effects_closed=False,
         physical_alias_disjointness_proven=False, cost_or_timing_inferred=False, target_executed=False)
     result['id'] = 'array-motion-legality:'+semantic_sha256(result)
-    return result
+    return motion, result
+
+
+def derive_array_motion_legality(body, *, carry_parameter, loop_interface, source_window,
+                                callee_effects=None, callee_binding=None):
+    """Check source correspondence and expose precise remaining obligations."""
+    _, legality = derive_array_motion_and_legality(body, carry_parameter=carry_parameter,
+        loop_interface=loop_interface, source_window=source_window,
+        callee_effects=callee_effects, callee_binding=callee_binding)
+    return legality
 
 
 def verify_array_motion_legality(report, body, *, carry_parameter, loop_interface, source_window,
@@ -524,4 +533,4 @@ def verify_array_motion_legality(report, body, *, carry_parameter, loop_interfac
     return deepcopy(expected)
 
 
-__all__ = ['derive_array_motion_legality', 'verify_array_motion_legality']
+__all__ = ['derive_array_motion_and_legality', 'derive_array_motion_legality', 'verify_array_motion_legality']

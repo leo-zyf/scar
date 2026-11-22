@@ -90,7 +90,7 @@ def temporal_resource_context(snapshot_sha256,executor_id,cpu_ids,caller_affinit
 
 
 def _anonymous_body(source_body,carry_parameter,budget):
-    from scar.analysis.array_motion import derive_array_motion
+    from scar.analysis.source_motion_window import derive_array_motion
     execution=prepare_pipeline_leaf(optimize_region(source_body,memory_budget_bytes=budget))
     body=execution.region; ordinals={}; result=[]
     motion=derive_array_motion(body,carry_parameter=carry_parameter,

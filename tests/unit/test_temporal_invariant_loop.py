@@ -48,7 +48,7 @@ def test_temporal_emitter_consumes_exact_optimized_motion_without_native_executi
     import ctypes
     import subprocess
     import pytest
-    from scar.analysis.array_motion import verify_array_motion
+    from scar.analysis.source_motion_window import verify_array_motion
     from scar.compiler.temporal_invariant_loop import _plan, _source
 
     def forbidden(*args, **kwargs):
@@ -99,7 +99,7 @@ def test_source_movement_gate_binds_real_legality_and_emitted_placements(tmp_pat
     import subprocess
     import pytest
     from test_array_motion_legality import _strict_window_case
-    from scar.analysis.array_motion import derive_array_motion
+    from scar.analysis.source_motion_window import derive_array_motion
     from scar.analysis.array_motion_legality import derive_array_motion_legality
     from scar.compiler.temporal_invariant_loop import _plan, _source
     from scar.ir.execution_recipe import artifact_reference

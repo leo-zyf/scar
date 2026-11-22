@@ -5,7 +5,7 @@ from hashlib import sha256
 
 import pytest
 
-from scar.analysis.array_motion import derive_array_motion, verify_array_motion
+from scar.analysis.source_motion_window import derive_array_motion, verify_array_motion
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 
 

@@ -346,14 +346,20 @@ def write_composite_invariant_loop_proof(proof,path):
     return artifact_reference(path,COMPOSITE_PROOF_SCHEMA)
 
 
-def _read_composite_invariant_loop_materials(path):
+def _read_composite_invariant_loop_materials(path,*,expected_reference=None):
     """Decode pinned source/fusion materials without granting F4 authority.
 
     The derived body is not a newly declared Python callable.  Reading these
     bytes never substitutes for ``validate_composite_invariant_loop_proof``.
     """
     from scar.ir.execution_recipe import open_artifact, read_artifact
-    reference, document = open_artifact(path, COMPOSITE_PROOF_SCHEMA)
+    if expected_reference is None:
+        reference,document=open_artifact(path,COMPOSITE_PROOF_SCHEMA)
+    else:
+        reference=expected_reference
+        if reference['uri']!=str(Path(path).absolute()) or reference['schema']!=COMPOSITE_PROOF_SCHEMA:
+            raise ValueError('composite original proof receipt changed during material replay')
+        document=read_artifact(reference)
     if (set(document)!={'schema','schema_version',*CompositeInvariantLoopProof.__dataclass_fields__}
             or type(document['schema_version']) is not int or document['schema_version']!=1):
         raise ValueError('supported composite proof fields/version required')
@@ -403,12 +409,17 @@ def _read_composite_invariant_loop_materials(path):
     return proof,reference
 
 
-def read_composite_invariant_loop_proof(path,*,catalog):
-    """Read pinned composition shards and replay every F4/fusion/global hop."""
+def _replay_composite_invariant_loop_proof(path,*,catalog):
     from scar.ir.execution_recipe import read_artifact
     proof,reference=_read_composite_invariant_loop_materials(path)
     proof=validate_composite_invariant_loop_proof(proof,catalog=catalog)
     read_artifact(reference,json_document=False)
+    return proof,reference
+
+
+def read_composite_invariant_loop_proof(path,*,catalog):
+    """Read pinned composition shards and replay every F4/fusion/global hop."""
+    proof,_=_replay_composite_invariant_loop_proof(path,catalog=catalog)
     return proof
 
 
@@ -423,47 +434,30 @@ def canonical_composite_invariant_motion_interface(proof):
 
 def read_composite_invariant_loop_motion(path,*,catalog):
     """Join the original loop window to shared, source-bound callee effects."""
-    from scar.analysis.array_motion import derive_array_motion
-    from scar.analysis.array_call_effects import derive_composite_call_effects
-    from scar.analysis.array_motion_legality import derive_array_motion_legality
-    from scar.analysis.composite_call_effect_binding import derive_composite_call_effect_binding
-    from scar.analysis.source_motion_window import derive_source_motion_window
-    from scar.compiler.loop_admission import _motion_origin_entry
-    from scar.ir.execution_recipe import artifact_reference
+    from scar.analysis.array_call_effects import derive_bound_composite_call_effects
+    from scar.analysis.array_motion_legality import derive_array_motion_and_legality
+    from scar.analysis.source_motion_window import project_loop_source_motion
     from scar.optimization.resource_solver import semantic_sha256
 
     view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
-    proof=read_composite_invariant_loop_proof(path,catalog=view)
+    proof,reference=_replay_composite_invariant_loop_proof(path,catalog=view)
     interface=canonical_composite_invariant_motion_interface(proof)
-    motion=derive_array_motion(proof.body,carry_parameter=proof.carry_parameter,loop_interface=interface)
     def role(name):
         rows=[row for row in proof.origins if row.get('kind')=='original_f4' and row.get('role')==name]
         if len(rows)!=1:raise ValueError('one original composite loop/CALL coordinate required')
         return rows[0]
-    identity=next(row for row in proof.source.origins if row.get('kind')=='source_identity')
-    source=view.unit(identity['unit'])
-    functions=[index for index,function in enumerate(source.facts.functions)
-        if function.template.occurrence==identity['occurrence']]
-    if len(functions)!=1:raise ValueError('composite source identity lacks one original F4 function')
-    call=role('invariant_array_leaf_call')
-    window=derive_source_motion_window(view,unit=identity['unit'],function_ordinal=functions[0],
-        loop_header=_motion_origin_entry(role('single_shared_invariant_loop')),
-        call_entry=_motion_origin_entry(call))
-    effects=derive_composite_call_effects(proof)
-    binding=derive_composite_call_effect_binding(view,proof,effects)
-    legality=derive_array_motion_legality(proof.body,carry_parameter=proof.carry_parameter,
+    window,routes=project_loop_source_motion(view,proof,
+        role('single_shared_invariant_loop'),role('invariant_array_leaf_call'))
+    effects,binding=derive_bound_composite_call_effects(view,proof)
+    motion,legality=derive_array_motion_and_legality(proof.body,carry_parameter=proof.carry_parameter,
         loop_interface=interface,source_window=window,callee_effects=effects,callee_binding=binding)
     report=dict(schema='scar.source-composite-loop-motion',schema_version=1,
-        proof=artifact_reference(path,COMPOSITE_PROOF_SCHEMA),proof_id=proof.id,
+        proof=reference,proof_id=proof.id,
         proof_sha256=semantic_sha256(asdict(proof)),body_sha256=motion['body_sha256'],
         canonical_interface_sha256=semantic_sha256(interface),array_motion=motion,
         source_identity=dict(path=proof.source.path,sha256=proof.source.sha256,code_key=proof.source.code_key),
         source_window=window,callee_effects=effects,callee_binding=binding,movement_legality=legality,
-        parameter_routes=[dict(leaf_formal=name,outer_parameter=proof.parameter_map[name],
-            original_actual=call['call_inputs'][index],
-            binding_role='CARRIED' if name==proof.carry_parameter else 'OUTER_LIVE_IN',
-            referent_content_invariance='CONDITIONAL_ON_EXACT_ARRAY_AND_NO_FOREIGN_WRITERS')
-            for index,name in enumerate(proof.body.parameters)],
+        parameter_routes=routes,
         source_facts=dict(authority='FULL_ORIGINAL_COMPOSITE_F4_REDISCOVERY',
             bodies_shared=True,iterations_unrolled=False,derived_body_is_python_callable=False),
         runtime_obligations=motion['conditional_obligations'],runtime_obligations_discharged=False,

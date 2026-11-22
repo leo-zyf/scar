@@ -14,7 +14,7 @@ import shlex
 import subprocess
 
 from scar.codegen import cpp
-from scar.analysis.array_motion import derive_array_motion,verify_array_motion
+from scar.analysis.source_motion_window import derive_array_motion,verify_array_motion
 from scar.compiler.model import document,plan_from_dict,region_from_dict
 from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
 from scar.compiler.invariant_loop import plan_invariant_loop
@@ -39,10 +39,9 @@ def _sources():
         Path(cpp.__file__).with_name('kernel_v1.cpp.in'),Path(cpp.__file__).with_name('scar_abi_v1.h'),
         Path(__file__).with_name('invariant_loop.py'),
         Path(__file__).with_name('loop_admission.py'),
-        Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py',
+        Path(__file__).resolve().parents[1]/'analysis'/'source_motion_window.py',
         Path(__file__).resolve().parents[1]/'analysis'/'array_motion_legality.py',
-        Path(__file__).resolve().parents[1]/'analysis'/'array_call_effects.py',
-        Path(__file__).resolve().parents[1]/'analysis'/'composite_call_effect_binding.py')]
+        Path(__file__).resolve().parents[1]/'analysis'/'array_call_effects.py')]
 
 
 def _compiler(parallel):
@@ -108,21 +107,21 @@ def _source_movement_gate(body,interface):
         raise ValueError('distinct original direct or composite source proof required')
     if motion.get('id')!=prefix+semantic_sha256({key:value for key,value in motion.items()if key!='id'}):
         raise ValueError('source-motion content identity differs')
-    original=interface[proof_key];proof=read_artifact(motion['proof']);query={};extra={}
+    original=interface[proof_key];proof_reference=_reference(motion['proof']);query={};extra={}
     if proof_key=='original_composite_f4_proof':
         from scar.compiler.pipeline_loop_frontend import _read_composite_invariant_loop_materials,COMPOSITE_PROOF_SCHEMA
         from scar.analysis.array_call_effects import verify_composite_call_effects
-        if motion['proof']['schema']!=COMPOSITE_PROOF_SCHEMA:
+        if proof_reference['schema']!=COMPOSITE_PROOF_SCHEMA:
             raise ValueError('composite source movement requires its separate original proof receipt')
-        typed_proof,proof_ref=_read_composite_invariant_loop_materials(motion['proof']['uri'])
-        if proof_ref!=motion['proof']:
-            raise ValueError('composite original proof receipt changed during material replay')
+        typed_proof,_=_read_composite_invariant_loop_materials(proof_reference['uri'],
+            expected_reference=proof_reference)
         proof=asdict(typed_proof)
         effects=verify_composite_call_effects(motion['callee_effects'],typed_proof)
         query=dict(callee_effects=effects,callee_binding=motion['callee_binding'])
         extra=dict(callee_effects_sha256=semantic_sha256(effects),
             callee_binding_sha256=semantic_sha256(motion['callee_binding']))
     else:
+        proof=read_artifact(proof_reference)
         proof={key:value for key,value in proof.items()if key not in ('schema','schema_version')}
     canonical=dict(carry_parameter=interface['carry_parameter'],
         readonly_parameters=[name for name in body.parameters if name!=interface['carry_parameter']],
