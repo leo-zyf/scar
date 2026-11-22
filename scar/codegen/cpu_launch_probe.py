@@ -149,7 +149,7 @@ def measure(out, *, cpu_ids, cwd, environment, abi='ARGV', compiler=('c++',), wa
     root.mkdir(parents=True, exist_ok=False)
     source, binary, sampler, sample_path = (root / _FILES[key] for key in _FILES)
     source.write_bytes((_PACKAGE/'native/cpu_launch_probe.cpp').read_bytes())
-    sampler.write_bytes((_PACKAGE/'runtime/cpu_launch_sampler.py').read_bytes())
+    sampler.write_bytes((_PACKAGE/'runtime/cpu_process_sampler.py').read_bytes())
     subprocess.run(_compile_argv(compiler, source, binary), check=True)
     runtime = _runtime(binary, cwd, environment)
     interpreter = _ref(sys.executable, 'application/x-executable')

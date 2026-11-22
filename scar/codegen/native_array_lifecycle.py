@@ -239,7 +239,7 @@ def measure(phase_sites_ref, out, *, warmups=0, samples=3):
     _same_loader(loaders['original'], loaders['diagnostic'], runtime)
     guard = _build_capacity_guard(root)
     sampler = root/'sampler.py'
-    sampler.write_bytes((_PACKAGE/'runtime/native_array_lifecycle_sampler.py').read_bytes())
+    sampler.write_bytes((_PACKAGE/'runtime/cpu_process_sampler.py').read_bytes())
     interpreter = _ref(sys.executable, 'application/x-executable')
     limit = capacity['candidate_address_space_limit_bytes']
     directories = [root/f'sample-{index:02d}' for index in range(warmups + samples)]

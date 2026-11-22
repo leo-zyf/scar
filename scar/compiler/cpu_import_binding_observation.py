@@ -27,8 +27,11 @@ _STATUS = 'scar.cpu-original-import-binding-run'
 _RAW = 'application/octet-stream'
 _SOURCE = 'scar.python-source'
 _ORIGIN_KINDS = {'ABSOLUTE_FILE', 'BUILT_IN', 'FROZEN', 'NAMESPACE', 'UNKNOWN'}
-_BOOTSTRAP = Path(__file__).resolve().parents[1]/'runtime/original_import_bindings.py'
-_SPAWN_BOOTSTRAP = _BOOTSTRAP.with_name('original_import_bindings_spawn.py')
+_BOOTSTRAP = Path(__file__).resolve().parents[1]/'runtime/original_import_bindings_spawn.py'
+_SPAWN_BOOTSTRAP = _BOOTSTRAP
+# Exact receipts of the historical observers published before the common bootstrap.
+_ARCHIVED_CORE = 'b230a4590c9e4e565af182f01f1885e063b9b0a95128ffa27de86b4e1f0350ad'
+_ARCHIVED_SPAWN = '12b15a243b205e6c5c1a48c8d32523caff9a275caa5a00617345c762e7021291'
 _OBSERVER_CORE = 'observer-core.py'
 _PROCESSES = 'processes'
 _PROCESS_SCHEMA = 'scar.cpu-original-import-process'
@@ -42,6 +45,12 @@ _OBSERVED = 'OBSERVED'
 def _need(ok, reason):
     if not ok:
         raise ValueError('CPU original import bindings: ' + reason)
+
+
+def _bootstrap_matches(reference, *, follow_spawn=False):
+    saved = _raw(reference)
+    archived = _ARCHIVED_SPAWN if follow_spawn else _ARCHIVED_CORE
+    return reference['sha256'] == archived or saved == _BOOTSTRAP.read_bytes()
 
 
 def _codes(code):
@@ -228,7 +237,7 @@ def _add_processes(report, root, spec, sites, timing):
     _need(0 < len(paths) <= _SPAWN_LIMIT + 1 and
           sum(p.stat().st_size for p in paths) <= _TOTAL_PROCESS_BYTES, 'process evidence exceeds the replay budget')
     core = _ref(root/_OBSERVER_CORE, _SOURCE)
-    _need(_raw(core) == _BOOTSTRAP.read_bytes(), 'shared original import observer changed')
+    _need(_bootstrap_matches(core), 'shared original import observer changed')
 
     cpus = sorted(spec['cpu_ids'])
     root_capture = _process_path(folder, 0)
@@ -272,8 +281,7 @@ def _record(root, paired_ref, initializer_ref, spec, watch, sites, *, follow_spa
     config, launch = _invocation(spec, root, sites, follow_spawn=follow_spawn)
     script = _ref(root/_OBSERVER, _SOURCE)
     request = _ref(root/_CONFIG, _RAW)
-    bootstrap = _SPAWN_BOOTSTRAP if follow_spawn else _BOOTSTRAP
-    _need(_raw(script) == bootstrap.read_bytes() and _raw(request) == (repr(config) + '\n').encode(),
+    _need(_bootstrap_matches(script, follow_spawn=follow_spawn) and _raw(request) == (repr(config) + '\n').encode(),
           'observer bootstrap or exact watched request changed')
     run = _ref(root/'run.json', _STATUS)
     status = read_artifact(run)
@@ -310,10 +318,10 @@ def measure(paired_ref, initializer_ref, watch, out, *, follow_spawn=False):
     _need(type(follow_spawn) is bool, 'follow_spawn must be an explicit boolean')
     config, launch = _invocation(spec, root, sites, follow_spawn=follow_spawn)
     (root/'published').mkdir(parents=True, exist_ok=False)
-    bootstrap = _SPAWN_BOOTSTRAP if follow_spawn else _BOOTSTRAP
-    (root/_OBSERVER).write_bytes(bootstrap.read_bytes())
+    bootstrap = _BOOTSTRAP.read_bytes()
+    (root/_OBSERVER).write_bytes(bootstrap)
     if follow_spawn:
-        (root/_OBSERVER_CORE).write_bytes(_BOOTSTRAP.read_bytes())
+        (root/_OBSERVER_CORE).write_bytes(bootstrap)
         (root/_PROCESSES).mkdir()
     (root/_CONFIG).write_text(repr(config) + '\n', encoding='utf-8')
     transcript = spec['transcript']
