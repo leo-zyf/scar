@@ -6,12 +6,17 @@ generated. Unknown cases stay in the domain and prevent a closed selection.
 import argparse
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from fractions import Fraction
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
+
+if TYPE_CHECKING:
+    from scar.compiler.pipeline_frontend import PipelinePlan
 
 SCHEMA = 'scar.pipeline-temporal-domain'
 INPUTS_SCHEMA = 'scar.pipeline-temporal-domain-inputs'
@@ -19,6 +24,15 @@ RESOURCE_EVENT_DOMAIN = 'scar.pipeline-resource-event-domain'
 RESOURCE_EVENT_INPUTS = 'scar.pipeline-resource-event-domain-inputs'
 RESOURCE_EVENT_QUERIES = 'scar.pipeline-resource-event-cost-queries'
 _RESOURCE_EVENT_VERSION = 2
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedTemporalCase:
+    pipeline: 'PipelinePlan'
+    memory: dict
+    ready: dict
+    target: Path
+    plan: dict
 
 
 def _write(path, value):
@@ -88,9 +102,7 @@ def _decision(cases):
 
 def _case(reference, search_budget):
     from .project_pipeline_temporal import SCHEMA as PREPARATION, open_temporal_inputs
-    from scar.optimization.pipeline_temporal_model import (
-        verify_pipeline_temporal_projection, plan_pipeline_temporal_model,
-    )
+    from scar.optimization.pipeline_temporal_model import solve_pipeline_temporal_projection
     preparation = read_artifact(reference)
     if (preparation.get('schema') != PREPARATION or type(preparation.get('schema_version')) is not int
             or preparation['schema_version'] != 1 or preparation.get('solver_invoked') is not False):
@@ -98,12 +110,10 @@ def _case(reference, search_budget):
     inputs = read_artifact(preparation['inputs'])
     projection = read_artifact(preparation['projection'])
     with open_temporal_inputs(preparation['inputs']) as (pipeline, memory, ready, target):
-        verify_pipeline_temporal_projection(pipeline, memory, ready, target, projection)
-        plan = plan_pipeline_temporal_model(pipeline, memory, ready, target,
-            cost_model=projection['cost_model'], search_budget=search_budget)
-        if semantic_sha256(plan['projection_report']) != semantic_sha256(projection):
-            raise ValueError('L3 cost projection differs from retained independently replayed L2')
-    read_artifact(reference); read_artifact(preparation['inputs']); read_artifact(preparation['projection'])
+        plan = solve_pipeline_temporal_projection(pipeline, memory, ready, target, projection,
+            search_budget=search_budget)
+    for retained in (reference, preparation['inputs'], preparation['projection']):
+        read_artifact(retained, json_document=False)
     solver = plan['solver_report']
     solution = solver['solution']
     if solution is not None:
@@ -132,10 +142,11 @@ def _case(reference, search_budget):
         lower_bound_ticks=solver['lower_bound_ticks'], gap_ticks=solver['gap_ticks'],
         states_explored=solver['states_explored'], unresolved=deepcopy(solver['unresolved']),
         runtime_order_executed=False, deployment_authorized=False)
-    return row, plan, _common_context(inputs, projection)
+    admitted = _AdmittedTemporalCase(pipeline, memory, ready, target, plan)
+    return row, admitted, _common_context(inputs, projection)
 
 
-def _derive(projections, search_budget):
+def _derive(projections, search_budget, *, retain_case=None):
     if type(search_budget) is not int or search_budget < 1:
         raise ValueError('positive per-case solver search budget required')
     if isinstance(projections, (str, Path, dict)):
@@ -144,12 +155,13 @@ def _derive(projections, search_budget):
     if not references:
         raise ValueError('nonempty explicit L2 case domain required')
     cases, plans, common, known_tick = [], {}, None, None
+    retained = None
     seen = set()
     for reference in references:
         if semantic_sha256(reference) in seen:
             raise ValueError('duplicate L2 preparation in the explicit domain')
         seen.add(semantic_sha256(reference))
-        row, plan, context = _case(reference, search_budget)
+        row, admitted, context = _case(reference, search_budget)
         if common is None:
             common = context
         elif semantic_sha256(common) != semantic_sha256(context):
@@ -160,7 +172,9 @@ def _derive(projections, search_budget):
                 known_tick = tick
             elif tick != known_tick:
                 raise ValueError('known case costs do not use the same exact rational tick')
-        cases.append(row); plans[row['id']] = plan
+        cases.append(row); plans[row['id']] = admitted.plan
+        if row['id'] == retain_case:
+            retained = admitted
     # A case without a tick necessarily has unknown durations and remains in
     # this domain. Its bound is never recast as a known zero or silently omitted.
     decision = _decision(cases)
@@ -172,7 +186,7 @@ def _derive(projections, search_budget):
         all_options_retained=True, no_unknown_cost_imputed=True,
         solver_invoked=True, native_compiled=False, certificate_generated=False,
         runtime_order_executed=False, physical_optimality_proven=False,
-        deployment_authorized=False, target_program_executed=False, performance_measured=False), plans
+        deployment_authorized=False, target_program_executed=False, performance_measured=False), plans, retained
 
 
 def solve_pipeline_temporal(projections, out, *, search_budget=100000):
@@ -187,7 +201,7 @@ def solve_pipeline_temporal(projections, out, *, search_budget=100000):
         scope='EXACT_EXPLICIT_FINITE_CASE_LIST_DECLARED_BEFORE_SEARCH')
     out.mkdir(parents=True)
     declared = _write(out/'domain-inputs.json', declaration)
-    report, plans = _derive(declaration['projections'], search_budget)
+    report, plans, _ = _derive(declaration['projections'], search_budget)
     read_artifact(declared)
     report['declared_domain'] = declared
     for index, row in enumerate(report['cases']):
@@ -197,8 +211,7 @@ def solve_pipeline_temporal(projections, out, *, search_budget=100000):
     return report
 
 
-def verify_pipeline_temporal_domain(report):
-    """Reopen original L2/source evidence and rerun every case, without writes."""
+def _verify_pipeline_temporal_domain(report, *, retain_selected=False):
     if isinstance(report, (str, Path)):
         path = Path(report).resolve()
         if path.is_dir(): path = path/'result.json'
@@ -211,7 +224,9 @@ def verify_pipeline_temporal_domain(report):
     if (declaration.get('schema') != INPUTS_SCHEMA or type(declaration.get('schema_version')) is not int
             or declaration['schema_version'] != 1):
         raise ValueError('original explicit finite input-domain publication required')
-    expected, plans = _derive(declaration['projections'], declaration['search_budget_per_case'])
+    retained_id = value['decision']['selected_case_id'] if retain_selected else None
+    expected, plans, retained = _derive(declaration['projections'], declaration['search_budget_per_case'],
+        retain_case=retained_id)
     expected['declared_domain'] = value['declared_domain']
     for actual, row in zip(value['cases'], expected['cases'], strict=True):
         stored = read_artifact(actual['plan'])
@@ -221,7 +236,12 @@ def verify_pipeline_temporal_domain(report):
     if semantic_sha256(expected) != semantic_sha256(value):
         raise ValueError('finite domain differs from retained cases, contexts, costs or selection replay')
     read_artifact(value['declared_domain'])
-    return value
+    return value, retained
+
+
+def verify_pipeline_temporal_domain(report):
+    """Reopen original L2/source evidence and rerun every case, without writes."""
+    return _verify_pipeline_temporal_domain(report)[0]
 
 
 def _file_reference(value, schema, member):

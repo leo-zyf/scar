@@ -11,17 +11,13 @@ from shutil import copy2
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.analysis.scalar_table_cse import check as check_proof
-from scar.analysis.scalar_table_handoff import CAPTURE as OBSERVATION, DESIGN as CAPTURE_DESIGN
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dynamic
 from scar.codegen.scalar_source import (
     _i64, _require, _table_rows, encode_outputs, render_score, render_table,
     render_transition, score_samples, transition_arguments,
 )
-from scar.compiler.scalar_table_region import _definition, _position, _span, seal_expression
 from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
-from scar.runtime.scalar_table_contract import SCHEMA as REGION, _admitted
 
 
 TABLE = 'scar.scalar-table-standalone'
@@ -72,6 +68,11 @@ def _bind(node, value, names):
 
 
 def _qualify_table(region_ref, observation_ref, table_version):
+    from scar.analysis.scalar_table_cse import check as check_proof
+    from scar.analysis.scalar_table_handoff import CAPTURE as OBSERVATION, DESIGN as CAPTURE_DESIGN
+    from scar.compiler.scalar_table_region import _definition, _position, _span, seal_expression
+    from scar.runtime.scalar_table_contract import SCHEMA as REGION, _admitted
+
     _require(region_ref['schema'] == REGION and observation_ref['schema'] == OBSERVATION,
              'expected exact scalar table region and source observation artifacts')
     report = read_artifact(region_ref)
@@ -239,6 +240,9 @@ def _table_package(region_ref, observation_ref, table_version):
 
 def export_table(region_path, observation_path, out, *, table_version=None):
     """Publish a C++20 executable for the admitted frozen table and operation."""
+    from scar.analysis.scalar_table_handoff import CAPTURE as OBSERVATION
+    from scar.runtime.scalar_table_contract import SCHEMA as REGION
+
     return _publish(_table_package(_ref(region_path, REGION), _ref(observation_path, OBSERVATION), table_version), out)
 
 

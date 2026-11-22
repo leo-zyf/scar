@@ -306,15 +306,13 @@ def _resource_events(ready):
 
 @contextmanager
 def _selected(original_domain, selected_case_id=None):
-    from scar.compiler.solve_pipeline_temporal import SCHEMA as DOMAIN, verify_pipeline_temporal_domain
-    from scar.compiler.project_pipeline_temporal import open_temporal_inputs
-    from .pipeline_temporal_model import verify_pipeline_temporal_model
+    from scar.compiler.solve_pipeline_temporal import SCHEMA as DOMAIN, _verify_pipeline_temporal_domain
     if isinstance(original_domain, (str, Path)):
         path = Path(original_domain).resolve()
         original_domain = artifact_reference(path/'result.json' if path.is_dir() else path, DOMAIN)
     reference = deepcopy(original_domain)
     _need(reference.get('schema') == DOMAIN, 'original finite-domain ArtifactRef required')
-    domain = verify_pipeline_temporal_domain(read_artifact(reference))
+    domain, admitted = _verify_pipeline_temporal_domain(read_artifact(reference), retain_selected=True)
     decision = domain['decision']
     _need(decision['status'] == 'OPTIMAL_WITHIN_EXPLICIT_DECLARED_DOMAIN'
           and decision['selection_decision'] == 'MODEL_SELECTED_EXPLICIT_CASE_ONLY'
@@ -325,19 +323,16 @@ def _selected(original_domain, selected_case_id=None):
     _need(selected_case_id is None or selected_case_id == selected,
           'requested case differs from the original finite-domain decision')
     rows = [row for row in domain['cases'] if row['id'] == selected]
-    _need(len(rows) == 1 and rows[0]['search_complete'] is True
+    _need(admitted is not None and len(rows) == 1 and rows[0]['search_complete'] is True
           and rows[0]['proved_infeasible'] is False, 'one complete selected feasible case required')
     row = rows[0]
-    with open_temporal_inputs(row['inputs']) as (pipeline, memory, ready, target):
-        temporal = read_artifact(row['plan'])
-        verify_pipeline_temporal_model(pipeline, memory, ready, target, temporal)
-        refs = {name: deepcopy(row[name]) for name in (
-            'preparation', 'inputs', 'projection', 'original_proof', 'memory', 'ready', 'plan', 'cost_model')}
-        yield reference, selected, refs, pipeline, memory, ready, target, temporal
-        for value in refs.values():
-            if value is not None:
-                read_artifact(value)
-    read_artifact(reference)
+    refs = {name: deepcopy(row[name]) for name in (
+        'preparation', 'inputs', 'projection', 'original_proof', 'memory', 'ready', 'plan', 'cost_model')}
+    yield reference, selected, refs, admitted.pipeline, admitted.memory, admitted.ready, admitted.target, admitted.plan
+    for value in refs.values():
+        if value is not None:
+            read_artifact(value, json_document=False)
+    read_artifact(reference, json_document=False)
 
 
 def _derive(pipeline, memory, ready, temporal, reference, selected, refs, *, resource_events=False):
@@ -464,7 +459,7 @@ def replay_pipeline_execution_refinement(value):
 
 
 def refine_selected_pipeline_temporal(original_domain, *, resource_events=False):
-    """Replay the entire original domain and independently reopen its winner."""
+    """Refine the winning case from one complete replay of the original domain."""
     with _selected(original_domain) as (reference, selected, refs, pipeline, memory, ready, _, temporal):
         return _derive(pipeline, memory, ready, temporal, reference, selected, refs,
                        resource_events=resource_events)

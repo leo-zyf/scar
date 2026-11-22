@@ -9,7 +9,7 @@ from scar.optimization.pipeline_memory import plan_pipeline_memory
 from scar.optimization.pipeline_schedule import plan_pipeline_ready_schedule
 from scar.optimization.pipeline_temporal_model import (
     COST_SCHEMA, CONTROL_RESOURCE, EXAMPLE, ROLE, project_pipeline_temporal_model,
-    verify_pipeline_temporal_projection,
+    solve_pipeline_temporal_projection, verify_pipeline_temporal_projection,
 )
 
 
@@ -52,6 +52,34 @@ def test_unknown_projection_never_invokes_solver_or_invents_free_control(hardwar
     assert report['projection']['memory_capacities'] != {
         'explicit-incremental-host-payload-budget':ready['encoded_graph_budget_bytes']}
     assert verify_pipeline_temporal_projection(pipeline, memory, ready, hardware, report)==report
+
+
+def test_retained_l2_projection_replays_memory_once_before_solving(hardware, monkeypatch):
+    from scar.optimization import pipeline_schedule, resource_solver
+
+    pipeline, memory, ready = _inputs(hardware)
+    projection = project_pipeline_temporal_model(pipeline, memory, ready, hardware)
+    original = pipeline_schedule.verify_pipeline_memory
+    replays = []
+
+    def count(*args):
+        replays.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(pipeline_schedule, 'verify_pipeline_memory', count)
+    plan = solve_pipeline_temporal_projection(pipeline, memory, ready, hardware, projection)
+    assert replays == [True]
+    assert plan['projection_report'] == projection
+    assert plan['solver_report']['status'] == 'UNRESOLVED'
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('modified L2 evidence must be rejected before solving')
+
+    monkeypatch.setattr(resource_solver, 'solve_resource_schedule', forbidden)
+    first = next(iter(projection['projection']['task_costs'].values()))
+    first['duration_ticks'] = 0
+    with pytest.raises(ValueError, match='differs from original input/cost/resource replay'):
+        solve_pipeline_temporal_projection(pipeline, memory, ready, hardware, projection)
 
 
 def test_complete_declared_example_is_not_measurement_and_wrong_binding_or_partial_cost_is_unknown(hardware, tmp_path):

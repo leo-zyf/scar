@@ -96,6 +96,9 @@ jobs:
           test -n "$plan"
           cd "$smoke"
           env -u PYTHONPATH "$smoke/bin/scar" --help
+          for variant in table score transition; do
+            env -u PYTHONPATH "$smoke/bin/python" -m scar.codegen.scalar_standalone "$variant" --help >/dev/null
+          done
           env -u PYTHONPATH "$smoke/bin/scar" compile --plan "$plan" \
             --out "$smoke/replayed" --repetitions 1 --case-seconds 60
 

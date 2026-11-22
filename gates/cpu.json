@@ -28,6 +28,7 @@
         "tests/unit/test_source_symbols.py",
         "tests/unit/test_source_contexts.py",
         "tests/unit/test_source_context_variants.py",
+        "tests/unit/test_source_declarations.py::test_c2a_source_declarations",
         "tests/unit/test_source_binding_variants.py",
         "tests/unit/test_compiler_topology.py"
       ]
@@ -50,6 +51,8 @@
         "tests/unit/test_read_ordered_activations.py",
         "tests/unit/test_source_productions.py::test_closed_grammar_exact_records_strict_codec_and_budgets",
         "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
+        "tests/unit/test_source_productions.py::test_type_parameter_action_interfaces_and_unambiguous_wire_kinds",
+        "tests/unit/test_source_productions.py::test_pattern_native_ports_and_failure_do_not_fabricate_capture_references",
         "tests/unit/test_source_binding_effects.py",
         "tests/unit/test_program_indexed_codec.py"
       ]
@@ -94,6 +97,8 @@
         "tests/unit/test_affinity_demands.py",
         "tests/unit/test_execution_recipe.py",
         "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py",
+        "tests/unit/test_pipeline_temporal_projection.py",
+        "tests/unit/test_pipeline_temporal_domain.py",
         "tests/unit/test_workspace_temporal_ir.py"
       ]
     },

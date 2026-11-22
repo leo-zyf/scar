@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from scar.analysis.scalar_table_handoff import table_version
 from scar.codegen.scalar_table_native import MAX_LIVE_KEYS
 
 
@@ -29,6 +28,8 @@ def _i64(value):
 
 
 def _table_rows(rows, version):
+    from scar.analysis.scalar_table_handoff import table_version
+
     _require(type(rows) is dict and 0 < len(rows) <= MAX_LIVE_KEYS, 'bounded frozen scalar table required')
     _require(table_version(rows) == version, 'frozen scalar table content version differs')
     for key, row in rows.items():

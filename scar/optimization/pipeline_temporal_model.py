@@ -13,9 +13,9 @@ from pathlib import Path
 from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import loads
-from scar.ir.versioned_schedule import VersionedTaskKind, validate_versioned_schedule
+from scar.ir.versioned_schedule import VersionedResourceSchedule, VersionedTaskKind
 from scar.runtime.compiled_deployment import thread_environment
-from scar.optimization.pipeline_memory import _pipeline, verify_pipeline_memory
+from scar.optimization.pipeline_memory import _pipeline
 from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule
 from .resource_solver import semantic_sha256
 from .schedule import schedule_from_dict
@@ -41,18 +41,22 @@ def _document(value):
 
 def _inputs(pipeline, memory, ready, target):
     pipeline = _pipeline(pipeline)
-    memory = verify_pipeline_memory(pipeline, memory)
+    # Ready admission replays this exact memory plan before checking its graph.
+    memory = _document(memory)
     ready = verify_pipeline_ready_schedule(pipeline, memory, target, ready)
     graph = schedule_from_dict(ready['task_graph'])
-    validate_versioned_schedule(graph)
+    if not isinstance(graph, VersionedResourceSchedule):
+        raise ValueError('a versioned pipeline resource schedule is required')
     compute = {}
+    seen_calls = set()
     for task in graph.tasks:
         if task.kind is VersionedTaskKind.COMPUTE:
             call = task.attrs.get('call_id')
-            if call not in ready['call_resource_demands'] or call in compute.values():
+            if call not in ready['call_resource_demands'] or call in seen_calls:
                 raise ValueError('one original COMPUTE task per bound pipeline call required')
             compute[task.id] = call
-    if set(compute.values()) != {call.id for call in pipeline.calls}:
+            seen_calls.add(call)
+    if seen_calls != {call.id for call in pipeline.calls}:
         raise ValueError('compute task projection omits an original pipeline call')
     return pipeline, memory, ready, graph, compute
 
@@ -141,8 +145,7 @@ def _example(data, context, tasks, compute, capacities):
     return (None, None, issues) if issues else (costs, controls, [])
 
 
-def project_pipeline_temporal_model(pipeline, memory, ready, target, *, cost_model=None):
-    """L2 only: replay inputs and project constraints without invoking a solver."""
+def _project(pipeline, memory, ready, target, cost_model):
     pipeline, memory, ready, graph, compute = _inputs(pipeline, memory, ready, target)
     tasks = {task.id: task for task in graph.tasks}
     context = _context(pipeline, memory, ready, graph, None)
@@ -201,24 +204,42 @@ def project_pipeline_temporal_model(pipeline, memory, ready, target, *, cost_mod
         solver_invoked=False, runtime_order_executed=False, model_optimum_proven=False,
         physical_optimality_proven=False, deployment_authorized=False,
         target_program_executed=False, performance_measured=False)
-    return _json(report)
+    return _json(report), graph
 
 
-def verify_pipeline_temporal_projection(pipeline, memory, ready, target, report):
+def project_pipeline_temporal_model(pipeline, memory, ready, target, *, cost_model=None):
+    """L2 only: replay inputs and project constraints without invoking a solver."""
+    return _project(pipeline, memory, ready, target, cost_model)[0]
+
+
+def _replay_projection(pipeline, memory, ready, target, report):
     value = _document(report)
     if value.get('schema') != PROJECTION_SCHEMA or type(value.get('schema_version')) is not int or value['schema_version'] != 1:
         raise ValueError('versioned L2 pipeline temporal projection required')
-    expected = project_pipeline_temporal_model(pipeline, memory, ready, target, cost_model=value['cost_model'])
+    expected, graph = _project(pipeline, memory, ready, target, value['cost_model'])
     if semantic_sha256(expected) != semantic_sha256(value):
         raise ValueError('temporal projection differs from original input/cost/resource replay')
-    return value
+    return value, graph
+
+
+def verify_pipeline_temporal_projection(pipeline, memory, ready, target, report):
+    return _replay_projection(pipeline, memory, ready, target, report)[0]
 
 
 def plan_pipeline_temporal_model(pipeline, memory, ready, target, *, cost_model=None, search_budget=100000):
     """Explicit L3 entry; L2 projection never calls this function implicitly."""
+    projected, graph = _project(pipeline, memory, ready, target, cost_model)
+    return _solve_projection(projected, graph, search_budget)
+
+
+def solve_pipeline_temporal_projection(pipeline, memory, ready, target, report, *, search_budget=100000):
+    """Replay an L2 report once and solve against its admitted typed graph."""
+    projected, graph = _replay_projection(pipeline, memory, ready, target, report)
+    return _solve_projection(projected, graph, search_budget)
+
+
+def _solve_projection(projected, graph, search_budget):
     from .resource_solver import solve_resource_schedule
-    projected = project_pipeline_temporal_model(pipeline, memory, ready, target, cost_model=cost_model)
-    graph = schedule_from_dict(_document(ready)['task_graph'])
     solver = solve_resource_schedule(graph, **projected['projection'], search_budget=search_budget)
     return _json(dict(schema=SCHEMA, schema_version=1,
         layer='L3_EXPLICIT_FIXED_RESOURCE_MAKESPAN_SEARCH', projection_report=projected,
@@ -242,4 +263,4 @@ def verify_pipeline_temporal_model(pipeline, memory, ready, target, report):
 
 __all__ = ['PROJECTION_SCHEMA', 'SCHEMA', 'COST_SCHEMA', 'ROLE', 'SCOPE', 'EXAMPLE', 'CONTROL_RESOURCE',
     'project_pipeline_temporal_model', 'verify_pipeline_temporal_projection',
-    'plan_pipeline_temporal_model', 'verify_pipeline_temporal_model']
+    'plan_pipeline_temporal_model', 'solve_pipeline_temporal_projection', 'verify_pipeline_temporal_model']
