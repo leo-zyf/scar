@@ -13,6 +13,7 @@ import pytest
 
 from scar.analysis.program_inventory import ProgramInventory, inventory_program
 from scar.ir.ids import CodeID
+from scar.ir.program.expansion import ContextStoreBudget
 from scar.ir.program.runtime_sources import RuntimeSeedStatus, RuntimeTraceBudget
 
 
@@ -185,16 +186,30 @@ def test_compile_attempt_limit_is_an_independent_verifier_ceiling(runtime_projec
         ProgramInventory.from_dict(document, max_compile_attempts=1)
 
 
-def test_compressed_trace_input_preserves_runtime_source_selection(runtime_project):
+@pytest.mark.parametrize("trace_form", ["directory", "gzip"])
+def test_trace_input_forms_preserve_runtime_source_selection(runtime_project, trace_form):
     root, entry, _, trace, marker = runtime_project
-    archive = trace.with_suffix(".jsonl.gz")
-    with gzip.open(archive, "wb") as stream:
-        stream.write(trace.read_bytes())
+    selected = trace.parent
+    if trace_form == "gzip":
+        selected = trace.with_suffix(".jsonl.gz")
+        with gzip.open(selected, "wb") as stream:
+            stream.write(trace.read_bytes())
     plain = with_trace(runtime_project)
-    compressed = inventory_program(entry, project_root=root, source_roots=(root,), runtime_trace=archive)
-    assert {file.snapshot.path for file in plain.files} == {file.snapshot.path for file in compressed.files}
-    assert ProgramInventory.from_dict(compressed.to_dict()).to_dict() == compressed.to_dict()
+    result = inventory_program(entry, project_root=root, source_roots=(root,), runtime_trace=selected)
+    assert {file.snapshot.path for file in plain.files} == {file.snapshot.path for file in result.files}
+    assert ProgramInventory.from_dict(result.to_dict()).to_dict() == result.to_dict()
     assert not marker.exists()
+
+
+def test_context_store_budget_is_an_independent_replay_ceiling(runtime_project):
+    budget = ContextStoreBudget(8_000_000, 8_000_000)
+    document = with_trace(runtime_project, context_budget=budget).to_dict()
+    assert ProgramInventory.from_dict(document, context_verification_budget=budget).to_dict() == document
+    for field in ("max_compressed_bytes", "max_record_bytes"):
+        reduced = replace(budget, **{field: 7_000_000})
+        with pytest.raises(ValueError, match="independent context verifier budget"):
+            ProgramInventory.from_dict(document, context_verification_budget=reduced)
+    assert not runtime_project[4].exists()
 
 
 @pytest.mark.parametrize("change", ("digest", "anchor", "seed", "match", "compile_budget"))

@@ -90,6 +90,9 @@ def work(items):
     assert view.metadata["source_replay_on_load"] is False
     with pytest.raises(ValueError, match="record byte budget"):
         load_source_layers(output, source_path, max_record_bytes=1)
+    with pytest.raises(ValueError, match="must be fresh and absent"):
+        reconstruct_source_layers(inventory_path, output)
+    assert inventory_path.read_bytes() == original_bytes and source_path.read_bytes() == source_bytes
 
     # The reader serves the archived source context. It deliberately does not
     # inspect current source bytes or claim a fresh source replay.
@@ -172,6 +175,11 @@ def test_reader_rejects_tampered_archive_and_path_escape(tmp_path):
 
 def test_input_record_total_and_boolean_budgets_are_enforced(tmp_path):
     inventory_path, _, _ = _inventory(tmp_path, "def work():\n    return 1\n")
+
+    invalid_files = tmp_path / "invalid-file-budget"
+    with pytest.raises(ValueError, match="max_files"):
+        reconstruct_source_layers(tmp_path / "absent.json", invalid_files, max_files=0)
+    assert not invalid_files.exists()
 
     too_small_input = tmp_path / "small-input"
     with pytest.raises(ValueError, match="raw-byte budget|decoded-byte budget"):
