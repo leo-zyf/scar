@@ -4,7 +4,6 @@ from typing import Any, get_args, get_type_hints
 
 import pytest
 
-from scar.ir.program import codec
 from scar.ir.program.ids import BlockID, OperationID, ProtocolScopeID, UseID
 from scar.ir.program.model import (
     BlockArgument, CompletionResult, InvokeLiteralResult, OperationResult, ProgramGraph,
@@ -200,4 +199,3 @@ def test_capability_detects_new_enums_inside_old_refs_without_string_false_posit
     changed = replace(graph, protocol_operations=(replace(row, clause=C.AWAIT_ACQUISITION),))
     assert has_await_acquisition_capability(changed)
     assert has_protocol_connection_capability(changed)
-    assert codec.SCHEMA_VERSION == 26

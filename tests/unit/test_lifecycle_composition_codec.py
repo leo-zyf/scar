@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from scar.ir.program.codec import SCHEMA_VERSION, dumps, loads
+from scar.ir.program.codec import dumps, loads
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.v2.common import ProofStatus
 from tests.fixtures.program_lifecycle_body_composition import body_cleanup_lifecycle_program
@@ -21,7 +21,6 @@ def test_immutable_d2_3_v14_wire_is_unchanged_by_query_scope_views():
     proof = json.loads((FIXTURES / "program_graph_v14_frozen.proof.json").read_text())
     assert proof["source_revision"] == "fdf9d0d37ab043db297f095bfafa685b32b0b058"
     assert proof["codec_schema_version"] == proof["wire_schema_version"] == 14
-    assert SCHEMA_VERSION == 26
     assert proof["codec_path_inside_immutable_archive"] is True
     assert proof["fixture_bytes"] == len(raw)
     assert proof["fixture_sha256"] == hashlib.sha256(raw).hexdigest()

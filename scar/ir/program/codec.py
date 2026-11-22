@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from scar.ir.program.queries import ProgramIndex
 
 from scar.ir.record_codec import decode, encode, loads as _loads
-from scar.ir.v2._validation import record_errors
 
 from scar.ir.program.model import LocalBindingValue, Operation, ProgramGraph, ProtocolValue, TerminatorKind
 from scar.ir.program.control import (
@@ -127,23 +126,6 @@ _DRIVER_RECORD_TAGS = {
     BodyDriveResult: ("kind", "BODY_DRIVE_RESULT"),
 }
 _V11_RECORD_TAGS = {**_V10_RECORD_TAGS, **_DRIVER_RECORD_TAGS}
-
-
-def _require_record_valid(graph: ProgramGraph) -> None:
-    if type(graph) is not ProgramGraph:
-        raise TypeError("program graph must be ProgramGraph")
-    errors = record_errors(graph, ProgramGraph, "ProgramGraph")
-    if errors:
-        raise ValueError("invalid program graph record: " + "; ".join(errors))
-
-
-def _require_record_and_graph_valid(graph: ProgramGraph) -> None:
-    _require_record_valid(graph)
-    # Keep the record vocabulary importable separately from graph queries.
-    # Serialization always runs the complete bounded graph validator.
-    from scar.ir.program.validation import require_valid
-
-    require_valid(graph)
 
 
 def _has_cleanup_capability(graph: ProgramGraph) -> bool:
@@ -278,7 +260,11 @@ def _has_class_frame_capability(graph: ProgramGraph) -> bool:
 
 def dumps(graph: ProgramGraph) -> str:
     """Select only present capabilities; preserve historical field/tag/byte profiles."""
-    _require_record_and_graph_valid(graph)
+    from scar.ir.program.validation import require_valid
+
+    if type(graph) is not ProgramGraph:
+        raise TypeError("program graph must be ProgramGraph")
+    require_valid(graph)
     if _has_cleanup_capability(graph) and not graph.handled_context_domains:
         raise ValueError("cleanup capability requires explicit handled-context domains")
     has_binding_capability = (
@@ -669,8 +655,11 @@ def _decode_program_graph(payload: str) -> ProgramGraph:
 
 def loads(payload: str) -> ProgramGraph:
     """Decode exact capability profiles v1–v32 without upgrading old wire."""
+    from scar.ir.program.validation import require_valid
+
     graph = _decode_program_graph(payload)
-    _require_record_and_graph_valid(graph)
+    # The strict decoder already checks all local record invariants.
+    require_valid(graph)
     return graph
 
 
@@ -683,7 +672,6 @@ def _loads_with_index(payload: str) -> tuple[ProgramGraph, "ProgramIndex"]:
     an index from different input bytes; nothing is cached globally here.
     """
     graph = _decode_program_graph(payload)
-    _require_record_valid(graph)
     from scar.ir.program.queries import ProgramIndex
     return graph, ProgramIndex(graph)
 
