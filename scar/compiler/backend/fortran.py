@@ -149,7 +149,36 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
             'compile_options': ('-ffp-contract=off', '-fno-fast-math', '-Werror=write-strings')}
 
 
-def _translate_freeform(manifest, units, edits, project, config, captures):
+def _c_abi_source(exports):
+    lines = ['#include <type_traits>', '#include "f2c.h"',
+             'static_assert(std::is_same_v<integer, int>);',
+             'static_assert(std::is_same_v<doublereal, double>);']
+    for row in exports:
+        result = row['result']
+        native_return = result['c_type'] if result else 'void'
+        transport_return = result['transport_type'] if result else 'int'
+        types, parameters, arguments = [], [], []
+        for index, argument in enumerate(row['arguments']):
+            name = f'arg{index}'
+            types.append(f'{argument["transport_type"]} *')
+            if argument['by_value']:
+                parameters.append(f'{argument["c_type"]} {name}')
+                arguments.append('&' + name)
+            elif argument['read_only']:
+                parameters.append(f'const {argument["c_type"]} *{name}')
+                arguments.append(f'const_cast<{argument["c_type"]} *>({name})')
+            else:
+                parameters.append(f'{argument["c_type"]} *{name}')
+                arguments.append(name)
+        lines.append(f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});')
+        lines.append(f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) {{')
+        call = f'{row["transport"]}({", ".join(arguments)});'
+        lines.append('    ' + ('return ' if result else '') + call)
+        lines.append('}')
+    return '\n'.join(lines) + '\n'
+
+
+def _translate_freeform(manifest, units, edits, project, config, captures, source_directory, mixed):
     env = os.environ.copy()
     if 'fparser_path' in config:
         dependency = Path(config['fparser_path']).resolve()
@@ -177,39 +206,46 @@ def _translate_freeform(manifest, units, edits, project, config, captures):
                 captured.append({'path': name, 'semantics': str(semantics)})
         else:
             captured = capture_fortran({**manifest, 'source_root': str(sources)}, temporary / 'capture')['units']
-        request = {'entry': manifest.get('entry', 'main'),
+        request = {'entry': manifest.get('entry', 'main'), 'mixed': mixed,
                    'units': [{'source': snapshots[unit['path']], 'semantics': unit['semantics']}
                              for unit in captured]}
         arguments = temporary / 'lowering.json'
         arguments.write_text(json.dumps(request), encoding='utf-8')
         helper = Path(__file__).with_name('_fortran_freeform.py')
-        fixed = json.loads(_run([sys.executable, '-B', str(helper), str(arguments)], temporary, env=env))
+        lowered = json.loads(_run([sys.executable, '-B', str(helper), str(arguments)], temporary, env=env))
         transport = []
-        for name, source in fixed.items():
+        for name, source in lowered['sources'].items():
             path = temporary / f'{name}.f'
             path.write_text(source, encoding='utf-8')
             transport.append((path.name, path, ()))
-        return _translate_f2c(transport, {}, project, config, long_lines=True)
+        build = _translate_f2c(transport, {}, project, config, long_lines=True,
+                               source_directory=source_directory)
+        exports = lowered['exports']
+        if exports:
+            wrapper = Path(source_directory) / 'scar_c_abi.cpp'
+            (project / wrapper).write_text(_c_abi_source(exports), encoding='utf-8')
+            build['sources'].append(wrapper.as_posix())
+        return build, exports
 
 
-def emit_fortran(manifest, project, edits, *, source_directory='src', fixed_only=False, captures=None):
+def emit_fortran(manifest, project, edits, *, source_directory='src', mixed=False, captures=None):
     """Emit standalone C++20 host sources. Return shared CMake writer arguments."""
     config = manifest.get('fortran', {})
     units = list(_units(manifest))
     project = Path(project).resolve()
     project.mkdir(parents=True, exist_ok=True)
+    exports = []
     if all(path.suffix.lower() in _FIXED_SUFFIXES for _, path, _ in units):
         build = _translate_f2c(units, edits, project, config, source_directory=source_directory)
         translation = 'f2c-cxx20'
     else:
-        if fixed_only:
-            raise ValueError('mixed Fortran requires the fixed-form external procedure ABI')
-        build = _translate_freeform(manifest, units, edits, project, config, captures)
+        build, exports = _translate_freeform(manifest, units, edits, project, config, captures,
+                                            source_directory, mixed)
         translation = 'gfortran-typed-fparser-fixed-form-f2c-cxx20'
-    recipe = {'compiler': translation,
+    recipe = {'schema': 'scar.fortran-emission', 'schema_version': 1, 'compiler': translation,
               'sources': [{'path': name, 'sha256': hashlib.sha256(
                   edits[name] if name in edits else path.read_bytes()).hexdigest()}
                           for name, path, _ in units],
-              'native_libraries': list(build['libraries'])}
+              'native_libraries': list(build['libraries']), 'c_exports': exports}
     (project / 'fortran-emission.json').write_text(json.dumps(recipe, indent=2) + '\n', encoding='utf-8')
     return build

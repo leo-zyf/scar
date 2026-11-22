@@ -18,9 +18,11 @@ from fparser.two.utils import walk
 
 
 _SCOPES = re.compile(r'^\s*procedure name = (\w+)\s*$', re.MULTILINE)
-_SYMBOLS = re.compile(r"^\s*symtree: '([^']+)'\s+\|\| symbol: '[^']+'[^\n]*\n", re.MULTILINE)
+_SYMBOLS = re.compile(r"^[ \t]*symtree: '([^']+)'[ \t]*\|\| symbol: '[^']+'[^\n]*\n", re.MULTILINE)
 _KINDS = {('REAL', 4): 'REAL', ('REAL', 8): 'DOUBLE PRECISION',
           ('INTEGER', 4): 'INTEGER', ('LOGICAL', 4): 'LOGICAL'}
+_C_TYPES = {('INTEGER', 4): ('int', 'integer'), ('REAL', 8): ('double', 'doublereal')}
+_IDENTIFIER = re.compile(r'(?<![\w.])[A-Za-z_]\w*', re.ASCII)
 _FORTRAN_STRINGS = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"")
 _KINDED_NUMBER = re.compile(r'(?<![\w.])((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eEdD][+-]?\d+)?)_(\w+)\b')
 _SOURCE_RELATIONS = re.compile(r'<=|>=|==|/=|<|>')
@@ -40,6 +42,8 @@ class Symbol:
     type_and_kind: tuple[str, int]
     attributes: str
     value: str | None
+    c_interop: bool
+    binding: str | None
 
     def type_name(self):
         if self.type_and_kind not in _KINDS:
@@ -68,7 +72,7 @@ def _symbol_tables(dump):
         for item_index, item in enumerate(entries):
             tail = entries[item_index + 1].start() if item_index + 1 < len(entries) else len(text)
             fields = text[item.end():tail]
-            type_spec = re.search(r'^\s*type spec\s*:\s*\((\w+)\s+(\d+)\)', fields, re.MULTILINE)
+            type_spec = re.search(r'^\s*type spec\s*:\s*\((\w+)\s+(\d+)[^\n]*\)', fields, re.MULTILINE)
             if not type_spec:
                 origin = re.search(r"from namespace '(\w+)'", item[0])
                 if origin:
@@ -76,8 +80,10 @@ def _symbol_tables(dump):
                 continue
             attributes = re.search(r'^\s*attributes:\s*(.*)$', fields, re.MULTILINE)
             value = re.search(r'^\s*value:\s*(.*)$', fields, re.MULTILINE)
+            binding = re.search(r"binding_label: '([^']+)'", item[0])
             symbols[item[1].lower()] = Symbol((type_spec[1], int(type_spec[2])),
-                                             attributes[1] if attributes else '', value[1] if value else None)
+                                             attributes[1] if attributes else '', value[1] if value else None,
+                                             'C_INTEROP' in type_spec[0], binding[1] if binding else None)
         tables[scope[1].lower()] = symbols
     for scope, name, origin in imports:
         inherited = tables.get(origin, {}).get(name)
@@ -86,7 +92,7 @@ def _symbol_tables(dump):
     return tables
 
 
-def _source_text(node, symbols):
+def _source_text(node, symbols, aliases=None):
     def convert(fragment):
         def number(match):
             value, kind = match.groups()
@@ -112,8 +118,11 @@ def _source_text(node, symbols):
                 raise ValueError(f'unsupported real conversion kind {kind}')
             return ('DBLE' if kind == '8' else 'REAL') + '(' + value + ')'
 
-        return re.sub(r'\bREAL\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)', real_conversion,
-                      fragment, flags=re.IGNORECASE)
+        fragment = re.sub(r'\bREAL\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)', real_conversion,
+                          fragment, flags=re.IGNORECASE)
+        if aliases:
+            fragment = _IDENTIFIER.sub(lambda match: aliases.get(match[0].lower(), match[0]), fragment)
+        return fragment
 
     source = str(node)
     chunks = []
@@ -173,11 +182,12 @@ def _collect_procedures(node, tables, inherited, procedures):
             _collect_procedures(child, tables, inherited, procedures)
 
 
-def _declarations(procedure, known):
+def _declarations(procedure, known, *, result=None, bridge=False):
     symbols = procedure.symbols
     dimensions = {}
     defined = set()
     declarations = []
+    allowed = {'PARAMETER', 'VALUE'} if bridge else {'PARAMETER'}
     for statement in procedure.specification:
         if isinstance(statement, (F.Use_Stmt, F.Implicit_Stmt)):
             continue
@@ -193,7 +203,7 @@ def _declarations(procedure, known):
         attrs = attr_list.items if attr_list else ()
         shape = next((item.items[1] for item in attrs if isinstance(item, F.Dimension_Attr_Spec)), None)
         for attr in attrs:
-            if not isinstance(attr, (F.Dimension_Attr_Spec, F.Intent_Attr_Spec)) and str(attr).upper() != 'PARAMETER':
+            if not isinstance(attr, (F.Dimension_Attr_Spec, F.Intent_Attr_Spec)) and str(attr).upper() not in allowed:
                 raise ValueError(f'unsupported Fortran declaration attribute {attr}')
         for entity in entities.items:
             entity_name, array, character, initializer = entity.items
@@ -201,7 +211,7 @@ def _declarations(procedure, known):
             symbol = symbols.get(name)
             if not symbol:
                 raise ValueError(f'missing compiler information for Fortran variable {name}')
-            if 'PARAMETER' in symbol.attributes:
+            if 'PARAMETER' in symbol.attributes or name == result:
                 continue
             if character or initializer:
                 raise ValueError(f'unsupported Fortran declaration initializer {entity}')
@@ -228,9 +238,10 @@ def _all_names(parts):
 
 
 class FixedSource:
-    def __init__(self, procedure, columns):
+    def __init__(self, procedure, columns, aliases):
         self.procedure = procedure
         self.columns = columns
+        self.aliases = aliases
         self.lines = []
         self.indices = []
         self.used = _all_names((*procedure.specification, *procedure.execution))
@@ -254,7 +265,7 @@ class FixedSource:
             if bounds:
                 self.broadcast(node, name, bounds, label)
                 return
-        self.line(_source_text(node, symbols), label)
+        self.line(_source_text(node, symbols, self.aliases), label)
 
     def broadcast(self, assignment, array, bounds, label):
         rhs = assignment.items[2]
@@ -285,21 +296,87 @@ class FixedSource:
             self.line('END DO')
 
 
-def _lower_procedure(procedure, known):
-    declarations, dimensions = _declarations(procedure, known)
-    source = FixedSource(procedure, dimensions)
+def _function_result(procedure):
+    start = procedure.node.content[0]
+    if isinstance(start, F.Function_Stmt):
+        suffix = start.items[-1]
+        return str(suffix.items[0]).lower() if suffix and suffix.items[0] else procedure.name
+    return None
+
+
+def _binding_spec(procedure):
+    start = procedure.node.content[0]
+    if isinstance(start, F.Function_Stmt):
+        return start.items[-1].items[1] if start.items[-1] else None
+    if isinstance(start, F.Subroutine_Stmt):
+        return start.items[-1]
+    return None
+
+
+def _c_export(procedure, transport):
+    start = procedure.node.content[0]
+    symbol = procedure.symbols.get(procedure.name)
+    if not symbol or not symbol.binding or not _IDENTIFIER.fullmatch(symbol.binding):
+        raise ValueError(f'BIND(C) requires a compiler-resolved C identifier. {procedure.name}')
+    spec = _binding_spec(procedure)
+    spelling = str(spec.items[0])[1:-1] if spec.items[0] else procedure.name
+    if symbol.binding != spelling or 'BIND(C)' not in symbol.attributes:
+        raise ValueError(f'BIND(C) name differs from compiler evidence. {procedure.name}')
+
+    dimensions = {}
+    for statement in procedure.specification:
+        if not isinstance(statement, F.Type_Declaration_Stmt):
+            continue
+        _, attributes, entities = statement.items
+        shared = next((attr.items[1] for attr in attributes.items
+                       if isinstance(attr, F.Dimension_Attr_Spec)), None) if attributes else None
+        for entity in entities.items:
+            name, shape, _, _ = entity.items
+            dimensions[str(name).lower()] = shape or shared
+
+    def abi(name, *, result=False):
+        fact = procedure.symbols[name]
+        attributes = set(re.findall(r'[A-Z]+', fact.attributes))
+        unsupported = {'POINTER', 'ALLOCATABLE', 'OPTIONAL', 'VOLATILE', 'ASYNCHRONOUS'}
+        if not fact.c_interop or fact.type_and_kind not in _C_TYPES or attributes & unsupported:
+            raise ValueError(f'unsupported interoperable type {name} in {procedure.name}')
+        shape = dimensions.get(name)
+        by_value = 'VALUE' in attributes
+        if shape is not None or 'DIMENSION' in attributes:
+            if (result or by_value
+                    or not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec))):
+                raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
+        c_type, transport_type = _C_TYPES[fact.type_and_kind]
+        return dict(c_type=c_type, transport_type=transport_type, by_value=by_value,
+                    read_only='DUMMY(IN)' in fact.attributes, shape=str(shape) if shape is not None else None)
+
+    arguments = start.items[2]
+    inputs = [abi(str(item).lower()) for item in arguments.items] if arguments else []
+    result = _function_result(procedure)
+    return dict(symbol=symbol.binding, transport=transport + '_', arguments=inputs,
+                result=abi(result, result=True) if result else None)
+
+
+def _lower_procedure(procedure, known, transport=None):
+    result = _function_result(procedure)
+    name = transport or procedure.name
+    if _binding_spec(procedure) and transport is None:
+        raise ValueError(f'BIND(C) requires an admitted transport. {procedure.name}')
+    symbol = procedure.symbols.get(procedure.name)
+    if symbol and 'RECURSIVE' in symbol.attributes:
+        raise ValueError(f'recursive Fortran needs reentrant transport. {procedure.name}')
+    declarations, dimensions = _declarations(procedure, known, result=result, bridge=transport is not None)
+    source = FixedSource(procedure, dimensions, {result: name} if result and name != result else {})
     for node in procedure.execution:
         source.emit(node)
     start = procedure.node.content[0]
     if isinstance(start, F.Function_Stmt):
-        if start.items[-1] is not None:
-            raise ValueError(f'unsupported Fortran function suffix {start.items[-1]}')
-        dtype = procedure.symbols[procedure.name].type_name()
-        declaration = f'{dtype} FUNCTION {procedure.name}({start.items[2] or ""})'
+        dtype = procedure.symbols[result].type_name()
+        declaration = f'{dtype} FUNCTION {name}({start.items[2] or ""})'
     elif isinstance(start, F.Subroutine_Stmt):
-        if start.items[0] is not None or start.items[-1] is not None:
+        if start.items[0] is not None:
             raise ValueError(f'unsupported Fortran subroutine modifiers {start}')
-        declaration = f'SUBROUTINE {procedure.name}({start.items[2] or ""})'
+        declaration = f'SUBROUTINE {name}({start.items[2] or ""})'
     else:
         declaration = str(start)
     parameters = tuple(_parameter_lines(procedure.symbols, source.used))
@@ -318,7 +395,21 @@ def main(request):
         semantics = Path(row['semantics']).read_text(encoding='utf-8')
         _collect_procedures(tree, _symbol_tables(semantics), {}, procedures)
     entries = [node.name for node in procedures.values() if isinstance(node.node, F.Main_Program)]
-    if len(entries) != 1 or request['entry'].lower() not in ('main', entries[0]):
+    transports, exports = {}, []
+    if request.get('mixed'):
+        if entries:
+            raise ValueError('a mixed free-form provider must export procedures without a main program')
+        for name, procedure in procedures.items():
+            if _binding_spec(procedure) is not None:
+                index = len(transports) + 1
+                while (transport := f'scarbind{index}') in procedures or transport in transports.values():
+                    index += 1
+                exports.append(_c_export(procedure, transport))
+                transports[name] = transport
+        if not exports or len({row['symbol'] for row in exports}) != len(exports):
+            raise ValueError('mixed free-form units require distinct compiler-resolved BIND(C) entries')
+        entries = list(transports)
+    elif len(entries) != 1 or request['entry'].lower() not in ('main', entries[0]):
         raise ValueError('expected one supported free-form program entry')
     functions = {name for name, procedure in procedures.items() if not isinstance(procedure.node, F.Main_Program)}
     pending = entries.copy()
@@ -329,9 +420,12 @@ def main(request):
             continue
         procedure = procedures[name]
         calls = _all_names(procedure.execution) & functions - {name}
-        output[name] = _lower_procedure(procedure, {target: procedures[target] for target in calls})
+        if calls & transports.keys():
+            raise ValueError('Fortran calls into a C ABI export require explicit value transport')
+        output[name] = _lower_procedure(procedure, {target: procedures[target] for target in calls},
+                                        transports.get(name))
         pending.extend(sorted(calls, reverse=True))
-    return output
+    return dict(sources=output, exports=exports)
 
 
 if __name__ == '__main__':

@@ -286,7 +286,8 @@ def emit_sources(manifest, project, edits, *, captures=None):
         config = dict(manifest, units=fortran, language='fortran')
         fortran_paths = {unit['path'] for unit in fortran}
         bridge = emit_fortran(config, project, {name: edits[name] for name in edits.keys() & fortran_paths},
-                              source_directory='src/fortran-abi', fixed_only=True)
+                              source_directory='src/fortran-abi', mixed=True,
+                              captures={name: captures[name] for name in fortran_paths} if captures else None)
         settings.update({name: ((), bridge['compile_options']) for name in bridge['sources']})
         fortran_libraries = bridge['libraries']
 

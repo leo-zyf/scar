@@ -245,6 +245,10 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
         report['executable'] = _receipt(executable)
         report['elf'] = dynamic
         delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
+        fortran_emission = out / 'project' / 'fortran-emission.json'
+        if fortran_emission.is_file():
+            artifacts['fortran_emission'] = file_reference(fortran_emission, 'scar.fortran-emission')
+            delivery['fortran_emission'] = artifacts['fortran_emission']
         delivery_path = out / 'project' / 'delivery.json'
         _write(delivery_path, dict(delivery, executable=report['executable']))
         artifacts['delivery'] = file_reference(delivery_path, delivery['schema'])

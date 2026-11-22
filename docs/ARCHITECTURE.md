@@ -37,7 +37,7 @@ Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/py
 | 构建与链接 | 构建独立工程，核对二进制、依赖和已绑定的跨语言目标符号 | 已生成源码、CMake 输入、原始调用图 | `project/CMakeLists.txt`、可执行文件、构建日志、ELF 依赖和符号核验记录 |
 | 验证 | 对照原版与生成版的退出状态和输出，按声明合同比较 | 两个可执行入口、同一输入和 CPU 配置 | `validation/` 的原始输出，以及 `result.json` 的逐用例正确性和计时 |
 
-`admit_entry` 重放排程及改写证据，核对化简图中对应操作已经消除。后端复用前端的 C 类型和 Fortran 编译语义证据，改写过的 C 单元按新字节定位。C 单元在混合目标中保留原 C 链接，固定格式 Fortran 经 f2c 生成同一工程的 C++20 单元。链接完成后核查静态图已绑定的跨语言目标符号。验收在计划指定的 CPU 上对照锁定用例，`result.json` 的 `layers` 记录进度与阻塞。混合自由格式 Fortran、未绑定的跨语言调用及一般区域改写仍待覆盖。
+`admit_entry` 重放排程及改写证据，核对化简图中对应操作已经消除。后端复用前端的 C 类型和 Fortran 编译语义证据，改写过的 C 单元按新字节定位。混合目标保留 C 链接，固定格式 Fortran 和已绑定的自由格式 Fortran 过程经 f2c 生成 C++20 单元。自由格式入口由 gfortran 的链接名和类型事实、源码的 `BIND(C)` 声明共同确定，支持 `int`、`double` 标量和无需描述符的数组参数。`fortran-emission.json` 记录导出的 ABI，链接后核查静态图已绑定的目标符号。验收在计划指定的 CPU 上对照锁定用例，`result.json` 的 `layers` 记录进度与阻塞。数组描述符、未绑定的跨语言调用及一般区域改写仍待覆盖。
 
 ## 共享职责
 
