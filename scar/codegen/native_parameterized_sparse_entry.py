@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 from scar.analysis.replay_transaction import replay_transaction
 from scar.codegen import native_source_triangle_profile as anchor
 from scar.codegen import scalar_recursive_entry as host
-from scar.codegen.native_project import write_native_project
+from scar.codegen.native_project import cmake_release_build, write_native_project
 from scar.codegen.native_publication_delivery import _render
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.scalar_score_ir import _require
@@ -200,22 +200,15 @@ install(TARGETS {_INGRESS} RUNTIME DESTINATION bin/{_INGRESS_DIR})
 
 
 def _build(root, compiler):
-    env = {key:value for key,value in os.environ.items() if not key.startswith('LD_')}
-    env['CXX'] = shlex.join(compiler)
-    logs = []
-    with TemporaryDirectory(prefix='.scar-count-cmake-', dir=root.parent) as temporary:
-        for args in (['cmake','-S',str(root),'-B',temporary,'-DCMAKE_BUILD_TYPE=Release'],
-                     ['cmake','--build',temporary,'--parallel','2']):
-            child = subprocess.run(args, env=env, capture_output=True, text=True)
-            logs.append(child.stdout + child.stderr)
-            _require(child.returncode == 0, 'C++20 application build failed\n' + logs[-1])
+    with cmake_release_build(root, compiler, prefix='.scar-count-cmake-',
+                             failure='C++20 application build failed') as (built, build_log, _):
         ingress = root / _INGRESS_DIR / _INGRESS
         ingress.parent.mkdir(parents=True)
-        copy2(Path(temporary) / _PROGRAM, root / _PROGRAM)
-        copy2(Path(temporary) / _INGRESS, ingress)
+        copy2(built / _PROGRAM, root / _PROGRAM)
+        copy2(built / _INGRESS, ingress)
     validation = root / 'validation'
     validation.mkdir()
-    (validation / 'build.log').write_text('\n'.join(logs))
+    (validation / 'build.log').write_text(build_log)
     return dict(supervisor=host._elf(root / _PROGRAM), ingress=host._elf(ingress))
 
 

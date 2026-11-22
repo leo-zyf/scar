@@ -167,8 +167,10 @@ def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=
     (root / 'CMakeLists.txt').write_text('\n'.join(lines) + '\n')
 
 
-def build_native_project(root, name, compiler, *, expected_libraries=(), require_cpu_only=False):
-    """Build into a temporary directory, then check and return the installed ELF."""
+@contextmanager
+def cmake_release_build(root, compiler, *, install=False, prefix='.scar-cmake-',
+                        failure='C++20 project build failed'):
+    """Keep the completed CMake build or install tree alive for publication."""
     if not compiler:
         raise ValueError('an available C++ compiler is required')
     env = {key: value for key, value in os.environ.items() if not key.startswith('LD_')}
@@ -179,20 +181,29 @@ def build_native_project(root, name, compiler, *, expected_libraries=(), require
     cmake = str(Path(cmake).resolve())
     # CXX can name a compiler with options or a compiler launcher.
     env['CXX'] = shlex.join(compiler)
-    with TemporaryDirectory(prefix='.scar-cmake-', dir=root.parent) as temporary:
+    with TemporaryDirectory(prefix=prefix, dir=root.parent) as temporary:
         configure = [cmake, '-S', str(root), '-B', temporary, '-DCMAKE_BUILD_TYPE=Release']
         build = [cmake, '--build', temporary, '--parallel', '2']
-        prefix = Path(temporary) / 'install'
-        install = [cmake, '--install', temporary, '--prefix', str(prefix)]
+        commands = [configure, build]
+        artifacts = Path(temporary)
+        if install:
+            artifacts /= 'install'
+            commands.append([cmake, '--install', temporary, '--prefix', str(artifacts)])
         logs = []
-        for command in (configure, build, install):
+        for command in commands:
             result = subprocess.run(command, env=env, capture_output=True, text=True)
             logs.append(result.stdout + result.stderr)
             if result.returncode:
-                raise ValueError('C++20 project build failed\n' + logs[-1])
+                raise ValueError(failure + '\n' + logs[-1])
+        yield artifacts, '\n'.join(logs), env
+
+
+def build_native_project(root, name, compiler, *, expected_libraries=(), require_cpu_only=False):
+    """Build into a temporary directory, then check and return the installed ELF."""
+    with cmake_release_build(root, compiler, install=True) as (installed, build_log, env):
         executable = root / 'bin' / name
         executable.parent.mkdir(exist_ok=True)
-        (prefix / 'bin' / name).rename(executable)
+        (installed / 'bin' / name).rename(executable)
     listing = subprocess.check_output(['ldd', str(executable)], env=env, text=True)
     dependencies = _dependencies(listing)
     if (any(not dependencies.get(path.name) or Path(dependencies[path.name]).resolve() != path.resolve()
@@ -205,6 +216,6 @@ def build_native_project(root, name, compiler, *, expected_libraries=(), require
         qualify_cpu_dependencies(dependencies)
     validation = root / 'validation'
     validation.mkdir(exist_ok=True)
-    (validation / 'build.log').write_text('\n'.join(logs))
+    (validation / 'build.log').write_text(build_log)
     (validation / 'ldd.txt').write_text(listing)
     return executable, dependencies
