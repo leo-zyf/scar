@@ -28,9 +28,8 @@ from scar.ir.program.model import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.validation import require_valid
 
-from ..contracts import GraphBundle, verify_source_lock
+from ..contracts import GraphBundle, NativeInputs, verify_source_lock
 from .clang import capture_unit
-from .units import source_standard
 
 
 _FUNCTION = re.compile(r'^;; Function (.*?) \(([^,]*), funcdef_no=.*$', re.M)
@@ -742,7 +741,8 @@ BUILTIN_ADAPTERS = (SourceAdapter('c-family', ('c', 'c++'), _capture_c_family),
                     SourceAdapter('gfortran', ('fortran',), _capture_fortran))
 
 
-def capture_target(manifest, out, jobs, *, adapters=BUILTIN_ADAPTERS):
+def capture_target(inputs: NativeInputs, out, jobs, *, adapters=BUILTIN_ADAPTERS):
+    manifest = inputs.manifest
     providers = {adapter.name: adapter for adapter in adapters}
     if len(providers) != len(adapters) or any(not re.fullmatch(r'[\w-]+', name) for name in providers):
         raise ValueError('frontend adapter names must be unique path components')
@@ -773,17 +773,18 @@ def capture_target(manifest, out, jobs, *, adapters=BUILTIN_ADAPTERS):
             for row in captured.evidence:
                 unit = expected[row['unit']]
                 row.update(language=unit.get('language', manifest['language']), flags=unit['flags'],
-                           standard=source_standard(unit['flags']),
+                           standard=inputs.standards[unit['path']],
                            adapter=dict(name=adapter.name, version=adapter.version))
             result.extend(captured)
     return result
 
 
-def build_graph(manifest, directory, *, jobs, request: ProviderArtifact, adapters=BUILTIN_ADAPTERS) -> GraphBundle:
+def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPTERS) -> GraphBundle:
     """Publish the program graph, platform facts and grounding evidence."""
+    manifest, request = inputs.manifest, inputs.request
     hardware = directory / 'hardware'
     build_target_graph(hardware, paths=(manifest['source_root'], str(directory)))
-    captured = capture_target(manifest, directory / 'frontend', jobs, adapters=adapters)
+    captured = capture_target(inputs, directory / 'frontend', jobs, adapters=adapters)
     verify_source_lock(manifest)
     program_path = directory / 'program.json'
     report = write_graph(captured.functions, program_path, entry=manifest['entry'])

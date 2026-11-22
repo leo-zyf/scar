@@ -30,22 +30,20 @@ def _graph_report(graph):
 
 def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only=False,
                    adapters=None):
+    from scar.analysis.replay_transaction import replay_transaction
+    from .contracts import lock_native_inputs
     from .frontend.graph import BUILTIN_ADAPTERS, build_graph
-    from .frontend.units import lock_units
 
     out = out.resolve()
     adapters = BUILTIN_ADAPTERS if adapters is None else tuple(adapters)
     languages = tuple(language for adapter in adapters for language in adapter.languages)
-    inputs = lock_units(manifest, out, languages=languages)
-    request = inputs.manifest
-    graph = build_graph(request, out, jobs=jobs, request=inputs.request, adapters=adapters)
-    result = _graph_report(graph)
-    if graph_only and graph.program is None:
-        result.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
-    if not graph_only:
-        from scar.analysis.replay_transaction import replay_transaction
-
-        with replay_transaction():
+    with replay_transaction():
+        inputs = lock_native_inputs(manifest, out, languages=languages)
+        graph = build_graph(inputs, out, jobs=jobs, adapters=adapters)
+        result = _graph_report(graph)
+        if graph_only and graph.program is None:
+            result.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
+        if not graph_only:
             _compile_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
     _publish_result(out, result)
     return result
