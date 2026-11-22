@@ -521,8 +521,9 @@ class StoredBindingVersions:
         self.source=view.project_unit(header['unit']);self.namespace=self.source.namespace
         expected_tables=TABLES
         if header['schema_version']==2:
-            from scar.analysis.binding_track_storage import ENCODING,pins
-            if (header.get('track_encoding'),header.get('storage_pins'))!=(ENCODING,pins()):
+            from scar.analysis.program_state_view import ENCODING,compatible_storage_pins
+            if (header.get('track_encoding') != ENCODING
+                    or not compatible_storage_pins(header.get('storage_pins'))):
                 raise ValueError('stored binding track encoding differs')
             expected_tables=TABLES|{'controls'}
         elif header['schema_version']!=1:raise ValueError('unsupported stored binding schema')

@@ -55,7 +55,7 @@ from scar.ir.program.inventory import (
 from scar.ir.record_codec import decode, encode
 from scar.ir.semantics_v2 import SourceSnapshot
 from scar.ir.v2.ids import OperationDefinitionID
-from scar.analysis.program_state_coverage import _pins, _inventory_index, _graph_contract
+from scar.analysis.program_state_coverage import _pins, _graph_contract, compatible_inventory_pins, read_inventory_index
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_value_flow import _artifact
 
@@ -1012,19 +1012,18 @@ class _CallLinker:
 def compatible_static_pins(plan):
     if plan.get('local_graph_shards') and plan.get('graph_contract')!=_graph_contract():return False
     expected=_pins();actual=plan['pins']
-    if actual==expected:return True
+    if compatible_inventory_pins(actual,expected):return True
     if plan.get('binding_fixed_points_run')is not False:return False
     a=dict(actual,state=dict(actual.get('state',{})));b=dict(expected,state=dict(expected['state']))
     a['state'].pop('definitions',None);b['state'].pop('definitions',None)
-    return a==b
+    return compatible_inventory_pins(a,b)
 
 
 def admit_static_inventory(path,*,catalog=None):
-    path=Path(path).resolve();raw=(path/'index.json').read_bytes();index=json.loads(raw)
-    if index!=_inventory_index(path):raise ValueError('stored inventory differs from complete original shards')
+    path=Path(path).resolve();raw=(path/'index.json').read_bytes();index=read_inventory_index(path,raw)
     report=json.loads((path/'result.json').read_bytes());plan=report['plan']
     if not compatible_static_pins(plan):raise ValueError('used static inventory rules differ')
-    ignored=plan['pins']!=_pins()
+    ignored=not compatible_inventory_pins(plan['pins'],_pins())
     if ignored and (any(report['counts'].get(k,0)!=0 for k in ('tracks','versions','read_selections'))
             or report['binding_fixed_points_complete']is not False):
         raise ValueError('inventory contains solver results but its solver changed')

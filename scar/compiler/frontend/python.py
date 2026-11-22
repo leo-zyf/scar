@@ -376,8 +376,8 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
                     or boundary['target_executed'] is not False):
                 raise ValueError('observed boundary publication contract differs')
             report['observed_boundaries'] = _receipt(out/'observed-boundaries/result.json')
-            run.stage('observed-binding-states','scar.analysis.source_observed_inventory_state',
-                ['--interfaces',out/'observed-function-interfaces','--static-inventory',out/'catalog-graph-state',
+            run.stage('observed-binding-states','scar.analysis.program_state_coverage',
+                ['observed','--interfaces',out/'observed-function-interfaces','--static-inventory',out/'catalog-graph-state',
                     '--out',out/'observed-binding-states',
                     '--jobs',min(jobs,8)],out/'observed-binding-states/result.json',
                 'scar.observed-source-binding-states',target_executed=False,first_stage_complete=False,

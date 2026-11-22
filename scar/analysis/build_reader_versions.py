@@ -37,6 +37,27 @@ _OBSERVED_STATE_READER = {
     'source_observed_inventory_state.py': 'b669edfe93a007af019fb6b33ae4781f946d64f8108f42d2b4d83799326dc110',
 }
 
+# F4 state inventory and fixed-point storage ownership was consolidated.
+STATE_OWNER_READER = {
+    'build.py': 'b6b875e2246f7713109f47dffa65153a7be838ee6138800265afdfa33a48d78c',
+    'build_f4.py': '1a6146a97b844f339367f1dabb5b0bd3f633ed47201cea67b8b66873df40d32e',
+    'program_state_view.py': 'db1afacc5ca01a0b4d16c460998961f224ffe41af45e258f306cef8d5837500a',
+    'program_state_coverage.py': 'fa8049c68ab8954fefa372cf6ba8b4ecf9546068c14b3ba9826b3c04ce2c9d82',
+    'program_inventory.py': '9a3d0ef3b490dd0a4badae31f4054a84c521650fb10372db68a07b1937fdd0f8',
+    'source_state.py': 'f30566d4767255568191d24a49cc78eb4027d9ae84bf58e372906c9f060adf66',
+}
+STATE_OWNER_PREDECESSOR = {
+    'build.py': 'ba6bd5372e4387b5d3a6a3920304ad2041e0df4c6e9f9f54035694cb2ef860de',
+    'build_f4.py': 'bf3851276afecb329271f28f9cceae4a5b5b4e1ef4938ecedda16c9472e97ca7',
+    'program_state_view.py': '77b487f00caf55bea21705e089b706726f6df527059a309bf6e20d2f86867f7c',
+    'program_state_coverage.py': '67162cb4cffe1fffd5f677a18e20177c510c114b6a63fc7f12852f4dfd633a04',
+    'program_inventory.py': '915fccd69f2b25b44a6ec415c9d6d448127c567bdcabbbda84cb42ad37a90de3',
+    'source_state.py': 'd564e50e9abe1edd4cfed445f18c3fe98d433199f01565bbac6323f8a7259344',
+    'binding_track_storage.py': 'c4e0f9b0464dc6988f0122a8b087f646e0223a735a464e87700d4278ddd1adff',
+    'source_observed_inventory_state.py': 'b669edfe93a007af019fb6b33ae4781f946d64f8108f42d2b4d83799326dc110',
+    'build_reader_versions.py': 'c1b9e453e68a89ffc5af8888c732de8944454ba5a8aba25bf75afadaf6a3c96a',
+}
+
 LOOP_TRANSFER_TRANSITION = {
     'storage': (
         'bbe9c5ba441b19ff17b05aac9d7f01ea3fd19e9c3dacc9ca5b9ea73ccedaa4aa',
@@ -86,7 +107,7 @@ def _previous_build_reader_matches(recorded, active):
             and recorded == dict(active, **_BUILD_PREDECESSOR))
 
 
-def compatible_build_pins(recorded, active):
+def _compatible_observed_build_pins(recorded, active):
     if _previous_build_reader_matches(recorded, active):
         return True
     if any(active.get(name) != digest for name, digest in _OBSERVED_STATE_READER.items()):
@@ -94,6 +115,15 @@ def compatible_build_pins(recorded, active):
     previous = {name: digest for name, digest in active.items() if name != 'source_observed_inventory_state.py'}
     previous.update(_OBSERVED_STATE_PREDECESSOR)
     return _previous_build_reader_matches(recorded, previous)
+
+
+def compatible_build_pins(recorded, active):
+    if _compatible_observed_build_pins(recorded, active):
+        return True
+    if any(active.get(name) != digest for name, digest in STATE_OWNER_READER.items()):
+        return False
+    predecessor = dict(active, **STATE_OWNER_PREDECESSOR)
+    return _compatible_observed_build_pins(recorded, predecessor)
 
 
 def compatible_entry_producer(recorded, active):

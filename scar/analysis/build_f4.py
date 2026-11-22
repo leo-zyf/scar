@@ -233,7 +233,7 @@ def discover(entry,trace,*,catalog=None,cache_roots=(),catalog_handoff=None):
             if r['pins']!=resumption_pins():
                 gaps.append(dict(layer=key,kind='CACHED_COMPONENT_RULES_CHANGED',path=str(path)));continue
         if key=='binding_states':
-            from scar.analysis.source_observed_inventory_state import compatible_pins as binding_pins_match
+            from scar.analysis.program_state_coverage import compatible_observed_pins as binding_pins_match
             plan=r['plan'];parent=json.loads(Path(plan['parent']['path']).read_bytes())
             if (trace is None or parent['trace']!=str(trace)
                     or Path(plan['catalog']['uri']).parent.resolve()!=c.path.resolve()):continue
@@ -467,7 +467,7 @@ class F4BuildSession:
                         self.gaps.append(dict(layer=name,kind='CATALOG_LOCAL_GRAPH_INCOMPLETE'))
                     continue
                 elif name=='binding_states':
-                    from scar.analysis.source_observed_inventory_state import SourceObservedStateProvider
+                    from scar.analysis.program_state_coverage import SourceObservedStateProvider
                     indices=[p.store.index for p in self.providers.values()
                         if getattr(getattr(p,'store',None),'index',None) is not None]
                     provider=SourceObservedStateProvider(self.view,path,index=indices[0] if indices else None)
