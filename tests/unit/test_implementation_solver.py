@@ -7,8 +7,7 @@ import json
 
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
-from scar.optimization.implementation_solver import solve_implementation_choices, task_implementation_contract
-from scar.optimization.resource_solver import semantic_sha256
+from scar.optimization.resource_solver import semantic_sha256, solve_implementation_choices, task_implementation_contract
 from scar.optimization.schedule import ResourceSchedule, Task, TaskKind
 
 

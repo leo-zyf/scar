@@ -1042,10 +1042,15 @@ def validate_versioned_schedule(schedule):
 
 def schedule_document(schedule):
     validate_versioned_schedule(schedule)
+    return _encode_validated_schedule(schedule)
+
+
+def _encode_validated_schedule(schedule):
+    version = _schedule_version(schedule)
     value = encode(schedule)
     if schedule.temporal is None:
         value.pop('temporal')
-    elif _schedule_version(schedule) == 3:
+    elif version == 3:
         temporal = value['temporal']
         temporal.pop('path_condition')
         for scope in temporal['scopes']:
@@ -1053,7 +1058,7 @@ def schedule_document(schedule):
             scope.pop('content_carries')
         for edge in temporal['constraints']:
             edge.pop('before_iteration'); edge.pop('after_iteration')
-    return dict(schema='scar.resource-schedule', schema_version=_schedule_version(schedule), **value)
+    return dict(schema='scar.resource-schedule', schema_version=version, **value)
 
 
 def schedule_from_dict(document):

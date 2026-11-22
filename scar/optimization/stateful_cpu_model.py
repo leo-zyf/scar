@@ -15,7 +15,6 @@ from scar.compiler.stateful_model import (
     stateful_digest,
 )
 from scar.optimization.scope_accounting import _fact, _profile
-from scar.optimization.resource_solver import semantic_sha256
 from dataclasses import replace
 from hashlib import sha256
 from scar.runtime.compiled_deployment import thread_environment
@@ -28,7 +27,8 @@ from scar.optimization.hardware import (
     propose_cpu_allocations,
     validate_cpu_placement,
 )
-from scar.optimization.implementation_solver import (
+from scar.optimization.resource_solver import (
+    semantic_sha256,
     solve_implementation_choices,
     task_implementation_contract,
 )

@@ -17,10 +17,9 @@ from .cpu_choices import _emit, _read, _receipt, _source
 from scar.optimization.scope_accounting import _fact, _number, _profile
 from .demand import analyze_region_demand
 from .hardware import bind_cpu_placement
-from .implementation_solver import solve_implementation_choices, task_implementation_contract
 from .loop_layout import verify_loop_layout
 from .loop_strategy import loop_execution_plan, verify_loop_strategy
-from .resource_solver import semantic_sha256 as digest
+from .resource_solver import semantic_sha256 as digest, solve_implementation_choices, task_implementation_contract
 from .schedule import ResourceSchedule, Task, TaskKind
 
 _OPS = ('add', 'sub', 'mul', 'div', 'neg')

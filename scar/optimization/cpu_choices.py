@@ -9,8 +9,9 @@ from scar.compiler.model import validate_plan
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode, loads
 from .cost_model import predict_region_costs
-from .implementation_solver import solve_implementation_choices, task_implementation_contract
-from .resource_solver import _shape_instantiation, semantic_sha256, solve_resource_schedule
+from .resource_solver import (
+    _shape_instantiation, semantic_sha256, solve_implementation_choices, solve_resource_schedule, task_implementation_contract,
+)
 from .schedule import ResourceSchedule, Task, TaskKind, schedule_document, schedule_from_dict
 
 
