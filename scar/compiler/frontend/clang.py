@@ -221,9 +221,11 @@ def _compile_settings(flags, source_root, staged_root):
     return tuple(include_dirs), tuple(compile_options)
 
 
-def _c_spans(units, root, edits, preserve_abi, captures):
+def _c_spans(units, root, edits, preserve_abi, captures, material):
     declarations = defaultdict(list)
     conversions = defaultdict(dict)
+    definitions = defaultdict(dict)
+    source_bytes = {}
     for unit in units:
         name = unit['path']
         ref = captures.get(name)
@@ -234,7 +236,8 @@ def _c_spans(units, root, edits, preserve_abi, captures):
         else:
             typed = capture_unit(root, unit, source_override=edits.get(name))
         records = typed['records']
-        for record in records:
+        functions, parameters, bodies = {}, defaultdict(list), {}
+        for index, record in enumerate(records):
             path = record['path']
             if path != name and not preserve_abi:
                 continue
@@ -242,6 +245,13 @@ def _c_spans(units, root, edits, preserve_abi, captures):
                     and record['kind'] in ('FunctionDecl', 'VarDecl')):
                 declarations[path].append(record)
             parent = record['parent']
+            if record['kind'] == 'FunctionDecl' and record['definition']:
+                functions[index] = record
+            elif parent in functions:
+                if record['kind'] == 'ParmDecl':
+                    parameters[parent].append(record)
+                elif record['kind'] == 'CompoundStmt':
+                    bodies[parent] = record
             if parent is None or record['canonical_type'] != 'void *' or not record['span']:
                 continue
             conversion = records[parent]
@@ -253,11 +263,86 @@ def _c_spans(units, root, edits, preserve_abi, captures):
             target = conversion['type']
             if conversions[path].setdefault(span, target) != target:
                 raise ValueError(f'ambiguous C pointer conversion in {path} at byte {span[0]}')
-    return declarations, conversions
+        for index, arguments in parameters.items():
+            if index not in bodies:
+                continue
+            function = functions[index]
+            path = function['path']
+            if path not in source_bytes:
+                lock = material.get(path)
+                data = _locked_source(root, path, lock) if lock is not None else (root / path).read_bytes()
+                source_bytes[path] = edits.get(path, data)
+            header = _c_identifier_definition(source_bytes[path], function, arguments, bodies[index])
+            if header is not None:
+                span, replacement, types = header
+                if definitions[path].setdefault(span, (replacement, types)) != (replacement, types):
+                    raise ValueError(f'ambiguous old-style C function definition. {path}:{function["line"]}')
+    return declarations, conversions, definitions, source_bytes
 
 
 _TRIVIA = re.compile(rb'(?:\s+|/\*[\s\S]*?\*/|//[^\n]*\n)*')
 _C_IDENTIFIER = re.compile(rb'[A-Za-z_]\w*')
+
+
+def _c_identifier_definition(data, function, parameters, body):
+    """Normalize a C identifier-list definition when its call ABI is unchanged."""
+    token = _C_IDENTIFIER.match(data, function['offset'])
+    if token is None:
+        return None
+    start = _TRIVIA.match(data, token.end()).end()
+    if data[start:start + 1] != b'(':
+        return None
+    cursor = start + 1
+    for index, parameter in enumerate(parameters):
+        name = _C_IDENTIFIER.match(data, _TRIVIA.match(data, cursor).end())
+        if name is None or name[0] != parameter['name'].encode():
+            return None
+        delimiter = _TRIVIA.match(data, name.end()).end()
+        expected = b')' if index + 1 == len(parameters) else b','
+        if data[delimiter:delimiter + 1] != expected:
+            return None
+        cursor = delimiter + 1
+
+    location = f'{function["path"]}:{function["line"]}'
+    if (token[0] != function['name'].encode() or not function['span'] or not body['span']
+            or body['path'] != function['path']):
+        raise ValueError(f'old-style C definition has no original function/body range. {location}')
+    body_start = body['span'][0]
+    if not function['span'][0] <= start < cursor <= body_start < function['span'][1]:
+        raise ValueError(f'old-style C definition has inconsistent source ranges. {location}')
+
+    # Clang's function type already records the default parameter promotions
+    # for a definition written with an identifier list. ParmDecl records the
+    # local type before those promotions. Only use an ANSI declarator if each
+    # has the same type at both sides of the call boundary.
+    types = [parameter['canonical_type'] for parameter in parameters]
+    _, _, signature = function['canonical_type'].partition('(')
+    if not signature.endswith(')') or signature[:-1].split(', ') != types:
+        raise ValueError(f'old-style C parameter promotion or adjustment requires an ABI bridge. {location}')
+
+    declared = []
+    names_end = cursor
+    for parameter in parameters:
+        span = parameter['span']
+        if not span or parameter['path'] != function['path']:
+            raise ValueError(f'old-style C parameter has no original declaration range. {location}')
+        begin, stop = span
+        spelling = parameter['name'].encode()
+        if start < begin < stop < names_end and data[begin:stop] == spelling and parameter['type'] == 'int':
+            declared.append(b'int ' + spelling)
+            continue
+        name = _C_IDENTIFIER.match(data, parameter['offset'])
+        end = _TRIVIA.match(data, stop).end()
+        if (not name or name[0] != spelling or not cursor <= begin <= name.start() < name.end() <= stop <= end < body_start
+                or _TRIVIA.match(data, cursor).end() != begin or data[end:end + 1] != b';'):
+            raise ValueError(f'old-style C parameters need independent ordered declaration ranges. {location}')
+        declared.append(data[begin:stop])
+        cursor = end + 1
+    if _TRIVIA.match(data, cursor).end() != body_start or data[body_start:body_start + 1] != b'{':
+        raise ValueError(f'old-style C definition has an unsupported parameter preamble. {location}')
+    replacement = b'(' + b', '.join(declared) + b')'
+    replacement += b'\n' * (data[start:body_start].count(b'\n') - replacement.count(b'\n'))
+    return (start, body_start), replacement, types
 
 
 def _c_abi_spans(path, data, declarations):
@@ -287,7 +372,7 @@ def _c_abi_spans(path, data, declarations):
         yield start, stop
 
 
-def _lower_c(path, data, declarations, conversions):
+def _lower_c(path, data, declarations, conversions, definitions):
     linkage = list(_c_abi_spans(path, data, declarations))
     insertions = defaultdict(list)
     prior = 0
@@ -309,10 +394,16 @@ def _lower_c(path, data, declarations, conversions):
         prior = stop
         provenance.append({'span': [start, stop], 'from': 'void *', 'to': target})
     chunks = []
+    replacements = {start: (stop, text) for (start, stop), (text, _) in definitions.items()}
     position = 0
-    for offset, tokens in sorted(insertions.items()):
-        chunks.extend((data[position:offset], *tokens))
+    for offset in sorted(insertions.keys() | replacements.keys()):
+        if offset < position:
+            raise ValueError(f'overlapping C source edits in {path} at byte {offset}')
+        chunks.extend((data[position:offset], *insertions[offset]))
         position = offset
+        if offset in replacements:
+            position, replacement = replacements[offset]
+            chunks.append(replacement)
     chunks.append(data[position:])
     return b''.join(chunks), provenance, linkage
 
@@ -357,25 +448,29 @@ def _stage_cxx_sources(manifest, project, edits, *, captures=None):
     c_units = [units[name] for name, language in languages.items() if language == 'c']
     c_root = Path('src/c-abi') if mixed else Path('src')
     cxx_root = Path('src/cxx') if mixed else Path('src')
-    decls, casts = _c_spans(c_units, root, edits, mixed, captures or {})
-    if (decls.keys() | casts.keys()) - material.keys():
+    decls, casts, headers, c_bytes = _c_spans(c_units, root, edits, mixed, captures or {}, material)
+    if (decls.keys() | casts.keys() | headers.keys()) - material.keys():
         raise ValueError('C translation referenced project files missing from the source lock')
 
     settings, translation = {}, []
     for name, lock in material.items():
         language = languages.get(name)
-        data = _locked_source(root, name, lock)
-        data = edits.get(name, data)
+        data = c_bytes.pop(name, None)
+        if data is None:
+            data = edits.get(name, _locked_source(root, name, lock))
         if language == 'c' or (language is None and mixed and c_units):
             output = c_root / name
             if language == 'c':
                 output = output.with_suffix('.cpp')
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, c_root)
-            converted, conversions, linkage = _lower_c(name, data, decls[name], casts[name])
+            converted, conversions, linkage = _lower_c(name, data, decls[name], casts[name], headers[name])
             _stage(project, output, converted)
             if language == 'c' or conversions or linkage:
-                translation.append(dict(source=name, output=str(output),
-                                        c_pointer_conversions=conversions, c_linkage=linkage))
+                row = dict(source=name, output=str(output), c_pointer_conversions=conversions, c_linkage=linkage)
+                if headers[name]:
+                    row['c_identifier_definitions'] = [dict(span=span, parameter_types=types)
+                                                       for span, (_, types) in sorted(headers[name].items())]
+                translation.append(row)
         if language in (None, 'c++'):
             output = cxx_root / name
             _stage(project, output, data)
