@@ -45,13 +45,11 @@ def _compile(arguments):
         inputs = parser.add_mutually_exclusive_group(required=True)
         inputs.add_argument('--manifest', help='locked native compilation units')
         inputs.add_argument('--domains', help='prepared Python program domains')
+        inputs.add_argument('--plan', help='replay a sealed native execution plan')
         parser.add_argument('--out', required=True)
         parser.parse_args(arguments)
         return 0
-    if _has_option(arguments, '--manifest'):
-        from scar.compiler.driver import main as compile_target
-    else:
-        from scar.compiler.pipeline import compile_domains_main as compile_target
+    from scar.compiler.driver import main as compile_target
     return compile_target(arguments)
 
 

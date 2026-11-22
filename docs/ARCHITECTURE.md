@@ -1,6 +1,6 @@
 # SCAR 的分层和交接合同
 
-`scar/cli.py` 负责命令分派。`scar/compiler/driver.py` 编排原生目标和 Python 循环。每层只消费规定的上游产物。跨阶段的文件引用包含 `uri`、`schema`、`size_bytes`、`sha256`。原生运行把这些引用集中写入 `result.json` 的 `artifacts` 字段，原始图、证据和计划分别存放。
+`scar/cli.py` 负责命令分派。`scar/compiler/driver.py` 编排原生目标和 Python 区域，`scar/compiler/contracts.py` 定义图、计划和循环交接。工件引用包含 `uri`、`schema`、`size_bytes`、`sha256`。原生运行把这些引用集中写入 `result.json` 的 `artifacts` 字段。
 
 ## 1. 前端
 
@@ -17,20 +17,24 @@
 
 源语言适配位于 `compiler/frontend/`。Python 源码规则与结构校验集中在 `analysis/static/lowering/`，原生适配使用 `frontend/clang.py`、`frontend/fortran.py` 和 `frontend/graph.py`。构图交出操作、数据与状态、跨单元调用、硬件和原始证据。整数 `switch` 通过有序分支和 SSA 参数建模，无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。
 
-Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。每个单元按层消费指定的上游记录，源码目录在所有单元完成后一次性发布。`source-layers/result.json` 记录层依赖、运行进程数和清单摘要，F4 构图继续按摘要读取各单元工件并独立核对规则。
+Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。F4 每个单元准备一次语义输入，供表达式、语句和根节点共用。独立重放在另一个批次重读输入并逐条校验。`GraphBundle` 同时支持已降级的 `ProgramGraph` 和由 F4 声明目录保留的区域证据。
+
+原生前端通过 `SourceAdapter` 注册语言适配器。同一目标可以按单元显式选 `source_adapter`，并保留各自的标准、参数、编译器、解析器版本和源码摘要。适配器交付统一的控制流记录以及分离的类型与调用证据。为新语言生成独立 C++20 工程时还需提供经验证的源码转换或算子实现。
 
 ## 2. 中端
 
 | 层 | 功能 | 输入 | 交接产物 |
 | --- | --- | --- | --- |
-| 图准入 | 核对图摘要、版本和 IR 结构，确定可分析的入口 | `GraphBuild.program` 和图证据 | 可读的 `ProgramGraph` 及其分析范围 |
+| 图准入 | 核对图摘要、版本和 IR 结构，确定可分析的入口 | `GraphBundle` | 可读的 `ProgramGraph` 或已准入的区域以及分析范围 |
 | 结构化简 | 根据依赖、作用域和效果判断合法改写，关联原操作和值 | 程序图、源码锚点和 Clang 类型证据 | `simplified.json`、SSA 拷贝传播清单与可重放的源码区间改写 |
 | 资源与成本 | 把可实施选项、成本证据、核组、内存和时序约束表达成规划问题 | 图、改写清单、硬件引用和锁定用例 | `cost-observation.json` 与 `planning-problem.json` 中的 `PlanningProblem` |
 | 选型和重放 | 以完工时间为目标选择合法的排程，并校验依赖和资源占用 | `PlanningProblem` | `plan.json` 中的执行计划以及验证结果 |
 
 `compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。`copy_source_edits` 把获准的 SSA 拷贝消除绑定到类型、名称和源码区间。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
 
-Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端从循环证明和硬件快照生成 `schedule.json`，记录输入形状、迭代次数、CPU 布局和内存预算。后端接收声明了证明、搬移合法性和排程引用的 `ScheduledLoop`，逐项重放并核对实际构建产物。
+Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端根据循环证明和硬件快照发布 `schedule.json`，再发布锁定证明、特化和资源绑定的 `cpp20-lowering.json`。后端通过 `deliver` 消费 `ScheduledLoop` 或 `ExecutionPlanRef`。重放检查计划和证明，保留中端已经选定的实现。
+
+原生 `compiler-plan.json` 锁定规划问题、计划和各项证据。`scar compile --plan` 在独立进程重放交付并核对锁定用例。发布 wheel 时先生成源码分发包，再从该分发包构建，以便打包输入与当前源码版本一致。
 
 ## 3. 后端
 
@@ -48,3 +52,5 @@ Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端�
 ## 共享职责
 
 `ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。前端的静态分析、观测关系和跨区域依赖查询分别归入 `analysis/static/`、`analysis/observed/`、`analysis/dependencies/`。`artifacts.py` 统一管理工件摘要、原子发布和证据表读写。证据表以相对路径、压缩与解码摘要、字节数及记录数作为交接合同。图查看由 `visualization/` 独立提供。构建证明记录分析实现摘要，历史源码保存在 Git，已有产物可按对应版本回读或重新构建。
+
+留存的旧 `SourceAtomID` 映射使用 Git `8c99524559bb58d46a146d8bac64f3a0ad19b836` 和 `artifacts/current/queries/source-anchors/query.py` 重放。

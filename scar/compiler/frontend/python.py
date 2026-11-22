@@ -5,7 +5,6 @@ records their order and admission; a completed local frontend is not proof
 of runtime dispatch, resource placement or whole-program graph closure.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
 import json
 import os
@@ -23,6 +22,9 @@ _DOMAINS = ('expressions', 'statements', 'roots')
 
 def _run_worker(argv):
     stage, *arguments = argv
+    if stage == 'source-rules':
+        from scar.analysis.source_expression_materials import batch_main
+        return batch_main(arguments)
     domain = stage.removeprefix('source-')
     if stage != domain and domain in _DOMAINS:
         from scar.analysis.source_expression_materials import main as materials
@@ -250,36 +252,17 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
             report['source_input'] = _receipt(out/'source-input.json')
 
         selection = [part for p in sources for part in ('--source',p)]
-        active = min(jobs, len(_DOMAINS))
-        # Independent domains share this worker budget. Each domain finishes
-        # collection before its required independent replay; dependent stages
-        # never race mutations of the source model.
-        allocations = [jobs//active+(i < jobs%active) for i in range(active)]
-
-        def domain_task(domain, workers):
-            singular = domain[:-1] if domain != 'roots' else 'root'
-            schema = 'scar.source-'+singular+'-materials'
-            common = ['source-'+domain,'--model',model,*selection,'--jobs',workers]
-            run.worker(domain, [*common,'--out',out/domain],
-                out/domain/'result.json', schema, status='LOCAL_RULES_VERIFIED', mode='COLLECTION')
-            run.worker(domain+'-verified', [*common,'--out',out/(domain+'-verified'),
-                '--materials',out/domain], out/(domain+'-verified')/'result.json', schema,
-                status='LOCAL_RULES_VERIFIED', mode='FRESH_VERIFICATION')
-
-        if active == 1:
-            for domain in _DOMAINS:
-                domain_task(domain, jobs)
-        else:
-            # At most active children execute at once. With two slots their
-            # allocations are equal; with three there are exactly three tasks.
-            with ThreadPoolExecutor(max_workers=active) as pool:
-                futures = [pool.submit(domain_task,domain,allocations[i%active])
-                    for i,domain in enumerate(_DOMAINS)]
-                errors = []
-                for future in as_completed(futures):
-                    try: future.result()
-                    except Exception as error: errors.append(error)
-                if errors: raise errors[0]
+        common = ['source-rules', '--model', model, '--out', out, *selection, '--jobs', jobs]
+        collected = out / 'rule-collection.json'
+        verified = out / 'rule-verification.json'
+        run.worker('source-rules', common, collected, 'scar.source-rule-batch',
+                   mode='COLLECTION', target_executed=False)
+        fresh = run.worker('source-rules-verified', [*common, '--verify'], verified,
+                           'scar.source-rule-batch', mode='FRESH_VERIFICATION', target_executed=False)
+        report['source_rules'] = _receipt(collected)
+        report['source_rules_verified'] = _receipt(verified)
+        if fresh['status'] != 'LOCAL_RULES_VERIFIED':
+            raise ValueError('source rule batch has unresolved prerequisites for template linking')
 
         # Independent typed-reference rules supply the denominator. In
         # particular this does not ask the edge producer what it emitted.

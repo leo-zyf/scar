@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 import weakref
 
-from . import session as _session_module
-from scar.backends.reuse import inferred_exact_reuse
+from scar.runtime.guarded_reuse import inferred_exact_reuse
+from scar.trace import session as _session_module
 from scar.ir import mark_storage_write
 
 

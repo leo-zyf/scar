@@ -113,7 +113,7 @@ def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budg
 def _build_temporal_body_cpu_domain(source_body,carry_parameter,target,*,proof_id,proof_sha256,
         input_shapes,trip_count,memory_budget_bytes,max_threads=None):
     """Shared derived-body/resource algorithm; this is not a source proof cast."""
-    from scar.compiler.parallel_temporal_invariant import describe_parallel_temporal_capability
+    from scar.compiler.temporal_invariant_loop import describe_parallel_temporal_capability
     if type(trip_count) is not int or not -(2**63)<=trip_count<2**63:
         raise ValueError('exact signed int64 trip count required')
     if type(memory_budget_bytes) is not int or memory_budget_bytes<8:

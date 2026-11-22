@@ -31,7 +31,7 @@ def test_light_runtime_pinned_bundle_imports_and_live_callable_guards(tmp_path,p
     if parallel:
         from scar.analysis.target_graph import build_target_graph
         from scar.optimization.hardware import propose_cpu_allocations
-        from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop
+        from scar.compiler.temporal_invariant_loop import build_parallel_temporal_invariant_loop
         if len(os.sched_getaffinity(0))<2:pytest.skip('two actual CPU affinity slots required')
         cpus=sorted(os.sched_getaffinity(0))[:2]
         inventory=dict(schema='scar.target-inventory',schema_version=1,sources=[],diagnostics=[],

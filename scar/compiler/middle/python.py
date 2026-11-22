@@ -5,23 +5,54 @@ hardware snapshot. Unsupported functions stay explicit; no AST fallback or
 target execution supplies a replacement semantic model.
 """
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 import json
 from pathlib import Path
 import time
 
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
+from scar.ir.execution_recipe import read_artifact
+
+from ..contracts import GraphBundle, ScheduledLoop
+from .plan import plan_loop_region, publish_plan
 
 
-@dataclass(frozen=True, slots=True)
-class ScheduledLoop:
-    loop_id: str
-    folder: Path
-    proof: dict
-    source_motion: dict
-    schedule: dict
-    composite: bool
-    parallel: bool
+def _prepare_loop_lowering(proof, folder, proof_ref, source_motion, schedule_ref, *, composite, parallel):
+    """Freeze the selected loop's lowering inputs before handing it to code generation."""
+    from scar.compiler.model import CpuPlacement
+
+    schedule = read_artifact(schedule_ref)
+    binding = dict(schedule['resource_binding'])
+    binding['cpu_ids'] = tuple(binding['cpu_ids'])
+    binding['evidence'] = tuple(binding.get('evidence', ()))
+    placement = CpuPlacement(**binding)
+    specialization = dict(input_shapes=schedule['input_shapes'], trip_count=schedule['trip_count'],
+                          input_layout='C_CONTIGUOUS')
+    if composite:
+        from scar.compiler.composite_invariant_loop import _loop_interface
+
+        interface = _loop_interface(proof, execution_specialization=specialization,
+                                    source_motion=source_motion)
+    else:
+        interface = dict(
+            original_f4_proof=asdict(proof), carry_parameter=proof.carry_parameter,
+            readonly_parameters=[name for name in proof.body.parameters if name != proof.carry_parameter],
+            authority='ORIGINAL_F4_REPLAYED_WITH_RESOURCE_SCHEDULE',
+            execution_specialization=specialization, source_motion=source_motion,
+        )
+    if parallel:
+        from scar.compiler.temporal_invariant_loop import _parallel_plan as prepare
+    else:
+        from scar.compiler.temporal_invariant_loop import _plan as prepare
+
+    plan, _ = prepare(proof.body, proof.carry_parameter, interface,
+                      schedule['effective_incremental_budget_bytes'], placement)
+    if plan['execution_movement_binding'] is None:
+        raise ValueError('loop delivery requires consumed source movement legality')
+    return publish_plan(folder / 'cpp20-lowering.json', dict(
+        schema='scar.cpp20-loop-lowering', schema_version=1, loop_id=proof.id,
+        proof=proof_ref, source_motion=source_motion, schedule=schedule_ref, parallel=parallel, plan=plan,
+    ))
 
 
 def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None, cpu_threads=None,
@@ -31,8 +62,6 @@ def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None,
     from scar.compiler.pipeline_loop_frontend import (
         read_composite_invariant_loop_motion, validate_composite_invariant_loop_links,
     )
-    from scar.ir.execution_recipe import read_artifact
-    from .plan import plan_loop_region, publish_plan
 
     input_specs = input_specs or {}
     original_costs = original_costs or {}
@@ -105,8 +134,13 @@ def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None,
                 calibrations=calibrations, original_cost=original_costs.get(proof.id),
             ))
             if row['selected_kind'] == 'REGISTER_TEMPORAL_FUSION':
+                parallel = cpu_model or threads is not None
+                row['lowering'] = _prepare_loop_lowering(
+                    proof, folder, reference, row['source_motion'], row['schedule'],
+                    composite=composed, parallel=parallel,
+                )
                 work.append((row, ScheduledLoop(proof.id, folder, reference, row['source_motion'], row['schedule'],
-                                                composed, cpu_model or threads is not None)))
+                                                composed, parallel, row['lowering'])))
             else:
                 row['status'] = retained
     return direct, composite, work
@@ -186,15 +220,14 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         raise ValueError('declared or previously observed input shapes required')
     if out.exists():raise ValueError('fresh program planning output required')
     started=time.monotonic()
-    parent=artifact_reference(program/'manifest.json','scar.program-build')
-    manifest=read_artifact(parent)
-    if manifest.get('backend')!='F4':raise ValueError('original F4 program build required')
+    graph=GraphBundle.read_python(program)
+    parent=asdict(graph.evidence)
+    manifest=graph.report
     source_filter=None if source is None else Path(source).absolute()
     with BuildSession(program) as session:
-        target=manifest.get('target')
-        if target is None:raise ValueError('program build has no target hardware snapshot')
+        target=manifest['target']
         _check(target)
-        hardware=Path(target['path']).parent
+        hardware=Path(graph.hardware.uri).parent
         # Reuse this session's catalog and original shared function bodies.
         sources=_planning_sources(session.view.catalog,source_filter)
         regions,rejected=discover_stateful_regions(session.view,source=source_filter)

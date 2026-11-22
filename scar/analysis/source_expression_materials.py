@@ -19,7 +19,7 @@ from scar.analysis.source_statement_rules import SourceStatementRules
 from scar.analysis.source_root_rules import SourceRootRules
 from scar.analysis.source_productions import ProductionSourceIndex, ProductionError
 from scar.analysis.source_core_interfaces import CORE_INSTRUCTIONS
-from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory
+from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory, file_reference
 from scar.analysis.source_store import read_source_prerequisites
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import source_productions as P
@@ -35,6 +35,12 @@ _PARENTS = ('source_roles', 'source_contexts', 'source_declarations', 'source_bi
 _FRONTIERS = {'RULE_FRONTIER', 'PURPOSE_FRONTIER', 'BINDING_INTERFACE_FRONTIER', 'SUSPENSION_CONTEXT_FRONTIER',
               'STATEMENT_CONTEXT_FRONTIER'}
 _WORLD = ValueType(ValueKind.STATE, location=LocationID('source-python-world'))
+_RULES = {
+    'expressions': ('expr', 'expression', P.ProductionPurpose.VALUE, SourceExpressionRules),
+    'statements': ('stmt', 'statement', P.ProductionPurpose.STATEMENT, SourceStatementRules),
+    'roots': ('mod', 'root', P.ProductionPurpose.ROOT, SourceRootRules),
+}
+_LIMITS = dict(nodes=1_000_000, tokens=2_000_000, steps=100_000, regions=100_000, visits=1_000_000)
 
 
 def _json(value):
@@ -78,9 +84,7 @@ def _basis(unit):
                 artifacts={name: unit['artifacts'][name] for name in names})
 
 
-def _unit(task):
-    model, out, unit, prior, materials, limits, pins, keep_catalog, domain = task
-    started = time.monotonic()
+def _source_index(model, unit, limits, pins):
     if _implementation() != pins:
         raise ValueError('source rule implementation changed between parent and worker')
     reader = _Fragments(Path(model))
@@ -90,11 +94,18 @@ def _unit(task):
     frontend = read_frontend_bindings(f0, f1, f2, *(reader.read(unit['artifacts'][name]) for name in _PARENTS))
     syntax = decode(SourceSyntaxMaterial, f2)
     contexts = SourceContextView(syntax, frontend.roles, frontend.contexts)
-    rules = {'expressions':SourceExpressionRules,'statements':SourceStatementRules,'roots':SourceRootRules}[domain](ProductionSourceIndex(f0, contexts, frontend),
-        world=_WORLD, exception_abi=ExceptionABI.EXCEPTION_WORLD)
-    catalog = rules.catalog()
     categories = {row.name: row.bases for row in syntax.profile.ast_schema if not row.abstract}
-    parent_seconds = time.monotonic() - started
+    return ProductionSourceIndex(f0, contexts, frontend), categories
+
+
+def _shard(unit, source, categories, domain, out, prior, materials, limits, keep_catalog, prerequisite_seconds):
+    started = time.monotonic()
+    contexts = source.context
+    syntax = contexts.syntax
+    family, _, default_purpose, rule_type = _RULES[domain]
+    rules = rule_type(source, world=_WORLD, exception_abi=ExceptionABI.EXCEPTION_WORLD)
+    catalog = rules.catalog()
+    parent_seconds = prerequisite_seconds + time.monotonic() - started
     relative = 'units/' + unit['key'] + '/' + domain + '.jsonl.gz'
     digest, decoded_bytes = sha256(), 0
     built, frontier, child_obligations, descriptors, suppressed = (Counter() for _ in range(5))
@@ -145,13 +156,12 @@ def _unit(task):
                 raise ValueError('source expression compressed receipt changed')
             stream = stack.enter_context(gzip.GzipFile(fileobj=io.BytesIO(payload), mode='rb'))
         for occurrence, node in enumerate(syntax.nodes):
-            is_expression = {'expressions':'expr','statements':'stmt','roots':'mod'}[domain] in categories[node.constructor]
+            is_expression = family in categories[node.constructor]
             owner = rules.descriptor_owner(occurrence)
             if not is_expression and owner is None:
                 continue
             expressions += is_expression
-            purpose = {'expressions':P.ProductionPurpose.VALUE,'statements':P.ProductionPurpose.STATEMENT,
-                'roots':P.ProductionPurpose.ROOT}[domain]
+            purpose = default_purpose
             if node.constructor in ('Name', 'Attribute', 'Subscript', 'List', 'Tuple'):
                 purpose = {'Load': P.ProductionPurpose.VALUE, 'Store': P.ProductionPurpose.STORE,
                            'Del': P.ProductionPurpose.DELETE}[rules.source.roles.context(occurrence)]
@@ -222,18 +232,27 @@ def _unit(task):
         evaluation_request_templates=dict(request_bodies),stringized_annotation_values=stringized_values,
         compilation_contexts=dict(compilation_counts),compilation_edge_kinds=dict(sorted(compilation_edge_kinds.items())),
         core_signature_checks=dict(sorted(core_signatures.items())),
-        parent_seconds=parent_seconds, seconds=time.monotonic()-started,
+        parent_seconds=parent_seconds, seconds=prerequisite_seconds+time.monotonic()-started,
         catalog_sha256=sha256(_json(catalog)).hexdigest())
     if keep_catalog:
         result['_catalog'] = catalog
     return result
 
 
-def _unit_with_context(task):
-    """Preserve typed source errors and make other worker failures transportable."""
-    label = 'SCAR ' + task[-1] + ' source: ' + task[2]['path']
+def _derive_unit(task):
+    """Load the original F0–F3 inputs once for this pass and source unit."""
+    model, unit, domains, limits, pins, keep_catalog = task
+    label = 'SCAR source prerequisites: ' + unit['path']
     try:
-        return _unit(task)
+        started = time.monotonic()
+        source, categories = _source_index(model, unit, limits, pins)
+        prerequisite_seconds = time.monotonic() - started
+        rows = {}
+        for domain, out, prior, materials in domains:
+            label = 'SCAR ' + domain + ' source: ' + unit['path']
+            rows[domain] = _shard(unit, source, categories, domain, out, prior, materials,
+                                  limits, keep_catalog, prerequisite_seconds if not rows else 0.0)
+        return rows, os.getpid(), prerequisite_seconds
     except ProductionError as error:
         error.add_note(label)
         raise
@@ -241,50 +260,24 @@ def _unit_with_context(task):
         raise RuntimeError(label + '\n' + type(error).__qualname__ + ': ' + str(error)) from error
 
 
-def collect_source_rules(model, out, *, domain, sources=(), materials=None, jobs=1,
-                               max_nodes=1_000_000, max_tokens=2_000_000,
-                               max_steps=100_000, max_regions=100_000, max_visits=1_000_000):
-    if type(domain) is not str or domain not in ('expressions', 'statements','roots'):
-        raise ValueError('expected the expression, statement or root source-rule domain')
-    singular={'expressions':'expression','statements':'statement','roots':'root'}[domain]
-    schema = 'scar.source-' + singular + '-materials'
-    limits = dict(nodes=max_nodes, tokens=max_tokens, steps=max_steps, regions=max_regions, visits=max_visits)
-    if type(jobs) is not int or not 1 <= jobs <= 32 or any(type(v) is not int or v < 0 for v in limits.values()):
-        raise ValueError('invalid source rule jobs/budgets')
-    root, out = Path(model).absolute(), Path(out).absolute()
-    if root.resolve() != root or out.resolve() != out or out.exists() or out.is_relative_to(root) or root.is_relative_to(out):
-        raise ValueError('source rules require a canonical model and fresh independent output')
-    manifest_bytes = (root / 'manifest.json').read_bytes()
-    manifest = json.loads(manifest_bytes)
-    if manifest.get('schema') != 'scar.static-program' or manifest.get('schema_version') != 1:
-        raise ValueError('expected an original static model')
-    selected = {str(Path(p).absolute()) for p in sources}
-    units = sorted((u for u in manifest['units'] if not selected or u['path'] in selected), key=lambda u: u['key'])
-    if not units or selected and selected != {u['path'] for u in units} or len({u['key'] for u in units}) != len(units):
-        raise ValueError('source selection must identify nonempty original source units exactly')
-    basis, pins, prior, store, store_bytes = [_basis(u) for u in units], _implementation(), {}, None, None
-    if materials is not None:
-        store = Path(materials).absolute()
-        if store.resolve() != store or out.is_relative_to(store) or store.is_relative_to(out):
-            raise ValueError('fresh verification output must be independent of source materials')
-        store_bytes = (store / 'result.json').read_bytes()
-        previous = json.loads(store_bytes)
-        if (previous.get('schema') != schema or previous.get('schema_version') != 4 or previous.get('domain') != domain
-            or previous.get('implementation_sha256') != pins or previous.get('input_basis') != basis
-            or previous.get('limits') != limits):
-            raise ValueError('previous rule material input/implementation/limit domain differs')
-        prior = {r['unit']: r for r in previous['units']}
-        if len(prior) != len(units) or set(prior) != {u['key'] for u in units}:
-            raise ValueError('previous source expression units do not match the selected domain')
-    _durable_mkdir(out)
-    started = time.monotonic()
-    tasks = [(str(root), str(out), u, prior.get(u['key']), None if store is None else str(store),
-              limits, pins, i == 0, domain) for i, u in enumerate(units)]
-    if jobs == 1:
-        rows = [_unit_with_context(task) for task in tasks]
-    else:
-        with ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context('spawn')) as pool:
-            rows = list(pool.map(_unit_with_context, tasks))
+def _read_previous(domain, store, out, basis, pins, limits):
+    if store.resolve() != store or out.is_relative_to(store) or store.is_relative_to(out):
+        raise ValueError('fresh verification output must be independent of source materials')
+    raw = (store / 'result.json').read_bytes()
+    previous = json.loads(raw)
+    schema = 'scar.source-' + _RULES[domain][1] + '-materials'
+    if (previous.get('schema') != schema or previous.get('schema_version') != 4
+            or previous.get('domain') != domain or previous.get('implementation_sha256') != pins
+            or previous.get('input_basis') != basis or previous.get('limits') != limits):
+        raise ValueError('previous rule material input/implementation/limit domain differs')
+    prior = {row['unit']: row for row in previous['units']}
+    if len(prior) != len(basis) or set(prior) != {unit['unit'] for unit in basis}:
+        raise ValueError('previous source units do not match the selected rule domain')
+    return previous, raw, prior
+
+
+def _domain_report(domain, rows, basis, pins, model_sha, model_units, limits, jobs, store, previous, seconds):
+    singular = _RULES[domain][1]
     catalog = rows[0].pop('_catalog')
     catalog_bytes = _json(catalog)
     if any(r['catalog_sha256'] != sha256(catalog_bytes).hexdigest() for r in rows):
@@ -307,25 +300,117 @@ def collect_source_rules(model, out, *, domain, sources=(), materials=None, jobs
         child_interface_obligations=sum(sum(r['child_interface_obligations'].values()) for r in rows))
     if store is not None and previous['counts'] != counts:
         raise ValueError('stored source rule summary differs from fresh counters')
-    if (root / 'manifest.json').read_bytes() != manifest_bytes or _implementation() != pins:
-        raise ValueError('model or implementation changed while processing source rules')
-    if store is not None and (store / 'result.json').read_bytes() != store_bytes:
-        raise ValueError('source rule material manifest changed during fresh verification')
-    report = dict(schema=schema, schema_version=4, domain=domain,
+    report = dict(schema='scar.source-' + singular + '-materials', schema_version=4, domain=domain,
         status='LOCAL_RULES_WITH_FRONTIERS' if counts['rule_frontiers'] else 'LOCAL_RULES_VERIFIED',
         mode='FRESH_VERIFICATION' if store is not None else 'COLLECTION',
-        input_basis=basis, implementation_sha256=pins, model_manifest_sha256=sha256(manifest_bytes).hexdigest(),
-        selected_units=len(rows), model_units=len(manifest['units']), limits=limits, jobs=jobs,
+        input_basis=basis, implementation_sha256=pins, model_manifest_sha256=model_sha,
+        selected_units=len(rows), model_units=model_units, limits=limits, jobs=jobs,
         catalog_sha256=sha256(catalog_bytes).hexdigest(), counts=counts, units=rows,
-        seconds=time.monotonic()-started, local_source_rules_replayed=True,
+        seconds=seconds, local_source_rules_replayed=True,
         child_interfaces_proven=False, effects_proven=False, state_parameter_origin_proven=False,
         compilation_context_interfaces_checked=True, native_context_propagation_proven=False,
         core_signature_source_counts_checked=True,
         canonical_graph_generated=False, whole_program_graph_complete=False,
         target_executed=False, transformation_authorized=False)
-    _durable_bytes(out / 'catalog.json', catalog_bytes, replace=False)
-    _durable_bytes(out / 'result.json', _json(report), replace=False)
-    return report
+    return report, catalog_bytes
+
+
+def _collect_rule_shards(model, outputs, *, sources, materials, jobs, limits):
+    if type(jobs) is not int or not 1 <= jobs <= 32 or any(type(v) is not int or v < 0 for v in limits.values()):
+        raise ValueError('invalid source rule jobs/budgets')
+    root = Path(model).absolute()
+    outputs = {name: Path(path).absolute() for name, path in outputs.items()}
+    materials = {name: Path(path).absolute() for name, path in materials.items()}
+    if root.resolve() != root or any(out.resolve() != out or out.exists() or out.is_relative_to(root)
+                                    or root.is_relative_to(out) for out in outputs.values()):
+        raise ValueError('source rules require a canonical model and fresh independent outputs')
+    manifest_bytes = (root / 'manifest.json').read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if manifest.get('schema') != 'scar.static-program' or manifest.get('schema_version') != 1:
+        raise ValueError('expected an original static model')
+    selected = {str(Path(path).absolute()) for path in sources}
+    units = sorted((unit for unit in manifest['units'] if not selected or unit['path'] in selected),
+                   key=lambda unit: unit['key'])
+    if not units or selected and selected != {unit['path'] for unit in units} or len({unit['key'] for unit in units}) != len(units):
+        raise ValueError('source selection must identify nonempty original source units exactly')
+    basis = [_basis(unit) for unit in units]
+    pins = _implementation()
+    parents = {domain: _read_previous(domain, store, outputs[domain], basis, pins, limits)
+               for domain, store in materials.items()}
+    for out in outputs.values():
+        _durable_mkdir(out)
+
+    started = time.monotonic()
+    tasks = []
+    for index, unit in enumerate(units):
+        domains = [(domain, out, parents[domain][2][unit['key']] if domain in parents else None,
+                    materials.get(domain)) for domain, out in outputs.items()]
+        tasks.append((root, unit, domains, limits, pins, index == 0))
+    workers = min(jobs, len(tasks))
+    if workers == 1:
+        processed = list(map(_derive_unit, tasks))
+    else:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn')) as pool:
+            processed = list(pool.map(_derive_unit, tasks))
+    if (root / 'manifest.json').read_bytes() != manifest_bytes or _implementation() != pins:
+        raise ValueError('model or implementation changed while processing source rules')
+    if any((materials[domain] / 'result.json').read_bytes() != previous[1]
+           for domain, previous in parents.items()):
+        raise ValueError('source rule material manifest changed during fresh verification')
+
+    model_sha = sha256(manifest_bytes).hexdigest()
+    reports = {}
+    for domain, out in outputs.items():
+        rows = [shards[domain] for shards, _, _ in processed]
+        report, catalog = _domain_report(domain, rows, basis, pins, model_sha, len(manifest['units']),
+                                         limits, jobs, materials.get(domain),
+                                         parents[domain][0] if domain in parents else None,
+                                         time.monotonic() - started)
+        _durable_bytes(out / 'catalog.json', catalog, replace=False)
+        _durable_bytes(out / 'result.json', _json(report), replace=False)
+        reports[domain] = report
+    observation = dict(units=len(units), workers=workers, active_workers=len({pid for _, pid, _ in processed}),
+                       prerequisite_loads=len(processed),
+                       prerequisite_worker_seconds=sum(seconds for _, _, seconds in processed))
+    return reports, observation
+
+
+def collect_source_rules(model, out, *, domain, sources=(), materials=None, jobs=1,
+                         max_nodes=1_000_000, max_tokens=2_000_000,
+                         max_steps=100_000, max_regions=100_000, max_visits=1_000_000):
+    if type(domain) is not str or domain not in _RULES:
+        raise ValueError('expected the expression, statement or root source-rule domain')
+    limits = dict(nodes=max_nodes, tokens=max_tokens, steps=max_steps, regions=max_regions, visits=max_visits)
+    stores = {} if materials is None else {domain: materials}
+    reports, _ = _collect_rule_shards(model, {domain: out}, sources=sources, materials=stores,
+                                     jobs=jobs, limits=limits)
+    return reports[domain]
+
+
+def batch_main(argv):
+    parser = argparse.ArgumentParser(description='Collect or independently replay all F4 source rule domains.')
+    parser.add_argument('--model', required=True, type=Path)
+    parser.add_argument('--out', required=True, type=Path)
+    parser.add_argument('--source', action='append', default=[])
+    parser.add_argument('--jobs', type=int, default=1)
+    parser.add_argument('--verify', action='store_true')
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    mode = 'FRESH_VERIFICATION' if args.verify else 'COLLECTION'
+    outputs = {domain: args.out / (domain + '-verified' if args.verify else domain) for domain in _RULES}
+    inputs = {domain: args.out / domain for domain in _RULES} if args.verify else {}
+    reports, observation = _collect_rule_shards(args.model, outputs, sources=args.source, materials=inputs,
+                                                jobs=args.jobs, limits=_LIMITS)
+    complete = all(report['status'] == 'LOCAL_RULES_VERIFIED' for report in reports.values())
+    result = dict(schema='scar.source-rule-batch', schema_version=1, mode=mode,
+                  status='LOCAL_RULES_VERIFIED' if complete else 'LOCAL_RULES_WITH_FRONTIERS',
+                  domains={domain: file_reference(folder / 'result.json', reports[domain]['schema'])
+                           for domain, folder in outputs.items()},
+                  target_executed=False, seconds=time.monotonic() - started, **observation)
+    report = args.out / ('rule-verification.json' if args.verify else 'rule-collection.json')
+    _durable_bytes(report, _json(result), replace=False)
+    print(json.dumps(result, indent=2))
+    return 0
 
 
 def collect_source_expressions(model, out, **options):

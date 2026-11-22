@@ -7,12 +7,13 @@ control transfers are visible in the import report and gate rewrites.
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 import re
 import subprocess
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 from scar.analysis.target_graph import build_target_graph
 from scar.artifacts import file_reference
@@ -27,7 +28,9 @@ from scar.ir.program.model import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.validation import require_valid
 
+from ..contracts import GraphBundle, verify_source_lock
 from .clang import capture_unit
+from .units import source_standard
 
 
 _FUNCTION = re.compile(r'^;; Function (.*?) \(([^,]*), funcdef_no=.*$', re.M)
@@ -120,7 +123,7 @@ def read_ssa(raw, unit):
 def capture_ssa(manifest, unit, destination):
     root = Path(manifest['source_root'])
     language = unit.get('language', manifest['language'])
-    compiler = unit.get('compiler', {'c': 'gcc', 'fortran': 'gfortran', 'c++': 'g++'}[language])
+    compiler = unit.get('compiler') or _SSA_COMPILERS[language]
     source = root / unit['path']
     destination = destination.absolute()
     with TemporaryDirectory(prefix='scar-native-ssa-') as scratch:
@@ -636,11 +639,56 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
                 calls=calls, frontiers=frontiers, elf_symbols_observed=bool(elf))
 
 
-def capture_target(manifest, out, jobs):
-    out.mkdir()
-    profiles = {'c': [], 'c++': [], 'fortran': []}
-    for unit in manifest['units']:
-        profiles[unit.get('language', manifest['language'])].append(unit)
+@dataclass(slots=True)
+class CapturedUnits:
+    """Normalized CFG records and separately referenced frontend evidence."""
+
+    functions: list[dict] = field(default_factory=list)
+    frontiers: list[dict] = field(default_factory=list)
+    evidence: list[dict] = field(default_factory=list)
+    call_tables: list[tuple[str, Path]] = field(default_factory=list)
+    declarations: list[dict] = field(default_factory=list)
+
+    def extend(self, captured: 'CapturedUnits'):
+        self.functions.extend(captured.functions)
+        self.frontiers.extend(captured.frontiers)
+        self.evidence.extend(captured.evidence)
+        self.call_tables.extend(captured.call_tables)
+        self.declarations.extend(captured.declarations)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAdapter:
+    """A frontend for distinct languages with per-unit compiler settings."""
+
+    name: str
+    languages: tuple[str, ...]
+    capture: Callable[[dict, list[dict], Path, int], CapturedUnits]
+    version: int = 1
+
+    def __post_init__(self):
+        if (not self.languages or len(set(self.languages)) != len(self.languages)
+                or type(self.version) is not int or self.version < 1):
+            raise ValueError('frontend adapter requires distinct languages and a positive version')
+
+
+def _capture_c_family(manifest, units, out, jobs):
+    from shutil import which
+
+    toolchains = {}
+    for unit in units:
+        language = unit.get('language', manifest['language'])
+        compiler = unit.get('compiler') or _SSA_COMPILERS[language]
+        if compiler in toolchains:
+            continue
+        executable = which(compiler)
+        if executable is None and '/' in compiler:
+            executable = str(Path(manifest['source_root']) / compiler)
+        if executable is None:
+            raise ValueError(f'SSA compiler unavailable: {compiler}')
+        version = subprocess.check_output([executable, '--version'], cwd=manifest['source_root'],
+                                          text=True, timeout=20).partition('\n')[0]
+        toolchains[compiler] = dict(path=str(Path(executable).resolve()), version=version)
 
     def c_family(item):
         index, unit = item
@@ -653,84 +701,114 @@ def capture_target(manifest, out, jobs):
             return functions, ssa, None, dict(unit=unit['path'], reason=str(error))
         return functions, ssa, graph, None
 
-    functions, frontiers, unit_evidence = [], [], []
-    call_tables, clang_units = [], []
+    bundle = CapturedUnits()
     with ThreadPoolExecutor(max_workers=jobs) as executor:
-        units = (*profiles['c'], *profiles['c++'])
         for unit, (captured, ssa, ast, frontier) in zip(units, executor.map(c_family, enumerate(units))):
+            language = unit.get('language', manifest['language'])
+            compiler = unit.get('compiler') or _SSA_COMPILERS[language]
             calls = ssa.with_suffix('.cgraph')
-            call_tables.append((unit['path'], calls))
+            bundle.call_tables.append((unit['path'], calls))
             artifacts = dict(control=file_reference(ssa, 'gcc.ssa'),
                              calls=file_reference(calls, 'gcc.ipa-cgraph'))
-            functions.extend(captured)
+            bundle.functions.extend(captured)
             if frontier is not None:
-                frontiers.append(frontier)
+                bundle.frontiers.append(frontier)
             else:
-                clang_units.append(ast)
+                bundle.declarations.append(ast)
                 artifacts['types'] = file_reference(ssa.with_suffix('.clang.json'), 'scar.clang-unit')
-            unit_evidence.append(dict(unit=unit['path'], language=unit.get('language', manifest['language']),
-                                      flags=unit['flags'], gcc_flags=unit.get('gcc_flags', []),
-                                      artifacts=artifacts))
-    if profiles['fortran']:
-        from .fortran import capture_fortran
-        fortran = capture_fortran(dict(manifest, units=profiles['fortran']), out)
-        for unit in fortran['units']:
-            functions.extend(read_ssa(Path(unit['raw']).read_text(), unit['path']))
-            call_tables.append((unit['path'], unit['call_table']))
-            unit_evidence.append(dict(unit=unit['path'], language='fortran', flags=unit['flags'], artifacts=dict(
-                control=file_reference(unit['raw'], 'gcc.ssa'),
-                types=file_reference(unit['semantics'], 'gfortran.semantics'),
-                calls=file_reference(unit['call_table'], 'gcc.ipa-cgraph'))))
-        (out / 'fortran.json').write_text(json.dumps(fortran))
-    return functions, frontiers, unit_evidence, call_tables, clang_units
+            bundle.evidence.append(dict(unit=unit['path'], toolchain=toolchains[compiler],
+                                        gcc_flags=unit.get('gcc_flags', []), artifacts=artifacts))
+    return bundle
 
 
-@dataclass(frozen=True, slots=True)
-class GraphBuild:
-    request: ProviderArtifact
-    program: ProviderArtifact | None
-    hardware: ProviderArtifact
-    evidence: ProviderArtifact
-    calls: ProviderArtifact
-    report: dict
+def _capture_fortran(manifest, units, out, jobs):
+    from .fortran import capture_fortran
 
-    def references(self):
-        return {role: asdict(reference) for role, reference in (
-            ('request', self.request), ('program', self.program), ('hardware', self.hardware),
-            ('graph_evidence', self.evidence), ('calls', self.calls),
-        ) if reference is not None}
+    # Module files are built in source-list order for inter-unit USE statements.
+    bundle = CapturedUnits()
+    fortran = capture_fortran(dict(manifest, units=units), out)
+    for unit in fortran['units']:
+        bundle.functions.extend(read_ssa(Path(unit['raw']).read_text(), unit['path']))
+        bundle.call_tables.append((unit['path'], Path(unit['call_table'])))
+        bundle.evidence.append(dict(unit=unit['path'], compiler_version=fortran['version'], artifacts=dict(
+            control=file_reference(unit['raw'], 'gcc.ssa'), types=file_reference(unit['semantics'], 'gfortran.semantics'),
+            calls=file_reference(unit['call_table'], 'gcc.ipa-cgraph'))))
+    (out / 'fortran.json').write_text(json.dumps(fortran))
+    return bundle
 
 
-def build_graph(manifest, directory, *, jobs, request: ProviderArtifact) -> GraphBuild:
+_SSA_COMPILERS = {'c': 'gcc', 'c++': 'g++', 'fortran': 'gfortran'}
+BUILTIN_ADAPTERS = (SourceAdapter('c-family', ('c', 'c++'), _capture_c_family),
+                    SourceAdapter('gfortran', ('fortran',), _capture_fortran))
+
+
+def capture_target(manifest, out, jobs, *, adapters=BUILTIN_ADAPTERS):
+    providers = {adapter.name: adapter for adapter in adapters}
+    if len(providers) != len(adapters) or any(not re.fullmatch(r'[\w-]+', name) for name in providers):
+        raise ValueError('frontend adapter names must be unique path components')
+    defaults = {}
+    for adapter in adapters:
+        for language in adapter.languages:
+            defaults.setdefault(language, adapter)
+    groups = defaultdict(list)
+    for unit in manifest['units']:
+        language = unit.get('language', manifest['language'])
+        adapter = (providers.get(unit['source_adapter']) if 'source_adapter' in unit else defaults.get(language))
+        if adapter is None or language not in adapter.languages:
+            raise ValueError(f'no frontend adapter for {language}: {unit["path"]}')
+        groups[adapter.name, language].append(unit)
+    out.mkdir()
+    result = CapturedUnits()
+    for adapter in adapters:
+        units = [unit for language in adapter.languages for unit in groups[adapter.name, language]]
+        if units:
+            directory = out if adapter in BUILTIN_ADAPTERS else out / adapter.name
+            if directory != out:
+                directory.mkdir()
+            captured = adapter.capture(manifest, units, directory, jobs)
+            expected = {unit['path']: unit for unit in units}
+            reported = {row['unit'] for row in captured.evidence}
+            if reported != expected.keys() or len(captured.evidence) != len(expected):
+                raise ValueError(f'adapter {adapter.name} did not account for its compilation units')
+            for row in captured.evidence:
+                unit = expected[row['unit']]
+                row.update(language=unit.get('language', manifest['language']), flags=unit['flags'],
+                           standard=source_standard(unit['flags']),
+                           adapter=dict(name=adapter.name, version=adapter.version))
+            result.extend(captured)
+    return result
+
+
+def build_graph(manifest, directory, *, jobs, request: ProviderArtifact, adapters=BUILTIN_ADAPTERS) -> GraphBundle:
     """Publish the program graph, platform facts and grounding evidence."""
     hardware = directory / 'hardware'
     build_target_graph(hardware, paths=(manifest['source_root'], str(directory)))
-    functions, frontiers, unit_evidence, call_tables, clang_units = capture_target(
-        manifest, directory / 'frontend', jobs)
+    captured = capture_target(manifest, directory / 'frontend', jobs, adapters=adapters)
+    verify_source_lock(manifest)
     program_path = directory / 'program.json'
-    report = write_graph(functions, program_path, entry=manifest['entry'])
+    report = write_graph(captured.functions, program_path, entry=manifest['entry'])
     program = (file_reference(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None)
     target = file_reference(hardware / 'result.json', 'scar.target-hardware-graph')
     baseline = (manifest.get('baseline') or {}).get('argv') or [None]
-    calls = link_calls(functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
-                       clang_units=clang_units, call_tables=call_tables)
+    calls = link_calls(captured.functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
+                       clang_units=captured.declarations, call_tables=captured.call_tables)
     calls_path = directory / 'call-links.json'
     calls_path.write_text(json.dumps(dict(schema='scar.native-call-links', schema_version=1, **calls)) + '\n')
     call_receipt = file_reference(calls_path, 'scar.native-call-links')
-    report.update(schema='scar.native-graph-evidence', schema_version=1, units=unit_evidence,
+    report.update(schema='scar.native-graph-evidence', schema_version=1, units=captured.evidence,
                   request=asdict(request), program=program, hardware=target, calls=call_receipt,
-                  frontend_frontiers=frontiers, call_frontiers=len(calls['frontiers']),
+                  frontend_frontiers=captured.frontiers, call_frontiers=len(calls['frontiers']),
                   call_sites=len(calls['calls']),
                   call_links=sum(row['status'] == 'BOUND' and row['operation'] is not None
                                  and row['callee']['region'] is not None for row in calls['calls']),
                   reachable_regions=len(calls['reachable']))
     evidence_path = directory / 'graph-report.json'
-    (directory / 'compiler-cfg.json').write_text(json.dumps(functions, indent=2, ensure_ascii=False) + '\n')
+    (directory / 'compiler-cfg.json').write_text(json.dumps(captured.functions, indent=2, ensure_ascii=False) + '\n')
     evidence_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
-    return GraphBuild(request, None if program is None else ProviderArtifact(**program),
-                      ProviderArtifact(**target),
-                      ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
-                      ProviderArtifact(**call_receipt), report)
+    return GraphBundle(request, None if program is None else ProviderArtifact(**program),
+                       ProviderArtifact(**target),
+                       ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
+                       ProviderArtifact(**call_receipt), report)
 
 
 def check_main(argv=None):

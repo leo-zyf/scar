@@ -1,5 +1,5 @@
 from scar.analysis import dead_expression_candidates
-from scar.backends import eliminate_dead_expressions
+from scar.analysis.static.source_rewrite import eliminate_dead_expressions
 from scar.ir import from_source
 
 

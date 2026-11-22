@@ -8,6 +8,7 @@ import shutil
 
 from scar.artifacts import file_reference
 from scar.ir.program.providers import ProviderArtifact
+from ..contracts import verify_source_lock
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,25 +17,32 @@ class NativeInputs:
     request: ProviderArtifact
 
 
-def lock_units(path: Path, out: Path) -> NativeInputs:
+def source_standard(flags) -> str | None:
+    """Locate the selected dialect without interpreting a compiler's names."""
+    arguments = iter(flags)
+    standard = None
+    for flag in arguments:
+        if flag.startswith(('-std=', '--std=')):
+            standard = flag.partition('=')[2]
+        elif flag in ('-std', '--std'):
+            standard = next(arguments, None)
+            if not standard:
+                raise ValueError('missing language standard in native compiler flags')
+    return standard
+
+
+def lock_units(path: Path, out: Path, *, languages=('c', 'c++', 'fortran')) -> NativeInputs:
     manifest = json.loads(path.read_bytes())
     if (manifest.get('schema'), manifest.get('schema_version')) != ('scar.native-entry', 1):
         raise ValueError('expected scar.native-entry schema v1')
-    dialects = {'c', 'c++', 'fortran'}
+    dialects = set(languages)
     language = manifest['language']
     if language not in dialects | {'mixed'}:
         raise ValueError(f'unsupported language: {language}')
     root = Path(manifest['source_root']).resolve(strict=True)
     manifest['source_root'] = str(root)
+    verify_source_lock(manifest)
     receipt = manifest['source_lock']['files']
-    for name, expected in receipt.items():
-        relative = Path(name)
-        source = (root / relative).resolve(strict=True)
-        if relative.is_absolute() or not source.is_relative_to(root):
-            raise ValueError(f'source path outside of root: {name}')
-        actual = file_reference(source, 'source')
-        if any(actual[key] != expected[key] for key in ('sha256', 'size_bytes')):
-            raise ValueError(f'locked source differs: {name}')
     units = manifest['units']
     names = {unit['path'] for unit in units}
     if not names or len(names) != len(units):
@@ -44,6 +52,7 @@ def lock_units(path: Path, out: Path) -> NativeInputs:
     for unit in units:
         if unit.get('language', language) not in dialects:
             raise ValueError(f'translation unit has no language profile: {unit["path"]}')
+        source_standard(unit['flags'])
     if baseline := manifest.get('baseline'):
         cwd = Path(baseline['cwd']).resolve(strict=True)
         argv = baseline['argv']

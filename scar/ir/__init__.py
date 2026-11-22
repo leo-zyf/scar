@@ -1,23 +1,32 @@
-from .ids import CodeID, InvocationID, LogicalVersion, ObjectID, StorageID
-from .effects import ActionLabel, Effect, Knowledge
-from .entities import (Materialization, ObjectEntity, Region, classify_region_overlap,
-                       tensor_entity)
-from .events import Event, Opportunity
-from .proofs import ProofObligation, ProofStatus, proof, proof_summary
-from .graph import ExecutionGraph, GraphEdge, GraphNode, NodeKind, ProgramGraph
-from .correspondence import (SourceCorrespondence, add_correspondences,
-                             link_events, summarize_correspondence)
-from .static import from_project, from_source
-from .versions import (StorageVersionRegistry, default_registry, mark_external_write,
-                       mark_storage_write, storage_version)
+"""Public execution and source-model records, resolved from their owning module."""
 
-__all__ = ["CodeID", "InvocationID", "LogicalVersion", "ObjectID", "StorageID",
-    "ActionLabel", "Effect", "Knowledge", "Materialization", "ObjectEntity",
-    "Region", "classify_region_overlap", "tensor_entity", "Event", "Opportunity", "ExecutionGraph",
-    "GraphEdge", "GraphNode", "NodeKind", "ProgramGraph", "from_source",
-    "from_project"]
-__all__ += ["SourceCorrespondence", "link_events", "add_correspondences",
-            "summarize_correspondence"]
-__all__ += ["StorageVersionRegistry", "default_registry", "mark_storage_write",
-            "mark_external_write", "storage_version"]
-__all__ += ["ProofObligation", "ProofStatus", "proof", "proof_summary"]
+from importlib import import_module
+
+
+_PUBLIC_MODULES = {
+    'ids': ('CodeID', 'InvocationID', 'LogicalVersion', 'ObjectID', 'StorageID'),
+    'effects': ('ActionLabel', 'Effect', 'Knowledge'),
+    'entities': ('Materialization', 'ObjectEntity', 'Region', 'classify_region_overlap', 'tensor_entity'),
+    'events': ('Event', 'Opportunity'),
+    'proofs': ('ProofObligation', 'ProofStatus', 'proof', 'proof_summary'),
+    'graph': ('ExecutionGraph', 'GraphEdge', 'GraphNode', 'NodeKind', 'ProgramGraph'),
+    'correspondence': ('SourceCorrespondence', 'add_correspondences', 'link_events', 'summarize_correspondence'),
+    'static': ('from_project', 'from_source'),
+    'versions': ('StorageVersionRegistry', 'default_registry', 'mark_external_write', 'mark_storage_write',
+                 'storage_version'),
+}
+_EXPORTS = {name: module for module, names in _PUBLIC_MODULES.items() for name in names}
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f'{__name__!r} has no attribute {name!r}')
+    value = getattr(import_module(f'.{module}', __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(globals().keys() | _EXPORTS.keys())

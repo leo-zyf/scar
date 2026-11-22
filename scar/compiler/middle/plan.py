@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from subprocess import CompletedProcess
 
-from scar.artifacts import file_reference
+from scar.artifacts import _durable_bytes, file_reference
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps, loads
 from scar.ir.implementation_plan import (
@@ -17,10 +17,13 @@ from scar.ir.implementation_plan import (
     PlanningResource, problem_document, problem_from_dict,
 )
 from scar.ir.program.providers import ProviderArtifact
-from scar.optimization.constructive_planner import construct_implementations
-from scar.optimization.paired_entry_selection import compare_entry_pairs
-from scar.runtime.cpu_paired_runner import compare_native_outputs
+from scar.optimization.joint_planner import verify_execution_plan
 
+from ..contracts import ExecutionPlanRef, GraphBundle
+
+
+_NATIVE_DELIVERY_PROFILE = 'CPP20_NATIVE_ENTRY'
+_NATIVE_COST_SCHEMA = 'scar.native-entry-cost'
 
 @dataclass(frozen=True, slots=True)
 class NativeRevision:
@@ -30,15 +33,7 @@ class NativeRevision:
     edits: tuple[dict, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class NativeSchedule:
-    entry: str
-    artifacts: dict
-    decision: dict
-    scope: str
-
-
-def rewrite_native(graph, out):
+def rewrite_native(graph: GraphBundle, out):
     if graph.program is None:
         raise ValueError('no validated entry region')
     path = out / 'simplified.json'
@@ -55,16 +50,89 @@ def rewrite_native(graph, out):
                           tuple(rules), tuple(edits))
 
 
-def schedule_native(revision: NativeRevision, observation, cases, out) -> NativeSchedule:
+def schedule_native(revision: NativeRevision, observation, cases, out) -> ExecutionPlanRef:
+    from scar.optimization.constructive_planner import construct_implementations
+
+    request = revision.artifacts['request']
+    cpu = observation['cpu']
+    if (observation.get('schema') != _NATIVE_COST_SCHEMA or observation['request'] != request
+            or observation['exit'] != 0 or type(cpu) is not int
+            or cases != read_artifact(request)['cases']
+            or cpu not in entry_cpus(revision.artifacts['hardware'])):
+        raise ValueError('native observation differs from the locked request or target')
     artifacts = dict(revision.artifacts, cost=publish_plan(out / 'cost-observation.json', observation))
     decision = native_cost_decision(observation, cases)
-    problem, schedule = plan_entry(revision.entry, artifacts, observation, revision.edits)
-    artifacts['planning_problem'] = publish_plan(out / 'planning-problem.json', problem)
+    problem = entry_problem(revision.entry, artifacts, observation, revision.edits, decision=decision)
+    schedule = construct_implementations(problem, baseline_only=entry_baseline_only(problem))
+    artifacts['planning_problem'] = publish_plan(out / 'planning-problem.json', problem_document(problem))
     artifacts['execution_plan'] = publish_plan(out / 'plan.json', schedule)
     if not schedule.get('selected'):
         raise ValueError('no feasible native execution schedule')
+    _verify_plan(problem, schedule)
     scope = 'BASELINE_ONLY' if observation['schema_version'] == 1 else decision['scope']
-    return NativeSchedule(revision.entry, artifacts, decision, scope)
+    return ExecutionPlanRef(revision.entry, artifacts, decision, scope)
+
+
+def _verify_plan(problem, plan):
+    baseline_only = plan.get('baseline_only')
+    if type(baseline_only) is not bool or entry_baseline_only(problem) and not baseline_only:
+        raise ValueError('execution plan does not honor the planning problem baseline scope')
+    return verify_execution_plan(problem, plan)
+
+
+def read_plan_contract(reference: ExecutionPlanRef):
+    """Replay a published schedule against its typed problem without running a solver."""
+    problem_document_, plan = reference.read_pair()
+    problem = problem_from_dict(problem_document_)
+    return problem, plan, _verify_plan(problem, plan)
+
+
+def read_native_binding(reference: ExecutionPlanRef):
+    """Resolve a selected native lowering without reconstructing the choice domain."""
+    problem, plan, verification = read_plan_contract(reference)
+    artifacts = reference.artifacts
+    if artifacts['cost']['schema'] != _NATIVE_COST_SCHEMA:
+        raise ValueError('native delivery requires a native cost artifact')
+    observation = read_artifact(artifacts['cost'])
+    if (problem.target != ProviderArtifact(**artifacts['hardware'])
+            or problem.source_refs != entry_sources(artifacts)
+            or observation['request'] != artifacts['request'] or observation['exit'] != 0):
+        raise ValueError('native planning problem does not bind the admitted inputs')
+    if (len(problem.operations) != 1 or problem.operations[0].id != 'entry'
+            or problem.data_edges or problem.activities or problem.timing_constraints
+            or problem.reserved_memory):
+        raise ValueError('native C++20 entry lowering requires one admitted execution region')
+
+    selected = plan['selected'][0]
+    mode = next(option for option in problem.operations[0].options if option.id == selected['option'])
+    cpu = observation['cpu']
+    if (type(cpu) is not int or cpu not in entry_cpus(artifacts['hardware'])
+            or mode.parameters.get('region') != reference.entry
+            or mode.demands != {f'cpu:{cpu}': 1}
+            or mode.workspace_bytes or selected['start_ns'] != 0
+            or mode.proof_refs != problem.source_refs):
+        raise ValueError('selected native implementation has no admitted CPU binding')
+
+    variant = observation.get('variants', {}).get(mode.id)
+    if mode.parameters.get('delivery') != _native_delivery(cpu, variant):
+        raise ValueError('selected native implementation has no admitted C++20 delivery binding')
+    version = observation['schema_version']
+    rewrites = mode.parameters.get('rewrites', [])
+    if version == 1 and (variant is not None or not plan['baseline_only'] or mode.id != 'original'):
+        raise ValueError('a baseline observation can only deliver the original implementation')
+    if version not in (1, 2) or (version == 2 and variant is None):
+        raise ValueError('selected native implementation has no calibrated project')
+    if mode.id == 'canonical':
+        if mode.lowering != 'canonicalize_scalar_copies' or not rewrites or observation.get('calibration_error'):
+            raise ValueError('canonical delivery requires a qualified source revision')
+    elif mode.id != 'original' or mode.lowering != 'preserve_entry' or rewrites:
+        raise ValueError('unsupported native delivery implementation')
+
+    binding = dict(cpus=[cpu], lowering=mode.lowering, selected=plan['selected'],
+                   rewrite_operations=rewrites, verification=verification)
+    if variant is not None:
+        binding['trial_variant'] = variant
+    return observation, binding
 
 
 def entry_sources(artifacts):
@@ -215,6 +283,9 @@ def native_cost_decision(observation, locked_cases):
         return dict(scope='ONE_BASELINE_LAUNCH', admitted=False, cases={})
     if observation['schema_version'] != 2:
         raise ValueError('unsupported native cost evidence')
+    from scar.optimization.paired_entry_selection import compare_entry_pairs
+    from scar.runtime.cpu_paired_runner import compare_native_outputs
+
     variants, cases = observation['variants'], observation['cases']
     if set(variants) - {'original', 'canonical'} or 'original' not in variants:
         raise ValueError('native timing requires the original implementation')
@@ -253,27 +324,36 @@ def entry_baseline_only(problem):
     return 'PHYSICAL_COST_BASELINE_ONLY' in problem.assumptions
 
 
-def entry_problem(entry, artifacts, observation, edits=()):
+def _native_delivery(cpu, variant):
+    binding = dict(profile=_NATIVE_DELIVERY_PROFILE, version=1, device='CPU', cpu_ids=[cpu])
+    if variant is not None:
+        binding['trial_variant'] = variant
+    return binding
+
+
+def entry_problem(entry, artifacts, observation, edits=(), *, decision=None):
     source_refs = entry_sources(artifacts)
-    core = f'cpu:{observation["cpu"]}'
+    cpu = observation['cpu']
+    core = f'cpu:{cpu}'
     cost = CostEstimate(observation['elapsed_ns'], None, None, 'EMPIRICAL_MODEL',
                         'baseline_launch', (dict(role='cost', **artifacts['cost']),))
 
     def implementation(mode, estimate):
         lowering = 'canonicalize_scalar_copies' if mode == 'canonical' else 'preserve_entry'
-        parameters = {'region': entry}
+        variant = observation.get('variants', {}).get(mode)
+        parameters = dict(region=entry, delivery=_native_delivery(cpu, variant))
         if mode == 'canonical':
             parameters['rewrites'] = [row['operation'] for row in edits]
         return ImplementationOption(mode, lowering, source_refs, {core: 1}, {}, {}, {}, estimate,
                                     parameters=parameters)
 
     baseline_only = True
-    if observation['schema_version'] == 1:
-        options = (implementation('canonical' if edits else 'original', cost),)
-    else:
+    options = (implementation('original', cost),)
+    if observation['schema_version'] == 2:
         if not edits:
             raise ValueError('paired native variants require a certified source rewrite')
-        decision = native_cost_decision(observation, read_artifact(artifacts['request'])['cases'])
+        if decision is None:
+            decision = native_cost_decision(observation, read_artifact(artifacts['request'])['cases'])
         observed = decision['cases'].values()
         if observed and all('metrics' in row for row in observed):
             modes = ('original', 'canonical')
@@ -286,8 +366,8 @@ def entry_problem(entry, artifacts, observation, edits=()):
                 options.append(implementation(mode, estimate))
             options = tuple(options)
             baseline_only = not decision['admitted']
-        else:
-            options = (implementation('original', cost),)
+    elif observation['schema_version'] != 1 or 'variants' in observation:
+        raise ValueError('unsupported native baseline cost evidence')
     assumptions = ('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY' if baseline_only
                    else 'PAIRED_CPU_WALL_TIME_DOMINANCE')
     return PlanningProblem(
@@ -295,12 +375,6 @@ def entry_problem(entry, artifacts, observation, edits=()):
         (PlanningResource(core, 'EXECUTION', 1, source_refs=cost.source_refs),),
         (PlanningOperation('entry', source_refs, (), options, options[0].id),), (),
         assumptions=assumptions)
-
-
-def plan_entry(entry, artifacts, observation, edits=()):
-    problem = entry_problem(entry, artifacts, observation, edits)
-    return problem_document(problem), construct_implementations(problem, baseline_only=entry_baseline_only(problem))
-
 
 def project_loop_calibrations(domain,calibrations,out):
     from scar.compiler.calibrate_temporal_cpu import project_temporal_resource_fact_batch
@@ -350,7 +424,8 @@ def project_loop_calibrations(domain,calibrations,out):
 
 def publish_plan(path, document):
     """Persist the versioned plan used by downstream replay."""
-    path.write_text(json.dumps(document, indent=2, sort_keys=True) + '\n')
+    encoded = (json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + '\n').encode()
+    _durable_bytes(path, encoded, replace=False)
     return artifact_reference(path, document['schema'])
 
 
@@ -454,8 +529,10 @@ def main(argv=None):
         from scar.optimization.joint_planner import solve_implementations
         plan = solve_implementations(problem, baseline_only=baseline_only)
     else:
+        from scar.optimization.constructive_planner import construct_implementations
+
         plan = construct_implementations(problem, baseline_only=baseline_only)
-    with args.out.open('x') as output:
-        json.dump(plan, output, indent=2)
-        output.write('\n')
+    if plan.get('selected'):
+        _verify_plan(problem, plan)
+    publish_plan(args.out, plan)
     return 0

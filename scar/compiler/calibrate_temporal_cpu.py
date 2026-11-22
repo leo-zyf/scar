@@ -129,7 +129,7 @@ def _native(backend,cpu_slots,out):
 def calibrate_temporal_cpu(target,cpu_masks,input_shape,trip_count,out,*,repetitions=7,warmup=2):
     """Compile one fixed registry probe and measure the explicitly supplied masks."""
     import numpy as np
-    from scar.compiler.parallel_temporal_invariant import describe_parallel_temporal_capability
+    from scar.compiler.temporal_invariant_loop import describe_parallel_temporal_capability
     from scar.runtime.native_loop import _Array,_descriptor,_cpu_available
     from scar.runtime.loop_guard import _state,_same_state,_range
     out=Path(out).resolve();shape=list(input_shape)

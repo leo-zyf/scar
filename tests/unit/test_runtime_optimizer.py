@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from scar.backends.reuse import inferred_exact_reuse
-from scar.trace.optimizer import RuntimeOptimizer
+from scar.runtime.guarded_reuse import inferred_exact_reuse
+from scar.runtime.torch_optimizer import RuntimeOptimizer
 
 
 def test_inferred_reuse_validates_first_repeat_before_cache_hit():

@@ -42,9 +42,9 @@ _CALLABLES = {'FunctionDecl', 'CXXMethod', 'Constructor', 'Destructor', 'Convers
 _CX_LINKAGE_EXTERNAL = 4
 
 
-@lru_cache(maxsize=1)
-def _library():
-    lib = CDLL('libclang-18.so.18')
+@lru_cache(maxsize=8)
+def _library(name):
+    lib = CDLL(name)
     signatures = {
         'createIndex': (c_void_p, c_int, c_int),
         'disposeIndex': (None, c_void_p),
@@ -73,6 +73,7 @@ def _library():
         'getFileName': (_String, c_void_p),
         'getCString': (c_char_p, _String),
         'disposeString': (None, _String),
+        'getClangVersion': (_String,),
         'getNumDiagnostics': (c_uint, c_void_p),
         'getDiagnostic': (c_void_p, c_void_p, c_uint),
         'getDiagnosticSeverity': (c_uint, c_void_p),
@@ -94,7 +95,8 @@ def capture_unit(source_root, unit, *, source_override=None):
     """
     source_root = Path(source_root).resolve()
     source = source_root / unit['path']
-    lib = _library()
+    library = unit.get('clang_library', 'libclang-18.so.18')
+    lib = _library(library)
     records = []
     files = {}
 
@@ -187,7 +189,8 @@ def capture_unit(source_root, unit, *, source_override=None):
         if any(row['severity'] >= 3 for row in diagnostics):
             raise ValueError(f'{source}: {diagnostics}')
         children(lib.clang_getTranslationUnitCursor(tu), None)
-        return dict(path=unit['path'], flags=unit['flags'], records=records, diagnostics=diagnostics)
+        return dict(path=unit['path'], flags=unit['flags'], records=records, diagnostics=diagnostics,
+                    frontend=dict(library=library, version=string(lib.clang_getClangVersion())))
     finally:
         if tu:
             lib.clang_disposeTranslationUnit(tu)
@@ -404,7 +407,7 @@ def _stage_cxx_sources(manifest, project, edits, *, captures=None):
                 source_settings=settings if len(common) > 1 else {}, **linkage)
 
 
-def stage_source_revision(manifest, project, source_edits=(), *, captures=None, plan):
+def stage_source_revision(manifest, project, source_edits=(), *, captures=None, plan, target_inputs=None):
     """Materialize and seal the admitted C++20 source revision."""
     from scar.codegen.native_project import publish_cpp20_inputs
 
@@ -424,6 +427,11 @@ def stage_source_revision(manifest, project, source_edits=(), *, captures=None, 
         previous[unit] = start
     project.mkdir()
     configuration = _stage_cxx_sources(manifest, project, edits, captures=captures)
+    for key, members in (target_inputs or {}).items():
+        if key not in ('include_dirs', 'libraries', 'runtime_dirs'):
+            raise ValueError(f'unsupported C++20 target input: {key}')
+        retained = configuration.get(key, ())
+        configuration[key] = (*retained, *(member for member in members if member not in retained))
     return publish_cpp20_inputs(project, configuration, plan=plan)
 
 

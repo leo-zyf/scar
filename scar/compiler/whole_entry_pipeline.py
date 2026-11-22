@@ -1,4 +1,5 @@
 """Replay an explicit entry optimization boundary on the build main chain."""
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -21,6 +22,37 @@ NVIDIA_HPC = 'NVIDIA_HPC'
 LIBTORCH = 'LIBTORCH_ATEN'
 _ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT',
                  'NVHPC_SOURCE_ENTRY': NVIDIA_HPC, 'NVHPC_SOURCE_DEVICE_ENTRY': NVIDIA_HPC}
+
+
+@dataclass(frozen=True, slots=True)
+class EntryEvidence:
+    """Optional inputs whose proof checks belong to whole-entry replay."""
+
+    costs: str | Path | None = None
+    forward_cpu: bool = False
+    launch_probes: tuple[str | Path, ...] = ()
+    team_probe: str | Path | None = None
+    native_phase_cost: str | Path | None = None
+    python_import_cost: str | Path | None = None
+    paired_observation: str | Path | None = None
+    import_bindings: str | Path | None = None
+    import_sources: str | Path | None = None
+    initializer_observation: str | Path | None = None
+    array_route: str | Path | None = None
+    array_route_cost: str | Path | None = None
+    fixed_grid_cli: str | Path | None = None
+    fixed_grid_mapped_input: str | Path | None = None
+    fixed_grid_lifecycle_cost: str | Path | None = None
+    fixed_grid_input_review: str | Path | None = None
+    fixed_grid_qualification: str | Path | None = None
+    fixed_grid_forward: str | Path | None = None
+
+    @property
+    def needs_paired_replay(self):
+        return any(item is not None for item in (
+            self.paired_observation, self.import_bindings, self.import_sources,
+            self.initializer_observation, self.array_route, self.fixed_grid_cli,
+        ))
 
 
 def _write(path, value):
@@ -478,15 +510,13 @@ def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=
         frontiers['cpu_native_array_route_cost'] = cost_ref
 
 
-def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, mapped_path=None,
-                               lifecycle_cost_path=None, input_route_review_path=None, source_qualification_path=None,
-                               forward_path=None):
+def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, out, evidence: EntryEvidence):
     from scar.analysis.cpu_fixed_grid_cli_effect_bridge import derive_cpu_fixed_grid_cli_effect_bridge
     from scar.analysis.cpu_fixed_grid_cli_resources import derive_cpu_fixed_grid_cli_resources
     from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA
     from scar.optimization.cpu_fixed_grid_cli_review import derive_cpu_fixed_grid_cli_review
 
-    delivery_ref = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    delivery_ref = artifact_reference(Path(evidence.fixed_grid_cli).resolve(strict=True), SCHEMA)
     delivery = read_artifact(delivery_ref)
     provider = delivery['provider']
     matching = [row for row in generated.values() if _cpu_catalog_option(row)
@@ -506,26 +536,26 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
         cpu_fixed_grid_cli_review=_write(out/'whole-entry-fixed-grid-cli-review.json', review),
     )
     qualification = None
-    if source_qualification_path is not None:
+    if evidence.fixed_grid_qualification is not None:
         from scar.optimization.cpu_fixed_grid_source_route_qualification import (
             SCHEMA as SOURCE_QUALIFICATION, verify_cpu_fixed_grid_source_route_qualification,
         )
 
-        qualification_ref = artifact_reference(Path(source_qualification_path).resolve(strict=True), SOURCE_QUALIFICATION)
+        qualification_ref = artifact_reference(Path(evidence.fixed_grid_qualification).resolve(strict=True), SOURCE_QUALIFICATION)
         qualification = verify_cpu_fixed_grid_source_route_qualification(qualification_ref)
         if qualification['cli_delivery'] != delivery_ref:
             raise ValueError('source route qualification belongs to a different fixed-grid CLI')
         frontiers['cpu_fixed_grid_source_qualification'] = qualification_ref
     input_route = None
-    if input_route_review_path is not None or qualification is not None:
+    if evidence.fixed_grid_input_review is not None or qualification is not None:
         from scar.optimization.cpu_fixed_grid_input_route_review import (
             SCHEMA as INPUT_ROUTE_REVIEW, verify_cpu_fixed_grid_input_route_review,
         )
 
-        if input_route_review_path is None:
+        if evidence.fixed_grid_input_review is None:
             input_route_ref = qualification['input_route_review']
         else:
-            input_route_ref = artifact_reference(Path(input_route_review_path).resolve(strict=True), INPUT_ROUTE_REVIEW)
+            input_route_ref = artifact_reference(Path(evidence.fixed_grid_input_review).resolve(strict=True), INPUT_ROUTE_REVIEW)
         if qualification is not None and input_route_ref != qualification['input_route_review']:
             raise ValueError('source qualification and native route review refer to different input graphs')
         input_route = (verify_cpu_fixed_grid_input_route_review(input_route_ref) if qualification is None else
@@ -536,13 +566,13 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
         if read_artifact(grid['effects']) != bridge or read_artifact(grid['resources']) != resources:
             raise ValueError('native input route graph differs from the admitted fixed-grid effects and resources')
         frontiers['cpu_fixed_grid_input_route_review'] = input_route_ref
-    if mapped_path is not None or input_route is not None:
+    if evidence.fixed_grid_mapped_input is not None or input_route is not None:
         from scar.optimization.cpu_fixed_grid_mapped_input_plan import (
             SCHEMA as MAPPED_PLAN, verify_cpu_fixed_grid_mapped_input_plan,
         )
 
-        mapped_ref = (input_route['mapped_plan'] if mapped_path is None else
-                      artifact_reference(Path(mapped_path).resolve(strict=True), MAPPED_PLAN))
+        mapped_ref = (input_route['mapped_plan'] if evidence.fixed_grid_mapped_input is None else
+                      artifact_reference(Path(evidence.fixed_grid_mapped_input).resolve(strict=True), MAPPED_PLAN))
         if input_route is not None and mapped_ref != input_route['mapped_plan']:
             raise ValueError('fixed-grid native route review and mapped input decision differ')
         mapped = (verify_cpu_fixed_grid_mapped_input_plan(mapped_ref) if input_route is None else
@@ -552,10 +582,10 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
                 or read_artifact(mapped['observation'])['control_delivery'] != delivery_ref):
             raise ValueError('mapped inputs do not belong to the exact scoped fixed-grid native incumbent')
         frontiers['cpu_fixed_grid_mapped_input_plan'] = mapped_ref
-    if lifecycle_cost_path is not None:
+    if evidence.fixed_grid_lifecycle_cost is not None:
         from scar.optimization.cpu_fixed_grid_lifecycle_cost import SCHEMA as LIFECYCLE_COST
 
-        cost_ref = artifact_reference(Path(lifecycle_cost_path).resolve(strict=True), LIFECYCLE_COST)
+        cost_ref = artifact_reference(Path(evidence.fixed_grid_lifecycle_cost).resolve(strict=True), LIFECYCLE_COST)
         cost = read_artifact(cost_ref)
         graph = read_artifact(cost['lifecycle'])
         old_review = read_artifact(cost['review'])
@@ -565,10 +595,10 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
                 or dict(old_review, bridge=bridge_ref) != review):
             raise ValueError('fixed-grid lifecycle costs belong to a different exact source CLI review')
         frontiers['cpu_fixed_grid_lifecycle_cost'] = cost_ref
-    if forward_path is not None:
+    if evidence.fixed_grid_forward is not None:
         from scar.optimization.cpu_fixed_grid_forward import SCHEMA as FORWARD, verify_cpu_fixed_grid_forward
 
-        forward_ref = artifact_reference(Path(forward_path).resolve(strict=True), FORWARD)
+        forward_ref = artifact_reference(Path(evidence.fixed_grid_forward).resolve(strict=True), FORWARD)
         forward = verify_cpu_fixed_grid_forward(forward_ref)
         timed_graph = read_artifact(forward['graph'])
         graph = read_artifact(timed_graph['lifecycle'])
@@ -863,14 +893,8 @@ def _review_source_trials(discovery, generated, domain, scope, out, *, capacity_
 
 
 @verify_stack_components_once()
-def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=False, enforce_cpu_capacity=False,
-                       cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
-                       cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
-                       cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None,
-                       cpu_native_array_route_cost=None, cpu_fixed_grid_cli_evidence=None,
-                       cpu_fixed_grid_mapped_input_plan=None, cpu_fixed_grid_lifecycle_cost=None,
-                       cpu_fixed_grid_input_route_review=None, cpu_fixed_grid_source_qualification=None,
-                       cpu_fixed_grid_forward=None):
+def replay_whole_entry(plan, out, *, evidence: EntryEvidence, plan_only, verify_entry=False,
+                       enforce_cpu_capacity=False):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -879,40 +903,41 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
 
     entry = plan['whole_entry']
     _, request, candidates = read_request(entry['request'])
-    if enforce_cpu_capacity and not (verify_entry and not plan_only and _infer_cpu_catalog(request)):
+    cpu_catalog = _infer_cpu_catalog(request)
+    obligations = plan.get('entry_obligations') is not None
+    if enforce_cpu_capacity and not (verify_entry and not plan_only and cpu_catalog):
         raise ValueError('CPU capacity enforcement requires an explicit CPU catalog trial')
-    forward = cpu_entry_forward or bool(cpu_launch_probes) or cpu_team_probe is not None or cpu_native_phase_cost is not None
-    if forward and not _infer_cpu_catalog(request):
+    forward = (evidence.forward_cpu or bool(evidence.launch_probes)
+               or evidence.team_probe is not None or evidence.native_phase_cost is not None)
+    if forward and not cpu_catalog:
         raise ValueError('CPU forward cost analysis requires a CPU catalog domain')
-    if cpu_python_import_cost is not None and not _infer_cpu_catalog(request):
+    if evidence.python_import_cost is not None and not cpu_catalog:
         raise ValueError('CPU Python import observations require a CPU catalog domain')
-    if cpu_paired_evidence is not None and not _infer_cpu_catalog(request):
+    if evidence.paired_observation is not None and not cpu_catalog:
         raise ValueError('CPU paired evidence requires a CPU catalog domain')
-    if cpu_native_array_route is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
+    if evidence.array_route is not None and not (cpu_catalog and obligations):
         raise ValueError('CPU native array routes require a catalog domain with original F4 obligations')
-    if cpu_fixed_grid_cli_evidence is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
+    if evidence.fixed_grid_cli is not None and not (cpu_catalog and obligations):
         raise ValueError('fixed-grid source CLI evidence requires a catalog domain with original F4 obligations')
-    if cpu_fixed_grid_cli_evidence is not None and 'cpu_paired_observation' not in request:
+    if evidence.fixed_grid_cli is not None and 'cpu_paired_observation' not in request:
         raise ValueError('fixed-grid source CLI evidence requires the frozen original paired launch')
-    if cpu_fixed_grid_mapped_input_plan is not None and cpu_fixed_grid_cli_evidence is None:
-        raise ValueError('mapped input decisions require the scoped fixed-grid source CLI evidence')
-    if cpu_fixed_grid_lifecycle_cost is not None and cpu_fixed_grid_cli_evidence is None:
-        raise ValueError('fixed-grid lifecycle costs require the scoped source CLI evidence')
-    if cpu_fixed_grid_input_route_review is not None and cpu_fixed_grid_cli_evidence is None:
-        raise ValueError('fixed-grid native input route requires the scoped source CLI evidence')
-    if cpu_fixed_grid_source_qualification is not None and cpu_fixed_grid_cli_evidence is None:
-        raise ValueError('fixed-grid source qualification requires the scoped source CLI evidence')
-    if cpu_fixed_grid_forward is not None and cpu_fixed_grid_cli_evidence is None:
-        raise ValueError('fixed-grid forward model requires the scoped source CLI evidence')
-    if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
-        raise ValueError('CPU native array route costs require the exact C++ route package')
-    if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
-            and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None)):
+    if evidence.fixed_grid_cli is None:
+        for value, reason in (
+            (evidence.fixed_grid_mapped_input, 'mapped input decisions require the scoped fixed-grid source CLI evidence'),
+            (evidence.fixed_grid_lifecycle_cost, 'fixed-grid lifecycle costs require the scoped source CLI evidence'),
+            (evidence.fixed_grid_input_review, 'fixed-grid native input route requires the scoped source CLI evidence'),
+            (evidence.fixed_grid_qualification, 'fixed-grid source qualification requires the scoped source CLI evidence'),
+            (evidence.fixed_grid_forward, 'fixed-grid forward model requires the scoped source CLI evidence'),
+        ):
+            if value is not None:
+                raise ValueError(reason)
+    import_evidence = (evidence.import_bindings, evidence.import_sources, evidence.initializer_observation)
+    if any(value is not None for value in import_evidence) and not (cpu_catalog and obligations):
         raise ValueError('CPU import bindings require a CPU catalog domain with original F4 obligations')
-    if cpu_paired_evidence is None and 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
+    if evidence.paired_observation is None and 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
-    scope_request = dict(request, use_captured_launch=True) if cpu_fixed_grid_cli_evidence is not None else request
+    scope_request = dict(request, use_captured_launch=True) if evidence.fixed_grid_cli is not None else request
     live_scope = _scope(plan, scope_request)
     if 'operator_stack_lock' in request:
         stack_target = entry['scope']['stack_target']
@@ -940,8 +965,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
             and read_artifact(cpu_observation_ref) != cpu_observation):
         raise ValueError('CPU provider observation differs from original graph replay')
     frontier_entry, paired_audit = entry, None
-    if cpu_paired_evidence is not None:
-        attached, paired_audit, checked_pair = _attach_cpu_pair(plan, live_scope, discovery, cpu_paired_evidence,
+    if evidence.paired_observation is not None:
+        attached, paired_audit, checked_pair = _attach_cpu_pair(plan, live_scope, discovery, evidence.paired_observation,
                                                               cpu_observation_ref, out, checked_pair)
         if attached != cpu_observation_ref:
             cpu_observation_ref = attached
@@ -955,17 +980,12 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     domain = _derive(plan, request, candidates, live_scope, legalities, entry['legalities'], discovery)
     if read_artifact(entry['domain']) != domain or read_artifact(entry['legalities']) != legalities:
         raise ValueError('retained whole-entry domain differs from original program and evidence replay')
-    domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], entry_costs, out)
-    import_frontiers = (_cpu_import_frontiers(plan, live_scope, out, cpu_import_bindings, cpu_import_sources,
-                                               cpu_initializer_observation)
-                        if _infer_cpu_catalog(request) and plan.get('entry_obligations') is not None else {})
+    domain, priced_domain, cost_inputs = _attach_costs(domain, entry['domain'], evidence.costs, out)
+    import_frontiers = _cpu_import_frontiers(plan, live_scope, out, *import_evidence) if cpu_catalog and obligations else {}
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     fixed_grid_frontiers = {}
-    if cpu_fixed_grid_cli_evidence is not None:
-        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, cpu_fixed_grid_cli_evidence, out,
-                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost,
-                                   cpu_fixed_grid_input_route_review, cpu_fixed_grid_source_qualification,
-                                   cpu_fixed_grid_forward)
+    if evidence.fixed_grid_cli is not None:
+        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, out, evidence)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain,
                                   import_frontier=import_frontiers.get('cpu_entry_import_frontier'),
                                   import_source_effects=import_frontiers.get('cpu_entry_import_source_effects'),
@@ -978,11 +998,11 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
 
         cpu_frontiers['cpu_original_publication_order'] = _write(out/'whole-entry-original-publication-order.json',
             derive_cpu_entry_publication_order(cpu_observation_ref))
-    if cpu_python_import_cost is not None:
-        _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
-    if cpu_native_array_route is not None:
-        _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route,
-                                       cpu_native_array_route_cost)
+    if evidence.python_import_cost is not None:
+        _attach_python_import_cost(plan, live_scope, cpu_frontiers, evidence.python_import_cost)
+    if evidence.array_route is not None:
+        _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, evidence.array_route,
+                                       evidence.array_route_cost)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None
@@ -1004,7 +1024,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
             if enforce_cpu_capacity:
                 capacity_contract = capacity
         if forward:
-            _forward_cpu_entry(out, cpu_frontiers, nomination, cpu_launch_probes, cpu_team_probe, cpu_native_phase_cost)
+            _forward_cpu_entry(out, cpu_frontiers, nomination, evidence.launch_probes,
+                               evidence.team_probe, evidence.native_phase_cost)
     if selected in generated:
         retained_pair_ref = paired_audit['validation']['reference'] if (
             paired_audit is not None and paired_audit['option_id'] == selected) else None

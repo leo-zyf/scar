@@ -9,8 +9,8 @@ import pytest
 
 from scar.analysis.target_graph import build_target_graph
 from scar.compiler.model import ArrayRegion,Expr,SourceRef
-from scar.compiler.parallel_temporal_invariant import (
-    build_parallel_temporal_invariant_loop,load_parallel_temporal_invariant_loop)
+from scar.compiler.temporal_invariant_loop import (
+    build_parallel_temporal_invariant_loop, load_temporal_invariant_loop as load_parallel_temporal_invariant_loop)
 from scar.optimization.hardware import propose_cpu_allocations
 
 

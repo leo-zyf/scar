@@ -69,7 +69,7 @@ def build_composite_invariant_loop(proof,out,*,catalog,memory_budget_bytes,resou
     interface=_loop_interface(proof,execution_specialization=execution_specialization,source_motion=source_motion)
     builder=build_temporal_invariant_loop
     if parallel:
-        from scar.compiler.parallel_temporal_invariant import build_parallel_temporal_invariant_loop
+        from scar.compiler.temporal_invariant_loop import build_parallel_temporal_invariant_loop
         builder=build_parallel_temporal_invariant_loop
     return builder(proof.body,out,carry_parameter=proof.carry_parameter,
         loop_interface=interface,memory_budget_bytes=memory_budget_bytes,resource_binding=resource_binding)

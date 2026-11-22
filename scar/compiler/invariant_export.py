@@ -32,7 +32,7 @@ def export_temporal_invariant(native_directory,out,*,schedule_path,proof_referen
         raise ValueError('temporal export requires its compiled current source movement certificate')
     parallel=native_manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
     if parallel:
-        from scar.compiler.parallel_temporal_invariant import load_parallel_temporal_invariant_loop
+        from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop as load_parallel_temporal_invariant_loop
         artifact=load_parallel_temporal_invariant_loop(native_directory)
     else:
         artifact=load_temporal_invariant_loop(native_directory)
@@ -148,7 +148,7 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
         raise ValueError('composite export requires its compiled current source movement certificate')
     parallel=manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
     if parallel:
-        from scar.compiler.parallel_temporal_invariant import load_parallel_temporal_invariant_loop
+        from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop as load_parallel_temporal_invariant_loop
         artifact=load_parallel_temporal_invariant_loop(native)
     else:
         artifact=load_temporal_invariant_loop(native)

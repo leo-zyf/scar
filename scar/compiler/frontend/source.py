@@ -81,7 +81,8 @@ def _derive_unit(task):
     return key, refs, records, os.getpid()
 
 
-def build_source_layers(roots, model, report, *, jobs):
+def build_source_layers(roots, model, report, *, jobs, source_files=(), max_files=4096,
+                        max_bytes=64_000_000, max_directories=16384):
     """Publish a fresh model only after all declared units pass their layer contracts."""
     model, report = Path(model).absolute(), Path(report).absolute()
     if (model.exists() or report.exists() or model.resolve() != model or report.resolve() != report
@@ -91,7 +92,9 @@ def build_source_layers(roots, model, report, *, jobs):
     started = time.monotonic()
     with TemporaryDirectory(prefix='.source-layers-', dir=model.parent) as directory:
         staged = Path(directory) / 'model'
-        build_static_program(roots[0], source_roots=roots[1:], out=staged, jobs=jobs, phase='sources')
+        build_static_program(roots[0], source_roots=roots[1:], source_files=source_files, out=staged,
+                             jobs=jobs, phase='sources', max_files=max_files, max_bytes=max_bytes,
+                             max_directories=max_directories)
         manifest = refine_static_program(staged)
         if (manifest['source_catalog_status'] != 'COMPLETE' or manifest['worker_errors']
                 or manifest['source_changed'] or any(unit['status'] in {'ERROR', 'SYNTAX_ERROR'}
@@ -152,8 +155,13 @@ def main(argv=None):
     parser.add_argument('--model', required=True, type=Path)
     parser.add_argument('--report', required=True, type=Path)
     parser.add_argument('--jobs', type=int, choices=range(1, 33), default=4)
+    parser.add_argument('--source-file', action='append', default=[], type=Path)
+    parser.add_argument('--max-files', type=int, default=4096)
+    parser.add_argument('--max-bytes', type=int, default=64_000_000)
+    parser.add_argument('--max-directories', type=int, default=16384)
     args = parser.parse_args(argv)
-    build_source_layers(args.roots, args.model, args.report, jobs=args.jobs)
+    build_source_layers(args.roots, args.model, args.report, jobs=args.jobs, source_files=args.source_file,
+                        max_files=args.max_files, max_bytes=args.max_bytes, max_directories=args.max_directories)
     return 0
 
 

@@ -1,26 +1,84 @@
-"""Emit one C++20 project from a locked native source revision."""
+"""Verify selected execution products and deliver C++20 targets."""
 
 from dataclasses import asdict, dataclass
-from hashlib import sha256
+import os
 from pathlib import Path
 import shutil
+import subprocess
 
 from scar.artifacts import file_reference
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
+from scar.codegen.native_cpu_elf import _dependencies, cpu_executable_dynamic
 from scar.codegen.native_project import (
     build_native_project, publish_cpp20_inputs, replay_cpp20_inputs, write_native_project,
 )
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document, problem_from_dict
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, loads
-from scar.optimization.joint_planner import verify_execution_plan
-
-from scar.compiler.model import CpuPlacement
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..middle.plan import NativeSchedule, copy_source_edits, entry_baseline_only, entry_cpus, entry_problem, publish_plan
-from ..middle.python import ScheduledLoop
+from ..contracts import ExecutionPlanRef, ScheduledLoop, verify_source_lock
+from ..middle.plan import copy_source_edits, publish_plan, read_native_binding
+from ..operator_stack import (
+    load_operator_stack, nvidia_stack_build, verify_operator_stack_linkage, verify_stack_components_once,
+)
 from ..qualification import executable_receipt
+
+
+_NATIVE_ENTRY = 'CPP20_NATIVE_ENTRY'
+_SERIAL_LOOP = 'CPP_SERIAL_TEMPORAL'
+_OPENMP_LOOP = 'CPP_OPENMP_EXPLICIT_ROW_PARTITION_TEMPORAL'
+_ABI1_PROFILES = frozenset((_NATIVE_ENTRY, _SERIAL_LOOP, _OPENMP_LOOP))
+
+
+def cpp20_capability(profile: str, *, operator_abi_version: int = 1) -> dict:
+    """Describe the target ABI used by an admitted delivery profile."""
+    if profile not in _ABI1_PROFILES or type(operator_abi_version) is not int or operator_abi_version != 1:
+        raise ValueError('unqualified C++20 operator ABI or delivery profile')
+    report = dict(schema='scar.cpp20-backend-capability', schema_version=1, profile=profile,
+                  cxx_standard=20, operator_abi_version=operator_abi_version)
+    if profile == _NATIVE_ENTRY:
+        report['target_kind'] = 'EXECUTABLE'
+    else:
+        report.update(target_kind='SHARED_OPERATOR', temporal_control_abi_version=1)
+    return report
+
+
+@dataclass(frozen=True, slots=True)
+class Cpp20Toolchain:
+    compiler: dict
+    stack: dict | None
+    route: str
+    inputs: dict
+    stack_document: dict | None = None
+
+    def receipt(self) -> dict:
+        return dict(schema='scar.cpp20-toolchain', schema_version=1, compiler=self.compiler,
+                    operator_stack=self.stack, route=self.route)
+
+
+def bind_cpp20_toolchain(stack=None, *, route: str = 'CPU') -> Cpp20Toolchain:
+    """Resolve the declared toolchain and verify its locked library stack."""
+    if route not in ('CPU', 'CUDA', 'HYBRID'):
+        raise ValueError(f'unsupported operator-stack route: {route}')
+    if stack is not None:
+        reference, document = load_operator_stack(stack)
+        build = nvidia_stack_build(document, route)
+        compiler = file_reference(build.pop('compiler')[0], 'scar.cpp20-compiler')
+        inputs = {key: tuple(map(str, values)) for key, values in build.items()}
+        return Cpp20Toolchain(compiler, reference, route, inputs, document)
+    if route != 'CPU':
+        raise ValueError('accelerator builds require a locked operator stack')
+    path = shutil.which('g++')
+    if path is None:
+        raise ValueError('g++ is required for the default CPU toolchain')
+    compiler = file_reference(Path(path).resolve(strict=True), 'scar.cpp20-compiler')
+    return Cpp20Toolchain(compiler, None, route, {})
+
+
+def _entry_toolchain(manifest):
+    stack = manifest.get('operator_stack')
+    if stack is not None and not isinstance(stack, dict):
+        raise ValueError('native operator stack must be a locked artifact reference')
+    return bind_cpp20_toolchain(stack)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,18 +91,32 @@ class NativeProject:
     artifacts: dict
 
 
-def emit_native(schedule: NativeSchedule, project: Path) -> NativeProject:
+def deliver(plan: ExecutionPlanRef | ScheduledLoop, project: Path | None = None, *,
+            catalog=None, plan_only: bool = False) -> NativeProject | dict:
+    """Lower a verified entry or region plan through the C++20 backend."""
+    if isinstance(plan, ExecutionPlanRef) and project is not None and not plan_only:
+        return _emit_native(plan, Path(project))
+    if isinstance(plan, ScheduledLoop) and project is None and catalog is not None:
+        return _lower_loop(plan, catalog=catalog, plan_only=plan_only)
+    raise ValueError('C++20 delivery requires a project path for an entry or a source catalog for a loop')
+
+
+def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
     """Replay the schedule, emit its C++20 project and seal the linked output."""
     from ..frontend.clang import stage_source_revision, verify_mixed_linkage
 
     artifacts = schedule.artifacts.copy()
-    manifest, observation, delivery = admit_entry(artifacts, schedule.entry)
-    if 'trial_variant' in delivery:
-        executable, inputs, dynamic = promote_cpp20_variant(project, artifacts, delivery)
-    else:
-        inputs = stage_source_revision(manifest, project, delivery['source_edits'],
-                                       captures=delivery['compiler_types'], plan=delivery['plan'])
-        executable, dynamic = build_cpp20_project(project, inputs, plan=delivery['plan'])
+    manifest, observation, delivery = admit_entry(schedule)
+    with verify_stack_components_once():
+        toolchain = _entry_toolchain(manifest)
+        delivery['toolchain'] = toolchain.receipt()
+        if 'trial_variant' in delivery:
+            executable, inputs, dynamic = promote_cpp20_variant(project, artifacts, delivery, toolchain=toolchain)
+        else:
+            inputs = stage_source_revision(manifest, project, delivery['source_edits'],
+                                           captures=delivery['compiler_types'], plan=delivery['plan'],
+                                           target_inputs=toolchain.inputs)
+            executable, dynamic = build_cpp20_project(project, inputs, plan=delivery['plan'], toolchain=toolchain)
     delivery['cpp20_inputs'] = artifacts['cpp20_inputs'] = inputs
     delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
     fortran = project / 'fortran-emission.json'
@@ -96,67 +168,63 @@ def replay_native_revision(artifacts):
         regions = {region.id.wire for region in simplified.regions}
         if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
             raise ValueError('source edits do not match the simplified IR')
-    root = Path(manifest['source_root'])
-    for name, lock in manifest['source_lock']['files'].items():
-        path = (root / name).resolve(strict=True)
-        if not path.is_relative_to(root):
-            raise ValueError(f'locked source outside the source root: {name}')
-        ref = file_reference(path, 'scar.native-source')
-        if any(ref[key] != lock[key] for key in ('sha256', 'size_bytes')):
-            raise ValueError(f'locked source changed: {name}')
+    verify_source_lock(manifest)
     return manifest, edits, compiler_types
 
 
-def admit_entry(artifacts, entry):
-    """Reconstruct the cost domain and verify the selected implementation."""
+def admit_entry(schedule: ExecutionPlanRef):
+    """Replay the selected implementation against the frozen problem and source."""
+    artifacts = schedule.artifacts
     manifest, edits, compiler_types = replay_native_revision(artifacts)
-    schemas = {'cost': 'scar.native-entry-cost', 'planning_problem': PROBLEM_SCHEMA, 'execution_plan': PLAN_SCHEMA}
-    documents = {}
-    for role, schema in schemas.items():
-        ref = artifacts[role]
-        if ref['schema'] != schema:
-            raise ValueError(f'invalid {role} artifact schema')
-        documents[role] = read_artifact(ref)
-    observation = documents['cost']
-    problem = entry_problem(entry, artifacts, observation, edits)
-    if (observation['request'] != artifacts['request'] or observation['exit'] != 0
-            or problem_document(problem) != documents['planning_problem']):
-        raise ValueError('native problem differs from the admitted inputs')
-    plan = documents['execution_plan']
-    verification = verify_execution_plan(problem, plan)
-    operation = problem.operations[0]
-    baseline_only = entry_baseline_only(problem)
-    eligible = (option for option in operation.options
-                if not baseline_only or option.id == operation.baseline_option)
-    option = min(eligible, key=lambda item: (item.cost.estimate_ns, item.id != operation.baseline_option))
-    if (plan['baseline_only'] != baseline_only or plan['transfers'] or plan.get('activities')
-            or len(plan['selected']) != 1 or plan['selected'][0]['option'] != option.id):
-        raise ValueError('backend cannot lower the selected native schedule')
-    cpu = int(next(iter(option.demands)).removeprefix('cpu:'))
-    if cpu not in entry_cpus(artifacts['hardware']):
-        raise ValueError('scheduled CPU is unavailable')
-    selected_edits = edits if option.id == 'canonical' else []
-    delivery = dict(schema='scar.native-delivery', schema_version=1, cpus=[cpu],
+    observation, binding = read_native_binding(schedule)
+    operations = binding.pop('rewrite_operations')
+    selected_edits = edits if operations else []
+    if operations != [edit['operation'] for edit in selected_edits]:
+        raise ValueError('scheduled source edits differ from the verified graph revision')
+    capability = cpp20_capability(_NATIVE_ENTRY, operator_abi_version=manifest.get('operator_abi_version', 1))
+    delivery = dict(schema='scar.native-delivery', schema_version=1,
                     plan=artifacts['execution_plan'], problem=artifacts['planning_problem'],
-                    request=artifacts['request'], selected=plan['selected'],
-                    source_edits=selected_edits, compiler_types=compiler_types,
-                    lowering=option.lowering, verification=verification)
-    if observation['schema_version'] == 2:
-        delivery['trial_variant'] = observation['variants'][option.id]
+                    request=artifacts['request'], source_edits=selected_edits, compiler_types=compiler_types,
+                    capability=capability, **binding)
     return manifest, observation, delivery
 
 
-def build_cpp20_project(project, inputs, *, plan):
-    """Build source-adapter output with one target language and verify its ABI."""
-    configuration = replay_cpp20_inputs(project, inputs, plan=plan)
-    write_native_project(project, 'scar_entry', **configuration)
-    executable, _ = build_native_project(project, 'scar_entry', ('g++',))
-    replay_cpp20_inputs(project, inputs, plan=plan)
+def _verify_linkage(executable, toolchain, dependencies=None):
     dynamic = cpu_executable_dynamic(executable)
     for name in dynamic['needed']:
         if any(provider in name for provider in ('libpython', 'libtorch', 'libgfortran')):
             raise ValueError(f'unqualified target dependency: {name}')
-    return executable, dynamic
+    if toolchain.stack_document is not None:
+        if dependencies is None:
+            env = {key: value for key, value in os.environ.items() if not key.startswith('LD_')}
+            dependencies = _dependencies(subprocess.check_output(['ldd', str(executable)], env=env, text=True))
+        dynamic['operator_stack'] = verify_operator_stack_linkage(toolchain.stack_document, dependencies, toolchain.route)
+    return dynamic
+
+
+def build_cpp20_project(project, inputs, *, plan, toolchain=None):
+    """Build source-adapter output with one target language and verify its ABI."""
+    configuration = replay_cpp20_inputs(project, inputs, plan=plan)
+    toolchain = toolchain or bind_cpp20_toolchain()
+    _verify_toolchain_inputs(toolchain, configuration)
+    _verify_compiler(toolchain)
+    write_native_project(project, 'scar_entry', **configuration)
+    executable, dependencies = build_native_project(project, 'scar_entry', (toolchain.compiler['uri'],))
+    replay_cpp20_inputs(project, inputs, plan=plan)
+    _verify_compiler(toolchain)
+    return executable, _verify_linkage(executable, toolchain, dependencies)
+
+
+def _verify_compiler(toolchain):
+    compiler = toolchain.compiler
+    if file_reference(compiler['uri'], compiler['schema']) != compiler:
+        raise ValueError('selected C++20 compiler changed during delivery')
+
+
+def _verify_toolchain_inputs(toolchain, configuration):
+    for key, members in toolchain.inputs.items():
+        if not set(members) <= set(configuration.get(key, ())):
+            raise ValueError(f'selected toolchain inputs are absent from the C++20 project: {key}')
 
 
 def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *, mode):
@@ -168,16 +236,20 @@ def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *
         request=artifacts['request'], rewrites=artifacts['rewrites'], mode=mode, source_edits=edits,
     ))
     project = directory / 'project'
-    inputs = stage_source_revision(manifest, project, edits, captures=compiler_types, plan=plan)
-    executable, _ = build_cpp20_project(project, inputs, plan=plan)
+    with verify_stack_components_once():
+        toolchain = _entry_toolchain(manifest)
+        inputs = stage_source_revision(manifest, project, edits, captures=compiler_types, plan=plan,
+                                       target_inputs=toolchain.inputs)
+        executable, _ = build_cpp20_project(project, inputs, plan=plan, toolchain=toolchain)
     binary = file_reference(executable, 'scar.cpp20-executable')
     variant = publish_plan(directory / 'result.json', dict(
         schema='scar.native-compiled-variant', schema_version=1, plan=plan, inputs=inputs, binary=binary,
+        toolchain=toolchain.receipt(),
     ))
     return executable, variant
 
 
-def promote_cpp20_variant(project, artifacts, delivery):
+def promote_cpp20_variant(project, artifacts, delivery, *, toolchain):
     """Deliver the scheduled executable byte for byte, without rebuilding it."""
     reference = delivery['trial_variant']
     if reference['schema'] != 'scar.native-compiled-variant':
@@ -188,7 +260,7 @@ def promote_cpp20_variant(project, artifacts, delivery):
     if (recipe != dict(schema='scar.native-source-variant', schema_version=1,
                        request=artifacts['request'], rewrites=artifacts['rewrites'],
                        mode=mode, source_edits=delivery['source_edits'])
-            or variant['schema_version'] != 1):
+            or variant['schema_version'] != 1 or variant.get('toolchain') != toolchain.receipt()):
         raise ValueError('selected trial belongs to a different source revision')
     staged = Path(reference['uri']).parent / 'project'
     original = staged / 'bin/scar_entry'
@@ -196,6 +268,7 @@ def promote_cpp20_variant(project, artifacts, delivery):
     if file_reference(original, 'scar.cpp20-executable') != binary:
         raise ValueError('selected executable differs from the calibrated binary')
     build = replay_cpp20_inputs(staged, variant['inputs'], plan=variant['plan'])
+    _verify_toolchain_inputs(toolchain, build)
     shutil.copytree(staged, project, ignore=shutil.ignore_patterns('cpp20-inputs.json'))
     inputs = publish_cpp20_inputs(project, build, plan=delivery['plan'])
     before = read_artifact(variant['inputs'])['files']
@@ -207,81 +280,71 @@ def promote_cpp20_variant(project, artifacts, delivery):
     delivered = file_reference(executable, binary['schema'])
     if delivered != dict(binary, uri=str(executable)):
         raise ValueError('published executable differs from the calibrated binary')
-    return executable, inputs, cpu_executable_dynamic(executable)
+    _verify_compiler(toolchain)
+    return executable, inputs, _verify_linkage(executable, toolchain)
 
 
-def lower_loop(work: ScheduledLoop, *, catalog, plan_only) -> dict:
+def _lower_loop(work: ScheduledLoop, *, catalog, plan_only: bool) -> dict:
     from scar.compiler.invariant_export import export_temporal_invariant, export_composite_temporal_invariant
     from scar.compiler.loop_admission import read_invariant_loop_motion
     from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_motion
+    from scar.compiler.temporal_invariant_loop import emit_temporal_invariant_loop, uses_openmp
 
     folder, composite, parallel = work.folder, work.composite, work.parallel
     reader = read_composite_invariant_loop_motion if composite else read_invariant_loop_motion
-    # Reopen the exact published schedule and source proof before codegen.
+    expected = dict(schema='scar.cpp20-loop-lowering', schema_version=1,
+                    loop_id=work.loop_id, proof=work.proof, source_motion=work.source_motion,
+                    schedule=work.schedule, parallel=parallel)
+    prepared = read_artifact(work.lowering)
+    if {key: value for key, value in prepared.items() if key != 'plan'} != expected:
+        raise ValueError('loop lowering does not bind the scheduled source and resources')
     schedule = read_artifact(work.schedule)
     read_artifact(work.proof)
     proof, motion = reader(work.proof['uri'], catalog=catalog)
     if (work.loop_id != proof.id
             or semantic_sha256(motion) != semantic_sha256(read_artifact(work.source_motion))):
         raise ValueError('loop movement changed between original F4 admission and lowering')
-    binding = dict(schedule['resource_binding'])
-    binding['cpu_ids'] = tuple(binding['cpu_ids'])
-    binding['evidence'] = tuple(binding.get('evidence', ()))
-    placement = CpuPlacement(**binding)
-    budget = schedule['effective_incremental_budget_bytes']
+    plan = prepared['plan']
+    if uses_openmp(plan) != parallel:
+        raise ValueError('C++20 loop lowering uses a different worker profile than the schedule')
+    execution = plan['execution_plan']
+    interface = plan['loop_interface']
     specialization = dict(input_shapes=schedule['input_shapes'], trip_count=schedule['trip_count'],
                           input_layout='C_CONTIGUOUS')
-    if composite:
-        from scar.compiler.composite_invariant_loop import _loop_interface
-        interface = _loop_interface(proof, execution_specialization=specialization,
-                                    source_motion=work.source_motion)
-    else:
-        interface = dict(
-            original_f4_proof=asdict(proof), carry_parameter=proof.carry_parameter,
-            readonly_parameters=[name for name in proof.body.parameters if name != proof.carry_parameter],
-            authority='ORIGINAL_F4_REPLAYED_WITH_RESOURCE_SCHEDULE',
-            execution_specialization=specialization, source_motion=work.source_motion,
-        )
-    if parallel:
-        from scar.compiler.parallel_temporal_invariant import (
-            _plan as preview, build_parallel_temporal_invariant_loop as build,
-        )
-    else:
-        from scar.compiler.temporal_invariant_loop import _plan as preview, build_temporal_invariant_loop as build
-    planned, _ = preview(proof.body, proof.carry_parameter, interface, budget, placement)
-    consumed = planned['execution_movement_binding']
-    if consumed is None:
-        raise ValueError('loop delivery requires consumed source movement legality')
+    proof_key = 'original_composite_f4_proof' if composite else 'original_f4_proof'
+    if (schedule['selected_kind'] != 'REGISTER_TEMPORAL_FUSION'
+            or semantic_sha256(interface.get(proof_key)) != semantic_sha256(asdict(proof))
+            or interface.get('source_motion') != work.source_motion
+            or interface.get('execution_specialization') != specialization
+            or plan['body_sha256'] != schedule['body_sha256']
+            or plan['memory_budget_bytes'] != schedule['effective_incremental_budget_bytes']
+            or semantic_sha256(execution.get('resource_binding')) != semantic_sha256(schedule['resource_binding'])):
+        raise ValueError('C++20 loop lowering differs from the selected proof, specialization or placement')
+    consumed = plan['execution_movement_binding']
+    if (consumed is None or consumed['source_motion'] != work.source_motion
+            or consumed['source_motion_sha256'] != semantic_sha256(motion)):
+        raise ValueError('C++20 loop lowering requires the original source movement evidence')
+    profile = _OPENMP_LOOP if parallel else _SERIAL_LOOP
+    capability = cpp20_capability(profile, operator_abi_version=execution['operator_abi_version'])
     movement = publish_plan(folder / 'movement-binding.json', consumed)
     family = 'COMPOSITE_LOOP' if composite else 'LOOP'
     if plan_only:
-        return dict(status=f'MODEL_SELECTED_{family}_PLAN_ONLY', movement_binding=movement)
+        return dict(status=f'MODEL_SELECTED_{family}_PLAN_ONLY', movement_binding=movement,
+                    capability=capability)
 
     native = folder / 'native'
-    if composite:
-        from scar.compiler.composite_invariant_loop import build_composite_invariant_loop
-        artifact = build_composite_invariant_loop(
-            proof, native, catalog=catalog, memory_budget_bytes=budget, resource_binding=placement,
-            execution_specialization=specialization, parallel=True if parallel else None,
-            source_motion=work.source_motion,
-        )
-        export = export_composite_temporal_invariant
-    else:
-        artifact = build(proof.body, native, carry_parameter=proof.carry_parameter,
-                         loop_interface=interface, memory_budget_bytes=budget, resource_binding=placement)
-        export = export_temporal_invariant
-    emitted = artifact.plan
-    if (emitted['execution_movement_binding'] != consumed
-            or emitted['loop_interface']['execution_specialization'] != specialization
-            or emitted['memory_budget_bytes'] != budget
-            or semantic_sha256(emitted['execution_plan']['resource_binding']) !=
-               semantic_sha256(schedule['resource_binding'])):
-        raise ValueError('compiled loop differs from the admitted movement, specialization or placement')
+    artifact = emit_temporal_invariant_loop(plan, native)
+    if (semantic_sha256(artifact.plan) != semantic_sha256(plan)
+            or artifact.report['cxx_standard'] != capability['cxx_standard']
+            or artifact.report['operator_descriptor_abi_version'] != capability['operator_abi_version']
+            or artifact.report['temporal_control_abi_version'] != capability['temporal_control_abi_version']):
+        raise ValueError('compiled loop differs from the admitted lowering or ABI')
+    export = export_composite_temporal_invariant if composite else export_temporal_invariant
     exported = export(native, folder / 'bundle', schedule_path=work.schedule['uri'],
                       proof_reference=work.proof, catalog=catalog)
     return dict(
         status=f'MODEL_SELECTED_{family}_COMPILED', native_directory=str(native),
-        movement_binding=movement,
+        movement_binding=movement, capability=capability,
         native_artifact=artifact_reference(native / 'artifact.json', artifact.report['schema']),
         bundle=exported['bundle'],
         bundle_export=artifact_reference(folder / 'bundle/export-report.json', exported['schema']),

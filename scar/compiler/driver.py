@@ -4,12 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
-
-from .backend.cpp20 import build_trial_variant, emit_native, replay_native_revision
-from .frontend.graph import build_graph
-from .frontend.units import lock_units
-from .middle.plan import entry_cpus, rewrite_native, schedule_native
-from .qualification import NativeCases, executable_receipt
+import sys
 
 
 def _graph_report(graph):
@@ -26,11 +21,17 @@ def _graph_report(graph):
                             calls='PARTIAL' if facts['call_frontiers'] or graph.program is None else 'BOUND'))
 
 
-def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only=False):
+def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only=False,
+                   adapters=None):
+    from .frontend.graph import BUILTIN_ADAPTERS, build_graph
+    from .frontend.units import lock_units
+
     out = out.resolve()
-    inputs = lock_units(manifest, out)
+    adapters = BUILTIN_ADAPTERS if adapters is None else tuple(adapters)
+    languages = tuple(language for adapter in adapters for language in adapter.languages)
+    inputs = lock_units(manifest, out, languages=languages)
     request = inputs.manifest
-    graph = build_graph(request, out, jobs=jobs, request=inputs.request)
+    graph = build_graph(request, out, jobs=jobs, request=inputs.request, adapters=adapters)
     result = _graph_report(graph)
     if graph_only and graph.program is None:
         result.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
@@ -41,6 +42,10 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
 
 
 def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
+    from .backend.cpp20 import build_trial_variant, deliver, replay_native_revision
+    from .middle.plan import entry_cpus, publish_plan, rewrite_native, schedule_native
+    from .qualification import NativeCases
+
     request = inputs.manifest
     layers = result['layers']
     layer = 'rewrite'
@@ -71,20 +76,18 @@ def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
         layers[layer] = 'OBSERVED'
         layer = 'schedule'
         schedule = schedule_native(revision, observation, request['cases'], out)
+        retained_plan = publish_plan(out / 'compiler-plan.json', schedule.document())
         result.update(artifacts=schedule.artifacts, cost_decision=schedule.decision,
                       planning_scope=schedule.scope)
         layers[layer] = 'SCHEDULED'
         layer = 'build'
-        project = emit_native(schedule, out / 'project')
-        result.update(artifacts=project.artifacts, cpus=project.delivery['cpus'], executable=project.receipt,
+        project = deliver(schedule, out / 'project')
+        result.update(artifacts=dict(project.artifacts, compiler_plan=retained_plan),
+                      cpus=project.delivery['cpus'], executable=project.receipt,
                       elf=project.dynamic, applied_source_rewrites=len(project.delivery['source_edits']))
         layers.update(admission='REPLAYED', source_revision='CPP20_STAGED', build='BUILT')
         layer = 'validation'
-        if project.delivery['cpus'] != [cases.cpu]:
-            raise ValueError('delivery uses a different CPU from the cost observation')
-        rows = cases.paired(project.executable, out / 'validation', project.observation, repetitions)
-        if executable_receipt(project.executable) != project.receipt:
-            raise ValueError('C++20 executable changed during validation')
+        rows = _validate_delivery(project, cases, out, repetitions)
         matched = all(row['matches'] for row in rows)
         result.update(validation=rows, delivery='COMPARED' if matched else 'MISMATCH')
         layers[layer] = 'MATCHED' if matched else 'MISMATCH'
@@ -95,12 +98,46 @@ def _compile_graph(inputs, graph, out, result, *, repetitions, case_seconds):
         result.update(delivery='INCOMPLETE', delivery_error=str(error))
 
 
+def _validate_delivery(project, cases, out, repetitions):
+    from .qualification import executable_receipt
+
+    if project.delivery['cpus'] != [cases.cpu]:
+        raise ValueError('delivery uses a different CPU from the cost observation')
+    rows = cases.paired(project.executable, out / 'validation', project.observation, repetitions)
+    if executable_receipt(project.executable) != project.receipt:
+        raise ValueError('C++20 executable changed during validation')
+    return rows
+
+
+def compile_saved_plan(path, out, *, repetitions, case_seconds):
+    """Replay a delivered entry plan in a separate process without replanning."""
+    from scar.artifacts import file_reference
+    from scar.ir.execution_recipe import read_artifact
+    from .backend.cpp20 import deliver
+    from .contracts import ExecutionPlanRef
+    from .qualification import NativeCases
+
+    plan = ExecutionPlanRef.read(path)
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    project = deliver(plan, out / 'project')
+    manifest = read_artifact(project.delivery['request'])
+    cases = NativeCases(manifest, project.observation['cpu'], case_seconds)
+    rows = _validate_delivery(project, cases, out, repetitions)
+    artifacts = dict(project.artifacts, compiler_plan=file_reference(path, 'scar.compiler-plan'))
+    result = dict(schema='scar.compiler-replay', schema_version=1, artifacts=artifacts,
+                  executable=project.receipt, cpus=project.delivery['cpus'], validation=rows,
+                  delivery='COMPARED' if all(row['matches'] for row in rows) else 'MISMATCH')
+    (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+    return result
+
+
 def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan_only=False,
                   loop_cpu_threads=None, loop_cpu_model=False, loop_calibrations=(),
                   loop_no_op_profiles=None, loop_max_threads=None):
     from scar.analysis.build import BuildSession, _check
     from scar.ir.execution_recipe import read_artifact
-    from .backend.cpp20 import lower_loop
+    from .backend.cpp20 import deliver
     from .middle.python import schedule_loops
 
     if not (document.get('invariant_loops') or document.get('composite_invariant_loops')
@@ -116,26 +153,38 @@ def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan
             original_costs=loop_no_op_profiles, max_threads=loop_max_threads,
         )
         for row, loop in work:
-            row.update(lower_loop(loop, catalog=session.view, plan_only=plan_only))
+            row.update(deliver(loop, catalog=session.view, plan_only=plan_only))
     read_artifact(program)
     _check(hardware)
     return direct, composite
 
 
 def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    if any(argument == '--domains' or argument.startswith('--domains=') for argument in arguments):
+        from .pipeline import compile_domains_main
+
+        return compile_domains_main(arguments)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--manifest', required=True, type=Path)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--manifest', type=Path)
+    inputs.add_argument('--plan', type=Path, help='replay a sealed compiler-plan.json')
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--jobs', type=int, choices=range(1, 13), default=4)
     parser.add_argument('--repetitions', type=int, choices=range(1, 10), default=3)
     parser.add_argument('--case-seconds', type=int, default=3600)
     parser.add_argument('--graph-only', action='store_true')
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if not 1 <= args.case_seconds <= 3600:
         parser.error('--case-seconds must be between 1 and 3600')
+    if args.plan and args.graph_only:
+        parser.error('--graph-only requires --manifest')
     try:
-        result = compile_native(args.manifest, args.out, jobs=args.jobs, repetitions=args.repetitions,
-                                case_seconds=args.case_seconds, graph_only=args.graph_only)
+        if args.plan:
+            result = compile_saved_plan(args.plan, args.out, repetitions=args.repetitions, case_seconds=args.case_seconds)
+        else:
+            result = compile_native(args.manifest, args.out, jobs=args.jobs, repetitions=args.repetitions,
+                                    case_seconds=args.case_seconds, graph_only=args.graph_only)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f'{error}\n')
     print(json.dumps(result, indent=2))

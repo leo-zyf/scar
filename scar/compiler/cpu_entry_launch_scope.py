@@ -18,8 +18,8 @@ from scar.analysis.cpu_import_source_body import (
     verify_cpu_import_source_body,
 )
 from scar.analysis.replay_transaction import detached_replay
-from scar.compiler.frontend.python import _LAYERS, _Run, build_frontend
-from scar.analysis.static_program import build_static_program, read_static_program
+from scar.compiler.frontend.python import _Run, build_frontend
+from scar.analysis.static_program import read_static_program
 from scar.optimization.cpu_entry_import_frontier import (
     SCHEMA as FRONTIER,
     verify_cpu_entry_import_frontier,
@@ -243,15 +243,15 @@ def _source_model(root, sources, jobs):
     empty = root/'empty-source-root'
     empty.mkdir()
     model = root/'source-model'
-    build_static_program(empty, source_files=tuple(sources), out=model, phase='sources', jobs=1,
-        max_files=len(sources), max_bytes=sum(row['size_bytes'] for row in sources.values()), max_directories=1)
     layers = root/'source-layers'
     layers.mkdir()
-    run = _Run(layers)
-    for command, schema in _LAYERS:
-        out = layers/command
-        run.worker(command, [command, '--model', model, '--out', out, '--jobs', jobs],
-                  out/'result.json', schema, complete_for_declared_units=True)
+    report = layers/'result.json'
+    files = [item for path in sources for item in ('--source-file', path)]
+    _Run(layers).stage('source-layers', 'scar.compiler.frontend.source',
+        [empty, *files, '--model', model, '--report', report, '--jobs', jobs,
+         '--max-files', len(sources), '--max-bytes', sum(row['size_bytes'] for row in sources.values()),
+         '--max-directories', 1], report, 'scar.source-layer-batch',
+        complete_for_declared_units=True, target_executed=False)
     return model
 
 

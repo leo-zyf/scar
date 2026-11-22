@@ -61,7 +61,7 @@ if os.environ.get("SCAR_TRACE_DIR"):
             print(f"SCAR injector disabled: {_scar_error}", flush=True)
 elif os.environ.get("SCAR_OPTIMIZE"):
     try:
-        from scar.trace.optimizer import install
+        from scar.runtime.torch_optimizer import install
         install()
     except Exception as _scar_error:
         # The backend is opt-in; a failed optimizer must leave the original
