@@ -1,5 +1,6 @@
 """Build and check an independent C++20 project from admitted native sources."""
 
+import json
 import os
 from pathlib import Path
 import re
@@ -8,7 +9,62 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
+from scar.artifacts import _durable_bytes, file_reference
 from scar.codegen.native_cpu_elf import _dependencies
+from scar.ir.execution_recipe import read_artifact
+
+
+CPP20_INPUTS = 'scar.cpp20-project-inputs'
+_CXX_SUFFIXES = {'.cpp', '.cc', '.cxx'}
+
+
+def _project_material(root, configuration):
+    if configuration.get('with_c_provider'):
+        raise ValueError('sealed C++20 projects only accept C++ translation units')
+    files = {}
+    for folder in ('src', 'include'):
+        directory = root / folder
+        if directory.is_symlink():
+            raise ValueError(f'staged C++20 inputs require an owned directory: {directory}')
+        for path in sorted(directory.rglob('*')):
+            if path.is_symlink():
+                raise ValueError(f'staged C++20 inputs require original file bytes: {path}')
+            if path.is_file():
+                files[path.relative_to(root).as_posix()] = file_reference(path, 'scar.cpp20-project-file')
+    sources = configuration['sources']
+    if (not sources or len(set(sources)) != len(sources)
+            or any(name not in files or Path(name).suffix not in _CXX_SUFFIXES for name in sources)):
+        raise ValueError('the backend requires unique staged C++ translation units')
+    libraries = {
+        name: file_reference(name, 'scar.cpp20-link-input')
+        for name in configuration.get('libraries', ()) if Path(name).is_absolute()
+    }
+    return files, libraries
+
+
+def publish_cpp20_inputs(root, configuration, *, plan):
+    """Seal the files, build settings and selected plan at the codegen boundary."""
+    root = Path(root).resolve(strict=True)
+    files, libraries = _project_material(root, configuration)
+    document = dict(schema=CPP20_INPUTS, schema_version=1, cxx_standard=20,
+                    plan=plan, configuration=configuration, files=files, libraries=libraries)
+    path = root / 'cpp20-inputs.json'
+    _durable_bytes(path, (json.dumps(document, indent=2, sort_keys=True) + '\n').encode(), replace=False)
+    return file_reference(path, CPP20_INPUTS)
+
+
+def replay_cpp20_inputs(root, reference, *, plan):
+    root = Path(root).resolve(strict=True)
+    if reference['schema'] != CPP20_INPUTS or Path(reference['uri']) != root / 'cpp20-inputs.json':
+        raise ValueError('C++20 input receipt belongs to a different project')
+    inputs = read_artifact(reference)
+    if (inputs['schema_version'], inputs['cxx_standard'], inputs['plan']) != (1, 20, plan):
+        raise ValueError('staged code, language standard or selected plan differs')
+    read_artifact(plan, json_document=False)
+    files, libraries = _project_material(root, inputs['configuration'])
+    if files != inputs['files'] or libraries != inputs['libraries']:
+        raise ValueError('staged C++20 source or link input differs from its receipt')
+    return inputs['configuration']
 
 
 def _cmake_arg(value):

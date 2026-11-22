@@ -404,8 +404,10 @@ def _stage_cxx_sources(manifest, project, edits, *, captures=None):
                 source_settings=settings if len(common) > 1 else {}, **linkage)
 
 
-def stage_source_revision(manifest, project, source_edits=(), *, captures=None):
-    """Materialize the admitted source revision and return C++20 project inputs."""
+def stage_source_revision(manifest, project, source_edits=(), *, captures=None, plan):
+    """Materialize and seal the admitted C++20 source revision."""
+    from scar.codegen.native_project import publish_cpp20_inputs
+
     edits, previous = {}, {}
     root = Path(manifest['source_root'])
     for edit in reversed(source_edits):
@@ -421,7 +423,8 @@ def stage_source_revision(manifest, project, source_edits=(), *, captures=None):
         edits[unit] = source[:start] + edit['replacement'].encode('ascii') + source[stop:]
         previous[unit] = start
     project.mkdir()
-    return _stage_cxx_sources(manifest, project, edits, captures=captures)
+    configuration = _stage_cxx_sources(manifest, project, edits, captures=captures)
+    return publish_cpp20_inputs(project, configuration, plan=plan)
 
 
 def verify_mixed_linkage(manifest, calls, executable):

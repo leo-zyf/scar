@@ -249,11 +249,12 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
         report['cpus'] = delivery['cpus']
         layers[layer] = 'REPLAYED'
         layer = 'source_revision'
-        build = stage_source_revision(
-            manifest, out / 'project', delivery['source_edits'], captures=delivery['compiler_types'])
+        inputs = stage_source_revision(manifest, out / 'project', delivery['source_edits'],
+                                       captures=delivery['compiler_types'], plan=delivery['plan'])
+        artifacts['cpp20_inputs'] = delivery['cpp20_inputs'] = inputs
         layers[layer] = 'CPP20_STAGED'
         layer = 'build'
-        executable, dynamic = build_cpp20_project(out / 'project', build)
+        executable, dynamic = build_cpp20_project(out / 'project', inputs, plan=delivery['plan'])
         report['executable'] = _receipt(executable)
         report['elf'] = dynamic
         delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)

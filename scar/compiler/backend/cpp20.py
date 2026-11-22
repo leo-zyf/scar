@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scar.artifacts import file_reference
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
-from scar.codegen.native_project import build_native_project, write_native_project
+from scar.codegen.native_project import build_native_project, replay_cpp20_inputs, write_native_project
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document, problem_from_dict
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, loads
@@ -91,13 +91,12 @@ def admit_entry(artifacts, entry):
     return manifest, observation, delivery
 
 
-def build_cpp20_project(project, build):
+def build_cpp20_project(project, inputs, *, plan):
     """Build source-adapter output with one target language and verify its ABI."""
-    if not build['sources'] or any(Path(path).suffix not in {'.cpp', '.cc', '.cxx'}
-                                   for path in build['sources']):
-        raise ValueError('the backend requires staged C++ translation units')
-    write_native_project(project, 'scar_entry', **build)
+    configuration = replay_cpp20_inputs(project, inputs, plan=plan)
+    write_native_project(project, 'scar_entry', **configuration)
     executable, _ = build_native_project(project, 'scar_entry', ('g++',))
+    replay_cpp20_inputs(project, inputs, plan=plan)
     dynamic = cpu_executable_dynamic(executable)
     for name in dynamic['needed']:
         if any(provider in name for provider in ('libpython', 'libtorch', 'libgfortran')):
