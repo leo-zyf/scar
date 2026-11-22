@@ -12,7 +12,7 @@ from scar.ir.program.state_addresses import (
 )
 from scar.ir.program.ids import OperationID, ResourceRequirementID, UseID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.program.state_modes import AccessMode as StateAccessMode
+from scar.ir.program.state_addresses import AccessMode as StateAccessMode
 
 
 def test_access_mode_is_one_shared_enum_and_address_variants_are_typed():

@@ -35,7 +35,7 @@ from scar.ir.program.state_addresses import (
     ObjectField,
     ReferenceOwner,
 )
-from scar.ir.program.state_modes import AccessMode
+from scar.ir.program.state_addresses import AccessMode
 from scar.ir.program.structured import PythonProtocolKind as Kind
 from scar.ir.semantics_v2 import Opcode
 from scar.ir.program.source_language import (

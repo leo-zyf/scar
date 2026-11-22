@@ -698,7 +698,8 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
     if not issues:
         from .lifecycle_validation import body_publication_errors
         for code, path, message in body_publication_errors(
-                graph, operation_blocks=operation_block, region_domains=region_domains,
+                graph, values=values, operations=operations, blocks=blocks, owners=block_region,
+                operation_blocks=operation_block,
                 incoming_edges=incoming_edges):
             error(code, path, message)
     if not issues:
@@ -716,8 +717,9 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         for code, path, message in no_entry_preconditions(graph):
             error(code, path, message)
     if not issues:
-        from .lifecycle_analysis import analyze_lifecycles
-        lifecycle_issues, lifecycle_facts = analyze_lifecycles(graph, operation_blocks=operation_block)
+        from .lifecycle_validation import analyze_lifecycles
+        lifecycle_issues, lifecycle_facts = analyze_lifecycles(
+            graph, operations=operations, owners=block_region, operation_blocks=operation_block)
         for code, path, message in lifecycle_issues:
             error(code, path, message)
     if not issues:

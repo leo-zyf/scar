@@ -41,8 +41,7 @@ from scar.ir.program.resources import (
 from scar.ir.program.providers import ProviderBinding, ProviderEnvelope, ProviderRegion
 from scar.ir.program.native import BoundaryRelation, NativeBoundary
 from scar.ir.program.call_effect_expansion import CallEffectExpansion
-from scar.ir.program.state_modes import AccessMode
-from scar.ir.program.state_addresses import StateAddressRefinement
+from scar.ir.program.state_addresses import AccessMode, StateAddressRefinement
 from scar.ir.program.literal_sources import (ExactLiteralOrigin, LiteralDefinition,
     UninterpretedConstant, UnlocatedLiteral, require_definition)
 from scar.ir.program.structured import ControlEdgeReference

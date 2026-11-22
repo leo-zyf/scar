@@ -88,6 +88,23 @@ class ConsumerFrontier:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceValueInterfaceUse:
+    reach: int
+    input: int
+    use: ReferenceArgumentUse
+
+
+@dataclass(frozen=True, slots=True)
+class SourceValueInterfaceGraph:
+    """Binding.use indexes uses; use.node and frontier.node index parent reaches."""
+
+    uses: tuple[SourceValueInterfaceUse, ...]
+    bindings: tuple[SourceConsumerBinding, ...]
+    frontiers: tuple[ConsumerFrontier, ...]
+    semantics: str = 'MAY_VALUE_DEPENDENCY_TO_SOURCE_INTERFACES_NOT_ROOT_ALIAS_OR_RUNTIME_DISPATCH'
+
+
+@dataclass(frozen=True, slots=True)
 class ConsumerBody:
     source_function: GlobalPort
     flow: SourceWorldFlow

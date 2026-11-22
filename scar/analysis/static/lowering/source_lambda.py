@@ -364,7 +364,7 @@ def _check_expression(node,result,model,graph,metadata,semantic,interface):
             need(link.opcode is Opcode.INDEX and isinstance(n.ctx,ast.Load),'Subscript lost its source read interface')
             children=[(n.value,'receiver',0),(n.slice,'index',1)]
             from scar.ir.program.state_addresses import AddressCoverage,AddressEffect,Element,InvokeStateOperand,ReferenceOwner
-            from scar.ir.program.state_modes import AccessMode
+            from scar.ir.program.state_addresses import AccessMode
             definition=semantic.definitions.get(link.semantic_operation)
             atom=semantic.source_atoms.get(link.source.atom_id)
             need(definition is not None and definition.kind is OperationKind.INDEX

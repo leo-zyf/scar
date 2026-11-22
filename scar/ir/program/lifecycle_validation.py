@@ -5,11 +5,19 @@ reference ownership or transformation authority is inferred by these checks.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING
+
 from .drivers import BodyDriveTerminator
 from .ids import UseID
 from .model import (
     AccessMode, Behavior, FootprintKind, ReferenceValue, StateVersionValue, UseRole,
 )
+
+if TYPE_CHECKING:
+    from .lifecycle_flow import TerminalFacts
+    from .session_flow import SessionFacts
 
 
 def _body_update_errors(op, instance_id, interface, values, error, prefix):
@@ -48,17 +56,13 @@ def _body_update_errors(op, instance_id, interface, values, error, prefix):
         error(prefix + "_uses", op.id, "only the original instance and access-before Uses belong to publication")
 
 
-def body_publication_errors(graph, *, operation_blocks, region_domains, incoming_edges):
+def body_publication_errors(graph, *, values, operations, blocks, owners, operation_blocks, incoming_edges):
     """Validate explicit scopes and each exact source/owner/current-state join."""
     errors = []
 
     def error(code, path, message):
         errors.append((code, str(path), message))
 
-    values = {row.id: row for row in graph.values}
-    operations = {row.id: row for row in graph.operations}
-    blocks = {block.id: block for region in graph.regions for block in region.blocks}
-    owners = {block.id: region.id for region in graph.regions for block in region.blocks}
     interfaces = {row.region: row for row in graph.driver_interfaces}
     drives = {row.operation: row for row in graph.body_drives}
     scopes = {row.region for row in graph.driver_lifecycles}
@@ -132,4 +136,28 @@ def body_publication_errors(graph, *, operation_blocks, region_domains, incoming
     return tuple(errors)
 
 
-__all__ = ["body_publication_errors"]
+@dataclass(frozen=True, slots=True)
+class DriverLifecycleFacts:
+    terminal: TerminalFacts
+    session: SessionFacts
+
+
+def analyze_lifecycles(graph, *, operations, owners, operation_blocks):
+    """Derive terminal and session facts after lifecycle shape checks."""
+    from .lifecycle_flow import derive_terminal_facts
+    from .session_flow import derive_session_facts
+
+    interfaces = {row.region: row for row in graph.driver_interfaces}
+    facts, errors = {}, []
+    for scope in graph.driver_lifecycles:
+        interface = interfaces[scope.region]
+        terminal = derive_terminal_facts(graph, interface)
+        session = derive_session_facts(graph, interface, terminal)
+        facts[scope.region] = DriverLifecycleFacts(terminal, session)
+    for row in graph.terminal_frame_releases:
+        region = owners[operation_blocks[row.operation]]
+        owner = next(use.value for use in operations[row.operation].uses if use.id == row.owner)
+        if not facts[region].terminal.before[row.operation].is_finished(owner):
+            errors.append(("terminal_release_unfinished", str(row.operation),
+                           "every actual incoming path must establish terminal history for this exact owner"))
+    return tuple(errors), MappingProxyType(facts)

@@ -17,7 +17,6 @@ from scar.artifacts import (
     _json,
 )
 from scar.ir.program import (
-    source_value_interfaces as V,
     binding_ports as R,
     source_productions as P,
     normal_graph as T,
@@ -110,7 +109,7 @@ def connect_value_interfaces(snapshot, bodies, reaches):
             conditions = tuple(dict.fromkeys((*reach.conditions, *_CONDITIONS)))
             use = R.ReferenceArgumentUse(reach_ordinal, value.call, role, value.ordinal, value.keyword,
                 value.actual, (), False, before, after, conditions)
-            uses.append(V.SourceValueInterfaceUse(reach_ordinal, input_ordinal, use))
+            uses.append(R.SourceValueInterfaceUse(reach_ordinal, input_ordinal, use))
             result = source_port(unit, call.result)
             sites.append((call, result, source_port(unit, call.callee)))
             wanted.add(_json(encode(result))); wanted_units.add(unit.unit)
@@ -137,7 +136,7 @@ def connect_value_interfaces(snapshot, bodies, reaches):
         if not matched:
             frontiers.append(R.ConsumerFrontier(item.reach, use_ordinal, use.actual, None,
                 'HISTORICAL_CALL_TARGET_INTERFACE_UNRESOLVED'))
-    return V.SourceValueInterfaceGraph(tuple(uses), tuple(bindings), tuple(frontiers))
+    return R.SourceValueInterfaceGraph(tuple(uses), tuple(bindings), tuple(frontiers))
 
 
 # Receipt-bound argument interfaces downstream of source value operations.
@@ -189,10 +188,13 @@ class ValueInterfaceParents:
 
 
 def _pins():
-    from scar.analysis import source_value_interfaces, source_reference_consumers
-    return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
-        ('producer', __file__), ('types', V.__file__), ('interfaces', source_value_interfaces.__file__),
+    from scar.analysis import source_reference_consumers
+
+    pins = {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
+        ('producer', __file__), ('types', R.__file__),
         ('binder', source_reference_consumers.__file__), ('values', values.__file__))}
+    pins['interfaces'] = pins['producer']
+    return pins
 
 
 def _counts(graph):
@@ -235,8 +237,8 @@ def read_value_interface_graph(path, *, parents=None):
         raise ValueError('value interface producer differs')
     parents = _parents(report['values'], parents)
     if report['parent'] != encode(parents.artifact): raise ValueError('value interface parent differs')
-    classes = dict(uses=V.SourceValueInterfaceUse, bindings=R.SourceConsumerBinding, frontiers=R.ConsumerFrontier)
-    graph = V.SourceValueInterfaceGraph(**{name: tuple(decode(cls, row, record_tags=P.PRODUCTION_RECORD_TAGS)
+    classes = dict(uses=R.SourceValueInterfaceUse, bindings=R.SourceConsumerBinding, frontiers=R.ConsumerFrontier)
+    graph = R.SourceValueInterfaceGraph(**{name: tuple(decode(cls, row, record_tags=P.PRODUCTION_RECORD_TAGS)
         for row in _table(path, report['tables'][name])) for name, cls in classes.items()})
     if (graph != connect_value_interfaces(parents.snapshot, parents.bodies, parents.reaches)
             or _counts(graph) != report['counts']):

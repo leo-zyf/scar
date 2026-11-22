@@ -13,7 +13,7 @@ from scar.ir.program.state_addresses import (
     AddressCoverage, AddressEffect, CellContent, DomainOwner, ExistingAccess,
     StateAddressRefinement, UnknownOwner, WholeOwner,
 )
-from scar.ir.program.state_modes import AccessMode as CanonicalAccessMode
+from scar.ir.program.state_addresses import AccessMode as CanonicalAccessMode
 from tests.fixtures.program_session_release_graphs import session_release_program
 from tests.fixtures.program_state_addresses import state_address_program
 

@@ -12,7 +12,12 @@ from typing import TypeAlias
 
 from scar.ir.program.ids import OperationID, ResourceRequirementID, UseID
 from scar.ir.program.providers import ProviderFactReference
-from scar.ir.program.state_modes import AccessMode
+
+
+class AccessMode(str, Enum):
+    READ = "READ"
+    WRITE = "WRITE"
+    READ_WRITE = "READ_WRITE"
 
 
 def _exact(value, expected, name):
@@ -298,7 +303,7 @@ STATE_ADDRESS_RECORD_TAGS = {
 
 
 __all__ = [
-    "AddressCoverage", "AddressEffect", "AddressOwner", "AddressSelector", "AddressUnit",
+    "AccessMode", "AddressCoverage", "AddressEffect", "AddressOwner", "AddressSelector", "AddressUnit",
     "CellContent", "DomainOwner", "DynamicField", "Element", "ExistingAccess",
     "InvokeStateOperand", "NamespaceKey", "ObjectField", "ReferenceOwner", "ResourceOwner",
     "Slice", "StateAddressRefinement", "StateAddressSite", "StorageRange",
