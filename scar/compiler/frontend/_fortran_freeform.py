@@ -21,7 +21,11 @@ _SCOPES = re.compile(r'^\s*procedure name = (\w+)\s*$', re.MULTILINE)
 _SYMBOLS = re.compile(r"^[ \t]*symtree: '([^']+)'[ \t]*\|\| symbol: '[^']+'[^\n]*\n", re.MULTILINE)
 _KINDS = {('REAL', 4): 'REAL', ('REAL', 8): 'DOUBLE PRECISION',
           ('INTEGER', 4): 'INTEGER', ('LOGICAL', 4): 'LOGICAL'}
-_C_TYPES = {('INTEGER', 4): ('int', 'integer'), ('REAL', 8): ('double', 'doublereal')}
+# Netlib f2c's default REAL function convention widens the return to double.
+# REAL arguments still refer to float storage.
+_C_TYPES = {('INTEGER', 4): ('int', 'integer', 'integer'),
+            ('REAL', 4): ('float', 'real', 'doublereal'),
+            ('REAL', 8): ('double', 'doublereal', 'doublereal')}
 _IDENTIFIER = re.compile(r'(?<![\w.])[A-Za-z_]\w*', re.ASCII)
 _FORTRAN_STRINGS = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"")
 _KINDED_NUMBER = re.compile(r'(?<![\w.])((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eEdD][+-]?\d+)?)_(\w+)\b')
@@ -346,7 +350,8 @@ def _c_export(procedure, transport):
             if (result or by_value
                     or not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec))):
                 raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
-        c_type, transport_type = _C_TYPES[fact.type_and_kind]
+        c_type, argument_type, return_type = _C_TYPES[fact.type_and_kind]
+        transport_type = return_type if result else argument_type
         return dict(c_type=c_type, transport_type=transport_type, by_value=by_value,
                     read_only='DUMMY(IN)' in fact.attributes, shape=str(shape) if shape is not None else None)
 

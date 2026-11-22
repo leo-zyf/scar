@@ -37,6 +37,7 @@
       "tests": [
         "tests/integration/test_formal_call_operands.py",
         "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
+        "tests/integration/test_native_indirect_calls.py::test_native_indirect_targets_flow_through_cfg_and_cpp20",
         "tests/unit/test_ir.py::test_graph_validation_proves_static_line_coverage",
         "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
         "tests/unit/test_source_binding_effects.py",
@@ -79,6 +80,8 @@
     {
       "id": "B2_NATIVE_CONTRACT",
       "tests": [
+        "tests/integration/test_native_indirect_calls.py::test_native_indirect_targets_flow_through_cfg_and_cpp20",
+        "tests/integration/test_native_stage_handoff.py::test_native_fortran_single_precision_array_abi[free-f2008]",
         "tests/unit/test_native_temporal_invariant.py",
         "tests/unit/test_export_loop.py",
         "tests/unit/test_caller_pipeline_capsule.py",

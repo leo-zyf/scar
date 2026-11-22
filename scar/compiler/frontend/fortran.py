@@ -203,6 +203,8 @@ def _c_abi_source(exports):
     lines = ['#include <type_traits>', '#include "f2c.h"',
              'static_assert(std::is_same_v<integer, int>);',
              'static_assert(std::is_same_v<doublereal, double>);']
+    if any(argument['transport_type'] == 'real' for row in exports for argument in row['arguments']):
+        lines.append('static_assert(std::is_same_v<real, float>);')
     for row in exports:
         result = row['result']
         native_return = result['c_type'] if result else 'void'

@@ -532,13 +532,15 @@ def stage_source_revision(manifest, project, source_edits=(), *, captures=None, 
 
 def verify_mixed_linkage(manifest, calls, executable):
     """Check that bound cross-language targets have their original link symbols."""
+    from ..contracts import native_bound_targets
+
     languages = {unit['path']: unit.get('language', manifest['language']) for unit in manifest['units']}
     if len(set(languages.values())) <= 1:
         return []
     links = read_artifact(calls)['calls']
-    targets = sorted({(row['caller']['unit'], row['callee']['unit'], row['linkage_symbol'])
-                      for row in links if row['status'] == 'BOUND'
-                      and languages[row['caller']['unit']] != languages[row['callee']['unit']]})
+    targets = sorted({(call['caller']['unit'], target['callee']['unit'], target['linkage_symbol'])
+                      for call in links for target in native_bound_targets(call)
+                      if languages[call['caller']['unit']] != languages[target['callee']['unit']]})
     symbols = {line.split()[0] for line in subprocess.check_output(
         ['nm', '-P', '--defined-only', str(executable)], text=True, timeout=30).splitlines() if line.split()}
     for owner, target, symbol in targets:

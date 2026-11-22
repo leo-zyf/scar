@@ -51,8 +51,59 @@ FORTRAN_UNITS = {
   integer(c_int) :: value
   value = n * n + 2
 end function formula
+
+function shift_matrix(a, offsets, scale) result(value) bind(C)
+  use, intrinsic :: iso_c_binding, only: c_float
+  implicit none
+  real(c_float), intent(inout) :: a(-2:-1, 3:5)
+  real(c_float), intent(in) :: offsets(-2:-1, 3:5)
+  real(c_float), value :: scale
+  real(c_float) :: value
+  integer :: i, j
+  do j = 3, 5
+    do i = -2, -1
+      a(i, j) = a(i, j) + scale * offsets(i, j)
+    end do
+  end do
+  value = a(-1, 5)
+end function shift_matrix
+
+subroutine bump_tail(a, amount) bind(C)
+  use, intrinsic :: iso_c_binding, only: c_float
+  implicit none
+  real(c_float), intent(inout) :: a(0:1, *)
+  real(c_float), value :: amount
+  a(0, 3) = a(0, 3) + amount
+end subroutine bump_tail
 '''),
 }
+FLOAT_ARRAY_CALLER = r'''#include <string.h>
+
+extern float shift_matrix(float a[6], const float offsets[6], float scale);
+extern void bump_tail(float a[6], float amount);
+
+int keep_value(int n) { int same = n; return same; }
+
+static int check_array_calls(void) {
+    float a[6] = {1, 2, 3, 4, 5, 6};
+    const float offsets[6] = {1, -2, 3, -4, 5, -6};
+    const float before[6] = {1, -2, 3, -4, 5, -6};
+    const float expected_first[6] = {1.25f, 1.5f, 3.75f, 3, 6.25f, 4.5f};
+    const float expected_second[6] = {0.75f, 2.5f, 2.25f, 5, 3.75f, 7.5f};
+    const float expected_final[6] = {0.75f, 2.5f, 2.25f, 5, 3.875f, 7.5f};
+    float result = shift_matrix(a, offsets, 0.25f);
+    if (result != 4.5f || memcmp(a, expected_first, sizeof a) != 0)
+        return 0;
+    result = shift_matrix(a, offsets, -0.5f);
+    if (result != 7.5f || memcmp(a, expected_second, sizeof a) != 0)
+        return 0;
+    bump_tail(a, 0.125f);
+    return memcmp(a, expected_final, sizeof a) == 0 &&
+           memcmp(offsets, before, sizeof offsets) == 0;
+}
+
+int c_value(int n) { return check_array_calls() ? keep_value(n) * 2 : 1000; }
+'''
 INPUTS = {"positive": (b"7\n", b"77\n"), "negative": (b"-3\n", b"-3\n")}
 
 
@@ -106,8 +157,7 @@ def native_request(tmp_path_factory, request):
     units, files, objects = [], {}, []
     for index, (name, language, standard, text) in enumerate(rows):
         if name == "modern.c" and profile == "free-f2008":
-            text = ("int keep_value(int n) { int same = n; return same; }\n"
-                    "int c_value(int n) { return keep_value(n) * 2; }\n")
+            text = FLOAT_ARRAY_CALLER
         path = sources / name
         path.write_text(text, encoding="utf-8")
         data = path.read_bytes()
@@ -272,6 +322,31 @@ def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_request, 
         assert (retained / "1-original.stdout").read_bytes() == expected
         assert (retained / "1-generated.stdout").read_bytes() == expected
         assert _run(folder, f"standalone-{case}", [standalone / "scar_entry"], stdin=stdin) == expected
+
+
+@pytest.mark.parametrize("native_request", ["free-f2008"], indirect=True)
+def test_native_fortran_single_precision_array_abi(native_graph, cpp20_delivery):
+    _, graph = native_graph
+    folder, delivery = cpp20_delivery
+    calls = read_artifact(graph["artifacts"]["calls"])
+    edges = {row["callee"]["symbol"] for row in calls["calls"]
+             if row["status"] == "BOUND" and row["reachable"] and row["operation"]}
+    assert {"shift_matrix", "bump_tail"} <= edges
+
+    receipt = json.loads((folder / "project/fortran-emission.json").read_bytes())
+    exports = {row["symbol"]: row for row in receipt["c_exports"]}
+    shifted = exports["shift_matrix"]
+    writable, readonly, scale = shifted["arguments"]
+    assert all(arg["c_type"] == "float" and arg["transport_type"] == "real"
+               for arg in (writable, readonly, scale))
+    assert writable["shape"].replace(" ", "") == "-2:-1,3:5"
+    assert writable["read_only"] is False and readonly["read_only"] is True
+    assert scale["by_value"] is True and scale["shape"] is None
+    assert shifted["result"]["c_type"] == "float" and shifted["result"]["transport_type"] == "doublereal"
+    assert exports["bump_tail"]["arguments"][0]["shape"].replace(" ", "") == "0:1,*"
+    assert {row["case"] for row in delivery["validation"] if row["matches"]} == set(INPUTS)
+    for case, (_, expected) in INPUTS.items():
+        assert (folder / "validation" / case / "1-generated.stdout").read_bytes() == expected
 
 
 def test_native_lowering_requires_an_abi_bridge_for_kr_promotions(tmp_path):

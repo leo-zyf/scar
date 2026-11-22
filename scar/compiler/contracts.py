@@ -199,6 +199,15 @@ def verify_source_lock(request):
             raise ValueError(f'locked source differs: {name}')
 
 
+def native_bound_targets(call):
+    """Return the in-graph bindings of a direct or finite indirect call."""
+    if call['status'] == 'BOUND':
+        return (call,)
+    if call['status'] == 'FINITE_TARGETS':
+        return tuple(target for target in call['targets'] if target['status'] == 'BOUND')
+    return ()
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionPlanRef:
     """An entry decision sealed to its original problem and selected plan."""

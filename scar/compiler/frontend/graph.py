@@ -28,7 +28,7 @@ from scar.ir.program.model import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.validation import require_valid
 
-from ..contracts import GraphBundle, NativeInputs, verify_source_lock
+from ..contracts import GraphBundle, NativeInputs, native_bound_targets, verify_source_lock
 from .clang import capture_unit
 
 
@@ -406,9 +406,11 @@ def write_graph(functions, out, entry='main'):
 
 _IPA_HEADER = re.compile(r'^(.+)/(\d+) \((.*)\)(?: @.*)?$')
 _IPA_REFERENCE = re.compile(r'/(\d+)(?=\s|$)')
+_IPA_ADDRESS = re.compile(r'/(\d+) \(addr\)(?=\s|$)')
 _SYMBOL = re.compile(r'^[\w.$]+$')
 _SSA_TARGET = re.compile(r'^(?:[\w.$]*_\d+)(?:\(D\))?$')
 _SITE = re.compile(r'^\[(?:(.+):)?(\d+):(\d+)(?: discrim \d+)?\]')
+_ADDRESS_SITE = re.compile(r'gimple_assign <addr_expr, [^,]+, (\[[^\]]+\]) ')
 
 
 def _ipa_calls(path):
@@ -420,17 +422,21 @@ def _ipa_calls(path):
         if match := _IPA_HEADER.fullmatch(line):
             name, number, display = match.groups()
             row = nodes[number] = dict(name=name, display=display, calls=[], external=False,
-                                       definition=False, indirect=False)
+                                       definition=False, addresses=[], function=False, public=False)
         elif row is not None:
             body = line.strip()
             if body.startswith('Calls:'):
                 row['calls'] = _IPA_REFERENCE.findall(body)
+            elif body.startswith('References:'):
+                row['addresses'] = _IPA_ADDRESS.findall(body)
             elif body.startswith('Visibility:'):
-                row['external'] = 'external' in body.split()
+                visibility = body.split()
+                row['external'] = 'external' in visibility
+                row['public'] = 'public' in visibility
             elif body.startswith('Type:'):
-                row['definition'] = 'definition' in body.split()
-            elif body.startswith('Indirect call'):
-                row['indirect'] = True
+                kinds = body.split()
+                row['definition'] = 'definition' in kinds
+                row['function'] = 'function' in kinds
     definitions = defaultdict(list)
     for row in nodes.values():
         if row['definition']:
@@ -465,6 +471,7 @@ def _compact(signature):
 
 def _clang_declarations(units):
     signatures, declarations, sites = defaultdict(set), {}, defaultdict(set)
+    address_sites = defaultdict(set)
     for unit in units:
         if not isinstance(unit, dict):
             raise ValueError('expected Clang AST documents indexed by translation unit path')
@@ -492,14 +499,22 @@ def _clang_declarations(units):
             if record['kind'] == 'CallExpr' and symbol and reference.get('name'):
                 sites[(unit['path'], record['path'], record['line'], reference['name'])].add(symbol)
             elif (record['kind'] == 'DeclRefExpr' and reference.get('kind') == 'FunctionDecl'
-                  and symbol and symbol == reference.get('name') and _SYMBOL.fullmatch(symbol)):
+                  and symbol and _SYMBOL.fullmatch(symbol)):
+                locations = [record]
+                if record['parent'] is not None:
+                    parent = unit['records'][record['parent']]
+                    if parent['kind'] == 'UnaryOperator' and '(*' in parent['canonical_type']:
+                        locations.append(parent)
+                for location in locations:
+                    key = (unit['path'], location['path'], location['line'], location['column'])
+                    address_sites[key].add((reference['name'], symbol))
                 # A header may lie outside the retained source root while the
                 # compiler still records the exact referenced C declaration.
                 result, suffix, parameters = record['canonical_type'].partition('(')
-                if suffix:
+                if suffix and symbol == reference.get('name'):
                     signature = _compact(f'{result} {symbol}({parameters}')
                     signatures[(unit['path'], signature)].add(symbol)
-    return signatures, sites
+    return signatures, sites, address_sites
 
 
 def _spellings(node, source_names):
@@ -544,7 +559,114 @@ def _callee(function):
                 region=function.get('region'))
 
 
-def link_calls(functions, anchors, *, entry='main', executable=None, clang_units=(), call_tables=()):
+def _linkage_binding(unit, linkage, origin, by_function, by_symbol, local_names, elf,
+                     *, public_functions=None):
+    binding = dict(linkage_symbol=linkage, origin=sorted(origin), elf=sorted(elf[linkage]))
+    targets = by_symbol.get(linkage, ())
+    same_unit = by_function.get((unit, linkage))
+    if same_unit is not None and (targets == [same_unit] or linkage in local_names):
+        targets = (same_unit,)
+    elif public_functions is not None:
+        targets = [target for target in targets if (target['unit'], linkage) in public_functions]
+    if len(targets) == 1 and 'IMPORT' not in elf[linkage]:
+        return dict(binding, status='BOUND', callee=_callee(targets[0]))
+    if len(targets) > 1:
+        return dict(binding, status='AMBIGUOUS', candidates=[_callee(target) for target in targets])
+    if 'IMPORT' in elf[linkage]:
+        return dict(binding, status='EXTERNAL')
+    if linkage.startswith('__builtin_'):
+        return dict(binding, status='BUILTIN')
+    return dict(binding, status='UNBOUND_DIRECT')
+
+
+def _address_target(operation, data, unit, source_root, sites, addressed):
+    match = _ADDRESS_SITE.search(operation['source'])
+    if match is None or (location := _SITE.fullmatch(match[1])) is None:
+        return None
+    path, line, column = location.groups()
+    if path and Path(path).is_absolute():
+        if source_root is None or not Path(path).is_relative_to(source_root):
+            return None
+        path = Path(path).relative_to(source_root).as_posix()
+    key = unit, path or unit, int(line), int(column)
+    targets = {symbol for name, symbol in sites.get(key, ())
+               if symbol in addressed and data in (name, symbol)}
+    if len(targets) == 1:
+        return targets.pop()
+    return None
+
+
+def _pointer_definitions(function, callers, nodes, sites, source_root):
+    """Index only pointer operations whose complete source and SSA are retained."""
+    addressed = {nodes[key]['name'] for caller in callers for key in caller['addresses']
+                 if key in nodes and nodes[key]['function']}
+    if not addressed:
+        return {}
+    definitions = {}
+    for block in function['blocks']:
+        number = block['number']
+        for name, inputs in block['phi'].items():
+            if not name.startswith('.MEM_'):
+                definitions[name] = dict(kind='PHI', block=number, predecessors=inputs)
+        for index, op in enumerate(block['operations']):
+            if op['opcode'] != 'gimple_assign' or op['memory'] or not op['result']:
+                continue
+            rhs = op['text'].removeprefix('gimple_assign <').removesuffix('>').split(', ')
+            if len(rhs) != 5 or rhs[3:] != ['NULL', 'NULL']:
+                continue
+            operator, name, operand, *_ = rhs
+            coordinate = dict(block=number, ordinal=index)
+            if operator == 'ssa_name' and _SSA_TARGET.fullmatch(operand):
+                definitions[name] = dict(kind='COPY', operand=operand, **coordinate)
+            elif operator == 'addr_expr':
+                target = _address_target(op, operand, function['unit'], source_root, sites, addressed)
+                if target is not None:
+                    definitions[name] = dict(kind='ADDRESS', linkage_symbol=target, **coordinate)
+    return definitions
+
+
+def _finite_pointer_flow(definitions, root):
+    """Find all reaching address roots, including initialized phi cycles."""
+    pending, reached, symbols, inputs_by_value = [root], set(), set(), defaultdict(set)
+    initialized = []
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        if (definition := definitions.get(name)) is None:
+            return None
+        reached.add(name)
+        kind = definition['kind']
+        if kind == 'ADDRESS':
+            symbols.add(definition['linkage_symbol'])
+            initialized.append(name)
+            continue
+        parents = ((definition['operand'],) if kind == 'COPY'
+                   else tuple(definition['predecessors'].values()))
+        if not parents:
+            return None
+        for parent in parents:
+            inputs_by_value[parent].add(name)
+        pending.extend(parents)
+    proven = set(initialized)
+    while initialized:
+        for dependent in inputs_by_value[initialized.pop()] - proven:
+            proven.add(dependent)
+            initialized.append(dependent)
+    if proven == reached:
+        return sorted(symbols), dict(operand=root, definitions={name: definitions[name] for name in sorted(reached)})
+    return None
+
+
+def _open_call(row):
+    if row['status'] == 'FINITE_TARGETS':
+        return any(_open_call(target) for target in row['targets'])
+    return (row['status'] in ('AMBIGUOUS', 'INDIRECT', 'UNBOUND_DIRECT')
+            or row['status'] == 'BOUND' and row['callee']['region'] is None)
+
+
+def link_calls(functions, anchors, *, entry='main', executable=None, clang_units=(), call_tables=(),
+               source_root=None):
     """Produce source links, reachable functions and explicitly open call sites.
 
     A cross-unit edge needs compiler binding evidence. ELF symbol presence alone
@@ -561,8 +683,12 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
         by_function[key] = function
         names[function['symbol']].add(function['name'])
     tables = {unit: _ipa_calls(path) for unit, path in call_tables}
-    signatures, sites = _clang_declarations(tuple(clang_units))
+    signatures, sites, address_sites = _clang_declarations(tuple(clang_units))
     elf = _elf_symbols(executable)
+    local_names = {unit: {node['name'] for node in nodes.values() if not node['external']}
+                   for unit, (nodes, _) in tables.items()}
+    public_functions = {(unit, node['name']) for unit, (nodes, _) in tables.items()
+                        for node in nodes.values() if node['function'] and node['definition'] and node['public']}
     anchored_operation_ids = {row['operation'] for row in anchors if row.get('call')}
     calls = []
     called_by = defaultdict(set)
@@ -570,6 +696,9 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
         nodes, definitions = tables.get(unit, ({}, {}))
         callers = definitions.get(symbol, ())
         identity = _function_identity(function)
+        pointer_definitions = None
+        flows = {}
+        local_definitions = local_names.get(unit, ())
         for block in function['blocks']:
             for index, operation in enumerate(block['operations']):
                 if operation['opcode'] != 'gimple_call' or not operation.get('call'):
@@ -590,32 +719,35 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
                     row.update(status='AMBIGUOUS', candidates=sorted(evidence))
                 elif len(evidence) == 1 and not unknown:
                     linkage, origin = next(iter(evidence.items()))
-                    row.update(linkage_symbol=linkage, origin=sorted(origin), elf=sorted(elf[linkage]))
-                    targets = by_symbol.get(linkage, ())
-                    same_unit = by_function.get((unit, linkage))
-                    table_target = [node for node in nodes.values() if node['name'] == linkage]
-                    if same_unit is not None and (targets == [same_unit]
-                                                  or any(not node['external'] for node in table_target)):
-                        targets = (same_unit,)
-                    if len(targets) == 1 and 'IMPORT' not in elf[linkage]:
-                        target = targets[0]
-                        row.update(status='BOUND', callee=_callee(target))
-                        called_by[(unit, symbol)].add((target['unit'], target['symbol']))
-                    elif len(targets) > 1:
-                        row.update(status='AMBIGUOUS', candidates=[_callee(target) for target in targets])
-                    elif 'IMPORT' in elf[linkage]:
-                        row.update(status='EXTERNAL')
-                    elif linkage.startswith('__builtin_'):
-                        row.update(status='BUILTIN')
-                    else:
-                        row.update(status='UNBOUND_DIRECT')
+                    row.update(_linkage_binding(unit, linkage, origin, by_function, by_symbol,
+                                                local_definitions, elf))
                 elif spelling.startswith('__builtin_'):
                     row.update(status='BUILTIN', origin=['gcc-ssa-intrinsic'])
                 elif not evidence and not unknown and (_SSA_TARGET.fullmatch(spelling)
                                                         or spelling.startswith('OBJ_TYPE_REF(')):
                     row.update(status='INDIRECT', origin=['gcc-ssa-indirect-operand'])
+                    if row['operation'] and _SSA_TARGET.fullmatch(spelling):
+                        if pointer_definitions is None:
+                            pointer_definitions = _pointer_definitions(
+                                function, callers, nodes, address_sites, source_root)
+                        if spelling not in flows:
+                            flows[spelling] = _finite_pointer_flow(pointer_definitions, spelling)
+                        if flow := flows[spelling]:
+                            symbols, row['target_flow'] = flow
+                            origin = ('gcc-ssa-indirect-operand', 'gcc-ipa-address-reference',
+                                      'clang-function-address-site')
+                            targets = [_linkage_binding(unit, linkage, origin, by_function, by_symbol,
+                                                        local_definitions, elf,
+                                                        public_functions=public_functions) for linkage in symbols]
+                            if len(targets) == 1 and targets[0]['status'] in ('BOUND', 'EXTERNAL'):
+                                row.update(targets[0])
+                            else:
+                                row.update(status='FINITE_TARGETS', targets=targets, origin=sorted(origin))
                 else:
                     row.update(status='UNBOUND_DIRECT')
+                for target in native_bound_targets(row):
+                    callee = target['callee']
+                    called_by[(unit, symbol)].add((callee['unit'], callee['symbol']))
                 calls.append(row)
 
     roots = by_symbol.get(entry, ())
@@ -629,9 +761,7 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
     for row in calls:
         caller = row['caller']
         row['reachable'] = (caller['unit'], caller['symbol']) in visited
-    frontiers = [row for row in calls if row['reachable'] and (
-        row['status'] in ('AMBIGUOUS', 'INDIRECT', 'UNBOUND_DIRECT')
-        or row['status'] == 'BOUND' and not row['callee']['region'])]
+    frontiers = [row for row in calls if row['reachable'] and _open_call(row)]
     return dict(entry=_callee(roots[0]) if len(roots) == 1 else None,
                 entry_candidates=[_callee(root) for root in roots],
                 reachable=[_callee(by_function[key]) for key in sorted(visited)],
@@ -792,7 +922,8 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
     target = file_reference(hardware / 'result.json', 'scar.target-hardware-graph')
     baseline = (manifest.get('baseline') or {}).get('argv') or [None]
     calls = link_calls(captured.functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
-                       clang_units=captured.declarations, call_tables=captured.call_tables)
+                       clang_units=captured.declarations, call_tables=captured.call_tables,
+                       source_root=Path(manifest['source_root']))
     calls_path = directory / 'call-links.json'
     calls_path.write_text(json.dumps(dict(schema='scar.native-call-links', schema_version=1, **calls)) + '\n')
     call_receipt = file_reference(calls_path, 'scar.native-call-links')
@@ -800,8 +931,9 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
                   request=asdict(request), program=program, hardware=target, calls=call_receipt,
                   frontend_frontiers=captured.frontiers, call_frontiers=len(calls['frontiers']),
                   call_sites=len(calls['calls']),
-                  call_links=sum(row['status'] == 'BOUND' and row['operation'] is not None
-                                 and row['callee']['region'] is not None for row in calls['calls']),
+                  call_links=sum(target['callee']['region'] is not None
+                                 for row in calls['calls'] if row['operation'] is not None
+                                 for target in native_bound_targets(row)),
                   reachable_regions=len(calls['reachable']))
     evidence_path = directory / 'graph-report.json'
     (directory / 'compiler-cfg.json').write_text(json.dumps(captured.functions, indent=2, ensure_ascii=False) + '\n')
