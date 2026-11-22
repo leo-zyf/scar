@@ -459,10 +459,12 @@ def _replay_single(manifest, member):
                                              lifetimes=lifetimes)
             source_abi = None
             source_file_publication = None
+            mapped_input_proof = None
             if 'source_entry_cli' in manifest:
                 from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
                 from scar.compiler.aten_source_entry import (
                     ABI_FILE, BINDING_FILE, LAUNCHER, render_source_launcher, source_entry_description,
+                    verify_mapped_input_emission,
                 )
                 from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
                 from scar.compiler.compile_aten_recurrence import _render_recurrence_launch
@@ -470,10 +472,14 @@ def _replay_single(manifest, member):
                 descriptor = manifest['source_entry_cli']
                 parent = descriptor['parent_manifest_sha256']
                 source_file_publication = descriptor.get('source_file_publication')
+                mapped_input_proof = descriptor.get('mapped_input_proof')
                 if (not manifest.get('source_entry_inferred') or not manifest.get('source_entry_replayable')
                         or not isinstance(parent, str) or re.fullmatch('[a-f0-9]{64}', parent) is None
-                        or descriptor != source_entry_description(parent, source_file_publication=source_file_publication)):
+                        or descriptor != source_entry_description(parent, source_file_publication=source_file_publication,
+                                                                 mapped_input_proof=mapped_input_proof)):
                     raise ValueError('invalid source-entry delivery descriptor')
+                if mapped_input_proof is not None:
+                    verify_mapped_input_emission(mapped_input_proof, parent, source_file_publication)
                 source_abi = derive_fixed_grid_file_entry(source, boundary['entry'],
                     source_bytes=member('plan/source-entry.py').read_bytes())
                 if (source_abi != json.loads(member(ABI_FILE).read_bytes())
@@ -484,7 +490,7 @@ def _replay_single(manifest, member):
                                             'launch.sh': _render_recurrence_launch(placement['cpus'])})
             generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
                 lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=source_abi,
-                source_file_publication=source_file_publication)
+                source_file_publication=source_file_publication, map_source_inputs=mapped_input_proof is not None)
         else:
             raise ValueError('native schedule is missing a source replay implementation')
         _require_generated(member, generated)

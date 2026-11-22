@@ -32,7 +32,7 @@ def _write(path, document):
         stream.write('\n')
 
 
-def source_entry_description(manifest_sha256, *, source_file_publication=None):
+def source_entry_description(manifest_sha256, *, source_file_publication=None, mapped_input_proof=None):
     from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE
 
     if source_file_publication not in (None, FRESH_SOURCE_FILE):
@@ -43,7 +43,22 @@ def source_entry_description(manifest_sha256, *, source_file_publication=None):
         source_cli_performance_measured=False, deployment_authorized=False)
     if source_file_publication is not None:
         result['source_file_publication'] = source_file_publication
+    if mapped_input_proof is not None:
+        result['mapped_input_proof'] = mapped_input_proof
     return result
+
+
+def verify_mapped_input_emission(reference, parent_sha256, publication):
+    from scar.analysis.cpu_fixed_grid_mapped_inputs import verify_cpu_fixed_grid_mapped_inputs
+    from scar.ir.execution_recipe import read_artifact
+
+    proof = verify_cpu_fixed_grid_mapped_inputs(reference)
+    incumbent = read_artifact(proof['project'])['source_entry_cli']
+    if (proof['status'] != 'PROVEN_SCOPED_MAPPED_INPUT_MATERIALIZATION'
+            or proof['parent_manifest_sha256'] != parent_sha256
+            or incumbent.get('source_file_publication') != publication
+            or 'mapped_input_proof' in incumbent):
+        raise ValueError('mapped input proof differs from the original schedule or unchanged publication policy')
 
 
 def render_source_launcher(cpus):
@@ -56,7 +71,8 @@ def render_source_launcher(cpus):
     return original.removesuffix(marker) + ' --source-entry "$@"\n'
 
 
-def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve_source_file_mode=False):
+def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve_source_file_mode=False,
+                      mapped_input_proof=None):
     """Rebuild one verified physical schedule with a source-derived argument mode."""
     from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
     from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE, render_recurrence
@@ -83,9 +99,16 @@ def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve
     lowered = scheduled_tensor_body(_read(root/'plan/problem.json'), _read(root/'plan/schedule.json'), execution)
     placement = execution['placement']
     publication = FRESH_SOURCE_FILE if preserve_source_file_mode else None
+    mapping = None
+    if mapped_input_proof is not None:
+        from scar.analysis.cpu_fixed_grid_mapped_inputs import SCHEMA
+        from scar.ir.execution_recipe import artifact_reference
+
+        mapping = artifact_reference(Path(mapped_input_proof).resolve(strict=True), SCHEMA)
+        verify_mapped_input_emission(mapping, manifest_sha256, publication)
     generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
         lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=abi,
-        source_file_publication=publication)
+        source_file_publication=publication, map_source_inputs=mapping is not None)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-source-aten-', dir=out.parent) as scratch:
@@ -117,7 +140,8 @@ def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve
             expected_libraries=libraries, require_cpu_only=True)
         if dependencies != emitted:
             raise ValueError('source-entry ELF changed the original qualified CPU dependency closure')
-        manifest['source_entry_cli'] = source_entry_description(manifest_sha256, source_file_publication=publication)
+        manifest['source_entry_cli'] = source_entry_description(manifest_sha256, source_file_publication=publication,
+                                                                mapped_input_proof=mapping)
         manifest['files'] = {path.relative_to(stage).as_posix(): _content(path)
                              for path in sorted(stage.rglob('*')) if path.is_file()}
         _write(stage/'artifact.json', manifest)
@@ -279,6 +303,8 @@ def main(argv=None):
     bind.add_argument('--compiler', default='g++')
     bind.add_argument('--preserve-source-file-mode', action='store_true',
                       help='create the fresh source output with the normal process and directory permissions')
+    bind.add_argument('--mapped-input-proof',
+                      help='emit a candidate using the proved provider-backed source input mapping')
     validate.add_argument('--input-root', required=True)
     validate.add_argument('--steps', required=True, type=int)
     validate.add_argument('--measure', action='store_true')

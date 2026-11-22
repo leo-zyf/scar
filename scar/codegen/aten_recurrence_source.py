@@ -209,8 +209,29 @@ void write_fresh_source_file(const fs::path& path, const void* data, std::size_t
 ''' + '\n'.join('    ' + line for line in original.splitlines()) + '\n    }'))
 
 
+def _mapped_source_inputs(file_cli):
+    include = '#include <ATen/ops/from_blob.h>'
+    owned = '''        backing[i] = read_tensor(paths[i], checked_bytes(shape));
+        inputs[i] = at::from_blob(backing[i].data(), at::IntArrayRef(shape.data(), shape.size()),
+                                  at::TensorOptions().device(at::kCPU).dtype(at::kFloat));'''
+    if file_cli.count(include) != 1 or file_cli.count(owned) != 1:
+        raise ValueError('mapped source inputs require the admitted generated file reader')
+    placed = '''        if (!load_order.empty()) {
+            const auto bytes = checked_bytes(shape);
+            if (bytes == 0 || fs::file_size(paths[i]) != bytes) {
+                throw std::runtime_error(std::string("input size differs from the graph contract: ") + paths[i]);
+            }
+            const auto elements = static_cast<std::int64_t>(bytes / sizeof(float));
+            inputs[i] = at::from_file(paths[i], false, elements,
+                at::TensorOptions().device(at::kCPU).dtype(at::kFloat))
+                .view(at::IntArrayRef(shape.data(), shape.size()));
+        } else {
+''' + '\n'.join('    ' + line for line in owned.splitlines()) + '\n        }'
+    return file_cli.replace(include, include + '\n#include <ATen/ops/from_file.h>').replace(owned, placed)
+
+
 def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None, source_entry_abi=None,
-                      source_file_publication=None):
+                      source_file_publication=None, map_source_inputs=False):
     """Use an admitted recurrence plan to emit one shared loop body and native main."""
     definitions, constructor, call = _placement(rhs_mode, cpus, lanes, operation_order)
     state_index = plan['state_input_index']
@@ -263,10 +284,15 @@ def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None,
     if source_file_publication not in (None, FRESH_SOURCE_FILE) or (
             source_file_publication is not None and source_entry_abi is None):
         raise ValueError('source file creation requires the admitted normal-completion entry ABI')
+    if map_source_inputs and (source_entry_abi is None or source_entry_abi['domain']['inputs']
+            != 'STABLE_READ_ONLY_EXACT_SIZE_REGULAR_CPU_FLOAT32_NATIVE_ENDIAN_FILES'):
+        raise ValueError('file mapping requires the exact stable source input ABI')
     if source_entry_abi is not None:
         file_cli = _source_file_abi(file_cli)
         if source_file_publication == FRESH_SOURCE_FILE:
             file_cli = _fresh_source_file(file_cli)
+        if map_source_inputs:
+            file_cli = _mapped_source_inputs(file_cli)
         publication_arg = ', true' if source_file_publication == FRESH_SOURCE_FILE else ''
         source_call = _source_entry(plan, source_entry_abi, team_argument, publication_arg)
         cli_mode = '    const bool source_entry = argc > 1 && std::string_view(argv[1]) == "--source-entry";\n'
