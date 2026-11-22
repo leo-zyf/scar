@@ -15,7 +15,6 @@ from pathlib import Path
 import sys
 
 from scar.analysis import source_contexts as C, source_contexts as source_context_view, source_role_materials as source_roles, source_syntax
-from scar.analysis import compiler_stage_cache
 from scar.analysis import source_compiled_values as compiled, source_values as source_text_values, source_compilation_contexts as source_compilation_contexts
 from scar.analysis.normal_facts import SourceFactStore
 from scar.artifacts import write_table
@@ -34,8 +33,7 @@ def pins():
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('contexts',C),('view',source_context_view),('roles',source_roles),
         ('syntax',source_syntax),('compiler_values',compiled),
-        ('compiler_digest',source_compilation_contexts),('types',V),('context_types',X),
-        ('compiler_stage_cache',compiler_stage_cache))}
+        ('compiler_digest',source_compilation_contexts),('types',V),('context_types',X))}
 
 
 class _ContextRouter(C._Router):
@@ -56,19 +54,16 @@ def context_variant_document(source_unit, f0, f1, f2, f3b, context, payload, *,
     conditional on equal constructor, field, literal and position trees, not
     on equal path, raw bytes or a superficial module-code comparison.
 
-    Only an explicitly owned compiler-stage session reuses successful pure
-    documents. Each returned mutable document stays independent; standalone
-    calls and independent readers still replay the source/context rules.
     """
-    return compiler_stage_cache.reuse_document('context_variant_document', _context_variant_document,
-        source_unit, f0, f1, f2, f3b, context, payload,
-        max_scopes=max_scopes, max_regions=max_regions,
-        max_boundaries=max_boundaries, max_slots=max_slots)
+    roles = source_roles.read_source_roles(f3b,f0,f1,f2)
+    syntax = decode(SourceSyntaxMaterial,f2)
+    return encode(_project_context_variant(source_unit,f0,f1,f2,f3b,context,payload,syntax,roles,
+        max_scopes=max_scopes,max_regions=max_regions,max_boundaries=max_boundaries,max_slots=max_slots))
 
 
-def _context_variant_document(source_unit, f0, f1, f2, f3b, context, payload, *,
-                              max_scopes=100000, max_regions=200000,
-                              max_boundaries=1000000, max_slots=10000000):
+def _project_context_variant(source_unit,f0,f1,f2,f3b,context,payload,syntax,roles,*,
+                             max_scopes=100000,max_regions=200000,
+                             max_boundaries=1000000,max_slots=10000000):
     if type(context) is not X.EffectiveCompileContext or type(payload) is not str:
         raise TypeError('explicit compiler context and interpreted source text required')
     if (context.runtime.implementation!=sys.implementation.name
@@ -84,8 +79,6 @@ def _context_variant_document(source_unit, f0, f1, f2, f3b, context, payload, *,
         raise ValueError('C1 root activation for non-module code flags is not implemented')
     limits = max_scopes,max_regions,max_boundaries,max_slots
     C._limits(limits)
-    roles = source_roles.read_source_roles(f3b,f0,f1,f2)
-    syntax = decode(SourceSyntaxMaterial,f2)
     if roles.status!='CLASSIFIED' or syntax.status!='PARSED':
         raise ValueError('context variant requires parsed and classified source')
     if context.mode!=syntax.mode:
@@ -118,8 +111,8 @@ def _context_variant_document(source_unit, f0, f1, f2, f3b, context, payload, *,
         tuple(router.scopes),tuple(router.regions),tuple(router.privates),
         tuple(router.boundaries),counts,router.slots,())
     source_context_view.SourceContextView(syntax,roles,material).verify_totality()
-    return encode(V.SourceContextVariant(key,source_unit,context,text_sha,digest,
-        sha256(original_tree.encode('utf-8')).hexdigest(),material))
+    return V.SourceContextVariant(key,source_unit,context,text_sha,digest,
+        sha256(original_tree.encode('utf-8')).hexdigest(),material)
 
 
 def read_context_variant(document,f0,f1,f2,f3b,payload):

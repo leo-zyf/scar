@@ -136,9 +136,16 @@ class SymbolVariantWorker:
 
 def symbol_variant_document(context_document,f0,f1,f2,f3b,payload,text_inputs,worker,*,parents,
                             context_document_sha256=None,max_scopes=100000,max_symbols=1000000):
+    context = contexts.read_context_variant(context_document,f0,f1,f2,f3b,payload)
+    return encode(_capture_symbol_variant(context_document,context,f0,f1,f2,f3b,payload,text_inputs,worker,
+        parents=parents,context_document_sha256=context_document_sha256,
+        max_scopes=max_scopes,max_symbols=max_symbols))
+
+
+def _capture_symbol_variant(context_document,context,f0,f1,f2,f3b,payload,text_inputs,worker,*,parents,
+                            context_document_sha256=None,max_scopes=100000,max_symbols=1000000):
     if any(type(n) is not int or n<0 for n in (max_scopes,max_symbols)):
         raise ValueError('exact nonnegative native scope/symbol budgets required')
-    context = contexts.read_context_variant(context_document,f0,f1,f2,f3b,payload)
     if (worker.profile.runtime.implementation != context.context.runtime.implementation
             or worker.profile.runtime.version != context.context.runtime.version):
         raise ValueError('symbol worker and C1 language/runtime versions differ')
@@ -168,10 +175,10 @@ def symbol_variant_document(context_document,f0,f1,f2,f3b,payload,text_inputs,wo
     ctx = context.context
     request = V.SymbolContextRequest(context.text_utf8_sha256,len(payload),ctx.filename,ctx.mode,
         ctx.requested_flags,ctx.caller_dont_inherit,ctx.inherited_future_flags,ctx.compiler_input_flags)
-    return encode(V.SourceSymbolVariant(context.namespace,context.source_unit,
+    return V.SourceSymbolVariant(context.namespace,context.source_unit,
         context_document_sha256 or sha256(_json(context_document)).hexdigest(),
         symbols._digest(encode(context.material)),ctx,tuple(parents),text_inputs,request,
-        V.SymbolAdapterReceipt(**worker.parent),material))
+        V.SymbolAdapterReceipt(**worker.parent),material)
 
 
 def read_symbol_variant(document,context_document,f0,f1,f2,f3b,payload,worker,*,parents,context_document_sha256=None):

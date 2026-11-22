@@ -56,6 +56,13 @@ def binding_variant_document(f0,f1,f2,f3b,context_variant,payload,*,
         binding_limits=(1000000,1000000,1000000,4000000,2000000,2000000,10000000,100000)):
     context = C.read_context_variant(context_variant,f0,f1,f2,f3b,payload)
     syntax,roles = decode(SourceSyntaxMaterial,f2),decode(SourceRolesMaterial,f3b)
+    return encode(_project_binding_variant(f0,f1,f2,f3b,syntax,roles,context,
+        declaration_limits=declaration_limits,binding_limits=binding_limits))
+
+
+def _project_binding_variant(f0,f1,f2,f3b,syntax,roles,context,*,
+        declaration_limits=(1000000,1000000,100000),
+        binding_limits=(1000000,1000000,1000000,4000000,2000000,2000000,10000000,100000)):
     contexts = context.material;c1 = encode(contexts);digest = _digest
     flags = context.context.compiled_future_flags
     if (len(declaration_limits)!=3 or len(binding_limits)!=8
@@ -84,7 +91,7 @@ def binding_variant_document(f0,f1,f2,f3b,context_variant,payload,*,
         tuple(resolver.resolutions),scope_bindings,tuple(resolver.captures),tuple(resolver.relays),
         tuple(resolver.root_globals),tuple(resolver.implicit),tuple(resolver.conflicts),(),resolver.search_steps)
     source_binding_view.SourceBindingView(roles,contexts,declared,resolved,contexts=resolver.view).verify()
-    return encode(V.SourceBindingVariant(context.namespace,digest(c1),declared,resolved))
+    return V.SourceBindingVariant(context.namespace,digest(c1),declared,resolved)
 
 
 def read_binding_variant(document,f0,f1,f2,f3b,context_variant,payload):

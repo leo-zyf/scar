@@ -60,12 +60,18 @@ def compiler_symbol_variant_document(context_document,binding_document,symbol_do
         f0,f1,f2,f3b,payload,worker,parents=parents)
     context = decode(CV.SourceContextVariant,context_document)
     native = decode(NV.SourceSymbolVariant,symbol_document)
+    syntax,roles = decode(SourceSyntaxMaterial,f2),decode(SourceRolesMaterial,f3b)
+    return encode(_project_compiler_symbol_variant(context_document,binding_document,symbol_document,
+        topology_document,f0,f1,f2,f3b,syntax,roles,context,binding,native,topology,limits=limits))
+
+
+def _project_compiler_symbol_variant(context_document,binding_document,symbol_document,topology_document,
+        f0,f1,f2,f3b,syntax,roles,context,binding,native,topology,*,limits=SymbolLimits()):
     context_sha = _digest(encode(context.material))
     if (any(value.namespace != context.namespace for value in (binding,topology,native))
             or any(value.context_material_sha256 != context_sha for value in (binding,topology,native))
             or native.context != context.context):
         raise ValueError('compiler symbol parents belong to different compilation contexts')
-    syntax,roles = decode(SourceSyntaxMaterial,f2),decode(SourceRolesMaterial,f3b)
     declarations,nt,tt = binding.declarations,native.material,topology.material
     try:
         raw = _ContextCollector(syntax,roles,context.material,declarations,nt,tt,limits,
@@ -85,9 +91,9 @@ def compiler_symbol_variant_document(context_document,binding_document,symbol_do
         raw.contributions,raw.sources,solution.facts,solution.transforms,solution.protocols,
         solution.blocks,symbols,parameters,(),solution.steps)
     S.CompilerSymbolView(declarations,tt,nt,material).verify()
-    return encode(V.SourceCompilerSymbolVariant(context.namespace,sha256(_json(context_document)).hexdigest(),
+    return V.SourceCompilerSymbolVariant(context.namespace,sha256(_json(context_document)).hexdigest(),
         context_sha,sha256(_json(binding_document)).hexdigest(),_digest(encode(binding.bindings)),
-        sha256(_json(symbol_document)).hexdigest(),sha256(_json(topology_document)).hexdigest(),material))
+        sha256(_json(symbol_document)).hexdigest(),sha256(_json(topology_document)).hexdigest(),material)
 
 
 def read_compiler_symbol_variant(document,context_document,binding_document,symbol_document,topology_document,

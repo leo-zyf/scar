@@ -27,6 +27,8 @@
       "tests": [
         "tests/unit/test_source_symbols.py",
         "tests/unit/test_source_contexts.py",
+        "tests/unit/test_source_context_variants.py",
+        "tests/unit/test_source_binding_variants.py",
         "tests/unit/test_compiler_topology.py"
       ]
     },

@@ -25,8 +25,7 @@ from scar.trace.lean_capture import LeanCapturePlan
 from contextlib import nullcontext
 from copy import deepcopy
 from scar.artifacts import _json
-from scar.analysis import compiler_stage_cache
-from scar.ir.program import source_productions as P, normal_graph as F, compiler_symbols as CV, compiler_symbols as BV, compiler_symbols as NV, compiler_symbols as TV, compiler_symbols as SV
+from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.source_declarations import SourceTemplateGraph, SourceTemplateKey
 from scar.ir.program.source_protocols import UnitSourceInterfaces
 
@@ -234,12 +233,35 @@ _COMPATIBLE_V1_PRODUCERS = (
     '6c56d389738e99cb01ae4d05e32b58b3d36b0b7b9105b2d8c38f65a7bf779050',
     'b64e9ba9651f689a0f87c4f4a04a0a8069aae4d5842b23b141847357bf81bf18',
 )
+_CACHED_V1_PRODUCER = '213ce0b7c12bfb4d2a84f72728be6dae8b0e344626c349abdcce9fefa9556a5f'
 
 
 def _pins():
+    from scar.analysis import source_binding_variants, source_context_variants
+    from scar.analysis import source_symbol_variants, source_topology_variants
     from scar.analysis.source_f4_variants import pins
-    return {**pins(), 'compiler_stage_cache':
-        sha256(Path(compiler_stage_cache.__file__).read_bytes()).hexdigest()}
+    return {**pins(), 'compile_variants': {
+        role:sha256(Path(module.__file__).read_bytes()).hexdigest() for role,module in (
+            ('context', source_context_variants), ('binding', source_binding_variants),
+            ('native_symbols', source_symbol_variants), ('topology', source_topology_variants))}}
+
+
+def _cached_f4_pins(pins):
+    # Replay the previous producer only with its exact retired C3-S receipt.
+    return {**pins, 'local_dependencies': {**pins['local_dependencies'], 'compiler_symbols':
+        '0b9e3bde8449f84af9b9886cc38c1190f759064e05cd5ce87c4098ee8bf4ea45'}}
+
+
+def _local_producer_matches(report):
+    pins = _pins()
+    implementation = report['implementation_sha256']
+    if implementation == sha256(Path(__file__).read_bytes()).hexdigest():
+        return report['pins'] == pins
+    if implementation in (*_COMPATIBLE_V1_PRODUCERS, _CACHED_V1_PRODUCER):
+        cached = _cached_f4_pins({name: pins[name] for name in ('recipe_dependencies', 'local_dependencies')})
+        cached['compiler_stage_cache'] = 'ffdac7b99b627b1eb65dbb1f5f387748b69c515accc6df0724d37bbd7d002523'
+        return report['pins'] == cached
+    return False
 
 
 def _stamp(path):
@@ -280,22 +302,19 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     Paths under ``out`` label these retained snapshots, not original file reads.
     """
     from scar.analysis.source_syntax import (
-        source_bytes_document, decoded_source_bytes,
-        source_tokens_document,
+        source_bytes_document, decoded_source_bytes, _project_tokens, _project_syntax, _restore_syntax,
     )
-    from scar.analysis.source_syntax import source_syntax_document
-    from scar.analysis.source_role_materials import source_roles_document
-    from scar.analysis.source_context_variants import context_variant_document
-    from scar.analysis.source_binding_variants import binding_variant_document
-    from scar.analysis.source_symbol_variants import symbol_variant_document, SymbolVariantWorker
-    from scar.analysis.source_topology_variants import topology_variant_document
-    from scar.analysis.source_compiler_symbol_variants import compiler_symbol_variant_document
+    from scar.analysis.source_role_materials import _project_roles
+    from scar.analysis.source_context_variants import _project_context_variant
+    from scar.analysis.source_binding_variants import _project_binding_variant
+    from scar.analysis.source_symbol_variants import _capture_symbol_variant, SymbolVariantWorker
+    from scar.analysis.source_topology_variants import _project_topology_variant
+    from scar.analysis.source_compiler_symbol_variants import _project_compiler_symbol_variant
     from scar.analysis.source_f4_variants import construct_graph
     from scar.analysis.source_symbols import _digest
     from scar.analysis.call_compilation import supported_future_flag_mask
     from scar.artifacts import _durable_bytes, _durable_mkdir
     from scar.ir.program.source_bytes import SourceBytesProfile
-    from scar.ir.program.source_roles import SourceRolesMaterial
     from scar.ir.program.compiler_symbols import SymbolSourceParent, SymbolTextInput
     from scar.ir.program.source_bytes import TextOpenInterpretation
     from scar.ir.program.compiler_symbols import EffectiveCompileContext
@@ -320,10 +339,13 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     if payload is None: payload = interpreted
     if type(payload) is not str or interpreted != payload:
         raise ValueError('F0 source decoding must equal the retained compilation text')
-    f1 = source_tokens_document(f0)
-    f2 = source_syntax_document(f0, f1, mode=recipe['mode'])
-    roles = source_roles_document(f0, f1, f2)
-    documents = dict(source_bytes=f0, source_tokens=f1, source_syntax=f2, source_roles=roles)
+    f1 = encode(_project_tokens(f0, interpreted))
+    syntax = _project_syntax(f0, f1, interpreted, mode=recipe['mode'])
+    _restore_syntax(syntax)
+    f2 = encode(syntax)
+    roles = _project_roles(f0, f1, f2, syntax)
+    f3b = encode(roles)
+    documents = dict(source_bytes=f0, source_tokens=f1, source_syntax=f2, source_roles=f3b)
     materials = {name:_write_document(out, name, doc) for name,doc in documents.items()}
     parents = tuple(SymbolSourceParent(name, _locator(out, materials[name], documents[name]['schema']),
         _digest(documents[name])) for name in documents)
@@ -334,29 +356,29 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
         recipe['optimize'], decode(SourceBytesProfile, f0['profile']), lowering=LOWERING)
     source_unit = sha256(_json(dict(raw_sha256=sha256(raw).hexdigest(),
         text_utf8_sha256=sha256(payload.encode('utf-8')).hexdigest()))).hexdigest()
-    # Reuse immutable analyzer inputs only within this owned compilation.
-    # Native worker observations and reader validation results stay uncached.
-    with compiler_stage_cache.compiler_stage_session():
-        cdoc = context_variant_document(source_unit, f0, f1, f2, roles, context, payload)
-        bdoc = binding_variant_document(f0, f1, f2, roles, cdoc, payload)
-        text = SymbolTextInput(parents[0].source, parents[0].document_sha256,
-            sha256(raw).hexdigest(), len(raw),
-            TextOpenInterpretation(f0['decoding']['encoding'], 'strict', '', True, False,
-                rule='RETAINED_COMPILATION_PAYLOAD_NO_RUNTIME_READ'),
-            sha256(payload.encode('utf-8')).hexdigest(), len(payload), (LOWERING,), ())
-        with (SymbolVariantWorker() if worker is None else nullcontext(worker)) as active:
-            ndoc = symbol_variant_document(cdoc, f0, f1, f2, roles, payload, (text,), active, parents=parents)
-            tdoc = topology_variant_document(cdoc, ndoc, f0, f1, f2, roles, payload, active, parents=parents)
-            sdoc = compiler_symbol_variant_document(cdoc, bdoc, ndoc, tdoc,
-                f0, f1, f2, roles, payload, active, parents=parents)
-            adapter = dict(active.parent)
-    context_variant = decode(CV.SourceContextVariant, cdoc)
-    binding = decode(BV.SourceBindingVariant, bdoc)
-    native = decode(NV.SourceSymbolVariant, ndoc)
-    topology = decode(TV.SourceTopologyVariant, tdoc)
-    symbols = decode(SV.SourceCompilerSymbolVariant, sdoc)
+    # These typed parents are produced in this invocation. Independent readers
+    # still compare saved materials against a fresh source/compiler projection.
+    context_variant = _project_context_variant(source_unit, f0, f1, f2, f3b, context, payload, syntax, roles)
+    cdoc = encode(context_variant)
+    binding = _project_binding_variant(f0, f1, f2, f3b, syntax, roles, context_variant)
+    bdoc = encode(binding)
+    text = SymbolTextInput(parents[0].source, parents[0].document_sha256,
+        sha256(raw).hexdigest(), len(raw),
+        TextOpenInterpretation(f0['decoding']['encoding'], 'strict', '', True, False,
+            rule='RETAINED_COMPILATION_PAYLOAD_NO_RUNTIME_READ'),
+        sha256(payload.encode('utf-8')).hexdigest(), len(payload), (LOWERING,), ())
+    with (SymbolVariantWorker() if worker is None else nullcontext(worker)) as active:
+        native = _capture_symbol_variant(cdoc, context_variant, f0, f1, f2, f3b, payload, (text,), active,
+                                         parents=parents)
+        adapter = dict(active.parent)
+    ndoc = encode(native)
+    topology = _project_topology_variant(ndoc, f0, f1, f2, f3b, syntax, roles, context_variant, native)
+    tdoc = encode(topology)
+    symbols = _project_compiler_symbol_variant(cdoc, bdoc, ndoc, tdoc, f0, f1, f2, f3b,
+                                               syntax, roles, context_variant, binding, native, topology)
+    sdoc = encode(symbols)
     graph, records, dispositions, edges, facts = construct_graph(context_variant, binding,
-        native, topology, symbols, f0, f2, decode(SourceRolesMaterial, roles))
+        native, topology, symbols, f0, f2, roles)
     documents.update(context_variant=cdoc, binding_variant=bdoc, native_variant=ndoc,
         topology_variant=tdoc, compiler_symbol_variant=sdoc,
         source_contexts=encode(context_variant.material), source_bindings=encode(binding.bindings),
@@ -405,9 +427,7 @@ class ObservedCompiledLocalMaterial:
         self._report_raw = self._report_path.read_bytes()
         self.report = report = json.loads(self._report_raw)
         if ((report.get('schema'), report.get('schema_version')) != (SCHEMA, 1)
-                or report['implementation_sha256'] not in (*_COMPATIBLE_V1_PRODUCERS,
-                    sha256(Path(__file__).read_bytes()).hexdigest())
-                or report['pins'] != _pins() or report['lowering'] != LOWERING
+                or not _local_producer_matches(report) or report['lowering'] != LOWERING
                 or set(report['claims']) != set(_CLAIMS) or any(report['claims'].values())):
             raise ValueError('local compiled material producer or contract differs')
         _recipe(report['recipe'])

@@ -46,9 +46,15 @@ def topology_variant_document(context_document,symbol_document,f0,f1,f2,f3b,payl
     context=C.read_context_variant(context_document,f0,f1,f2,f3b,payload)
     native=N.read_symbol_variant(symbol_document,context_document,f0,f1,f2,f3b,payload,worker,
         parents=parents,context_document_sha256=sha256(_json(context_document)).hexdigest())
+    syntax,roles=decode(SourceSyntaxMaterial,f2),decode(SourceRolesMaterial,f3b)
+    return encode(_project_topology_variant(symbol_document,f0,f1,f2,f3b,syntax,roles,context,native,
+        max_blocks=max_blocks,max_rewrites=max_rewrites,max_visit_steps=max_visit_steps))
+
+
+def _project_topology_variant(symbol_document,f0,f1,f2,f3b,syntax,roles,context,native,*,
+                              max_blocks=100000,max_rewrites=200000,max_visit_steps=4000000):
     if native.namespace!=context.namespace or native.context!=context.context:
         raise ValueError('native scope context differs from source context')
-    syntax,roles=decode(SourceSyntaxMaterial,f2),decode(SourceRolesMaterial,f3b)
     limits=max_blocks,max_rewrites,max_visit_steps
     if any(type(n) is not int or n<0 for n in limits):
         raise ValueError('exact nonnegative topology limits required')
@@ -65,8 +71,8 @@ def topology_variant_document(context_document,symbol_document,f0,f1,f2,f3b,payl
         projections,tuple(builder.rewrites),(),builder.visit_steps)
     T.CompilerTopologyView(roles,context.material,native.material,material,
         contexts=builder.view).verify()
-    return encode(V.SourceTopologyVariant(context.namespace,_digest(encode(context.material)),
-        sha256(_json(symbol_document)).hexdigest(),material))
+    return V.SourceTopologyVariant(context.namespace,_digest(encode(context.material)),
+        sha256(_json(symbol_document)).hexdigest(),material)
 
 
 def read_topology_variant(document,context_document,symbol_document,f0,f1,f2,f3b,payload,worker,*,parents):
