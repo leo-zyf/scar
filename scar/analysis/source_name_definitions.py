@@ -68,6 +68,32 @@ def _normal_resumptions(material, edges, scope):
     return admitted
 
 
+class _NameDefinitionControl:
+    """Index the original body once for independent lexical-slot solves."""
+
+    __slots__ = ('material', 'unit', 'function_ordinal', 'flow', 'root', 'edges',
+                 'adjacency', 'operations', 'resumptions')
+
+    def __init__(self, material, unit, function_ordinal, flow):
+        function = unit.functions[function_ordinal]
+        if (type(flow) is not V.SourceBodyValueFlow or flow.source_templates != material.result_artifact
+                or flow.source_function != source_port(unit, function.value)
+                or flow.body != T.Body(unit.unit, function.template, function.body)):
+            raise ValueError('name definition flow differs from its original function/body/material')
+        self.material = material
+        self.unit = unit
+        self.function_ordinal = function_ordinal
+        self.flow = flow
+        self.root = G.Port(flow.body.template, flow.body.region, G.PortKind.ENTER)
+        self.edges = tuple(edge for edge in flow.edges if edge.kind is G.EdgeKind.CONTROL)
+        self.adjacency = defaultdict(list)
+        for ordinal, edge in enumerate(self.edges):
+            self.adjacency[edge.source].append(ordinal)
+        self.operations = {operation.entry: index for index, operation in enumerate(flow.operations)}
+        scope = function.body_scope.owner
+        self.resumptions = _normal_resumptions(material, self.edges, scope)
+
+
 def reaching_name_definitions(snapshot, source_function, namespace, *, anchor_graph=None,
         material=None, flow=None, max_states=20000, max_stack=128, max_updates=1000000):
     """Strict original may definitions; no operation-effect exemptions."""
@@ -78,7 +104,7 @@ def reaching_name_definitions(snapshot, source_function, namespace, *, anchor_gr
 
 def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_graph=None,
         material=None, flow=None, max_states=20000, max_stack=128, max_updates=1000000,
-        _local_read_effects=None, _frame_isolation_effects=None):
+        _local_read_effects=None, _frame_isolation_effects=None, _control=None):
     """Track may definitions under original binding/frame and branch guards.
 
     Reuse a caller's original material/anchor graph/SourceBodyValueFlow when
@@ -93,11 +119,21 @@ def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_g
         raise TypeError('name definitions require an original function and complete LEXICAL Namespace')
     if any(type(n) is not int or n < 1 for n in (max_states, max_stack, max_updates)):
         raise ValueError('name definition budgets must be positive integers')
-    unit = snapshot.fact_store.load(source_function.unit)
-    matches = [(i, f) for i, f in enumerate(unit.functions) if source_port(unit, f.value) == source_function]
-    if len(matches) != 1 or matches[0][1].body_scope is None:
-        raise ValueError('name definition source is not one scope-qualified original function')
-    function_ordinal, function = matches[0]; scope = function.body_scope.owner
+    if _control is None:
+        unit = snapshot.fact_store.load(source_function.unit)
+        matches = [(i, f) for i, f in enumerate(unit.functions) if source_port(unit, f.value) == source_function]
+        if len(matches) != 1 or matches[0][1].body_scope is None:
+            raise ValueError('name definition source is not one scope-qualified original function')
+        function_ordinal, function = matches[0]
+    else:
+        if (type(_control) is not _NameDefinitionControl or _control.material is not material or
+                _control.flow.source_function != source_function or flow is not None):
+            raise ValueError('name definition control differs from its original unit/function/material')
+        unit = _control.unit
+        function_ordinal = _control.function_ordinal
+        function = unit.functions[function_ordinal]
+        flow = _control.flow
+    scope = function.body_scope.owner
     body = T.Body(unit.unit, function.template, function.body)
     if material is None:
         material = source_graph_material(getattr(snapshot, 'catalog', snapshot), unit.unit)
@@ -110,9 +146,7 @@ def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_g
         raise ValueError('name definitions require the original unit/scope/material anchors')
     if flow is None:
         flow = project_value_flow(material, source_function, body)
-    elif (type(flow) is not V.SourceBodyValueFlow or flow.source_function != source_function
-            or flow.body != body or flow.source_templates != material.result_artifact):
-        raise ValueError('name definition flow differs from its original function/body/material')
+    control = _control if _control is not None else _NameDefinitionControl(material, unit, function_ordinal, flow)
     if _local_read_effects is not None:
         from scar.analysis.source_frame_binding_effects import LocalReadEffectContext
         if type(_local_read_effects) is not LocalReadEffectContext:
@@ -127,14 +161,11 @@ def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_g
         isolation = _frame_isolation_effects.witness(material, anchor_graph, function, scope, flow, namespace)
         isolated_sites = set() if isolation is None else {flow.operations[i].entry for i in isolation.filtered_operations}
     else:isolated_sites = set()
-    edges = tuple(e for e in flow.edges if e.kind is G.EdgeKind.CONTROL)
-    adjacency = defaultdict(list)
-    for ordinal, edge in enumerate(edges): adjacency[edge.source].append(ordinal)
+    edges, adjacency, operations = control.edges, control.adjacency, control.operations
+    root = control.root
     slicer = ReferenceSlicer(snapshot); function_fact = slicer.fact(unit, 'functions', function_ordinal)
-    root = G.Port(body.template, body.region, G.PortKind.ENTER)
     definitions = []; strong = defaultdict(int); weak = defaultdict(int); seeds = 0
     reads_by_site = defaultdict(lambda: defaultdict(list)); frontiers = []; frontier_ids = set()
-    operations = {op.entry: i for i, op in enumerate(flow.operations)}
 
     def frontier(state, edge, access, reason, evidence=()):
         key = state, edge, access, reason, evidence
@@ -211,7 +242,7 @@ def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_g
                 'OPAQUE_EFFECT_IS_UNKNOWN_NOT_NONE_AND_NOT_REFERENCE_ALIAS',))
     frontier(None, None, None, 'APPLICATION_EXCEPTION_PATHS_OUTSIDE_NORMAL_SUCCESS_VIEW')
     frontier(None, None, None, 'OPAQUE_CALLBACK_AND_CAPTURE_SLOT_IDENTITY_REMAIN_OPEN')
-    resumptions = _normal_resumptions(material, edges, scope)
+    resumptions = control.resumptions
     for edge_ordinal in resumptions:
         site = edges[edge_ordinal].target
         weak[site] |= definition(D.NameDefinitionKind.OPAQUE_EFFECT, site, conditions=(

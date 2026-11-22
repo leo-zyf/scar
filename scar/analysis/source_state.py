@@ -7,7 +7,7 @@ from pathlib import Path
 from scar.analysis.program_view import _digest
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_stack_routes import _bindings, anchor_name_accesses
-from scar.analysis.source_name_definitions import reaching_name_definitions
+from scar.analysis.source_name_definitions import _NameDefinitionControl, _reaching_name_definitions
 from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
@@ -92,7 +92,7 @@ class SourceStateProvider:
         self.environment_values = {}
         self.in_edges = defaultdict(list); self.out_edges = defaultdict(list)
         self.tracks = []; self.track_ids = {}; self.selections = []; self.track_limits = []
-        self.flows = {}; self.anchors = None
+        self.flows = {}; self._definition_controls = {}; self.anchors = None
         self.read_frontiers = defaultdict(list)
         self.content_provider = None
         self.content_lineage = None
@@ -321,9 +321,19 @@ class SourceStateProvider:
         if (type(namespace) is not F.Namespace or namespace.kind is not F.NamespaceKind.LEXICAL
                 or type(namespace.owner) is not int or not 0 <= namespace.owner < len(self.bindings.bindings)):
             raise ValueError('binding track requires a complete original lexical slot')
-        functions = [f for f in self.source.facts.functions if source_port(self.source.facts, f.value) == source_function]
-        if len(functions) != 1: raise ValueError('binding track source is not a unique original function')
-        function = functions[0]; slot = self.bindings.bindings[namespace.owner]
+        if type(source_function) is not T.GlobalPort:
+            raise ValueError('binding track source is not a unique original function')
+        unit = self.source.facts
+        control = self._definition_controls.get(source_function)
+        if control is None:
+            matches = [(i, f) for i, f in enumerate(unit.functions) if source_port(unit, f.value) == source_function]
+            if len(matches) != 1 or matches[0][1].body_scope is None:
+                raise ValueError('binding track source is not a unique original function')
+            function_ordinal, function = matches[0]
+        else:
+            function_ordinal = control.function_ordinal
+            function = unit.functions[function_ordinal]
+        slot = self.bindings.bindings[namespace.owner]
         if (slot.domain != 'LOCAL_BINDING' or slot.owner != function.environment.scope
                 or self._name(slot.name) != namespace.name):
             raise ValueError('captured/nonlocal/name-mismatched slot needs its selected environment interface')
@@ -337,13 +347,20 @@ class SourceStateProvider:
             return self.tracks[index]
         if self.anchors is None:
             self.anchors = anchor_name_accesses(self.view.catalog, self.material.unit, material=self.material)
-        if source_function not in self.flows:
+        flow = self.flows.get(source_function)
+        if flow is None:
             body = T.Body(self.material.unit, function.template, function.body)
-            self.flows[source_function] = project_value_flow(self.material, source_function, body)
-        graph = reaching_name_definitions(self.view.catalog, source_function, namespace,
-            anchor_graph=self.anchors, material=self.material, flow=self.flows[source_function], **limits)
+            flow = project_value_flow(self.material, source_function, body)
+            self.flows[source_function] = flow
+        if control is None or control.flow is not flow:
+            control = _NameDefinitionControl(self.material, unit, function_ordinal, flow)
+            self._definition_controls[source_function] = control
+        graph = _reaching_name_definitions(self.view.catalog, source_function, namespace,
+            anchor_graph=self.anchors, material=self.material, _control=control, **limits)
         ordinal = len(self.tracks); self.track_ids[key] = ordinal; self.tracks.append(graph); self.track_limits.append(limits)
         location = self._location(EnvironmentInterface('LEXICAL_BINDING', slot.owner, namespace.owner), namespace.name)
+        address = Point(self.namespace, location)
+        by_definition = {}
         for index, definition in enumerate(graph.definitions):
             identity = ValueID(_digest(('scar.source-binding-version.v1', self.source.basis, source_function,
                 namespace, index, definition)))
@@ -352,7 +369,8 @@ class SourceStateProvider:
             version = S.BindingVersionTemplate(identity, location, source_function, namespace,
                 index, definition.kind, bound, definition.value)
             self.versions[identity] = version
-            value = Point(self.namespace, identity); address = Point(self.namespace, location)
+            by_definition[index] = identity
+            value = Point(self.namespace, identity)
             self._edge(address, value, K.STATE_LOCATION, Meaning.STRUCTURE)
             site = self.view.source_port(T.GlobalPort(self.material.unit, definition.site))
             selected = DependencyCondition('scar.source-state.version', 'SAME_ACTIVATION_AND_DEFINITION_OCCURRENCE',
@@ -361,8 +379,8 @@ class SourceStateProvider:
             if definition.value is not None:
                 payload = self.view.source_port(definition.value)
                 self._edge(payload, value, K.BINDING_PAYLOAD, Meaning.BINDING, (selected,))
-        by_definition = {v.definition:v.id for v in self.versions.values()
-            if v.source_function == source_function and v.namespace == namespace}
+        frontier_reasons = tuple(frontier.reason for frontier in graph.frontiers)
+        function_points = (self.view.source_port(source_function),) if graph.reads else ()
         for index, read in enumerate(graph.reads):
             access = graph.anchor_graph.accesses[read.access]
             self.view.source_port(access.site)
@@ -372,9 +390,9 @@ class SourceStateProvider:
             target = Point(self.namespace, op)
             versions = tuple(by_definition[n] for n in read.definitions)
             self.selections.append(S.BindingReadSelection(ordinal, index, read.access, read.state, versions))
-            self.read_frontiers[op].extend(frontier.reason for frontier in graph.frontiers)
+            self.read_frontiers[op].extend(frontier_reasons)
             condition = DependencyCondition('scar.source-state.read', 'MATCHED_RECIPE_STATE_AND_FRAME_SELECTED',
-                target, index, (self.view.source_port(source_function),))
+                target, index, function_points)
             for identity in versions:
                 self._edge(Point(self.namespace, identity), target, K.BINDING_READ, Meaning.BINDING,
                     (condition,), strength=Strength.MAY)
