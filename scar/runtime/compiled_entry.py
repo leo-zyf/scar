@@ -13,7 +13,6 @@ from scar.runtime.entry_runner import _Scope, _Loader, _file, run_original_scrip
 from scar.runtime.caller_pipeline_capsule import (
     _json,
     _need,
-    pack_slot,
     evaluate_slot,
     SLOT_BYTES,
     TRIAL,
@@ -23,7 +22,7 @@ from scar.runtime.caller_pipeline_deployment import (
     environment_sha256,
     provider_identity,
 )
-from scar.runtime.compiled_deployment import _raw
+from scar.runtime.compiled_deployment import _raw, selected_rows
 
 
 # Execute an unchanged entry with model-selected loop implementations.
@@ -114,9 +113,12 @@ def read_pipeline(pipeline):
     return reference, _artifact_document(raw, reference['schema'])
 
 
-def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=False,deployment=None):
+def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=False,deployment=None,
+              expected_pipeline=None):
     reference, report = read_pipeline(pipeline)
-    from scar.runtime.compiled_deployment import deployment_gate,selected_rows
+    if expected_pipeline is not None and reference != expected_pipeline:
+        raise ValueError('compiled pipeline changed after final entry admission')
+    from scar.runtime.compiled_deployment import deployment_gate
     gate=(dict(decision='MEASURE_SELECTED_MODEL_IMPLEMENTATION',deployment_authorized=False)
         if measure_candidate else deployment_gate(deployment,reference,entry,argv))
     if not exclusive_inputs or gate['decision'] not in ('MEASURE_SELECTED_MODEL_IMPLEMENTATION','LOAD_MODEL_SELECTED_NATIVE'):
@@ -267,22 +269,135 @@ STATEFUL_PROFILE='COMPILED_STATEFUL_REGIONS_V1'
 TRUST='EXPLICIT_EXPECTED_PAYLOAD_AND_SLOT_SHA256_FROM_BUILD_PRODUCER_NOT_SIGNATURES'
 
 
-def _profile(kind):
-    if kind==PROFILE:
-        from . import compiled_loop_capsule
-        return compiled_loop_capsule
-    if kind==STATEFUL_PROFILE:
-        from . import compiled_stateful_capsule
-        return compiled_stateful_capsule
-    raise ValueError('unregistered final-entry profile')
+def _capsule_bundle(row):
+    exported = read_artifact(row['bundle_export'])
+    directory = Path(row['bundle']).resolve()
+    _need(exported['bundle'] == str(directory), 'retained compact bundle path differs')
+    return exported, directory
+
+
+def _capsule_row(row, directory, contract, *, proof_kind, admission_schema, runtime_schema, **profile):
+    from .native_loop import _file_hash_and_header
+
+    native = directory / contract['native']['library']
+    digest, header = _file_hash_and_header(native)
+    _need(digest == contract['native']['library_sha256'] and header[:6] == b'\x7fELF\x02\x01',
+          'original compact ELF bytes differ')
+    return dict(id=row['id'], proof_kind=proof_kind, proof=row['proof'], schedule=row['schedule'],
+                bundle=str(directory), bundle_export=row['bundle_export'],
+                admission=artifact_reference(directory / 'admission.json', admission_schema),
+                runtime=artifact_reference(directory / 'runtime.json', runtime_schema),
+                native=dict(path=str(native), sha256=digest, bytes=native.stat().st_size),
+                input_shapes=row['input_shapes'], memory_budget_bytes=row['memory_budget_bytes'], **profile)
+
+
+def _fixed_loop_capsule_row(row):
+    from .native_loop import _small_raw
+    from .native_temporal_invariant import ADMISSION, SCHEMA, TRUST as EXPORT_TRUST, validate_contract
+
+    _need(row.get('selected_kind') == 'REGISTER_TEMPORAL_FUSION' and row.get('bundle_export')
+          and row['proof']['schema'] in ('scar.invariant-loop-proof', 'scar.composite-invariant-loop-proof'),
+          'only compact original DIRECT/COMPOSITE fixed-loop artifacts are supported')
+    exported, directory = _capsule_bundle(row)
+    raw = _small_raw(directory / 'admission.json')
+    admission = _json(raw)
+    _need(sha256(raw).hexdigest() == exported['expected_admission_sha256']
+          and admission.get('schema') == ADMISSION and admission.get('schema_version') == 1
+          and admission['trust_policy'] == EXPORT_TRUST, 'original compact export admission required')
+    raw = _small_raw(directory / 'runtime.json')
+    contract = validate_contract(_json(raw))
+    _need(sha256(raw).hexdigest() == admission['runtime_sha256'] == exported['runtime_sha256']
+          and contract['native']['library_sha256'] == admission['library_sha256'],
+          'compact runtime/library identities differ')
+    composite = contract.get('proof_kind', 'DIRECT') == 'COMPOSITE'
+    _need(composite == (row['proof']['schema'] == 'scar.composite-invariant-loop-proof')
+          and contract['source_proof'] == row['proof'], 'original proof kind/source differs')
+    schedule = row['schedule']
+    _need(contract['resource_schedule']['receipt'] == dict(path=schedule['uri'], sha256=schedule['sha256'],
+          bytes=schedule['size_bytes']), 'original selected schedule differs')
+    _need(contract['trip_count'] == row['trip_count'] and contract['memory_budget_bytes'] <= row['memory_budget_bytes']
+          and {name: array['shape'] for name, array in contract['arrays'].items()} == row['input_shapes'],
+          'original shape/count/budget specialization differs')
+    return _capsule_row(row, directory, contract, proof_kind='COMPOSITE' if composite else 'DIRECT',
+                        admission_schema=ADMISSION, runtime_schema=SCHEMA, trip_count=row['trip_count'])
+
+
+def _stateful_capsule_row(row):
+    from .stateful_contract import ADMISSION_SCHEMA, SCHEMA, inspect_stateful_bundle
+
+    _need(row.get('status') == 'MEASURED_STATEFUL_BUNDLE_READY' and row.get('selected_kind') == 'ORDERED_STATEFUL_REGION'
+          and row.get('bundle_export') and row.get('native_artifact') and row.get('selection')
+          and row.get('proof', {}).get('schema') == 'scar.stateful-validation-candidate',
+          'only original exported transactional stateful ABI1 regions are supported')
+    exported, directory = _capsule_bundle(row)
+    _need(exported.get('schema') == 'scar.stateful-runtime-export', 'original stateful compact export schema differs')
+    metadata = inspect_stateful_bundle(directory, expected_admission_sha256=exported['expected_admission_sha256'])
+    contract, admission = metadata['contract'], metadata['admission']
+    native = contract['native']
+    _need(all(exported.get(key) == value for key, value in native['ids'].items())
+          and exported['library_sha256'] == native['library_sha256']
+          and exported['runtime_contract_sha256'] == admission['runtime_contract_sha256'],
+          'stateful export/ABI identities differ')
+    for reference, role in ((row['native_artifact'], 'original-native-manifest'),
+                            (row['selection'], 'original-measured-selection')):
+        receipt = dict(role=role, path=reference['uri'], sha256=reference['sha256'], bytes=reference['size_bytes'])
+        _need(receipt in admission['evidence'], 'original stateful ' + role + ' receipt differs')
+    shapes = {record['id']: record['shape'] for record in contract['inputs'] if record['kind'] == 'array'}
+    _need(shapes == row['input_shapes'] == contract['selection']['input_shapes']
+          and row['memory_budget_bytes'] == contract['memory']['memory_budget_bytes']
+          and row['resource_binding']['cpu_ids'] == contract['cpu']['ids'],
+          'stateful exact shape/budget/CPU specialization differs')
+    return _capsule_row(row, directory, contract, proof_kind='TRANSACTIONAL_STATEFUL_REGION',
+                        admission_schema=ADMISSION_SCHEMA, runtime_schema=SCHEMA,
+                        native_artifact=row['native_artifact'], original_selection=row['selection'],
+                        external_assumptions=contract['external_assumptions'],
+                        floating_environment_policy=contract['floating_environment_policy'],
+                        transaction_boundary='ONE_ORIGINAL_METHOD_PRIVATE_SHADOW_WRITES_THEN_ALL_STATE_COMMIT')
+
+
+_CAPSULE_PROFILES = {PROFILE: _fixed_loop_capsule_row, STATEFUL_PROFILE: _stateful_capsule_row}
+_RUNTIME_SOURCES = (
+    'cli.py', '__main__.py', 'runtime/compiled_deployment.py', 'runtime/entry_runner.py',
+    'runtime/native_temporal_invariant.py', 'runtime/native_loop.py', 'runtime/loop_guard.py',
+    'runtime/loop_contract.py', 'runtime/array_copy_guard.py', 'trace/code_snapshot.py',
+)
+_STATEFUL_SOURCES = ('runtime/native_stateful.py', 'runtime/stateful_contract.py', 'runtime/stateful_guard.py')
+
+
+def describe_final_profile(pipeline, kind):
+    _need(kind in _CAPSULE_PROFILES, 'unregistered final-entry profile')
+    reference, document = read_pipeline(pipeline)
+    rows = selected_rows(document)
+    _need(rows, 'at least one admitted compiled region is required')
+    describe_row = _CAPSULE_PROFILES[kind]
+    return dict(profile_kind=kind, pipeline=reference, rows=[describe_row(row) for row in rows])
+
+
+def verify_final_profile(value, kind):
+    _need(value.get('profile_kind') == kind, 'registered compact profile required')
+    _need(describe_final_profile(value['pipeline']['uri'], kind) == value, 'compiled pipeline/bundle profile changed')
+
+
+def _execution_statistics(execution):
+    if execution.get('schema') == 'scar.entry-runner-execution':
+        return dict(execution['statistics'])
+    native, fallback, reasons = 0, 0, {}
+    for attachment in execution.get('attachments', ()):
+        for stats in attachment.get('statistics', ()):
+            native += stats['native_calls']
+            fallback += stats['fallback_calls']
+            for reason, count in stats['reasons'].items():
+                reasons[reason] = reasons.get(reason, 0) + count
+    return dict(native_calls=native, fallback_calls=fallback, reasons=reasons)
 
 
 def runtime_identity(kind):
-    profile=_profile(kind)
+    _need(kind in _CAPSULE_PROFILES, 'unregistered final-entry profile')
     runtime=Path(__file__).resolve().parent
+    sources = _RUNTIME_SOURCES + (_STATEFUL_SOURCES if kind == STATEFUL_PROFILE else ())
     paths=[Path(__file__).resolve(),runtime/'caller_pipeline_capsule.py',
         runtime/'caller_pipeline_deployment.py',runtime.parent/'optimization'/'paired_entry_selection.py',
-        *profile.runtime_sources()]
+        *(runtime.parent / name for name in sources)]
     rows=[(str(path),sha256(path.read_bytes()).hexdigest())for path in dict.fromkeys(paths)]
     return sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
@@ -296,7 +411,7 @@ def admit(capsule,slot,*,expected_payload_sha256,expected_slot_sha256,entry,argv
         and payload['trust_policy']==TRUST and payload['capsule_directory']==str(capsule)
         and payload['slot_bytes']==SLOT_BYTES and payload['policy']['frozen_before_measurement']is True,
         'supported final-entry payload required')
-    profile=_profile(payload['profile_kind']);slot=Path(slot).resolve()
+    kind=payload['profile_kind'];slot=Path(slot).resolve()
     _need(slot.parent==capsule and slot.stat().st_size==SLOT_BYTES,'one fixed-page cost slot required')
     raw=slot.read_bytes();_need(sha256(raw).hexdigest()==expected_slot_sha256,'final cost-slot trust pin differs')
     decision=_json(raw);evaluation=evaluate_slot(decision,payload,expected_payload_sha256)
@@ -308,7 +423,7 @@ def admit(capsule,slot,*,expected_payload_sha256,expected_slot_sha256,entry,argv
         'fresh report in frozen storage scope required')
     for source in payload['source_refs']:_raw(source)
     _need(payload['provider_identity']==provider_identity(),'NumPy runtime identity changed')
-    profile.verify_profile(payload['artifact_profile'])
+    verify_final_profile(payload['artifact_profile'], kind)
     return payload,decision,evaluation
 
 
@@ -322,7 +437,7 @@ def run_final_entry(entry,argv,*,capsule,slot,expected_payload_sha256,expected_s
     from .entry_runner import _arguments,run_original_script
     entry,argv=_arguments(entry,argv);report=Path(report).resolve()
     _need(not report.exists(),'fresh final-entry report required')
-    _profile(profile_kind);payload=decision=None;selected=False
+    payload=decision=None;selected=False
     context=entry_context(entry,argv);environment=environment_sha256();identity=runtime_identity(profile_kind)
     reason='final_cost_not_admitted_default_no_op'
     try:
@@ -333,8 +448,12 @@ def run_final_entry(entry,argv,*,capsule,slot,expected_payload_sha256,expected_s
         if selected:reason='explicit_unmeasured_protocol_validation'
     except (OSError,ValueError,KeyError,TypeError,ImportError)as error:
         reason='final_scope_or_profile_not_admitted:'+str(error)
-    if selected:execution=_profile(profile_kind).execute_profile(payload['artifact_profile'],entry,argv)
-    else:execution=run_original_script(entry,argv)
+    if selected:
+        pipeline = payload['artifact_profile']['pipeline']
+        execution = run_build(pipeline['uri'], entry, argv, exclusive_inputs=True, measure_candidate=True,
+                              expected_pipeline=pipeline)
+    else:
+        execution = run_original_script(entry,argv)
     stable=(entry_context(entry,argv)==context and environment_sha256()==environment and runtime_identity(profile_kind)==identity)
     try:
         if payload is not None:
@@ -346,7 +465,7 @@ def run_final_entry(entry,argv,*,capsule,slot,expected_payload_sha256,expected_s
         payload_sha256=expected_payload_sha256,slot_sha256=expected_slot_sha256,
         selected=selected,validation_only=validation_only is True,mode='UNMEASURED_VALIDATION'if selected else'ORIGINAL_NO_OP',
         reason=reason,context_unchanged=stable,execution=execution,
-        statistics=_profile(profile_kind).execution_statistics(execution),deployment_authorized=False,
+        statistics=_execution_statistics(execution),deployment_authorized=False,
         cost_status='UNMEASURED',performance_measured=False,raw_benchmark_evidence_replayed=False,
         whole_program_cpp=False,new_mathematical_backend=False)
     report.parent.mkdir(parents=True,exist_ok=True)
@@ -354,10 +473,31 @@ def run_final_entry(entry,argv,*,capsule,slot,expected_payload_sha256,expected_s
     return result
 
 
+def _capsule_main(argv):
+    parser = argparse.ArgumentParser(description='Validate a pinned compiled entry capsule.')
+    parser.add_argument('--profile-kind', choices=tuple(_CAPSULE_PROFILES), default=PROFILE)
+    for flag in ('capsule', 'slot', 'payload-sha256', 'slot-sha256', 'report'):
+        parser.add_argument('--' + flag, required=True)
+    parser.add_argument('--validate-only', action='store_true')
+    parser.add_argument('--exclusive-inputs', action='store_true')
+    parser.add_argument('command', nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    if not command:
+        parser.error('unchanged Python entry required after --')
+    run_final_entry(command[0], command[1:], capsule=args.capsule, slot=args.slot,
+                    expected_payload_sha256=args.payload_sha256, expected_slot_sha256=args.slot_sha256,
+                    report=args.report, profile_kind=args.profile_kind, validation_only=args.validate_only,
+                    exclusive_inputs=args.exclusive_inputs)
+    return 0
+
+
 __all__ = [
     'run_final_entry',
     'admit',
     'runtime_identity',
+    'describe_final_profile',
+    'verify_final_profile',
     'PAYLOAD',
     'PROFILE',
     'STATEFUL_PROFILE',
@@ -370,4 +510,8 @@ __all__ = [
 ]
 
 
-if __name__=='__main__':raise SystemExit(main())
+if __name__ == '__main__':
+    arguments = sys.argv[1:]
+    options = arguments[:arguments.index('--')] if '--' in arguments else arguments
+    entry = _capsule_main if any(item == '--capsule' or item.startswith('--capsule=') for item in options) else main
+    raise SystemExit(entry(arguments))

@@ -146,8 +146,7 @@ def _caller(scope, reference, document):
 
 
 def _stateful(scope, reference, payload):
-    from scar.runtime.compiled_stateful_capsule import verify_profile
-    from scar.runtime.compiled_entry import STATEFUL_PROFILE, TRUST, runtime_identity
+    from scar.runtime.compiled_entry import STATEFUL_PROFILE, TRUST, runtime_identity, verify_final_profile
 
     _context(scope, payload['entry_context'])
     _require(payload['schema_version'] == 1 and payload['profile_kind'] == STATEFUL_PROFILE
@@ -164,7 +163,7 @@ def _stateful(scope, reference, payload):
     for row in payload['source_refs'] + [payload['validator_implementation']]:
         read_artifact(row, json_document=False)
     _require(payload['runtime_identity'] == runtime_identity(STATEFUL_PROFILE), 'stateful delivery runtime code changed')
-    verify_profile(profile)
+    verify_final_profile(profile, STATEFUL_PROFILE)
     return dict(kind='PYTHON_ORCHESTRATED_CPP', target=target, pipeline=profile['pipeline'], rows=profile['rows'],
                 memory_scope='ORIGINAL_STATEFUL_REGION_BUDGET', python_runtime_required=True)
 
