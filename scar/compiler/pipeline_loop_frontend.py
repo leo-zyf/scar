@@ -491,7 +491,7 @@ def validate_composite_invariant_loop_links(proof,spec,loopsref):
     """Verify composite caller ports directly, without a schema-v1 proof cast."""
     from scar.compiler.middle.python import _invariant_loop_links
     from scar.ir.execution_recipe import read_artifact
-    from scar.optimization.deployment_cost import _pointer
+    from scar.optimization.scope_accounting import _pointer
     if (type(proof) is not CompositeInvariantLoopProof or spec.get('id')!=proof.id
             or spec.get('source_code_key')!=proof.source.code_key):
         raise ValueError('composite specification differs from its original proof/source ID')

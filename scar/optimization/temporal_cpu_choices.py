@@ -19,7 +19,7 @@ from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode
-from scar.optimization.deployment_cost import _fact, _profile
+from scar.optimization.scope_accounting import _fact, _profile
 from scar.optimization.hardware import _target_materials, propose_cpu_allocations, validate_cpu_placement
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.resource_solver import semantic_sha256

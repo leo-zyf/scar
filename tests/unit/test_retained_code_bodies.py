@@ -6,7 +6,7 @@ from types import CodeType
 import pytest
 
 from scar.analysis.program_view import ProgramView
-from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.ir.program.call_edges import CapturedCode
 from scar.ir.record_codec import decode
 from scar.trace.code_snapshot import describe_code
@@ -43,7 +43,7 @@ def test_compiler_scope_body_join_does_not_cache_on_fingerprint_alone():
 
 
 def test_call_query_demand_keeps_original_ordinals_and_does_not_attach_unrelated_calls():
-    from scar.analysis.source_call_binding_view import SourceCallBindingProvider
+    from scar.analysis.source_call_context_graph import SourceCallBindingProvider
     from scar.ir.program.normal_graph import FunctionActivation
     repo=Path(__file__).resolve().parents[2]
     root=repo/'artifacts/current/experiments/cross-unit-composite-v1'

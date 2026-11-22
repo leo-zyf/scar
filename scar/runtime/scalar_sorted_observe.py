@@ -16,7 +16,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization import scalar_sorted_region as region
 from scar.optimization.scalar_transition_ir import _flatten
 from scar.runtime.scalar_table_contract import MISS, OFFER, compile_original
-from scar.runtime.scalar_table_entry import _run_main
+from scar.runtime.scalar_table_contract import _run_main
 from scar.trace.code_snapshot import describe_code, site
 
 

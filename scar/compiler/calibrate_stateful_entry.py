@@ -61,7 +61,7 @@ def _pins():
     root = Path(__file__).resolve().parents[1]
     names = ('compiler/calibrate_stateful_entry.py', 'compiler/array_copy_contract.py',
         'analysis/stateful_entry_protocol.py', 'compiler/stateful_runtime.py',
-        'compiler/export_stateful.py', 'compiler/native_lowering_view.py',
+        'compiler/stateful_runtime.py', 'compiler/selected_stateful_lowering.py',
         'compiler/stateful_model.py', 'optimization/stateful_cpu_model.py',
         'runtime/stateful_guard.py', 'runtime/stateful_contract.py',
         'trace/code_snapshot.py', 'codegen/stateful.py', 'codegen/cpp.py')
@@ -69,9 +69,9 @@ def _pins():
 
 
 def _materials(specialization):
-    from scar.compiler.native_lowering_view import derive_stateful_lowering_view
+    from scar.compiler.selected_stateful_lowering import derive_stateful_lowering_view
     from scar.compiler.stateful_model import stateful_from_dict
-    from scar.compiler.export_stateful import project_stateful_contract
+    from scar.compiler.stateful_runtime import project_stateful_contract
     from scar.optimization.stateful_cpu_model import _domain, stateful_cpu_cost_context
 
     spec = read_artifact(specialization)

@@ -13,7 +13,7 @@ from pathlib import Path
 from scar.analysis import bounded_entry_calls as projection
 from scar.analysis.build import _rules
 from scar.analysis.program_view import _digest
-from scar.analysis.source_call_binding_view import SCHEMA as ATTEMPTS, SourceObservedCallTarget
+from scar.analysis.source_call_context_graph import SCHEMA as ATTEMPTS, SourceObservedCallTarget
 from scar.analysis.source_declared_catalog import SCHEMA as DECLARED, read_source_catalog
 from scar.compiler.call_binding import join_call_bindings, plan_digest, read_call_binding_plan
 from scar.ir.execution_recipe import artifact_reference, read_artifact
@@ -27,7 +27,7 @@ _PLAN = 'scar.call-binding-plan'
 _RAW = 'scar.call-binding-observations'
 _REF_FIELDS = {'uri', 'schema', 'size_bytes', 'sha256'}
 _RESOURCE_SCOPE_READERS = frozenset((
-    'source_resource_scopes.py', 'source_resource_scope_view.py', '../ir/program/resource_observations.py',
+    'source_resource_scopes.py', '../ir/program/resource_observations.py',
 ))
 
 

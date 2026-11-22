@@ -21,7 +21,7 @@ from scar.ir.record_codec import decode
 
 
 def _pins():
-    from scar.analysis import ordered_region_activation,ordered_region_inputs,ordered_region_inline,stateful_dependency_view,source_call_view
+    from scar.analysis import ordered_region_activation, ordered_region_inputs as ordered_region_inputs, ordered_region_inputs as ordered_region_inline, stateful_dependency_view, source_call_view
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in (
         ('publisher',__import__(__name__,fromlist=['__file__'])),('activation',ordered_region_activation),
         ('inputs',ordered_region_inputs),('activation_types',A),('input_types',I),

@@ -16,7 +16,7 @@ import sys
 import time
 
 from scar.analysis.source_declared_calls import DeclaredCallStore, _NoTargets, _check_targets, _folder, _flat_tables
-from scar.analysis.source_control_namespaces import ControlNamespaceStore
+from scar.analysis.source_control import ControlNamespaceStore
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_references import source_port
@@ -62,7 +62,7 @@ class FunctionInterfaceParents:
             if (self.control.raw != (self.control.path/'result.json').read_bytes()
                     or self.control_parent != _artifact(self.control.path/'result.json', self.control.report['schema'])):
                 raise ValueError('source function normal-control parent changed')
-            from scar.analysis.source_control_namespaces import _pins
+            from scar.analysis.source_control import _pins
             if self.control.report['pins'] != _pins(): raise ValueError('source function normal-control rules changed')
 
     def project(self, unit):

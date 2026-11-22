@@ -27,7 +27,7 @@ from scar.runtime.scalar_recursive_driver_observe import ordered_map_digest
 from scar.runtime.scalar_recursive_observe import _pod
 from scar.runtime.scalar_sorted_study import _namespace_exact
 from scar.runtime.scalar_table_contract import MISS, OFFER
-from scar.runtime.scalar_table_entry import _run_main
+from scar.runtime.scalar_table_contract import _run_main
 from scar.trace.code_snapshot import describe_code
 
 

@@ -34,7 +34,7 @@ def _pins():
         'compiler/semantic_revision.py','analysis/source_pipeline_graph.py',
         'optimization/semantic_rewrite.py','optimization/semantic_region_demand.py',
         'optimization/optimizer.py','optimization/graph.py',
-        'optimization/deployment_cost.py','compiler/pipeline_runtime.py')
+        'optimization/scope_accounting.py','compiler/pipeline_runtime.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 

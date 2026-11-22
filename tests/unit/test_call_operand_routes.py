@@ -6,7 +6,7 @@ from types import ModuleType
 import pytest
 
 from scar.analysis.call_edges import _link_call_model
-from scar.analysis.call_operand_reader import OperandReadIssue, read_call_operands
+from scar.analysis.call_trace_reader import OperandReadIssue, read_call_operands
 from scar.analysis.call_operand_routes import build_operand_routes, query_operand_routes
 from scar.analysis.program_inventory import inventory_program
 from scar.ir.program.call_operands import OperandEventKind, OperandGap

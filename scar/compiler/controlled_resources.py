@@ -203,7 +203,7 @@ def _stateful(parent,context):
             'EXTERNAL_COMMIT_COPIES','PRIVATE_SLOT_DESTRUCTION_AND_RETURN'],caller_mask_restored_by_native=True)
     root=Path(__file__).resolve().parents[1]
     runtime={name:_file(root/name)for name in ('runtime/stateful_guard.py','compiler/stateful_runtime.py',
-        'compiler/export_stateful.py','codegen/stateful.py','codegen/stateful_v1.cpp.in')}
+        'compiler/stateful_runtime.py','codegen/stateful.py','codegen/stateful_v1.cpp.in')}
     anchors=[_anchor(members['source'],text,meaning)for text,meaning in (
         ('std::array<std::unique_ptr<double[]>','PRIVATE_SLOTS_ALLOCATED_BEFORE_AFFINITY_SCOPE'),
         ('if (!caller_affinity.bind(planned_cpu_ids[0]))','SERIAL_PRIVATE_EXECUTION_AFFINITY_START'),

@@ -2,7 +2,7 @@
 from dataclasses import replace
 from types import SimpleNamespace as NS
 
-from scar.analysis.ordered_region_inline import OrderedRegionInlineIndex
+from scar.analysis.ordered_region_inputs import OrderedRegionInlineIndex
 from scar.ir.program import normal_graph as F, source_productions as P
 from scar.ir.program.dependencies import (DependencyFrame as Frame,DependencyPoint as Point,
     GraphNamespace,context_push,context_frames)

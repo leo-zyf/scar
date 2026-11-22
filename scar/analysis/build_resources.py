@@ -1,25 +1,40 @@
-"""Symbolic resource interfaces for the unified build.
+"""Build resources."""
 
-These are requirements and guarded candidates, with optional references to a
-retained hardware inventory, never observations of execution. A Python value's host representation is distinct
-from any tensor storage it may reference. In particular a device request does
-not certify a physical copy, allocation, kernel launch or file access.
-"""
 from collections import defaultdict
 from dataclasses import replace
 from hashlib import sha256
-
-from scar.ir.program import model as M, source_productions as P, view as V
+from scar.ir.program import model as M, source_productions as P, view as V, target_hardware as H
 from scar.ir.program.dependencies import (
-    DependencyPoint as Point, DependencyEdge as Edge, DependencyKind as K,
-    DependencyMeaning as Meaning, DependencyStrength as Strength,
-    DependencyCondition as Condition, DependencyEvidence as Evidence,
-    DependencyNeighborhood as Neighborhood, DependencyFrontier as Frontier)
+    DependencyPoint as Point,
+    DependencyEdge as Edge,
+    DependencyKind as K,
+    DependencyMeaning as Meaning,
+    DependencyStrength as Strength,
+    DependencyCondition as Condition,
+    DependencyEvidence as Evidence,
+    DependencyNeighborhood as Neighborhood,
+    DependencyFrontier as Frontier,
+)
 from scar.ir.program.ids import OperationID, ResourceDefinitionID, ResourceRequirementID
 from scar.ir.program.resources import (
-    ResourceDefinition, ResourceRequirement, ExternalResource, ResourceKind, ResourceRole)
+    ResourceDefinition,
+    ResourceRequirement,
+    ExternalResource,
+    ResourceKind,
+    ResourceRole,
+)
 from scar.ir.record_codec import encode, decode
+from pathlib import Path
+from scar.ir.program.providers import ProviderArtifact
+from scar.ir.program.source_references import SourceArtifactLocator
 
+
+# Symbolic resource interfaces for the unified build.
+#
+# These are requirements and guarded candidates, with optional references to a
+# retained hardware inventory, never observations of execution. A Python value's host representation is distinct
+# from any tensor storage it may reference. In particular a device request does
+# not certify a physical copy, allocation, kernel launch or file access.
 _SCHEMA = 'scar.build-resource-interfaces.v1'
 # Names denote symbolic interface classes. They do not claim these devices exist.
 _POOLS = {
@@ -59,7 +74,7 @@ class BuildResourceProvider:
         self._candidate_operations = set()
         self.target = None
         if target is not None:
-            from scar.analysis.build_target_resources import RetainedBuildTarget
+            from scar.analysis.build_resources import RetainedBuildTarget
             self.target = RetainedBuildTarget(self, target)
 
     def _record(self, point, record, owner):
@@ -290,7 +305,7 @@ class BuildResourceProvider:
             provider.frontiers.append(frontier)
             provider._frontiers[frontier.point].append(frontier)
         if 'target' in payload:
-            from scar.analysis.build_target_resources import RetainedBuildTarget
+            from scar.analysis.build_resources import RetainedBuildTarget
             from pathlib import Path
             path = Path(payload['target']['snapshot']['uri']).parent
             provider.target = RetainedBuildTarget(provider, path)
@@ -333,3 +348,143 @@ def attach_build_resources(view, units=(), *, operations=(), resource_hints=None
         add(point, ports, original)
     view.register(provider)
     return provider
+
+
+# Reference a retained target inventory from symbolic program resources.
+#
+# This adapter reads existing typed hardware tables. It neither probes hardware
+# nor runs the target, and every attachment is a capability candidate rather
+# than a placement, allocation or transfer observation.
+SCHEMA = 'scar.build-target-resources.v1'
+
+
+def target_kind_role(record):
+    """Hardware topology is not implicitly a storage or execution endpoint."""
+    if type(record) is H.CpuExecutor:
+        return ResourceKind.CPU, ResourceRole.EXECUTOR
+    if type(record) is H.Accelerator:
+        return ResourceKind.GPU, ResourceRole.EXECUTOR
+    if type(record) is H.MemoryDomain:
+        return ResourceKind.MEMORY, ResourceRole.MEMORY_POOL
+    if type(record) in (H.StorageDevice,H.StorageEndpoint):
+        return ResourceKind.STORAGE, ResourceRole.STORAGE_ENDPOINT
+    if type(record) is H.HardwareThread:
+        return ResourceKind.THREAD, ResourceRole.OPAQUE_RESOURCE
+    if type(record) in (H.CpuCore,H.CpuPackage):
+        return ResourceKind.CPU, ResourceRole.OPAQUE_RESOURCE
+    if type(record) is H.CacheDomain:
+        return ResourceKind.MEMORY, ResourceRole.OPAQUE_RESOURCE
+    if type(record) in (H.PciFunction,H.DiscoveredAccelerator,H.NetworkInterface,H.RdmaAdapter):
+        return ResourceKind.DEVICE, ResourceRole.OPAQUE_RESOURCE
+    if type(record) is H.HardwareBoundary:
+        return ResourceKind.OTHER, ResourceRole.OPAQUE_RESOURCE
+    raise ValueError('unclassified target hardware record')
+
+
+def _stamp(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+class RetainedBuildTarget:
+    """Project original hardware IDs into demanded program namespaces once."""
+    def __init__(self, provider, path):
+        from scar.analysis.target_graph import TargetHardwareGraph
+        self.provider = provider
+        self.graph = TargetHardwareGraph(Path(path).resolve())
+        self.resources = self.graph.resources()
+        self.connections = self.graph.connections()
+        self.paths = self.graph.paths()
+        path = self.graph.path / 'result.json'
+        raw = path.read_bytes()
+        self.snapshot = ProviderArtifact(str(path), sha256(raw).hexdigest(), len(raw),
+            self.graph.report['schema'])
+        self.locator = SourceArtifactLocator(self.snapshot, self.snapshot.sha256,
+            self.snapshot.size_bytes, 'canonical-json')
+        report = self.graph.report
+        files = (path, Path(report['inventory']['uri']),
+            *(self.graph.path / r['path'] for r in report['nodes'].values()),
+            self.graph.path / report['connections']['path'],
+            self.graph.path / report['paths']['path'],
+            *(self.graph.path/report[name]['path'] for name in ('availability','constraints') if name in report))
+        self._stamps = {p: _stamp(p) for p in files}
+        self.points = {}
+        self.bindings = set()
+
+    def check(self):
+        if any(_stamp(path) != stamp for path, stamp in self._stamps.items()):
+            raise ValueError('retained build target changed during the query session')
+
+    def _point(self, namespace, record):
+        identity = ResourceDefinitionID(sha256((SCHEMA + ':' + self.snapshot.sha256
+            + ':' + self.snapshot.uri + ':' + str(record.id)).encode()).hexdigest())
+        return Point(namespace, identity, None)
+
+    def restore(self):
+        """Reuse published namespace/pool projections without adding edges."""
+        for namespace in {ns for ns, _ in self.provider.pools}:
+            points = {r.id: self._point(namespace, r) for r in self.resources}
+            if any(p not in self.provider.records for p in points.values()):
+                raise ValueError('resource payload lost its target namespace projection')
+            self.points[namespace] = points
+        self.bindings.update(self.provider.pools)
+
+    def add_namespace(self, namespace):
+        if namespace in self.points:
+            return self.points[namespace]
+        root = Point(namespace, namespace.root, None)
+        points = {}
+        for record in self.resources:
+            kind, role = target_kind_role(record)
+            point = self._point(namespace, record)
+            definition = ResourceDefinition(point.node, kind, role,
+                ExternalResource(namespace.root, 'target-snapshot:' + str(record.id)))
+            self.provider._record(point, definition, root)
+            points[record.id] = point
+        self.points[namespace] = points
+        for connection in self.connections:
+            pairs = ((connection.source, connection.target),)
+            if connection.bidirectional:
+                pairs += ((connection.target, connection.source),)
+            for source, target in pairs:
+                self.provider._edge(points[source], points[target],
+                    'scar.build.retained-hardware-topology.v1', may=True,
+                    guards=(*connection.conditions, 'RETAINED_TOPOLOGY_' + connection.kind.value,
+                        'HARDWARE_SNAPSHOT_LINK_NOT_OBSERVED_TRANSFER'), evidence=(self.locator,))
+        return points
+
+    @staticmethod
+    def _pool_names(record):
+        if type(record) is H.CpuExecutor:
+            return ('cpu',)
+        if type(record) is H.Accelerator:
+            return ('gpu',)
+        if type(record) is H.MemoryDomain:
+            return ('dram',) if record.kind is H.MemoryKind.HOST else ('device-memory',)
+        if type(record) is H.StorageDevice:
+            return (('ssd',) if record.media_kind == 'non_rotating' else ()) + (
+                ('nvme',) if record.transport == 'nvme' else ())
+        return ()
+
+    def bind_pool(self, point, name):
+        if (point.namespace, name) in self.bindings:
+            return
+        points = self.add_namespace(point.namespace)
+        for record in self.resources:
+            if name in self._pool_names(record):
+                self.provider._edge(points[record.id], point,
+                    'scar.build.retained-target-pool-candidate.v1', may=True,
+                    guards=('SCOPE_EXECUTION_AND_RESOURCE_POLICY_SELECT_RECORDED_TARGET',
+                        'INVENTORY_CAPACITY_NOT_AVAILABLE_ALLOCATION_BUDGET',
+                        'RESOURCE_TYPE_COMPATIBILITY_NOT_PLACEMENT_OR_TRANSFER_PROOF'),
+                    evidence=(self.locator,))
+        self.bindings.add((point.namespace, name))
+
+    def payload(self):
+        self.check()
+        return dict(schema=SCHEMA, snapshot=encode(self.snapshot),
+            resources=encode(self.resources, record_tags=H.TARGET_RECORD_TAGS),
+            connections=encode(self.connections), paths=encode(self.paths),
+            availability=encode(self.graph.availability()),constraints=encode(self.graph.constraints()),
+            physical_use_established=False, allocation_budgets_established=False,
+            transfers_observed=False)

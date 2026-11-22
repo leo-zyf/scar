@@ -12,7 +12,7 @@ from scar.compiler.model import document as plan_document
 from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.record_codec import loads
 from scar.optimization.pipeline_memory import _shape, plan_pipeline_memory
-from .pipeline_strategy import _fusion, _shape_replay
+from scar.optimization.pipeline_strategy import _fusion, _shape_replay
 from .resource_solver import semantic_sha256
 
 

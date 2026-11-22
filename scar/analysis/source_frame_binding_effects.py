@@ -191,7 +191,7 @@ def conditional_reaching_name_definitions(snapshot, source_function, namespace, 
 
 def conditional_local_read_tracks(state):
     """Analyze one source provider without attaching conditional data edges."""
-    from scar.analysis.state_materialization import local_read_tracks
+    from scar.analysis.source_state import local_read_tracks
     if state.anchors is None:
         state.anchors = anchor_name_accesses(state.view.catalog, state.material.unit, material=state.material)
     context = LocalReadEffectContext(state.material)
@@ -380,7 +380,7 @@ def frame_isolated_reaching_name_definitions(snapshot, source_function, namespac
 
 def frame_isolated_local_read_tracks(state):
     from scar.analysis.source_stack_routes import anchor_name_accesses
-    from scar.analysis.state_materialization import local_read_tracks
+    from scar.analysis.source_state import local_read_tracks
     if state.anchors is None:
         state.anchors = anchor_name_accesses(state.view.catalog, state.material.unit, material=state.material)
     context = FrameBindingIsolationContext(state.material); result = []

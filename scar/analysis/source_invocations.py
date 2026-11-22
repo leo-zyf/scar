@@ -891,7 +891,7 @@ def _bind_source_invocations(composition: CompositionIndex, coordinates: Capture
     members = _Members(coordinates, directory)
     operand_trace = None
     if entry_routing_profile is not None:
-        from scar.analysis.call_operand_reader import read_call_operands
+        from scar.analysis.call_trace_reader import read_call_operands
         operand_trace = read_call_operands(directory, root, budget=entry_operand_budget, frame_budget=call_budget)
         scanned = operand_trace.frame_scan
         sink = _Sink(retain_entries=True)

@@ -12,7 +12,7 @@ import gzip
 import json
 import time
 from types import CodeType
-from scar.analysis.call_operand_reader import CallOperandTrace
+from scar.analysis.call_trace_reader import CallOperandTrace
 from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.call_edges import CodeCapture
 from scar.ir.program.providers import ProviderArtifact

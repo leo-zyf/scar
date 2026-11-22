@@ -167,7 +167,7 @@ def validate_mapping_import_statement(node,expansion,*,overlay,code_evidence,inv
 
 def validate_mapping_heap_store(node,target,expansion,*,graph,overlay,semantic,code_evidence,
                                 expression_value,invoke,protocols,blocks,operations,values,refinements):
-    from scar.analysis.state_materialization import validate_heap_store
+    from scar.analysis.source_state import validate_heap_store
     from scar.ir.program.structured import PythonProtocolKind as P
     import dis
     source=next((link.source for link in overlay.operation_links if type(link.source) is SourceReference

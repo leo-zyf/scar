@@ -13,7 +13,7 @@ from scar.compiler.frontend.python import _LAYERS, _Run, build_frontend
 from scar.analysis.static_program import build_static_program, read_static_program
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.cpu_entry_import_frontier import SCHEMA as FRONTIER, verify_cpu_entry_import_frontier
-from scar.optimization.deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 
 
 SCHEMA = 'scar.cpu-import-source-admission'

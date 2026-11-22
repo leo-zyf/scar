@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 import re
 
-from .deployment_cost import _digest, _profile, plan_deployment, verify_deployment_plan
+from scar.optimization.scope_accounting import _digest, _profile, plan_deployment, verify_deployment_plan
 
 
 _IDS = {'build_id', 'loop_sha256', 'strategy_sha256', 'execution_plan_sha256', 'contract_sha256'}

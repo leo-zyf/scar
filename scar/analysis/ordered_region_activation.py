@@ -11,7 +11,7 @@ from dataclasses import replace
 from hashlib import sha256
 
 from scar.analysis.ordered_region_inputs import derive_ordered_inputs
-from scar.analysis.ordered_region_inline import OrderedRegionInlineIndex
+from scar.analysis.ordered_region_inputs import OrderedRegionInlineIndex
 from scar.analysis.source_call_view import (SourceFunctionCallProvider,function_interface_fact,
     source_caller_scope)
 from scar.analysis.source_namespace_contents import NamespacePlanView

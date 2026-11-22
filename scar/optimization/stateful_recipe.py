@@ -381,7 +381,7 @@ def unpack_stateful_recipe(value): return _parts(verify_stateful_recipe(value))
 def estimate_stateful_recipe(value,task_costs=None):
     """Replay independent direct-task costs, never split a complete-call observation."""
     recipe=verify_stateful_recipe(value)
-    from .deployment_cost import _fact,_profile
+    from scar.optimization.scope_accounting import _fact, _profile
     context=dict(recipe_id=recipe['recipe_id'],task_graph_sha256=semantic_sha256(recipe['task_graph']),
         backend_capability_sha256=semantic_sha256(recipe['implementation']['backend_capability_record']),
         budget_scope=recipe['resources']['memory']['budget_scope'])

@@ -107,7 +107,7 @@ def evaluate_sourced_affine(*, context, context_evidence, features, feature_unit
     model parameters, including when independently calibrated; they are never
     promoted to observed end-to-end time or physical lower/upper bounds.
     """
-    from .deployment_cost import _fact, _number, _digest
+    from scar.optimization.scope_accounting import _fact, _number, _digest
 
     frontier, terms, cache, artifacts, anchors = [], [], {}, {}, set()
 

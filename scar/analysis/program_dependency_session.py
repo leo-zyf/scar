@@ -739,9 +739,7 @@ class ProgramDependencySession:
         """Describe the exact selected source construct, retaining effects/open scope."""
         from scar.analysis.loop_graph_view import LoopConstructView
         from dataclasses import replace
-        from scar.analysis.program_regions import (
-            analyze_boundary, BoundaryFieldStatus, BoundaryKnowledge,
-        )
+        from scar.analysis.program_regions import analyze_boundary, BoundaryFieldStatus, BoundaryKnowledge
         from scar.ir.program.dependencies import DependencyPoint
         from scar.ir.v2.common import SourceReference
         source = loop.template.loop.source if type(loop) is LoopConstructView else loop
@@ -915,7 +913,7 @@ class ProgramDependencySession:
         ordinary input/time budgets.  It does not consume a typed graph/shard
         admission or retain 6697 decoded documents in the graph cache.
         """
-        from scar.analysis.program_relation_routing import RawCallRelationRouting
+        from scar.analysis.program_dependency_export import RawCallRelationRouting
         if self.call_publication is None:
             raise ValueError("CALL_RELATIONS_NOT_PUBLISHED: no saved call relationships were supplied")
         if self._call_routing is None:

@@ -99,7 +99,7 @@ def _freeze_policy(reference,document,capture_epoch):
 
 def _pins():
     root=Path(__file__).resolve().parents[1]
-    names=('compiler/stateful_holdout.py','compiler/stateful_runtime.py','compiler/export_stateful.py',
+    names=('compiler/stateful_holdout.py','compiler/stateful_runtime.py','compiler/stateful_runtime.py',
         'compiler/stateful_model.py','runtime/stateful_guard.py','runtime/stateful_contract.py',
         'runtime/native_stateful.py','runtime/entry_runner.py','trace/code_snapshot.py',
         'optimization/stateful_entry_cost.py',

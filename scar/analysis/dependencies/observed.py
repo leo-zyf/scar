@@ -303,7 +303,7 @@ class ObservedDependencyProvider:
 
     def _native_protocol_plan(self):
         """Derive each explicit source operand afresh, without native entry claims."""
-        from scar.analysis.cpython_native_interfaces import NativeProtocolShape, build_native_protocol
+        from scar.analysis.native_callables import NativeProtocolShape, build_native_protocol
         from scar.analysis.observed.call_bindings import _session_body
         from scar.analysis.program_dependency_export import _Tables
         from scar.analysis.static.calls import StaticCallSession
@@ -367,7 +367,7 @@ class ObservedDependencyProvider:
 
     def build_native_protocols(self, fresh_output_dir):
         """Write shared ABI declaration templates, then admit them via replay."""
-        from scar.analysis.cpython_native_interfaces import write_native_protocol
+        from scar.analysis.native_callables import write_native_protocol
         if self.native_protocol_manifest is not None:
             raise ValueError('native protocols are already attached to this observed run')
         basis, shapes, _, _ = self._native_protocol_plan()
@@ -391,7 +391,7 @@ class ObservedDependencyProvider:
 
     def attach_native_protocols(self, existing_dir):
         """Replay original inputs and compare fresh expected graphs before wiring."""
-        from scar.analysis.cpython_native_interfaces import native_protocol_document
+        from scar.analysis.native_callables import native_protocol_document
         from scar.analysis.program_dependency_session import _stamp
         if self.native_protocol_manifest is not None:
             raise ValueError('native protocols are already attached to this observed run')

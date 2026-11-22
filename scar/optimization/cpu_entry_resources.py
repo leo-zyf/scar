@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from scar.ir.execution_recipe import read_artifact, artifact_reference
 from scar.optimization.cpu_entry_decision_ledger import verify_cpu_entry_decision_ledger
-from scar.optimization.deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 from dataclasses import asdict
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.ir.program.target_hardware import (

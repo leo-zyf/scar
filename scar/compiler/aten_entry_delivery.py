@@ -81,7 +81,7 @@ def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve
     from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE, render_recurrence
     from scar.codegen.native_project import build_native_project
     from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
-    from scar.compiler.tensor_execution import scheduled_tensor_body
+    from scar.compiler.tensor_planning_inputs import scheduled_tensor_body
     from scar.runtime.validate_native_project import verify_native_project
 
     out = Path(out).resolve()

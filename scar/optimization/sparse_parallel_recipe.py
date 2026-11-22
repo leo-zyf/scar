@@ -21,7 +21,7 @@ from scar.optimization.schedule import (
     Task,
     TaskKind,
 )
-from scar.optimization.sparse_solve_recipe import PROFILE as SERIAL_PROFILE
+from scar.optimization.sparse_solve_cost import PROFILE as SERIAL_PROFILE
 from collections import deque
 from scar.optimization.sparse_solve_cost import _duration, _summary
 

@@ -12,7 +12,7 @@ from test_stateful_stage_dag import _inputs, _region, _render
 from scar.codegen import stateful
 from scar.codegen.stateful_stage_capture import capture_stateful_stage_sources
 from scar.compiler.model import Expr
-from scar.compiler.native_lowering_view import derive_stateful_lowering_view
+from scar.compiler.selected_stateful_lowering import derive_stateful_lowering_view
 from scar.compiler.stateful_model import StatefulAction, document, stateful_digest
 from scar.ir.execution_recipe import artifact_reference
 

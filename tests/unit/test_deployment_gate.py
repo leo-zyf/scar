@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from scar.optimization.deployment_cost import plan_deployment
+from scar.optimization.scope_accounting import plan_deployment
 from scar.optimization.deployment_gate import MEMORY_SCOPE, deployment_gate, verify_deployment_gate
 
 

@@ -34,7 +34,7 @@ def _pins():
         'compiler/pipeline_runtime.py', 'optimization/macro_pass.py',
         'optimization/pipeline_demand.py', 'optimization/demand.py',
         'optimization/pipeline_forward_cost.py', 'optimization/cost_model.py',
-        'optimization/deployment_cost.py', 'compiler/semantic_revision.py',
+        'optimization/scope_accounting.py', 'compiler/semantic_revision.py',
         'optimization/semantic_region_demand.py')
     return {name: sha256((root/name).read_bytes()).hexdigest() for name in files}
 

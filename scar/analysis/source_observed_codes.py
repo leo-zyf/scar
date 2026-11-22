@@ -14,14 +14,14 @@ import json
 from pathlib import Path
 import sys
 
-from scar.analysis.call_operand_reader import read_call_operands
+from scar.analysis.call_trace_reader import read_call_operands
 from scar.analysis.python_call_targets import read_python_call_targets
 from scar.analysis.compiler_contexts import CompilerCodeIndex
 from scar.analysis.static.query import _Fragments
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.program_view import ProgramView, _digest
-from scar.analysis.source_observed_materials import ObservedFactMaterials
+from scar.analysis.source_observed_interfaces import ObservedFactMaterials
 from scar.analysis.source_consumer_parents import _stamp
 from scar.artifacts import write_table
 from scar.artifacts import _durable_mkdir, _durable_bytes

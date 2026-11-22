@@ -52,9 +52,7 @@ def _sources(pipeline):
 
 def _admit(pipeline, strategy):
     from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
-    from scar.optimization.pipeline_strategy import (
-        fused_execution_plan, verify_pipeline_strategy,
-    )
+    from scar.optimization.pipeline_strategy import fused_execution_plan, verify_pipeline_strategy
     strategy = verify_pipeline_strategy(pipeline, strategy)
     _require(strategy["selected"]["kind"] == "FULL_FUSION",
              "fused backend requires the selected FULL_FUSION representation")

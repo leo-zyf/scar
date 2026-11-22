@@ -1,41 +1,49 @@
-"""Observed source-code selections augment retained conditional call interfaces.
+"""Source observed interfaces."""
 
-Group repeated observations by original callsite and source definition. An
-equivalent parent interface keeps its original frame/fact; only missing code
-targets add an interface. Observations neither erase static alternatives nor
-establish future dispatch, creator instances, cell contents or pure effects.
-"""
 import argparse
+import json
+import inspect
 from collections import defaultdict
 from dataclasses import replace
 from hashlib import sha256
-import json
-import inspect
 from contextlib import contextmanager
 from bisect import bisect_right
 from pathlib import Path
-
-from scar.analysis.source_call_view import open_function_interfaces,function_interface_fact
-from scar.analysis.source_function_connections import Invocation,connect
+from scar.analysis.source_call_view import open_function_interfaces, function_interface_fact
+from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.artifacts import read_record_table as _table
-from scar.artifacts import write_table
-from scar.artifacts import _durable_bytes, _durable_mkdir
-from scar.artifacts import _json
+from scar.artifacts import (
+    read_record_table as _table,
+    write_table,
+    _durable_bytes,
+    _durable_mkdir,
+    _json,
+)
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.observed.call_bindings import recover_positional_receiver
 from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
-from scar.ir.program import function_sites as I, normal_graph as T, source_productions as P
-from scar.ir.program import source_observations as R
+from scar.ir.program import (
+    function_sites as I,
+    normal_graph as T,
+    source_productions as P,
+    source_observations as R,
+)
 from scar.ir.program.python_call_targets import PythonTargetKind
 from scar.ir.program.call_edges import CallEdgeBudget
-from scar.ir.record_codec import encode,decode
+from scar.ir.record_codec import encode, decode
 from scar.trace.code_snapshot import call_instruction
+from scar.analysis.source_fact_materials import FactMaterialResolver
 
 
+# Observed source-code selections augment retained conditional call interfaces.
+#
+# Group repeated observations by original callsite and source definition. An
+# equivalent parent interface keeps its original frame/fact; only missing code
+# targets add an interface. Observations neither erase static alternatives nor
+# establish future dispatch, creator instances, cell contents or pure effects.
 SCHEMA='scar.source-observed-function-interfaces'
 VERSION=3
 TABLES=('groups','observation_frontiers','interfaces','queries','frontiers')
@@ -50,7 +58,7 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 
 def _pins():
     from scar.analysis import source_observed_calls as source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
-    from scar.analysis import source_function_connections, source_observed_materials, source_fact_materials
+    from scar.analysis import source_function_connections, source_observed_interfaces as source_observed_materials, source_fact_materials
     from scar.analysis.static import compilation as static_compilation
     from scar.analysis.observed import call_bindings as observed_positional_receiver
     from scar.analysis import source_frame_binding_effects as source_frame_binding_effects
@@ -567,6 +575,33 @@ def main():
             catalog=index.view.catalog.path,project_root=index.codes.project_root,index=index,
             graph_check_out=Path(args.resource_scopes_out)/'graph-check.json')
     _check_targets();print(json.dumps(report['counts']),flush=True)
+
+
+# Guard only the primitive fact leaves used by observed/source relations.
+class ObservedFactMaterials:
+    def __init__(self,catalog):
+        self.resolver=FactMaterialResolver(catalog)
+        if (self.resolver.catalog.path,self.resolver.catalog.report)!=(catalog.path,catalog.report):
+            raise ValueError('observed primitive facts use a different source catalog')
+        self.routes={};self._guard={};self._references=set()
+
+    def admit(self,references):
+        selected=tuple(r for r in references if r not in self._references)
+        for route in self.resolver.verify(selected):
+            for artifact in (route.physical,*route.catalogs):
+                path=Path(artifact.uri);raw=path.read_bytes()
+                if (len(raw),sha256(raw).hexdigest())!=(artifact.size_bytes,artifact.sha256):
+                    raise ValueError('observed primitive fact receipt changed during admission')
+                if path in self._guard and self._guard[path]!=raw:
+                    raise ValueError('observed primitive facts changed during admission')
+                self._guard[path]=raw
+            self.routes[route.logical]=route
+        self._references.update(selected);self.check()
+
+    def check(self):
+        self.resolver.validate_catalog()
+        if any(path.read_bytes()!=raw for path,raw in self._guard.items()):
+            raise ValueError('observed primitive fact leaf or catalog receipt changed')
 
 
 if __name__=='__main__':main()

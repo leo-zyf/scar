@@ -11,7 +11,7 @@ import dis
 import inspect
 
 from scar.analysis.call_edges import _Sources
-from scar.analysis.call_operand_reader import CallOperandTrace
+from scar.analysis.call_trace_reader import CallOperandTrace
 from scar.analysis.call_operand_routes import _Core, _Boundary as _CoreBoundary, _has_index, _layout_matches, _span
 from scar.analysis.function_binding import bind_call
 from scar.ir.program.call_edges import CallEdgeModel, CallLinkStatus, CapturedSite

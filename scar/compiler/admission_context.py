@@ -162,7 +162,7 @@ class AdmissionContext:
     def _producers(self):
         self._live()
         paths = {_ROOT/'compiler'/name for name in ('admission_context.py', 'controlled_resources.py',
-            'source_summary_binding.py', 'stateful_candidate.py', 'native_lowering_view.py')}
+            'source_summary_binding.py', 'stateful_candidate.py', 'selected_stateful_lowering.py')}
         for name, module in tuple(sys.modules.items()):
             filename = getattr(module, '__file__', None) if name.startswith('scar.') else None
             if filename:
@@ -226,7 +226,7 @@ class AdmissionContext:
 
     def _derive_stateful(self, reference):
         from scar.codegen import stateful, cpp
-        from scar.compiler.native_lowering_view import derive_stateful_lowering_view
+        from scar.compiler.selected_stateful_lowering import derive_stateful_lowering_view
         from scar.compiler.stateful_candidate import check_observed_specialization
         from scar.compiler.stateful_model import document
         specialized = read_artifact(reference)

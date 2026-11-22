@@ -182,7 +182,7 @@ def prepare(proof, historical, handoff, *, case=0):
 
 def _f4_total(design, graph):
     from scar.analysis.static.lowering.source_call_lowering import _body, _original_route
-    from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+    from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 
     view = ProgramView(Path(graph['catalog']['uri']).parent)
     source = design['source']['uri']

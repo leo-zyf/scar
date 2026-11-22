@@ -15,7 +15,7 @@ import time
 
 from scar.analysis import source_context_variants as C, source_binding_variants as B
 from scar.analysis import source_symbol_variants as N, source_topology_variants as T
-from scar.analysis import compiler_symbols as S, compiler_symbol_collect as collect
+from scar.analysis import compiler_symbols as S, compiler_symbol_materials as collect
 from scar.analysis import compiler_symbol_solve as solve, compiler_symbol_view
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes

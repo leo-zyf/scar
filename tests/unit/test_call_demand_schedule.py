@@ -174,7 +174,7 @@ def test_restore_failure_keeps_indexed_child_candidate_and_other_file_body(tmp_p
 
 
 def test_remainder_origin_is_not_kept_when_a_pending_body_gets_a_call_source(tmp_path):
-    from scar.analysis.call_demand_schedule import CallDemandQueue
+    from scar.analysis.call_demand import CallDemandQueue
     from scar.ir.program.call_composition import Remainder
     from scar.ir.program.inventory import DefinitionKind, DefinitionInventory
     from scar.ir.semantics_v2 import SourceSnapshot
@@ -195,7 +195,7 @@ def test_remainder_origin_is_not_kept_when_a_pending_body_gets_a_call_source(tmp
 
 
 def test_distinct_process_seed_origins_remain_distinct_on_one_task():
-    from scar.analysis.call_demand_schedule import CallDemandQueue
+    from scar.analysis.call_demand import CallDemandQueue
     from scar.ir.program.inventory import DefinitionKind, DefinitionInventory
     from scar.ir.program.expansion import ContextStoreBudget
     from scar.ir.semantics_v2 import SourceSnapshot

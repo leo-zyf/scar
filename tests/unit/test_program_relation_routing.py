@@ -5,7 +5,7 @@ import pytest
 
 
 def test_exact_namespace_wire_reuse_preserves_validation_budget_and_foreign_routes(tmp_path, monkeypatch):
-    from scar.analysis import program_relation_routing as routing
+    from scar.analysis import program_dependency_export as routing
     from scar.ir.program.dependencies import GraphNamespace
     from scar.ir.program.ids import RegionID
     from scar.ir.program.providers import ProviderArtifact, ProviderFactReference

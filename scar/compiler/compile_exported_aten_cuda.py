@@ -50,7 +50,7 @@ def _pipeline(model, *, treatment=False):
         from scar.compiler.aten_export_placement import qualify_device_export
 
         if treatment:
-            from scar.compiler.native_export_placement_costs import plan_device_treatment, replay_device_treatment
+            from scar.compiler.native_device_cost import plan_device_treatment, replay_device_treatment
 
             return qualify_device_export, plan_device_treatment, replay_device_treatment, _PLACEMENT_TREATMENT
         from scar.compiler.aten_export_placement import plan_device_export, replay_device_export

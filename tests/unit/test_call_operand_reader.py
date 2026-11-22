@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-import scar.analysis.call_operand_reader as reader
+import scar.analysis.call_trace_reader as reader
 from scar.analysis.call_trace_reader import CollectingCallSink, scan_call_trace
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.program.call_operands import CallOperandBudget

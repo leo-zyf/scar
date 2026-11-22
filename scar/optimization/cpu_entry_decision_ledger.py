@@ -8,7 +8,7 @@ from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.target_hardware import CpuCore, HardwareThread, MemoryDomain, MemoryKind
 from scar.ir.record_codec import encode
 from .aten_native_schedule import recorded_cpu_domain
-from .deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 from .resource_solver import semantic_sha256
 from .whole_entry_choice import DOMAIN, LIFECYCLE_PHASES, solve_whole_entry_choice
 

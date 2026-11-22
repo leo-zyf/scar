@@ -13,7 +13,7 @@ from typing import Any
 
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.providers import ProviderFactReference
-from .deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 from .resource_solver import semantic_sha256
 
 

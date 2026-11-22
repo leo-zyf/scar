@@ -9,9 +9,7 @@ import json
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference
-from scar.optimization.deployment_cost import (
-    _digest, plan_deployment, verify_deployment_plan,
-)
+from scar.optimization.scope_accounting import _digest, plan_deployment, verify_deployment_plan
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 
@@ -50,7 +48,7 @@ _ENTRY_SOURCES = (
     'codegen/fused_pipeline.py', 'codegen/cpp.py', 'codegen/kernel_v1.cpp.in',
     'codegen/scar_abi_v1.h', 'trace/code_snapshot.py', 'runtime/array_copy_guard.py',
 )
-_PRODUCERS = ('optimization/macro_pass.py', 'optimization/deployment_cost.py',
+_PRODUCERS = ('optimization/macro_pass.py', 'optimization/scope_accounting.py',
     'analysis/pipeline_region_pass.py', 'optimization/pipeline_strategy.py',
     'optimization/pipeline_fusion.py')
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scar.analysis import scalar_table_cse, scalar_table_handoff
 from scar.analysis.program_view import ProgramView
-from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.analysis.static.lowering.source_call_lowering import _body
 from scar.analysis.source_references import source_port
 from scar.runtime.source_value_observe import _codes

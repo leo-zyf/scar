@@ -1,14 +1,9 @@
-"""Attach source binding interfaces and may versions to the common graph.
+"""Source state."""
 
-No source parsing or target execution. Original C2 interfaces select symbolic
-addresses; the existing matched-control solver supplies definition choices.
-This adapter does not infer object contents from a stable reference binding.
-"""
 from collections import ChainMap, defaultdict
 from copy import copy
 from dataclasses import replace
 from pathlib import Path
-
 from scar.analysis.program_view import _digest
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_stack_routes import _bindings, anchor_name_accesses
@@ -17,17 +12,58 @@ from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_consumer_parents import _stamp
-from scar.ir.program import state_ports as S, source_productions as P
-from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
-from scar.ir.program import view as V, model as M
+from scar.ir.program import (
+    state_ports as S,
+    source_productions as P,
+    normal_graph as G,
+    normal_graph as F,
+    normal_graph as T,
+    view as V,
+    model as M,
+)
 from scar.ir.program.source_bindings import EnvironmentInterface
 from scar.ir.program.name_flow import NameDefinitionKind as D
-from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEdge,
-    DependencyKind as K, DependencyMeaning as Meaning, DependencyStrength as Strength,
-    DependencyEvidence, DependencyCondition, DependencyFrontier, DependencyNeighborhood)
+from scar.ir.program.dependencies import (
+    DependencyPoint as Point,
+    DependencyEdge,
+    DependencyKind as K,
+    DependencyMeaning as Meaning,
+    DependencyStrength as Strength,
+    DependencyEvidence,
+    DependencyCondition,
+    DependencyFrontier,
+    DependencyNeighborhood,
+    DependencyEdge as Edge,
+    DependencyCondition as Condition,
+    DependencyEvidence as Evidence,
+    DependencyNeighborhood as Neighborhood,
+    DependencyFrontier as Frontier,
+)
 from scar.ir.program.ids import LocationID, OperationID, ValueID
+from hashlib import sha256
+from scar.artifacts import read_record_table as _table
+from scar.ir.program.providers import ProviderArtifact
+from scar.ir.program.source_references import SourceArtifactLocator
+from scar.ir.record_codec import decode, encode
+import ast
+from scar.ir.program.state_addresses import (
+    AddressCoverage,
+    AddressEffect,
+    Element,
+    InvokeStateOperand,
+    ObjectField,
+    ReferenceOwner,
+)
+from scar.ir.program.state_modes import AccessMode
+from scar.ir.program.structured import PythonProtocolKind as Kind
+from scar.ir.semantics_v2 import Opcode
 
 
+# Attach source binding interfaces and may versions to the common graph.
+#
+# No source parsing or target execution. Original C2 interfaces select symbolic
+# addresses; the existing matched-control solver supplies definition choices.
+# This adapter does not infer object contents from a stable reference binding.
 class _AppendBuffer:
     """Reserve final ordinals while keeping one operation's rows private."""
     def __init__(self, base):self.base=base;self.added=[]
@@ -411,3 +447,200 @@ class SourceStateProvider:
 
     def incoming(self, point): return self._neighbors(point, True)
     def outgoing(self, point): return self._neighbors(point, False)
+
+
+# State materialization.
+# Select local binding analyses from original access/owner types, not names.
+def local_read_tracks(state):
+    """Return every function/slot pair this intraprocedural model can track.
+
+    A capture is still an address interface: it is not silently analyzed as
+    a slot of the reading activation. Different function creations can select
+    the same body, so all original creation endpoints are retained.
+    """
+    # This API explicitly enumerates the whole unit, unlike point queries.
+    state.ensure_all(include_content=False)
+    functions = {}
+    for function in state.source.facts.functions:
+        if function.body_scope is not None:
+            functions.setdefault((function.body_scope.owner, function.environment.scope), []).append(function)
+    selected = {}
+    for access in state.accesses:
+        if access.kind is not S.BindingAccessKind.READ: continue
+        for alternative in access.alternatives:
+            descriptor = state.locations[alternative.location].interface
+            if descriptor.kind != 'LEXICAL_BINDING': continue
+            slot = state.bindings.bindings[descriptor.binding]
+            if slot.domain != 'LOCAL_BINDING': continue
+            namespace = F.Namespace(F.NamespaceKind.LEXICAL, descriptor.binding, state._name(slot.name))
+            for function in functions.get((access.scope, slot.owner), ()):
+                endpoint = source_port(state.source.facts, function.value)
+                selected.setdefault((endpoint, namespace), None)
+    return tuple(selected)
+
+
+def track_local_reads(state, **limits):
+    """Solve each selected pair once, sharing the provider's anchors/bodies."""
+    selected = local_read_tracks(state)
+    for function, namespace in selected: state.track(function, namespace, **limits)
+    return selected
+
+
+# Typed readback of additional binding-version relations, without solving.
+#
+# The enclosing observer admits producer/input receipts and actual body choices.
+# This unit reader checks saved table bytes, types and endpoint closure against
+# the original source projection. Independent source rederivation remains the
+# separate state-view reader; it is not repeated for graph navigation.
+TABLES=frozenset(('rules','requests','locations','accesses','versions','selections','tracks','edges',
+    'content_addresses','content_states','content_accesses','content_edges'))
+LINEAGE_TABLES=frozenset(('content_lineage','content_lineage_edges'))
+
+
+class StoredBindingVersions:
+    def __init__(self,view,folder,header,summary):
+        self.folder=Path(folder);self.header=header;self.summary=summary
+        self.source=view.project_unit(header['unit']);self.namespace=self.source.namespace
+        expected_tables=TABLES
+        if header['schema_version']==2:
+            from scar.analysis.binding_track_storage import ENCODING,pins
+            if (header.get('track_encoding'),header.get('storage_pins'))!=(ENCODING,pins()):
+                raise ValueError('stored binding track encoding differs')
+            expected_tables=TABLES|{'controls'}
+        elif header['schema_version']!=1:raise ValueError('unsupported stored binding schema')
+        if (encode(self.namespace)!=header['namespace']
+                or encode(self.source.material.result_artifact)!=header['source_material']
+                or set(header['tables']) not in (expected_tables,expected_tables|LINEAGE_TABLES)
+                or header['original_body_bytes_copied']!=0
+                or any(header[k]is not False for k in ('loops_unrolled','target_executed',
+                    'tensor_content_versions_proven','effect_membership_closed','first_stage_complete'))):
+            raise ValueError('stored binding source domain, table grammar or authority differs')
+        self.guards={};self.locations={};self.versions={};self.in_edges=defaultdict(list);self.out_edges=defaultdict(list)
+        for artifact in header['binding_materials']:
+            p=Path(artifact['uri']);raw=p.read_bytes()
+            if len(raw)!=artifact['size_bytes'] or sha256(raw).hexdigest()!=artifact['sha256']:
+                raise ValueError('stored binding original C2 material changed')
+            self.guards[p]=_stamp(p)
+        # Check every saved table, including proof records not needed for this
+        # neighborhood. Hash compressed bytes incrementally; do not decode the
+        # full per-variable control histories just to follow a version edge.
+        for name,receipt in header['tables'].items():
+            if receipt['path']!=name+'.jsonl.gz':raise ValueError('stored binding table path differs')
+            p=self.folder/receipt['path'];before=_stamp(p);digest=sha256();size=0
+            with p.open('rb') as stream:
+                for block in iter(lambda:stream.read(1024*1024),b''):digest.update(block);size+=len(block)
+            if size!=receipt['bytes'] or digest.hexdigest()!=receipt['sha256'] or _stamp(p)!=before:
+                raise ValueError('stored binding table receipt changed')
+            self.guards[p]=before
+        for name,cls,target in (('locations',S.BindingLocationTemplate,self.locations),
+                ('versions',S.BindingVersionTemplate,self.versions)):
+            for wire in _table(self.folder,header['tables'][name]):
+                row=decode(cls,wire,record_tags=P.PRODUCTION_RECORD_TAGS)
+                if row.id in target:raise ValueError('duplicate stored binding identity')
+                target[row.id]=row
+            if len(target)!=header['counts'][name]:raise ValueError('stored binding node denominator differs')
+        for row in self.versions.values():
+            bound=(S.BindingBoundness.BOUND if row.kind in (D.FORMAL,D.WRITE) else
+                S.BindingBoundness.UNBOUND if row.kind is D.DELETE else S.BindingBoundness.UNKNOWN)
+            if row.location not in self.locations or row.source_function.unit!=header['unit'] or row.boundness is not bound:
+                raise ValueError('stored binding version location/function/boundness differs')
+        raw=(self.folder/'result.json').read_bytes()
+        artifact=ProviderArtifact(str(self.folder/'result.json'),sha256(raw).hexdigest(),len(raw),'scar.source-state-view')
+        self.locator=SourceArtifactLocator(artifact,artifact.sha256,artifact.size_bytes,'canonical-json')
+        point=lambda identity:Point(self.namespace,identity,None)
+        known=lambda identity:identity in self.source.nodes or identity in self.locations or identity in self.versions
+        count=0;self.projected_relations=0
+        for wire in _table(self.folder,header['tables']['edges']):
+            row=decode(S.StoredBindingEdge,wire,record_tags=P.PRODUCTION_RECORD_TAGS);count+=1
+            if not all(known(n) for n in (row.source,row.target,
+                    *(c.subject for c in row.conditions if c.subject is not None),
+                    *(n for c in row.conditions for n in c.operands))):
+                raise ValueError('stored binding edge has an undeclared source/state endpoint')
+            if row.source not in self.versions and row.target not in self.versions:continue
+            conditions=tuple(Condition(c.domain,c.name,None if c.subject is None else point(c.subject),
+                c.index,tuple(point(n) for n in c.operands)) for c in row.conditions)
+            edge=Edge(point(row.source),point(row.target),row.kind,row.meaning,
+                (Evidence(row.rule,(self.locator,),(point(row.source),point(row.target))),),conditions,row.strength)
+            self.in_edges[row.target].append(edge);self.out_edges[row.source].append(edge);self.projected_relations+=1
+        if count!=header['counts']['relations']:raise ValueError('stored binding edge denominator differs')
+        self.check()
+
+    def check(self,point=None):
+        self.source.check(point)
+        if any(_stamp(p)!=stamp for p,stamp in self.guards.items()):
+            raise ValueError('admitted stored binding unit changed')
+
+    def describe(self,point):
+        if point.namespace!=self.namespace:return None
+        self.check(point)
+        if point.node in self.locations:
+            return V.ProgramNode(point,V.ProgramEntityKind.STATE_LOCATION,V.ProgramNodeRole.STATE_LOCATION,None,None)
+        if point.node in self.versions:
+            row=self.versions[point.node]
+            return V.ProgramNode(point,V.ProgramEntityKind.VALUE,V.ProgramNodeRole.CORE_VALUE,None,
+                M.ValueType(M.ValueKind.STATE,location=row.location))
+        return None
+
+    def original(self,point):
+        if self.describe(point)is None:raise ValueError('point is not a stored binding state node')
+        return self.locations.get(point.node) or self.versions[point.node]
+
+    def expand(self,point):
+        self.original(point)
+        return tuple(Point(self.namespace,row.id,point.context) for row in self.versions.values() if row.location==point.node)
+
+    def explain(self,point):
+        return dict(node=self.describe(point),original=self.original(point),stored_source=self.locator,
+            source_rederived_now=False,admission='PINNED_TYPED_STORED_STATE_WITH_ENDPOINT_CLOSURE',
+            binding_versions_not_tensor_contents=True,runtime_instance_selected=False,
+            track_summary=self.summary,independent_replay='scar state-view --read '+str(self.folder))
+
+    def _neighbors(self,point,incoming):
+        if point.namespace!=self.namespace:return Neighborhood()
+        self.check(point);rows=(self.in_edges if incoming else self.out_edges).get(point.node,())
+        edges=tuple(replace(e,source=replace(e.source,context=point.context),target=replace(e.target,context=point.context),
+            conditions=tuple(replace(c,subject=None if c.subject is None else replace(c.subject,context=point.context),
+                operands=tuple(replace(p,context=point.context) for p in c.operands)) for c in e.conditions)) for e in rows)
+        frontiers=[]
+        if point.node in self.locations or point.node in self.versions:
+            frontiers.append(Frontier(point,'STATE_INSTANCE_AND_OBJECT_CONTENT_NOT_SELECTED',
+                'Static binding versions require frame/occurrence selection and are not tensor contents.'))
+        if rows and self.summary['budget_or_control_incomplete']:
+            frontiers.append(Frontier(point,'SOURCE_BINDING_TRACK_COVERAGE_REQUIRES_SELECTION',
+                'Some tracks in this unit are open; saved track/selection records qualify each read.'))
+        return Neighborhood(edges,tuple(frontiers))
+
+    def incoming(self,point):return self._neighbors(point,True)
+    def outgoing(self,point):return self._neighbors(point,False)
+
+
+# Additional source/owner checks for the two heap store protocols.
+#
+# Core validation owns use typing/CFG; the environment validator owns the
+# normal/raise state signature. Exact source evaluation is checked by replay.
+def validate_heap_store(operation, kind, link, row, semantic):
+    definition = semantic.definitions.get(link.semantic_operation)
+    atom = semantic.source_atoms.get(link.source.atom_id)
+    attribute = kind is Kind.STORE_ATTRIBUTE
+    expected_kind = "Attribute" if attribute else "Subscript"
+    if (definition is None or atom is None or atom.kind != expected_kind
+            or definition.metadata.get("role") != "binding"
+            or definition.code_id != link.source.atom_id.wire
+            or link.opcode is not Opcode.OPAQUE
+            or not definition.label.startswith("bind ")):
+        raise ValueError("heap store must reference its exact SG assignment target")
+    target = ast.parse(definition.label[5:], mode="eval").body
+    if attribute:
+        if not isinstance(target, ast.Attribute) or len(operation.uses) != 3:
+            raise ValueError("attribute store needs its owner, assigned reference and world")
+        selector = ObjectField(target.attr)
+    else:
+        if (not isinstance(target, ast.Subscript) or isinstance(target.slice, ast.Slice)
+                or len(operation.uses) != 4):
+            raise ValueError("subscript store needs its owner, key, assigned reference and world")
+        selector = Element(operation.uses[1].id)
+    effect = AddressEffect(ReferenceOwner(operation.uses[0].id), (selector,), AccessMode.WRITE)
+    if (row is None or row.site != InvokeStateOperand(operation.id, operation.uses[-1].id)
+            or row.coverage is not AddressCoverage.PARTIAL or row.protocol is not None
+            or row.effects != (effect,)):
+        raise ValueError("heap store address must retain its exact owner/key/world Uses")

@@ -14,7 +14,7 @@ from scar.compiler.model import document
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, loads
 from .cpu_choices import _emit, _read, _receipt, _source
-from .deployment_cost import _fact, _number, _profile
+from scar.optimization.scope_accounting import _fact, _number, _profile
 from .demand import analyze_region_demand
 from .hardware import bind_cpu_placement
 from .implementation_solver import solve_implementation_choices, task_implementation_contract

@@ -14,7 +14,7 @@ from pathlib import Path
 import statistics
 
 from scar.ir.execution_recipe import artifact_reference,read_artifact
-from scar.optimization.deployment_cost import _fact,_pointer
+from scar.optimization.scope_accounting import _fact, _pointer
 from scar.optimization.resource_solver import semantic_sha256
 
 PROFILE='scar.rebased-stateful-cpu-cost-profile'

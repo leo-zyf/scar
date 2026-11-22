@@ -24,25 +24,25 @@ SCHEMA = 'scar.program-build'
 def _rules():
     return {name: sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
         for name in ('build.py', 'observed/boundaries.py', 'observed/call_bindings.py',
-            'observed/function_interfaces.py', 'build_resources.py', 'build_target_resources.py',
-            'build_f4.py', 'build_f4_resources.py', 'source_declared_catalog.py',
+            'observed/function_interfaces.py', 'build_resources.py',
+            'build_f4.py', 'source_declared_catalog.py',
             'source_fact_materials.py', 'source_observed_boundaries.py',
             '../ir/program/source_observations.py', 'source_body_interfaces.py',
             'source_body_activations.py',
             'source_observed_resumptions.py', 'source_resumption_view.py',
             '../trace/resumptions.py', 'compiler_contexts.py', 'source_observed_codes.py',
             'source_observed_calls.py', '../ir/program/compiler_symbols.py',
-            'source_resource_scopes.py', 'source_resource_scope_view.py',
+            'source_resource_scopes.py',
             '../ir/program/resource_observations.py', 'source_observed_state.py',
-            'source_observed_state_view.py', 'state_materialization.py', 'binding_track_storage.py',
+            'source_observed_state_view.py', 'binding_track_storage.py',
             '../ir/program/binding_ports.py', '../ir/program/body_observations.py',
             'program_view.py', 'program_view_storage.py', '../ir/program/view.py',
             'source_region_projection.py', 'source_content.py', 'source_content_lineage.py',
             '../ir/program/data_materials.py', 'program_state_view.py', 'program_state_coverage.py',
             'program_inventory.py', 'source_graph_material.py',
-            'source_effect_projection.py', 'source_effects.py', 'source_state.py',
-            'source_call_binding_view.py', 'bounded_function_interfaces.py', 'source_call_view.py',
-            'retained_code_bodies.py', 'source_function_connections.py', 'call_inputs.py',
+            'source_effects.py', 'source_state.py',
+            'source_call_context_graph.py', 'function_interface_observations.py', 'source_call_view.py',
+            'source_function_connections.py', 'call_inputs.py',
             'source_call_captures.py', 'observed_source_catalog.py', 'lazy_compiled_interfaces.py',
             'reissue_observed_catalog.py', '../compiler/call_binding.py',
             '../compiler/graph_frontend.py', '../trace/call_binding.py',
@@ -281,7 +281,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         hardware = TargetHardwareGraph(target_path)
         hardware.resources(); hardware.connections(); hardware.paths()
         target_ref = _receipt(target_path / 'result.json')
-    from scar.analysis.build_f4 import discover,build_f4,CatalogHandoff
+    from scar.analysis.build_f4 import discover, build_f4, CatalogHandoff
     catalog_handoff=CatalogHandoff()
     f4=discover(entry,trace_path,catalog=catalog,cache_roots=cache_roots,
         catalog_handoff=catalog_handoff) if catalog or model is None else None

@@ -19,7 +19,7 @@ from scar.codegen.scalar_table_native import MAX_LIVE_KEYS
 from scar.compiler.scalar_table_region import _definition, _position, _span, seal_expression
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.runtime.scalar_table_contract import SCHEMA as REGION
-from scar.runtime.scalar_table_entry import _admitted
+from scar.runtime.scalar_table_contract import _admitted
 
 
 SCHEMA = 'scar.scalar-table-standalone'

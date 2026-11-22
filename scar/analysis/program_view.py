@@ -119,7 +119,7 @@ class SourceUnitProvider:
         self.check()
 
     def effects(self, point):
-        from scar.analysis.source_effect_projection import project_effects
+        from scar.analysis.source_effects import project_effects
         return project_effects(self, point)
 
     def check(self, point=None):

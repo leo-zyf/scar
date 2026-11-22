@@ -382,8 +382,8 @@ def connect_current_capture(composition, coordinates, trace_directory, out_dir, 
                             python_source_port_consumer=None, python_source_port_budget=None,
                             python_source_body_composition=None, python_source_inventory_artifact=None):
     """Open/verify current raw once, then privately share it across source/SBA."""
-    from scar.analysis.call_operand_reader import read_call_operands
-    from scar.analysis.call_operands import _link_call_operands_owned
+    from scar.analysis.call_trace_reader import read_call_operands
+    from scar.analysis.call_operand_routes import _link_call_operands_owned
     from scar.analysis.source_invocations import _bind_source_invocations_owned
     from scar.analysis.dispatch_sources import bind_dispatch_sources
     from scar.ir.program.call_edges import CallEdgeBudget

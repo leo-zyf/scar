@@ -187,7 +187,7 @@ def _native(context,directory,cases):
 
 
 def _llc(context):
-    from scar.optimization.deployment_cost import _fact
+    from scar.optimization.scope_accounting import _fact
     reference=context['hardware_context']['cpu_cache']['evidence'];caches,_=_fact(reference)
     cpus=set(context['worker_cpu_ids'])
     shared=[row for row in caches if row['type']=='Unified' and cpus<=set(row['shared_cpu_ids'])

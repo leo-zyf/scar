@@ -7,7 +7,7 @@ import sys
 import threading
 import types
 
-from scar.analysis.call_operand_reader import read_call_operands
+from scar.analysis.call_trace_reader import read_call_operands
 from scar.ir.program.call_operands import CALL_WINDOWS_RULE, LOAD_OCCURRENCES_RULE
 from scar.trace.call_edges import install as install_frames
 import scar.trace.call_operands as operand_module

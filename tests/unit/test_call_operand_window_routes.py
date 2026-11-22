@@ -11,10 +11,8 @@ from types import ModuleType
 import pytest
 
 from scar.analysis.call_edges import _link_call_model
-from scar.analysis.call_operand_reader import read_call_operands
-from scar.analysis.call_operand_routes import (
-    _Boundary, _instruction_plan, _load_window, build_operand_routes, query_operand_routes,
-)
+from scar.analysis.call_trace_reader import read_call_operands
+from scar.analysis.call_operand_routes import _Boundary, _instruction_plan, _load_window, build_operand_routes, query_operand_routes
 from scar.analysis.program_inventory import inventory_program
 from scar.ir.program.call_operands import (
     CALL_WINDOWS_RULE, LOAD_OCCURRENCES_RULE, OperandEventKind, OperandGap,

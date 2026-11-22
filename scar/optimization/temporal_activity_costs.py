@@ -22,7 +22,7 @@ from scar.optimization.resource_solver import semantic_sha256
 
 def _samples(reference, term, session):
     """Recompute statistics from retained primitive samples and original scopes."""
-    from scar.optimization.deployment_cost import _pointer
+    from scar.optimization.scope_accounting import _pointer
     source_key = semantic_sha256(reference['artifact'])
     key = (semantic_sha256(reference), term['key'])
     if key in session['statistics']:

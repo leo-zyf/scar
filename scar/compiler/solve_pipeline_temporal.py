@@ -277,7 +277,7 @@ def _resource_event_report(declaration, *, output=None, stored=None):
     from .project_pipeline_temporal import open_temporal_inputs
     from scar.analysis.replay_transaction import replay_transaction
     from scar.optimization.pipeline_implementation import build_pipeline_problem
-    from scar.optimization.pipeline_resource_event_domain import domain_cases, cost_context, case_cost, decide
+    from scar.optimization.pipeline_schedule import domain_cases, cost_context, case_cost, decide
 
     budget = declaration['search_budget_per_arena']
     if type(budget) is not int or budget < 1:

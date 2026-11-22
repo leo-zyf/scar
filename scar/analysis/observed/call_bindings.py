@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from scar.analysis.call_operand_reader import CallOperandTrace, read_call_operands
+from scar.analysis.call_trace_reader import CallOperandTrace, read_call_operands
 from scar.analysis.program_dependency_export import _Tables
 from scar.analysis.python_call_targets import read_python_call_targets
 from scar.analysis.static.calls import StaticCallBudget, StaticCallSession
@@ -119,7 +119,7 @@ def _json(value):
 
 def read_observed_call_bindings(document):
     """Strictly decode normalized DTOs; this does not replay original inputs."""
-    from scar.analysis.contextual_call_export import _MAX_BYTES, _Reader, _TABLES, _preflight
+    from scar.analysis.contextual_call_resolution import _MAX_BYTES, _Reader, _TABLES, _preflight
     from scar.ir.record_codec import loads as strict_loads
     if type(document) in (str, bytes):
         size = len(document.encode('utf-8')) if type(document) is str else len(document)

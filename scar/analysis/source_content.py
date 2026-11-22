@@ -56,7 +56,7 @@ class SourceContentProvider:
     def ensure_operation(self, operation):
         """Publish contents only after the operation's binding request exists."""
         from scar.analysis.source_content_interfaces import ContentInterfaceIndex
-        from scar.analysis.source_state import _AppendBuffer,_publish_edges
+        from scar.analysis.source_state import _AppendBuffer, _publish_edges
         point,context,step=self.bindings._operation_context(operation);identity=point.node
         self.bindings.ensure_operation(point,include_content=False)
         if identity in self.bindings._building or identity in self._building:return ()

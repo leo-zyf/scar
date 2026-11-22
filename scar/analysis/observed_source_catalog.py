@@ -242,7 +242,7 @@ class ObservedSourceCatalog(DeclaredSourceCatalog):
 
 def build_observed_catalog(base, trace, matches, out, *, project_root, material_roots=(), adapter_directory=None):
     from scar.analysis.compilation_audit import CompilationAuditInputs, SCHEMA as MATCH_SCHEMA
-    from scar.analysis.call_operand_reader import read_call_operands
+    from scar.analysis.call_trace_reader import read_call_operands
     from scar.analysis.source_symbol_context_adapter import DEFAULT
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
     from scar.analysis.compiled_local_interfaces import build_material_interfaces

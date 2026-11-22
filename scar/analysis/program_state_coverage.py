@@ -20,7 +20,7 @@ import time
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_declared_calls import _NoTargets,_check_targets
-from scar.analysis.state_materialization import local_read_tracks
+from scar.analysis.source_state import local_read_tracks
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
 from scar.artifacts import write_table
@@ -34,7 +34,7 @@ _WORKER=None
 
 
 def _pins():
-    from scar.analysis import state_materialization as source_local_state, program_view_storage, program_view
+    from scar.analysis import source_state as source_local_state, program_view_storage, program_view
     from scar import artifacts as artifact_io
     from scar.ir import record_codec
     return dict(inventory=sha256(Path(__file__).read_bytes()).hexdigest(),state=state_pins(),

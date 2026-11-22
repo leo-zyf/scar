@@ -10,7 +10,7 @@ from pathlib import Path
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.record_codec import encode
 from scar.optimization.cost_model import evaluate_sourced_affine
-from scar.optimization.deployment_cost import _digest, _fact, _number, _profile
+from scar.optimization.scope_accounting import _digest, _fact, _number, _profile
 from scar.optimization.macro_pass import COST_SCOPE, fusion_pass_cost_context
 
 
@@ -165,7 +165,7 @@ def predict_pipeline_forward_cost(region_document, blueprint, demand, coefficien
     root = Path(__file__).resolve().parents[1]
     implementations = {name:artifact_reference(root / name, 'scar.backend-implementation-source')
         for name in ('optimization/pipeline_forward_cost.py', 'optimization/pipeline_demand.py',
-                     'optimization/cost_model.py', 'optimization/deployment_cost.py',
+                     'optimization/cost_model.py', 'optimization/scope_accounting.py',
                      'optimization/macro_pass.py')}
     successor = ({'macro_preparation': deepcopy(demand['macro_preparation']),
         'candidate_binding': deepcopy(demand['candidate_binding'])} if 'candidate_binding' in demand else {})

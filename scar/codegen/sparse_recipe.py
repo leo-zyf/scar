@@ -8,7 +8,7 @@ import subprocess
 from scar.ir.execution_recipe import SCHEMA as RECIPE
 from scar.ir.execution_recipe import artifact_reference, read_artifact, write_recipe
 from scar.optimization.resource_solver import semantic_sha256
-from scar.optimization.sparse_solve_recipe import verify_sparse_solve_recipe
+from scar.optimization.sparse_solve_cost import verify_sparse_solve_recipe
 
 from . import sparse_lu as backend
 

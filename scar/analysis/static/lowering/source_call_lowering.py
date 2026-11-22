@@ -43,7 +43,7 @@ from pathlib import Path
 from scar.analysis.entry_call_dependence import _index, _path
 from scar.analysis.normal_graph import normal_edges
 from scar.analysis.program_view import ProgramView
-from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.analysis.call_inputs import call_operands
 from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings

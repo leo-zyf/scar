@@ -47,7 +47,7 @@ def _text(name, declarations):
 
 @pytest.mark.parametrize('family', ('source_events', 'bounds_and_detached'))
 def test_compiler_symbol_collect(family):
-    from scar.analysis.compiler_symbol_collect import collect_symbols, RAW_RULES
+    from scar.analysis.compiler_symbol_materials import collect_symbols, RAW_RULES
 
     def collect(inputs, limits=SymbolLimits()):
         raw = collect_symbols(*inputs, limits=limits)

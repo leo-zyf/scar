@@ -5,14 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 import re
 import json
-from scar.analysis.contextual_call_export import (
-    _MAX_BYTES,
-    _Reader,
-    _TABLES,
-    _array,
-    _object,
-    _preflight,
-)
+from scar.analysis.contextual_call_resolution import _MAX_BYTES, _Reader, _TABLES, _array, _object, _preflight
 from scar.analysis.observed.call_bindings import ObservedCallBinding
 from scar.analysis.observed.function_interfaces import ObservedFunctionInterface
 from scar.analysis.program_dependency_export import _Tables

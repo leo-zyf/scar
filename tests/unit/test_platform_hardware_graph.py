@@ -1,7 +1,7 @@
 """Hardware coverage must survive task limits and absent compute drivers."""
 import json
 
-from scar.analysis.build_target_resources import target_kind_role
+from scar.analysis.build_resources import target_kind_role
 from scar.analysis.target_graph import build_target_graph,TargetHardwareGraph
 from scar.ir.program import target_hardware as H
 from scar.ir.program.resources import ResourceRole

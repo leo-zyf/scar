@@ -829,7 +829,7 @@ def _inventory_from_inputs(entry, *, project_root, source_roots, budget, runtime
         discovery = _discover_sources_from_entries(entry, additional_entries=paths, **limits)
         runtime_builder = RuntimeScopeBuilder(runtime, seeds, max_compile_attempts)
     if interface_model or (runtime_builder is not None and global_expansion):
-        from scar.analysis.program_expansion import expand_inventory
+        from scar.analysis.program_regions import expand_inventory
         _check_context_budget(context_budget)
         files, expansion, measurements, interfaces, frames, structured = expand_inventory(discovery, runtime_builder, budget, context_budget,
                                             _ordered_files(discovery, runtime_paths=paths), interface_model=interface_model,

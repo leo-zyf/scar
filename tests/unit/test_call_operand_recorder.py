@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from scar.analysis.call_operand_reader import read_call_operands
+from scar.analysis.call_trace_reader import read_call_operands
 from scar.ir.program.call_operands import CallableKind
 from scar.trace.call_edges import install as install_frames
 from scar.trace.call_operands import install as install_operands

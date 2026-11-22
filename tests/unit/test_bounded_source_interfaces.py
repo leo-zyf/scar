@@ -90,8 +90,8 @@ def test_shared_callee_requires_exact_caller_frame_and_preserves_open_prefix():
 
 def test_retained_bounded_interfaces_are_balanced_conditional_source_routes(monkeypatch):
     from scar.analysis.program_view import ProgramView
-    from scar.analysis.source_call_binding_view import SourceCallBindingProvider
-    from scar.analysis.bounded_function_interfaces import BoundedFunctionInterfaceStore
+    from scar.analysis.source_call_context_graph import SourceCallBindingProvider
+    from scar.analysis.function_interface_observations import BoundedFunctionInterfaceStore
     from scar.analysis.source_call_view import Flow
     root=Path(__file__).resolve().parents[2]/'artifacts/current/experiments/cross-unit-composite-v1'
     raw=tuple(sorted((root/'call-bindings').glob('call-bindings.*.json')))

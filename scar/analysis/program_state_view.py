@@ -22,7 +22,7 @@ from scar.ir.record_codec import encode, decode
 
 
 def _pins():
-    from scar.analysis import source_state, source_effects, source_name_definitions
+    from scar.analysis import source_state as source_state, source_effects as source_effects, source_name_definitions
     from scar.analysis import source_stack_routes as source_name_access_anchors, source_value_flow, program_view
     from scar.analysis import source_namespace_contents as source_implicit_namespaces
     from scar.analysis import annotation_state as source_annotation_namespaces
@@ -218,7 +218,7 @@ def main():
         state=ProgramView(args.catalog).state(args.unit)
         if args.interfaces_only and args.slot:parser.error('--interfaces-only cannot select slots')
         if not args.slot and not args.interfaces_only:
-            from scar.analysis.state_materialization import track_local_reads
+            from scar.analysis.source_state import track_local_reads
             track_local_reads(state)
         for index in dict.fromkeys(args.slot):
             if not 0<=index<len(state.bindings.bindings):parser.error('slot is outside original C2 binding domain')

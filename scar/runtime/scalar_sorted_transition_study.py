@@ -21,7 +21,7 @@ from scar.runtime.csr_region_entry import _observer_active
 from scar.runtime.scalar_sorted_observe import _seal
 from scar.runtime.scalar_sorted_study import _MISSING, _Offer, _TypeBindings
 from scar.runtime.scalar_table_contract import OFFER, compile_original, replace_leaf
-from scar.runtime.scalar_table_entry import _run_main
+from scar.runtime.scalar_table_contract import _run_main
 from scar.runtime.sorted_study_epoch import load as load_epoch
 from scar.trace.code_snapshot import describe_code, site
 

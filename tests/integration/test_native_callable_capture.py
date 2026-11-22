@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.skipif(sys.implementation.name != 'cpython' or sys.version_info[:3] != (3, 14, 7),
     reason='the native probe uses the CPython 3.14.7 full ABI')
 def test_native_callable_capture_replay_and_shared_graph(tmp_path):
-    from scar.analysis.call_operand_reader import read_call_operands
+    from scar.analysis.call_trace_reader import read_call_operands
     from scar.analysis.native_callables import read_native_callables
     from scar.analysis.observed.dependency_export import (
         export_observed_dependencies,

@@ -12,7 +12,7 @@ from scar.analysis import scalar_recursive_region as recursive
 from scar.analysis import scalar_score_reuse_evidence as source
 from scar.analysis import scalar_table_handoff as tables
 from scar.analysis.replay_transaction import detached_replay
-from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
+from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.analysis.static.lowering.source_call_lowering import _body
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode

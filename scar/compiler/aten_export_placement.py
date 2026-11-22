@@ -359,7 +359,7 @@ def _from_cpu(cpu, cpu_sha256, profile, model_bytes, model_ref, *, empirical=Non
     if empirical is None:
         proposal, _ = propose_device_placement(projection, model, model_ref=model_ref)
     else:
-        from scar.compiler.native_device_placement_empirical import propose_empirical_device_placement
+        from scar.compiler.native_device_cost import propose_empirical_device_placement
 
         proposal = propose_empirical_device_placement(root, cpu_sha256, profile, projection, model, model_ref,
                                                        **empirical)

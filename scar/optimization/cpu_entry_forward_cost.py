@@ -6,7 +6,7 @@ import json
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.cpu_entry_resources import _ARRAY, _array_runtime
 from .cpu_entry_decision_ledger import verify_cpu_entry_decision_ledger
-from .deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 from .whole_entry_choice import LIFECYCLE_PHASES
 
 

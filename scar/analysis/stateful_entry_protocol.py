@@ -74,7 +74,7 @@ def _owner(source):
 
 def _implementations():
     from scar.codegen import stateful, cpp
-    from scar.compiler import stateful_runtime, export_stateful, stateful_model
+    from scar.compiler import stateful_runtime as stateful_runtime, stateful_runtime as export_stateful, stateful_model
     from scar.runtime import stateful_guard, stateful_contract
     from scar.trace import code_snapshot as code_snapshot
     from scar.optimization.selection import select_stateful_measured
@@ -118,7 +118,7 @@ def derive_stateful_entry_protocol(native_manifest, *, trial, exclusive_inputs, 
     """
     from scar.codegen import stateful
     from scar.compiler.stateful_model import stateful_from_dict, stateful_digest
-    from scar.compiler.export_stateful import project_stateful_contract, _replay_selection
+    from scar.compiler.stateful_runtime import project_stateful_contract, _replay_selection
     from scar.compiler.export_loop import _receipt
     _need(type(trial) is bool and type(exclusive_inputs) is bool, 'exact trial and exclusive_inputs booleans required')
     _need(selection is None or type(selection) is dict, 'selection must be the original optional factory dictionary')

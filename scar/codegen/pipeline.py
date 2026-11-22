@@ -160,7 +160,7 @@ def _admit_execution_schedule(pipeline, memory, operators, report):
     elif report.get('execution_family')==PARALLEL_FAMILY:
         from scar.optimization.pipeline_schedule import verify_pipeline_schedule as verify
     elif report.get('execution_family') in (SOLVER_ORDER_FAMILY, RESOURCE_EVENTS_FAMILY):
-        from scar.optimization.pipeline_execution_refinement import verify_pipeline_execution_refinement as verify
+        from scar.optimization.pipeline_strategy import verify_pipeline_execution_refinement as verify
     else:raise ValueError('unsupported explicit pipeline execution family')
     targets=set()
     for call,operator in zip(pipeline.calls,operators):

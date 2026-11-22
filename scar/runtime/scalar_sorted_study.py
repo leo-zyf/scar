@@ -20,7 +20,7 @@ from scar.optimization.scalar_score_ir import _int64, _require
 from scar.runtime.csr_region_entry import _observer_active
 from scar.runtime.entry_runner import run_original_script
 from scar.runtime.scalar_sorted_observe import _seal
-from scar.runtime.scalar_table_entry import _run_main
+from scar.runtime.scalar_table_contract import _run_main
 from scar.trace.code_snapshot import describe_code
 
 

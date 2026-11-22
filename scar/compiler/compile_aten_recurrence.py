@@ -17,9 +17,7 @@ from scar.codegen.native_project import build_native_project, write_native_proje
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_region_inputs import read_aten_region_inputs
 from scar.compiler.plan_aten_ready import read_ready_selection
-from scar.compiler.tensor_execution import (
-    calibrate_tensor_body, compare_native_projects, operation_costs, replay_recurrence_placement, scheduled_tensor_body,
-)
+from scar.compiler.tensor_planning_inputs import calibrate_tensor_body, compare_native_projects, operation_costs, replay_recurrence_placement, scheduled_tensor_body
 from scar.compiler.tensor_planning_inputs import tensor_physical_problem
 from scar.compiler.tensor_planning_inputs import recurrence_graph
 from scar.ir.execution_recipe import artifact_reference, read_artifact

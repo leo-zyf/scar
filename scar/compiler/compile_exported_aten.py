@@ -16,9 +16,7 @@ from scar.codegen.native_project import build_native_project, write_native_proje
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import SCHEMA as RECIPE, normalize_recipe
 from scar.compiler.plan_aten_native_graph import _host_tensor_budget
-from scar.compiler.tensor_execution import (
-    calibrate_tensor_body, compare_native_projects, operation_costs, replay_native_comparison, scheduled_tensor_body,
-)
+from scar.compiler.tensor_planning_inputs import calibrate_tensor_body, compare_native_projects, operation_costs, replay_native_comparison, scheduled_tensor_body
 from scar.compiler.tensor_planning_inputs import tensor_physical_problem
 from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.implementation_plan import problem_from_dict

@@ -233,7 +233,7 @@ def estimate_loop_recipe(value, worker_profile=None):
     elif layout is None:
         unresolved.append(dict(field='layout', reason='current temporal worker cost profile requires its exact SIMD layout'))
     else:
-        from .deployment_cost import _profile
+        from scar.optimization.scope_accounting import _profile
         from .loop_workers import predict_loop_worker_costs
         profile, _ = _profile(worker_profile)
         prediction = predict_loop_worker_costs(loop, strategy, plan, layout, profile)

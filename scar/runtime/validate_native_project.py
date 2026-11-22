@@ -11,9 +11,7 @@ from tempfile import TemporaryDirectory
 
 from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.tensor_execution import (
-    replay_native_comparison, replay_operation_costs, replay_recurrence_placement, scheduled_tensor_body,
-)
+from scar.compiler.tensor_planning_inputs import replay_native_comparison, replay_operation_costs, replay_recurrence_placement, scheduled_tensor_body
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 from scar.ir.v2.schemas import canonical_json

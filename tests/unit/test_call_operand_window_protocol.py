@@ -9,8 +9,8 @@ import sys
 
 import pytest
 
-import scar.analysis.call_operand_reader as reader
-from scar.analysis.call_operands import CallOperandReport, link_call_operands
+import scar.analysis.call_trace_reader as reader
+from scar.analysis.call_operand_routes import CallOperandReport, link_call_operands
 from scar.analysis.program_inventory import inventory_program
 from scar.ir.program.call_operands import (
     CALL_WINDOWS_RULE, LOAD_OCCURRENCES_RULE, OPERAND_CAPTURE_RULES,

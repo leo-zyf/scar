@@ -58,7 +58,7 @@ def _selected_members(root, manifest, mode):
 def _material(body, mode):
     from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
     from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
-    from scar.compiler.tensor_execution import scheduled_tensor_body
+    from scar.compiler.tensor_planning_inputs import scheduled_tensor_body
     from scar.runtime.validate_native_project import verify_native_project
 
     manifest = read_artifact(body)

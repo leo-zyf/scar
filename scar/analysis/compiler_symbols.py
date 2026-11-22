@@ -28,7 +28,7 @@ def _digest(document):
 
 @lru_cache(maxsize=1)
 def _catalog():
-    from scar.analysis.compiler_symbol_collect import RAW_RULES
+    from scar.analysis.compiler_symbol_materials import RAW_RULES
     from scar.analysis.compiler_symbol_solve import FACT_RULES, TRANSFORM_RULES, PROTOCOL_RULES
     topology, declarations = _topology_catalog(), _declaration_catalog()
     payload = dict(rule_version=_VERSION, topology_catalog_sha256=topology.content_sha256,
@@ -46,7 +46,7 @@ def compiler_symbol_catalog() -> dict:
 
 
 def _profile(native):
-    from scar.analysis import compiler_symbol_collect, compiler_symbol_solve, compiler_symbol_view
+    from scar.analysis import compiler_symbol_materials as compiler_symbol_collect, compiler_symbol_solve, compiler_symbol_view
     from scar.ir.program import compiler_symbols as symbol_ir
     catalog = _catalog()
     implementation = _digest({name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
@@ -98,7 +98,7 @@ def _project(solution, topology, declarations, native):
 
 
 def _derive(f0, f1, f2, f3b, c1, c2a, f3a, topology_document, limits):
-    from scar.analysis.compiler_symbol_collect import collect_symbols
+    from scar.analysis.compiler_symbol_materials import collect_symbols
     from scar.analysis.compiler_symbol_solve import solve_symbols
     # Both public parent readers remain strict. A future owner-bound validated
     # bundle can remove repeated work without accepting an external boolean.

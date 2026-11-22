@@ -548,7 +548,7 @@ def export_observed_function_interfaces(interfaces):
 
 def read_observed_function_interfaces(document):
     """Strong DTO readback only; no replay or execution of original inputs."""
-    from scar.analysis.contextual_call_export import _MAX_BYTES, _Reader, _TABLES, _preflight
+    from scar.analysis.contextual_call_resolution import _MAX_BYTES, _Reader, _TABLES, _preflight
     from scar.ir.record_codec import loads
     if type(document) in (str, bytes):
         if len(document.encode() if type(document) is str else document) > _MAX_BYTES:

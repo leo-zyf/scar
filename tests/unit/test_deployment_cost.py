@@ -7,7 +7,7 @@ import pytest
 
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
-from scar.optimization.deployment_cost import plan_deployment, verify_deployment_plan
+from scar.optimization.scope_accounting import plan_deployment, verify_deployment_plan
 
 
 def profile(tmp_path, name, boundary, mode, values, *, basis='OBSERVED', count=1):

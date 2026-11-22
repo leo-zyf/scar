@@ -14,7 +14,7 @@ from scar.compiler.cpu_entry_replay import _build_capacity_guard, _capacity_guar
 from scar.compiler.cpu_entry_replay_adapters import _match_json_report, array_tasks
 from scar.compiler.entry_delivery import _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.deployment_cost import _pointer
+from scar.optimization.scope_accounting import _pointer
 from scar.runtime.cpu_paired_runner import capacity_receipt
 
 

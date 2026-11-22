@@ -13,7 +13,7 @@ import math
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference,read_artifact
-from .deployment_cost import _fact
+from scar.optimization.scope_accounting import _fact
 from .resource_solver import semantic_sha256
 
 

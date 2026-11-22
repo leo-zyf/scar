@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib,json
 from pathlib import Path
-from scar.analysis.call_operand_reader import CallOperandTrace
+from scar.analysis.call_trace_reader import CallOperandTrace
 from scar.ir.program.python_call_targets import PythonCallTarget,PythonEntryBinding,PythonTargetGap,PythonTargetKind,PythonSourcePortBinding,PythonSourcePortIssue,ObservedPythonCallGraph,PythonSourcePortModel,read_target_record
 from scar.ir.program.call_edges import CallRecordAnchor, CallTraceFile
 from scar.ir.program.call_operands import CallableKind
@@ -117,7 +117,7 @@ def build_python_source_ports(*,trace,call_model,inventory,sources,inventory_art
     from bisect import bisect_left
     from collections import defaultdict
     from scar.analysis.source_call_bindings import _Session,_Boundary,_need,Issue
-    from scar.analysis.call_operand_routes import _Boundary as CoreBoundary,_has_index,_layout_matches,_span
+    from scar.analysis.call_operand_routes import _Boundary as CoreBoundary, _has_index, _layout_matches, _span
     from scar.analysis.function_binding import bind_call
     from scar.ir.program.python_call_targets import PythonSourcePortBinding,PythonSourcePortIssue,SourceReceiverPort
     from scar.ir.program.source_call_bindings import SourceArgumentPort,SourceBodyNamespace
