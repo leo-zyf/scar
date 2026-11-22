@@ -14,8 +14,8 @@ from pathlib import Path
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode
 from scar.ir.temporal_resources import ResourceProjection, projection_document
-from scar.ir.versioned_schedule import (VersionedTaskKind, TemporalDurationBasis,
-    TemporalOccupancyKind, schedule_document, validate_versioned_schedule)
+from scar.ir.versioned_schedule import (VersionedResourceSchedule, VersionedTaskKind, TemporalDurationBasis,
+    TemporalOccupancyKind, _encode_validated_schedule, validate_versioned_schedule)
 
 SCHEMA = 'scar.activity-cost-table'
 EFFECT_SCOPE = 'MODELED_EXISTING_CPU_SCHEDULE_ACTIVITIES_NOT_COMPLETE_CALL'
@@ -116,23 +116,43 @@ def activity_cost_from_dict(document):
 
 def validate_activity_cost_table(table, schedule, resource_projection):
     """Validate original group coverage; the producer owns source-fact replay."""
-    table = _typed(table)
+    return _validate_cost_table(table, _prepare_cost_table_inputs(schedule, resource_projection))
+
+
+@dataclass(frozen=True, slots=True)
+class _CostTableInputs:
+    schedule: VersionedResourceSchedule
+    resources: ResourceProjection
+    schedule_sha256: str
+    resources_sha256: str
+    activities: dict
+    tasks: dict
+
+
+def _prepare_cost_table_inputs(schedule, resources):
+    """Admit one schedule and projection for any related cost-table revisions."""
     validate_versioned_schedule(schedule)
-    _need(schedule.temporal is not None and type(resource_projection) is ResourceProjection,
+    _need(schedule.temporal is not None and type(resources) is ResourceProjection,
           'original temporal schedule and typed resource projection required')
-    digest = _digest(schedule_document(schedule))
-    _need(table.source_schedule_sha256 == digest == resource_projection.source_schedule_sha256
-          and table.resource_projection_sha256 == _digest(projection_document(resource_projection))
-          and table.target == resource_projection.target, 'cost table source/resource/target identity differs')
-    activities = {row.id: row for row in schedule.temporal.activities}
+    return _CostTableInputs(schedule, resources, _digest(_encode_validated_schedule(schedule)),
+        _digest(projection_document(resources)), {row.id: row for row in schedule.temporal.activities},
+        {row.id: row for row in schedule.tasks})
+
+
+def _validate_cost_table(table, inputs):
+    table = _typed(table)
+    schedule, resources = inputs.schedule, inputs.resources
+    _need(table.source_schedule_sha256 == inputs.schedule_sha256 == resources.source_schedule_sha256
+          and table.resource_projection_sha256 == inputs.resources_sha256
+          and table.target == resources.target, 'cost table source/resource/target identity differs')
+    activities, tasks = inputs.activities, inputs.tasks
     subjects, covered, charged = set(), set(), set()
     known = complete = empirical = markers = observed_scopes = 0
-    tasks = {row.id: row for row in schedule.tasks}
     for row in table.costs:
         _need(type(row.subject) is str and row.subject and row.subject not in subjects, 'unique original cost subject required')
         subjects.add(row.subject)
         _strings(row.activities, 'subject activity IDs', nonempty=True)
-        _need(set(row.activities) <= set(activities) and not covered.intersection(row.activities),
+        _need(set(row.activities) <= activities.keys() and not covered.intersection(row.activities),
               'parent/group/leaf must not double-charge original activities')
         _need(len({activities[key].scope for key in row.activities}) == 1, 'cost group must retain one original body scope')
         covered.update(row.activities)

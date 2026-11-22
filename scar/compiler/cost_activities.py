@@ -10,8 +10,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.temporal_resources import projection_from_dict
 from scar.optimization.schedule import schedule_from_dict
 from scar.optimization.resource_solver import semantic_sha256
-from scar.optimization.boundary_activity_costs import boundary_calibration_reference
-from scar.optimization.temporal_activity_costs import (project_stateful_activity_costs,
+from scar.optimization.temporal_activity_costs import (boundary_calibration_reference, project_stateful_activity_costs,
     project_unknown_activity_costs)
 
 SCHEMA = 'scar.activity-cost-preparation'

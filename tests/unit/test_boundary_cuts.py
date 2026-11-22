@@ -19,7 +19,7 @@ from scar.ir.execution_recipe import artifact_reference
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.temporal_resources import projection_document
 from scar.ir.versioned_schedule import schedule_document
-from scar.optimization.boundary_activity_costs import project_boundary_activity_costs
+from scar.optimization.temporal_activity_costs import project_boundary_activity_costs
 from scar.optimization.resource_solver import semantic_sha256
 
 
