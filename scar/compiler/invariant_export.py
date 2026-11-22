@@ -22,7 +22,6 @@ def export_temporal_invariant(native_directory,out,*,schedule_path,proof_referen
     from scar.ir.execution_recipe import read_artifact
     from scar.runtime.native_temporal_invariant import SCHEMA,ADMISSION,TRUST,validate_contract
     native_directory=Path(native_directory).resolve()
-    native_manifest=json.loads((native_directory/'artifact.json').read_bytes())
     read_artifact(proof_reference)
     proof,source_motion=read_invariant_loop_motion(proof_reference['uri'],catalog=catalog)
     raw_plan=json.loads((native_directory/'plan.json').read_bytes())
@@ -30,12 +29,8 @@ def export_temporal_invariant(native_directory,out,*,schedule_path,proof_referen
     if (motion_ref is None or source_motion['proof']!=proof_reference
             or semantic_sha256(read_artifact(motion_ref))!=semantic_sha256(source_motion)):
         raise ValueError('temporal export requires its compiled current source movement certificate')
-    parallel=native_manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
-    if parallel:
-        from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop as load_parallel_temporal_invariant_loop
-        artifact=load_parallel_temporal_invariant_loop(native_directory)
-    else:
-        artifact=load_temporal_invariant_loop(native_directory)
+    artifact=load_temporal_invariant_loop(native_directory)
+    parallel=artifact.report['schema']=='scar.native-parallel-temporal-invariant-loop'
     if semantic_sha256(asdict(proof))!=semantic_sha256(artifact.plan['loop_interface']['original_f4_proof']):
         raise ValueError('temporal export original F4 proof differs from compiled interface')
     consumed=artifact.plan.get('execution_movement_binding')
@@ -132,7 +127,7 @@ def export_temporal_invariant(native_directory,out,*,schedule_path,proof_referen
 def export_composite_temporal_invariant(native,out,*,schedule_path,proof_reference,catalog):
     from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop
     from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_motion,COMPOSITE_PROOF_SCHEMA
-    from scar.optimization.composite_invariant_schedule import verify_composite_invariant_loop_schedule
+    from scar.optimization.invariant_loop_schedule import verify_invariant_loop_schedule
     from scar.optimization.resource_solver import semantic_sha256
     from scar.ir.execution_recipe import read_artifact
     from scar.runtime.native_temporal_invariant import SCHEMA,ADMISSION,TRUST,validate_contract
@@ -140,18 +135,14 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
         raise ValueError('separate composite proof reference required; v1 cast is not admission')
     proof_document=read_artifact(proof_reference)
     proof,source_motion=read_composite_invariant_loop_motion(proof_reference['uri'],catalog=catalog)
-    native=Path(native).resolve();manifest=json.loads((native/'artifact.json').read_bytes())
+    native=Path(native).resolve()
     raw_plan=json.loads((native/'plan.json').read_bytes())
     motion_ref=raw_plan['loop_interface'].get('source_motion')
     if (motion_ref is None or source_motion['proof']!=proof_reference
             or semantic_sha256(read_artifact(motion_ref))!=semantic_sha256(source_motion)):
         raise ValueError('composite export requires its compiled current source movement certificate')
-    parallel=manifest.get('schema')=='scar.native-parallel-temporal-invariant-loop'
-    if parallel:
-        from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop as load_parallel_temporal_invariant_loop
-        artifact=load_parallel_temporal_invariant_loop(native)
-    else:
-        artifact=load_temporal_invariant_loop(native)
+    artifact=load_temporal_invariant_loop(native)
+    parallel=artifact.report['schema']=='scar.native-parallel-temporal-invariant-loop'
     interface=artifact.plan['loop_interface']
     consumed=artifact.plan.get('execution_movement_binding')
     if (consumed is None or interface.get('source_motion')!=motion_ref
@@ -169,13 +160,13 @@ def export_composite_temporal_invariant(native,out,*,schedule_path,proof_referen
     schema=schedule.get('schema')
     if schema=='scar.composite-invariant-loop-resource-plan':
         if parallel:raise ValueError('serial structural composite plan cannot authorize a parallel artifact')
-        verify_composite_invariant_loop_schedule(proof,schedule['target_path'],schedule,catalog=catalog)
+        verify_invariant_loop_schedule(proof,schedule['target_path'],schedule,catalog=catalog)
     elif schema in ('scar.parallel-composite-temporal-resource-plan','scar.cost-selected-composite-temporal-cpu-resource-plan'):
-        from scar.optimization.composite_temporal_cpu_choices import (
-            verify_composite_temporal_cpu_preview,verify_selected_composite_temporal_cpu_choice)
+        from scar.optimization.temporal_cpu_choices import (
+            verify_temporal_cpu_preview,verify_selected_temporal_cpu_choice)
         if not parallel:raise ValueError('parallel composite CPU choice requires the actual OpenMP artifact')
-        verifier=(verify_composite_temporal_cpu_preview if schema=='scar.parallel-composite-temporal-resource-plan'
-            else verify_selected_composite_temporal_cpu_choice)
+        verifier=(verify_temporal_cpu_preview if schema=='scar.parallel-composite-temporal-resource-plan'
+            else verify_selected_temporal_cpu_choice)
         verifier(proof,schedule['target_path'],schedule,catalog=catalog)
         scheduled=schedule['backend'];compiled=artifact.report['capability']
         if any(semantic_sha256(scheduled[key])!=semantic_sha256(compiled[key])

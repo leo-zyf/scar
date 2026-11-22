@@ -9,8 +9,7 @@ from dataclasses import asdict
 from copy import deepcopy
 
 from scar.compiler.invariant_loop import plan_invariant_loop
-from scar.compiler.loop_admission import validate_invariant_loop_proof
-from scar.ir.execution_recipe import artifact_reference
+from scar.compiler.loop_admission import InvariantLoopProof, validate_invariant_loop_proof
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode
 from scar.ir.versioned_schedule import (VersionedResourceSchedule, VersionedLogicalValue,
@@ -109,7 +108,42 @@ def _schedule(proof, placement, resources, snapshot, shape, steps, budget, selec
     return schedule_document(schedule)
 
 
-def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, memory_budget_bytes, cpu_threads=1):
+def _admit_proof(proof, catalog):
+    if type(proof) is InvariantLoopProof or catalog is None:
+        return validate_invariant_loop_proof(proof), False
+    from scar.compiler.pipeline_loop_frontend import validate_composite_invariant_loop_proof
+
+    return validate_composite_invariant_loop_proof(proof, catalog=catalog), True
+
+
+def _work_variants(nodes, cut, invariants, elements, steps, budget):
+    nbytes = 8 * elements
+    input_loads = sum(node['op'] == 'input' for node in nodes)
+    variants = [_work('KEEP_IN_BODY', _counts(nodes, elements, steps), elements * steps * input_loads,
+                      elements * steps, steps, 2 if steps else 0, nbytes)]
+    materialized, hoisted_loads = Counter(), 0
+    for region in cut['hoisted_regions']:
+        live = _live(region)
+        materialized.update(_counts(live, elements))
+        hoisted_loads += elements * sum(node['op'] == 'input' for node in live)
+    residual = _live(cut['residual_region'])
+    materialized.update(_counts(residual, elements, steps))
+    roots = len(cut['hoisted_roots'])
+    variants.append(_work('MATERIALIZE_INVARIANT', {op: materialized[op] if steps else 0 for op in _ARITHMETIC},
+                          hoisted_loads + elements * steps * sum(node['op'] == 'input' for node in residual) if steps else 0,
+                          elements * (roots + steps) if steps else 0,
+                          roots + steps if steps else 0, roots + 2 if steps else 0, nbytes))
+    register = {op: sum(elements * (1 if node['id'] in invariants else steps) for node in nodes if node['op'] == op)
+                if steps else 0 for op in _ARITHMETIC}
+    variants.append(_work('REGISTER_TEMPORAL_FUSION', register, elements * input_loads if steps else 0,
+                          elements if steps else 0, 1 if steps else 0, 1 if steps else 0, nbytes))
+    for variant in variants:
+        variant['budget_feasible'] = variant['incremental_array_payload_bytes'] <= budget
+    return variants
+
+
+def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, memory_budget_bytes,
+                                 cpu_threads=1, catalog=None):
     """Derive placement from a typed F4 proof and full retained hardware graph.
 
     ``input_shapes`` is keyed by original LEAF parameter names. The typed
@@ -118,7 +152,7 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
     The private-array budget excludes external inputs, stack and allocator
     metadata. Nonpositive counts preserve the original carry alias.
     """
-    proof=validate_invariant_loop_proof(proof)
+    proof, composite = _admit_proof(proof, catalog)
     if cpu_threads != 1 or type(cpu_threads) is not int:
         raise ValueError('current register-temporal lowering supports an explicit single CPU only')
     if type(trip_count) is not int or not -(2**63) <= trip_count < 2**63:
@@ -132,56 +166,51 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
         raise ValueError('positive rank-two exact input shapes required')
     shape=shapes[proof.carry_parameter]
     if any(value != shape for value in shapes.values()): raise ValueError('all original elementwise inputs require equal shapes')
-    interface=dict(carry_parameter=proof.carry_parameter,
-        readonly_parameters=[name for name in proof.body.parameters if name != proof.carry_parameter],
-        original_f4_proof=asdict(proof))
+    proof_data = asdict(proof)
+    interface = dict(carry_parameter=proof.carry_parameter,
+                     readonly_parameters=[name for name in proof.body.parameters if name != proof.carry_parameter])
+    if composite:
+        interface.update(original_composite_f4_proof=proof_data, runtime_global_routes_required=True)
+    else:
+        interface['original_f4_proof'] = proof_data
     cut=plan_invariant_loop(proof.body, carry_parameter=proof.carry_parameter, loop_interface=interface,
         memory_budget_bytes=memory_budget_bytes)
     motion=cut['motion_analysis']
-    if (motion['body_sha256'] != cut['body_sha256'] or
+    if not composite and (motion['body_sha256'] != cut['body_sha256'] or
             motion['loop_interface_sha256'] != semantic_sha256(interface) or
             motion['carry_parameter'] != proof.carry_parameter):
         raise ValueError('motion analysis must describe the original loop body and caller interface')
-    motion_sha256=semantic_sha256(motion)
     graph, snapshot, resources, connections=_target_materials(target)
     bindings=propose_cpu_allocations(graph, memory_budget_bytes=memory_budget_bytes, max_threads=1)
     if not bindings: raise ValueError('no retained CPU/host-memory allocation within current affinity')
     placement=min(bindings, key=lambda row:(row.cpu_ids, row.executor_id, row.memory_domain_id))
     validate_cpu_placement(placement)
     effective_budget=placement.memory_budget_bytes
-    body=asdict(proof.body); nodes=_live(body); elements=shape[0]*shape[1]; nbytes=8*elements; steps=max(trip_count, 0)
-    original=_counts(nodes, elements, steps)
-    input_loads=sum(node['op']=='input' for node in nodes)
-    variants=[_work('KEEP_IN_BODY', original, elements*steps*input_loads, elements*steps,
-        steps, 2 if steps else 0, nbytes)]
-    materialized=Counter(); hoisted_loads=0
-    for region in cut['hoisted_regions']:
-        live=_live(region); materialized.update(_counts(live, elements))
-        hoisted_loads+=elements*sum(node['op']=='input' for node in live)
-    residual=_live(cut['residual_region']); materialized.update(_counts(residual, elements, steps))
-    if not steps: materialized.clear(); hoisted_loads=0
-    variants.append(_work('MATERIALIZE_INVARIANT', {op:materialized[op] for op in _ARITHMETIC},
-        hoisted_loads+elements*steps*sum(node['op']=='input' for node in residual),
-        elements*(len(cut['hoisted_roots'])+steps) if steps else 0,
-        len(cut['hoisted_roots'])+steps if steps else 0, len(cut['hoisted_roots'])+2 if steps else 0, nbytes))
-    structural_invariants={node['id'] for node in nodes if node['op'] in _ARITHMETIC
-        and node['id'] in motion['invariant_nodes']}
-    invariants={key for key in structural_invariants
-        if motion['placements'][key]['status']=='CONDITIONAL'
-        and motion['placements'][key]['temporal_placement']=='PRE_TEMPORAL_LOOP'}
-    register={op:sum(elements*(1 if node['id'] in invariants else steps) for node in nodes if node['op']==op)
-        if steps else 0 for op in _ARITHMETIC}
-    variants.append(_work('REGISTER_TEMPORAL_FUSION', register, elements*input_loads if steps else 0,
-        elements if steps else 0, 1 if steps else 0, 1 if steps else 0, nbytes))
-    for variant in variants: variant['budget_feasible']=variant['incremental_array_payload_bytes'] <= effective_budget
+    nodes = _live(proof_data['body'])
+    elements, steps = shape[0] * shape[1], max(trip_count, 0)
+    nbytes = 8 * elements
+    arithmetic = [node['id'] for node in nodes if node['op'] in _ARITHMETIC]
+    if composite:
+        invariants = {name for name in arithmetic if proof.carry_parameter not in cut['dependencies'][name]}
+    else:
+        structural_invariants = [name for name in arithmetic if name in motion['invariant_nodes']]
+        invariants = {name for name in structural_invariants
+                      if motion['placements'][name]['status'] == 'CONDITIONAL'
+                      and motion['placements'][name]['temporal_placement'] == 'PRE_TEMPORAL_LOOP'}
+    variants = _work_variants(nodes, cut, invariants, elements, steps, effective_budget)
     winner=variants[-1]; dominance=[_dominance(winner, other) for other in variants[:-1]]
     selected=('NO_OP' if not steps else 'REGISTER_TEMPORAL_FUSION' if winner['budget_feasible']
         and all(row['weakly_dominates'] for row in dominance) else 'NO_OP')
     schedule=None
     if selected=='REGISTER_TEMPORAL_FUSION' or not steps:
         schedule=_schedule(proof, placement, resources, snapshot, shape, steps, effective_budget, selected, winner)
-    result=dict(schema='scar.invariant-loop-resource-plan', schema_version=1,
-        proof_id=proof.id, proof_sha256=semantic_sha256(asdict(proof)), body_sha256=cut['body_sha256'],
+        if composite:
+            schedule['proof'].update(source_proof_kind=proof.profile,
+                synthetic_body_is_original_callable=False, root_callee_source=asdict(proof.root_callee_source),
+                all_function_global_routes_required=True)
+    family = 'composite-invariant-loop-resource-plan' if composite else 'invariant-loop-resource-plan'
+    result=dict(schema='scar.' + family, schema_version=1,
+        proof_id=proof.id, proof_sha256=semantic_sha256(proof_data), body_sha256=cut['body_sha256'],
         target_snapshot=encode(snapshot), target_path=str(graph.path),
         all_resources=[encode(H.TargetResourceRef(snapshot, resource.id)) for resource in resources],
         hardware_connections_retained_count=len(connections),
@@ -195,33 +224,49 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
         placement_policy='LOWEST_CPU_ID_WITHIN_RETAINED_EXECUTOR_AND_CURRENT_PROCESS_AFFINITY',
         memory_policy='UNBOUND', numa_page_placement_proven=False,
         variants=variants, selected_kind=selected, dominance=dominance,
-        status='STRUCTURAL_RESOURCE_DOMINANCE_UNDER_GUARDS' if selected=='REGISTER_TEMPORAL_FUSION' else
+        status=('STRUCTURAL_COMPOSITE_RESOURCE_DOMINANCE_UNDER_GUARDS' if composite else
+            'STRUCTURAL_RESOURCE_DOMINANCE_UNDER_GUARDS') if selected=='REGISTER_TEMPORAL_FUSION' else
             'ORIGINAL_ZERO_TRIP_ALIAS' if not steps else 'INCREMENTAL_PAYLOAD_BUDGET_INFEASIBLE',
         profitability_status='UNPROVEN_NO_SOURCED_TIMING_MODEL', duration_seconds=None,
-        motion_analysis=deepcopy(motion), motion_analysis_sha256=motion_sha256,
-        conditional_legality=dict(status=motion['status'], motion_analysis_id=motion['id'],
-            motion_analysis_sha256=motion_sha256,
-            conditional_obligations=deepcopy(motion['conditional_obligations']),
-            obligations_discharged=False, source_loop_replacement_authorized=False),
-        structural_invariant_nodes=[node['id'] for node in nodes if node['id'] in structural_invariants],
         invariant_nodes=[node['id'] for node in nodes if node['id'] in invariants],
-        invariant_nodes_authority='CONDITIONAL_PRE_TEMPORAL_LOOP_PLACEMENTS_ONLY',
-        body_dependencies=deepcopy(motion['dependencies']), loop_unrolled=False, resource_schedule=schedule,
+        loop_unrolled=False, resource_schedule=schedule,
         required_contract=[*cut['Q'],'EXACT_C_CONTIGUOUS_INPUTS_AT_RUNTIME'], runtime_guards_required=True,
-        cost_authority='STATIC_ORIGINAL_EXPR_DEPENDENCIES_DECLARED_SHAPE_AND_TRIP_COUNT',
-        model_exclusions=['INPUT_FINITE_SCANS_AND_FP_GUARDS', 'DESCRIPTOR_ABI_AND_ALLOCATION_OVERHEAD',
-            'REGISTER_SPILLS_STACK_BYTES_AND_MACHINE_SIMD_INSTRUCTIONS', 'CACHE_NUMA_AND_SHARED_RESOURCE_CONTENTION'],
         original_f4_replay_required=True, source_loop_replacement_authorized=False,
         target_variants_executed=False, whole_program_makespan_optimized=False,
         physical_optimality_proven=False, selected_for_use=False)
-    result['id']='invariant-loop-resource-plan:'+semantic_sha256(result)
+    if composite:
+        result.update(body_identity=proof.body_identity, root_callee_source=asdict(proof.root_callee_source),
+            function_global_guards=[asdict(guard) for guard in proof.nested_callee_guards],
+            original_proof_fact_locators=[f'#/origins/{i}' for i, row in enumerate(proof.origins)
+                if row.get('role') in ('single_shared_invariant_loop', 'invariant_array_leaf_call', 'lexical_carry_write')],
+            comparison_scope='THREE_DERIVED_PLACEMENTS_OF_SAME_CERTIFIED_FUSED_SCALAR_DAG_NOT_PYTHON_TIME',
+            body_dependencies=cut['dependencies'], composition_replay_required=True,
+            cost_authority='ORIGINAL_F4_COMPOSITION_AND_DECLARED_SHAPE_TRIP_COUNT',
+            model_exclusions=['PYTHON_CALL_AND_GUARD_COST', 'REGISTER_SPILLS_STACK_AND_MACHINE_INSTRUCTIONS',
+                'FINITE_SCANS_AND_ALLOCATION_OVERHEAD', 'CACHE_NUMA_SHARED_CONTENTION'])
+        result['required_contract'].append('ALL_ORIGINAL_FUNCTION_GLOBAL_ROUTES_MATCH')
+    else:
+        motion_sha256 = semantic_sha256(motion)
+        result.update(motion_analysis=deepcopy(motion), motion_analysis_sha256=motion_sha256,
+            conditional_legality=dict(status=motion['status'], motion_analysis_id=motion['id'],
+                motion_analysis_sha256=motion_sha256,
+                conditional_obligations=deepcopy(motion['conditional_obligations']),
+                obligations_discharged=False, source_loop_replacement_authorized=False),
+            structural_invariant_nodes=structural_invariants,
+            invariant_nodes_authority='CONDITIONAL_PRE_TEMPORAL_LOOP_PLACEMENTS_ONLY',
+            body_dependencies=deepcopy(motion['dependencies']),
+            cost_authority='STATIC_ORIGINAL_EXPR_DEPENDENCIES_DECLARED_SHAPE_AND_TRIP_COUNT',
+            model_exclusions=['INPUT_FINITE_SCANS_AND_FP_GUARDS', 'DESCRIPTOR_ABI_AND_ALLOCATION_OVERHEAD',
+                'REGISTER_SPILLS_STACK_BYTES_AND_MACHINE_SIMD_INSTRUCTIONS', 'CACHE_NUMA_AND_SHARED_RESOURCE_CONTENTION'])
+    result['id'] = family + ':' + semantic_sha256(result)
     return result
 
 
-def verify_invariant_loop_schedule(proof, target, plan):
+def verify_invariant_loop_schedule(proof, target, plan, *, catalog=None):
     """Replay every source/hardware/count/budget choice; never run a target."""
     expected=plan_invariant_loop_schedule(proof, target, input_shapes=plan['input_shapes'],
-        trip_count=plan['trip_count'], memory_budget_bytes=plan['memory_budget_bytes'], cpu_threads=plan['cpu_threads'])
+        trip_count=plan['trip_count'], memory_budget_bytes=plan['memory_budget_bytes'], cpu_threads=plan['cpu_threads'],
+        catalog=catalog)
     if semantic_sha256(expected)!=semantic_sha256(plan):
         raise ValueError('invariant loop resource plan differs from original dependency/hardware replay')
     return deepcopy(expected)

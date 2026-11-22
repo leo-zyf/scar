@@ -433,38 +433,26 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
                      model=False, threads=None, max_threads=None, calibrations=(), original_cost=None):
     """Plan from an admitted loop proof and publish the selected resource contract."""
     target = Path(hardware['path']).parent
-    composite = catalog is not None
-    scope = {'catalog': catalog} if composite else {}
     arguments = dict(input_shapes=shapes, trip_count=count, memory_budget_bytes=budget)
     report = dict(physical_optimality_proven=False, performance_qualified=False)
     if model and threads is not None:
         raise ValueError('automatic loop cost selection and an explicit CPU preview are separate modes')
 
     if model or threads is not None:
-        if composite:
-            from scar.optimization.temporal_cpu_choices import (
-                build_composite_temporal_cpu_domain as build_domain,
-                preview_composite_temporal_cpu_choice as preview,
-                verify_composite_temporal_cpu_preview as verify_preview,
-                plan_selected_composite_temporal_cpu_choice as select,
-                verify_selected_composite_temporal_cpu_choice as verify_selection,
-            )
-        else:
-            from scar.optimization.temporal_cpu_choices import (
-                build_temporal_cpu_domain as build_domain,
-                preview_temporal_cpu_choice as preview,
-                verify_temporal_cpu_preview as verify_preview,
-                plan_selected_temporal_cpu_choice as select,
-                verify_selected_temporal_cpu_choice as verify_selection,
-            )
-        domain = build_domain(proof, target, **scope, **arguments,
+        from scar.optimization.temporal_cpu_choices import (
+            build_temporal_cpu_domain, plan_selected_temporal_cpu_choice, preview_temporal_cpu_choice,
+            verify_selected_temporal_cpu_choice, verify_temporal_cpu_preview,
+        )
+
+        domain = build_temporal_cpu_domain(proof, target, **arguments, catalog=catalog,
                               max_threads=max_threads if model else threads)
+        composite = domain.get('proof_kind') == 'COMPOSITE'
         report['cpu_domain'] = publish_plan(directory / 'cpu-domain.json', domain)
         if composite:
             report['guard_profile'] = publish_plan(directory / 'guard-profile.json', domain['guard_profile'])
         if model:
             facts, report['cost_inputs'] = project_loop_calibrations(domain, calibrations, directory / 'resource-facts')
-            selection = select(domain, resource_facts=facts, no_op_profile=original_cost)
+            selection = plan_selected_temporal_cpu_choice(domain, resource_facts=facts, no_op_profile=original_cost)
             choice, schedule = selection['choice'], selection['schedule']
             report.update(
                 cpu_choice=publish_plan(directory / 'cpu-choice.json', choice),
@@ -479,27 +467,18 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
                 report.update(selected_kind='NO_OP', cost_status=choice['status'],
                               reason='complete forward cost domain or profitable model winner unavailable')
                 return report
-            verify_selection(proof, target, schedule, **scope)
+            verify_selected_temporal_cpu_choice(proof, target, schedule, catalog=catalog)
         else:
-            schedule = preview(domain, cpu_threads=threads)
-            verify_preview(proof, target, schedule, **scope)
+            schedule = preview_temporal_cpu_choice(domain, cpu_threads=threads)
+            verify_temporal_cpu_preview(proof, target, schedule, catalog=catalog)
             report['selection_scope'] = ('EXPLICIT_COMPOSITE_CPU_TEAM_PREVIEW_UNRANKED' if composite
                                          else 'EXPLICIT_CPU_TEAM_PREVIEW_UNRANKED')
     else:
-        if composite:
-            from scar.optimization.composite_invariant_schedule import (
-                plan_composite_invariant_loop_schedule as plan_schedule,
-                verify_composite_invariant_loop_schedule as verify_schedule,
-            )
-        else:
-            from scar.optimization.invariant_loop_schedule import (
-                plan_invariant_loop_schedule as plan_schedule,
-                verify_invariant_loop_schedule as verify_schedule,
-            )
-        schedule = plan_schedule(proof, target, **scope, **arguments)
-        verify_schedule(proof, target, schedule, **scope)
-        report['selection_scope'] = (schedule['comparison_scope'] if composite
-                                     else 'STRUCTURAL_LOGICAL_WORK_AND_RESOURCE_MODEL')
+        from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule, verify_invariant_loop_schedule
+
+        schedule = plan_invariant_loop_schedule(proof, target, **arguments, catalog=catalog)
+        verify_invariant_loop_schedule(proof, target, schedule, catalog=catalog)
+        report['selection_scope'] = schedule.get('comparison_scope', 'STRUCTURAL_LOGICAL_WORK_AND_RESOURCE_MODEL')
 
     snapshot = schedule['target_snapshot']
     if (snapshot['uri'], snapshot['sha256'], snapshot['size_bytes']) != (

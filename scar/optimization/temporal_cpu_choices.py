@@ -14,13 +14,13 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
-from scar.compiler.loop_admission import validate_invariant_loop_proof
 from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode
 from scar.optimization.scope_accounting import _fact, _profile
 from scar.optimization.hardware import _target_materials, propose_cpu_allocations, validate_cpu_placement
+from scar.optimization.invariant_loop_schedule import _admit_proof, _schedule
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.resource_solver import semantic_sha256
 from scar.runtime.compiled_deployment import thread_environment
@@ -28,6 +28,13 @@ from scar.runtime.compiled_deployment import thread_environment
 _PARTITION='CONTIGUOUS_ROWS_FIRST_REMAINDER_EXPLICIT_V1'
 _OPS=('add','sub','mul','div','neg')
 _SCOPE='ONE_GUARDED_ORIGINAL_LOOP_CALL_DISPATCH_THROUGH_RETURN_ARGUMENT_EXPRESSIONS_ALREADY_EVALUATED'
+_PLAN_TYPES = {
+    (False, False): ('scar.parallel-temporal-invariant-loop-resource-plan', 'parallel-temporal-resource-plan'),
+    (False, True): ('scar.cost-selected-temporal-cpu-resource-plan', 'cost-selected-temporal-resource-plan'),
+    (True, False): ('scar.parallel-composite-temporal-resource-plan', 'parallel-composite-temporal-resource-plan'),
+    (True, True): ('scar.cost-selected-composite-temporal-cpu-resource-plan',
+                   'cost-selected-composite-temporal-resource-plan'),
+}
 
 
 def temporal_primitive_families():
@@ -102,12 +109,71 @@ def _anonymous_body(source_body,carry_parameter,budget):
         carry_argument_index=body.parameters.index(carry_parameter),source_ids_are_not_primitive_keys=True)
 
 
-def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budget_bytes,max_threads=None):
+def _composite_guard_profile(proof):
+    """Retain runtime-check geometry and the original source-unit partition."""
+    sources, functions, function_index, source_index, edges, slots = [], [], {}, {}, {}, {}
+
+    def function(source):
+        key = (source.path, source.code_key)
+        if source.path not in source_index:
+            source_index[source.path] = len(sources)
+            sources.append(Path(source.path).stat().st_size)
+        if key not in function_index:
+            function_index[key] = len(functions)
+            functions.append(dict(source_index=source_index[source.path], namespace=source_index[source.path]))
+        return function_index[key]
+
+    def slot(owner, name, target):
+        key = (functions[owner]['namespace'], name)
+        index = slots.setdefault(key, len(slots))
+        prior = edges.setdefault(index, dict(slot=index, namespace=key[0], target=target))
+        if prior['target'] != target:
+            raise ValueError('inconsistent original namespace target in composite route')
+        return index
+
+    original, root = function(proof.source), function(proof.root_callee_source)
+    for guard in proof.nested_callee_guards:
+        function(guard.owner_source)
+        function(guard.target_source)
+    by_path = {tuple(guard.global_path): guard for guard in proof.nested_callee_guards}
+    root_slot, routes = slot(original, proof.root_global_name, root), []
+    for guard in proof.nested_callee_guards:
+        path, owner = [], original
+        for length, name in enumerate(guard.global_path, 1):
+            prefix = by_path.get(tuple(guard.global_path[:length]))
+            if prefix is None:
+                raise ValueError('missing original prefix route')
+            actual_owner, target = function(prefix.owner_source), function(prefix.target_source)
+            if owner != actual_owner:
+                raise ValueError('original composite owner differs from preceding target')
+            path.append(slot(owner, name, target))
+            owner = target
+        routes.append(dict(path_slots=path, owner=function(guard.owner_source),
+                           target=function(guard.target_source), lookup_slot=path[-1]))
+    return dict(schema='scar.composite-temporal-guard-profile', schema_version=1,
+                source_byte_lengths=sources, functions=functions, global_slots=list(edges.values()),
+                original_function=original, root_function=root, root_slot=root_slot, routes=routes,
+                namespace_partition_basis='DEFINING_SOURCE_UNIT_DECLARED_CANONICAL_MODEL',
+                code_key_cache='WARM_IDENTITY_CACHE', source_reads_per_call=len(sources),
+                source_contents_or_names_in_profile=False, source_layout_is_target_program=False)
+
+
+def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budget_bytes,max_threads=None,catalog=None):
     """Enumerate representative physical-core/SMT masks; never compile a target."""
-    proof=validate_invariant_loop_proof(proof)
-    return _build_temporal_body_cpu_domain(proof.body,proof.carry_parameter,target,
+    proof,composite=_admit_proof(proof,catalog)
+    domain=_build_temporal_body_cpu_domain(proof.body,proof.carry_parameter,target,
         proof_id=proof.id,proof_sha256=semantic_sha256(asdict(proof)),input_shapes=input_shapes,
         trip_count=trip_count,memory_budget_bytes=memory_budget_bytes,max_threads=max_threads)
+    if composite:
+        domain.update(schema='scar.composite-temporal-cpu-domain',proof_kind='COMPOSITE',
+            original_proof_profile=proof.profile,body_identity=proof.body_identity,
+            original_source=asdict(proof.source),root_callee_source=asdict(proof.root_callee_source),
+            root_global_name=proof.root_global_name,function_global_guards=[asdict(g) for g in proof.nested_callee_guards],
+            guard_profile=_composite_guard_profile(proof),composite_f4_and_fusion_replay_required=True)
+        domain['runtime_guards'].append('ORIGINAL_COMPOSITE_FUNCTION_GLOBAL_ROUTES_CODE_DEFAULTS_AND_SOURCE_BYTES_MATCH')
+        domain.pop('id')
+        domain['id']='composite-temporal-cpu-domain:'+semantic_sha256(domain)
+    return domain
 
 
 def _build_temporal_body_cpu_domain(source_body,carry_parameter,target,*,proof_id,proof_sha256,
@@ -206,9 +272,9 @@ def _build_temporal_body_cpu_domain(source_body,carry_parameter,target,*,proof_i
     return result
 
 
-def verify_temporal_cpu_domain(proof,target,domain):
+def verify_temporal_cpu_domain(proof,target,domain,*,catalog=None):
     expected=build_temporal_cpu_domain(proof,target,input_shapes=domain['input_shapes'],trip_count=domain['trip_count'],
-        memory_budget_bytes=domain['memory_budget_bytes'],max_threads=domain['max_threads'])
+        memory_budget_bytes=domain['memory_budget_bytes'],max_threads=domain['max_threads'],catalog=catalog)
     if semantic_sha256(expected)!=semantic_sha256(domain):raise ValueError('temporal CPU domain differs from original proof/hardware/capability replay')
     return expected
 
@@ -344,14 +410,13 @@ def preview_temporal_cpu_choice(domain,*,cpu_threads):
     matches=[row for row in domain['candidates'] if row['cpu_threads']==cpu_threads and row['legal_under_guards']]
     if not matches:raise ValueError('requested worker count has no legal hardware-derived placement')
     row=min(matches,key=lambda value:(value['resource_binding']['cpu_ids'],value['resource_binding']['executor_id']))
-    return _candidate_temporal_cpu_plan(domain,row)
+    return _finish_plan(_candidate_temporal_cpu_plan(domain,row),domain,selected=False)
 
 
 def _candidate_temporal_cpu_plan(domain,row):
     """Lower the exact candidate row, without reselecting by worker count."""
     cpu_threads=row['cpu_threads']
     from scar.compiler.model import CpuPlacement,SourceRef
-    from scar.optimization.invariant_loop_schedule import _schedule
     graph,snapshot,resources,connections=_target_materials(domain['target_path'])
     if encode(snapshot)!=domain['target_snapshot']:raise ValueError('temporal preview target snapshot changed')
     binding=dict(row['resource_binding']);binding['cpu_ids']=tuple(binding['cpu_ids']);binding['evidence']=tuple(binding['evidence'])
@@ -375,7 +440,7 @@ def _candidate_temporal_cpu_plan(domain,row):
             cpu_threads=cpu_threads,row_partition=domain['backend']['row_partition'])
     from scar.ir.versioned_schedule import schedule_from_dict
     schedule_from_dict(schedule)
-    plan=dict(schema='scar.parallel-temporal-invariant-loop-resource-plan',schema_version=1,
+    return dict(schema_version=1,
         domain_id=domain['id'],domain_max_threads=domain['max_threads'],candidate_id=row['id'],
         proof_id=domain['proof_id'],proof_sha256=domain['proof_sha256'],body_sha256=domain['body_sha256'],
         selected_kind='REGISTER_TEMPORAL_FUSION',status='EXPLICIT_CPU_TEAM_PREVIEW_UNDER_GUARDS',
@@ -392,13 +457,27 @@ def _candidate_temporal_cpu_plan(domain,row):
         cost_status='UNKNOWN',profitability_status='UNPROVEN_NO_SOURCED_TIMING_MODEL',duration_seconds=None,loop_unrolled=False,
         source_loop_replacement_authorized=False,runtime_guards_required=True,
         performance_qualified=False,physical_optimality_proven=False,selected_for_use=False)
-    plan['id']='parallel-temporal-resource-plan:'+semantic_sha256(plan)
+
+
+def _finish_plan(plan,domain,*,selected):
+    composite=domain.get('proof_kind')=='COMPOSITE'
+    if composite:
+        plan.update({key: domain[key] for key in (
+            'proof_kind','original_proof_profile','body_identity','original_source','root_callee_source',
+            'root_global_name','function_global_guards','guard_profile','composite_f4_and_fusion_replay_required',
+        )})
+    plan['schema'], prefix = _PLAN_TYPES[composite,selected]
+    plan['id']=prefix+':'+semantic_sha256(plan)
     return plan
 
 
-def verify_temporal_cpu_preview(proof,target,plan):
-    domain=build_temporal_cpu_domain(proof,target,input_shapes=plan['input_shapes'],trip_count=plan['trip_count'],
-        memory_budget_bytes=plan['memory_budget_bytes'],max_threads=plan['domain_max_threads'])
+def _domain_for_plan(proof,target,plan,catalog):
+    return build_temporal_cpu_domain(proof,target,input_shapes=plan['input_shapes'],trip_count=plan['trip_count'],
+        memory_budget_bytes=plan['memory_budget_bytes'],max_threads=plan['domain_max_threads'],catalog=catalog)
+
+
+def verify_temporal_cpu_preview(proof,target,plan,*,catalog=None):
+    domain=_domain_for_plan(proof,target,plan,catalog)
     expected=preview_temporal_cpu_choice(domain,cpu_threads=plan['cpu_threads'])
     if semantic_sha256(expected)!=semantic_sha256(plan):raise ValueError('parallel temporal preview differs from original proof/hardware/backend replay')
     return expected
@@ -427,39 +506,28 @@ def plan_selected_temporal_cpu_choice(domain,*,resource_facts=(),no_op_profile=N
     if source['kind']!='PATH':raise ValueError('selected resource plan requires retained original cost profile')
     original=artifact_reference(source['path'],document['schema']);read_artifact(original)
     selected_cost=next(value['model']['duration_ns'] for value in choice['variants'] if value['id']==row['id'])
-    plan.update(schema='scar.cost-selected-temporal-cpu-resource-plan',
-        status='COMPLETE_SOURCED_MODEL_SELECTED_IMPLEMENTATION_UNDER_GUARDS',
+    plan.update(status='COMPLETE_SOURCED_MODEL_SELECTED_IMPLEMENTATION_UNDER_GUARDS',
         resource_facts=references,no_op_profile=original,choice=choice,
         selection_authority='COMPLETE_SOURCED_FORWARD_MODEL_OVER_EXPLICIT_CPU_MASK_DOMAIN',
         cost_status='KNOWN_FORWARD_MODEL',resource_cost_basis='DECLARED_COMPONENT_MODEL',
         predicted_complete_call_ns=selected_cost,original_complete_call_ns=choice['original_no_op']['duration_ns'],
         complete_call_cost_scope=_SCOPE,complete_call_cost_basis='DECLARED_COMPONENT_MODEL',
         full_entry_performance_qualified=False,fresh_process_scope_measured=False)
-    plan.pop('id');plan['id']='cost-selected-temporal-resource-plan:'+semantic_sha256(plan)
-    result['schedule']=plan
+    result['schedule']=_finish_plan(plan,domain,selected=True)
     return result
 
 
-def verify_selected_temporal_cpu_choice(proof,target,plan):
+def verify_selected_temporal_cpu_choice(proof,target,plan,*,catalog=None):
     """Rebuild the original domain, re-read all facts, and recompute the winner."""
-    if (plan.get('schema'),plan.get('schema_version'))!=('scar.cost-selected-temporal-cpu-resource-plan',1):
+    schemas={_PLAN_TYPES[composite,True][0] for composite in (False,True)}
+    if plan.get('schema') not in schemas or plan.get('schema_version')!=1:
         raise ValueError('versioned cost-selected temporal resource plan required')
     references=plan['resource_facts'];original=plan['no_op_profile']
     for reference in (*references,original):read_artifact(reference)
-    domain=build_temporal_cpu_domain(proof,target,input_shapes=plan['input_shapes'],trip_count=plan['trip_count'],
-        memory_budget_bytes=plan['memory_budget_bytes'],max_threads=plan['domain_max_threads'])
+    domain=_domain_for_plan(proof,target,plan,catalog)
     result=plan_selected_temporal_cpu_choice(domain,resource_facts=[reference['uri'] for reference in references],
         no_op_profile=original['uri'])
     expected=result['schedule']
     if expected is None or semantic_sha256(expected)!=semantic_sha256(plan):
         raise ValueError('cost-selected temporal schedule differs from original full-domain cost/hardware replay')
     return expected
-
-
-def __getattr__(name):
-    if name in ('build_composite_temporal_cpu_domain','verify_composite_temporal_cpu_domain',
-            'preview_composite_temporal_cpu_choice','verify_composite_temporal_cpu_preview',
-            'plan_selected_composite_temporal_cpu_choice','verify_selected_composite_temporal_cpu_choice'):
-        from scar.optimization import composite_temporal_cpu_choices
-        return getattr(composite_temporal_cpu_choices,name)
-    raise AttributeError(name)
