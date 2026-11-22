@@ -84,12 +84,21 @@ def _legacy_reference(receipt, schema):
 
 
 def verify_source_lock(request):
+    from scar.analysis.replay_transaction import current_transaction
+
     root = Path(request['source_root'])
+    transaction = current_transaction()
     for name, expected in request['source_lock']['files'].items():
         relative = Path(name)
         source = (root / relative).resolve(strict=True)
         if relative.is_absolute() or not source.is_relative_to(root):
             raise ValueError(f'source path outside of root: {name}')
+        if transaction is not None:
+            try:
+                transaction.watch(source, expected['sha256'], expected['size_bytes'])
+            except ValueError as error:
+                raise ValueError(f'locked source differs: {name}') from error
+            continue
         actual = file_reference(source, 'scar.native-source')
         if any(actual[key] != expected[key] for key in ('sha256', 'size_bytes')):
             raise ValueError(f'locked source differs: {name}')

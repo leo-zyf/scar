@@ -7,6 +7,13 @@ import subprocess
 import sys
 
 
+def _publish_result(directory, result):
+    from scar.artifacts import _durable_bytes
+
+    payload = json.dumps(result, indent=2, ensure_ascii=False).encode('utf-8') + b'\n'
+    _durable_bytes(directory / 'result.json', payload, replace=False)
+
+
 def _graph_report(graph):
     facts = graph.report
     incomplete = any(facts[key] for key in ('frontiers', 'frontend_frontiers', 'excluded_control'))
@@ -40,7 +47,7 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
 
         with replay_transaction():
             _compile_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
-    (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+    _publish_result(out, result)
     return result
 
 
@@ -82,6 +89,7 @@ def _plan_graph(graph, out, result, *, repetitions, case_seconds):
         layers[layer] = 'OBSERVED'
         layer = 'schedule'
         schedule = schedule_native(revision, observation, request['cases'], out)
+        verify_source_lock(request)
         retained_plan = publish_plan(out / 'compiler-plan.json', schedule.document())
         result.update(artifacts=dict(schedule.artifacts, compiler_plan=retained_plan), cost_decision=schedule.decision,
                       planning_scope=schedule.scope)
@@ -122,16 +130,18 @@ def _compile_graph(graph, out, result, *, repetitions, case_seconds):
 
 def plan_native_graph(directory, out, *, repetitions, case_seconds):
     """Schedule a retained native graph without repeating frontend capture."""
+    from scar.analysis.replay_transaction import replay_transaction
     from .contracts import GraphBundle
 
     graph = GraphBundle.read_native(directory)
     result = _graph_report(graph)
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    schedule, _ = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+    with replay_transaction():
+        schedule, _ = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
     if schedule is not None:
         result['status'] = 'PLAN_SCHEDULED'
-    (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+    _publish_result(out, result)
     return result
 
 
@@ -183,7 +193,7 @@ def compile_saved_plan(path, out, *, repetitions, case_seconds):
     result = dict(schema='scar.compiler-replay', schema_version=1, artifacts=artifacts,
                   executable=project.receipt, cpus=project.delivery['cpus'], validation=rows,
                   delivery='COMPARED' if all(row['matches'] for row in rows) else 'MISMATCH')
-    (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+    _publish_result(out, result)
     return result
 
 
