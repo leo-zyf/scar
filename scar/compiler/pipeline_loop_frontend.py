@@ -11,10 +11,9 @@ from pathlib import Path
 import json
 
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRejected,
-    _source_identity, _metadata, _reject, _origin, _ENV, _WORLD)
+    _discovery_for, _metadata, _reject, _origin, _ENV, _WORLD)
 from scar.compiler.loop_admission import _InvariantLoopLowerer, _PendingLeafResult
 from scar.compiler.loop_admission import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
@@ -194,13 +193,14 @@ def _component(pipeline,by_code):
     return _Component(prepare_pipeline_leaf(optimize_region(merged)),tuple(guards),tuple(steps),merged)
 
 
-def discover_pipeline_invariant_loops(catalog,source=None):
+def discover_pipeline_invariant_loops(catalog,source=None,*,_discovery=None):
     """Resolve admitted ordinary module/from-import functions to one fixed point.
 
     The source argument filters returned loop owners, not their imported
     dependencies. Every dependency provider must already exist in the catalog.
     """
-    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
+    discovery = _discovery_for(catalog, _discovery)
+    view, resolver = discovery.view, discovery.resolver
     roots=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not roots:return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
@@ -209,16 +209,16 @@ def discover_pipeline_invariant_loops(catalog,source=None):
     paths=sorted({store.model_units[unit].get('path',store.rows[unit]['path']) for unit in units})
     leaves = []
     for path in paths:
-        found, _ = discover_graph_regions(view, path)
+        found, _ = discover_graph_regions(view, path, _discovery=discovery)
         leaves.extend(found)
     leaf_plans = _prepare_leaf_plans(leaves, units)
-    pipelines, _ = _pipelines_from_leaf_plans(view, units, leaf_plans)
+    pipelines, _ = _pipelines_from_leaf_plans(discovery, units, leaf_plans)
     pipeline_by_unit = {_source_occurrence(pipeline.source): pipeline for pipeline in pipelines}
-    result=[];rejections=[];resolver=BodyInterfaceResolver(view);originals={};metadata={}
+    result=[];rejections=[];originals={};metadata={}
     for unit in units:
         original=view.unit(unit);originals[unit]=original
         resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in original.facts.functions)
-        try:metadata[unit]=_source_identity(view.catalog,unit)
+        try:metadata[unit]=discovery.identity(unit)
         except (ValueError,KeyError,SyntaxError,OSError) as error:
             rejections.append(dict(unit=unit,code='COMPOSITE_SOURCE_IDENTITY',detail=str(error)))
     components={};by_code={};last={};pending=[]

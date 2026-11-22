@@ -21,7 +21,7 @@ from scar.compiler.graph_frontend import (
     _Slice,
     _OPS,
     _metadata,
-    _source_identity,
+    _discovery_for,
     GraphRegionRejected,
 )
 from scar.compiler.loop_admission import (
@@ -50,7 +50,6 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
-from scar.analysis.program_view import ProgramView
 from scar.ir.program.normal_graph import Body
 from scar.trace.code_snapshot import code_key
 
@@ -755,15 +754,16 @@ class _KindConstraintLowerer(_StateLowerer):
         return super().numeric(value, array=array)
 
 
-def discover_stateful_regions(catalog, source=None):
-    view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
+def discover_stateful_regions(catalog, source=None, *, _discovery=None):
+    discovery = _discovery_for(catalog, _discovery)
+    view, resolver = discovery.view, discovery.resolver
     units = tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not units: return [], [dict(path=str(Path(source).absolute()), code='SOURCE_NOT_IN_CATALOG')]
-    result, rejected, resolver = [], [], BodyInterfaceResolver(view)
+    result, rejected = [], []
     for unit in units:
         original = view.unit(unit); functions = original.facts.functions
         resolver.prepare_many(Body(unit, fn.template, fn.body) for fn in functions)
-        model, syntax, codes, recipe, digest = _source_identity(view.catalog, unit)
+        model, syntax, codes, recipe, digest = discovery.identity(unit)
         metadata, leaves = {}, {}
         for ordinal, function in enumerate(functions):
             name, span, lines = _metadata(syntax, function.template.occurrence)

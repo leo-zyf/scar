@@ -204,6 +204,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.analysis.build import BuildSession,_check
     from scar.analysis.build_admission import publish_build_admission
     from scar.analysis.build_f4 import _validate_catalog_parents
+    from scar.compiler.graph_frontend import RegionDiscovery
     from scar.compiler.stateful_loop_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
     from scar.compiler.loop_admission import discover_invariant_loops, write_invariant_loop_proof
@@ -228,9 +229,15 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         target=manifest['target']
         _check(target)
         hardware=Path(graph.hardware.uri).parent
-        # Reuse this session's catalog and original shared function bodies.
         sources=_planning_sources(session.view.catalog,source_filter)
-        regions,rejected=discover_stateful_regions(session.view,source=source_filter)
+        # Complete region admission before building per-region hardware domains.
+        discovery = RegionDiscovery(session.view)
+        regions,rejected=discover_stateful_regions(session.view,source=source_filter,_discovery=discovery)
+        invariant_proofs,invariant_rejected=discover_invariant_loops(session.view,source=source_filter,_discovery=discovery)
+        composite_proofs,composite_rejected=discover_pipeline_invariant_loops(
+            session.view, source=source_filter, _discovery=discovery)
+        discovery.validate()
+        del discovery
         out.mkdir(parents=True)
         source_admission=publish_build_admission(session,out/'source-admission.json',source_filter=source_filter)
         entry_obligations=None
@@ -272,7 +279,6 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
         # hardware snapshot. The body is stored once inside its proof artifact;
         # later cost/lowering passes refer to that body instead of re-extracting
         # a disconnected array DAG or copying it per hardware configuration.
-        invariant_proofs,invariant_rejected=discover_invariant_loops(session.view,source=source_filter)
         invariant_rows=[]
         for index,proof in enumerate(invariant_proofs):
             folder=out/('invariant-loop-'+str(index));folder.mkdir()
@@ -286,7 +292,6 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
                 loop_link_frontier=frontier,iterations_unrolled=False,
                 original_f4_replay_required_for_lowering=True,
                 source_replacement_authorized=False,selected_for_use=False,lowering_authorized=False))
-        composite_proofs,composite_rejected=discover_pipeline_invariant_loops(session.view,source=source_filter)
         composite_rows=[]
         for index,proof in enumerate(composite_proofs):
             folder=out/('composite-loop-'+str(index));folder.mkdir()

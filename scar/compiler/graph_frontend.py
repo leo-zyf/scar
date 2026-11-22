@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from hashlib import sha256
+import json
 import math
 from pathlib import Path
 from types import CodeType
@@ -17,6 +18,7 @@ from types import SimpleNamespace
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_guards import PRESERVE, OMIT_PROVEN_DEBUG, SourceAssertions, AssertionEffectUnproven, validate_assertion_policy
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
+from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_references import source_port, ReferenceSlicer
 from scar.analysis.static.query import _Fragments
@@ -453,6 +455,69 @@ def _source_identity(catalog, unit):
     return model, syntax, objects, recipe, sha256(raw).hexdigest()
 
 
+class RegionDiscovery:
+    """One caller-owned admission of retained source and F4 body interfaces."""
+
+    def __init__(self, catalog):
+        self.view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
+        self.resolver = BodyInterfaceResolver(self.view)
+        self._identities = {}
+        self._regions = {}
+
+    def _identity_receipt(self, unit):
+        catalog = self.view.catalog
+        store = catalog.fact_store
+        model = store.model_units[unit]
+        root = Path(store.model_for(unit))
+        fragments = []
+        for name in ('source_bytes', 'source_syntax'):
+            descriptor = model['artifacts'][name]
+            path = root / descriptor['path']
+            if path.resolve() != path:
+                raise ValueError('source identity fragment traverses a symlink')
+            fragments.append((path, _stamp(path), json.dumps(descriptor, sort_keys=True)))
+        profile = getattr(catalog, 'replay_profiles', {}).get(unit)
+        return model['path'], tuple(fragments), json.dumps(profile, sort_keys=True)
+
+    def identity(self, unit):
+        receipt = self._identity_receipt(unit)
+        if unit in self._identities:
+            original, identity = self._identities[unit]
+            if receipt != original:
+                raise ValueError('admitted source identity changed during discovery')
+            return identity
+        identity = _source_identity(self.view.catalog, unit)
+        if receipt != self._identity_receipt(unit):
+            raise ValueError('retained source identity changed during admission')
+        self._identities[unit] = receipt, identity
+        return identity
+
+    def regions(self, unit, assertion_policy):
+        key = unit, assertion_policy
+        if key in self._regions:
+            self.view.unit(unit).check()
+            self.identity(unit)
+            return self._regions[key]
+        result = _project_graph_regions(self, unit, assertion_policy)
+        if unit in self._identities:
+            self._regions[key] = result
+        return result
+
+    def validate(self):
+        """Confirm every shared unit still has its original retained inputs."""
+        for unit in self._identities:
+            self.view.unit(unit).check()
+            self.identity(unit)
+
+
+def _discovery_for(catalog, discovery):
+    if discovery is None:
+        return RegionDiscovery(catalog)
+    if not isinstance(discovery, RegionDiscovery) or discovery.view is not catalog:
+        raise ValueError('source discovery requires the original ProgramView')
+    return discovery
+
+
 def _metadata(syntax, occurrence):
     row = syntax.nodes[occurrence]
     schema = next(schema for schema in syntax.profile.ast_schema if schema.name == row.constructor)
@@ -474,55 +539,63 @@ def _metadata_span(syntax, occurrence):
     return {'line': attrs['lineno'].scalar.to_python()}
 
 
-def discover_graph_regions(catalog, source=None, *, assertion_policy=PRESERVE) -> tuple[list[ArrayRegion], list[dict]]:
+def discover_graph_regions(catalog, source=None, *, assertion_policy=PRESERVE, _discovery=None) -> tuple[list[ArrayRegion], list[dict]]:
     """Lower requested admitted source bodies; retain every original ID in origins."""
     validate_assertion_policy(assertion_policy)
-    view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
-    catalog = view.catalog
+    discovery = _discovery_for(catalog, _discovery)
+    catalog = discovery.view.catalog
     units = (tuple(catalog.fact_store.rows) if source is None else
         tuple(sorted(catalog.units_for_source(str(Path(source).absolute())) or ())))
     regions, rejected = [], []
     if source is not None and not units:
         return regions, [dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG',
             reason='SOURCE_NOT_IN_CATALOG',detail='source has no admitted units in this catalog')]
-    resolver = BodyInterfaceResolver(view)
     for unit in units:
-        source_view = view.unit(unit); functions = source_view.facts.functions
-        resolver.prepare_many(Body(unit, function.template, function.body) for function in functions)
+        found, failures = discovery.regions(unit, assertion_policy)
+        regions.extend(found)
+        rejected.extend(failures)
+    return regions, rejected
+
+
+def _project_graph_regions(discovery, unit, assertion_policy):
+    source_view = discovery.view.unit(unit)
+    functions = source_view.facts.functions
+    resolver = discovery.resolver
+    resolver.prepare_many(Body(unit, function.template, function.body) for function in functions)
+    try:
+        model, syntax, codes, recipe, raw_digest = discovery.identity(unit)
+    except (ValueError, KeyError, SyntaxError, OSError) as error:
+        return [], [dict(unit=unit, code='SOURCE_IDENTITY_UNAVAILABLE', detail=str(error))]
+    assertions = SourceAssertions(syntax) if assertion_policy == OMIT_PROVEN_DEBUG else None
+    regions, rejected = [], []
+    for ordinal, function in enumerate(functions):
+        name, span, lines = _metadata(syntax, function.template.occurrence)
+        candidates = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
+            and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount] == function.parameter_names]
+        base = dict(unit=unit, function=ordinal, template=encode(function.template),
+            region=function.body.wire, path=model['path'], sha256=raw_digest, **span)
         try:
-            model, syntax, codes, recipe, raw_digest = _source_identity(catalog, unit)
-        except (ValueError, KeyError, SyntaxError, OSError) as error:
-            rejected.append(dict(unit=unit, code='SOURCE_IDENTITY_UNAVAILABLE', detail=str(error)))
-            continue
-        assertions = SourceAssertions(syntax) if assertion_policy == OMIT_PROVEN_DEBUG else None
-        for ordinal, function in enumerate(functions):
-            name, span, lines = _metadata(syntax, function.template.occurrence)
-            candidates = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
-                and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount] == function.parameter_names]
-            base = dict(unit=unit, function=ordinal, template=encode(function.template),
-                region=function.body.wire, path=model['path'], sha256=raw_digest, **span)
-            try:
-                if len(candidates) != 1:
-                    _reject('CODE_IDENTITY_UNAVAILABLE', 'original function has no unique complete code identity')
-                code = candidates[0]
-                lowerer = _GraphLowerer(source_view, function, resolver, syntax=syntax, source_assertions=assertions)
-                nodes, output, origins = lowerer.lower()
-                key = code_key(code)
-                identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
-                    semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS', unit=unit,
-                    f0_sha256=model['artifacts']['source_bytes']['decoded_sha256'],
-                    f2_sha256=model['artifacts']['source_syntax']['decoded_sha256'],
-                    occurrence=function.template.occurrence, span=span, recipe=recipe, code_key=key)
-                reference = SourceRef(model['path'], raw_digest,
-                    code.co_qualname, span['line'], span['column'], key, (identity, *origins))
-                region_id = 'graph-array-region:'+sha256((unit+'\0'+function.body.wire+'\0'+key).encode()).hexdigest()[:24]
-                region = ArrayRegion(region_id, reference, function.parameter_names, nodes, output)
-                if any(node.op == 'copy' for node in nodes):
-                    region = replace(region, assumptions=tuple(dict.fromkeys((*region.assumptions, *COPY_REQUIRED_GUARDS))))
-                regions.append(region)
-            except GraphRegionRejected as error:
-                rejected.append(dict(base, qualname=candidates[0].co_qualname if len(candidates)==1 else name,
-                    code=error.code, reason=error.code, detail=error.detail, origin=error.origin))
+            if len(candidates) != 1:
+                _reject('CODE_IDENTITY_UNAVAILABLE', 'original function has no unique complete code identity')
+            code = candidates[0]
+            lowerer = _GraphLowerer(source_view, function, resolver, syntax=syntax, source_assertions=assertions)
+            nodes, output, origins = lowerer.lower()
+            key = code_key(code)
+            identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
+                semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS', unit=unit,
+                f0_sha256=model['artifacts']['source_bytes']['decoded_sha256'],
+                f2_sha256=model['artifacts']['source_syntax']['decoded_sha256'],
+                occurrence=function.template.occurrence, span=span, recipe=recipe, code_key=key)
+            reference = SourceRef(model['path'], raw_digest,
+                code.co_qualname, span['line'], span['column'], key, (identity, *origins))
+            region_id = 'graph-array-region:'+sha256((unit+'\0'+function.body.wire+'\0'+key).encode()).hexdigest()[:24]
+            region = ArrayRegion(region_id, reference, function.parameter_names, nodes, output)
+            if any(node.op == 'copy' for node in nodes):
+                region = replace(region, assumptions=tuple(dict.fromkeys((*region.assumptions, *COPY_REQUIRED_GUARDS))))
+            regions.append(region)
+        except GraphRegionRejected as error:
+            rejected.append(dict(base, qualname=candidates[0].co_qualname if len(candidates)==1 else name,
+                code=error.code, reason=error.code, detail=error.detail, origin=error.origin))
     return regions, rejected
 
 

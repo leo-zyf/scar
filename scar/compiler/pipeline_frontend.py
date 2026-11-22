@@ -4,8 +4,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, asdict, replace
 from hashlib import sha256
 from pathlib import Path
-from scar.analysis.program_view import ProgramView
-from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_namespace_contents import NamespaceReferenceResolver
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (
@@ -14,7 +12,7 @@ from scar.compiler.graph_frontend import (
     GraphRegionRejected,
     _reject,
     _origin,
-    _source_identity,
+    _discovery_for,
     _metadata,
     _WORLD,
     _ENV,
@@ -483,23 +481,25 @@ def _prepare_leaf_plans(leaves, units):
     return {site: prepare_pipeline_leaf(optimize_region(region)) for site, region in regions.items()}
 
 
-def discover_graph_pipelines(catalog,source=None):
+def discover_graph_pipelines(catalog,source=None,*,_discovery=None):
     """Return automatically routed pipelines plus explicit profile rejections."""
-    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
+    discovery = _discovery_for(catalog, _discovery)
+    view = discovery.view
     units=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not units:
         return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
-    leaves, _ = discover_graph_regions(view, source)
-    return _pipelines_from_leaf_plans(view, units, _prepare_leaf_plans(leaves, units))
+    leaves, _ = discover_graph_regions(view, source, _discovery=discovery)
+    return _pipelines_from_leaf_plans(discovery, units, _prepare_leaf_plans(leaves, units))
 
 
-def _pipelines_from_leaf_plans(view, units, plans):
-    result=[];rejected=[];resolver=BodyInterfaceResolver(view)
+def _pipelines_from_leaf_plans(discovery, units, plans):
+    view, resolver = discovery.view, discovery.resolver
+    result, rejected = [], []
     for unit in units:
         original=view.unit(unit);functions=original.facts.functions
         resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in functions)
-        try:model,syntax,codes,recipe,digest=_source_identity(view.catalog,unit)
+        try:model,syntax,codes,recipe,digest=discovery.identity(unit)
         except (ValueError,KeyError,SyntaxError,OSError) as error:
             rejected.append(dict(unit=unit,code='PIPELINE_SOURCE_IDENTITY_UNAVAILABLE',detail=str(error)));continue
         local_plans={fn.template:plans[unit,fn.template.occurrence] for fn in functions

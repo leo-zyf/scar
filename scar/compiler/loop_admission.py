@@ -22,16 +22,16 @@ from scar.compiler.pipeline_frontend import (
     pipeline_from_dict,
     _global_functions,
     _Callee,
+    _source_occurrence,
     discover_graph_pipelines,
 )
 from scar.compiler.model import validate_plan
 from collections import Counter
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (
     discover_graph_regions,
-    _source_identity,
+    _discovery_for,
     _metadata,
     _origin,
     GraphRegionRejected,
@@ -435,19 +435,18 @@ class _LoopLowerer(_GraphLowerer):
 
 
 def discover_graph_loops(catalog,source=None):
-    view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
-    pipelines,_=discover_graph_pipelines(view,source);bodies={}
-    for body in pipelines:
-        identity=next(row for row in body.source.origins if row.get('kind')=='source_identity')
-        bodies[identity['unit'],identity['occurrence']]=body
+    discovery = _discovery_for(catalog, None)
+    view, resolver = discovery.view, discovery.resolver
+    pipelines, _ = discover_graph_pipelines(view, source, _discovery=discovery)
+    bodies = {_source_occurrence(body.source): body for body in pipelines}
     units=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not units:return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
-    loops=[];rejected=[];resolver=BodyInterfaceResolver(view)
+    loops, rejected = [], []
     for unit in units:
         original=view.unit(unit);functions=original.facts.functions
         resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in functions)
-        model,syntax,codes,recipe,digest=_source_identity(view.catalog,unit)
+        model,syntax,codes,recipe,digest=discovery.identity(unit)
         selected={fn.template:bodies[unit,fn.template.occurrence] for fn in functions if (unit,fn.template.occurrence) in bodies}
         globals=_global_functions(original.facts,selected)
         for ordinal,function in enumerate(functions):
@@ -648,22 +647,21 @@ class _InvariantLoopLowerer(_LoopLowerer):
         return body, body.parameters[self.carry_formal_index], function.parameter_names[trip], mapping, self.selected_body.name, tuple(self.origins)
 
 
-def discover_invariant_loops(catalog, source=None):
+def discover_invariant_loops(catalog, source=None, *, _discovery=None):
     """Discover original module-level range/carry/leaf bindings without execution."""
-    view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
-    leaves, _ = discover_graph_regions(view, source); by_source = {}
-    for leaf in leaves:
-        identity = next(row for row in leaf.source.origins if row.get('kind') == 'source_identity')
-        by_source[identity['unit'], identity['occurrence']] = leaf
+    discovery = _discovery_for(catalog, _discovery)
+    view, resolver = discovery.view, discovery.resolver
+    leaves, _ = discover_graph_regions(view, source, _discovery=discovery)
+    by_source = {_source_occurrence(leaf.source): leaf for leaf in leaves}
     units = tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not units:
         return [], [dict(path=str(Path(source).absolute()), code='SOURCE_NOT_IN_CATALOG')]
-    loops = []; rejected = []; resolver = BodyInterfaceResolver(view)
+    loops, rejected = [], []
     for unit in units:
         original = view.unit(unit); functions = original.facts.functions
         resolver.prepare_many(Body(unit, fn.template, fn.body) for fn in functions)
-        try: model, syntax, codes, recipe, digest = _source_identity(view.catalog, unit)
+        try: model, syntax, codes, recipe, digest = discovery.identity(unit)
         except (ValueError, KeyError, SyntaxError, OSError) as error:
             rejected.append(dict(unit=unit, code='INVARIANT_LOOP_SOURCE_IDENTITY', detail=str(error))); continue
         selected = {fn.template:by_source[unit, fn.template.occurrence] for fn in functions
