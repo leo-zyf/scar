@@ -23,11 +23,6 @@ def _loop(value):
     return read_loop(value) if isinstance(value, (str, Path)) else validate_loop(value)
 
 
-def _body_plan(loop, budget):
-    # Raw certificate and optimized execution plan are distinct authorities.
-    return _fusion(loop.body, budget)
-
-
 def plan_loop_strategy(loop, *, input_shapes, trip_count, memory_budget_bytes,
                        search_budget=100000, backend_support=_CAPABILITY):
     """Plan a single carry's per-element temporal loop, never a partial fallback.
@@ -37,6 +32,14 @@ def plan_loop_strategy(loop, *, input_shapes, trip_count, memory_budget_bytes,
     statically established loop count. Nonpositive counts retain original input
     alias semantics through NO_OP. The body must preserve the carry shape.
     """
+    report, _ = plan_loop_strategy_with_body(loop, input_shapes=input_shapes, trip_count=trip_count,
+        memory_budget_bytes=memory_budget_bytes, search_budget=search_budget, backend_support=backend_support)
+    return report
+
+
+def plan_loop_strategy_with_body(loop, *, input_shapes, trip_count, memory_budget_bytes,
+                                search_budget=100000, backend_support=_CAPABILITY):
+    """Construct the strategy and its selected body in one pass."""
     loop = _loop(loop)
     frontier = []
     supplied = dict(input_shapes) if isinstance(input_shapes, Mapping) else {loop.state_parameter: input_shapes}
@@ -71,7 +74,7 @@ def plan_loop_strategy(loop, *, input_shapes, trip_count, memory_budget_bytes,
     raw, certificate, plan = None, None, None
     shape_rows = []
     try:
-        raw, certificate, plan = _body_plan(loop, memory_budget_bytes)
+        raw, certificate, plan = _fusion(loop.body, memory_budget_bytes)
         if raw is not None:
             shape_rows, issues = _shape_replay(loop.body, raw, plan, certificate, memory)
             frontier.extend(dict(field='body.' + row['field'], reason=row['reason']) for row in issues)
@@ -103,7 +106,7 @@ def plan_loop_strategy(loop, *, input_shapes, trip_count, memory_budget_bytes,
             budget_scope=memory['budget_scope'], budget_excludes=memory['budget_excludes'],
             physical_optimality_proven=False, duration_predicted=False)
     positive_count = exact_count and 0 < trip_count <= 2**63 - 1
-    return dict(
+    report = dict(
         schema='scar.loop-strategy-plan', schema_version=1, loop_id=loop.id, loop_sha256=loop_digest(loop),
         body_pipeline_sha256=pipeline_digest(loop.body), capability=_CAPABILITY, backend_support=backend_support,
         parameters=list(loop.parameters), state_parameter=loop.state_parameter,
@@ -153,32 +156,35 @@ def plan_loop_strategy(loop, *, input_shapes, trip_count, memory_budget_bytes,
         original_python_no_op=dict(available=True, nonpositive_count_retains_original_alias=True),
         physical_optimality_proven=False, duration_predicted=False, dram_traffic_predicted=False,
         placement_optimized=False, target_variants_executed=False, deployment_authorized=False)
+    return report, plan if selected else None
 
 
-def verify_loop_strategy(loop, strategy):
+def replay_loop_strategy(loop, strategy):
     """Pure source/body/shape/control/budget replay, with no target execution."""
     value = loads(Path(strategy).read_bytes()) if isinstance(strategy, (str, Path)) else deepcopy(strategy)
     if (value.get('schema'), value.get('schema_version')) != ('scar.loop-strategy-plan', 1):
         raise ValueError('versioned loop strategy required')
     shapes = dict(value['input_shapes'])
     shapes.update({key: None for key in value['input_shape_frontier_parameters']})
-    expected = plan_loop_strategy(loop, input_shapes=shapes, trip_count=value['trip_count'],
+    expected, plan = plan_loop_strategy_with_body(loop, input_shapes=shapes, trip_count=value['trip_count'],
         memory_budget_bytes=value['memory_budget_bytes'], search_budget=value['search_budget'],
         backend_support=value['backend_support'])
     if semantic_sha256(expected) != semantic_sha256(value):
         raise ValueError('loop strategy differs from complete source/body/control replay')
-    return value
+    return value, plan
+
+
+def verify_loop_strategy(loop, strategy):
+    return replay_loop_strategy(loop, strategy)[0]
 
 
 def loop_execution_plan(loop, strategy):
     """Return exact shared body P; a temporal backend must supply the real loop."""
-    loop = _loop(loop); report = verify_loop_strategy(loop, strategy)
+    report, plan = replay_loop_strategy(loop, strategy)
     if report['selected_strategy'] != 'TEMPORAL_FUSION':
         raise ValueError('exact temporal fusion is not the selected strategy')
-    _, _, plan = _body_plan(loop, report['memory_budget_bytes'])
-    if plan is None or semantic_sha256(plan_document(plan)) != report['loop_execution_plan_sha256']:
-        raise ValueError('shared loop body execution-plan receipt differs')
     return plan
 
 
-__all__ = ['plan_loop_strategy', 'verify_loop_strategy', 'loop_execution_plan']
+__all__ = ['plan_loop_strategy', 'plan_loop_strategy_with_body', 'replay_loop_strategy',
+           'verify_loop_strategy', 'loop_execution_plan']

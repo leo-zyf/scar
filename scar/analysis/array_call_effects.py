@@ -15,7 +15,7 @@ from scar.compiler.model import validate_region, validate_plan
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.graph import value_kinds
 from scar.optimization.optimizer import optimize_region, _RUNTIME_GUARDS, _EXTERNAL_ASSUMPTIONS
-from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion, fusion_region_digest
+from scar.optimization.pipeline_fusion import fusion_region_digest, replay_pipeline_fusion
 from scar.optimization.resource_solver import semantic_sha256
 
 
@@ -152,8 +152,7 @@ class _Composition:
                     'FRESH_LEAF_OUTPUTS','NO_INPUT_WRITES'}
                 if not required<=set(pipeline.assumptions):
                     raise ValueError('original closed pipeline boundary contracts are missing: '+str(sorted(required-set(pipeline.assumptions))))
-                body, _ = fuse_pipeline_region(pipeline)
-                verify_pipeline_fusion(pipeline,body,composition.fusion_certificate)
+                body = replay_pipeline_fusion(pipeline, composition.fusion_certificate)
                 if body is None:
                     raise ValueError('composition fusion profile has explicit unresolved frontiers')
             except (ValueError,TypeError,KeyError) as error:

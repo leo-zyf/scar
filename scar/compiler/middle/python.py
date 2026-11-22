@@ -11,10 +11,165 @@ from pathlib import Path
 import time
 
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
-from scar.ir.execution_recipe import read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 
 from ..contracts import GraphBundle, ScheduledArrayLoop, ScheduledLoop
-from .plan import plan_array_loop, plan_loop_region, publish_plan
+from .plan import publish_plan
+
+
+def project_loop_calibrations(domain, calibrations, out):
+    from scar.compiler.calibrate_temporal_cpu import project_temporal_resource_fact_batch
+
+    out = Path(out).resolve()
+    if out.exists():
+        raise ValueError('fresh loop cost input publication required')
+    out.mkdir(parents=True)
+    facts, sources, batches, skipped, materials = [], [], [], [], []
+    composite = domain['schema'] == 'scar.composite-temporal-cpu-domain'
+    for value in calibrations:
+        path = Path(value).resolve()
+        if path.is_dir():
+            path = path / 'result.json'
+        reference, document = open_artifact(path)
+        sources.append(reference)
+        materials.append((path, document, reference))
+    base_calibrations = [path for path, document, _ in materials
+                         if document.get('schema') == 'scar.temporal-cpu-resource-calibration']
+    for index, (path, document, reference) in enumerate(materials):
+        schema = document['schema']
+        folder = out / f'calibration-{index}'
+        if schema == 'scar.temporal-resource-calibration':
+            facts.append(path)
+            continue
+        if schema == 'scar.temporal-cpu-resource-calibration':
+            batch = project_temporal_resource_fact_batch(domain, path, folder)
+        elif schema == 'scar.composite-temporal-boundary-calibration':
+            if not composite:
+                skipped.append(dict(calibration=reference, reason='COMPOSITE_BOUNDARY_INAPPLICABLE_TO_DIRECT_LOOP'))
+                continue
+            from scar.compiler.calibrate_temporal_cpu import project_composite_boundary_facts
+
+            batch = project_composite_boundary_facts(domain, path, folder,
+                                                     base_calibrations=base_calibrations)
+        else:
+            raise ValueError(f'independent supported loop resource calibration required: {schema}')
+        facts.extend(Path(row['observations']['uri']) for row in batch['candidates'])
+        batches.append(artifact_reference(folder / 'result.json', batch['schema']))
+    for reference in sources:
+        read_artifact(reference, json_document=False)
+    report = dict(schema='scar.loop-cost-inputs', schema_version=1, domain_id=domain['id'],
+                  calibrations=sources, batches=batches, skipped=skipped,
+                  facts=[artifact_reference(path, 'scar.temporal-resource-calibration') for path in facts],
+                  source_independent_projections=True, target_program_executed=False)
+    return facts, publish_plan(out / 'result.json', report)
+
+
+def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catalog=None,
+                     model=False, threads=None, max_threads=None, calibrations=(), original_cost=None):
+    """Publish the schedule constructed from the admitted proof and target.
+
+    The standalone export replays schedules from persisted evidence.
+    """
+    target = Path(hardware['path']).parent
+    arguments = dict(input_shapes=shapes, trip_count=count, memory_budget_bytes=budget)
+    report = dict(physical_optimality_proven=False, performance_qualified=False)
+    if model and threads is not None:
+        raise ValueError('automatic loop cost selection and an explicit CPU preview are separate modes')
+
+    if model or threads is not None:
+        from scar.optimization.temporal_cpu_choices import (
+            build_temporal_cpu_domain, plan_selected_temporal_cpu_choice, preview_temporal_cpu_choice,
+        )
+
+        domain = build_temporal_cpu_domain(proof, target, **arguments, catalog=catalog,
+                                           max_threads=max_threads if model else threads)
+        composite = domain.get('proof_kind') == 'COMPOSITE'
+        report['cpu_domain'] = publish_plan(directory / 'cpu-domain.json', domain)
+        if composite:
+            report['guard_profile'] = publish_plan(directory / 'guard-profile.json', domain['guard_profile'])
+        if model:
+            facts, report['cost_inputs'] = project_loop_calibrations(domain, calibrations, directory / 'resource-facts')
+            selection = plan_selected_temporal_cpu_choice(domain, resource_facts=facts, no_op_profile=original_cost)
+            choice, schedule = selection['choice'], selection['schedule']
+            report.update(
+                cpu_choice=publish_plan(directory / 'cpu-choice.json', choice),
+                candidate_count=len(domain['candidates']),
+                complete_cost_profiles=sum(row['model']['complete'] for row in choice['variants']),
+                cost_domain_complete=choice['complete_cost_domain'],
+                original_no_op_cost_known=choice['original_no_op']['complete'],
+                selection_scope=('SOURCED_COMPOSITE_FORWARD_CPU_COMPONENT_MODEL' if composite
+                                 else 'SOURCED_FORWARD_CPU_COMPONENT_MODEL'),
+            )
+            if schedule is None:
+                report.update(selected_kind='NO_OP', cost_status=choice['status'],
+                              reason='complete forward cost domain or profitable model winner unavailable')
+                return report
+        else:
+            schedule = preview_temporal_cpu_choice(domain, cpu_threads=threads)
+            report['selection_scope'] = ('EXPLICIT_COMPOSITE_CPU_TEAM_PREVIEW_UNRANKED' if composite
+                                         else 'EXPLICIT_CPU_TEAM_PREVIEW_UNRANKED')
+    else:
+        from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule
+
+        schedule = plan_invariant_loop_schedule(proof, target, **arguments, catalog=catalog)
+        report['selection_scope'] = schedule.get('comparison_scope', 'STRUCTURAL_LOGICAL_WORK_AND_RESOURCE_MODEL')
+
+    snapshot = schedule['target_snapshot']
+    if (snapshot['uri'], snapshot['sha256'], snapshot['size_bytes']) != (
+            hardware['path'], hardware['sha256'], hardware['bytes']):
+        raise ValueError('loop schedule differs from the original hardware snapshot')
+    report.update(
+        schedule=publish_plan(directory / 'schedule.json', schedule),
+        selected_kind=schedule['selected_kind'],
+        profitability_status=schedule['profitability_status'],
+        input_shapes=shapes, trip_count=count,
+        memory_budget_bytes=schedule['effective_incremental_budget_bytes'],
+        requested_memory_budget_bytes=budget,
+    )
+    return report
+
+
+def plan_array_loop(loop, hardware, directory, *, shapes, count, budget, model=False, threads=None):
+    """Bind the existing single-carry fusion strategy to an observed CPU target."""
+    from scar.compiler.model import document
+    from scar.optimization.hardware import bind_cpu_placement, propose_cpu_placements
+    from scar.optimization.loop_strategy import plan_loop_strategy_with_body
+
+    if model and threads is not None:
+        raise ValueError('automatic loop cost selection and an explicit CPU preview are separate modes')
+    strategy, execution = plan_loop_strategy_with_body(
+        loop, input_shapes=shapes, trip_count=count, memory_budget_bytes=budget)
+    report = dict(
+        strategy=publish_plan(directory / 'strategy.json', strategy),
+        status='ORIGINAL_ARRAY_LOOP_RETAINED', selected_kind='NO_OP',
+        input_shapes=strategy['input_shapes'], trip_count=strategy['trip_count'],
+        memory_budget_bytes=budget, physical_optimality_proven=False, performance_qualified=False,
+    )
+    if strategy['selected_strategy'] == 'NO_OP':
+        return dict(report, profitability_status='STRATEGY_NOT_ADMITTED',
+                    reason='exact temporal fusion or its input and payload bounds are unresolved')
+    if model:
+        return dict(report, profitability_status='MISSING_COMPATIBLE_COMPONENT_COSTS',
+                    reason='the single-carry temporal ABI has no complete comparable CPU and original costs')
+
+    target = Path(hardware['path']).parent
+    requested = 1 if threads is None else threads
+    placements = propose_cpu_placements(execution, target, memory_budget_bytes=budget, max_threads=requested)
+    binding = next((row for row in placements if len(row.cpu_ids) == requested
+                    and row.memory_budget_bytes >= strategy['final_bytes']), None)
+    if binding is None:
+        return dict(report, profitability_status='NO_FEASIBLE_CPU_PLACEMENT',
+                    reason='no admitted CPU cohort and memory domain fits the payload budget')
+    if (binding.target_path, binding.target_sha256) != (str(target), hardware['sha256']):
+        raise ValueError('array loop CPU placement differs from the original hardware snapshot')
+    bound = bind_cpu_placement(execution, binding)
+    return dict(report, status='ARRAY_LOOP_TEMPORAL_FUSION_SCHEDULED',
+                selected_kind='ARRAY_LOOP_TEMPORAL_FUSION', profitability_status='UNMEASURED',
+                selection_scope='EXPLICIT_CPU_COHORT_UNRANKED' if threads is not None
+                else 'SINGLE_CPU_STRUCTURAL_CANDIDATE',
+                schedule=publish_plan(directory / 'execution-plan.json', document(bound)),
+                cpu_ids=list(binding.cpu_ids), memory_budget_bytes=bound.cost['memory_budget_bytes'],
+                requested_memory_budget_bytes=budget)
 
 
 def _prepare_loop_lowering(proof, folder, proof_ref, source_motion, schedule_ref, *, composite, parallel):

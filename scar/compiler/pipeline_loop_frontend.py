@@ -25,7 +25,7 @@ from scar.ir.program.normal_graph import Body
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.optimization.optimizer import optimize_region
-from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
+from scar.optimization.pipeline_fusion import fuse_pipeline_region, replay_pipeline_fusion
 
 
 @dataclass(frozen=True)
@@ -174,7 +174,6 @@ def _source_reference(discovery,unit,function,model,recipe,digest,origins=()):
 def _component(pipeline,by_code):
     merged,certificate=fuse_pipeline_region(pipeline)
     if merged is None:_reject('COMPOSITE_FUSION_OPEN',str(certificate['frontiers']))
-    verify_pipeline_fusion(pipeline,merged,certificate)
     guards=[];steps=[];seen=set()
     for call in pipeline.calls:
         source=call.callee.source
@@ -327,8 +326,8 @@ def write_composite_invariant_loop_proof(proof,path):
     def save(target,value):
         with target.open('x') as stream:json.dump(value,stream,indent=2,sort_keys=True,allow_nan=False);stream.write('\n')
     for i,composition in enumerate(proof.compositions):
-        body,certificate=fuse_pipeline_region(composition.pipeline)
-        verify_pipeline_fusion(composition.pipeline,body,composition.fusion_certificate)
+        certificate = composition.fusion_certificate
+        body = replay_pipeline_fusion(composition.pipeline, certificate)
         if body is None:raise ValueError('composite proof has an unclosed fusion')
         target=path.with_name(path.stem+'-composition-'+str(i)+'.json')
         if target.exists():raise ValueError('fresh composite composition output required')
@@ -361,17 +360,19 @@ def _read_composite_invariant_loop_materials(path):
     def source(value):
         value=dict(value);value['origins']=tuple(value.get('origins',()))
         return SourceRef(**value)
-    steps=[]
+    steps = []
+    fused_bodies = []
     for ref in document['compositions']:
         retained=read_artifact(ref)
         if (set(retained)!={'schema','schema_version','pipeline','fusion_certificate'}
                 or retained['schema']!=_COMPOSITION_SCHEMA or type(retained['schema_version']) is not int
                 or retained['schema_version']!=1):
             raise ValueError('original composite pipeline shard required')
-        pipeline=pipeline_from_dict(retained['pipeline']);body,_=fuse_pipeline_region(pipeline)
-        verify_pipeline_fusion(pipeline,body,retained['fusion_certificate'])
+        pipeline = pipeline_from_dict(retained['pipeline'])
+        body = replay_pipeline_fusion(pipeline, retained['fusion_certificate'])
         if body is None:raise ValueError('retained composite fusion is unsupported')
         steps.append(PipelineComposition(pipeline,retained['fusion_certificate']))
+        fused_bodies.append(body)
     data={name:document[name] for name in CompositeInvariantLoopProof.__dataclass_fields__}
     data.update(source=source(data['source']),root_callee_source=source(data['root_callee_source']),
         parameters=tuple(data['parameters']),body=region_from_dict(data['body']),origins=tuple(data['origins']),
@@ -387,8 +388,8 @@ def _read_composite_invariant_loop_materials(path):
     from scar.compiler.model import validate_region
     validate_region(proof.body)
     canonical=lambda value:json.dumps(asdict(value),sort_keys=True,separators=(',',':'),allow_nan=False)
-    roots=[row for row in proof.compositions if row.pipeline.source==proof.root_callee_source]
-    if len(roots)!=1 or canonical(fuse_pipeline_region(roots[0].pipeline)[0])!=canonical(proof.body):
+    roots = [body for body in fused_bodies if body.source == proof.root_callee_source]
+    if len(roots) != 1 or canonical(roots[0]) != canonical(proof.body):
         raise ValueError('retained composite body differs from its original root composition fusion')
     for original in (proof.source,proof.root_callee_source,
             *(guard.owner_source for guard in proof.nested_callee_guards),

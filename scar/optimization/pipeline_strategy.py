@@ -26,10 +26,9 @@ def _pipeline(value):
 
 
 def _fusion(pipeline, budget):
-    from .pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
+    from .pipeline_fusion import fuse_pipeline_region
 
     raw, certificate = fuse_pipeline_region(pipeline)
-    verify_pipeline_fusion(pipeline, raw, certificate)
     if raw is None:
         return None, certificate, None
     plan = optimize_region(raw, memory_budget_bytes=budget)
@@ -72,6 +71,12 @@ def plan_pipeline_strategy(pipeline, *, input_shapes, memory_budget_bytes, searc
     budget is not a rejection of a fused representation. No duration, DRAM or
     cache traffic, hardware placement, or partial fusion partition is inferred.
     """
+    report, _ = _plan_pipeline_strategy(pipeline, input_shapes=input_shapes,
+                                        memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
+    return report
+
+
+def _plan_pipeline_strategy(pipeline, *, input_shapes, memory_budget_bytes, search_budget):
     pipeline = _pipeline(pipeline)
     preserve = plan_pipeline_memory(pipeline, input_shapes=input_shapes,
                                     memory_budget_bytes=memory_budget_bytes, search_budget=search_budget)
@@ -123,7 +128,7 @@ def plan_pipeline_strategy(pipeline, *, input_shapes, memory_budget_bytes, searc
     best_bytes = None if selected is None else selected['peak_allocation_bytes']
     lower = final['nbytes']
     reaches_bound = best_bytes is not None and lower is not None and best_bytes == lower
-    return dict(
+    report = dict(
         schema='scar.pipeline-strategy-plan', schema_version=1, pipeline_id=pipeline.id,
         pipeline_sha256=pipeline_digest(pipeline), input_shapes=preserve['input_shapes'],
         memory_budget_bytes=memory_budget_bytes, search_budget=search_budget,
@@ -148,29 +153,30 @@ def plan_pipeline_strategy(pipeline, *, input_shapes, memory_budget_bytes, searc
         physical_optimality_proven=False, placement_optimized=False, partial_partition_search=False,
         duration_predicted=False, dram_traffic_predicted=False, target_variants_executed=False,
         deployment_authorized=False)
+    return report, plan if kind == 'FULL_FUSION' else None
 
 
-def verify_pipeline_strategy(pipeline, report):
+def replay_pipeline_strategy(pipeline, report):
     """Pure replay of original pool, raw certificate, optimized DAG and shapes."""
     value = loads(Path(report).read_bytes()) if isinstance(report, (str, Path)) else deepcopy(report)
     if (value.get('schema'), value.get('schema_version')) != ('scar.pipeline-strategy-plan', 1):
         raise ValueError('versioned pipeline strategy required')
-    expected = plan_pipeline_strategy(pipeline, input_shapes=value['input_shapes'],
+    expected, plan = _plan_pipeline_strategy(pipeline, input_shapes=value['input_shapes'],
         memory_budget_bytes=value['memory_budget_bytes'], search_budget=value['search_budget'])
     if semantic_sha256(expected) != semantic_sha256(value):
         raise ValueError('pipeline strategy differs from complete representation/source/shape replay')
-    return value
+    return value, plan
+
+
+def verify_pipeline_strategy(pipeline, report):
+    return replay_pipeline_strategy(pipeline, report)[0]
 
 
 def fused_execution_plan(pipeline, strategy):
     """Return the exact optimized plan; its raw source certificate stays separate."""
-    pipeline = _pipeline(pipeline)
-    report = verify_pipeline_strategy(pipeline, strategy)
+    report, plan = replay_pipeline_strategy(pipeline, strategy)
     if report['selected_strategy'] != 'FULL_FUSION':
         raise ValueError('full fusion is not the selected supported strategy')
-    _, _, plan = _fusion(pipeline, report['memory_budget_bytes'])
-    if plan is None or semantic_sha256(plan_document(plan)) != report['fusion_execution_plan_sha256']:
-        raise ValueError('optimized fusion execution-plan receipt differs')
     return plan
 
 

@@ -165,17 +165,12 @@ def admit_loop(loop, strategy, execution_plan):
     for the original loop. Source-file I/O is separate in check_loop_sources.
     """
     from scar.optimization.hardware import bind_cpu_placement
-    from scar.optimization.loop_strategy import verify_loop_strategy, loop_execution_plan
-    from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
+    from scar.optimization.loop_strategy import replay_loop_strategy
 
-    strategy = verify_loop_strategy(loop, strategy)
+    strategy, expected = replay_loop_strategy(loop, strategy)
     _require(strategy["selected"]["kind"] == "TEMPORAL_FUSION" and
              strategy["capability"] == "EXACT_ELEMENTWISE_TEMPORAL_FUSION",
              "loop backend requires the selected exact elementwise temporal profile")
-    raw, _ = fuse_pipeline_region(loop.body)
-    _require(raw is not None, "loop body fusion has unresolved source obligations")
-    verify_pipeline_fusion(loop.body, raw, strategy["body_fusion_certificate"])
-    expected = loop_execution_plan(loop, strategy)
     actual = (read_plan(execution_plan) if isinstance(execution_plan, (str, Path))
               else plan_from_dict(plan_document(execution_plan)))
     _require(actual.resource_binding is not None, "loop execution requires an explicit recorded CPU binding")

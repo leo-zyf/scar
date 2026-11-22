@@ -51,17 +51,10 @@ def _sources(pipeline):
 
 
 def _admit(pipeline, strategy):
-    from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
-    from scar.optimization.pipeline_strategy import fused_execution_plan, verify_pipeline_strategy
-    strategy = verify_pipeline_strategy(pipeline, strategy)
+    from scar.optimization.pipeline_strategy import replay_pipeline_strategy
+    strategy, expected = replay_pipeline_strategy(pipeline, strategy)
     _require(strategy["selected"]["kind"] == "FULL_FUSION",
              "fused backend requires the selected FULL_FUSION representation")
-    raw, _ = fuse_pipeline_region(pipeline)
-    _require(raw is not None, "complete fusion source graph is unsupported")
-    verify_pipeline_fusion(pipeline, raw, strategy["fusion_certificate"])
-    # The strategy helper independently replays raw -> optimized plan. Its
-    # source operation map belongs to that bridge, not to the raw certificate.
-    expected = fused_execution_plan(pipeline, strategy)
     cpp._supported(expected)
     _require(expected.region.source == pipeline.source and
              expected.region.parameters == pipeline.parameters and expected.resource_binding is None,

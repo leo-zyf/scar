@@ -174,11 +174,17 @@ def fuse_pipeline_region(pipeline):
     return region,certificate
 
 
+def replay_pipeline_fusion(pipeline, certificate):
+    """Return the fused body after checking the retained original-edge certificate."""
+    region, expected = fuse_pipeline_region(pipeline)
+    if _canonical(certificate) != _canonical(expected):
+        raise ValueError('pipeline fusion certificate differs from complete source/leaf/call replay')
+    return region
+
+
 def verify_pipeline_fusion(pipeline,region,certificate):
     """Replay exact original call/leaf/source contracts and every mapped edge."""
-    expected_region,expected=fuse_pipeline_region(pipeline)
-    if _canonical(certificate)!=_canonical(expected):
-        raise ValueError('pipeline fusion certificate differs from complete source/leaf/call replay')
+    expected_region = replay_pipeline_fusion(pipeline, certificate)
     if expected_region is None:
         if region is not None:raise ValueError('unsupported pipeline fusion cannot have a region')
     elif region is None or fusion_region_digest(region)!=fusion_region_digest(expected_region):
@@ -186,4 +192,4 @@ def verify_pipeline_fusion(pipeline,region,certificate):
     return True
 
 
-__all__=['fuse_pipeline_region','verify_pipeline_fusion','fusion_region_digest']
+__all__ = ['fuse_pipeline_region', 'replay_pipeline_fusion', 'verify_pipeline_fusion', 'fusion_region_digest']
