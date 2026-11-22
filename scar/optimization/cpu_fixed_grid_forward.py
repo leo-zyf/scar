@@ -5,6 +5,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from scar.analysis import cpu_fixed_grid_timing_graph as timing_graph
+from scar.codegen.cpu_native_route_package import _fixed_grid_route_replay
 from scar.compiler import cpu_fixed_grid_short_native_probe as native_probe
 from scar.compiler import cpu_fixed_grid_short_python_probe as python_probe
 from scar.compiler import cpu_fixed_grid_source_route_benchmark as benchmark
@@ -67,6 +68,7 @@ def _compare(model, measured):
                 observed_median_minus_point_ns=None if point is None else _wire(median - point))
 
 
+@_fixed_grid_route_replay()
 def derive_cpu_fixed_grid_forward(graph_ref, python_ref, native_ref, holdout_ref):
     graph = timing_graph.verify_cpu_fixed_grid_timing_graph(graph_ref)
     native = native_probe.verify_short_native(native_ref)

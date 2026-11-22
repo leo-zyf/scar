@@ -517,14 +517,15 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, out, evidence:
         frontiers['cpu_fixed_grid_source_qualification'] = qualification_ref
     input_route = None
     if evidence.fixed_grid_input_review is not None or qualification is not None:
-        from scar.optimization.cpu_fixed_grid_input_route_review import (
-            SCHEMA as INPUT_ROUTE_REVIEW, verify_cpu_fixed_grid_input_route_review,
+        from scar.optimization.cpu_fixed_grid_source_route_qualification import (
+            INPUT_ROUTE_REVIEW_SCHEMA, verify_cpu_fixed_grid_input_route_review,
         )
 
         if evidence.fixed_grid_input_review is None:
             input_route_ref = qualification['input_route_review']
         else:
-            input_route_ref = artifact_reference(Path(evidence.fixed_grid_input_review).resolve(strict=True), INPUT_ROUTE_REVIEW)
+            input_route_ref = artifact_reference(Path(evidence.fixed_grid_input_review).resolve(strict=True),
+                                                 INPUT_ROUTE_REVIEW_SCHEMA)
         if qualification is not None and input_route_ref != qualification['input_route_review']:
             raise ValueError('source qualification and native route review refer to different input graphs')
         input_route = (verify_cpu_fixed_grid_input_route_review(input_route_ref) if qualification is None else
@@ -954,7 +955,10 @@ def replay_whole_entry(plan, out, *, evidence: EntryEvidence, plan_only, verify_
     generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     fixed_grid_frontiers = {}
     if evidence.fixed_grid_cli is not None:
-        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, out, evidence)
+        from scar.codegen.cpu_native_route_package import _fixed_grid_route_replay
+
+        with _fixed_grid_route_replay():
+            _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, out, evidence)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain,
                                   import_frontier=import_frontiers.get('cpu_entry_import_frontier'),
                                   import_source_effects=import_frontiers.get('cpu_entry_import_source_effects'),

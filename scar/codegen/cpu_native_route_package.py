@@ -1,18 +1,24 @@
 """Bind scoped native route plans to retained C++20 projects by reference."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import errno
 import os
 from pathlib import Path
+import shutil
 import stat
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 
-from scar.analysis.replay_transaction import replay_transaction
+from scar.analysis.replay_transaction import current_transaction, replay_transaction
 from scar.codegen.cpu_catalog_runtime_package import _host, _loader, _signature, _write_json
 from scar.codegen.native_cpu_arena_reuse import _path
-from scar.codegen.native_provider_bundle import _content, cpu_executable_dynamic
+from scar.codegen.native_provider_bundle import _content, _dependencies, cpu_executable_dynamic
 from scar.compiler.aten_entry_delivery import LAUNCHER
 from scar.compiler.entry_delivery import _environment_digest
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import _reference, artifact_reference, read_artifact
 from scar.optimization.cpu_fixed_grid_mapped_input_plan import SCHEMA as _FIXED_GRID_PLAN
 
 
@@ -28,6 +34,7 @@ _DIAGNOSTICS = {'SCAR_ARRAY_ENTRY_STATES', 'SCAR_ARRAY_ENTRY_LANE_REPORT'}
 _GROUPED_MODE, _PROCESS_MODE = 'ORDERED_OPENMP', 'ORDERED_LOCAL_PROCESSES'
 _OWNED, _MAPPED = 'OWNED_COPY', 'PROVIDER_MAP'
 _DEPENDENCIES = 'plan/dependencies.json'
+_FIXED_GRID_REPLAY = ContextVar('scar_fixed_grid_route_replay', default=None)
 
 
 def _require_array(condition, reason):
@@ -344,7 +351,97 @@ def _replay_fixed_grid_package(package):
 
 def verify_cpu_fixed_grid_native_route_package(reference):
     """Recheck sealed program, scoped decision, loader and evidence without launching either arm."""
+    replay = _FIXED_GRID_REPLAY.get()
+    if replay is not None and current_transaction() is replay.transaction:
+        return replay.verify(reference)
     return _replay_fixed_grid_package(_read_fixed_grid_package(reference))
+
+
+def _native_verification_context():
+    return (os.uname(), os.getcwd(), os.geteuid(), os.getegid(), tuple(os.getgroups()),
+            tuple(sys.path), tuple(sorted(os.environ.items())))
+
+
+def _watch_native_lookup_inputs(transaction):
+    readelf = shutil.which('readelf')
+    standard = Path('/usr/bin/readelf')
+    if (readelf is None or Path(readelf).resolve() != standard.resolve()
+            or any(name.startswith('LD_') for name in os.environ)):
+        return False
+    for tool in (readelf, standard, '/usr/bin/ldd', '/bin/sh'):
+        transaction.pin_file(tool)
+    for path in ('/etc/ld.so.cache', '/etc/ld.so.preload'):
+        try:
+            with open(path, 'rb'):
+                pass  # The path observer binds bytes or exact absence.
+        except FileNotFoundError:
+            continue
+    return True
+
+
+class _FixedGridRouteReplay:
+    """Share one fully verified package between readers of the same cold review."""
+
+    def __init__(self, transaction):
+        self.transaction = transaction
+        self.reference = None
+        self.package = None
+        self.context = None
+
+    def verify(self, reference):
+        reference = _reference(reference)
+        _require_fixed_grid(self.reference is None or reference == self.reference,
+                            'shared review refers to a different package')
+        if self.package is None:
+            context = _native_verification_context()
+            with self.transaction.observe_paths() as observed:
+                lookup_bound = _watch_native_lookup_inputs(self.transaction)
+                package = _replay_fixed_grid_package(_read_fixed_grid_package(reference))
+            if lookup_bound and observed.complete_paths and context == _native_verification_context():
+                self.reference, self.package, self.context = reference, deepcopy(package), context
+            return package
+
+        self.check_preflight()
+        self.transaction.watch(reference['uri'], reference['sha256'], reference['size_bytes'])
+        return deepcopy(self.package)
+
+    def check_preflight(self):
+        package = self.package
+        cwd, output = Path(package['working_directory']), Path(package['publication']['path'])
+        _require_fixed_grid(self.context == _native_verification_context() and package['host'] == _host()
+                            and cwd.is_dir() and cwd.resolve(strict=True) == cwd
+                            and output.parent.is_dir() and not output.exists() and not output.is_symlink(),
+                            'host or launch preflight changed during shared route replay')
+
+    def validate(self):
+        if self.package is None:
+            return
+        self.check_preflight()
+        for route in self.package['routes'].values():
+            # Loader search may select a newly present library even while every
+            # known library is unchanged. Replay it for both admitted binaries.
+            binary = route['executable']
+            self.transaction.watch(binary['uri'], binary['sha256'], binary['size_bytes'])
+            listing = subprocess.check_output(['/usr/bin/ldd', binary['uri']], text=True, env={})
+            current = _dependencies(listing)
+            _require_fixed_grid(current == route['loader']['resolved'], 'native loader resolution changed during replay')
+
+
+@contextmanager
+def _fixed_grid_route_replay():
+    """Own one route admission for a pure aggregate review, including its dependency guards."""
+    existing = _FIXED_GRID_REPLAY.get()
+    if existing is not None and current_transaction() is existing.transaction:
+        yield
+        return
+    with replay_transaction() as transaction:
+        owner = _FixedGridRouteReplay(transaction)
+        token = _FIXED_GRID_REPLAY.set(owner)
+        try:
+            yield
+            owner.validate()
+        finally:
+            _FIXED_GRID_REPLAY.reset(token)
 
 
 def _output_guards(output, expected_mode):

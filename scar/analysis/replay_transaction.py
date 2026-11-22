@@ -93,6 +93,10 @@ class _Capture:
     query_processes: set = field(default_factory=set)
     observe_directories: bool = False
     directories: dict = field(default_factory=dict)
+    complete_paths: bool = True
+
+    def refuse_paths(self):
+        self.reusable = self.complete_paths = False
 
 
 def _popen_frame(code, descriptor=None):
@@ -138,7 +142,7 @@ def _audit(event, args):
                 # Directory membership and side effects need separate proof;
                 # a collection of observed file reads cannot establish them.
                 for row in transaction._captures:
-                    row.reusable = False
+                    row.refuse_paths()
         transaction = transaction.parent
 
 
@@ -217,18 +221,18 @@ class ReplayTransaction:
         supported = path is None or isinstance(path, (str, bytes, os.PathLike))
         for capture in self._captures:
             if not capture.observe_directories or not supported:
-                capture.reusable = False
+                capture.refuse_paths()
         if supported and any(capture.observe_directories for capture in self._captures):
             path = str(Path(os.fsdecode(path) if path is not None else '.').absolute())
             if any(path == root or path.startswith(root+'/') for root in ('/proc', '/sys', '/dev')):
                 for capture in self._captures:
-                    capture.reusable = False
+                    capture.refuse_paths()
                 return
             try:
                 signature = _directory_version(path)
             except OSError:
                 for capture in self._captures:
-                    capture.reusable = False
+                    capture.refuse_paths()
                 return
             self._watch_directory(path, signature)
 
@@ -246,17 +250,25 @@ class ReplayTransaction:
                     row.pipe_processes.add(process)
                 else:
                     row.reusable = False
+                if process is None:
+                    row.complete_paths = False
             return
         if (not isinstance(path, (str, bytes, os.PathLike))
                 or not isinstance(flags, int) or flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC)):
+            devnull = path == os.devnull and _popen_frame(_POPEN_INIT) is not None
             for row in self._captures:
                 row.reusable = False
+                if not devnull:
+                    row.complete_paths = False
             return
         path = os.fsdecode(path)
         absolute = str(Path(path).absolute())
         if any(absolute == root or absolute.startswith(root+'/') for root in ('/proc','/sys','/dev')):
+            devnull = absolute == os.devnull and _popen_frame(_POPEN_INIT) is not None
             for row in self._captures:
                 row.reusable = False
+                if not devnull:
+                    row.complete_paths = False
             return
         try:
             version = _file_version(absolute)
@@ -270,14 +282,14 @@ class ReplayTransaction:
             # Missing/volatile inputs keep the original factory behavior and
             # diagnostics, but cannot create a reusable proof document.
             for row in self._captures:
-                row.reusable = False
+                row.refuse_paths()
             return
         self._remember(version)
 
     def _absent(self, path):
         for row in self._captures:
             if not row.observe_directories:
-                row.reusable = False
+                row.refuse_paths()
         if any(row.observe_directories for row in self._captures):
             self._watch_directory(path, ('ABSENT',))
 
@@ -363,6 +375,20 @@ class ReplayTransaction:
             self.watch(path, digest, size, rehash=self.parent is None)
         for path, signature in tuple(self._directories.items()):
             self._watch_directory(path, signature)
+
+    @contextmanager
+    def observe_paths(self):
+        """Bind ordinary file and directory reads separately from subprocess reuse."""
+        capture = _Capture(observe_reads=True, observe_directories=True)
+        if current_transaction() is not self or not _ensure_observer():
+            capture.complete_paths = False
+            yield capture
+            return
+        self._captures.append(capture)
+        try:
+            yield capture
+        finally:
+            self._captures.pop()
 
     def close(self):
         self.closed = True

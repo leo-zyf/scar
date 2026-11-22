@@ -4,8 +4,9 @@ import os
 from pathlib import Path
 import shutil
 
-from scar.analysis.replay_transaction import replay_transaction
-from scar.codegen.cpu_native_route_package import _output_guards, verify_cpu_fixed_grid_native_route_package
+from scar.codegen.cpu_native_route_package import (
+    _fixed_grid_route_replay, _output_guards, verify_cpu_fixed_grid_native_route_package,
+)
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.cpu_fixed_grid_mapped_input_study import _input_files
 from scar.compiler.observe_cpu_fixed_grid_input_counters import SCHEMA as COUNTERS
@@ -28,7 +29,7 @@ def _binding(package_ref, oracle_ref):
     from scar.compiler.cpu_fixed_grid_short_python_probe import verify_short_python
 
     _need(oracle_ref['schema'] == _ORACLE, 'exact independent short-count Python oracle required')
-    with replay_transaction():
+    with _fixed_grid_route_replay():
         package = verify_cpu_fixed_grid_native_route_package(package_ref)
         oracle = verify_short_python(oracle_ref)
     _need(package['selected_runtime'] == _ROUTE and package['inputs_must_remain_stable'] is True

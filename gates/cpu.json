@@ -37,6 +37,7 @@
       "tests": [
         "tests/integration/test_contextual_receiver_sources.py::test_receiver_walk_follows_matching_formal_and_retains_unbound_context",
         "tests/integration/test_formal_call_operands.py",
+        "tests/integration/test_observed_call_bindings.py::test_two_actual_classes_bind_one_static_call_without_claiming_class_origin",
         "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
         "tests/integration/test_native_indirect_calls.py::test_native_indirect_targets_flow_through_cfg_and_cpp20",
         "tests/integration/test_native_fortran_cfi.py::test_native_fortran_cfi_shapes_and_reverse_strides",
@@ -45,6 +46,7 @@
         "tests/unit/test_program_await_qualification_flow.py::test_own_bool_literal_cannot_contradict_the_known_predicate_result",
         "tests/unit/test_program_inventory_graph_contract.py",
         "tests/unit/test_source_body_interfaces.py",
+        "tests/unit/test_source_environment_lowering.py::test_session_discovers_factory_origins_without_call_targets_and_keeps_open_class_path",
         "tests/unit/test_read_ordered_activations.py",
         "tests/unit/test_source_productions.py::test_closed_grammar_exact_records_strict_codec_and_budgets",
         "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
@@ -91,7 +93,8 @@
         "tests/integration/test_native_stage_handoff.py::test_native_middle_replays_cost_and_schedule",
         "tests/unit/test_affinity_demands.py",
         "tests/unit/test_execution_recipe.py",
-        "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py"
+        "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py",
+        "tests/unit/test_workspace_temporal_ir.py"
       ]
     },
     {
@@ -112,6 +115,7 @@
         "tests/unit/test_export_loop.py",
         "tests/unit/test_caller_pipeline_capsule.py",
         "tests/unit/test_deployment_gate.py",
+        "tests/unit/test_entry_delivery.py::test_scoped_native_route_package_is_published_and_replayed_by_reference[fixed-grid]",
         "tests/unit/test_gate_runner.py"
       ]
     }
