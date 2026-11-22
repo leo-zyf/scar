@@ -213,7 +213,7 @@ def _capacity_limit(reference, compilation, spec):
     if reference is None:
         return None
     from scar.compiler.entry_delivery import _environment_digest
-    from scar.optimization.cpu_entry_capacity_contract import verify_cpu_entry_capacity_contract
+    from scar.optimization.cpu_entry_resources import verify_cpu_entry_capacity_contract
 
     contract = verify_cpu_entry_capacity_contract(reference)
     _need(contract['status'] == 'CANDIDATE_GUARD_ADMISSIBLE' and contract['provider_process_count'] == 1,
@@ -443,7 +443,7 @@ def main(argv=None):
             parser.error('--check uses the contract pinned by the validation report')
         report = check(args.check)
     elif args.out:
-        from scar.optimization.cpu_entry_capacity_contract import SCHEMA as CAPACITY
+        from scar.optimization.cpu_entry_resources import CAPACITY_SCHEMA as CAPACITY
 
         report = measure(args.compilation, args.out, capture=args.original_capture, cpu=args.cpu,
                          warmups=args.warmups, pairs=args.pairs, collect_resources=False if args.no_resources else None,

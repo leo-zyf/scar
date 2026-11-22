@@ -123,7 +123,7 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
                 raise ValueError('no executor satisfies the explicit pipeline CPU allocation')
             parallel_binding = candidates[0]
             if pipeline_dispatch=='ready':
-                from scar.optimization.pipeline_ready_schedule import plan_pipeline_ready_schedule as planner
+                from scar.optimization.pipeline_schedule import plan_pipeline_ready_schedule as planner
             else:
                 from scar.optimization.pipeline_schedule import plan_pipeline_schedule as planner
             execution_schedule = planner(pipeline, memory, target,

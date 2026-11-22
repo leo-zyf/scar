@@ -45,7 +45,7 @@ def open_temporal_inputs(reference, *, include_source=False):
     from scar.analysis.caller_pipeline_values import read_caller_values
     from scar.compiler.caller_pipeline import read_caller_pipeline_proof
     from scar.optimization.pipeline_memory import verify_pipeline_memory
-    from scar.optimization.pipeline_ready_schedule import verify_pipeline_ready_schedule
+    from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule
     if isinstance(reference, (str, Path)):
         path = Path(reference).resolve()
         reference = artifact_reference(path/'inputs.json' if path.is_dir() else path, INPUTS)
@@ -99,7 +99,7 @@ def prepare_pipeline_temporal(program, out, *, caller_unit, function_ordinal,
     from scar.analysis.caller_pipeline_values import publish_caller_values
     from scar.compiler.caller_pipeline import build_caller_pipeline, write_caller_pipeline_proof
     from scar.optimization.hardware import propose_cpu_placements
-    from scar.optimization.pipeline_ready_schedule import plan_pipeline_ready_schedule
+    from scar.optimization.pipeline_schedule import plan_pipeline_ready_schedule
     if type(pipeline_workers) is not int or pipeline_workers < 1:
         raise ValueError('explicit positive CPU lane count required')
     if memory_order not in ('source', 'dependencies'):

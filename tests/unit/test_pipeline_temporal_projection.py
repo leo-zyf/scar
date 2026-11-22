@@ -6,7 +6,7 @@ from test_pipeline_schedule import _pipeline
 from scar.analysis.target_graph import build_target_graph
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.pipeline_memory import plan_pipeline_memory
-from scar.optimization.pipeline_ready_schedule import plan_pipeline_ready_schedule
+from scar.optimization.pipeline_schedule import plan_pipeline_ready_schedule
 from scar.optimization.pipeline_temporal_model import (
     COST_SCHEMA, CONTROL_RESOURCE, EXAMPLE, ROLE, project_pipeline_temporal_model,
     verify_pipeline_temporal_projection,

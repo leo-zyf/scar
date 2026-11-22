@@ -7,7 +7,7 @@ from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pip
 from scar.ir.versioned_schedule import validate_versioned_schedule
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.pipeline_memory import plan_pipeline_memory
-from scar.optimization.pipeline_schedule import _dependencies,_waves,_task_graph
+from scar.optimization.pipeline_schedule import _dependencies, _waves, _task_graph
 
 
 def _leaf(arity):

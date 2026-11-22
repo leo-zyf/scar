@@ -16,7 +16,7 @@ from scar.ir.record_codec import loads
 from scar.ir.versioned_schedule import VersionedTaskKind, validate_versioned_schedule
 from scar.runtime.compiled_deployment import thread_environment
 from scar.optimization.pipeline_memory import _pipeline, verify_pipeline_memory
-from .pipeline_ready_schedule import verify_pipeline_ready_schedule
+from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule
 from .resource_solver import semantic_sha256
 from .schedule import schedule_from_dict
 

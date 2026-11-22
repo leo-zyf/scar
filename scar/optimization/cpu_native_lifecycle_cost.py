@@ -2,7 +2,7 @@
 
 from scar.analysis.cpu_entry_lifecycle_graph import SCHEMA as LIFECYCLE_GRAPH
 from scar.ir.execution_recipe import read_artifact
-from .cpu_entry_capacity_contract import ADMISSIBLE
+from scar.optimization.cpu_entry_resources import ADMISSIBLE
 from .cpu_entry_forward_cost import verify_cpu_entry_forward_cost
 from .whole_entry_choice import LIFECYCLE_PHASES
 

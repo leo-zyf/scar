@@ -3,7 +3,7 @@ from test_pipeline_schedule import _pipeline
 from scar.ir.versioned_schedule import validate_versioned_schedule
 from scar.optimization.pipeline_memory import plan_pipeline_memory
 from scar.optimization.pipeline_schedule import _dependencies
-from scar.optimization.pipeline_ready_schedule import _call_bindings, _dependency_graph, _ready_calls
+from scar.optimization.pipeline_schedule import _call_bindings, _dependency_graph, _ready_calls
 
 
 def test_true_ready_successor_needs_no_other_lane_join_and_pool_consumer_still_orders_reuse():

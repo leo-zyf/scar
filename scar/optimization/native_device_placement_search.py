@@ -5,7 +5,7 @@ from sys import maxsize
 from scar.ir.implementation_plan import PLAN_SCHEMA, digest, problem_from_dict
 from scar.optimization.joint_planner import verify_execution_plan
 from scar.optimization.device_cost_bounds import choose_native_device_interval
-from scar.optimization.native_device_service_interval import native_device_service_interval
+from scar.optimization.native_device_activity_costs import native_device_service_interval
 
 
 SCHEMA = 'scar.native-device-placement-search'

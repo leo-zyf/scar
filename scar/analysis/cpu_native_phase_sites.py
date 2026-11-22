@@ -8,7 +8,7 @@ from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.codegen import native_array_entry, native_seeded_array_task_entry as generator
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import encode
-from scar.optimization.cpu_entry_capacity_contract import ADMISSIBLE
+from scar.optimization.cpu_entry_resources import ADMISSIBLE
 
 SCHEMA = 'scar.cpu-native-phase-sites'
 _MAIN = 'src/main.cpp'

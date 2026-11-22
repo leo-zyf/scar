@@ -51,7 +51,7 @@ def _compile(arguments):
     if _has_option(arguments, '--manifest'):
         from scar.compiler.pipeline import main as compile_target
     else:
-        from scar.compiler.backend.python import main as compile_target
+        from scar.compiler.pipeline import compile_domains_main as compile_target
     return compile_target(arguments)
 
 

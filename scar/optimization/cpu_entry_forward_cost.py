@@ -4,7 +4,7 @@ from hashlib import sha256
 import json
 
 from scar.ir.execution_recipe import read_artifact
-from .cpu_entry_capacity_contract import _ARRAY, _array_runtime
+from scar.optimization.cpu_entry_resources import _ARRAY, _array_runtime
 from .cpu_entry_decision_ledger import verify_cpu_entry_decision_ledger
 from .deployment_cost import _pointer
 from .whole_entry_choice import LIFECYCLE_PHASES
@@ -272,7 +272,7 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
     repeat = grouped.get(TEAM_PROBE)
     constraints = None
     if schedule_constraints is not None:
-        from .cpu_entry_schedule_constraints import verify_cpu_entry_schedule_constraints
+        from scar.optimization.cpu_entry_resources import verify_cpu_entry_schedule_constraints
 
         constraints = verify_cpu_entry_schedule_constraints(schedule_constraints)
         _require(constraints['scope_sha256'] == ledger['scope_sha256']
@@ -287,7 +287,7 @@ def derive_cpu_entry_forward_cost(ledger_ref, option_id, probes=(), *, lifecycle
     phase_order = _phase_order(lifecycle_graph, ledger_ref, ledger['scope_sha256'], option_id)
     memory = None
     if memory_lifetimes is not None:
-        from .cpu_entry_memory_lifetimes import verify_cpu_entry_memory_lifetimes
+        from scar.optimization.cpu_entry_resources import verify_cpu_entry_memory_lifetimes
 
         memory = verify_cpu_entry_memory_lifetimes(memory_lifetimes)
         _require(schedule_constraints is not None and memory['schedule_constraints'] == schedule_constraints

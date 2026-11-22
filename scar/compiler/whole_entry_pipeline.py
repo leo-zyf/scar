@@ -649,8 +649,8 @@ def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, acti
 def _forward_cpu_entry(out, frontiers, nomination, probes, team_probe, phase_cost):
     from scar.analysis.cpu_entry_lifecycle_graph import derive_cpu_entry_lifecycle_graph
     from scar.optimization.cpu_entry_forward_cost import LAUNCH_PROXY, TEAM_PROBE, derive_cpu_entry_forward_cost
-    from scar.optimization.cpu_entry_memory_lifetimes import derive_cpu_entry_memory_lifetimes
-    from scar.optimization.cpu_entry_schedule_constraints import derive_cpu_entry_schedule_constraints
+    from scar.optimization.cpu_entry_resources import derive_cpu_entry_memory_lifetimes
+    from scar.optimization.cpu_entry_resources import derive_cpu_entry_schedule_constraints
 
     ledger = frontiers['cpu_decision_ledger']
     if phase_cost is not None:
@@ -988,7 +988,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     capacity_contract = None
     if forward or enforce_cpu_capacity and selected != domain['baseline_id']:
         from scar.analysis.cpu_launch_resources import derive_cpu_launch_resources
-        from scar.optimization.cpu_entry_capacity_contract import derive_cpu_entry_capacity_contract
+        from scar.optimization.cpu_entry_resources import derive_cpu_entry_capacity_contract
 
         eligible = [row['id'] for row in domain['options'] if row['legal_status'] != 'INELIGIBLE'
                     and row['id'] in generated and _cpu_catalog_option(generated[row['id']])]

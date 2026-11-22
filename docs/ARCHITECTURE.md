@@ -15,7 +15,7 @@
 | 运行证据 | 对照实际调用与资源活动，记录静态分支中仍待判定的字段 | 有界 trace、调用锚点和资源观测 | 可重放的执行证据和绑定记录。Python 建图可消费这组材料 |
 | 硬件建模 | 发布平台容量、拓扑和访问关系 | 本机 CPU、NUMA、内存、存储和设备库存 | `hardware/result.json` 及其引用的资源表。实测带宽和时长作为独立成本证据 |
 
-Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/python.py` 和 `compiler/backend/python.py`。源码构造的降级规则与对应的结构校验集中在 `analysis/static/lowering/`，消费带类型和绑定的语法节点并生成图操作与源码锚点。原生语言适配器是 `compiler/frontend/clang.py` 和 `fortran.py`。`frontend/graph.py::build_graph` 接收锁定请求，交出程序图、跨单元连线、硬件和每个编译单元的证据。整数 `switch` 复用有序分支和 SSA 参数，编译器记录的无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。入口无法生成 IR 时，流程在首个需要程序图的层给出阻塞原因。
+源语言适配位于 `compiler/frontend/`。Python 源码规则与结构校验集中在 `analysis/static/lowering/`，原生适配使用 `frontend/clang.py`、`frontend/fortran.py` 和 `frontend/graph.py`。构图交出操作、数据与状态、跨单元调用、硬件和原始证据。整数 `switch` 通过有序分支和 SSA 参数建模，无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。
 
 ## 2. 中端
 
@@ -28,6 +28,8 @@ Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/py
 
 `compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。对于由同类型 `int` 参数初始化局部变量并立即返回的函数，`copy_source_edits` 将已消除的 SSA 操作接到同一函数的类型、名称绑定和源码区间。中端把这个规范形写入计划，其他情况用 `preserve_entry`。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。两种交付的原生整入口计价都只采用一次基准启动，性能收益须另测。
 
+Python 的直接循环与跨函数组合循环共用 `plan_loop_region`。它从已准入的循环证明和硬件快照生成 `schedule.json`，记录输入形状、迭代次数、CPU 布局和内存预算。后端重读该引用并核对实际构建产物。
+
 ## 3. 后端
 
 | 层 | 功能 | 输入 | 交接产物 |
@@ -37,7 +39,9 @@ Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/py
 | 构建与链接 | 构建独立工程，核对二进制、依赖和已绑定的跨语言目标符号 | 已生成源码、CMake 输入、原始调用图 | `project/CMakeLists.txt`、可执行文件、构建日志、ELF 依赖和符号核验记录 |
 | 验证 | 对照原版与生成版的退出状态和输出，按声明合同比较 | 两个可执行入口、同一输入和 CPU 配置 | `validation/` 的原始输出，以及 `result.json` 的逐用例正确性和计时 |
 
-`admit_entry` 重放排程及改写证据，核对化简图中对应操作已经消除。后端复用前端的 C 类型和 Fortran 编译语义证据，改写过的 C 单元按新字节定位。混合目标保留 C 链接，固定格式 Fortran 和已绑定的自由格式 Fortran 过程经 f2c 生成 C++20 单元。自由格式入口由 gfortran 的链接名和类型事实、源码的 `BIND(C)` 声明共同确定，支持 `int`、`double` 标量和无需描述符的数组参数。`fortran-emission.json` 记录导出的 ABI，链接后核查静态图已绑定的目标符号。验收在计划指定的 CPU 上对照锁定用例，`result.json` 的 `layers` 记录进度与阻塞。数组描述符、未绑定的跨语言调用及一般区域改写仍待覆盖。
+`compiler/pipeline.py` 编排两类输入。原生源码适配器应用已准入的改写并交出 C++20 编译单元、编译选项和链接输入。Fortran 方言和 ABI 转换归源语言适配器处理。C++20 后端集中在 `compiler/backend/cpp20.py`，负责 C++20 工程、循环区域降级、构建及产物检查。Python 目前实测覆盖可证明的循环区域。原生数组描述符、未绑定调用和一般区域改写仍待覆盖。
+
+后续增加源语言沿用图与证据接口。新增 GPU 资源、传输与算子实现通过 `PlanningProblem` 和可重放的执行计划进入中端。C++20 交付消费计划选定的实现和资源绑定，并通过算子 ABI 接入外部高性能库。
 
 ## 共享职责
 

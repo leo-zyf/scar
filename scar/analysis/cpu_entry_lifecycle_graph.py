@@ -5,7 +5,7 @@ from enum import Enum
 
 from scar.analysis.cpu_launch_resources import verify_cpu_launch_resources
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.cpu_entry_capacity_contract import ADMISSIBLE, verify_cpu_entry_capacity_contract
+from scar.optimization.cpu_entry_resources import ADMISSIBLE, verify_cpu_entry_capacity_contract
 from scar.optimization.cpu_entry_decision_ledger import verify_cpu_entry_decision_ledger
 from scar.optimization.whole_entry_choice import LIFECYCLE_PHASES
 

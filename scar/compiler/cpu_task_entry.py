@@ -233,7 +233,7 @@ def emit_cpu_catalog_entry(option, scope, out, *, plan_only, verify_entry, capac
         _plan_scope(plan, scope)
         capture, cpu, _ = _replay_inputs(plan, scope)
         if capacity_contract is not None:
-            from scar.optimization.cpu_entry_capacity_contract import verify_cpu_entry_capacity_contract
+            from scar.optimization.cpu_entry_resources import verify_cpu_entry_capacity_contract
 
             capacity = verify_cpu_entry_capacity_contract(capacity_contract)
             if (capacity['option_id'] != option['id'] or capacity['scope_sha256'] != semantic_sha256(scope)

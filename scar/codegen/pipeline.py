@@ -156,7 +156,7 @@ def _admit_execution_schedule(pipeline, memory, operators, report):
     report=json.loads(json.dumps(report,allow_nan=False))
     _require(type(report)is dict,'explicit pipeline execution report required')
     if report.get('execution_family')==READY_FAMILY:
-        from scar.optimization.pipeline_ready_schedule import verify_pipeline_ready_schedule as verify
+        from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule as verify
     elif report.get('execution_family')==PARALLEL_FAMILY:
         from scar.optimization.pipeline_schedule import verify_pipeline_schedule as verify
     elif report.get('execution_family') in (SOLVER_ORDER_FAMILY, RESOURCE_EVENTS_FAMILY):
