@@ -1,26 +1,3 @@
-"""Dispatch deployment before importing the graph/compiler command suite."""
-import sys
+"""Installed SCAR command."""
 
-
-def main(argv=None):
-    arguments = sys.argv[1:] if argv is None else list(argv)
-    if arguments and arguments[0] == 'run':
-        from scar.runtime.entry_cli import main as run
-        return run(arguments[1:])
-    if arguments and arguments[0] == 'run-build':
-        from scar.runtime.compiled_entry import main as run
-        return run(arguments[1:])
-    if arguments and arguments[0] == 'run-caller-pipeline':
-        from scar.runtime.caller_pipeline_cli import main as run
-        return run(arguments[1:])
-    if arguments and arguments[0] == 'run-loop-delivery':
-        from scar.runtime.compiled_loop_capsule import main as run
-        return run(arguments[1:])
-    if arguments and arguments[0] == 'run-stateful-delivery':
-        from scar.runtime.compiled_stateful_capsule import main as run
-        return run(arguments[1:])
-    if arguments and arguments[0] == 'run-workspace-session':
-        from scar.runtime.session_scope_bundle import main as run
-        return run(arguments[1:])
-    from scar.cli import main as commands
-    return commands(arguments)
+from scar.cli import main

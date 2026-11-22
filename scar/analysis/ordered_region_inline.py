@@ -12,7 +12,7 @@ from scar.analysis.source_call_view import (SourceFunctionCallProvider,
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.ir.program import normal_targets as T,source_productions as P
-from scar.ir.program import ordered_region_inline as R
+from scar.ir.program import ordered_regions as R
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.program.dependencies import context_push,context_pop

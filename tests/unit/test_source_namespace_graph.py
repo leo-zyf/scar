@@ -4,7 +4,7 @@ from scar.ir.program import source_productions as P, source_bindings as B, sourc
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.record_codec import decode, encode
 from tests.unit.test_source_construction_connections import source_facts
-from tests.unit.test_source_expression_rules import _documents, _rules
+from tests.fixtures.source_rules import _documents, _rules
 
 
 def test_ordered_namespaces_delete_and_function_capture():

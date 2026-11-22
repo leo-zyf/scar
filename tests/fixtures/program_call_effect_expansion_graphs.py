@@ -17,7 +17,7 @@ from scar.ir.program.model import (
 from scar.ir.program.state_addresses import InvokeStateOperand
 from tests.fixtures.program_driver_graphs import PACKET, REFERENCE, _Builder
 from tests.fixtures.program_graphs import shared_body_calls_program
-from tests.unit.test_execution_state_preservation import (
+from tests.fixtures.state_preservation import (
     _formals, _preservation_program, _terminal, _uses,
 )
 

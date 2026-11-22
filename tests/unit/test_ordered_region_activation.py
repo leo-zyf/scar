@@ -4,7 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 from scar.analysis.ordered_region_activation import OrderedRegionActivationProvider
-from scar.ir.program import ordered_region_activation as A
+from scar.ir.program import ordered_regions as A
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint as Point,
     DependencyFrame as Frame,DependencyKind as K,DependencyMeaning as M,
     DependencyEdge as Edge,DependencyEvidence as Evidence,DependencyStrength as S,

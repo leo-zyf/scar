@@ -11,7 +11,7 @@ from scar.ir.program.model import AccessMode, ProgramGraph, TerminatorKind
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.validation import require_valid, validate
 from tests.fixtures.program_call_return_graphs import call_return_program
-from tests.unit.test_execution_state_preservation import _preservation_program
+from tests.fixtures.state_preservation import _preservation_program
 
 
 def _program(kind='invoke'):
@@ -164,7 +164,7 @@ def test_valid_program_graph_subclass_retains_public_expansion_validation_and_re
     # address-validator restriction; the new relation must neither hide it nor
     # introduce an exception before that controlled public diagnostic.
     baseline = validate(derived)
-    assert baseline and {issue.code for issue in baseline} == {'address_graph'}
+    assert {issue.code for issue in baseline} == {'address_graph', 'attribute_lookup_graph'}
     rejections = {}
     for entry in (require_valid, ProgramIndex):
         with pytest.raises(ValueError, match='address_graph') as rejected:

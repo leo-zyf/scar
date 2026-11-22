@@ -131,7 +131,7 @@ def _source_model(root, sources, jobs):
     run = _Run(layers)
     for command, schema in _LAYERS:
         out = layers/command
-        run.stage(command, 'scar.cli', [command, '--model', model, '--out', out, '--jobs', jobs],
+        run.stage(command, 'scar.compiler.frontend.stages', [command, '--model', model, '--out', out, '--jobs', jobs],
                   out/'result.json', schema, complete_for_declared_units=True)
     return model
 

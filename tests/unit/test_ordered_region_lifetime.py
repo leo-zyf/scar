@@ -5,7 +5,7 @@ from scar.analysis.ordered_region_lifetime import OrderedRegionLifetimeProvider
 from scar.analysis.stateful_dependencies import project_stateful_dependencies
 from scar.compiler.model import Expr,SourceRef
 from scar.compiler.stateful_model import StatefulInput,StatefulAction,StatefulRegion,REQUIRED_GUARDS
-from scar.ir.program import ordered_region_activation as A,ordered_region_lifetime as L
+from scar.ir.program import ordered_regions as A, ordered_regions as L
 from scar.ir.program.dependencies import GraphNamespace,DependencyPoint as Point,DependencyStrength,DependencyMeaning
 from scar.ir.program.ids import RegionID,ValueID
 from scar.ir.program.providers import ProviderArtifact

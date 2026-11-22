@@ -14,7 +14,7 @@ import json
 import time
 
 from scar.analysis.stateful_dependencies import trace_dependencies
-from scar.ir.program import ordered_region_lifetime as L,ordered_region_activation as A
+from scar.ir.program import ordered_regions as L, ordered_regions as A
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.dependencies import (DependencyPoint as Point,DependencyEdge as Edge,
     DependencyEvidence as Evidence,DependencyCondition as Condition,DependencyKind as K,

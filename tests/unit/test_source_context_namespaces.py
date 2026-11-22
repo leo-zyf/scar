@@ -10,7 +10,7 @@ from scar.ir.program.source_namespaces import NamespaceInterfaceBinding
 from scar.ir.program.normal_targets import GlobalPort
 from scar.ir.record_codec import decode,encode
 from tests.unit.test_source_construction_connections import source_facts
-from tests.unit.test_source_expression_rules import _documents
+from tests.fixtures.source_rules import _documents
 
 
 def test_custom_builtin_mapping_arriving_after_read_subscription():

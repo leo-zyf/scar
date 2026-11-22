@@ -15,7 +15,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_selected_call_window import derive_selected_call_window
-from scar.ir.program import ordered_loop_transfer as R,normal_links as F,normal_graph as G
+from scar.ir.program import ordered_regions as R, normal_links as F, normal_graph as G
 from scar.ir.program import normal_targets as T,source_productions as P
 from scar.ir.program.model import ValueKind,ValueType
 from scar.ir.program.providers import ProviderFactReference

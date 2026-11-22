@@ -11,7 +11,7 @@ from scar.ir.program import normal_links as F, normal_targets as T, source_produ
 from scar.ir.program.protocol_signatures import ExceptionABI
 from scar.ir.program.source_template_links import SourceMaterialDomain as D
 from scar.ir.record_codec import decode, encode
-from tests.unit.test_source_expression_rules import _documents, _rules, purpose, WORLD
+from tests.fixtures.source_rules import _documents, _rules, purpose, WORLD
 
 
 def source_facts(text, *, protocols=False):

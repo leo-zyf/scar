@@ -13,7 +13,7 @@ from scar.analysis.source_text_values import source_text_candidates
 from scar.ir.program import source_text as X, source_productions as P
 from scar.ir.record_codec import encode, decode
 from tests.unit.test_source_construction_connections import source_facts
-from tests.unit.test_source_expression_rules import _documents
+from tests.fixtures.source_rules import _documents
 
 
 def test_pathlib_source_text_uses_raw_open_rules_and_excludes_local_shadow(tmp_path):

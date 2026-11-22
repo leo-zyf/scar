@@ -5,7 +5,7 @@ import pytest
 
 from scar.analysis import read_ordered_activations as reader
 from scar.analysis.normal_output import write_table
-from scar.ir.program.ordered_region_inputs import OrderedInputBoundary
+from scar.ir.program.ordered_regions import OrderedInputBoundary
 
 
 def test_independent_table_comparison_rejects_rehashed_semantic_change(tmp_path,monkeypatch):

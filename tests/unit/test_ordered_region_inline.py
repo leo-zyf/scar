@@ -7,7 +7,7 @@ from scar.ir.program import normal_links as F,source_productions as P
 from scar.ir.program.dependencies import (DependencyFrame as Frame,DependencyPoint as Point,
     GraphNamespace,context_push,context_frames)
 from scar.ir.program.ids import OperationID,RegionID,ValueID,UseID
-from scar.ir.program.ordered_region_inline import OrderedInlineRoute
+from scar.ir.program.ordered_regions import OrderedInlineRoute
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.source_template_links import SourceTemplateKey

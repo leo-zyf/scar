@@ -19,7 +19,7 @@ from scar.analysis.read_ordered_lifetimes import (_header as _life_header,
 from scar.analysis.read_ordered_activations import (_header as _activation_header,
     _read_tables as _activation_tables)
 from scar.analysis.source_symbol_variants import _table
-from scar.ir.program import ordered_loop_transfer as R
+from scar.ir.program import ordered_regions as R
 from scar.ir.program import source_selected_call_window as W
 from scar.ir.program.dependencies import DependencyEdge
 from scar.ir.execution_recipe import artifact_reference,read_artifact

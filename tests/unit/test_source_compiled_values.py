@@ -13,7 +13,7 @@ from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode, decode
 from tests.unit.test_source_construction_connections import source_facts
-from tests.unit.test_source_expression_rules import _documents
+from tests.fixtures.source_rules import _documents
 
 
 def test_path_filename_context_inheritance_and_shadow(monkeypatch):

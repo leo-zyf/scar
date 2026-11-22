@@ -8,7 +8,7 @@ from scar.ir.program.queries import ProgramIndex
 from tests.fixtures.execution_call_effect_expansion_graphs import (
     call_effect_expansion_execution, ordinary_call_effect_expansion_execution,
 )
-from tests.unit.test_execution_state_preservation import _index
+from tests.fixtures.state_preservation import _index
 
 
 _BUDGET = 262144

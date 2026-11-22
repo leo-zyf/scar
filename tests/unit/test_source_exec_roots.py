@@ -8,7 +8,7 @@ from scar.ir.program.control import LanguageCompletionKind as K
 from scar.ir.effects import Knowledge
 from scar.ir.record_codec import encode,decode
 from tests.unit.test_source_construction_connections import source_facts
-from tests.unit.test_source_expression_rules import _documents,WORLD,REF
+from tests.fixtures.source_rules import _documents,WORLD,REF
 
 
 def test_namespace_branches_preparation_discard_and_closure(monkeypatch):

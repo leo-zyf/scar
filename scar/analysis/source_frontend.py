@@ -241,11 +241,11 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
         connection_reference_catalog()
         if source_model is None:
             extra_roots = [part for p in paths[1:] for part in ('--source-root',p)]
-            run.stage('source', 'scar.cli', ['static',paths[0],*extra_roots,'--out',model,
+            run.stage('source', 'scar.compiler.frontend.stages', ['static',paths[0],*extra_roots,'--out',model,
                 '--phase','sources','--jobs',jobs], model/'manifest.json', 'scar.static-program',
                 phase='sources', source_catalog_status='COMPLETE', worker_errors=[], source_changed=[])
             for command, schema in _LAYERS:
-                run.stage(command, 'scar.cli', [command,'--model',model,'--out',out/command,
+                run.stage(command, 'scar.compiler.frontend.stages', [command,'--model',model,'--out',out/command,
                     '--jobs',jobs], out/command/'result.json', schema, complete_for_declared_units=True)
         else:
             model, source_manifest = _reuse_source_model(run,source_model,paths,sources)
@@ -262,9 +262,9 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
             singular = domain[:-1] if domain != 'roots' else 'root'
             schema = 'scar.source-'+singular+'-materials'
             common = ['source-'+domain,'--model',model,*selection,'--jobs',workers]
-            run.stage(domain, 'scar.cli', [*common,'--out',out/domain],
+            run.stage(domain, 'scar.compiler.frontend.stages', [*common,'--out',out/domain],
                 out/domain/'result.json', schema, status='LOCAL_RULES_VERIFIED', mode='COLLECTION')
-            run.stage(domain+'-verified', 'scar.cli', [*common,'--out',out/(domain+'-verified'),
+            run.stage(domain+'-verified', 'scar.compiler.frontend.stages', [*common,'--out',out/(domain+'-verified'),
                 '--materials',out/domain], out/(domain+'-verified')/'result.json', schema,
                 status='LOCAL_RULES_VERIFIED', mode='FRESH_VERIFICATION')
 

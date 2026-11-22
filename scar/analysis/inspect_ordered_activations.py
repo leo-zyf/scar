@@ -15,7 +15,7 @@ from scar.analysis.stateful_dependency_view import StatefulDependencyProvider,pu
 from scar.analysis.ordered_region_activation import OrderedRegionActivationProvider
 from scar.analysis.source_call_view import SourceFunctionCallProvider
 from scar.ir.execution_recipe import artifact_reference
-from scar.ir.program import ordered_region_activation as A,ordered_region_inputs as I,ordered_region_inline as J,view as V
+from scar.ir.program import ordered_regions as A, ordered_regions as I, ordered_regions as J, view as V
 from scar.ir.program.dependencies import context_push
 from scar.ir.record_codec import decode
 
