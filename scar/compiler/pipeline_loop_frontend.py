@@ -19,7 +19,7 @@ from scar.compiler.loop_admission import _InvariantLoopLowerer, _PendingLeafResu
 from scar.compiler.loop_admission import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
 from scar.compiler.pipeline_frontend import (_PipelineLowerer, _Value, _Callee, _global_functions,
-    _pipelines_from_leaf_plans, _prepare_leaf_plans, _source_occurrence)
+    SourceFunctionComponents, _pipelines_from_leaf_plans, _prepare_leaf_plans, _source_occurrence)
 from scar.compiler.pipeline_frontend import PipelinePlan, compose_pipeline, prepare_pipeline_leaf, document as pipeline_document, pipeline_from_dict
 from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.normal_graph import Body
@@ -200,7 +200,6 @@ def discover_pipeline_invariant_loops(catalog,source=None):
     The source argument filters returned loop owners, not their imported
     dependencies. Every dependency provider must already exist in the catalog.
     """
-    from scar.compiler.provenance import SourceFunctionComponents
     view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
     roots=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))

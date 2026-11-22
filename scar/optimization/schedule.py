@@ -265,7 +265,7 @@ def validate_schedule(schedule) -> dict:
 
 def build_region_schedule(plan: ExecutionPlan, target) -> ResourceSchedule:
     """Lower one region to explicit synchronous CPU allocation/data dependencies."""
-    from scar.compiler.provenance import graph_value_sources
+    from .optimizer import graph_value_sources
 
     validate_plan(plan)
     if plan.proof.get("supported") is not True or plan.proof.get("legal") is not True:

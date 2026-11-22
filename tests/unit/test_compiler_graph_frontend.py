@@ -103,7 +103,7 @@ def test_rejects_actions_outside_return_dependencies(instruction):
 def test_value_provenance_follows_optimizer_map_without_inventing_versions():
     from dataclasses import replace
     from scar.compiler.model import ArrayRegion,ExecutionPlan,Expr,SourceRef
-    from scar.compiler.provenance import graph_value_sources
+    from scar.optimization.optimizer import graph_value_sources
 
     nodes,output,origins=_graph().lower()
     duplicate=dict(next(row for row in origins if row.get('expression')=='n2'),expression='old-add')
