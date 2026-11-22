@@ -7,7 +7,7 @@ from pathlib import Path
 from scar.compiler import calibrate_array_task_entry as validation
 from scar.compiler.calibrate_array_entry import _normalize, _ref, _replay, _write
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.retained-native-array-task-entry'
@@ -23,7 +23,7 @@ def _same_placement(left, right):
     return all(left[key] == right[key] for key in _PLACEMENT)
 
 
-def _retained(accepted, incumbent):
+def _retained(accepted, incumbent, *, archived=None):
     if _same_placement(accepted['selected'], incumbent):
         return accepted['entry'], None, accepted['pairing']
     controls = [(label, row) for label, row in accepted.get('validation_controls', {}).items()
@@ -38,16 +38,21 @@ def _retained(accepted, incumbent):
     timing = {key: original_pairing[key] for key in ('warmup_pairs', 'measurement_pairs')}
     control_runs = [_replay(row, recipe, expected) for row in control['clean_pairs']]
     checked = [_replay(row, recipe, expected) for row in accepted['clean_pairs']]
-    comparison = compare_entry_pairs([row for row in checked if row['mode'] == 'native'] + control_runs,
-        incumbent=label, challenger='native', **timing)
+    def compare(baseline, candidate, matched, field):
+        if archived is None:
+            return compare_entry_pairs(matched, incumbent=baseline, challenger=candidate, **timing)
+        return replay_entry_pairs(matched, archived[field], incumbent=baseline, challenger=candidate, **timing)
+
+    comparison = compare(label, 'native', [row for row in checked if row['mode'] == 'native'] + control_runs,
+                         'comparison_against_local_incumbent')
     if comparison['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW':
         return accepted['entry'], comparison, original_pairing
-    control_comparison = compare_entry_pairs([row for row in checked if row['mode'] == 'original'] + control_runs,
-        incumbent='original', challenger=label, **timing)
+    control_comparison = compare('original', label, [row for row in checked if row['mode'] == 'original'] + control_runs,
+                                 'retained_vs_original')
     return control['entry'], comparison, control_comparison
 
 
-def resolve(schedule_path, acceptance_path):
+def resolve(schedule_path, acceptance_path, *, archived=None):
     from scar.optimization import independent_array_task_mpi_schedule as mpi
 
     schedule_ref = _ref(schedule_path, mpi.SCHEMA)
@@ -64,7 +69,7 @@ def resolve(schedule_path, acceptance_path):
           'independent qualification must match the retained team model and pass its original-entry comparison')
     incumbent = local['decision']['selected']
     _need(incumbent is not None, 'no existing local incumbent in the same task graph')
-    release, comparison, original_comparison = _retained(accepted, incumbent)
+    release, comparison, original_comparison = _retained(accepted, incumbent, archived=archived)
     _need(original_comparison['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW',
           'preserved local executable has not passed its own original-entry comparison')
     package = read_artifact(release)
@@ -101,7 +106,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.check and not any((args.schedule, args.acceptance, args.out)):
         result = read_artifact(_ref(args.check, SCHEMA))
-        replay = resolve(result['schedule']['uri'], result['existing_acceptance']['uri'])
+        replay = resolve(result['schedule']['uri'], result['existing_acceptance']['uri'], archived=result)
         _need(result == replay, 'retained release differs after re-evaluation')
     elif args.schedule and args.acceptance and args.out and args.check is None:
         result = resolve(args.schedule, args.acceptance)

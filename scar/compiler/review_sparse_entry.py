@@ -8,7 +8,7 @@ from scar.codegen.native_ordered_sparse_export import SCHEMA as PACKAGE
 from scar.compiler.plan_dead_result_item import SCHEMA as DEAD_ITEM
 from scar.compiler.plan_sparse_parallel import EXECUTION, _check_ordered_activity
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, compare_entry_pairs
 from scar.runtime.native_detached_entry import _admit_package
 from scar.runtime.sparse_entry_review_launch import SCHEMA as DECISION
 from scar.runtime.sparse_parallel_entry import SCHEMA as INCUMBENT
@@ -73,7 +73,8 @@ def prepare(selection, package, dead_item, harness, harness_support, out):
         execution_recipe=selected['execution_recipe'], native_package=native, dead_item_plan=plan,
         runtime_members=code, harness=artifact_reference(Path(harness).resolve(), 'scar.python-source'),
         harness_support=artifact_reference(Path(harness_support).resolve(), 'scar.python-source'),
-        scope=_SCOPE, warmup_pairs=1, measurement_pairs=3, minimum_gain=0.05, variants=list(_MODES)))
+        scope=_SCOPE, warmup_pairs=1, measurement_pairs=3, minimum_gain=DEFAULT_MINIMUM_GAIN,
+        strict_minimum_gain=True, variants=list(_MODES)))
 
 
 def _expected_command(row, frozen):
@@ -174,7 +175,8 @@ def qualify(design_path, evidence_path, out):
     reviews = {candidate: compare_entry_pairs([{key: row[key] for key in _TIMING_FIELDS} for row in runs
         if row['mode'] in ('parallel', candidate)], incumbent='parallel', challenger=candidate,
         warmup_pairs=frozen['warmup_pairs'], measurement_pairs=frozen['measurement_pairs'],
-        minimum_gain=frozen['minimum_gain']) for candidate in ('compact', 'dead_item')}
+        minimum_gain=frozen['minimum_gain'], strict_minimum_gain=frozen.get('strict_minimum_gain', False))
+        for candidate in ('compact', 'dead_item')}
     advance = any(review['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for review in reviews.values())
     return _write(out, dict(schema=DECISION, schema_version=1, entry=frozen['entry'], context=frozen['context'],
         incumbent=frozen['incumbent'], design=design, evidence=evidence_ref, processes=processes, comparisons=reviews,

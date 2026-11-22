@@ -37,8 +37,8 @@ def test_component_break_even_is_exact_sourced_and_can_gate_before_loading(tmp_p
              original_per_call=0.1, native_per_call=0.05), basis='DECLARED_MODEL')
     request = dict(context=context, available_cpu_ids=[0, 1, 2], memory_budget_bytes=64)
     cold = plan_deployment(document, reuse_count=1, **request)
-    assert cold['decision'] == 'NO_OP' and cold['break_even_reuse_count'] == 23
-    assert cold['qualifying_reuse_range'] == dict(minimum=23, maximum=None)
+    assert cold['decision'] == 'NO_OP' and cold['break_even_reuse_count'] == 21
+    assert cold['qualifying_reuse_range'] == dict(minimum=21, maximum=None)
     repeated = plan_deployment(document, reuse_count=23, **request)
     assert repeated['decision'] == 'LOAD_NATIVE_CANDIDATE'
     assert repeated['total_costs']['original']['seconds'] == 2.3
@@ -83,3 +83,20 @@ def test_complete_boundary_is_replayed_at_its_original_count_without_setup_subtr
     bad = deepcopy(warm); bad['costs']['native_total']['evidence'] = warm['costs']['original_total']['evidence']
     invalid = plan_deployment(bad, **request)
     assert invalid['decision'] == 'NO_OP' and any('source value/unit/basis differs' in row['reason'] for row in invalid['frontier'])
+
+
+def test_default_gain_is_strict_and_legacy_deployment_receipt_replays(tmp_path):
+    document, context = profile(tmp_path, 'boundary', 'FRESH_PROCESS', 'COMPONENTS',
+        dict(original_one_time=0, native_load=9, native_setup=0, original_per_call=100, native_per_call=90),
+        basis='DECLARED_MODEL')
+    request = dict(context=context, available_cpu_ids=[0, 1], memory_budget_bytes=64)
+    boundary = plan_deployment(document, reuse_count=1, **request)
+    assert boundary['request']['minimum_gain'] == 0.01
+    assert boundary['request']['strict_minimum_gain'] is True
+    assert boundary['decision'] == 'NO_OP' and boundary['break_even_reuse_count'] == 2
+    assert verify_deployment_plan(boundary) == boundary
+    assert plan_deployment(document, reuse_count=2, **request)['decision'] == 'LOAD_NATIVE_CANDIDATE'
+    legacy = plan_deployment(document, reuse_count=1, minimum_gain=0.01, strict_minimum_gain=False, **request)
+    assert 'strict_minimum_gain' not in legacy['request']
+    assert legacy['decision'] == 'LOAD_NATIVE_CANDIDATE' and legacy['break_even_reuse_count'] == 1
+    assert verify_deployment_plan(legacy) == legacy

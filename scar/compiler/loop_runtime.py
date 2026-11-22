@@ -11,6 +11,7 @@ import threading
 from types import FunctionType, ModuleType
 
 from scar.codegen import GuardFailure
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.trace.code_snapshot import code_key
 from .loop_model import validate_loop
 from .pipeline_runtime import _state, _same_state
@@ -137,9 +138,11 @@ def install_loop(module, artifact, *, exclusive_inputs=False, selection=None, tr
 
 
 def select_loop_measured(artifact, baseline_seconds, native_seconds, *, validated,
-                         native_fallbacks=0, minimum_gain=0.05):
+                         native_fallbacks=0, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     from copy import deepcopy
-    from scar.optimization.selection import _samples, _summary
+    from scar.optimization.selection import _samples, _strict_measured_gain_met, _summary
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     validate_loop(artifact.loop)
     reasons = []
     baseline, error = _samples(baseline_seconds)
@@ -157,12 +160,18 @@ def select_loop_measured(artifact, baseline_seconds, native_seconds, *, validate
     speedup = a['median'] / b['median'] if baseline and native else None
     if gain is not None and (not math.isfinite(gain) or not math.isfinite(speedup)):
         reasons.append('nonfinite_statistics'); gain = speedup = None
-    if valid_threshold and gain is not None and gain < minimum_gain:
-        reasons.append('measured_gain_below_required_threshold')
-    return dict(schema='scar.loop-measured-selection', schema_version=1,
+    if valid_threshold and gain is not None:
+        profitable = (_strict_measured_gain_met(baseline, native, minimum_gain) if strict_minimum_gain else
+                      gain >= minimum_gain)
+        if not profitable:
+            reasons.append('measured_gain_below_required_threshold')
+    result = dict(schema='scar.loop-measured-selection', schema_version=1,
         status='MEASURED', decision='NO_OP' if reasons else 'TRANSFORM_UNDER_CONTRACT',
         selected=not reasons, reasons=reasons, baseline=a, native=b, speedup=speedup,
         gain_fraction=gain, minimum_gain=minimum_gain,
         artifact={key:artifact.report[key] for key in ('build_id','loop_sha256','strategy_sha256')},
         scope='EXACT_LOOP_SOURCE_NESTED_CALLEES_ARRAY_LAYOUT_SHAPE_AND_TRIP_COUNT',
         external_assumptions=deepcopy(artifact.strategy['external_assumptions']))
+    if strict_minimum_gain:
+        result['strict_minimum_gain'] = True
+    return result

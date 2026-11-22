@@ -67,7 +67,7 @@ def _replay_selection(artifact,selection,retain):
         fallbacks+=sum(item['fallback_calls'] for item in stats)
     replay=select_stateful_measured(artifact,measurement['baseline_seconds']['samples'],
         measurement['optimized_seconds']['samples'],validated=True,native_fallbacks=fallbacks,
-        minimum_gain=selection['minimum_gain'])
+        minimum_gain=selection['minimum_gain'], strict_minimum_gain=selection.get('strict_minimum_gain', False))
     if any(selection.get(key)!=value for key,value in replay.items()):
         raise ValueError('stateful measured selection differs from retained sample replay')
     return selection

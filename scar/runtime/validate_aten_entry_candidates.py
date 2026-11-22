@@ -156,7 +156,8 @@ def read_entry_candidate_validation(path, digest):
                    report['expected_native_calls'])
     candidates = report['candidate_order']
     replay = select_aten_entry_candidate(report['rounds'], candidates, warmup_rounds=report['warmup_rounds'],
-        measured_rounds=report['measured_rounds'], expected_native_calls=report['expected_native_calls'])
+        measured_rounds=report['measured_rounds'], expected_native_calls=report['expected_native_calls'],
+        gain_policy=report.get('gain_policy'))
     if any(report.get(key) != value for key, value in replay.items()):
         raise ValueError('the recorded ATen entry choice does not match the retained round evidence')
     trials = {name: (row['uri'], row['sha256']) for name, row in report['trials'].items()}

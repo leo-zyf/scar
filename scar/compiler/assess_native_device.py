@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.native_device_pair import admit_native_device_pair, replay_native_device_pair
 from scar.optimization.native_device_comparison import compare_native_device, native_device_probe_reason
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 
 SCHEMA = 'scar.native-device-assessment'
@@ -21,12 +22,15 @@ def _content_fields(row):
     return {key: row[key] for key in ('sha256', 'size_bytes')}
 
 
-def _trial_settings(warmup, count, minimum):
+def _trial_settings(warmup, count, minimum, *, strict=True):
     if (type(warmup) is not int or not 0 <= warmup <= 100
             or type(count) is not int or not 3 <= count <= 500
-            or type(minimum) not in (int, float) or not 0 <= minimum < 1):
+            or type(minimum) not in (int, float) or not 0 <= minimum < 1 or type(strict) is not bool):
         raise ValueError('expected 0–100 warmup pairs, 3–500 measured pairs and a finite gain fraction')
-    return dict(warmup_pairs=warmup, measurement_pairs=count, minimum_gain=minimum)
+    settings = dict(warmup_pairs=warmup, measurement_pairs=count, minimum_gain=minimum)
+    if strict:
+        settings['strict_minimum_gain'] = True
+    return settings
 
 
 def _paths(named, witness):
@@ -136,7 +140,8 @@ def _replay_observation(witness, observation, settings, cpu, cuda):
     references, _, device = _locked_trial_context(witness, observation, cpu, cuda)
     decision = compare_native_device(observation['probe'], observation['runs'], references=references,
         output_shapes=[item['shape'] for item in witness['outputs']], device=witness['cuda']['device'],
-        byte_order=witness['abi']['byte_order'], runtime_qualified=device is not None, **settings)
+        byte_order=witness['abi']['byte_order'], runtime_qualified=device is not None,
+        **dict({'strict_minimum_gain': False}, **settings))
     if _phase(decision) != observation['phase']:
         raise ValueError('paired observation phase differs from its replayed probe and attempts')
     return decision
@@ -144,7 +149,7 @@ def _replay_observation(witness, observation, settings, cpu, cuda):
 
 def assess_native_device(cpu_project, cuda_project, *, cpu_manifest_sha256, cuda_manifest_sha256, out,
                          named_inputs, references, cpu_profile=None, warmup_pairs=1,
-                         measurement_pairs=4, minimum_gain=0.05):
+                         measurement_pairs=4, minimum_gain=DEFAULT_MINIMUM_GAIN):
     from scar.runtime.native_device_probe import probe_native_device_pair
 
     out = Path(out).resolve()
@@ -184,7 +189,8 @@ def replay_native_device_assessment(path, *, assessment_sha256, cpu_project, cud
         raise ValueError('unsupported native device assessment')
     cpu, cuda, witness = replay_native_device_pair(report['pair'], cpu_project, cuda_project)
     stored = report['settings']
-    settings = _trial_settings(stored['warmup_pairs'], stored['measurement_pairs'], stored['minimum_gain'])
+    settings = _trial_settings(stored['warmup_pairs'], stored['measurement_pairs'], stored['minimum_gain'],
+                               strict=stored.get('strict_minimum_gain', False))
     if settings != stored or _replay_observation(witness, report['observation'], settings, cpu, cuda) != report['decision']:
         raise ValueError('native device assessment decision differs from offline replay')
     return report
@@ -205,7 +211,7 @@ def main(argv=None):
     parser.add_argument('--reference', action='append', default=[], dest='references')
     parser.add_argument('--warmup-pairs', type=int, default=1)
     parser.add_argument('--measurement-pairs', type=int, default=4)
-    parser.add_argument('--minimum-gain', type=float, default=0.05)
+    parser.add_argument('--minimum-gain', type=float, default=DEFAULT_MINIMUM_GAIN)
     args = parser.parse_args(argv)
     if args.check:
         if not args.check_sha256:

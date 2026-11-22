@@ -13,6 +13,7 @@ from pathlib import Path
 import statistics
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.optimization.resource_solver import semantic_sha256
 
 
@@ -83,7 +84,7 @@ def _validated_samples(measurement,report):
     return baseline,native,native_calls
 
 
-def finalize_stateful_candidate(pipeline,candidate,validation,out,minimum_gain=.05):
+def finalize_stateful_candidate(pipeline,candidate,validation,out,minimum_gain=DEFAULT_MINIMUM_GAIN):
     """Preserve the pipeline and add a measured, guarded stateful bundle row."""
     from scar.codegen.stateful import load
     from scar.compiler.export_stateful import export_stateful
@@ -158,7 +159,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pipeline',required=True);parser.add_argument('--candidate',required=True)
     parser.add_argument('--validation',required=True);parser.add_argument('--out',required=True)
-    parser.add_argument('--minimum-gain',type=float,default=.05);args=parser.parse_args(argv)
+    parser.add_argument('--minimum-gain',type=float,default=DEFAULT_MINIMUM_GAIN);args=parser.parse_args(argv)
     result=finalize_stateful_candidate(args.pipeline,args.candidate,args.validation,args.out,args.minimum_gain)
     row=result['stateful_regions'][-1]
     print(json.dumps(dict(result=str(Path(args.out).resolve()/'result.json'),status=row['status'],

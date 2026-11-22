@@ -13,7 +13,7 @@ from scar.codegen.native_provider_bundle import _content
 from scar.compiler.compile_exported_aten import _calibration_paths, _write_record
 from scar.compiler.compile_exported_nvhpc import _compare, check_nvhpc_project
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.nvhpc-source-process-observation'
@@ -91,10 +91,22 @@ def _assess(arms, contract, sizes, torch):
     return dict(accepted=accepted, same_stdout_stderr=same_streams, outputs=checks)
 
 
-def _timing(runs, warmup, count, *, minimum_gain=0.05):
-    return compare_entry_pairs([{key: run[key] for key in _TIMING_FIELDS} for run in runs],
+def _timing_rows(runs):
+    return [{key: run[key] for key in _TIMING_FIELDS} for run in runs]
+
+
+def _timing(runs, warmup, count, *, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
+    return compare_entry_pairs(_timing_rows(runs),
         incumbent='ORIGINAL', challenger='NATIVE', warmup_pairs=warmup, measurement_pairs=count,
-        minimum_gain=minimum_gain)
+        minimum_gain=minimum_gain, strict_minimum_gain=strict_minimum_gain)
+
+
+def _replay_timing(runs, warmup, count, saved, *, minimum_gain, strict_minimum_gain):
+    retained = replay_entry_pairs(_timing_rows(runs), saved, incumbent='ORIGINAL', challenger='NATIVE',
+                                  warmup_pairs=warmup, measurement_pairs=count)
+    if minimum_gain is None:
+        return retained
+    return _timing(runs, warmup, count, minimum_gain=minimum_gain, strict_minimum_gain=strict_minimum_gain)
 
 
 def _collect_pairs(commands, context, out, publication, contract, sizes, count, torch):
@@ -201,7 +213,7 @@ def validate_source_process(project, manifest_sha256, arguments, out, *, warmup_
     return report
 
 
-def replay_source_process(reference, evidence, scope, *, minimum_gain):
+def replay_source_process(reference, evidence, scope, *, minimum_gain=None, strict_minimum_gain=True):
     """Cold-check the retained ordered process outputs and original scope evidence."""
     import torch
 
@@ -230,16 +242,17 @@ def replay_source_process(reference, evidence, scope, *, minimum_gain):
     folder = Path(reference['uri']).parent
     if not _replay_pairs(folder, runs, saved['comparisons'], contract, sizes, warmup + count, torch):
         raise ValueError('incomplete or failed retained source process pairs')
-    if _timing(runs, warmup, count) != saved['timing']:
-        raise ValueError('retained process timing summary changed')
+    timing = _replay_timing(runs, warmup, count, saved['timing'], minimum_gain=minimum_gain,
+                            strict_minimum_gain=strict_minimum_gain)
     read_artifact(reference, json_document=False)
-    return _timing(runs, warmup, count, minimum_gain=minimum_gain), context
+    return timing, context
 
 
-def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
+def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain=None, strict_minimum_gain=True):
     """Attach diagnostic effects and a scoped component forecast to the clean comparison."""
     if reference['schema'] == SCHEMA:
-        return replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain)
+        return replay_source_process(reference, evidence, scope, minimum_gain=minimum_gain,
+                                     strict_minimum_gain=strict_minimum_gain)
     document = read_artifact(reference)
     version = document['schema_version']
     fields = {'schema', 'schema_version', 'process', 'effects', 'lifecycle'}
@@ -248,7 +261,8 @@ def replay_source_entry_evidence(reference, evidence, scope, *, minimum_gain):
     if reference['schema'] != EVIDENCE or type(version) is not int or version not in (1, 2) or set(document) != fields:
         raise ValueError('a versioned NVIDIA source evidence bundle is required')
     process = document['process']
-    timing, context = replay_source_process(process, evidence, scope, minimum_gain=minimum_gain)
+    timing, context = replay_source_process(process, evidence, scope, minimum_gain=minimum_gain,
+                                            strict_minimum_gain=strict_minimum_gain)
     diagnostics = {}
     effects = document['effects']
     if effects is not None:

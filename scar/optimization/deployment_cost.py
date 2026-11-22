@@ -13,6 +13,8 @@ import math
 from pathlib import Path
 import re
 
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
+
 
 _COMPONENTS = ('original_one_time', 'native_load', 'native_setup',
                'original_per_call', 'native_per_call')
@@ -94,11 +96,11 @@ def _quantity(value):
     return dict(seconds=approximate, exact_seconds=dict(numerator=value.numerator, denominator=value.denominator))
 
 
-def _range(original_setup, native_setup, original_call, native_call, gain):
+def _range(original_setup, native_setup, original_call, native_call, gain, strict_minimum_gain):
     """Positive integer counts satisfying the exact gain inequality."""
     intercept = (1 - gain) * original_setup - native_setup
     slope = (1 - gain) * original_call - native_call
-    strict = gain == 0  # A zero gain threshold still requires an improvement.
+    strict = strict_minimum_gain or gain == 0
     if slope == 0:
         return dict(minimum=1, maximum=None) if (intercept > 0 if strict else intercept >= 0) else None
     crossing = -intercept / slope
@@ -111,12 +113,14 @@ def _range(original_setup, native_setup, original_call, native_call, gain):
 
 
 def plan_deployment(profile, *, context, reuse_count, available_cpu_ids=None,
-                    memory_budget_bytes=None, minimum_gain=0.05):
+                    memory_budget_bytes=None, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     """Return a metadata-only NO_OP or permission to consider loading one candidate.
 
     This cost gate cannot authorize deployment or replace source, correctness,
     CPU affinity, memory, input, and external-contract admission at execution.
     """
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     frontier, infeasible, cache = [], [], {}
     def issue(field, reason): frontier.append(dict(field=field, reason=reason))
     try:
@@ -131,6 +135,8 @@ def plan_deployment(profile, *, context, reuse_count, available_cpu_ids=None,
     request = dict(context=_wire(context), reuse_count=reuse_count,
         available_cpu_ids=available,
         memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain)
+    if strict_minimum_gain:
+        request['strict_minimum_gain'] = True
     if not isinstance(document, dict):
         document = {}; issue('profile', 'canonical deployment cost profile required')
     allowed = {'schema', 'schema_version', 'mode', 'context', 'context_evidence', 'costs',
@@ -225,12 +231,15 @@ def plan_deployment(profile, *, context, reuse_count, available_cpu_ids=None,
             original = values['original_one_time'] + reuse_count * values['original_per_call']
             native_setup = values['native_load'] + values['native_setup']
             native = native_setup + reuse_count * values['native_per_call']
-            qualifying = _range(values['original_one_time'], native_setup, values['original_per_call'], values['native_per_call'], gain)
+            qualifying = _range(values['original_one_time'], native_setup, values['original_per_call'],
+                                values['native_per_call'], gain, strict_minimum_gain)
             break_even = qualifying['minimum'] if qualifying and qualifying['maximum'] is None else None
         else: original, native = values['original_total'], values['native_total']
         totals = dict(original=_quantity(original), native=_quantity(native))
+        threshold = (1 - gain) * original
         if original <= 0: issue('costs.original_total', 'positive original total required for a gain comparison')
-        elif native >= original or native > (1 - gain) * original: infeasible.append('cost_gain_below_required_threshold')
+        elif native >= original or native > threshold or (strict_minimum_gain and native == threshold):
+            infeasible.append('cost_gain_below_required_threshold')
     assumptions = document.get('model_assumptions', [])
     if not isinstance(assumptions, list) or any(not isinstance(item, str) or not item for item in assumptions):
         issue('model_assumptions', 'explicit model assumptions must be a list of nonempty strings'); assumptions = []
@@ -265,7 +274,9 @@ def verify_deployment_plan(report):
             raise ValueError('deployment profile receipt differs')
         profile = source['path']
     elif source['kind'] == 'FACT_REFERENCE': profile = source['reference']
-    expected = plan_deployment(profile, **value['request'])
+    request = dict(value['request'])
+    request.setdefault('strict_minimum_gain', False)
+    expected = plan_deployment(profile, **request)
     if _digest(expected) != _digest(value): raise ValueError('deployment cost plan differs from original scope/evidence replay')
     return value
 

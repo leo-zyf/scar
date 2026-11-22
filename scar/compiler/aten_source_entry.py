@@ -277,7 +277,7 @@ def validate_source_entry(project, manifest_sha256, input_root, out, *, steps, m
     if _inputs(abi, input_root) != inputs or any(_content(path) != expected for path, expected in source_files.items()):
         raise ValueError('original inputs or source authority changed while comparing the entry')
     decision = compare_entry_pairs(runs, incumbent='ORIGINAL_PYTHON', challenger='NATIVE_CPP',
-        warmup_pairs=1, measurement_pairs=3, minimum_gain=.05) if measure else None
+        warmup_pairs=1, measurement_pairs=3) if measure else None
     report = dict(schema='scar.aten-source-entry-validation', schema_version=1,
         project=str(root), manifest_sha256=manifest_sha256, steps=steps, inputs=inputs, argv=argv,
         commands=commands, cpu_ids=manifest['cpus'], python_provider_environment=env,

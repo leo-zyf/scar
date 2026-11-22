@@ -1,11 +1,13 @@
 """Measured implementation selection within the guarded array-region contract."""
 
+from fractions import Fraction
 import math
 from numbers import Real
 import statistics
 
 from scar.compiler.model import ExecutionPlan
 from scar.compiler.validation import validate_plan
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 
 def _samples(values):
@@ -37,8 +39,16 @@ def _summary(samples):
                       0.0 if samples else None)}
 
 
+def _strict_measured_gain_met(baseline, native, minimum_gain):
+    def median_twice(samples):
+        ordered = sorted(samples)
+        return Fraction(str(ordered[(len(ordered) - 1) // 2])) + Fraction(str(ordered[len(ordered) // 2]))
+
+    return median_twice(native) < (1 - Fraction(str(minimum_gain))) * median_twice(baseline)
+
+
 def select_measured(plan, baseline_seconds, native_seconds, *, validated,
-                    native_fallbacks=0, minimum_gain=0.05) -> dict:
+                    native_fallbacks=0, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True) -> dict:
     """Select only a validated, faster implementation under its explicit contract.
 
     Timing samples must be positive finite seconds. The gain is the reduction in
@@ -76,12 +86,14 @@ def select_measured(plan, baseline_seconds, native_seconds, *, validated,
     if not required.issubset(assumptions):
         reasons.append("missing_external_contract_assumptions")
     return _finish_decision(baseline, native, reasons, assumptions, guards,
-                            validated, native_fallbacks, minimum_gain)
+                            validated, native_fallbacks, minimum_gain, strict_minimum_gain)
 
 
 def _finish_decision(baseline, native, reasons, assumptions, guards,
-                     validated, native_fallbacks, minimum_gain):
+                     validated, native_fallbacks, minimum_gain, strict_minimum_gain):
     """Cost policy shared by separately admitted semantic profiles."""
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     if validated is not True:
         reasons.append("correctness_not_validated")
     if type(native_fallbacks) is not int or native_fallbacks < 0:
@@ -100,12 +112,14 @@ def _finish_decision(baseline, native, reasons, assumptions, guards,
     if speedup is not None and (not math.isfinite(speedup) or not math.isfinite(gain)):
         reasons.append("nonfinite_derived_statistics")
         speedup, gain = None, None
-    if valid_threshold and gain is not None and (gain <= 0 or
-            (gain < minimum_gain and not math.isclose(gain, minimum_gain,
-                                                      rel_tol=1e-12, abs_tol=0.0))):
-        reasons.append("measured_gain_below_required_threshold")
+    if valid_threshold and gain is not None:
+        profitable = (_strict_measured_gain_met(baseline, native, minimum_gain) if strict_minimum_gain else
+                      gain > 0 and (gain >= minimum_gain or math.isclose(gain, minimum_gain,
+                                                                        rel_tol=1e-12, abs_tol=0.0)))
+        if not profitable:
+            reasons.append("measured_gain_below_required_threshold")
     selected = not reasons
-    return {
+    result = {
         "status": "MEASURED",
         "decision": "TRANSFORM_UNDER_CONTRACT" if selected else "NO_OP",
         "selected": selected,
@@ -118,10 +132,13 @@ def _finish_decision(baseline, native, reasons, assumptions, guards,
         "scope": "Selection applies only to the validated workload and explicit profile "
                  "contract; it does not prove global purity or new provenance.",
     }
+    if strict_minimum_gain:
+        result['strict_minimum_gain'] = True
+    return result
 
 
 def select_stateful_measured(artifact, baseline_seconds, native_seconds, *, validated,
-                             native_fallbacks=0, minimum_gain=0.05):
+                             native_fallbacks=0, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     """Admit one measured stateful implementation, retaining original execution.
 
     Legality is checked through the ordered stateful plan, independently of the
@@ -150,7 +167,7 @@ def select_stateful_measured(artifact, baseline_seconds, native_seconds, *, vali
         assumptions = ()
         reasons.append('missing_stateful_external_contract_assumptions')
     result = _finish_decision(baseline, native, reasons, assumptions, region.guards,
-                             validated, native_fallbacks, minimum_gain)
+                             validated, native_fallbacks, minimum_gain, strict_minimum_gain)
     result.update(profile=region.profile,
         artifact={key: report.get(key) for key in ('build_id', 'plan_sha256')},
         input_shapes=plan.get('input_shapes', {}),

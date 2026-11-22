@@ -37,7 +37,8 @@ def runner_identity():
         'runtime/caller_pipeline_cli.py', 'runtime/caller_pipeline_guard.py',
         'runtime/compiled_deployment.py', 'runtime/entry_runner.py', 'runtime/native_loop.py',
         'runtime/stateful_guard.py', 'runtime/native_stateful.py', 'runtime/stateful_contract.py',
-        'runtime/bundle_metadata.py', 'runtime/aten_provider_identity.py', 'trace/code_snapshot.py')
+        'runtime/bundle_metadata.py', 'runtime/aten_provider_identity.py', 'trace/code_snapshot.py',
+        'optimization/paired_entry_selection.py')
     return sha256(json.dumps([(name, sha256((root/name).read_bytes()).hexdigest()) for name in names],
         separators=(',', ':')).encode()).hexdigest()
 
@@ -181,15 +182,21 @@ def execution_counts(report, *, bundle, context, identity, environment, design=N
     return native if type(native) is int else 0, fallback if type(fallback) is int else 0, bool(valid)
 
 
-def whole_entry_gain(original_ns, candidate_ns, minimum_gain):
+def whole_entry_gain(original_ns, candidate_ns, minimum_gain, *, strict_minimum_gain=True):
     """Require both a material median gain and separated clean process samples."""
+    from scar.optimization.paired_entry_selection import strict_entry_gain_met
+
     if not original_ns or len(original_ns) != len(candidate_ns):
         raise ValueError('paired complete-process durations required')
     if any(type(ns) is not int or ns <= 0 for ns in (*original_ns, *candidate_ns)):
         raise ValueError('positive integer process durations required')
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     gain = 1 - statistics.median(candidate_ns) / statistics.median(original_ns)
     separated = max(candidate_ns) < min(original_ns)
-    return gain, separated, separated and gain >= minimum_gain
+    meets_gain = (strict_entry_gain_met(original_ns, candidate_ns, minimum_gain) if strict_minimum_gain else
+                  gain >= minimum_gain)
+    return gain, separated, separated and meets_gain
 
 
 def deployment_gate(receipt, *, expected_deployment_sha256, bundle,
@@ -254,7 +261,8 @@ def deployment_gate(receipt, *, expected_deployment_sha256, bundle,
                 raise ValueError('whole-entry candidate or guarded-boundary observations invalid')
             if sample['phase'] == 'MEASUREMENT': measurements.append(sample)
         gain, _, profitable = whole_entry_gain([row['baseline']['wall_ns'] for row in measurements],
-            [row['optimized']['wall_ns'] for row in measurements], minimum)
+            [row['optimized']['wall_ns'] for row in measurements], minimum,
+            strict_minimum_gain=policy.get('strict_minimum_gain', False))
         if not profitable: return rejected('not_profitable_at_frozen_whole_entry_gain')
         return dict(**rejected('positive_candidate_gain_only_final_delivery_admission_cost_not_covered'),
             candidate_gain_fraction=gain, evidence_status='PRELIMINARY_CANDIDATE_ONLY',

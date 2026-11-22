@@ -14,6 +14,7 @@ from time import perf_counter_ns
 
 from scar.compiler.stateful_holdout import _write
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.runtime.compiled_deployment import thread_environment
 
 DESIGN = 'scar.snapshot-entry-cost-design'
@@ -102,7 +103,7 @@ def prepare(candidate, previous_validation, runner, argv, out):
     return _write(output/'design.json', dict(schema=DESIGN, schema_version=1,
         context=common, runner=runner_ref, previous_correctness=validation_ref,
         argv=argv, worker_designs=formats, pair_count=PAIR_COUNT,
-        policy=dict(minimum_gain=0.05, max_relative_error=0.2),
+        policy=dict(minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True, max_relative_error=0.2),
         root=str(output), prepared_at=_now(), protocol='FRESH_PROCESS_LAUNCH_TO_EXIT_INCLUDING_STARTUP_AND_IO',
         implementation=_ref(__file__, 'scar.implementation-source')))
 
@@ -114,12 +115,15 @@ def _design(value):
     previous = _read(original['design'], WORKER_DESIGN)
     context = saved['context']
     compiled = _read(context['candidate'], CANDIDATE)
+    policy = saved['policy']
+    valid_policy = policy in (dict(minimum_gain=0.05, max_relative_error=0.2),
+                              dict(minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True, max_relative_error=0.2))
     _need(original['validated'] is True and previous['runner'] == saved['runner']
         and previous['entry'] == context['entry']
         and previous['argv'] not in saved['argv'].values()
         and previous['bundles']['borrowed']['scope_admission'] == compiled['scope_admission'] == context['scope_admission']
         and saved['implementation'] == _ref(__file__, 'scar.implementation-source')
-        and saved['pair_count'] == PAIR_COUNT and saved['policy'] == dict(minimum_gain=0.05, max_relative_error=0.2),
+        and saved['pair_count'] == PAIR_COUNT and valid_policy,
         'frozen software or policy differs from the admitted source benchmark')
     _coordinate(saved['argv'])
     for member in (context['entry'], saved['runner'], compiled['library'], compiled['source']):
@@ -295,8 +299,11 @@ def _evaluation(model_path, model, design_ref, design, ticket, holdout):
     gain = (original-native)/original
     original_error = abs(predicted_original-original)/original
     native_error = abs(predicted_native-native)/native
-    qualifies = (min(expected_gain, gain) >= Fraction(1, 20)
-        and max(original_error, native_error) <= Fraction(1, 5))
+    policy = design['policy']
+    threshold = Fraction(str(policy['minimum_gain']))
+    lower_gain = min(expected_gain, gain)
+    gain_qualifies = lower_gain > threshold if policy.get('strict_minimum_gain') else lower_gain >= threshold
+    qualifies = gain_qualifies and max(original_error, native_error) <= Fraction(str(policy['max_relative_error']))
     context = {**design['context'], 'argv':design['argv']['holdout']}
     return dict(schema=SCHEMA, schema_version=1, decision='LOAD_NATIVE_CANDIDATE' if qualifies else 'NO_OP',
         qualifies=qualifies, context=context, design=design_ref, model=model_path, holdout=holdout,

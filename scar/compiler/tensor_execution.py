@@ -11,7 +11,7 @@ from time import perf_counter_ns
 from scar.codegen.native_provider_bundle import _content
 from scar.ir.implementation_plan import CostEstimate, problem_from_dict
 from scar.optimization.joint_planner import verify_execution_plan
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 _PHASES = ('setup_ns', 'read_ns', 'loop_ns', 'publish_ns')
@@ -81,8 +81,8 @@ def replay_native_comparison(comparison, expected):
     runs = comparison['runs']
     if len(comparison['outputs']) != len(runs) or any(actual != expected for actual in comparison['outputs']):
         raise ValueError('paired native candidates do not match the calibrated output receipts')
-    decision = compare_entry_pairs(runs, incumbent=_MODES[0], challenger=_MODES[1],
-                                   warmup_pairs=1, measurement_pairs=4)
+    decision = replay_entry_pairs(runs, comparison['decision'], incumbent=_MODES[0], challenger=_MODES[1],
+                                  warmup_pairs=1, measurement_pairs=4)
     if decision != comparison['decision']:
         raise ValueError('paired native selection differs from its underlying timing rows')
     return 'READY_DAG' if decision['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' else 'SERIAL'

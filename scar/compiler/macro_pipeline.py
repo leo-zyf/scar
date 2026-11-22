@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference,read_artifact
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 SCHEMA='scar.macro-pipeline-preparation'
 
@@ -37,7 +38,7 @@ def _pins():
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 
-def _derive(inputs,profile,cpus,budget,gain):
+def _derive(inputs,profile,cpus,budget,gain,*,strict_minimum_gain=True):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs
     from scar.analysis.pipeline_region_pass import derive_fusion_region
     from scar.compiler.pipeline_fusion_delivery import derive_fusion_blueprint
@@ -50,19 +51,22 @@ def _derive(inputs,profile,cpus,budget,gain):
         blueprint=derive_fusion_blueprint(pipeline,memory,target,available_cpu_ids=cpus,source_refs=refs)
         budget=memory['memory_budget_bytes']if budget is None else budget
         report=run_fusion_pass(region,blueprint,cost_profile=None if profile is None else profile['uri'],
-            available_cpu_ids=cpus,memory_budget_bytes=budget,minimum_gain=gain)
+            available_cpu_ids=cpus,memory_budget_bytes=budget,minimum_gain=gain,
+            strict_minimum_gain=strict_minimum_gain)
         report=json.loads(json.dumps(report,sort_keys=True,allow_nan=False))
         return pipeline,region,blueprint,report,budget,values
 
 
-def _metadata(inputs,profile,cpus,budget,gain,files,decision):
-    return dict(schema=SCHEMA,schema_version=2,inputs=inputs,cost_profile=profile,
+def _metadata(inputs,profile,cpus,budget,gain,files,decision,*,strict_minimum_gain=True):
+    result=dict(schema=SCHEMA,schema_version=2,inputs=inputs,cost_profile=profile,
         available_cpu_ids=list(cpus),memory_budget_bytes=budget,minimum_gain=gain,
         files=files,decision=decision,producer_pins=_pins(),
         source_F4_and_value_routes_replayed=True,source_graph_unchanged=True,
         original_python_is_actual_alternative=True,global_solver_invoked=False,
         candidate_versions_benchmarked=False,target_program_executed=False,
         deployment_authorized=False,default_backend='NO_OP')
+    if strict_minimum_gain:result['strict_minimum_gain']=True
+    return result
 
 
 def _structural_selection(region, report):
@@ -77,7 +81,7 @@ def _structural_selection(region, report):
 
 
 def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_bytes=None,
-        minimum_gain=.05,compile_native=False):
+        minimum_gain=DEFAULT_MINIMUM_GAIN,compile_native=False):
     from scar.compiler.project_pipeline_temporal import INPUTS
     from scar.optimization.macro_pass import SCHEMA as PASS_SCHEMA
     reference=_reference(inputs,INPUTS)
@@ -126,8 +130,9 @@ def check(preparation):
     reference=_reference(preparation,SCHEMA);saved=read_artifact(reference)
     if saved.get('schema_version')!=2 or saved['producer_pins']!=_pins():
         raise ValueError('macro pipeline producer differs')
+    strict=saved.get('strict_minimum_gain',False)
     pipeline,region,blueprint,report,budget,values=_derive(saved['inputs'],saved['cost_profile'],
-        saved['available_cpu_ids'],saved['memory_budget_bytes'],saved['minimum_gain'])
+        saved['available_cpu_ids'],saved['memory_budget_bytes'],saved['minimum_gain'],strict_minimum_gain=strict)
     if any(read_artifact(saved['files'][name])!=value for name,value in
             (('region',region),('blueprint',blueprint),('pass_report',report))):
         raise ValueError('macro pipeline differs from original source, cost or lowering replay')
@@ -135,7 +140,7 @@ def check(preparation):
     if context['context']!=report['cost_context']or context['complete_scope_reuse_count']!=1:
         raise ValueError('protected-call cost context differs')
     if saved!=_metadata(saved['inputs'],saved['cost_profile'],saved['available_cpu_ids'],budget,
-            saved['minimum_gain'],saved['files'],report['decision']):
+            saved['minimum_gain'],saved['files'],report['decision'],strict_minimum_gain=strict):
         raise ValueError('macro pipeline preparation summary differs')
     from scar.compiler.semantic_revision import check_fusion_revision
     check_fusion_revision(saved['files']['semantic_revision'],pipeline,
@@ -191,7 +196,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inputs');parser.add_argument('--out');parser.add_argument('--cost-profile')
     parser.add_argument('--cpu-ids',help='cost-applicable caller affinity domain, not pinning')
-    parser.add_argument('--memory-budget-bytes',type=int);parser.add_argument('--minimum-gain',type=float,default=.05)
+    parser.add_argument('--memory-budget-bytes',type=int)
+    parser.add_argument('--minimum-gain',type=float,default=DEFAULT_MINIMUM_GAIN)
     parser.add_argument('--compile',action='store_true');parser.add_argument('--check')
     args=parser.parse_args(argv)
     if args.check:

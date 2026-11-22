@@ -95,7 +95,7 @@ def benchmark(artifact_path,out,*,shape=(1026,1026),warmup=3,repetitions=9,input
         warmup=warmup,repetitions=repetitions,paired_order='AB_BA_ALTERNATING',instrumented=False,
         baseline_seconds=a,optimized_seconds=b,speedup=speedup,native_without_fallback=no_fallback,
         stats=wrapped.scar_stats,decision=decision['decision'],selection=decision,
-        profitability='profitable' if selected else 'not profitable',selection_margin=0.05,
+        profitability='profitable' if selected else 'not profitable',selection_margin=decision['minimum_gain'],
         assumptions=['SYNCHRONOUS_CPU_EXECUTION','NO_FOREIGN_CONCURRENT_INPUT_WRITERS'],
         environment=dict(python=sys.version,numpy=np.__version__,platform=platform.platform(),
             processor=platform.processor(),logical_cpus=os.cpu_count(),

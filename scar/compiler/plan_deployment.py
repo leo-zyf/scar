@@ -3,6 +3,8 @@ import argparse
 import json
 from pathlib import Path
 
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
+
 
 def main():
     from scar.optimization.deployment_cost import plan_deployment,verify_deployment_plan
@@ -11,7 +13,7 @@ def main():
     parser.add_argument('--reuse-count',type=int,required=True)
     parser.add_argument('--cpu-ids',type=int,nargs='+',required=True)
     parser.add_argument('--memory-budget-bytes',type=int,required=True)
-    parser.add_argument('--minimum-gain',type=float,default=.05)
+    parser.add_argument('--minimum-gain',type=float,default=DEFAULT_MINIMUM_GAIN)
     parser.add_argument('--out',required=True)
     args=parser.parse_args();path=Path(args.out)
     if path.exists():raise ValueError('fresh deployment cost report required')

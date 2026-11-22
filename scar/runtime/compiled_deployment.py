@@ -28,7 +28,8 @@ def runner_identity():
     names=('entrypoint.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_temporal_invariant.py','runtime/native_loop.py',
         'runtime/loop_guard.py','runtime/native_stateful.py','runtime/stateful_guard.py',
-        'runtime/stateful_contract.py','runtime/bundle_metadata.py','trace/code_snapshot.py')
+        'runtime/stateful_contract.py','runtime/bundle_metadata.py','trace/code_snapshot.py',
+        'optimization/paired_entry_selection.py')
     values=[(name,sha256((root/name).read_bytes()).hexdigest()) for name in names]
     return sha256(json.dumps(values,separators=(',',':')).encode()).hexdigest()
 
@@ -93,15 +94,21 @@ def deployment_gate(path,pipeline,entry,argv):
                     or sum(c['fallback_calls'] for c in counts)!=0):
                 raise ValueError('native execution counts differ from retained observations')
             if sample['phase']=='MEASUREMENT':measured.append(sample)
-        threshold=policy['minimum_gain']
+        threshold=policy['minimum_gain'];strict=policy.get('strict_minimum_gain',False)
         if (type(threshold) not in (int,float) or not math.isfinite(threshold) or not 0<=threshold<1
+                or type(strict)is not bool
                 or len(measured)!=policy['repetitions'] or len(measured)<3):
             raise ValueError('complete measured policy required')
         values={kind:[row[kind]['wall_ns'] for row in measured] for kind in ('baseline','optimized')}
         if any(type(v) is not int or v<=0 for group in values.values() for v in group):
             raise ValueError('positive complete-process samples required')
         gain=1-statistics.median(values['optimized'])/statistics.median(values['baseline'])
-        if gain<threshold:return rejected('measured_gain_below_policy')
+        if strict:
+            from scar.optimization.paired_entry_selection import strict_entry_gain_met
+
+            profitable=strict_entry_gain_met(values['baseline'],values['optimized'],threshold)
+        else:profitable=gain>=threshold
+        if not profitable:return rejected('measured_gain_below_policy')
         return dict(decision='LOAD_MODEL_SELECTED_NATIVE',deployment_authorized=True,
             gain_fraction=gain,scope='EXACT_MEASURED_ENTRY_AND_REGION_CONTRACTS',
             arbitrary_external_effect_validation=False)

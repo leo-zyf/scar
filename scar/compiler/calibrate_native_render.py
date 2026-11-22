@@ -11,7 +11,7 @@ from scar.analysis.native_service_environment import capture, validate
 from scar.codegen import native_live_plot_service
 from scar.compiler.observe_native_plot_entry import BENCHMARK, ENTRY, _benchmark_ref
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.native-render-service-calibration'
@@ -167,9 +167,12 @@ def _derive(report, layout, frames):
                                  returncode=0, stdout_sha256=_EMPTY, stderr_sha256=_EMPTY))
     _need(set(root.iterdir()) == sample_dirs, 'unexpected run directories')
     _need(set((root.parent / 'resources').iterdir()) == resource_files, 'unexpected resource sidecars')
-    return {str(count): dict(timeline=verified[count], selection=compare_entry_pairs(
-        costs[count], incumbent='v1', challenger='v2', warmup_pairs=report['warmups'],
-        measurement_pairs=report['repetitions'])) for count in costs}
+    archived = report.get('cases')
+    context = dict(incumbent='v1', challenger='v2', warmup_pairs=report['warmups'],
+                   measurement_pairs=report['repetitions'])
+    return {str(count): dict(timeline=verified[count], selection=(compare_entry_pairs(costs[count], **context)
+        if archived is None else replay_entry_pairs(costs[count], archived[str(count)]['selection'], **context)))
+        for count in costs}
 
 
 def _parameters(counts, frames, warmups, repetitions, limit):

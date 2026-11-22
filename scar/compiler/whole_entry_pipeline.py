@@ -385,7 +385,7 @@ def _retain_projection(out, filename, report, retained):
 
 
 def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None, import_frontier=None, import_source_effects=None,
-                   import_activations=None):
+                   import_activations=None, fixed_grid_lifecycle_cost=None):
     if 'cpu_provider_catalog' not in scope or plan.get('entry_obligations') is None:
         return {}
     from scar.analysis.entry_effect_frontier import derive_entry_effect_frontier
@@ -395,11 +395,13 @@ def _cpu_frontiers(plan, scope, entry, out, *, priced_domain=None, import_fronti
     effect = _retain_projection(out, 'whole-entry-effect-frontier.json',
         derive_entry_effect_frontier(plan['entry_obligations'], graph), entry.get('entry_effect_frontier'))
     domain = priced_domain or entry['domain']
+    use_retained = domain == entry['domain'] and import_frontier is None and fixed_grid_lifecycle_cost is None
     decision = _retain_projection(out, 'whole-entry-decision-ledger.json',
         derive_cpu_entry_decision_ledger(domain, entry['legalities'], provider_graph=graph,
                                          effect_frontier=effect, import_frontier=import_frontier,
-                                         import_source_effects=import_source_effects, import_activations=import_activations),
-        entry.get('cpu_decision_ledger') if domain == entry['domain'] and import_frontier is None else None)
+                                         import_source_effects=import_source_effects, import_activations=import_activations,
+                                         fixed_grid_lifecycle_cost=fixed_grid_lifecycle_cost),
+        entry.get('cpu_decision_ledger') if use_retained else None)
     return dict(entry_effect_frontier=effect, cpu_decision_ledger=decision)
 
 
@@ -515,10 +517,10 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
             raise ValueError('mapped inputs do not belong to the exact scoped fixed-grid native incumbent')
         frontiers['cpu_fixed_grid_mapped_input_plan'] = mapped_ref
     if lifecycle_cost_path is not None:
-        from scar.optimization.cpu_fixed_grid_lifecycle_cost import SCHEMA as LIFECYCLE_COST, verify_cpu_fixed_grid_lifecycle_cost
+        from scar.optimization.cpu_fixed_grid_lifecycle_cost import SCHEMA as LIFECYCLE_COST
 
         cost_ref = artifact_reference(Path(lifecycle_cost_path).resolve(strict=True), LIFECYCLE_COST)
-        cost = verify_cpu_fixed_grid_lifecycle_cost(cost_ref)
+        cost = read_artifact(cost_ref)
         graph = read_artifact(cost['lifecycle'])
         old_review = read_artifact(cost['review'])
         if (graph['delivery'] != delivery_ref or read_artifact(graph['effects']) != bridge
@@ -898,11 +900,18 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     import_frontiers = (_cpu_import_frontiers(plan, live_scope, out, cpu_import_bindings, cpu_import_sources,
                                                cpu_initializer_observation)
                         if _infer_cpu_catalog(request) and plan.get('entry_obligations') is not None else {})
+    generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
+    fixed_grid_frontiers = {}
+    if cpu_fixed_grid_cli_evidence is not None:
+        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, cpu_fixed_grid_cli_evidence, out,
+                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain,
                                   import_frontier=import_frontiers.get('cpu_entry_import_frontier'),
                                   import_source_effects=import_frontiers.get('cpu_entry_import_source_effects'),
-                                  import_activations=import_frontiers.get('cpu_entry_import_activations'))
+                                  import_activations=import_frontiers.get('cpu_entry_import_activations'),
+                                  fixed_grid_lifecycle_cost=fixed_grid_frontiers.get('cpu_fixed_grid_lifecycle_cost'))
     cpu_frontiers.update(import_frontiers)
+    cpu_frontiers.update(fixed_grid_frontiers)
     if paired_audit is not None:
         from scar.analysis.cpu_entry_publication_order import derive_cpu_entry_publication_order
 
@@ -910,13 +919,9 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
             derive_cpu_entry_publication_order(cpu_observation_ref))
     if cpu_python_import_cost is not None:
         _attach_python_import_cost(plan, live_scope, cpu_frontiers, cpu_python_import_cost)
-    generated = {} if discovery is None else {option['id']: option for option in discovery['options']}
     if cpu_native_array_route is not None:
         _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route,
                                        cpu_native_array_route_cost)
-    if cpu_fixed_grid_cli_evidence is not None:
-        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, cpu_frontiers, cpu_fixed_grid_cli_evidence, out,
-                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None

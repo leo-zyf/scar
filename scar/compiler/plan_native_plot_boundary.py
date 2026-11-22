@@ -18,7 +18,7 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.target_hardware import CpuCore, HardwareThread, StorageEndpoint, TargetResourceRef
 from scar.ir.record_codec import encode
 from scar.optimization.constructive_planner import construct_implementations
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.native-plot-boundary-plan'
@@ -153,7 +153,7 @@ def _isolated_render_plan(count, comparison, receipt, callback, target, thread, 
     return dict(comparison=_at(receipt, report_root + '/selection'), problem=problem_document(problem), plan=plan)
 
 
-def _entry_reviews(sample, observed):
+def _entry_reviews(sample, observed, *, archived=None):
     from scar.compiler.observe_native_plot_entry import BENCHMARK, ENTRY, _benchmark_ref
 
     sequence = read_artifact(sample['sequence'])
@@ -189,12 +189,14 @@ def _entry_reviews(sample, observed):
                 } == expected_outputs, 'whole entry run changed release output identity')
                 rows.append(dict(pair=pair, mode=arm, wall_ns=run['elapsed_ns'], returncode=run['status'],
                                  stdout_sha256=run['stdout']['sha256'], stderr_sha256=run['stderr']['sha256']))
-        result.append(dict(benchmark=reference, selection=compare_entry_pairs(rows, incumbent='v1', challenger='v2',
-                           warmup_pairs=warmups, measurement_pairs=repetitions)))
+        criteria = dict(incumbent='v1', challenger='v2', warmup_pairs=warmups, measurement_pairs=repetitions)
+        selection = (compare_entry_pairs(rows, **criteria) if archived is None
+                     else replay_entry_pairs(rows, archived[len(result)]['selection'], **criteria))
+        result.append(dict(benchmark=reference, selection=selection))
     return result
 
 
-def _calibrated_render(path, observed, problem, hardware, thread, core, callback):
+def _calibrated_render(path, observed, problem, hardware, thread, core, callback, *, archived=None):
     from scar.compiler.calibrate_native_render import SCHEMA as RENDER, check
 
     receipt = artifact_reference(Path(path).resolve(strict=True), RENDER)
@@ -206,7 +208,7 @@ def _calibrated_render(path, observed, problem, hardware, thread, core, callback
     _need(storage is not None, 'render episode needs an identified target publication endpoint')
     cases = {count: _isolated_render_plan(count, row['selection'], receipt, callback, problem.target, thread, storage)
              for count, row in sample['cases'].items()}
-    reviews = _entry_reviews(sample, observed)
+    reviews = _entry_reviews(sample, observed, archived=archived)
     proposed = all(row['selection']['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for row in reviews)
     return dict(artifact=receipt, measured_scope=sample['scope'], measured_storage_endpoint=storage,
                 address_space_limit_bytes=sample['address_space_limit_bytes'], cases=cases,
@@ -215,7 +217,7 @@ def _calibrated_render(path, observed, problem, hardware, thread, core, callback
 
 
 @replay_transaction()
-def project(diagnostic, calibration=None, render_calibration=None):
+def project(diagnostic, calibration=None, render_calibration=None, *, archived=None):
     reference = artifact_reference(Path(diagnostic).resolve(strict=True), DIAGNOSTIC)
     observed = check_diagnostics(reference['uri'])
     _need(observed == read_artifact(reference) and observed['clean_performance_claim'] is False,
@@ -235,7 +237,8 @@ def project(diagnostic, calibration=None, render_calibration=None):
         refs = (*refs, _at(measured['calibrated_child']['artifact']))
     missing_time = 'CLEAN_RENDER_AND_PUBLICATION_SERVICE_TIME'
     if render_calibration is not None:
-        measured['calibrated_render'] = _calibrated_render(render_calibration, observed, problem, hardware, thread, core, callback)
+        measured['calibrated_render'] = _calibrated_render(render_calibration, observed, problem, hardware, thread, core,
+                                                         callback, archived=archived)
         refs = (*refs, _at(measured['calibrated_render']['artifact']))
         missing_time = 'MATCHED_FULL_CALLER_SERVICE_WITH_QUALIFIED_RENDER_MODE'
     cost = replace(baseline.cost, source_refs=baseline.cost.source_refs + (detail,),
@@ -273,7 +276,8 @@ def main(argv=None):
         saved = json.loads(args.check.read_bytes())
         calibration = saved.get('calibrated_child', {}).get('artifact', {}).get('uri')
         render = saved.get('calibrated_render', {}).get('artifact', {}).get('uri')
-        report = project(saved['diagnostic']['uri'], calibration, render)
+        report = project(saved['diagnostic']['uri'], calibration, render,
+                         archived=saved.get('calibrated_render', {}).get('whole_entry_reviews'))
         _need(saved == report, 'saved publication planning result differs at cold replay')
     elif args.out:
         report = project(args.diagnostic, args.calibration, args.render_calibration)

@@ -77,9 +77,11 @@ def evaluate_slot(slot, payload, payload_sha256):
         _need(type(slot[name]) is str and _HEX.fullmatch(slot[name]) is not None, 'cost-slot hash required')
     _need(slot['producer_sha256'] == payload['validator_implementation']['sha256'], 'slot producer differs from frozen validator')
     policy = payload['policy']; warmup = policy['warmup']; count = policy['repetitions']
+    strict_minimum_gain = policy.get('strict_minimum_gain', False)
     _need(type(warmup) is int and warmup >= 1 and type(count) is int and count >= 3
         and warmup+count <= 12 and type(policy['minimum_gain']) in (int, float)
-        and math.isfinite(policy['minimum_gain']) and 0 <= policy['minimum_gain'] < 1,
+        and math.isfinite(policy['minimum_gain']) and 0 <= policy['minimum_gain'] < 1
+        and type(strict_minimum_gain) is bool,
         'bounded complete frozen cost policy required')
     samples = slot['samples']; _need(type(samples) is list and len(samples) == warmup+count, 'all declared compact coordinates required')
     expected = [(0, i) for i in range(warmup)] + [(1, i) for i in range(count)]
@@ -105,7 +107,12 @@ def evaluate_slot(slot, payload, payload_sha256):
     gain = 1-b/max(a, 1)
     valid_count = sum(map(int, valid)); validation_bound = slot['validation_sha256'] != '0'*64
     unknown_count = sum(map(int, unmeasured)); trial_unknown = unknown_count == len(unmeasured) and not validation_bound
-    meets_gain = gain >= policy['minimum_gain']
+    if strict_minimum_gain:
+        from scar.optimization.paired_entry_selection import strict_entry_gain_met
+
+        meets_gain = strict_entry_gain_met(original, candidate, policy['minimum_gain'])
+    else:
+        meets_gain = gain >= policy['minimum_gain']
     separated = max(candidate) < min(original)
     _need(slot['role'] != TRIAL or trial_unknown, 'trial coordinates must remain explicitly unmeasured')
     complete = valid_count == len(valid) and validation_bound

@@ -6,21 +6,31 @@ import re
 
 
 SCHEMA = 'scar.paired-entry-selection'
+DEFAULT_MINIMUM_GAIN = 0.01
 _RUN_FIELDS = {'pair', 'mode', 'wall_ns', 'returncode', 'stdout_sha256', 'stderr_sha256'}
 _DIGEST = re.compile('[0-9a-f]{64}')
 
 
+def _median_twice(ordered):
+    return ordered[(len(ordered) - 1) // 2] + ordered[len(ordered) // 2]
+
+
+def strict_entry_gain_met(original_ns, candidate_ns, minimum_gain):
+    """Compare integer elapsed samples at an exact decimal gain boundary."""
+    return (_median_twice(sorted(candidate_ns))
+            < (1 - Fraction(str(minimum_gain))) * _median_twice(sorted(original_ns)))
+
+
 def _metrics(samples):
     ordered = sorted(samples)
-    size = len(ordered)
-    median_twice = ordered[(size - 1) // 2] + ordered[size // 2]
+    median_twice = _median_twice(ordered)
     median_ns = median_twice // 2 if median_twice % 2 == 0 else median_twice / 2
     return dict(samples_ns=samples, min_ns=ordered[0], max_ns=ordered[-1],
                 median_ns=median_ns, median_ns_twice=median_twice)
 
 
 def compare_entry_pairs(runs, *, incumbent, challenger, warmup_pairs, measurement_pairs,
-                        minimum_gain=0.05):
+                        minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     """Reduce matched fresh-process timing rows supplied by an evidence adapter.
 
     The adapter is responsible for matching context, treatment identity and raw
@@ -32,6 +42,8 @@ def compare_entry_pairs(runs, *, incumbent, challenger, warmup_pairs, measuremen
             or type(warmup_pairs) is not int or warmup_pairs < 0
             or type(measurement_pairs) is not int or measurement_pairs < 3):
         raise ValueError('two distinct modes and at least three measured pairs are required')
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     if isinstance(minimum_gain, bool) or not isinstance(minimum_gain, Real):
         raise ValueError('minimum gain must be a finite fraction in [0, 1)')
     try:
@@ -67,14 +79,31 @@ def compare_entry_pairs(runs, *, incumbent, challenger, warmup_pairs, measuremen
     median_gain = Fraction(baseline['median_ns_twice'] - candidate['median_ns_twice'], baseline['median_ns_twice'])
     separated = candidate['max_ns'] < baseline['min_ns']
     reasons = []
-    if median_gain <= 0 or median_gain < minimum:
+    if median_gain <= 0 or median_gain < minimum or (strict_minimum_gain and median_gain == minimum):
         reasons.append('MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD')
     if not separated:
         reasons.append('CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS')
+    policy = dict(minimum_gain=float(minimum), strict_observed_separation=True)
+    if strict_minimum_gain:
+        policy['strict_minimum_gain'] = True
     return dict(schema=SCHEMA, schema_version=1, incumbent=incumbent, challenger=challenger,
                 warmup_pairs=warmup_pairs, measurement_pairs=measurement_pairs, metrics=metrics,
                 paired_improvement_ns=[old - new for old, new in zip(baseline['samples_ns'], candidate['samples_ns'])],
                 gain_fraction=float(median_gain), observed_envelopes_separated=separated,
-                policy=dict(minimum_gain=float(minimum), strict_observed_separation=True),
+                policy=policy,
                 verdict='KEEP_INCUMBENT' if reasons else 'ADVANCE_TO_RELEASE_REVIEW',
                 reasons=reasons, deployment_authorized=False)
+
+
+def replay_entry_pairs(runs, archived, *, incumbent, challenger, warmup_pairs, measurement_pairs):
+    """Recompute a paired decision using the exact policy encoded in its receipt."""
+    if type(archived) is not dict or type(archived.get('policy')) is not dict:
+        raise ValueError('archived paired selection policy required')
+    policy = archived['policy']
+    replayed = compare_entry_pairs(runs, incumbent=incumbent, challenger=challenger,
+                                  warmup_pairs=warmup_pairs, measurement_pairs=measurement_pairs,
+                                  minimum_gain=policy.get('minimum_gain'),
+                                  strict_minimum_gain=policy.get('strict_minimum_gain', False))
+    if replayed != archived:
+        raise ValueError('archived paired comparison did not replay')
+    return replayed

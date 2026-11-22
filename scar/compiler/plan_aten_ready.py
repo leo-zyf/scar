@@ -16,6 +16,7 @@ from scar.ir.implementation_plan import (
     PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, CostEstimate, ImplementationOption,
     PlanningDataEdge, PlanningOperation, PlanningProblem, problem_document,
 )
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY
 from scar.optimization.aten_native_schedule import _declared_operators
 from scar.optimization.aten_native_team import model_cpu_team
 from scar.optimization.aten_ready_dag import plan_ready_dag
@@ -228,7 +229,8 @@ def _case(raw, model, baseline, warmup, count, storage, *, recipe):
         modes = ['SERIAL', 'TWO_CPU'] if order == 'AB' else ['TWO_CPU', 'SERIAL']
         rows.append(dict(pair_index=i, order=modes, serial_ns=row['baseline_ns'], dual_ns=row['ready_ns'],
                          bitwise_identical=True, input_values_unchanged=True, fresh_owned_outputs=True))
-    metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count)
+    metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count,
+                                                                      gain_policy=model.get('gain_policy'))
     results = dict(baseline=baseline, metrics={'BASELINE': metrics['SERIAL'], 'READY_DAG': metrics['TWO_CPU']},
                 wins=wins, paired_order_differences={'AB': directional['SERIAL'], 'BA': directional['TWO_CPU']},
                 speedup=ratio, profitable=faster)
@@ -237,11 +239,12 @@ def _case(raw, model, baseline, warmup, count, storage, *, recipe):
     return results
 
 
-def _ready_model(recipe, schedule, raw, budget, warmup, *, ready_dag_abi, joint_order=False):
+def _ready_model(recipe, schedule, raw, budget, warmup, *, ready_dag_abi, joint_order=False,
+                 gain_policy=ATEN_GAIN_POLICY):
     if raw['cpu_ids'] != schedule['cpus'] or raw['warmup_pairs'] != warmup:
         raise ValueError('ready DAG calibration belongs to a different CPU execution context')
     return plan_ready_dag(recipe, schedule, raw['calibration'], warmup, tensor_budget_bytes=budget,
-                          ready_dag_abi=ready_dag_abi, joint_order=joint_order)
+                          ready_dag_abi=ready_dag_abi, joint_order=joint_order, gain_policy=gain_policy)
 
 
 def _baselines(recipe, schedule, calibration, model, budget, warmup):
@@ -255,7 +258,8 @@ def _baselines(recipe, schedule, calibration, model, budget, warmup):
 
 def _source_order_baseline(recipe, schedule, raw, model, budget, warmup, abi):
     if 'operation_order' in model and model['status'] == 'PLAN_READY_DAG':
-        source_order = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi)
+        source_order = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi,
+                                    gain_policy=model.get('gain_policy'))
         if source_order['status'] == 'PLAN_READY_DAG':
             return source_order, 'ready:' + ''.join(map(str, source_order['lanes']))
     return None, None
@@ -293,7 +297,8 @@ def _replica_validation(raw, model, candidate, warmup, count, *, retained=False)
         modes = ['SERIAL', 'TWO_CPU'] if order == 'AB' else ['TWO_CPU', 'SERIAL']
         rows.append(dict(pair_index=i, order=modes, serial_ns=row['baseline_ns'], dual_ns=row['ready_ns'],
                          bitwise_identical=True, input_values_unchanged=True, fresh_owned_outputs=True))
-    metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count)
+    metrics, wins, directional, ratio, faster = _compare_measured_pairs(rows, count,
+                                                                      gain_policy=model.get('gain_policy'))
     label = 'RETAINED' if retained else 'REPLICATED'
     result = dict(metrics={'DIRECT': metrics['SERIAL'], label: metrics['TWO_CPU']}, wins=wins,
         paired_order_differences={'AB': directional['SERIAL'], 'BA': directional['TWO_CPU']}, speedup=ratio, profitable=faster)
@@ -490,7 +495,8 @@ def read_ready_selection(path, selection):
             and (artifact.get('ready_order_abi') != 1 or selection.get('validation_policy') is not None
                  or selection.get('input_replica') is not None)):
         raise ValueError('ready selection differs from the standalone native delivery scope')
-    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi, joint_order=delivery_scope == _NATIVE_ONLY)
+    model = _ready_model(recipe, schedule, raw, budget, warmup, ready_dag_abi=abi,
+                         joint_order=delivery_scope == _NATIVE_ONLY, gain_policy=selection['model'].get('gain_policy'))
     if delivery_scope == _NATIVE_ONLY:
         original_model, baseline = _source_order_baseline(recipe, schedule, raw, model, budget, warmup, abi)
         trial = selection.get('joint_order_comparison')

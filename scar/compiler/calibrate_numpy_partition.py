@@ -12,7 +12,7 @@ from time import perf_counter_ns
 
 from scar.codegen import native_numpy_partition as native
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 from scar.trace.code_snapshot import code_key
 
 
@@ -61,7 +61,7 @@ def _source(witness_ref, sample_id, iterations, output):
     print(elapsed)
 
 
-def _selection(samples, counts):
+def _selection(samples, counts, *, archived=None):
     empty = sha256(b'').hexdigest()
     comparisons = {}
     for incumbent, challenger in (('source-call', 'preserved-copy'), ('source-call', 'elided-copy'),
@@ -70,8 +70,10 @@ def _selection(samples, counts):
         rows = [dict(pair=row['pair'], mode=row['mode'], wall_ns=row['elapsed_ns'], returncode=0,
                      stdout_sha256=row['output']['sha256'], stderr_sha256=empty)
                 for row in samples if row['mode'] in arms]
-        comparisons[challenger + '_over_' + incumbent] = compare_entry_pairs(
-            rows, incumbent=incumbent, challenger=challenger, warmup_pairs=counts[0], measurement_pairs=counts[1])
+        name = challenger + '_over_' + incumbent
+        context = dict(incumbent=incumbent, challenger=challenger, warmup_pairs=counts[0], measurement_pairs=counts[1])
+        comparisons[name] = (compare_entry_pairs(rows, **context) if archived is None
+                             else replay_entry_pairs(rows, archived['comparisons'][name], **context))
     elide, copy = (comparisons[name]['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for name in
                    ('elided-copy_over_preserved-copy', 'preserved-copy_over_source-call'))
     elide_over_source = comparisons['elided-copy_over_source-call']['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW'
@@ -153,7 +155,7 @@ def check(path):
                 or read_artifact(row['output'], json_document=False) != expected):
             raise ValueError('timed output differs from the witnessed original bytes')
     counts = (report['warmup_rounds'], report['measured_rounds'])
-    if _selection(report['observations'], counts) != report['selection']:
+    if _selection(report['observations'], counts, archived=report['selection']) != report['selection']:
         raise ValueError('recorded cost choice differs from replay')
     return report
 

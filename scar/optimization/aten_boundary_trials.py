@@ -8,7 +8,7 @@ from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode
 from scar.optimization.implementation_costs import SCHEMA as COST_PROFILE, CostQuery, query_key
-from scar.optimization.paired_entry_selection import _metrics
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, _metrics
 
 
 EVIDENCE = 'scar.aten-boundary-trial-evidence'
@@ -18,11 +18,19 @@ _CONTEXT_FIELDS = {'boundary', 'provider', 'target', 'inputs', 'output', 'placem
 _EVIDENCE_FIELDS = {'schema', 'schema_version', 'boundary', 'context', 'warmup_pairs', 'measured_pairs', 'samples'}
 _OBSERVATIONS = ('bitwise_identical', 'input_values_unchanged', 'fresh_owned_outputs')
 _SAMPLE_FIELDS = {'pair_index', 'order', 'serial_ns', 'dual_ns', *_OBSERVATIONS}
+ATEN_GAIN_POLICY = dict(minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True)
 
 
 def _require(condition, message):
     if not condition:
         raise ValueError(message)
+
+def _passes_gain(incumbent_ns, candidate_ns, policy):
+    if policy is None:
+        return (incumbent_ns - candidate_ns) / incumbent_ns >= .05
+    _require(policy == ATEN_GAIN_POLICY and policy.get('strict_minimum_gain') is True,
+             'unsupported ATen gain policy')
+    return Fraction(incumbent_ns - candidate_ns, incumbent_ns) > Fraction(str(policy['minimum_gain']))
 
 
 def _canonical(document):
@@ -56,7 +64,8 @@ def _measurements(rows, repetitions):
     return samples, differences, directional
 
 
-def project_aten_boundary_trial(evidence_ref, *, expected_context, minimum_gain=0.05):
+def project_aten_boundary_trial(evidence_ref, *, expected_context, minimum_gain=DEFAULT_MINIMUM_GAIN,
+                                strict_minimum_gain=True):
     """Replay pinned evidence as exact-context costs for the two trial modes.
 
     The producer establishes the native runtime receipt and validation checks
@@ -87,8 +96,8 @@ def project_aten_boundary_trial(evidence_ref, *, expected_context, minimum_gain=
     _require(type(warmup) is int and warmup >= 1 and type(repetitions) is int
              and repetitions >= 3 and repetitions % 2 == 1,
              'at least one warmup pair and an odd number of at least three measured pairs required')
-    _require(type(minimum_gain) in (float, int) and 0 <= minimum_gain < 1,
-             'minimum gain must be a finite fraction in [0,1)')
+    _require(type(minimum_gain) in (float, int) and 0 <= minimum_gain < 1 and type(strict_minimum_gain) is bool,
+             'minimum gain must be a finite fraction in [0,1) with an explicit comparison')
     threshold = Fraction(str(minimum_gain))
     samples, differences, directional = _measurements(evidence['samples'], repetitions)
     metrics = {mode: dict(_metrics(s), variance_ns2=variance(s)) for mode, s in samples.items()}
@@ -100,7 +109,7 @@ def project_aten_boundary_trial(evidence_ref, *, expected_context, minimum_gain=
         for order, values in directional.items()
     }
     reasons = []
-    if gain <= 0 or gain < threshold:
+    if gain <= 0 or gain < threshold or (strict_minimum_gain and gain == threshold):
         reasons.append('MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD')
     if 4 * wins < 3 * repetitions:
         reasons.append('TWO_CPU_NOT_FASTER_IN_THREE_QUARTERS_OF_PAIRS')
@@ -126,6 +135,8 @@ def project_aten_boundary_trial(evidence_ref, *, expected_context, minimum_gain=
         policy=dict(minimum_gain=minimum_gain, minimum_paired_win_fraction=0.75,
                     positive_order_group_medians_required=True),
         sample_ranges_are_physical_bounds=False, python_replacement_authorized=False, deployment_authorized=False)
+    if strict_minimum_gain:
+        selection['policy']['strict_minimum_gain'] = True
     return selection, profile, queries
 
 

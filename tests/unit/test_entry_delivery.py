@@ -4,6 +4,7 @@ import json
 
 from scar.compiler.entry_delivery import BOUNDARY, STATEFUL, replay_entry_delivery
 from scar.ir.execution_recipe import artifact_reference
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 def test_original_and_unmatched_winner_do_not_load_candidate():
@@ -36,3 +37,21 @@ def test_unmatched_source_and_untrusted_receipt_keep_original(tmp_path):
     rejected = replay_entry_delivery(scope, selected_id='native', candidate=candidate)
     assert 'byte identity differs' in rejected['reason']
     assert not rejected['deployment_authorized']
+
+
+def test_strict_paired_gain_boundary_keeps_legacy_replay():
+    def runs(candidate):
+        return [dict(pair=pair, mode=mode, wall_ns=wall, returncode=0,
+                     stdout_sha256='0' * 64, stderr_sha256='1' * 64)
+                for pair in range(3) for mode, wall in (('original', 100), ('native', candidate))]
+
+    scope = dict(incumbent='original', challenger='native', warmup_pairs=0, measurement_pairs=3)
+    exact = compare_entry_pairs(runs(99), **scope)
+    assert exact['policy']['strict_minimum_gain'] is True
+    assert exact['verdict'] == 'KEEP_INCUMBENT'
+    assert replay_entry_pairs(runs(99), exact, **scope) == exact
+    assert compare_entry_pairs(runs(98), **scope)['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW'
+    legacy = compare_entry_pairs(runs(95), minimum_gain=0.05, strict_minimum_gain=False, **scope)
+    assert 'strict_minimum_gain' not in legacy['policy']
+    assert legacy['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW'
+    assert replay_entry_pairs(runs(95), legacy, **scope) == legacy

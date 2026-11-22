@@ -25,7 +25,7 @@ def _require(condition, detail):
 def _profile(reference):
     _require(reference['schema'] == retention.SCHEMA, 'expected a retained native entry')
     kept = read_artifact(reference)
-    replay = retention.resolve(kept['schedule']['uri'], kept['existing_acceptance']['uri'])
+    replay = retention.resolve(kept['schedule']['uri'], kept['existing_acceptance']['uri'], archived=kept)
     _require(kept == replay, 'retained entry changed during cold qualification')
     accepted = read_artifact(kept['existing_acceptance'])
     runtime = kept['retained_release']

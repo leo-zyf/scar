@@ -16,6 +16,7 @@ import sys
 import time
 
 from scar.compiler.validate_build import _reference, _save, _equal_files, _statistics
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.runtime.compiled_deployment import _raw
 from scar.runtime.caller_pipeline_deployment import (entry_context, environment_sha256,
     provider_snapshot, bundle_reference, source_references, whole_entry_gain)
@@ -123,7 +124,7 @@ def _slot(payload, digest, role, samples=(), validation_sha256='0'*64):
 
 
 def prepare_capsule(bundle, entry, argv, out, *, expected_admission_sha256, source_paths,
-        warmup=1, repetitions=3, minimum_gain=.05, publication_directory=None,
+        warmup=1, repetitions=3, minimum_gain=DEFAULT_MINIMUM_GAIN, publication_directory=None,
         publication_bytes=(), publication_nonnegative_seconds=()):
     from scar.runtime.entry_runner import _arguments
     entry, argv = _arguments(entry, argv); out = Path(out).resolve()
@@ -155,7 +156,7 @@ def prepare_capsule(bundle, entry, argv, out, *, expected_admission_sha256, sour
         validator_implementation=_reference(__file__, 'scar.validation-raw'),
         original_regional_proof=original, regional_authority='PRIOR_PRODUCER_PINNED_C2_ORIGINAL_F4_AND_MATCHED_ABI_REPLAY',
         regional_source_derivation_repeated=False,
-        policy=dict(warmup=warmup, repetitions=repetitions, minimum_gain=minimum_gain,
+        policy=dict(warmup=warmup, repetitions=repetitions, minimum_gain=minimum_gain, strict_minimum_gain=True,
             frozen_before_measurement=True),
         reporting=dict(required=True, allowed_root=str(out.parent), new_file_only=True),
         cost_applicability='SAME_IMMUTABLE_PAYLOAD_RUNTIME_FIXED_PAGE_SCHEMA_AND_SHARED_TRIAL_RELEASE_OPERATION_PATH',
@@ -292,7 +293,8 @@ def validate_capsule(capsule, out, *, expected_payload_sha256, expected_trial_sl
     complete = len(samples) == len(coordinates); valid = complete and all(row['valid'] for row in samples)
     separated = profitable = False
     if valid:
-        gain, separated, profitable = whole_entry_gain(a['samples_ns'], b['samples_ns'], policy['minimum_gain'])
+        gain, separated, profitable = whole_entry_gain(a['samples_ns'], b['samples_ns'], policy['minimum_gain'],
+                                                       strict_minimum_gain=policy.get('strict_minimum_gain', False))
     if not complete: reasons.append('DECLARED_MEASUREMENTS_INCOMPLETE')
     if valid and not profitable: reasons.append('FINAL_COMPACT_PATH_NOT_PROFITABLE')
     result = dict(schema=VALIDATION, schema_version=1, payload=payload_ref, trial_slot=trial_ref,
@@ -389,7 +391,7 @@ def main(argv=None):
     parser.add_argument('--bundle', required=True); parser.add_argument('--admission-sha256', required=True)
     parser.add_argument('--source', action='append', required=True); parser.add_argument('--out', required=True)
     parser.add_argument('--warmup', type=int, default=1); parser.add_argument('--repetitions', type=int, default=3)
-    parser.add_argument('--minimum-gain', type=float, default=.05)
+    parser.add_argument('--minimum-gain', type=float, default=DEFAULT_MINIMUM_GAIN)
     _add_publication_options(parser)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv); command = args.command[1:] if args.command[:1] == ['--'] else args.command

@@ -3,12 +3,14 @@ from fractions import Fraction
 from math import floor
 from statistics import median
 
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
+
 
 def _interval(values):
     return min(values), median(values), max(values)
 
 
-def entry_phase_sensitivity(pairs, *, observed_calls, requested_calls, minimum_gain=.05):
+def entry_phase_sensitivity(pairs, *, observed_calls, requested_calls, minimum_gain=DEFAULT_MINIMUM_GAIN):
     """Compare a fixed per-entry remainder and a proportional repeated window.
 
     The window is timed inside the exact matching process sample on each side.

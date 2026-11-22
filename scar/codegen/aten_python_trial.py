@@ -61,14 +61,15 @@ def _read_plan(path, digest):
     if key == 'cpu_team':
         model = model_cpu_team(calibrated['calibration'], recipe, schedule, warmup, tensor_budget_bytes=budget)
         starts = selection['selected_windows']
-        stats = team_statistics(validation, schedule, warmup, count, starts, mode)
+        stats = team_statistics(validation, schedule, warmup, count, starts, mode,
+                                gain_policy=selection.get('gain_policy'))
         profits = stats['profitable_parallel'] and mode == model['selected']
         expected_starts = model['selected_windows']
         problem, _, timeline = team_segments(hardware, schedule, origin, evidence, model, mode)
     else:
         model = _window_model(calibrated['calibration'], recipe, schedule, warmup, observe_storage=True,
                               tensor_budget_bytes=budget)
-        stats = _statistics(validation, warmup, count, schedule['cpus'])
+        stats = _statistics(validation, warmup, count, schedule['cpus'], gain_policy=selection.get('gain_policy'))
         starts = selection['selected_window_starts']
         profits = stats['profitable_two_cpu'] and mode == 'TWO_CPU'
         expected_starts = model['selected_starts']

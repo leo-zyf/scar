@@ -10,7 +10,7 @@ from scar.compiler import calibrate_array_task_entry as calibration
 from scar.compiler.calibrate_array_entry import _ref, _replay, _run, _write
 from scar.compiler.cpu_entry_replay_adapters import _match_json_report
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.cpu-task-arena-study'
@@ -46,7 +46,7 @@ def _commands(runtime, recipe, variant, native_modes=_MODES[1:]):
     return {'original': raw['original'], baseline: raw['native'], candidate: [*raw['native'][:-1], binary['uri']]}
 
 
-def _summarize(runs, modes, commands, argv, recipe, expected, pairs):
+def _summarize(runs, modes, commands, argv, recipe, expected, pairs, *, archived=None):
     order = [(index, mode) for index in range(1 + pairs)
              for mode in (modes if index % 2 == 0 else modes[::-1])]
     _need([(row['pair'], row['mode']) for row in runs] == order, 'A/B order differs from the frozen campaign')
@@ -57,8 +57,9 @@ def _summarize(runs, modes, commands, argv, recipe, expected, pairs):
                   read_artifact(row['published'], json_document=False), recipe, expected),
               'whole-entry output or launch differs')
         compared.append(_replay(row, recipe, expected))
-    result = compare_entry_pairs(compared, incumbent=modes[0], challenger=modes[1],
-                               warmup_pairs=1, measurement_pairs=pairs)
+    context = dict(incumbent=modes[0], challenger=modes[1], warmup_pairs=1, measurement_pairs=pairs)
+    result = (compare_entry_pairs(compared, **context) if archived is None
+              else replay_entry_pairs(compared, archived, **context))
     return dict(selection=result, population_variance_ns2={
         mode: pvariance(values['samples_ns']) for mode, values in result['metrics'].items()})
 
@@ -138,7 +139,7 @@ def _check_measurements(report, modes, runtime, recipe, case, expected, commands
     for name, arms in (('native_pairs', modes), ('original_pairs', ('original', modes[1]))):
         data = report[name]
         compared = _summarize(data['runs'], arms, commands, case['argv'], recipe, expected,
-                              data['selection']['measurement_pairs'])
+                              data['selection']['measurement_pairs'], archived=data['selection'])
         _need(all(data[key] == value for key, value in compared.items()), 'study timing receipts differ at replay')
     diagnostic = report['state_diagnostics']
     states = _compare_checkpoints(diagnostic['runs'], runtime, commands, case['argv'], recipe, expected, modes)

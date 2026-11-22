@@ -18,6 +18,7 @@ INPUTS_SCHEMA = 'scar.pipeline-temporal-domain-inputs'
 RESOURCE_EVENT_DOMAIN = 'scar.pipeline-resource-event-domain'
 RESOURCE_EVENT_INPUTS = 'scar.pipeline-resource-event-domain-inputs'
 RESOURCE_EVENT_QUERIES = 'scar.pipeline-resource-event-cost-queries'
+_RESOURCE_EVENT_VERSION = 2
 
 
 def _write(path, value):
@@ -319,7 +320,8 @@ def _resource_event_report(declaration, *, output=None, stored=None):
                     missing_costs.setdefault(key, dict(role=term['role'],
                         reasons=term['missing_terms'], applicable_case_ids=[]))['applicable_case_ids'].append(row['id'])
             cases.append(row)
-        decision = decide(cases)
+        version = declaration['schema_version']
+        decision = decide(cases, policy_version=version)
         original_unpriced = cases[0]['cost']['predicted_ns'] is None
         queue = []
         for key, query in missing_costs.items():
@@ -331,7 +333,7 @@ def _resource_event_report(declaration, *, output=None, stored=None):
                     'DEFER_UNTIL_ORIGINAL_BOUNDARY_COST_IS_QUALIFIED' if original_unpriced else
                     'ELIGIBLE_EXACT_COMPONENT_QUERY'),
                 whole_program_variant_probe_authorized=False))
-        report = dict(schema=RESOURCE_EVENT_DOMAIN, schema_version=1, source_inputs=inputs_ref,
+        report = dict(schema=RESOURCE_EVENT_DOMAIN, schema_version=version, source_inputs=inputs_ref,
             cost_profile=profile, source_evidence=list(source_refs),
             original_task_graph_sha256=semantic_sha256(source_ready['task_graph']),
             declared_scope='ONE_GUARDED_CALLER_PIPELINE_INVOCATION_WARM_SESSION',
@@ -339,7 +341,7 @@ def _resource_event_report(declaration, *, output=None, stored=None):
             source_and_dependency_arenas=True, source_order_and_physical_resource_constraints_replayed=True,
             affinity_pinning_does_not_establish_page_residency=True,
             cases=cases, decision=decision, decision_cost_frontier=queue,
-            all_cases_retained=True, minimum_gain_fraction=dict(numerator=1, denominator=20),
+            all_cases_retained=True, minimum_gain_fraction=decision['minimum_gain_fraction'],
             probes_run_by_planner=False, declared_ticks_used_as_ns=False, physical_optimality_proven=False,
             target_program_executed=False, complete_variants_timed=False, deployment_authorized=False)
         return report, dict(schema=RESOURCE_EVENT_QUERIES, schema_version=1, queries=cost_queries)
@@ -353,7 +355,7 @@ def solve_pipeline_resource_events(inputs, out, *, cost_profile=None, search_bud
     output = Path(out).resolve()
     if output.exists():
         raise ValueError('fresh resource-event domain output required')
-    declaration = dict(schema=RESOURCE_EVENT_INPUTS, schema_version=1,
+    declaration = dict(schema=RESOURCE_EVENT_INPUTS, schema_version=_RESOURCE_EVENT_VERSION,
         source_inputs=_file_reference(inputs, INPUTS, 'inputs.json'),
         cost_profile=None if cost_profile is None else _file_reference(cost_profile, COSTS, 'profile.json'),
         search_budget_per_arena=search_budget)
@@ -371,8 +373,10 @@ def verify_pipeline_resource_event_domain(report):
     ref = _file_reference(report, RESOURCE_EVENT_DOMAIN, 'result.json')
     value = read_artifact(ref)
     declaration = read_artifact(value['declared_domain'])
-    if (value.get('schema_version') != 1
-            or (declaration.get('schema'), declaration.get('schema_version')) != (RESOURCE_EVENT_INPUTS, 1)):
+    version = value.get('schema_version')
+    if (type(version) is not int or version not in (1, _RESOURCE_EVENT_VERSION)
+            or declaration.get('schema') != RESOURCE_EVENT_INPUTS
+            or type(declaration.get('schema_version')) is not int or declaration['schema_version'] != version):
         raise ValueError('versioned original resource-event domain and declaration required')
     expected, queries = _resource_event_report(declaration, stored=value['cases'])
     expected['declared_domain'] = value['declared_domain']

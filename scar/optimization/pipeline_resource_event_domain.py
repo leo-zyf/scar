@@ -205,8 +205,12 @@ def cost_context(pipeline, source_memory, source_ready, source_inputs):
             origins_sha256=semantic_sha256(source.origins)), original_proof_sha256=source_inputs['proof']['sha256'])
 
 
-def decide(cases):
+def decide(cases, *, policy_version=2):
     """Select only interval-separated conditional improvements over original."""
+    if type(policy_version) is not int or policy_version not in (1, 2):
+        raise ValueError('unsupported resource-event decision policy')
+    inclusive = policy_version == 1
+    gain_denominator = 20 if inclusive else 100
     eligible = [row for row in cases if row['legal_status'] != 'INELIGIBLE']
     unresolved = [row['id'] for row in eligible if row['cost']['predicted_ns'] is None]
     original = cases[0]['cost']['predicted_ns']
@@ -220,12 +224,18 @@ def decide(cases):
     else:
         upper = best['cost']['predicted_ns']['upper_ns']
         alternative_lower = min(row['cost']['predicted_ns']['lower_ns'] for row in priced if row is not best)
-        if upper >= alternative_lower or 100*upper > 95*original['lower_ns']:
+        baseline = original['lower_ns']
+        savings = gain_denominator * (baseline - upper)
+        gain_qualified = savings >= baseline if inclusive else savings > baseline
+        if upper >= alternative_lower or not gain_qualified:
             reason = 'COST_INTERVALS_NOT_SEPARATED_OR_MINIMUM_GAIN_NOT_PROVEN_WITHIN_MODEL'
         else:
             selected = best['id']
             reason = 'CONDITIONALLY_LEAST_COST_WITH_INTERVAL_SEPARATION_AND_MINIMUM_GAIN'
-    return dict(deployment_default='NO_OP', selected_case_id=selected,
+    result = dict(deployment_default='NO_OP', selected_case_id=selected,
         selection_decision='COST_SELECTED_EXPLICIT_CASE_ONLY' if selected else 'NO_OP',
-        reason=reason, unresolved_case_ids=unresolved, minimum_gain_fraction=dict(numerator=1, denominator=20),
+        reason=reason, unresolved_case_ids=unresolved, minimum_gain_fraction=dict(numerator=1, denominator=gain_denominator),
         full_program_variant_search_performed=False, deployment_authorized=False)
+    if not inclusive:
+        result['inclusive_minimum_gain'] = False
+    return result

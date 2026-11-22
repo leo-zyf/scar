@@ -13,6 +13,7 @@ from scar.runtime.final_entry_capsule import PAYLOAD,PROFILE,TRUST,runtime_ident
 from scar.runtime.caller_pipeline_capsule import pack_slot,SLOT_BYTES,TRIAL,SLOT
 from scar.runtime.caller_pipeline_deployment import entry_context,environment_sha256,provider_identity
 from scar.compiler.caller_pipeline_capsule import _slot
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 
 def _sources(value):
@@ -43,7 +44,8 @@ def prepare_profile_capsule(pipeline,out,*,profile_kind,entry,argv=(),source_pat
         capsule_directory=str(out),slot_bytes=SLOT_BYTES,entry_context=entry_context(entry,argv),
         environment_sha256=environment_sha256(),source_refs=ledger,provider_identity=provider_identity(),
         runtime_identity=runtime_identity(profile_kind),validator_implementation=artifact_reference(__file__,'scar.validation-raw'),
-        policy=dict(warmup=1,repetitions=3,minimum_gain=.05,frozen_before_measurement=True),
+        policy=dict(warmup=1,repetitions=3,minimum_gain=DEFAULT_MINIMUM_GAIN,strict_minimum_gain=True,
+            frozen_before_measurement=True),
         reporting=dict(required=True,allowed_root=str(out.parent)),
         cost_status='UNMEASURED',deployment_authorized=False,original_performance_evidence_used=False,
         numeric_cost_wire_schema=SLOT,original_guard_effect_shape_budget_conditions_reused=True)

@@ -5,10 +5,11 @@ from tempfile import TemporaryDirectory
 
 from scar.compiler.plan_aten_boundary import _write
 from scar.compiler.plan_aten_native_graph import (
-    _ENV, _GAIN, _compare_measured_pairs, _invoke, _launcher, _receipt, _verify_resource_segments,
+    _ENV, _compare_measured_pairs, _invoke, _launcher, _receipt, _verify_resource_segments,
 )
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import problem_document
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.aten_native_team import model_cpu_team
 
 
@@ -16,7 +17,7 @@ def team_window_spec(windows):
     return ','.join(f'{start}:{width}' for start, width in windows)
 
 
-def team_statistics(raw, schedule, warmup, repetitions, windows, mode):
+def team_statistics(raw, schedule, warmup, repetitions, windows, mode, *, gain_policy=ATEN_GAIN_POLICY):
     if (raw['cpu_ids'] != schedule['cpus'] or raw['windows'] != windows or raw['warmup_pairs'] != warmup
             or raw['measured_pairs'] != repetitions or raw['all_pairs_validated'] is not True):
         raise ValueError('native team validation does not match its placement and configuration')
@@ -28,7 +29,7 @@ def team_statistics(raw, schedule, warmup, repetitions, windows, mode):
         rows.append(dict(pair_index=i, order=order if row['order'] == 'AB' else order[::-1],
                          serial_ns=row['serial_ns'], dual_ns=row['parallel_ns'], bitwise_identical=True,
                          input_values_unchanged=True, fresh_owned_outputs=True))
-    metrics, wins, directional, ratio, passes = _compare_measured_pairs(rows, repetitions)
+    metrics, wins, directional, ratio, passes = _compare_measured_pairs(rows, repetitions, gain_policy=gain_policy)
     return dict(metrics={'SERIAL': metrics['SERIAL'], mode: metrics['TWO_CPU']}, wins_parallel=wins,
                 paired_order_differences={'AB': directional['SERIAL'], 'BA': directional['TWO_CPU']},
                 speedup_parallel=ratio, profitable_parallel=passes)
@@ -62,10 +63,11 @@ def plan_aten_native_team(verified, *, input_paths, out, warmup_pairs, measured_
     predicted = model['selected']
     chosen_windows = model['selected_windows']
     serial = model['predictions']['SERIAL']['estimate_ns']
-    gain = (serial - model['predictions'][predicted]['estimate_ns']) / serial
+    preferred = model['predictions'][predicted]['estimate_ns']
+    gain = (serial - preferred) / serial
     reasons, validation, matched = [], None, None
     if predicted != 'SERIAL':
-        if gain < _GAIN:
+        if not _passes_gain(serial, preferred, ATEN_GAIN_POLICY):
             reasons.append('PREDICTED_GAIN_BELOW_THRESHOLD')
         else:
             matched = _invoke(executable, schedule, '--benchmark-team',
@@ -100,6 +102,7 @@ def plan_aten_native_team(verified, *, input_paths, out, warmup_pairs, measured_
             selected_windows=windows, predicted_gain=gain, validation=validation, warmup_pairs=warmup_pairs,
             measured_pairs=0 if validation is None else measured_pairs, execution_timeline=timeline,
             runtime_environment=_ENV, source_replacement_authorized=False, cold_launcher_performance_measured=False,
+            gain_policy=dict(ATEN_GAIN_POLICY),
             planning_domain='ADJACENT_INDEPENDENT_GROUPS_ON_THREE_RECORDED_LOCAL_CORES')
         _write(stage / 'selection.json', report)
         _write(stage / 'problem.json', problem_document(problem))

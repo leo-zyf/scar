@@ -31,8 +31,10 @@ def _profile(kind):
 
 def runtime_identity(kind):
     profile=_profile(kind)
-    paths=[Path(__file__).resolve(),Path(__file__).with_name('caller_pipeline_capsule.py'),
-        Path(__file__).with_name('caller_pipeline_deployment.py'),*profile.runtime_sources()]
+    runtime=Path(__file__).resolve().parent
+    paths=[runtime/'final_entry_capsule.py',runtime/'caller_pipeline_capsule.py',
+        runtime/'caller_pipeline_deployment.py',runtime.parent/'optimization'/'paired_entry_selection.py',
+        *profile.runtime_sources()]
     rows=[(str(path),sha256(path.read_bytes()).hexdigest())for path in dict.fromkeys(paths)]
     return sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 

@@ -129,7 +129,9 @@ def _record(inputs, validation_ref):
     _need(observed['commands'] == inputs['commands'] and observed['working_directory'] == inputs['working_directory']
           and observed['python_provider_environment'] == inputs['environment']
           and observed['full_process_measured'] is True, 'cold observation must match exact bounded native launch')
-    decision, _, launch = _aten_validation(scope, evidence, validation_ref, .05)
+    policy = observed['decision']['policy']
+    decision, _, launch = _aten_validation(scope, evidence, validation_ref, policy['minimum_gain'],
+                                           strict_minimum_gain=policy.get('strict_minimum_gain', False))
     _need(all(row['stdout'].encode() == _raw(inputs['original_stdout'])
               and row['output']['sha256'] == inputs['final']['sha256']
               and row['output']['size_bytes'] == inputs['final']['size_bytes']

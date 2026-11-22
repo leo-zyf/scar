@@ -3,6 +3,7 @@
 import re
 from statistics import variance
 
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.paired_entry_selection import _metrics
 
 
@@ -67,7 +68,7 @@ def _coverage(timed, candidate, expected):
                 and (expected is None or native[0] == expected))
 
 
-def _compare(timed, metrics, reference, candidate):
+def _compare(timed, metrics, reference, candidate, gain_policy):
     deltas = {'REFERENCE_FIRST': [], 'CANDIDATE_FIRST': []}
     differences = []
     for row in timed:
@@ -80,16 +81,20 @@ def _compare(timed, metrics, reference, candidate):
     reference_median = metrics[reference]['process_ns']['median_ns_twice']
     candidate_median = metrics[candidate]['process_ns']['median_ns_twice']
     faster = sum(delta > 0 for delta in differences)
-    checks = dict(median_gain_at_least_five_percent=20 * candidate_median <= 19 * reference_median,
-                  at_least_three_quarters_rounds_faster=4 * faster >= 3 * len(timed),
+    checks = dict(at_least_three_quarters_rounds_faster=4 * faster >= 3 * len(timed),
                   positive_median_gain_in_each_order=all(group['median_ns_twice'] > 0 for group in directional.values()))
+    if gain_policy is None:
+        checks['median_gain_at_least_five_percent'] = 20 * candidate_median <= 19 * reference_median
+    else:
+        checks['median_gain_exceeds_minimum'] = _passes_gain(reference_median, candidate_median, gain_policy)
     return dict(boundary='FRESH_PROCESS_WALL_TIME', checks=checks, profitable=all(checks.values()),
                 faster_rounds=faster, paired_improvement_ns=differences,
                 median_delta_ns_by_order={direction: group['median_ns'] for direction, group in directional.items()},
                 speedup=reference_median / candidate_median)
 
 
-def select_aten_entry_candidate(rounds, candidates, *, warmup_rounds, measured_rounds, expected_native_calls):
+def select_aten_entry_candidate(rounds, candidates, *, warmup_rounds, measured_rounds, expected_native_calls,
+                                gain_policy=ATEN_GAIN_POLICY):
     """Advance a verified challenger only when it beats the original and the incumbent."""
     orders = entry_round_orders(candidates, warmup_rounds=warmup_rounds, measured_rounds=measured_rounds)
     if expected_native_calls is not None and (type(expected_native_calls) is not int or expected_native_calls < 1):
@@ -111,7 +116,7 @@ def select_aten_entry_candidate(rounds, candidates, *, warmup_rounds, measured_r
             for field in _CHANNELS
         }
         equivalence[candidate] = dict(matches, equivalent=all(matches.values()))
-    comparisons = {candidate: {reference: _compare(timed, metrics, reference, candidate)
+    comparisons = {candidate: {reference: _compare(timed, metrics, reference, candidate, gain_policy)
                                for reference in labels if reference != candidate}
                    for candidate in candidates}
 
@@ -136,7 +141,10 @@ def select_aten_entry_candidate(rounds, candidates, *, warmup_rounds, measured_r
 
     speedups = {boundary: metrics[_ORIGINAL][boundary]['median_ns_twice'] / metrics[selected][boundary]['median_ns_twice']
                 for boundary in _BOUNDARIES}
-    return dict(selected=selected, metrics=metrics, comparisons=comparisons, coverage=coverage,
+    report = dict(selected=selected, metrics=metrics, comparisons=comparisons, coverage=coverage,
                 equivalence=equivalence, decisions=decisions, speedups=speedups,
                 recommendation='KEEP_ORIGINAL' if selected == _ORIGINAL else 'CANDIDATE_ENTRY_GAIN_OBSERVED',
                 automatic_deployment_authorized=False)
+    if gain_policy is not None:
+        report['gain_policy'] = dict(gain_policy)
+    return report

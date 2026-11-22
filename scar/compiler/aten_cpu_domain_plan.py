@@ -1,7 +1,8 @@
 """Price topology representatives from native ATen primitives before graph validation."""
 
 from scar.codegen.aten_native_graph import _read_declared
-from scar.compiler.plan_aten_native_graph import _GAIN, _bundle, _invoke, _receipt, _window_model
+from scar.compiler.plan_aten_native_graph import _bundle, _invoke, _receipt, _window_model
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.aten_native_schedule import propose_cpu_windows
 from scar.optimization.aten_native_team import TEAM_PLACEMENT_POLICY, model_cpu_team, propose_cpu_team
 
@@ -12,7 +13,7 @@ def _placement_cost(option):
     return model['predictions'][mode]
 
 
-def choose_aten_cpu_domain(candidates, *, team):
+def choose_aten_cpu_domain(candidates, *, team, gain_policy=ATEN_GAIN_POLICY):
     options = [(cost['estimate_ns'], mode != 'SERIAL', tuple(row['cpus']), mode, row)
                for row in candidates for mode, cost in row['model']['predictions'].items()
                if not team or mode in ('SERIAL', row['model']['selected'])]
@@ -37,7 +38,7 @@ def choose_aten_cpu_domain(candidates, *, team):
                 if cross_cost['sample_max_ns'] >= local_cost['sample_min_ns']:
                     ranking['decision'] = 'CROSS_NODE_RANK_UNRESOLVED_WITHIN_CALIBRATION_SPANS'
                     chosen = local
-    if (serial[0] - chosen[0]) / serial[0] < _GAIN:
+    if not _passes_gain(serial[0], chosen[0], gain_policy):
         chosen = serial
     return chosen, serial, ranking
 
@@ -90,7 +91,8 @@ def plan_aten_cpu_domain(probe, *, domain, input_paths, warmup_pairs, tensor_bud
                   inputs=inputs, comparisons=candidates, selected_cpu_ids=list(cpus), selected_mode=mode,
                   selected_estimate_ns=estimate, best_serial_estimate_ns=best_serial[0],
                   best_serial_cpu_ids=list(best_serial[2]), workload_variant_runs=0,
-                  memory_page_placement_observed=residency, source_replacement_authorized=False)
+                  memory_page_placement_observed=residency, source_replacement_authorized=False,
+                  gain_policy=dict(ATEN_GAIN_POLICY))
     if ranking is not None:
         report['topology_ranking'] = ranking
     return report, samples

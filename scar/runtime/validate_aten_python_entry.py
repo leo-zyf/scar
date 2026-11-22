@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
 from scar.ir.record_codec import loads
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.paired_entry_selection import _metrics
 from scar.runtime.aten_python_trial import _read_manifest, _trial_layout
 
@@ -122,7 +123,7 @@ def _native_coverage(timed, *, required, expected_native_calls):
                 full_coverage_required=required, coverage_requirement_met=not required or covered)
 
 
-def _summary(pairs, *, require_full_coverage=False, expected_native_calls=None):
+def _summary(pairs, *, require_full_coverage=False, expected_native_calls=None, gain_policy=ATEN_GAIN_POLICY):
     timed = [pair for pair in pairs if not pair['warmup']]
     boundaries = ('process_ns', 'entry_ns')
     metrics = {}
@@ -138,18 +139,23 @@ def _summary(pairs, *, require_full_coverage=False, expected_native_calls=None):
     for pair in timed:
         delta = pair['runs']['ORIGINAL']['process_ns'] - pair['runs']['GUARDED']['process_ns']
         deltas[pair['order']].append(delta)
-    baseline = metrics['ORIGINAL']['process_ns']['median_ns']
-    guarded = metrics['GUARDED']['process_ns']['median_ns']
+    median_key = 'median_ns' if gain_policy is None else 'median_ns_twice'
+    baseline, guarded = (metrics[mode]['process_ns'][median_key] for mode in _MODES)
     faster_pairs = sum(delta > 0 for group in deltas.values() for delta in group)
     group_medians = {order: median(values) for order, values in deltas.items() if values}
-    checks = dict(median_gain_at_least_five_percent=20 * (baseline - guarded) >= baseline,
-                  at_least_three_quarters_pairs_faster=4 * faster_pairs >= 3 * len(timed),
+    checks = dict(at_least_three_quarters_pairs_faster=4 * faster_pairs >= 3 * len(timed),
                   positive_median_gain_in_each_order=all(value > 0 for value in group_medians.values()))
+    if gain_policy is None:
+        checks['median_gain_at_least_five_percent'] = 20 * (baseline - guarded) >= baseline
+    else:
+        checks['median_gain_exceeds_minimum'] = _passes_gain(baseline, guarded, gain_policy)
     coverage = _native_coverage(timed, required=require_full_coverage, expected_native_calls=expected_native_calls)
     if require_full_coverage:
         checks['guarded_dispatch_coverage'] = coverage['coverage_requirement_met']
     decision = dict(boundary='FRESH_PROCESS_WALL_TIME', checks=checks, faster_pairs=faster_pairs,
                     median_delta_ns_by_order=group_medians)
+    if gain_policy is not None:
+        decision['gain_policy'] = dict(gain_policy)
     return dict(metrics=metrics, speedups=speedups, full_process_decision=decision, native_coverage=coverage,
                 recommendation='CANDIDATE_ENTRY_GAIN_OBSERVED' if all(checks.values()) else 'KEEP_ORIGINAL',
                 automatic_deployment_authorized=False)

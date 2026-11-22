@@ -12,7 +12,7 @@ import sys
 
 from scar.compiler import compile_cpu_entry, cpu_entry_replay_adapters
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 from scar.runtime import cpu_paired_runner
 from scar.runtime.cpu_paired_runner import pace as _pace
 
@@ -275,7 +275,7 @@ def _resource_observation(rows, warmups, *, runner=None):
     return observation
 
 
-def _results(spec, samples, layout, warmups, pairs):
+def _results(spec, samples, layout, warmups, pairs, *, archived=None):
     observations = []
     report = spec.get('json_report')
     # Compare the common result after each arm's own stdout format passes.
@@ -311,8 +311,10 @@ def _results(spec, samples, layout, warmups, pairs):
                   f'{mode} changed the exact publications')
         observations.append(dict(pair=execution['pair'], mode=mode, wall_ns=row['elapsed_ns'],
                                  returncode=0, stdout_sha256=semantic_identity, stderr_sha256=_EMPTY))
-    return compare_entry_pairs(observations, incumbent='original', challenger='candidate',
-                               warmup_pairs=warmups, measurement_pairs=pairs)
+    context = dict(incumbent='original', challenger='candidate', warmup_pairs=warmups, measurement_pairs=pairs)
+    if archived is not None:
+        return replay_entry_pairs(observations, archived, **context)
+    return compare_entry_pairs(observations, **context)
 
 
 def measure(compilation, out, *, capture=None, cpu=None, warmups=1, pairs=3, collect_resources=None,
@@ -370,7 +372,7 @@ def check(path):
           and report['whole_program_equivalence_proven'] is False and report['deployment_authorized'] is False,
           'CPU entry invocation differs at replay')
     layout = _layout(spec, root, warmups, pairs)
-    _need(report['selection'] == _results(spec, report['runs'], layout, warmups, pairs),
+    _need(report['selection'] == _results(spec, report['runs'], layout, warmups, pairs, archived=report['selection']),
           'paired whole-entry decision differs at replay')
     recorded_observation = report.get('resource_observation')
     _need(recorded_observation is None or type(recorded_observation) is dict, 'invalid wait4 observation')

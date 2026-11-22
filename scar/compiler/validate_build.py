@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, strict_entry_gain_met
+
 
 def _reference(path, schema):
     path=Path(path).resolve(); raw=path.read_bytes()
@@ -64,7 +66,7 @@ def _native_counts(report,pipeline,entry,argv):
     return native,fallback,bool(clean and attached and native>0 and fallback==0)
 
 
-def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain=.05):
+def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain=DEFAULT_MINIMUM_GAIN):
     """Measure original versus the model-selected pipeline, never rank variants.
 
     The declaration and runner identity are frozen before the first child.
@@ -91,8 +93,8 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
         for key in ('proof','schedule','bundle_export'):
             if key in row:_read(row[key])
     context=entry_context(entry,argv);runner=runner_identity();environment=dict(os.environ)
-    policy=dict(warmup=warmup,repetitions=repetitions,minimum_gain=minimum_gain,
-        frozen_before_measurement=True,admission='EXACT_OUTPUTS_NATIVE_ONLY_AND_MEDIAN_GAIN_AT_LEAST_DECLARED_THRESHOLD')
+    policy=dict(warmup=warmup,repetitions=repetitions,minimum_gain=minimum_gain,strict_minimum_gain=True,
+        frozen_before_measurement=True,admission='EXACT_OUTPUTS_NATIVE_ONLY_AND_MEDIAN_GAIN_ABOVE_DECLARED_THRESHOLD')
     out.mkdir(parents=True);samples_folder=out/'samples';samples_folder.mkdir()
     design=dict(schema='scar.compiled-program-validation-design',schema_version=1,pipeline=pipeline_ref,
         entry_context=context,runner_identity=runner,policy=policy,specializations=specializations,
@@ -156,7 +158,7 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
     speedup=original_median/native_median if original_median is not None and native_median else None
     complete=len(measurements)==repetitions and len(samples)==warmup+repetitions
     validated=complete and all(row['valid'] for row in samples)
-    profitable=validated and gain is not None and gain>=minimum_gain
+    profitable=validated and strict_entry_gain_met(baseline_stats['samples_ns'], optimized_stats['samples_ns'], minimum_gain)
     if not complete:failure_reasons.append('REQUESTED_MEASUREMENTS_INCOMPLETE')
     if validated and not profitable:failure_reasons.append('NOT_PROFITABLE_AT_FROZEN_MINIMUM_GAIN')
     receipt=dict(schema='scar.compiled-program-deployment',schema_version=1,
@@ -181,7 +183,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pipeline',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--warmup',type=int,default=1);parser.add_argument('--repetitions',type=int,default=3)
-    parser.add_argument('--minimum-gain',type=float,default=.05)
+    parser.add_argument('--minimum-gain',type=float,default=DEFAULT_MINIMUM_GAIN)
     parser.add_argument('command',nargs=argparse.REMAINDER);args=parser.parse_args(argv)
     command=args.command[1:] if args.command[:1]==['--'] else args.command
     if not command:parser.error('original Python script entry required after --')

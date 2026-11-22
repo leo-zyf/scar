@@ -13,7 +13,9 @@ _OBSERVATION = 'scar.cpu-array-native-route-observation'
 _PROVEN = 'PROVEN_SCOPED_CPU_ARRAY_NATIVE_ROUTE'
 _INCUMBENT = 'retained_process'
 _CHALLENGER = 'grouped_openmp'
-_MINIMUM = Fraction(1, 20)
+_LEGACY_VERSION = 1
+_VERSION = 2
+_MINIMUM = {_LEGACY_VERSION: Fraction(1, 20), _VERSION: Fraction(1, 100)}
 
 
 def _require(ok, detail):
@@ -48,10 +50,9 @@ def _routes(source):
     }
 
 
-def _choose(pairs):
+def _choose(pairs, version):
     _require(pairs['schema'] == PAIRED_SELECTION and pairs['schema_version'] == 1
              and pairs['incumbent'] == _INCUMBENT and pairs['challenger'] == _CHALLENGER
-             and pairs['policy'] == dict(minimum_gain=float(_MINIMUM), strict_observed_separation=True)
              and pairs['deployment_authorized'] is False, 'unsupported clean paired route comparison policy')
     incumbent, challenger = (pairs['metrics'][route] for route in (_INCUMBENT, _CHALLENGER))
     baseline_median, candidate_median = incumbent['median_ns_twice'], challenger['median_ns_twice']
@@ -59,11 +60,15 @@ def _choose(pairs):
              'positive exact paired route medians required')
     gain = Fraction(baseline_median - candidate_median, baseline_median)
     separated = challenger['max_ns'] < incumbent['min_ns']
-    nominated = gain >= _MINIMUM and separated
+    minimum = _MINIMUM[version]
+    inclusive = version == _LEGACY_VERSION
+    above_threshold = gain >= minimum if inclusive else gain > minimum
+    nominated = above_threshold and separated
     verdict = 'ADVANCE_TO_RELEASE_REVIEW' if nominated else 'KEEP_INCUMBENT'
-    _require(separated == pairs['observed_envelopes_separated']
-             and pairs['verdict'] == verdict,
-             'paired route envelope or verdict differs from replay')
+    _require(separated == pairs['observed_envelopes_separated'], 'paired route envelope differs from replay')
+    if inclusive:
+        _require(pairs['policy'] == dict(minimum_gain=float(minimum), strict_observed_separation=True)
+                 and pairs['verdict'] == verdict, 'legacy paired route verdict differs from replay')
     summary = dict(
         measured_pairs=pairs['measurement_pairs'], warmup_pairs=pairs['warmup_pairs'],
         retained_process_median_ns_twice=baseline_median, grouped_openmp_median_ns_twice=candidate_median,
@@ -72,7 +77,16 @@ def _choose(pairs):
         observed_envelopes_separated=separated, gain_fraction=float(gain),
         exact_gain_fraction=dict(numerator=gain.numerator, denominator=gain.denominator),
         source_pairing_verdict=pairs['verdict'])
-    return (_CHALLENGER if nominated else _INCUMBENT), summary, pairs['reasons']
+    if inclusive:
+        reasons = pairs['reasons']
+    else:
+        summary['decision_pairing_verdict'] = verdict
+        reasons = []
+        if not above_threshold:
+            reasons.append('MEASURED_MEDIAN_GAIN_NOT_STRICTLY_ABOVE_THRESHOLD')
+        if not separated:
+            reasons.append('CHALLENGER_MAX_NS_NOT_BELOW_INCUMBENT_MIN_NS')
+    return (_CHALLENGER if nominated else _INCUMBENT), summary, reasons
 
 
 def _observation_scope(source, proof_ref, comparison):
@@ -86,8 +100,8 @@ def _observation_scope(source, proof_ref, comparison):
              'comparison must share the exact original launch, CPU cohort and two route packages')
 
 
-def _describe(comparison):
-    chosen, summary, reasons = _choose(comparison['pairs'])
+def _describe(comparison, version):
+    chosen, summary, reasons = _choose(comparison['pairs'], version)
     states = comparison['state_diagnostics']
     summary.update(
         exact_round_state_checkpoints=states['exact_checkpoints'], exact_round_state_bytes=states['exact_bytes'],
@@ -111,13 +125,13 @@ def _distinct_captures(comparison, paths, stdout_digests):
         stdout_digests.add(digest)
 
 
-def _replication(campaigns):
+def _replication(campaigns, version):
     paths, stdout_digests, outcomes = set(), set(), []
     oracle = _checkpoint_oracle(campaigns[0][1])
     for reference, comparison in campaigns:
         _require(_checkpoint_oracle(comparison) == oracle, 'replication changed the ordered round-state oracle')
         _distinct_captures(comparison, paths, stdout_digests)
-        chosen, summary, reasons = _describe(comparison)
+        chosen, summary, reasons = _describe(comparison, version)
         outcomes.append(dict(observation=reference, gate_passed=chosen == _CHALLENGER,
                              summary=summary, reasons=reasons))
     passed = sum(row['gate_passed'] for row in outcomes)
@@ -129,7 +143,8 @@ def _replication(campaigns):
     result = dict(
         status=('ALL_CAMPAIGNS_PASS' if unanimous else 'CAMPAIGN_VERDICTS_DISAGREE' if disagree
                 else 'NO_CAMPAIGN_PASSES'),
-        policy='REQUIRE_EXISTING_PAIRED_GATE_IN_EVERY_CAMPAIGN',
+        policy=('REQUIRE_EXISTING_PAIRED_GATE_IN_EVERY_CAMPAIGN' if version == _LEGACY_VERSION else
+                'REQUIRE_STRICT_ONE_PERCENT_AND_DISJOINT_ENVELOPES_IN_EVERY_CAMPAIGN'),
         campaign_count=len(outcomes), passing_campaigns=passed, campaigns=outcomes,
         pooled_samples=False, same_checkpoint_oracle_verified=True, disjoint_process_captures_verified=True)
     return (_CHALLENGER if unanimous else _INCUMBENT), reasons, result
@@ -137,6 +152,10 @@ def _replication(campaigns):
 
 def derive_cpu_array_native_route_plan(proof_ref, comparison_ref, *, replications=()):
     """Nominate a native route only when every supplied clean campaign passes."""
+    return _derive(proof_ref, comparison_ref, replications, _VERSION)
+
+
+def _derive(proof_ref, comparison_ref, replications, version):
     from scar.analysis.cpu_array_native_route import verify_cpu_array_native_route
     from scar.compiler.cpu_array_native_route_trial import verify_cpu_array_native_route_observation
 
@@ -161,13 +180,13 @@ def derive_cpu_array_native_route_plan(proof_ref, comparison_ref, *, replication
 
     workload, resources = source['workload'], source['resources']
     routes = _routes(source)
-    chosen, summary, reasons = _describe(comparison)
+    chosen, summary, reasons = _describe(comparison, version)
     replication = None
     if replications:
-        chosen, reasons, replication = _replication(campaigns)
+        chosen, reasons, replication = _replication(campaigns, version)
     nominated = chosen == _CHALLENGER
     report = dict(
-        schema=SCHEMA, schema_version=1, proof=proof_ref, comparison=comparison_ref,
+        schema=SCHEMA, schema_version=version, proof=proof_ref, comparison=comparison_ref,
         retention=source['retention'], grouped=source['baseline_grouped'], scope=source['scope'],
         workload=workload, resources=resources, effect_contract=source['effects'],
         routes=routes, selected_route=chosen, fallback_route=_INCUMBENT,
@@ -177,7 +196,7 @@ def derive_cpu_array_native_route_plan(proof_ref, comparison_ref, *, replication
         empirical_evidence=dict(
             pairing='#/pairs', state_validation='#/state_diagnostics',
             basis='OBSERVED_CLEAN_NATIVE_WALL_TIME_ENVELOPES',
-            minimum_gain=float(_MINIMUM), inclusive_minimum_gain=True,
+            minimum_gain=float(_MINIMUM[version]), inclusive_minimum_gain=version == _LEGACY_VERSION,
             strict_observed_separation=True, serves_as_analytic_hardware_bound=False),
         coverage_frontier=[
             dict(role='RESOURCE_PLACEMENT', status='EXACT_SCOPED_ROUTE_REQUIREMENTS', evidence='#/resources'),
@@ -195,9 +214,8 @@ def derive_cpu_array_native_route_plan(proof_ref, comparison_ref, *, replication
 def verify_cpu_array_native_route_plan(reference):
     """Cold-replay both native routes, the empirical receipts and the scoped decision."""
     saved = read_artifact(reference)
-    _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
+    _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] in _MINIMUM,
              'unsupported CPU array native route plan')
-    replay = derive_cpu_array_native_route_plan(
-        saved['proof'], saved['comparison'], replications=saved.get('replications', ()))
+    replay = _derive(saved['proof'], saved['comparison'], saved.get('replications', ()), saved['schema_version'])
     _require(saved == replay, 'saved native route plan differs at cold replay')
     return replay

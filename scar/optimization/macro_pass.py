@@ -12,6 +12,7 @@ from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.deployment_cost import (
     _digest, plan_deployment, verify_deployment_plan,
 )
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 
 SCHEMA = 'scar.macro-pass-report'
@@ -170,7 +171,8 @@ def fusion_pass_cost_context(region_document, blueprint):
 
 
 def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
-                    available_cpu_ids, memory_budget_bytes, minimum_gain=0.05):
+                    available_cpu_ids, memory_budget_bytes, minimum_gain=DEFAULT_MINIMUM_GAIN,
+                    strict_minimum_gain=True):
     """Replay one fusion's legality and reuse the existing exact deployment gate."""
     from scar.analysis.pipeline_region_pass import select_fusion_region
 
@@ -178,7 +180,8 @@ def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
     context = _cost_context(region, blueprint, graph)
     profitability = plan_deployment({} if cost_profile is None else cost_profile,
         context=context, reuse_count=1, available_cpu_ids=available_cpu_ids,
-        memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain)
+        memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain,
+        strict_minimum_gain=strict_minimum_gain)
     verify_deployment_plan(profitability)
     rewrite = legal and profitability['decision'] == 'LOAD_NATIVE_CANDIDATE'
     reason = ('Existing fusion is legal under the retained source Q and meets the protected-call cost threshold.'
@@ -200,6 +203,10 @@ def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
     invalidation = [asdict(AnalysisFact(region['region_id']['wire'], source_revision, name,
         'INVALIDATED_BY_FUSION_DELTA', (dict(optimized_revision=optimized_revision),)))
         for name in FUSION_PASS.invalidates] if rewrite else []
+    request = dict(available_cpu_ids=profitability['request']['available_cpu_ids'],
+                   memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain)
+    if strict_minimum_gain:
+        request['strict_minimum_gain'] = True
     return dict(schema=SCHEMA, schema_version=1, decision='REWRITE' if rewrite else 'KEEP',
         region_document_sha256=source_revision, blueprint_sha256=_digest(blueprint),
         spec=asdict(FUSION_PASS), requires=requires,
@@ -217,8 +224,7 @@ def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
             source_parents=deepcopy(region['projection']['source_parents']),
             source_refs=deepcopy(region['source_refs']), target=deepcopy(blueprint['target']),
             implementations=_sources((*_PRODUCERS, *_ENTRY_SOURCES))),
-        request=dict(available_cpu_ids=profitability['request']['available_cpu_ids'],
-            memory_budget_bytes=memory_budget_bytes, minimum_gain=minimum_gain),
+        request=request,
         deployment_authorized=False, target_program_executed=False,
         native_artifact_built=False, physical_optimality_proven=False)
 
@@ -232,7 +238,9 @@ def verify_fusion_pass(report, region_document, blueprint):
     source = plan['profile_source']
     profile = (source['path'] if source['kind'] == 'PATH' else
         source['reference'] if source['kind'] == 'FACT_REFERENCE' else plan['profile'])
-    expected = run_fusion_pass(region_document, blueprint, cost_profile=profile, **report['request'])
+    request = dict(report['request'])
+    request.setdefault('strict_minimum_gain', False)
+    expected = run_fusion_pass(region_document, blueprint, cost_profile=profile, **request)
     _need(_digest(expected) == _digest(report), 'fusion pass differs from exact legality/cost/selection replay')
     return expected
 

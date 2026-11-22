@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from scar.analysis import native_array_entry_recipe
 from scar.compiler.calibrate_array_entry import _normalize, _ref, _replay, _run, _write
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.native-seeded-array-entry-calibration'
@@ -164,7 +164,7 @@ def check(path):
         _need(row['parameters'] == case['parameters'] and all(run['argv'] == argv for run in row['clean_pairs']),
               'original held-out arguments changed')
         prior = row['pairing']
-        rebuilt = compare_entry_pairs([_replay(run, base, expected) for run in row['clean_pairs']],
+        rebuilt = replay_entry_pairs([_replay(run, base, expected) for run in row['clean_pairs']], prior,
             incumbent='original', challenger='native', warmup_pairs=prior['warmup_pairs'],
             measurement_pairs=prior['measurement_pairs'])
         _need(rebuilt == prior, 'clean pairing differs')

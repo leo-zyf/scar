@@ -1,6 +1,6 @@
 """Replay a clean paired stateful recipe comparison at its measured boundary."""
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import replay_entry_pairs
 
 
 SCHEMA = 'scar.current-stateful-entry-benchmark'
@@ -45,8 +45,11 @@ def replay_entry_benchmark(reference, recipe_reference):
             if scope == 'method' and (observation['final_numeric_state_equal'] is not True
                     or any(sum(observation['method_calls_ns'][row['mode']]) != row['wall_ns'] for row in pair)):
                 raise ValueError('region comparison does not reproduce the native call boundaries')
-        replayed[scope] = compare_entry_pairs(rows, incumbent=_MODES[0], challenger=_MODES[1],
-            warmup_pairs=warmup, measurement_pairs=measured, minimum_gain=design['minimum_gain'])
+        stored = report['result'][scope]
+        if stored['policy']['minimum_gain'] != design['minimum_gain']:
+            raise ValueError('comparison threshold differs from the frozen benchmark design')
+        replayed[scope] = replay_entry_pairs(rows, stored, incumbent=_MODES[0], challenger=_MODES[1],
+            warmup_pairs=warmup, measurement_pairs=measured)
     if replayed != report['result']:
         raise ValueError('comparison verdict differs from the retained clean repetitions')
     read_artifact(reference)

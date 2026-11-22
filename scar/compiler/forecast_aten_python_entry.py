@@ -9,6 +9,7 @@ import re
 from tempfile import TemporaryDirectory
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.paired_entry_selection import _metrics
 from scar.runtime.aten_python_trial import _read_manifest
 
@@ -143,28 +144,38 @@ def _hot_calls(record, manifest, digest):
                 guarded_median_ns=metrics['GUARDED_NATIVE']['median_ns'])
 
 
-def _estimate(observed, hot, startup_ns):
+def _estimate(observed, hot, startup_ns, *, gain_policy=ATEN_GAIN_POLICY):
     calls = observed['calls']
     original_total = observed['setup_ns'] + observed['entry_ns'] + observed['teardown_ns']
     noncall = original_total - observed['total_callable_ns']
     guarded_total = noncall + calls * hot['guarded_median_ns'] + startup_ns
     origin_per_call = Fraction(observed['total_callable_ns'], calls)
     saving_per_call = origin_per_call - hot['guarded_median_ns']
-    five_percent_saving_per_call = origin_per_call * Fraction(19, 20) - hot['guarded_median_ns']
-    startup_limit = floor(original_total * Fraction(19, 20) - noncall - calls * hot['guarded_median_ns'])
-    qualifies = guarded_total * 20 <= original_total * 19
-    return dict(original_observed_ns=original_total, guarded_modeled_ns=guarded_total, original_noncall_ns=noncall,
+    estimate = dict(original_observed_ns=original_total, guarded_modeled_ns=guarded_total, original_noncall_ns=noncall,
                 original_observed_average_callable_ns=float(origin_per_call),
                 incremental_guarded_startup_ns=startup_ns,
                 modeled_speedup=original_total / guarded_total,
                 modeled_gain_fraction=(original_total - guarded_total) / original_total,
-                meets_five_percent_modeled_gain=qualifies,
                 break_even_minimum_calls_for_positive_gain=(floor(startup_ns / saving_per_call) + 1
-                                                           if saving_per_call > 0 else None),
-                minimum_calls_for_five_percent_gain=(max(1, ceil((startup_ns + Fraction(noncall, 20))
-                                                               / five_percent_saving_per_call))
-                                                     if five_percent_saving_per_call > 0 else None),
-                maximum_startup_ns_for_five_percent_gain=startup_limit if startup_limit >= 0 else None)
+                                                           if saving_per_call > 0 else None))
+    legacy = gain_policy is None
+    qualifies = (guarded_total * 20 <= original_total * 19 if legacy
+                 else _passes_gain(original_total, guarded_total, gain_policy))
+    threshold = Fraction(1, 20) if legacy else Fraction(str(gain_policy['minimum_gain']))
+    qualified_saving_per_call = origin_per_call * (1 - threshold) - hot['guarded_median_ns']
+    startup_limit = original_total * (1 - threshold) - noncall - calls * hot['guarded_median_ns']
+    startup_limit = floor(startup_limit) if legacy else ceil(startup_limit) - 1
+    minimum_calls = None
+    if qualified_saving_per_call > 0:
+        calls_at_threshold = (startup_ns + noncall * threshold) / qualified_saving_per_call
+        minimum_calls = max(1, ceil(calls_at_threshold) if legacy else floor(calls_at_threshold) + 1)
+    startup_limit = startup_limit if startup_limit >= 0 else None
+    if legacy:
+        return dict(estimate, meets_five_percent_modeled_gain=qualifies,
+                    minimum_calls_for_five_percent_gain=minimum_calls,
+                    maximum_startup_ns_for_five_percent_gain=startup_limit)
+    return dict(estimate, gain_policy=dict(gain_policy), meets_minimum_modeled_gain=qualifies,
+                minimum_calls_for_modeled_gain=minimum_calls, maximum_startup_ns_for_modeled_gain=startup_limit)
 
 
 def forecast_aten_python_entry(trial, *, trial_sha256, demand, demand_sha256, call_evidence,
@@ -186,7 +197,7 @@ def forecast_aten_python_entry(trial, *, trial_sha256, demand, demand_sha256, ca
     if grad_modes is not None and grad_modes['enabled' if hot['ambient_grad_enabled'] else 'disabled'] != observed['calls']:
         raise ValueError('observed original calls and hot calibration have different grad modes')
     estimate = _estimate(observed, hot, startup_ns)
-    recommendation = 'CANDIDATE_ENTRY_GAIN_FORECAST' if estimate['meets_five_percent_modeled_gain'] else 'KEEP_ORIGINAL'
+    recommendation = 'CANDIDATE_ENTRY_GAIN_FORECAST' if estimate['meets_minimum_modeled_gain'] else 'KEEP_ORIGINAL'
     report = dict(schema='scar.aten-python-entry-forecast', schema_version=1,
         scope='MODELED_IN_PROCESS_ENTRY_WITH_OBSERVED_ORIGINAL_DEMAND',
         trial=str(trial / 'trial.json'), trial_sha256=trial_sha256, cpu_ids=manifest['cpus'],

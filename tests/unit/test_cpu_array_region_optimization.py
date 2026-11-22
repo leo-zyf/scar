@@ -237,4 +237,8 @@ def test_measured_selection_accepts_gain_and_accepts_slower_native_as_noop():
     assert slower["decision"] == "NO_OP" and not slower["selected"]
     assert slower["speedup"] == pytest.approx(0.547)
     assert "measured_gain_below_required_threshold" in slower["reasons"]
+    exact = select_measured(plan, [1.0], [0.99], validated=True)
+    assert exact["decision"] == "NO_OP" and exact["strict_minimum_gain"] is True
+    better = select_measured(plan, [1.0], [0.989], validated=True)
+    assert better["decision"] == "TRANSFORM_UNDER_CONTRACT"
     assert plan.proof["selected"] is False

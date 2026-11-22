@@ -11,7 +11,7 @@ from scar.compiler import calibrate_array_task_entry as calibration
 from scar.compiler.calibrate_array_entry import _ref, _run, _write
 from scar.compiler.cpu_task_arena_study import _checkpoint_files
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.cpu-array-native-route-observation'
@@ -68,7 +68,7 @@ def _validated_runs(runs, mode, package, recipe, holdout):
         package['output_fields']['worker_pid'], native_label=mode)
 
 
-def _summarize(runs, pairs, holdout, recipe, packages):
+def _summarize(runs, pairs, holdout, recipe, packages, *, archived_pairing=None):
     sequence = [(pair, mode) for pair in range(1 + pairs)
                 for mode in (_MODES if pair % 2 == 0 else _MODES[::-1])]
     _need([(row['pair'], row['mode']) for row in runs] == sequence, 'alternating clean run order changed')
@@ -76,8 +76,9 @@ def _summarize(runs, pairs, holdout, recipe, packages):
     for mode, package in packages.items():
         checked, _ = _validated_runs([run for run in runs if run['mode'] == mode], mode, package, recipe, holdout)
         rows.extend(checked)
-    selection = compare_entry_pairs(rows, incumbent=_MODES[0], challenger=_MODES[1],
-                                    warmup_pairs=1, measurement_pairs=pairs)
+    context = dict(incumbent=_MODES[0], challenger=_MODES[1], warmup_pairs=1, measurement_pairs=pairs)
+    selection = (compare_entry_pairs(rows, **context) if archived_pairing is None else
+                 replay_entry_pairs(rows, archived_pairing, **context))
     variance = {mode: pvariance(row['samples_ns']) for mode, row in selection['metrics'].items()}
     return selection, variance
 
@@ -143,7 +144,8 @@ def verify_cpu_array_native_route_observation(reference):
           and all(row['diagnostics_enabled'] is False for row in report['runs']), 'observation scope changed')
     pairs = report['pairs']['measurement_pairs']
     _need(type(pairs) is int and 3 <= pairs <= 32, 'unsupported clean pair count')
-    selection, variance = _summarize(report['runs'], pairs, holdout, recipe, packages)
+    selection, variance = _summarize(report['runs'], pairs, holdout, recipe, packages,
+                                     archived_pairing=report['pairs'])
     states = _state_diagnostics(report['state_diagnostics']['runs'], holdout, recipe, packages)
     _need(selection == report['pairs'] and variance == report['population_variance_ns2']
           and states == report['state_diagnostics'], 'observation projections differ on replay')

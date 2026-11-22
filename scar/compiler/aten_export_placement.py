@@ -228,7 +228,8 @@ def replay_export_cpu(recipe, evidence, *, origin, tensor_budget_bytes, result_b
         if [(row['id'], row['size_bytes']) for row in evidence['inputs']] != list(zip(
                 [item['id'] for item in recipe['inputs']], input_bytes, strict=True)):
             raise ValueError('ready CPU sampled files do not match recipe input ports')
-        model = _ready_model(recipe, team, raw, tensor_budget_bytes, warmup, ready_dag_abi=_ABI, joint_order=True)
+        model = _ready_model(recipe, team, raw, tensor_budget_bytes, warmup, ready_dag_abi=_ABI, joint_order=True,
+                             gain_policy=evidence['model'].get('gain_policy'))
         original, baseline = _source_order_baseline(recipe, team, raw, model, tensor_budget_bytes, warmup, _ABI)
         if original is not None:
             if not _replay_trial(evidence, 'joint_order_comparison', recipe, model, baseline, result_bytes, warmup, count):

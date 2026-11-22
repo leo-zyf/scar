@@ -17,7 +17,7 @@ from scar.compiler import aten_source_entry, cpu_fixed_grid_cli_delivery as deli
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.entry_delivery import _aten
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 
 
 SCHEMA = 'scar.cpu-fixed-grid-mapped-input-study'
@@ -36,6 +36,7 @@ def _need(condition, detail):
 
 
 def _ref(path, schema=_RAW):
+    path = Path(path).absolute()
     _need(path.resolve(strict=True) == path and stat.S_ISREG(path.lstat().st_mode), 'expected an exact local file')
     return artifact_reference(path, schema)
 
@@ -137,13 +138,22 @@ def _rows(directory, *, command, mode, pair, expected_mode, timed):
                 stdout=stdout, stderr=stderr, published=published, publication_mode=expected_mode)
 
 
-def _benchmark(binding, root, pairs, *, capture=False):
+def compare_native_input_runs(runs, pairs, *, archived=None):
+    timings = [dict(pair=row['pair'], mode=row['mode'], returncode=0, wall_ns=row['wall_ns'],
+                    stdout_sha256=row['stdout']['sha256'], stderr_sha256=row['stderr']['sha256']) for row in runs]
+    context = dict(incumbent=_COPY, challenger=_MAPPED, warmup_pairs=_WARMUPS, measurement_pairs=pairs)
+    if archived is not None:
+        return replay_entry_pairs(timings, archived, **context)
+    return compare_entry_pairs(timings, **context)
+
+
+def _benchmark(binding, root, pairs, *, capture=False, archived=None):
     _need(type(pairs) is int and 5 <= pairs <= 24, 'five to twenty-four clean native pairs required')
     output = Path(binding['argv'][-1])
     _need(output.resolve() == output and not output.exists() and not output.is_symlink()
           and not root.is_relative_to(output.parent), 'exact fresh source output outside study directory required')
     commands = _commands(binding, output, binding['argv'][1])
-    runs, timings = [], []
+    runs = []
     stable = _input_files(binding)
     for pair in range(pairs + _WARMUPS):
         for mode in (_MODES if pair % 2 == 0 else _MODES[::-1]):
@@ -155,11 +165,8 @@ def _benchmark(binding, root, pairs, *, capture=False):
                   and _raw(row['published']) == _raw(binding['original_output']),
                   'source stdout or full final Tensor differs from the original scope')
             runs.append(row)
-            timings.append(dict(pair=pair, mode=mode, returncode=0, wall_ns=row['wall_ns'],
-                                stdout_sha256=row['stdout']['sha256'], stderr_sha256=row['stderr']['sha256']))
     _need(stable == _input_files(binding), 'input file contents or identity changed between matched native arms')
-    selection = compare_entry_pairs(timings, incumbent=_COPY, challenger=_MAPPED, warmup_pairs=_WARMUPS,
-                                    measurement_pairs=pairs)
+    selection = compare_native_input_runs(runs, pairs, archived=archived)
     return dict(runs=runs, selection=selection, input_snapshots=stable, population_variance_ns2={
         mode: pvariance(row['samples_ns']) for mode, row in selection['metrics'].items()})
 
@@ -224,11 +231,11 @@ def _diagnostic(binding, root, tool, *, capture=False):
                 kernel_io_bytes_measured=False, page_fault_work_removed_proven=False)
 
 
-def _report(binding, root, pairs, tool, *, capture=False):
+def _report(binding, root, pairs, tool, *, capture=False, archived=None):
     if capture:
         root.mkdir(parents=True, exist_ok=False)
         _need(set(binding['cpu_ids']) <= os.sched_getaffinity(0), 'bounded CPU cohort is unavailable')
-    result = _benchmark(binding, root, pairs, capture=capture)
+    result = _benchmark(binding, root, pairs, capture=capture, archived=archived)
     diagnostic = None
     if tool is not None:
         path = root/'diagnostic'
@@ -264,7 +271,8 @@ def verify_cpu_fixed_grid_mapped_input_study(reference):
           'exact mapped input study receipt required')
     diagnostic = saved['file_reads_evidence']
     binding = _inputs(saved['control_delivery'], saved['mapped_project'])
-    report = _report(binding, path.parent, saved['measurement_pairs'], None if diagnostic is None else diagnostic['tool'])
+    report = _report(binding, path.parent, saved['measurement_pairs'], None if diagnostic is None else diagnostic['tool'],
+                     archived=saved['selection'])
     _need(report == saved, 'saved matched input study differs from cold replay')
     return saved
 

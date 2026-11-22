@@ -63,8 +63,10 @@ def replay_aten_boundary(directory, *, expected_selection_sha256=None):
     hardware = Path(observations['context']['target_graph']['path']).parent
     target, cpu_resources, modes, evidence = _admit_observation(raw_ref, hardware, case_id)
     _verify_document(evidence_ref, evidence)
+    policy = saved_selection['policy']
     selection, profile, queries = project_aten_boundary_trial(
-        evidence_ref, expected_context=evidence['context'])
+        evidence_ref, expected_context=evidence['context'], minimum_gain=policy['minimum_gain'],
+        strict_minimum_gain=policy.get('strict_minimum_gain', False))
     _verify_document(profile_ref, profile)
     selection = _published_selection(selection, evidence_ref, profile_ref, raw_ref, directory)
     _verify_document(selection_ref, selection)

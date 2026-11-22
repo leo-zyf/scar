@@ -236,8 +236,32 @@ def _import_bindings(reference, scope, effects, threads, cores, source_effects, 
     return result
 
 
+def _fixed_grid_lifecycle(reference, scope_sha, target, baseline, facts, provider):
+    from scar.optimization.cpu_fixed_grid_lifecycle_cost import verify_cpu_fixed_grid_lifecycle_cost
+
+    cost = verify_cpu_fixed_grid_lifecycle_cost(reference)
+    review = read_artifact(cost['review'])
+    option = review['option_id']
+    delivery = read_artifact(review['delivery'])
+    _, fact = facts.get(option, (None, {}))
+    generated = fact.get('generated_option', {})
+    plan = generated['proof']['emission_plan'] if generated.get('implementation_family') == _FAMILY else None
+    _require(cost['scope_sha256'] == scope_sha and cost['target'] == target
+             and plan is not None and plan['authority'] == delivery['provider'] == provider
+             and option == 'planned:' + semantic_sha256(dict(scope_sha256=scope_sha, plan=plan))
+             and cost['whole_entry_ranked'] is False and cost['deployment_authorized'] is False,
+             'fixed-grid lifecycle evidence differs from the exact CPU option or scope')
+    return dict(reference=reference, graph=cost['lifecycle'], source_review=cost['review'],
+                source_effect_graph=review['bridge'],
+                route_options=dict(original_python=baseline, native_cpp=option),
+                effect_frontier=[row for row in review['coverage_frontier'] if row['role'] != 'FORWARD_COST'],
+                cost_frontier=cost['coverage_frontier'], cost_used_for_ranking=False,
+                unpriced_graph_operations={key: row['unpriced_operations'] for key, row in cost['routes'].items()})
+
+
 def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_graph=None, effect_frontier=None,
-                                     import_frontier=None, import_source_effects=None, import_activations=None):
+                                     import_frontier=None, import_source_effects=None, import_activations=None,
+                                     fixed_grid_lifecycle_cost=None):
     """Project a read-only evidence ledger from exact original domain receipts."""
     domain, legalities = read_artifact(domain_ref), read_artifact(legalities_ref)
     scope = domain['scope']
@@ -321,6 +345,9 @@ def derive_cpu_entry_decision_ledger(domain_ref, legalities_ref, *, provider_gra
     else:
         _require(import_source_effects is None and import_activations is None,
                  'import source effects and activations require original import bindings')
+    if fixed_grid_lifecycle_cost is not None:
+        report['fixed_grid_lifecycle'] = _fixed_grid_lifecycle(
+            fixed_grid_lifecycle_cost, scope_sha, scope['target'], baseline, facts, provider)
     return report
 
 
@@ -328,10 +355,12 @@ def verify_cpu_entry_decision_ledger(ledger_ref):
     saved = read_artifact(ledger_ref)
     _require(ledger_ref['schema'] == SCHEMA and saved['schema_version'] == 1, 'unsupported decision ledger')
     bindings = saved.get('original_import_bindings')
+    lifecycle = saved.get('fixed_grid_lifecycle')
     replay = derive_cpu_entry_decision_ledger(saved['domain'], saved['legalities'],
         provider_graph=saved['provider_graph'], effect_frontier=saved['effect_frontier'],
         import_frontier=None if bindings is None else bindings['reference'],
         import_source_effects=None if bindings is None or 'source_effects' not in bindings else bindings['source_effects']['reference'],
-        import_activations=None if bindings is None or 'initializer_activations' not in bindings else bindings['initializer_activations']['reference'])
+        import_activations=None if bindings is None or 'initializer_activations' not in bindings else bindings['initializer_activations']['reference'],
+        fixed_grid_lifecycle_cost=None if lifecycle is None else lifecycle['reference'])
     _require(saved == replay, 'retained decision ledger differs at cold replay')
     return replay

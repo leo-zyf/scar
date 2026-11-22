@@ -7,7 +7,7 @@ from statistics import pvariance
 
 from scar.compiler.calibrate_array_entry import _normalize, _ref, _replay, _run, _write
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 from scar.trace.numpy_partition_entry_validation import normalize_report
 
 
@@ -375,9 +375,10 @@ def _load_control(path, package, recipe, prior):
     return _CONTROL_LABELS[alternate['decision']['mode']], reference, alternate
 
 
-def _pair(checked, incumbent, challenger, warmups, repetitions):
-    return compare_entry_pairs(checked, incumbent=incumbent, challenger=challenger,
-                               warmup_pairs=warmups, measurement_pairs=repetitions)
+def _pair(checked, incumbent, challenger, warmups, repetitions, *, archived=None):
+    context = dict(incumbent=incumbent, challenger=challenger, warmup_pairs=warmups, measurement_pairs=repetitions)
+    return (compare_entry_pairs(checked, **context) if archived is None
+            else replay_entry_pairs(checked, archived, **context))
 
 
 def calibrate(package_path, holdout_path, out, *, state_oracle=None, control_paths=(), warmups=1, repetitions=3):
@@ -483,7 +484,7 @@ def _check(path, *, already_replayed_schedule=None):
     checked, processes = _validate_runs(stored['clean_pairs'], package, recipe, case, expected, params, pid)
     previous = stored['pairing']
     warmups, repetitions = previous['warmup_pairs'], previous['measurement_pairs']
-    pairing = _pair(checked, 'original', 'native', warmups, repetitions)
+    pairing = _pair(checked, 'original', 'native', warmups, repetitions, archived=previous)
     _need(stored['entry'] == reference and stored['schedule'] == package['schedule']
           and stored['selected'] == package['decision'] and stored['cpu_ids'] == package['cpu_ids']
           and stored['parameters'] == case['parameters'] and stored['normalized_only'] == recipe['runtime_fields']
@@ -500,12 +501,13 @@ def _check(path, *, already_replayed_schedule=None):
         alternate_runs, identities = _validate_runs(row['clean_pairs'], alternate, recipe, case, expected,
                                                     params, pid, native_label=label)
         compared = [item for item in checked if item['mode'] == 'native'] + alternate_runs
-        comparison = _pair(compared, 'native', label, warmups, repetitions)
+        comparison = _pair(compared, 'native', label, warmups, repetitions, archived=row['pairing'])
         _need(actual_label == label and entry == row['entry'] and alternate['decision'] == row['selected']
               and identities == row['verified_processes'] and comparison == row['pairing']
               and row['deployment_authorized'] is False, 'validation control replay differs')
         if 'selected_vs_control' in row:
-            _need(row['selected_vs_control'] == _pair(compared, label, 'native', warmups, repetitions),
+            _need(row['selected_vs_control'] == _pair(compared, label, 'native', warmups, repetitions,
+                                                       archived=row['selected_vs_control']),
                   'selected backend did not reproduce its control comparison')
         _check_diagnostics(row, stored['holdout'], alternate, recipe, case, expected, params, pid, label)
     return stored

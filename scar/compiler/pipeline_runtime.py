@@ -11,6 +11,7 @@ import threading
 from types import FunctionType, ModuleType
 
 from scar.codegen import GuardFailure
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.trace.code_snapshot import code_key
 from .pipeline_model import validate_pipeline
 from .runtime import SourceMismatch
@@ -126,9 +127,11 @@ def install_pipeline(module, artifact, *, exclusive_inputs=False, selection=None
 
 
 def select_pipeline_measured(artifact, baseline_seconds, native_seconds, *, validated,
-                             native_fallbacks=0, minimum_gain=0.05):
+                             native_fallbacks=0, minimum_gain=DEFAULT_MINIMUM_GAIN, strict_minimum_gain=True):
     """Apply the measured NO_OP policy to this exact pipeline contract."""
-    from scar.optimization.selection import _samples, _summary
+    from scar.optimization.selection import _samples, _strict_measured_gain_met, _summary
+    if type(strict_minimum_gain) is not bool:
+        raise ValueError('minimum gain comparator must be a boolean')
     validate_pipeline(artifact.pipeline)
     reasons = []
     baseline, error = _samples(baseline_seconds)
@@ -149,11 +152,17 @@ def select_pipeline_measured(artifact, baseline_seconds, native_seconds, *, vali
     speedup = a['median'] / b['median'] if baseline and native else None
     if gain is not None and (not math.isfinite(gain) or not math.isfinite(speedup)):
         reasons.append('nonfinite_derived_statistics'); gain = speedup = None
-    if threshold_ok and gain is not None and (gain <= 0 or
-            gain < minimum_gain and not math.isclose(gain, minimum_gain, rel_tol=1e-12, abs_tol=0)):
-        reasons.append('measured_gain_below_required_threshold')
-    return dict(status='MEASURED', decision='NO_OP' if reasons else 'TRANSFORM_UNDER_CONTRACT',
+    if threshold_ok and gain is not None:
+        profitable = (_strict_measured_gain_met(baseline, native, minimum_gain) if strict_minimum_gain else
+                      gain > 0 and (gain >= minimum_gain or math.isclose(gain, minimum_gain,
+                                                                        rel_tol=1e-12, abs_tol=0)))
+        if not profitable:
+            reasons.append('measured_gain_below_required_threshold')
+    result = dict(status='MEASURED', decision='NO_OP' if reasons else 'TRANSFORM_UNDER_CONTRACT',
         selected=not reasons, reasons=reasons or ['validated_native_median_meets_gain_threshold'],
         baseline=a, native=b, speedup=speedup, gain_fraction=gain, minimum_gain=minimum_gain,
         external_assumptions=['SYNCHRONOUS_CPU_EXECUTION', 'NO_FOREIGN_CONCURRENT_INPUT_WRITERS'],
         scope='EXACT_VALIDATED_PIPELINE_SOURCE_CALLEES_SHAPES_LAYOUT_AND_MEMORY_PLAN')
+    if strict_minimum_gain:
+        result['strict_minimum_gain'] = True
+    return result

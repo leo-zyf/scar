@@ -5,7 +5,7 @@ import json
 from math import prod
 import re
 
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, compare_entry_pairs
 
 
 SCHEMA = 'scar.native-device-entry-decision'
@@ -87,13 +87,14 @@ def native_device_run_reason(row, *, references, output_shapes, byte_order):
 
 
 def compare_native_device(probe, runs, *, references, output_shapes, device, byte_order,
-                          warmup_pairs, measurement_pairs, minimum_gain=0.05, runtime_qualified=True):
+                          warmup_pairs, measurement_pairs, minimum_gain=DEFAULT_MINIMUM_GAIN,
+                          strict_minimum_gain=True, runtime_qualified=True):
     """Verify probe, order, streams and file receipts before comparing real samples."""
     cpu_stdout = _output_contract(references, output_shapes, byte_order)
     if (type(runs) is not list or type(warmup_pairs) is not int or warmup_pairs < 0
             or type(measurement_pairs) is not int or measurement_pairs < 3
             or type(minimum_gain) not in (int, float) or not 0 <= minimum_gain < 1
-            or type(runtime_qualified) is not bool):
+            or type(strict_minimum_gain) is not bool or type(runtime_qualified) is not bool):
         raise ValueError('invalid native device comparison settings')
     reason = native_device_probe_reason(probe, device=device)
     if reason is None and not runtime_qualified:
@@ -128,6 +129,7 @@ def compare_native_device(probe, runs, *, references, output_shapes, device, byt
     if len(matched) != expected_runs:
         raise ValueError('native device comparison is missing successful matched attempts')
     result = compare_entry_pairs(matched, incumbent='CPU', challenger='CUDA', warmup_pairs=warmup_pairs,
-                                 measurement_pairs=measurement_pairs, minimum_gain=minimum_gain)
+                                 measurement_pairs=measurement_pairs, minimum_gain=minimum_gain,
+                                 strict_minimum_gain=strict_minimum_gain)
     return dict(decision, verdict=result['verdict'], reasons=result['reasons'], timing_analysis=result,
                 performance_measured=True, bitwise_outputs_verified=True)

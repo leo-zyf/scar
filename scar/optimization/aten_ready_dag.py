@@ -2,14 +2,13 @@
 
 from statistics import median_low
 
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.aten_native_team import READY_SERVICE_SCOPE, _measurements, _storage, _team_groups, data_dependencies
 from scar.optimization.aten_ready_joint import ordered_ready_intervals, solve_ready_joint
 from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
 from scar.optimization.aten_ready_numa import model_ready_numa_locality
 from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
 
-
-_MIN_GAIN = 0.05
 _LANE_DOMAINS = ((0, 1), (0, 2), (0, 1, 2))
 
 
@@ -60,7 +59,8 @@ def _prediction(point, samples):
     return dict(estimate_ns=point, sample_min_ns=min(point, *samples), sample_max_ns=max(point, *samples))
 
 
-def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2, joint_order=False):
+def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes, ready_dag_abi=2, joint_order=False,
+                   gain_policy=ATEN_GAIN_POLICY):
     """Nominate and price a deterministic lane schedule on the measured placement.
 
     Callers must replay the exact concurrency declaration for every operator.
@@ -85,6 +85,8 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
                   basis='SOURCE_ORDER_EARLIEST_FINISH_WITH_MEASURED_LANE_SERVICES',
                   contention_modelled=False, per_edge_notification_cost_modelled=False,
                   source_replacement_authorized=False)
+    if gain_policy is not None:
+        report['gain_policy'] = dict(gain_policy)
     cross_numa = len(set(nodes)) > 1
     if joint_order and (cross_numa or not full_graph):
         raise ValueError('joint ready ordering requires the same-NUMA full-graph contract')
@@ -192,7 +194,7 @@ def plan_ready_dag(recipe, schedule, calibration, warmup, *, tensor_budget_bytes
         report.update(basis='SOURCE_ORDER_EARLIEST_FINISH_WITH_FIXED_LANE_NUMA_REPLAY',
                       bounds='ISOLATED_AND_CONTEXTUAL_CALIBRATION_SPAN_NOT_PHYSICAL_BOUNDS')
     report['predictions']['READY_DAG'] = prediction
-    if (serial['estimate_ns'] - estimate) / serial['estimate_ns'] < _MIN_GAIN:
+    if not _passes_gain(serial['estimate_ns'], estimate, gain_policy):
         return dict(report, reason='READY_DAG_PREDICTED_GAIN_BELOW_THRESHOLD')
 
     timeline = [dict(index=i, operation=operations[i]['id'], lane=lane, cpu_id=cpus[lane],

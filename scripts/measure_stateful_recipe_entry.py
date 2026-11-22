@@ -14,7 +14,7 @@ import time
 
 from scar.compiler.stateful_holdout import TIMER, _distribution, _environment, _episode, _owner, _stats
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, compare_entry_pairs
 from scar.optimization.stateful_recipe import verify_stateful_recipe
 
 SCHEMA = 'scar.current-stateful-entry-benchmark'
@@ -129,7 +129,7 @@ def run(args):
     design = dict(schema=SCHEMA + '.design', schema_version=1,
         request=dict(caller_cpu_ids=affinity, capture_epoch=recipe['recipe_id']), material=pins,
         argv=argv, output_token=args.output_token, paired_order='ALTERNATING_AB_BA',
-        warmup_pairs=2, measurement_pairs=7, minimum_gain=0.05, method_timer=TIMER,
+        warmup_pairs=2, measurement_pairs=7, minimum_gain=DEFAULT_MINIMUM_GAIN, method_timer=TIMER,
         entry_timer='ORIGINAL_SCRIPT_EXECUTION_FROM_PRELOADED_SOURCE_BOUNDARY',
         python=dict(executable=sys.executable, version=sys.version),
         environment={key: os.environ.get(key) for key in
@@ -192,7 +192,7 @@ def run(args):
                 method_calls_ns={mode: [s['elapsed_ns'] for s in expected[mode]['steps']] for mode in MODES}
                     if cohort == 'method' else None))
         selection[cohort] = compare_entry_pairs(rows, incumbent=MODES[0], challenger=MODES[1],
-            warmup_pairs=2, measurement_pairs=7, minimum_gain=0.05)
+            warmup_pairs=2, measurement_pairs=7, minimum_gain=design['minimum_gain'])
         raw[cohort] = dict(rows=rows, correctness=comparisons, measured_variance_ns2={
             mode: statistics.variance(selection[cohort]['metrics'][mode]['samples_ns']) for mode in MODES})
     require(vars(owner)[name] is descriptor, 'source boundary was not restored')

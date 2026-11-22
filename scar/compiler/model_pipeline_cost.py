@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 SCHEMA = 'scar.pipeline-forward-model-build'
 _MACRO_PARENTS = ('region', 'blueprint')
@@ -38,7 +39,7 @@ def _pins():
     return {name: sha256((root/name).read_bytes()).hexdigest() for name in files}
 
 
-def _derive(inputs, preparation, coefficients, cpus, budget, gain):
+def _derive(inputs, preparation, coefficients, cpus, budget, gain, *, strict_minimum_gain=True):
     from scar.optimization.pipeline_demand import (
         derive_pipeline_demand, derive_successor_pipeline_cost_demand,
     )
@@ -50,8 +51,9 @@ def _derive(inputs, preparation, coefficients, cpus, budget, gain):
         from scar.compiler.macro_pipeline import _derive as derive_source
 
         cpus = sorted(os.sched_getaffinity(0)) if cpus is None else cpus
-        gain = .05 if gain is None else gain
-        pipeline, region, blueprint, _, budget, _ = derive_source(inputs, None, cpus, budget, gain)
+        gain = DEFAULT_MINIMUM_GAIN if gain is None else gain
+        pipeline, region, blueprint, _, budget, _ = derive_source(inputs, None, cpus, budget, gain,
+            strict_minimum_gain=strict_minimum_gain)
         demand = derive_pipeline_demand(pipeline, blueprint)
     else:
         from scar.compiler.macro_pipeline import check as check_macro
@@ -70,6 +72,8 @@ def _derive(inputs, preparation, coefficients, cpus, budget, gain):
     documents = _json(dict(region=region, blueprint=blueprint, demand=demand,
         coefficient_template=template, prediction=prediction))
     request = dict(available_cpu_ids=list(cpus), memory_budget_bytes=budget, minimum_gain=gain)
+    if strict_minimum_gain:
+        request['strict_minimum_gain'] = True
     return documents, inputs, request, macro_context
 
 
@@ -100,8 +104,10 @@ def _deployment_profile(documents, files, coefficients):
 def _pass_report(documents, files, request):
     from scar.optimization.macro_pass import run_fusion_pass
 
+    settings = dict(request)
+    settings.setdefault('strict_minimum_gain', False)
     report = _json(run_fusion_pass(documents['region'], documents['blueprint'],
-        cost_profile=files['deployment_profile']['uri'], **request))
+        cost_profile=files['deployment_profile']['uri'], **settings))
     binding = documents['demand'].get('candidate_binding')
     if binding is not None and report['decision'] == 'REWRITE':
         revision = read_artifact(binding['candidate_revision'])
@@ -152,7 +158,8 @@ def check(result, *, include_macro_context=False):
             or saved.get('producer_pins') != _pins()):
         raise ValueError('forward model producer differs')
     documents, inputs, request, macro_context = _derive(saved['inputs'], preparation, saved['coefficient_profile'],
-        saved['available_cpu_ids'], saved['memory_budget_bytes'], saved['minimum_gain'])
+        saved['available_cpu_ids'], saved['memory_budget_bytes'], saved['minimum_gain'],
+        strict_minimum_gain=saved.get('strict_minimum_gain', False))
     if macro_context is not None and any(saved['files'][name] != macro_context[0]['files'][name]
             for name in _MACRO_PARENTS):
         raise ValueError('forward model parents differ from the published macro region and blueprint')

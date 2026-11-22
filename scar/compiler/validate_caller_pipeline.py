@@ -13,6 +13,7 @@ import sys
 import time
 
 from .validate_build import _reference, _save, _equal_files, _statistics
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.runtime.caller_pipeline_deployment import (SCHEMA, DESIGN, SAMPLE, TRUST,
     entry_context, runner_identity, environment_sha256, provider_identity,
     source_references, bundle_reference, execution_counts, reference, whole_entry_gain)
@@ -20,7 +21,7 @@ from scar.runtime.compiled_deployment import _raw
 
 
 def validate_caller_pipeline(bundle, entry, argv, out, *, expected_admission_sha256,
-        source_paths=(), warmup=1, repetitions=3, minimum_gain=.05):
+        source_paths=(), warmup=1, repetitions=3, minimum_gain=DEFAULT_MINIMUM_GAIN):
     """Freeze one exact invocation, validate one candidate, and retain raw pairs.
 
     ``source_paths`` is the already-admitted source catalog's path set. Paths are
@@ -40,7 +41,7 @@ def validate_caller_pipeline(bundle, entry, argv, out, *, expected_admission_sha
     context = entry_context(entry, argv); identity = runner_identity(); environment_hash = environment_sha256()
     environment = dict(os.environ); provider = provider_identity()
     sources = source_references(entry, metadata['contract'], source_paths)
-    policy = dict(warmup=warmup, repetitions=repetitions, minimum_gain=minimum_gain,
+    policy = dict(warmup=warmup, repetitions=repetitions, minimum_gain=minimum_gain, strict_minimum_gain=True,
         frozen_before_measurement=True,
         admission='EXACT_ENTRY_STDOUT_STDERR_SUCCESS_NATIVE_ONLY_AND_DECLARED_MEDIAN_GAIN')
     validator = _reference(Path(__file__), 'scar.validation-raw')
@@ -155,7 +156,7 @@ def main(argv=None):
     parser.add_argument('--bundle', required=True); parser.add_argument('--admission-sha256', required=True)
     parser.add_argument('--out', required=True); parser.add_argument('--source', action='append', default=[])
     parser.add_argument('--warmup', type=int, default=1); parser.add_argument('--repetitions', type=int, default=3)
-    parser.add_argument('--minimum-gain', type=float, default=.05)
+    parser.add_argument('--minimum-gain', type=float, default=DEFAULT_MINIMUM_GAIN)
     parser.add_argument('command', nargs=argparse.REMAINDER); args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command: parser.error('original Python entry required after --')

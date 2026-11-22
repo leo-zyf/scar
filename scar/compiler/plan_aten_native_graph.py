@@ -19,7 +19,7 @@ from scar.ir.implementation_plan import (
 )
 from scar.ir.program.target_hardware import CpuExecutor, MemoryDomain, MemoryKind
 from scar.ir.record_codec import encode, loads
-from scar.optimization.aten_boundary_trials import _measurements
+from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _measurements, _passes_gain
 from scar.optimization.aten_joint_numa_locality import model_aten_joint_numa_locality
 from scar.optimization.aten_native_schedule import propose_cpu_pair, propose_cpu_windows, select_cpu_windows
 from scar.optimization.aten_numa_locality import model_aten_numa_locality
@@ -31,7 +31,6 @@ from scar.optimization.paired_entry_selection import _metrics
 
 _EXE = 'aten-native-graph'
 _ENV = {'PATH': '/usr/bin:/bin', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'}
-_GAIN = 0.05
 _MEMORY_PROFILE = 'LAST_CONSUMER_OR_EXPORT_V1'
 _SCHEDULE_KEYS = {
     'ORDERED_DEFAULT_WITH_DECLARED_CPU_PAIR_TRIAL': 'cpu_pair',
@@ -411,22 +410,26 @@ def _verify_resource_segments(hardware, schedule, origin, evidence, timeline, st
     return problem, plan, timeline
 
 
-def _statistics(raw, warmup, repetitions, cpus):
+def _statistics(raw, warmup, repetitions, cpus, *, gain_policy=ATEN_GAIN_POLICY):
     if ([raw['caller_cpu'], raw['worker_cpu']] != cpus or raw['warmup_pairs'] != warmup
             or raw['measured_pairs'] != repetitions or raw['all_pairs_validated'] is not True):
         raise ValueError('native observations differ from the requested graph trial')
-    metrics, wins, by_order, ratio, faster = _compare_measured_pairs(raw['samples'], repetitions)
+    metrics, wins, by_order, ratio, faster = _compare_measured_pairs(raw['samples'], repetitions,
+                                                                   gain_policy=gain_policy)
     return dict(metrics=metrics, wins_two_cpu=wins, paired_order_differences=by_order,
                 speedup_two_cpu=ratio, profitable_two_cpu=faster)
 
 
-def _compare_measured_pairs(rows, repetitions):
+def _compare_measured_pairs(rows, repetitions, *, gain_policy=ATEN_GAIN_POLICY):
     samples, differences, directional = _measurements(rows, repetitions)
     metrics = {mode: dict(_metrics(values), variance_ns2=variance(values)) for mode, values in samples.items()}
     serial, dual = (metrics[m]['median_ns'] for m in ('SERIAL', 'TWO_CPU'))
     wins = sum(value > 0 for value in differences)
     by_order = {order[0]: _metrics(values) for order, values in directional.items()}
-    faster = ((serial - dual) / serial >= _GAIN and 4 * wins >= 3 * repetitions
+    median_key = 'median_ns_twice' if gain_policy is not None else 'median_ns'
+    exact_serial, exact_dual = (metrics[mode][median_key] for mode in ('SERIAL', 'TWO_CPU'))
+    faster = (_passes_gain(exact_serial, exact_dual, gain_policy)
+              and 4 * wins >= 3 * repetitions
               and all(row['median_ns_twice'] > 0 for row in by_order.values()))
     return metrics, wins, by_order, serial / dual, faster
 
@@ -539,7 +542,8 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
         starts = model['selected_starts'] if windowed else [schedule['pair_indices'][0]]
         dual_cost = costs.get('TWO_CPU')
         modeled_gain = 0.0 if dual_cost is None else 1 - dual_cost['estimate_ns'] / costs['SERIAL']['estimate_ns']
-        if predicted == 'TWO_CPU' and modeled_gain < _GAIN:
+        if predicted == 'TWO_CPU' and not _passes_gain(
+                costs['SERIAL']['estimate_ns'], costs['TWO_CPU']['estimate_ns'], ATEN_GAIN_POLICY):
             reasons.append('PREDICTED_GAIN_BELOW_THRESHOLD')
         if predicted == 'TWO_CPU' and not reasons:
             if windowed:
@@ -574,7 +578,7 @@ def plan_aten_native_graph(bundle, *, bundle_sha256, input_paths, out, warmup_pa
             selected=selected, reasons=reasons, predicted_gain_two_cpu=modeled_gain,
             validation=stats, warmup_pairs=warmup_pairs, measured_pairs=0 if stats is None else measured_pairs,
             runtime_environment=_ENV, source_replacement_authorized=False,
-            cold_launcher_performance_measured=False,
+            cold_launcher_performance_measured=False, gain_policy=dict(ATEN_GAIN_POLICY),
             planning_domain=('NONOVERLAPPING_DECLARED_ADJACENT_PAIRS_ON_TWO_RECORDED_CORES' if windowed
                              else 'ONE_DECLARED_ADJACENT_PAIR_ON_TWO_RECORDED_CORES'))
         if windowed:

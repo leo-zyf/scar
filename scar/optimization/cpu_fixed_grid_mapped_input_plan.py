@@ -1,12 +1,10 @@
 """Plan private file-backed input materialization for an admitted CPU recurrence."""
 
-from fractions import Fraction
 from math import prod
 from pathlib import Path
 
 from scar.analysis.replay_transaction import replay_transaction
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.paired_entry_selection import SCHEMA as PAIRED_SELECTION
 
 SCHEMA = 'scar.cpu-fixed-grid-mapped-input-plan'
 _PROOF = 'scar.cpu-fixed-grid-mapped-input-proof'
@@ -14,7 +12,6 @@ _STUDY = 'scar.cpu-fixed-grid-mapped-input-study'
 _DELIVERY = 'scar.cpu-fixed-grid-cli-delivery'
 _PROVEN = 'PROVEN_SCOPED_MAPPED_INPUT_MATERIALIZATION'
 _OWNED, _MAPPED = 'OWNED_COPY', 'PROVIDER_MAP'
-_MINIMUM = Fraction(1, 20)
 _VALIDATION = ('exact_stdout', 'exact_stderr', 'exact_exit_status', 'bitwise_final_file',
                'exact_publication_mode', 'input_files_unchanged')
 
@@ -59,25 +56,10 @@ def _projection(proof):
     return rows, binding, abi
 
 
-def _paired_gate(selection):
-    _require(selection['schema'] == PAIRED_SELECTION and selection['schema_version'] == 1
-             and selection['incumbent'] == _OWNED and selection['challenger'] == _MAPPED
-             and selection['policy'] == dict(minimum_gain=float(_MINIMUM), strict_observed_separation=True)
-             and selection['deployment_authorized'] is False, 'unsupported matched native input comparison')
-    control, candidate = (selection['metrics'][arm] for arm in (_OWNED, _MAPPED))
-    original, mapped = control['median_ns_twice'], candidate['median_ns_twice']
-    _require(type(original) is type(mapped) is int and min(original, mapped) > 0, 'invalid paired medians')
-    improved = Fraction(original - mapped, original) >= _MINIMUM
-    separated = candidate['max_ns'] < control['min_ns']
-    gate = improved and separated
-    _require(selection['observed_envelopes_separated'] == separated
-             and selection['verdict'] == ('ADVANCE_TO_RELEASE_REVIEW' if gate else 'KEEP_INCUMBENT'),
-             'paired gate or observed separation differs from the fixed policy')
-    return gate
-
-
-def _observed(reference, proof_ref, proof, inputs, binding, abi):
-    from scar.compiler.cpu_fixed_grid_mapped_input_study import verify_cpu_fixed_grid_mapped_input_study
+def _observed(reference, proof_ref, proof, inputs, binding, abi, *, archived):
+    from scar.compiler.cpu_fixed_grid_mapped_input_study import (
+        compare_native_input_runs, verify_cpu_fixed_grid_mapped_input_study,
+    )
 
     _require(reference['schema'] == _STUDY, 'verified native mapped-input comparison required')
     observed = verify_cpu_fixed_grid_mapped_input_study(reference)
@@ -105,13 +87,17 @@ def _observed(reference, proof_ref, proof, inputs, binding, abi):
     _require([(row['port'], row['path'], row['size_bytes']) for row in observed['file_inputs']]
              == [(row['port'], path, row['payload_bytes']) for row, path in zip(inputs, paths, strict=True)],
              'observed files do not bind every planned mapped-input port in order')
-    selection = observed['selection']
+    selection = observed['selection'] if archived else compare_native_input_runs(
+        observed['runs'], observed['measurement_pairs'])
+    if archived:
+        _require(selection['policy'] == dict(minimum_gain=0.05, strict_observed_separation=True),
+                 'legacy input plan must retain the original inclusive policy')
     diagnostic = observed.get('file_reads_evidence')
     return dict(
         reference=reference, mapped_project=observed['mapped_project'], control_delivery=delivery_ref,
         source=observed['source'], argv=observed['argv'], working_directory=observed['working_directory'],
         basis='OBSERVED_PAIRED_CXX_TO_CXX_FRESH_PROCESSES', validation=observed['validation'],
-        selection=selection, measured_gain_gate_passed=_paired_gate(selection),
+        selection=selection, measured_gain_gate_passed=selection['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW',
         file_read_diagnostic=None if diagnostic is None else dict(
             locator='#/file_reads_evidence', pair_scope=diagnostic['pair_scope'],
             explicit_file_read_payload_removed_bytes=diagnostic['explicit_file_read_payload_removed_bytes'],
@@ -120,22 +106,24 @@ def _observed(reference, proof_ref, proof, inputs, binding, abi):
         diagnostic_used_for_timing_gate=False, serves_as_analytic_bound=False)
 
 
-def derive_cpu_fixed_grid_mapped_input_plan(proof_ref, *, observation=None):
+def derive_cpu_fixed_grid_mapped_input_plan(proof_ref, *, observation=None, schema_version=2):
     """Keep source-level movement separate from the observed runtime choice."""
     from scar.analysis.cpu_fixed_grid_mapped_inputs import verify_cpu_fixed_grid_mapped_inputs
 
-    _require(proof_ref['schema'] == _PROOF, 'exact mapped-input materialization proof required')
+    _require(proof_ref['schema'] == _PROOF and type(schema_version) is int and schema_version in (1, 2),
+             'exact mapped-input materialization proof and supported policy version required')
     with replay_transaction():
         proof = verify_cpu_fixed_grid_mapped_inputs(proof_ref)
         inputs, binding, abi = _projection(proof)
-        evidence = None if observation is None else _observed(observation, proof_ref, proof, inputs, binding, abi)
+        evidence = None if observation is None else _observed(
+            observation, proof_ref, proof, inputs, binding, abi, archived=schema_version == 1)
     switch = evidence is not None and evidence['measured_gain_gate_passed']
     status = ('MAPPED_INPUT_NOMINATED_FOR_SCOPED_RUNTIME' if switch else
               'KEEP_OWNED_COPY_NOT_PROFITABLE' if evidence is not None else
               'SCOPED_MAPPED_INPUT_EXPERIMENT_READY')
     logical = sum(row['payload_bytes'] for row in inputs)
     return dict(
-        schema=SCHEMA, schema_version=1, proof=proof_ref, observation=observation,
+        schema=SCHEMA, schema_version=schema_version, proof=proof_ref, observation=observation,
         project=proof['project'], target=proof['target'], source=proof['source'],
         source_contract_sha256=proof['source_contract_sha256'],
         scope=proof['scope'], placement=proof['placement'], provider=proof['provider'], inputs=inputs,
@@ -170,8 +158,8 @@ def derive_cpu_fixed_grid_mapped_input_plan(proof_ref, *, observation=None):
 def verify_cpu_fixed_grid_mapped_input_plan(reference):
     """Replay the materialization proof and the optional measured runtime decision."""
     saved = read_artifact(reference)
-    _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
-             'unsupported fixed-grid mapped input plan')
-    replay = derive_cpu_fixed_grid_mapped_input_plan(saved['proof'], observation=saved['observation'])
+    _require(reference['schema'] == SCHEMA, 'unsupported fixed-grid mapped input plan')
+    replay = derive_cpu_fixed_grid_mapped_input_plan(
+        saved['proof'], observation=saved['observation'], schema_version=saved['schema_version'])
     _require(saved == replay, 'saved mapped input plan differs at cold replay')
     return replay

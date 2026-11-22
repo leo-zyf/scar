@@ -12,6 +12,8 @@
 
 当前优先完成三阶段核心开发，定期在同一完整边界验证。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
 
+默认收益评审要求可比较的耗时严格下降 **超过 1%**。正确性与交付仍按原入口合同验证。历史评审按收据内的政策回放。
+
 C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 SuperLU 与 OpenBLAS。对 PyTorch 可用 `scar link-aten-provider --provider-revision REV --schema SCHEMA --out LINKED` 从完整声明生成并校验 LibTorch 调用。输出的 `operators.hpp` 提供类型化入口，`result.json` 记录编译和链接参数。能否替换原区域还取决于语义、资源与收益证据。详见[架构](docs/ARCHITECTURE.md)。
 
 `scar export-native-ordered-sparse --release RELEASE/selection.json --out CPP` 重放发布决策，并把所选排程和原生库封装为独立 C++20 包。可用 `--provider NUMERIC` 复用已检查的数值库包。迁移后用 `--check CPP` 核对发布收据、排程、源码及库文件。

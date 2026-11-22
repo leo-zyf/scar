@@ -8,9 +8,11 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
+
 
 def validate_caller_delivery(program,bundle,out,argv,*,expected_admission_sha256,
-        warmup=1,repetitions=3,minimum_gain=.05,publication_directory=None,
+        warmup=1,repetitions=3,minimum_gain=DEFAULT_MINIMUM_GAIN,publication_directory=None,
         publication_bytes=(),publication_nonnegative_seconds=()):
     from scar.analysis.build import BuildSession
     from scar.compiler.caller_pipeline_capsule import prepare_capsule,validate_capsule,export_cost_slot
@@ -49,7 +51,7 @@ def main(argv=None):
     parser.add_argument('--build',required=True);parser.add_argument('--bundle',required=True)
     parser.add_argument('--admission-sha256',required=True);parser.add_argument('--out',required=True)
     parser.add_argument('--warmup',type=int,default=1);parser.add_argument('--repetitions',type=int,default=3)
-    parser.add_argument('--minimum-gain',type=float,default=.05)
+    parser.add_argument('--minimum-gain',type=float,default=DEFAULT_MINIMUM_GAIN)
     _add_publication_options(parser)
     parser.add_argument('args',nargs=argparse.REMAINDER)
     args=parser.parse_args(argv);command=args.args[1:]if args.args[:1]==['--']else args.args

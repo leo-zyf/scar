@@ -13,7 +13,7 @@ from time import perf_counter_ns
 from scar.analysis import native_array_entry_recipe
 from scar.codegen import native_array_entry
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import compare_entry_pairs, replay_entry_pairs
 from scar.trace.numpy_partition_entry_validation import normalize_report
 
 
@@ -166,7 +166,7 @@ def check(path):
     for cohort, profile in zip(report['cohorts'], recipe['profiles'], strict=True):
         expected = _normalize(json.dumps(profile['report']).encode(), recipe)
         observed = cohort['pairing']
-        paired = compare_entry_pairs([_replay(row, recipe, expected) for row in cohort['runs']],
+        paired = replay_entry_pairs([_replay(row, recipe, expected) for row in cohort['runs']], observed,
             incumbent='original', challenger='native', warmup_pairs=observed['warmup_pairs'],
             measurement_pairs=observed['measurement_pairs'])
         _need(paired == observed and cohort['parameters'] == profile['parameters'],

@@ -11,7 +11,9 @@ import re
 from subprocess import SubprocessError
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.paired_entry_selection import compare_entry_pairs
+from scar.optimization.paired_entry_selection import (
+    DEFAULT_MINIMUM_GAIN, compare_entry_pairs, replay_entry_pairs,
+)
 
 
 BOUNDARY = 'PROCESS_LAUNCH_THROUGH_EXIT'
@@ -262,9 +264,10 @@ def qualify_entry_delivery(scope, candidate):
     return result
 
 
-def _paired(rows, warmup, repetitions, minimum_gain):
+def _paired(rows, warmup, repetitions, minimum_gain, strict_minimum_gain):
     return compare_entry_pairs(rows, incumbent='ORIGINAL', challenger='NATIVE', warmup_pairs=warmup,
-                               measurement_pairs=repetitions, minimum_gain=minimum_gain)
+                               measurement_pairs=repetitions, minimum_gain=minimum_gain,
+                               strict_minimum_gain=strict_minimum_gain)
 
 
 def _timing_row(pair, mode, wall_ns, returncode, stdout, stderr):
@@ -272,7 +275,7 @@ def _timing_row(pair, mode, wall_ns, returncode, stdout, stderr):
                 stdout_sha256=sha256(stdout).hexdigest(), stderr_sha256=sha256(stderr).hexdigest())
 
 
-def _aten_validation(scope, evidence, reference, minimum_gain):
+def _aten_validation(scope, evidence, reference, minimum_gain, *, strict_minimum_gain=False):
     v = _matches(reference, 'scar.aten-source-entry-validation')
     original, native = 'ORIGINAL_PYTHON', 'NATIVE_CPP'
     artifact = evidence['artifact']
@@ -337,12 +340,12 @@ def _aten_validation(scope, evidence, reference, minimum_gain):
         _require(v['decision'] is None and ordered[0]['stdout_sha256'] == ordered[1]['stdout_sha256'],
                  'standalone correctness observation does not preserve stdout')
         return None, None, launch
-    prior = compare_entry_pairs(v['runs'], incumbent=original, challenger=native, warmup_pairs=1, measurement_pairs=3)
-    _require(prior == v['decision'], 'standalone stored policy decision differs from replay')
-    return _paired(ordered, 1, 3, minimum_gain), None, launch
+    replay_entry_pairs(v['runs'], v['decision'], incumbent=original, challenger=native,
+                       warmup_pairs=1, measurement_pairs=3)
+    return _paired(ordered, 1, 3, minimum_gain, strict_minimum_gain), None, launch
 
 
-def _caller_validation(scope, evidence, reference, minimum_gain):
+def _caller_validation(scope, evidence, reference, minimum_gain, *, strict_minimum_gain=False):
     from scar.compiler.caller_pipeline_capsule import (
         DESIGN, VALIDATION, _counts, _publication_match, _publication_snapshot,
         _require_fresh_publication, _slot, _validation_design)
@@ -399,7 +402,7 @@ def _caller_validation(scope, evidence, reference, minimum_gain):
         _require(streams[0] == streams[1] and _publication_match(a['publications'], b['publications'], publication)
                  and native_only and row['native_calls'] == native and row['fallback_calls'] == fallback
                  and row['valid'] is row['frozen_context_unchanged'] is True, 'caller outputs, exits or native coverage differ')
-    paired = _paired(timings, policy['warmup'], policy['repetitions'], minimum_gain)
+    paired = _paired(timings, policy['warmup'], policy['repetitions'], minimum_gain, strict_minimum_gain)
     launch = dict(entry_context=context, environment_sha256=payload['environment_sha256'],
                   timing_scope=design['process_clock_scope'])
     if evidence['artifact']['schema'] != CALLER_EXPORT:
@@ -430,7 +433,7 @@ def _caller_validation(scope, evidence, reference, minimum_gain):
     return paired, dict(payload=payload_ref, slot=slot_ref, validation=reference), launch
 
 
-def _sparse_validation(scope, evidence, reference, minimum_gain):
+def _sparse_validation(scope, evidence, reference, minimum_gain, *, strict_minimum_gain=False):
     from scar.codegen.native_parameterized_sparse_entry import check as check_native
     from scar.optimization.native_parameterized_sparse_plan import BENCHMARK, COMPARISON, compare
 
@@ -457,20 +460,22 @@ def _sparse_validation(scope, evidence, reference, minimum_gain):
                            read_artifact(row['stderr'], json_document=False)) for row in rows]
     launch = dict(cpu_ids=run['cpu_ids'], working_directory=run['cwd'], provider_environment=run['environment'],
                   original_interpreter=run['arms']['original'], timing_scope=stored['scope'])
-    return _paired(timings, 1, len(rows) // 2 - 1, minimum_gain), None, launch
+    return _paired(timings, 1, len(rows) // 2 - 1, minimum_gain, strict_minimum_gain), None, launch
 
 
-def _nvhpc_validation(scope, evidence, reference, minimum_gain):
+def _nvhpc_validation(scope, evidence, reference, minimum_gain, *, strict_minimum_gain=True):
     from scar.compiler.nvhpc_source_validation import replay_source_entry_evidence
 
-    timing, context = replay_source_entry_evidence(reference, evidence, scope, minimum_gain=minimum_gain)
+    timing, context = replay_source_entry_evidence(reference, evidence, scope, minimum_gain=minimum_gain,
+                                                   strict_minimum_gain=strict_minimum_gain)
     return timing, None, context
 
 
-def _nvhpc_device_validation(scope, evidence, reference, minimum_gain):
+def _nvhpc_device_validation(scope, evidence, reference, minimum_gain, *, strict_minimum_gain=True):
     from scar.compiler.nvhpc_source_device_validation import replay_source_device
 
-    timing, status = replay_source_device(reference, evidence, scope, minimum_gain=minimum_gain)
+    timing, status = replay_source_device(reference, evidence, scope, minimum_gain=minimum_gain,
+                                         strict_minimum_gain=strict_minimum_gain)
     return timing, None, status
 
 
@@ -483,7 +488,8 @@ _VALIDATORS = {
 }
 
 
-def replay_entry_delivery(scope, *, selected_id, candidate=None, minimum_gain=0.05):
+def replay_entry_delivery(scope, *, selected_id, candidate=None, minimum_gain=DEFAULT_MINIMUM_GAIN,
+                          strict_minimum_gain=True):
     """Recheck the exact winner, retain fallback, and replay only its registered evidence."""
     result = dict(schema=HANDOFF, schema_version=1, selected_id=selected_id, scope=scope,
                   final_action='KEEP_ORIGINAL', reason='original entry remains the selected fallback',
@@ -507,7 +513,8 @@ def replay_entry_delivery(scope, *, selected_id, candidate=None, minimum_gain=0.
         if validation is None or route not in _VALIDATORS:
             return dict(result, final_action='CANDIDATE_VALIDATION_REQUIRED',
                         reason='same-boundary whole-process validation is absent for this artifact')
-        timing, release, launch = _VALIDATORS[route](scope, evidence, validation, minimum_gain)
+        timing, release, launch = _VALIDATORS[route](scope, evidence, validation, minimum_gain,
+                                                    strict_minimum_gain=strict_minimum_gain)
     except _PROFILE_ERRORS as error:
         return dict(result, reason='whole-process validation could not replay: ' + str(error))
     checked_effects = route != NVHPC_DEVICE_ROUTE or launch['output_contract_verified']

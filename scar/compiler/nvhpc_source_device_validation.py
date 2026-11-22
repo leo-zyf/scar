@@ -14,7 +14,7 @@ from scar.compiler.compile_exported_aten_cuda import CUDA_ENVIRONMENT, SCHEMA as
 from scar.compiler.compile_exported_nvhpc import _contract
 from scar.compiler.entry_delivery import NVHPC_DEVICE_ROUTE as ROUTE
 from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
-from scar.compiler.nvhpc_source_validation import _collect_pairs, _context, _receipt, _replay_pairs, _timing
+from scar.compiler.nvhpc_source_validation import _collect_pairs, _context, _receipt, _replay_pairs, _replay_timing, _timing
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.native_device_comparison import native_device_probe_reason
 from scar.optimization.resource_solver import semantic_sha256
@@ -176,7 +176,7 @@ def validate_source_device(scope, evidence, out, *, warmup_pairs=1, measurement_
     return report
 
 
-def replay_source_device(reference, evidence, scope, *, minimum_gain=0.05):
+def replay_source_device(reference, evidence, scope, *, minimum_gain=None, strict_minimum_gain=True):
     saved = read_artifact(reference)
     if (reference['schema'] != SCHEMA or saved['schema_version'] != 1 or saved['evidence'] != evidence
             or saved['scope_sha256'] != semantic_sha256(scope) or saved['deployment_authorized'] is not False):
@@ -185,7 +185,7 @@ def replay_source_device(reference, evidence, scope, *, minimum_gain=0.05):
     warmup, count = saved['warmup_pairs'], saved['measurement_pairs']
     total = _counts(warmup, count)
     runs, checks, context = saved['runs'], saved['comparisons'], saved['context']
-    timing, retained = None, None
+    timing = None
     if phase is None:
         import torch
 
@@ -199,13 +199,13 @@ def replay_source_device(reference, evidence, scope, *, minimum_gain=0.05):
         if _replay_pairs(Path(reference['uri']).parent, runs, checks, evidence['numerical_contract'],
                          evidence['output_sizes'], total, torch):
             phase = 'COMPLETE'
-            retained = _timing(runs, warmup, count)
-            timing = _timing(runs, warmup, count, minimum_gain=minimum_gain)
+            timing = _replay_timing(runs, warmup, count, saved['timing'], minimum_gain=minimum_gain,
+                                    strict_minimum_gain=strict_minimum_gain)
         else:
             phase = 'OUTPUT_CONTRACT_FAILED'
     elif runs or checks or context is not None or saved['commands'] is not None:
         raise ValueError('device observation includes entry runs after preflight rejection')
-    if phase != saved['phase'] or retained != saved['timing']:
+    if phase != saved['phase'] or (saved['timing'] is not None) != (phase == 'COMPLETE'):
         raise ValueError('device observation decision differs from retained runs')
     return timing, dict(phase=phase, device=saved['device'], entry_runs=len(runs),
                         output_contract_verified=phase == 'COMPLETE', deployment_authorized=False)
