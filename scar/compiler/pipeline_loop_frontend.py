@@ -353,8 +353,8 @@ def _read_composite_invariant_loop_materials(path):
     The derived body is not a newly declared Python callable.  Reading these
     bytes never substitutes for ``validate_composite_invariant_loop_proof``.
     """
-    from scar.ir.execution_recipe import artifact_reference,read_artifact
-    reference=artifact_reference(path,COMPOSITE_PROOF_SCHEMA);document=read_artifact(reference)
+    from scar.ir.execution_recipe import open_artifact, read_artifact
+    reference, document = open_artifact(path, COMPOSITE_PROOF_SCHEMA)
     if (set(document)!={'schema','schema_version',*CompositeInvariantLoopProof.__dataclass_fields__}
             or type(document['schema_version']) is not int or document['schema_version']!=1):
         raise ValueError('supported composite proof fields/version required')

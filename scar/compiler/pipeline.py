@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 
 from .contracts import EntryEvidence
 
@@ -81,7 +81,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if domains.is_dir():domains=domains/'result.json'
     if out.exists():raise ValueError('fresh compile-build output required')
     started=time.monotonic()
-    parent=artifact_reference(domains,'scar.program-optimization-domains');document=read_artifact(parent)
+    parent, document = open_artifact(domains, 'scar.program-optimization-domains')
     evidence = EntryEvidence() if entry_evidence is None else entry_evidence
     if enforce_cpu_capacity and (not verify_entry or plan_only or 'whole_entry' not in document):
         raise ValueError('CPU capacity enforcement requires a whole-entry process trial')

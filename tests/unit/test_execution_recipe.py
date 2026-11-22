@@ -3,14 +3,17 @@ from copy import deepcopy
 
 import pytest
 
-from scar.ir.execution_recipe import (artifact_reference, make_recipe, recipe_id,
+from scar.ir import execution_recipe
+from scar.ir.execution_recipe import (artifact_reference, make_recipe, open_artifact, recipe_id,
                                       read_recipe, validate_recipe, write_recipe)
 from scar.optimization.schedule import LogicalValue, Materialization, ResourceSchedule, Task, TaskKind
 
 
 def test_recipe_identity_causality_source_pins_and_detached_inputs(tmp_path):
     component = tmp_path/'operation.json'; component.write_text('{"schema":"test.operation","kind":"increment"}')
-    source = artifact_reference(component, 'test.operation')
+    source, content = open_artifact(component, 'test.operation')
+    assert source == artifact_reference(component, 'test.operation')
+    assert content == dict(schema='test.operation', kind='increment')
     boundary = dict(id='original-boundary', parameters=['x'])
     graph = ResourceSchedule('region',
         (LogicalValue('input'), LogicalValue('output', 'compute', True)),
@@ -38,3 +41,20 @@ def test_recipe_identity_causality_source_pins_and_detached_inputs(tmp_path):
     with pytest.raises(ValueError, match='allocation does not establish'): validate_recipe(early)
     component.write_text('{"schema":"test.operation","kind":"different"}')
     with pytest.raises(ValueError, match='byte identity'): validate_recipe(recipe)
+
+
+def test_open_artifact_rejects_replacement_during_the_read(tmp_path, monkeypatch):
+    original = tmp_path / 'operation.json'
+    replacement = tmp_path / 'replacement.json'
+    original.write_text('{"schema":"test.operation","value":1}')
+    replacement.write_text('{"schema":"test.operation","value":2}')
+    read = execution_recipe._bounded_bytes
+
+    def replace_after_read(stream):
+        raw = read(stream)
+        replacement.replace(original)
+        return raw
+
+    monkeypatch.setattr(execution_recipe, '_bounded_bytes', replace_after_read)
+    with pytest.raises(ValueError, match='changed while opening'):
+        open_artifact(original, 'test.operation')

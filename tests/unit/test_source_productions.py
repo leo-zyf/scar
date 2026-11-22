@@ -790,7 +790,10 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     from scar.analysis.compiler_topology import compiler_topology_document
     from scar.analysis.compiler_symbols import compiler_symbols_document
     from scar.analysis.frontend_bindings import read_frontend_bindings
+    from scar.analysis.source_expression_materials import _WORLD
+    from scar.analysis.source_expression_rules import SourceExpressionRules
     from scar.analysis.source_contexts import SourceContextView
+    from scar.ir.program.protocol_signatures import ExceptionABI
     from scar.ir.program.source_syntax import SourceSyntaxMaterial
     from scar.ir.record_codec import decode
 
@@ -813,11 +816,15 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     occurrence = names[0]
     site = P.SlotRef(occurrence, 'FIELD', context.role_view.fields['Name']['id'])
     port = next(i for i, p in enumerate(frontend.roles.ports) if p.site == site)
-    root = replace(region('name', parameters=(), outputs=normal(REF), steps=('read',)),
-        source=P.ProductionOccurrence(occurrence), context=context.entry_context(occurrence))
-    read = replace(step('read', root, P.AccessBinding(P.BindingActionKind.READ, port), outputs=normal(REF)), source=root.source)
-    value = replace(plan((root,), (read,)), input=index.input, source=root.source,
-        slots=(P.ProductionSlotDisposition(site, P.ProductionDispositionKind.ROLE_PORT),))
+    rules = SourceExpressionRules(index, world=_WORLD, exception_abi=ExceptionABI.EXCEPTION_WORLD)
+    value = rules.build(occurrence, P.ProductionPurpose.VALUE)
+    root, = value.regions
+    read, = (action for action in value.steps if type(action.instruction) is P.AccessBinding)
+    assert read.instruction == P.AccessBinding(P.BindingActionKind.READ, port)
+
+    def replace_read(replacement):
+        return tuple(replacement if action.id == read.id else action for action in value.steps)
+
     result = index.match(value)
     assert result['original_source_references_checked'] is True
     assert result['upstream_fresh_replayed'] is result['source_rules_replayed'] is False
@@ -825,7 +832,8 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     for changed, code in (
         (replace(value, input=replace(index.input, f2_sha256='b' * 64)), 'INPUT_LINEAGE'),
         (replace(value, regions=(replace(root, context=replace(root.context, region=99)),)), 'SOURCE_CONTEXT'),
-        (replace(value, steps=(replace(read, instruction=P.AccessBinding(P.BindingActionKind.READ, bad_port)),)), 'SOURCE_PORT'),
+        (replace(value, steps=replace_read(replace(read,
+            instruction=P.AccessBinding(P.BindingActionKind.READ, bad_port)))), 'SOURCE_PORT'),
         (replace(value, slots=(P.ProductionSlotDisposition(replace(site, ordinal=999),
             P.ProductionDispositionKind.METADATA),)), 'SOURCE_REFERENCE'),
     ):
@@ -837,6 +845,6 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     label = frontend.roles.ports[label_port].site
     attribute_root = replace(root, source=label, context=context.context_at_slot(label).state)
     attribute_step = replace(read, source=label, instruction=P.AccessBinding(P.BindingActionKind.READ, label_port))
-    attribute_plan = replace(value, source=label, regions=(attribute_root,), steps=(attribute_step,), slots=())
+    attribute_plan = replace(value, source=label, regions=(attribute_root,), steps=replace_read(attribute_step), slots=())
     with pytest.raises(A.ProductionError, match='SOURCE_PORT'):
         index.match(attribute_plan)

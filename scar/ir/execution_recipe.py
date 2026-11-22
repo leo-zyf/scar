@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import asdict, is_dataclass
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import re
 
@@ -44,10 +45,15 @@ def _json(raw):
     return json.loads(raw, object_pairs_hook=_pairs, parse_constant=_invalid)
 
 
-def _bytes(path):
-    with Path(path).open('rb') as stream: raw = stream.read(_LIMIT + 1)
+def _bounded_bytes(stream):
+    raw = stream.read(_LIMIT + 1)
     if len(raw) > _LIMIT: raise ValueError('recipe component exceeds 64 MiB; reference a smaller shard')
     return raw
+
+
+def _bytes(path):
+    with Path(path).open('rb') as stream:
+        return _bounded_bytes(stream)
 
 
 def _reference(value):
@@ -61,10 +67,39 @@ def _reference(value):
     return value
 
 
-def artifact_reference(path, schema):
-    path = Path(path).absolute(); raw = _bytes(path)
+def _reference_from_bytes(path, schema, raw):
     return _reference(dict(uri=str(path), sha256=sha256(raw).hexdigest(),
                            size_bytes=len(raw), schema=schema))
+
+
+def artifact_reference(path, schema):
+    path = Path(path).absolute()
+    return _reference_from_bytes(path, schema, _bytes(path))
+
+
+def _file_identity(stat):
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _artifact_document(raw, path, schema):
+    document = _json(raw)
+    actual = document.get('schema') if type(document) is dict else None
+    if type(actual) is not str or not actual or (schema is not None and actual != schema):
+        raise ValueError('recipe component schema differs: ' + str(path))
+    return document
+
+
+def open_artifact(path, schema=None):
+    """Open a previously unsealed document and bind its receipt to the parsed bytes."""
+    path = Path(path).absolute()
+    with path.open('rb') as stream:
+        original = _file_identity(os.fstat(stream.fileno()))
+        raw = _bounded_bytes(stream)
+        if (original != _file_identity(os.fstat(stream.fileno()))
+                or original != _file_identity(path.stat())):
+            raise ValueError('recipe component changed while opening: ' + str(path))
+    document = _artifact_document(raw, path, schema)
+    return _reference_from_bytes(path, document['schema'], raw), document
 
 
 def read_artifact(reference, *, json_document=True):
@@ -72,10 +107,7 @@ def read_artifact(reference, *, json_document=True):
     if len(raw) != reference['size_bytes'] or sha256(raw).hexdigest() != reference['sha256']:
         raise ValueError('recipe component byte identity differs: ' + reference['uri'])
     if not json_document: return raw
-    value = _json(raw)
-    if type(value) is not dict or value.get('schema') != reference['schema']:
-        raise ValueError('recipe component schema differs: ' + reference['uri'])
-    return value
+    return _artifact_document(raw, reference['uri'], reference['schema'])
 
 
 def recipe_id(recipe):
@@ -161,4 +193,4 @@ def write_recipe(recipe, path):
 
 
 __all__ = ['SCHEMA', 'VERSION', 'make_recipe', 'validate_recipe', 'recipe_id',
-           'artifact_reference', 'read_artifact', 'read_recipe', 'write_recipe']
+           'artifact_reference', 'open_artifact', 'read_artifact', 'read_recipe', 'write_recipe']

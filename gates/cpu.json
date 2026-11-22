@@ -38,6 +38,7 @@
         "tests/integration/test_formal_call_operands.py",
         "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
         "tests/unit/test_ir.py::test_graph_validation_proves_static_line_coverage",
+        "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
         "tests/unit/test_source_binding_effects.py",
         "tests/unit/test_program_indexed_codec.py"
       ]
@@ -63,6 +64,7 @@
       "id": "M3_SEALED_SCHEDULE",
       "tests": [
         "tests/integration/test_native_stage_handoff.py::test_native_middle_replays_cost_and_schedule",
+        "tests/unit/test_execution_recipe.py",
         "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py"
       ]
     },

@@ -10,7 +10,7 @@ import re
 from subprocess import CompletedProcess
 
 from scar.artifacts import _durable_bytes, file_reference
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps, loads
 from scar.ir.implementation_plan import (
     CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem,
@@ -402,8 +402,7 @@ def project_loop_calibrations(domain,calibrations,out):
     for value in calibrations:
         path=Path(value).resolve()
         if path.is_dir():path=path/'result.json'
-        document=json.loads(path.read_bytes());schema=document.get('schema')
-        reference=artifact_reference(path,schema);read_artifact(reference)
+        reference, document = open_artifact(path)
         sources.append(reference)
         materials.append((path,document,reference))
     base_calibrations=[path for path,document,_ in materials

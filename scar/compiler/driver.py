@@ -177,16 +177,14 @@ def _validate_delivery(project, cases, out, repetitions):
 def compile_saved_plan(path, out, *, repetitions, case_seconds):
     """Replay a delivered entry plan in a separate process without replanning."""
     from scar.analysis.replay_transaction import replay_transaction
-    from scar.artifacts import file_reference
     from .backend.cpp20 import deliver
     from .contracts import ExecutionPlanRef
     from .qualification import NativeCases
 
-    reference = file_reference(path, 'scar.compiler-plan')
     out = out.resolve()
     with replay_transaction() as transaction:
+        reference, plan = ExecutionPlanRef.open(path)
         transaction.watch(reference['uri'], reference['sha256'], reference['size_bytes'])
-        plan = ExecutionPlanRef.read_reference(reference)
         out.mkdir(parents=True, exist_ok=False)
         project = deliver(plan, out / 'project')
         cases = NativeCases(project.manifest, project.observation['cpu'], case_seconds)

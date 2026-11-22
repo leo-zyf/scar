@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from scar.artifacts import file_reference
-from scar.ir.execution_recipe import read_artifact
+from scar.ir.execution_recipe import open_artifact, read_artifact
 from scar.ir.program.providers import ProviderArtifact
 
 
@@ -59,7 +59,7 @@ class GraphBundle:
     def read_native(cls, directory: Path) -> 'GraphBundle':
         """Open the graph-only publication and verify its role bindings."""
         directory = directory.resolve(strict=True)
-        result = read_artifact(file_reference(directory / 'result.json', 'scar.native-entry-result'))
+        _, result = open_artifact(directory / 'result.json', 'scar.native-entry-result')
         if result.get('schema_version') != 1 or result.get('artifacts') is None:
             raise ValueError('expected a published native graph result')
         references = result['artifacts']
@@ -177,17 +177,24 @@ class ExecutionPlanRef:
 
     @classmethod
     def read(cls, path: Path) -> 'ExecutionPlanRef':
-        return cls.read_reference(file_reference(path, 'scar.compiler-plan'))
+        return cls.open(path)[1]
+
+    @classmethod
+    def open(cls, path: Path) -> tuple[dict, 'ExecutionPlanRef']:
+        reference, document = open_artifact(path, 'scar.compiler-plan')
+        return reference, cls._from_document(document)
 
     @classmethod
     def read_reference(cls, reference: dict) -> 'ExecutionPlanRef':
-        value = read_artifact(reference)
-        version = value.pop('schema_version', None)
+        return cls._from_document(read_artifact(reference))
+
+    @classmethod
+    def _from_document(cls, value: dict) -> 'ExecutionPlanRef':
+        version = value.get('schema_version')
         if (value.get('schema') != 'scar.compiler-plan' or type(version) is not int or version != 1
-                or set(value) != {'schema', 'entry', 'artifacts', 'decision', 'scope'}):
+                or set(value) != {'schema', 'schema_version', 'entry', 'artifacts', 'decision', 'scope'}):
             raise ValueError('unsupported compiler plan envelope')
-        del value['schema']
-        return cls(**value)
+        return cls(value['entry'], value['artifacts'], value['decision'], value['scope'])
 
 
 @dataclass(frozen=True, slots=True)
