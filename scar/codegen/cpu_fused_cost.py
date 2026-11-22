@@ -41,6 +41,15 @@ def _receipt(path):
     raw=path.read_bytes();return dict(path=str(path),sha256=_hash(raw),bytes=len(raw))
 
 
+def _interpolate(points, x):
+    points = sorted(points)
+    _require(points[0][0] <= x <= points[-1][0], 'outside primitive interpolation range')
+    for left, right in zip(points, points[1:]):
+        if left[0] <= x <= right[0]:
+            return left[1] + (right[1] - left[1]) * (x - left[0]) / (right[0] - left[0])
+    return points[0][1]
+
+
 def _canonical_cases():
     """Fixed generic dependency/fan-in families; no target is an input."""
     result=[]
@@ -135,6 +144,74 @@ class _Layout(ctypes.Structure):
         ('offsets',ctypes.c_int64*8),('groups',ctypes.c_int32*8),('loads',ctypes.c_int32)]
 
 
+def _probe_template(name, **fields):
+    loop = (_HERE / 'loop_v1.cpp.in').read_text()
+    start = loop.index('class ThreadAffinity {')
+    affinity = loop[start:loop.index('\n#endif', start)]
+    start = loop.index('class FloatingScope {')
+    floating = loop[start:loop.index('\n};', start) + 3]
+    source = (_HERE / name).read_text()
+    for key, value in dict(AFFINITY_CLASS=affinity, FLOATING_CLASS=floating, **fields).items():
+        source = source.replace('@' + key + '@', value)
+    return source
+
+
+def _dag_layouts(loads, cols, groups):
+    # Compiler-visible rank-two axial and diagonal neighbors.
+    shifts = ((1, 1), (0, 1), (1, 2), (2, 1), (1, 0), (0, 0), (2, 2), (0, 2))
+    if groups == 1:
+        return [dict(stride=cols + 2, offset=r * (cols + 2) + c, storage_group=0)
+                for r, c in shifts[:loads]]
+    result = [dict(stride=cols, offset=0, storage_group=0)]
+    return result + [dict(stride=cols + 2, offset=r * (cols + 2) + c, storage_group=1)
+                     for r, c in shifts[:loads - 1]]
+
+
+def _dag_probe_template(context, *, expanded=False):
+    cpus = context['worker_cpu_ids']
+    source = _probe_template('cpu_fused_cost_v2.cpp.in', CPU_IDS=', '.join(map(str, cpus)),
+                             CPU_SLOTS=str(max(cpus) + 1))
+    if expanded:
+        source = source.replace('double scalars[16]', 'double scalars[128]')
+        source = source.replace('i<16;++i)a.scalars', 'i<128;++i)a.scalars')
+        # Dispatch- and barrier-only cases have no output store.
+        source = source.replace('double[l.rows*l.cols]);', 'double[l.rows*l.cols]());')
+    return source
+
+
+def _render_dag_probe(template, registry, *, boundary_bodies=None, compact=False):
+    """Fill the measured registry directly in its compile envelope."""
+    boundary_bodies = boundary_bodies or {}
+    functions, pointers, loads = [], [], []
+    symbols = {'add': '+', 'sub': '-', 'mul': '*'}
+    loop = ('#pragma omp for schedule(static)\nfor(int64_t row=0;row<a.rows;++row)\n'
+            'for(int64_t col=0;col<a.cols;++col){\n')
+    closing = '}' if compact else '}\n'
+    for case in registry:
+        for groups in (1, 2):
+            name = case['id'] + '_g' + str(groups)
+            text = boundary_bodies.get(case.get('role'))
+            if text is None:
+                body = []
+                for index, layout in enumerate(_dag_layouts(case['array_loads'], 100, groups)):
+                    padding = layout['stride'] - 100
+                    row, col = divmod(layout['offset'], layout['stride'])
+                    body.append(f'const double x{index}=a.inputs[{layout["storage_group"]}]'
+                                f'[({row}+row)*(a.cols+{padding})+{col}+col];')
+                for node in case['graph']:
+                    left, right = [f'a.scalars[{value[1:]}]' if value.startswith('s') else value
+                                   for value in node['inputs']]
+                    body.append(f'const double {node["id"]}=({left}{symbols[node["op"]]}{right});')
+                body.append(f'a.output[row*a.cols+col]={case["output"]};')
+                text = loop + '\n'.join(body) + ('\n}' if compact else '\n}\n')
+            functions.append(f'__attribute__((noinline)) void {name}(const Args &a){{\n' + text + closing)
+            pointers.append('&' + name)
+            loads.append(str(case['array_loads']))
+    return (template.replace('@CANONICAL_FUNCTIONS@', '\n'.join(functions))
+            .replace('@CANONICAL_POINTERS@', ', '.join(pointers))
+            .replace('@CANONICAL_LOADS@', ', '.join(loads)))
+
+
 def _render_source(context,cases):
     cpus=context['worker_cpu_ids']
     original=(_HERE/'loop_v1.cpp.in').read_text();start=original.index('class ThreadAffinity {')
@@ -153,37 +230,78 @@ def _render_source(context,cases):
     return source
 
 
-def _native(context,directory,cases):
-    compiler=context['backend']['compiler'];cpus=context['worker_cpu_ids']
-    _require(len(cpus)>1 and set(cpus)<=os.sched_getaffinity(0)
-        and sorted(os.sched_getaffinity(0))==context['caller_affinity_cpu_ids'], 'exact caller/worker mask required')
-    identity=subprocess.run([*compiler['argv'],'--version'],check=True,capture_output=True,text=True).stdout.splitlines()[0]
-    _require(identity==compiler['identity'] and 'g++' in identity and '-fopenmp' in compiler['options'],
+def _compile_fused_probe(context, directory, render, *, version):
+    compiler = context['backend']['compiler']
+    cpus = context['worker_cpu_ids']
+    affinity = os.sched_getaffinity(0)
+    _require(len(cpus) > 1 and set(cpus) <= affinity and sorted(affinity) == context['caller_affinity_cpu_ids'],
+             'exact caller/worker affinity required')
+    identity = subprocess.run([*compiler['argv'], '--version'], check=True, capture_output=True,
+                              text=True).stdout.splitlines()[0]
+    _require(identity == compiler['identity'] and 'g++' in identity and '-fopenmp' in compiler['options'],
              'recorded GCC/OpenMP compiler context required')
-    source=_render_source(context,cases)
-    directory.mkdir(parents=True);(directory/'canonical.cpp').write_text(source)
-    (directory/'scar_abi_v1.h').write_bytes((_HERE/'scar_abi_v1.h').read_bytes())
-    library=directory/'canonical.so';remarks=directory/'vectorization.txt'
-    command=[*compiler['argv'],*compiler['options'],'-fopt-info-vec-optimized='+str(remarks),
-        str(directory/'canonical.cpp'),'-o',str(library)]
-    compiled=subprocess.run(command,capture_output=True,text=True)
-    (directory/'compile.log').write_text(compiled.stdout+compiled.stderr)
-    _require(compiled.returncode==0,'canonical fused-cost compilation failed: '+compiled.stderr[-1500:])
-    assembly=subprocess.run(['objdump','-d','-C','--no-show-raw-insn',str(library)],check=True,capture_output=True,text=True).stdout
-    (directory/'assembly.txt').write_text(assembly)
+    directory.mkdir(parents=True)
+    source = directory / 'canonical.cpp'
+    source.write_text(render(context))
+    (directory / 'scar_abi_v1.h').write_bytes((_HERE / 'scar_abi_v1.h').read_bytes())
+    library = directory / 'canonical.so'
+    remarks = directory / 'vectorization.txt'
+    command = [*compiler['argv'], *compiler['options'], '-fopt-info-vec-optimized=' + str(remarks),
+               str(source), '-o', str(library)]
+    compiled = subprocess.run(command, capture_output=True, text=True)
+    (directory / 'compile.log').write_text(compiled.stdout + compiled.stderr)
+    _require(compiled.returncode == 0, 'canonical fused-cost compilation failed: ' + compiled.stderr[-1500:])
+    assembly_path = directory / 'assembly.txt'
+    assembly = subprocess.run(['objdump', '-d', '-C', '--no-show-raw-insn', str(library)],
+                              check=True, capture_output=True, text=True).stdout
+    assembly_path.write_text(assembly)
+    handle = ctypes.CDLL(str(library))
+    function = getattr(handle, f'scar_fused_cost_probe_v{version}')
+    arguments = [ctypes.c_int32, ctypes.POINTER(_Layout), ctypes.c_uint64, ctypes.c_uint64]
+    if version == 2:
+        arguments.append(ctypes.c_uint64)
+    function.argtypes = [*arguments, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_uint64),
+                         ctypes.POINTER(ctypes.c_int32)]
+    function.restype = ctypes.c_int32
+    receipt = dict(compiler=compiler, command=command, source=_receipt(source), library=_receipt(library),
+                   assembly=_receipt(assembly_path), vectorization_remarks=_receipt(remarks))
+    return handle, function, receipt, assembly
+
+
+def _native(context, directory, cases):
+    handle, function, receipt, assembly = _compile_fused_probe(
+        context, directory, lambda resource: _render_source(resource, cases), version=1)
     instructions=re.findall(r'^\s*[0-9a-f]+:\s+([a-zA-Z][a-zA-Z0-9.]*)',assembly,re.M)
-    handle=ctypes.CDLL(str(library));function=handle.scar_fused_cost_probe_v1
-    function.argtypes=[ctypes.c_int32,ctypes.POINTER(_Layout),ctypes.c_uint64,ctypes.c_uint64,
-        ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_int32)]
-    function.restype=ctypes.c_int32
-    receipt=dict(compiler=compiler,command=command,diagnostic_options=['-fopt-info-vec-optimized'],
-        source=_receipt(directory/'canonical.cpp'),library=_receipt(library),
-        assembly=_receipt(directory/'assembly.txt'),vectorization_remarks=_receipt(remarks),
+    receipt.update(diagnostic_options=['-fopt-info-vec-optimized'],
         packed_arithmetic={op:instructions.count(op+'pd') for op in ('add','sub','mul','div')},
         scalar_arithmetic={op:instructions.count(op+'sd') for op in ('add','sub','mul','div')},
         v_prefixed_mnemonics=sorted({op for op in instructions if op.startswith('v')}),
         complete_isa_or_regalloc_proof=False,target_source_or_dag_compiled=False)
     return handle,function,receipt
+
+
+def _measure_dag_probe(function, configurations, repetitions, warmup, batch):
+    observations = []
+    for config in configurations:
+        p = config.get('parameters', config)
+        operands = p['operand_layouts'] if 'parameters' in config else p['layouts']
+        layout = _Layout()
+        layout.rows, layout.cols, layout.loads = p['rows'], p['cols'], p['array_loads']
+        for index, row in enumerate(operands):
+            layout.strides[index], layout.offsets[index], layout.groups[index] = (
+                row['stride'], row['offset'], row['storage_group'])
+        samples = (ctypes.c_double * repetitions)()
+        checksum = ctypes.c_uint64()
+        cpus = (ctypes.c_int32 * 2)()
+        status = function(config['kernel_index'], ctypes.byref(layout), repetitions, warmup, batch,
+                          samples, ctypes.byref(checksum), cpus)
+        _require(status == 0, 'canonical FP/affinity/allocation guard: ' + str(status))
+        values = list(samples)
+        _require(all(math.isfinite(x) and x > 0 for x in values), 'positive finite stage samples required')
+        observations.append(dict(**config, samples_ns=values, median_ns=statistics.median(values),
+                                 min_ns=min(values), max_ns=max(values), stdev_ns=statistics.stdev(values),
+                                 checksum=checksum.value, caller_cpu_before=cpus[0], caller_cpu_after=cpus[1]))
+    return observations
 
 
 def _llc(context):

@@ -20,7 +20,9 @@ import sys
 import time
 
 from . import cpu_instruction_cost as C
-from .cpu_fused_cost import _HERE,_Layout,_hash,_json,_receipt,_require,_save
+from .cpu_fused_cost import (_HERE, _Layout, _dag_layouts, _hash, _json, _probe_template,
+                             _receipt, _render_dag_probe, _require, _save)
+from .cpu_fused_cost_models import _dag_case
 from scar.ir.execution_recipe import artifact_reference,read_artifact
 
 PACK='scar.cpu-batch-instruction-pack'
@@ -37,7 +39,7 @@ def _registry():
     for i,(family,n,extra) in enumerate((('SERIAL_FANIN',3,6),('SERIAL_FANIN',5,12),
         ('BALANCED_FANIN',7,7),('BALANCED_FANIN',3,7),('PARALLEL_BRANCHES',3,6),
         ('PARALLEL_BRANCHES',7,8),('SHARED_BRANCHES',5,8),('SHARED_BRANCHES',7,12))):
-        case=C.V2._case(family,n,extra,seed=907+i,holdout=True);pool=5 if i%2==0 else 8
+        case=_dag_case(family,n,extra,seed=907+i,holdout=True);pool=5 if i%2==0 else 8
         for node in case['graph']:
             node['inputs']=['s'+str(int(v[1:])%pool) if v.startswith('s') else v for v in node['inputs']]
         case.update(id='batch_fresh_holdout_'+str(i),role='FRESH_HOLDOUT',operand_pool=pool)
@@ -56,7 +58,7 @@ def _configurations(context):
             for r,c in shapes:
                 result.append(dict(id='batch-configuration-'+str(len(result)),case_index=i,kernel_index=i*2+group-1,
                     groups=group,rows=r,cols=c,workers=workers,elements=((r+workers-1)//workers)*c,
-                    array_loads=case['array_loads'],layouts=C.V2._layouts(case['array_loads'],c,group),
+                    array_loads=case['array_loads'],layouts=_dag_layouts(case['array_loads'],c,group),
                     role=case['role'],holdout=case['holdout']))
     random.Random(1001831).shuffle(result);return result
 
@@ -82,31 +84,12 @@ def _compatible(pack,context):
     return tool
 
 
+
 def _source(available):
-    original=(_HERE/'loop_v1.cpp.in').read_text();start=original.index('class ThreadAffinity {')
-    affinity=original[start:original.index('\n#endif',start)]
-    start=original.index('class FloatingScope {');floating=original[start:original.index('\n};',start)+3]
-    functions=[];pointers=[];loads=[]
-    for case in _registry():
-        for group in (1,2):
-            name=case['id']+'_g'+str(group);body=[]
-            for i,layout in enumerate(C.V2._layouts(case['array_loads'],100,group)):
-                padding=layout['stride']-100;r,c=divmod(layout['offset'],layout['stride'])
-                body.append(f'const double x{i}=a.inputs[{layout["storage_group"]}][({r}+row)*(a.cols+{padding})+{c}+col];')
-            for node in case['graph']:
-                args=['a.scalars['+v[1:]+']' if v.startswith('s') else v for v in node['inputs']]
-                body.append('const double '+node['id']+'=('+args[0]+dict(add='+',sub='-',mul='*')[node['op']]+args[1]+');')
-            if case['role']=='DISPATCH':text='#ifdef _OPENMP\n#pragma omp barrier\n#else\nasm volatile("" : : "g"(&a) : "memory");\n#endif\n'
-            else:
-                body.append('a.output[row*a.cols+col]='+case['output']+';')
-                text='#pragma omp for schedule(static)\nfor(int64_t row=0;row<a.rows;++row)\nfor(int64_t col=0;col<a.cols;++col){\n'+'\n'.join(body)+'\n}\n'
-            functions.append('__attribute__((noinline)) void '+name+'(const Args &a){\n'+text+'}\n')
-            pointers.append('&'+name);loads.append(str(case['array_loads']))
-    source=(_HERE/'cpu_batch_instruction_v1.cpp.in').read_text()
-    for key,value in dict(CPU_SLOTS=str(max(available)+1),MAX_WORKERS=str(len(available)),
-        AFFINITY_CLASS=affinity,FLOATING_CLASS=floating,CANONICAL_FUNCTIONS='\n'.join(functions),
-        CANONICAL_POINTERS=', '.join(pointers),CANONICAL_LOADS=', '.join(loads)).items():source=source.replace('@'+key+'@',value)
-    return source
+    template = _probe_template('cpu_batch_instruction_v1.cpp.in',
+                               CPU_SLOTS=str(max(available) + 1), MAX_WORKERS=str(len(available)))
+    boundary = '#ifdef _OPENMP\n#pragma omp barrier\n#else\nasm volatile("" : : "g"(&a) : "memory");\n#endif\n'
+    return _render_dag_probe(template, _registry(), boundary_bodies={'DISPATCH': boundary})
 
 
 def _normalized_block(text):

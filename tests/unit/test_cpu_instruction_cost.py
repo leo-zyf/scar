@@ -4,8 +4,7 @@ import json
 
 import pytest
 
-from scar.codegen import cpu_fused_cost_v2 as V2
-from scar.codegen import cpu_fused_cost_v3 as V3
+from scar.codegen.cpu_fused_cost_models import registry_v2, registry_v3
 from scar.codegen.cpu_fused_cost import _receipt
 from scar.codegen.cpu_instruction_cost import PARALLEL, SERIAL, _cycle_demand, _lex_assembly, _natural_loops
 from scar.codegen.cpu_instruction_replay import _replay_analysis
@@ -71,7 +70,7 @@ def test_parallel_partition_fresh_design_and_one_stage_barrier(instruction_analy
     assert next(r['logical_worker_rows'] for r in configs if r['rows']==439)==[110,110,110,109]
     assert next(r['logical_worker_rows'] for r in configs if r['rows']==618)==[155,155,154,154]
     shape=lambda r:json.dumps({'graph':r['graph'],'output':r['output']},sort_keys=True)
-    seen={shape(r) for registry in (SERIAL.registry(),V2.canonical_registry(),V3._registry())
+    seen={shape(r) for registry in (SERIAL.registry(),registry_v2(),registry_v3())
         for r in registry if r['holdout']}
     assert not seen&{shape(r) for r in PARALLEL.registry() if r['holdout']}
     source=PARALLEL.source(context)

@@ -16,9 +16,10 @@ import statistics
 import subprocess
 import time
 
-from . import cpu_fused_cost_v2 as V2
-from .cpu_fused_cost_v3 import _interpolate
-from .cpu_fused_cost import _HERE,_Layout,_hash,_llc,_receipt,_require,_save
+from .cpu_fused_cost import (_HERE, _Layout, _dag_layouts, _dag_probe_template, _hash,
+                             _interpolate, _llc, _receipt, _render_dag_probe, _require, _save,
+                             fused_features)
+from .cpu_fused_cost_models import _CALIBRATION_FILES, _dag_case
 
 
 _MCA=Path('/opt/amd/aocc/5.1/bin/llvm-mca')
@@ -45,7 +46,7 @@ _ASSUMPTIONS=[
 def _registry():
     rows=[dict(id='instruction_empty',role='DISPATCH',array_loads=0,graph=[],output=None,holdout=False)]
     for n in (1,2,4,6,8):
-        case=V2._case('BALANCED_FANIN',n,0);case.update(id='instruction_memory_'+str(n),role='MEMORY')
+        case=_dag_case('BALANCED_FANIN',n,0);case.update(id='instruction_memory_'+str(n),role='MEMORY')
         rows.append(case)
     patterns=(('ADD',('add',)),('SUB',('sub',)),('MUL',('mul',)),
         ('ADD_MUL',('add','mul')),('ADD_ADD_MUL',('add','add','mul')),
@@ -66,7 +67,7 @@ def _registry():
     for i,(family,n,extra) in enumerate((('SERIAL_FANIN',3,8),('SERIAL_FANIN',7,10),
         ('BALANCED_FANIN',5,6),('BALANCED_FANIN',7,8),('PARALLEL_BRANCHES',3,10),
         ('PARALLEL_BRANCHES',5,8),('SHARED_BRANCHES',5,6),('SHARED_BRANCHES',7,10))):
-        case=V2._case(family,n,extra,seed=281+i,holdout=True)
+        case=_dag_case(family,n,extra,seed=281+i,holdout=True)
         if i%2==0:
             for node in case['graph']:
                 node['inputs']=['s'+str(int(k[1:])%4) if k.startswith('s') else k for k in node['inputs']]
@@ -86,38 +87,24 @@ def _configurations(context):
                 result.append(dict(id='instruction-configuration-'+str(len(result)),case_index=i,
                     kernel_index=i*2+group-1,groups=group,rows=r,cols=c,workers=workers,
                     elements=((r+workers-1)//workers)*c,array_loads=case['array_loads'],
-                    layouts=V2._layouts(case['array_loads'],c,group),role=case['role'],holdout=case['holdout']))
+                    layouts=_dag_layouts(case['array_loads'],c,group),role=case['role'],holdout=case['holdout']))
     random.Random(391127).shuffle(result);return result
 
 
+def _instruction_template(context):
+    template = _dag_probe_template(context, expanded=True)
+    head, marker, tail = template.partition('@CANONICAL_FUNCTIONS@')
+    head = head.replace('#include <omp.h>', '#ifdef _OPENMP\n#include <omp.h>\n#endif')
+    head += '\nint probe_tid(){\n#ifdef _OPENMP\nreturn omp_get_thread_num();\n#else\nreturn 0;\n#endif\n}\n'
+    head += 'int probe_team(){\n#ifdef _OPENMP\nreturn omp_get_num_threads();\n#else\nreturn 1;\n#endif\n}\n'
+    tail = tail.replace('scar_fused_cost_probe_v2', 'scar_instruction_cost_probe_v1')
+    tail = tail.replace('omp_get_thread_num()', 'probe_tid()').replace('omp_get_num_threads()', 'probe_team()')
+    return head + marker + tail
+
+
 def _source(context):
-    base=V2._source(context)
-    head=base[:base.index('__attribute__((noinline)) void registry_')]
-    head=head.replace('#include <omp.h>','#ifdef _OPENMP\n#include <omp.h>\n#endif')
-    head=head.replace('double scalars[16]','double scalars[128]')
-    head+='\nint probe_tid(){\n#ifdef _OPENMP\nreturn omp_get_thread_num();\n#else\nreturn 0;\n#endif\n}\n'
-    head+='int probe_team(){\n#ifdef _OPENMP\nreturn omp_get_num_threads();\n#else\nreturn 1;\n#endif\n}\n'
-    tail=base[base.index('extern "C" SCAR_EXPORT_V1 int32_t scar_fused_cost_probe_v2'):]
-    tail=tail.replace('scar_fused_cost_probe_v2','scar_instruction_cost_probe_v1')
-    tail=tail.replace('omp_get_thread_num()','probe_tid()').replace('omp_get_num_threads()','probe_team()')
-    tail=tail.replace('i<16;++i)a.scalars','i<128;++i)a.scalars').replace('double[l.rows*l.cols]);','double[l.rows*l.cols]());')
-    functions=[];pointers=[];loads=[]
-    for case in _registry():
-        for group in (1,2):
-            name=case['id']+'_g'+str(group);body=[]
-            for i,layout in enumerate(V2._layouts(case['array_loads'],100,group)):
-                pad=layout['stride']-100;r,c=divmod(layout['offset'],layout['stride'])
-                body.append(f'const double x{i}=a.inputs[{layout["storage_group"]}][({r}+row)*(a.cols+{pad})+{c}+col];')
-            for node in case['graph']:
-                args=['a.scalars['+v[1:]+']' if v.startswith('s') else v for v in node['inputs']]
-                body.append('const double '+node['id']+'=('+args[0]+dict(add='+',sub='-',mul='*')[node['op']]+args[1]+');')
-            if case['role']=='DISPATCH':text='asm volatile("" : : "g"(&a) : "memory");\n'
-            else:
-                body.append('a.output[row*a.cols+col]='+case['output']+';')
-                text='#pragma omp for schedule(static)\nfor(int64_t row=0;row<a.rows;++row)\nfor(int64_t col=0;col<a.cols;++col){\n'+'\n'.join(body)+'\n}\n'
-            functions.append('__attribute__((noinline)) void '+name+'(const Args &a){\n'+text+'}\n')
-            pointers.append('&'+name);loads.append(str(case['array_loads']))
-    return head+'\n'.join(functions)+'\nusing Kernel=void(*)(const Args &);\nconstexpr Kernel kernels[]={'+', '.join(pointers)+'};\nconstexpr int required_loads[]={'+', '.join(loads)+'};\n}\n'+tail
+    return _render_dag_probe(_instruction_template(context), _registry(),
+                             boundary_bodies={'DISPATCH': 'asm volatile("" : : "g"(&a) : "memory");\n'})
 
 
 def _tool_contract(context):
@@ -285,7 +272,7 @@ def _parallel_registry():
     for i,(family,n,extra) in enumerate((('SERIAL_FANIN',5,10),('SERIAL_FANIN',7,6),
         ('BALANCED_FANIN',3,9),('BALANCED_FANIN',5,10),('PARALLEL_BRANCHES',5,10),
         ('PARALLEL_BRANCHES',7,6),('SHARED_BRANCHES',3,8),('SHARED_BRANCHES',5,10))):
-        case=V2._case(family,n,extra,seed=541+i,holdout=True);pool=3 if i%2==0 else 6
+        case=_dag_case(family,n,extra,seed=541+i,holdout=True);pool=3 if i%2==0 else 6
         for node in case['graph']:
             node['inputs']=['s'+str(int(k[1:])%pool) if k.startswith('s') else k for k in node['inputs']]
         case.update(role='FRESH_HOLDOUT',operand_pool=pool);rows.append(case)
@@ -306,30 +293,13 @@ def _parallel_configurations(context):
                 rows.append(dict(id='parallel-instruction-configuration-'+str(len(rows)),case_index=i,
                     kernel_index=i*2+group-1,groups=group,rows=r,cols=c,workers=workers,
                     elements=max(chunks)*c,array_loads=case['array_loads'],
-                    layouts=V2._layouts(case['array_loads'],c,group),role=case['role'],holdout=case['holdout'],
+                    layouts=_dag_layouts(case['array_loads'],c,group),role=case['role'],holdout=case['holdout'],
                     logical_worker_rows=chunks,partition='GOMP_STATIC_CONTIGUOUS_FIRST_REMAINDER_DECLARED_CONTEXT'))
     random.Random(671933).shuffle(rows);return rows
 
 
+
 def _parallel_source(context):
-    base=_source(context);head=base[:base.index('__attribute__((noinline)) void instruction_')]
-    tail=base[base.index('extern "C" SCAR_EXPORT_V1 int32_t scar_instruction_cost_probe_v1'):]
-    functions=[];pointers=[];loads=[]
-    for case in _parallel_registry():
-        for group in (1,2):
-            name=case['id']+'_g'+str(group);body=[]
-            for i,layout in enumerate(V2._layouts(case['array_loads'],100,group)):
-                pad=layout['stride']-100;r,c=divmod(layout['offset'],layout['stride'])
-                body.append(f'const double x{i}=a.inputs[{layout["storage_group"]}][({r}+row)*(a.cols+{pad})+{c}+col];')
-            for node in case['graph']:
-                args=['a.scalars['+v[1:]+']' if v.startswith('s') else v for v in node['inputs']]
-                body.append('const double '+node['id']+'=('+args[0]+dict(add='+',sub='-',mul='*')[node['op']]+args[1]+');')
-            if case['role']=='DISPATCH':text='#pragma omp barrier\n'
-            else:
-                body.append('a.output[row*a.cols+col]='+case['output']+';')
-                text='#pragma omp for schedule(static)\nfor(int64_t row=0;row<a.rows;++row)\nfor(int64_t col=0;col<a.cols;++col){\n'+'\n'.join(body)+'\n}\n'
-            functions.append('__attribute__((noinline)) void '+name+'(const Args &a){\n'+text+'}\n')
-            pointers.append('&'+name);loads.append(str(case['array_loads']))
     witness='''
 extern "C" SCAR_EXPORT_V1 int32_t scar_parallel_partition_witness_v1(
     int64_t rows,int64_t *first,int64_t *counts,int32_t *cpus){
@@ -349,7 +319,10 @@ extern "C" SCAR_EXPORT_V1 int32_t scar_parallel_partition_witness_v1(
     return guard?4:0;
 }
 '''
-    return head+'\n'.join(functions)+'\nusing Kernel=void(*)(const Args &);\nconstexpr Kernel kernels[]={'+', '.join(pointers)+'};\nconstexpr int required_loads[]={'+', '.join(loads)+'};\n}\n'+tail+witness
+
+    source = _render_dag_probe(_instruction_template(context), _parallel_registry(),
+                               boundary_bodies={'DISPATCH': '#pragma omp barrier\n'})
+    return source + witness
 
 
 def _parallel_tool_contract(context):
@@ -512,11 +485,7 @@ def instruction_cost_profile(mode):
 
 
 def _implementation():
-    names = (
-        _SOURCE_FILE, 'cpu_fused_cost_v2.py', 'cpu_fused_cost_v2.cpp.in',
-        'cpu_fused_cost_v3.py', 'cpu_fused_cost.py', 'loop_v1.cpp.in', 'scar_abi_v1.h',
-    )
-    return {name: _hash((_HERE / name).read_bytes()) for name in names}
+    return {name: _hash((_HERE / name).read_bytes()) for name in (_SOURCE_FILE, *_CALIBRATION_FILES)}
 
 
 def _compile_probe(context, directory, source_text):
@@ -925,14 +894,14 @@ def _projection_stage(plan, term, node_order, source, capacity, profile):
     inputs = [plan['assignment'][key]['slot_id'] for key in stage['input_payloads'] if key in plan['assignment']]
     _require(output not in inputs, 'output workspace aliases a live input slot')
     groups, rows, cols = parameters['backing_storage_groups'], parameters['rows'], parameters['cols']
-    expected = V2._layouts(parameters['array_loads'], cols, groups)
+    expected = _dag_layouts(parameters['array_loads'], cols, groups)
 
     def layout_identity(row):
         return row['storage_group'], row['stride'], row['offset']
 
     _require(sorted(parameters['operand_layouts'], key=layout_identity) == sorted(expected, key=layout_identity),
         'uncalibrated operand memory geometry')
-    _, geometry = V2.fused_features(parameters, capacity)
+    _, geometry = fused_features(parameters, capacity)
     _require(256 <= rows <= 768 and 320 <= cols <= 832 and geometry['backing_bytes'] + rows * cols * 8 <= capacity,
         'outside measured geometry/reported cache extent scope')
     span = _stage_source_range(source, node_order[stage['root_expr']])

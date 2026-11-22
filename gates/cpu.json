@@ -69,7 +69,10 @@
     },
     {
       "id": "M2_RESOURCE_AND_TIME_COST",
-      "tests": ["tests/unit/test_cpu_instruction_cost.py", "tests/unit/test_resource_solver.py"]
+      "tests": [
+        "tests/unit/test_cpu_fused_cost_v2.py", "tests/unit/test_cpu_instruction_cost.py",
+        "tests/unit/test_resource_solver.py"
+      ]
     },
     {
       "id": "M3_SEALED_SCHEDULE",
