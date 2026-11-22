@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Protocol,runtime_checkable
 
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_function_interfaces import SourceFunctionInterfaceStore
+from scar.analysis.source_function_interfaces import (
+    COMPILED_SCHEMA, SCHEMA as FUNCTION_SCHEMA, CompiledFunctionInterfaceStore, SourceFunctionInterfaceStore)
 from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import _artifact
@@ -45,10 +46,8 @@ def open_function_interfaces(value):
     """Select a declared material representation, never a workload name."""
     if isinstance(value,FunctionInterfaceReader): return value
     path=Path(value).absolute();schema=json.loads((path/'result.json').read_bytes())['schema']
-    from scar.analysis.source_function_interfaces import SCHEMA as ordinary_schema
-    if schema==ordinary_schema: return SourceFunctionInterfaceStore(path)
-    from scar.analysis.source_compiled_interfaces import SCHEMA as compiled_schema,CompiledFunctionInterfaceStore
-    if schema==compiled_schema: return CompiledFunctionInterfaceStore(path)
+    if schema==FUNCTION_SCHEMA: return SourceFunctionInterfaceStore(path)
+    if schema==COMPILED_SCHEMA: return CompiledFunctionInterfaceStore(path)
     from scar.analysis.source_returned_functions import SCHEMA as returned_schema,ReturnedFunctionInterfaceStore
     if schema==returned_schema:return ReturnedFunctionInterfaceStore(path)
     from scar.analysis.source_function_collection import SCHEMA as collection_schema,FunctionInterfaceCollection

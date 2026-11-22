@@ -102,8 +102,9 @@ def _owners(unit):
     return result
 
 
-def _cuts(resolver, reference):
-    formals = []; results = []; result_sets = {}
+def _cuts(resolver, reference, result_sets=None):
+    formals = []; results = []
+    if result_sets is None: result_sets = {}
     for frontier in reference.frontiers:
         if frontier.reason == 'FUNCTION_PARAMETER_REQUIRES_SELECTED_CALL_CONTEXT':
             formals.append(frontier.state)
@@ -133,14 +134,43 @@ def project_declared_calls(snapshot, identity, *, resolver=None, max_states=4000
     if identity not in getattr(store, 'declaration_units', store.importable_units) or identity in store.original_source_units:
         raise ValueError('declared call projection requires an admitted local source declaration unit')
     resolver = resolver if resolver is not None else NamespaceReferenceResolver(snapshot)
-    unit = store.load(identity); owners = _owners(unit); queries = []
+    return _project_admitted_calls(snapshot, identity, resolver, limits)
+
+
+def _project_admitted_calls(snapshot, identity, resolver, limits):
+    """Project the same ordered declarations for either explicitly admitted scope."""
+    unit = snapshot.fact_store.load(identity); owners = _owners(unit); queries = []; result_sets = {}
     for ordinal, call in enumerate(unit.calls):
         callee = source_port(unit, call.callee); reference = resolver.resolve(callee, **limits)
-        formal, results = _cuts(resolver, reference)
+        formal, results = _cuts(resolver, reference, result_sets)
         queries.append(D.DeclaredCallQuery(identity, resolver.slicer.fact(unit, 'calls', ordinal),
             callee, owners[ordinal], reference, formal, results))
     queries = tuple(queries); snapshot.validate_parents()
     return D.DeclaredCallUnit(identity, queries, _symbols(resolver, queries))
+
+
+def _read_declaration_tables(runtime, unit, folder, tables, *, query_table='queries'):
+    queries = tuple(decode(D.DeclaredCallQuery, wire, record_tags=P.PRODUCTION_RECORD_TAGS)
+        for wire in _table(folder, tables[query_table]))
+    symbols = tuple(decode(D.DeclaredCallSymbolRequest, wire, record_tags=P.PRODUCTION_RECORD_TAGS)
+        for wire in _table(folder, tables['symbols']))
+    graph = D.DeclaredCallUnit(unit, queries, symbols); facts = runtime.catalog.fact_store.load(unit)
+    owners = _owners(facts); resolver = runtime.resolver; result_sets = {}
+    if len(queries) != len(facts.calls): raise ValueError('declared call table omitted an original source call')
+    for ordinal, (query, call) in enumerate(zip(queries, facts.calls)):
+        if (query.unit != unit or query.call != resolver.slicer.fact(facts, 'calls', ordinal)
+                or query.callee != source_port(facts, call.callee) or query.owners != owners[ordinal]
+                or not query.reference.states or query.reference.states[0].port != query.callee
+                or query.reference.states[0].selectors):
+            raise ValueError('declared call original fact, callee, owners or query root differs')
+        size = len(query.reference.states)
+        if (any(not 0 <= e.downstream < size or not 0 <= e.upstream < size for e in query.reference.edges)
+                or any(not 0 <= x.state < size for x in (*query.reference.origins, *query.reference.frontiers))):
+            raise ValueError('declared namespace reference index lies outside its unit query')
+        if (query.formal_frontiers, query.call_result_frontiers) != _cuts(resolver, query.reference, result_sets):
+            raise ValueError('declared call formal or call-result boundary metadata differs')
+    if symbols != _symbols(resolver, queries): raise ValueError('declared named requests differ')
+    return graph
 
 
 def _counts(graph):
@@ -328,27 +358,8 @@ class DeclaredCallStore:
             compiled_units_included=_has_compiled(self.catalog.fact_store, (unit,)),
             **{name: False for name in NO_PROOF})
         if report != expected: raise ValueError('declared call unit provenance or projection metadata differs')
-        queries = tuple(decode(D.DeclaredCallQuery, wire, record_tags=P.PRODUCTION_RECORD_TAGS)
-            for wire in _table(folder, shard['tables']['queries']))
-        symbols = tuple(decode(D.DeclaredCallSymbolRequest, wire, record_tags=P.PRODUCTION_RECORD_TAGS)
-            for wire in _table(folder, shard['tables']['symbols']))
-        graph = D.DeclaredCallUnit(unit, queries, symbols); facts = self.catalog.fact_store.load(unit)
-        owners = _owners(facts); resolver = self.runtime.resolver
-        if len(queries) != len(facts.calls): raise ValueError('declared call table omitted an original source call')
-        for ordinal, (query, call) in enumerate(zip(queries, facts.calls)):
-            if (query.unit != unit or query.call != resolver.slicer.fact(facts, 'calls', ordinal)
-                    or query.callee != source_port(facts, call.callee) or query.owners != owners[ordinal]
-                    or not query.reference.states or query.reference.states[0].port != query.callee
-                    or query.reference.states[0].selectors):
-                raise ValueError('declared call original fact, callee, owners or query root differs')
-            size = len(query.reference.states)
-            if (any(not 0 <= e.downstream < size or not 0 <= e.upstream < size for e in query.reference.edges)
-                    or any(not 0 <= x.state < size for x in (*query.reference.origins, *query.reference.frontiers))):
-                raise ValueError('declared namespace reference index lies outside its unit query')
-            if (query.formal_frontiers, query.call_result_frontiers) != _cuts(resolver, query.reference):
-                raise ValueError('declared call formal or call-result boundary metadata differs')
-        if symbols != _symbols(resolver, queries) or _counts(graph) != shard['counts']:
-            raise ValueError('declared named requests or source call counts differ')
+        graph = _read_declaration_tables(self.runtime, unit, folder, shard['tables'])
+        if _counts(graph) != shard['counts']: raise ValueError('declared source call counts differ')
         self.validate()
         if raw != (folder/'result.json').read_bytes(): raise ValueError('declared call unit report changed')
         return graph
