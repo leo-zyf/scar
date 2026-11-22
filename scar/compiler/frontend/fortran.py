@@ -76,6 +76,82 @@ static inline Result scar_f2c_call(Result (*callee)(...), Args... args) {
     return reinterpret_cast<Result (*)(Args...)>(callee)(args...);
 }
 '''
+_CFI_ELEMENT = '''
+#include <cstdint>
+
+using longint = std::int64_t;
+
+// The companion CFI ABI describes byte addresses of live scalar objects.
+template<class T>
+static inline T* scar_cfi_element(T* base, longint byte_offset) {
+    return reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(base) +
+                                static_cast<std::uintptr_t>(byte_offset));
+}
+'''
+_CFI_VIEW = '''static_assert(CFI_VERSION == 1);
+static_assert(std::is_same_v<CFI_index_t, longint>);
+static_assert(sizeof(std::uintptr_t) == sizeof(longint));
+
+struct ScarCFIAxis {
+    longint extent, stride, origin, lower, upper;
+};
+
+template<class T, std::size_t Rank>
+struct ScarCFIView {
+    T* data;
+    std::array<ScarCFIAxis, Rank> axes;
+};
+
+template<class T, CFI_type_t Type, std::size_t Rank>
+static ScarCFIView<T, Rank> scar_cfi_view(CFI_cdesc_t* descriptor,
+                                        std::array<longint, Rank> origins) {
+    static_assert(0 < Rank && Rank <= CFI_MAX_RANK);
+    if (!descriptor || descriptor->version != CFI_VERSION || descriptor->rank != Rank ||
+        descriptor->type != Type || descriptor->elem_len != sizeof(T) ||
+        descriptor->attribute != CFI_attribute_other) std::abort();
+
+    ScarCFIView<T, Rank> result{};
+    result.data = static_cast<T*>(descriptor->base_addr);
+    bool empty = false;
+    for (std::size_t i = 0; i < Rank; ++i) {
+        const CFI_dim_t& dim = descriptor->dim[i];
+        if (dim.lower_bound != 0 || dim.extent < 0 || dim.sm % longint(sizeof(T))) std::abort();
+        ScarCFIAxis& axis = result.axes[i];
+        axis.extent = dim.extent;
+        axis.stride = dim.sm;
+        axis.origin = origins[i];
+        if (dim.extent == 0) {
+            empty = true;
+            axis.lower = 1;
+            axis.upper = 0;
+        } else {
+            axis.lower = axis.origin;
+            if (__builtin_add_overflow(axis.origin, dim.extent - 1, &axis.upper)) std::abort();
+        }
+    }
+
+    if (!empty) {
+        longint min_offset = 0, max_offset = 0;
+        for (const auto& axis : result.axes) {
+            longint displacement;
+            if ((axis.extent > 1 && axis.stride == 0) ||
+                __builtin_mul_overflow(axis.extent - 1, axis.stride, &displacement)) std::abort();
+            longint& sum = displacement < 0 ? min_offset : max_offset;
+            if (__builtin_add_overflow(sum, displacement, &sum)) std::abort();
+        }
+        const auto base = reinterpret_cast<std::uintptr_t>(result.data);
+        const auto available = (std::numeric_limits<std::uintptr_t>::max)() - base;
+        const auto negative = std::uintptr_t(0) - static_cast<std::uintptr_t>(min_offset);
+        // The caller establishes accessible backing objects and their lifetime.
+        // Check the representable byte envelope before evaluating any element.
+        if (!base || base % alignof(T) || negative > base || max_offset == (std::numeric_limits<longint>::max)() ||
+            static_cast<std::uintptr_t>(max_offset) > available ||
+            sizeof(T) - 1 > available - static_cast<std::uintptr_t>(max_offset)) std::abort();
+    }
+    return result;
+}
+'''
+_CFI_AXIS_FIELDS = ('extent', 'stride', 'origin', 'lower', 'upper')
 
 
 def _runtime(config, name):
@@ -107,7 +183,7 @@ def _apply_spans(source, edits):
     return source
 
 
-def _repair_f2c_pointers(source):
+def _repair_f2c_pointers(source, descriptor_arrays=()):
     """Subtract one-based offsets in subscripts without forming invalid base pointers."""
     changes = []
     for marker in re.finditer(re.escape(_POINTER_ADJUSTMENTS), source):
@@ -130,13 +206,24 @@ def _repair_f2c_pointers(source):
                 if opening == len(mask) or mask[opening] != '[':
                     raise ValueError(f'unsupported shifted pointer use in f2c output. {pointer}')
                 closing = _next_bracket_end(mask, opening)
-                changes.extend(((body + opening + 1, body + opening + 1, '('),
-                                (body + closing, body + closing, f') - ({offset})')))
-    return _apply_spans(source, changes)
+                if pointer in descriptor_arrays:
+                    changes.extend(((body + use.start(), body + opening + 1,
+                                     f'(*scar_cfi_element({pointer}, ('),
+                                    (body + closing, body + closing + 1, f') - ({offset})))')))
+                else:
+                    changes.extend(((body + opening + 1, body + opening + 1, '('),
+                                    (body + closing, body + closing, f') - ({offset})')))
+    repaired = _apply_spans(source, changes)
+    if descriptor_arrays:
+        mask = _mask_cpp(repaired)
+        for pointer in descriptor_arrays:
+            if re.search(r'\b' + re.escape(pointer) + r'\s*\[', mask):
+                raise ValueError(f'unlowered CFI element access in f2c output. {pointer}')
+    return repaired
 
 
-def _repair_f2c_source(source):
-    source = _repair_f2c_pointers(source)
+def _repair_f2c_source(source, descriptor_arrays=()):
+    source = _repair_f2c_pointers(source, descriptor_arrays)
     mask = _mask_cpp(source)
     edits = [(call.start(), call.end(), f'scar_f2c_call({call[1]}, ')
              for call in _INDIRECT_CALL.finditer(mask)]
@@ -148,7 +235,8 @@ def _repair_f2c_source(source):
     return '#include "scar_f2c_call.hpp"\n' + _apply_spans(source, edits)
 
 
-def _translate_f2c(units, edits, project, config, *, long_lines=False, source_directory='src'):
+def _translate_f2c(units, edits, project, config, *, long_lines=False, source_directory='src',
+                   descriptor_units=None):
     translator = _tool(config, 'f2c')
     header = _runtime(config, 'f2c_header')
     archive = _runtime(config, 'f2c_archive')
@@ -161,12 +249,13 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
     # keeps its ABI and permits strict C++20 string literal initialization.
     contents = re.sub(r'\bchar\s*\*\s*cifmt\b', 'const char *cifmt', contents)
     (generated / 'f2c.h').write_text(contents, encoding='utf-8')
-    (generated / 'scar_f2c_call.hpp').write_text(_CALL_WRAPPER, encoding='utf-8')
+    wrapper = _CALL_WRAPPER + (_CFI_ELEMENT if descriptor_units else '')
+    (generated / 'scar_f2c_call.hpp').write_text(wrapper, encoding='utf-8')
 
     sources = []
     with TemporaryDirectory(prefix='.f2c-', dir=project) as temporary:
         staging = Path(temporary)
-        inputs = []
+        inputs = {}
         for index, (name, path, flags) in enumerate(units):
             accepted = {'-std=legacy', '-std=gnu', '-ffixed-form', '-ffixed-line-length-72',
                         '-fno-fast-math', '-ffp-contract=off'}
@@ -174,7 +263,7 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
                 raise ValueError(f'f2c requires supported fixed-form inputs and options. {name}')
             unit = staging / f'fortran-{index}.f'
             unit.write_bytes(edits[name] if name in edits else path.read_bytes())
-            inputs.append(unit.name)
+            inputs[unit.name] = (descriptor_units or {}).get(name, ())
 
         options = ['-C++', '-Ps', '-g']
         if long_lines:
@@ -189,10 +278,10 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
         else:
             raise ValueError('f2c could not stabilize compiler-generated prototypes')
 
-        for unit in inputs:
+        for unit, descriptor_arrays in inputs.items():
             translated = (staging / unit).with_suffix('.c').read_text(encoding='utf-8')
             dest = (source_dir / unit).with_suffix('.cpp')
-            dest.write_text(_repair_f2c_source(translated), encoding='utf-8')
+            dest.write_text(_repair_f2c_source(translated, descriptor_arrays), encoding='utf-8')
             sources.append(dest.relative_to(project).as_posix())
 
     return {'sources': sources, 'libraries': (str(archive), 'm'),
@@ -200,20 +289,37 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
 
 
 def _c_abi_source(exports):
-    lines = ['#include <type_traits>', '#include "f2c.h"',
-             'static_assert(std::is_same_v<integer, int>);',
-             'static_assert(std::is_same_v<doublereal, double>);']
+    has_descriptors = any('descriptor' in arg for row in exports for arg in row['arguments'])
+    lines = ['#include <type_traits>']
+    if has_descriptors:
+        lines.extend(['#include <ISO_Fortran_binding.h>', '#include <array>', '#include <cstdlib>',
+                      '#include <limits>', '#include "scar_f2c_call.hpp"'])
+    lines.extend(['#include "f2c.h"', 'static_assert(std::is_same_v<integer, int>);',
+                  'static_assert(std::is_same_v<doublereal, double>);'])
     if any(argument['transport_type'] == 'real' for row in exports for argument in row['arguments']):
         lines.append('static_assert(std::is_same_v<real, float>);')
+    if has_descriptors:
+        lines.append(_CFI_VIEW)
     for row in exports:
         result = row['result']
         native_return = result['c_type'] if result else 'void'
         transport_return = result['transport_type'] if result else 'int'
-        types, parameters, arguments = [], [], []
+        types, parameters, arguments, checks = [], [], [], []
         for index, argument in enumerate(row['arguments']):
             name = f'arg{index}'
             types.append(f'{argument["transport_type"]} *')
-            if argument['by_value']:
+            if descriptor := argument.get('descriptor'):
+                parameters.append(f'CFI_cdesc_t *{name}')
+                view = f'view{index}'
+                lower = ', '.join(map(str, descriptor['lower_bounds']))
+                template = f'{argument["c_type"]}, {descriptor["cfi_type"]}, {descriptor["rank"]}'
+                checks.append(f'    auto {view} = scar_cfi_view<{template}>({name}, {{{lower}}});')
+                arguments.append(f'{view}.data')
+                for axis in range(descriptor['rank']):
+                    for field in _CFI_AXIS_FIELDS:
+                        types.append('longint *')
+                        arguments.append(f'&{view}.axes[{axis}].{field}')
+            elif argument['by_value']:
                 parameters.append(f'{argument["c_type"]} {name}')
                 arguments.append('&' + name)
             elif argument['read_only']:
@@ -224,6 +330,7 @@ def _c_abi_source(exports):
                 arguments.append(name)
         lines.append(f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});')
         lines.append(f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) {{')
+        lines.extend(checks)
         call = f'{row["transport"]}({", ".join(arguments)});'
         lines.append('    ' + ('return ' if result else '') + call)
         lines.append('}')
@@ -271,12 +378,15 @@ def _translate_freeform(manifest, units, edits, project, config, captures, sourc
             path.write_text(source, encoding='utf-8')
             transport.append((path.name, path, ()))
         build = _translate_f2c(transport, {}, project, config, long_lines=True,
-                               source_directory=source_directory)
+                               source_directory=source_directory,
+                               descriptor_units=lowered['descriptor_units'])
         exports = lowered['exports']
         if exports:
             wrapper = Path(source_directory) / 'scar_c_abi.cpp'
             (project / wrapper).write_text(_c_abi_source(exports), encoding='utf-8')
             build['sources'].append(wrapper.as_posix())
+        if lowered['descriptor_units']:
+            build['gnu_cfi_descriptors'] = True
         return build, exports
 
 

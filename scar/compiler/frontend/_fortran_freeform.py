@@ -5,6 +5,7 @@ declaration, and statement structure. The transport source is built anew from
 these inputs and never substitutes routines from an earlier upstream release.
 """
 
+from copy import copy
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -186,8 +187,9 @@ def _collect_procedures(node, tables, inherited, procedures):
             _collect_procedures(child, tables, inherited, procedures)
 
 
-def _declarations(procedure, known, *, result=None, bridge=False):
+def _declarations(procedure, known, *, result=None, bridge=False, descriptors=None):
     symbols = procedure.symbols
+    descriptors = descriptors or {}
     dimensions = {}
     defined = set()
     declarations = []
@@ -220,6 +222,15 @@ def _declarations(procedure, known, *, result=None, bridge=False):
             if character or initializer:
                 raise ValueError(f'unsupported Fortran declaration initializer {entity}')
             extent = array or shape
+            if name in descriptors:
+                descriptor = descriptors[name]
+                declarations.append(f'{symbol.type_name()} {descriptor["array"]}(*)')
+                for axis in descriptor['axes']:
+                    declarations.append('INTEGER*8 ' + ', '.join(axis[key] for key in _CFI_AXIS_FIELDS))
+                defined.add(name)
+                continue
+            if extent and _all_names((extent,)) & descriptors.keys():
+                raise ValueError(f'CFI array used in a declaration of {name}')
             declaration = f'{symbol.type_name()} {name}'
             if extent:
                 declaration += f'({_source_text(extent, symbols)})'
@@ -241,11 +252,105 @@ def _all_names(parts):
     return {str(name).lower() for part in parts for name in walk(part, F.Name)}
 
 
+_CFI_AXIS_FIELDS = ('extent', 'stride', 'origin', 'lower', 'upper')
+_CFI_INQUIRIES = {'SIZE': 'extent', 'LBOUND': 'lower', 'UBOUND': 'upper'}
+
+
+def _integer_constant(node, symbols):
+    if isinstance(node, F.Name):
+        fact = symbols.get(str(node).lower())
+        if not fact or fact.type_and_kind != ('INTEGER', 4) or 'PARAMETER' not in fact.attributes:
+            raise ValueError(f'CFI shape needs a default-integer constant. {node}')
+        value = _literal(fact.value or '', fact)
+    else:
+        value = _source_text(node, symbols)
+    if not re.fullmatch(r'[+-]?\s*\d+', value):
+        raise ValueError(f'CFI shape needs a default-integer constant. {node}')
+    number = int(value.replace(' ', ''))
+    if not -(2**31) <= number < 2**31:
+        raise ValueError(f'CFI shape constant outside the GNU default integer range. {node}')
+    return number
+
+
+def _cfi_inquiry(node, descriptors, symbols):
+    intrinsic, parameters = node.items
+    arguments = parameters.items if parameters else ()
+    if not arguments or not isinstance(arguments[0], F.Name):
+        return None
+    descriptor = descriptors.get(str(arguments[0]).lower())
+    if descriptor is None:
+        return None
+    intrinsic = str(intrinsic).upper()
+    if intrinsic not in _CFI_INQUIRIES or len(arguments) != 2:
+        raise ValueError(f'unsupported CFI array inquiry. {node}')
+    dim = arguments[1]
+    if isinstance(dim, F.Actual_Arg_Spec):
+        keyword, dim = dim.items
+        if str(keyword).upper() != 'DIM':
+            raise ValueError(f'CFI array inquiry needs an explicit dimension. {node}')
+    number = _integer_constant(dim, symbols)
+    if not 1 <= number <= len(descriptor['axes']):
+        raise ValueError(f'CFI inquiry dimension outside the declared rank. {node}')
+    return f'INT({descriptor["axes"][number - 1][_CFI_INQUIRIES[intrinsic]]})'
+
+
+def _cfi_index(node, descriptors, symbols):
+    if isinstance(node, F.Name):
+        fact = symbols.get(str(node).lower())
+        return (fact is not None and fact.type_and_kind == ('INTEGER', 4)
+                and 'DIMENSION' not in fact.attributes and 'PROCEDURE' not in fact.attributes)
+    if isinstance(node, F.Int_Literal_Constant):
+        _integer_constant(node, symbols)
+        return True
+    if isinstance(node, F.Intrinsic_Function_Reference):
+        return _cfi_inquiry(node, descriptors, symbols) is not None
+    if isinstance(node, (F.Level_2_Unary_Expr, F.Level_2_Expr, F.Add_Operand, F.Parenthesis)):
+        return all(_cfi_index(item, descriptors, symbols) for item in node.items
+                   if not isinstance(item, str))
+    return False
+
+
+def _cfi_expression(node, descriptors, symbols):
+    if isinstance(node, F.Intrinsic_Function_Reference):
+        inquiry = _cfi_inquiry(node, descriptors, symbols)
+        if inquiry is not None:
+            return inquiry
+    if isinstance(node, F.Part_Ref):
+        name, subscripts = node.items
+        descriptor = descriptors.get(str(name).lower())
+        if descriptor is not None:
+            axes = descriptor['axes']
+            if len(subscripts.items) != len(axes) or not all(
+                    _cfi_index(index, descriptors, symbols) for index in subscripts.items):
+                raise ValueError(f'CFI element access needs one scalar default-integer subscript per axis. {node}')
+            terms = []
+            for index, axis in zip(subscripts.items, axes):
+                index = _cfi_expression(index, descriptors, symbols)
+                terms.append(f'(({index}) - {axis["origin"]}) * {axis["stride"]}')
+            return f'{descriptor["array"]}(1 + {" + ".join(terms)})'
+        if _all_names((subscripts,)) & descriptors.keys():
+            fact = symbols.get(str(name).lower())
+            if not fact or 'DIMENSION' not in fact.attributes:
+                raise ValueError(f'CFI values cannot be passed to an unlowered function. {node}')
+    if isinstance(node, F.Call_Stmt) and _all_names((node,)) & descriptors.keys():
+        raise ValueError(f'CFI values cannot be passed by reference to a procedure. {node}')
+    if isinstance(node, F.Name) and str(node).lower() in descriptors:
+        raise ValueError(f'CFI array requires an element access or scalar shape inquiry. {node}')
+    if isinstance(node, tuple):
+        return tuple(_cfi_expression(item, descriptors, symbols) for item in node)
+    if hasattr(node, 'items'):
+        replacement = copy(node)
+        replacement.items = _cfi_expression(node.items, descriptors, symbols)
+        return replacement
+    return node
+
+
 class FixedSource:
-    def __init__(self, procedure, columns, aliases):
+    def __init__(self, procedure, columns, aliases, descriptors):
         self.procedure = procedure
         self.columns = columns
         self.aliases = aliases
+        self.descriptors = descriptors
         self.lines = []
         self.indices = []
         self.used = _all_names((*procedure.specification, *procedure.execution))
@@ -269,6 +374,8 @@ class FixedSource:
             if bounds:
                 self.broadcast(node, name, bounds, label)
                 return
+        if self.descriptors:
+            node = _cfi_expression(node, self.descriptors, symbols)
         self.line(_source_text(node, symbols, self.aliases), label)
 
     def broadcast(self, assignment, array, bounds, label):
@@ -338,7 +445,11 @@ def _c_export(procedure, transport):
             name, shape, _, _ = entity.items
             dimensions[str(name).lower()] = shape or shared
 
+    used = set(procedure.symbols)
+    descriptor_serial = 0
+
     def abi(name, *, result=False):
+        nonlocal descriptor_serial
         fact = procedure.symbols[name]
         attributes = set(re.findall(r'[A-Z]+', fact.attributes))
         unsupported = {'POINTER', 'ALLOCATABLE', 'OPTIONAL', 'VOLATILE', 'ASYNCHRONOUS'}
@@ -346,14 +457,33 @@ def _c_export(procedure, transport):
             raise ValueError(f'unsupported interoperable type {name} in {procedure.name}')
         shape = dimensions.get(name)
         by_value = 'VALUE' in attributes
-        if shape is not None or 'DIMENSION' in attributes:
-            if (result or by_value
-                    or not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec))):
-                raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
         c_type, argument_type, return_type = _C_TYPES[fact.type_and_kind]
         transport_type = return_type if result else argument_type
-        return dict(c_type=c_type, transport_type=transport_type, by_value=by_value,
-                    read_only='DUMMY(IN)' in fact.attributes, shape=str(shape) if shape is not None else None)
+        row = dict(c_type=c_type, transport_type=transport_type, by_value=by_value,
+                   read_only='DUMMY(IN)' in fact.attributes, shape=str(shape) if shape is not None else None)
+        if shape is not None or 'DIMENSION' in attributes:
+            if result or by_value:
+                raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
+            if isinstance(shape, F.Assumed_Shape_Spec_List):
+                if attributes & {'CONTIGUOUS', 'TARGET'}:
+                    raise ValueError(f'CFI CONTIGUOUS/TARGET dummy is outside the borrowed element ABI. {name}')
+                bounds = [_integer_constant(axis.items[0], procedure.symbols) if axis.items[0] is not None else 1
+                          for axis in shape.items]
+                while True:
+                    descriptor_serial += 1
+                    array = f'scarcfia{descriptor_serial}'
+                    axes = [{field: f'{array}{axis}{field[0]}' for field in _CFI_AXIS_FIELDS}
+                            for axis in range(len(bounds))]
+                    identifiers = {array, *(value for axis in axes for value in axis.values())}
+                    if not identifiers & used:
+                        used.update(identifiers)
+                        break
+                row['descriptor'] = {'schema': 'scar.gnu-cfi-assumed-shape', 'schema_version': 1,
+                                     'rank': len(bounds), 'cfi_type': f'CFI_type_{c_type}',
+                                     'lower_bounds': bounds, 'array': array, 'axes': axes}
+            elif not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec)):
+                raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
+        return row
 
     arguments = start.items[2]
     inputs = [abi(str(item).lower()) for item in arguments.items] if arguments else []
@@ -362,26 +492,43 @@ def _c_export(procedure, transport):
                 result=abi(result, result=True) if result else None)
 
 
-def _lower_procedure(procedure, known, transport=None):
+def _lower_procedure(procedure, known, export=None):
     result = _function_result(procedure)
+    transport = export['transport'][:-1] if export else None
     name = transport or procedure.name
     if _binding_spec(procedure) and transport is None:
         raise ValueError(f'BIND(C) requires an admitted transport. {procedure.name}')
     symbol = procedure.symbols.get(procedure.name)
     if symbol and 'RECURSIVE' in symbol.attributes:
         raise ValueError(f'recursive Fortran needs reentrant transport. {procedure.name}')
-    declarations, dimensions = _declarations(procedure, known, result=result, bridge=transport is not None)
-    source = FixedSource(procedure, dimensions, {result: name} if result and name != result else {})
+    start = procedure.node.content[0]
+    arguments = start.items[2] if isinstance(start, (F.Function_Stmt, F.Subroutine_Stmt)) else None
+    descriptors = {}
+    transport_arguments = []
+    if export and arguments is not None:
+        for argument, abi in zip(arguments.items, export['arguments'], strict=True):
+            original = str(argument).lower()
+            descriptor = abi.get('descriptor')
+            if descriptor is None:
+                transport_arguments.append(original)
+                continue
+            descriptors[original] = descriptor
+            transport_arguments.append(descriptor['array'])
+            for axis in descriptor['axes']:
+                transport_arguments.extend(axis[field] for field in _CFI_AXIS_FIELDS)
+    signature = ', '.join(transport_arguments) if descriptors else str(arguments or '')
+    declarations, dimensions = _declarations(procedure, known, result=result, bridge=transport is not None,
+                                             descriptors=descriptors)
+    source = FixedSource(procedure, dimensions, {result: name} if result and name != result else {}, descriptors)
     for node in procedure.execution:
         source.emit(node)
-    start = procedure.node.content[0]
     if isinstance(start, F.Function_Stmt):
         dtype = procedure.symbols[result].type_name()
-        declaration = f'{dtype} FUNCTION {name}({start.items[2] or ""})'
+        declaration = f'{dtype} FUNCTION {name}({signature})'
     elif isinstance(start, F.Subroutine_Stmt):
         if start.items[0] is not None:
             raise ValueError(f'unsupported Fortran subroutine modifiers {start}')
-        declaration = f'SUBROUTINE {name}({start.items[2] or ""})'
+        declaration = f'SUBROUTINE {name}({signature})'
     else:
         declaration = str(start)
     parameters = tuple(_parameter_lines(procedure.symbols, source.used))
@@ -400,7 +547,7 @@ def main(request):
         semantics = Path(row['semantics']).read_text(encoding='utf-8')
         _collect_procedures(tree, _symbol_tables(semantics), {}, procedures)
     entries = [node.name for node in procedures.values() if isinstance(node.node, F.Main_Program)]
-    transports, exports = {}, []
+    transports, exports = {}, {}
     if request.get('mixed'):
         if entries:
             raise ValueError('a mixed free-form provider must export procedures without a main program')
@@ -409,9 +556,9 @@ def main(request):
                 index = len(transports) + 1
                 while (transport := f'scarbind{index}') in procedures or transport in transports.values():
                     index += 1
-                exports.append(_c_export(procedure, transport))
+                exports[name] = _c_export(procedure, transport)
                 transports[name] = transport
-        if not exports or len({row['symbol'] for row in exports}) != len(exports):
+        if not exports or len({row['symbol'] for row in exports.values()}) != len(exports):
             raise ValueError('mixed free-form units require distinct compiler-resolved BIND(C) entries')
         entries = list(transports)
     elif len(entries) != 1 or request['entry'].lower() not in ('main', entries[0]):
@@ -428,9 +575,14 @@ def main(request):
         if calls & transports.keys():
             raise ValueError('Fortran calls into a C ABI export require explicit value transport')
         output[name] = _lower_procedure(procedure, {target: procedures[target] for target in calls},
-                                        transports.get(name))
+                                        exports.get(name))
         pending.extend(sorted(calls, reverse=True))
-    return dict(sources=output, exports=exports)
+    descriptor_units = {}
+    for name, row in exports.items():
+        arrays = [arg['descriptor']['array'] for arg in row['arguments'] if 'descriptor' in arg]
+        if arrays:
+            descriptor_units[name + '.f'] = arrays
+    return dict(sources=output, exports=list(exports.values()), descriptor_units=descriptor_units)
 
 
 if __name__ == '__main__':

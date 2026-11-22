@@ -364,9 +364,13 @@ def _revision_inputs(artifacts, manifest, evidence, edits):
         raise ValueError('compiler evidence differs from the admitted frontend outputs')
     typed_units = {unit['path'] for unit in manifest['units']
                    if unit.get('language', manifest['language']) in ('c', 'fortran')}
+    needs_fortran_abi = any(unit.get('language', manifest['language']) == 'fortran'
+                            for unit in manifest['units'])
+    retained_units = typed_units | {unit['path'] for unit in manifest['units']
+                                   if needs_fortran_abi and unit.get('language', manifest['language']) == 'c++'}
     compiler_types = {row['unit']: row['artifacts']['types'] for row in evidence.get('units', ())
-                      if row['unit'] in typed_units and 'types' in row['artifacts']}
-    if compiler_types.keys() != typed_units:
+                      if row['unit'] in retained_units and 'types' in row['artifacts']}
+    if not typed_units <= compiler_types.keys():
         raise ValueError('C and Fortran translation require original type evidence for every unit')
     return manifest, edits, compiler_types
 

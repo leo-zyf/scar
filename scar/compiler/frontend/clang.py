@@ -1,15 +1,19 @@
 """C-family source evidence and assembly of the admitted C++20 source revision."""
 
 from collections import defaultdict
+from contextlib import contextmanager
 from ctypes import (CDLL, CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_int,
                     c_uint, c_ulong, c_void_p)
+from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
 import json
 from pathlib import Path
 import re
 import subprocess
+from tempfile import TemporaryDirectory
 
+from scar.analysis.replay_transaction import pinned_file_reference
 from scar.ir.execution_recipe import read_artifact
 
 
@@ -40,6 +44,8 @@ class _Unsaved(Structure):
 _Visitor = CFUNCTYPE(c_uint, _Cursor, _Cursor, c_void_p)
 _CALLABLES = {'FunctionDecl', 'CXXMethod', 'Constructor', 'Destructor', 'ConversionFunction'}
 _CX_LINKAGE_EXTERNAL = 4
+_GNU_CFI_HEADER = 'ISO_Fortran_binding.h'
+_GNU_CFI_ROUTINES = {'CFI_establish', 'CFI_is_contiguous', 'CFI_section'}
 
 
 @lru_cache(maxsize=8)
@@ -87,7 +93,28 @@ def _library(name):
     return lib
 
 
-def capture_unit(source_root, unit, *, source_override=None):
+@dataclass(frozen=True, slots=True)
+class _BindingHeader:
+    snapshot: Path
+    origin: Path
+    sha256: str
+
+
+@contextmanager
+def gnu_cfi_overlay(header):
+    """Share one immutable CFI header across a batch of Clang parses."""
+    if header is None:
+        yield None
+        return
+    ref = pinned_file_reference(header, 'scar.gnu-cfi-header')
+    with TemporaryDirectory(prefix='scar-gnu-cfi-include-') as include:
+        snapshot = Path(include) / _GNU_CFI_HEADER
+        # Override the Flang binding without changing other resource headers.
+        snapshot.write_bytes(read_artifact(ref, json_document=False))
+        yield _BindingHeader(snapshot, header, ref['sha256'])
+
+
+def capture_unit(source_root, unit, *, source_override=None, cfi=None):
     """Return project-owned AST records, with byte ranges in original files.
 
     Parent indices refer to positions in records. Referenced declarations may
@@ -99,6 +126,7 @@ def capture_unit(source_root, unit, *, source_override=None):
     lib = _library(library)
     records = []
     files = {}
+    cfi_headers = defaultdict(set)
 
     def string(value):
         try:
@@ -142,6 +170,12 @@ def capture_unit(source_root, unit, *, source_override=None):
                                   kind=reference_kind,
                                   symbol=string(lib.clang_Cursor_getMangling(reference))
                                   if reference_kind in _CALLABLES else '')
+                    if reference_kind == 'FunctionDecl' and target['symbol'].startswith('CFI_'):
+                        header, _, _, _ = location(lib.clang_getCursorLocation(reference))
+                        if cfi is not None and header == cfi.snapshot:
+                            header = cfi.origin
+                        if header and header.name == _GNU_CFI_HEADER and not header.is_relative_to(source_root):
+                            cfi_headers[header].add(target['symbol'])
                 definition = bool(lib.clang_isCursorDefinition(cur))
                 index = len(records)
                 symbol = ''
@@ -167,6 +201,8 @@ def capture_unit(source_root, unit, *, source_override=None):
             raise error
 
     flags = [f'-working-directory={source_root}', *unit['flags']]
+    if cfi is not None:
+        flags.extend(('-isystem', str(cfi.snapshot.parent)))
     argv = (c_char_p * len(flags))(*(flag.encode() for flag in flags))
     overlay = (None if source_override is None else
                _Unsaved(str(source).encode(), source_override, len(source_override)))
@@ -189,8 +225,15 @@ def capture_unit(source_root, unit, *, source_override=None):
         if any(row['severity'] >= 3 for row in diagnostics):
             raise ValueError(f'{source}: {diagnostics}')
         children(lib.clang_getTranslationUnitCursor(tu), None)
-        return dict(path=unit['path'], flags=unit['flags'], records=records, diagnostics=diagnostics,
-                    frontend=dict(library=library, version=string(lib.clang_getClangVersion())))
+        document = dict(path=unit['path'], flags=unit['flags'], records=records, diagnostics=diagnostics,
+                        frontend=dict(library=library, version=string(lib.clang_getClangVersion())))
+        if cfi_headers:
+            bindings = []
+            for header, symbols in sorted(cfi_headers.items()):
+                digest = cfi.sha256 if cfi is not None and header == cfi.origin else sha256(header.read_bytes()).hexdigest()
+                bindings.append(dict(path=str(header), sha256=digest, symbols=sorted(symbols)))
+            document['gnu_cfi'] = bindings
+        return document
     finally:
         if tu:
             lib.clang_disposeTranslationUnit(tu)
@@ -221,20 +264,27 @@ def _compile_settings(flags, source_root, staged_root):
     return tuple(include_dirs), tuple(compile_options)
 
 
-def _c_spans(units, root, edits, preserve_abi, captures, material):
+def _c_family_evidence(root, unit, edits, captures, cfi):
+    name = unit['path']
+    ref = captures.get(name)
+    if ref is None or name in edits:
+        return capture_unit(root, unit, source_override=edits.get(name), cfi=cfi)
+    typed = json.loads(read_artifact(ref, json_document=False))
+    if typed['path'] != name or typed['flags'] != unit['flags']:
+        raise ValueError(f'C type evidence has a different source or profile: {name}')
+    return typed
+
+
+def _c_spans(units, root, edits, preserve_abi, captures, material, cfi):
     declarations = defaultdict(list)
     conversions = defaultdict(dict)
     definitions = defaultdict(dict)
     source_bytes = {}
+    cfi_headers = []
     for unit in units:
         name = unit['path']
-        ref = captures.get(name)
-        if ref is not None and name not in edits:
-            typed = json.loads(read_artifact(ref, json_document=False))
-            if typed['path'] != name or typed['flags'] != unit['flags']:
-                raise ValueError(f'C type evidence has a different source or profile: {name}')
-        else:
-            typed = capture_unit(root, unit, source_override=edits.get(name))
+        typed = _c_family_evidence(root, unit, edits, captures, cfi)
+        cfi_headers.extend(typed.get('gnu_cfi', ()))
         records = typed['records']
         functions, parameters, bodies = {}, defaultdict(list), {}
         for index, record in enumerate(records):
@@ -277,7 +327,7 @@ def _c_spans(units, root, edits, preserve_abi, captures, material):
                 span, replacement, types = header
                 if definitions[path].setdefault(span, (replacement, types)) != (replacement, types):
                     raise ValueError(f'ambiguous old-style C function definition. {path}:{function["line"]}')
-    return declarations, conversions, definitions, source_bytes
+    return declarations, conversions, definitions, source_bytes, cfi_headers
 
 
 _TRIVIA = re.compile(rb'(?:\s+|/\*[\s\S]*?\*/|//[^\n]*\n)*')
@@ -425,6 +475,53 @@ def _stage(project, name, data):
         stream.write(data)
 
 
+@lru_cache(maxsize=8)
+def _compiler_cfi_header(compiler):
+    try:
+        location = subprocess.check_output([compiler, '-print-file-name=include/' + _GNU_CFI_HEADER],
+                                           text=True, timeout=20).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    header = Path(location)
+    if not header.is_absolute() or not header.is_file():
+        return None
+    return header.resolve(strict=True)
+
+
+def gnu_cfi_header(manifest):
+    """Find the target Fortran toolchain's descriptor header, when available."""
+    from .fortran import _tool
+
+    try:
+        compiler = _tool(manifest.get('fortran', {}), 'gfortran')
+    except ValueError:
+        return None
+    return _compiler_cfi_header(compiler)
+
+
+def _stage_gnu_cfi(header, project, headers):
+    if header is None:
+        raise ValueError('the Fortran toolchain must supply its GNU CFI binding header')
+    ref = pinned_file_reference(header, 'scar.gnu-cfi-header')
+    data = read_artifact(ref, json_document=False)
+    for record in headers:
+        if (record['path'], record['sha256']) != (ref['uri'], ref['sha256']):
+            raise ValueError('the native call was typed against a different GNU CFI binding header')
+    symbols = {symbol for record in headers for symbol in record['symbols']}
+    unsupported = symbols - _GNU_CFI_ROUTINES
+    if unsupported:
+        raise ValueError(f'unsupported standalone GNU CFI routines: {sorted(unsupported)}')
+
+    # It remains a toolchain header when sealed into the relocatable project.
+    _stage(project, 'include/scar_generated/' + _GNU_CFI_HEADER, b'#pragma GCC system_header\n' + data)
+    if not symbols:
+        return None
+    source = 'src/fortran-abi/scar_gnu_cfi.cpp'
+    implementation = Path(__file__).resolve().parents[2] / 'native' / 'gnu_cfi.cpp'
+    _stage(project, source, implementation.read_bytes())
+    return source
+
+
 def _stage_cxx_sources(manifest, project, edits, *, captures=None):
     """Translate each locked unit under its language profile, then assemble C++20."""
     profile = manifest['language']
@@ -445,10 +542,19 @@ def _stage_cxx_sources(manifest, project, edits, *, captures=None):
             _locked_source(root, name, lock)
         return emit_fortran(manifest, project, edits, captures=captures)
 
+    captures = captures or {}
     c_units = [units[name] for name, language in languages.items() if language == 'c']
+    cxx_units = [units[name] for name, language in languages.items() if language == 'c++' and fortran]
     c_root = Path('src/c-abi') if mixed else Path('src')
     cxx_root = Path('src/cxx') if mixed else Path('src')
-    decls, casts, headers, c_bytes = _c_spans(c_units, root, edits, mixed, captures or {}, material)
+    cfi_header = gnu_cfi_header(manifest) if fortran else None
+    recapture = any(unit['path'] not in captures or unit['path'] in edits for unit in (*c_units, *cxx_units))
+    with gnu_cfi_overlay(cfi_header if recapture else None) as cfi:
+        decls, casts, headers, c_bytes, cfi_headers = _c_spans(
+            c_units, root, edits, mixed, captures, material, cfi)
+        for unit in cxx_units:
+            typed = _c_family_evidence(root, unit, edits, captures, cfi)
+            cfi_headers.extend(typed.get('gnu_cfi', ()))
     if (decls.keys() | casts.keys() | headers.keys()) - material.keys():
         raise ValueError('C translation referenced project files missing from the source lock')
 
@@ -490,6 +596,10 @@ def _stage_cxx_sources(manifest, project, edits, *, captures=None):
                               captures={name: captures[name] for name in fortran_paths} if captures else None)
         settings.update({name: ((), bridge['compile_options']) for name in bridge['sources']})
         fortran_libraries = bridge['libraries']
+        if cfi_headers or bridge.get('gnu_cfi_descriptors'):
+            cfi_source = _stage_gnu_cfi(cfi_header, project, cfi_headers)
+            if cfi_source:
+                settings[cfi_source] = ((), ())
 
     profiles = (manifest, manifest.get('cxx', {})) if mixed else (
         manifest if c_units else manifest.get('cxx', {}),)

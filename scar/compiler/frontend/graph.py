@@ -29,7 +29,7 @@ from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.validation import require_valid
 
 from ..contracts import GraphBundle, NativeInputs, native_bound_targets, verify_source_lock
-from .clang import capture_unit
+from .clang import capture_unit, gnu_cfi_header, gnu_cfi_overlay
 
 
 _FUNCTION = re.compile(r'^;; Function (.*?) \(([^,]*), funcdef_no=.*$', re.M)
@@ -804,6 +804,9 @@ class SourceAdapter:
 def _capture_c_family(manifest, units, out, jobs):
     from shutil import which
 
+    uses_fortran = any(unit.get('language', manifest['language']) == 'fortran' for unit in manifest['units'])
+    cfi_header = gnu_cfi_header(manifest) if uses_fortran else None
+
     toolchains = {}
     for unit in units:
         language = unit.get('language', manifest['language'])
@@ -824,14 +827,14 @@ def _capture_c_family(manifest, units, out, jobs):
         ssa = out / f'tu-{index}.ssa'
         functions = capture_ssa(manifest, unit, ssa)
         try:
-            graph = capture_unit(manifest['source_root'], unit)
+            graph = capture_unit(manifest['source_root'], unit, cfi=cfi)
             (out / f'tu-{index}.clang.json').write_text(json.dumps(graph))
         except (ValueError, OSError) as error:
             return functions, ssa, None, dict(unit=unit['path'], reason=str(error))
         return functions, ssa, graph, None
 
     bundle = CapturedUnits()
-    with ThreadPoolExecutor(max_workers=jobs) as executor:
+    with gnu_cfi_overlay(cfi_header) as cfi, ThreadPoolExecutor(max_workers=jobs) as executor:
         for unit, (captured, ssa, ast, frontier) in zip(units, executor.map(c_family, enumerate(units))):
             language = unit.get('language', manifest['language'])
             compiler = unit.get('compiler') or _SSA_COMPILERS[language]
