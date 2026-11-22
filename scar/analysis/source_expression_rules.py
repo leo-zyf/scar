@@ -23,7 +23,7 @@ from scar.ir.program.delegation_signatures import delegation_signature_catalog, 
 from scar.ir.program.signature_patterns import SIGNATURE_RECORD_TAGS
 from scar.ir.record_codec import encode
 from scar.ir.literals import PythonLiteral
-from scar.analysis.source_pattern_interfaces import FIELDS as _PATTERN_FIELDS
+from scar.analysis.source_statement_interfaces import PATTERN_FIELDS as _PATTERN_FIELDS
 
 
 _PATTERN_PARENTS = (('match_case','pattern'),('MatchSequence','patterns'),
@@ -74,9 +74,9 @@ _RULE_MODULES = ('static/lowering/source_displays.py', 'static/lowering/source_s
                  'source_deferred_interfaces.py', 'source_statement_rules.py',
                  'statement_bindings.py', 'type_parameter_rules.py',
                  'source_statement_exceptions.py',
-                 'source_control.py', 'source_pattern_interfaces.py',
+                 'source_control.py', 'source_statement_interfaces.py',
                  'source_root_interfaces.py',
-                 'source_root_rules.py', 'source_class_namespace_interfaces.py',
+                 'source_root_rules.py',
                  'source_scope_annotation_interfaces.py',
                  'annotation_state.py', 'source_compilation_contexts.py',
                  'source_core_interfaces.py')

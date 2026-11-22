@@ -12,7 +12,7 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.signature_patterns import ChoiceBinding, CountBinding
 from scar.ir.program.structured import PythonProtocolKind as K
 from scar.analysis.await_protocol import emit_delegate_loop
-from scar.analysis.source_pattern_interfaces import FIELDS
+from scar.analysis.source_statement_interfaces import PATTERN_FIELDS as FIELDS
 from hashlib import sha256
 from pathlib import Path
 

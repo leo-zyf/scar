@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from scar.analysis.compiler_topology import _Builder, _FUNCTIONLIKE, TopologyStop
-from scar.analysis.source_declaration_view import SourceDeclarationView
+from scar.analysis.source_declarations import SourceDeclarationView
 from scar.ir.program.source_roles import SlotRef
 from scar.ir.program.compiler_symbols import (
     INTRINSIC_NAMES,

@@ -7,9 +7,10 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from scar.analysis.source_declarations import read_source_declarations, _catalog as _declaration_catalog
+from scar.analysis.source_declarations import (
+    SourceDeclarationView, read_source_declarations, _catalog as _declaration_catalog,
+)
 from scar.analysis.source_contexts import SourceContextView
-from scar.analysis.source_declaration_view import SourceDeclarationView
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial, SlotRef
 from scar.ir.program.source_contexts import SourceContextsMaterial

@@ -1,6 +1,5 @@
 """Type parameter rules."""
 
-from collections import defaultdict
 from scar.ir.program import source_productions as P
 from scar.analysis.source_core_interfaces import REF as _REF
 from scar.ir.program.signature_patterns import CountBinding
@@ -24,8 +23,6 @@ class TypeParameterInterfaceIndex:
     def __init__(self,source):
         self.source=source
         self.scopes={scope.owner.occurrence:i for i,scope in enumerate(source.context.material.scopes) if scope.kind=='TYPE_PARAMETERS'}
-        self.ports=defaultdict(list)
-        for i,port in enumerate(source.frontend.roles.ports):self.ports[port.site].append(i)
         self._specs={}
 
     def lazy(self,site,*,allow_starred=False):
@@ -50,7 +47,7 @@ class TypeParameterInterfaceIndex:
         scope=self.source.context.entry_context(occurrence).environment
         data=self.source.frontend.bindings;decl=self.source.frontend.declarations
         ports=[]
-        for p in self.ports[name]:
+        for p in self.source.role_ports(name):
             port=data.ports[p]
             if port.declref is None or port.resolution is None:continue
             binding=data.resolutions[port.resolution].binding

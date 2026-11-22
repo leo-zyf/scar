@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from scar.analysis import source_context_variants as C, source_declarations as D, source_bindings as B
-from scar.analysis import source_declaration_view, source_binding_view, source_values as source_text_values, source_compiled_values
+from scar.analysis import source_binding_view, source_values as source_text_values, source_compiled_values
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.static.query import _Fragments
 from scar.analysis.source_syntax import read_source_bytes
@@ -31,7 +31,7 @@ from scar.ir.record_codec import decode, encode
 def pins():
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('context_variant',C),('context_variant_types',CV),('declarations',D),('bindings',B),
-        ('declaration_view',source_declaration_view),('binding_view',source_binding_view),('types',V))}
+        ('binding_view',source_binding_view),('types',V))}
 
 
 class _EffectiveFuture:
@@ -78,7 +78,7 @@ def _project_binding_variant(f0,f1,f2,f3b,syntax,roles,context,*,
         replace(D._profile(),rule_version='PYTHON_SOURCE_DECLARATION_COMPILE_VARIANT_V1',
             implementation_sha256=implementation),*declaration_limits,'DECLARED',
         tuple(ledger.names),tuple(ledger.ports),tuple(ledger.contributions),scopes,tuple(ledger.conflicts),())
-    source_declaration_view.SourceDeclarationView(roles,contexts,declared,contexts=ledger.view).verify()
+    D.SourceDeclarationView(roles,contexts,declared,contexts=ledger.view).verify()
     resolver = _ContextResolver(syntax,roles,contexts,declared,binding_limits,flags)
     scope_bindings = resolver.run()
     resolved = SourceBindingsMaterial(
