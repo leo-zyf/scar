@@ -16,8 +16,7 @@ WRAPPER_SCOPE = 'NATIVE_TASK_WRAPPER_BEFORE_AND_AFTER_ABI_FORECAST'
 _ADDED = ('leaf_service_cost', 'wrapper_cost_query', 'wrapper_cost', 'task_cost_context',
           'abi_service_demands', 'whole_task_physical_cpu_demand')
 _HOST = ('codegen/pipeline_v1.cpp.in', 'codegen/pipeline_ready_v1.cpp.in', 'codegen/pipeline_parallel_v1.cpp.in',
-         'codegen/pipeline.py', 'codegen/pipeline_implementation.py',
-         'codegen/pipeline.py', 'codegen/pipeline.py', 'codegen/kernel_v1.cpp.in')
+         'codegen/pipeline.py', 'optimization/pipeline_implementation.py', 'codegen/kernel_v1.cpp.in')
 _SCOPES = dict(prefix='NATIVE_CALLER_POOL_CONTROL_PREFIX_FORECAST',
     submit='NATIVE_CALLER_EMPLACE_SUBMISSION_FORECAST',
     launch='NATIVE_WORKER_START_LATENCY_FORECAST', exit='NATIVE_WORKER_EXIT_AFTER_ALL_PUBLICATIONS_FORECAST',

@@ -22,7 +22,7 @@ def runner_implementation_sha256():
     package = Path(__file__).resolve().parents[1]
     names = ("runtime/entry_runner.py", "runtime/native_loop.py", "runtime/loop_guard.py",
              "runtime/loop_contract.py", "runtime/array_copy_guard.py", "runtime/entry_cli.py",
-             "runtime/__init__.py", "entrypoint.py", "__main__.py", "trace/code_snapshot.py", "trace/__init__.py",
+             "runtime/__init__.py", "cli.py", "__main__.py", "trace/code_snapshot.py", "trace/__init__.py",
              "optimization/deployment_gate.py", "optimization/scope_accounting.py", "optimization/__init__.py")
     names += ('runtime/native_stateful.py', 'runtime/stateful_guard.py', 'runtime/stateful_contract.py')
     files = [{"path": name, "sha256": sha256((package / name).read_bytes()).hexdigest()} for name in names]

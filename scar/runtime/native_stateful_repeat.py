@@ -142,7 +142,7 @@ def validate_contract(value):
 
 def implementation_sha256():
     root=Path(__file__).resolve().parents[1]
-    names=('runtime/native_stateful_repeat.py','runtime/stateful_loop_guard.py','runtime/native_stateful.py',
+    names=('runtime/native_stateful_repeat.py','runtime/native_stateful.py',
         'runtime/stateful_guard.py','runtime/stateful_contract.py','runtime/native_loop.py',
         'runtime/loop_contract.py','trace/code_snapshot.py')
     rows=[(name,sha256((root/name).read_bytes()).hexdigest())for name in names]

@@ -25,7 +25,7 @@ def entry_context(entry,argv):
 
 def runner_identity():
     root=Path(__file__).resolve().parents[1]
-    names=('entrypoint.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
+    names=('cli.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_temporal_invariant.py','runtime/native_loop.py',
         'runtime/loop_guard.py','runtime/native_stateful.py','runtime/stateful_guard.py',
         'runtime/stateful_contract.py','runtime/array_copy_guard.py','trace/code_snapshot.py',

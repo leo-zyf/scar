@@ -33,7 +33,7 @@ def environment_sha256():
 
 def runner_identity():
     root = Path(__file__).resolve().parents[1]
-    names = ('runtime/caller_pipeline_delivery.py', 'runtime/caller_pipeline_deployment.py',
+    names = ('runtime/caller_pipeline_deployment.py',
         'runtime/caller_pipeline_cli.py', 'runtime/caller_pipeline_guard.py',
         'runtime/compiled_deployment.py', 'runtime/entry_runner.py', 'runtime/native_loop.py',
         'runtime/stateful_guard.py', 'runtime/native_stateful.py', 'runtime/stateful_contract.py',

@@ -1,20 +1,6 @@
 """Scope accounting."""
 
 from dataclasses import replace, asdict, is_dataclass
-from scar.ir.activity_costs import (
-    ActivityCost,
-    CostBasis,
-    CostCoverage,
-    validate_activity_cost_table,
-)
-from scar.ir.execution_recipe import read_artifact
-from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.versioned_schedule import (
-    VersionedTaskKind as K,
-    schedule_document,
-    schedule_from_dict,
-)
-from scar.optimization.resource_solver import semantic_sha256
 from copy import deepcopy
 from fractions import Fraction
 from hashlib import sha256
@@ -46,6 +32,12 @@ def project_scope_accounting(table, schedule, resources, recipe, demand, *, mapp
                              boundary_derivation=None, dag_derivation=None, scope_schedule_ref=None):
     """Replay the exact modern source graph, then qualify its semantic fence."""
     from scar.analysis.implementation_scope import derive_stateful_scope_envelope
+    from scar.ir.activity_costs import ActivityCost, CostBasis, CostCoverage, validate_activity_cost_table
+    from scar.ir.execution_recipe import read_artifact
+    from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
+    from scar.ir.versioned_schedule import VersionedTaskKind as K, schedule_document, schedule_from_dict
+    from scar.optimization.resource_solver import semantic_sha256
+
     validate_activity_cost_table(table, schedule, resources)
     replay = derive_stateful_scope_envelope(schedule_from_dict(recipe['task_graph']), recipe)
     if schedule_document(replace(schedule, temporal=None)) != schedule_document(replay):

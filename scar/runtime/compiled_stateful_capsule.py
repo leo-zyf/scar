@@ -21,7 +21,7 @@ def _need(condition,message):
 
 def runtime_sources():
     root=Path(__file__).resolve().parents[1]
-    names=('entrypoint.py','__main__.py','runtime/compiled_stateful_capsule.py',
+    names=('cli.py','__main__.py','runtime/compiled_stateful_capsule.py',
         'runtime/compiled_loop_capsule.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_stateful.py','runtime/stateful_contract.py',
         'runtime/stateful_guard.py','runtime/native_loop.py','runtime/native_temporal_invariant.py',
