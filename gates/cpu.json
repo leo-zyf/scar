@@ -39,6 +39,7 @@
         "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
         "tests/integration/test_native_indirect_calls.py::test_native_indirect_targets_flow_through_cfg_and_cpp20",
         "tests/unit/test_ir.py::test_graph_validation_proves_static_line_coverage",
+        "tests/unit/test_program_inventory_graph_contract.py",
         "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
         "tests/unit/test_source_binding_effects.py",
         "tests/unit/test_program_indexed_codec.py"
