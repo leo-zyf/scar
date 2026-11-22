@@ -32,7 +32,7 @@ Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。同一单�
 
 `compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。`copy_source_edits` 把获准的 SSA 拷贝消除绑定到类型、名称和源码区间。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
 
-Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端根据循环证明和硬件快照发布 `schedule.json`，再发布锁定证明、特化和资源绑定的 `cpp20-lowering.json`。后端通过 `deliver` 消费 `ScheduledLoop` 或 `ExecutionPlanRef`。重放检查计划和证明，保留中端已经选定的实现。
+Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端根据循环证明和硬件快照发布 `schedule.json`，再发布锁定证明、特化和资源绑定的 `cpp20-lowering.json`。后端通过 `deliver` 消费类型化计划。一次编译中的源码准入与循环降级共用已打开的图会话。独立进程仍冷重放计划和证明。
 
 已有的单数组递推可沿用同一编译入口。中端从 F4 复核循环回边和调用端口，发布融合策略及绑定 CPU 的执行计划。指定核数会生成待测候选。自动选型缺少可比成本时采用原执行。`scar run` 只在显式试跑或同一入口通过测量准入后挂接候选。
 

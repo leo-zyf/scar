@@ -1,6 +1,7 @@
 """Publish and replay the source/target boundary of one original F4 build."""
 
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 
 from scar.analysis.build import BuildSession
@@ -119,7 +120,7 @@ def publish_build_admission(session, out_file, *, source_filter=None):
     return artifact_reference(out_file, SCHEMA)
 
 
-def verify_build_admission(reference, *, program, hardware, source_filter=None):
+def verify_build_admission(reference, *, program, hardware, source_filter=None, _session=None):
     """Replay independently from original typed F4 source and hardware tables."""
     with replay_transaction():
         saved = read_artifact(_pin(reference))
@@ -128,7 +129,8 @@ def verify_build_admission(reference, *, program, hardware, source_filter=None):
                 or saved.get('target', {}).get('snapshot') != _reference(hardware, TARGET)):
             raise ValueError('F4 admission does not bind the original build and target')
         read_artifact(_pin(program))
-        with BuildSession(Path(program['uri']).parent) as session:
+        session_context = BuildSession(Path(program['uri']).parent) if _session is None else nullcontext(_session)
+        with session_context as session:
             expected = _admit(session, program, hardware, source_filter)
         if _json(expected) != _json(saved):
             raise ValueError('F4 admission differs from original source/target replay')

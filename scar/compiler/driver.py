@@ -207,13 +207,22 @@ def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan
     from .backend.cpp20 import deliver
     from .middle.python import schedule_loops
 
-    if not (document.get('invariant_loops') or document.get('composite_invariant_loops')
-            or document.get('array_loops') or loop_inputs or loop_no_op_profiles):
+    has_loops = (document.get('invariant_loops') or document.get('composite_invariant_loops')
+                 or document.get('array_loops') or loop_inputs or loop_no_op_profiles)
+    admission = document.get('source_admission')
+    if admission is None and not has_loops:
         return [], [], []
     program, hardware = document['program'], document['hardware']
     read_artifact(program)
     _check(hardware)
     with BuildSession(Path(program['uri']).parent) as session:
+        if admission is not None:
+            from scar.analysis.build_admission import verify_build_admission
+
+            verify_build_admission(admission, program=program, hardware=hardware,
+                                   source_filter=document.get('source_filter'), _session=session)
+        if not has_loops:
+            return [], [], []
         direct, composite, arrays, work = schedule_loops(
             document, out, session.view, trip_count=loop_trip_count, input_specs=loop_inputs,
             cpu_threads=loop_cpu_threads, cpu_model=loop_cpu_model, calibrations=loop_calibrations,

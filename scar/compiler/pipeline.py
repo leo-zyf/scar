@@ -64,10 +64,6 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     source_admission=document.get('source_admission')
     if version==2 and source_admission is None:
         raise ValueError('program planning domain is missing original graph admission')
-    if source_admission is not None and 'whole_entry' not in document:
-        from scar.analysis.build_admission import verify_build_admission
-        verify_build_admission(source_admission,program=document['program'],hardware=document['hardware'],
-            source_filter=document.get('source_filter'))
     loop_ref=document.get('loop_dependencies')
     if loop_ref is not None:read_artifact(loop_ref)
     if 'whole_entry' in document:
@@ -111,7 +107,14 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if set(stateful_interval_plans)-identifiers:raise ValueError('interval plans must name retained original regions')
     if set(stateful_interval_plans)&set(no_op_profiles):
         raise ValueError('one region cannot consume both an interval plan and scalar NO_OP profiles')
-    out.mkdir(parents=True);rows=[]
+    out.mkdir(parents=True)
+    loops, composite_loops, array_loops = compile_loops(
+        document, out, loop_trip_count=loop_trip_count, loop_inputs=loop_inputs,
+        plan_only=plan_only, loop_cpu_threads=loop_cpu_threads, loop_cpu_model=loop_cpu_model,
+        loop_calibrations=loop_calibrations, loop_no_op_profiles=loop_no_op_profiles,
+        loop_max_threads=loop_max_threads,
+    )
+    rows=[]
     for index,original in enumerate(document['regions']):
         directory=out/('region-'+str(index));directory.mkdir()
         row=dict(region_id=original['region_id'],selected_for_use=False,validation='NOT_EXECUTED')
@@ -195,12 +198,6 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
                 cpu_threads=stateful_cpu_threads)
             row['validation_candidate']=artifact_reference(directory/'validation-candidate/candidate.json',candidate['schema'])
         rows.append(row)
-    loops, composite_loops, array_loops = compile_loops(
-        document, out, loop_trip_count=loop_trip_count, loop_inputs=loop_inputs,
-        plan_only=plan_only, loop_cpu_threads=loop_cpu_threads, loop_cpu_model=loop_cpu_model,
-        loop_calibrations=loop_calibrations, loop_no_op_profiles=loop_no_op_profiles,
-        loop_max_threads=loop_max_threads,
-    )
     return _publish_result(out, parent, document, started, loop_dependencies=loop_ref,
         regions=rows,invariant_loops=loops,source_rejections=document['rejections'],
         source_rejection_views=dict(
