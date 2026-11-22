@@ -53,7 +53,10 @@ def _compile(arguments):
         parser.add_argument('--out', required=True)
         parser.parse_args(arguments)
         return 0
-    from scar.compiler.driver import main as compile_target
+    if _has_option(arguments, '--domains'):
+        from scar.compiler.pipeline import compile_domains_main as compile_target
+    else:
+        from scar.compiler.driver import main as compile_target
     return compile_target(arguments)
 
 

@@ -11,8 +11,7 @@ import time
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
-from .driver import compile_loops
-from .whole_entry_pipeline import EntryEvidence
+from .contracts import EntryEvidence
 
 
 _ENTRY_RESULT_LINKS = (
@@ -36,6 +35,38 @@ def _publish_result(out, parent, document, started, **details):
         report['source_admission'] = admission
     (out / 'result.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
     return report
+
+
+def _compile_loops(document, out, *, trip_count, inputs, plan_only, cpu_threads,
+                   cpu_model, calibrations, no_op_profiles, max_threads):
+    from scar.analysis.build import BuildSession, _check
+    from .backend.cpp20 import deliver
+    from .middle.python import schedule_loops
+
+    has_loops = (document.get('invariant_loops') or document.get('composite_invariant_loops')
+                 or document.get('array_loops') or inputs or no_op_profiles)
+    admission = document.get('source_admission')
+    if admission is None and not has_loops:
+        return [], [], []
+    program, hardware = document['program'], document['hardware']
+    with BuildSession(Path(program['uri']).parent) as session:
+        if admission is not None:
+            from scar.analysis.build_admission import verify_build_admission
+
+            verify_build_admission(admission, program=program, hardware=hardware,
+                                   source_filter=document.get('source_filter'), _session=session)
+        if not has_loops:
+            return [], [], []
+        direct, composite, arrays, work = schedule_loops(
+            document, out, session.view, trip_count=trip_count, input_specs=inputs,
+            cpu_threads=cpu_threads, cpu_model=cpu_model, calibrations=calibrations,
+            original_costs=no_op_profiles, max_threads=max_threads,
+        )
+        for row, loop in work:
+            row.update(deliver(loop, catalog=session.view, plan_only=plan_only))
+    read_artifact(program)
+    _check(hardware)
+    return direct, composite, arrays
 
 
 @reuse_decoded_source_bodies()
@@ -108,11 +139,11 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     if set(stateful_interval_plans)&set(no_op_profiles):
         raise ValueError('one region cannot consume both an interval plan and scalar NO_OP profiles')
     out.mkdir(parents=True)
-    loops, composite_loops, array_loops = compile_loops(
-        document, out, loop_trip_count=loop_trip_count, loop_inputs=loop_inputs,
-        plan_only=plan_only, loop_cpu_threads=loop_cpu_threads, loop_cpu_model=loop_cpu_model,
-        loop_calibrations=loop_calibrations, loop_no_op_profiles=loop_no_op_profiles,
-        loop_max_threads=loop_max_threads,
+    loops, composite_loops, array_loops = _compile_loops(
+        document, out, trip_count=loop_trip_count, inputs=loop_inputs,
+        plan_only=plan_only, cpu_threads=loop_cpu_threads, cpu_model=loop_cpu_model,
+        calibrations=loop_calibrations, no_op_profiles=loop_no_op_profiles,
+        max_threads=loop_max_threads,
     )
     rows=[]
     for index,original in enumerate(document['regions']):

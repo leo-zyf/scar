@@ -199,48 +199,8 @@ def compile_saved_plan(path, out, *, repetitions, case_seconds):
     return result
 
 
-def compile_loops(document, out, *, loop_trip_count=None, loop_inputs=None, plan_only=False,
-                  loop_cpu_threads=None, loop_cpu_model=False, loop_calibrations=(),
-                  loop_no_op_profiles=None, loop_max_threads=None):
-    from scar.analysis.build import BuildSession, _check
-    from scar.ir.execution_recipe import read_artifact
-    from .backend.cpp20 import deliver
-    from .middle.python import schedule_loops
-
-    has_loops = (document.get('invariant_loops') or document.get('composite_invariant_loops')
-                 or document.get('array_loops') or loop_inputs or loop_no_op_profiles)
-    admission = document.get('source_admission')
-    if admission is None and not has_loops:
-        return [], [], []
-    program, hardware = document['program'], document['hardware']
-    read_artifact(program)
-    _check(hardware)
-    with BuildSession(Path(program['uri']).parent) as session:
-        if admission is not None:
-            from scar.analysis.build_admission import verify_build_admission
-
-            verify_build_admission(admission, program=program, hardware=hardware,
-                                   source_filter=document.get('source_filter'), _session=session)
-        if not has_loops:
-            return [], [], []
-        direct, composite, arrays, work = schedule_loops(
-            document, out, session.view, trip_count=loop_trip_count, input_specs=loop_inputs,
-            cpu_threads=loop_cpu_threads, cpu_model=loop_cpu_model, calibrations=loop_calibrations,
-            original_costs=loop_no_op_profiles, max_threads=loop_max_threads,
-        )
-        for row, loop in work:
-            row.update(deliver(loop, catalog=session.view, plan_only=plan_only))
-    read_artifact(program)
-    _check(hardware)
-    return direct, composite, arrays
-
-
 def main(argv=None):
     arguments = sys.argv[1:] if argv is None else argv
-    if any(argument == '--domains' or argument.startswith('--domains=') for argument in arguments):
-        from .pipeline import compile_domains_main
-
-        return compile_domains_main(arguments)
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--manifest', type=Path)

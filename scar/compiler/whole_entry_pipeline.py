@@ -1,10 +1,10 @@
 """Replay an explicit entry optimization boundary on the build main chain."""
-from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
 from subprocess import CalledProcessError
 
+from scar.compiler.contracts import EntryEvidence
 from scar.compiler.operator_stack import verify_stack_components_once
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
@@ -22,37 +22,6 @@ NVIDIA_HPC = 'NVIDIA_HPC'
 LIBTORCH = 'LIBTORCH_ATEN'
 _ROUTE_STACKS = {'ATEN_SOURCE_ENTRY': LIBTORCH, 'PARAMETERIZED_SPARSE': 'SPARSE_DIRECT',
                  'NVHPC_SOURCE_ENTRY': NVIDIA_HPC, 'NVHPC_SOURCE_DEVICE_ENTRY': NVIDIA_HPC}
-
-
-@dataclass(frozen=True, slots=True)
-class EntryEvidence:
-    """Optional inputs whose proof checks belong to whole-entry replay."""
-
-    costs: str | Path | None = None
-    forward_cpu: bool = False
-    launch_probes: tuple[str | Path, ...] = ()
-    team_probe: str | Path | None = None
-    native_phase_cost: str | Path | None = None
-    python_import_cost: str | Path | None = None
-    paired_observation: str | Path | None = None
-    import_bindings: str | Path | None = None
-    import_sources: str | Path | None = None
-    initializer_observation: str | Path | None = None
-    array_route: str | Path | None = None
-    array_route_cost: str | Path | None = None
-    fixed_grid_cli: str | Path | None = None
-    fixed_grid_mapped_input: str | Path | None = None
-    fixed_grid_lifecycle_cost: str | Path | None = None
-    fixed_grid_input_review: str | Path | None = None
-    fixed_grid_qualification: str | Path | None = None
-    fixed_grid_forward: str | Path | None = None
-
-    @property
-    def needs_paired_replay(self):
-        return any(item is not None for item in (
-            self.paired_observation, self.import_bindings, self.import_sources,
-            self.initializer_observation, self.array_route, self.fixed_grid_cli,
-        ))
 
 
 def _write(path, value):
