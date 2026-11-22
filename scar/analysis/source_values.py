@@ -36,7 +36,7 @@ from hashlib import sha256
 from io import BytesIO, TextIOWrapper
 from pathlib import Path, PurePosixPath
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static.query import _Fragments

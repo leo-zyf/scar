@@ -15,7 +15,7 @@ from pathlib import Path
 from scar.analysis import source_context_variants as C,source_symbol_variants as N
 from scar.analysis import compiler_topology as T, compiler_topology_materials as compiler_topology_view
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_contexts import _digest
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json

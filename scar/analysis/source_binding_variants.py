@@ -16,7 +16,7 @@ from scar.analysis import source_context_variants as C, source_declarations as D
 from scar.analysis import source_declaration_view, source_binding_view, source_values as source_text_values, source_compiled_values
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.static.query import _Fragments
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
 from scar.analysis.source_contexts import _digest

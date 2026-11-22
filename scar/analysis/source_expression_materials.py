@@ -20,7 +20,7 @@ from scar.analysis.source_root_rules import SourceRootRules
 from scar.analysis.source_productions import ProductionSourceIndex, ProductionError
 from scar.analysis.source_core_interfaces import CORE_INSTRUCTIONS
 from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory, file_reference
-from scar.analysis.source_store import read_source_prerequisites
+from scar.analysis.source_materials import _matches, _source_envelope
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import source_productions as P
 from scar.ir.program.ids import LocationID
@@ -68,7 +68,7 @@ def _implementation():
         'analysis/source_annotation_state_interfaces.py','analysis/annotation_state.py',
         'analysis/source_compilation_contexts.py',
         'analysis/source_core_interfaces.py',
-        'analysis/source_syntax.py',
+        'analysis/source_syntax.py', 'analysis/source_materials.py',
         'analysis/type_parameter_rules.py',
         'analysis/source_productions.py', 'analysis/program_types.py',
         'ir/program/source_productions.py', 'ir/record_codec.py')
@@ -88,9 +88,16 @@ def _source_index(model, unit, limits, pins):
     if _implementation() != pins:
         raise ValueError('source rule implementation changed between parent and worker')
     reader = _Fragments(Path(model))
-    f0, f1, f2 = read_source_prerequisites(reader, unit, limits['nodes'], limits['tokens'])
-    if f0['namespace_root'] != unit['namespace_root']:
-        raise ValueError('source unit namespace differs from its original F0')
+    source = reader.read(unit['artifacts']['source'])
+    size = _source_envelope(unit, source)
+    f0, f1, f2 = (reader.read(unit['artifacts'][name])
+                  for name in ('source_bytes', 'source_tokens', 'source_syntax'))
+    if not _matches(unit, source, f0, size):
+        raise ValueError('source stage requires matching original F0 bytes/text')
+    for stage, material, budget, ceiling in (('F1', f1, 'max_tokens', limits['tokens']),
+                                               ('F2', f2, 'max_nodes', limits['nodes'])):
+        if type(material[budget]) is not int or not 0 <= material[budget] <= ceiling:
+            raise ValueError(f'{stage} replay budget exceeds the requested {budget} limit')
     frontend = read_frontend_bindings(f0, f1, f2, *(reader.read(unit['artifacts'][name]) for name in _PARENTS))
     syntax = decode(SourceSyntaxMaterial, f2)
     contexts = SourceContextView(syntax, frontend.roles, frontend.contexts)

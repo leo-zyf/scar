@@ -19,9 +19,7 @@ import sysconfig
 from types import MemberDescriptorType
 import warnings
 
-from scar.analysis.source_bytes import decoded_source_bytes
-from scar.analysis.source_syntax import read_source_syntax
-from scar.analysis.source_tokens import _error
+from scar.analysis.source_syntax import decoded_source_bytes, read_source_syntax, _native_diagnostic
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.program.source_paths import RawScopeMember, SourceScope, SourceSymbol, SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile, SymbolConstant, SymbolFrontier
 from scar.ir.program.source_bytes import SourceTokenWarning
@@ -210,10 +208,10 @@ def _produce(f0, f1, f2, max_scopes, max_symbols):
         try:
             raw = _native_symtable(text, f0['path'], mode)
         except (SyntaxError, ValueError, TypeError) as error:
-            status, failure = 'SYMBOL_TABLE_ERROR', replace(_error(error),
+            status, failure = 'SYMBOL_TABLE_ERROR', replace(_native_diagnostic(error),
                 coordinate_basis='NATIVE_SYMBOL_TABLE_DIAGNOSTIC_NOT_AST_COORDINATES')
         except (MemoryError, RecursionError, OverflowError) as error:
-            status, failure = 'RESOURCE_ERROR', replace(_error(error),
+            status, failure = 'RESOURCE_ERROR', replace(_native_diagnostic(error),
                 coordinate_basis='NATIVE_SYMBOL_TABLE_DIAGNOSTIC_NOT_AST_COORDINATES')
         else:
             try:
@@ -222,7 +220,7 @@ def _produce(f0, f1, f2, max_scopes, max_symbols):
             except SymbolBudgetExceeded as error:
                 status, frontiers = 'BUDGET_STOPPED', (error.frontier,)
             except (MemoryError, RecursionError, OverflowError) as error:
-                status, failure = 'RESOURCE_ERROR', replace(_error(error),
+                status, failure = 'RESOURCE_ERROR', replace(_native_diagnostic(error),
                     coordinate_basis='SOURCE_SYMBOL_MATERIAL_RESOURCE_ERROR')
     warning_rows = tuple(SourceTokenWarning(item.category.__module__, item.category.__qualname__,
         str(item.message), item.filename, item.lineno, item.line, item.source is not None) for item in caught)

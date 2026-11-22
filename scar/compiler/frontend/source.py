@@ -19,8 +19,7 @@ from scar.analysis.source_declarations import source_declarations_document
 from scar.analysis.source_materials import _material
 from scar.analysis.source_role_materials import source_roles_document
 from scar.analysis.source_symbols import compiler_hash_context, source_symbols_document
-from scar.analysis.source_syntax import source_syntax_document
-from scar.analysis.source_tokens import source_tokens_document
+from scar.analysis.source_syntax import source_syntax_document, source_tokens_document
 from scar.analysis.static.query import _Fragments
 from scar.analysis.static_program import (
     _artifacts, _json, _write, build_static_program, read_static_program, refine_static_program,

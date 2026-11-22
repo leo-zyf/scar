@@ -23,7 +23,7 @@ from scar.analysis import source_compiled_values as compiled, source_values as s
 from scar.analysis import source_symbol_context_adapter as adapter_module
 from scar.analysis.normal_facts import SourceFactStore
 from scar.artifacts import write_table
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
 from scar.analysis.static.query import _Fragments
@@ -45,8 +45,8 @@ def pins():
 
 
 def _native_profile(native):
-    from scar.analysis.source_bytes import _profile
-    profile = symbols._profile({'profile':encode(_profile())})
+    from scar.analysis.source_syntax import _bytes_profile
+    profile = symbols._profile({'profile':encode(_bytes_profile())})
     origin = native.__spec__.origin
     binary = profile.native_binary if origin=='built-in' else str(Path(origin).resolve())
     return replace(profile,api=API,native_origin=origin,native_binary=binary,

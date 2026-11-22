@@ -18,7 +18,7 @@ from scar.analysis import source_execution, source_values as source_text_values,
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.normal_facts import SourceFactStore
 from scar.artifacts import write_table
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_syntax import _digest
 from scar.artifacts import _durable_bytes, _durable_mkdir

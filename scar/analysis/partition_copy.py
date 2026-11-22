@@ -8,9 +8,10 @@ from pathlib import Path
 import sys
 from types import CodeType
 
-from scar.analysis.source_bytes import source_bytes_document
-from scar.analysis.source_syntax import read_source_syntax, source_syntax_document
-from scar.analysis.source_tokens import source_tokens_document
+from scar.analysis.source_syntax import (
+    source_bytes_document, read_source_syntax, source_syntax_document,
+    source_tokens_document,
+)
 from scar.trace.code_snapshot import code_key
 
 

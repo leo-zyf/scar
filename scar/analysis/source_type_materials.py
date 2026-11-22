@@ -25,8 +25,7 @@ from scar.analysis import (
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_references import ReferenceSlicer
-from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_syntax import _digest
+from scar.analysis.source_syntax import read_source_bytes, _digest
 from scar.ir.program import (
     compiler_symbols as C,
     source_protocols as E,

@@ -18,7 +18,7 @@ from scar.analysis import source_symbol_variants as N, source_topology_variants 
 from scar.analysis import compiler_symbols as S, compiler_symbol_materials as collect
 from scar.analysis import compiler_symbol_solve as solve, compiler_symbol_view
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_contexts import _digest
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json

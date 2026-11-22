@@ -16,7 +16,7 @@ from scar.artifacts import (
     _json,
 )
 from scar.analysis.source_launch import read_script_entry
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import (
     configuration as R,

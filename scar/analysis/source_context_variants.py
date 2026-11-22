@@ -19,7 +19,7 @@ from scar.analysis import compiler_stage_cache
 from scar.analysis import source_compiled_values as compiled, source_values as source_text_values, source_compilation_contexts as source_compilation_contexts
 from scar.analysis.normal_facts import SourceFactStore
 from scar.artifacts import write_table
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json

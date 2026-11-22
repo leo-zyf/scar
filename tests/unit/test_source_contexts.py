@@ -8,9 +8,10 @@ import sys
 
 import pytest
 
-from scar.analysis.source_bytes import source_bytes_document
-from scar.analysis.source_tokens import source_tokens_document
-from scar.analysis.source_syntax import source_syntax_document
+from scar.analysis.source_syntax import (
+    source_bytes_document, source_tokens_document,
+    source_syntax_document,
+)
 from scar.analysis.source_role_materials import source_roles_document
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.record_codec import decode

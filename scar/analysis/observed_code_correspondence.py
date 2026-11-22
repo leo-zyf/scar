@@ -279,8 +279,10 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     its known original bytes; absent those, UTF-8 is an analysis representation.
     Paths under ``out`` label these retained snapshots, not original file reads.
     """
-    from scar.analysis.source_bytes import source_bytes_document, decoded_source_bytes
-    from scar.analysis.source_tokens import source_tokens_document
+    from scar.analysis.source_syntax import (
+        source_bytes_document, decoded_source_bytes,
+        source_tokens_document,
+    )
     from scar.analysis.source_syntax import source_syntax_document
     from scar.analysis.source_role_materials import source_roles_document
     from scar.analysis.source_context_variants import context_variant_document

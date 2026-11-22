@@ -16,7 +16,7 @@ import warnings
 
 import pytest
 
-from scar.analysis.source_bytes import decoded_source_bytes, source_bytes_document
+from scar.analysis.source_syntax import decoded_source_bytes, source_bytes_document
 
 
 pytestmark = pytest.mark.skipif(
@@ -166,7 +166,7 @@ def _corpus(family):
 
 @pytest.mark.parametrize('family', ('operators', 'strings', 'layout', 'errors', 'guards', 'warnings'))
 def test_f1_schema_families_match_official_tokenizer(family):
-    from scar.analysis.source_tokens import source_tokens_document, read_source_tokens
+    from scar.analysis.source_syntax import source_tokens_document, read_source_tokens
 
     if family == 'warnings':
         with warnings.catch_warnings(record=True) as leaked:

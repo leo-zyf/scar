@@ -6,7 +6,7 @@ import json
 import symtable
 import pytest
 
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_materials import archive_model_source_bytes, verify_model_source_bytes, main
 from scar.analysis.static.calls import input_basis_unit
 from scar.analysis.static_program import _json, _write

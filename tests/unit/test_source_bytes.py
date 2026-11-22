@@ -7,7 +7,7 @@ import pytest
 
 
 def test_source_bytes_lossless_material_and_strict_replay():
-    from scar.analysis.source_bytes import source_bytes_document, read_source_bytes, decoded_source_bytes
+    from scar.analysis.source_syntax import source_bytes_document, read_source_bytes, decoded_source_bytes
 
     def document(raw):
         return source_bytes_document(raw, path='/source/material.py', namespace_root='/source')
@@ -74,7 +74,7 @@ def test_source_bytes_lossless_material_and_strict_replay():
 
 def test_codec_warning_policy_is_stable_under_ambient_warning_as_error():
     import warnings
-    from scar.analysis.source_bytes import source_bytes_document, read_source_bytes, decoded_source_bytes
+    from scar.analysis.source_syntax import source_bytes_document, read_source_bytes, decoded_source_bytes
 
     raw = b'# coding: unicode_escape\ns="\\q"\n'
     expected = source_bytes_document(raw, path='/source/material.py', namespace_root='/source')

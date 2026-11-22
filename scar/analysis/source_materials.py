@@ -12,9 +12,7 @@ import shutil
 import tempfile
 import time
 
-from scar.analysis.source_bytes import (
-    decoded_source_bytes, read_source_bytes, source_bytes_document,
-)
+from scar.analysis.source_syntax import _read_bytes_material, source_bytes_document
 from scar.analysis.static.sources import _Changed, _ByteBudget, _read_raw_source
 
 
@@ -68,13 +66,13 @@ def _source_envelope(unit, source):
 
 
 def _matches(unit, source, document, size):
-    raw = read_source_bytes(document)
+    raw, text = _read_bytes_material(document)
     return (len(raw) == size and sha256(raw).hexdigest() == unit['raw_sha256']
         and document['path'] == unit['path'] and document['namespace_root'] == unit['namespace_root']
         and document['decoding']['status'] == 'DECODED'
         and document['decoding']['encoding'] == unit['encoding']
         and document['decoding']['decoded_utf8_sha256'] == unit['decoded_sha256']
-        and decoded_source_bytes(document) == source['text'])
+        and text == source['text'])
 
 
 def _material(unit, read):

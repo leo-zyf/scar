@@ -8,7 +8,7 @@ from scar.analysis.cpu_entry_import_initializers import (
     SCHEMA as INITIALIZERS, _row, verify_cpu_entry_import_initializers,
 )
 from scar.analysis.replay_transaction import detached_replay, replay_transaction
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies, source_body_access
 from scar.analysis.source_productions import _digest
 from scar.analysis.static.query import _Fragments

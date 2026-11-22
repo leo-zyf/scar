@@ -16,8 +16,10 @@ import warnings
 
 import pytest
 
-from scar.analysis.source_bytes import decoded_source_bytes, source_bytes_document
-from scar.analysis.source_tokens import source_tokens_document
+from scar.analysis.source_syntax import (
+    decoded_source_bytes, source_bytes_document,
+    source_tokens_document,
+)
 from scar.ir.literals import MAX_INT_BIT_LENGTH, MAX_LITERAL_PAYLOAD_BYTES, PythonLiteral
 from scar.ir.record_codec import decode, encode
 

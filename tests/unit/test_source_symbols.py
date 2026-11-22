@@ -10,8 +10,10 @@ import warnings
 
 import pytest
 
-from scar.analysis.source_bytes import decoded_source_bytes, source_bytes_document
-from scar.analysis.source_tokens import source_tokens_document
+from scar.analysis.source_syntax import (
+    decoded_source_bytes, source_bytes_document,
+    source_tokens_document,
+)
 from scar.analysis.source_syntax import source_syntax_document
 
 

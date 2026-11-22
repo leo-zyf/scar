@@ -21,7 +21,7 @@ from scar.analysis import source_templates as source_template_links
 from scar.analysis.source_expression_materials import _WORLD,_implementation as recipe_implementation
 from scar.analysis.normal_facts import SourceFactStore
 from scar.artifacts import write_table
-from scar.analysis.source_bytes import read_source_bytes
+from scar.analysis.source_syntax import read_source_bytes
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
 from scar.ir.program import compiler_symbols as CV, compiler_symbols as BV
