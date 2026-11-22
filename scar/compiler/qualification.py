@@ -18,9 +18,18 @@ from scar.runtime.cpu_paired_runner import compare_native_outputs
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, strict_entry_gain_met
 
 
+def _native_file_identity(path):
+    from scar.analysis.replay_transaction import current_transaction
+
+    if (transaction := current_transaction()) is not None:
+        return transaction.pin_file(path)
+    ref = file_reference(path, 'scar.native-input')
+    return ref['sha256'], ref['size_bytes']
+
+
 def executable_receipt(path):
-    ref = file_reference(path, 'binary')
-    return dict(path=str(path), sha256=ref['sha256'], size_bytes=ref['size_bytes'])
+    digest, size = _native_file_identity(path)
+    return dict(path=str(path), sha256=digest, size_bytes=size)
 
 
 class NativeCases:
@@ -35,7 +44,7 @@ class NativeCases:
         self.digests = self.input_digests()
 
     def input_digests(self):
-        return {name: file_reference(path, 'stdin')['sha256'] if path is not None else sha256(b'').hexdigest()
+        return {name: _native_file_identity(path)[0] if path is not None else sha256(b'').hexdigest()
                 for name, path in self.stdin.items()}
 
     def check_locks(self, observation):

@@ -1,6 +1,7 @@
 """Retained hardware reuse is detached, content guarded and transaction local."""
 from collections import Counter
 from copy import deepcopy
+from hashlib import sha256
 
 import pytest
 
@@ -55,3 +56,14 @@ def test_hardware_decode_and_topology_reuse_keep_content_and_cold_boundaries(har
         path.write_bytes(original)
     with replay_transaction():
         assert _target_materials(hardware)[0].report == expected_report
+
+
+def test_pinned_native_input_rejects_same_size_replacement_at_publication(tmp_path):
+    path = tmp_path / 'input'
+    path.write_bytes(b'abc')
+    with pytest.raises(ValueError, match='byte identity differs'):
+        with replay_transaction() as transaction:
+            assert transaction.pin_file(path) == (sha256(b'abc').hexdigest(), 3)
+            path.write_bytes(b'xyz')
+    with replay_transaction() as transaction:
+        assert transaction.pin_file(path) == (sha256(b'xyz').hexdigest(), 3)

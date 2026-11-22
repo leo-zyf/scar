@@ -194,6 +194,14 @@ class ReplayTransaction:
             raise ValueError('metadata dependency byte identity differs: '+version[0])
         self._remember(version)
 
+    def pin_file(self, path):
+        """Read a new file identity once and watch it until publication."""
+        if self.closed or self.owner != get_ident():
+            raise ValueError('replay dependency needs its live owner transaction')
+        version = _file_version(path)
+        self._remember(version)
+        return version[1:3]
+
     def _watch_directory(self, path, signature):
         if _directory_version(path) != signature:
             raise ValueError('metadata path or membership version changed within replay: '+path)
