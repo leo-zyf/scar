@@ -20,10 +20,10 @@ from scar.analysis.source_function_connections import Invocation,connect
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.observed.call_bindings import recover_positional_receiver
@@ -49,7 +49,7 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 
 
 def _pins():
-    from scar.analysis import source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
+    from scar.analysis import source_observed_calls as source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
     from scar.analysis import source_function_connections, source_observed_materials, source_fact_materials
     from scar.analysis.static import compilation as static_compilation
     from scar.analysis.observed import call_bindings as observed_positional_receiver
@@ -559,7 +559,7 @@ def main():
         from scar.analysis.source_body_activations import build_body_activations
         build_body_activations(index,args.activations_out)
         if args.graph_check_out:
-            from scar.analysis.source_body_activation_view import verify_body_activations
+            from scar.analysis.source_body_activations import verify_body_activations
             verify_body_activations(args.activations_out,args.graph_check_out,index=index)
     if args.resource_scopes_out:
         from scar.analysis.source_resource_scopes import build_resource_scopes

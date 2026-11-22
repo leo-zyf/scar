@@ -13,7 +13,7 @@ from scar.ir.execution_recipe import read_artifact
 from scar.runtime.csr_region_entry import _observer_active, launch_context
 from scar.runtime.entry_runner import _arguments, _execute
 from scar.runtime.sparse_solve_entry import admit as admit_serial
-from scar.runtime.sparse_solve_prediction import DetachedCSR, match_request
+from scar.runtime.sparse_launch import DetachedCSR, match_request
 from scar.trace.code_snapshot import code_key
 
 SCHEMA = 'scar.sparse-parallel-entry-selection'

@@ -3,8 +3,8 @@
 from scar.analysis.source_expression_rules import _REF
 from scar.ir.program import source_productions as P, source_bindings as B, state_ports as S
 from scar.ir.program.structured import PythonProtocolKind as K
-from scar.analysis.source_namespace_interfaces import ImplicitNamespaceAccess, _at, _name
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import ImplicitNamespaceAccess, _at, _name
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
 

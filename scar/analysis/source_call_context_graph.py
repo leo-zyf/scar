@@ -9,16 +9,16 @@ import time
 
 from scar.analysis.source_body_expansion import ExpansionParents, read_body_expansion
 from scar.analysis.call_inputs import ContextReferenceEngine
-from scar.analysis.source_constructor_interfaces import project_constructor_interfaces
+from scar.analysis.source_class_base_graph import project_constructor_interfaces
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_references import source_port
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _json
 from scar.ir.program import call_inputs as X, class_ports as C
 from scar.ir.program import source_productions as P, source_value_routes as S, binding_ports as R
 from scar.ir.program import declared_contexts as D, normal_graph as T
@@ -196,7 +196,7 @@ def _counts(graph):
 
 
 def _pins():
-    from scar.analysis import call_inputs as source_call_contexts, source_constructor_interfaces, source_function_connections
+    from scar.analysis import call_inputs as source_call_contexts, source_class_base_graph as source_constructor_interfaces, source_function_connections
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', X.__file__), ('constructor_types', C.__file__),
         ('declared_types', D.__file__),

@@ -3,7 +3,7 @@ from scar.analysis.normal_targets import _Solver
 from scar.analysis.source_content_factors import factor_records,expand_factor,write_factors
 from scar.ir.program import source_productions as P, data_materials as C
 from scar.ir.record_codec import encode,decode
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from tests.unit.test_source_construction_connections import source_facts
 
 

@@ -234,7 +234,7 @@ def _input_case_inventory(ctx, advance):
             if unfinished:
                 ctx._await_input_case_pending[site] = unfinished
         else:
-            from .protocol_connection_validation import _guard_inventory
+            from scar.ir.program.protocol_connection_validation import _guard_inventory
             _, _, missing = _guard_inventory(ctx, advance, attachment)
             cases = tuple((case, case.guard, False) for case in attachment.cases)
             cases += tuple((None, ControlEdgeReference(operation, number), True)

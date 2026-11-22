@@ -11,7 +11,7 @@ from scar.analysis.nvhpc_source_effects import TENSOR_FLOW, verify_nvhpc_tensor_
 from scar.analysis.call_inputs import call_operands
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_role_materials import SyntaxRoleView
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.analysis.static.query import _Fragments
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.normal_graph import AttributeAction, FactTable

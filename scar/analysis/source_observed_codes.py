@@ -23,9 +23,9 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_observed_materials import ObservedFactMaterials
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_mkdir, _durable_bytes
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_mkdir, _durable_bytes
+from scar.artifacts import _json
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_observations import ObservedSourceCodeLink, ObservedSourceScopeKind as ScopeKind, ObservedSourceScopeLink, ObservedSourceRequestCodeLink, ObservedSourceCompilerCodeLink
@@ -77,7 +77,7 @@ def _compiler_bodies(material, topology, selected):
     """Resolve only requested C3 scopes to original five-kind body entries."""
     from scar.analysis.source_annotation_code_bridge import _recipe_reference
     from scar.analysis.source_connection_contracts import body_entry_rules
-    from scar.analysis.source_namespace_interfaces import NamespacePlanView
+    from scar.analysis.source_namespace_contents import NamespacePlanView
     rules = dict(body_entry_rules()); keys = defaultdict(list)
     for key in material.interfaces['nodes']: keys[key.occurrence].append(key)
     plans = {}; seen = set()
@@ -433,7 +433,7 @@ class ObservedSourceCodeProvider:
 
 def request_code_pins():
     from scar.analysis import source_annotation_code_bridge, compiler_contexts as compiler_code_paths
-    from scar.ir.program import code_identity as compiler_path_ir
+    from scar.ir.program import compiler_symbols as compiler_path_ir
     from scar.ir.program import source_observations as request_ir
     return {name:sha256(Path(path).read_bytes()).hexdigest() for name,path in
         (('provider',__file__),('requests',request_ir.__file__),('bridge',source_annotation_code_bridge.__file__),

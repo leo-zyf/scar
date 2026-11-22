@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from scar.analysis.normal_targets import _Solver
 from scar.analysis.source_relations import SharedContainerFlow
 from scar.analysis.namespace_values import BuiltinNamespaceFlow
-from scar.analysis.source_namespace_interfaces import CallerReferencePaths, extract_namespace_interfaces
+from scar.analysis.source_namespace_contents import CallerReferencePaths, extract_namespace_interfaces
 from scar.ir.program import source_productions as P, source_bindings as B, source_declarations as D, normal_graph as G
 from scar.ir.program.name_flow import NamespaceInterfaceBinding
 from scar.ir.program.normal_graph import GlobalPort

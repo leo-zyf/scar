@@ -17,7 +17,8 @@ from scar.analysis.program_dependencies import ProgramDependencyGraph
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_region_projection import RegionProjectionIndex
-from scar.analysis.source_templates import _json, _worker_stores
+from scar.analysis.source_templates import _worker_stores
+from scar.artifacts import _json
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_references import source_port
 from scar.ir.program import normal_graph as G, source_productions as P, model as M
@@ -633,8 +634,8 @@ def _pins():
 
 def publish_program_view(catalog, units, out):
     """Store identity/edge projections; original instructions stay in F4."""
-    from scar.analysis.normal_output import write_table
-    from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+    from scar.artifacts import write_table
+    from scar.artifacts import _durable_bytes, _durable_mkdir
     from scar.analysis.source_value_flow import _artifact
     from scar.analysis.program_view_storage import pack_nodes,pack_edges
     started = time.monotonic(); pins = _pins(); out = Path(out).absolute()

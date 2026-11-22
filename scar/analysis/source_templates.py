@@ -26,12 +26,12 @@ from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
 from dataclasses import fields, is_dataclass
 from functools import lru_cache
 from scar.analysis.source_expression_materials import _implementation, _basis
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
+from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory
 from scar.analysis.static.query import _Fragments
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.record_codec import encode, decode
-from scar.artifacts import _json
+from scar.artifacts import _json, write_table
 from contextlib import contextmanager
 from threading import RLock
 from scar.ir.program.source_declarations import SourceTemplateKey
@@ -262,7 +262,7 @@ class _Store:
         payload = path.read_bytes()
         _require(len(payload) == descriptor['bytes'] and sha256(payload).hexdigest() == descriptor['sha256'], unit['path'], 'parent compressed receipt differs')
         digest = sha256(); size = 0
-        with gzip.open(path, 'rb') as stream:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as stream:
             for line, raw in enumerate(stream, 1):
                 digest.update(raw); size += len(raw)
                 _require(size <= descriptor['decoded_bytes'], path, 'parent decoded byte budget exceeded')
@@ -270,19 +270,6 @@ class _Store:
                 if 'plan' in record:
                     yield self.domain, line, record['plan']
         _require(size == descriptor['decoded_bytes'] and digest.hexdigest() == descriptor['decoded_sha256'], path, 'parent decoded receipt differs')
-
-
-def _stream(path, records):
-    digest = sha256(); decoded_bytes = 0; count = 0
-    with path.open('xb') as destination:
-        with gzip.GzipFile(filename='', mode='wb', fileobj=destination, compresslevel=3, mtime=0) as stream:
-            for record in records:
-                raw = _json(encode(record, record_tags=P.PRODUCTION_RECORD_TAGS))
-                stream.write(raw); digest.update(raw); decoded_bytes += len(raw); count += 1
-        destination.flush(); os.fsync(destination.fileno())
-    payload = path.read_bytes()
-    return dict(path=path.name, bytes=len(payload), sha256=sha256(payload).hexdigest(),
-        decoded_bytes=decoded_bytes, decoded_sha256=digest.hexdigest(), records=count)
 
 
 @lru_cache(maxsize=1)
@@ -307,8 +294,8 @@ def _link_unit(task):
         graph = build_template_graph(unit['key'], syntax,
             (record for store in stores for record in store.records(unit)), max_visits=max_visits)
         path = Path(out) / 'units' / unit['key']; _durable_mkdir(path)
-        nodes = _stream(path / 'templates.jsonl.gz', graph.templates)
-        links = _stream(path / 'links.jsonl.gz', graph.links)
+        nodes = write_table(path / 'templates.jsonl.gz', graph.templates)
+        links = write_table(path / 'links.jsonl.gz', graph.links)
         header = dict(schema=graph.schema, schema_version=graph.schema_version, authority=graph.authority,
             unit=unit['key'], input=encode(graph.input), profile=encode(graph.profile), templates=nodes, links=links)
         header_bytes = _json(header)

@@ -39,7 +39,7 @@ class CallEdgeRecorder:
         self.root_prefix = self.root.rstrip(os.sep)+os.sep
         self.observer_files = {CallEdgeRecorder.profile.__code__.co_filename,describe_code.__code__.co_filename}
         self.pid = os.getpid()
-        from scar.trace.captured_sources import PROGRAM_PORTS_PROFILES, PROCESS_PORTS_PROFILE
+        from scar.trace.capture_import import PROGRAM_PORTS_PROFILES, PROCESS_PORTS_PROFILE
         if capture_profile not in (None, *PROGRAM_PORTS_PROFILES) or capture_profile is not None and lean_plan is not None:
             raise ValueError('program ports requires its explicit profile and no lean plan')
         self.capture_profile = capture_profile
@@ -107,7 +107,7 @@ class CallEdgeRecorder:
                               for fd, path in ((self.events_fd, self.event_path),
                                                (self.codes_fd, self.code_path))}
         if self.program_ports:
-            from scar.trace.captured_sources import CapturedSources
+            from scar.trace.capture_import import CapturedSources
             try:
                 self.source_archive = CapturedSources(self.out, self.pid, profile=capture_profile, **(source_limits or {}))
             except BaseException:
@@ -602,7 +602,7 @@ class CallEdgeRecorder:
                     unplanned_bodies_expanded=False,
                     scope=PROFILE + ': planned roots/direct thin boundaries; unplanned interiors/imports unexpanded')
             if self.program_ports:
-                from scar.trace.captured_sources import SOURCE_SCOPE, PROCESS_SOURCE_SCOPE
+                from scar.trace.capture_import import SOURCE_SCOPE, PROCESS_SOURCE_SCOPE
                 metadata.update(capture_profile=self.capture_profile,
                     scope_policy=PROCESS_SOURCE_SCOPE if self.process_ports else SOURCE_SCOPE,
                     instruction_monitoring=False, captured_sources=self.source_archive.close(),

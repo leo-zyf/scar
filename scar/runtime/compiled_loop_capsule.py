@@ -3,7 +3,7 @@ import argparse
 from hashlib import sha256
 from pathlib import Path
 
-from .compiled_entry import artifact_reference,read_artifact,run_build
+from scar.runtime.compiled_entry import artifact_reference, read_artifact, run_build
 from .compiled_deployment import selected_rows
 from .native_loop import _small_raw,_json,_file_hash_and_header
 from .native_temporal_invariant import validate_contract,SCHEMA,ADMISSION,TRUST
@@ -87,7 +87,7 @@ def execution_statistics(execution):
 
 
 def _main(argv=None,*,profile_kind=PROFILE):
-    from .final_entry_capsule import run_final_entry
+    from scar.runtime.compiled_entry import run_final_entry
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--capsule',required=True);parser.add_argument('--slot',required=True)
     parser.add_argument('--payload-sha256',required=True);parser.add_argument('--slot-sha256',required=True)

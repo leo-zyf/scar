@@ -20,7 +20,7 @@ from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.control import LanguageCompletionKind as C
 from types import SimpleNamespace
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_name_access_anchors import _bindings, anchor_name_accesses
+from scar.analysis.source_stack_routes import _bindings, anchor_name_accesses
 
 
 # Conditional local-READ effects from original F4/C2 witnesses.
@@ -350,7 +350,7 @@ class FrameBindingIsolationContext:
 def frame_isolated_reaching_name_definitions(snapshot, source_function, namespace, *, anchor_graph=None,
         material=None, flow=None, max_states=20000, max_stack=128, max_updates=1000000, effect_context=None):
     from scar.analysis.source_graph_material import source_graph_material
-    from scar.analysis.source_name_access_anchors import anchor_name_accesses
+    from scar.analysis.source_stack_routes import anchor_name_accesses
     from scar.analysis.source_name_definitions import _reaching_name_definitions
     if material is None:
         material = source_graph_material(getattr(snapshot, 'catalog', snapshot), source_function.unit)
@@ -379,7 +379,7 @@ def frame_isolated_reaching_name_definitions(snapshot, source_function, namespac
 
 
 def frame_isolated_local_read_tracks(state):
-    from scar.analysis.source_name_access_anchors import anchor_name_accesses
+    from scar.analysis.source_stack_routes import anchor_name_accesses
     from scar.analysis.state_materialization import local_read_tracks
     if state.anchors is None:
         state.anchors = anchor_name_accesses(state.view.catalog, state.material.unit, material=state.material)

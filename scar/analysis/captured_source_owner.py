@@ -17,9 +17,7 @@ from scar.ir.program.call_edges import CallEdgeBudget, CapturedCode
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, loads as strict_loads
 from scar.ir.semantics_v2 import SourceSnapshot
-from scar.trace.captured_sources import (
-    PROGRAM_PORTS_PROFILE, PROGRAM_PORTS_PROFILES, SOURCE_SCHEMA, SOURCE_SCOPE,
-    PROCESS_SOURCE_SCOPE, validate_source_metadata, validate_source_row)
+from scar.trace.capture_import import PROGRAM_PORTS_PROFILE, PROGRAM_PORTS_PROFILES, SOURCE_SCHEMA, SOURCE_SCOPE, PROCESS_SOURCE_SCOPE, validate_source_metadata, validate_source_row
 from scar.trace.reader import open_binary, resolve
 
 

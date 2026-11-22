@@ -20,10 +20,10 @@ from scar.analysis import compiler_symbol_solve as solve, compiler_symbol_view
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_contexts import _digest
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import code_identity as V
-from scar.ir.program import code_identity as CV, code_identity as NV
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.ir.program import compiler_symbols as V
+from scar.ir.program import compiler_symbols as CV, compiler_symbols as NV
 from scar.ir.program.compiler_symbols import CompilerSymbolsInput, CompilerSymbolsMaterial, SymbolLimits, SymbolStop
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial

@@ -13,15 +13,15 @@ import time
 from types import SimpleNamespace
 
 from scar.analysis.normal_graph import normal_edges, _Emitter
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_reference_consumers import read_reference_consumers, argument_points
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _json
 from scar.analysis.source_world_flow import STRUCTURAL, _walk, _state
-from scar.analysis.source_world_material import WorldMaterial
+from scar.analysis.source_world_flow import WorldMaterial
 from scar.ir.program import source_value_routes as V, source_productions as P
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program.providers import ProviderArtifact
@@ -180,7 +180,7 @@ def _derive(consumers, timings=None):
 
 
 def _pins():
-    from scar.analysis import normal_graph, source_world_material, source_reference_consumers, source_world_flow
+    from scar.analysis import normal_graph, source_world_flow as source_world_material, source_reference_consumers, source_world_flow as source_world_flow
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', V.__file__), ('emitter', normal_graph.__file__),
         ('materials', source_world_material.__file__), ('consumers', source_reference_consumers.__file__),

@@ -18,13 +18,13 @@ from scar.analysis import source_contexts as C, source_contexts as source_contex
 from scar.analysis import compiler_stage_cache
 from scar.analysis import source_compiled_values as compiled, source_values as source_text_values, source_compilation_contexts as source_compilation_contexts
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.call_compilation import supported_future_flag_mask
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.analysis.static.query import _Fragments
-from scar.ir.program import code_identity as V, code_identity as X, source_bytes as S
+from scar.ir.program import compiler_symbols as V, compiler_symbols as X, source_bytes as S
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_contexts import SourceContextsInput, SourceContextsMaterial
 from scar.ir.record_codec import decode, encode

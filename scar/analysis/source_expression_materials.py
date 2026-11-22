@@ -19,7 +19,7 @@ from scar.analysis.source_statement_rules import SourceStatementRules
 from scar.analysis.source_root_rules import SourceRootRules
 from scar.analysis.source_productions import ProductionSourceIndex, ProductionError
 from scar.analysis.source_core_interfaces import CORE_INSTRUCTIONS
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
+from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory
 from scar.analysis.source_store import read_source_prerequisites
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import source_productions as P
@@ -43,7 +43,7 @@ def _json(value):
 
 def _implementation():
     package = Path(__file__).resolve().parents[1]
-    names = ('analysis/source_expression_materials.py', 'analysis/source_expression_rules.py',
+    names = ('artifacts.py', 'analysis/source_expression_materials.py', 'analysis/source_expression_rules.py',
         'analysis/static/lowering/source_displays.py', 'analysis/static/lowering/source_string.py',
         'analysis/static/lowering/source_comprehension.py',
         'analysis/await_protocol.py', 'ir/program/delegation_signatures.py',

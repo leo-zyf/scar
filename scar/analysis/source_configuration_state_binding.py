@@ -14,11 +14,11 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis import normal_facts
 from scar.analysis.source_configuration_values import read_configuration_values
 from scar.analysis.source_configuration_overrides import read_configuration_overrides
-from scar.analysis.source_configuration_requests import _Aliases,_gp,_source
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_mkdir,_durable_bytes
-from scar.analysis.source_templates import _json
+from scar.analysis.source_configuration_requests import _Aliases, _gp, _source
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import write_table
+from scar.artifacts import _durable_mkdir, _durable_bytes
+from scar.artifacts import _json
 from scar.ir.program import state_ports as S, source_productions as P, normal_graph as F
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.record_codec import decode
@@ -35,7 +35,7 @@ def _artifact(path,schema):
 
 
 def _pins():
-    from scar.analysis import source_configuration_values as source_configuration_value_store, source_configuration_requests
+    from scar.analysis import source_configuration_values as source_configuration_value_store, source_configuration_requests as source_configuration_requests
     return {key:sha256(Path(path).read_bytes()).hexdigest() for key,path in
         dict(producer=__file__,types=S.__file__,facts=normal_facts.__file__,
             values=source_configuration_value_store.__file__,aliases=source_configuration_requests.__file__).items()}

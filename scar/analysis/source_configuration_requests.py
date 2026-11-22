@@ -1,29 +1,37 @@
-"""Infer conditional configuration requests from source calls and entry inputs."""
+"""Source configuration requests."""
+
 import argparse
 import ast
-from collections import defaultdict,deque
-from hashlib import sha256
 import json
 import os
+from collections import defaultdict, deque
+from hashlib import sha256
 from pathlib import Path
-
 from scar.analysis.source_context_query import ContextTargetGraph
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import (
+    read_record_table as _table,
+    write_table,
+    _durable_bytes,
+    _durable_mkdir,
+    _json,
+)
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.static.query import _Fragments
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import configuration as R, normal_graph as T, normal_graph as G
-from scar.ir.program import source_productions as P
+from scar.ir.program import (
+    configuration as R,
+    normal_graph as T,
+    normal_graph as G,
+    source_productions as P,
+)
 from scar.ir.program.source_frame_bindings import StaticInputPort
-from scar.ir.program.code_identity import CompiledSourceCandidate
-from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
+from scar.ir.program.compiler_symbols import CompiledSourceCandidate
+from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.literals import PythonLiteral
-from scar.ir.record_codec import decode,encode
+from scar.ir.record_codec import decode, encode
 
 
+# Infer conditional configuration requests from source calls and entry inputs.
 _MAIN_AST='c74b68f02a2029a047dd57ac694222498276410aad4007735186229d27358545'
 _ARGS_AST='812bfc3c6ebe8d6657bbaacf955486f8af8baf3f16989cb2230ac49d4965d3f8'
 _FLAGS={'--config-name':'config_name','-cn':'config_name','--config-path':'config_path','-cp':'config_path'}
@@ -208,6 +216,49 @@ def main():
     parser.add_argument('--targets',required=True);parser.add_argument('--out',required=True)
     args=parser.parse_args();report=build_configuration_requests(args.targets,args.out)
     print(json.dumps({name:report[name] for name in ('status','request_count','source_candidates')}),flush=True)
+
+
+# Read conditional input requests against their immutable call/entry parents.
+def read_configuration_requests(path):
+    path=Path(path).absolute();raw=(path/'result.json').read_bytes();report=json.loads(raw)
+    if ((report['schema'],report['schema_version'],report['status'])!=
+            ('scar.configuration-requests',1,'CONDITIONAL_LIBRARY_REQUESTS_EXTRACTED')
+            or report['implementation_sha256']!=sha256(Path(__file__).read_bytes()).hexdigest()
+            or report['types_sha256']!=sha256(Path(R.__file__).read_bytes()).hexdigest()):
+        raise ValueError('configuration request producer or types differ')
+    target=Path(report['targets']);target_raw=(target/'result.json').read_bytes()
+    if sha256(target_raw).hexdigest()!=report['targets_sha256']:
+        raise ValueError('configuration call graph parent differs')
+    graph=json.loads(target_raw);catalog=graph['context_facts']
+    facts_raw=(target/catalog['path']).read_bytes()
+    if (len(facts_raw)!=catalog['bytes'] or sha256(facts_raw).hexdigest()!=catalog['sha256']
+            or sha256(facts_raw).hexdigest()!=report['source_catalog_sha256']):
+        raise ValueError('configuration source catalog differs')
+    entry=Path(report['script_entry']['path'])
+    if (sha256((entry/'result.json').read_bytes()).hexdigest()!=report['script_entry']['sha256']
+            or sha256((entry/'entry.json').read_bytes()).hexdigest()!=report['entry_sha256']):
+        raise ValueError('configuration entry input snapshot differs')
+    units={row['unit'] for row in json.loads(facts_raw)['units']}
+    requests=tuple(decode(R.ConfigurationRequest,wire) for wire in _table(path,report['requests']))
+    if (len(requests)!=report['request_count'] or len({r.id for r in requests})!=len(requests)
+            or sum(len(r.sources) for r in requests)!=report['source_candidates']):
+        raise ValueError('configuration request denominators differ')
+    calls=graph['calls']
+    for request in requests:
+        ref=request.call_reference
+        if (request.api.unit not in units or request.factory_result.unit not in units
+                or ref.artifact.uri!=str(target/calls['path'])
+                or (ref.artifact.sha256,ref.artifact.size_bytes)!=(calls['sha256'],calls['bytes'])
+                or not ref.locator.startswith('#/records/')
+                or not 0<=int(ref.locator.removeprefix('#/records/'))<calls['records']):
+            raise ValueError('configuration request lost its original source call reference')
+        if (not request.conditions or any(not source.conditions for source in request.sources)
+                or request.semantics!='CONDITIONAL_REQUEST_CANDIDATES_NOT_CURRENT_ARGV_OR_COMPOSED_CFG'):
+            raise ValueError('configuration source selection has no conditional provenance')
+    if (report['target_executed'] or report['configuration_composed'] or report['current_argv_proven']
+            or report['first_stage_complete'] or (path/'result.json').read_bytes()!=raw):
+        raise ValueError('configuration requests have no execution or composition authority')
+    return report,requests
 
 
 if __name__=='__main__':main()

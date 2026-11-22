@@ -4,7 +4,7 @@ from dataclasses import replace
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.model import CompletionResult, ExitKind
 from scar.ir.program.protocol_async import async_connections, request_state_view
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import AdmissionPredicate
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.validation import require_valid, validate

@@ -243,7 +243,8 @@ class StatefulDependencyProvider:
 
 def _pins():
     from scar.analysis import stateful_dependencies
-    from scar.analysis import program_view,normal_output
+    from scar.analysis import program_view
+    from scar import artifacts as artifact_io
     from scar.compiler import stateful_model, stateful_loop_frontend as stateful_frontend, graph_frontend
     from scar.ir.program import dependencies
     from scar.ir import record_codec
@@ -251,12 +252,12 @@ def _pins():
         ('adapter',__import__(__name__,fromlist=['__file__'])),('projection',stateful_dependencies),
         ('region_model',stateful_model),('extractor',stateful_frontend),('source_lowering',graph_frontend),
         ('public_view',program_view),('public_types',V),('relations',dependencies),
-        ('wire_codec',record_codec),('table_writer',normal_output))}
+        ('wire_codec',record_codec),('table_writer',artifact_io))}
 
 
 def publish_stateful_graph(provider,out):
     """Store the typed projection and original references, not body snapshots."""
-    from scar.analysis.normal_output import write_table
+    from scar.artifacts import write_table
     from scar.ir.record_codec import encode
     out=Path(out).resolve()
     if out.exists():raise ValueError('fresh ordered-content graph output required')
@@ -284,7 +285,7 @@ def publish_stateful_graph(provider,out):
 def read_stateful_graph(path,view,*,_provider=None):
     """Check stored typed tables against the source-replayed public adapter."""
     from itertools import zip_longest
-    from scar.analysis.source_symbol_variants import _table
+    from scar.artifacts import read_record_table as _table
     path=Path(path).resolve();raw=(path/'result.json').read_bytes();report=json.loads(raw)
     if (report.get('schema'),report.get('schema_version'))!=('scar.stateful-public-graph',1)or report['pins']!=_pins():
         raise ValueError('ordered-content graph producer/schema changed')

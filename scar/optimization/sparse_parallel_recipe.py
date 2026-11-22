@@ -40,7 +40,7 @@ _CALL = 'PER_CALL'
 _EXIT = 'PER_SCOPE_EXIT'
 _ENTRY = 'scar.runtime.sparse_parallel_entry.'
 _POOL = 'scar.runtime.sparse_parallel_lu.'
-_PREDICTION = 'scar.runtime.sparse_solve_prediction.DetachedCSR.'
+_PREDICTION = 'scar.runtime.sparse_launch.DetachedCSR.'
 _ORIGINAL = 'ORIGINAL_SOURCE_ROW_EDIT_AND_NORMALIZATION'
 
 

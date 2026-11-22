@@ -4,7 +4,7 @@ from hashlib import sha256
 
 import pytest
 
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.source_relations import select_relation_rows
 
 

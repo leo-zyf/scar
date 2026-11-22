@@ -387,7 +387,7 @@ class F4BuildSession:
                     provider=SourceObservedBoundaryProvider(self.view,BoundaryStore(path,index=indices[0] if indices else None))
                 elif name=='body_activations':
                     from scar.analysis.source_body_activations import SourceBodyActivationStore
-                    from scar.analysis.source_body_activation_view import SourceBodyActivationProvider
+                    from scar.analysis.source_body_activations import SourceBodyActivationProvider
                     indices=[p.store.index for p in self.providers.values()
                         if getattr(getattr(p,'store',None),'report',{}).get('schema') in (
                             'scar.source-observed-function-interfaces','scar.source-observed-boundaries')]

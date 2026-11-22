@@ -156,8 +156,8 @@ def protocol_obligations(graph, scope=None, *, budget=4096, _index=None):
     if scope is not None and type(scope) is not ProtocolScopeID:
         raise TypeError('protocol scope query requires exact ProtocolScopeID or None')
     from .queries import ProgramIndex
-    from .protocol_connection_flow import ConnectionContext
-    from .protocol_connection_validation import connection_reports
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import connection_reports
     index = ProgramIndex(graph) if _index is None else _index
     ctx = ConnectionContext(graph, index=index, budget=shared)
     from .protocol_await_records import (AwaitAcquisition, AwaitIteratorQualification,

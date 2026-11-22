@@ -9,13 +9,13 @@ import time
 from scar.analysis.source_consumer_parents import ConsumerParents
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_address_paths import AddressResolver
-from scar.analysis.source_world_material import WorldMaterial
+from scar.analysis.source_world_flow import WorldMaterial
 from scar.analysis.source_world_flow import project_world_flow
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_templates import _json
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.ir.program import binding_ports as R, normal_graph as T, normal_graph as F, source_productions as P
 from scar.ir.program.declared_contexts import DescriptorKind, ClassValueKind
 from scar.ir.program.providers import ProviderArtifact
@@ -200,7 +200,7 @@ def _artifact(path, schema):
 
 
 def _pins():
-    from scar.analysis import source_consumer_parents, source_address_paths, source_world_flow, source_world_material
+    from scar.analysis import source_consumer_parents, source_address_paths, source_world_flow as source_world_flow, source_world_flow as source_world_material
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', R.__file__), ('parents', source_consumer_parents.__file__),
         ('addresses', source_address_paths.__file__), ('world_flow', source_world_flow.__file__),

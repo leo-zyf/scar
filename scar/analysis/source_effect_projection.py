@@ -5,7 +5,7 @@ adapters are already attached. Unknown callbacks, physical allocation and
 object contents remain unknown independently of known source accesses.
 """
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.ir.effects import Knowledge as K
 from scar.ir.program import state_ports as S, source_productions as P
 from scar.ir.program import normal_graph as G, model as M

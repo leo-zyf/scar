@@ -13,7 +13,7 @@ from scar.ir.program.model import (
     TerminatorKind,
 )
 from scar.ir.program.protocol_async import async_connections
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import AsyncSessionOutcome
 from scar.ir.program.protocols import (
     AdmissionPredicate, BodyStateCondition, OwnedUse, ReferenceIsNoneCondition,

@@ -1,34 +1,142 @@
-"""Build a shared post-call STATE/CONTROL graph from sealed F4 materials.
+"""Source world flow."""
 
-Protocol state changes are operations, never copy/alias edges. The graph keeps
-branch guards, loop backedges and paired call-site labels. Reachability is a
-may-path query, not a total order, a selected invocation, or effect discharge.
-"""
 import argparse
+import json
+import time
 from collections import defaultdict, deque, Counter
 from hashlib import sha256
-import json
 from pathlib import Path
-import time
-
 from scar.analysis.normal_graph import normal_edges, _Emitter
 from scar.analysis.source_declared_state import read_declared_state
 from scar.analysis.source_configuration_state_binding import read_configuration_state_bindings
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.source_world_material import WorldMaterial
 from scar.analysis.source_context_query import ContextTargetGraph
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import state_ports as W, normal_graph as G, normal_graph as T
-from scar.ir.program import source_productions as P, normal_graph as F
+from scar.artifacts import (
+    write_table,
+    read_record_table as _table,
+    _durable_bytes,
+    _durable_mkdir,
+    _json,
+)
+from scar.ir.program import (
+    state_ports as W,
+    normal_graph as G,
+    normal_graph as T,
+    source_productions as P,
+    normal_graph as F,
+)
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, decode
+from scar.analysis.source_declared_catalog import read_source_catalog
+from scar.analysis.source_templates import read_template_bodies, read_template_graph
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
+# Receipt-bound source templates for local world-dependency queries.
+#
+# Only existing noncompiled source materials are supported here. Template
+# dependencies retain shared regions, branches and loop backedges; reading a
+# recipe does not enter a scope or execute the target program.
+class WorldMaterial:
+    """Read a source unit's sealed F4 plans without constructing a solver."""
+
+    def __init__(self, catalog, unit):
+        self.catalog = read_source_catalog(catalog)
+        self.fact_store = self.catalog.fact_store
+        if type(unit) is not str or unit not in self.fact_store.rows:
+            raise ValueError('world material needs an original catalog source unit')
+        if (unit in self.fact_store.original_source_units
+                or self.fact_store.rows[unit].get('facts_format') == 'COMPILE_CONTEXT_F4_JSONL'):
+            raise ValueError('compiled-context world material is unsupported by this source-only reader')
+        self.unit = unit
+        self._parents = {}
+        self._catalog_raw = self._remember(self.catalog.path/'result.json')
+        if json.loads(self._catalog_raw) != self.catalog.report:
+            raise ValueError('world material catalog report changed during its strict read')
+
+        def source_parents(store):
+            self._remember(store.path/'result.json', store.raw)
+            for parent in store.parents:
+                source_parents(parent)
+
+        source_parents(self.fact_store.base)
+        for store in self.fact_store.supplemental_sources:
+            source_parents(store)
+        self.source_store = self.fact_store.source_parent_for(unit)
+        while self.source_store.parents:
+            self.source_store = self.source_store.parents[self.source_store.unit_parent[unit]]
+        self.root = Path(self.source_store.templates).absolute()
+        self._template_raw = self._remember(self.root/'result.json')
+        self.result_artifact = ProviderArtifact(str(self.root/'result.json'),
+            sha256(self._template_raw).hexdigest(), len(self._template_raw), 'scar.source-template-link-store')
+        self.graph = read_template_graph(self.root, unit)
+        self.interfaces = dict(nodes={node.key: node for node in self.graph.templates},
+            links={(link.caller, link.step): link for link in self.graph.links})
+        self._children = defaultdict(list)
+        for link in self.graph.links:
+            self._children[link.caller].append(link.callee)
+        self._plans = {}
+        self.validate_parents()
+
+    def _remember(self, path, expected=None):
+        path = Path(path).absolute(); raw = path.read_bytes()
+        if ((expected is not None and raw != expected)
+                or (path in self._parents and self._parents[path] != raw)):
+            raise ValueError('world material source parent byte receipt differs: ' + str(path))
+        self._parents[path] = raw
+        return raw
+
+    def validate_parents(self):
+        """Recheck original catalog, template and source-fact parent bytes."""
+        for path, raw in self._parents.items():
+            if path.read_bytes() != raw:
+                raise ValueError('world material parent changed: ' + str(path))
+        if json.loads(self._catalog_raw) != self.catalog.report:
+            raise ValueError('world material catalog report changed in memory')
+        self.fact_store.validate_parents()
+        self.catalog.interface_store.validate_parents()
+        return len(self._parents)
+
+    def plans(self, keys):
+        """Batch-read missing original plans; cache only strictly verified plans."""
+        keys = tuple(keys)
+        if any(type(key) is not SourceTemplateKey or key not in self.interfaces['nodes'] for key in keys):
+            raise ValueError('world material template key is absent or foreign')
+        keys = tuple(dict.fromkeys(keys))
+        self.validate_parents()
+        wanted = tuple(key for key in keys if key not in self._plans)
+        if wanted:
+            selected = read_template_bodies(self.root, self.unit, wanted)
+            self.validate_parents()
+            self._plans.update(selected)
+        self.validate_parents()
+        return {key: self._plans[key] for key in keys}
+
+    def closure(self, start_key, max_templates=4000):
+        """Read a finite template dependency closure once, without loop unrolling."""
+        if type(start_key) is not SourceTemplateKey or start_key not in self.interfaces['nodes']:
+            raise ValueError('world material root template is absent or foreign')
+        if type(max_templates) is not int or max_templates < 1:
+            raise ValueError('world material template budget must be a positive integer')
+        pending = deque((start_key,)); found = {start_key}; keys = []
+        while pending:
+            key = pending.popleft(); keys.append(key)
+            for child in self._children.get(key, ()):
+                if child in found:
+                    continue
+                if len(found) >= max_templates:
+                    raise ValueError('world material template closure exceeds its declared budget')
+                found.add(child); pending.append(child)
+        return self.plans(keys)
+
+
+# Build a shared post-call STATE/CONTROL graph from sealed F4 materials.
+#
+# Protocol state changes are operations, never copy/alias edges. The graph keeps
+# branch guards, loop backedges and paired call-site labels. Reachability is a
+# may-path query, not a total order, a selected invocation, or effect discharge.
 STRUCTURAL = (P.EvaluateChild, P.ApplyRegion, P.InvokeTypeParameterFactory, P.BranchControl,
     P.HandleCompletions, P.LoopControl, P.SuspendExecution, P.TransferCompletion)
 
@@ -120,7 +228,7 @@ def _artifact(path, schema):
 
 
 def _pins():
-    from scar.analysis import source_world_material, normal_graph
+    from scar.analysis import source_world_flow as source_world_material, normal_graph
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', W.__file__), ('material', source_world_material.__file__),
         ('emitter', normal_graph.__file__))}

@@ -6,7 +6,7 @@ import pytest
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.exception_matches import BuiltinExceptionCategory, ExceptionHandlerOperand
 from scar.ir.program.model import ExitKind, TerminatorKind
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import DelegateLookupFallback, NormalizedThrowSource
 from scar.ir.program.protocol_continuations import continuation_connections
 from scar.ir.program.protocol_connection_validation import common_connections

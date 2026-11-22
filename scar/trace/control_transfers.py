@@ -515,9 +515,7 @@ def _lean_plan_member(files, trace_root, pid, members, calls, operands):
 
 
 def _program_source_members(files, trace_root, pid, members, calls, operands):
-    from scar.trace.captured_sources import (
-        SOURCE_SCHEMA, validate_program_profile, validate_source_metadata, validate_source_row,
-    )
+    from scar.trace.capture_import import SOURCE_SCHEMA, validate_program_profile, validate_source_metadata, validate_source_row
     declaration = validate_program_profile(calls, operands)
     if declaration is None:
         return None, []
@@ -552,7 +550,7 @@ def _program_source_members(files, trace_root, pid, members, calls, operands):
         manifest=encode(metadata), events=encode(artifact),
         files=len(by_path), archived_files=rows, code_descriptors=len(doc['code_sources']),
         compiler_match='NOT_CHECKED', loader_bytes_observed=False)
-    from scar.trace.captured_sources import PROCESS_PORTS_PROFILE
+    from scar.trace.capture_import import PROCESS_PORTS_PROFILE
     if calls['capture_profile'] == PROCESS_PORTS_PROFILE:
         result.update(profile=PROCESS_PORTS_PROFILE, scope_policy=calls['scope_policy'],
                       scope_frontiers=calls['scope_frontiers'])

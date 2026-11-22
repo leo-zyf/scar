@@ -17,10 +17,10 @@ from scar.analysis import source_declaration_view, source_binding_view, source_v
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.static.query import _Fragments
 from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.analysis.source_contexts import _digest
-from scar.ir.program import code_identity as V, code_identity as CV, source_bytes as S
+from scar.ir.program import compiler_symbols as V, compiler_symbols as CV, source_bytes as S
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.source_declarations import SourceDeclarationsInput, SourceDeclarationsMaterial

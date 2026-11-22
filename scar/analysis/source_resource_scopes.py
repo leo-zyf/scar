@@ -23,11 +23,11 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.program_view import ProgramView,_digest
-from scar.analysis.source_templates import _json
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.normal_output import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import write_table
 from scar.ir.program import resource_observations as R
 from scar.ir.program import source_productions as P
 from scar.ir.program.call_edges import FrameCompletion
@@ -47,7 +47,7 @@ def _receipt(path):
 
 def _pins():
     from scar.trace import resource_scopes, os_resources, control_transfers as capture_coordinates
-    from scar.analysis import python_call_targets,source_body_activations,source_observed_codes,source_observed_calls
+    from scar.analysis import python_call_targets, source_body_activations as source_body_activations, source_observed_codes, source_observed_calls as source_observed_calls
     return {**source_observed_codes.request_code_pins(),**{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer',__import__(__name__,fromlist=['__file__'])),('types',R),
         ('markers',resource_scopes),('os_reader',os_resources),('coordinates',capture_coordinates),

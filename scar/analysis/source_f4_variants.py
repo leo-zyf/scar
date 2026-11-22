@@ -20,13 +20,13 @@ from scar.analysis.source_productions import ProductionSourceIndex
 from scar.analysis import source_templates as source_template_links
 from scar.analysis.source_expression_materials import _WORLD,_implementation as recipe_implementation
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import code_identity as CV, code_identity as BV
-from scar.ir.program import code_identity as NV, code_identity as TV
-from scar.ir.program import code_identity as SV
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.ir.program import compiler_symbols as CV, compiler_symbols as BV
+from scar.ir.program import compiler_symbols as NV, compiler_symbols as TV
+from scar.ir.program import compiler_symbols as SV
 from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.source_declarations import SourceMaterialDomain as D
 from scar.ir.program.protocol_signatures import ExceptionABI

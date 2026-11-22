@@ -7,7 +7,7 @@ import re
 from hashlib import sha256
 from pathlib import Path
 from scar.analysis.source_configuration_overrides import read_configuration_overrides
-from scar.analysis.source_configuration_composition_store import read_configuration_composition
+from scar.analysis.source_configuration_composition import read_configuration_composition
 from scar.analysis.source_data_materials import DataMaterialStore, _artifact
 from scar.analysis.static.lowering.source_string import InterpolationSyntax
 from scar.ir.program import configuration as V, configuration as C
@@ -18,15 +18,10 @@ from scar.ir.program.configuration import (
     OverrideExpressionKind,
 )
 from scar.ir.program.providers import ProviderArtifact
-from scar.analysis import (
-    normal_output,
-    source_symbol_variants,
-    source_configuration_overrides as parent,
-    source_configuration_composition_store as composition,
-    source_data_materials as data_store,
-)
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.analysis import source_configuration_overrides as parent, source_configuration_composition as composition, source_data_materials as data_store
+from scar import artifacts as artifact_io
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir import record_codec as codec
 from dataclasses import dataclass, replace
 from scar.ir.literals import PythonLiteral
@@ -57,7 +52,7 @@ def pins():
         types=Path(V.__file__), codec=Path(codec.__file__),
         interpolation=directory/'static/lowering/source_string.py', override_syntax=directory/'source_override_syntax.py',
         parent=Path(parent.__file__), composition=Path(composition.__file__), data_store=Path(data_store.__file__),
-        table_writer=Path(normal_output.__file__), table_reader=Path(source_symbol_variants.__file__))
+        table_writer=Path(artifact_io.__file__), table_reader=Path(artifact_io.__file__))
     return {name: sha256(path.read_bytes()).hexdigest() for name, path in paths.items()}
 
 
@@ -78,9 +73,9 @@ def _validate(graph):
     base_path = Path(overrides.composition.uri).parent
     base = json.loads(artifact(overrides.composition))
     materials = {m.id: m for m in (codec.decode(C.ConfigurationMaterial, row)
-        for row in source_symbol_variants._table(base_path, base['tables']['materials']))}
+        for row in artifact_io.read_record_table(base_path, base['tables']['materials']))}
     steps = tuple(codec.decode(C.ConfigurationStep, row)
-        for row in source_symbol_variants._table(base_path, base['tables']['steps']))
+        for row in artifact_io.read_record_table(base_path, base['tables']['steps']))
     limits = {key: json.loads(artifact(m.store))['tables']['references']['records'] for key, m in materials.items()}
     trees, functions = {}, set()
     _require(graph.profiles and graph.parser_tools, 'configuration value interpretation needs profiles and parser tools')
@@ -144,7 +139,7 @@ def _validate(graph):
         if source.owner not in text_tables:
             material = materials[source.owner]; folder = Path(material.store.uri).parent
             header = json.loads(payloads[material.store.uri])
-            text_tables[source.owner] = tuple(source_symbol_variants._table(folder, header['tables'][name])
+            text_tables[source.owner] = tuple(artifact_io.read_record_table(folder, header['tables'][name])
                 for name in ('references', 'nodes'))
         references, nodes = text_tables[source.owner]
         return nodes[references[source.ordinal]['target']]['scalar_text']
@@ -187,7 +182,7 @@ def _current(receipts):
 def write_configuration_values(graph, out):
     out = Path(out).absolute(); _require(not out.exists(), 'fresh configuration value output required')
     initial = pins(); graph, receipts = _validate(graph); _durable_mkdir(out)
-    tables = {name: normal_output.write_table(out/(name+'.jsonl.gz'), getattr(graph, name)) for name in _TABLES}
+    tables = {name: artifact_io.write_table(out/(name+'.jsonl.gz'), getattr(graph, name)) for name in _TABLES}
     counts = {name: len(getattr(graph, name)) for name in _TABLES}
     report = dict(schema=_SCHEMA, schema_version=1, status=_STATUS,
         **{name: codec.encode(getattr(graph, name)) for name in _HEADER}, tables=tables, counts=counts,
@@ -212,7 +207,7 @@ def read_configuration_values(path):
     document = {name: report[name] for name in _HEADER}
     for name, kind in _TABLES.items():
         receipt = report['tables'][name]; data_store._receipt(receipt, name+'.jsonl.gz', table=True)
-        rows = source_symbol_variants._table(path, receipt)
+        rows = artifact_io.read_record_table(path, receipt)
         _require(len(rows) == receipt['records'], 'configuration value table count differs')
         document[name] = [codec.encode(codec.decode(kind, row)) for row in rows]
     graph, receipts = _validate(codec.decode(V.ConfigurationValues, document))

@@ -7,7 +7,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from test_loop_frontend import _original_loop
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.compiler.graph_frontend import GraphRegionRejected
 from scar.compiler.loop_admission import _InvariantLoopLowerer
 from scar.compiler import loop_admission as frontend

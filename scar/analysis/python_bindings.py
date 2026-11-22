@@ -24,9 +24,9 @@ from scar.analysis.normal_entry import EntrySolver
 from scar.analysis import normal_entry,normal_facts,normal_namespaces
 from scar.analysis import source_generators,source_content_factors
 from scar.ir.program import normal_graph as E
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table as _stream
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table as _stream
 from scar.analysis.native_call_materials import read_static_native_materials, NativeMaterialBudget
 from scar.analysis.static.native_interfaces import (
     native_material_document,

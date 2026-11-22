@@ -172,8 +172,8 @@ class DeclaredSourceCatalog:
 
 def publish_declared_catalog(facts, interfaces, out):
     """Reference existing complete local stores; do not build or solve bodies."""
-    from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-    from scar.analysis.source_templates import _json
+    from scar.artifacts import _durable_bytes, _durable_mkdir
+    from scar.artifacts import _json
     out = Path(out).absolute()
     if out.resolve() != out or out.exists():
         raise ValueError('declared catalog requires fresh canonical output')

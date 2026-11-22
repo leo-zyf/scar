@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from scar.analysis.source_call_view import open_function_interfaces
 from scar.analysis.source_function_creations import SourceFunctionCreationStore
-from scar.analysis.source_stacked_references import StackedReferenceEngine
+from scar.analysis.source_stack_routes import StackedReferenceEngine
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_field_interfaces import _InterfaceOnly
@@ -21,11 +21,11 @@ from scar.analysis.source_function_interfaces import _counts as interface_counts
 from scar.analysis.source_declared_calls import _NoTargets, _check_targets, _folder, _flat_tables
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table
 from scar.ir.program import function_sites as R, function_sites as I
 from scar.ir.program import normal_graph as T, source_productions as P, source_value_routes as S
 from scar.ir.program.call_inputs import CallInterfaceRecord
@@ -65,7 +65,7 @@ class _SealedEngine(StackedReferenceEngine):
 
 
 def _pins():
-    from scar.analysis import call_inputs as source_call_contexts, source_stacked_references, source_references as source_reference_slice
+    from scar.analysis import call_inputs as source_call_contexts, source_stack_routes as source_stacked_references, source_references as source_reference_slice
     from scar.analysis import source_function_connections,source_field_interfaces,source_function_creations
     from scar.ir.program import call_inputs as C, function_sites as F
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),**{

@@ -17,7 +17,7 @@ import math
 
 from scar.ir.record_codec import encode
 from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.code_identity import EffectiveCompileContext
+from scar.ir.program.compiler_symbols import EffectiveCompileContext
 
 
 _ACTIVE = ContextVar('scar_compiler_stage_cache', default=None)

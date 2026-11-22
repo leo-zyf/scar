@@ -7,7 +7,7 @@ import __future__
 from scar.analysis import source_execution
 from scar.analysis.source_compiled_values import compile_source_candidates
 from scar.analysis.source_compilation_contexts import code_digest
-from scar.ir.program import source_bytes as S, code_identity as X, source_productions as P
+from scar.ir.program import source_bytes as S, compiler_symbols as X, source_productions as P
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.providers import ProviderArtifact

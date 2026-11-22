@@ -13,14 +13,14 @@ from pathlib import Path
 import time
 
 from scar.analysis.source_binding_native_graph import BindingNativeStore
-from scar.analysis.native_resource_declarations import _projections
+from scar.analysis.native_state_materials import _projections
 from scar.analysis.target_graph import TargetHardwareGraph, _resources
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import resource_observations as R, target_hardware as H
 from scar.ir.program import native_contracts as D, source_productions as P
 from scar.ir.program import native_contracts as N
@@ -150,7 +150,7 @@ def _source_routes(store,unit,values):
 
 
 def _pins():
-    from scar.analysis import source_binding_native_graph,native_resource_declarations,target_graph
+    from scar.analysis import source_binding_native_graph, native_state_materials as native_resource_declarations, target_graph
     return {name:sha256(Path(path).read_bytes()).hexdigest() for name,path in (
         ('producer',__file__),('types',R.__file__),('native',source_binding_native_graph.__file__),
         ('projection',native_resource_declarations.__file__),('target',target_graph.__file__),('target_types',H.__file__))}

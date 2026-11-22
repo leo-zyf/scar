@@ -17,12 +17,12 @@ from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_graph_material import CompiledGraphMaterial
 from scar.analysis.source_references import source_port
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table
 from scar.ir.program import call_inputs as D, function_sites as R
 from scar.ir.program import name_flow as N, source_productions as P, normal_graph as T
 from scar.ir.record_codec import decode, encode
@@ -39,7 +39,7 @@ NO_PROOF = ('source_scopes_activated', 'caller_contexts_selected', 'runtime_disp
 
 
 def _pins():
-    from scar.analysis import source_graph_material, source_world_material, source_relations as source_relation_selection
+    from scar.analysis import source_graph_material, source_world_flow as source_world_material, source_relations as source_relation_selection
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),
         declaration_rules=declared._pins(), signature_rules=functions._pins(), **{
             name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (

@@ -196,9 +196,9 @@ def _rows(provider):
 
 
 def publish_configuration_view(provider,out):
-    from scar.analysis.normal_output import write_table
-    from scar.analysis.source_stage import _durable_mkdir,_durable_bytes
-    from scar.analysis.source_templates import _json
+    from scar.artifacts import write_table
+    from scar.artifacts import _durable_mkdir, _durable_bytes
+    from scar.artifacts import _json
     out=Path(out).absolute()
     if out.exists():raise ValueError('fresh configuration-view output required')
     provider.check();_durable_mkdir(out)
@@ -212,7 +212,7 @@ def publish_configuration_view(provider,out):
 
 
 def read_configuration_view(path):
-    from scar.analysis.source_symbol_variants import _table
+    from scar.artifacts import read_record_table as _table
     from scar.ir.program import source_productions as P
     path=Path(path).absolute();raw=(path/'result.json').read_bytes();report=json.loads(raw)
     if ((report['schema'],report['schema_version'])!=('scar.source-configuration-view',1)

@@ -9,7 +9,7 @@ from hashlib import sha256
 import json
 
 from scar.analysis.source_declared_catalog import read_source_catalog
-from scar.analysis.source_world_material import WorldMaterial
+from scar.analysis.source_world_flow import WorldMaterial
 from scar.analysis.source_relations import select_relation_rows
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_productions import _digest, read_production_plan

@@ -17,9 +17,9 @@ from scar.analysis import compiler_topology as T,compiler_topology_view
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_contexts import _digest
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import code_identity as V, code_identity as NV
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.ir.program import compiler_symbols as V, compiler_symbols as NV
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.compiler_symbols import CompilerTopologyInput, CompilerTopologyMaterial

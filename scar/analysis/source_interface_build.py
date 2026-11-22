@@ -14,14 +14,10 @@ from pathlib import Path
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_suspension_interfaces import SuspensionInterfaceIndex, _state_indices
-from scar.analysis.source_templates import (
-    _json,
-    _worker_stores,
-    read_template_graph,
-    _check_catalog,
-)
+from scar.analysis.source_templates import _worker_stores, read_template_graph, _check_catalog
+from scar.artifacts import _json
 from scar.analysis.source_productions import _digest
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.ir.program import (
     normal_graph as F,
     source_productions as P,

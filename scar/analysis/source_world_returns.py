@@ -18,10 +18,10 @@ from scar.analysis.source_relation_snapshot import RelationSnapshot
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_world_return_parents import CertifiedWorldParents
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import call_returns as R, normal_graph as T, normal_graph as F, source_productions as P
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, decode
@@ -189,7 +189,7 @@ def _artifact(path, schema):
 
 
 def _pins():
-    from scar.analysis import source_world_flow, source_address_paths, source_world_material, source_graph_material, source_world_return_parents
+    from scar.analysis import source_world_flow as source_world_flow, source_address_paths, source_world_flow as source_world_material, source_graph_material, source_world_return_parents
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', R.__file__), ('world_flow', source_world_flow.__file__),
         ('addresses', source_address_paths.__file__), ('material', source_world_material.__file__),

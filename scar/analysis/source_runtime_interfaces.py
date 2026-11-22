@@ -14,8 +14,8 @@ from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.source_observed_interfaces import build_observed_interfaces
 from scar.analysis.source_declared_catalog import _receipt
-from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes
+from scar.artifacts import _json
 
 
 def publish(parent,trace,project_root,out,*,boundaries_out=None,activations_out=None,
@@ -37,7 +37,7 @@ def publish(parent,trace,project_root,out,*,boundaries_out=None,activations_out=
         from scar.analysis.source_body_activations import build_body_activations
         phase('body-activations',build_body_activations,index,activations_out)
         if graph_check_out:
-            from scar.analysis.source_body_activation_view import verify_body_activations
+            from scar.analysis.source_body_activations import verify_body_activations
             phase('body-graph-check',verify_body_activations,activations_out,graph_check_out,index=index)
     if resource_scopes_out:
         from scar.analysis.source_resource_scopes import build_resource_scopes

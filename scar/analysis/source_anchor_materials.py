@@ -12,7 +12,7 @@ from scar.analysis.source_atom_anchors import (
     SourceAnchorError, _digest, source_atom_anchors_document, read_source_atom_anchors,
 )
 from scar.analysis.source_syntax import read_source_syntax_material
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.analysis.source_store import read_source_prerequisites
 from scar.analysis.static.query import _Fragments
 

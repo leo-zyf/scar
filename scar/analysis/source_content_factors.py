@@ -9,8 +9,8 @@ from hashlib import sha256
 from pathlib import Path
 from time import monotonic
 
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _json
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program.data_materials import ContentFactor
 from scar.ir.record_codec import _encode, _record_tags

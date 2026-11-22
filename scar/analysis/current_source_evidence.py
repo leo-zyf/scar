@@ -342,7 +342,7 @@ def _checkpoint_stream(directory, declaration, *, max_bytes=1_000_000_000):
 
 
 def _resume_source(owner, composition, directory, report_sha, bindings_sha, code_witnesses):
-    from scar.analysis.source_body_access import SourceBodyAccess
+    from scar.analysis.source_body_expansion import SourceBodyAccess
     directory = Path(directory).resolve(strict=True)
     report, report_ref = _read(directory / "report.json", report_sha, schema="scar.source-invocations")
     bindings, binding_ref = _read(directory / "bindings.json", bindings_sha,

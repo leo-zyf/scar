@@ -18,7 +18,8 @@ from scar.analysis import normal_targets
 from scar.analysis import normal_containers
 from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
-from scar.analysis import source_templates as source_template_batch, source_templates as source_template_workers, normal_output, source_interface_build as source_interface_store, source_content_factors
+from scar.analysis import source_templates as source_template_batch, source_templates as source_template_workers, source_interface_build as source_interface_store, source_content_factors
+from scar import artifacts as artifact_io
 from scar.ir.program import source_protocols as L, data_materials as C
 from scar.ir.program import source_protocols as D, suspension_interfaces as S
 from scar.analysis.source_templates import read_template_body
@@ -45,7 +46,7 @@ class NormalCallGraph:
         if self.report['types_sha256'] != sha256(Path(T.__file__).read_bytes()).hexdigest():
             raise ValueError('call edge declarations differ')
         if self.report['source_reader_pins']!={name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in
-                (('batch',source_template_batch),('workers',source_template_workers),('output',normal_output),
+                (('batch',source_template_batch),('workers',source_template_workers),('output',artifact_io),
                  ('interfaces',source_interface_store),('interface_types',L),
                  ('content_factors',source_content_factors),('content_factor_types',C))}:
             raise ValueError('source reader/writer implementation differs')

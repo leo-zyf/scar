@@ -9,7 +9,7 @@ from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.protocol_await import (
     _input_case_inventory, await_inventory, iterator_use,
 )
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import ProtocolOperationRef
 from scar.ir.program.protocols import ContractResult, OwnedUse
 from scar.ir.program.queries import ProgramIndex

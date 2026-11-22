@@ -223,7 +223,7 @@ def matcher_view(ctx, matcher):
                                 OwnedUse(operation.id, argument)})
             state_support.append({'site': site, 'before': OwnedUse(operation.id, site.state_use),
                                   'location': location, 'completions': tuple(completions)})
-    from .protocol_connection_validation import consumer_ledger
+    from scar.ir.program.protocol_connection_validation import consumer_ledger
     for kind, completion in ((ExitKind.NORMAL, normal), (ExitKind.RAISE, raised)):
         if completion is None:
             continue
@@ -264,7 +264,7 @@ def exception_match_reports(ctx):
 def exception_match(index, operation, *, budget=4096):
     from scar.ir.execution.validity_budget import ValidityBudget
     from .ids import OperationID
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     if type(operation) is not OperationID:
         raise TypeError('exception matcher query requires exact original OperationID')
     matcher = index._exception_matches.get(operation)

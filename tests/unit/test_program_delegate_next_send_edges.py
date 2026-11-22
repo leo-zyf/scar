@@ -14,7 +14,7 @@ from scar.ir.program.model import (
     BlockArgument, CompletionResult, ExitKind, InvokeLiteralResult, LiteralOrigin,
     ReferenceValue, StateVersionValue, TerminatorKind, Use, UseRole,
 )
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import RawOperandSource
 from scar.ir.program.protocol_continuations import continuation_connections
 from scar.ir.program.protocols import ContractResult, HostTerminal, OutcomeAdapter, OwnedUse

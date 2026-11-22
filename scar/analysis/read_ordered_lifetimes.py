@@ -13,7 +13,7 @@ from scar.analysis.ordered_region_activation import OrderedRegionActivationProvi
 from scar.analysis.ordered_region_lifetime import OrderedRegionLifetimeProvider,_pins,SCHEMA as PUBLICATION_SCHEMA
 from scar.analysis.read_ordered_activations import _header as _activation_header,_read_tables as _activation_tables
 from scar.analysis.source_call_view import SourceFunctionCallProvider
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.stateful_dependency_view import StatefulDependencyProvider,read_stateful_graph
 from scar.ir.execution_recipe import artifact_reference,read_artifact
 from scar.ir.program import ordered_regions as L

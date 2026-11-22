@@ -460,7 +460,7 @@ def continuation_connections(ctx):
            for row in ctx.graph.protocol_operations):
         # Reuse the independent fixed-output inventory and its already charged
         # shared report, rather than inventing a lookup-to-call relation table.
-        from .protocol_connection_validation import common_connections
+        from scar.ir.program.protocol_connection_validation import common_connections
         method_consumers = {report["site"]: report
                             for report in common_connections(ctx)["consumers"]}
 

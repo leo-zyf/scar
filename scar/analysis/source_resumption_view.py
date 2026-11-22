@@ -14,7 +14,7 @@ from scar.analysis.source_observed_resumptions import SCHEMA, _pins, derive
 from scar.analysis.source_observed_interfaces import ObservedFunctionInterfaceStore
 from scar.analysis.source_declared_catalog import _check
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_call_view import prepare_source_ports
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.program_view import _digest
@@ -207,8 +207,8 @@ class SourceResumptionProvider:
 
 
 def verify_resumption_graph(path,out,*,index=None):
-    from scar.analysis.source_stage import _durable_bytes
-    from scar.analysis.source_templates import _json
+    from scar.artifacts import _durable_bytes
+    from scar.artifacts import _json
     started = time.monotonic(); store = ResumptionStore(path,index=index)
     provider = SourceResumptionProvider(store.index.view,store); checked = 0
     for edges in provider.out_edges.values():

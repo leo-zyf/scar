@@ -1,7 +1,7 @@
 """Namespace sources retain duplicate providers and distinct import branches."""
 from types import SimpleNamespace as NS
 
-from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver
+from scar.analysis.source_namespace_contents import NamespaceReferenceResolver
 from scar.ir.program import name_flow as N, normal_graph as F, normal_graph as G
 from scar.ir.program import source_productions as P, normal_graph as T
 from scar.ir.program.source_declarations import SourceTemplateKey

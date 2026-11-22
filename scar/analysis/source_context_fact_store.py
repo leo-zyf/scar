@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_exec_query import ExecRootGraph
-from scar.analysis.source_templates import _json
+from scar.analysis.source_exec_roots import ExecRootGraph
+from scar.artifacts import _json
 from scar.ir.program import normal_graph as F
 
 

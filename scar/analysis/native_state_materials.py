@@ -1,29 +1,40 @@
-"""Read existing independent native schema units without source-call replay.
+"""Native state materials."""
 
-Only the native batches of a binding/native publication are certified here.
-Python normalization, caller relations and runtime dispatch are not rederived.
-The retained parser output is re-lowered and byte-compared by the existing
-native reader; neither parser workers nor target programs are started.
-"""
 from dataclasses import dataclass
 from hashlib import sha256
 import gzip
 import json
+import argparse
+import time
 from pathlib import Path
-
-from scar.analysis import source_binding_native_graph as native_graph
-from scar.analysis import source_native_binding_materials as generated
+from scar.analysis import (
+    source_binding_native_graph as native_graph,
+    source_native_binding_materials as generated,
+)
 from scar.analysis.static import native_interfaces as static_native_interfaces
 from scar.analysis.native_call_materials import StaticNativeDeclaration, StaticNativeMaterials
-from scar.analysis.source_symbol_variants import _table
-from scar.ir.program import codec, native_contracts as N
+from scar.artifacts import (
+    read_record_table as _table,
+    _durable_bytes,
+    _durable_mkdir,
+    _json,
+    write_table as _stream,
+)
+from scar.ir.program import codec, native_contracts as N, native_contracts as R
 from scar.ir.program.dependencies import GraphNamespace
 from scar.ir.program.native import NativeBoundary
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.record_codec import decode
+from scar.analysis.python_binding_query import PythonBindingGraph
 
 
+# Read existing independent native schema units without source-call replay.
+#
+# Only the native batches of a binding/native publication are certified here.
+# Python normalization, caller relations and runtime dispatch are not rederived.
+# The retained parser output is re-lowered and byte-compared by the existing
+# native reader; neither parser workers nor target programs are started.
 @dataclass(frozen=True, slots=True)
 class NativeStateUnit:
     namespace: GraphNamespace
@@ -193,3 +204,55 @@ class NativeStateMaterials:
                     or native_graph._pins() != self._pins
                     or any(_stamp(path) != stamp for path, stamp in self._stamps.items())):
                 raise ValueError('native state original materials or producer changed')
+
+
+# Project exact resource-related input types and dispatch declarations.
+def _projections(type_,path=(),pointer=''):
+    if type_['kind'] in ('OptionalType','ListType'):
+        projection=R.TypeProjection.OPTIONAL_ELEMENT if type_['kind']=='OptionalType' else R.TypeProjection.LIST_ELEMENT
+        yield from _projections(type_['element'],(*path,projection),pointer+'/element')
+    elif type_['kind']=='BaseType':
+        kind={'Tensor':R.ResourceOperandKind.TENSOR_ARGUMENT,'Device':R.ResourceOperandKind.DEVICE_ARGUMENT,
+            'Generator':R.ResourceOperandKind.GENERATOR_ARGUMENT}.get(type_.get('name'))
+        if kind is not None:yield kind,type_['text'],path,pointer
+
+
+def build_resource_declarations(bindings,out):
+    started=time.monotonic();view=PythonBindingGraph(bindings);out=Path(out).absolute()
+    if out.exists():raise ValueError('fresh resource declaration output required')
+    operands=[];dispatch=[];seen=set();materials={}
+    for definition in view.definitions():
+        if definition.native is None or definition.native.boundary in seen:continue
+        graph=view.expand_native(definition);boundary=next(b for b in graph.native_boundaries if b.id==definition.native.boundary)
+        seen.add(boundary.id);artifact=boundary.signature.artifact
+        if artifact.sha256 not in materials:
+            raw=Path(artifact.uri).read_bytes()
+            if len(raw)!=artifact.size_bytes or sha256(raw).hexdigest()!=artifact.sha256:raise ValueError('native declaration materials differ')
+            materials[artifact.sha256]=json.loads(raw)
+        pointer=boundary.signature.locator.rsplit('/',1)[0];row=materials[artifact.sha256]
+        for key in pointer.removeprefix('#/').split('/'):row=row[int(key)] if type(row) is list else row[key]
+        for index,(parameter,slot) in enumerate(zip(row['inputs'],boundary.inputs,strict=True)):
+            for category,type_,path,tail in _projections(parameter['type']):
+                operands.append(R.ResourceOperand(boundary.id,slot.port,category,type_,path,
+                    ProviderFactReference(artifact,pointer+'/inputs/'+str(index)+'/type'+tail)))
+        for index,candidate in enumerate(row['dispatch']):
+            dispatch.append(R.DeclaredDispatchCandidate(boundary.id,tuple(candidate['keys']),candidate['symbol'],
+                ProviderFactReference(artifact,pointer+'/dispatch/'+str(index))))
+    _durable_mkdir(out);ot=_stream(out/'operands.jsonl.gz',operands);dt=_stream(out/'dispatch.jsonl.gz',dispatch)
+    result=dict(schema='scar.native-resource-declarations',schema_version=1,status='DECLARED_OPERANDS_AND_DISPATCH',
+        bindings=str(view.path),bindings_result_sha256=sha256((view.path/'result.json').read_bytes()).hexdigest(),
+        native_boundaries=len(seen),resource_operands=ot,dispatch_candidates=dt,
+        physical_resources_bound=False,resource_uses_created=0,kernels_observed=0,copies_observed=0,
+        type_is_not_consumption_proof=True,target_executed=False,first_stage_complete=False,
+        implementation_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),types_sha256=sha256(Path(R.__file__).read_bytes()).hexdigest(),
+        seconds=time.monotonic()-started)
+    _durable_bytes(out/'result.json',_json(result),replace=False);return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--bindings',required=True);parser.add_argument('--out',required=True)
+    args=parser.parse_args();r=build_resource_declarations(args.bindings,args.out)
+    print(json.dumps({k:r[k] for k in ('status','native_boundaries','seconds')},indent=2))
+
+
+if __name__=='__main__':main()

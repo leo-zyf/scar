@@ -5,7 +5,7 @@ import pytest
 
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.model import CompletionResult, InvokeLiteralResult, TerminatorKind
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connection_validation import common_connections
 from scar.ir.program.protocol_continuations import continuation_connections
 from scar.ir.program.protocols import ContractResult, OwnedUse, ProtocolCallRule as CR

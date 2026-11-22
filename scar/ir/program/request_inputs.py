@@ -1200,7 +1200,7 @@ def request_input_binding(index, raw, input, ordinal=0, *, budget=4096, accounti
     elif type(accounting) is not ValidityBudget or budget != 4096:
         raise TypeError('use one exact shared accounting budget or an integer budget')
     flow = ProtocolFlow(index.graph, budget=accounting) if _flow is None else _flow
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     if type(flow) not in (ProtocolFlow, ConnectionContext) or flow.graph is not index.graph or flow.budget is not accounting:
         raise ValueError('request input query must share this exact graph and accounting flow')
     raw_view = _input_origins_with_flow(index, raw.operation, raw.use, accounting=accounting, _copy_flow=flow, _guard=_guard)

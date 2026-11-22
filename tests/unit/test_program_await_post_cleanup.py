@@ -342,7 +342,7 @@ def _controlled_structured_join(monkeypatch, *, copied, root, delivery):
     from scar.ir.execution.validity_budget import ValidityBudget
     from scar.ir.program import await_inventory_originals as join
     from scar.ir.program.operation_results import result_legs
-    from scar.ir.program.protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
 
     graph, details = await_post_cleanup_program(mode='preserve')
     core = _core(graph)

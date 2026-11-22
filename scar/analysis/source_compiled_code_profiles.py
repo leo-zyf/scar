@@ -21,14 +21,14 @@ from scar.analysis.source_references import ReferenceSlicer
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static.query import _Fragments
-from scar.ir.program import code_identity as C, source_protocols as E, source_bytes as S
-from scar.ir.program import code_identity as CV, code_identity as R
+from scar.ir.program import compiler_symbols as C, source_protocols as E, source_bytes as S
+from scar.ir.program import compiler_symbols as CV, compiler_symbols as R
 from scar.ir.program.call_edges import CapturedCode, CodeCapture
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.launch_provenance import FactMaterialRoute
-from scar.ir.program.code_identity import CompiledCodeProfile, CompiledExecAlternative, CompiledRootCodeMatch
+from scar.ir.program.compiler_symbols import CompiledCodeProfile, CompiledExecAlternative, CompiledRootCodeMatch
 from scar.ir.record_codec import decode
 from scar.trace.code_snapshot import describe_code
 

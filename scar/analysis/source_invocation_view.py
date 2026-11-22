@@ -167,7 +167,7 @@ def derive_invocation_bindings(view,groups,observations,activations,interfaces,t
 class _SharedBody:
     """One original-body membership lens; adjacency stays in its source unit."""
     def __init__(self,view,body):
-        from scar.analysis.source_namespace_interfaces import NamespacePlanView
+        from scar.analysis.source_namespace_contents import NamespacePlanView
         self.body=body;self.source=source=view.unit(body.unit)
         material=getattr(source,'material',None)
         if material is None:raise ValueError('original F4 body material is unavailable')
@@ -371,7 +371,7 @@ class SourceInvocationProvider:
 
 def _original_invocation_groups(store,unit):
     """Reuse the admitted unit replay; decode its original group table once."""
-    from scar.analysis.source_symbol_variants import _table
+    from scar.artifacts import read_record_table as _table
     from scar.analysis.source_world_returns import _table_ref
     from scar.ir.program.source_observations import ObservedSourceFunctionGroup
     from scar.ir.record_codec import decode
@@ -415,7 +415,7 @@ class LazySourceInvocationProvider:
             for unit in sorted(provider.available_units):self.materials.setdefault(unit,store)
         self.rules=tuple(_artifact(path,'scar.source-invocation-provider-rules') for path in (
             Path(__file__),Path(source_invocations.__file__),Path(__import__(
-                'scar.analysis.source_body_activation_view',fromlist=['__file__']).__file__)))
+                'scar.analysis.source_body_activations',fromlist=['__file__']).__file__)))
         self.activation_receipt=encode(_artifact(activations.store.path/'result.json',activations.store.report['schema']))
         if not self.materials:
             self.gaps.append(dict(layer='invocations',kind='SAME_RUN_OBSERVED_FUNCTION_GROUPS_NOT_AVAILABLE',run_scope=self.run_scope))

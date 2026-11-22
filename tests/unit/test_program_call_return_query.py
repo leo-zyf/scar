@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.program.model import ExitKind, TerminatorKind
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import HostTerminal
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.structured import ControlEdgeReference

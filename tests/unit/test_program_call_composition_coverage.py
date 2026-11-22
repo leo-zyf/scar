@@ -3,7 +3,7 @@ from dataclasses import replace
 
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.ids import UseID
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.validation import require_valid
 from tests.fixtures.program_call_composition_graphs import duplicate_argument_composition_program

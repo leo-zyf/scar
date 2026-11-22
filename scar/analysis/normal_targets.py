@@ -25,10 +25,11 @@ from scar.ir.program import normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program import normal_graph as G
 from scar.ir.record_codec import decode,encode
-from scar.analysis.source_templates import _json
-from scar.analysis import source_templates as source_template_batch, source_templates as source_template_workers, normal_output, source_interface_build as source_interface_store, source_content_factors, normal_containers, source_container_delta, source_pack_shapes
+from scar.artifacts import _json
+from scar.analysis import source_templates as source_template_batch, source_templates as source_template_workers, source_interface_build as source_interface_store, source_content_factors, normal_containers, source_container_delta, source_pack_shapes
+from scar import artifacts as artifact_io
 from scar.ir.program import source_protocols as L, data_materials as C
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.analysis.static.query import _Fragments
 from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
@@ -420,7 +421,7 @@ def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=N
     solver.generators.validate_parents()
     solver.generators.close()
     units=solver.units;_durable_mkdir(out)
-    from scar.analysis.normal_output import write_table
+    from scar.artifacts import write_table
     def _stream(path,records):return write_table(path,records,timings=table_write_seconds)
     fragment=_stream(out/'calls.jsonl.gz',solver.links.values())
     content=source_content_factors.write_factors(solver.containers,out)
@@ -462,7 +463,7 @@ def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=N
         suspension_interface_implementation_sha256=sha256(Path(source_suspension_interfaces.__file__).read_bytes()).hexdigest(),
         suspension_interface_types_sha256=sha256(Path(S.__file__).read_bytes()).hexdigest(),
         source_reader_pins={name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in
-            (('batch',source_template_batch),('workers',source_template_workers),('output',normal_output),
+            (('batch',source_template_batch),('workers',source_template_workers),('output',artifact_io),
              ('interfaces',source_interface_store),('interface_types',L),
              ('content_factors',source_content_factors),('content_factor_types',C))},
         interface_summary=None if solver.interface_store is None else solver.interface_store.receipt,
@@ -488,7 +489,7 @@ def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=N
 def solve_entry_targets(facts,out,entries,*,max_events=20_000_000,jobs=None,interfaces=None):
     from scar.analysis import normal_entry,normal_facts
     from scar.ir.program import normal_graph as E
-    from scar.analysis.normal_output import write_table as _stream
+    from scar.artifacts import write_table as _stream
     from heapq import nlargest
     started=time.monotonic();store=normal_facts.SourceFactStore(facts);out=Path(out).absolute()
     catalog_seconds=time.monotonic()-started

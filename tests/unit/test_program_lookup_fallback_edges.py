@@ -12,7 +12,7 @@ from scar.ir.program.model import (
     Behavior, BlockArgument, InvokeLiteralResult, Operation, OperationResult, Successor,
     Terminator, TerminatorKind, Use, UseRole,
 )
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_continuations import continuation_connections
 from scar.ir.program.protocol_connections import NormalizedThrowSource
 from scar.ir.program.protocol_packet_routes import packet_frontiers

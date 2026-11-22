@@ -9,7 +9,7 @@ from hashlib import sha256
 
 from scar.analysis.source_frame_captures import FrameCaptureIndex
 from scar.analysis.namespace_flow import RootNamespaceViews
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.ir.program import normal_graph as F, normal_graph as G, normal_graph as T
 from scar.ir.program import source_frame_bindings as B,source_productions as P
 from scar.ir.record_codec import encode

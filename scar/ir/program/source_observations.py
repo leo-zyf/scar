@@ -22,7 +22,7 @@ from scar.ir.program.python_call_targets import (
 from scar.ir.program.native_callables import NativeCallableFact
 from scar.ir.program.call_operands import OperandCallAttempt
 from scar.ir.program.source_productions import EvaluationRequestEnvironment, ProductionStepID
-from scar.ir.program.code_identity import CompilerCodePath
+from scar.ir.program.compiler_symbols import CompilerCodePath
 
 
 # Shared source CALL interfaces and separate recorded dispatch occurrences.

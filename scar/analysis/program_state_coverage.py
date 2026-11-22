@@ -21,9 +21,9 @@ from scar.analysis.program_view import ProgramView
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_declared_calls import _NoTargets,_check_targets
 from scar.analysis.state_materialization import local_read_tracks
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table
 from scar.analysis.program_state_view import _pins as state_pins,_counts,_rows
 from scar.analysis.program_view_storage import pack_nodes,pack_edges
 from scar.analysis.source_value_flow import _artifact
@@ -34,13 +34,14 @@ _WORKER=None
 
 
 def _pins():
-    from scar.analysis import state_materialization as source_local_state, program_view_storage, program_view, normal_output
+    from scar.analysis import state_materialization as source_local_state, program_view_storage, program_view
+    from scar import artifacts as artifact_io
     from scar.ir import record_codec
     return dict(inventory=sha256(Path(__file__).read_bytes()).hexdigest(),state=state_pins(),
         graph_storage=sha256(Path(program_view_storage.__file__).read_bytes()).hexdigest(),
         graph_mapping=program_view._pins(),
         wire_codec=sha256(Path(record_codec.__file__).read_bytes()).hexdigest(),
-        table_output=sha256(Path(normal_output.__file__).read_bytes()).hexdigest(),
+        table_output=sha256(Path(artifact_io.__file__).read_bytes()).hexdigest(),
         track_selection=sha256(Path(source_local_state.__file__).read_bytes()).hexdigest())
 
 

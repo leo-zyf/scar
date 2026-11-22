@@ -7,7 +7,7 @@ from pathlib import Path
 from functools import partial
 from scar.analysis import source_interface_build as source_interface_build
 from scar.analysis.source_interface_build import SourceInterfaceStore
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode

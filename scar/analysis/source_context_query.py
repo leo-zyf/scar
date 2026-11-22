@@ -8,7 +8,7 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_context_fact_store import ContextFactStore
 from scar.analysis.source_context_interfaces import ContextInterfaceStore
 from scar.analysis.source_namespace_graph import NamespaceGraph
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_productions import _digest
 from scar.ir.program import source_exec_roots as X
 from scar.ir.program import source_paths as B
@@ -37,7 +37,7 @@ class ContextTargetGraph(Q.NormalCallGraph):
         if any(r[name]!=sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in modules):
             raise ValueError('context relation declarations or original implementation differ')
         expected={name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in
-            (('batch',Q.source_template_batch),('workers',Q.source_template_workers),('output',Q.normal_output),
+            (('batch',Q.source_template_batch),('workers',Q.source_template_workers),('output',Q.artifact_io),
              ('interfaces',Q.source_interface_store),('interface_types',Q.L),
              ('content_factors',Q.source_content_factors),('content_factor_types',Q.C))}
         if r['source_reader_pins']!=expected:

@@ -15,8 +15,8 @@ from types import CodeType
 
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program.call_edges import CodeCapture
 from scar.ir.record_codec import decode, encode
 from scar.trace.code_snapshot import describe_code

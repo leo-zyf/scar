@@ -809,7 +809,7 @@ def consumer_graph(ctx, source, choices=()):
                 inventory_complete = proofs_complete = False
             if may is not None:
                 seen = set()
-                from .protocol_connection_validation import _consumer_role
+                from scar.ir.program.protocol_connection_validation import _consumer_role
                 for at, values in may.items():
                     if not ctx.spend('copy_consumer_positions', 1 + len(values)):
                         break
@@ -942,7 +942,7 @@ def _budget(ctx):
 
 def copy_consumers(index, source, *, guard=None, budget=4096):
     from scar.ir.execution.validity_budget import ValidityBudget
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     ctx = ConnectionContext(index.graph, index=index, budget=ValidityBudget(budget))
     return deepcopy(consumer_graph(ctx, source, ctx.selected_edges(guard)))
 

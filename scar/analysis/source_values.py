@@ -47,9 +47,9 @@ from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static.query import _Fragments
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.python_bindings import SourceCallSite
 from scar.ir.program.source_references import SourceArtifactLocator

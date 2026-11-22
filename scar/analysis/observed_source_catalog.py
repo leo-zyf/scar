@@ -14,8 +14,8 @@ import time
 from types import CodeType, MappingProxyType
 
 from scar.analysis.source_declared_catalog import DeclaredSourceCatalog, _receipt, _check, _stamp
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.analysis.observed_code_correspondence import ObservedCompiledLocalMaterial, build_local_material
 
 

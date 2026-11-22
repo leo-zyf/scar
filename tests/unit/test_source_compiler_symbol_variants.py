@@ -15,9 +15,9 @@ from scar.analysis.source_topology_variants import topology_variant_document
 from scar.analysis.source_compiler_symbol_variants import compiler_symbol_variant_document, read_compiler_symbol_variant
 from scar.analysis.compiler_symbols import read_compiler_symbols, _digest
 from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.code_identity import EffectiveCompileContext
+from scar.ir.program.compiler_symbols import EffectiveCompileContext
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.code_identity import SymbolSourceParent, SymbolTextInput
+from scar.ir.program.compiler_symbols import SymbolSourceParent, SymbolTextInput
 from scar.ir.program.source_bytes import TextOpenInterpretation
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode

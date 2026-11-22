@@ -6,7 +6,7 @@ from scar.ir.program import source_productions as P, normal_graph as F, normal_g
 from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_exec_roots import ExecNamespaceKind
 from hashlib import sha256
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.ir.record_codec import encode
 
 

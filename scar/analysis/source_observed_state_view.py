@@ -12,7 +12,7 @@ from scar.analysis.source_observed_state import SCHEMA,compatible_pins
 from scar.analysis.program_state_view import _pins as state_pins
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_declared_catalog import _check
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.record_codec import encode
 from scar.ir.program.dependencies import DependencyNeighborhood as Neighborhood

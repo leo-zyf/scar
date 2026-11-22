@@ -90,7 +90,7 @@ def test_repeated_same_callsite_keeps_invocation_and_caller_boundary_occurrences
     # The real F4 session hook installs discovery without opening every group
     # shard. Its first source query binds that unit; another query reuses it.
     from scar.analysis.build_f4 import F4BuildSession
-    from scar.analysis.source_body_activation_view import SourceBodyActivationProvider
+    from scar.analysis.source_body_activations import SourceBodyActivationProvider
     from scar.ir.program.dependencies import DependencyKind,DependencyMeaning
     from scar.analysis import source_invocation_view as invocation_module
     view=args[0];source=view.unit('unit');source.unit='unit'

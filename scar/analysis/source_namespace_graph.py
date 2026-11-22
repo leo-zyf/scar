@@ -9,16 +9,16 @@ import json
 from pathlib import Path
 import time
 
-from scar.analysis import source_namespace_interfaces as interfaces, source_namespace_contents as contents
-from scar.analysis import namespace_values as captures, source_exec_query as exec_query
+from scar.analysis import source_namespace_contents as interfaces, source_namespace_contents as contents
+from scar.analysis import namespace_values as captures, source_exec_roots as exec_query
 from scar.analysis import source_compiler_symbol_variants as symbols, source_binding_variants
 from scar.analysis import source_suspension_interfaces
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.ir.program import name_flow as N, code_identity as B
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.ir.program import name_flow as N, compiler_symbols as B
 from scar.ir.program import source_productions as P
 from scar.ir.record_codec import decode
 

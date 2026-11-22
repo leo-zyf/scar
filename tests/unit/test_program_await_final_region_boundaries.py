@@ -8,7 +8,7 @@ from scar.ir.program.model import (
     Behavior, CompletionResult, ExitKind, InvokeLiteralResult, Operation,
     OperationResult, ReferenceValue, Use, UseRole,
 )
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.structured import ControlEdgeReference
 from scar.ir.program.validation import require_valid

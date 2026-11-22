@@ -14,10 +14,10 @@ from scar.analysis import source_value_flow as values
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_relation_snapshot import RelationSnapshot, _local_path
 from scar.analysis.source_value_interfaces import connect_value_interfaces
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import source_value_interfaces as V, binding_ports as R, source_productions as P
 from scar.ir.record_codec import encode, decode
 

@@ -24,17 +24,9 @@ from scar.trace.code_snapshot import code_key, describe_code
 from scar.trace.lean_capture import LeanCapturePlan
 from contextlib import nullcontext
 from copy import deepcopy
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.analysis import compiler_stage_cache
-from scar.ir.program import (
-    source_productions as P,
-    normal_graph as F,
-    code_identity as CV,
-    code_identity as BV,
-    code_identity as NV,
-    code_identity as TV,
-    code_identity as SV,
-)
+from scar.ir.program import source_productions as P, normal_graph as F, compiler_symbols as CV, compiler_symbols as BV, compiler_symbols as NV, compiler_symbols as TV, compiler_symbols as SV
 from scar.ir.program.source_declarations import SourceTemplateGraph, SourceTemplateKey
 from scar.ir.program.source_protocols import UnitSourceInterfaces
 
@@ -267,7 +259,7 @@ def _recipe(value):
 
 
 def _write_document(root, name, document):
-    from scar.analysis.source_stage import _durable_bytes
+    from scar.artifacts import _durable_bytes
     raw = _json(document); payload = gzip.compress(raw, compresslevel=3, mtime=0)
     path = name + '.json.gz'; _durable_bytes(root/path, payload, replace=False)
     return dict(path=path, bytes=len(payload), sha256=sha256(payload).hexdigest(),
@@ -299,12 +291,12 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     from scar.analysis.source_f4_variants import construct_graph
     from scar.analysis.source_symbols import _digest
     from scar.analysis.call_compilation import supported_future_flag_mask
-    from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+    from scar.artifacts import _durable_bytes, _durable_mkdir
     from scar.ir.program.source_bytes import SourceBytesProfile
     from scar.ir.program.source_roles import SourceRolesMaterial
-    from scar.ir.program.code_identity import SymbolSourceParent, SymbolTextInput
+    from scar.ir.program.compiler_symbols import SymbolSourceParent, SymbolTextInput
     from scar.ir.program.source_bytes import TextOpenInterpretation
-    from scar.ir.program.code_identity import EffectiveCompileContext
+    from scar.ir.program.compiler_symbols import EffectiveCompileContext
     from scar.trace.code_snapshot import describe_code
 
     started = time.monotonic(); recipe = _recipe(recipe); out = Path(out).absolute()

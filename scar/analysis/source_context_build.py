@@ -19,9 +19,9 @@ from scar.analysis import namespace_flow as source_root_namespace_views
 from scar.ir.program import source_paths as source_builtin_namespaces
 from scar.ir.program import source_frame_bindings
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 
 
 def pins():

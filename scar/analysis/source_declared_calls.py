@@ -17,13 +17,13 @@ import time
 from types import SimpleNamespace
 
 from scar.analysis.source_declared_catalog import read_source_catalog
-from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver
+from scar.analysis.source_namespace_contents import NamespaceReferenceResolver
 from scar.analysis.source_references import source_port
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_value_flow import _artifact
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import call_inputs as D, normal_graph as F, source_productions as P
 from scar.ir.record_codec import decode, encode
 
@@ -167,9 +167,9 @@ def _totals(shards):
 
 
 def _pins():
-    from scar.analysis import source_namespace_interfaces as source_namespace_references, source_references as source_reference_slice, source_class_base_graph
-    from scar.analysis import source_context_query, source_context_fact_store, normal_facts, normal_output
-    from scar.analysis import source_symbol_variants
+    from scar.analysis import source_namespace_contents as source_namespace_references, source_references as source_reference_slice, source_class_base_graph as source_class_base_graph
+    from scar.analysis import source_context_query, source_context_fact_store, normal_facts
+    from scar import artifacts as artifact_io
     from scar.ir.program import name_flow as N, normal_graph as T, normal_graph as G
     from scar.ir import record_codec
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{
@@ -178,7 +178,7 @@ def _pins():
             ('references', source_reference_slice), ('catalog_adapter', source_class_base_graph),
             ('catalog_reader', source_context_query), ('context_facts', source_context_fact_store),
             ('facts', normal_facts), ('fact_types', F), ('target_types', T), ('graph_types', G),
-            ('production_types', P), ('output', normal_output), ('tables', source_symbol_variants),
+            ('production_types', P), ('output', artifact_io), ('tables', artifact_io),
             ('codec', record_codec))})
 
 

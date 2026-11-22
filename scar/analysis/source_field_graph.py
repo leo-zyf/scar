@@ -11,10 +11,10 @@ from scar.analysis.source_relation_snapshot import RelationSnapshot
 from scar.analysis.source_field_interfaces import discover_field_calls, infer_field_method, _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_references import source_port as _gp
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
 from scar.ir.program import source_value_routes as R, normal_graph as T, normal_graph as F
 from scar.ir.program import source_productions as P
 from scar.ir.record_codec import encode, decode

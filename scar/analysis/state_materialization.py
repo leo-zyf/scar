@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_consumer_parents import _stamp
 from scar.ir.program.name_flow import NameDefinitionKind as D
 from scar.ir.program.dependencies import (

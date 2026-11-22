@@ -18,11 +18,11 @@ from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_declared_calls import _NoTargets, _check_targets, _owners
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.ir.program import source_exec_view as R, source_exec_roots as X, source_productions as P
 from scar.ir.program import source_frame_bindings as B, normal_graph as T, normal_graph as G, model as M, view as V
 from scar.ir.program.python_bindings import SourceCallSite
@@ -339,7 +339,7 @@ class SourceExecProvider:
 
 
 def _pins():
-    from scar.analysis import program_view,source_call_view,source_context_query,source_exec_query,source_namespace_graph,source_launch
+    from scar.analysis import program_view, source_call_view, source_context_query, source_exec_roots as source_exec_query, source_namespace_graph, source_launch
     from scar.ir.program import dependencies
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),**{
         name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
@@ -349,8 +349,8 @@ def _pins():
 
 
 def publish_exec_view(provider,out):
-    from scar.analysis.normal_output import write_table
-    from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
+    from scar.artifacts import write_table
+    from scar.artifacts import _durable_bytes, _durable_mkdir
     provider.materials.check();out=Path(out).absolute()
     if out.exists():raise ValueError('fresh exec view output required')
     _durable_mkdir(out);rows=tuple(provider.records.values());tables={}

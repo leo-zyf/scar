@@ -169,7 +169,7 @@ def read_call_operands(trace, root, *, budget=CallOperandBudget(), frame_budget=
         expected = {family: base_files[process, family] for family in ("codes", "events", "meta")}
         _require({item.family: item for item in meta.base_manifest} == expected,
                  "operand metadata does not bind the original frame file manifest")
-        from scar.trace.captured_sources import validate_program_profile, validate_source_metadata
+        from scar.trace.capture_import import validate_program_profile, validate_source_metadata
         program_source = validate_program_profile(base_meta[process], {'rule':meta.rule, 'instructions':meta.instructions})
         if meta.rule == PROCESS_PORTS_RULE:
             actual_entries = {entry.invocation.invocation_id:entry for entry in entries

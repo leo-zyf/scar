@@ -196,7 +196,7 @@ class _CapturedSourceSession:
         from scar.analysis.source_discovery import _root_has_initializer
         from scar.ir.program.providers import ProviderArtifact
         from scar.trace.control_transfers import CaptureCoordinates
-        from scar.trace.captured_sources import PROGRAM_PORTS_PROFILES
+        from scar.trace.capture_import import PROGRAM_PORTS_PROFILES
         candidates=[meta for meta in scanned.metadata if meta.get('capture_profile') in PROGRAM_PORTS_PROFILES]
         _require(candidates,'captured session needs an original program-ports process')
         if coordinates is not None:
@@ -318,7 +318,7 @@ def _read_call_source_seeds(
             ))
         else:
             descriptors[group.code] = captured
-    from scar.trace.captured_sources import PROGRAM_PORTS_PROFILES
+    from scar.trace.capture_import import PROGRAM_PORTS_PROFILES
     captured_session=(_CapturedSourceSession(scanned,root,budget,coordinates,
                                            captured_source_budget=captured_source_budget)
         if any(meta.get('capture_profile')in PROGRAM_PORTS_PROFILES for meta in scanned.metadata)else None)

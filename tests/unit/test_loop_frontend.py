@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.compiler.graph_frontend import GraphRegionRejected
 from scar.compiler.loop_admission import _LoopLowerer
 from scar.compiler.loop_admission import ArrayLoopPlan, document, loop_from_dict, loop_digest

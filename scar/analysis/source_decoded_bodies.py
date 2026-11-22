@@ -12,7 +12,7 @@ from threading import get_ident
 from scar.analysis.source_productions import read_production_plan
 from scar.analysis.source_templates import _check_catalog, _graph
 from scar.analysis.source_templates import _implementation, _require, _worker_stores
-from scar.analysis.source_world_material import WorldMaterial
+from scar.analysis.source_world_flow import WorldMaterial
 from scar.ir.program import source_productions as P, source_declarations as T
 
 _ACTIVE = ContextVar('scar_decoded_source_bodies', default=None)

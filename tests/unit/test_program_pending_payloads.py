@@ -2,7 +2,7 @@
 import pytest
 
 from scar.ir.program.control import PendingPayload
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.validation import require_valid, validate
 from tests.fixtures.program_pending_payload_graphs import (

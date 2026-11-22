@@ -16,8 +16,8 @@ from scar.analysis.source_interface_build import _project
 from scar.analysis.source_interface_build import SourceInterfaceStore, file_receipt, projection_pins
 from scar.analysis.source_productions import _digest
 from scar.analysis.source_references import source_port
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import normal_graph as F, source_productions as P
 from scar.ir.program.suspension_interfaces import WitnessSource
 from scar.ir.record_codec import decode, encode

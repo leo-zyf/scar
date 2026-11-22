@@ -15,7 +15,7 @@ from .sparse_recipe import SCHEMA, verify_sparse_lowering
 
 _ENTRY = 'scar.runtime.sparse_parallel_entry'
 _POOL = 'scar.runtime.sparse_parallel_lu'
-_PREDICTION = 'scar.runtime.sparse_solve_prediction'
+_PREDICTION = 'scar.runtime.sparse_launch'
 _OFFER = _ENTRY + '._OrderedOffers.'
 _TEAM = _POOL + '._ParallelSolver.'
 _DETACHED = _PREDICTION + '.DetachedCSR.'

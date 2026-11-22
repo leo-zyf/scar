@@ -6,9 +6,9 @@ from shutil import rmtree
 from tempfile import TemporaryDirectory
 
 from scar.analysis.interprocedural_summary import SCHEMA
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes
+from scar.artifacts import read_record_table as _table
 from scar.ir.execution_recipe import _LIMIT, _reference, artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 

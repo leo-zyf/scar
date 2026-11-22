@@ -8,7 +8,7 @@ from scar.ir.program.ids import OperationID, UseID
 from scar.ir.program.lifecycle import SessionPost
 from scar.ir.program.model import CompletionResult, InvokeLiteralResult
 from scar.ir.program.protocol_async import async_connections
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import AsyncSessionOutcome
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.structured import ControlEdgeReference

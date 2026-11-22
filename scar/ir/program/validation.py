@@ -739,7 +739,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         if (has_protocol_connection_capability(graph) or graph.exception_matches
                 or graph.protocol_operations and any(op.callee is not None for op in graph.operations)):
             from .queries import ProgramIndex
-            from .protocol_connection_flow import ConnectionContext
+            from scar.ir.program.protocol_connection_validation import ConnectionContext
             prepared = ProgramIndex._from_validated_core(
                 graph, cleanup_facts, resumption_facts, lifecycle_facts)
             ctx = ConnectionContext(graph, index=prepared)
@@ -752,7 +752,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
             error(code, path, message)
     if not issues and ctx is not None:
         if has_protocol_connection_capability(graph) or graph.exception_matches:
-            from .protocol_connection_validation import connection_reports
+            from scar.ir.program.protocol_connection_validation import connection_reports
             for code, path, message in connection_reports(ctx)["issues"]:
                 error(code, path, message)
     if not issues and _prepared_index is not None and prepared is not None:

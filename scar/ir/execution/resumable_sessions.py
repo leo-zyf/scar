@@ -120,7 +120,7 @@ def _handled_host(ctx, source, path, exported, target, host, shared):
         # This bounded projection cannot flatten repeated visits to one site.
         return None
     from scar.ir.program.handled_completion_routes import handled_terminal_relation
-    from scar.ir.program.protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     static = ConnectionContext(ctx.program, index=ctx.body_program_index, budget=shared)
     occurrences = {operation.id: occurrence for operation, occurrence, _ in path}
     block_visits = {}

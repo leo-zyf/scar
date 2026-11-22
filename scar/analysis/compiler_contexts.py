@@ -7,11 +7,7 @@ from scar.analysis.source_compilation_contexts import CompilationContextIndex
 from scar.analysis.source_scope_annotation_interfaces import ScopeAnnotationIndex
 from scar.analysis.source_root_interfaces import RootInterfaceIndex
 from scar.analysis.source_productions import ProductionSourceIndex
-from scar.ir.program.code_identity import (
-    SourceContextVariant,
-    CompilerCodePath,
-    CompilerCodeRole as Role,
-)
+from scar.ir.program.compiler_symbols import SourceContextVariant, CompilerCodePath, CompilerCodeRole as Role
 from collections import defaultdict
 from scar.analysis.compiler_topology import compiler_topology_catalog
 

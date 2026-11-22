@@ -14,7 +14,7 @@ from pathlib import Path
 from scar.analysis.build_resources import BuildResourceProvider, _key
 from scar.analysis.build_target_resources import RetainedBuildTarget, target_kind_role
 from scar.analysis.source_call_view import source_call_site
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.program_view import SOURCE_REPRESENTATION, _digest
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_resource_graph import SourceResourceGraph, _target, _pins as resource_pins
@@ -110,7 +110,7 @@ class LazyF4Resources:
     @staticmethod
     def _pins():
         from scar.analysis import build_resources, source_effects, source_resource_graph, target_graph
-        from scar.analysis import build_target_resources, source_call_view, source_namespace_interfaces as source_namespace_interfaces
+        from scar.analysis import build_target_resources, source_call_view, source_namespace_contents as source_namespace_interfaces
         paths = {__file__, *(module.__file__ for module in (build_resources, source_effects,
             source_resource_graph, target_graph, build_target_resources, source_call_view,
             source_namespace_interfaces, R))}

@@ -7,7 +7,6 @@ import argparse
 from dataclasses import replace
 from hashlib import sha256
 from io import BytesIO, TextIOWrapper
-import gzip
 import json
 import os
 from pathlib import Path
@@ -23,13 +22,14 @@ from scar.analysis import source_context_variants as contexts, source_symbols as
 from scar.analysis import source_compiled_values as compiled, source_values as source_text_values
 from scar.analysis import source_symbol_context_adapter as adapter_module
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.analysis.static.query import _Fragments
-from scar.ir.program import code_identity as V, code_identity as C
-from scar.ir.program import code_identity as X, source_bytes as S
+from scar.artifacts import read_record_table as _table
+from scar.ir.program import compiler_symbols as V, compiler_symbols as C
+from scar.ir.program import compiler_symbols as X, source_bytes as S
 from scar.ir.program.source_paths import SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile
 from scar.ir.program.source_bytes import SourceTokenWarning
 from scar.ir.record_codec import decode, encode
@@ -183,17 +183,6 @@ def read_symbol_variant(document,context_document,f0,f1,f2,f3b,payload,worker,*,
     if document != fresh:
         raise ValueError('symbol variant differs from its retained context/native view')
     return variant
-
-
-def _table(path,receipt):
-    raw = (path/receipt['path']).read_bytes()
-    if len(raw)!=receipt['bytes'] or sha256(raw).hexdigest()!=receipt['sha256']:
-        raise ValueError('stored context binding table differs')
-    decoded = gzip.decompress(raw)
-    if (len(decoded)!=receipt['decoded_bytes'] or decoded.count(b'\n')!=receipt['records']
-            or sha256(decoded).hexdigest()!=receipt['decoded_sha256']):
-        raise ValueError('decoded context binding table differs')
-    return tuple(json.loads(line) for line in decoded.splitlines())
 
 
 def _source_parents(store,identity):

@@ -375,7 +375,7 @@ def handled_completion(index, source, terminal, *, budget=4096):
     """Public detached view, with one shared budget for all derived work."""
     from copy import deepcopy
     from scar.ir.execution.validity_budget import ValidityBudget
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     from .protocols import HostTerminal
     if type(terminal) is not HostTerminal:
         raise TypeError('handled completion requires an exact original HostTerminal')

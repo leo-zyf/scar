@@ -271,7 +271,7 @@ def project_await_links(ctx, scope, shared):
     """Derive this scope with the public query's one shared traversal budget."""
     from scar.ir.program.protocol_await import await_inventory
     from scar.ir.program.protocol_await_records import AwaitBodyLink
-    from scar.ir.program.protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     if ctx.body_program_index is None:
         return
     flow = ConnectionContext(ctx.program, index=ctx.body_program_index, budget=shared)

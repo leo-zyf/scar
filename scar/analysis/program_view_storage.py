@@ -6,7 +6,7 @@ templates, reconstructs nested namespaces or substitutes source evidence.
 """
 from itertools import zip_longest
 
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.ir.program import view as V, source_productions as P, normal_graph as G
 from scar.ir.program.dependencies import DependencyPoint, DependencyCondition
 from scar.ir.record_codec import _decode, _record_tags

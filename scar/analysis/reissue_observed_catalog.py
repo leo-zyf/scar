@@ -13,8 +13,8 @@ import re
 import time
 
 from scar.analysis.source_declared_catalog import _check, _receipt
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 
 
 REISSUE_SCHEMA = 'scar.observed-source-catalog-reissue'

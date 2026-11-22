@@ -11,10 +11,10 @@ import os
 from pathlib import Path
 import time
 
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import binding_ports as B, source_productions as P, state_ports as S
 from scar.ir.record_codec import decode,encode
 

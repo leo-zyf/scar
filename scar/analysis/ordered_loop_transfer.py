@@ -11,10 +11,10 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.source_call_view import function_interface_fact,source_call_site,source_caller_scope
 from scar.analysis.source_control import loop_dependencies, _enclosed
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
-from scar.analysis.source_selected_call_window import derive_selected_call_window
+from scar.analysis.source_observed_calls import derive_selected_call_window
 from scar.ir.program import ordered_regions as R, normal_graph as F, normal_graph as G
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program.model import ValueKind,ValueType

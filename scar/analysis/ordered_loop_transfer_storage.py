@@ -18,7 +18,7 @@ from scar.analysis.read_ordered_lifetimes import (_header as _life_header,
     _tables as _life_tables,_graph as _life_graph)
 from scar.analysis.read_ordered_activations import (_header as _activation_header,
     _read_tables as _activation_tables)
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.ir.program import ordered_regions as R
 from scar.ir.program import call_returns as W
 from scar.ir.program.dependencies import DependencyEdge
@@ -35,13 +35,14 @@ _FIELDS={'schema','schema_version','lifetime_publication','activation_publicatio
 
 
 def _pins():
-    from scar.analysis import ordered_loop_transfer, source_control as source_loop_dependencies, source_value_flow, source_references as source_reference_slice, source_namespace_interfaces as source_namespace_interfaces, source_call_view, normal_graph, normal_output, read_ordered_lifetimes, ordered_region_lifetime, source_selected_call_window
+    from scar.analysis import ordered_loop_transfer, source_control as source_loop_dependencies, source_value_flow, source_references as source_reference_slice, source_namespace_contents as source_namespace_interfaces, source_call_view, normal_graph, read_ordered_lifetimes, ordered_region_lifetime, source_observed_calls as source_selected_call_window
+    from scar import artifacts as artifact_io
     from scar.ir.program import call_returns as W
     from scar.ir import record_codec
     modules=(('storage',__import__(__name__,fromlist=['__file__'])),('transfer',ordered_loop_transfer),
         ('transfer_types',R),('loop_interfaces',source_loop_dependencies),('value_flow',source_value_flow),
         ('reference_paths',source_reference_slice),('namespace_interfaces',source_namespace_interfaces),
-        ('original_call_interfaces',source_call_view),('normal_edges',normal_graph),('table_writer',normal_output),
+        ('original_call_interfaces',source_call_view),('normal_edges',normal_graph),('table_writer',artifact_io),
         ('codec',record_codec),('lifetime_replayer',read_ordered_lifetimes),
         ('selected_call_window',source_selected_call_window),('selected_call_window_types',W))
     return dict(rules={name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in modules},
@@ -133,7 +134,7 @@ def _live_parent(provider,reference):
 
 def publish_ordered_loop_transfers(provider,out,*,lifetime_publication):
     """Publish an unregistered extension after checking its existing parents."""
-    from scar.analysis.normal_output import write_table
+    from scar.artifacts import write_table
     if type(provider)is not OrderedLoopTransferProvider:raise TypeError('original ordered loop transfer provider required')
     if any(p is provider for p in provider.view.dependencies.providers):
         raise ValueError('publish parent lifetime before registering its loop extension; construct with register=False')

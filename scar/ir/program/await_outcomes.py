@@ -157,7 +157,7 @@ def case_binding(ctx, source, actual, choices):
 
 def consumers(ctx, source, choices=()):
     """Indexed position-sensitive may inventory, with explicit call boundaries."""
-    from .protocol_connection_validation import _consumer_role
+    from scar.ir.program.protocol_connection_validation import _consumer_role
     choices = ctx.selected_edges(choices)
     if not hasattr(ctx, '_await_outcome_consumers'):
         ctx._await_outcome_consumers = {}

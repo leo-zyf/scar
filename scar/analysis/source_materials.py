@@ -116,7 +116,7 @@ def _acquire_material(task):
 
 
 def _write_material_report(out, report):
-    from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+    from scar.artifacts import _durable_bytes, _durable_mkdir
     from scar.analysis.static_program import _json
     _durable_mkdir(out)
     _durable_bytes(out / 'result.json', _json(report), replace=False)
@@ -132,7 +132,8 @@ def archive_model_source_bytes(model, out, *, jobs=4, max_bytes=64 * 1024 * 1024
     """
     from scar.analysis.static_program import _artifacts, _json, _write, read_static_program
     from scar.analysis.static.query import _Fragments
-    from scar.analysis.source_stage import _durable_bytes, _sync_directory, _sync_file
+    from scar.analysis.source_stage import _sync_file
+    from scar.artifacts import _durable_bytes, _sync_directory
     if type(jobs) is not int or not 1 <= jobs <= 32 or type(max_bytes) is not int or max_bytes < 1:
         raise ValueError('F0 requires bounded positive jobs and byte budgets')
     started = time.monotonic()
@@ -311,7 +312,8 @@ def verify_model_source_bytes(model, out):
 
 def main(argv=None):
     from scar.analysis.static_program import _json, _write
-    from scar.analysis.source_stage import _durable_mkdir, _sync_directory, _sync_file
+    from scar.analysis.source_stage import _sync_file
+    from scar.artifacts import _durable_mkdir, _sync_directory
     parser = argparse.ArgumentParser(prog='scar source-bytes')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--model')

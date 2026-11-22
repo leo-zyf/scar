@@ -11,9 +11,9 @@ from pathlib import Path
 
 from scar.analysis.program_view import _digest
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_name_access_anchors import _bindings, anchor_name_accesses
+from scar.analysis.source_stack_routes import _bindings, anchor_name_accesses
 from scar.analysis.source_name_definitions import reaching_name_definitions
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_consumer_parents import _stamp
@@ -230,7 +230,7 @@ class SourceStateProvider:
             kind = S.BindingAccessKind.HANDLE if ins.action is P.ClassProtocolActionKind.CELL_REFERENCE else S.BindingAccessKind.WRITE
             payload = context.result(step) if kind is S.BindingAccessKind.HANDLE else context.value(step.arguments[1])
         else:
-            from scar.analysis.source_namespace_interfaces import identify_implicit_namespace
+            from scar.analysis.source_namespace_contents import identify_implicit_namespace
             from scar.analysis.annotation_state import identify_annotation_namespace
             implicit = identify_annotation_namespace(self.bindings,self.declarations,
                 self.root_scopes,self.class_scopes,context,step)

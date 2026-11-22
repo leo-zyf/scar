@@ -151,7 +151,7 @@ class _Sources:
         self.site_links, self.operand_links = {}, {}
         self.qualified_bodies = {}
         self.total_source_bytes = 0
-        from scar.analysis.source_body_access import SourceBodyAccess
+        from scar.analysis.source_body_expansion import SourceBodyAccess
         self.source_access = inventory if type(inventory) is SourceBodyAccess else None
         if self.source_access is not None:
             _require(captured_source_owner is None,
@@ -984,7 +984,7 @@ def _link_call_model(trace, project_root, inventory=None, budget=CallEdgeBudget(
         root = Path(project_root)
         _require(root.is_absolute() and '..' not in root.parts and str(root) == str(project_root),
                  'captured source namespace must retain its exact original absolute root')
-    from scar.analysis.source_body_access import SourceBodyAccess
+    from scar.analysis.source_body_expansion import SourceBodyAccess
     partitioned_access = inventory if type(inventory) is SourceBodyAccess else None
     if inventory is not None:
         versions = (5, 6, 7, 8) if allow_v6 else (4, 5)

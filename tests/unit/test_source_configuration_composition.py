@@ -2,7 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from scar.analysis.source_configuration_composition import _Builder,_package
+from scar.analysis.source_configuration_composition import _Builder, _package
 from scar.ir.program.configuration import ConfigurationStepKind
 
 

@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+from scar.artifacts import _durable_bytes, _durable_mkdir
 
 
 _WORKERS = {

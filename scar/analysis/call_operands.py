@@ -199,7 +199,7 @@ def _link_call_operands(trace, project_root, inventory=None, *, frame_budget=Cal
     from scar.analysis.call_operand_reader import read_call_operands
     from scar.analysis.call_operand_routes import build_operand_routes
 
-    from scar.analysis.source_body_access import SourceBodyAccess
+    from scar.analysis.source_body_expansion import SourceBodyAccess
     _require(progress is None or callable(progress), "progress must be callable or None")
     _require(source_port_consumer is None or callable(source_port_consumer),
              "source-port consumer must be callable or None")

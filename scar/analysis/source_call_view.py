@@ -14,7 +14,7 @@ from typing import Protocol,runtime_checkable
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_function_interfaces import SourceFunctionInterfaceStore
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
@@ -176,7 +176,7 @@ class SourceFunctionCallProvider:
         self.captures=FunctionCaptureStateProvider(view)
         self.returned=None
         if callable(getattr(self.store,'callable_provenance',None)):
-            from scar.analysis.source_callable_provenance_view import ReturnedCallableProvider
+            from scar.analysis.source_creation_view import ReturnedCallableProvider
             self.returned=ReturnedCallableProvider(self)
         # A projection over retained observations can be an in-memory reader.
         # Its evidence remains the original immutable plan/record, rather

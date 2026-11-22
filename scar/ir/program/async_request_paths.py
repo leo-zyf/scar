@@ -371,7 +371,7 @@ def request_no_drive_paths(index, scope=None, *, budget=4096):
     reports only prepare the original inventory and do not run this walk.
     """
     from scar.ir.execution.validity_budget import ValidityBudget
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     shared = ValidityBudget(budget)
     ctx = ConnectionContext(index.graph, index=index, budget=shared)
     inventory = request_no_drive_inventory(ctx)

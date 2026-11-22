@@ -62,7 +62,7 @@ class RegionMetadataCollector:
             if tracker is None:
                 if not self._start_monitor():return self
             else:
-                from scar.trace.numpy_allocation_epochs import AllocationEpochTracker
+                from scar.trace.native_memory import AllocationEpochTracker
                 if not self.plan.stateful_inputs:raise ValueError('stateful input ports are needed for allocation epochs')
                 self.combined=True
                 self.allocation_epochs=AllocationEpochTracker(tracker)

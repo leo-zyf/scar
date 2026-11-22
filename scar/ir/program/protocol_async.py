@@ -972,7 +972,7 @@ class _Analysis:
 
 def async_connections(ctx):
     """Analyze once per shared context; no provider execution or implicit IO."""
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     if type(ctx) is not ConnectionContext:
         raise TypeError('async connections require the exact shared ConnectionContext')
     cached = getattr(ctx, '_async_connections_report', None)

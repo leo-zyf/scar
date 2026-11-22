@@ -9,8 +9,8 @@ from pathlib import Path
 import time
 
 from scar.analysis.build import BuildSession
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.stateful_dependency_view import StatefulDependencyProvider,publish_stateful_graph,read_stateful_graph
 from scar.analysis.ordered_region_activation import OrderedRegionActivationProvider
 from scar.analysis.source_call_view import SourceFunctionCallProvider

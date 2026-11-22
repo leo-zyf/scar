@@ -10,7 +10,7 @@ from scar.ir.program.model import (
     TerminatorKind, value_type,
 )
 from scar.ir.program.protocol_async import _Analysis, async_connections
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import OwnedUse, RequestProcessingRule
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.resumption import ResumeSlotKind

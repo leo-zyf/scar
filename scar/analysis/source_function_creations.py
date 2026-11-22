@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_declared_calls import _NoTargets, _check_targets, _folder, _flat_tables
 from scar.analysis.source_graph_material import source_graph_material
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.namespace_values import extract_captures
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.ir.program import function_sites as R
@@ -33,10 +33,10 @@ from scar.ir.program.structured import PythonProtocolKind as Protocol
 from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode, decode
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 
 
 SCHEMA = 'scar.source-function-creations'
@@ -231,9 +231,10 @@ def _stamp(path):
 
 
 def _pins():
-    from scar.analysis import source_graph_material as materials, source_world_material
-    from scar.analysis import source_namespace_interfaces as source_namespace_interfaces, namespace_values as source_namespace_captures, source_references as source_reference_slice
-    from scar.analysis import source_symbol_variants, normal_output, source_declared_calls, source_stage
+    from scar.analysis import source_graph_material as materials, source_world_flow as source_world_material
+    from scar.analysis import source_namespace_contents as source_namespace_interfaces, namespace_values as source_namespace_captures, source_references as source_reference_slice
+    from scar.analysis import source_declared_calls, source_stage
+    from scar import artifacts as artifact_io
     from scar.ir import record_codec
     from scar.ir.program import normal_graph as normal_links, protocol_signatures, signature_patterns, model, source_declarations as source_template_links
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
@@ -242,8 +243,8 @@ def _pins():
         ('globals_captures', source_namespace_captures), ('facts', source_reference_slice),
         ('fact_types', normal_links), ('target_types', T), ('graph_types', G), ('production_types', P),
         ('template_types', source_template_links), ('protocol_abi', protocol_signatures),
-        ('signature_types', signature_patterns), ('value_types', model), ('tables', source_symbol_variants),
-        ('output', normal_output), ('catalog_reader', source_declared_calls),
+        ('signature_types', signature_patterns), ('value_types', model), ('tables', artifact_io),
+        ('output', artifact_io), ('catalog_reader', source_declared_calls),
         ('durable_output', source_stage), ('codec', record_codec))}
 
 

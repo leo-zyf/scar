@@ -9,7 +9,7 @@ from scar.ir.program.model import (
     TerminatorKind, ValueKind,
 )
 from scar.ir.program.protocol_await import _result_copy
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import OwnedUse
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.structured import ControlEdgeReference

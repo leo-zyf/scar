@@ -147,7 +147,7 @@ def _caller(scope, reference, document):
 
 def _stateful(scope, reference, payload):
     from scar.runtime.compiled_stateful_capsule import verify_profile
-    from scar.runtime.final_entry_capsule import STATEFUL_PROFILE, TRUST, runtime_identity
+    from scar.runtime.compiled_entry import STATEFUL_PROFILE, TRUST, runtime_identity
 
     _context(scope, payload['entry_context'])
     _require(payload['schema_version'] == 1 and payload['profile_kind'] == STATEFUL_PROFILE

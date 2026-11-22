@@ -12,11 +12,11 @@ from pathlib import Path
 from scar.analysis.compiler_contexts import CompilerCodeIndex
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_references import ReferenceSlicer
-from scar.analysis.source_templates import _json
+from scar.artifacts import _json
 from scar.analysis.static.query import _Fragments
 from scar.compiler.graph_frontend import _source_identity
 from scar.ir.program.call_edges import CapturedCode
-from scar.ir.program.code_identity import CompilerCodeRole as Role
+from scar.ir.program.compiler_symbols import CompilerCodeRole as Role
 from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode

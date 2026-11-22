@@ -6,7 +6,7 @@ import sysconfig
 import numpy as np
 import pytest
 
-from scar.trace.numpy_allocation_epochs import AllocationEpochTracker, build_tracker
+from scar.trace.native_memory import AllocationEpochTracker, build_tracker
 
 
 @pytest.mark.skipif(sys.platform != 'linux' or sysconfig.get_config_var('Py_GIL_DISABLED')

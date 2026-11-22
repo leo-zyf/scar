@@ -7,7 +7,7 @@ cost authority: this profile currently permits unmeasured validation only.
 from hashlib import sha256
 from pathlib import Path
 
-from .compiled_entry import artifact_reference,read_artifact,run_build
+from scar.runtime.compiled_entry import artifact_reference, read_artifact, run_build
 from .compiled_deployment import selected_rows
 from .native_loop import _file_hash_and_header
 from .stateful_contract import inspect_stateful_bundle,SCHEMA,ADMISSION_SCHEMA

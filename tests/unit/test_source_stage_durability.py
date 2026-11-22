@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from scar.analysis.source_stage import SourceStage, _durable_bytes
+from scar.analysis.source_stage import SourceStage
+from scar.artifacts import _durable_bytes
 from scar.analysis.static_program import _json, _write, read_static_program
 
 

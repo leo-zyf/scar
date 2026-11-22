@@ -177,7 +177,7 @@ def test_unknown_packet_root_does_not_contradict_a_real_return_replacement():
     from scar.ir.execution.validity_budget import ValidityBudget
     from scar.ir.program.control import LanguageCompletionKind
     from scar.ir.program.model import OperationResult, ReferenceValue, TerminatorKind
-    from scar.ir.program.protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     from scar.ir.program.protocol_packet_routes import packet_continuations
     from scar.ir.program.protocols import OwnedUse, StaticGapReason
     from tests.fixtures.program_packet_continuation_graphs import _explicit_transfers

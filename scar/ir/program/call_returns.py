@@ -322,7 +322,7 @@ class CallReturns:
         A result target stops at that exact original call's kind/full slot;
         no input Use or arbitrary later consumer stands in for a result.
         """
-        from .protocol_connection_flow import _answer
+        from scar.ir.program.protocol_connection_validation import _answer
         ctx, routes, unresolved = self.ctx, [], False
         target_call = None
         if result is not None:
@@ -424,7 +424,7 @@ class CallReturns:
 def source_binding(index, expected, actual, *, guard=None, budget=4096):
     """Single-source, detached query; never grants transformation authority."""
     from scar.ir.execution.validity_budget import ValidityBudget
-    from .protocol_connection_flow import ConnectionContext
+    from scar.ir.program.protocol_connection_validation import ConnectionContext
     accounting = ValidityBudget(budget)
     ctx = ConnectionContext(index.graph, index=index, budget=accounting)
     port = ctx.port(expected)

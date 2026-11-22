@@ -7,12 +7,12 @@ import json
 from pathlib import Path
 import time
 
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_effects import catalog
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _json
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import state_ports as S, source_productions as P, data_materials as C
 from scar.ir.program import data_materials as L
@@ -23,8 +23,8 @@ from scar.ir.record_codec import encode, decode
 
 def _pins():
     from scar.analysis import source_state, source_effects, source_name_definitions
-    from scar.analysis import source_name_access_anchors, source_value_flow, program_view
-    from scar.analysis import source_namespace_interfaces as source_implicit_namespaces
+    from scar.analysis import source_stack_routes as source_name_access_anchors, source_value_flow, program_view
+    from scar.analysis import source_namespace_contents as source_implicit_namespaces
     from scar.analysis import annotation_state as source_annotation_namespaces
     from scar.analysis import source_content, source_content_interfaces
     from scar.analysis import class_bindings as source_environment_values

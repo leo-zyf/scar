@@ -129,7 +129,7 @@ def _trace(args) -> int:
         if control_codes:env['SCAR_CONTROL_CODES'] = json.dumps(control_codes)
         if epoch_region is not None:
             from scar.compiler.input_metadata import read_input_boundary
-            from scar.trace.numpy_allocation_epochs import build_tracker
+            from scar.trace.native_memory import build_tracker
             region = Path(epoch_region).resolve()
             if not read_input_boundary(region).stateful_inputs:
                 raise SystemExit('--stateful-allocation-epochs requires a stateful array region')
@@ -183,7 +183,7 @@ def _trace(args) -> int:
             env['SCAR_OPERAND_MAX_EVENTS'] = str(args.max_operand_events)
             env['SCAR_OPERAND_MAX_BYTES'] = str(args.max_operand_bytes)
             if program_ports:
-                from scar.trace.captured_sources import PROGRAM_PORTS_PROFILE, PROCESS_PORTS_PROFILE
+                from scar.trace.capture_import import PROGRAM_PORTS_PROFILE, PROCESS_PORTS_PROFILE
                 env['SCAR_PYTHON_CAPTURE_PROFILE'] = (PROCESS_PORTS_PROFILE if port_profile == 'process-ports'
                                                       else PROGRAM_PORTS_PROFILE)
                 env['SCAR_STREAM_BACKING_OBSERVATIONS'] = '1'

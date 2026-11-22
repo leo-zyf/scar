@@ -14,7 +14,7 @@ from scar.ir.program.model import (
 )
 from scar.ir.program.protocol_await_records import CoroutineAwaitWrapper, WrapperHeldBody
 from scar.ir.program.protocol_await import _result_copy
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import HostTerminal, OwnedUse, ProtocolProfile, OutcomeAdapterRule
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.resumption import ResumableKind, SuspendTerminator, SuspensionFlavor

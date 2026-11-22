@@ -10,14 +10,14 @@ import json
 from pathlib import Path
 import re
 
-from scar.analysis.source_configuration_composition_store import read_configuration_composition
-from scar.analysis.source_configuration_request_store import read_configuration_requests
+from scar.analysis.source_configuration_composition import read_configuration_composition
+from scar.analysis.source_configuration_requests import read_configuration_requests
 from scar.analysis.source_data_materials import _artifact
 from scar.analysis.source_override_syntax import OverrideSyntax
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_templates import _json
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes
+from scar.artifacts import _json
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import configuration as O, launch_provenance as L, source_productions as P
 from scar.ir.program.configuration import ConfigurationProtocolSource

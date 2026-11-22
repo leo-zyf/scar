@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.compiler.model import SourceRef,ArrayRegion,Expr
 from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline, document, pipeline_from_dict, prepare_pipeline_leaf, pipeline_digest
 from scar.compiler.pipeline_frontend import _PipelineLowerer, _global_functions

@@ -16,7 +16,7 @@ from scar.ir.record_codec import decode
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.sparse_parallel_cost import SCHEMA as COST, check
 from scar.runtime.sparse_parallel_entry import SCHEMA
-from scar.runtime.sparse_solve_launch import LAUNCH as SERIAL_LAUNCH
+from scar.runtime.sparse_launch import LAUNCH as SERIAL_LAUNCH
 
 SCOPE = 'scar.sparse-parallel-scope'
 RECIPE = 'scar.sparse-parallel-detached-recipe'

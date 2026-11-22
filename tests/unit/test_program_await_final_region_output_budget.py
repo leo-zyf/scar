@@ -8,7 +8,7 @@ from scar.ir.program.model import (
     InvokeLiteralResult, Operation, OperationResult, StateVersionValue,
     Successor, Terminator, TerminatorKind, Use, UseRole,
 )
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocols import OwnedUse
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.region_implementation import region_implementation

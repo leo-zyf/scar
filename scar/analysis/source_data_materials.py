@@ -13,9 +13,9 @@ from scar.analysis.static.sources import _absolute, _has_symlink_component, _rea
 from scar.ir.literals import PythonLiteral, LiteralKind
 from scar.ir.program import data_materials as D
 from scar.ir.program.providers import ProviderArtifact
-from scar.analysis import normal_output, source_symbol_variants
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar import artifacts as artifact_io
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir import record_codec as codec
 
 
@@ -207,7 +207,7 @@ def pins():
     directory = Path(__file__).parent
     paths = dict(store=Path(__file__), parser=directory/'source_data_materials.py',
         types=Path(D.__file__), codec=Path(codec.__file__),
-        table_writer=Path(normal_output.__file__), table_reader=Path(source_symbol_variants.__file__))
+        table_writer=Path(artifact_io.__file__), table_reader=Path(artifact_io.__file__))
     return {name: sha256(path.read_bytes()).hexdigest() for name, path in paths.items()}
 
 
@@ -355,7 +355,7 @@ def write_data_material(material, raw, out):
     initial = pins()
     _durable_mkdir(out)
     _durable_bytes(out/'source.bin', raw, replace=False)
-    tables = {name: normal_output.write_table(out/(name+'.jsonl.gz'), getattr(material, name)) for name in _TABLES}
+    tables = {name: artifact_io.write_table(out/(name+'.jsonl.gz'), getattr(material, name)) for name in _TABLES}
     report = dict(schema=_SCHEMA, schema_version=1, status=_STATUS,
         **{name: codec.encode(getattr(material, name)) for name in _HEADER},
         raw_source=dict(path='source.bin', bytes=len(raw), sha256=sha256(raw).hexdigest()),
@@ -393,7 +393,7 @@ class DataMaterialStore:
         for name, kind in _TABLES.items():
             receipt = r['tables'][name]
             _receipt(receipt, name+'.jsonl.gz', table=True)
-            document = source_symbol_variants._table(self.path, receipt)
+            document = artifact_io.read_record_table(self.path, receipt)
             _require(len(document) == receipt['records'], 'data table record count differs')
             rows[name] = tuple(codec.decode(kind, item) for item in document)
         document = {name: r[name] for name in _HEADER}

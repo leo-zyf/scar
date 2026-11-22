@@ -11,7 +11,7 @@ from scar.analysis.session_caller_effects import _source
 from scar.analysis.source_decoded_bodies import source_body_access
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_control import _enclosed, loop_dependencies
-from scar.analysis.source_name_access_anchors import anchor_name_accesses
+from scar.analysis.source_stack_routes import anchor_name_accesses
 from scar.analysis.source_name_definitions import reaching_name_definitions
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow

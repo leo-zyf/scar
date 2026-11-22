@@ -1,32 +1,34 @@
-"""Connect standard exec code-value alternatives to verified F4 root graphs.
+"""Source exec roots."""
 
-The graph contains namespace selection, conditional builtins insertion,
-closure checks, audit, a shared body call and discard/release. None selection
-uses identity predicates. Protocol values never impersonate source ports.
-"""
 import argparse
-from hashlib import sha256
 import json
+from hashlib import sha256
 from pathlib import Path
-
-from scar.analysis import source_f4_variants as f4,source_execution,source_compiled_values as compiled
-from scar.analysis import source_context_variants, source_compilation_contexts as source_compilation_contexts
-from scar.analysis import source_symbol_variants
+from scar.analysis import (
+    source_f4_variants as f4,
+    source_execution,
+    source_compiled_values as compiled,
+    source_context_variants,
+    source_compilation_contexts as source_compilation_contexts,
+    source_f4_variants,
+)
+from scar import artifacts as artifact_io
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import read_record_table as _table, _durable_bytes, _durable_mkdir, _json
 from scar.ir.effects import ActionLabel as L
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_exec_roots as X, source_protocols as E, code_identity as C
-from scar.ir.program import code_identity as CV, normal_graph as G, normal_graph as T, normal_graph as F
+from scar.ir.program import source_exec_roots as X, source_protocols as E, compiler_symbols as C, compiler_symbols as CV, normal_graph as G, normal_graph as T, normal_graph as F, source_productions as P
 from scar.ir.program.source_declarations import SourceTemplateGraph
 from scar.ir.program.control import LanguageCompletionKind as K
-from scar.ir.program.model import ValueType,ValueKind
-from scar.ir.program import source_productions as P
-from scar.ir.record_codec import encode,decode
+from scar.ir.program.model import ValueType, ValueKind
+from scar.ir.record_codec import encode, decode, _decode, _record_tags
 
 
+# Connect standard exec code-value alternatives to verified F4 root graphs.
+#
+# The graph contains namespace selection, conditional builtins insertion,
+# closure checks, audit, a shared body call and discard/release. None selection
+# uses identity predicates. Protocol values never impersonate source ports.
 def _conditions(*groups):
     return tuple(dict.fromkeys(value for group in groups for value in group))
 
@@ -159,7 +161,7 @@ def exec_root_connections(boundary,candidate,root_template,root,free_variables,*
 def pins():
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('f4',f4),('builtins',source_execution),('compiled',compiled),('contexts',source_context_variants),
-        ('compiler_digest',source_compilation_contexts),('table_reader',source_symbol_variants),('types',X))}
+        ('compiler_digest',source_compilation_contexts),('table_reader',artifact_io),('types',X))}
 
 
 def build_exec_roots(facts,executions,compiled_sources,f4_graphs,out):
@@ -224,7 +226,7 @@ def build_exec_roots(facts,executions,compiled_sources,f4_graphs,out):
                         frame_kind=frame_kind,code_use=use)
                     connections.extend(edges);obligations.extend(pending)
     _durable_mkdir(out)
-    from scar.analysis.normal_output import write_table
+    from scar.artifacts import write_table
     tables={name:write_table(out/(name+'.jsonl.gz'),rows) for name,rows in
         (('connections',connections),('obligations',obligations))}
     if ((store.path/'result.json').read_bytes()!=store.raw or any(path.read_bytes()!=raw for path,raw in snapshots)
@@ -245,6 +247,69 @@ def main():
     for name in ('facts','executions','compiled-sources','f4-graphs','out'):parser.add_argument('--'+name,required=True)
     args=parser.parse_args()
     print(json.dumps(build_exec_roots(args.facts,args.executions,args.compiled_sources,args.f4_graphs,args.out)),flush=True)
+
+
+# Navigate exec boundary regions and expand their shared compiled subgraphs.
+class ExecRootGraph:
+    """Small reference index; body graphs stay in their compilation stores."""
+    def __init__(self,path):
+        self.path=Path(path).absolute();r=json.loads((self.path/'result.json').read_bytes());self.report=r
+        if (r['schema'],r['schema_version'])!=('scar.source-exec-roots',1):
+            raise ValueError('expected exec root graph')
+        if (r['implementation_sha256']!=sha256(Path(__file__).read_bytes()).hexdigest()
+                or r['pins']!=pins() or r['profile']!='NORMAL_SUCCESS'):
+            raise ValueError('exec graph producer or normal-path scope differs')
+        if sha256((Path(r['source_facts'])/'result.json').read_bytes()).hexdigest()!=r['source_facts_sha256']:
+            raise ValueError('exec source fact catalog differs')
+        self.parents={}
+        for name in ('source_execution','compiled_sources','f4_graphs'):
+            ref=r[name];root=Path(ref['path']);raw=(root/'result.json').read_bytes()
+            if sha256(raw).hexdigest()!=ref['sha256']:
+                raise ValueError('exec graph parent differs: '+name)
+            report=json.loads(raw)
+            if report['source_facts_sha256']!=r['source_facts_sha256']:
+                raise ValueError('exec graph source parent differs')
+            self.parents[name]=(root,report)
+        root,fr=self.parents['f4_graphs']
+        if (fr['implementation_sha256']!=sha256(Path(source_f4_variants.__file__).read_bytes()).hexdigest()
+                or fr['pins']!=source_f4_variants.pins()):
+            raise ValueError('exec body rules or source graph producer differ')
+        self.tags=_record_tags(P.PRODUCTION_RECORD_TAGS)
+
+    def connections(self):
+        for wire in _table(self.path,self.report['tables']['connections']):
+            value=_decode(X.ExecRootConnection,wire,self.tags)
+            if value.root.owner.unit not in self.parents['f4_graphs'][1]['variants']:
+                raise ValueError('exec root has no referenced subgraph')
+            if value.code_use is None or value.code_use.exec_result!=value.site.result:
+                raise ValueError('exec connection lost its original code-use witness')
+            if value.profile!='NORMAL_SUCCESS' or value.normal_result.to_python() is not None:
+                raise ValueError('exec normal-result contract differs')
+            yield value
+
+    def _rows(self,connection,table):
+        root,report=self.parents['f4_graphs'];descriptor=report['variants'][connection.root.owner.unit]
+        yield from _table(root/descriptor['path'],descriptor['tables'][table])
+
+    def expand_root(self,connection):
+        rows=list(self._rows(connection,'templates'))
+        if len(rows)!=1:raise ValueError('exec body has multiple graph headers')
+        graph=_decode(SourceTemplateGraph,rows[0],self.tags)
+        root=next(n for n in graph.templates if n.key==connection.root.template)
+        if graph.unit!=connection.root.owner.unit or root.root!=connection.root.region:
+            raise ValueError('exec root interface differs from shared graph')
+        return graph
+
+    def root_edges(self,connection):
+        for wire in self._rows(connection,'normal_edges'):
+            yield _decode(G.Edge,wire,self.tags)
+
+    def root_facts(self,connection):
+        rows=list(self._rows(connection,'facts'))
+        if len(rows)!=1:raise ValueError('exec body has multiple primitive fact fragments')
+        facts=_decode(F.UnitFacts,rows[0],self.tags)
+        if facts.root_scope!=connection.root:raise ValueError('exec primitive root witness differs')
+        return facts
 
 
 if __name__=='__main__':main()

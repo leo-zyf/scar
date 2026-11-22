@@ -246,7 +246,7 @@ def _rows(provider):
 
 
 def _tables(path,report,provider):
-    from scar.analysis.source_symbol_variants import _table
+    from scar.artifacts import read_record_table as _table
     expected=_rows(provider)
     if set(report['tables'])!=set(expected):raise ValueError('caller value table domain differs')
     absent=object();counts={}
@@ -282,7 +282,7 @@ def _replay(reference,view,provider,original=None):
 
 def publish_caller_values(proof_reference,out,*,view,provider,proof=None,input_shapes=None):
     """Return (report, replayed_proof); perform one original proof replay."""
-    from scar.analysis.normal_output import write_table
+    from scar.artifacts import write_table
     replayed=_replay(proof_reference,view,provider,proof);pins=_pins()
     values=CallerPipelineValueProvider(replayed,proof_reference,view=view,provider=provider,input_shapes=input_shapes)
     out=Path(out).resolve()

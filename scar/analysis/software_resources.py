@@ -10,8 +10,8 @@ from hashlib import sha256
 from pathlib import Path
 from scar.analysis.python_binding_query import PythonBindingGraph
 from scar.analysis.target_graph import TargetHardwareGraph, _artifact
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json, _stream
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json, write_table as _stream
 from scar.ir.program import (
     native_contracts as S,
     target_hardware as H,

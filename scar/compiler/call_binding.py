@@ -62,7 +62,7 @@ def _static_call_mapping(view,unit):
     """Load the original static mapper only for explicit planning/replay."""
     from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
     from scar.analysis.source_references import ReferenceSlicer, source_port
-    from scar.analysis.source_namespace_interfaces import NamespacePlanView
+    from scar.analysis.source_namespace_contents import NamespacePlanView
     from scar.analysis.source_declared_calls import _owners
 
     class _StaticCallMapping:

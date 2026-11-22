@@ -6,7 +6,7 @@ import pytest
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.program.ids import ValueID
 from scar.ir.program.model import DataValue, LiteralOrigin, StateVersionValue
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_connections import RequestAssociation, SessionOccupancyCondition
 from scar.ir.program.protocols import AdmissionPredicate
 from scar.ir.program.queries import ProgramIndex

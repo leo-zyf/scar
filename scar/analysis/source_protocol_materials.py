@@ -7,14 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.source_constructor_interfaces import (
-    _site,
-    _stage,
-    _source_entry,
-    _SOURCE,
-    _PENDING,
-)
-from scar.analysis.source_symbol_variants import _table
+from scar.analysis.source_class_base_graph import _site, _stage, _source_entry, _SOURCE, _PENDING
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_consumer_parents import _stamp
 from scar.ir.program import (
@@ -559,9 +553,9 @@ class SourceProtocolCallProvider:
 
 def publish_protocol_view(provider, out):
     """Write small unit shards; source and native bodies remain references."""
-    from scar.analysis.normal_output import write_table
-    from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-    from scar.analysis.source_templates import _json
+    from scar.artifacts import write_table
+    from scar.artifacts import _durable_bytes, _durable_mkdir
+    from scar.artifacts import _json
     provider.materials.check(); out = Path(out).absolute()
     if out.exists(): raise ValueError('fresh protocol-view output required')
     _durable_mkdir(out); shards = {}

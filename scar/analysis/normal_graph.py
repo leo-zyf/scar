@@ -16,8 +16,9 @@ import time
 
 from scar.analysis.source_compilation_contexts import _at, _item, references
 from scar.analysis.source_productions import _digest, read_production_plan
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
-from scar.analysis.source_templates import read_template_graph, _worker_stores, _stream, _json, _read_graph_table
+from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory
+from scar.analysis.source_templates import read_template_graph, _worker_stores, _read_graph_table
+from scar.artifacts import write_table as _stream, _json
 from scar.ir.program import normal_graph as G
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_declarations import SourceTemplateKey

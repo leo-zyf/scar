@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scar.analysis.source_world_returns import read_world_returns
 from scar.analysis.source_relation_snapshot import RelationSnapshot, _local_path
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.ir.program import declared_contexts as D, source_productions as P
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode

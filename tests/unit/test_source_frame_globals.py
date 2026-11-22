@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from scar.analysis.normal_targets import _Solver
 from scar.analysis.source_frame_globals import FrameGlobalsFlow
 from scar.analysis.namespace_values import extract_captures
-from scar.analysis.source_namespace_interfaces import NamespacePlanView, CallerReferencePaths
+from scar.analysis.source_namespace_contents import NamespacePlanView, CallerReferencePaths
 from scar.ir.program import normal_graph as F, normal_graph as G, source_productions as P
 from scar.ir.record_codec import decode,encode
 from tests.unit.test_source_construction_connections import source_facts

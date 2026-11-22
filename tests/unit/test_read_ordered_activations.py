@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scar.analysis import read_ordered_activations as reader
-from scar.analysis.normal_output import write_table
+from scar.artifacts import write_table
 from scar.ir.program.ordered_regions import OrderedInputBoundary
 
 

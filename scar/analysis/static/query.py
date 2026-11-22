@@ -7,11 +7,11 @@ and decoded receipts before projecting their original records.
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
-import io
 import json
 from pathlib import Path
+
+from scar.artifacts import read_gzip_payload
 
 
 def _wire(value):
@@ -36,25 +36,7 @@ class _Fragments:
         self.core_graphs = {}
 
     def read(self, descriptor):
-        relative = Path(descriptor["path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("fragment path escapes static model")
-        path = self.root / relative
-        if path.resolve() != path or path.is_symlink() or not path.is_file():
-            raise ValueError("fragment is absent or traverses a symlink")
-        stored_size, decoded_size = descriptor["bytes"], descriptor["decoded_bytes"]
-        if any(type(n) is not int or n < 0 for n in (stored_size, decoded_size)):
-            raise ValueError("fragment byte receipts must be nonnegative integers")
-        with path.open("rb") as source:
-            payload = source.read(stored_size + 1)
-        if len(payload) != stored_size or hashlib.sha256(payload).hexdigest() != descriptor["sha256"]:
-            raise ValueError("stored fragment receipt differs: " + str(relative))
-        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as source:
-            decoded = source.read(decoded_size + 1)
-        if (len(decoded) != decoded_size or
-                hashlib.sha256(decoded).hexdigest() != descriptor["decoded_sha256"]):
-            raise ValueError("decoded fragment receipt differs: " + str(relative))
-        document = json.loads(decoded)
+        document = json.loads(read_gzip_payload(self.root, descriptor, kind='fragment'))
         if type(document) is not dict:
             raise ValueError("fragment root must be a JSON object")
         self.receipts.append(dict(descriptor))

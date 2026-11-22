@@ -9,7 +9,7 @@ from functools import cache
 
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_compilation_contexts import _at, _item
-from scar.analysis.source_name_access_anchors import anchor_name_accesses
+from scar.analysis.source_stack_routes import anchor_name_accesses
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state

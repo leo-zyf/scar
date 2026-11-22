@@ -17,13 +17,13 @@ from typing import get_args
 
 from scar.analysis.source_connection_contracts import body_entry_rules, validate_connection_plan
 from scar.analysis.source_productions import _digest as _plan_digest
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
-from scar.analysis.normal_output import write_table
+from scar.artifacts import read_record_table as _table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import write_table
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import source_productions as P, normal_graph as G
 from scar.ir.program import body_observations as R
@@ -234,7 +234,7 @@ def body_interface(view, body):
 
 
 def _modules():
-    from scar.analysis import source_connection_contracts, source_namespace_interfaces as source_namespace_interfaces
+    from scar.analysis import source_connection_contracts, source_namespace_contents as source_namespace_interfaces
     from scar.analysis import source_productions, program_view
     from scar.ir import record_codec
     return (

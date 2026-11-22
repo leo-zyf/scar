@@ -4,7 +4,7 @@ import pytest
 
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis import source_body_interfaces as body_reader
-from scar.analysis import source_body_activation_view as port_view
+from scar.analysis import source_body_activations as port_view
 from scar.ir.program import body_observations as B, source_productions as P, normal_graph as G
 from scar.ir.program.normal_graph import Body, GlobalPort
 from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness

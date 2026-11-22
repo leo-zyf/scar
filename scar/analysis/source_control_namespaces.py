@@ -18,15 +18,15 @@ import time
 
 from scar.analysis.source_declared_calls import DeclaredCallStore, _NoTargets, _check_targets, _folder, _flat_tables
 from scar.analysis.source_graph_material import source_graph_material
-from scar.analysis.source_name_access_anchors import anchor_name_accesses, _bindings
+from scar.analysis.source_stack_routes import anchor_name_accesses, _bindings
 from scar.analysis.source_name_definitions import reaching_name_definitions
-from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver, _Query
+from scar.analysis.source_namespace_contents import NamespaceReferenceResolver, _Query
 from scar.analysis.source_references import source_port
-from scar.analysis.source_symbol_variants import _table
+from scar.artifacts import read_record_table as _table
 from scar.analysis.source_value_flow import _artifact, project_value_flow
-from scar.analysis.normal_output import write_table
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import write_table
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.ir.program import name_flow as R, name_flow as A
 from scar.ir.program import name_flow as D, name_flow as N
 from scar.ir.program import normal_graph as F, normal_graph as T, source_productions as P
@@ -182,8 +182,8 @@ def _unit(unit, anchors, tracks, filters, queries):
 
 
 def _pins():
-    from scar.analysis import source_name_access_anchors, source_name_definitions, source_graph_material, source_value_flow
-    from scar.analysis import source_namespace_interfaces as source_namespace_interfaces, source_world_flow, source_productions
+    from scar.analysis import source_stack_routes as source_name_access_anchors, source_name_definitions, source_graph_material, source_value_flow
+    from scar.analysis import source_namespace_contents as source_namespace_interfaces, source_world_flow as source_world_flow, source_productions
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{
         name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (
             ('types', R), ('anchors', source_name_access_anchors), ('anchor_types', A),

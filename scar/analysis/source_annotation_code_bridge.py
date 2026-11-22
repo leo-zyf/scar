@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import CodeType
 
-from scar.analysis.source_namespace_interfaces import NamespacePlanView
+from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.ir.program import source_productions as P, normal_graph as T
 from scar.ir.program.source_observations import ObservedSourceRequestKind as Kind
 from scar.ir.program.source_declarations import SourceTemplateKey

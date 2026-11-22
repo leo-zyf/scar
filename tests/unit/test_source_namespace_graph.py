@@ -1,5 +1,5 @@
 """Namespace order, deletion and actual function globals survive projection."""
-from scar.analysis.source_namespace_interfaces import extract_namespace_interfaces, CallerReferencePaths
+from scar.analysis.source_namespace_contents import extract_namespace_interfaces, CallerReferencePaths
 from scar.ir.program import source_productions as P, source_bindings as B, source_declarations as D
 from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode, encode

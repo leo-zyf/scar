@@ -20,8 +20,8 @@ from scar.analysis.compiled_local_interfaces import build_material_interfaces, C
 from scar.analysis.observed_code_correspondence import build_local_material, ObservedCompiledLocalMaterial
 from scar.analysis.observed_external_sources import ExternalSourceMatches
 from scar.analysis.source_interface_build import file_receipt, projection_pins
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_templates import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
 from scar.trace.code_snapshot import describe_code
 
 

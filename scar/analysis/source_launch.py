@@ -13,8 +13,8 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static.query import _Fragments
-from scar.analysis.source_templates import _json
-from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+from scar.artifacts import _json
+from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.analysis.call_compilation import future_flags_for
 from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.literals import PythonLiteral

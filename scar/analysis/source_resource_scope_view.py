@@ -119,8 +119,8 @@ class SourceResourceScopeProvider:
 def verify_resource_scope_graph(path,out,*,index=None):
     """Read stored observations and check every exposed relation in both directions."""
     import time
-    from scar.analysis.source_stage import _durable_bytes
-    from scar.analysis.source_templates import _json
+    from scar.artifacts import _durable_bytes
+    from scar.artifacts import _json
     started=time.monotonic();store=ResourceScopeStore(path,index=index)
     provider=SourceResourceScopeProvider(store.index.view,store);checked=0
     for edges in provider.out_edges.values():

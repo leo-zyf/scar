@@ -13,7 +13,7 @@ from scar.ir.program.model import OperationResult, ProtocolValue
 from scar.ir.program.protocols import OwnedUse, HostTerminal
 from copy import deepcopy
 from scar.ir.execution.validity_budget import ValidityBudget
-from scar.ir.program.protocol_connection_flow import ConnectionContext
+from scar.ir.program.protocol_connection_validation import ConnectionContext
 from scar.ir.program.protocol_packet_routes import completion_continuations as _query
 
 
