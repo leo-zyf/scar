@@ -7,7 +7,6 @@ of runtime dispatch, resource placement or whole-program graph closure.
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
-from importlib import import_module
 import json
 import os
 from pathlib import Path
@@ -19,21 +18,6 @@ import time
 from scar.artifacts import _durable_bytes, _durable_mkdir
 
 
-_WORKERS = {
-    'static': 'scar.analysis.static_program',
-    'source-bytes': 'scar.analysis.source_materials',
-    'source-tokens': 'scar.analysis.source_lexing',
-    'source-syntax': 'scar.analysis.source_parsing',
-    'source-symbols': 'scar.analysis.source_symbol_materials',
-    'source-roles': 'scar.analysis.source_role_materials',
-    'source-contexts': 'scar.analysis.source_context_interfaces',
-    'source-declarations': 'scar.analysis.source_declaration_materials',
-    'source-bindings': 'scar.analysis.source_binding_materials',
-    'compiler-topology': 'scar.analysis.compiler_topology_materials',
-    'compiler-symbols': 'scar.analysis.compiler_symbol_materials',
-    'program-types': 'scar.analysis.source_type_materials',
-    'source-anchors': 'scar.analysis.source_anchor_materials',
-}
 _DOMAINS = ('expressions', 'statements', 'roots')
 
 
@@ -43,23 +27,9 @@ def _run_worker(argv):
     if stage != domain and domain in _DOMAINS:
         from scar.analysis.source_expression_materials import main as materials
         return materials(arguments, domain=domain)
-    if stage not in _WORKERS:
-        raise SystemExit(f'unknown frontend stage {stage}')
-    return import_module(_WORKERS[stage]).main(arguments)
+    raise SystemExit(f'unknown frontend stage {stage}')
 
 
-_LAYERS = (
-    ('source-bytes', 'scar.source-material-gate'),
-    ('source-tokens', 'scar.source-token-gate'),
-    ('source-syntax', 'scar.source-syntax-gate'),
-    ('source-symbols', 'scar.source-symbol-gate'),
-    ('source-roles', 'scar.source-role-gate'),
-    ('source-contexts', 'scar.source-context-gate'),
-    ('source-declarations', 'scar.source-declaration-gate'),
-    ('source-bindings', 'scar.source-binding-gate'),
-    ('compiler-topology', 'scar.compiler-topology-gate'),
-    ('compiler-symbols', 'scar.compiler-symbol-gate'),
-)
 def _receipt(path):
     raw = path.read_bytes()
     return dict(path=str(path), bytes=len(raw), sha256=sha256(raw).hexdigest())
@@ -168,7 +138,7 @@ def _reuse_source_model(run, model, roots, sources):
             raise ValueError('source-model manifest changed during input admission')
         receipt = dict(schema='scar.source-frontend-input',schema_version=1,
             model=str(model),manifest=dict(path=str(manifest),bytes=len(original),sha256=sha256(original).hexdigest()),
-            selected_sources=receipts,reused_layers=['source',*(name for name,_ in _LAYERS)],
+            selected_sources=receipts,reused_layers=['F0', 'F1', 'F2', 'F3'],
             scope='ORIGINAL_F0_F3_INPUTS_WITH_SELECTED_SOURCE_IDENTITY_AND_CURRENT_BYTES_CHECKED',
             whole_f0_f3_corpus_revalidated=False,f4_prerequisite_replay_required=True,
             source_ids_rewritten=False,target_executed=False)
@@ -270,13 +240,11 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
             raise ValueError('connection input classification domains are not closed')
         connection_reference_catalog()
         if source_model is None:
-            extra_roots = [part for p in paths[1:] for part in ('--source-root',p)]
-            run.worker('source', ['static',paths[0],*extra_roots,'--out',model,
-                '--phase','sources','--jobs',jobs], model/'manifest.json', 'scar.static-program',
-                phase='sources', source_catalog_status='COMPLETE', worker_errors=[], source_changed=[])
-            for command, schema in _LAYERS:
-                run.worker(command, [command,'--model',model,'--out',out/command,
-                    '--jobs',jobs], out/command/'result.json', schema, complete_for_declared_units=True)
+            layers = out/'source-layers'/'result.json'
+            run.stage('source-layers', 'scar.compiler.frontend.source',
+                [*paths, '--model', model, '--report', layers, '--jobs', jobs], layers,
+                'scar.source-layer-batch', complete_for_declared_units=True, target_executed=False)
+            report['source_layers'] = _receipt(layers)
         else:
             model, source_manifest = _reuse_source_model(run,source_model,paths,sources)
             report['source_input'] = _receipt(out/'source-input.json')

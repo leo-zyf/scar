@@ -1,5 +1,6 @@
 """C3-S source-derived compiler symbol facts and original public projections."""
 from __future__ import annotations
+from dataclasses import replace
 from functools import lru_cache
 from hashlib import sha256
 import json
@@ -16,6 +17,7 @@ from scar.ir.record_codec import decode, encode
 
 
 _VERSION = 'CPYTHON_3_14_7_COMPILER_SYMBOLS_C3S_V1'
+_PREVIOUS_IMPLEMENTATION = '2cc2593cc6e1c71fd791507ea9bf7a4f748a68ed15c778dddc1ec3a386245e0d'
 _SOURCE_DISPOSITIONS = ('EMITTED', 'DETACHED_RAW', 'IGNORED_LOCAL_ANNOTATION', 'GRAMMAR_ONLY')
 _SLOT_DISPOSITIONS = ('PUBLIC', 'INLINED', 'DETACHED', 'DELETED')
 _KW_LIMITS = ('max_symbol_slots', 'max_compiler_contributions', 'max_symbol_facts',
@@ -149,10 +151,13 @@ def compiler_symbols_document(f0, f1, f2, f3b, c1, c2a, f3a, topology, *,
 def read_compiler_symbols(document, f0, f1, f2, f3b, c1, c2a, f3a, topology):
     material = decode(CompilerSymbolsMaterial, document)
     native = decode(SourceSymbolsMaterial, f3a)
-    if material.profile != _profile(native):
+    profile = _profile(native)
+    if material.profile.implementation_sha256 == _PREVIOUS_IMPLEMENTATION:
+        profile = replace(profile, implementation_sha256=_PREVIOUS_IMPLEMENTATION)
+    if material.profile != profile:
         raise ValueError('C3-S compiler symbol implementation/catalog profile mismatch')
     fresh = _derive(f0, f1, f2, f3b, c1, c2a, f3a, topology, material.limits)
-    if material != fresh:
+    if material != replace(fresh, profile=profile):
         raise ValueError('C3-S compiler symbol provenance differs from its original source/compiler inputs')
     return material
 

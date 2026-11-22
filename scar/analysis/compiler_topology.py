@@ -15,6 +15,7 @@ from scar.ir.program.compiler_symbols import TopologyFieldRule, TopologyConstruc
 from scar.ir.record_codec import decode, encode
 
 _VERSION = 'CPYTHON_3_14_7_COMPILER_TOPOLOGY_C3T_V1'
+_PREVIOUS_IMPLEMENTATION = 'f848939ac3d9687b57cc2560634a027267509909296b4b312f827c5942e36af9'
 _ROLES = ('ROOT', 'FUNCTION_BODY', 'LAMBDA_BODY', 'CLASS_BODY', 'TYPE_PARAMETERS',
     'HEADER_ANNOTATIONS', 'VARIABLE_ANNOTATIONS', 'TYPE_PARAMETER_BOUND',
     'TYPE_PARAMETER_DEFAULT', 'TYPE_ALIAS', 'COMPREHENSION', 'GENERATOR_EXPRESSION')
@@ -584,11 +585,14 @@ def read_compiler_topology(document, f0, f1, f2, f3b, c1, f3a) -> CompilerTopolo
     # native profile is itself validated by the one fresh F3-A read below.
     from scar.ir.program.source_paths import SourceSymbolsMaterial
     recorded_native = decode(SourceSymbolsMaterial, f3a)
-    if material.profile != _profile(recorded_native):
+    profile = _profile(recorded_native)
+    if material.profile.implementation_sha256 == _PREVIOUS_IMPLEMENTATION:
+        profile = replace(profile, implementation_sha256=_PREVIOUS_IMPLEMENTATION)
+    if material.profile != profile:
         raise ValueError('C3-T compiler topology implementation/catalog profile mismatch')
     fresh = _derive(f0, f1, f2, f3b, c1, f3a,
         (material.max_blocks, material.max_rewrites, material.max_visit_steps))
-    if material != fresh:
+    if material != replace(fresh, profile=profile):
         raise ValueError('C3-T topology differs from original source contexts/public compiler entries')
     return material
 

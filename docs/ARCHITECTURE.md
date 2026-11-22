@@ -17,6 +17,8 @@
 
 源语言适配位于 `compiler/frontend/`。Python 源码规则与结构校验集中在 `analysis/static/lowering/`，原生适配使用 `frontend/clang.py`、`frontend/fortran.py` 和 `frontend/graph.py`。构图交出操作、数据与状态、跨单元调用、硬件和原始证据。整数 `switch` 通过有序分支和 SSA 参数建模，无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。
 
+Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。每个单元按层消费指定的上游记录，源码目录在所有单元完成后一次性发布。`source-layers/result.json` 记录层依赖、运行进程数和清单摘要，F4 构图继续按摘要读取各单元工件并独立核对规则。
+
 ## 2. 中端
 
 | 层 | 功能 | 输入 | 交接产物 |
