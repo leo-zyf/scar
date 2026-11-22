@@ -20,7 +20,7 @@ from scar.ir.execution_recipe import read_artifact
 
 
 SCHEMA = 'scar.cpu-import-initializer-observation'
-_BOOTSTRAP = bindings._BOOTSTRAP.with_name('original_import_initializer_monitor.py')
+_ARCHIVED_MONITOR = '75be92bb1d4883ef1a40e5f37eb129e37929a64c5e63c6b1abc669f9119f46e9'
 _SPAWN_CORE = 'spawn-observer.py'
 _INITIALIZERS = 'initializers'
 _PROCESS = 'scar.cpu-import-initializer-process'
@@ -57,12 +57,16 @@ def _inputs(reference):
     return admitted, prior, spec, watch, sites, original, dict(sorted(sources.items()))
 
 
-def _invocation(spec, root, sites, sources):
+def _invocation(spec, root, sites, sources, *, archived=False):
     config, launch = bindings._invocation(spec, root, sites, follow_spawn=True)
-    config.update(spawn_observer=str(root/_SPAWN_CORE), initializer_directory=str(root/_INITIALIZERS),
+    observer = str(root/bindings._OBSERVER)
+    config.update(spawn_observer=str(root/_SPAWN_CORE) if archived else observer,
+        initializer_directory=str(root/_INITIALIZERS),
         initializer_sources=[dict(module_name=name, source_path=path, source_bytes=_raw(reference))
                              for (name, path), reference in sources.items()],
         max_initializer_activations=_LIMIT)
+    if not archived:
+        config['observer_core'] = observer
     return config, launch
 
 
@@ -232,12 +236,18 @@ def _activations(root, report, original, sites, sources):
 
 def _record(root, admission_ref, inputs):
     admitted, prior, spec, watch, sites, original, sources = inputs
-    config, launch = _invocation(spec, root, sites, sources)
     script = _ref(root/bindings._OBSERVER, bindings._SOURCE)
-    spawn = _ref(root/_SPAWN_CORE, bindings._SOURCE)
+    stored = _raw(script)
+    archived = script['sha256'] == _ARCHIVED_MONITOR
+    config, launch = _invocation(spec, root, sites, sources, archived=archived)
+    spawn = _ref(root/_SPAWN_CORE, bindings._SOURCE) if archived else script
     request = _ref(root/bindings._CONFIG, bindings._RAW)
-    _need(_raw(script) == _BOOTSTRAP.read_bytes() and _raw(spawn) == bindings._SPAWN_BOOTSTRAP.read_bytes()
-          and _raw(request) == (repr(config) + '\n').encode(), 'exact monitor or pinned request changed')
+    if archived:
+        _raw(spawn)
+        _need(spawn['sha256'] == bindings._ARCHIVED_SPAWN, 'archived monitor spawn observer changed')
+    else:
+        _need(stored == bindings._BOOTSTRAP.read_bytes(), 'initializer monitor changed')
+    _need(_raw(request) == (repr(config) + '\n').encode(), 'pinned request changed')
     run = _ref(root/'run.json', bindings._STATUS)
     timing = read_artifact(run)
     _need(type(timing['status']) is int and timing['status'] == 0
@@ -249,7 +259,7 @@ def _record(root, admission_ref, inputs):
     _observation(spec, stdout, publications)
     report = dict(artifacts=dict(bootstrap=script, spawn_observer=spawn, request=request, run=run,
                                  stdout=stdout, stderr=stderr, publications=publications))
-    bindings._add_processes(report, root, spec, sites, timing)
+    bindings._add_processes(report, root, spec, sites, timing, observer_core=None if archived else script)
     activations = _activations(root, report, original, sites, sources)
     original_arm = spec['arms']['original']
     report.update(schema=SCHEMA, schema_version=1, admission=admission_ref,
@@ -276,9 +286,7 @@ def measure_cpu_import_initializer_observation(admission_ref, out):
     (root/'published').mkdir(parents=True, exist_ok=False)
     (root/_INITIALIZERS).mkdir()
     (root/bindings._PROCESSES).mkdir()
-    (root/bindings._OBSERVER).write_bytes(_BOOTSTRAP.read_bytes())
-    (root/_SPAWN_CORE).write_bytes(bindings._SPAWN_BOOTSTRAP.read_bytes())
-    (root/bindings._OBSERVER_CORE).write_bytes(bindings._BOOTSTRAP.read_bytes())
+    (root/bindings._OBSERVER).write_bytes(bindings._BOOTSTRAP.read_bytes())
     (root/bindings._CONFIG).write_text(repr(config) + '\n', encoding='utf-8')
     transcript = spec['transcript']
     with (root/'stdout.bin').open('xb') as stdout, (root/'stderr.bin').open('xb') as stderr:

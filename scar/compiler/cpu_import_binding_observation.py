@@ -28,10 +28,10 @@ _RAW = 'application/octet-stream'
 _SOURCE = 'scar.python-source'
 _ORIGIN_KINDS = {'ABSOLUTE_FILE', 'BUILT_IN', 'FROZEN', 'NAMESPACE', 'UNKNOWN'}
 _BOOTSTRAP = Path(__file__).resolve().parents[1]/'runtime/original_import_bindings_spawn.py'
-_SPAWN_BOOTSTRAP = _BOOTSTRAP
 # Exact receipts of the historical observers published before the common bootstrap.
 _ARCHIVED_CORE = 'b230a4590c9e4e565af182f01f1885e063b9b0a95128ffa27de86b4e1f0350ad'
 _ARCHIVED_SPAWN = '12b15a243b205e6c5c1a48c8d32523caff9a275caa5a00617345c762e7021291'
+_ARCHIVED_LEXICAL = '5d90b1b3ec524ad27e8e542cc8a3649c9ed849101ea22b613dcbc414edc1928f'
 _OBSERVER_CORE = 'observer-core.py'
 _PROCESSES = 'processes'
 _PROCESS_SCHEMA = 'scar.cpu-original-import-process'
@@ -50,7 +50,7 @@ def _need(ok, reason):
 def _bootstrap_matches(reference, *, follow_spawn=False):
     saved = _raw(reference)
     archived = _ARCHIVED_SPAWN if follow_spawn else _ARCHIVED_CORE
-    return reference['sha256'] == archived or saved == _BOOTSTRAP.read_bytes()
+    return reference['sha256'] in (archived, _ARCHIVED_LEXICAL) or saved == _BOOTSTRAP.read_bytes()
 
 
 def _codes(code):
@@ -225,7 +225,7 @@ def _process_row(slot, pid, *, raw=None, reference=None, spawn=None):
                 capture=reference, spawn=spawn, entries_omitted=None if raw is None else raw['entries_omitted'])
 
 
-def _add_processes(report, root, spec, sites, timing):
+def _add_processes(report, root, spec, sites, timing, *, observer_core=None):
     from scar.runtime.original_import_bindings_spawn import diagnostic_spawn_argv, spawn_payload_fds
 
     launcher = timing.get('launcher_pid')
@@ -236,7 +236,7 @@ def _add_processes(report, root, spec, sites, timing):
     paths = set(folder.iterdir())
     _need(0 < len(paths) <= _SPAWN_LIMIT + 1 and
           sum(p.stat().st_size for p in paths) <= _TOTAL_PROCESS_BYTES, 'process evidence exceeds the replay budget')
-    core = _ref(root/_OBSERVER_CORE, _SOURCE)
+    core = _ref(root/_OBSERVER_CORE, _SOURCE) if observer_core is None else observer_core
     _need(_bootstrap_matches(core), 'shared original import observer changed')
 
     cpus = sorted(spec['cpu_ids'])
