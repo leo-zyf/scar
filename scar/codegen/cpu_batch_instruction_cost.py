@@ -10,19 +10,16 @@ from copy import deepcopy
 import ctypes
 from hashlib import sha256
 import json
-import math
 import os
 from pathlib import Path
 import random
 import re
 import resource
-import statistics
 import subprocess
 import sys
 import time
 
-from . import cpu_instruction_cost as S
-from . import cpu_parallel_instruction_cost as P
+from . import cpu_instruction_cost as C
 from .cpu_fused_cost import _HERE,_Layout,_hash,_json,_receipt,_require,_save
 from scar.ir.execution_recipe import artifact_reference,read_artifact
 
@@ -35,12 +32,12 @@ class _Mask(ctypes.Structure):
 
 
 def _registry():
-    result=[deepcopy(r) for r in S._registry() if not r['holdout']]
+    result=[deepcopy(r) for r in C._registry() if not r['holdout']]
     result[0]['id']='batch_stage_floor'
     for i,(family,n,extra) in enumerate((('SERIAL_FANIN',3,6),('SERIAL_FANIN',5,12),
         ('BALANCED_FANIN',7,7),('BALANCED_FANIN',3,7),('PARALLEL_BRANCHES',3,6),
         ('PARALLEL_BRANCHES',7,8),('SHARED_BRANCHES',5,8),('SHARED_BRANCHES',7,12))):
-        case=S.V2._case(family,n,extra,seed=907+i,holdout=True);pool=5 if i%2==0 else 8
+        case=C.V2._case(family,n,extra,seed=907+i,holdout=True);pool=5 if i%2==0 else 8
         for node in case['graph']:
             node['inputs']=['s'+str(int(v[1:])%pool) if v.startswith('s') else v for v in node['inputs']]
         case.update(id='batch_fresh_holdout_'+str(i),role='FRESH_HOLDOUT',operand_pool=pool)
@@ -59,17 +56,9 @@ def _configurations(context):
             for r,c in shapes:
                 result.append(dict(id='batch-configuration-'+str(len(result)),case_index=i,kernel_index=i*2+group-1,
                     groups=group,rows=r,cols=c,workers=workers,elements=((r+workers-1)//workers)*c,
-                    array_loads=case['array_loads'],layouts=S.V2._layouts(case['array_loads'],c,group),
+                    array_loads=case['array_loads'],layouts=C.V2._layouts(case['array_loads'],c,group),
                     role=case['role'],holdout=case['holdout']))
     random.Random(1001831).shuffle(result);return result
-
-
-def _algorithm(mode):
-    _require(mode in ('serial','parallel'),'serial or parallel compiler mode required')
-    return S if mode=='serial' else P
-
-
-def _tool(context,mode):return S._tool_contract(context) if mode=='serial' else P._tool_contract(context)
 
 
 def _instruction_tool(tool):
@@ -80,12 +69,12 @@ def _compatible(pack,context):
     for key,value in pack['resource_template'].items():
         if key not in ('worker_cpu_ids','executor_id'):
             _require(context[key]==value,'batch shared compiler/hardware context differs: '+key)
-    count=len(context['worker_cpu_ids'])
-    _require((count==1)==(pack['mode']=='serial'),'serial/OpenMP boundary differs')
+    profile = C.instruction_cost_profile(pack['mode'])
+    profile.require_workers(len(context['worker_cpu_ids']))
     _require(set(context['worker_cpu_ids'])<=set(pack['available_cpu_ids']),'mask outside frozen hardware availability')
     _require(sorted(os.sched_getaffinity(0))==context['caller_affinity_cpu_ids']
         and all(os.environ.get(k)==v for k,v in context['native_thread_environment'].items()),'current caller/thread environment differs')
-    tool=_tool(context,pack['mode'])
+    tool=profile.tool_contract(context)
     _require(_instruction_tool(tool)==_instruction_tool(pack['tool']),'shared instruction tool/ISA differs')
     if pack['mode']=='parallel':
         _require(tool['openmp_runtime']==pack['tool']['openmp_runtime']
@@ -101,7 +90,7 @@ def _source(available):
     for case in _registry():
         for group in (1,2):
             name=case['id']+'_g'+str(group);body=[]
-            for i,layout in enumerate(S.V2._layouts(case['array_loads'],100,group)):
+            for i,layout in enumerate(C.V2._layouts(case['array_loads'],100,group)):
                 padding=layout['stride']-100;r,c=divmod(layout['offset'],layout['stride'])
                 body.append(f'const double x{i}=a.inputs[{layout["storage_group"]}][({r}+row)*(a.cols+{padding})+{c}+col];')
             for node in case['graph']:
@@ -154,7 +143,7 @@ def _block(text,tool,cache):
 
 
 def _analyze(assembly,tool,cache,*,function=None,source_range=None,source_path=None):
-    loops=S._natural_loops(P._lex_assembly(assembly),function,source_range,source_path)
+    loops=C._natural_loops(C._lex_assembly(assembly),function,source_range,source_path)
     _require(bool(loops),'no supported store-bearing natural loop');rows=[];hits=0
     for loop in loops:
         _require(not re.search(r'\bcall\w*\b',loop['text']),'opaque call in shared instruction block')
@@ -170,23 +159,30 @@ def _analyze(assembly,tool,cache,*,function=None,source_range=None,source_path=N
         original_assembly_sha256=_hash(assembly.encode()),static_cache_hits=hits)
 
 
+def _numeric_model(profile):
+    return dict(module=_receipt(Path(C.__file__)), derive=profile.derive.__name__,
+        predict=profile.predict.__name__, policy=profile.precision_policy)
+
+
+def _pack_implementation():
+    files = ['cpu_batch_instruction_cost.py', 'cpu_batch_instruction_v1.cpp.in', *C._implementation()]
+    return [_receipt(_HERE / name) for name in files]
+
+
 def build_instruction_pack(domain,mode,out,*,cache):
     from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context
-    domain=_domain(domain);_algorithm(mode);out=Path(out).resolve();_require(not out.exists(),'fresh kernel pack required')
+    domain=_domain(domain);profile=C.instruction_cost_profile(mode)
+    out=Path(out).resolve();_require(not out.exists(),'fresh kernel pack required')
     candidates=[r for r in domain['candidates'] if (r['worker_count']==1)==(mode=='serial')]
     _require(bool(candidates),'no matching backend mode');context=stateful_resource_context(domain,candidates[0]['id'])
-    available=context['caller_affinity_cpu_ids'];tool=_tool(context,mode);compiler=context['backend']['compiler']
-    identity=subprocess.run([*compiler['argv'],'--version'],check=True,capture_output=True,text=True).stdout.splitlines()[0]
-    _require(identity==compiler['identity'],'kernel compiler identity differs')
-    out.mkdir(parents=True);started=time.perf_counter();source=out/'canonical.cpp';source.write_text(_source(available))
-    (out/'scar_abi_v1.h').write_bytes((_HERE/'scar_abi_v1.h').read_bytes());assembly=out/'canonical.s';library=out/'canonical.so';remarks=out/'vectorization.txt'
-    commands=[[*compiler['argv'],*compiler['options'],'-S','-fverbose-asm','-fopt-info-vec-optimized='+str(remarks),str(source),'-o',str(assembly)],
-        [*compiler['argv'],*compiler['options'],str(assembly),'-o',str(library)]]
-    for i,command in enumerate(commands):
-        p=subprocess.run(command,capture_output=True,text=True);(out/f'compile-{i}.log').write_text(p.stdout+p.stderr)
-        _require(p.returncode==0,'shared canonical compilation failed: '+p.stderr[-800:])
-    analyses={};asm=assembly.read_text()
+    available = context['caller_affinity_cpu_ids']
+    tool = profile.tool_contract(context)
+    started = time.perf_counter()
+    native = C._compile_probe(context, out, _source(available))
+    native['vectorization'] = native.pop('vectorization_remarks')
+    analyses = {}
+    asm = Path(native['assembly']['path']).read_text()
     for index,case in enumerate(_registry()):
         if case['role']=='DISPATCH':continue
         for group in (1,2):
@@ -195,12 +191,11 @@ def build_instruction_pack(domain,mode,out,*,cache):
     _save(out/'instruction-analysis.json',dict(schema='scar.cpu-batch-shared-instruction-analysis',schema_version=1,analyses=analyses))
     parent=artifact_reference(Path(domain['base_stage_plan']['uri']).parent/'domain.json',domain['schema'])
     pack=dict(schema=PACK,schema_version=1,mode=mode,domain=parent,resource_template=context,
-        available_cpu_ids=available,tool=tool,compiler=compiler,registry=_registry(),cache_directory=str(Path(cache).resolve()),
-        source=_receipt(source),assembly=_receipt(assembly),library=_receipt(library),vectorization=_receipt(remarks),commands=commands,
+        available_cpu_ids=available,tool=tool,registry=_registry(),cache_directory=str(Path(cache).resolve()),
+        **native,
         instruction_analysis=artifact_reference(out/'instruction-analysis.json','scar.cpu-batch-shared-instruction-analysis'),
-        numeric_model=dict(module=_receipt(Path(_algorithm(mode).__file__)),derive='_derive',predict='_predict',policy=_algorithm(mode)._POLICY),
-        implementation_files=[_receipt(Path(__file__)),_receipt(_HERE/'cpu_batch_instruction_v1.cpp.in'),
-            _receipt(Path(S.__file__)),_receipt(Path(P.__file__)),_receipt(_HERE/'loop_v1.cpp.in'),_receipt(_HERE/'scar_abi_v1.h')],
+        numeric_model=_numeric_model(profile),
+        implementation_files=_pack_implementation(),
         build_seconds=time.perf_counter()-started,target_workload_executed=False,target_dag_provided_to_probe=False,
         cpu_mask_is_runtime_measurement_parameter=True,cost_times_shared_between_masks=False,
         maximum_holdout_relative_error=.20)
@@ -215,10 +210,9 @@ def _read_pack(value):
     for key in ('source','assembly','library','vectorization'):
         receipt=pack[key];_require(_receipt(Path(receipt['path']))==receipt,'kernel pack receipt differs')
     _require(Path(pack['source']['path']).read_text()==_source(pack['available_cpu_ids']),'shared native source differs')
-    for receipt in pack['implementation_files']:
-        _require(_receipt(Path(receipt['path']))==receipt,'batch producer/numeric source differs')
-    _require(_receipt(Path(pack['numeric_model']['module']['path']))==pack['numeric_model']['module']
-        and pack['numeric_model']['policy']==_algorithm(pack['mode'])._POLICY,'frozen numerical model differs')
+    _require(pack['implementation_files'] == _pack_implementation(),'batch producer/numeric source differs')
+    profile = C.instruction_cost_profile(pack['mode'])
+    _require(pack['numeric_model'] == _numeric_model(profile),'frozen numerical model differs')
     return reference,pack
 
 
@@ -229,26 +223,12 @@ def _handle(pack):
     function.restype=ctypes.c_int32;return handle,function
 
 
-def _qualify(observations,analyses,coefficients,mode):
-    module=_algorithm(mode);result={}
-    for group in (1,2):
-        rows=[]
-        for row in observations:
-            if not row['holdout'] or row['groups']!=group:continue
-            cost=module._predict(row,analyses[str(row['kernel_index'])],coefficients)
-            rows.append(dict(configuration=row['id'],observed_ns=row['median_ns'],prediction=cost,
-                relative_error=abs(cost['duration_ns']-row['median_ns'])/row['median_ns']))
-        maximum=max(r['relative_error'] for r in rows)
-        result[str(group)]=dict(holdout=rows,maximum_holdout_relative_error=maximum,
-            admitted=maximum<=.20,precision_policy=module._POLICY)
-    return result
-
-
 def sample_instruction_context(pack_value,context,out,*,repetitions=3,warmup=1,batch=4):
     reference,pack=_read_pack(pack_value);out=Path(out).resolve();_require(not out.exists(),'fresh context observations required')
     _require(repetitions==3 and warmup==1 and batch==4,'frozen batch sampling policy is3/1/4')
-    tool=_compatible(pack,context);handle,function=_handle(pack);mode=pack['mode'];module=_algorithm(mode)
-    if mode=='parallel':_require(P._loaded_openmp(handle)==tool['openmp_runtime'],'actual shared probe runtime differs')
+    tool=_compatible(pack,context);handle,function=_handle(pack);mode=pack['mode']
+    profile=C.instruction_cost_profile(mode)
+    if profile.parallel:_require(C._loaded_openmp(handle)==tool['openmp_runtime'],'actual shared probe runtime differs')
     cpulist=context['worker_cpu_ids'];cpu_array=(ctypes.c_int32*len(cpulist))(*cpulist);mask=_Mask(len(cpulist),0,cpu_array)
     configs=_configurations(context);out.mkdir(parents=True);started=time.perf_counter();load_before=list(os.getloadavg())
     design=dict(schema='scar.cpu-batch-context-design',schema_version=1,pack=reference,resource_context=context,
@@ -257,8 +237,7 @@ def sample_instruction_context(pack_value,context,out,*,repetitions=3,warmup=1,b
     _save(out/'design.json',design);design_ref=artifact_reference(out/'design.json',design['schema'])
     observations=[];journal=out/'samples.jsonl'
     for row in configs:
-        layout=_Layout();layout.rows=row['rows'];layout.cols=row['cols'];layout.loads=row['array_loads']
-        for i,v in enumerate(row['layouts']):layout.strides[i]=v['stride'];layout.offsets[i]=v['offset'];layout.groups[i]=v['storage_group']
+        layout=C._probe_layout(row)
         samples=(ctypes.c_double*repetitions)();sink=ctypes.c_uint64();cpus=(ctypes.c_int32*(2+len(cpulist)))()
         status=function(row['kernel_index'],ctypes.byref(layout),ctypes.byref(mask),repetitions,warmup,batch,samples,ctypes.byref(sink),cpus)
         if status!=0:
@@ -266,9 +245,8 @@ def sample_instruction_context(pack_value,context,out,*,repetitions=3,warmup=1,b
                 frozen_design=design_ref,completed_observations=observations,failed_configuration=row,
                 native_status=status,target_workload_executed=False))
             raise ValueError('shared independent primitive FP/CPU/allocation guard: '+str(status))
-        values=list(samples)
-        _require(all(math.isfinite(v) and v>0 for v in values) and list(cpus)[2:]==cpulist,'sample or actual worker placement differs')
-        observations.append(dict(**row,samples_ns=values,median_ns=statistics.median(values),min_ns=min(values),max_ns=max(values),
+        _require(list(cpus)[2:]==cpulist,'actual worker placement differs')
+        observations.append(dict(**row, **C._sample_summary(samples),
             checksum=sink.value,actual_cpu_ids=list(cpus)[2:],caller_cpu_before=cpus[0],caller_cpu_after=cpus[1]))
         with journal.open('a') as stream:stream.write(json.dumps(observations[-1],sort_keys=True)+'\n')
     _require(sorted(os.sched_getaffinity(0))==context['caller_affinity_cpu_ids'],'caller affinity not restored')
@@ -276,11 +254,11 @@ def sample_instruction_context(pack_value,context,out,*,repetitions=3,warmup=1,b
         observations=observations,observed_seconds=time.perf_counter()-started,
         host_load=dict(before=load_before,after=list(os.getloadavg()),isolated=False),pid=os.getpid(),
         target_workload_executed=False,target_variants_ranked=False)
-    _save(out/'raw.json',raw);analyses=read_artifact(pack['instruction_analysis'])['analyses'];coefficients=module._derive(observations,analyses)
+    _save(out/'raw.json',raw);analyses=read_artifact(pack['instruction_analysis'])['analyses'];coefficients=profile.derive(observations,analyses)
     model=dict(schema=MODEL,schema_version=1,mode=mode,pack=reference,resource_context=context,tool=tool,frozen_design=design_ref,
         raw_observations=artifact_reference(out/'raw.json',raw['schema']),coefficients=coefficients,
-        local_models=_qualify(observations,analyses,coefficients,mode),precision_policy=module._POLICY,
-        cache_geometry=S._llc(context)[1],assumptions=module._ASSUMPTIONS,
+        local_models=C._qualify(observations,analyses,coefficients,profile),precision_policy=profile.precision_policy,
+        cache_geometry=C._llc(context)[1],assumptions=profile.assumptions,
         observed_seconds=raw['observed_seconds'],peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         target_workload_executed=False,target_variants_ranked=False,serial_duration_divided_by_workers=False,
         other_mask_observations_used=False,physical_optimality_proven=False,deployment_authorized=False)
@@ -298,18 +276,16 @@ def read_context_model(path):
     _require(design['pack']==raw['pack']==pack_ref and raw['frozen_design']==model['frozen_design']
         and design['resource_context']==model['resource_context'] and design['tool']==tool
         and (design['repetitions'],design['warmup'],design['batch'])==(3,1,4), 'raw context scope differs')
-    configs=_configurations(model['resource_context']);_require(design['configurations']==configs
-        and len(raw['observations'])==len(configs),'complete frozen context design required')
+    configs=_configurations(model['resource_context'])
+    _require(design['configurations']==configs,'complete frozen context design required')
+    C._verify_observations(raw['observations'],configs,design['repetitions'])
     cpus=model['resource_context']['worker_cpu_ids']
-    for row,expected in zip(raw['observations'],configs):
-        _require(all(row[k]==v for k,v in expected.items()) and len(row['samples_ns'])==3
-            and all(math.isfinite(v) and v>0 for v in row['samples_ns'])
-            and row['median_ns']==statistics.median(row['samples_ns']) and row['actual_cpu_ids']==cpus,
-            'independent context observations differ')
-    analyses=read_artifact(pack['instruction_analysis'])['analyses'];module=_algorithm(pack['mode'])
-    _require(module._derive(raw['observations'],analyses)==model['coefficients']
-        and _qualify(raw['observations'],analyses,model['coefficients'],pack['mode'])==model['local_models']
-        and model['precision_policy']==module._POLICY and model['target_workload_executed'] is False
+    _require(all(row['actual_cpu_ids']==cpus for row in raw['observations']),'independent context observations differ')
+    analyses=read_artifact(pack['instruction_analysis'])['analyses']
+    profile=C.instruction_cost_profile(pack['mode'])
+    _require(profile.derive(raw['observations'],analyses)==model['coefficients']
+        and C._qualify(raw['observations'],analyses,model['coefficients'],profile)==model['local_models']
+        and model['precision_policy']==profile.precision_policy and model['target_workload_executed'] is False
         and model['target_variants_ranked'] is False and model['other_mask_observations_used'] is False,
         'per-mask model coefficient/holdout/independence differs')
     return reference,model,pack_ref,pack,analyses
@@ -325,48 +301,33 @@ def project_instruction_context(domain,candidate_id,model_path,out):
     demand=stateful_cpu_demand(domain,candidate_id)
     _require(demand['resource_context']==model['resource_context'],'target/resource context differs')
     out=Path(out).resolve();_require(not out.exists(),'fresh target instruction projection required');out.mkdir(parents=True)
-    region,plan,source,assembly,lowering=S._target_static(domain,candidate_id,demand['resource_context'],out/'static',model['tool'])
-    order={n.id:i for i,n in enumerate(region.nodes)};components=[];unsupported=[];proposals=[];module=_algorithm(pack['mode'])
+    region,plan,source,assembly,lowering=C._target_static(domain,candidate_id,demand['resource_context'],out/'static')
+    profile=C.instruction_cost_profile(pack['mode'])
+    lowering_ref=artifact_reference(out/'static/lowering.json',lowering['schema'])
+    order={n.id:i for i,n in enumerate(region.nodes)};components=[];unsupported=[];proposals=[]
     capacity=model['cache_geometry']['reported_capacity_bytes'];stack_max=max(r['stack_memory_references'] for a in calibrated.values() for r in a['loops'])
     for term in demand['terms']:
         if term['component']!='FUSED_SCALAR_DAG_ROW_STAGE':continue
         proposal=None
         try:
-            p=term['parameters'];index=int(term['source_ref']['pointer'].rsplit('/',1)[1]);stage=plan['stages'][index]
-            _require(stage['kind']=='COMPUTE' and p['workers']==len(model['resource_context']['worker_cpu_ids']),'stage boundary differs')
-            output=plan['assignment'][stage['output_payload']]['slot_id']
-            inputs=[plan['assignment'][k]['slot_id'] for k in stage['input_payloads'] if k in plan['assignment']]
-            _require(output not in inputs,'live source/output allocation aliases')
-            expected=S.V2._layouts(p['array_loads'],p['cols'],p['backing_storage_groups']);sort=lambda r:(r['storage_group'],r['stride'],r['offset'])
-            _require(sorted(p['operand_layouts'],key=sort)==sorted(expected,key=sort),'uncalibrated memory geometry')
-            _,geometry=S.V2.fused_features(p,capacity)
-            _require(256<=p['rows']<=768 and 320<=p['cols']<=832
-                and geometry['backing_bytes']+p['rows']*p['cols']*8<=capacity,'outside measured geometry/reported cache scope')
-            span=S._stage_source_range(source,order[stage['root_expr']])
+            p=term['parameters']
+            _require(p['workers']==len(model['resource_context']['worker_cpu_ids']),'exact target worker mask differs')
+            _,span,witness=C._projection_stage(plan,term,order,source,capacity,profile)
             analysis=_analyze(assembly,model['tool'],pack['cache_directory'],source_range=span,source_path=lowering['source']['path'])
-            _require(max(r['stack_memory_references'] for r in analysis['loops'])<=stack_max,'uncalibrated stack pressure')
-            cost=module._predict(dict(groups=p['backing_storage_groups'],rows=p['rows'],cols=p['cols'],workers=p['workers'],
-                elements=((p['rows']+p['workers']-1)//p['workers'])*p['cols'],array_loads=p['array_loads']),analysis,model['coefficients'])
-            qualified=model['local_models'][str(p['backing_storage_groups'])]
+            cost,qualified=C._projection_cost(term,analysis,model,profile,stack_max)
             proposal=dict(component=term['component'],parameters=p,prediction=cost,point_estimate_ns=cost['duration_ns'],
                 selectable=False,maximum_holdout_relative_error=qualified['maximum_holdout_relative_error'])
             _require(qualified['admitted'],'fixed fresh batch holdout maximum relative error '
                 +str(qualified['maximum_holdout_relative_error'])+' exceeds frozen0.20 policy')
-            components.append(dict(component=term['component'],parameters=p,basis='DECLARED_COMPONENT_MODEL',median_ns=cost['duration_ns'],
-                prediction=cost,source_model=dict(artifact=reference,locator='#/coefficients'),
-                source_validation=dict(artifact=reference,locator='#/local_models/'+str(p['backing_storage_groups'])+'/holdout'),
-                source_pack=pack_ref,source_provenance=term['source_ref'],instruction_analysis=analysis,
-                static_lowering=artifact_reference(out/'static/lowering.json',lowering['schema']),
-                workspace_alias_authority=dict(output_slot=output,input_slots=inputs,live_slots_distinct=True),
-                precision_policy=module._POLICY,maximum_holdout_relative_error=qualified['maximum_holdout_relative_error'],
-                target_dag_compiled_for_static_analysis=True,measured_target_component=False,physical_optimality_proven=False,
-                assumptions=module._ASSUMPTIONS))
+            component=C._projection_component(term,analysis,cost,qualified,profile,reference,lowering_ref,witness)
+            component['source_pack']=pack_ref
+            components.append(component)
         except (ValueError,StopIteration) as error:
             unsupported.append(dict(component=term['component'],parameters=term['parameters'],reason=str(error)))
             if proposal is not None:proposals.append(dict(**proposal,rejection_reason=str(error)))
     value=dict(schema='scar.stateful-resource-calibration',schema_version=1,resource_context=demand['resource_context'],
         components=components,unsupported_components=unsupported,proposed_estimates=proposals,source_model=reference,shared_pack=pack_ref,
-        static_lowering=artifact_reference(out/'static/lowering.json',lowering['schema']),all_fused_components_covered=not unsupported,
+        static_lowering=lowering_ref,all_fused_components_covered=not unsupported,
         target_dag_compiled_for_static_analysis=True,target_workload_executed=False,target_variants_ranked=False,
         complete_method_cost_measured=False,physical_optimality_proven=False)
     _save(out/'observations.json',value);return artifact_reference(out/'observations.json',value['schema'])

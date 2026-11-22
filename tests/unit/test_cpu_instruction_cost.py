@@ -6,10 +6,8 @@ import pytest
 
 from scar.codegen import cpu_fused_cost_v2 as V2
 from scar.codegen import cpu_fused_cost_v3 as V3
-from scar.codegen import cpu_parallel_instruction_cost as P
 from scar.codegen.cpu_fused_cost import _receipt
-from scar.codegen.cpu_instruction_cost import (_natural_loops,_cycle_demand,_source,
-    _registry,_configurations,_predict)
+from scar.codegen.cpu_instruction_cost import PARALLEL, SERIAL, _cycle_demand, _lex_assembly, _natural_loops
 from scar.codegen.cpu_instruction_replay import _replay_analysis
 
 
@@ -49,23 +47,23 @@ def test_instruction_structure_and_serial_boundary_are_explicit(instruction_anal
     prefixed=prefixed.replace('.L1:\n','.L1:\n# /tmp/canonical.cpp:10: value\n# /usr/include/header.h:888: inline\n')
     assert _natural_loops(prefixed,source_range=(10,12),source_path='/tmp/canonical.cpp')[0]['width']==2
     assert _cycle_demand(instruction_analysis,3,5,1)==3*(2*4+3)
-    source=_source({'worker_cpu_ids':[0]})
+    source=SERIAL.source({'worker_cpu_ids':[0]})
     assert '#ifdef _OPENMP\n#include <omp.h>\n#endif' in source
     assert 'probe_team()' in source and 'probe_tid()' in source
-    registry=_registry();configs=_configurations({'worker_cpu_ids':[0]})
+    registry=SERIAL.registry();configs=SERIAL.configurations({'worker_cpu_ids':[0]})
     assert all(r['role'] in ('DISPATCH','MEMORY','MATH','FRESH_HOLDOUT') for r in registry)
     assert {r['rows'] for r in configs if r['holdout']}=={432,593}
     assert not {r['rows'] for r in configs if r['holdout']}&{r['rows'] for r in configs if not r['holdout']}
     # Synthetic unit values exercise the forward formula, never hardware claims.
     coefficients={'dispatch_ns':7,'effective_ns_per_mca_cycle':2,'memory':{'1':{
         '2':[{'elements':1,'proxy_ns_per_element':1},{'elements':100,'proxy_ns_per_element':1}]}}}
-    cost=_predict({'rows':3,'cols':5,'workers':1,'elements':15,'groups':1,'array_loads':2},
+    cost=SERIAL.predict({'rows':3,'cols':5,'workers':1,'elements':15,'groups':1,'array_loads':2},
                   instruction_analysis,coefficients)
     assert cost['duration_ns']==7+max(15,2*33)
 
 
 def test_parallel_partition_fresh_design_and_one_stage_barrier(instruction_analysis):
-    context={'worker_cpu_ids':[0,1,2,3]};configs=P._configurations(context)
+    context={'worker_cpu_ids':[0,1,2,3]};configs=PARALLEL.configurations(context)
     assert len(configs)==123 and sum(r['holdout'] for r in configs)==32
     for row in configs:
         assert sum(row['logical_worker_rows'])==row['rows']
@@ -73,17 +71,17 @@ def test_parallel_partition_fresh_design_and_one_stage_barrier(instruction_analy
     assert next(r['logical_worker_rows'] for r in configs if r['rows']==439)==[110,110,110,109]
     assert next(r['logical_worker_rows'] for r in configs if r['rows']==618)==[155,155,154,154]
     shape=lambda r:json.dumps({'graph':r['graph'],'output':r['output']},sort_keys=True)
-    seen={shape(r) for registry in (_registry(),V2.canonical_registry(),V3._registry())
+    seen={shape(r) for registry in (SERIAL.registry(),V2.canonical_registry(),V3._registry())
         for r in registry if r['holdout']}
-    assert not seen&{shape(r) for r in P._registry() if r['holdout']}
-    source=P._source(context)
+    assert not seen&{shape(r) for r in PARALLEL.registry() if r['holdout']}
+    source=PARALLEL.source(context)
     start=source.index('void parallel_stage_barrier_floor_g1(')
     end=source.index('void parallel_stage_barrier_floor_g2(')
     assert source[start:end].count('#pragma omp barrier')==1
     assert '#pragma omp for' not in source[start:end]
     coefficient={'barrier_floor_ns':11,'effective_ns_per_mca_cycle':2,'memory':{'1':{
         '2':[{'elements':1,'proxy_ns_per_element':1},{'elements':100,'proxy_ns_per_element':1}]}}}
-    cost=P._predict({'rows':7,'cols':5,'workers':4,'elements':10,'groups':1,'array_loads':2},instruction_analysis,coefficient)
+    cost=PARALLEL.predict({'rows':7,'cols':5,'workers':4,'elements':10,'groups':1,'array_loads':2},instruction_analysis,coefficient)
     assert cost['duration_ns']==11+max(10,2*2*(2*4+3))
     assert cost['completion_barriers_charged']==1 and cost['team_lifecycle_charged_here'] is False
     assert 'dispatch_ns' not in cost
@@ -97,7 +95,7 @@ def test_parallel_partition_fresh_design_and_one_stage_barrier(instruction_analy
  cmpq %rdi, %rax
  jne .L1
 '''
-    lexed=P._lex_assembly(assembly)
+    lexed=_lex_assembly(assembly)
     assert '.string "keep#literal"' in lexed
     assert len(assembly.splitlines())==len(lexed.splitlines())
     assert _natural_loops(lexed)[0]['width']==1
