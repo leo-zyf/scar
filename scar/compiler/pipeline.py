@@ -4,17 +4,18 @@ import argparse
 from dataclasses import asdict
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
 import re
+import shutil
 import statistics
 import subprocess
 import time
 
-from scar.ir.execution_recipe import artifact_reference
+from scar.artifacts import file_reference
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PLANNING_SCHEMA
+from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA
 from .frontend.graph import build_graph
-from .middle.plan import plan_entry, simplify_copies
+from .middle.plan import entry_cpus, plan_entry, simplify_copies
 
 
 _LANGUAGES = {'c', 'c++', 'fortran'}
@@ -26,8 +27,8 @@ def _write(path, document):
 
 
 def _receipt(path):
-    data = path.read_bytes()
-    return dict(path=str(path), sha256=sha256(data).hexdigest(), size_bytes=len(data))
+    reference = file_reference(path, 'binary')
+    return dict(path=str(path), sha256=reference['sha256'], size_bytes=reference['size_bytes'])
 
 
 def _manifest(path):
@@ -54,6 +55,18 @@ def _manifest(path):
             raise ValueError(f'translation unit has no language profile: {unit["path"]}')
         if unit['path'] not in locks:
             raise ValueError(f'translation unit missing source lock: {unit["path"]}')
+    if baseline := manifest.get('baseline'):
+        cwd = Path(baseline['cwd']).resolve(strict=True)
+        argv = baseline['argv']
+        if not argv:
+            raise ValueError('baseline requires an executable')
+        argv[0] = str((cwd / argv[0]).resolve() if '/' in argv[0]
+                      else Path(shutil.which(argv[0]) or cwd / argv[0]).resolve())
+        baseline['cwd'] = str(cwd)
+    case_ids = [case['id'] for case in manifest.get('cases', ())]
+    if (len(set(case_ids)) != len(case_ids)
+            or any(not re.fullmatch(r'[\w.-]+', name) or name in ('.', '..') for name in case_ids)):
+        raise ValueError('case IDs must be unique directory names')
     return manifest
 
 
@@ -89,12 +102,20 @@ def _compare(case, original, generated):
     return False
 
 
-def _paired(manifest, executable, out, cpus, repetitions, case_seconds):
+def _case_input(case):
+    return b'' if not case.get('stdin') else Path(case['stdin']).read_bytes()
+
+
+def _paired(manifest, executable, out, cpus, observation, repetitions, case_seconds):
     baseline = manifest['baseline']
+    if _receipt(baseline['argv'][0]) != observation['baseline']:
+        raise ValueError('baseline executable differs from calibration')
     rows = []
     for case in manifest['cases']:
-        stdin_path = case.get('stdin')
-        stdin = b'' if stdin_path is None else Path(stdin_path).read_bytes()
+        stdin = _case_input(case)
+        input_digest = sha256(stdin).hexdigest()
+        if input_digest != observation['case_inputs'][case['id']]:
+            raise ValueError(f'case input differs from calibration: {case["id"]}')
         case_dir = out / case['id']
         case_dir.mkdir()
         deadline = time.monotonic() + case_seconds
@@ -121,64 +142,118 @@ def _paired(manifest, executable, out, cpus, repetitions, case_seconds):
                    for arm in arms}
         timing = {arm: dict(median_ns=statistics.median(values), min_ns=min(values), max_ns=max(values))
                   for arm, values in samples.items() if values}
-        rows.append(dict(case=case['id'], matches=matched, stdin_sha256=sha256(stdin).hexdigest(),
+        rows.append(dict(case=case['id'], matches=matched, stdin_sha256=input_digest,
                          comparison=case.get('comparison', 'exact'), pairs=records, timing=timing))
     return rows
+
+
+def _observe_entry(manifest, artifacts, case_seconds):
+    baseline = manifest['baseline']
+    cases = manifest['cases']
+    available = entry_cpus(artifacts['hardware'])
+    if not available:
+        raise ValueError('no online CPU is available in the inventoried execution scope')
+    cpu = min(available)
+    executable = _receipt(baseline['argv'][0])
+    case = cases[0]
+    fixture = _case_input(case)
+    inputs = {row['id']: sha256(fixture if row is case else _case_input(row)).hexdigest()
+              for row in cases}
+    result, elapsed = _run(baseline['argv'] + case.get('argv', []), baseline['cwd'], fixture,
+                           [cpu], time.monotonic() + case_seconds)
+    return dict(schema='scar.native-entry-cost', schema_version=1, request=artifacts['request'],
+                scope='ONE_BASELINE_LAUNCH', cpu=cpu, elapsed_ns=elapsed, exit=result.returncode,
+                baseline=executable, case=case['id'], case_inputs=inputs)
 
 
 def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph_only=False):
     manifest = _manifest(manifest_path)
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    _write(out / 'request.json', manifest)
-    frontend = build_graph(manifest, out, jobs=jobs)
+    request_path = out / 'request.json'
+    _write(request_path, manifest)
+    request = file_reference(request_path, 'scar.native-entry')
+    frontend = build_graph(manifest, out, jobs=jobs, request=request)
     graph = frontend.report
-    artifacts = {'graph_evidence': asdict(frontend.evidence), 'hardware': asdict(frontend.hardware)}
+    artifacts = dict(request=request, graph_evidence=asdict(frontend.evidence),
+                     calls=asdict(frontend.calls), hardware=asdict(frontend.hardware))
     if frontend.program is not None:
         artifacts['program'] = asdict(frontend.program)
+    layers = dict(source='LOCKED', compiler='CAPTURED',
+                  graph='PARTIAL' if frontend.program else 'BLOCKED',
+                  calls='PARTIAL' if graph['call_frontiers'] or not frontend.program else 'BOUND',
+                  hardware='OBSERVED')
     report = dict(schema='scar.native-entry-result', schema_version=1, graph={
-        key: value for key, value in graph.items() if key not in ('anchors', 'frontiers', 'frontend_frontiers')},
+        key: graph[key] for key in ('entry', 'regions', 'operations', 'values', 'locations',
+                                    'excluded_control', 'call_frontiers', 'call_sites', 'call_links',
+                                    'reachable_regions')},
         frontend_frontiers=len(graph['frontend_frontiers']), cfg_frontiers=len(graph['frontiers']),
-        status='GRAPH_PARTIAL', selection='KEEP_ORIGINAL', artifacts=artifacts)
-    if frontend.program is not None and not graph_only:
-        rewrites = simplify_copies(frontend.program, graph['anchors'], out / 'simplified.json')
-        _write(out / 'rewrites.json', rewrites)
-        report['graph_rewrites'] = len(rewrites)
-        core = min(os.sched_getaffinity(0))
-        report['cpus'] = [core]
-        if manifest.get('baseline') and manifest.get('cases'):
-            case = manifest['cases'][0]
-            baseline = manifest['baseline']
-            fixture = b'' if not case.get('stdin') else Path(case['stdin']).read_bytes()
-            result, cost = _run(baseline['argv'] + case.get('argv', []), baseline['cwd'], fixture,
-                                [core], time.monotonic() + case_seconds)
-            if result.returncode == 0:
-                problem, schedule = plan_entry(
-                    graph['entry'], frontend.program, frontend.hardware, core, cost)
-                problem_path = out / 'planning-problem.json'
-                schedule_path = out / 'plan.json'
-                _write(problem_path, problem)
-                _write(schedule_path, schedule)
-                artifacts['planning_problem'] = artifact_reference(problem_path, PLANNING_SCHEMA)
-                artifacts['execution_plan'] = artifact_reference(schedule_path, PLAN_SCHEMA)
-                report['planning_scope'] = 'BASELINE_ONLY'
-    _write(out / 'result.json', report)
-    if graph_only or manifest['language'] == 'mixed':
+        status='GRAPH_PARTIAL', selection='KEEP_ORIGINAL', artifacts=artifacts, layers=layers)
+    if graph_only:
+        if frontend.program is None:
+            report.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
+        _write(out / 'result.json', report)
         return report
 
+    layer = 'rewrite'
     try:
-        from .backend.cpp20 import build_reference_project
+        if frontend.program is None:
+            raise ValueError('no validated entry region')
+        simplified = out / 'simplified.json'
+        rewrites = simplify_copies(frontend.program, graph['anchors'], simplified)
+        artifacts['simplified'] = file_reference(simplified, PROGRAM_SCHEMA)
+        rewrite_path = out / 'rewrites.json'
+        _write(rewrite_path, dict(schema='scar.native-rewrites', schema_version=1, rules=rewrites,
+                                  program=artifacts['program'], result=artifacts['simplified']))
+        artifacts['rewrites'] = file_reference(rewrite_path, 'scar.native-rewrites')
+        report['graph_rewrites'] = len(rewrites)
+        layers[layer] = 'IR_VALIDATED'
+        layer = 'cost'
+        if not manifest.get('baseline') or not manifest.get('cases'):
+            raise ValueError('baseline executable and cases are required to qualify native delivery')
+        observation = _observe_entry(manifest, artifacts, case_seconds)
+        cost_path = out / 'cost-observation.json'
+        _write(cost_path, observation)
+        artifacts['cost'] = file_reference(cost_path, observation['schema'])
+        if observation['exit'] != 0:
+            raise ValueError(f'baseline exited with status {observation["exit"]}')
+        layers[layer] = 'OBSERVED'
+        layer = 'schedule'
+        problem, schedule = plan_entry(graph['entry'], artifacts, observation)
+        for role, path, document, schema in (
+            ('planning_problem', out / 'planning-problem.json', problem, PLANNING_SCHEMA),
+            ('execution_plan', out / 'plan.json', schedule, PLAN_SCHEMA),
+        ):
+            _write(path, document)
+            artifacts[role] = file_reference(path, schema)
+        if not schedule.get('selected'):
+            raise ValueError('no feasible native execution schedule')
+        report['planning_scope'] = 'BASELINE_ONLY'
+        layers[layer] = 'SCHEDULED'
+        layer = 'admission'
+        from .backend.cpp20 import admit_entry, build_reference_project
 
+        manifest, observation, delivery = admit_entry(artifacts, graph['entry'])
+        report['cpus'] = delivery['cpus']
+        layers[layer] = 'REPLAYED'
+        layer = 'build'
         executable, dynamic = build_reference_project(manifest, out / 'project')
         report['executable'] = _receipt(executable)
         report['elf'] = dynamic
+        delivery_path = out / 'project' / 'delivery.json'
+        _write(delivery_path, dict(delivery, executable=report['executable']))
+        artifacts['delivery'] = file_reference(delivery_path, delivery['schema'])
+        layers[layer] = 'BUILT'
+        layer = 'validation'
         comparison = out / 'validation'
         comparison.mkdir()
-        rows = _paired(manifest, executable, comparison, report.get('cpus', [min(os.sched_getaffinity(0))]),
+        rows = _paired(manifest, executable, comparison, delivery['cpus'], observation,
                        repetitions, case_seconds)
         report['validation'] = rows
         report['delivery'] = 'COMPARED' if all(case['matches'] for case in rows) else 'MISMATCH'
+        layers[layer] = 'MATCHED' if report['delivery'] == 'COMPARED' else 'MISMATCH'
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as error:
+        layers[layer] = 'BLOCKED'
         report['delivery'] = 'INCOMPLETE'
         report['delivery_error'] = str(error)
     _write(out / 'result.json', report)

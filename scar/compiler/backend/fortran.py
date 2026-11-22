@@ -88,8 +88,10 @@ def _repair_f2c_source(source):
     mask = _mask_cpp(source)
     edits = [(call.start(), call.end(), f'scar_f2c_call({call[1]}, ')
              for call in _INDIRECT_CALL.finditer(mask)]
-    for match in re.finditer(r'\bs_stop\s*\(("(?:\\.|[^"\\])*")\s*,', source):
-        # libf2c reads the STOP message but its historical argument is char*.
+    literal = r'("(?:\\.|[^"\\])*")'
+    # libf2c's STOP message and formatted WRITE input strings are read-only.
+    for match in re.finditer(r'\b(?:s_stop\s*\(\s*|do_fio\s*\(\s*&\w+\s*,\s*)'
+                             + literal + r'\s*,', source):
         edits.append((*match.span(1), f'const_cast<char*>({match[1]})'))
     return '#include "scar_f2c_call.hpp"\n' + _apply_spans(source, edits)
 

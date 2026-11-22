@@ -4,8 +4,10 @@ import argparse
 from dataclasses import replace
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 
+from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.codec import dumps, loads
 from scar.ir.implementation_plan import (
     CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem,
@@ -13,6 +15,21 @@ from scar.ir.implementation_plan import (
 )
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.constructive_planner import construct_implementations
+
+
+def entry_sources(artifacts):
+    roles = ('request', 'program', 'graph_evidence', 'calls', 'simplified', 'rewrites', 'cost')
+    return tuple(dict(role=role, **artifacts[role]) for role in roles)
+
+
+def entry_cpus(hardware):
+    target = read_artifact(hardware)
+    inventory = read_artifact(dict(target['inventory'], schema='scar.target-inventory'))
+    available = os.sched_getaffinity(0).intersection(inventory['cpu']['online_cpu_ids'])
+    constraints = inventory['execution_constraints']
+    if constraints.get('allowed_cpu_ids') is not None:
+        available.intersection_update(constraints['allowed_cpu_ids'])
+    return available
 
 
 def simplify_copies(program: ProviderArtifact, anchors, out):
@@ -55,16 +72,22 @@ def simplify_copies(program: ProviderArtifact, anchors, out):
     return rewrites
 
 
-def plan_entry(entry: str, program: ProviderArtifact, hardware: ProviderArtifact, core, calibration_ns):
-    source_refs = (dict(path=program.uri, sha256=program.sha256, size_bytes=program.size_bytes,
-                        region=entry),)
-    cost = CostEstimate(calibration_ns, None, None, 'EMPIRICAL_MODEL', 'baseline_launch', source_refs)
-    baseline = ImplementationOption('original', 'preserve_entry', source_refs, {f'cpu:{core}': 1},
-                                    {}, {}, {}, cost, parameters={})
-    problem = PlanningProblem(
-        hardware, source_refs, (PlanningResource(f'cpu:{core}', 'EXECUTION', 1),),
+def entry_problem(entry, artifacts, observation):
+    source_refs = entry_sources(artifacts)
+    core = f'cpu:{observation["cpu"]}'
+    cost = CostEstimate(observation['elapsed_ns'], None, None, 'EMPIRICAL_MODEL',
+                        'baseline_launch', (dict(role='cost', **artifacts['cost']),))
+    baseline = ImplementationOption('original', 'preserve_entry', source_refs, {core: 1},
+                                    {}, {}, {}, cost, parameters={'region': entry})
+    return PlanningProblem(
+        ProviderArtifact(**artifacts['hardware']), source_refs,
+        (PlanningResource(core, 'EXECUTION', 1, source_refs=cost.source_refs),),
         (PlanningOperation('entry', source_refs, (), (baseline,), baseline.id),), (),
         assumptions=('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY'))
+
+
+def plan_entry(entry, artifacts, observation):
+    problem = entry_problem(entry, artifacts, observation)
     return problem_document(problem), construct_implementations(problem, baseline_only=True)
 
 
@@ -76,11 +99,12 @@ def main(argv=None):
     parser.add_argument('--exact', action='store_true', help='use the optional exact resource solver')
     args = parser.parse_args(argv)
     problem = problem_from_dict(json.loads(args.problem.read_bytes()))
+    baseline_only = 'PHYSICAL_COST_BASELINE_ONLY' in problem.assumptions
     if args.exact:
         from scar.optimization.joint_planner import solve_implementations
-        plan = solve_implementations(problem)
+        plan = solve_implementations(problem, baseline_only=baseline_only)
     else:
-        plan = construct_implementations(problem)
+        plan = construct_implementations(problem, baseline_only=baseline_only)
     with args.out.open('x') as output:
         json.dump(plan, output, indent=2)
         output.write('\n')

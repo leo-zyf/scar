@@ -59,6 +59,7 @@ class Procedure:
 def _symbol_tables(dump):
     scopes = list(_SCOPES.finditer(dump))
     tables = {}
+    imports = []
     for index, scope in enumerate(scopes):
         end = scopes[index + 1].start() if index + 1 < len(scopes) else len(dump)
         text = dump[scope.end():end].split('\n  code:', 1)[0]
@@ -69,12 +70,19 @@ def _symbol_tables(dump):
             fields = text[item.end():tail]
             type_spec = re.search(r'^\s*type spec\s*:\s*\((\w+)\s+(\d+)\)', fields, re.MULTILINE)
             if not type_spec:
+                origin = re.search(r"from namespace '(\w+)'", item[0])
+                if origin:
+                    imports.append((scope[1].lower(), item[1].lower(), origin[1].lower()))
                 continue
             attributes = re.search(r'^\s*attributes:\s*(.*)$', fields, re.MULTILINE)
             value = re.search(r'^\s*value:\s*(.*)$', fields, re.MULTILINE)
             symbols[item[1].lower()] = Symbol((type_spec[1], int(type_spec[2])),
                                              attributes[1] if attributes else '', value[1] if value else None)
         tables[scope[1].lower()] = symbols
+    for scope, name, origin in imports:
+        inherited = tables.get(origin, {}).get(name)
+        if inherited is not None:
+            tables[scope][name] = inherited
     return tables
 
 
@@ -153,8 +161,10 @@ def _collect_procedures(node, tables, inherited, procedures):
         name = str(node.content[0].items[1]).lower()
         if name in procedures or name not in tables:
             raise ValueError(f'open or ambiguous Fortran procedure scope {name}')
-        specification = next((tuple(child.content) for child in node.content
-                              if isinstance(child, F.Specification_Part)), ())
+        specification = tuple(
+            statement for child in node.content if isinstance(child, F.Specification_Part)
+            for item in child.content
+            for statement in (item.content if isinstance(item, F.Implicit_Part) else (item,)))
         execution = next((tuple(child.content) for child in node.content
                           if isinstance(child, F.Execution_Part)), ())
         procedures[name] = Procedure(name, node, specification, execution, {**inherited, **tables[name]})
@@ -292,8 +302,11 @@ def _lower_procedure(procedure, known):
         declaration = f'SUBROUTINE {procedure.name}({start.items[2] or ""})'
     else:
         declaration = str(start)
-    fixed = [declaration, 'IMPLICIT NONE', *_parameter_lines(procedure.symbols, source.used), *declarations]
+    parameters = tuple(_parameter_lines(procedure.symbols, source.used))
+    fixed = [declaration, 'IMPLICIT NONE',
+             *(line for line in parameters if not line.startswith('DATA ')), *declarations]
     fixed.extend(f'INTEGER {name}' for name in source.indices)
+    fixed.extend(line for line in parameters if line.startswith('DATA '))
     return '\n'.join([*('      ' + line for line in fixed), *source.lines, '      END', ''])
 
 

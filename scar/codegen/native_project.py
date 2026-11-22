@@ -25,7 +25,7 @@ def _cmake_arg(value):
 def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=(),
                          compile_options=(), link_options=(), libraries=(), runtime_dirs=(),
                          install_dirs=(), install_launcher=False, preserve_install_permissions=False,
-                         with_c_provider=False):
+                         with_c_provider=False, source_settings=None):
     """Write the shared project format with profile-specific source and link inputs."""
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
         raise ValueError('expected a CMake target name')
@@ -40,6 +40,18 @@ def write_native_project(root, name, *, sources=('src/main.cpp',), include_dirs=
                           ('target_link_libraries', libraries)):
         if args:
             lines.append(f'{command}({name} PRIVATE ' + ' '.join(map(_cmake_arg, args)) + ')')
+    for source, (directories, options) in (source_settings or {}).items():
+        if source not in sources:
+            raise ValueError(f'compile settings reference an absent source: {source}')
+        source = _cmake_arg(source)
+        if directories:
+            arguments = ' '.join(map(_cmake_arg, directories))
+            lines.append(f'set(scar_source_includes {arguments})')
+            lines.append('list(TRANSFORM scar_source_includes PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")')
+            lines.append(f'set_property(SOURCE {source} PROPERTY INCLUDE_DIRECTORIES ${{scar_source_includes}})')
+        if options:
+            arguments = ' '.join(map(_cmake_arg, options))
+            lines.append(f'set_property(SOURCE {source} PROPERTY COMPILE_OPTIONS {arguments})')
     if runtime_dirs:
         paths = ' '.join(map(_cmake_arg, runtime_dirs))
         lines.append(f'set_property(TARGET {name} PROPERTY BUILD_RPATH {paths})')
@@ -86,7 +98,7 @@ def build_native_project(root, name, compiler, *, expected_libraries=(), require
             or any(name.startswith(('libpython', 'libtorch_python')) for name in dependencies)):
         raise ValueError('native project did not link the required non-Python provider libraries')
     if require_cpu_only:
-        from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+        from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
         qualify_cpu_dependencies(dependencies)
     validation = root / 'validation'

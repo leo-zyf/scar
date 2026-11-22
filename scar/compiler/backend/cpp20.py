@@ -4,10 +4,66 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from scar.artifacts import file_reference
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project, write_native_project
+from scar.ir.execution_recipe import read_artifact
+from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PROBLEM_SCHEMA, problem_document, problem_from_dict
+from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA
+from scar.optimization.joint_planner import verify_execution_plan
 
 from ..frontend.clang import capture_unit
+from ..middle.plan import entry_cpus, entry_problem
+
+
+def admit_entry(artifacts, entry):
+    """Replay the artifact and execution contracts before emitting source."""
+    schemas = {
+        'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
+        'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
+        'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
+        'rewrites': 'scar.native-rewrites', 'cost': 'scar.native-entry-cost',
+        'planning_problem': PROBLEM_SCHEMA, 'execution_plan': PLAN_SCHEMA,
+    }
+    documents = {}
+    for role, schema in schemas.items():
+        ref = artifacts[role]
+        if ref['schema'] != schema:
+            raise ValueError(f'invalid {role} artifact schema')
+        if role in {'program', 'graph_evidence', 'calls', 'simplified', 'rewrites'}:
+            if file_reference(ref['uri'], schema) != ref:
+                raise ValueError(f'{role} artifact differs from the plan input')
+        else:
+            documents[role] = read_artifact(ref)
+    observation = documents['cost']
+    problem = problem_from_dict(documents['planning_problem'])
+    if (observation['schema_version'] != 1 or observation['request'] != artifacts['request']
+            or observation['exit'] != 0 or problem_document(entry_problem(entry, artifacts, observation))
+            != documents['planning_problem']):
+        raise ValueError('native problem differs from the admitted inputs')
+    plan = documents['execution_plan']
+    verification = verify_execution_plan(problem, plan)
+    option = problem.operations[0].options[0]
+    if (not plan['baseline_only'] or plan['transfers'] or plan.get('activities')
+            or len(plan['selected']) != 1 or plan['selected'][0]['option'] != option.id):
+        raise ValueError('backend cannot lower the selected native schedule')
+    cpu = int(next(iter(option.demands)).removeprefix('cpu:'))
+    if cpu not in entry_cpus(artifacts['hardware']):
+        raise ValueError('scheduled CPU is unavailable')
+    manifest = documents['request']
+    root = Path(manifest['source_root'])
+    for name, lock in manifest['source_lock']['files'].items():
+        path = (root / name).resolve(strict=True)
+        if not path.is_relative_to(root):
+            raise ValueError(f'locked source outside the source root: {name}')
+        ref = file_reference(path, 'scar.native-source')
+        if any(ref[key] != lock[key] for key in ('sha256', 'size_bytes')):
+            raise ValueError(f'locked source changed: {name}')
+    delivery = dict(schema='scar.native-delivery', schema_version=1, cpus=[cpu],
+                    plan=artifacts['execution_plan'], problem=artifacts['planning_problem'],
+                    request=artifacts['request'], selected=plan['selected'],
+                    lowering=option.lowering, verification=verification)
+    return manifest, observation, delivery
 
 
 def _compile_settings(flags, source_root):
@@ -70,23 +126,23 @@ def _lower_pointer_conversions(path, data, records):
 
 def emit_sources(manifest, project, edits):
     """Stage verified headers and source files, then apply language bridges."""
-    if manifest['language'] == 'fortran':
+    language = manifest['language']
+    units = {unit['path']: unit for unit in manifest['units']}
+    if language == 'mixed' or any(unit.get('language', language) != language for unit in units.values()):
+        raise ValueError('mixed-language source lowering requires a verified linkage bridge')
+    if language == 'fortran':
         from .fortran import emit_fortran
         return emit_fortran(manifest, project, edits)
 
     root = Path(manifest['source_root']).resolve()
-    is_c = manifest['language'] == 'c'
-    units = {unit['path']: unit for unit in manifest['units']}
+    is_c = language == 'c'
     material = manifest['source_lock']['files']
     if not units or not units.keys() <= material.keys():
         raise ValueError('every translation unit needs locked source bytes')
     if not edits.keys() <= units.keys() or any(not isinstance(value, bytes) for value in edits.values()):
         raise ValueError('source edits must provide byte replacements for translation units')
 
-    settings = {_compile_settings(unit['flags'], root) for unit in units.values()}
-    if len(settings) != 1:
-        raise ValueError('C++20 staging requires a shared compile configuration')
-    include_dirs, compile_options = settings.pop()
+    settings = {name: _compile_settings(unit['flags'], root) for name, unit in units.items()}
     sources, translation = {}, []
     for name, lock in material.items():
         relative = Path(name)
@@ -113,8 +169,15 @@ def emit_sources(manifest, project, edits):
     if is_c:
         (project / 'translation.json').write_text(json.dumps(translation, indent=2) + '\n')
     linkage = manifest if is_c else manifest.get('cxx', {})
+    common = set(settings.values())
+    if len(common) == 1:
+        include_dirs, compile_options = common.pop()
+        source_settings = {}
+    else:
+        include_dirs, compile_options = (), ()
+        source_settings = {sources[name]: configuration for name, configuration in settings.items()}
     return dict(sources=tuple(sources[name] for name in units), include_dirs=include_dirs,
-                compile_options=compile_options,
+                compile_options=compile_options, source_settings=source_settings,
                 libraries=linkage.get('libraries', ()), link_options=linkage.get('link_options', ()),
                 runtime_dirs=linkage.get('runtime_dirs', ()))
 

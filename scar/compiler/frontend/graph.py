@@ -14,7 +14,8 @@ import re
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.analysis.target_graph import _artifact, build_target_graph
+from scar.analysis.target_graph import build_target_graph
+from scar.artifacts import file_reference
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
@@ -105,7 +106,8 @@ def read_ssa(raw, unit):
         blocks = list(_BLOCK.finditer(body))
         if not blocks:
             continue
-        yield dict(unit=unit, name=match[1], symbol=match[2], blocks=[
+        version = sha256(body.encode()).hexdigest()
+        yield dict(unit=unit, name=match[1], symbol=match[2], version=version, blocks=[
             _read_block(block[1], block[2], body[block.end():blocks[i + 1].start() if i + 1 < len(blocks) else len(body)])
             for i, block in enumerate(blocks)])
 
@@ -127,8 +129,13 @@ def capture_ssa(manifest, unit, destination):
     return list(read_ssa(destination.read_text(errors='replace'), unit['path']))
 
 
+def _function_identity(function):
+    identity = (function['unit'], function['symbol'], function.get('version'))
+    return sha256(json.dumps(identity).encode()).hexdigest()[:24]
+
+
 def _lower_function(function):
-    identity = sha256((function['unit'] + ':' + function['symbol']).encode()).hexdigest()[:24]
+    identity = _function_identity(function)
     region = RegionID(identity)
     location = LocationID(identity + ':memory')
     exception_blocks = {row['number'] for row in function['blocks']
@@ -486,7 +493,7 @@ def link_calls(functions, anchors, *, entry='main', executable=None, clang_units
     for (unit, symbol), function in by_function.items():
         nodes, definitions = tables.get(unit, ({}, {}))
         callers = definitions.get(symbol, ())
-        identity = sha256((unit + ':' + symbol).encode()).hexdigest()[:24]
+        identity = _function_identity(function)
         for block in function['blocks']:
             for index, operation in enumerate(block['operations']):
                 if operation['opcode'] != 'gimple_call' or not operation.get('call'):
@@ -569,23 +576,39 @@ def capture_target(manifest, out, jobs):
             graph = capture_unit(manifest['source_root'], unit)
             (out / f'tu-{index}.clang.json').write_text(json.dumps(graph))
         except (ValueError, OSError) as error:
-            return functions, dict(unit=unit['path'], reason=str(error))
-        return functions, None
+            return functions, ssa, None, dict(unit=unit['path'], reason=str(error))
+        return functions, ssa, graph, None
 
-    functions, frontiers = [], []
+    functions, frontiers, unit_evidence = [], [], []
+    call_tables, clang_units = [], []
     with ThreadPoolExecutor(max_workers=jobs) as executor:
-        items = enumerate((*profiles['c'], *profiles['c++']))
-        for captured, frontier in executor.map(c_family, items):
+        units = (*profiles['c'], *profiles['c++'])
+        for unit, (captured, ssa, ast, frontier) in zip(units, executor.map(c_family, enumerate(units))):
+            calls = ssa.with_suffix('.cgraph')
+            call_tables.append((unit['path'], calls))
+            artifacts = dict(control=file_reference(ssa, 'gcc.ssa'),
+                             calls=file_reference(calls, 'gcc.ipa-cgraph'))
             functions.extend(captured)
             if frontier is not None:
                 frontiers.append(frontier)
+            else:
+                clang_units.append(ast)
+                artifacts['types'] = file_reference(ssa.with_suffix('.clang.json'), 'scar.clang-unit')
+            unit_evidence.append(dict(unit=unit['path'], language=unit.get('language', manifest['language']),
+                                      flags=unit['flags'], gcc_flags=unit.get('gcc_flags', []),
+                                      artifacts=artifacts))
     if profiles['fortran']:
         from .fortran import capture_fortran
         fortran = capture_fortran(dict(manifest, units=profiles['fortran']), out)
         for unit in fortran['units']:
             functions.extend(read_ssa(Path(unit['raw']).read_text(), unit['path']))
+            call_tables.append((unit['path'], unit['call_table']))
+            unit_evidence.append(dict(unit=unit['path'], language='fortran', flags=unit['flags'], artifacts=dict(
+                control=file_reference(unit['raw'], 'gcc.ssa'),
+                types=file_reference(unit['semantics'], 'gfortran.semantics'),
+                calls=file_reference(unit['call_table'], 'gcc.ipa-cgraph'))))
         (out / 'fortran.json').write_text(json.dumps(fortran))
-    return functions, frontiers
+    return functions, frontiers, unit_evidence, call_tables, clang_units
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,20 +616,37 @@ class GraphBuild:
     program: ProviderArtifact | None
     hardware: ProviderArtifact
     evidence: ProviderArtifact
+    calls: ProviderArtifact
     report: dict
 
 
-def build_graph(manifest, directory, *, jobs) -> GraphBuild:
+def build_graph(manifest, directory, *, jobs, request) -> GraphBuild:
     """Publish the program graph, platform facts and grounding evidence."""
     hardware = directory / 'hardware'
     build_target_graph(hardware, paths=(manifest['source_root'], str(directory)))
-    functions, frontiers = capture_target(manifest, directory / 'frontend', jobs)
+    functions, frontiers, unit_evidence, call_tables, clang_units = capture_target(
+        manifest, directory / 'frontend', jobs)
     program_path = directory / 'program.json'
     report = write_graph(functions, program_path, entry=manifest['entry'])
-    report['frontend_frontiers'] = frontiers
+    program = (file_reference(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None)
+    target = file_reference(hardware / 'result.json', 'scar.target-hardware-graph')
+    baseline = (manifest.get('baseline') or {}).get('argv') or [None]
+    calls = link_calls(functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
+                       clang_units=clang_units, call_tables=call_tables)
+    calls_path = directory / 'call-links.json'
+    calls_path.write_text(json.dumps(dict(schema='scar.native-call-links', schema_version=1, **calls)) + '\n')
+    call_receipt = file_reference(calls_path, 'scar.native-call-links')
+    report.update(schema='scar.native-graph-evidence', schema_version=1, units=unit_evidence,
+                  request=request, program=program, hardware=target, calls=call_receipt,
+                  frontend_frontiers=frontiers, call_frontiers=len(calls['frontiers']),
+                  call_sites=len(calls['calls']),
+                  call_links=sum(row['status'] == 'BOUND' and row['operation'] is not None
+                                 and row['callee']['region'] is not None for row in calls['calls']),
+                  reachable_regions=len(calls['reachable']))
     evidence_path = directory / 'graph-report.json'
     (directory / 'compiler-cfg.json').write_text(json.dumps(functions, indent=2, ensure_ascii=False) + '\n')
     evidence_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
-    program = _artifact(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None
-    return GraphBuild(program, _artifact(hardware / 'result.json', 'scar.target-hardware-graph'),
-                      _artifact(evidence_path, 'scar.native-graph-evidence'), report)
+    return GraphBuild(None if program is None else ProviderArtifact(**program),
+                      ProviderArtifact(**target),
+                      ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
+                      ProviderArtifact(**call_receipt), report)

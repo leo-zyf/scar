@@ -1,6 +1,7 @@
 """Canonical artifact bytes and durable publication."""
 
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import tempfile
@@ -8,6 +9,18 @@ import tempfile
 
 def _json(value):
     return (json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
+
+
+def file_reference(path, schema):
+    """Identify a file without loading the whole artifact into memory."""
+    path = Path(path).absolute()
+    size = 0
+    digest = sha256()
+    with path.open('rb') as stream:
+        while chunk := stream.read(1024 * 1024):
+            size += len(chunk)
+            digest.update(chunk)
+    return dict(uri=str(path), schema=schema, size_bytes=size, sha256=digest.hexdigest())
 
 
 def _sync_directory(path):

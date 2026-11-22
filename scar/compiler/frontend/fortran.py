@@ -43,12 +43,15 @@ def capture_fortran(manifest, out):
         for index, (name, path, flags) in enumerate(_units(manifest)):
             symbols = out / f'unit-{index}.fortran-original'
             ssa = out / f'unit-{index}.ssa'
+            calls = ssa.with_suffix('.cgraph')
             command = [compiler, *flags, '-J', str(modules), '-I', str(modules)]
             ssa_switch = f'-fdump-tree-ssa-raw-blocks-lineno-vops={ssa}'
             text = _run([*command, '-O0', '-c', '-fdump-fortran-original', ssa_switch,
+                         f'-fdump-ipa-cgraph={calls}',
                          '-o', str(modules / f'unit-{index}.o'), str(path)], modules)
             symbols.write_text(text, encoding='utf-8')
             units.append({'path': name, 'frontend': 'gfortran', 'format': 'gcc-tree-ssa',
-                          'raw': str(ssa), 'semantics': str(symbols), 'flags': list(flags),
+                          'raw': str(ssa), 'call_table': str(calls),
+                          'semantics': str(symbols), 'flags': list(flags),
                           'procedures': re.findall(r'^\s*procedure name = (\w+)', text, re.MULTILINE)})
     return {'frontend': 'gfortran', 'version': version, 'units': units}
