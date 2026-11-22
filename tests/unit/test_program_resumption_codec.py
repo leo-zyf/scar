@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scar.ir.program.codec import SCHEMA_VERSION, dumps, loads
+from scar.ir.program.codec import dumps, loads
 from scar.ir.program.control import ProtocolValueKind
 from scar.ir.program.ids import ValueID
 from scar.ir.program.model import BlockArgument, ProtocolValue
@@ -43,7 +43,6 @@ def test_resumption_graph_uses_strict_v10_tagged_wire_and_roundtrips():
     graph = resumption_program()
     payload = dumps(graph)
     document = json.loads(payload)
-    assert SCHEMA_VERSION == 27
     assert document["schema_version"] == 10
     assert RESUMPTION_FIELDS <= set(document)
     assert all(document[name] for name in RESUMPTION_FIELDS)

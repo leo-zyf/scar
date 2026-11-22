@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scar.ir.program.codec import SCHEMA_VERSION, dumps, loads
+from scar.ir.program.codec import dumps, loads
 from scar.ir.program.frames import FrameRules
 from tests.fixtures.program_no_body_graphs import no_body_program
 from tests.fixtures.program_session_release_graphs import session_release_program
@@ -32,7 +32,6 @@ def test_session_release_roundtrip_preserves_all_canonical_producers(binding, po
     graph = session_release_program(binding=binding, post=post, strict_subset=True, extra_domain=True)
     payload = dumps(graph)
     document = json.loads(payload)
-    assert SCHEMA_VERSION == 27
     assert document["schema_version"] == 14
     assert document["session_updates"] and document["terminal_frame_releases"]
     assert loads(payload) == graph

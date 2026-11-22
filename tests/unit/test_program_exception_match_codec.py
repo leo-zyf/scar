@@ -1,5 +1,5 @@
 """Program21 matcher capability, strict nested tags, and old wire isolation."""
-from dataclasses import fields, replace
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -8,7 +8,6 @@ import pytest
 
 from scar.ir.program import codec
 from scar.ir.program.exception_matches import ExceptionHandlerOperand, FixedBuiltinHandler
-from scar.ir.program.model import ProgramGraph
 from scar.ir.program.validation import require_valid
 from tests.fixtures.program_exception_match_graphs import exception_match_program
 from tests.fixtures.program_method_lookup_graphs import method_lookup_program
@@ -28,10 +27,9 @@ def _document(*, mode="ordinary", input_kind="reference"):
 @pytest.mark.parametrize("input_kind", ("reference", "packet"))
 def test_matchers_select_program21_without_a_fake_protocol_scope(mode, input_kind):
     graph, document = _document(mode=mode, input_kind=input_kind)
-    assert codec.SCHEMA_VERSION == 27
     assert not graph.protocol_scopes and not graph.protocol_operations
     assert document["schema_version"] == 21
-    assert set(document) == ({field.name for field in fields(ProgramGraph)} - {"call_effect_expansions", "stored_value_writes", "stored_value_reads"}) | {"schema", "schema_version"}
+    assert set(document) == set(json.loads((FIXTURES / "program_graph_v21_frozen.json").read_bytes()))
     row, = document["exception_matches"]
     assert row["kind"] == "EXCEPTION_MATCHER"
     assert row["handler"]["kind"] == ("FIXED_BUILTIN_EXCEPTION_HANDLER" if mode == "ordinary"
@@ -152,7 +150,7 @@ def test_new_handler_record_cannot_hide_inside_an_old_program20_source_union():
         codec.loads(json.dumps(document))
 
 
-@pytest.mark.parametrize("version", (28, True))
+@pytest.mark.parametrize("version", (codec.SCHEMA_VERSION + 1, True))
 def test_future_and_boolean_schema_versions_remain_rejected(version):
     _, document = _document()
     document["schema_version"] = version

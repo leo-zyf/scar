@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from scar.ir.program import ExactLiteralOrigin
-from scar.ir.program.codec import SCHEMA_VERSION, dumps, loads
+from scar.ir.program.codec import dumps, loads
 from tests.fixtures.program_literals import literal_program
 from tests.fixtures.program_state_addresses import state_address_program
 
@@ -16,7 +16,6 @@ from tests.fixtures.program_state_addresses import state_address_program
 def test_either_capability_selects_v16(exact, attachments):
     graph, _ = literal_program(exact=exact, attachments=attachments)
     wire = dumps(graph)
-    assert SCHEMA_VERSION == 27
     assert json.loads(wire)["schema_version"] == 16
     assert loads(wire) == graph
     assert dumps(loads(wire)) == wire

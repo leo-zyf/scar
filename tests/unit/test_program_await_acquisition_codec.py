@@ -3,7 +3,7 @@
 The oracle test runs the historical encoder only inside a git archive.  No
 current encoder is used to manufacture the expected historical bytes.
 """
-from dataclasses import fields, replace
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -17,7 +17,6 @@ import pytest
 
 from scar.ir.program import codec
 from scar.ir.program.ids import OperationID, ProtocolScopeID, UseID
-from scar.ir.program.model import ProgramGraph
 from scar.ir.program.protocol_await_records import (
     AwaitAcquisition, AwaitBodyLink, AwaitIteratorQualification, CoroutineAwaitWrapper,
     has_await_acquisition_capability,
@@ -78,8 +77,9 @@ def test_v23_roundtrip_keeps_original_input_results_state_and_distinct_completio
     graph = _graph(kind)
     wire = codec.dumps(graph)
     document = json.loads(wire)
-    assert codec.SCHEMA_VERSION == 27 and document["schema_version"] == 23
-    assert set(document) == ({item.name for item in fields(ProgramGraph)} - {"call_effect_expansions", "stored_value_writes", "stored_value_reads"}) | {"schema", "schema_version"}
+    assert document["schema_version"] == 23
+    frozen = Path(__file__).resolve().parents[1] / "fixtures" / "program_graph_v21_frozen.json"
+    assert set(document) == set(json.loads(frozen.read_bytes()))
     assert has_await_acquisition_capability(graph)
     recovered = codec.loads(wire)
     assert recovered == graph and codec.dumps(recovered) == wire
@@ -175,7 +175,7 @@ def test_v23_cannot_upgrade_an_old_document_with_no_new_capability():
         codec.loads(json.dumps(document))
 
 
-@pytest.mark.parametrize("version", (True, 28))
+@pytest.mark.parametrize("version", (True, codec.SCHEMA_VERSION + 1))
 def test_boolean_or_future_schema_version_is_not_a_capability(version):
     document = json.loads(codec.dumps(_graph()))
     document["schema_version"] = version

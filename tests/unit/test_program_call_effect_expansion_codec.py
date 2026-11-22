@@ -3,7 +3,7 @@
 The Program24 oracle is encoded by an isolated immutable archive. Only root's
 serial test runner executes that archive or any of these tests.
 """
-from dataclasses import fields, replace
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -15,13 +15,12 @@ import textwrap
 
 import pytest
 
-from scar.ir.execution import codec as execution_codec
 from scar.ir.program import codec
 from scar.ir.program.call_effect_expansion import (
     CALL_EFFECT_EXPANSION_RECORD_TAGS, CallEffectExpansion,
 )
 from scar.ir.program.ids import OperationID, RegionID
-from scar.ir.program.model import ProgramGraph, TerminatorKind
+from scar.ir.program.model import TerminatorKind
 from scar.ir.program.validation import require_valid
 from scar.ir.record_codec import encode
 from tests.fixtures.program_async_competition_graphs import async_competition_program
@@ -54,9 +53,9 @@ def test_program25_roundtrip_preserves_original_calls_effects_and_all_completion
     assert not codec._has_session_occupancy_capability(graph)
     wire = codec.dumps(graph)
     document = json.loads(wire)
-    assert codec.SCHEMA_VERSION == 27 and document['schema_version'] == 25
-    assert execution_codec.SCHEMA_VERSION == 8
-    assert set(document) == ({field.name for field in fields(ProgramGraph)} - {'stored_value_writes', 'stored_value_reads'}) | {'schema', 'schema_version'}
+    assert document['schema_version'] == 25
+    frozen = Path(__file__).resolve().parents[1] / "fixtures" / "program_graph_v21_frozen.json"
+    assert set(document) == set(json.loads(frozen.read_bytes())) | {"call_effect_expansions"}
     assert document['call_effect_expansions'] == [
         encode(row, record_tags=CALL_EFFECT_EXPANSION_RECORD_TAGS)]
     assert set(document['call_effect_expansions'][0]) == {'kind', 'operation', 'callee'}
@@ -199,7 +198,7 @@ def test_program25_can_coexist_with_occupancy_without_requiring_or_replacing_tha
     assert codec._has_session_occupancy_capability(recovered)
 
 
-@pytest.mark.parametrize('version', (True, 28))
+@pytest.mark.parametrize('version', (True, codec.SCHEMA_VERSION + 1))
 def test_boolean_or_next_future_version_cannot_enable_effect_expansion(version):
     graph, _, _ = _program()
     document = json.loads(codec.dumps(graph))

@@ -77,68 +77,40 @@ _CALL_EFFECT_FIELDS = frozenset({"call_effect_expansions"})
 _STORED_VALUE_FIELDS = frozenset({"stored_value_writes", "stored_value_reads"})
 _FRAME_ROOT_FIELDS = frozenset({"frame_roots"})
 _ATTRIBUTE_LOOKUP_FIELDS = frozenset({"attribute_lookups"})
-_V32_GRAPH_FIELDS = _GRAPH_FIELDS
-_V29_GRAPH_FIELDS = _V32_GRAPH_FIELDS - _ATTRIBUTE_LOOKUP_FIELDS
-_V30_GRAPH_FIELDS = _V29_GRAPH_FIELDS
-_V31_GRAPH_FIELDS = _V30_GRAPH_FIELDS
-_V28_GRAPH_FIELDS = _V29_GRAPH_FIELDS - _FRAME_ROOT_FIELDS
-_V27_GRAPH_FIELDS = _V28_GRAPH_FIELDS
-_V26_GRAPH_FIELDS = _V27_GRAPH_FIELDS - _STORED_VALUE_FIELDS
-_V25_GRAPH_FIELDS = _V26_GRAPH_FIELDS
-_V24_GRAPH_FIELDS = _V25_GRAPH_FIELDS - _CALL_EFFECT_FIELDS
-_V23_GRAPH_FIELDS = _V24_GRAPH_FIELDS
-_V22_GRAPH_FIELDS = _V23_GRAPH_FIELDS
-_V21_GRAPH_FIELDS = _V22_GRAPH_FIELDS
-_V20_GRAPH_FIELDS = _V21_GRAPH_FIELDS - _EXCEPTION_MATCH_FIELDS
-_V19_GRAPH_FIELDS = _V20_GRAPH_FIELDS
-_V18_GRAPH_FIELDS = _V19_GRAPH_FIELDS - _CONNECTION_FIELDS
-_V17_GRAPH_FIELDS = _V18_GRAPH_FIELDS
-_V16_GRAPH_FIELDS = _V17_GRAPH_FIELDS - _PROTOCOL_FIELDS
-_V15_GRAPH_FIELDS = _V16_GRAPH_FIELDS - _LITERAL_FIELDS
-_V14_GRAPH_FIELDS = _V15_GRAPH_FIELDS - _STATE_ADDRESS_FIELDS
-_V13_GRAPH_FIELDS = _V14_GRAPH_FIELDS - _SESSION_RELEASE_FIELDS
-_V12_GRAPH_FIELDS = _V13_GRAPH_FIELDS - _NO_BODY_FIELDS
-_V11_GRAPH_FIELDS = _V12_GRAPH_FIELDS - _PUBLICATION_FIELDS
-_V10_GRAPH_FIELDS = _V11_GRAPH_FIELDS - _DRIVER_FIELDS
-_V9_GRAPH_FIELDS = _V10_GRAPH_FIELDS - _RESUMPTION_FIELDS
-_V8_GRAPH_FIELDS = _V9_GRAPH_FIELDS - _CLEANUP_FIELDS
-_V7_GRAPH_FIELDS = _V8_GRAPH_FIELDS - _NATIVE_FIELDS
-_V6_GRAPH_FIELDS = _V7_GRAPH_FIELDS - _PROVIDER_FIELDS
-_V5_GRAPH_FIELDS = _V6_GRAPH_FIELDS - _CONTROL_FIELDS
-_V4_GRAPH_FIELDS = _V5_GRAPH_FIELDS - _ENVIRONMENT_FIELDS
-_V1_V2_GRAPH_FIELDS = _V4_GRAPH_FIELDS - _BINDING_FIELDS - _RESOURCE_FIELDS
-_V3_GRAPH_FIELDS = _V4_GRAPH_FIELDS - _RESOURCE_FIELDS
-_V1_V2_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V1_V2_GRAPH_FIELDS
-_V3_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V3_GRAPH_FIELDS
-_V4_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V4_GRAPH_FIELDS
-_V5_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V5_GRAPH_FIELDS
-_V6_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V6_GRAPH_FIELDS
-_V7_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V7_GRAPH_FIELDS
-_V8_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V8_GRAPH_FIELDS
-_V9_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V9_GRAPH_FIELDS
-_V10_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V10_GRAPH_FIELDS
-_V11_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V11_GRAPH_FIELDS
-_V12_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V12_GRAPH_FIELDS
-_V13_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V13_GRAPH_FIELDS
-_V14_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V14_GRAPH_FIELDS
-_V15_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V15_GRAPH_FIELDS
-_V16_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V16_GRAPH_FIELDS
-_V17_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V17_GRAPH_FIELDS
-_V18_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V18_GRAPH_FIELDS
-_V19_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V19_GRAPH_FIELDS
-_V20_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V20_GRAPH_FIELDS
-_V21_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V21_GRAPH_FIELDS
-_V22_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V22_GRAPH_FIELDS
-_V23_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V23_GRAPH_FIELDS
-_V24_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V24_GRAPH_FIELDS
-_V25_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V25_GRAPH_FIELDS
-_V26_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V26_GRAPH_FIELDS
-_V27_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V27_GRAPH_FIELDS
-_V28_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V28_GRAPH_FIELDS
-_V29_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V29_GRAPH_FIELDS
-_V30_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V30_GRAPH_FIELDS
-_V31_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V31_GRAPH_FIELDS
-_V32_ENVELOPE_FIELDS = frozenset({"schema", "schema_version"}) | _V32_GRAPH_FIELDS
+# Each capability owns the fields it introduced. Intermediate schema versions
+# can extend nested tags while keeping the same set of top-level fields.
+_ADDED_FIELDS = {
+    3: _BINDING_FIELDS,
+    4: _RESOURCE_FIELDS,
+    5: _ENVIRONMENT_FIELDS,
+    6: _CONTROL_FIELDS,
+    7: _PROVIDER_FIELDS,
+    8: _NATIVE_FIELDS,
+    9: _CLEANUP_FIELDS,
+    10: _RESUMPTION_FIELDS,
+    11: _DRIVER_FIELDS,
+    12: _PUBLICATION_FIELDS,
+    13: _NO_BODY_FIELDS,
+    14: _SESSION_RELEASE_FIELDS,
+    15: _STATE_ADDRESS_FIELDS,
+    16: _LITERAL_FIELDS,
+    17: _PROTOCOL_FIELDS,
+    19: _CONNECTION_FIELDS,
+    21: _EXCEPTION_MATCH_FIELDS,
+    25: _CALL_EFFECT_FIELDS,
+    27: _STORED_VALUE_FIELDS,
+    29: _FRAME_ROOT_FIELDS,
+    32: _ATTRIBUTE_LOOKUP_FIELDS,
+}
+_FIELDS_BY_VERSION = {
+    version: _GRAPH_FIELDS.difference(
+        *(group for since, group in _ADDED_FIELDS.items() if since > version))
+    for version in range(1, SCHEMA_VERSION + 1)
+}
+_HEADER_FIELDS = frozenset({"schema", "schema_version"})
+_ENVELOPE_FIELDS_BY_VERSION = {
+    version: _HEADER_FIELDS | graph_fields for version, graph_fields in _FIELDS_BY_VERSION.items()
+}
 _V19_CONNECTION_RECORD_TAGS = {record: tag for record, tag in PROTOCOL_CONNECTION_RECORD_TAGS.items()
                               if record is not SessionOccupancyCondition}
 _V17_PROTOCOL_RECORD_TAGS = {record: tag for record, tag in PROTOCOL_RECORD_TAGS.items()
@@ -363,100 +335,42 @@ def dumps(graph: ProgramGraph) -> str:
         tags = {**tags, **STATIC_FRAME_ROOT_RECORD_TAGS}
     if has_class_frame:
         tags = {**tags, **CLASS_FRAME_ABI_RECORD_TAGS}
+    capabilities = (
+        (has_attribute_lookups, 32),
+        (has_class_frame, 31),
+        (has_static_frame_roots, 30),
+        (has_frame_roots, 29),
+        (_has_handle_table_capability(graph), 28),
+        (has_stored_values, 27),
+        (has_async_initial_control, 26),
+        (has_call_effect_expansions, 25),
+        (has_session_occupancy, 24),
+        (has_await_acquisition, 23),
+        (has_lookup_fallback, 22),
+        (has_exception_matches, 21),
+        (has_method_lookup, 20),
+        (has_protocol_connections, 19),
+        (has_admission or has_invoke_subset, 18),
+        (has_protocols, 17),
+        (has_literals, 16),
+        (has_addresses, 15),
+        (has_session_release, 14),
+        (has_no_body, 13),
+        (has_publication, 12),
+        (has_driver, 11),
+        (has_resumption, 10),
+        (graph.handled_context_domains, 9),
+        (graph.native_boundaries, 8),
+        (graph.provider_envelopes, 7),
+        (graph.control_scopes, 6),
+        (graph.environments, 5),
+        (any(getattr(graph, name) for name in _RESOURCE_FIELDS), 4),
+        (has_binding_capability, 3),
+    )
+    version = next((version for present, version in capabilities if present), 2)
     encoded = encode(graph, record_tags=tags)
-    if has_attribute_lookups:
-        document = {"schema": SCHEMA, "schema_version": 32,
-                    **{name: encoded[name] for name in _V32_GRAPH_FIELDS}}
-    elif has_class_frame:
-        document = {"schema": SCHEMA, "schema_version": 31,
-                    **{name: encoded[name] for name in _V31_GRAPH_FIELDS}}
-    elif has_static_frame_roots:
-        document = {"schema": SCHEMA, "schema_version": 30,
-                    **{name: encoded[name] for name in _V30_GRAPH_FIELDS}}
-    elif has_frame_roots:
-        document = {"schema": SCHEMA, "schema_version": 29,
-                    **{name: encoded[name] for name in _V29_GRAPH_FIELDS}}
-    elif _has_handle_table_capability(graph):
-        document = {"schema": SCHEMA, "schema_version": 28,
-                    **{name: encoded[name] for name in _V28_GRAPH_FIELDS}}
-    elif has_stored_values:
-        document = {"schema": SCHEMA, "schema_version": 27,
-                    **{name: encoded[name] for name in _V27_GRAPH_FIELDS}}
-    elif has_async_initial_control:
-        document = {"schema": SCHEMA, "schema_version": 26,
-                    **{name: encoded[name] for name in _V26_GRAPH_FIELDS}}
-    elif has_call_effect_expansions:
-        document = {"schema": SCHEMA, "schema_version": 25,
-                    **{name: encoded[name] for name in _V25_GRAPH_FIELDS}}
-    elif has_session_occupancy:
-        document = {"schema": SCHEMA, "schema_version": 24,
-                    **{name: encoded[name] for name in _V24_GRAPH_FIELDS}}
-    elif has_await_acquisition:
-        document = {"schema": SCHEMA, "schema_version": 23,
-                    **{name: encoded[name] for name in _V23_GRAPH_FIELDS}}
-    elif has_lookup_fallback:
-        document = {"schema": SCHEMA, "schema_version": 22,
-                    **{name: encoded[name] for name in _V22_GRAPH_FIELDS}}
-    elif has_exception_matches:
-        document = {"schema": SCHEMA, "schema_version": 21,
-                    **{name: encoded[name] for name in _V21_GRAPH_FIELDS}}
-    elif has_method_lookup:
-        document = {"schema": SCHEMA, "schema_version": 20,
-                    **{name: encoded[name] for name in _V20_GRAPH_FIELDS}}
-    elif has_protocol_connections:
-        document = {"schema": SCHEMA, "schema_version": 19,
-                    **{name: encoded[name] for name in _V19_GRAPH_FIELDS}}
-    elif has_admission or has_invoke_subset:
-        document = {"schema": SCHEMA, "schema_version": 18,
-                    **{name: encoded[name] for name in _V18_GRAPH_FIELDS}}
-    elif has_protocols:
-        document = {"schema": SCHEMA, "schema_version": 17,
-                    **{name: encoded[name] for name in _V17_GRAPH_FIELDS}}
-    elif has_literals:
-        document = {"schema": SCHEMA, "schema_version": 16,
-                    **{name: encoded[name] for name in _V16_GRAPH_FIELDS}}
-    elif has_addresses:
-        document = {"schema": SCHEMA, "schema_version": 15,
-                    **{name: encoded[name] for name in _V15_GRAPH_FIELDS}}
-    elif has_session_release:
-        document = {"schema": SCHEMA, "schema_version": 14,
-                    **{name: encoded[name] for name in _V14_GRAPH_FIELDS}}
-    elif has_no_body:
-        document = {"schema": SCHEMA, "schema_version": 13,
-                    **{name: encoded[name] for name in _V13_GRAPH_FIELDS}}
-    elif has_publication:
-        document = {"schema": SCHEMA, "schema_version": 12,
-                    **{name: encoded[name] for name in _V12_GRAPH_FIELDS}}
-    elif has_driver:
-        document = {"schema": SCHEMA, "schema_version": 11,
-                    **{name: encoded[name] for name in _V11_GRAPH_FIELDS}}
-    elif has_resumption:
-        document = {"schema": SCHEMA, "schema_version": 10,
-                    **{name: encoded[name] for name in _V10_GRAPH_FIELDS}}
-    elif graph.handled_context_domains:
-        document = {"schema": SCHEMA, "schema_version": 9,
-                    **{name: encoded[name] for name in _V9_GRAPH_FIELDS}}
-    elif graph.native_boundaries:
-        document = {"schema": SCHEMA, "schema_version": 8,
-                    **{name: encoded[name] for name in _V8_GRAPH_FIELDS}}
-    elif graph.provider_envelopes:
-        document = {"schema": SCHEMA, "schema_version": 7,
-                    **{name: encoded[name] for name in _V7_GRAPH_FIELDS}}
-    elif graph.control_scopes:
-        document = {"schema": SCHEMA, "schema_version": 6,
-                    **{name: encoded[name] for name in _V6_GRAPH_FIELDS}}
-    elif graph.environments:
-        document = {"schema": SCHEMA, "schema_version": 5,
-                    **{name: encoded[name] for name in _V5_GRAPH_FIELDS}}
-    elif any(getattr(graph, name) for name in _RESOURCE_FIELDS):
-        document = {"schema": SCHEMA, "schema_version": 4,
-                    **{name: encoded[name] for name in _V4_GRAPH_FIELDS}}
-    elif has_binding_capability:
-        document = {"schema": SCHEMA, "schema_version": 3,
-                    **{name: encoded[name] for name in _V3_GRAPH_FIELDS}}
-    else:
-        document = {"schema": SCHEMA, "schema_version": 2,
-                    **{name: encoded[name] for name in _V1_V2_GRAPH_FIELDS}}
+    document = {"schema": SCHEMA, "schema_version": version,
+                **{name: encoded[name] for name in _FIELDS_BY_VERSION[version]}}
     return json.dumps(document, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=(has_literals or has_protocols or has_protocol_connections
                                     or has_exception_matches),
@@ -507,55 +421,23 @@ def _decode_program_graph(payload: str) -> ProgramGraph:
     document: Any = _loads(payload)
     if type(document) is not dict:
         raise ValueError("program graph document has incorrect top-level fields")
-    if not {"schema", "schema_version"} <= set(document):
+    if not _HEADER_FIELDS <= document.keys():
         raise ValueError("program graph document has incorrect top-level fields")
     if document["schema"] != SCHEMA:
         raise ValueError("unsupported program graph schema")
     version = document["schema_version"]
-    if type(version) is not int or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32):
+    if type(version) is not int or version not in _FIELDS_BY_VERSION:
         raise ValueError("unsupported program graph schema version")
-    expected_fields = {1: _V1_V2_ENVELOPE_FIELDS, 2: _V1_V2_ENVELOPE_FIELDS,
-                       3: _V3_ENVELOPE_FIELDS, 4: _V4_ENVELOPE_FIELDS,
-                       5: _V5_ENVELOPE_FIELDS, 6: _V6_ENVELOPE_FIELDS,
-                       7: _V7_ENVELOPE_FIELDS, 8: _V8_ENVELOPE_FIELDS,
-                       9: _V9_ENVELOPE_FIELDS, 10: _V10_ENVELOPE_FIELDS,
-                       11: _V11_ENVELOPE_FIELDS, 12: _V12_ENVELOPE_FIELDS,
-                       13: _V13_ENVELOPE_FIELDS, 14: _V14_ENVELOPE_FIELDS,
-                       15: _V15_ENVELOPE_FIELDS, 16: _V16_ENVELOPE_FIELDS,
-                       17: _V17_ENVELOPE_FIELDS, 18: _V18_ENVELOPE_FIELDS,
-                       19: _V19_ENVELOPE_FIELDS, 20: _V20_ENVELOPE_FIELDS,
-                       21: _V21_ENVELOPE_FIELDS, 22: _V22_ENVELOPE_FIELDS,
-                       23: _V23_ENVELOPE_FIELDS, 24: _V24_ENVELOPE_FIELDS,
-                       25: _V25_ENVELOPE_FIELDS, 26: _V26_ENVELOPE_FIELDS,
-                       27: _V27_ENVELOPE_FIELDS, 28: _V28_ENVELOPE_FIELDS,
-                       29: _V29_ENVELOPE_FIELDS, 30: _V30_ENVELOPE_FIELDS,
-                       31: _V31_ENVELOPE_FIELDS, 32: _V32_ENVELOPE_FIELDS}[version]
-    if set(document) != expected_fields:
+    if document.keys() != _ENVELOPE_FIELDS_BY_VERSION[version]:
         raise ValueError("program graph document has incorrect top-level fields")
-    graph_fields = {1: _V1_V2_GRAPH_FIELDS, 2: _V1_V2_GRAPH_FIELDS,
-                    3: _V3_GRAPH_FIELDS, 4: _V4_GRAPH_FIELDS,
-                    5: _V5_GRAPH_FIELDS, 6: _V6_GRAPH_FIELDS,
-                    7: _V7_GRAPH_FIELDS, 8: _V8_GRAPH_FIELDS, 9: _V9_GRAPH_FIELDS,
-                    10: _V10_GRAPH_FIELDS, 11: _V11_GRAPH_FIELDS,
-                    12: _V12_GRAPH_FIELDS, 13: _V13_GRAPH_FIELDS,
-                    14: _V14_GRAPH_FIELDS, 15: _V15_GRAPH_FIELDS, 16: _V16_GRAPH_FIELDS,
-                    17: _V17_GRAPH_FIELDS, 18: _V18_GRAPH_FIELDS,
-                    19: _V19_GRAPH_FIELDS, 20: _V20_GRAPH_FIELDS,
-                    21: _V21_GRAPH_FIELDS, 22: _V22_GRAPH_FIELDS,
-                    23: _V23_GRAPH_FIELDS, 24: _V24_GRAPH_FIELDS,
-                    25: _V25_GRAPH_FIELDS, 26: _V26_GRAPH_FIELDS,
-                    27: _V27_GRAPH_FIELDS, 28: _V28_GRAPH_FIELDS,
-                    29: _V29_GRAPH_FIELDS, 30: _V30_GRAPH_FIELDS,
-                    31: _V31_GRAPH_FIELDS, 32: _V32_GRAPH_FIELDS}[version]
-    record = {name: document[name] for name in graph_fields}
-    if version < 32:
-        # NOT_RECORDED is a field-level absence of this capability. Neither a
-        # legacy decoder nor a later reader may infer or backfill lookups here.
-        record["attribute_lookups"] = None
-    elif record["attribute_lookups"] is None:
+    record = {name: document[name] for name in _FIELDS_BY_VERSION[version]}
+    # Historical schemas never recorded attribute lookups. Preserve that
+    # absence separately from the empty typed tables introduced by other versions.
+    if version == 32 and record["attribute_lookups"] is None:
         raise ValueError("schema version 32 requires explicitly recorded attribute lookup capability")
+    missing = _GRAPH_FIELDS - record.keys()
+    record.update({name: None if name == "attribute_lookups" else [] for name in missing})
     if version < 29:
-        record.update({name: [] for name in _FRAME_ROOT_FIELDS})
         # The expanded typed source union and enum must not expand old wire.
         scopes = record.get("control_scopes")
         if type(scopes) is list:
@@ -566,29 +448,9 @@ def _decode_program_graph(payload: str) -> ProgramGraph:
                 if (scope.get("kind") == "FRAME" or type(source) is dict
                         and (source.get("source_kind") == "MODULE_UNIT" or "snapshot" in source)):
                     raise ValueError("historical schema cannot contain frame-root source capability")
-    if version < 27:
-        record.update({name: [] for name in _STORED_VALUE_FIELDS})
-    if version < 25:
-        record.update({name: [] for name in _CALL_EFFECT_FIELDS})
-    if version < 21:
-        record.update({name: [] for name in _EXCEPTION_MATCH_FIELDS})
     if version == 1:
         record = _upgrade_v1_record(record)
-    if version in (1, 2):
-        record["binding_definitions"] = []
-        record["binding_reads"] = []
-    if version < 4:
-        record.update({name: [] for name in _RESOURCE_FIELDS})
-    if version < 5:
-        record.update({name: [] for name in _ENVIRONMENT_FIELDS})
-    if version < 6:
-        record.update({name: [] for name in _CONTROL_FIELDS})
-    if version < 7:
-        record.update({name: [] for name in _PROVIDER_FIELDS})
-    if version < 8:
-        record.update({name: [] for name in _NATIVE_FIELDS})
     if version < 9:
-        record.update({name: [] for name in _CLEANUP_FIELDS})
         # C0's dispatch wire is unchanged. C1 routes use an explicit new tag;
         # accepting it under an older schema would silently upgrade capability.
         operations = record.get("operations")
@@ -597,24 +459,7 @@ def _decode_program_graph(payload: str) -> ProgramGraph:
                 term = operation.get("terminator") if type(operation) is dict else None
                 if type(term) is dict and term.get("kind") == "CLEANUP_ROUTE":
                     raise ValueError("historical schema cannot contain cleanup protocol capability")
-    if version < 10:
-        record.update({name: [] for name in _RESUMPTION_FIELDS})
-    if version < 12:
-        record.update({name: [] for name in _PUBLICATION_FIELDS})
-    if version < 13:
-        record.update({name: [] for name in _NO_BODY_FIELDS})
-    if version < 14:
-        record.update({name: [] for name in _SESSION_RELEASE_FIELDS})
-    if version < 17:
-        record.update({name: [] for name in _PROTOCOL_FIELDS})
-    if version < 19:
-        record.update({name: [] for name in _CONNECTION_FIELDS})
-    if version < 16:
-        record.update({name: [] for name in _LITERAL_FIELDS})
-    if version < 15:
-        record.update({name: [] for name in _STATE_ADDRESS_FIELDS})
     if version < 11:
-        record.update({name: [] for name in _DRIVER_FIELDS})
         # Inspect only canonical protocol-bearing fields. Capability rejection
         # must not depend on whether a containing legacy record constructs
         # successfully (for example a malformed completion signature).

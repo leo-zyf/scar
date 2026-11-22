@@ -4,7 +4,7 @@ Only root's serial runner executes these tests or the immutable Program25
 encoder subprocess. No new predicate tag or stored phase fact is introduced.
 """
 from copy import deepcopy
-from dataclasses import fields, replace
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -16,11 +16,9 @@ import textwrap
 
 import pytest
 
-from scar.ir.execution import codec as execution_codec
 from scar.ir.program import codec
 from scar.ir.program.call_effect_expansion import CallEffectExpansion
 from scar.ir.program.ids import RegionID
-from scar.ir.program.model import ProgramGraph
 from scar.ir.program.protocol_connections import (
     has_async_initial_control_capability, has_protocol_connection_capability,
 )
@@ -72,9 +70,9 @@ def test_program26_preserves_original_body_none_ports_and_uses_the_existing_subj
     operation = next(op for op in graph.operations if op.id == row.operation)
     wire = codec.dumps(graph)
     document = json.loads(wire)
-    assert codec.SCHEMA_VERSION == 27 and document['schema_version'] == 26
-    assert execution_codec.SCHEMA_VERSION == 8
-    assert set(document) == ({field.name for field in fields(ProgramGraph)} - {'stored_value_writes', 'stored_value_reads'}) | {'schema', 'schema_version'}
+    assert document['schema_version'] == 26
+    frozen = Path(__file__).resolve().parents[1] / "fixtures" / "program_graph_v21_frozen.json"
+    assert set(document) == set(json.loads(frozen.read_bytes())) | {"call_effect_expansions"}
     assert document['call_effect_expansions'] == []
     assert has_async_initial_control_capability(graph)
     assert has_protocol_connection_capability(graph)
@@ -198,7 +196,7 @@ def test_program26_does_not_relax_original_subject_types_or_allow_new_phase_fact
         codec.loads(json.dumps(document))
 
 
-@pytest.mark.parametrize('version', (True, 28))
+@pytest.mark.parametrize('version', (True, codec.SCHEMA_VERSION + 1))
 def test_boolean_or_future_schema_does_not_enable_async_initial_control(version):
     graph, _, _ = _program()
     document = json.loads(codec.dumps(graph))
