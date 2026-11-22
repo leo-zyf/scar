@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from scar.compiler.validate_build import _reference, _save, _equal_files, _statistics
+from scar.compiler.qualification import _reference, _save, _equal_files, _statistics
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 from scar.runtime.compiled_deployment import _raw
 from scar.runtime.caller_pipeline_deployment import (entry_context, environment_sha256,
