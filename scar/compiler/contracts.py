@@ -146,9 +146,13 @@ class ExecutionPlanRef:
 
     @classmethod
     def read(cls, path: Path) -> 'ExecutionPlanRef':
-        value = read_artifact(file_reference(path, 'scar.compiler-plan'))
+        return cls.read_reference(file_reference(path, 'scar.compiler-plan'))
+
+    @classmethod
+    def read_reference(cls, reference: dict) -> 'ExecutionPlanRef':
+        value = read_artifact(reference)
         version = value.pop('schema_version', None)
-        if (type(version) is not int or version != 1
+        if (value.get('schema') != 'scar.compiler-plan' or type(version) is not int or version != 1
                 or set(value) != {'schema', 'entry', 'artifacts', 'decision', 'scope'}):
             raise ValueError('unsupported compiler plan envelope')
         del value['schema']

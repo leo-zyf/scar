@@ -176,20 +176,22 @@ def _validate_delivery(project, cases, out, repetitions):
 
 def compile_saved_plan(path, out, *, repetitions, case_seconds):
     """Replay a delivered entry plan in a separate process without replanning."""
+    from scar.analysis.replay_transaction import replay_transaction
     from scar.artifacts import file_reference
-    from scar.ir.execution_recipe import read_artifact
     from .backend.cpp20 import deliver
     from .contracts import ExecutionPlanRef
     from .qualification import NativeCases
 
-    plan = ExecutionPlanRef.read(path)
+    reference = file_reference(path, 'scar.compiler-plan')
     out = out.resolve()
-    out.mkdir(parents=True, exist_ok=False)
-    project = deliver(plan, out / 'project')
-    manifest = read_artifact(project.delivery['request'])
-    cases = NativeCases(manifest, project.observation['cpu'], case_seconds)
-    rows = _validate_delivery(project, cases, out, repetitions)
-    artifacts = dict(project.artifacts, compiler_plan=file_reference(path, 'scar.compiler-plan'))
+    with replay_transaction() as transaction:
+        transaction.watch(reference['uri'], reference['sha256'], reference['size_bytes'])
+        plan = ExecutionPlanRef.read_reference(reference)
+        out.mkdir(parents=True, exist_ok=False)
+        project = deliver(plan, out / 'project')
+        cases = NativeCases(project.manifest, project.observation['cpu'], case_seconds)
+        rows = _validate_delivery(project, cases, out, repetitions)
+    artifacts = dict(project.artifacts, compiler_plan=reference)
     result = dict(schema='scar.compiler-replay', schema_version=1, artifacts=artifacts,
                   executable=project.receipt, cpus=project.delivery['cpus'], validation=rows,
                   delivery='COMPARED' if all(row['matches'] for row in rows) else 'MISMATCH')

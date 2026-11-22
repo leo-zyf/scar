@@ -93,6 +93,7 @@ def _entry_toolchain(manifest):
 class NativeProject:
     executable: Path
     receipt: dict
+    manifest: dict
     observation: dict
     delivery: dict
     dynamic: dict
@@ -132,7 +133,7 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
         delivery['fortran_emission'] = artifacts['fortran_emission'] = file_reference(fortran, 'scar.fortran-emission')
     receipt = executable_receipt(executable)
     artifacts['delivery'] = publish_plan(project / 'delivery.json', dict(delivery, executable=receipt))
-    return NativeProject(executable, receipt, observation, delivery, dynamic, artifacts)
+    return NativeProject(executable, receipt, manifest, observation, delivery, dynamic, artifacts)
 
 
 def replay_native_revision(artifacts):
