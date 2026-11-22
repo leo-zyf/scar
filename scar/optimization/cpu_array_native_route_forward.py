@@ -30,7 +30,7 @@ def _coverage(graph, prices):
                                                  'transport_proxy_interval_ns'))
     has_profile = profile is not None
     _need(prices['executable'] == graph['executable'], 'cost and route use different C++ executables')
-    return dict(
+    report = dict(
         included_profile_operations=list(_PROFILE), priced_as_one_service=has_profile,
         empty_dispatch_proxy_operations=list(_DISPATCH),
         exposed_unpriced_operations=[*(_PROFILE if not has_profile else ()), *_OTHER],
@@ -45,6 +45,13 @@ def _coverage(graph, prices):
             if graph['mode'] == 'LOCAL_PROCESS_ORDERED_SOCKET_WINDOW'
             else 'MAX_OVER_STATIC_ORDINAL_LANES'),
         cost_components_share_an_entry_clock=False, whole_entry_interval_ns=dict(lower=None, upper=None))
+    if 'loaded_dispatch_span_ns' in prices:
+        span = _interval(prices['loaded_dispatch_span_ns'])
+        model = _interval(prices['conditional_additive_component_interval_ns'])
+        report.update(loaded_dispatch_observation_ns=span, empty_proxy_added_to_loaded_dispatch=False,
+                      loaded_dispatch_minus_model_point_ns=span['estimate_ns'] - model['estimate_ns'],
+                      measured_task_service_replay=prices['loaded_service_replay'])
+    return report
 
 
 def _statistics(samples):
@@ -56,7 +63,7 @@ def _diagnostic_report(reference, graph, package_ref, checked_package):
 
     diagnostic = _verify(reference, checked_package)
     plan = read_artifact(diagnostic['plan'])
-    _need(diagnostic['route_package'] == package_ref and plan['proof'] == graph['proof']
+    _need((checked_package is not None or diagnostic['route_package'] == package_ref) and plan['proof'] == graph['proof']
           and diagnostic['target'] == graph['hardware'] and diagnostic['clean_benchmark'] is False,
           'diagnostic siblings must bind the same C++ package, source proof and hardware')
     routes = {}
@@ -82,7 +89,41 @@ def _diagnostic_report(reference, graph, package_ref, checked_package):
                 overlapping_task_intervals_retained_in_artifact=True, costs_calibrated_from_diagnostics=False)
 
 
-def _project(lifecycle_ref, component_ref, graph, components, package_ref, diagnostics, checked_package=None):
+def _publication_report(reference, graph, routes):
+    from scar.compiler.calibrate_cpu_array_native_route_boundary import _verify
+
+    publication = _verify(reference, graph)
+    proof = read_artifact(graph['proof'])
+    _need(publication['proof'] == graph['proof'] and publication['exact_stdout_and_file_bytes']
+          and publication['cpu_ids'] == proof['resources']['launch_cpu_ids']
+          and publication['normalized_oracle'] == proof['workload']['normalized_oracle'],
+          'publication clocks differ from the admitted source, output contract or CPU scope')
+    results = {}
+    for name in _ROUTES:
+        arm, graph_route = publication['routes'][name], graph['routes'][name]
+        _need(arm['original_executable'] == graph_route['executable']
+              and any(row['source'] == 'file_publication' and row['target'] == 'stdout_publication'
+                      for row in graph_route['edges']), 'publication must preserve the exact file then stdout order')
+        windows = {key: _statistics([row['markers_ns'][end] - row['markers_ns'][begin] for row in arm['samples']])
+                   for key, (begin, end) in publication['windows'].items()}
+        results[name] = windows
+        body = routes[name].get('loaded_dispatch_observation_ns')
+        if body is not None:
+            report = windows['publication_statements']
+            results[name]['conditional_accounted_windows_ns'] = {
+                'lower_ns': body['lower_ns'] + report['min_ns'],
+                'estimate_ns': body['estimate_ns'] + report['median_ns'],
+                'upper_ns': body['upper_ns'] + report['max_ns'],
+            }
+    return dict(artifact=reference, routes=results, sample_count=publication['sample_count'],
+                composed_windows=['loaded_dispatch', 'native_publication_statements'],
+                composition_basis='SEQUENTIAL_COMPONENT_PROXIES_WITH_PRODUCER_HISTORY_ASSUMPTION',
+                excluded=['LOADER_AND_INGRESS', 'ORDERED_REDUCTION', 'STDOUT_DRAIN_AND_PROCESS_EXIT', 'FILE_DURABILITY'],
+                physical_entry_bounds=False)
+
+
+def _project(lifecycle_ref, component_ref, graph, components, package_ref, diagnostics, checked_package=None,
+             *, publication=None):
     _need(graph['proof'] == components['proof'] and graph['hardware'] == components['resources']['hardware']
           and graph['scope'] == components['scope'] and set(graph['routes']) == set(components['routes'])
           == set(_ROUTES), 'lifecycle and component inputs refer to different route scopes')
@@ -102,21 +143,26 @@ def _project(lifecycle_ref, component_ref, graph, components, package_ref, diagn
         comparison = dict(process_minus_grouped_point_ns=process['estimate_ns'] - openmp['estimate_ns'],
                           process_low_minus_grouped_high_ns=process['lower_ns'] - openmp['upper_ns'],
                           grouped_low_minus_process_high_ns=openmp['lower_ns'] - process['upper_ns'],
-                          prices_cover_different_contention_assumptions=True, decision_authority=False)
-    return dict(schema=SCHEMA, schema_version=1, proof=graph['proof'], lifecycle=lifecycle_ref,
+                          prices_cover_different_contention_assumptions=components.get('matched_probe') is None,
+                          decision_authority=False)
+    result = dict(schema=SCHEMA, schema_version=1, proof=graph['proof'], lifecycle=lifecycle_ref,
                 components=component_ref, package=package_ref, diagnostics=observed, routes=routes,
                 conditional_body_comparison=comparison, scope=graph['scope'], hardware=graph['hardware'],
                 status='CONDITIONAL_SUBGRAPH_MODEL' if comparison is not None else 'PARTIAL_SUBGRAPH_MODEL',
                 whole_entry_cost_closed=False, physical_duration_bound=False, whole_entry_ranked=False,
                 target_executed=False, execution_default='NO_OP', deployment_authorized=False)
+    if publication is not None:
+        result['publication'] = _publication_report(publication, graph, routes)
+    return result
 
 
-def derive_cpu_array_native_route_forward(lifecycle_ref, component_ref, *, package_ref=None, diagnostics=None):
+def derive_cpu_array_native_route_forward(lifecycle_ref, component_ref, *, package_ref=None, diagnostics=None,
+                                         publication=None):
     """Compare matched body models while keeping both full-entry costs unresolved."""
-    return _derive(lifecycle_ref, component_ref, package_ref, diagnostics, None)
+    return _derive(lifecycle_ref, component_ref, package_ref, diagnostics, None, publication=publication)
 
 
-def _derive(lifecycle_ref, component_ref, package_ref, diagnostics, checked_package):
+def _derive(lifecycle_ref, component_ref, package_ref, diagnostics, checked_package, *, publication=None):
     with replay_transaction():
         graph, components = read_artifact(lifecycle_ref), read_artifact(component_ref)
         proof_ref = graph['proof']
@@ -124,9 +170,11 @@ def _derive(lifecycle_ref, component_ref, package_ref, diagnostics, checked_pack
               and proof_ref == components['proof'], 'expected one exact proof for lifecycle and component inputs')
         proof, checked_package = _read_proof(proof_ref, package_ref, checked_package)
         _need(lifecycle._canonical(graph) == lifecycle._canonical(lifecycle._project(proof_ref, proof))
-              and components == component_cost._project(proof_ref, proof, components['grouped_probe']),
+              and components == component_cost._project(proof_ref, proof, components.get('grouped_probe'),
+                    matched_probe=components.get('matched_probe'), checked_package=checked_package),
               'saved lifecycle or component costs differ after replay')
-        return _project(lifecycle_ref, component_ref, graph, components, package_ref, diagnostics, checked_package)
+        return _project(lifecycle_ref, component_ref, graph, components, package_ref, diagnostics, checked_package,
+                        publication=publication)
 
 
 def _read_proof(proof_ref, package_ref, checked_package=None):
@@ -151,7 +199,9 @@ def _verify(reference, checked_package=None):
     saved = read_artifact(reference)
     _need(reference['schema'] == SCHEMA and saved['schema_version'] == 1, 'unsupported forward cost report')
     diagnostics = saved['diagnostics']
+    publication = saved.get('publication')
     replay = _derive(saved['lifecycle'], saved['components'], saved['package'],
-                     None if diagnostics is None else diagnostics['artifact'], checked_package)
+                     None if diagnostics is None else diagnostics['artifact'], checked_package,
+                     publication=None if publication is None else publication['artifact'])
     _need(replay == saved, 'native route timeline differs at replay')
     return replay

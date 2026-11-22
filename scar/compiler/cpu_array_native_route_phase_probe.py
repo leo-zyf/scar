@@ -9,7 +9,9 @@ from struct import Struct
 import subprocess
 from time import CLOCK_MONOTONIC, clock_gettime_ns
 
-from scar.codegen.cpu_array_native_route_package import SCHEMA as PACKAGE, verify_cpu_array_native_route_package
+from scar.codegen.cpu_array_native_route_package import (
+    SCHEMA as PACKAGE, _rebind_probed_package, verify_cpu_array_native_route_package,
+)
 from scar.codegen.cpu_catalog_runtime_package import _loader, _signature
 from scar.codegen.native_cpu_arena_reuse import _path
 from scar.codegen.native_project import build_native_project
@@ -153,15 +155,18 @@ def _render(source, route):
     return b''.join(result), sites
 
 
-def _project(folder, arm, route, compiler, *, build=False):
+def _project(folder, arm, route, compiler, *, build=False, renderer=_render, witness_members=None):
     runtime = read_artifact(arm['package'])
     baseline = runtime['files']
     source = baseline[_SOURCE]
-    edited, sites = _render(_raw(source), route)
+    edited, sites = renderer(_raw(source), route)
     binary = runtime['binary']
-    _need(_HEADER not in baseline and runtime['cxx_standard'] == 20, 'existing runtime already has probe or wrong C++ ABI')
+    extra = {_HEADER: _CPP} if witness_members is None else witness_members
+    _need(not extra.keys() & baseline.keys() and runtime['cxx_standard'] == 20,
+          'existing runtime already has probe or wrong C++ ABI')
     members = {name: _raw(reference) for name, reference in baseline.items() if name != binary and name != _SOURCE}
-    members.update({_SOURCE: edited, _HEADER: _CPP})
+    members.update(extra)
+    members[_SOURCE] = edited
     if build:
         for name, payload in members.items():
             file = _path(folder, name)
@@ -330,8 +335,7 @@ def _verify(reference, checked_package=None):
           'expected canonical phase probe result reference')
     package = None
     if checked_package is not None:
-        package_ref, package = checked_package
-        _need(package_ref == report['route_package'], 'phase samples differ from the checked package')
+        package = _rebind_probed_package(report['route_package'], checked_package)
     _need(report == _report(report['route_package'], path.parent, report['sample_count'], checked_package=package),
           'retained probe evidence differs from cold replay')
     return report

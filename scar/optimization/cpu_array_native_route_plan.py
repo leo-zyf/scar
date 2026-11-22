@@ -1,6 +1,7 @@
 """Compare two admitted local C++ routes for one exact CPU array entry."""
 
 from fractions import Fraction
+from pathlib import Path
 
 from scar.analysis.replay_transaction import replay_transaction
 from scar.ir.execution_recipe import read_artifact
@@ -74,16 +75,7 @@ def _choose(pairs):
     return (_CHALLENGER if nominated else _INCUMBENT), summary, pairs['reasons']
 
 
-def derive_cpu_array_native_route_plan(proof_ref, comparison_ref):
-    """Nominate a validated native route under one frozen entry context."""
-    from scar.analysis.cpu_array_native_route import verify_cpu_array_native_route
-    from scar.compiler.cpu_array_native_route_trial import verify_cpu_array_native_route_observation
-
-    _require(proof_ref['schema'] == _PROOF and comparison_ref['schema'] == _OBSERVATION,
-             'scoped route proof and clean paired observation required')
-    with replay_transaction():
-        source = verify_cpu_array_native_route(proof_ref)
-        comparison = verify_cpu_array_native_route_observation(comparison_ref)
+def _observation_scope(source, proof_ref, comparison):
     workload, resources, case = source['workload'], source['resources'], comparison['case']
     _require(source['status'] == _PROVEN and comparison['retention'] == source['retention']
              and comparison['grouped'] == source['baseline_grouped']
@@ -92,14 +84,89 @@ def derive_cpu_array_native_route_plan(proof_ref, comparison_ref):
              and case['cpu_ids'] == resources['launch_cpu_ids']
              and comparison['deployment_authorized'] is False and comparison['target_executed'] is True,
              'comparison must share the exact original launch, CPU cohort and two route packages')
-    routes = _routes(source)
+
+
+def _describe(comparison):
     chosen, summary, reasons = _choose(comparison['pairs'])
     states = comparison['state_diagnostics']
     summary.update(
         exact_round_state_checkpoints=states['exact_checkpoints'], exact_round_state_bytes=states['exact_bytes'],
         population_variance_ns2=comparison['population_variance_ns2'])
+    return chosen, summary, reasons
+
+
+def _checkpoint_oracle(comparison):
+    # The observer already checks both arms against each other at each position.
+    return tuple((Path(row['uri']).name, row['size_bytes'], row['sha256'])
+                 for row in comparison['state_diagnostics']['checkpoints'][_INCUMBENT])
+
+
+def _distinct_captures(comparison, paths, stdout_digests):
+    for row in (*comparison['runs'], *comparison['state_diagnostics']['runs']):
+        captures = {Path(row[key]['uri']).resolve(strict=True) for key in ('stdout', 'stderr', 'published')}
+        digest = row['stdout']['sha256']
+        _require(len(captures) == 3 and captures.isdisjoint(paths) and digest not in stdout_digests,
+                 'campaigns must use disjoint raw process captures, including warmup and diagnostics')
+        paths.update(captures)
+        stdout_digests.add(digest)
+
+
+def _replication(campaigns):
+    paths, stdout_digests, outcomes = set(), set(), []
+    oracle = _checkpoint_oracle(campaigns[0][1])
+    for reference, comparison in campaigns:
+        _require(_checkpoint_oracle(comparison) == oracle, 'replication changed the ordered round-state oracle')
+        _distinct_captures(comparison, paths, stdout_digests)
+        chosen, summary, reasons = _describe(comparison)
+        outcomes.append(dict(observation=reference, gate_passed=chosen == _CHALLENGER,
+                             summary=summary, reasons=reasons))
+    passed = sum(row['gate_passed'] for row in outcomes)
+    unanimous = passed == len(outcomes)
+    disagree = 0 < passed < len(outcomes)
+    reasons = list(dict.fromkeys(reason for row in outcomes for reason in row['reasons']))
+    if disagree:
+        reasons.append('CAMPAIGN_VERDICTS_DISAGREE')
+    result = dict(
+        status=('ALL_CAMPAIGNS_PASS' if unanimous else 'CAMPAIGN_VERDICTS_DISAGREE' if disagree
+                else 'NO_CAMPAIGN_PASSES'),
+        policy='REQUIRE_EXISTING_PAIRED_GATE_IN_EVERY_CAMPAIGN',
+        campaign_count=len(outcomes), passing_campaigns=passed, campaigns=outcomes,
+        pooled_samples=False, same_checkpoint_oracle_verified=True, disjoint_process_captures_verified=True)
+    return (_CHALLENGER if unanimous else _INCUMBENT), reasons, result
+
+
+def derive_cpu_array_native_route_plan(proof_ref, comparison_ref, *, replications=()):
+    """Nominate a native route only when every supplied clean campaign passes."""
+    from scar.analysis.cpu_array_native_route import verify_cpu_array_native_route
+    from scar.compiler.cpu_array_native_route_trial import verify_cpu_array_native_route_observation
+
+    _require(proof_ref['schema'] == _PROOF and comparison_ref['schema'] == _OBSERVATION
+             and type(replications) in (tuple, list), 'scoped route proof and clean paired observations required')
+    with replay_transaction():
+        source = verify_cpu_array_native_route(proof_ref)
+        comparison = verify_cpu_array_native_route_observation(comparison_ref)
+        _observation_scope(source, proof_ref, comparison)
+        campaigns = [(comparison_ref, comparison)]
+        paths = {Path(comparison_ref['uri']).resolve(strict=True)}
+        digests = {comparison_ref['sha256']}
+        for reference in replications:
+            path = Path(reference['uri']).resolve(strict=True)
+            _require(reference['schema'] == _OBSERVATION and path not in paths and reference['sha256'] not in digests,
+                     'replication requires a distinct verified observation')
+            measured = verify_cpu_array_native_route_observation(reference)
+            _observation_scope(source, proof_ref, measured)
+            campaigns.append((reference, measured))
+            paths.add(path)
+            digests.add(reference['sha256'])
+
+    workload, resources = source['workload'], source['resources']
+    routes = _routes(source)
+    chosen, summary, reasons = _describe(comparison)
+    replication = None
+    if replications:
+        chosen, reasons, replication = _replication(campaigns)
     nominated = chosen == _CHALLENGER
-    return dict(
+    report = dict(
         schema=SCHEMA, schema_version=1, proof=proof_ref, comparison=comparison_ref,
         retention=source['retention'], grouped=source['baseline_grouped'], scope=source['scope'],
         workload=workload, resources=resources, effect_contract=source['effects'],
@@ -120,6 +187,9 @@ def derive_cpu_array_native_route_plan(proof_ref, comparison_ref):
         forward_cost_proven=False, target_executed=False, original_default_retained=True,
         execution_default='NO_OP', transformation_authorized=False,
         whole_entry_effect_equivalence_proven=False, deployment_authorized=False)
+    if replication is not None:
+        report.update(replications=list(replications), replication=replication)
+    return report
 
 
 def verify_cpu_array_native_route_plan(reference):
@@ -127,6 +197,7 @@ def verify_cpu_array_native_route_plan(reference):
     saved = read_artifact(reference)
     _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
              'unsupported CPU array native route plan')
-    replay = derive_cpu_array_native_route_plan(saved['proof'], saved['comparison'])
+    replay = derive_cpu_array_native_route_plan(
+        saved['proof'], saved['comparison'], replications=saved.get('replications', ()))
     _require(saved == replay, 'saved native route plan differs at cold replay')
     return replay

@@ -159,6 +159,21 @@ def verify_cpu_array_native_route_package(reference):
     return report
 
 
+def _rebind_probed_package(reference, checked_package):
+    """Reuse a checked launch when only the choice and its decision receipt changed."""
+    checked_ref, checked = checked_package
+    if checked_ref == reference:
+        return checked
+    original = read_artifact(reference)
+    decision_fields = {'plan', 'status', 'selected_route', 'fallback_route'}
+    _require(reference['schema'] == SCHEMA
+             and read_artifact(original['plan'])['proof'] == read_artifact(checked['plan'])['proof']
+             and {key: value for key, value in original.items() if key not in decision_fields}
+             == {key: value for key, value in checked.items() if key not in decision_fields},
+             'probed route package differs in binaries, resources, environment or output contract')
+    return original
+
+
 def prepare_cpu_array_native_route_launch(reference, *, argv, cpu_ids, target, environment, fresh_root,
                                           prefer_original_native=False):
     """Resolve an explicitly requested native invocation or decline before any target executes."""

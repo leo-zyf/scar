@@ -150,7 +150,7 @@ def verify_cpu_array_native_route_observation(reference):
     return report
 
 
-def study(out, *, retention=None, grouped=None, observation=None, pairs=7):
+def study(out, *, retention=None, grouped=None, observation=None, pairs=7, replications=()):
     from scar.analysis.cpu_array_native_route import derive_cpu_array_native_route
     from scar.codegen.cpu_array_native_route_package import export_cpu_array_native_route_package
     from scar.optimization.cpu_array_native_route_plan import derive_cpu_array_native_route_plan
@@ -165,7 +165,8 @@ def study(out, *, retention=None, grouped=None, observation=None, pairs=7):
     if observation is None:
         observe(retention, grouped, out/'observation', pairs=pairs)
         observation = _ref(out/'observation/result.json', SCHEMA)
-    plan = derive_cpu_array_native_route_plan(_ref(out/'proof.json', proof['schema']), observation)
+    plan = derive_cpu_array_native_route_plan(_ref(out/'proof.json', proof['schema']), observation,
+                                             replications=replications)
     _write(out/'plan.json', plan)
     return export_cpu_array_native_route_package(_ref(out/'plan.json', plan['schema']), out/'package')
 
@@ -179,12 +180,14 @@ def main(argv=None):
     mode.add_argument('--observation', type=Path)
     mode.add_argument('--check', type=Path)
     parser.add_argument('--grouped', type=Path)
+    parser.add_argument('--replication', action='append', type=Path, default=[],
+                        help='additional independent clean campaign on the same held-out entry')
     parser.add_argument('--out', type=Path)
     parser.add_argument('--pairs', type=int, default=7)
     args = parser.parse_args(argv)
     with replay_transaction():
         if args.check is not None:
-            if args.grouped is not None or args.out is not None:
+            if args.grouped is not None or args.out is not None or args.replication:
                 parser.error('--check reads an existing route package')
             reference = _ref(args.check, delivery.SCHEMA)
         elif args.out is None:
@@ -192,12 +195,14 @@ def main(argv=None):
         elif args.observation is not None:
             if args.grouped is not None:
                 parser.error('--observation already fixes both routes')
-            reference = study(args.out, observation=_ref(args.observation, SCHEMA))
+            reference = study(args.out, observation=_ref(args.observation, SCHEMA),
+                              replications=tuple(_ref(path, SCHEMA) for path in args.replication))
         elif args.grouped is None:
             parser.error('--retention requires --grouped')
         else:
             reference = study(args.out, retention=_ref(args.retention, _RETENTION),
-                              grouped=_ref(args.grouped, _GROUPED), pairs=args.pairs)
+                              grouped=_ref(args.grouped, _GROUPED), pairs=args.pairs,
+                              replications=tuple(_ref(path, SCHEMA) for path in args.replication))
         package = delivery.verify_cpu_array_native_route_package(reference)
     print(json.dumps(dict(package=reference['uri'], status=package['status'],
                           selected_route=package['selected_route'], original_action=package['original_python_action'])))

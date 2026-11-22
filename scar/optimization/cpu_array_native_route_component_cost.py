@@ -8,6 +8,7 @@ from .cpu_entry_forward_cost import _interval, _replay_team_components, _schedul
 SCHEMA = 'scar.cpu-array-native-route-component-cost'
 _ROUTE_PROOF = 'scar.cpu-array-native-route-proof'
 _GROUPED_PROBE = 'scar.cpu-array-native-route-body-observation'
+_MATCHED_PROBE = 'scar.cpu-array-native-route-matched'
 _PROVEN = 'PROVEN_SCOPED_CPU_ARRAY_NATIVE_ROUTE'
 _SIDES = ('lower_ns', 'estimate_ns', 'upper_ns')
 _UNPRICED = ('ENTRY_LAUNCH_AND_LOADER', 'INPUT_INGRESS_AND_RUNTIME_GUARDS',
@@ -123,18 +124,90 @@ def _grouped_cost(reference, proof_ref, source, choice):
     return _conditional(source['scope'], choice, probe['conditional_model'], openmp=True)
 
 
-def derive_cpu_array_native_route_component_cost(proof_ref, *, grouped_probe=None):
+def _loaded_service_replay(samples, width, *, openmp):
+    """Hold the measured ordinal services fixed and replay only their dependencies."""
+    measured = [row for row in samples if row['part'] == 'loaded'][1:]
+    rows = []
+    for sample in measured:
+        completions = []
+        for ordinal, service in enumerate(sample['task_ns']):
+            ready = completions[ordinal - width] if ordinal >= width else 0
+            done = ready + service
+            if not openmp and completions:
+                # The owner's retirement order limits when the next slot can be
+                # issued. Other workers can finish before this ordinal retires.
+                done = max(done, completions[-1])
+            completions.append(done)
+        critical = max(completions)
+        rows.append(dict(seed=sample['seed'], service_only_critical_path_ns=critical,
+                         dispatch_observed_ns=sample['elapsed_ns'],
+                         unexplained_elapsed_ns=sample['elapsed_ns'] - critical))
+    return dict(samples=rows,
+                critical_path_interval_ns=process._summary([row['service_only_critical_path_ns'] for row in rows]),
+                accounting_basis='FIXED_MEASURED_ORDINAL_SERVICES_NO_DISPATCH_OR_CONTROL_DURATIONS',
+                predicts_unseen_inputs=False)
+
+
+def _matched_routes(reference, proof_ref, source, checked_package=None):
+    from scar.compiler.calibrate_cpu_array_native_route_matched import _verify
+
+    _require(reference['schema'] == _MATCHED_PROBE, 'exact matched native component observation required')
+    probe = _verify(reference, proof_ref, source, checked_package=checked_package)
+    arms = probe['route_arms']
+    _require(probe['proof'] == proof_ref and probe['scope'] == source['scope']
+             and probe['cpu_ids'] == source['resources']['launch_cpu_ids']
+             and set(arms) == {'retained_process', 'grouped_openmp'},
+             'matched probe does not cover both native routes in their common declared scope')
+    routes = {}
+    for name, resource, executable_role in (
+        ('retained_process', 'local_processes', 'retained_executable'),
+        ('grouped_openmp', 'openmp_grouped', 'openmp_executable'),
+    ):
+        arm, placement = arms[name], source['resources'][resource]
+        executable = source['evidence'][executable_role]
+        _require(arm['executable'] == executable and arm['worker_cpu_ids'] == placement['worker_cpu_ids']
+                 and placement['launch_cpu_ids'] == probe['cpu_ids'],
+                 'matched route arm crosses its native executable or physical lane placement')
+        components = _conditional(source['scope'], placement, arm['conditional_model'], openmp=name == 'grouped_openmp')
+        pointer = f'#/route_arms/{name}'
+        routes[name] = dict(
+            **components, executable=executable, resources=f'#/resources/{resource}',
+            numeric_basis='MATCHED_LOADED_FIRST_WAVE_WORKER_SERVICE',
+            transport_basis='ISOLATED_MATCHED_EMPTY_DISPATCH_PROXY',
+            loaded_dispatch_span_ns=_interval(arm['loaded_dispatch_span_ns']),
+            loaded_service_replay=_loaded_service_replay(arm['samples'], len(placement['worker_cpu_ids']),
+                                                         openmp=name == 'grouped_openmp'),
+            loaded_dispatch_basis='OBSERVED_FULL_SCOPED_MULTI_WAVE_DISPATCH',
+            loaded_dispatch_composed_with_proxy=False,
+            provenance=dict(
+                numerical=dict(artifact=reference, locator=pointer + '/conditional_model/worker_service_intervals_ns'),
+                transport=dict(artifact=reference, locator=pointer + '/conditional_model/additive_transport_interval_ns'),
+                loaded_dispatch=dict(artifact=reference, locator=pointer + '/loaded_dispatch_span_ns')),
+            assumptions=['FIRST_WAVE_SERVICE_TRANSFERS_TO_LATER_WAVES',
+                         'INDEPENDENT_EMPTY_TRANSPORT_ADDED_AS_COMPONENT_PROXY'],
+            historical_ungrouped_numeric_transferred=False,
+            unpriced_phases=['ENTRY_LAUNCH_AND_LOADER', 'INPUT_INGRESS_AND_RUNTIME_GUARDS',
+                             'ISOLATED_COST_OF_LOADED_DISPATCH_INTERACTION', 'FINAL_REPORT_FILE_STDOUT_AND_EXIT'])
+    return routes
+
+
+def derive_cpu_array_native_route_component_cost(proof_ref, *, grouped_probe=None, matched_probe=None):
     """Bind lane service and independent dispatch inputs to the exact two native routes."""
     from scar.analysis.cpu_array_native_route import verify_cpu_array_native_route
 
     _require(proof_ref['schema'] == _ROUTE_PROOF, 'scoped array native route proof required')
     with replay_transaction():
         source = verify_cpu_array_native_route(proof_ref)
-        return _project(proof_ref, source, grouped_probe)
+        return _project(proof_ref, source, grouped_probe, matched_probe=matched_probe)
 
 
-def _project(proof_ref, source, grouped_probe):
+def _project(proof_ref, source, grouped_probe, *, matched_probe=None, checked_package=None):
     _require(source['status'] == _PROVEN, 'route proof did not establish exact scope')
+    _require(grouped_probe is None or matched_probe is None, 'choose either grouped-only or matched route evidence')
+    if matched_probe is not None:
+        routes = _matched_routes(matched_probe, proof_ref, source, checked_package)
+        return dict(_report(proof_ref, source, None, routes, 'SCOPED_MATCHED_COMPONENT_MODELS'),
+                    matched_probe=matched_probe)
     local, grouped, local_evidence, team_evidence = _origins(source)
     process_components = _conditional(source['scope'], local, local['cost'], openmp=False)
     exact_grouped = None if grouped_probe is None else _grouped_cost(grouped_probe, proof_ref, source, grouped)
@@ -162,10 +235,14 @@ def _project(proof_ref, source, grouped_probe):
             assumptions=(['PER_LANE_SERVICE_TRANSFERS_TO_MULTI_WAVE_EXECUTION',
                           'INDEPENDENT_EMPTY_TRANSPORT_ADDED_AS_COMPONENT_PROXY'] if exact_grouped is not None else []),
             unpriced_phases=list(_UNPRICED) + (['EXACT_GROUPED_NUMERICAL_SERVICE'] if exact_grouped is None else [])))
+    status = 'SCOPED_COMPONENT_MODELS' if exact_grouped is not None else 'GROUPED_NUMERICAL_COMPONENT_OPEN'
+    return _report(proof_ref, source, grouped_probe, routes, status)
+
+
+def _report(proof_ref, source, grouped_probe, routes, status):
     return dict(schema=SCHEMA, schema_version=1, proof=proof_ref, grouped_probe=grouped_probe,
         retention=source['retention'], grouped=source['baseline_grouped'], scope=source['scope'],
-        resources=source['resources'], routes=routes,
-        status='SCOPED_COMPONENT_MODELS' if exact_grouped is not None else 'GROUPED_NUMERICAL_COMPONENT_OPEN',
+        resources=source['resources'], routes=routes, status=status,
         interval_basis='EMPIRICAL_SAMPLE_CONDITIONED_SERVICE_MODEL',
         full_entry_interval_ns=dict(lower=None, upper=None), physical_duration_bound_proven=False,
         whole_entry_choice_proven=False, forward_cost_proven=False, deployment_authorized=False,
@@ -177,6 +254,7 @@ def verify_cpu_array_native_route_component_cost(reference):
     saved = read_artifact(reference)
     _require(reference['schema'] == SCHEMA and type(saved['schema_version']) is int and saved['schema_version'] == 1,
              'unsupported CPU array route component cost report')
-    replay = derive_cpu_array_native_route_component_cost(saved['proof'], grouped_probe=saved['grouped_probe'])
+    replay = derive_cpu_array_native_route_component_cost(
+        saved['proof'], grouped_probe=saved['grouped_probe'], matched_probe=saved.get('matched_probe'))
     _require(saved == replay, 'saved native route component cost differs at cold replay')
     return replay

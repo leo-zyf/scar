@@ -1,0 +1,270 @@
+{
+  "artifacts": {
+    "compile_build": {
+      "schema": "scar.program-compiler-pipeline",
+      "sha256": "7cd776370d1a69f13b869f994b2498f8e39ad276ac2a283cc99025b52fbd6501",
+      "size_bytes": 2554,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-compile-build/result.json"
+    },
+    "components": {
+      "schema": "scar.cpu-array-native-route-component-cost",
+      "sha256": "35bfd3a97b75fdbc8422cfc14baf5797c29b0ab33b269e900bca323779a750a3",
+      "size_bytes": 17207,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-forward/components.json"
+    },
+    "cpp_package": {
+      "schema": "scar.cpu-array-native-route-package",
+      "sha256": "03ffa52a636c18bbbf38acad05371e5b5b49a60782410daf60e976e8f1c10803",
+      "size_bytes": 14141,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-route/package/artifact.json"
+    },
+    "excluded_overlapping_campaign": {
+      "schema": "scar.cpu-array-native-route-observation",
+      "sha256": "59eec5c137ca4f53614a591e7f09e7eecf96e3557fca15be875819a26daf5836",
+      "size_bytes": 310757,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/post-calibration-holdout/result.json"
+    },
+    "first_clean_campaign": {
+      "schema": "scar.cpu-array-native-route-observation",
+      "sha256": "9ef9a68bd5759ffa9d5c9f921ea44e561642faea8f3b03c41c226e0cfb9f63eb",
+      "size_bytes": 300095,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/observation/result.json"
+    },
+    "independent_repeat": {
+      "schema": "scar.cpu-array-native-route-observation",
+      "sha256": "605bf85b344852d5cfa0355377dc82173cc4dfe276da988204bc88ba9661a702",
+      "size_bytes": 312439,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/independent-holdout-repeat/result.json"
+    },
+    "lifecycle": {
+      "schema": "scar.cpu-array-native-route-lifecycle",
+      "sha256": "a020f17bbb7b3d402453754f901c6d3ef4d86d1e6d81fdabc41413507dabec25",
+      "size_bytes": 38383,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-forward/lifecycle.json"
+    },
+    "matched_probe": {
+      "schema": "scar.cpu-array-native-route-matched",
+      "sha256": "ea41d64606d0ff54e3fab17a0d3eb70c29efc9f601e519db53a6c8007597fb70",
+      "size_bytes": 69181,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/matched-dispatch/result.json"
+    },
+    "publication_probe": {
+      "schema": "scar.cpu-array-native-route-boundary-calibration",
+      "sha256": "c265d5d0db68e5acedffe84a907187e7240b38d64044f76695edbc5672da2b6d",
+      "size_bytes": 81418,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/publication-boundary/result.json"
+    },
+    "publication_sites": {
+      "schema": "scar.cpu-array-native-route-probe-sites",
+      "sha256": "6df05d3cc48a2c97c4f00d82407f3f6a6409c2d139dfb593ec07ff5bdcfe6bd0",
+      "size_bytes": 25806,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/publication-boundary-sites.json"
+    },
+    "replicated_plan": {
+      "schema": "scar.cpu-array-native-route-plan",
+      "sha256": "3f844a6db91291105a773232b41dca7798ef4f32cd28e86bfb4c9da654a65d33",
+      "size_bytes": 15348,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-route/plan.json"
+    },
+    "timeline": {
+      "schema": "scar.cpu-array-native-route-forward",
+      "sha256": "d5ee160c2cdd5868260d108861e57b588cbf4042ba41a0aeac043f45fdf7d6c5",
+      "size_bytes": 18081,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-forward/result.json"
+    },
+    "whole_entry_selection": {
+      "schema": "scar.whole-entry-main-chain",
+      "sha256": "8fecada46f407c70e23b30fe9356260860a3b432262986d0913f32957a486d8b",
+      "size_bytes": 9277,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/replicated-compile-build/whole-entry-selection.json"
+    }
+  },
+  "compile_replay_seconds": 85.82257561990991,
+  "cpu": "Intel Xeon E5-2680 v4",
+  "deployment_authorized": false,
+  "entry_cost_closed": false,
+  "excluded_campaign": {
+    "excluded_observation_mtime_ns": 1795305338519369147,
+    "gain_fraction": 0.06938049882458365,
+    "overlapping_compiler_marker": {
+      "mtime_ns": 1795305332463256303,
+      "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/forward-matched-compile-build/whole-entry-import-effects.json"
+    },
+    "reason": "SCAR_COMPILER_REPLAY_OVERLAPPED_ON_THE_SAME_CPU_COHORT"
+  },
+  "focused_regression_tests_passed": 18,
+  "hardware_duration_bound": false,
+  "independent_whole_entry_campaigns": {
+    "campaign_count": 2,
+    "campaigns": [
+      {
+        "gate_passed": false,
+        "observation": {
+          "schema": "scar.cpu-array-native-route-observation",
+          "sha256": "9ef9a68bd5759ffa9d5c9f921ea44e561642faea8f3b03c41c226e0cfb9f63eb",
+          "size_bytes": 300095,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/observation/result.json"
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD"
+        ],
+        "summary": {
+          "exact_gain_fraction": {
+            "denominator": 144710055,
+            "numerator": 4889222
+          },
+          "exact_round_state_bytes": 12582912,
+          "exact_round_state_checkpoints": 384,
+          "gain_fraction": 0.03378633226281339,
+          "grouped_openmp_max_ns": 140601845,
+          "grouped_openmp_median_ns_twice": 279641666,
+          "grouped_openmp_min_ns": 137894420,
+          "measured_pairs": 7,
+          "observed_envelopes_separated": true,
+          "population_variance_ns2": {
+            "grouped_openmp": 1002277898318.2041,
+            "retained_process": 1470528127912.2856
+          },
+          "retained_process_max_ns": 147332875,
+          "retained_process_median_ns_twice": 289420110,
+          "retained_process_min_ns": 143540495,
+          "source_pairing_verdict": "KEEP_INCUMBENT",
+          "warmup_pairs": 1
+        }
+      },
+      {
+        "gate_passed": false,
+        "observation": {
+          "schema": "scar.cpu-array-native-route-observation",
+          "sha256": "605bf85b344852d5cfa0355377dc82173cc4dfe276da988204bc88ba9661a702",
+          "size_bytes": 312439,
+          "uri": "/home/zyf/AAA/scar/artifacts/current/experiments/cpu-array-native-route-v1/cirq-8/independent-holdout-repeat/result.json"
+        },
+        "reasons": [
+          "MEASURED_MEDIAN_GAIN_BELOW_THRESHOLD"
+        ],
+        "summary": {
+          "exact_gain_fraction": {
+            "denominator": 143692994,
+            "numerator": 6754785
+          },
+          "exact_round_state_bytes": 12582912,
+          "exact_round_state_checkpoints": 384,
+          "gain_fraction": 0.04700845053030212,
+          "grouped_openmp_max_ns": 137282504,
+          "grouped_openmp_median_ns_twice": 273876418,
+          "grouped_openmp_min_ns": 135356150,
+          "measured_pairs": 7,
+          "observed_envelopes_separated": true,
+          "population_variance_ns2": {
+            "grouped_openmp": 447925633092.40814,
+            "retained_process": 525211760933.7143
+          },
+          "retained_process_max_ns": 144667829,
+          "retained_process_median_ns_twice": 287385988,
+          "retained_process_min_ns": 142527954,
+          "source_pairing_verdict": "KEEP_INCUMBENT",
+          "warmup_pairs": 1
+        }
+      }
+    ],
+    "disjoint_process_captures_verified": true,
+    "passing_campaigns": 0,
+    "policy": "REQUIRE_EXISTING_PAIRED_GATE_IN_EVERY_CAMPAIGN",
+    "pooled_samples": false,
+    "same_checkpoint_oracle_verified": true,
+    "status": "NO_CAMPAIGN_PASSES"
+  },
+  "matched_normalized_output_equal": true,
+  "matched_seed_count": 6,
+  "matched_warmup_seed_count": 1,
+  "original_entry_action": "KEEP_ORIGINAL",
+  "publication_exact_oracle_verified": true,
+  "publication_samples_per_route": 7,
+  "route_costs": {
+    "grouped_openmp": {
+      "conditionally_modeled_dispatch_ns": {
+        "estimate_ns": 135045884,
+        "lower_ns": 133068861,
+        "upper_ns": 135987216
+      },
+      "fixed_observed_task_critical_path_ns": {
+        "estimate_ns": 132596642,
+        "lower_ns": 132519829,
+        "upper_ns": 132947297
+      },
+      "loaded_dispatch_ns": {
+        "estimate_ns": 133190131,
+        "lower_ns": 133118324,
+        "upper_ns": 133424515
+      },
+      "median_unexplained_ns": 530219,
+      "publication_ns": {
+        "max_ns": 231668,
+        "median_ns": 155732,
+        "min_ns": 134035,
+        "samples_ns": [
+          155732,
+          154963,
+          134035,
+          182981,
+          152641,
+          231668,
+          162617
+        ]
+      },
+      "sequential_accounted_ns": {
+        "estimate_ns": 133345863,
+        "lower_ns": 133252359,
+        "upper_ns": 133656183
+      }
+    },
+    "retained_process": {
+      "conditionally_modeled_dispatch_ns": {
+        "estimate_ns": 142600761,
+        "lower_ns": 140396241,
+        "upper_ns": 143532133
+      },
+      "fixed_observed_task_critical_path_ns": {
+        "estimate_ns": 138160380,
+        "lower_ns": 137960024,
+        "upper_ns": 138556111
+      },
+      "loaded_dispatch_ns": {
+        "estimate_ns": 141045437,
+        "lower_ns": 140756980,
+        "upper_ns": 141086152
+      },
+      "median_unexplained_ns": 2796956,
+      "publication_ns": {
+        "max_ns": 217165,
+        "median_ns": 166904,
+        "min_ns": 155245,
+        "samples_ns": [
+          217165,
+          160417,
+          186598,
+          209690,
+          166904,
+          155245,
+          164871
+        ]
+      },
+      "sequential_accounted_ns": {
+        "estimate_ns": 141212341,
+        "lower_ns": 140912225,
+        "upper_ns": 141303317
+      }
+    }
+  },
+  "same_probes_replayed_with_replicated_route_package": true,
+  "schema": "scar.cpu-array-native-route-matched-acceptance",
+  "schema_version": 1,
+  "scope": {
+    "requested_workers": 4,
+    "round_count": 48,
+    "task_count": 8
+  },
+  "selected_native_route": "retained_process",
+  "workload": "Cirq CPU test case"
+}
