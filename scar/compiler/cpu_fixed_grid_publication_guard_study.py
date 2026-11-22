@@ -8,7 +8,7 @@ import re
 import stat
 import subprocess
 
-from scar.codegen.cpu_fixed_grid_native_route_package import (
+from scar.codegen.cpu_native_route_package import (
     _output_guards, prepare_cpu_fixed_grid_native_route_launch, verify_cpu_fixed_grid_native_route_package,
 )
 from scar.codegen.cpu_catalog_runtime_package import _signature

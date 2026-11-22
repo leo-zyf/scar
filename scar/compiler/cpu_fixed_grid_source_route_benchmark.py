@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from statistics import pvariance
 
-from scar.codegen.cpu_fixed_grid_native_route_package import (
-    SCHEMA as PACKAGE, _output_guards, verify_cpu_fixed_grid_native_route_package,
+from scar.codegen.cpu_native_route_package import (
+    FIXED_GRID_SCHEMA as PACKAGE, _output_guards, verify_cpu_fixed_grid_native_route_package,
 )
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.cpu_fixed_grid_mapped_input_study import _capture, _input_files, _rows

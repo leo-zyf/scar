@@ -472,7 +472,7 @@ def _attach_python_import_cost(plan, scope, frontiers, path):
 
 
 def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=None):
-    from scar.codegen.cpu_array_native_route_package import SCHEMA, verify_cpu_array_native_route_package
+    from scar.codegen.cpu_native_route_package import ARRAY_SCHEMA as SCHEMA, verify_cpu_array_native_route_package
 
     reference = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
     package = verify_cpu_array_native_route_package(reference)

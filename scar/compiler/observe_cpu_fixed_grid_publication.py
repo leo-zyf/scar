@@ -8,7 +8,7 @@ import stat
 import subprocess
 
 from scar.analysis.nvhpc_source_effects import _FD, _FOOTER, _OPEN_FLAGS, _QUOTED, _ROW, _WRITE, _child_fd, _path_argument
-from scar.codegen.cpu_fixed_grid_native_route_package import verify_cpu_fixed_grid_native_route_package
+from scar.codegen.cpu_native_route_package import verify_cpu_fixed_grid_native_route_package
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.ir.execution_recipe import read_artifact
 
@@ -50,7 +50,7 @@ def _file_metadata(path):
 
 
 def _capture(folder, command, package):
-    from scar.codegen.cpu_fixed_grid_native_route_package import _output_guards
+    from scar.codegen.cpu_native_route_package import _output_guards
 
     path = Path(package['publication']['path'])
     _need(not _output_guards(path, package['publication']['expected_mode']), 'exact publication must be fresh and correctly scoped')

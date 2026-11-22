@@ -7,7 +7,7 @@ import shutil
 import stat
 import subprocess
 
-from scar.codegen.cpu_fixed_grid_native_route_package import verify_cpu_fixed_grid_native_route_package
+from scar.codegen.cpu_native_route_package import verify_cpu_fixed_grid_native_route_package
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.compiler.cpu_fixed_grid_mapped_input_study import _input_files
 from scar.compiler.observe_cpu_fixed_grid_python_lifecycle import _capture, _check_row, _render

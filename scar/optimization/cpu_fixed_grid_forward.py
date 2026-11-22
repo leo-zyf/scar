@@ -136,7 +136,7 @@ def verify_cpu_fixed_grid_forward(reference):
 def main(argv=None):
     from scar.analysis.cpu_fixed_grid_input_route_graph import SCHEMA as INPUT_GRAPH
     from scar.analysis.cpu_fixed_grid_lifecycle import SCHEMA as LIFECYCLE
-    from scar.codegen.cpu_fixed_grid_native_route_package import SCHEMA as PACKAGE
+    from scar.codegen.cpu_native_route_package import FIXED_GRID_SCHEMA as PACKAGE
     from scar.compiler.observe_cpu_fixed_grid_input_counters import SCHEMA as COUNTERS
 
     parser = argparse.ArgumentParser(description=__doc__)

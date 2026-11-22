@@ -9,8 +9,8 @@ from struct import Struct
 import subprocess
 from time import CLOCK_MONOTONIC, clock_gettime_ns
 
-from scar.codegen.cpu_array_native_route_package import (
-    SCHEMA as PACKAGE, _rebind_probed_package, verify_cpu_array_native_route_package,
+from scar.codegen.cpu_native_route_package import (
+    ARRAY_SCHEMA as PACKAGE, _rebind_probed_package, verify_cpu_array_native_route_package,
 )
 from scar.codegen.cpu_catalog_runtime_package import _loader, _signature
 from scar.codegen.native_cpu_arena_reuse import _path

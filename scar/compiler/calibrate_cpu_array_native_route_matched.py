@@ -9,8 +9,8 @@ from pathlib import Path
 import subprocess
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.codegen.cpu_array_native_route_package import (
-    SCHEMA as PACKAGE, _rebind_probed_package, verify_cpu_array_native_route_package,
+from scar.codegen.cpu_native_route_package import (
+    ARRAY_SCHEMA as PACKAGE, _rebind_probed_package, verify_cpu_array_native_route_package,
 )
 from scar.compiler.calibrate_array_entry import _normalize, _ref, _write
 from scar.compiler.calibrate_array_task_entry import _report as _worker_report

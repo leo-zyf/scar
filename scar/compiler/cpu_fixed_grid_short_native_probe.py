@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.codegen.cpu_fixed_grid_native_route_package import _output_guards, verify_cpu_fixed_grid_native_route_package
+from scar.codegen.cpu_native_route_package import _output_guards, verify_cpu_fixed_grid_native_route_package
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.cpu_fixed_grid_mapped_input_study import _input_files
 from scar.compiler.observe_cpu_fixed_grid_input_counters import SCHEMA as COUNTERS

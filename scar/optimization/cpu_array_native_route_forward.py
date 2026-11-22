@@ -182,7 +182,7 @@ def _read_proof(proof_ref, package_ref, checked_package=None):
         _need(checked_package is None, 'checked package without a requested package')
         return verify_cpu_array_native_route(proof_ref), None
     if checked_package is None:
-        from scar.codegen.cpu_array_native_route_package import verify_cpu_array_native_route_package
+        from scar.codegen.cpu_native_route_package import verify_cpu_array_native_route_package
 
         checked_package = package_ref, verify_cpu_array_native_route_package(package_ref)
     checked_ref, package = checked_package

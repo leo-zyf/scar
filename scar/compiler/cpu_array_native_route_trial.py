@@ -154,7 +154,7 @@ def verify_cpu_array_native_route_observation(reference):
 
 def study(out, *, retention=None, grouped=None, observation=None, pairs=7, replications=()):
     from scar.analysis.cpu_array_native_route import derive_cpu_array_native_route
-    from scar.codegen.cpu_array_native_route_package import export_cpu_array_native_route_package
+    from scar.codegen.cpu_native_route_package import export_cpu_array_native_route_package
     from scar.optimization.cpu_array_native_route_plan import derive_cpu_array_native_route_plan
 
     if observation is not None:
@@ -174,7 +174,7 @@ def study(out, *, retention=None, grouped=None, observation=None, pairs=7, repli
 
 
 def main(argv=None):
-    from scar.codegen import cpu_array_native_route_package as delivery
+    from scar.codegen import cpu_native_route_package as delivery
 
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -191,7 +191,7 @@ def main(argv=None):
         if args.check is not None:
             if args.grouped is not None or args.out is not None or args.replication:
                 parser.error('--check reads an existing route package')
-            reference = _ref(args.check, delivery.SCHEMA)
+            reference = _ref(args.check, delivery.ARRAY_SCHEMA)
         elif args.out is None:
             parser.error('a fresh --out path is required')
         elif args.observation is not None:

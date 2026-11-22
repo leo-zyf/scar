@@ -1,7 +1,7 @@
 """Bind fixed-grid input graph, cost observations and the chosen native project."""
 
 from scar.analysis.cpu_fixed_grid_input_route_graph import verify_cpu_fixed_grid_input_route_graph
-from scar.codegen.cpu_fixed_grid_native_route_package import verify_cpu_fixed_grid_native_route_package
+from scar.codegen.cpu_native_route_package import verify_cpu_fixed_grid_native_route_package
 from scar.compiler.observe_cpu_fixed_grid_input_counters import verify_cpu_fixed_grid_input_counters
 from scar.ir.execution_recipe import read_artifact
 
