@@ -6,10 +6,11 @@ The existing timeline reconstruction and independent verifier remain the sole
 authority for storage accounting and final feasibility.
 """
 from collections import defaultdict, deque
+from heapq import heapify, heappop, heappush
 import time
 
-from scar.ir.implementation_plan import PLAN_SCHEMA, digest, validate_problem
-from scar.optimization.joint_planner import _frontiers, _known, _qualified_mode, _timeline, verify_execution_plan
+from scar.ir.implementation_plan import validate_problem
+from scar.optimization.joint_planner import _known, _plan_report, _qualified_mode, _timeline, _verify_selected_timeline
 
 
 class _Stopped(Exception):
@@ -45,28 +46,39 @@ def _topology(problem):
     return predecessors, successors, order
 
 
-def _fit(release, duration, demands, calendar, capacities):
-    if not duration: return release
-    if any(units > capacities[r] for r, units in demands.items()): return None
-    candidates = {release}
-    for resource in demands:
-        candidates.update(end for _, end, _ in calendar.get(resource, ()) if end >= release)
-    for start in sorted(candidates):
-        end = start + duration
-        fits = True
-        for resource, units in demands.items():
-            records = []
-            for left, right, occupied in calendar.get(resource, ()):
-                if left < end and start < right:
-                    records.extend(((max(left, start), occupied), (min(right, end), -occupied)))
-            current = units
-            for _, delta in sorted(records):
-                current += delta
-                if current > capacities[resource]:
-                    fits = False; break
-            if not fits: break
-        if fits: return start
-    return None
+def _fit(release, duration, demands, calendar, capacities, candidate_usage=None):
+    """Find the first gap in the union of resource saturation intervals."""
+    if not duration:
+        return release
+    if any(units > capacities[resource] for resource, units in demands.items()):
+        return None
+    blocked = []
+    for resource, units in demands.items():
+        available = capacities[resource] - units
+        events = defaultdict(int)
+        for rows in (calendar.get(resource, ()), candidate_usage.get(resource, ()) if candidate_usage else ()):
+            for start, end, occupied in rows:
+                if end > release:
+                    events[max(start, release)] += occupied
+                    events[end] -= occupied
+        used = 0
+        blocked_since = None
+        for instant, delta in sorted(events.items()):
+            used += delta
+            if used > available:
+                if blocked_since is None:
+                    blocked_since = instant
+            elif blocked_since is not None:
+                blocked.append((blocked_since, instant))
+                blocked_since = None
+    start = release
+    for left, right in sorted(blocked):
+        if right <= start:
+            continue
+        if start + duration <= left:
+            break
+        start = right
+    return start
 
 
 def _occupy(calendar, start, end, demands):
@@ -87,7 +99,7 @@ def _minimum_transfer(edge, choices):
     return min(costs, default=0)
 
 
-def _bounds(problem, choices, predecessors, order, capacities):
+def _bounds(problem, choices, predecessors, successors, order, capacities):
     if any(not modes for modes in choices.values()): return None, {}, {}
     durations = {name:min(m.cost.estimate_ns for m in modes) for name, modes in choices.items()}
     delays = {name:{p:0 for p in deps} for name, deps in predecessors.items()}
@@ -104,7 +116,7 @@ def _bounds(problem, choices, predecessors, order, capacities):
             *(ends[p] + delay for p, delay in delays[name].items())])
     rank = {}
     for name in reversed(order):
-        tails = [rank[after] + delays[after][name] for after in order if name in delays[after]]
+        tails = (rank[after] + delays[after][name] for after in successors[name])
         rank[name] = durations[name] + max(tails, default=0)
     energy = {r:0 for r in capacities}
     for modes in choices.values():
@@ -130,16 +142,25 @@ def _choose(problem, choices, predecessors, successors, rank, capacities, check)
     operations = {o.id:o for o in problem.operations}
     incoming = defaultdict(list)
     for edge in problem.data_edges: incoming[edge.consumer].append(edge)
+    activity_by_option = defaultdict(list)
+    for activity in problem.activities:
+        if _known(activity.cost):
+            for condition in set(activity.when):
+                activity_by_option[condition.operation, condition.option].append(activity)
+    active_activities = set()
     selected, routes, ends, calendar, priority_order = {}, {}, {}, {}, []
-    ready = {name for name, deps in predecessors.items() if not deps}
+    waiting = {name:len(deps) for name, deps in predecessors.items()}
+    ready = [(-rank[name], indexes[name], name) for name, count in waiting.items() if not count]
+    heapify(ready)
     while ready:
         check()
-        name = min(ready, key=lambda n:(-rank[n], indexes[n])); ready.remove(name)
+        _, _, name = heappop(ready)
         best = None
+        latest_predecessor = max((ends[before] for before in predecessors[name]), default=0)
         for position, mode in enumerate(choices[name]):
             check()
-            probe = {r:list(rows) for r, rows in calendar.items()}
-            release = max((ends[p] for p in predecessors[name]), default=0)
+            candidate_usage = {}
+            release = latest_predecessor
             picked, possible = {}, True
             for edge in incoming[name]:
                 source = (edge.external_location if edge.producer is None else
@@ -152,37 +173,42 @@ def _choose(problem, choices, predecessors, successors, rank, capacities, check)
                 for index, route in enumerate(edge.transfers):
                     if not _known(route.cost) or (route.source_memory, route.destination_memory) != (source, destination):
                         continue
-                    start = _fit(available, route.cost.estimate_ns, route.demands, probe, capacities)
+                    start = _fit(available, route.cost.estimate_ns, route.demands, calendar, capacities, candidate_usage)
                     if start is not None: options.append((start + route.cost.estimate_ns, index, start, route))
                 if not options:
                     possible = False; break
                 end, _, start, route = min(options, key=lambda row:row[:2])
                 picked[edge.id] = route; release = max(release, end)
-                _occupy(probe, start, end, route.demands)
+                _occupy(candidate_usage, start, end, route.demands)
             if not possible: continue
             demands = {**mode.demands, **mode.workspace_bytes}
-            start = _fit(release, mode.cost.estimate_ns, demands, probe, capacities)
+            start = _fit(release, mode.cost.estimate_ns, demands, calendar, capacities, candidate_usage)
             if start is None: continue
             end = start + mode.cost.estimate_ns
-            activation = sum(a.cost.estimate_ns for a in problem.activities if _known(a.cost)
-                and not _present(a.when, selected) and _present(a.when, {**selected, name:mode}))
+            activation = sum(activity.cost.estimate_ns for activity in activity_by_option[name, mode.id]
+                if activity.id not in active_activities)
             score = (end + activation, end, mode.id != operations[name].baseline_option, position)
             if best is None or score < best[0]:
-                _occupy(probe, start, end, demands)
-                best = score, mode, picked, end, probe
+                _occupy(candidate_usage, start, end, demands)
+                best = score, mode, picked, end, candidate_usage
         if best is None:
             raise _Stopped('GREEDY_MODE_OR_ROUTE_DEAD_END', operation=name,
                 meaning='A different earlier choice may still be feasible; no infeasibility is established.')
-        _, selected[name], picked, ends[name], calendar = best
+        _, mode, picked, ends[name], candidate_usage = best
+        selected[name] = mode
+        for resource, intervals in candidate_usage.items():
+            calendar.setdefault(resource, []).extend(intervals)
+        active_activities.update(activity.id for activity in activity_by_option[name, mode.id])
         routes.update(picked); priority_order.append(name)
         for child in successors[name]:
-            if child not in selected and predecessors[child] <= selected.keys(): ready.add(child)
+            waiting[child] -= 1
+            if not waiting[child]:
+                heappush(ready, (-rank[child], indexes[child], child))
     return selected, routes, priority_order
 
 
-def _temporal(problem, selected, routes, rank, priority_order):
+def _temporal(problem, selected, routes, rank):
     tasks, edges, lease_events = {}, [], {}
-    order = {name:i for i, name in enumerate(priority_order)}
     def task(key, duration, demands, priority, wait=False):
         tasks[key] = dict(duration=duration, demands=demands, priority=priority, wait=wait)
         start, end = _event(key, 'START'), _event(key, 'END')
@@ -232,7 +258,7 @@ def _temporal(problem, selected, routes, rank, priority_order):
         if constraint.maximum_ns is not None: edges.append((after, before, -constraint.maximum_ns))
     nodes = {_event(key, endpoint) for key in tasks for endpoint in ('START', 'END')}
     nodes.update(point for left, right, _ in edges for point in (left, right))
-    return tasks, edges, nodes, lease_events, order
+    return tasks, edges, nodes, lease_events
 
 
 def _propagate(nodes, edges, check):
@@ -320,28 +346,19 @@ def construct_implementations(problem, *, baseline_only=False, max_repairs=10000
             or type(max_seconds) not in (int, float) or not 0 < max_seconds <= 3600):
         raise ValueError('explicit baseline flag, positive repair budget and bounded construction time required')
     started = time.monotonic(); problem = validate_problem(problem)
-    frontiers = _frontiers(problem, baseline_only)
-    extended = bool(problem.activities or problem.timing_constraints)
-    report = dict(schema=PLAN_SCHEMA, schema_version=2 if extended else 1, problem_sha256=digest(problem),
+    report = _plan_report(problem, baseline_only)
+    frontiers = report['frontiers']
+    report.update(
         status='UNRESOLVED', solver_status='NOT_RUN_CONSTRUCTIVE_HEURISTIC',
-        domain_complete=not frontiers, frontiers=frontiers,
-        optimization_domain='BASELINE_IMPLEMENTATIONS_ONLY' if baseline_only else 'ALL_DECLARED_IMPLEMENTATION_OPTIONS',
         tie_break='BASELINE_THEN_DECLARED_ORDER_AT_EQUAL_LOCAL_EARLIEST_FINISH_SCORE',
-        baseline_only=baseline_only, selected=[], transfers=[], memory_leases=[], makespan_ns=None,
-        model_lower_bound_ns=None, relative_gap=None, known_subdomain_lower_bound_ns=None,
-        known_subdomain_gap=None, model_optimality_proven=False, physical_optimality_proven=False,
-        cost_basis='EXPLICIT_CONTEXT_POINT_ESTIMATES_NOT_PHYSICAL_TIME_GUARANTEES',
-        memory_accounting='SCOPED_INCREMENTAL_PRIVATE_PAYLOAD_EXTERNAL_INPUTS_BORROWED',
-        external_input_bytes_not_charged=sum({e.value:e.nbytes for e in problem.data_edges if e.producer is None}.values()),
+        known_subdomain_lower_bound_ns=None, known_subdomain_gap=None,
         solver=dict(name='CONSTRUCTIVE_CRITICAL_PATH_CAPACITY_CALENDARS', solver_called=False,
             max_repairs=max_repairs, max_seconds=max_seconds),
-        target_program_executed=False, execution_authorized=False, deployment_authorized=False,
-        default_backend='NO_OP', construction_frontier=[], scheduling_constraints=[],
+        construction_frontier=[], scheduling_constraints=[],
         construction=dict(mode_selection='READY_CRITICAL_PATH_LOCAL_EFT_PLUS_FIRST_HOST_ACTIVATION_SERVICE',
             memory_policy='FINITE_CAPACITIES_AND_INDEPENDENT_TIMELINE_LEASES',
             endpoint_policy='INTEGER_DIFFERENCE_PROPAGATION_FIXED_EQUALITIES_AND_WAIT_TAIL',
             repair_attempts=0, added_resource_orders=0))
-    if extended: report['activities'] = []
     def check():
         if time.monotonic() - started > max_seconds: raise _Stopped('CONSTRUCTION_TIME_BUDGET_EXHAUSTED')
     try:
@@ -361,7 +378,7 @@ def construct_implementations(problem, *, baseline_only=False, max_repairs=10000
             and (not m.cost.estimate_ns or all(units <= capacities[r]
                 for r, units in {**m.demands, **m.workspace_bytes}.items()))] for o in problem.operations}
         predecessors, successors, order = _topology(problem)
-        lower, rank, bound = _bounds(problem, choices, predecessors, order, capacities)
+        lower, rank, bound = _bounds(problem, choices, predecessors, successors, order, capacities)
         if lower is None: raise _Stopped('NO_COMPLETE_KNOWN_MODE_DOMAIN')
         report.update(known_subdomain_lower_bound_ns=lower, lower_bound_details=bound,
             lower_bound_scope='ALL_KNOWN_COST_OPTIONS_WITH_UNAVAILABLE_ACTIVITY_CHOICES_EXCLUDED',
@@ -369,7 +386,7 @@ def construct_implementations(problem, *, baseline_only=False, max_repairs=10000
         selected, routes, priority_order = _choose(problem, choices, predecessors, successors, rank, capacities, check)
         report['construction']['chosen_options'] = {name:mode.id for name, mode in selected.items()}
         report['construction']['chosen_routes'] = {name:route.id for name, route in routes.items()}
-        tasks, constraints, nodes, lease_events, _ = _temporal(problem, selected, routes, rank, priority_order)
+        tasks, constraints, nodes, lease_events = _temporal(problem, selected, routes, rank)
         times = _propagate(nodes, constraints, check)
         if times is None: raise _Stopped('CHOSEN_MODE_ENDPOINT_CONSTRAINTS_CONFLICT')
         report['fixed_selection_lower_bound_ns'] = max(times[_event(key, 'END')] for key in tasks)
@@ -389,7 +406,7 @@ def construct_implementations(problem, *, baseline_only=False, max_repairs=10000
                     relative_gap=None if frontiers else (total - lower) / max(1, total),
                     known_subdomain_gap=(total - lower) / max(1, total),
                     lower_bound_matched=total == lower, elapsed_seconds=time.monotonic() - started)
-                candidate['verification'] = verify_execution_plan(problem, candidate)
+                candidate['verification'] = _verify_selected_timeline(problem, candidate)
                 return candidate
             instant, resource, active = conflict
             delayed = sorted(active, key=lambda i:(records[i]['priority'], -records[i]['start'], records[i]['label']))

@@ -17,7 +17,7 @@ from scar.ir.implementation_plan import (
     PlanningResource, problem_document, problem_from_dict,
 )
 from scar.ir.program.providers import ProviderArtifact
-from scar.optimization.joint_planner import verify_execution_plan
+from scar.optimization.joint_planner import _verify_admitted_plan
 
 from ..contracts import ExecutionPlanRef, GraphBundle
 
@@ -68,23 +68,23 @@ def schedule_native(revision: NativeRevision, observation, cases, out) -> Execut
     artifacts['execution_plan'] = publish_plan(out / 'plan.json', schedule)
     if not schedule.get('selected'):
         raise ValueError('no feasible native execution schedule')
-    _verify_plan(problem, schedule)
+    _require_plan_scope(problem, schedule)
     scope = 'BASELINE_ONLY' if observation['schema_version'] == 1 else decision['scope']
     return ExecutionPlanRef(revision.entry, artifacts, decision, scope)
 
 
-def _verify_plan(problem, plan):
+def _require_plan_scope(problem, plan):
     baseline_only = plan.get('baseline_only')
     if type(baseline_only) is not bool or entry_baseline_only(problem) and not baseline_only:
         raise ValueError('execution plan does not honor the planning problem baseline scope')
-    return verify_execution_plan(problem, plan)
 
 
 def read_plan_contract(reference: ExecutionPlanRef):
     """Replay a published schedule against its typed problem without running a solver."""
     problem_document_, plan = reference.read_pair()
     problem = problem_from_dict(problem_document_)
-    return problem, plan, _verify_plan(problem, plan)
+    _require_plan_scope(problem, plan)
+    return problem, plan, _verify_admitted_plan(problem, plan)
 
 
 def read_native_binding(reference: ExecutionPlanRef):
@@ -512,6 +512,6 @@ def main(argv=None):
 
         plan = construct_implementations(problem, baseline_only=baseline_only)
     if plan.get('selected'):
-        _verify_plan(problem, plan)
+        _require_plan_scope(problem, plan)
     publish_plan(args.out, plan)
     return 0

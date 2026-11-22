@@ -45,6 +45,25 @@ def _frontiers(problem, baseline_only):
     return result
 
 
+def _plan_report(problem, baseline_only):
+    """Create the solver-independent part of the execution plan receipt."""
+    frontiers = _frontiers(problem, baseline_only)
+    extended = bool(problem.activities or problem.timing_constraints)
+    external_inputs = {edge.value: edge.nbytes for edge in problem.data_edges if edge.producer is None}
+    report = dict(schema=PLAN_SCHEMA, schema_version=2 if extended else 1, problem_sha256=digest(problem),
+        domain_complete=not frontiers, frontiers=frontiers,
+        optimization_domain='BASELINE_IMPLEMENTATIONS_ONLY' if baseline_only else 'ALL_DECLARED_IMPLEMENTATION_OPTIONS',
+        baseline_only=baseline_only, selected=[], transfers=[], memory_leases=[], makespan_ns=None,
+        model_lower_bound_ns=None, relative_gap=None, model_optimality_proven=False, physical_optimality_proven=False,
+        cost_basis='EXPLICIT_CONTEXT_POINT_ESTIMATES_NOT_PHYSICAL_TIME_GUARANTEES',
+        memory_accounting='SCOPED_INCREMENTAL_PRIVATE_PAYLOAD_EXTERNAL_INPUTS_BORROWED',
+        external_input_bytes_not_charged=sum(external_inputs.values()),
+        target_program_executed=False, execution_authorized=False, deployment_authorized=False, default_backend='NO_OP')
+    if extended:
+        report['activities'] = []
+    return report
+
+
 def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=False):
     """Select legal modes and data routes, then minimize completion time.
 
@@ -61,7 +80,9 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         from importlib.metadata import version
     except ImportError as error:
         raise RuntimeError('joint planning requires the optional scar[planning] dependency; runtime delivery does not')from error
-    clock=time.monotonic();frontiers=_frontiers(p,baseline_only)
+    clock=time.monotonic()
+    result=_plan_report(p, baseline_only)
+    frontiers=result['frontiers']
     durations=[m.cost.estimate_ns for o in p.operations for m in o.options if _known(m.cost)]
     durations.extend(t.cost.estimate_ns for e in p.data_edges for t in e.transfers if _known(t.cost))
     durations.extend(a.cost.estimate_ns for a in p.activities if _known(a.cost))
@@ -185,27 +206,19 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
     solver=cp_model.CpSolver();solver.parameters.max_time_in_seconds=float(max_seconds)
     solver.parameters.num_search_workers=workers;solver.parameters.random_seed=0
     status=solver.solve(model);feasible=status in(cp_model.OPTIMAL,cp_model.FEASIBLE)
-    extended=bool(p.activities or p.timing_constraints)
-    result=dict(schema=PLAN_SCHEMA,schema_version=2 if extended else 1,problem_sha256=digest(p),
+    result.update(
         status=('OPTIMAL_WITHIN_MODEL'if status==cp_model.OPTIMAL and not frontiers else
                 'FEASIBLE_PARTIAL_DOMAIN'if feasible and frontiers else'FEASIBLE_WITHIN_MODEL'if feasible else
                 'UNRESOLVED'if frontiers or status==cp_model.UNKNOWN else'INFEASIBLE_WITHIN_MODEL'),
-        solver_status=solver.status_name(status),domain_complete=not frontiers,frontiers=frontiers,
-        optimization_domain='BASELINE_IMPLEMENTATIONS_ONLY'if baseline_only else'ALL_DECLARED_IMPLEMENTATION_OPTIONS',
+        solver_status=solver.status_name(status),
         tie_break='MINIMUM_REPLACEMENTS_AT_EQUAL_POINT_MODEL_COMPLETION_TIME',
-        baseline_only=baseline_only,selected=[],transfers=[],memory_leases=[],makespan_ns=None,
-        model_lower_bound_ns=None,relative_gap=None,model_optimality_proven=status==cp_model.OPTIMAL and not frontiers,
-        physical_optimality_proven=False,cost_basis='EXPLICIT_CONTEXT_POINT_ESTIMATES_NOT_PHYSICAL_TIME_GUARANTEES',
-        memory_accounting='SCOPED_INCREMENTAL_PRIVATE_PAYLOAD_EXTERNAL_INPUTS_BORROWED',
-        external_input_bytes_not_charged=sum({e.value:e.nbytes for e in p.data_edges if e.producer is None}.values()),
+        model_optimality_proven=status==cp_model.OPTIMAL and not frontiers,
         solver=dict(name='OR_TOOLS_CP_SAT',version=version('ortools'),max_seconds=max_seconds,workers=workers),
-        elapsed_seconds=time.monotonic()-clock,target_program_executed=False,execution_authorized=False,
-        deployment_authorized=False,default_backend='NO_OP')
-    if extended:result['activities']=[]
+        elapsed_seconds=time.monotonic()-clock)
     if not feasible:return result
     result['selected']=[dict(operation=o.id,option=m.id,start_ns=solver.value(starts[o.id]),end_ns=solver.value(ends[o.id]))
                         for o in p.operations for m in o.options if solver.value(choices[o.id,m.id])]
-    if extended:
+    if 'activities' in result:
         result['activities']=[dict(activity=a.id,start_ns=solver.value(activity_starts[a.id]),end_ns=solver.value(activity_ends[a.id]))
             for a in p.activities if solver.value(activity_presence[a.id])]
     result['transfers']=[dict(edge=e.id,option=t.id,source_memory=t.source_memory,destination_memory=t.destination_memory,
@@ -216,7 +229,7 @@ def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=Fals
         relative_gap=None if frontiers else(total-lower)/max(1,total),
         known_subdomain_lower_bound_ns=lower,known_subdomain_gap=(total-lower)/max(1,total))
     result['memory_leases']=_timeline(p,result)[1]
-    verify_execution_plan(p,result)
+    _verify_selected_timeline(p,result)
     return result
 
 
@@ -303,7 +316,11 @@ def verify_execution_plan(problem,plan):
     This verifies feasibility, not source legality, cost accuracy or the solver's
     optimality claim. Source-qualified publishers must replay those separately.
     """
-    p=validate_problem(problem)
+    return _verify_admitted_plan(validate_problem(problem), plan)
+
+
+def _verify_admitted_plan(p, plan):
+    """Verify a plan against a problem already admitted by the caller."""
     extended=bool(p.activities or p.timing_constraints)
     if plan.get('schema')!=PLAN_SCHEMA or plan.get('schema_version')!=(2 if extended else 1) or plan.get('problem_sha256')!=digest(p):
         raise ValueError('execution plan belongs to a different typed problem')
@@ -314,6 +331,10 @@ def verify_execution_plan(problem,plan):
         raise ValueError('unresolved or unfinished domain cannot claim model optimality')
     if plan['frontiers']and(plan['model_lower_bound_ns']is not None or plan['relative_gap']is not None):
         raise ValueError('known-subdomain bounds cannot claim bounds on unknown alternatives')
+    return _verify_selected_timeline(p, plan)
+
+
+def _verify_selected_timeline(p, plan):
     execution,leases=_timeline(p,plan)
     if plan['memory_leases']!=leases:raise ValueError('memory leases differ from selected value lifetimes')
     finish=max([r['end_ns']for r in plan['selected']]+[r['end_ns']for r in plan['transfers']]
