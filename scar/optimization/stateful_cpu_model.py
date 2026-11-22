@@ -412,6 +412,18 @@ def _demand_document(domain, candidate_id, row, plan, terms):
         scope='ONE_ORIGINAL_METHOD_CALL_SITE',costs_inferred=False)
 
 
+def _boundary_parameters(region, plan):
+    arrays = [item for item in region.inputs if item.kind == 'array']
+    return dict(arrays=len(arrays), scalars=sum(item.kind == 'scalar' for item in region.inputs),
+        callees=len(region.callees), providers=len(region.providers),
+        input_path_depths=[len(item.path)-1 for item in region.inputs],
+        callee_path_depths=[len(item.path)-1 for item in region.callees],
+        provider_lookup_depths=[len(item.lookup_path)-1 for item in region.providers],
+        array_shapes=[plan['input_shapes'][item.id] for item in arrays],
+        written_arrays=[item.id in plan['shadows'] for item in arrays],
+        workspace_slot_capacities=[slot['capacity_bytes'] for slot in plan['workspace_slots']])
+
+
 def _demand_terms(region, plan, *, original, workers):
     nodes={n.id:n for n in region.nodes}
     shapes={};views={};origins={};available={};available_payloads={};terms=[]
@@ -455,15 +467,9 @@ def _demand_terms(region, plan, *, original, workers):
             if action.kind=='evaluate' and shapes[action.value] is not None:
                 available[action.value]=dict(stride=shapes[action.value][1],offset=0)
     else:
-        term('GUARDED_METHOD_AND_NATIVE_ARTIFACT_BOUNDARY',dict(arrays=sum(i.kind=='array' for i in region.inputs),
-            scalars=sum(i.kind=='scalar' for i in region.inputs),callees=len(region.callees),providers=len(region.providers),
-            input_path_depths=[len(i.path)-1 for i in region.inputs],
-            callee_path_depths=[len(i.path)-1 for i in region.callees],
-            provider_lookup_depths=[len(i.lookup_path)-1 for i in region.providers],
-            array_shapes=[plan['input_shapes'][i.id] for i in region.inputs if i.kind=='array'],
-            written_arrays=[i.id in plan['shadows'] for i in region.inputs if i.kind=='array'],
-            workspace_slot_capacities=[r['capacity_bytes'] for r in plan['workspace_slots']]))
-        capacities=[r['capacity_bytes'] for r in plan['workspace_slots']]
+        parameters = _boundary_parameters(region, plan)
+        term('GUARDED_METHOD_AND_NATIVE_ARTIFACT_BOUNDARY', parameters)
+        capacities = parameters['workspace_slot_capacities']
         term('ALLOCATE_FIXED_POOL',dict(capacities=capacities))
         for shape in plan['input_shapes'].values(): term('INPUT_FINITE_SCAN_SERIAL',dict(rows=shape[0],cols=shape[1]))
         term('CALLER_WORKER_AFFINITY_FENV_TEAM',dict(workers=workers))

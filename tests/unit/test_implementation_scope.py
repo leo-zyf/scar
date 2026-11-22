@@ -11,8 +11,9 @@ from scar.analysis.implementation_scope import derive_stateful_scope_envelope
 from scar.analysis.schedule_time import attach_task_time
 from scar.codegen.scope_boundary_probe import render_scope_boundary_probe
 from scar.codegen.stateful import implementation_sha256
-from scar.compiler.calibrate_scope_boundary import (
-    CONDITIONS, CUTS, MISSING, PHASES, SCHEMA, scope_boundary_statistics,
+from scar.compiler.calibrate_boundary_cuts import (
+    SCOPE_CONDITIONS as CONDITIONS, SCOPE_CUTS as CUTS, SCOPE_MISSING as MISSING,
+    SCOPE_PHASES as PHASES, SCOPE_SCHEMA as SCHEMA, scope_boundary_statistics,
 )
 from scar.ir.execution_recipe import artifact_reference, make_recipe
 from scar.ir.versioned_schedule import (

@@ -8,6 +8,7 @@ call latency, and never authorize a transformation.
 import argparse
 from copy import deepcopy
 import ctypes
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
@@ -21,8 +22,7 @@ from scar.compiler.calibrate_stateful_boundary import (_canonical_binding,
     _json, _now, _receipt, _source)
 from scar.compiler.stateful_model import stateful_from_dict
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.stateful_cpu_model import _domain
-from scar.optimization.stateful_cpu_model import stateful_cpu_demand
+from scar.optimization.stateful_cpu_model import _boundary_parameters, _domain, _resource_context
 from scar.runtime.stateful_contract import (ASSUMPTIONS, FP_POLICY, MEMORY_SCOPE,
     canonical_sha256, validate_contract)
 
@@ -48,12 +48,51 @@ CONDITIONS = (
 MISSING = ('TARGET_IMPLEMENTATION_AND_DATA_REGIME_DELTA_NOT_VALIDATED',
     'INSTRUMENTATION_PERTURBATION_NOT_BOUNDED',
     'POST_PROVIDER_AFFINITY_AND_FLOATING_STATE_NOT_REPRODUCED_BY_EMPTY_DAG')
+SCOPE_SCHEMA = 'scar.stateful-scope-boundary-calibration'
+SCOPE_CUTS = (*CUTS[:-1], 'helper_cleanup_ready', 'outer_return')
+SCOPE_PHASES = (*deepcopy(PHASES[:-1]),
+    dict(id='helper_cleanup', start='restore_ready', end='helper_cleanup_ready',
+        phase_kinds=['NATIVE_HELPER_CLEANUP']),
+    dict(id='return_handoff', start='helper_cleanup_ready', end='outer_return',
+        phase_kinds=['NATIVE_RETURN', 'PYTHON_STATUS_RETURN']))
+SCOPE_CONDITIONS = (*CONDITIONS,
+    'ORIGINAL_HELPER_DESTRUCTION_PRECEDES_WORKSPACE_POOL_RELEASE',
+    'EXPLICIT_HELPER_CLEANUP_CUT_SEPARATES_DESTRUCTION_FROM_ABI_PYTHON_HANDOFF')
+SCOPE_MISSING = (*MISSING, 'HELPER_SCOPE_REASSEMBLY_AND_ADDITIONAL_CLOCK_CUT_DELTA',
+    'ABSENT_WORKSPACE_DESTRUCTION_CAN_CHANGE_CANONICAL_HANDOFF_REGIME')
+
+
+@dataclass(frozen=True, slots=True)
+class _Profile:
+    schema: str
+    result_schema: str
+    cuts: tuple[str, ...]
+    phases: tuple[dict, ...]
+    conditions: tuple[str, ...]
+    missing: tuple[str, ...]
+    sample_name: str
+
+
+_MIXED = _Profile(SCHEMA, 'scar.stateful-boundary-cut-result', CUTS, PHASES, CONDITIONS,
+                  MISSING, 'canonical-call')
+_SCOPE = _Profile(SCOPE_SCHEMA, 'scar.stateful-scope-boundary-result', SCOPE_CUTS, SCOPE_PHASES,
+                  SCOPE_CONDITIONS, SCOPE_MISSING, 'canonical-scope-call')
+_CLOCK = dict(api='clock_gettime', clock_id='CLOCK_MONOTONIC', unit='ns')
+_RUNTIME_PATH = (
+    'scar.runtime.stateful_guard.guarded_stateful_function.call',
+    'scar.compiler.stateful_runtime._ArtifactAdapter.run',
+    'scar.codegen.stateful.StatefulArtifact.run',
+)
+_ABI_HEADERS = ('stateful_abi_v1.h', 'scar_abi_v1.h')
 _FILES = ('compiler/calibrate_boundary_cuts.py', 'compiler/calibrate_stateful_boundary.py',
     'compiler/stateful_runtime.py', 'codegen/boundary_cuts.py',
     'codegen/stateful_boundary_cuts_v1.cpp.in', 'codegen/stateful.py',
     'codegen/stateful_v1.cpp.in', 'codegen/loop_v1.cpp.in', 'codegen/cpp.py',
     'codegen/stateful_abi_v1.h', 'codegen/scar_abi_v1.h',
-    'runtime/stateful_guard.py', 'runtime/stateful_contract.py', 'trace/code_snapshot.py')
+    'runtime/stateful_guard.py', 'runtime/stateful_contract.py', 'trace/code_snapshot.py',
+    'optimization/stateful_cpu_model.py')
+_SCOPE_FILES = ('analysis/implementation_scope.py', 'codegen/scope_boundary_probe.py',
+                'codegen/stateful_scope_boundary_v1.cpp.in')
 
 
 def _need(condition, message):
@@ -61,31 +100,42 @@ def _need(condition, message):
         raise ValueError(message)
 
 
-def _pins():
-    return {name: sha256((_ROOT/name).read_bytes()).hexdigest() for name in _FILES}
+def _pins(profile):
+    files = (*_FILES, *_SCOPE_FILES) if profile is _SCOPE else _FILES
+    return {name: sha256((_ROOT/name).read_bytes()).hexdigest() for name in files}
 
 
 def boundary_cut_statistics(document):
     """Validate the exclusive partition before computing any numeric costs."""
-    _need((document.get('schema'), document.get('schema_version')) == (SCHEMA, 1),
+    return _statistics(document, _MIXED)
+
+
+def scope_boundary_statistics(document):
+    """Validate the helper-destructor cut before computing costs."""
+    return _statistics(document, _SCOPE)
+
+
+def _statistics(document, profile):
+    _need((document.get('schema'), document.get('schema_version')) == (profile.schema, 1),
           'versioned boundary cut calibration required')
-    _need(document.get('cuts') == list(CUTS) and document.get('phases') == list(PHASES),
+    _need(document.get('cuts') == list(profile.cuts) and document.get('phases') == list(profile.phases),
           'exact source boundary cut order and contiguous exclusive phases required')
-    _need(document.get('conditions') == list(CONDITIONS) and document.get('missing_terms') == list(MISSING),
+    _need(document.get('conditions') == list(profile.conditions)
+          and document.get('missing_terms') == list(profile.missing),
           'canonical boundary applicability and implementation residuals required')
-    _need(document.get('clock') == dict(api='clock_gettime', clock_id='CLOCK_MONOTONIC', unit='ns'),
+    _need(document.get('clock') == _CLOCK,
           'shared native/Python integer monotonic clock required')
     repetitions, warmup = document.get('repetitions'), document.get('warmup')
     _need(type(repetitions) is int and 3 <= repetitions <= 10000
           and type(warmup) is int and 1 <= warmup <= 10000, 'bounded warm repeated samples required')
     samples = document.get('samples')
     _need(type(samples) is list and len(samples) == repetitions, 'all original cut samples required')
-    seen, columns = set(), [[] for _ in PHASES]
+    seen, columns = set(), [[] for _ in profile.phases]
     for sample in samples:
         identity, cuts = sample.get('id'), sample.get('timestamps_ns')
         _need(type(identity) is str and identity and identity not in seen, 'unique shared sample identities required')
         seen.add(identity)
-        _need(type(cuts) is list and len(cuts) == len(CUTS)
+        _need(type(cuts) is list and len(cuts) == len(profile.cuts)
               and all(type(value) is int and value > 0 for value in cuts)
               and all(left <= right for left, right in zip(cuts, cuts[1:])),
               'same-clock monotone integer cuts required; no negative or missing interval')
@@ -95,32 +145,34 @@ def boundary_cut_statistics(document):
             column.append(duration)
     return [dict(phase=phase['id'], samples_ns=values, median_ns=statistics.median(values),
         min_ns=min(values), max_ns=max(values), stdev_ns=statistics.stdev(values))
-        for phase, values in zip(PHASES, columns)]
+        for phase, values in zip(profile.phases, columns)]
 
 
-def _spec(domain, candidate_id):
-    from scar.codegen.boundary_cuts import render_boundary_cut_probe
+def _spec(domain, candidate_id, profile):
     candidate = next((row for row in domain['candidates'] if row['id'] == candidate_id), None)
     _need(candidate is not None and candidate['legal_under_guards'] and candidate['worker_count'] == 1,
           'boundary cut v1 requires one admitted serial CPU candidate')
-    demand = stateful_cpu_demand(domain, candidate_id)
-    term = next(row for row in demand['terms'] if row['component'] == 'GUARDED_METHOD_AND_NATIVE_ARTIFACT_BOUNDARY')
     region = stateful_from_dict(read_artifact(domain['region']))
     plan = read_artifact(domain['base_stage_plan'])
+    parameters = _boundary_parameters(region, plan)
     memory = {key: plan[key] for key in ('external_array_bytes', 'workspace_payload_bytes',
         'total_region_array_payload_bytes', 'memory_budget_bytes')}
     backend = domain['backend_capabilities']['serial']
     cpus = candidate['binding']['cpu_ids']
-    core = dict(region_sha256=canonical_sha256(term['parameters']),
-        plan_sha256=canonical_sha256(dict(parameters=term['parameters'], cpu_ids=cpus, memory=memory)),
+    core = dict(region_sha256=canonical_sha256(parameters),
+        plan_sha256=canonical_sha256(dict(parameters=parameters, cpu_ids=cpus, memory=memory)),
         provider_runtime=backend['provider_runtime'])
-    source, provenance = render_boundary_cut_probe(term['parameters'], memory, cpus, core)
+    if profile is _SCOPE:
+        from scar.codegen.scope_boundary_probe import render_scope_boundary_probe as render
+    else:
+        from scar.codegen.boundary_cuts import render_boundary_cut_probe as render
+    source, provenance = render(parameters, memory, cpus, core)
     return dict(region=region, plan=plan, memory=memory, cpus=cpus, core=core,
         compiler=backend['compiler'], source=source, provenance=provenance,
-        resource_context=demand['resource_context'])
+        resource_context=_resource_context(domain, candidate_id, candidate))
 
 
-def _build(spec, directory):
+def _build(spec, directory, profile):
     from scar.codegen.stateful import _Table
     directory.mkdir()
     compiler = spec['compiler']
@@ -129,7 +181,7 @@ def _build(spec, directory):
           'canonical serial compiler differs from source context')
     source = directory/'probe.cpp'; source.write_text(spec['source'])
     headers = {}
-    for name in ('stateful_abi_v1.h', 'scar_abi_v1.h'):
+    for name in _ABI_HEADERS:
         (directory/name).write_bytes((_ROOT/'codegen'/name).read_bytes())
         headers[name] = _receipt(directory/name)
     library = directory/'boundary_cuts.so'
@@ -152,7 +204,7 @@ def _build(spec, directory):
         _need(getattr(table.contents, key) == expected.encode(), 'canonical table identity differs')
     return handle, table, dict(source=_receipt(source), library=_receipt(library), headers=headers,
         compiler=compiler, compiler_command=command, source_fragments=spec['provenance'],
-        implementation_files=_pins(), target_dag_compiled=False)
+        implementation_files=_pins(profile), target_dag_compiled=False)
 
 
 def _contract(original, inputs, callees, providers, region, spec, probe, out):
@@ -175,6 +227,14 @@ def _contract(original, inputs, callees, providers, region, spec, probe, out):
 
 
 def calibrate_boundary_cuts(domain, candidate_id, out, *, repetitions=7, warmup=2):
+    return _calibrate(domain, candidate_id, out, _MIXED, repetitions, warmup)
+
+
+def calibrate_scope_boundary(domain, candidate_id, out, *, repetitions=7, warmup=2):
+    return _calibrate(domain, candidate_id, out, _SCOPE, repetitions, warmup)
+
+
+def _calibrate(domain, candidate_id, out, profile, repetitions, warmup):
     from scar.codegen.stateful import StatefulArtifact, _providers
     from scar.compiler.stateful_runtime import _ArtifactAdapter
     from scar.runtime.stateful_guard import guarded_stateful_function
@@ -183,14 +243,14 @@ def calibrate_boundary_cuts(domain, candidate_id, out, *, repetitions=7, warmup=
     _need(type(repetitions) is int and 3 <= repetitions <= 10000
           and type(warmup) is int and 1 <= warmup <= 10000, 'bounded warm repeated samples required')
     started = time.monotonic(); observed_from = _now()
-    domain = _domain(domain); spec = _spec(domain, candidate_id)
+    domain = _domain(domain); spec = _spec(domain, candidate_id, profile)
     actual = sorted(os.sched_getaffinity(0)); environment = thread_environment()
     _need(actual == domain['live_constraints']['process_affinity_cpu_ids']
           and set(spec['cpus']) <= set(actual) and environment == domain['live_constraints']['native_thread_environment'],
           'caller mask/thread environment must match original domain')
     out = Path(out).resolve(); out.mkdir(parents=True, exist_ok=False)
     original, args, inputs, callees, providers, structure = _canonical_binding(spec['region'], spec['plan'], out)
-    library, table, probe = _build(spec, out/'native')
+    library, table, probe = _build(spec, out/'native', profile)
     contract = _contract(original, inputs, callees, providers, spec['region'], spec, probe, out)
     (out/'canonical-contract.json').write_bytes(_json(contract))
     runtime, native_providers, owners, power = _providers(spec['region'])
@@ -207,16 +267,18 @@ def calibrate_boundary_cuts(domain, candidate_id, out, *, repetitions=7, warmup=
     read_cuts = library.scar_boundary_cut_read_v1
     read_cuts.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_uint64]
     read_cuts.restype = ctypes.c_int32
-    native_cuts = (ctypes.c_uint64*6)()
+    native_count = len(profile.cuts) - 2
+    native_cuts = (ctypes.c_uint64 * native_count)()
     samples = []; load_before = list(os.getloadavg())
     try:
         for rep in range(repetitions+warmup):
             enter = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
             result = wrapper(*args)
             returned = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
-            _need(result is None and read_cuts(native_cuts, 6) == 0, 'canonical call or cut collection failed')
+            _need(result is None and read_cuts(native_cuts, native_count) == 0,
+                  'canonical call or cut collection failed')
             if rep >= warmup:
-                samples.append(dict(id=f'canonical-call:{rep-warmup}',
+                samples.append(dict(id=f'{profile.sample_name}:{rep-warmup}',
                     timestamps_ns=[enter, *native_cuts, returned]))
         _need(wrapper.scar_stats['native_calls'] == repetitions+warmup
               and wrapper.scar_stats['fallback_calls'] == 0, 'actual compiler native path was not used')
@@ -225,16 +287,15 @@ def calibrate_boundary_cuts(domain, candidate_id, out, *, repetitions=7, warmup=
         if after != actual:
             os.sched_setaffinity(0, actual)
     _need(after == actual and thread_environment() == environment, 'canonical caller context was not restored')
-    document = dict(schema=SCHEMA, schema_version=1, domain_id=domain['domain_id'], candidate_id=candidate_id,
+    document = dict(schema=profile.schema, schema_version=1, domain_id=domain['domain_id'], candidate_id=candidate_id,
         domain_source=dict(region=domain['region'], stage_plan=domain['base_stage_plan'],
             target=domain['target_snapshot']), resource_context=spec['resource_context'],
-        cuts=list(CUTS), phases=deepcopy(list(PHASES)), samples=samples, repetitions=repetitions, warmup=warmup,
-        clock=dict(api='clock_gettime', clock_id='CLOCK_MONOTONIC', unit='ns'),
-        conditions=list(CONDITIONS), missing_terms=list(MISSING),
+        cuts=list(profile.cuts), phases=deepcopy(list(profile.phases)), samples=samples,
+        repetitions=repetitions, warmup=warmup, clock=dict(_CLOCK),
+        conditions=list(profile.conditions), missing_terms=list(profile.missing),
         probe=probe, canonical_structure=structure,
         canonical_runtime_contract=_receipt(out/'canonical-contract.json'),
-        runtime_path=['scar.runtime.stateful_guard.guarded_stateful_function.call',
-            'scar.compiler.stateful_runtime._ArtifactAdapter.run', 'scar.codegen.stateful.StatefulArtifact.run'],
+        runtime_path=list(_RUNTIME_PATH),
         runtime_stats=deepcopy(wrapper.scar_stats), observed_from=observed_from, observed_until=_now(),
         seconds=time.monotonic()-started, host_load=dict(before=load_before, after=list(os.getloadavg()), isolated=False),
         observed_caller_affinity_before=actual, observed_caller_affinity_after=after,
@@ -242,53 +303,78 @@ def calibrate_boundary_cuts(domain, candidate_id, out, *, repetitions=7, warmup=
         exclusive_partition_verified=True, clock_overhead_subtracted=False,
         target_workload_executed=False, target_variants_ranked=False, target_variants_compiled=False,
         whole_target_call_measured=False, physical_optimality_proven=False, deployment_authorized=False)
-    document['phase_statistics'] = boundary_cut_statistics(document)
+    if profile is _SCOPE:
+        document.update(helper_cleanup_separated=True, pool_release_measured=False)
+    document['phase_statistics'] = _statistics(document, profile)
     path = out/'observations.json'; path.write_bytes(_json(document))
-    result = dict(schema='scar.stateful-boundary-cut-result', schema_version=1,
-        observations=artifact_reference(path, SCHEMA), phases=document['phase_statistics'],
-        exclusive_partition_verified=True, target_workload_executed=False, deployment_authorized=False)
+    result = dict(schema=profile.result_schema, schema_version=1,
+        observations=artifact_reference(path, profile.schema), phases=document['phase_statistics'],
+        target_workload_executed=False, deployment_authorized=False)
+    if profile is _SCOPE:
+        result['helper_cleanup_separated'] = True
+    else:
+        result['exclusive_partition_verified'] = True
     (out/'result.json').write_bytes(_json(result))
     return result
 
 
 def read_boundary_cuts(reference, *, domain, candidate_id):
     """Replay source fragments and all cuts; never compile or run a probe."""
+    return _read_boundary(reference, domain, candidate_id, _MIXED)
+
+
+def read_scope_boundary_calibration(reference, *, domain, candidate_id):
+    """Replay the explicit helper cleanup partition."""
+    return _read_boundary(reference, domain, candidate_id, _SCOPE)
+
+
+def _retained_bytes(receipt):
+    path = Path(receipt['path']).resolve()
+    raw = path.read_bytes()
+    _need(dict(path=str(path), sha256=sha256(raw).hexdigest(), bytes=len(raw)) == receipt,
+          'canonical boundary retained artifact changed')
+    return raw
+
+
+def _read_boundary(reference, domain, candidate_id, profile):
     if isinstance(reference, (str, Path)):
-        reference = artifact_reference(Path(reference).resolve(), SCHEMA)
+        reference = artifact_reference(Path(reference).resolve(), profile.schema)
     document = read_artifact(reference)
     domain = _domain(domain) if isinstance(domain, (str, Path)) else domain
-    spec = _spec(domain, candidate_id)
+    spec = _spec(domain, candidate_id, profile)
     _need(document.get('domain_id') == domain['domain_id'] and document.get('candidate_id') == candidate_id
           and document.get('domain_source') == dict(region=domain['region'], stage_plan=domain['base_stage_plan'],
               target=domain['target_snapshot']) and document.get('resource_context') == spec['resource_context'],
           'boundary cuts belong to a different source/resource/candidate context')
-    _need(document.get('phase_statistics') == boundary_cut_statistics(document),
+    _need(document.get('phase_statistics') == _statistics(document, profile),
           'phase statistics differ from retained exclusive cuts')
     probe = document.get('probe', {})
-    _need(probe.get('implementation_files') == _pins() and probe.get('source_fragments') == spec['provenance']
+    _need(probe.get('implementation_files') == _pins(profile)
+          and probe.get('source_fragments') == spec['provenance']
           and probe.get('compiler') == spec['compiler'] and probe.get('target_dag_compiled') is False,
           'canonical compiler boundary source provenance differs')
-    for receipt in (probe['source'], probe['library'], *probe['headers'].values(),
-                    document['canonical_runtime_contract'], document['canonical_structure']['canonical_source']):
-        _need(_receipt(receipt['path']) == receipt, 'canonical boundary retained artifact changed')
-    _need(Path(probe['source']['path']).read_text() == spec['source'], 'native boundary source differs from exact fragment replay')
-    _need(set(probe['headers']) == {'stateful_abi_v1.h', 'scar_abi_v1.h'}
-          and all(Path(receipt['path']).read_bytes() == (_ROOT/'codegen'/name).read_bytes()
-                  for name, receipt in probe['headers'].items()), 'canonical ABI headers differ from current source')
+    structure = document['canonical_structure']
+    source = _retained_bytes(probe['source'])
+    _retained_bytes(probe['library'])
+    raw_contract = _retained_bytes(document['canonical_runtime_contract'])
+    _retained_bytes(structure['canonical_source'])
+    _need(source == spec['source'].encode(), 'native boundary source differs from exact fragment replay')
+    _need(set(probe['headers']) == set(_ABI_HEADERS)
+          and all(_retained_bytes(receipt) == (_ROOT/'codegen'/name).read_bytes()
+                  for name, receipt in probe['headers'].items()),
+          'canonical ABI headers differ from current source')
     _need(probe.get('compiler_command') == [*spec['compiler']['argv'], *spec['compiler']['options'],
         probe['source']['path'], '-o', probe['library']['path'], '-lm'], 'canonical compile invocation differs')
-    contract = validate_contract(json.loads(Path(document['canonical_runtime_contract']['path']).read_bytes()))
+    contract = validate_contract(json.loads(raw_contract))
     _need(contract['native']['contract'] == spec['core'] and contract['cpu']['ids'] == spec['cpus']
           and contract['native']['library_sha256'] == probe['library']['sha256'], 'canonical runtime contract differs')
-    structure = document['canonical_structure']
     _need(contract['parameters'] == list(spec['region'].parameter_names) == structure['parameters']
           and contract['inputs'] == structure['inputs']
           and [row['path'] for row in contract['inputs']] == [list(row.path) for row in spec['region'].inputs]
           and structure['source_body'] == 'RAISE_IF_FALLBACK_NO_TARGET_DAG'
           and contract['source']['sha256'] == structure['canonical_source']['sha256'],
           'canonical receiver/source structure differs')
-    _need(document.get('runtime_path') == ['scar.runtime.stateful_guard.guarded_stateful_function.call',
-        'scar.compiler.stateful_runtime._ArtifactAdapter.run', 'scar.codegen.stateful.StatefulArtifact.run'],
+    _need(document.get('runtime_path') == list(_RUNTIME_PATH),
         'compiler boundary observations must use actual compiler adapter/artifact path')
     _need(document.get('runtime_stats', {}).get('native_calls') == document['repetitions']+document['warmup']
           and document['runtime_stats'].get('fallback_calls') == 0
@@ -300,24 +386,32 @@ def read_boundary_cuts(reference, *, domain, candidate_id):
                  'whole_target_call_measured', 'clock_overhead_subtracted', 'physical_optimality_proven', 'deployment_authorized'):
         _need(document.get(name) is False, 'canonical fragment measurement must not claim '+name)
     _need(document.get('exclusive_partition_verified') is True, 'exclusive boundary cut partition required')
-    read_artifact(reference)
+    if profile is _SCOPE:
+        _need(document.get('helper_cleanup_separated') is True and document.get('pool_release_measured') is False,
+              'explicit helper cleanup separation without a pool release measurement required')
+    read_artifact(reference, json_document=False)
     return document
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--domain', required=True); parser.add_argument('--candidate', required=True)
+    parser.add_argument('--profile', choices=('mixed', 'scope'), default='mixed')
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--out'); source.add_argument('--check')
     parser.add_argument('--repetitions', type=int, default=7); parser.add_argument('--warmup', type=int, default=2)
     args = parser.parse_args(argv)
+    profile = _SCOPE if args.profile == 'scope' else _MIXED
     if args.check:
-        result = read_boundary_cuts(args.check, domain=args.domain, candidate_id=args.candidate)
-        print(json.dumps(dict(phases=result['phase_statistics'], exclusive_partition_verified=True,
-            target_workload_executed=False), sort_keys=True))
+        document = _read_boundary(args.check, args.domain, args.candidate, profile)
+        result = dict(phases=document['phase_statistics'], target_workload_executed=False)
+        if profile is _SCOPE:
+            result.update(source_replayed=True, helper_cleanup_separated=True)
+        else:
+            result['exclusive_partition_verified'] = True
     else:
-        print(json.dumps(calibrate_boundary_cuts(args.domain, args.candidate, args.out,
-            repetitions=args.repetitions, warmup=args.warmup), sort_keys=True))
+        result = _calibrate(args.domain, args.candidate, args.out, profile, args.repetitions, args.warmup)
+    print(json.dumps(result, sort_keys=True))
     return 0
 
 

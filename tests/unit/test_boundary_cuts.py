@@ -64,12 +64,13 @@ def test_exclusive_shared_cut_samples_partition_calls_and_reject_invalid_partiti
 def test_boundary_projection_only_replaces_complete_unknown_groups_and_preserves_known_pool(
         original_and_envelope, inputs, tmp_path, monkeypatch):
     from scar.compiler import calibrate_boundary_cuts as calibration
-    from scar.optimization import stateful_cpu_model as stateful_cpu_model
+    from scar.optimization import stateful_cpu_model, temporal_activity_costs
     _, envelope = original_and_envelope
     schedule = attach_task_time(envelope)
     _, target, _, _, context = inputs
     resources = derive_temporal_resources(schedule, target, source_context=context)
     document = _cuts(); document['resource_context'] = {'fixture': 'SOURCE_READER_ISOLATED'}
+    document['phase_statistics'] = boundary_cut_statistics(document)
     path = tmp_path / 'synthetic-cuts.json'; path.write_text(json.dumps(document))
     reference = artifact_reference(path, SCHEMA)
     fact = ProviderFactReference(ProviderArtifact(**reference), '#/samples')
@@ -88,11 +89,13 @@ def test_boundary_projection_only_replaces_complete_unknown_groups_and_preserves
         semantic_sha256(projection_document(resources)), resources.target,
         (*pools, *(r for r in unknown if not pool_activities.intersection(r.activities))),
         unmapped_terms=({'term': 'original-unmapped', 'reason': 'NOT_AN_ACTIVITY'},))
-    # Only the heavy source reader/context admission boundary is isolated.
-    # The real table, group coverage and numeric cut validators still run.
+    # The isolated reader supplies the same already verified phase summaries
+    # as the cold reader. Projection must neither recompute nor rebind them.
     monkeypatch.setattr(calibration, 'read_boundary_cuts', lambda *a, **kw: deepcopy(document))
     monkeypatch.setattr(stateful_cpu_model, 'stateful_resource_context',
         lambda *a, **kw: document['resource_context'])
+    monkeypatch.setattr(temporal_activity_costs, '_sample_statistics',
+        lambda values: pytest.fail('projection recomputed admitted boundary statistics'))
     domain = {'candidates': [{'id': 'serial', 'worker_count': 1}]}
     def project(value=table, refs=(reference,)):
         return project_boundary_activity_costs(value, schedule, resources,

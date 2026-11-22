@@ -328,7 +328,7 @@ def project_boundary_activity_costs(table, schedule, resources, *, domain, candi
 
 
 def _project_boundary_activity_costs(table, inputs, *, domain, candidate_id, calibrations, by_task=None):
-    from scar.compiler.calibrate_boundary_cuts import read_boundary_cuts
+    from scar.compiler.calibrate_boundary_cuts import read_boundary_cuts, read_scope_boundary_calibration
     from scar.optimization.stateful_cpu_model import stateful_resource_context
 
     schedule = inputs.schedule
@@ -350,6 +350,7 @@ def _project_boundary_activity_costs(table, inputs, *, domain, candidate_id, cal
     modern = 'implementation_scope_cleanup' in schedule.proof
     cuts = _SCOPE_CUTS if modern else _CUTS
     expected_schema = _SCOPE_BOUNDARY_SCHEMA if modern else _BOUNDARY_SCHEMA
+    read_calibration = read_scope_boundary_calibration if modern else read_boundary_cuts
     costs = list(table.costs); mappings = []; facts = []; residuals = []; seen = set()
     for value in calibrations:
         reference = boundary_calibration_reference(value)
@@ -359,11 +360,7 @@ def _project_boundary_activity_costs(table, inputs, *, domain, candidate_id, cal
         if identity in seen:
             raise ValueError('one boundary calibration publication cannot be charged twice')
         seen.add(identity)
-        if modern:
-            from scar.compiler.calibrate_scope_boundary import read_scope_boundary_calibration
-            document = read_scope_boundary_calibration(reference, domain=domain, candidate_id=candidate_id)
-        else:
-            document = read_boundary_cuts(reference, domain=domain, candidate_id=candidate_id)
+        document = read_calibration(reference, domain=domain, candidate_id=candidate_id)
         if (document.get('schema'), document.get('schema_version')) != (expected_schema, 1):
             raise ValueError('source-replayed boundary cut calibration required')
         if document['resource_context'] != stateful_resource_context(domain, candidate_id):
@@ -372,23 +369,12 @@ def _project_boundary_activity_costs(table, inputs, *, domain, candidate_id, cal
             raise ValueError('original shared monotonic boundary cut order differs')
         conditions = _strings(document['conditions'], 'boundary applicability conditions', (tuple, list))
         missing = _strings(document['missing_terms'], 'boundary residual terms', (tuple, list))
-        samples = document['samples']; sample_ids = set()
-        if type(samples) is not list or len(samples) < 3:
-            raise ValueError('retained repeated boundary cut vectors required')
-        for sample in samples:
-            sample_id, timestamps = sample['id'], sample['timestamps_ns']
-            if type(sample_id) is not str or not sample_id or sample_id in sample_ids:
-                raise ValueError('unique shared boundary sample identity required')
-            sample_ids.add(sample_id)
-            if (type(timestamps) is not list or len(timestamps) != len(cuts)
-                    or any(type(t) is not int or t < 0 for t in timestamps)
-                    or any(a > b for a, b in zip(timestamps, timestamps[1:]))):
-                raise ValueError('one original monotonic integer cut vector required per sample')
+        samples = document['samples']
         phases = document['phases']
         if type(phases) is not list or len(phases) != len(cuts) - 1:
             raise ValueError('one exclusive phase per adjacent original cut pair required')
         phase_ids = set(); covered_kinds = set(); phase_rows = []
-        for index, phase in enumerate(phases):
+        for index, (phase, timing) in enumerate(zip(phases, document['phase_statistics'], strict=True)):
             phase_id = phase['id']
             if type(phase_id) is not str or not phase_id or phase_id in phase_ids:
                 raise ValueError('unique original boundary phase identity required')
@@ -409,8 +395,8 @@ def _project_boundary_activity_costs(table, inputs, *, domain, candidate_id, cal
             activities = tuple(by_task[task.id] for task in selected)
             replaced = _remove_unknown_costs(costs, activities,
                 'boundary evidence may only replace complete UNKNOWN subjects; primitive facts remain charged once')
-            values = [sample['timestamps_ns'][index+1] - sample['timestamps_ns'][index] for sample in samples]
-            stats = dict(**_sample_statistics(values), repetitions=len(values))
+            stats = {key: timing[key] for key in ('median_ns', 'min_ns', 'max_ns', 'stdev_ns')}
+            stats['repetitions'] = document['repetitions']
             subject = 'cost:boundary:' + semantic_sha256(dict(source=reference, phase=phase_id,
                 schedule=table.source_schedule_sha256, activities=activities))[:32]
             charge = 'boundary-occurrence:' + semantic_sha256(dict(source=reference, phase=phase_id, activities=activities))
