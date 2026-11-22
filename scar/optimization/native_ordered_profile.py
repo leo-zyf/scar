@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from collections import Counter
 from hashlib import sha256
+import json
 from pathlib import Path
 import re
 from statistics import median, stdev
 
 from scar.analysis.source_triangle_seed import SCHEMA as SEED, check as check_seed
 from scar.analysis.sparse_parallel_scaling_scope import _lanes
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 from scar.optimization.sparse_parallel_cost import HARDWARE, collect_hardware
 from scar.optimization.sparse_parallel_recipe import _storage_requirements
@@ -73,6 +74,107 @@ def _original(seed, observation, original, before, detached, oracle):
             and observation['local_monitoring_only'] is True
             and observation['performance_measurement'] is False,
             'aggregate count, F4 frame and output must belong to the same original observation')
+    return frames
+
+
+def _validate_source_segments(design, observation):
+    """Check process identity and necessary bounds for compact owner summaries."""
+    from scar.runtime.sparse_ordered_scope_observe import CLOCKS, COST, PUBLICATION, cost_boundaries
+
+    witness = observation['segmented_cost']
+    phases = witness['phases']
+    order = [*design['ordered_children'], PUBLICATION]
+    _require(witness['schema'] == COST and witness['schema_version'] == 1
+        and observation['entry'] == design['entry'] and observation['argv'] == design['argv']
+        and observation['local_event_counts'] == design['expected_counts']
+        and all(witness[key] == observation[key] for key in ('process_id', 'thread_id', 'affinity'))
+        and witness['scope'] == 'INSTRUMENTED_ORIGINAL_OWNER_ONLY'
+        and witness['clock_sources'] == dict(wall_ns='PERF_COUNTER_NS', thread_cpu_ns='THREAD_TIME_NS')
+        and witness['boundaries'] == cost_boundaries(design)
+        and witness['phase_order'] == order and set(phases) == set(order)
+        and witness['clean_measurement'] is False and witness['occurrence_intervals_saved'] is False
+        and set(witness['envelope']) == set(CLOCKS), 'owner segment scope or exact observation sites differ')
+    count = design['count']
+    _require(all(type(row['count']) is int and row['count'] == count
+        and set(row) == {'count', *CLOCKS} for row in phases.values()),
+        'each retained owner phase requires the same number of normal occurrences')
+
+    measured = {}
+    for axis in CLOCKS:
+        first, last = witness['envelope'][axis]
+        _require(type(first) is int and type(last) is int and 0 <= first < last, 'invalid owner clock envelope')
+        parts = [phases[name][axis] for name in order]
+        for part in parts:
+            start, stop, total, lower, upper = (part[key] for key in
+                ('first_ns', 'last_ns', 'sum_ns', 'min_ns', 'max_ns'))
+            _require(all(type(value) is int for value in (start, stop, total, lower, upper))
+                and first <= start <= stop <= last and 0 <= lower <= upper
+                and (count-1)*lower + upper <= total <= (count-1)*upper + lower and total <= stop-start,
+                'observed phase aggregate exceeds occurrence or owner clock bounds')
+        _require(all(a['first_ns'] <= b['first_ns'] and a['last_ns'] <= b['last_ns']
+            for a,b in zip(parts, parts[1:])), 'phase clock extrema violate the original ordered loop')
+        total = sum(part['sum_ns'] for part in parts)
+        _require(total <= last-first, 'disjoint owner phase totals cannot exceed the loop envelope')
+        measured[axis] = dict(envelope_ns=last-first, selected_disjoint_ns=total,
+            unattributed_complement_ns=last-first-total)
+    return witness, measured
+
+
+def _f4_bind(targets, boundary):
+    found = []
+    for index, row in targets:
+        attempt = row['observation']
+        if (attempt['caller_site'] == boundary['caller']
+                and attempt['target_code'] == boundary['code']
+                and ('callable' not in boundary or
+                     json.loads(attempt['metadata_json']) == boundary['callable'])):
+            found.append((index, row))
+    _require(len(found) == 1, 'timed scope or phase is missing its exact original F4 operation')
+    index, row = found[0]
+    return dict(observed_call=f'#/observed_targets/{index}', operation=row['operation'],
+        result_port=row['observation']['source_call'], boundary=boundary)
+
+
+def _project_source_cost(design, observation, observation_ref, seed, ordered_scope, scope_ref, resources, frames):
+    """Project same-run source service evidence onto the source loop's ordered edges."""
+    witness, measured = _validate_source_segments(design, observation)
+    _require('process_id' in observation and read_artifact(observation_ref) == observation,
+        'source cost must name exact captured observation bytes')
+    _require(frames['process_id'] == observation['process_id']
+        and frames['thread_id'] == observation['thread_id'] and frames['cpu_ids'] == observation['affinity'],
+        'timed owner scope and F4 frames require the same process, thread and CPU mask')
+    graph_ref = seed['entry_calls']
+    graph = read_artifact(graph_ref)
+    boundaries = witness['boundaries']
+    order = witness['phase_order']
+    targets = [(index, row) for index, row in enumerate(graph['observed_targets'])
+        if row['entry_scope_reachable'] and all(row['observation'][key] == observation[key]
+            for key in ('process_id', 'thread_id'))]
+    nodes = {name: {**_f4_bind(targets, boundaries['phases'][name]),
+        'measurement': f'#/segmented_cost/phases/{name}', 'observed': witness['phases'][name]} for name in order}
+    edges = [dict(source=left, target=right, relation='SAME_ITERATION_ORDER')
+        for left,right in zip(order, order[1:])]
+    edges.append(dict(source=order[-1], target=order[0], relation='NEXT_ITERATION_ORDERED_PUBLICATION'))
+    affinity = observation['affinity']
+    placement = resources['placement']
+    _require(design['count'] == resources['case']['call_count']
+        and ordered_scope['loop']['exact_count_under_source_conditions']['normal_scope_completion'] is True,
+        'source owner measurement must belong to the admitted loop and fixed count')
+    return dict(schema='scar.ordered-source-owner-cost-projection', schema_version=1,
+        observation=observation_ref, graph=graph_ref, ordered_scope=scope_ref,
+        loop={**_f4_bind(targets, boundaries['scope']), 'count': design['count'],
+            'control': '#/loop/original_operation', 'ordered_effect': '#/dependences/ordered_publication'},
+        phase_order=order, nodes=nodes, ordered_edges=edges, measured=measured,
+        lane=dict(process_id=observation['process_id'], thread_id=observation['thread_id'],
+            affinity=affinity, single_allowed_cpu_id=affinity[0] if len(affinity) == 1 else None,
+            matches_native_owner_affinity=affinity == [placement['owner_cpu_id']],
+            native_core_topology_ref=placement['hardware']),
+        cost_policy=dict(source_clock_scope='OBSERVED_INSTRUMENTED_OWNER_SPANS',
+            phase_includes_descendants=True, measured_sibling_spans_disjoint=True,
+            occurrence_order_checked_by_collector=True, clean_source_time_ns=None,
+            unassigned_time_kind='UNKNOWN', native_worker_service_ns=None, native_transfer_service_ns=None,
+            native_retirement_wait_ns=None, native_startup_close_ns=None,
+            native_duration_bounds_ns=None, source_time_transfer=False, width_selection_basis='LIVE_CAPACITY_ONLY'))
 
 
 def _resources(before, hardware_ref, hardware, count, width, identity, *, window=None):
@@ -126,16 +228,20 @@ def _resources(before, hardware_ref, hardware, count, width, identity, *, window
         cost=dict(basis='UNKNOWN', startup_ns=None, per_call_ns=None, close_ns=None, whole_scope_ns=None)), control
 
 
-def admissible_profile_widths(before, hardware, count):
-    eligible = []
+def _admissible_profile_resources(before, hardware_ref, hardware, count, identity):
+    eligible = {}
     for width in range(2, min(count, len(before['placement']['workers'])) + 1):
         try:
-            _resources(before, None, hardware, count, width, before['recipe_id'])
+            resources, _ = _resources(before, hardware_ref, hardware, count, width, identity)
         except ValueError:
             continue
-        eligible.append(width)
+        eligible[width] = resources
     _require(eligible, 'current CPU and memory scope cannot admit two workers in the validated provider family')
-    return tuple(eligible)
+    return eligible
+
+
+def admissible_profile_widths(before, hardware, count):
+    return tuple(_admissible_profile_resources(before, None, hardware, count, before['recipe_id']))
 
 
 def observe_profile_host(anchor_digest_package, count, *, widths=None):
@@ -189,7 +295,7 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
         and release['count'] == before['case']['call_count']
         and original_scope['consumer_completions'] == release['count'],
         'source, detached code or original fixed profile differs')
-    _original(seed, observation, original, before, detached, read_artifact(oracle_ref, json_document=False))
+    frames = _original(seed, observation, original, before, detached, read_artifact(oracle_ref, json_document=False))
     # Width and hardware are intentionally absent from the data ABI identity.
     logical = dict(source=seed['entry']['sha256'], seed=seed_ref['sha256'], argv=seed['argv'],
         detached=anchor['detached']['sha256'], provider=manifest['numeric']['sha256'],
@@ -202,12 +308,12 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
     wire = project_source_csr_stream(plan, detached)
     diagnosis = {}
     if 'segmented_cost' in observation:
-        from scar.optimization.ordered_source_owner_cost import project_source_cost
         from scar.runtime.sparse_ordered_scope_observe import _scope_design
 
         design = _scope_design(package, manifest, seed['argv'], PACKAGE)
-        diagnosis['source_cost'] = project_source_cost(
-            design, observation, observation_ref, seed, scope, detached['source'], plan)
+        diagnosis['source_cost'] = _project_source_cost(
+            design, observation, observation_ref, seed, scope, detached['source'], plan, frames)
+        read_artifact(seed['provenance']['frames'], json_document=False)
     return dict(schema=SCHEMA, schema_version=2 if independent_window is not None else 1,
         anchor=anchor, source_seed=seed_ref, argv=seed['argv'],
         original_observation=observation_ref, oracle=oracle_ref, hardware=hardware_ref,
@@ -219,11 +325,19 @@ def plan_profile(anchor_package, source_seed_path, hardware_path, oracle_path, w
 
 
 def verify_profile_plan(path):
-    stored = read_artifact(_ref(path, SCHEMA))
+    if type(path) is dict:
+        reference = path
+        _require(reference.get('schema') == SCHEMA
+            and reference['uri'] == str(Path(reference['uri']).resolve(strict=True)),
+            'ordered count profile reference required')
+        stored = read_artifact(reference)
+    else:
+        reference, stored = open_artifact(Path(path).resolve(strict=True), SCHEMA)
     replay = plan_profile(Path(stored['anchor']['package']['uri']).parent,
         stored['source_seed']['uri'], stored['hardware']['uri'], stored['oracle']['uri'], stored['width'],
         original_observation_path=stored['original_observation']['uri'], window=stored.get('window'))
     _require(replay == stored, 'count profile differs from its exact cold replay')
+    read_artifact(reference, json_document=False)
     return stored
 
 

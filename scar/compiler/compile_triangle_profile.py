@@ -129,15 +129,15 @@ def _model_input_matches(canonical, model):
 
 def _nominate_width(out, pilot, solver, common, oracle, admissible):
     from scar.codegen.native_ordered_timing import collect
-    from scar.optimization.native_ordered_transport_cost import propose as propose_transport
-    from scar.optimization.native_ordered_width_cost import propose
+    from scar.optimization.native_ordered_width_cost import prepare_width_proposal, project_transport
 
     canonical = read_artifact(common)['canonical_csr']
     input_path = Path(common['uri']).parent / canonical['uri']
     diagnostic = collect(solver, out/'calibration', input_path=input_path,
                          expected_stdout=oracle)
-    proposal = _write(out/'width-cost.json', propose(pilot['uri'], [diagnostic['uri']]))
-    model = propose_transport(proposal['uri'])
+    replay = prepare_width_proposal(pilot, (diagnostic,))
+    proposal = _write(out/'width-cost.json', replay.proposal)
+    model = project_transport(proposal, replay)
     width = model['recommended_width']
     _require(type(width) is int and width in admissible and model['admissible_widths'] == list(admissible)
         and model['profile_plan'] == pilot and model['native_observations'] == [diagnostic]
@@ -268,10 +268,10 @@ def compile_entry(family_path, entry, argv, out, *, widths=None, repeats=3, max_
 
 def _check_width_model(record, plans, canonical):
     if 'transport_proposal' in record:
-        from scar.optimization.native_ordered_transport_cost import check as verify_transport
+        from scar.optimization.native_ordered_width_cost import check_transport
 
         reference = record['transport_proposal']
-        model = verify_transport(reference['uri'])
+        model = check_transport(reference['uri'])
         _require(model['pilot_proposal'] == record['proposal'] and model['holdout_used_for_nomination'] is False,
             'transport proposal differs from its calibrated pilot')
     else:
