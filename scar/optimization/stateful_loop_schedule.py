@@ -100,7 +100,7 @@ def _loop_model(step, parameter_map, trip_count):
 
 def _proof_structure(proof):
     # Exact distinct proof type: this is not a pure/invariant-loop proof cast.
-    from scar.compiler.stateful_loop_frontend import StatefulLoopProof
+    from scar.compiler.frontend.stateful import StatefulLoopProof
     _need(type(proof) is StatefulLoopProof, 'original StatefulLoopProof required')
     step = validate_stateful_region(proof.step)
     _need(type(proof.id) is str and bool(proof.id), 'original loop proof ID required')

@@ -26,7 +26,7 @@ def time_schedule_reference(path):
 def _loop_context(reference, schedule, region_reference):
     from scar.analysis.build import BuildSession
     from scar.compiler.project_pipeline_temporal import _provider
-    from scar.compiler.stateful_loop_frontend import read_stateful_loop_proof
+    from scar.compiler.frontend.stateful import read_stateful_loop_proof
     from scar.compiler.stateful_model import document
     raw = read_artifact(reference)
     if (raw.get('schema'), raw.get('schema_version')) != ('scar.g1-current-source-loop-reference', 1):

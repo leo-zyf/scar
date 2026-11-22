@@ -72,7 +72,7 @@ def _validate_sample(document,spec):
 
 def _admit(domain_path,program,entry,argv):
     from scar.analysis.build import BuildSession
-    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
+    from scar.compiler.frontend.stateful import discover_stateful_regions
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.optimization.stateful_cpu_model import _domain, stateful_cpu_cost_context
     from scar.runtime.compiled_deployment import entry_context,thread_environment

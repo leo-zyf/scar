@@ -29,7 +29,7 @@ def test_ordered_epochs_stay_distinct_from_descriptors_and_require_original_repl
         StatefulAction('b','evaluate','next'),StatefulAction('z','write','next','x',None,1,2,'assign'))
     region=StatefulRegion('region',source,('x',),(StatefulInput('x',('x',),'array'),),nodes,actions,guards=REQUIRED_GUARDS)
     path=tmp_path/'region.json';path.write_text(json.dumps(document(region)))
-    monkeypatch.setattr('scar.compiler.stateful_loop_frontend.discover_stateful_regions',lambda view,source:([region],[]))
+    monkeypatch.setattr('scar.compiler.frontend.stateful.discover_stateful_regions',lambda view,source:([region],[]))
     view=ProgramView(None)
     artifact=ProviderArtifact('/original.json','0'*64,1,'fixture')
     locator=SourceArtifactLocator(artifact,'0'*64,1,'canonical-json')

@@ -12,7 +12,7 @@ from pathlib import Path
 
 def prepare_stateful_candidate(program,domain,out,*,cpu_threads=1):
     from scar.analysis.build import BuildSession
-    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
+    from scar.compiler.frontend.stateful import discover_stateful_regions
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.compiler.model import CpuPlacement
     from scar.ir.execution_recipe import artifact_reference,read_artifact
@@ -67,7 +67,7 @@ def check_observed_specialization(value, *, _session=None):
     """
     from scar.analysis.build import BuildSession
     from scar.compiler.input_metadata import stateful_shapes_from_metadata
-    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
+    from scar.compiler.frontend.stateful import discover_stateful_regions
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.resource_solver import semantic_sha256

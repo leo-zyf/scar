@@ -39,7 +39,7 @@ def _derive(source_kind, reference, repetitions, base_reference):
     if source_kind == 'ORIGINAL_STATEFUL_LOOP':
         from scar.analysis.build import BuildSession
         from scar.analysis.source_call_view import SourceFunctionCallProvider
-        from scar.compiler.stateful_loop_frontend import read_stateful_loop_proof
+        from scar.compiler.frontend.stateful import read_stateful_loop_proof
         from scar.optimization.stateful_loop_schedule import verify_stateful_loop
         _need(source.get('schema') == LOOP_SCHEMA, 'original source-loop compiler publication required')
         read_artifact(source['program'])
