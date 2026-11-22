@@ -6,7 +6,7 @@ import sysconfig
 
 import pytest
 
-from scar.analysis.static_native_materials import NativeMaterialError, read_static_native_materials
+from scar.analysis.native_call_materials import NativeMaterialError, read_static_native_materials
 
 
 def test_static_native_materials_exact_overloads_effects_and_isolation(tmp_path, monkeypatch):

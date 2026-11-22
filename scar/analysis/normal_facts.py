@@ -45,7 +45,7 @@ class SourceFactStore:
 
     def _collection(self):
         if self.report['schema_version']!=1:raise ValueError('unsupported source fact collection')
-        from scar.analysis.source_template_links import _json
+        from scar.analysis.source_templates import _json
         if self.report['implementation_sha256']!=sha256(Path(__file__).read_bytes()).hexdigest():
             raise ValueError('source fact collection implementation differs')
         self.parents=[];rows={};self.model_units={}
@@ -119,7 +119,7 @@ class SourceFactStore:
 
 def collect_fact_stores(parents,out):
     """Reference immutable per-unit stores; never copy/re-sign their bodies."""
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     from scar.analysis.source_stage import _durable_mkdir,_durable_bytes
     stores=[]
     for path in parents:

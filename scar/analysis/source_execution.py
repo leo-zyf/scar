@@ -17,13 +17,13 @@ from types import SimpleNamespace
 
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_containers import ContainerFlow
-from scar.analysis.source_interface_store import SourceInterfaceStore
+from scar.analysis.source_interface_build import SourceInterfaceStore
 from scar.analysis.source_pack_shapes import StaticPackShapes, StaticPackShape
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.static.query import _Fragments
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import source_protocols as X, normal_graph as F, normal_graph as T

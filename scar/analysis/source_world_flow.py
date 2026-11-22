@@ -20,7 +20,7 @@ from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import state_ports as W, normal_graph as G, normal_graph as T
 from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.model import ValueKind, ValueType

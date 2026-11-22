@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from scar.ir.execution.validity_budget import ValidityBudget
-from scar.ir.program.await_outcome_flow import consumers, flow
+from scar.ir.program.await_outcomes import consumers, flow
 from scar.ir.program.ids import UseID
 from scar.ir.program.model import (
     CompletionResult, ExitKind, InvokeLiteralResult, StateVersionValue,

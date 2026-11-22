@@ -4,7 +4,7 @@ import pytest
 from test_pipeline_schedule import _pipeline
 from scar.ir.versioned_schedule import schedule_document
 from scar.optimization.pipeline_execution_refinement import _acyclic, _projection
-from scar.optimization.pipeline_partial_order_memory import plan_pipeline_partial_order_memory
+from scar.optimization.pipeline_memory import plan_pipeline_partial_order_memory
 from scar.optimization.pipeline_ready_schedule import _dependencies, _dependency_graph
 
 

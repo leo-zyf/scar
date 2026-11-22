@@ -9,8 +9,8 @@ import pytest
 from test_loop_frontend import _original_loop
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.compiler.graph_frontend import GraphRegionRejected
-from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer
-from scar.compiler import invariant_loop_frontend as frontend
+from scar.compiler.loop_admission import _InvariantLoopLowerer
+from scar.compiler import loop_admission as frontend
 from scar.compiler.model import ArrayRegion, Expr
 from scar.compiler.pipeline_frontend import _Callee
 from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F

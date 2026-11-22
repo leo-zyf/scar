@@ -17,7 +17,7 @@ from scar.analysis.source_value_interfaces import connect_value_interfaces
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import source_value_interfaces as V, binding_ports as R, source_productions as P
 from scar.ir.record_codec import encode, decode
 

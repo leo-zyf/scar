@@ -41,7 +41,7 @@ from scar.compiler.tensor_execution import (
 from scar.ir.program import codec
 from scar.ir.record_codec import encode
 from scar.optimization.implementation_costs import CostQuery, query_key
-from scar.compiler.aten_export_device_placement import placement_choices, placement_proposal
+from scar.compiler.aten_export_placement import placement_choices, placement_proposal
 from scar.optimization.native_device_placement_search import placement_assignment
 
 

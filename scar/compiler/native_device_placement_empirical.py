@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from scar.compiler.assess_native_device import _check_file_records, _locked_files, _paths
-from scar.compiler.aten_export_device_placement import placement_choices, placement_proposal
+from scar.compiler.aten_export_placement import placement_choices, placement_proposal
 from scar.compiler.aten_export_hybrid_plan import build_placed_hybrid_problem, plan_placed_hybrid_export
 from scar.compiler.native_export_placement_costs import CpuPlacementCostUnavailable, admit_pageable_cpu_costs
 from scar.compiler.native_export_placement_costs import load_native_hybrid_placement_costs, match_native_hybrid_placement_costs, native_hybrid_placement_cost_matches

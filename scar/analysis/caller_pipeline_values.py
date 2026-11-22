@@ -232,7 +232,7 @@ class CallerPipelineValueProvider:
 
 def _pins():
     from scar.compiler import caller_pipeline, pipeline_frontend as pipeline_model, array_copy_contract as array_copy_contract
-    from scar.optimization import graph,pipeline_memory,optimizer
+    from scar.optimization import graph, pipeline_memory as pipeline_memory, optimizer
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in(
         ('projection',__import__(__name__,fromlist=['__file__'])),('types',R),('source_proof',caller_pipeline),
         ('pipeline',pipeline_model),('copy_contract',array_copy_contract),('ordered_values',graph),

@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from scar.analysis.cpu_native_phase_sites import _one, verify_cpu_native_phase_sites
-from scar.analysis.static_cpp_source import read_static_cpp_source
+from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode
 

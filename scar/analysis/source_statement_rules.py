@@ -750,7 +750,7 @@ class _StatementBuilder(_Builder):
         target = P.SourceLoopTarget(self.occurrence)
         iterator = None
         if self.node.constructor != 'While':
-            from scar.analysis.source_comprehension_rules import get_iterator
+            from scar.analysis.static.lowering.source_comprehension import get_iterator
             self.mark('iter', P.ProductionDispositionKind.EVALUATED_CHILD)
             self.mark('target', P.ProductionDispositionKind.TARGET_ADDRESS)
             iterable, current = self.evaluate(root, self.site('iter'), current)

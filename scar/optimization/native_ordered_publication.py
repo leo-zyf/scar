@@ -91,7 +91,7 @@ def _source(input_ref, manifest, stream, release):
 
 
 def _check_output_contract(package, manifest, digest_stream, binary_stream, release):
-    from scar.codegen.native_sparse_publication import PROFILE, SCHEMA as PUBLICATION, STREAM
+    from scar.codegen.native_sparse_source import PROFILE, SCHEMA as PUBLICATION, STREAM
 
     root = Path(package['uri']).parent
     local = manifest['publication']

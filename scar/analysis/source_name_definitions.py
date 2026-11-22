@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from functools import cache
 
 from scar.analysis.source_graph_material import source_graph_material
-from scar.analysis.source_compilation_flow import _at, _item
+from scar.analysis.source_compilation_contexts import _at, _item
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
@@ -114,7 +114,7 @@ def _reaching_name_definitions(snapshot, source_function, namespace, *, anchor_g
             or flow.body != body or flow.source_templates != material.result_artifact):
         raise ValueError('name definition flow differs from its original function/body/material')
     if _local_read_effects is not None:
-        from scar.analysis.source_binding_effects import LocalReadEffectContext
+        from scar.analysis.source_frame_binding_effects import LocalReadEffectContext
         if type(_local_read_effects) is not LocalReadEffectContext:
             raise TypeError('conditional local reads require original typed effect witnesses')
         read_only = _local_read_effects.witnesses(material, anchor_graph, function, scope, flow)

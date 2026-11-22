@@ -14,10 +14,7 @@ from scar.codegen.native_project import build_native_project, write_native_proje
 from scar.codegen.native_provider_bundle import (
     SCHEMA as PROVIDER_BUNDLE, build_native_provider_bundle, validate_native_provider_bundle,
 )
-from scar.codegen.native_sparse_publication import (
-    SCHEMA as PUBLICATION, STREAM as DIGEST_STREAM, SYSTEM_LIBRARIES,
-    project as project_publication, project_stream as project_digest_stream,
-)
+from scar.codegen.native_sparse_source import SCHEMA as PUBLICATION, STREAM as DIGEST_STREAM, SYSTEM_LIBRARIES, project as project_publication, project_stream as project_digest_stream
 from scar.codegen.native_sparse_source import SOURCE_STREAM, project_source_csr_stream, render_source_scale
 from scar.codegen.sparse_native_export import check_sparse_export, export_sparse_native
 from scar.ir.execution_recipe import SCHEMA as RECIPE, artifact_reference, read_artifact

@@ -2,7 +2,7 @@
 
 from collections import defaultdict, deque
 from pathlib import Path
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import normal_graph as F, normal_graph as T, source_value_routes as R
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, decode

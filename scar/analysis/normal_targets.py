@@ -25,8 +25,8 @@ from scar.ir.program import normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program import normal_graph as G
 from scar.ir.record_codec import decode,encode
-from scar.analysis.source_template_links import _json
-from scar.analysis import source_template_batch,source_template_workers,normal_output,source_interface_store,source_content_factors,normal_containers,source_container_delta,source_pack_shapes
+from scar.analysis.source_templates import _json
+from scar.analysis import source_templates as source_template_batch, source_templates as source_template_workers, normal_output, source_interface_build as source_interface_store, source_content_factors, normal_containers, source_container_delta, source_pack_shapes
 from scar.ir.program import source_protocols as L, data_materials as C
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.static.query import _Fragments

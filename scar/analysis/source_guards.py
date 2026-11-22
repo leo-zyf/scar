@@ -150,7 +150,7 @@ def _need(condition, detail):
 def validate_module_assertion(node,expansion,*,context,code_evidence,profile,overlay,
         blocks,operations,values,protocols,invoke,expression_value,source_reference,
         exception_holds,ref_type,state_type):
-    from scar.analysis.source_module_lowering import mapping_assertion_supported
+    from scar.analysis.static.lowering.source_module_lowering import mapping_assertion_supported
     _need(mapping_assertion_supported(context,code_evidence,node,profile=profile),
         'the original compiler did not retain this supported assertion layout')
     source=source_reference(node)

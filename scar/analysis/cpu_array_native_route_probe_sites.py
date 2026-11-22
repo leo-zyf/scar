@@ -3,7 +3,7 @@
 from scar.analysis.cpu_array_native_route_lifecycle import _anchor, verify_cpu_array_native_route_lifecycle
 from scar.analysis.cpu_native_phase_sites import _source_spans
 from scar.analysis.replay_transaction import replay_transaction
-from scar.analysis.static_cpp_source import read_static_cpp_source
+from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.codegen.native_array_entry import _argv_header
 from scar.ir.execution_recipe import _canonical, read_artifact
 

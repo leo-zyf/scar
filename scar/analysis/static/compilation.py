@@ -410,7 +410,7 @@ def compile_source_unit(prepared) -> SourceCompiledUnit:
             issues.append({"source_span": _reference_span(reference), "definition": encode(definition_id),
                            "status": "DUPLICATE_DEFINITION_SOURCE_MAPPING", "candidate_count": len(rows)})
 
-    from scar.analysis.source_module_lowering import module_unit
+    from scar.analysis.static.lowering.source_module_lowering import module_unit
     return SourceCompiledUnit(snapshot, namespace_root, source_sha256, root, clean_entries,
         tuple(issues), sys.implementation.name, tuple(sys.version_info[:3]), sys.version,
         sys.implementation.cache_tag, module_unit(prepared))

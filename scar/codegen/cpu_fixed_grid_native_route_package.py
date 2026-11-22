@@ -10,7 +10,7 @@ from scar.codegen.cpu_array_native_route_package import _pin
 from scar.codegen.cpu_catalog_runtime_package import _host, _signature, _write_json
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.aten_source_entry import LAUNCHER
+from scar.compiler.aten_entry_delivery import LAUNCHER
 from scar.compiler.entry_delivery import _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.cpu_fixed_grid_mapped_input_plan import SCHEMA as PLAN, verify_cpu_fixed_grid_mapped_input_plan

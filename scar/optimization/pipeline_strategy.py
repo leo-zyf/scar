@@ -8,7 +8,7 @@ from scar.compiler.pipeline_frontend import pipeline_digest, read_pipeline, vali
 from scar.compiler.validation import validate_plan
 from scar.ir.record_codec import loads
 from .optimizer import optimize_region
-from .pipeline_memory import plan_pipeline_memory
+from scar.optimization.pipeline_memory import plan_pipeline_memory
 from .resource_solver import _shape_instantiation, semantic_sha256
 
 

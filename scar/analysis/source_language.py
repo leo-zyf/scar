@@ -189,7 +189,7 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
     if pending_protocols is None:
         pending_protocols = model.protocols
     if language is not None and language.lambda_bodies:
-        from scar.analysis.source_lambda import validate_lambda_regions,root_projection as lambda_projection
+        from scar.analysis.static.lowering.source_lambda import validate_lambda_regions,root_projection as lambda_projection
         _need(control is not None,'Lambda body checking requires the original control context, not a fabricated suite')
         delegated=validate_lambda_regions(model,graph,interface,metadata,semantic,control,language,
             source_tree=source_tree,options=options,structural_only=structural_only,sealed_source=sealed_source)
@@ -228,36 +228,36 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
     constants = {row.operation: row for row in language.constants}
     _need(len(unpack) == len(language.unpackings) and len(slices) == len(language.slices)
           and len(constants) == len(language.constants), "duplicate language shape/provenance record")
-    from scar.analysis.source_call_validation import CALL_PROTOCOLS, validate_call_protocols
+    from scar.analysis.static.lowering.source_call_lowering import CALL_PROTOCOLS, validate_call_protocols
     calls = {identity for identity, protocol in protocols.items() if protocol.kind in CALL_PROTOCOLS}
-    from scar.analysis.source_function_try_validation import validate_function_try_protocols
+    from scar.analysis.static.lowering.source_function_try import validate_function_try_protocols
     try_protocols = validate_function_try_protocols(model, graph, interface, metadata, semantic, language, source_tree=source_tree)
-    from scar.analysis.source_function_definitions import validate_function_definitions
+    from scar.analysis.static.lowering.source_function_definitions import validate_function_definitions
     functions = validate_function_definitions(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_import_lowering import validate_imports
+    from scar.analysis.static.lowering.source_import_lowering import validate_imports
     imports = validate_imports(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_with import validate_with
+    from scar.analysis.static.lowering.source_with import validate_with
     withs = validate_with(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_set_lowering import validate_set_displays
+    from scar.analysis.static.lowering.source_set_lowering import validate_set_displays
     sets = validate_set_displays(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_comprehension_validation import validate_comprehensions
+    from scar.analysis.static.lowering.source_comprehension import validate_comprehensions
     comprehensions=validate_comprehensions(model,graph,interface,metadata,semantic,language,
         source_tree=source_tree,options=options,structural_only=structural_only)
-    from scar.analysis.source_displays import validate_starred_displays
+    from scar.analysis.static.lowering.source_displays import validate_starred_displays
     displays=validate_starred_displays(model,graph,interface,metadata,semantic,language,
         source_tree=source_tree,options=options,structural_only=structural_only)
-    from scar.analysis.source_slice_validation import validate_slice_access
+    from scar.analysis.static.lowering.source_slice import validate_slice_access
     slice_access = validate_slice_access(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
     from scar.analysis.source_expression_validation import validate_source_expressions
     expressions = validate_source_expressions(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only,
         pending_protocols=pending_protocols)
-    from scar.analysis.source_class_construction_validation import validate_class_constructions
+    from scar.analysis.static.lowering.source_class_construction import validate_class_constructions
     _need(not language.class_constructions or options is not None,
           'class construction requires original independently reconstructed compiler inputs')
     classes = validate_class_constructions(graph=graph,metadata=metadata,records=language.class_constructions,
@@ -339,7 +339,7 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
     # Verify normal-path target order and direct original assigned ports. A
     # nested unpack starts only when its outer siblings before it were stored.
     visiting = set()
-    from scar.analysis.source_comprehension_lowering import scoped_target_slots
+    from scar.analysis.static.lowering.source_comprehension import scoped_target_slots
     scoped_unpack_slots=scoped_target_slots(semantic,source_tree,language) if isinstance(source_tree,ast.Module) else {}
     def stores(identity):
         _need(identity not in visiting, "unpack target shape is cyclic")
@@ -376,7 +376,7 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
         visiting.remove(identity)
         return block, position
     if Capability.UNPACK_TARGETS_314_V1 in language.capabilities:
-        from scar.analysis.source_unpack_lowering import validate_unpack_targets
+        from scar.analysis.static.lowering.source_unpack_lowering import validate_unpack_targets
         validate_unpack_targets(model,graph,interface,metadata,semantic,language,
             source_tree=source_tree,options=options,structural_only=structural_only)
     else:
@@ -501,7 +501,7 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
                   "constant provenance is not backed by the independently loaded CodeWitness")
             _need(len(constant.constant_path) == 1, "this capability only indexes direct code constants")
             if literal_constant:
-                from scar.analysis.source_constant_lowering import witnessed_constant
+                from scar.analysis.static.lowering.source_constant_lowering import witnessed_constant
                 witnessed_constant(evidence, node, index=constant.constant_path[0])
                 continue
             candidates = [row for row in dis.get_instructions(evidence.code)
@@ -515,12 +515,12 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
                   "source constant does not name its exact witnessed LOAD_CONST slot")
     call_protocols = validate_call_protocols(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_string import validate_string_source
+    from scar.analysis.static.lowering.source_string import validate_string_source
     string_protocols = validate_string_source(model, graph, interface, metadata, semantic,
         source_tree=source_tree, options=options, structural_only=structural_only, language=language)
     tuple_ownership = None
     if Capability.SLICE_KEYS in language.capabilities:
-        from scar.analysis.source_displays import validate_tuple_key_ownership
+        from scar.analysis.static.lowering.source_displays import validate_tuple_key_ownership
         tuple_ownership = validate_tuple_key_ownership(model, graph, interface, metadata, semantic,
             source_tree=source_tree, options=options, structural_only=structural_only, language=language)
     _need(len({row.name for row in language.compiler_locals}) == len(language.compiler_locals),

@@ -6,7 +6,7 @@ import ast
 import dis
 from dataclasses import replace
 from types import CodeType
-from scar.analysis.source_class_lowering import (
+from scar.analysis.static.lowering.source_class_lowering import (
     _resolve_class,
     _class_header_inputs,
     _class_scope_statements,
@@ -549,7 +549,7 @@ def require_valid_class_suite(prepared,definition,source,*,code_evidence,result)
     method_carriers={}
     rows=tuple(dis.get_instructions(evidence.code,adaptive=False,show_caches=False))
     applications=set()
-    from scar.analysis.source_class_lowering import _source_reference
+    from scar.analysis.static.lowering.source_class_lowering import _source_reference
     for n in ast.walk(node):
         if not isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)):continue
         ref_n=_source_reference(prepared,n)

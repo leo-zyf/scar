@@ -22,7 +22,7 @@ import warnings
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program.call_edges import CapturedCode
 from scar.ir.record_codec import decode, loads, encode
 from scar.trace.code_snapshot import describe_code

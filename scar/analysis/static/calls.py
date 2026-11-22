@@ -572,7 +572,7 @@ class StaticCallSession:
             overlay = decode_frame_body(document["module"])
             from scar.ir.program.entry_namespaces import CompilerStructuredFrameBodyOverlay
             if type(overlay) is CompilerStructuredFrameBodyOverlay:
-                from scar.analysis.source_module_compiler_lowering import validate_compiler_prologue_core
+                from scar.analysis.static.lowering.source_module_compiler_lowering import validate_compiler_prologue_core
                 validate_compiler_prologue_core(overlay, graph)
             roots = [module.initializer for module in context.semantic.modules.values()
                      if module.path == context.unit["path"] and module.fingerprint == metadata.source.fingerprint]

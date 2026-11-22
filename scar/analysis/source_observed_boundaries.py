@@ -26,7 +26,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import source_observations as R, source_productions as P, view as V
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.program.source_observations import ObservedSourceRequestCodeLink

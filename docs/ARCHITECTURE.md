@@ -15,7 +15,7 @@
 | 运行证据 | 对照实际调用与资源活动，记录静态分支中仍待判定的字段 | 有界 trace、调用锚点和资源观测 | 可重放的执行证据和绑定记录。Python 建图可消费这组材料 |
 | 硬件建模 | 发布平台容量、拓扑和访问关系 | 本机 CPU、NUMA、内存、存储和设备库存 | `hardware/result.json` 及其引用的资源表。实测带宽和时长作为独立成本证据 |
 
-Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/python.py` 和 `compiler/backend/python.py`。前端统一管理源码目录构建和分层 worker。原生语言适配器是 `compiler/frontend/clang.py` 和 `fortran.py`。`frontend/graph.py::build_graph` 接收锁定请求，交出程序图、跨单元连线、硬件和每个编译单元的证据。入口无法生成 IR 时，程序引用为空，流程在首个需要程序图的层给出阻塞原因。跨语言和间接调用的绑定覆盖以证据为准。
+Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/python.py` 和 `compiler/backend/python.py`。源码构造的降级规则与对应的结构校验集中在 `analysis/static/lowering/`，消费带类型和绑定的语法节点并生成图操作与源码锚点。原生语言适配器是 `compiler/frontend/clang.py` 和 `fortran.py`。`frontend/graph.py::build_graph` 接收锁定请求，交出程序图、跨单元连线、硬件和每个编译单元的证据。入口无法生成 IR 时，程序引用为空，流程在首个需要程序图的层给出阻塞原因。跨语言和间接调用的绑定覆盖以证据为准。
 
 ## 2. 中端
 

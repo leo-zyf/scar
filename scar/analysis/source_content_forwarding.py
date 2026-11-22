@@ -10,11 +10,11 @@ from collections import Counter,defaultdict
 from dataclasses import replace
 from types import SimpleNamespace as NS
 
-from scar.analysis.source_binding_effects import LocalReadEffectContext
+from scar.analysis.source_frame_binding_effects import LocalReadEffectContext
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
 from scar.ir.program import data_materials as C, data_materials as F
 from scar.ir.program.control import LanguageCompletionKind as Completion

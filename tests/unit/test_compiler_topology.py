@@ -86,7 +86,7 @@ def test_c3t_compiler_topology(family, monkeypatch):
     import _ast
     import scar.analysis.compiler_topology as api
     from scar.analysis.compiler_topology_view import CompilerTopologyView
-    from scar.analysis.source_context_view import SourceContextView
+    from scar.analysis.source_contexts import SourceContextView
 
     def built(source, *, mode='exec', max_tokens=2_000_000):
         inputs = _inputs(source, mode=mode, max_tokens=max_tokens)

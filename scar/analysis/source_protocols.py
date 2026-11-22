@@ -211,7 +211,7 @@ class SourceProtocolFrontierProvider:
         from pathlib import Path
         from scar.analysis.normal_output import write_table
         from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-        from scar.analysis.source_template_links import _json
+        from scar.analysis.source_templates import _json
         from scar.analysis.source_value_flow import _artifact
         from scar.ir.record_codec import encode
         out=Path(out).absolute()

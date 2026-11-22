@@ -462,10 +462,7 @@ def _replay_single(manifest, member):
             mapped_input_proof = None
             if 'source_entry_cli' in manifest:
                 from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
-                from scar.compiler.aten_source_entry import (
-                    ABI_FILE, BINDING_FILE, LAUNCHER, render_source_launcher, source_entry_description,
-                    verify_mapped_input_emission,
-                )
+                from scar.compiler.aten_entry_delivery import ABI_FILE, BINDING_FILE, LAUNCHER, render_source_launcher, source_entry_description, verify_mapped_input_emission
                 from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
                 from scar.compiler.compile_aten_recurrence import _render_recurrence_launch
 

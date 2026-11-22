@@ -102,7 +102,7 @@ def publish_activation_interfaces(provider,out,*,program,body_graph):
 
 
 def main(argv=None):
-    from scar.compiler.stateful_frontend import discover_stateful_regions
+    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build',required=True);parser.add_argument('--region');parser.add_argument('--out',required=True)

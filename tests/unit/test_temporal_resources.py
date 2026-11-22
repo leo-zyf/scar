@@ -7,7 +7,7 @@ import pytest
 from test_versioned_schedule import ordered_state_schedule
 from scar.analysis.schedule_time import attach_task_time
 from scar.analysis.target_graph import TargetHardwareGraph, build_target_graph
-from scar.analysis.temporal_resources import derive_temporal_resources
+from scar.analysis.software_resources import derive_temporal_resources
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.program import target_hardware as H
 from scar.ir.temporal_resources import (

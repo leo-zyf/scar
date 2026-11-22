@@ -1,6 +1,6 @@
 """Shared/cyclic data references keep occurrence spans and raw bytes."""
 from scar.analysis.source_data_materials import parse_yaml_material
-from scar.analysis.source_data_material_store import DataMaterialStore,write_data_material
+from scar.analysis.source_data_materials import DataMaterialStore, write_data_material
 from scar.ir.program.data_materials import DataNodeKind
 
 

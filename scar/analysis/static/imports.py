@@ -578,7 +578,7 @@ def derive_import_from_interfaces(body,*,text,semantic,module,metadata,links,pro
         _need(len(matches)==1,'function import owner is not its original lexical compiler scope')
     if module is not None:
         constants=module.constants
-        from scar.analysis.source_module_lowering import _mapping_source_instructions,mapping_import_plan
+        from scar.analysis.static.lowering.source_module_lowering import _mapping_source_instructions,mapping_import_plan
         evidence=SimpleNamespace(code=code)
         # Only the module helper's instruction splitter needs this code here;
         # the root CodeRef itself has already been independently replayed.
@@ -587,7 +587,7 @@ def derive_import_from_interfaces(body,*,text,semantic,module,metadata,links,pro
         namespaces=(frame.builtins_namespace,frame.globals_namespace,frame.locals_namespace)
     else:
         language=decode_language_overlay(body.document['language']);constants=language.constants
-        from scar.analysis.source_import_lowering import compiler_import
+        from scar.analysis.static.lowering.source_import_lowering import compiler_import
         instructions=tuple(dis.get_instructions(code,adaptive=False,show_caches=False))
         environments=[env for env in body.graph.environments
             if env.region==body.graph.root and env.code_definition==body.namespace.definition]

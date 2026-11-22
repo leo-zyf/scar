@@ -5,7 +5,7 @@ from hashlib import sha256
 from scar.analysis.cpu_array_native_route import verify_cpu_array_native_route
 from scar.analysis.cpu_native_phase_sites import _source_spans
 from scar.analysis.replay_transaction import replay_transaction
-from scar.analysis.static_cpp_source import read_static_cpp_source
+from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.codegen import native_array_entry
 from scar.codegen import native_seeded_array_task_entry as generator
 from scar.ir.execution_recipe import _canonical, read_artifact

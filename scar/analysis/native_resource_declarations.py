@@ -7,7 +7,7 @@ import time
 
 from scar.analysis.python_binding_query import PythonBindingGraph
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json,_stream
+from scar.analysis.source_templates import _json, _stream
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program import native_contracts as R
 

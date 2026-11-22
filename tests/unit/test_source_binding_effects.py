@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scar.analysis import source_binding_effects as E, source_name_definitions as solver
+from scar.analysis import source_frame_binding_effects as E, source_name_definitions as solver
 from scar.analysis import source_frame_binding_effects as I
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_bindings as B, name_flow as A

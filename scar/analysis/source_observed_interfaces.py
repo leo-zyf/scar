@@ -23,7 +23,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.observed.call_bindings import recover_positional_receiver
@@ -53,7 +53,7 @@ def _pins():
     from scar.analysis import source_function_connections, source_observed_materials, source_fact_materials
     from scar.analysis.static import compilation as static_compilation
     from scar.analysis.observed import call_bindings as observed_positional_receiver
-    from scar.analysis import source_frame_binding_effects
+    from scar.analysis import source_frame_binding_effects as source_frame_binding_effects
     from scar.ir import record_codec
     from scar.trace import python_call_targets as operand_bytecode
     from scar.ir.program import source_observations as code_types

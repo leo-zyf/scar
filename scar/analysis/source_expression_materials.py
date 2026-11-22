@@ -13,7 +13,7 @@ from pathlib import Path
 import time
 
 from scar.analysis.frontend_bindings import read_frontend_bindings
-from scar.analysis.source_context_view import SourceContextView
+from scar.analysis.source_contexts import SourceContextView
 from scar.analysis.source_expression_rules import SourceExpressionRules, SourceRuleError
 from scar.analysis.source_statement_rules import SourceStatementRules
 from scar.analysis.source_root_rules import SourceRootRules
@@ -44,20 +44,16 @@ def _json(value):
 def _implementation():
     package = Path(__file__).resolve().parents[1]
     names = ('analysis/source_expression_materials.py', 'analysis/source_expression_rules.py',
-        'analysis/source_displays.py', 'analysis/source_string.py',
-        'analysis/source_comprehension_rules.py',
-        'analysis/await_protocol.py',
+        'analysis/static/lowering/source_displays.py', 'analysis/static/lowering/source_string.py',
+        'analysis/static/lowering/source_comprehension.py',
         'analysis/await_protocol.py', 'ir/program/delegation_signatures.py',
         'analysis/source_statement_interfaces.py',
         'analysis/source_callable_rules.py', 'analysis/source_deferred_interfaces.py',
-        'analysis/source_statement_rules.py', 'analysis/source_statement_rules.py', 'analysis/statement_bindings.py',
-        'analysis/statement_bindings.py',
-        'analysis/source_definition_interfaces.py', 'analysis/statement_bindings.py',
-        'analysis/source_statement_rules.py',
-        'analysis/source_statement_exceptions.py',
+        'analysis/source_statement_rules.py', 'analysis/statement_bindings.py',
+        'analysis/source_definition_interfaces.py',
         'analysis/source_statement_exceptions.py',
         'analysis/source_control.py',
-        'analysis/source_pattern_interfaces.py', 'analysis/source_statement_rules.py',
+        'analysis/source_pattern_interfaces.py',
         'analysis/source_root_interfaces.py', 'analysis/source_root_rules.py',
         'analysis/source_evaluation_interfaces.py', 'analysis/source_evaluation_rules.py',
         'analysis/source_class_namespace_interfaces.py', 'analysis/source_class_namespace_rules.py',
@@ -65,10 +61,9 @@ def _implementation():
         'analysis/source_scope_annotation_interfaces.py',
         'analysis/source_annotation_state_interfaces.py','analysis/annotation_state.py',
         'analysis/source_compilation_contexts.py',
-        'analysis/source_compilation_flow.py',
         'analysis/source_core_interfaces.py',
         'analysis/source_syntax.py',
-        'analysis/type_parameter_rules.py', 'analysis/type_parameter_rules.py',
+        'analysis/type_parameter_rules.py',
         'analysis/source_productions.py', 'analysis/program_types.py',
         'ir/program/source_productions.py', 'ir/record_codec.py')
     return {name: sha256((package / name).read_bytes()).hexdigest() for name in names}

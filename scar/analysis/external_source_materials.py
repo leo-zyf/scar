@@ -19,9 +19,9 @@ from types import CodeType
 from scar.analysis.compiled_local_interfaces import build_material_interfaces, CompiledLocalInterfaces
 from scar.analysis.observed_code_correspondence import build_local_material, ObservedCompiledLocalMaterial
 from scar.analysis.observed_external_sources import ExternalSourceMatches
-from scar.analysis.source_interface_store import file_receipt, projection_pins
+from scar.analysis.source_interface_build import file_receipt, projection_pins
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.trace.code_snapshot import describe_code
 
 
@@ -104,7 +104,7 @@ def _close_worker():
 
 
 def _initialize_worker(matches_path, receipt, pins, adapter_directory):
-    from scar.analysis.source_template_workers import _initialize_worker as initialize
+    from scar.analysis.source_templates import _initialize_worker as initialize
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
     global _MATCHES, _WORKER, _PINS
     initialize()
@@ -151,7 +151,7 @@ def build_external_materials(matches_path, out, *, jobs=4, adapter_directory=Non
     """Build actual F4/interface leaves covering every matched input CodeID."""
     from scar.analysis.source_symbol_context_adapter import DEFAULT
     from scar.analysis.source_symbol_variants import SymbolVariantWorker
-    from scar.analysis.source_template_workers import _torch_guard
+    from scar.analysis.source_templates import _torch_guard
     started = time.monotonic(); matches_path = Path(matches_path).absolute(); out = Path(out).absolute()
     if matches_path.is_file(): matches_path = matches_path.parent
     if out.resolve() != out or out.exists() or type(jobs) is not int or not 1 <= jobs <= 8:

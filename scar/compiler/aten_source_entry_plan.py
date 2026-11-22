@@ -6,9 +6,7 @@ import shutil
 from tempfile import TemporaryDirectory
 
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.aten_source_entry import (
-    ABI_FILE, BINDING_FILE, LAUNCHER, _read, _write, render_source_launcher, source_entry_description,
-)
+from scar.compiler.aten_entry_delivery import ABI_FILE, BINDING_FILE, LAUNCHER, _read, _write, render_source_launcher, source_entry_description
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 

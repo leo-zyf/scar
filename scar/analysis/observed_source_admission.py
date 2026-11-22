@@ -16,7 +16,7 @@ from scar.analysis.observed_source_catalog import ObservedSourceCatalog, SCHEMA,
 from scar.analysis.observed_code_correspondence import ObservedCompiledLocalMaterial, _COMPATIBLE_V1_PRODUCERS
 from scar.analysis.observed_external_sources import ExternalSourceMatches, match_external_sources
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program.call_edges import CallEdgeBudget
 
 

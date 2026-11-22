@@ -5,7 +5,7 @@ import json
 import pytest
 
 from test_temporal_resources import inputs
-from scar.analysis.temporal_resources import derive_temporal_resources
+from scar.analysis.software_resources import derive_temporal_resources
 from scar.ir.activity_costs import (
     ActivityCost, ActivityCostTable, CostBasis as B, CostCoverage as C,
     CostInterval, IntervalKind, activity_cost_document, activity_cost_from_dict,

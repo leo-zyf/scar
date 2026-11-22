@@ -17,7 +17,7 @@ from scar.analysis.source_declared_catalog import DeclaredSourceCatalog, read_so
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.launch_provenance import FactMaterialRoute
 from scar.ir.record_codec import decode, encode

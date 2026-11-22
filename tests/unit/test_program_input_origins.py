@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from scar.ir.execution.validity_budget import ValidityBudget
-from scar.ir.program.input_origins import _input_origins, input_origins
+from scar.ir.program.request_inputs import _input_origins, input_origins
 from scar.ir.program.ids import OperationID, UseID
 from scar.ir.program.model import (
     LiteralEvaluation, LiteralOrigin, OperationResult, ProtocolValue,

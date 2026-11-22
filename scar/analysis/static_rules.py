@@ -109,7 +109,7 @@ def _stat(path):
 
 def _reference(module, function, kind, phase):
     module = "scar.analysis." + module
-    file = Path(__file__).parent / (module.rsplit(".", 1)[1] + ".py")
+    file = Path(__file__).parent.joinpath(*module.split(".")[2:]).with_suffix(".py")
     digest, names = _source(module, _stat(file))
     if function not in names:
         raise ValueError("lowering rule function no longer exists: " + module + "." + function)
@@ -131,32 +131,32 @@ def _rule(node):
     module, function = "structured_lowering", "StructuredBuilder.expr"
     compiler = False
     if isinstance(node, _FUNCS):
-        module, function = "source_function_definitions", "lower_function_definition"
+        module, function = "static.lowering.source_function_definitions", "lower_function_definition"
         caps, compiler = [C.NESTED_FUNCTION_314_V1], True
         if isinstance(node, ast.AsyncFunctionDef) or node.decorator_list or getattr(node, "type_params", ()) or any(x is not None for x in node.args.kw_defaults):
             unsupported = "Nested creation currently rejects async/decorators/type parameters/keyword defaults (compiler_plan)."
     elif isinstance(node, ast.ClassDef):
-        module, function = 'source_class_construction_lowering', 'lower_class_construction'
+        module, function = 'static.lowering.source_class_construction', 'lower_class_construction'
         caps, compiler = [C.CLASS_CONSTRUCTION_314_V1, C.FUNCTION_TRY_314_V1], True
         if node.type_params or any(isinstance(base, ast.Starred) for base in node.bases) or any(
                 keyword.arg is None for keyword in node.keywords):
             unsupported = 'Class type parameters, starred bases and expanded keywords require a later explicit profile.'
     elif isinstance(node, ast.Lambda):
-        module, function = "source_lambda", "lower_lambda"
+        module, function = "static.lowering.source_lambda", "lower_lambda"
         caps, compiler = [C.LAMBDA_EXPRESSION_314_V1], True
         needs.append(_needs("STATIC_CHILD_CODE_AND_CELLS", "Use this lambda's exact child code/constants and closure layout; do not substitute parent co_consts."))
     elif isinstance(node, _COMPS):
-        module, function = "source_comprehension_lowering", "lower_comprehension"
+        module, function = "static.lowering.source_comprehension", "lower_comprehension"
         caps, compiler = [C.COMPREHENSION_314_V1, C.SOURCE_EXPRESSIONS_314_V1,
                           C.SOURCE_REFERENCE_LIFETIME_314_V1], True
-        from scar.analysis.source_comprehension_lowering import shape
+        from scar.analysis.static.lowering.source_comprehension import shape
         if node.generators and not isinstance(node.generators[0].target,ast.Name):
             caps.extend((C.COMPREHENSION_TARGETS_314_V1,C.FUNCTION_TRY_314_V1))
         if not shape(node,recursive_targets=True):
             unsupported = "Current comprehension shape requires one synchronous clause, recursive Tuple/List-to-Name target, no filters/nesting/walrus/suspension."
         needs.append(_needs("COMPREHENSION_LOCAL_SCOPE_AND_UNWIND", "Recursive target bindings use original comprehension slots; failed partial unpack preserves earlier writes, releases local references and forwards original propagation/world to enclosing cleanup."))
     elif isinstance(node, ast.GeneratorExp):
-        module, function = "source_generator_create", "lower_creation"
+        module, function = "static.lowering.source_generator_create", "lower_creation"
         # Its deferred elt has its own SG/source children, intentionally not
         # traversed as eager parent code by _owned. The lazy builder still
         # needs the generic expression capability, even when the outer body
@@ -173,35 +173,35 @@ def _rule(node):
                 "The lazy target-child dispatcher has no BoolOp adapter; enclosing creation does not execute deferred lambda or generator bodies."))
         needs.append(_needs("STATIC_CHILD_CODE_AND_CELLS", "Creation and lazy body remain distinct; child .0/freevars/constant slot must match. Drive/close are not selected by creation."))
     elif isinstance(node, ast.Set):
-        module, function = "source_set_lowering", "lower_set_display"
+        module, function = "static.lowering.source_set_lowering", "lower_set_display"
         caps, compiler = [C.SET_DISPLAY_314_V1], True
         if not 0 < len(node.elts) <= 30 or any(isinstance(x, ast.Starred) for x in node.elts):
             unsupported = "Set display requires 1..30 non-starred elements."
     elif isinstance(node, (ast.Tuple, ast.List)) and isinstance(node.ctx, ast.Store):
-        module, function = "source_unpack_lowering", "lower_unpack_target"
+        module, function = "static.lowering.source_unpack_lowering", "lower_unpack_target"
         caps, compiler = [C.UNPACK_TARGETS_314_V1], True
         if any(isinstance(x, ast.Starred) for x in ast.walk(node)):
             unsupported = "Unpack target star binding has no current target adapter."
         needs.append(_needs("STATIC_BINDING_CLASSIFICATION", "Name leaves must resolve to original local/cell/global slots; heap leaves obey _check and exact ordered compiler consumption."))
     elif isinstance(node, (ast.Tuple, ast.List)) and any(isinstance(x, ast.Starred) for x in node.elts):
-        module, function = "source_displays", "lower_starred_display"
+        module, function = "static.lowering.source_displays", "lower_starred_display"
         caps, compiler = [C.STARRED_DISPLAY_314_V1, C.SOURCE_EXPRESSIONS_314_V1,
                           C.SOURCE_REFERENCE_LIFETIME_314_V1], True
         if len(node.elts) > 30:
             unsupported = "Current starred display supports at most 30 elements."
     elif isinstance(node, ast.Call):
         if any(isinstance(x, ast.Starred) for x in node.args) or any(x.arg is None for x in node.keywords):
-            module, function = "source_call_lowering", "lower_kwargs_call"
+            module, function = "static.lowering.source_call_lowering", "lower_kwargs_call"
             caps, compiler = [C.CALL_KWARGS_314_V1, C.CALL_EXPANSION_314_V1], True
             needs.append(_needs("STATIC_CALL_FUNCTION_EX_SEQUENCE", "Validate exact call position, ordered positional/keyword runs, merge and release protocol; dict display update is a different rule."))
     elif isinstance(node, ast.Constant):
         value = node.value
         if not (value is None or type(value) in (bool, int, str) or type(value) is float and math.isfinite(value)):
-            module, function = "source_constant_lowering", "lower_code_constant"
+            module, function = "static.lowering.source_constant_lowering", "lower_code_constant"
             caps, compiler = [C.CODE_CONSTANTS_314_V1], True
             needs.append(_needs("STATIC_CODE_CONSTANT_SLOT", "Exact original LOAD_CONST position/index/content is required; no active object identity is inferred."))
         else:
-            module, function = "source_expression_lowering", "lower_source_literal"
+            module, function = "static.lowering.source_expression_lowering", "lower_source_literal"
             caps = [C.SOURCE_EXPRESSIONS_314_V1]
     elif isinstance(node, ast.Name):
         module, function = "environment_lowering", "StructuredEnvironmentBuilder.read_source_name" if isinstance(node.ctx, ast.Load) else "StructuredEnvironmentBuilder.store"
@@ -210,7 +210,7 @@ def _rule(node):
         elif isinstance(node.ctx, ast.Store):
             caps = [C.SOURCE_EXPRESSIONS_314_V1]
     elif isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Store):
-        module, function = "source_heap_lowering", "store_heap_target"
+        module, function = "static.lowering.source_heap_lowering", "store_heap_target"
         if isinstance(node, ast.Attribute) and node.attr.startswith("__") and not node.attr.endswith("__"):
             unsupported = "Private heap assignment requires an unavailable exact compiler-class mangling rule."
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice):
@@ -220,7 +220,7 @@ def _rule(node):
             caps.append(C.SLICE_ACCESS_314_V1)
             compiler = True
     elif isinstance(node, ast.Slice) or isinstance(node, ast.Subscript):
-        module = "source_slice_lowering"
+        module = "static.lowering.source_slice"
         function = "lower_slice" if isinstance(node, ast.Slice) else "lower_subscript"
         # Ordinary non-tuple keys never call _instructions. Slice and extended
         # tuple keys do; capability presence alone is not a compiler dependency.
@@ -230,31 +230,31 @@ def _rule(node):
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice) and node.slice.step is None and not all(x is None or isinstance(x, ast.Constant) for x in (node.slice.lower, node.slice.upper)):
             needs.append(_needs("STATIC_SLICE_SEQUENCE", "Compiler must select a supported BINARY_SLICE/BUILD_SLICE protocol; source shape alone cannot decide."))
     elif isinstance(node, ast.Dict):
-        module, function = "source_mapping_lowering", "lower_dictionary"
+        module, function = "static.lowering.source_mapping_lowering", "lower_dictionary"
         caps = [C.SOURCE_EXPRESSIONS_314_V1, C.SOURCE_REFERENCE_LIFETIME_314_V1]
     elif isinstance(node, ast.JoinedStr):
-        module, function = "source_string", "lower_joined_string"
+        module, function = "static.lowering.source_string", "lower_joined_string"
         if len(node.values) > 30:
             unsupported = "Incremental f-string list/append/join for more than 30 pieces is not implemented."
     elif isinstance(node, ast.FormattedValue):
-        module, function = "source_string", "_formatted_value"
+        module, function = "static.lowering.source_string", "_formatted_value"
         if node.conversion not in (-1, 115, 114, 97):
             unsupported = "Unknown f-string conversion protocol."
     elif isinstance(node, (ast.BoolOp, ast.IfExp)):
-        module = "source_conditional_lowering"
+        module = "static.lowering.source_conditional_lowering"
         function = "lower_bool_expression" if isinstance(node, ast.BoolOp) else "lower_if_expression"
     elif isinstance(node, ast.BinOp):
-        module, function = "source_expression_lowering", "lower_source_expression"
+        module, function = "static.lowering.source_expression_lowering", "lower_source_expression"
         caps, compiler = [C.SOURCE_EXPRESSIONS_314_V1], True
     elif isinstance(node, (ast.UnaryOp, ast.Attribute, ast.Tuple, ast.List)):
         pass
     elif isinstance(node, ast.Compare):
-        module, function = "source_expression_lowering", "lower_source_expression"
+        module, function = "static.lowering.source_expression_lowering", "lower_source_expression"
         caps, compiler = [C.SOURCE_EXPRESSIONS_314_V1], True
         if len(node.ops) != 1:
             unsupported = "Current StructuredBuilder.expr has no chained comparison lowering."
     elif isinstance(node, ast.Try):
-        module = "source_function_try_lowering"
+        module = "static.lowering.source_function_try"
         function = "FunctionTryBuilder.try_except" if node.handlers else "FunctionTryBuilder.try_finally"
         caps = [C.FUNCTION_TRY_314_V1]
         if (node.handlers and node.finalbody or not (node.handlers or node.finalbody)
@@ -262,13 +262,13 @@ def _rule(node):
             unsupported = "_try_shape rejects nested/combined try and nested yield/await transfers."
         needs.append(_needs("PAIRED_EXCEPTION_AND_CLEANUP_PROTOCOL", "Reuse existing C0/C1 pending, current propagation packet and namespace cleanup; no runtime traceback observation is asserted."))
     elif isinstance(node, ast.With):
-        module, function = "source_with", "FunctionWithBuilder.with_statement"
+        module, function = "static.lowering.source_with", "FunctionWithBuilder.with_statement"
         caps, compiler = [C.FUNCTION_TRY_314_V1, C.FUNCTION_WITH_314_V1], True
         if len(node.items) != 1:
             unsupported = "Current with_shape accepts exactly one synchronous item."
         needs.append(_needs("CLEANUP_CONTEXT_CHECK", "Current with_statement rejects nesting inside an active cleanup/try corridor; enclosing syntax must be checked."))
     elif isinstance(node, ast.AugAssign):
-        module, function = "source_function_try_lowering", "FunctionTryBuilder.augmented_assignment"
+        module, function = "static.lowering.source_function_try", "FunctionTryBuilder.augmented_assignment"
         caps = [C.FUNCTION_TRY_314_V1]
         if isinstance(node.target, (ast.Attribute, ast.Subscript)):
             caps.append(C.HEAP_AUGASSIGN_314_V1)
@@ -279,13 +279,13 @@ def _rule(node):
         else:
             needs.append(_needs("ORDINARY_LOCAL_AUGASSIGN_TARGET", "Name target must be an ordinary local, not cell/global; heap target retains its receiver/key once."))
     elif isinstance(node, (ast.Import, ast.ImportFrom)):
-        module, function = "source_import_lowering", "lower_import"
+        module, function = "static.lowering.source_import_lowering", "lower_import"
         caps, compiler = [C.FUNCTION_IMPORT_314_V1], True
         if any(x.name == "*" for x in node.names) or isinstance(node, ast.Import) and any("." in x.name and x.asname for x in node.names):
             unsupported = "Current import rule rejects star binding and dotted Import with alias traversal."
         needs.append(_needs("STATIC_IMPORT_BINDING_LAYOUT", "Current producer requires exact fast-local, non-cell stores; source/import candidates do not prove loaded ModuleObject."))
     elif isinstance(node, (ast.AnnAssign, ast.Assert, ast.Raise)):
-        module = "source_statement_lowering"
+        module = "static.lowering.source_statement_lowering"
         function = {ast.AnnAssign: "annotated_assignment", ast.Assert: "assert_statement", ast.Raise: "raise_statement"}[type(node)]
         if isinstance(node, ast.Assert):
             needs.append(_needs("COMPILER_OPTIMIZE_ZERO", "Assertion lowering is conditional on compile optimize=0."))
@@ -349,7 +349,7 @@ def plan_static_entry(tree, entry, *, path, fingerprint):
         caps = []  # Module mapping protocols do not use function fast-local capabilities.
         base_needs.append(_needs("STATIC_COMPILER_MODULE_ROOT", "Compile retained text without exec; use the original MODULE initializer, empty compiler path and a source-compilation frame root, never CapturedCode."))
         base_needs.append(_needs("MAPPING_PREFIX_AND_RESIDUAL", "Mechanically select the supported ordered mapping prefix; keep the exact remaining source slice as REQUIRED_EXPANSION with its original namespace and CFG."))
-        add(node, entry["ast_path"], "source_module_lowering", "lower_module_entry",
+        add(node, entry["ast_path"], "static.lowering.source_module_lowering", "lower_module_entry",
             needs=base_needs, status="NEEDS_STATIC_COMPILER")
         roots = [(child, f"{entry['ast_path']}.body[{index}]") for index, child in enumerate(node.body)]
     elif class_entry:
@@ -366,7 +366,7 @@ def plan_static_entry(tree, entry, *, path, fingerprint):
         add(node, entry["ast_path"], "environment_lowering", "StructuredEnvironmentBuilder.build_function", needs=base_needs)
         roots = [(child, f"{entry['ast_path']}.body[{index}]") for index, child in enumerate(node.body)]
     else:
-        module, function = ("source_module_lowering", "lower_module_entry") if kind == "MODULE" else ("environment_lowering", "StructuredEnvironmentBuilder.build_function")
+        module, function = ("static.lowering.source_module_lowering", "lower_module_entry") if kind == "MODULE" else ("environment_lowering", "StructuredEnvironmentBuilder.build_function")
         base_needs.append(_needs("PURE_STATIC_ENTRY_ADAPTER", "Existing function adapter rejects async/yield bodies; module has partial mapping profiles, class/annotation/type and standalone expression scopes need their exact entry adapter. Enclosing-body expression producers remain reusable."))
         add(node, entry["ast_path"], module, function, needs=base_needs, status="ENTRY_ADAPTER_MISSING")
         # Rules below remain requirements for a missing entry adapter, not
@@ -385,7 +385,7 @@ def plan_static_entry(tree, entry, *, path, fingerprint):
         for child, child_path in _owned(root, root_path):
             if isinstance(child, (ast.stmt, ast.expr, ast.Slice, *_METADATA)):
                 if mapping_entry:
-                    add(child, child_path, "source_module_lowering", "mapping_prefix_selection",
+                    add(child, child_path, "static.lowering.source_module_lowering", "mapping_prefix_selection",
                         needs=[_needs("MAPPING_PREFIX_ADMISSION", "This predicate checks exact source/compiler mapping in source order; unsupported suffix members remain typed residual source, not function-frame operations.")],
                         status="REQUIRES_MAPPING_SELECTION")
                     continue
@@ -393,7 +393,7 @@ def plan_static_entry(tree, entry, *, path, fingerprint):
                     chosen=[C.COMPREHENSION_314_V1]
                     # Target-tree syntax is consumed by its owning comp. It
                     # must not accidentally select the outer-frame unpack ABI.
-                    add(child,child_path,"source_comprehension_lowering","lower_comprehension",chosen,
+                    add(child,child_path,"static.lowering.source_comprehension","lower_comprehension",chosen,
                         [_needs("COMPREHENSION_OWNED_TARGET", "Original target occurrence belongs to its comprehension scope; the owning producer binds its original slots once.")])
                     continue
                 module, function, chosen, needs, unsupported = _rule(child)

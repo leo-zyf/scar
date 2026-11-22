@@ -12,7 +12,7 @@ from .protocol_connections import RawOperandSource, RequestStateCondition, Reque
 from .protocols import (AdmissionPredicate, BodyStateCondition, BodyStatePredicateRule,
                         DriverSubject, HostTerminal, OwnedUse, ProtocolProfile, ReferenceIsNoneCondition,
                         RequestProcessing, RequestProcessingRule)
-from .request_inputs import _none_content
+from scar.ir.program.request_inputs import _none_content
 from scar.ir.program.session_flow import _aggregate, _answer, _declarations, _prepare, _read_branch_support
 from .structured import ControlEdgeReference
 

@@ -789,7 +789,7 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     from scar.analysis.compiler_topology import compiler_topology_document
     from scar.analysis.compiler_symbols import compiler_symbols_document
     from scar.analysis.frontend_bindings import read_frontend_bindings
-    from scar.analysis.source_context_view import SourceContextView
+    from scar.analysis.source_contexts import SourceContextView
     from scar.ir.program.source_syntax import SourceSyntaxMaterial
     from scar.ir.record_codec import decode
 

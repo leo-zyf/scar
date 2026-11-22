@@ -14,15 +14,15 @@ import json
 from pathlib import Path
 import sys
 
-from scar.analysis import source_contexts as C, source_context_view, source_role_materials as source_roles, source_syntax
+from scar.analysis import source_contexts as C, source_contexts as source_context_view, source_role_materials as source_roles, source_syntax
 from scar.analysis import compiler_stage_cache
-from scar.analysis import source_compiled_values as compiled, source_text_values, source_compilation_contexts
+from scar.analysis import source_compiled_values as compiled, source_values as source_text_values, source_compilation_contexts as source_compilation_contexts
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import code_identity as V, code_identity as X, source_bytes as S
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

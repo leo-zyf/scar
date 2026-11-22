@@ -13,7 +13,7 @@ from scar.analysis.program_view_shard_reader import open_source_graph_shard
 from scar.analysis.state_materialization import local_read_tracks
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import source_productions as P, state_ports as S
 from scar.ir.record_codec import _decode, _record_tags, encode, loads

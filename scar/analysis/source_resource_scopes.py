@@ -23,7 +23,7 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.program_view import ProgramView,_digest
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_symbol_variants import _table

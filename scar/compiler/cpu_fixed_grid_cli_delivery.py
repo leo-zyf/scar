@@ -11,7 +11,7 @@ import subprocess
 from time import perf_counter_ns
 
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler import aten_source_entry, cpu_entry_replay, fixed_grid_source_provider
+from scar.compiler import aten_entry_delivery as aten_source_entry, cpu_entry_replay, fixed_grid_source_provider
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.entry_delivery import _aten, _aten_validation, _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact

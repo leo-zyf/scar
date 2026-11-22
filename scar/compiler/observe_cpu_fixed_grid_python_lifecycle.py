@@ -12,7 +12,7 @@ from time import monotonic_ns
 
 from scar.analysis.fixed_grid_entry_abi import _span
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.aten_source_entry import ABI_FILE
+from scar.compiler.aten_entry_delivery import ABI_FILE
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA as DELIVERY, verify_cpu_fixed_grid_cli_delivery
 from scar.ir.execution_recipe import read_artifact

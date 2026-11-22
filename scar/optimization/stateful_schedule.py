@@ -14,7 +14,7 @@ from scar.compiler.stateful_model import (read_stateful, stateful_digest,
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode, loads
 from .hardware import _target_materials, validate_cpu_placement
-from .pipeline_memory import _shape, _solve
+from scar.optimization.pipeline_memory import _shape, _solve
 from .resource_solver import semantic_sha256
 
 SCHEMA = 'scar.stateful-stage-plan'

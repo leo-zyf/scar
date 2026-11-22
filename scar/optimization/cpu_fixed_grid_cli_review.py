@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.compiler.aten_source_entry import BINDING_FILE
+from scar.compiler.aten_entry_delivery import BINDING_FILE
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 

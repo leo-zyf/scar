@@ -9,7 +9,7 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_links import _pins
 from scar.analysis.source_bytes import source_bytes_document
 from scar.analysis.source_launch import declare_script_entry
-from scar.analysis.source_text_values import source_text_candidates
+from scar.analysis.source_values import source_text_candidates
 from scar.ir.program import source_bytes as X, source_productions as P
 from scar.ir.record_codec import encode, decode
 from tests.unit.test_source_construction_connections import source_facts

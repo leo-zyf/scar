@@ -25,7 +25,7 @@ from scar.analysis.source_observed_materials import ObservedFactMaterials
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_mkdir, _durable_bytes
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_observations import ObservedSourceCodeLink, ObservedSourceScopeKind as ScopeKind, ObservedSourceScopeLink, ObservedSourceRequestCodeLink, ObservedSourceCompilerCodeLink

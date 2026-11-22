@@ -15,8 +15,8 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRejected,
     _source_identity, _metadata, _reject, _origin, _ENV, _WORLD)
-from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer,_PendingLeafResult
-from scar.compiler.loop_frontend import _Parameter
+from scar.compiler.loop_admission import _InvariantLoopLowerer, _PendingLeafResult
+from scar.compiler.loop_admission import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
 from scar.compiler.pipeline_frontend import _PipelineLowerer, _Value, _Callee, _global_functions, discover_graph_pipelines
 from scar.compiler.pipeline_frontend import PipelinePlan, compose_pipeline, prepare_pipeline_leaf, document as pipeline_document, pipeline_from_dict
@@ -429,7 +429,7 @@ def read_composite_invariant_loop_motion(path,*,catalog):
     from scar.analysis.array_motion_legality import derive_array_motion_legality
     from scar.analysis.composite_call_effect_binding import derive_composite_call_effect_binding
     from scar.analysis.source_motion_window import derive_source_motion_window
-    from scar.compiler.invariant_loop_frontend import _motion_origin_entry
+    from scar.compiler.loop_admission import _motion_origin_entry
     from scar.ir.execution_recipe import artifact_reference
     from scar.optimization.resource_solver import semantic_sha256
 

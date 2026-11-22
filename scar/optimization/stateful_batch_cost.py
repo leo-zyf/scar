@@ -28,7 +28,7 @@ def _raw(receipt):
 
 def verify_batch_cpu_cost(domain,candidate_id,worker_result,*,replay_session=None):
     from scar.codegen.cpu_batch_instruction_cost import make_calibration_context
-    from scar.codegen.cpu_batch_instruction_replay import verify_batch_projection
+    from scar.codegen.cpu_instruction_replay import verify_batch_projection
     from scar.codegen.cpu_batch_boundary_resource_replay import verify_aux_sample
     from scar.optimization.stateful_cpu_model import _cost, stateful_cpu_cost_context
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand, component_key
@@ -88,7 +88,7 @@ def verify_batch_cpu_cost(domain,candidate_id,worker_result,*,replay_session=Non
 def plan_cpu_domain_batch(batch_result,no_op_profile,out):
     from scar.optimization.stateful_cpu_model import _domain, _cost, stateful_cpu_cost_context, plan_stateful_cpu_choices
     from scar.codegen.cpu_batch_instruction_cost import make_calibration_context
-    from scar.codegen.cpu_batch_instruction_replay import BatchReplaySession
+    from scar.codegen.cpu_instruction_replay import BatchReplaySession
     from scar.optimization.stateful_cost_rebase import _model_dependencies
 
     started=time.perf_counter();out=Path(out).resolve()

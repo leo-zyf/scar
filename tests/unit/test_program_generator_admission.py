@@ -7,7 +7,7 @@ import pytest
 from scar.ir.program.drivers import BodyResume, BodyStart, RawRequestKind
 from scar.ir.program import codec
 from scar.ir.program.ids import OperationID, ValueID
-from scar.ir.program.input_origins import input_origins
+from scar.ir.program.request_inputs import input_origins
 from scar.ir.program.model import DataValue, ExitKind, InvokeLiteralResult, LiteralOrigin, OperationResult, ReferenceValue, StateVersionValue, TerminatorKind
 from scar.ir.program.protocol_flow import ProtocolFlow
 from scar.ir.program.protocols import AdmissionPredicate, BodyStateCondition, BodyStatePredicateRule, OwnedUse

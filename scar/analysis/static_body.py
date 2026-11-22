@@ -34,12 +34,11 @@ def _producer():
     # Body caches depend on the source frontend/lowerers, not on CLI/query or
     # unrelated trace/backend edits. Include the complete shared IR/codec basis.
     paths = set((package / "ir").rglob("*.py"))
-    paths.update(analysis.glob("source_*lowering.py"))
+    paths.update((analysis / "static" / "lowering").glob("*.py"))
     paths.update(analysis.glob("source_*validation.py"))
     paths.update(analysis / name for name in (
         "static_body.py", "static_program.py", "static_rules.py", "static/compilation.py",
-        "source_displays.py", "source_function_definitions.py", "source_generator_create.py",
-        "source_guards.py", "source_lambda.py", "source_mapping_functions.py", "source_string.py",
+        "source_guards.py",
         "program_lowering.py", "structured_lowering.py", "environment_lowering.py",
         "source_attribute_lookup.py", "attribute_selector.py",
         "source_language.py", "source_environment_layout.py", "function_interfaces.py",
@@ -216,7 +215,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                         compilation_error = type(error).__name__ + ": " + str(error)
                         raise
                 if entry["kind"] == "MODULE":
-                    from scar.analysis.source_module_lowering import module_unit, lower_module_entry
+                    from scar.analysis.static.lowering.source_module_lowering import module_unit, lower_module_entry
                     from scar.ir.program.entry_namespaces import FrameBodyProfile
                     unit_source = module_unit(prepared)
                     if unit_source.initializer != definition:

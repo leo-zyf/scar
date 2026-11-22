@@ -21,7 +21,7 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.normal_output import write_table
 from scar.ir.program import call_inputs as D, function_sites as R
 from scar.ir.program import name_flow as N, source_productions as P, normal_graph as T

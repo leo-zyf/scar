@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from scar.analysis.program_view import ProgramView,_digest
 from scar.analysis.source_configuration_state_binding import read_configuration_state_bindings
-from scar.analysis.source_configuration_value_store import read_configuration_values
+from scar.analysis.source_configuration_values import read_configuration_values
 from scar.analysis.source_call_view import prepare_source_ports,source_call_site,source_active_scope
 from scar.analysis.source_references import source_port
 from scar.analysis.source_world_returns import _table_ref
@@ -198,7 +198,7 @@ def _rows(provider):
 def publish_configuration_view(provider,out):
     from scar.analysis.normal_output import write_table
     from scar.analysis.source_stage import _durable_mkdir,_durable_bytes
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     out=Path(out).absolute()
     if out.exists():raise ValueError('fresh configuration-view output required')
     provider.check();_durable_mkdir(out)

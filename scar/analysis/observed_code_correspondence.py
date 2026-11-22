@@ -24,7 +24,7 @@ from scar.trace.code_snapshot import code_key, describe_code
 from scar.trace.lean_capture import LeanCapturePlan
 from contextlib import nullcontext
 from copy import deepcopy
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis import compiler_stage_cache
 from scar.ir.program import (
     source_productions as P,

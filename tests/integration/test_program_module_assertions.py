@@ -10,7 +10,7 @@ import pytest
 def test_module_assertion_message_pair_and_legacy_prefix(tmp_path, monkeypatch):
     from scar.analysis.program_lowering import prepare_source_text
     from scar.analysis.static.compilation import compile_source_unit
-    import scar.analysis.source_module_lowering as lowering
+    import scar.analysis.static.lowering.source_module_lowering as lowering
     from scar.analysis.source_module_validation import require_valid_structured_module_program
     from scar.ir.program.model import ExitKind, TerminatorKind
     from scar.ir.program.entry_namespaces import FrameBodyProfile

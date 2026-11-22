@@ -267,7 +267,7 @@ def test_c2b_namespace_templates(family, monkeypatch):
                 assert relay.binding == capture.binding
                 hop = relay.parent
         # One shared annotation namespace must retain both original regions.
-        from scar.analysis.source_context_view import SourceContextView
+        from scar.analysis.source_contexts import SourceContextView
         for expressions in (('First', 'Second'), ('1', '2')):
             for future_prefix in ('', 'from __future__ import annotations\n'):
                 source = future_prefix + 'class C:\n obj.attribute: ' + expressions[0] + '\n simple: ' + expressions[1] + '\n'

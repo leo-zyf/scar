@@ -13,12 +13,12 @@ import json
 from pathlib import Path
 
 from scar.analysis import source_context_variants as C, source_declarations as D, source_bindings as B
-from scar.analysis import source_declaration_view, source_binding_view, source_text_values, source_compiled_values
+from scar.analysis import source_declaration_view, source_binding_view, source_values as source_text_values, source_compiled_values
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.static.query import _Fragments
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_contexts import _digest
 from scar.ir.program import code_identity as V, code_identity as CV, source_bytes as S
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

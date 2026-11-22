@@ -138,7 +138,7 @@ def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=
 
 
 def _legacy_scopes(rows,session,report):
-    from scar.compiler.invariant_loop_frontend import read_invariant_loop_proof
+    from scar.compiler.loop_admission import read_invariant_loop_proof
     from scar.compiler.temporal_invariant_loop import load_temporal_invariant_loop
     from scar.optimization.invariant_loop_schedule import verify_invariant_loop_schedule
     scopes=[]

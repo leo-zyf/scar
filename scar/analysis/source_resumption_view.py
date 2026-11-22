@@ -208,7 +208,7 @@ class SourceResumptionProvider:
 
 def verify_resumption_graph(path,out,*,index=None):
     from scar.analysis.source_stage import _durable_bytes
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     started = time.monotonic(); store = ResumptionStore(path,index=index)
     provider = SourceResumptionProvider(store.index.view,store); checked = 0
     for edges in provider.out_edges.values():

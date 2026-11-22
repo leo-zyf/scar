@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from scar.analysis.cpu_entry_lifecycle_graph import verify_cpu_entry_lifecycle_graph
-from scar.analysis.static_cpp_source import read_static_cpp_source
+from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.codegen import native_array_entry, native_seeded_array_task_entry as generator
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import encode

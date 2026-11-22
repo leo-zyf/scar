@@ -9,7 +9,7 @@ import pytest
 from test_implementation_envelope import original_and_envelope
 from test_temporal_resources import inputs
 from scar.analysis.schedule_time import attach_task_time
-from scar.analysis.temporal_resources import derive_temporal_resources
+from scar.analysis.software_resources import derive_temporal_resources
 from scar.compiler.calibrate_boundary_cuts import (
     CONDITIONS, CUTS, MISSING, PHASES, SCHEMA, boundary_cut_statistics,
 )

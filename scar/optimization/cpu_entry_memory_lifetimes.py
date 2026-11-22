@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from scar.analysis.static_cpp_source import read_static_cpp_source
+from scar.analysis.native_call_materials import read_static_cpp_source
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.target_hardware import ConnectionKind, CpuExecutor, MemoryDomain, MemoryKind

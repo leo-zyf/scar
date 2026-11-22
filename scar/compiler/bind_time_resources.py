@@ -11,7 +11,7 @@ SCHEMA = 'scar.temporal-resource-preparation'
 
 
 def _derive(time_reference):
-    from scar.analysis.temporal_resources import derive_temporal_resources
+    from scar.analysis.software_resources import derive_temporal_resources
     receipt = read_time_schedule(time_reference['uri'])
     if receipt != read_artifact(time_reference):
         raise ValueError('original semantic-time receipt changed during replay')

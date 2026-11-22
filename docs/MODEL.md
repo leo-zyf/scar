@@ -168,7 +168,7 @@ F5事实的code_scope来自原CompilationContextFlow；声明子图存在不等�
 循环也可作为整体展开：当前 `LoopTemplateView` / `LoopConstructView` 是原图的投影视图，
 保留成员、嵌套关系、初始输入、header 参数、回边、正常退出、break/continue 及来源缺口；
 它们尚不是独立 canonical Region，也不把每次迭代静态展开成一份新图。
-见 [循环模板](../scar/analysis/program_loop_views.py) 与 [循环成员](../scar/analysis/program_loop_regions.py)。
+见 [循环模板](../scar/analysis/loop_graph_view.py) 与 [循环成员](../scar/analysis/loop_graph_view.py)。
 
 跨边界接口必须保留正常返回、异常、挂起及适用的状态输入/输出，不只连接返回 Tensor。
 循环外引用可以指向可变对象；引用不变不能证明对象内容跨迭代不变。

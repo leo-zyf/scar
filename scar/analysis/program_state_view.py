@@ -12,7 +12,7 @@ from scar.analysis.program_view import ProgramView
 from scar.analysis.source_effects import catalog
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import state_ports as S, source_productions as P, data_materials as C
 from scar.ir.program import data_materials as L

@@ -13,8 +13,8 @@ from pathlib import Path
 import sys
 from types import CodeType
 
-from scar.analysis import source_compiled_values as compiled, source_execution, source_text_values
-from scar.analysis import source_compilation_contexts, source_context_variants, source_f4_variants
+from scar.analysis import source_compiled_values as compiled, source_execution, source_values as source_text_values
+from scar.analysis import source_compilation_contexts as source_compilation_contexts, source_context_variants, source_f4_variants
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_references import ReferenceSlicer

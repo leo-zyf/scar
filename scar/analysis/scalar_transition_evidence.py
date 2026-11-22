@@ -10,7 +10,7 @@ from pathlib import Path
 from scar.analysis import scalar_score_evidence, scalar_table_handoff
 from scar.analysis.program_view import ProgramView
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
-from scar.analysis.source_call_handoff import _body
+from scar.analysis.static.lowering.source_call_lowering import _body
 from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import read_artifact

@@ -31,7 +31,7 @@ def _sources():
     return [_receipt(p) for p in (Path(__file__),Path(cpp.__file__),
         Path(cpp.__file__).with_name('kernel_v1.cpp.in'),Path(cpp.__file__).with_name('scar_abi_v1.h'),
         Path(__file__).with_name('invariant_loop.py'),
-        Path(__file__).with_name('pipeline_loop_frontend.py'),
+        Path(__file__).with_name('loop_admission.py'),
         Path(__file__).resolve().parents[1]/'analysis'/'array_motion.py',
         Path(__file__).resolve().parents[1]/'analysis'/'array_motion_legality.py',
         Path(__file__).resolve().parents[1]/'analysis'/'array_call_effects.py',

@@ -7,7 +7,7 @@ from scar.analysis.build import BuildSession
 from scar.analysis.build_f4 import _validate_catalog_parents
 from scar.analysis.replay_transaction import current_transaction, replay_transaction
 from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import encode
 

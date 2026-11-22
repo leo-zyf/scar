@@ -510,7 +510,7 @@ class PreparedSource:
     def lower_entry(self, selection, *, code_evidence, max_operations=10000,
                     profile=ModuleEntryProfile.EXEC_MAPPING_314_V1):
         """Explicit mapping-root capability; never changes function defaults."""
-        from scar.analysis.source_module_lowering import lower_module_entry
+        from scar.analysis.static.lowering.source_module_lowering import lower_module_entry
         return lower_module_entry(self, selection, code_evidence=code_evidence, max_operations=max_operations,
                                   profile=profile)
 
@@ -528,12 +528,12 @@ def _lower_prepared(context, entry, *, source, max_operations, expand_candidates
         if language_options is not None:
             from scar.ir.program.source_language import SourceLanguageCapability
             if SourceLanguageCapability.FUNCTION_TRY_314_V1 in language_options.capabilities:
-                from scar.analysis.source_function_try_lowering import FunctionTryBuilder
+                from scar.analysis.static.lowering.source_function_try import FunctionTryBuilder
                 builder = FunctionTryBuilder
             if SourceLanguageCapability.FUNCTION_WITH_314_V1 in language_options.capabilities:
                 if SourceLanguageCapability.FUNCTION_TRY_314_V1 not in language_options.capabilities:
                     raise ValueError('function With requires the existing paired propagation/C0/C1 capability')
-                from scar.analysis.source_with import FunctionWithBuilder
+                from scar.analysis.static.lowering.source_with import FunctionWithBuilder
                 builder = FunctionWithBuilder
         return builder(context, entry, source=source, max_operations=max_operations,
                                              sealed_source=sealed_source, language_options=language_options).run()

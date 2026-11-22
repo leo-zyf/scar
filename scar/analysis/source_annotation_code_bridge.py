@@ -104,7 +104,7 @@ def _recipe_reference(material, key, step_index):
         schema = 'scar.sealed-source-recipe-jsonl'; coordinate = 'lines'
     else:
         import json
-        from scar.analysis.source_template_links import _worker_stores
+        from scar.analysis.source_templates import _worker_stores
         report = json.loads(material._template_raw)
         specs = tuple((p['domain'], p['materials'], p['verification'], p['collection_sha256'],
             p['verification_sha256']) for p in report['parents'])

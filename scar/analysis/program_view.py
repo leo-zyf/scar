@@ -17,7 +17,7 @@ from scar.analysis.program_dependencies import ProgramDependencyGraph
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_region_projection import RegionProjectionIndex
-from scar.analysis.source_template_links import _json, _worker_stores
+from scar.analysis.source_templates import _json, _worker_stores
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_references import source_port
 from scar.ir.program import normal_graph as G, source_productions as P, model as M

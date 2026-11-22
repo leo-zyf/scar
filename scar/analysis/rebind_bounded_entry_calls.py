@@ -101,7 +101,7 @@ def _artifacts(value):
 
 
 def _templates(materials, root, units):
-    from scar.analysis.source_template_links import _implementation, _worker_stores
+    from scar.analysis.source_templates import _implementation, _worker_stores
     from scar.ir.program import source_declarations as link_types
 
     report = json.loads((root/'result.json').read_bytes())

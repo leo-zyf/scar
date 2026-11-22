@@ -69,7 +69,7 @@ def _mapping_exception_holds(block_id, operations, protocols, blocks, use_links)
 
 def validate_mapping_import_statement(node,expansion,*,overlay,code_evidence,invoke,protocols,blocks,operations,values,instructions):
     """Replay original import receiver stack and normal/exception world ports."""
-    from scar.analysis.source_module_lowering import mapping_import_plan
+    from scar.analysis.static.lowering.source_module_lowering import mapping_import_plan
     from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     P=PythonProtocolKind
     plans=mapping_import_plan(node,code_evidence.code,instructions=instructions)
@@ -256,7 +256,7 @@ def validate_mapping_if(node,expansion,*,graph,overlay,blocks,operations,express
 
 def require_valid_module_program(result, *, source_texts, code_evidence=None, max_operations=10000):
     from scar.analysis.program_lowering import PreparedSource, _symbol_tables
-    from scar.analysis.source_module_lowering import module_unit, module_source_census, require_root_evidence
+    from scar.analysis.static.lowering.source_module_lowering import module_unit, module_source_census, require_root_evidence
     from scar.analysis.source_semantics_v2 import validate_source_semantics
     from scar.analysis.control_flow_v2 import validate_source_control_flow
     from scar.ir.program.validation import require_valid
@@ -317,7 +317,7 @@ def require_valid_module_program(result, *, source_texts, code_evidence=None, ma
           and overlay.unexpanded_body is not None, 'this entry capability must retain required body expansion')
     graph, interface, body = result.graph, overlay.interface, overlay.unexpanded_body
     require_valid(graph)
-    from scar.analysis.source_module_lowering import module_source_context
+    from scar.analysis.static.lowering.source_module_lowering import module_source_context
     _need(body.unit == unit and body.context == module_source_context(context)
           and body.required_expansion.value == 'REQUIRED', 'unexpanded body source/context/debt differs')
     regions = {row.id:row for row in graph.regions}
@@ -449,7 +449,7 @@ def require_valid_module_prefix(result,*,source_texts,code_evidence=None,max_ope
     """SP7 validation; the preceding SP6 closed validator is unchanged."""
     from pathlib import Path
     from scar.analysis.program_lowering import PreparedSource
-    from scar.analysis.source_module_lowering import (module_unit,module_source_census,
+    from scar.analysis.static.lowering.source_module_lowering import (module_unit,module_source_census,
         require_root_evidence,first_import_selection)
     from scar.analysis.source_semantics_v2 import validate_source_semantics
     from scar.analysis.control_flow_v2 import validate_source_control_flow
@@ -646,7 +646,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
     from pathlib import Path
     import dis
     from scar.analysis.program_lowering import PreparedSource
-    from scar.analysis.source_module_lowering import (module_unit,module_source_census,module_source_context,
+    from scar.analysis.static.lowering.source_module_lowering import (module_unit,module_source_census,module_source_context,
         require_root_evidence,mapping_prefix_selection,frame_statement_slice,_module_statement_ref,mapping_name_opcode,
         _mapping_source_instructions,mapping_global_declaration,mapping_literal_bool_if_plan)
     from scar.analysis.source_semantics_v2 import validate_source_semantics
@@ -793,7 +793,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
             (expression_nodes if isinstance(node,ast.expr) else nodes)[reference]=node
     annotation_plans={}
     if module_annotations:
-        from scar.analysis.source_module_annotations import module_annotation_plan
+        from scar.analysis.static.lowering.source_module_annotations import module_annotation_plan
         for expansion in overlay.expansions:
             if expansion.compiler_annotation is None:continue
             node=nodes.get(expansion.source)
@@ -803,7 +803,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
             annotation_plans[expansion.source]=plan
     instructions=_mapping_source_instructions(context,code_evidence,profile=result.profile)
     from scar.ir.program.class_construction import CLASS_CONSTRUCTION_PROTOCOLS
-    from scar.analysis.source_class_construction_validation import validate_class_constructions
+    from scar.analysis.static.lowering.source_class_construction import validate_class_constructions
     class_ops=validate_class_constructions(graph=graph,metadata=result.metadata,
         records=getattr(overlay,'class_constructions',()),protocols=protocols,code_evidence=code_evidence,
         source_tree=context.tree,semantic=result.semantic,module_overlay=overlay,structural_only=True)
@@ -860,7 +860,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
             node=expression_nodes.get(protocol.source) or nodes.get(protocol.source)
             if isinstance(node,ast.Name):literal(op.uses[1],node.id)
             else:
-                from scar.analysis.source_module_lowering import _module_docstring
+                from scar.analysis.static.lowering.source_module_lowering import _module_docstring
                 docstring=extended and _module_docstring(context,node)
                 _need(isinstance(node,(ast.Import,ast.ImportFrom)) or paired and isinstance(node,ast.ExceptHandler)
                       or extended and isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) or class_profile and isinstance(node,ast.ClassDef) or docstring,
@@ -990,9 +990,9 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
         return previous
     compiler_prologue=None
     if compiler:
-        from scar.analysis.source_module_compiler_lowering import validate_compiler_prologue
+        from scar.analysis.static.lowering.source_module_compiler_lowering import validate_compiler_prologue
         if expanded_compiler:
-            from scar.analysis.source_module_compiler_lowering import validate_expanded_compiler_prologue
+            from scar.analysis.static.lowering.source_module_compiler_lowering import validate_expanded_compiler_prologue
             compiler_prologue=validate_expanded_compiler_prologue(result,code_evidence,context)
         else:compiler_prologue=validate_compiler_prologue(result,code_evidence,context)
     source_start=compiler_prologue.normal if compiler_prologue is not None else entry.id
@@ -1011,7 +1011,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                      if nodes[statement].value is node and plan.empty_dict is not None]
             if matches:
                 _need(len(matches)==1,'annotation dictionary has conflicting compiler plans')
-                from scar.analysis.source_module_annotations import empty_dict_result
+                from scar.analysis.static.lowering.source_module_annotations import empty_dict_result
                 return empty_dict_result(node,matches[0],source_reference=lambda n:_module_statement_ref(context,n),
                     overlay=overlay,protocols=protocols,operations=operations,invoke=invoke,
                     ref_type=ref_type,state_type=state_type)
@@ -1067,7 +1067,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                 source_reference=lambda n:_module_statement_ref(context,n),exception_holds=_mapping_exception_holds,
                 ref_type=ref_type,state_type=state_type)
         elif isinstance(node,ast.AnnAssign):
-            from scar.analysis.source_module_annotations import validate_module_annotation
+            from scar.analysis.static.lowering.source_module_annotations import validate_module_annotation
             validate_module_annotation(node,expansions[source],annotation_plans[source],
                 overlay=overlay,blocks=blocks,operations=operations,values=values,protocols=protocols,
                 expression_value=expression_value,invoke=invoke,source_reference=lambda n:_module_statement_ref(context,n),
@@ -1089,7 +1089,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                   'class statement has no checked parent construction')
         elif isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
             _need(extended,'function construction requires explicit mapping BODY profile')
-            from scar.analysis.source_mapping_functions import validate_mapping_function
+            from scar.analysis.static.lowering.source_mapping_functions import validate_mapping_function
             validate_mapping_function(node,source=source,graph=graph,overlay=overlay,semantic=result.semantic,
                 code_evidence=code_evidence,globals_namespace=abi.globals_namespace,locals_namespace=abi.locals_namespace)
         elif isinstance(node,ast.If):
@@ -1099,7 +1099,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                 expansions=expansions,source_reference=lambda n:_module_statement_ref(context,n),
                 compiler_elision=elisions.get(source))
         elif isinstance(node,ast.Expr):
-            from scar.analysis.source_module_lowering import _module_docstring
+            from scar.analysis.static.lowering.source_module_lowering import _module_docstring
             if _module_docstring(context,node):
                 _need(extended,'module docstring assignment needs mapping BODY profile')
                 store=store_at(source)
@@ -1215,7 +1215,7 @@ def require_valid_module_propagation(result,*,context,code_evidence):
         PendingDispatchTerminator)
     from scar.ir.program.cleanup import CleanupRouteTerminator
     from scar.ir.program.model import ProtocolValue,UseRole
-    from scar.analysis.source_module_lowering import _module_statement_ref
+    from scar.analysis.static.lowering.source_module_lowering import _module_statement_ref
     graph=result.graph;overlay=result.module
     values={v.id:v for v in graph.values};ops={o.id:o for o in graph.operations}
     blocks={b.id:b for region in graph.regions for b in region.blocks}

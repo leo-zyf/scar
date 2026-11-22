@@ -47,13 +47,13 @@ def _pipeline(model, *, treatment=False):
     if treatment and schema != _PLACEMENT_MODEL:
         raise ValueError('an exact calibration placement requires the typed placement profile')
     if schema == _PLACEMENT_MODEL:
-        from scar.compiler.aten_export_device_placement import qualify_device_export
+        from scar.compiler.aten_export_placement import qualify_device_export
 
         if treatment:
             from scar.compiler.native_export_placement_costs import plan_device_treatment, replay_device_treatment
 
             return qualify_device_export, plan_device_treatment, replay_device_treatment, _PLACEMENT_TREATMENT
-        from scar.compiler.aten_export_device_placement import plan_device_export, replay_device_export
+        from scar.compiler.aten_export_placement import plan_device_export, replay_device_export
 
         return qualify_device_export, plan_device_export, replay_device_export, _PLACEMENT_CANDIDATE
     if schema == _HYBRID_MODEL:

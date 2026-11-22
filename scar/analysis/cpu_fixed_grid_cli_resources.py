@@ -33,7 +33,7 @@ def _mount(path, endpoints, backing):
 
 def derive_cpu_fixed_grid_cli_resources(project, target, argv, inputs):
     """Project logical payloads, eligible NUMA domains and known storage routes."""
-    from scar.compiler.aten_source_entry import ABI_FILE, BINDING_FILE
+    from scar.compiler.aten_entry_delivery import ABI_FILE, BINDING_FILE
 
     manifest = read_artifact(project)
     abi_ref = _member(project, manifest, ABI_FILE, 'scar.fixed-grid-file-entry')

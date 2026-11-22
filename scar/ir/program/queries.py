@@ -757,7 +757,7 @@ class ProgramIndex:
     def input_origins(self, operation_id, use_id, *, budget=4096):
         """Static original input routes, reusing this validated model index."""
         from scar.ir.execution.validity_budget import ValidityBudget
-        from .input_origins import _input_origins
+        from scar.ir.program.request_inputs import _input_origins
         return _input_origins(self, operation_id, use_id, accounting=ValidityBudget(budget))
 
     def source_binding(self, expected, actual, *, guard=None, budget=4096):
@@ -794,12 +794,12 @@ class ProgramIndex:
 
     def paired_input_origins(self, raw, pack_operand, *, budget=4096):
         """Exact raw-pack operand routes; not a predicate-input binding."""
-        from .input_origins import paired_input_origins
+        from scar.ir.program.request_inputs import paired_input_origins
         return paired_input_origins(self, raw, pack_operand, budget=budget)
 
     def request_input_binding(self, raw, input, ordinal=0, *, budget=4096):
         """Joint original raw/operand/input routes under one static call context."""
-        from .request_inputs import request_input_binding
+        from scar.ir.program.request_inputs import request_input_binding
         return request_input_binding(self, raw, input, ordinal, budget=budget)
 
     def creation_bindings(self, operation_id: OperationID):

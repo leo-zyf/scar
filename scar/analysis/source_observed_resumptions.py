@@ -17,7 +17,7 @@ from scar.analysis.source_observed_calls import _span
 from scar.analysis.source_observed_interfaces import ObservedFunctionInterfaceStore
 from scar.analysis.source_declared_catalog import _receipt, _check
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.normal_output import write_table
 from scar.ir.program import control as C, source_productions as P
 from scar.ir.record_codec import encode

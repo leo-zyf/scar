@@ -107,7 +107,7 @@ forward: "Forward.Name"
 @pytest.mark.parametrize('family', ('coverage', 'matrix', 'codec_and_budgets'))
 def test_c2a_source_declarations(family, monkeypatch):
     import scar.analysis.source_declarations as api
-    from scar.analysis.source_context_view import SourceContextView
+    from scar.analysis.source_contexts import SourceContextView
 
     inputs = _inputs(_source())
     syntax = decode(SourceSyntaxMaterial, inputs[2])

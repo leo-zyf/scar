@@ -37,7 +37,7 @@ def _documents(text,mode='exec'):
 
 def _rules(documents):
     from scar.analysis.frontend_bindings import read_frontend_bindings
-    from scar.analysis.source_context_view import SourceContextView
+    from scar.analysis.source_contexts import SourceContextView
     from scar.ir.program.source_syntax import SourceSyntaxMaterial
     from scar.ir.record_codec import decode
     f0, f1, f2, b, c, d, q, a, t, s = documents

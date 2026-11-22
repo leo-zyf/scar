@@ -20,13 +20,13 @@ if __name__=='__main__':
     sys.path.insert(0,str(ROOT))
 
 from scar.analysis import source_context_variants as contexts, source_symbols as symbols
-from scar.analysis import source_compiled_values as compiled, source_text_values
+from scar.analysis import source_compiled_values as compiled, source_values as source_text_values
 from scar.analysis import source_symbol_context_adapter as adapter_module
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import code_identity as V, code_identity as C
 from scar.ir.program import code_identity as X, source_bytes as S

@@ -43,7 +43,7 @@ def _source_label(source):
 def derive_composite_call_effect_binding(view,proof,effects):
     """Return source-bound conditional interfaces, without duplicating bodies."""
     from scar.analysis.array_call_effects import verify_composite_call_effects
-    from scar.compiler.invariant_loop_frontend import _motion_origin_entry
+    from scar.compiler.loop_admission import _motion_origin_entry
     from scar.compiler.pipeline_loop_frontend import CompositeInvariantLoopProof
 
     if type(proof) is not CompositeInvariantLoopProof:

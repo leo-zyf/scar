@@ -310,7 +310,7 @@ def _lowering_route(entry):
                 "qualification": "Class suite namespace/cell/frame and conditional method-call protocols; explicit continuations and open effects remain, not a claim of complete class construction."}
     if entry["kind"] == "MODULE" and len(entry.get("semantic_definition_ids") or ()) == 1:
         return {"status": "READY_TO_ATTEMPT", "body_supported": None,
-                "adapter": "scar.analysis.source_module_lowering.lower_module_entry",
+                "adapter": "scar.analysis.static.lowering.source_module_lowering.lower_module_entry",
                 "profile": "STRUCTURED_MAPPING_COMPILER_OPS_314_V1", "runtime_witness_required": False,
                 "required_inputs": ["original_module_initializer", "prepared_source_layers", "static_exec_compiler_root"],
                 "qualification": "Static mapping prefix and exact residual source; not whole-body support."}

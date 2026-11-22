@@ -8,7 +8,7 @@ from shutil import copytree
 from tempfile import TemporaryDirectory
 
 from scar.codegen import native_ordered_sparse_export as ordered
-from scar.codegen.native_sparse_publication import project_stream as project_digest
+from scar.codegen.native_sparse_source import project_stream as project_digest
 from scar.codegen.native_sparse_source import project_source_csr_stream
 from scar.codegen.sparse_native_export import check_sparse_export
 from scar.ir.execution_recipe import artifact_reference, read_artifact

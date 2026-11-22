@@ -688,7 +688,7 @@ def _failure_occurrence(ctx, definition, source, shared):
             stage = operation
     elif admitted:
         local.append('await_failure_call_activation_missing')
-    from scar.ir.program.await_outcome_flow import result_legs
+    from scar.ir.program.await_outcomes import result_legs
     parent_port = next((leg['own_result'] for leg in result_legs(ctx.await_flow,
         ctx.core_operations[source.operation]) if leg['kind'] is ExitKind.RAISE), None)
     if selected is True:
@@ -722,10 +722,10 @@ def _failure_occurrence(ctx, definition, source, shared):
 
 
 def project_outcomes(ctx, scope, shared):
-    from scar.ir.program.await_failures import failure_paths
+    from scar.ir.program.await_outcomes import failure_paths
     from scar.ir.program.await_outcomes import outcome_connections
     if ctx.await_flow is None:
-        from scar.ir.program.await_outcome_flow import inventory
+        from scar.ir.program.await_outcomes import inventory
         empty = {**inventory((), 0, True), 'occurrence_count': 0, 'observed_occurrence_count': 0,
             'checked_occurrence_count': 0, 'pending_occurrence_count': 0}
         return {'outcomes': (), 'outcome_inventory': {**empty, 'drive_successors_total': 0},

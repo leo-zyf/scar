@@ -19,7 +19,7 @@ from scar.analysis.source_reference_consumers import read_reference_consumers, a
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_world_flow import STRUCTURAL, _walk, _state
 from scar.analysis.source_world_material import WorldMaterial
 from scar.ir.program import source_value_routes as V, source_productions as P

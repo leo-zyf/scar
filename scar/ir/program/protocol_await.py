@@ -482,7 +482,7 @@ def _result_copy(ctx, source, target, choices=()):
     slot = target.index if type(target) is OperationResult else target.result.index
     previous = ctx._returns.guards
     try:
-        from .await_outcome_flow import required_choices
+        from scar.ir.program.await_outcomes import required_choices
         required, complete = required_choices(ctx, source)
         if not complete:
             return {'match': None, 'routes': (), 'gaps': ('await_result_source_prefix_unresolved',)}
@@ -977,8 +977,8 @@ def await_connections(ctx):
         if protection is not None and protection['match'] is None:
             analysis.gaps.append({'code': 'await_qualification_protection_unproved',
                                   'site': _site(item['advance']), 'gaps': protection['gaps']})
-    from .await_outcomes import outcome_connections
-    from .await_failures import failure_paths
+    from scar.ir.program.await_outcomes import outcome_connections
+    from scar.ir.program.await_outcomes import failure_paths
     outcomes = outcome_connections(ctx, inventory)
     failures = failure_paths(ctx)
     analysis.issues.extend((*outcomes['issues'], *failures['issues']))

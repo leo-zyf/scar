@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from scar.analysis.source_scalar_values import ScalarValueFlow
+from scar.analysis.source_values import ScalarValueFlow
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import normal_graph as T, scalar_values as V, source_productions as P
 from scar.ir.record_codec import decode, encode

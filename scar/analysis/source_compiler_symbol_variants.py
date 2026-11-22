@@ -21,7 +21,7 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_contexts import _digest
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import code_identity as V
 from scar.ir.program import code_identity as CV, code_identity as NV
 from scar.ir.program.compiler_symbols import CompilerSymbolsInput, CompilerSymbolsMaterial, SymbolLimits, SymbolStop

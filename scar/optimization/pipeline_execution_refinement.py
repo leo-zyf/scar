@@ -10,7 +10,7 @@ from scar.ir.versioned_schedule import (
     VersionedTaskKind, schedule_from_dict, validate_versioned_schedule,
 )
 from .pipeline_ready_schedule import verify_pipeline_ready_schedule
-from .pipeline_memory import verify_pipeline_memory
+from scar.optimization.pipeline_memory import verify_pipeline_memory
 from .resource_solver import semantic_sha256
 
 

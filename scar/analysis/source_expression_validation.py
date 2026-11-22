@@ -4,7 +4,7 @@ from __future__ import annotations
 import ast
 
 from scar.analysis.program_lowering import _REF
-from scar.analysis.source_expression_lowering import BINARY_OPCODES, COMPARE_OPERATORS, source_operator
+from scar.analysis.static.lowering.source_expression_lowering import BINARY_OPCODES, COMPARE_OPERATORS, source_operator
 from scar.analysis.source_language import function_exception_types, require_source_tree
 from scar.ir.program.control import ProtocolValueKind as P
 from scar.ir.program.model import (AccessMode, Behavior, BlockArgument, CompletionResult, DataValue, ExitKind,
@@ -118,11 +118,11 @@ def validate_source_expressions(model, graph, interface, metadata, semantic, lan
                   'lazy adapter outcomes disagree on pending references')
             return outcomes[0] + released
         if len(failed.arguments) == 3:
-            from scar.analysis.source_function_try_validation import exception_handoff_holds
+            from scar.analysis.static.lowering.source_function_try import exception_handoff_holds
             _need(all(type(values[value]) is ReferenceValue for value in failed.arguments[:2]),
                   'paired failure lost original exception/traceback')
             return exception_handoff_holds(failed.id, operations, protocols, blocks, uses) + released
-        from scar.analysis.source_slice_validation import _raw_handoff_holds
+        from scar.analysis.static.lowering.source_slice import _raw_handoff_holds
         return _raw_handoff_holds(failed, operation, operations, protocols, values, uses)
 
     def forward_reference(operation, protocol, link):
@@ -328,7 +328,7 @@ def validate_source_expressions(model, graph, interface, metadata, semantic, lan
             _need(tag_source is not None and tag_source.source == protocol.source
                   and (tag_source.role, tag_source.index) == ('source-operator', 0)
                   and tag_source.semantic_value is None, 'protocol selector is not its original static source configuration')
-        from scar.analysis.source_slice_validation import _validate_local_transfer
+        from scar.analysis.static.lowering.source_slice import _validate_local_transfer
         _validate_local_transfer(identity, operations, protocols, blocks, values, links, uses, language,
             target_operands=args[:2], target_failure_consumes=not (binary or index_rule), failure_pending=failure_pending)
     return selected

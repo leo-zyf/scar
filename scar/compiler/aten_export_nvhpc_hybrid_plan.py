@@ -4,7 +4,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from scar.compiler.aten_export_cuda_plan import _profile_target
-from scar.compiler.aten_export_device_placement import placement_choices, placement_proposal
+from scar.compiler.aten_export_placement import placement_choices, placement_proposal
 from scar.compiler.aten_export_hybrid_plan import _MM, _build_placement, _certify_placement
 from scar.compiler.aten_export_hybrid_source import qualify_hybrid_export
 from scar.ir.execution_recipe import read_artifact

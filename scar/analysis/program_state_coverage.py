@@ -22,7 +22,7 @@ from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_declared_calls import _NoTargets,_check_targets
 from scar.analysis.state_materialization import local_read_tracks
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.normal_output import write_table
 from scar.analysis.program_state_view import _pins as state_pins,_counts,_rows
 from scar.analysis.program_view_storage import pack_nodes,pack_edges

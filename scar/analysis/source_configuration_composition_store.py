@@ -6,9 +6,9 @@ from pathlib import Path
 
 from scar.analysis import normal_output, source_symbol_variants
 from scar.analysis import source_configuration_request_store as requests_store
-from scar.analysis import source_data_material_store as data_store
+from scar.analysis import source_data_materials as data_store
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir import record_codec as codec
 from scar.ir.program import configuration as C
 

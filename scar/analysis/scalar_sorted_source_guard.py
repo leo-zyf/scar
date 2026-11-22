@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scar.analysis import scalar_loop_score_provenance as provenance
 from scar.analysis import scalar_score_reuse_evidence as observed
-from scar.analysis.source_generator_lowering import child_code
+from scar.analysis.static.lowering.source_generator_lowering import child_code
 from scar.compiler.scalar_table_region import _definition, code_tree
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import encode

@@ -13,7 +13,7 @@ from scar.compiler.pipeline_frontend import pipeline_digest, validate_pipeline
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import loads
 from scar.ir.versioned_schedule import schedule_document, validate_versioned_schedule
-from .pipeline_memory import verify_pipeline_memory
+from scar.optimization.pipeline_memory import verify_pipeline_memory
 from .pipeline_schedule import _closed, _dependencies, _need, _target, _task_graph
 from .resource_solver import semantic_sha256
 

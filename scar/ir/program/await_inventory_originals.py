@@ -1,6 +1,6 @@
 """Await inventory originals."""
 
-from scar.ir.program.await_outcome_flow import selected, state_links
+from scar.ir.program.await_outcomes import selected, state_links
 from scar.ir.program.suspension_interfaces import continuation_rows
 from scar.ir.program.model import ExitKind, TerminatorKind, InvokeLiteralResult
 from scar.ir.program.operation_results import evaluated_sources

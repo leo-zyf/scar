@@ -13,7 +13,7 @@ from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static.query import _Fragments
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.call_compilation import future_flags_for
 from scar.ir.program.function_origins import CallCompilationProfile
@@ -156,7 +156,7 @@ def initial_scalar_fields(contract, unit):
     writes and all original source constraints remain in the may graph.
     No argv list or environment dictionary is offered as a tuple constant.
     """
-    from scar.analysis.source_scalar_values import collect_unit
+    from scar.analysis.source_values import collect_unit
     if (type(contract) is not L.ScriptEntryContract
             or unit.unit != contract.source.unit or unit.root_scope != contract.root):
         raise ValueError('entry scalar fields require their original source unit')

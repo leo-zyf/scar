@@ -10,8 +10,7 @@ import sysconfig
 
 import pytest
 
-from scar.analysis.static_cpp_source import (CppRelationKind, CppSourceError,
-    cpp_source_from_document, cpp_source_to_document, read_static_cpp_source)
+from scar.analysis.native_call_materials import CppRelationKind, CppSourceError, cpp_source_from_document, cpp_source_to_document, read_static_cpp_source
 from scar.ir.v2.ids import SourceAtomID
 
 

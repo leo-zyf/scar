@@ -32,7 +32,7 @@ from scar.analysis.source_capture_interfaces import CaptureInterfaceIndex
 from scar.analysis.source_scope_annotation_interfaces import ScopeAnnotationIndex
 from scar.analysis.source_annotation_state_interfaces import AnnotationStateIndex
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
-from scar.analysis.source_compilation_flow import CompilationFlowIndex, validate_flow
+from scar.analysis.source_compilation_contexts import CompilationFlowIndex, validate_flow
 from scar.analysis.source_core_interfaces import validate_core_interfaces
 
 
@@ -78,7 +78,7 @@ def production_type_catalog():
                  'scar.analysis.source_root_interfaces','scar.analysis.source_evaluation_interfaces','scar.analysis.source_syntax',
                  'scar.analysis.source_class_namespace_interfaces','scar.analysis.source_capture_interfaces',
                  'scar.analysis.source_scope_annotation_interfaces','scar.analysis.source_annotation_state_interfaces',
-                 'scar.analysis.source_compilation_contexts', 'scar.analysis.source_compilation_flow',
+                 'scar.analysis.source_compilation_contexts', 'scar.analysis.source_compilation_contexts',
                  'scar.analysis.source_core_interfaces'):
         modules[name] = sha256(Path(sys.modules[name].__file__).read_bytes()).hexdigest()
     payload = dict(schema='scar.source-production-type-catalog', schema_version=1,
@@ -1164,7 +1164,7 @@ class ProductionSourceIndex:
     """
     def __init__(self, f0, context_view, frontend_view):
         from scar.analysis.frontend_bindings import FrontendBindingView
-        from scar.analysis.source_context_view import SourceContextView
+        from scar.analysis.source_contexts import SourceContextView
         _require(type(context_view) is SourceContextView and type(frontend_view) is FrontendBindingView,
                  'INPUT', 'views', 'expected original typed F2/F3 views')
         syntax = context_view.syntax

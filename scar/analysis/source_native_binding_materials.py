@@ -48,7 +48,7 @@ with _target_guard():
     from scar.analysis import python_bindings as producer, tensor_return_flow
     from scar.analysis.normal_output import write_table
     from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     from scar.ir.program import python_bindings as B, source_productions as P
     from scar.ir.program.providers import ProviderArtifact
     from scar.ir.record_codec import _decode, _record_tags, decode, encode

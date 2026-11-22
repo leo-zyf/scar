@@ -13,7 +13,7 @@ from time import perf_counter
 
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_productions import _digest, production_plan_document
-from scar.analysis.source_template_links import read_template_graph, _worker_stores
+from scar.analysis.source_templates import read_template_graph, _worker_stores
 from scar.ir.program import normal_graph as G, normal_graph as F, source_productions as P
 from scar.ir.program import suspension_interfaces as I
 from scar.ir.program.control import LanguageCompletionKind as C
@@ -174,7 +174,7 @@ class SuspensionInterfaceIndex:
         if self.plan_reader is not None:
             for key in missing:self._plan(unit,key)
             return
-        from scar.analysis.source_template_workers import TemplatePlanPool
+        from scar.analysis.source_templates import TemplatePlanPool
         root, report, receipt = self._header(unit)
         self.validate_parents()
         if self._pool is None:self._pool = TemplatePlanPool(jobs=self._jobs)

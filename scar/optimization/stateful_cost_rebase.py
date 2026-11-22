@@ -49,9 +49,9 @@ def _implementation(model_replays=()):
         'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py')
     schemas={r['schema']for r in model_replays}
     if schemas:
-        names+=('codegen/cpu_instruction_cost.py','codegen/cpu_instruction_cost_replay.py')
+        names+=('codegen/cpu_instruction_cost.py','codegen/cpu_instruction_replay.py')
     if 'scar.cpu-parallel-instruction-cost-projection-replay'in schemas:
-        names+=('codegen/cpu_parallel_instruction_cost.py','codegen/cpu_parallel_instruction_cost_replay.py')
+        names+=('codegen/cpu_parallel_instruction_cost.py','codegen/cpu_instruction_replay.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 
@@ -177,9 +177,9 @@ def _component_dependencies(facts,domain,candidate):
                 # MCA outputs and every projected component. A schema or
                 # hash alone cannot discharge these dependencies.
                 if schema=='scar.cpu-instruction-cost-model':
-                    from scar.codegen.cpu_instruction_cost_replay import verify_instruction_projection as verify
+                    from scar.codegen.cpu_instruction_replay import verify_instruction_projection as verify
                 else:
-                    from scar.codegen.cpu_parallel_instruction_cost_replay import verify_parallel_instruction_projection as verify
+                    from scar.codegen.cpu_instruction_replay import verify_parallel_instruction_projection as verify
                 replay=verify(domain,candidate,reference['artifact']['uri'])
                 if replay['projection']!=reference['artifact']:
                     raise ValueError('instruction projection differs from original component facts')

@@ -19,8 +19,8 @@ def _query(tmp_path,texts,writes=(),*,open_prefix=False):
     except PackageNotFoundError:pytest.skip('optional installed interpolation grammar is absent')
     from scar.analysis.source_data_materials import parse_yaml_material
     from scar.analysis.source_configuration_values import compile_configuration_expressions
-    from scar.analysis.source_configuration_value_query import ConfigurationValueQuery
-    from scar.analysis.source_string import InterpolationSyntax
+    from scar.analysis.source_configuration_values import ConfigurationValueQuery
+    from scar.analysis.static.lowering.source_string import InterpolationSyntax
     steps=[ConfigurationStep(0,ConfigurationStepKind.EMPTY,None,None,None,None,None,(),(),('FIXTURE',))]
     if open_prefix:steps.append(ConfigurationStep(1,ConfigurationStepKind.OPEN_PROVIDER,0,None,None,None,None,(),(),('FIXTURE',)))
     materials={}

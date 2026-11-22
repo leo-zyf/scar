@@ -342,7 +342,7 @@ class _Analysis:
                     else:
                         # Fixed NEXT semantics demands None. This comparison
                         # inspects existing literal facts, never invents one.
-                        from .request_inputs import _none_content
+                        from scar.ir.program.request_inputs import _none_content
                         view = self.ctx.origins(actual)
                         contexts = []
                         for recipe in view['recipes']:
@@ -593,7 +593,7 @@ class _Analysis:
                                 'known_none': (), 'status': 'NOT_CHECKED'}
                                for source in self.return_inventory]
         from .driver_flow import body_outcome_uses
-        from .request_inputs import _none_content
+        from scar.ir.program.request_inputs import _none_content
         for number, source in enumerate(self.return_inventory):
             body = source['body_source']
             if not self.spend('return_sources', body.id):

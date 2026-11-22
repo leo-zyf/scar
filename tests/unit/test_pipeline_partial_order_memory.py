@@ -5,9 +5,7 @@ import pytest
 from test_pipeline_schedule import _pipeline
 from scar.optimization.pipeline_memory import plan_pipeline_memory
 from scar.optimization.pipeline_schedule import _dependencies
-from scar.optimization.pipeline_partial_order_memory import (
-    OPTIMAL, plan_pipeline_partial_order_memory, verify_pipeline_partial_order_memory,
-)
+from scar.optimization.pipeline_memory import OPTIMAL, plan_pipeline_partial_order_memory, verify_pipeline_partial_order_memory
 
 
 def test_independent_writer_keeps_its_slot_instead_of_serializing_behind_old_consumer():

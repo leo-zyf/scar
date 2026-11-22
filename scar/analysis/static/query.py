@@ -197,7 +197,7 @@ def _canonical_dependencies(unit, entries, fragments, limit):
                            "prefix": module_document["prefix"], "remaining": module_document["remaining"],
                            "frontiers": _page(module_document["frontiers"], limit)}
             if "compiler_prologue" in module_document:
-                from scar.analysis.source_module_compiler_lowering import validate_compiler_prologue_core
+                from scar.analysis.static.lowering.source_module_compiler_lowering import validate_compiler_prologue_core
                 validate_compiler_prologue_core(overlay, graph)
                 module_view["compiler_prologue"] = module_document["compiler_prologue"]
                 module_view["compiler_prologue_core_checked"] = True

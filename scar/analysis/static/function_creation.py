@@ -113,7 +113,7 @@ def extract_function_creation(body, operation, value, normal_edge):
             return extract_class_function_creation(body,operation,value,normal_edge)
         from scar.analysis.static.nested_creation import verify_nested_function_creation
         return verify_nested_function_creation(body,operation,value,normal_edge)
-    from scar.analysis.source_mapping_functions import mapping_function_plan
+    from scar.analysis.static.lowering.source_mapping_functions import mapping_function_plan
     from scar.trace.code_snapshot import code_key
     from scar.ir.program.model import OperationResult
     context = body.context

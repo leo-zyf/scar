@@ -69,8 +69,8 @@ _SELECTORS = {
     'Compare': frozenset(('Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE', 'Is', 'IsNot', 'In', 'NotIn')),
 }
 _TARGETS = frozenset(('Name', 'Attribute', 'Subscript', 'List', 'Tuple'))
-_RULE_MODULES = ('source_displays.py', 'source_string.py',
-                 'source_comprehension_rules.py', 'await_protocol.py', 'source_callable_rules.py',
+_RULE_MODULES = ('static/lowering/source_displays.py', 'static/lowering/source_string.py',
+                 'static/lowering/source_comprehension.py', 'await_protocol.py', 'source_callable_rules.py',
                  'source_deferred_interfaces.py', 'source_statement_rules.py',
                  'statement_bindings.py', 'type_parameter_rules.py',
                  'source_definition_interfaces.py', 'source_statement_exceptions.py',
@@ -81,7 +81,7 @@ _RULE_MODULES = ('source_displays.py', 'source_string.py',
                  'source_class_namespace_rules.py', 'source_capture_interfaces.py',
                  'source_scope_annotation_interfaces.py', 'source_annotation_state_interfaces.py',
                  'annotation_state.py', 'source_compilation_contexts.py',
-                 'source_compilation_flow.py', 'source_core_interfaces.py')
+                 'source_core_interfaces.py')
 
 
 class SourceRuleError(ProductionError):
@@ -186,7 +186,7 @@ class SourceExpressionRules:
             source_schema_sha256=self.source.roles.catalog.f2_schema_sha256,
             recipe_type_catalog_sha256=production_type_catalog()['content_sha256'],
             rules=rows, implementation_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),
-            production_modules={name: sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in _RULE_MODULES},
+            production_modules={name: sha256((Path(__file__).parent / name).read_bytes()).hexdigest() for name in _RULE_MODULES},
             delegation_protocols=[dict(protocol=kind.value, signature=encode(signature, record_tags=SIGNATURE_RECORD_TAGS))
                 for kind, signature in delegation_signature_catalog().items()],
             state_parameter=encode(self.world), exception_abi=self.exception_abi.value,
@@ -449,13 +449,13 @@ class _Builder:
         if kind in ('Name', 'Attribute', 'Subscript'):
             self.target(root, state)
         elif kind in ('List', 'Tuple', 'Set', 'Dict'):
-            from scar.analysis.source_displays import emit_display
+            from scar.analysis.static.lowering.source_displays import emit_display
             emit_display(self, root, state)
         elif kind in ('JoinedStr', 'FormattedValue', 'TemplateStr', 'Interpolation'):
-            from scar.analysis.source_string import emit_string
+            from scar.analysis.static.lowering.source_string import emit_string
             emit_string(self, root, state)
         elif kind in _COMPREHENSIONS:
-            from scar.analysis.source_comprehension_rules import emit_comprehension
+            from scar.analysis.static.lowering.source_comprehension import emit_comprehension
             emit_comprehension(self, root, state)
         elif kind == 'Yield':
             from scar.analysis.await_protocol import emit_yield

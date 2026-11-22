@@ -287,7 +287,7 @@ class SourceBodyActivationProvider:
 def verify_body_activations(path,out,*,index=None):
     """Read stored tables and every balanced relation; reuse an admitted index."""
     from scar.analysis.source_stage import _durable_bytes
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     started=time.monotonic(); store=SourceBodyActivationStore(path,index=index)
     provider=SourceBodyActivationProvider(store.view,store)
     checked=0

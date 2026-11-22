@@ -17,7 +17,7 @@ from scar.analysis.source_override_syntax import OverrideSyntax
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import configuration as O, launch_provenance as L, source_productions as P
 from scar.ir.program.configuration import ConfigurationProtocolSource

@@ -49,62 +49,62 @@ def captured_cell_slot(definition, name):
 def dispatch_source_expression(builder, node, cursor):
     if (builder.has_language('SOURCE_REFERENCE_LIFETIME_314_V1') and isinstance(node, ast.Subscript)
             and isinstance(node.ctx, ast.Load) and not isinstance(node.slice, (ast.Slice, ast.Tuple))):
-        from scar.analysis.source_slice_lowering import lower_subscript
+        from scar.analysis.static.lowering.source_slice import lower_subscript
         return lower_subscript(builder, node, cursor, source_expression=True)
     if builder.has_language('SOURCE_EXPRESSIONS_314_V1'):
-        from scar.analysis.source_expression_lowering import lower_source_expression, lower_source_literal
+        from scar.analysis.static.lowering.source_expression_lowering import lower_source_expression, lower_source_literal
         if isinstance(node, (ast.BinOp, ast.Compare)):
             return lower_source_expression(builder, node, cursor)
         if isinstance(node, ast.Constant):
-            from scar.analysis.source_constant_lowering import needs_code_constant
+            from scar.analysis.static.lowering.source_constant_lowering import needs_code_constant
             if not needs_code_constant(node):
                 return lower_source_literal(builder, node, cursor)
     if (builder.has_language("STARRED_DISPLAY_314_V1") and isinstance(node,(ast.Tuple,ast.List))
             and isinstance(node.ctx,ast.Load) and any(isinstance(n,ast.Starred)for n in node.elts)):
-        from scar.analysis.source_displays import lower_starred_display
+        from scar.analysis.static.lowering.source_displays import lower_starred_display
         return lower_starred_display(builder,node,cursor)
     if builder.has_language("COMPREHENSION_314_V1") and isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp)):
-        from scar.analysis.source_comprehension_lowering import lower_comprehension
+        from scar.analysis.static.lowering.source_comprehension import lower_comprehension
         return lower_comprehension(builder,node,cursor)
     if builder.has_language("CODE_CONSTANTS_314_V1") and isinstance(node, ast.Constant):
-        from scar.analysis.source_constant_lowering import needs_code_constant, lower_code_constant
+        from scar.analysis.static.lowering.source_constant_lowering import needs_code_constant, lower_code_constant
         if needs_code_constant(node):
             return lower_code_constant(builder, node, cursor)
     if builder.has_language('LAMBDA_EXPRESSION_314_V1') and isinstance(node,ast.Lambda):
-        from scar.analysis.source_lambda import lower_lambda
+        from scar.analysis.static.lowering.source_lambda import lower_lambda
         return lower_lambda(builder,node,cursor)
     if builder.has_language("SET_DISPLAY_314_V1") and isinstance(node, ast.Set):
-        from scar.analysis.source_set_lowering import lower_set_display
+        from scar.analysis.static.lowering.source_set_lowering import lower_set_display
         return lower_set_display(builder, node, cursor)
     if builder.has_language("GENEXPR_CREATION_314_V1") and isinstance(node, ast.GeneratorExp):
-        from scar.analysis.source_generator_create import lower_creation
+        from scar.analysis.static.lowering.source_generator_create import lower_creation
         return lower_creation(builder, node, cursor)
     if builder.has_language("GENEXPR_314_V1") and isinstance(node, ast.GeneratorExp):
-        from scar.analysis.source_generator_lowering import lower_generator
+        from scar.analysis.static.lowering.source_generator_lowering import lower_generator
         return lower_generator(builder, node, cursor)
     if (isinstance(node, ast.Call) and (
             builder.has_language("CALL_KWARGS_314_V1") and any(keyword.arg is None for keyword in node.keywords)
             or builder.has_language("CALL_EXPANSION_314_V1") and any(isinstance(arg, ast.Starred) for arg in node.args))):
-        from scar.analysis.source_call_lowering import lower_kwargs_call
+        from scar.analysis.static.lowering.source_call_lowering import lower_kwargs_call
         return lower_kwargs_call(builder, node, cursor)
     if builder.has_language("LEXICAL_LOCALS") and isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
         label = ("GENERATOR_EXPRESSION_CREATION_DRIVE_INTERFACE_UNIMPLEMENTED" if isinstance(node, ast.GeneratorExp)
                  else "COMPREHENSION_SCOPE_INTERFACE_UNIMPLEMENTED")
         raise _Unsupported(GapKind.UNSUPPORTED_SYNTAX, node, label)
     if builder.has_language("SLICE_KEYS") and isinstance(node, (ast.Slice, ast.Subscript)):
-        from scar.analysis.source_slice_lowering import lower_slice, lower_subscript
+        from scar.analysis.static.lowering.source_slice import lower_slice, lower_subscript
         return lower_slice(builder, node, cursor) if isinstance(node, ast.Slice) else lower_subscript(builder, node, cursor)
     if isinstance(node, ast.Dict):
-        from scar.analysis.source_mapping_lowering import lower_dictionary
+        from scar.analysis.static.lowering.source_mapping_lowering import lower_dictionary
         return lower_dictionary(builder, node, cursor)
     if isinstance(node, ast.JoinedStr):
-        from scar.analysis.source_string import lower_joined_string
+        from scar.analysis.static.lowering.source_string import lower_joined_string
         return lower_joined_string(builder, node, cursor)
     if isinstance(node, ast.BoolOp):
-        from scar.analysis.source_conditional_lowering import lower_bool_expression
+        from scar.analysis.static.lowering.source_conditional_lowering import lower_bool_expression
         return lower_bool_expression(builder, node, cursor)
     if isinstance(node, ast.IfExp):
-        from scar.analysis.source_conditional_lowering import lower_if_expression
+        from scar.analysis.static.lowering.source_conditional_lowering import lower_if_expression
         return lower_if_expression(builder, node, cursor)
     if isinstance(node, ast.Name):
         return builder.read_source_name(node, cursor, builder.old_operation(node))
@@ -113,7 +113,7 @@ def dispatch_source_expression(builder, node, cursor):
 
 def dispatch_source_condition(builder, node, cursor):
     if isinstance(node, (ast.BoolOp, ast.IfExp)) or isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        from scar.analysis.source_conditional_lowering import lower_condition_expression
+        from scar.analysis.static.lowering.source_conditional_lowering import lower_condition_expression
         return lower_condition_expression(builder, node, cursor)
     return NotImplemented
 
@@ -140,10 +140,10 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
             function_entries=(FunctionEntryLayout(self.environment.id, self.interface.parameters),),
             state_address_refinements=tuple(self.address_refinements))
         if hasattr(self, "generator_records"):
-            from scar.analysis.source_generator_lowering import assemble_generators
+            from scar.analysis.static.lowering.source_generator_lowering import assemble_generators
             graph = assemble_generators(self, graph)
         if hasattr(self,'lambda_bodies'):
-            from scar.analysis.source_lambda import assemble_lambda_bodies
+            from scar.analysis.static.lowering.source_lambda import assemble_lambda_bodies
             graph = assemble_lambda_bodies(self,graph)
         return graph
 
@@ -197,7 +197,7 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
     def read_source_name(self, node, cursor, old=None):
         """A target child may have SG provenance without a computational overlay."""
         if getattr(self,"comprehension_scope",None) is not None:
-            from scar.analysis.source_comprehension_lowering import _target_read
+            from scar.analysis.static.lowering.source_comprehension import _target_read
             scoped = _target_read(self,node,cursor,old)
             if scoped is not NotImplemented:return scoped
         if node.id in self.cell_references:
@@ -214,16 +214,16 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
 
     def store(self, target, value, cursor):
         if self.has_language("FIXED_UNPACK") and isinstance(target, (ast.Tuple, ast.List)):
-            from scar.analysis.source_unpack_lowering import lower_unpack_target
+            from scar.analysis.static.lowering.source_unpack_lowering import lower_unpack_target
             return lower_unpack_target(self, target, value, cursor)
         if isinstance(target, (ast.Attribute, ast.Subscript)):
-            from scar.analysis.source_heap_lowering import store_heap_target
+            from scar.analysis.static.lowering.source_heap_lowering import store_heap_target
             return store_heap_target(self, target, value, cursor)
         if isinstance(target, ast.Name) and target.id in self.cell_references:
             records = self.old_by_atom.get(self.source(target).atom_id, ())
             recovered = self.has_language('SOURCE_EXPRESSIONS_314_V1') and not records
             if recovered:
-                from scar.analysis.source_heap_lowering import _source_definition, _associate
+                from scar.analysis.static.lowering.source_heap_lowering import _source_definition, _associate
                 definition = _source_definition(self, target, binding=True)
                 writes = [edge for edge in self.semantic.edges.values()
                     if edge.source.id == definition.id and edge.relation is SemanticRelation.WRITES_SLOT]
@@ -258,20 +258,20 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
     def statements(self, statements, cursor):
         # These declarations affect compiler binding classification; neither
         # performs a namespace read/write merely by being encountered.
-        from scar.analysis.source_statement_lowering import annotated_assignment, assert_statement, raise_statement
+        from scar.analysis.static.lowering.source_statement_lowering import annotated_assignment, assert_statement, raise_statement
         for node in statements:
             if isinstance(node, (ast.Global, ast.Nonlocal)):
                 continue
             if cursor is None:
                 cursor = super().statements((node,), cursor)
             elif isinstance(node, ast.ClassDef) and self.has_language('CLASS_CONSTRUCTION_314_V1'):
-                from scar.analysis.source_class_construction_lowering import lower_class_construction
+                from scar.analysis.static.lowering.source_class_construction import lower_class_construction
                 cursor = lower_class_construction(self, node, cursor)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and self.has_language('NESTED_FUNCTION_314_V1'):
-                from scar.analysis.source_function_definitions import lower_function_definition
+                from scar.analysis.static.lowering.source_function_definitions import lower_function_definition
                 cursor = lower_function_definition(self, node, cursor)
             elif isinstance(node, (ast.Import, ast.ImportFrom)) and self.has_language('FUNCTION_IMPORT_314_V1'):
-                from scar.analysis.source_import_lowering import lower_import
+                from scar.analysis.static.lowering.source_import_lowering import lower_import
                 cursor = lower_import(self, node, cursor)
             elif isinstance(node, ast.AnnAssign):
                 cursor = annotated_assignment(self, node, cursor)

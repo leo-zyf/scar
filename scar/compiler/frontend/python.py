@@ -325,7 +325,7 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
 
         parents = [part for domain in _DOMAINS for part in
             ('--materials',domain,out/domain,out/(domain+'-verified'))]
-        run.stage('templates', 'scar.analysis.source_template_links',
+        run.stage('templates', 'scar.analysis.source_templates',
             ['--model',model,'--out',out/'templates',*parents,*selection,'--jobs',jobs],
             out/'templates/result.json','scar.source-template-link-store', status='SOURCE_INTERFACES_LINKED')
         run.stage('facts','scar.analysis.normal_links',

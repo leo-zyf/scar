@@ -14,7 +14,7 @@ import time
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import binding_ports as B, source_productions as P, state_ports as S
 from scar.ir.record_codec import decode,encode
 

@@ -7,8 +7,8 @@ from pathlib import Path
 def compile_invariant_build(document,out,*,loop_trip_count=None,loop_inputs=None,plan_only=False,loop_cpu_threads=None,
         loop_cpu_model=False,loop_calibrations=(),loop_no_op_profiles=None,loop_max_threads=None):
     from scar.analysis.build import BuildSession
-    from scar.compiler.invariant_loop_frontend import read_invariant_loop_motion,validate_invariant_loop_links
-    from scar.compiler.export_temporal_invariant import export_temporal_invariant
+    from scar.compiler.loop_admission import read_invariant_loop_motion, validate_invariant_loop_links
+    from scar.compiler.invariant_export import export_temporal_invariant
     from scar.compiler.temporal_invariant_loop import build_temporal_invariant_loop
     from scar.compiler.model import CpuPlacement
     from scar.ir.execution_recipe import read_artifact,artifact_reference

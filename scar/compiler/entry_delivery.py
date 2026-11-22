@@ -80,7 +80,7 @@ def _environment_digest(environment):
 
 
 def _aten(scope, reference, document):
-    from scar.compiler.aten_source_entry import ABI_FILE, BINDING_FILE, LAUNCHER, _inputs
+    from scar.compiler.aten_entry_delivery import ABI_FILE, BINDING_FILE, LAUNCHER, _inputs
     from scar.runtime.validate_native_project import verify_native_project
 
     root = Path(reference['uri']).parent

@@ -481,8 +481,8 @@ class StructuredBuilder(_Builder):
             return None
         if len(node.targets) == 1:
             return self.store(node.targets[0], value, cursor)
-        from scar.analysis.source_heap_lowering import _hold
-        from scar.analysis.source_mapping_lowering import _transfer
+        from scar.analysis.static.lowering.source_heap_lowering import _hold
+        from scar.analysis.static.lowering.source_mapping_lowering import _transfer
         baseline = len(self.active_temporaries)
         _hold(self, cursor, node.value, value)
         try:
@@ -732,7 +732,7 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
     delegated = set()
     if language is not None:
         if language.lambda_bodies:
-            from scar.analysis.source_lambda import validate_lambda_regions, root_projection as lambda_projection
+            from scar.analysis.static.lowering.source_lambda import validate_lambda_regions, root_projection as lambda_projection
             delegated.update(validate_lambda_regions(model,graph,interface,metadata,semantic,control,language,
                 source_tree=source_tree,options=language_options,structural_only=structural_only,sealed_source=sealed_source))
             model,graph,metadata,language=lambda_projection(model,graph,metadata,language,delegated)
@@ -864,11 +864,11 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
     if environment_profile:
         from scar.analysis.source_environment_layout import validate_environment_body
         validate_environment_body(model, graph, interface, metadata, semantic, language=language)
-        from scar.analysis.source_statement_lowering import validate_statement_protocols
+        from scar.analysis.static.lowering.source_statement_lowering import validate_statement_protocols
         validate_statement_protocols(model, graph, interface, metadata, semantic, language=language)
-        from scar.analysis.source_string import validate_string_protocols
+        from scar.analysis.static.lowering.source_string import validate_string_protocols
         validate_string_protocols(model, graph, interface, metadata, semantic, language=language)
-        from scar.analysis.source_mapping_lowering import validate_mapping_protocols
+        from scar.analysis.static.lowering.source_mapping_lowering import validate_mapping_protocols
         validate_mapping_protocols(model, graph, interface, metadata, semantic, language=language)
     if language is not None:
         from scar.analysis.source_language import validate_language_body

@@ -102,7 +102,7 @@ def _loader(path, project, files, cwd, environment):
 
 
 def _admit(selection_ref, staging):
-    from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
+    from scar.compiler.cpu_task_entry import emit_cpu_catalog_entry
 
     selected = read_artifact(selection_ref)
     _need(selection_ref['schema'] == _SELECTION and selected['schema_version'] == 1 and not selected['plan_only'],

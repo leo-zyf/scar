@@ -6,7 +6,7 @@ import pytest
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.compiler.graph_frontend import GraphRegionRejected
-from scar.compiler.loop_frontend import _LoopLowerer
+from scar.compiler.loop_admission import _LoopLowerer
 from scar.compiler.loop_admission import ArrayLoopPlan, document, loop_from_dict, loop_digest
 from scar.compiler.model import SourceRef,ArrayRegion,Expr
 from scar.compiler.pipeline_frontend import _Callee

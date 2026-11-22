@@ -15,15 +15,15 @@ import time
 from scar.analysis import source_compiler_symbol_variants as S, compiler_contexts as source_compile_interfaces
 from scar.analysis import source_expression_rules, source_statement_rules as source_statement_rules, source_root_rules, normal_graph, normal_links
 from scar.analysis.frontend_bindings import FrontendBindingView
-from scar.analysis.source_context_view import SourceContextView
+from scar.analysis.source_contexts import SourceContextView
 from scar.analysis.source_productions import ProductionSourceIndex
-from scar.analysis import source_template_links
+from scar.analysis import source_templates as source_template_links
 from scar.analysis.source_expression_materials import _WORLD,_implementation as recipe_implementation
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import code_identity as CV, code_identity as BV
 from scar.ir.program import code_identity as NV, code_identity as TV
 from scar.ir.program import code_identity as SV

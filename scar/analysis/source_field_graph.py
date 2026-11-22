@@ -12,7 +12,7 @@ from scar.analysis.source_field_interfaces import discover_field_calls, infer_fi
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_references import source_port as _gp
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import source_value_routes as R, normal_graph as T, normal_graph as F

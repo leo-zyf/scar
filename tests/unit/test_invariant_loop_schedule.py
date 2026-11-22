@@ -6,7 +6,7 @@ import pytest
 
 from test_cpu_hardware_placement import hardware
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.invariant_loop_frontend import InvariantLoopProof
+from scar.compiler.loop_admission import InvariantLoopProof
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import decode
 from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule, verify_invariant_loop_schedule

@@ -16,17 +16,17 @@ import re
 import time
 from types import SimpleNamespace
 
-from scar.analysis import python_bindings, software_resources
+from scar.analysis import python_bindings, software_resources as software_resources
 from scar.analysis.static import native_interfaces as static_native_interfaces
 from scar.analysis import source_named_bindings, source_declared_calls
 from scar.analysis.source_native_binding_materials import read_binding_materials, _target_guard
-from scar.analysis.static_native_materials import StaticNativeMaterials
+from scar.analysis.native_call_materials import StaticNativeMaterials
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import native_contracts as N, name_flow as M
 from scar.ir.program import python_bindings as B, source_productions as P
 from scar.ir.program import native_contracts as S
@@ -230,7 +230,7 @@ def _counts(graph):
 
 
 def _pins():
-    from scar.analysis import static_native_materials, source_native_binding_materials, normal_output
+    from scar.analysis import native_call_materials as static_native_materials, source_native_binding_materials, normal_output
     from scar.ir.program import native_contracts as S, binding_returns as R, native, model, codec, validation
     from scar.ir import record_codec
     result = dict(producer=sha256(Path(__file__).read_bytes()).hexdigest())

@@ -5,8 +5,8 @@ from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.program.target_hardware import CpuCore, CpuExecutor, HardwareThread
 from .hardware import _indexed_resources, _record_evidence, _target_materials
 from .implementation_costs import CostQuery, query_key, resolve_cost
-from .pipeline_memory import plan_pipeline_memory
-from .pipeline_partial_order_memory import plan_pipeline_partial_order_memory
+from scar.optimization.pipeline_memory import plan_pipeline_memory
+from scar.optimization.pipeline_memory import plan_pipeline_partial_order_memory
 from .pipeline_ready_schedule import plan_pipeline_ready_schedule
 from .resource_solver import semantic_sha256
 

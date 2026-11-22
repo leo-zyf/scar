@@ -10,7 +10,7 @@ import hashlib
 import sys
 from types import SimpleNamespace
 
-from scar.analysis.source_class_construction_validation import validate_class_constructions
+from scar.analysis.static.lowering.source_class_construction import validate_class_constructions
 from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.analysis.static.function_origins import _replay_compilation
 from scar.ir.program.class_construction import ContextualClassStatementSource

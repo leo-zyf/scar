@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from scar.analysis.normal_facts import SourceFactStore
-from scar.analysis.source_interface_store import SourceInterfaceStore
+from scar.analysis.source_interface_build import SourceInterfaceStore
 
 
 SCHEMA = 'scar.declared-source-catalog'
@@ -173,7 +173,7 @@ class DeclaredSourceCatalog:
 def publish_declared_catalog(facts, interfaces, out):
     """Reference existing complete local stores; do not build or solve bodies."""
     from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-    from scar.analysis.source_template_links import _json
+    from scar.analysis.source_templates import _json
     out = Path(out).absolute()
     if out.resolve() != out or out.exists():
         raise ValueError('declared catalog requires fresh canonical output')

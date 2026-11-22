@@ -76,7 +76,7 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
             memory = strategy['selected_memory_plan']
         else:
             if pipeline_memory_order=='dependencies':
-                from scar.optimization.pipeline_partial_order_memory import plan_pipeline_partial_order_memory as memory_planner
+                from scar.optimization.pipeline_memory import plan_pipeline_partial_order_memory as memory_planner
             else:
                 from scar.optimization.pipeline_memory import plan_pipeline_memory as memory_planner
             memory = memory_planner(pipeline, input_shapes=shapes,

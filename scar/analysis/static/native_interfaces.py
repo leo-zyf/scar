@@ -12,7 +12,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from scar.analysis.static_native_materials import StaticNativeMaterials
+from scar.analysis.native_call_materials import StaticNativeMaterials
 from scar.ir.program.ids import (
     BlockID, LocationID, NativeBoundaryID, OperationID, ProviderID, RegionID, UseID, ValueID,
 )

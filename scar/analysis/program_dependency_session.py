@@ -719,7 +719,7 @@ class ProgramDependencySession:
 
     def loop_views(self, namespace):
         """Expose shared loop templates and original carried ports, not iterations."""
-        from scar.analysis.program_loop_views import loop_template_views
+        from scar.analysis.loop_graph_view import loop_template_views
         if type(namespace) is GraphNamespace:
             namespace = namespace.source_body
         if type(namespace) is not SourceBodyNamespace:
@@ -728,7 +728,7 @@ class ProgramDependencySession:
 
     def loop_constructs(self, namespace):
         """Expand original source loop constructs into shared operation references."""
-        from scar.analysis.program_loop_regions import loop_construct_views
+        from scar.analysis.loop_graph_view import loop_construct_views
         if type(namespace) is GraphNamespace:
             namespace = namespace.source_body
         if type(namespace) is not SourceBodyNamespace:
@@ -737,7 +737,7 @@ class ProgramDependencySession:
 
     def loop_boundary(self, namespace, loop, *, context=None, max_members=16384):
         """Describe the exact selected source construct, retaining effects/open scope."""
-        from scar.analysis.program_loop_regions import LoopConstructView
+        from scar.analysis.loop_graph_view import LoopConstructView
         from dataclasses import replace
         from scar.analysis.program_regions import (
             analyze_boundary, BoundaryFieldStatus, BoundaryKnowledge,
@@ -753,7 +753,7 @@ class ProgramDependencySession:
             raise ValueError('loop construct differs from its current original source/ports')
         selected, = selected
         if not selected.members:
-            from scar.analysis.program_loop_views import LoopViewUnavailable
+            from scar.analysis.loop_graph_view import LoopViewUnavailable
             raise LoopViewUnavailable('No operation members are recorded; inspect loop construct frontiers.')
         graph_namespace = selected.template.namespace
         operations = tuple(DependencyPoint(graph_namespace, identity, context)

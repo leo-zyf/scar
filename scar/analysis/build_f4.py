@@ -377,7 +377,7 @@ class F4BuildSession:
                     provider=SourceNativeCallProvider(self.view,path)
                 elif name=='protocol':
                     from scar.analysis.source_protocol_materials import SourceProtocolMaterials
-                    from scar.analysis.source_protocol_view import SourceProtocolCallProvider
+                    from scar.analysis.source_protocol_materials import SourceProtocolCallProvider
                     materials=SourceProtocolMaterials(path,self.catalog,members=self._component_path('members'))
                     provider=SourceProtocolCallProvider(self.view,materials)
                 elif name=='observed_boundaries':

@@ -67,7 +67,7 @@ def emit_callable(b, root, state):
     b.mark(field, P.ProductionDispositionKind.DEFERRED_CHILD)
     defaults, keywords = [], []
     if generator:
-        from scar.analysis.source_comprehension_rules import comprehension_clauses
+        from scar.analysis.static.lowering.source_comprehension import comprehension_clauses
         clauses = comprehension_clauses(b)
     else:
         defaults, keywords, state = prepare_defaults(b,root,state,env)
@@ -82,7 +82,7 @@ def emit_callable(b, root, state):
     if generator:
         *function_env, state = b.protocol(root, K.MAKE_GENEXPR_FUNCTION, (code, globals_ref, *cells), state, (closure,))
         iterable, state = b.evaluate(root, clauses[0][1], state)
-        from scar.analysis.source_comprehension_rules import get_iterator
+        from scar.analysis.static.lowering.source_comprehension import get_iterator
         iterator, state = get_iterator(b, root, iterable, state, clauses[0][3])
         result = b.protocol(root, K.CREATE_GENEXPR, (*function_env, *cells, iterator), state, (closure,))
     else:
@@ -98,7 +98,7 @@ def emit_callable(b, root, state):
     else:
         execute_world = current
     if generator:
-        from scar.analysis.source_comprehension_rules import emit_clause_loops
+        from scar.analysis.static.lowering.source_comprehension import emit_clause_loops
         execute_world = emit_clause_loops(b, execution, clauses, b.parameter(execution,0), execute_world,
             suspension=P.SuspensionKind.ASYNC_YIELD if env.kind is P.DeferredBodyKind.ASYNC_GENERATOR else P.SuspensionKind.YIELD)
         value, execute_world = b.literal(execution, None, execute_world)

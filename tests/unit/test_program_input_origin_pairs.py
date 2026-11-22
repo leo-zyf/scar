@@ -3,7 +3,7 @@ import importlib
 from scar.ir.program.ids import OperationID, UseID
 from scar.ir.program.protocols import OwnedUse
 from scar.ir.program.queries import ProgramIndex
-from scar.ir.program.input_origins import paired_input_origins
+from scar.ir.program.request_inputs import paired_input_origins
 from scar.ir.execution.validity_budget import ValidityBudget
 from tests.fixtures.program_input_origin_graphs import input_origin_program
 from scar.ir.program.validation import require_valid
@@ -148,7 +148,7 @@ def test_origin_route_indexes_are_built_once_and_reused_across_source_and_joint_
     graph, details = input_origin_program()
     require_valid(graph)
     index = ProgramIndex(graph)
-    module = importlib.import_module("scar.ir.program.input_origins")
+    module = importlib.import_module("scar.ir.program.request_inputs")
     original_builder = module._build_origin_route_indexes
     builds = []
 

@@ -3,7 +3,7 @@ import json
 import pytest
 
 from scar.codegen.cpu_fused_cost import _receipt
-from scar.codegen.cpu_instruction_cost_replay import _replay_analysis
+from scar.codegen.cpu_instruction_replay import _replay_analysis
 
 
 def test_rehashed_instruction_mutation_is_rejected_against_compiler_loop(tmp_path):

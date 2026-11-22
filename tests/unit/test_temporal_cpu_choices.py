@@ -7,7 +7,7 @@ import pytest
 
 from test_cpu_hardware_placement import hardware
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.invariant_loop_frontend import InvariantLoopProof
+from scar.compiler.loop_admission import InvariantLoopProof
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.temporal_cpu_choices import (build_temporal_cpu_domain,
     preview_temporal_cpu_choice, verify_temporal_cpu_preview, temporal_cpu_cost_demand,

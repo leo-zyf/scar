@@ -9,7 +9,7 @@ from hashlib import sha256
 import os
 import time
 
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import source_productions as P
 from scar.ir.record_codec import _encode, _record_tags
 

@@ -5,9 +5,9 @@ from dataclasses import replace
 import pytest
 
 from scar.analysis.program_lowering import SourceProgram, prepare_source_text
-from scar.analysis.source_class_construction_validation import validate_class_constructions
+from scar.analysis.static.lowering.source_class_construction import validate_class_constructions
 from scar.analysis.source_language import SourceLanguageOptions
-from scar.analysis.source_module_lowering import lower_module_entry, module_unit
+from scar.analysis.static.lowering.source_module_lowering import lower_module_entry, module_unit
 from scar.analysis.static.compilation import compile_source_unit
 from scar.analysis.static.lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
@@ -22,7 +22,7 @@ from scar.ir.v2.ids import OperationDefinitionID
 def test_module_literal_bool_if_maps_compiler_elision_without_executing_source(tmp_path, monkeypatch):
     import ast
     import dis
-    import scar.analysis.source_module_lowering as lowering
+    import scar.analysis.static.lowering.source_module_lowering as lowering
     from scar.ir.program.entry_namespaces import StatementSequenceField as F
     from scar.ir.program.structured import PythonProtocolKind as P
 
@@ -124,8 +124,8 @@ def test_module_literal_bool_if_maps_compiler_elision_without_executing_source(t
     # Emit a historical conservative prefix using its unchanged admission
     # mode, then independently read that old wire after restoring new rules.
     original_selection=lowering.mapping_prefix_selection
-    def old_selection(context,evidence,*,profile=None,literal_bool_elision=False,module_annotations=False):
-        return original_selection(context,evidence,profile=profile,literal_bool_elision=False)
+    def old_selection(context, evidence, *, profile=None, **_features):
+        return original_selection(context, evidence, profile=profile, literal_bool_elision=False)
     text='sentinel = 0\nif True:\n    value = kept()\nelse:\n    value = dead()\nafter = 1\n'
     with monkeypatch.context() as patch:
         patch.setattr(lowering,'mapping_prefix_selection',old_selection)
@@ -241,7 +241,7 @@ def test_parent_class_ports_roundtrip_without_running_and_reject_substitutions(t
     annotation_unit = module_unit(annotation_prepared)
     annotation_evidence = compile_source_unit(annotation_prepared).for_module(annotation_unit)
     assert annotation_evidence.code.co_cellvars == ('__conditional_annotations__',)
-    from scar.analysis.source_module_lowering import require_root_evidence
+    from scar.analysis.static.lowering.source_module_lowering import require_root_evidence
     with pytest.raises(ValueError, match='exact non-resumable exec root'):
         require_root_evidence(annotation_unit, annotation_evidence)
     annotation_module = lower_module_entry(annotation_prepared, annotation_unit,

@@ -144,7 +144,7 @@ def compile_composite_invariant_build(document,out,*,loop_trip_count=None,loop_i
                     or artifact.plan['execution_movement_binding']!=consumed
                     or semantic_sha256(artifact.plan['execution_plan']['resource_binding'])!=semantic_sha256(schedule['resource_binding'])):
                 raise ValueError('composite native specialization differs from selected resource schedule')
-            from scar.compiler.export_composite_temporal_invariant import export_composite_temporal_invariant
+            from scar.compiler.invariant_export import export_composite_temporal_invariant
             exported=export_composite_temporal_invariant(directory/'native',directory/'bundle',
                 schedule_path=schedule_path,proof_reference=spec['proof'],catalog=session.view)
             row.update(status='MODEL_SELECTED_COMPOSITE_LOOP_COMPILED',native_directory=str(directory/'native'),

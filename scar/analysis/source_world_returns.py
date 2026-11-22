@@ -21,7 +21,7 @@ from scar.analysis.source_world_return_parents import CertifiedWorldParents
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import call_returns as R, normal_graph as T, normal_graph as F, source_productions as P
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, decode

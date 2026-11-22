@@ -77,7 +77,7 @@ class StatefulDependencyProvider:
     relation_kinds=frozenset((*[kind for kind,_ in _EDGES.values()],K.CONTAINS,K.IMPLEMENTATION))
 
     def __init__(self,view,region,*,register=True):
-        from scar.compiler.stateful_frontend import discover_stateful_regions
+        from scar.compiler.stateful_loop_frontend import discover_stateful_regions
         self.view=view
         self._reference=artifact_reference(region,SCHEMA)
         self._region=stateful_from_dict(read_artifact(self._reference))
@@ -244,7 +244,7 @@ class StatefulDependencyProvider:
 def _pins():
     from scar.analysis import stateful_dependencies
     from scar.analysis import program_view,normal_output
-    from scar.compiler import stateful_model,stateful_frontend,graph_frontend
+    from scar.compiler import stateful_model, stateful_loop_frontend as stateful_frontend, graph_frontend
     from scar.ir.program import dependencies
     from scar.ir import record_codec
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in (
@@ -313,7 +313,7 @@ def read_stateful_graph(path,view,*,_provider=None):
 
 def main(argv=None):
     from scar.analysis.build import BuildSession
-    from scar.compiler.stateful_frontend import discover_stateful_regions
+    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build',required=True)

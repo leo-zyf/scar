@@ -18,7 +18,7 @@ from scar.ir.versioned_schedule import (VersionedLogicalValue as Value,StorageSl
     VersionedMaterialization as Material,VersionedTask as Task,VersionedTaskKind as K,
     VersionedResourceSchedule,schedule_document,validate_versioned_schedule)
 from .hardware import _target_materials,_indexed_resources,_record_evidence,_connection_evidence,_accesses
-from .pipeline_memory import verify_pipeline_memory
+from scar.optimization.pipeline_memory import verify_pipeline_memory
 from .resource_solver import semantic_sha256
 
 

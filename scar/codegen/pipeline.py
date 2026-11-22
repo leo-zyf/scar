@@ -1,35 +1,43 @@
-"""One Python entry and one C++ host invocation for a pure array pipeline.
-
-The host calls existing operator ABI-1 tables in source order or under a
-replayed CPU schedule. It owns workspace payload buffers and returns the
-independent fresh NumPy final after successful execution.
-"""
+"""Pipeline."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 import ctypes
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
-
+from dataclasses import dataclass
+from pathlib import Path
 from scar.compiler.model import document as leaf_document
-from scar.compiler.pipeline_frontend import PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline
+from scar.compiler.pipeline_frontend import (
+    PipelinePlan,
+    document,
+    pipeline_digest,
+    pipeline_from_dict,
+    read_pipeline,
+)
 from scar.optimization.pipeline_memory import verify_pipeline_memory
 from scar.optimization.hardware import validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
-from . import cpp
-from .pipeline_resource_events import (
-    DIAGNOSTIC_CAPACITY_PER_EVENT, DIAGNOSTIC_KINDS, RESOURCE_EVENTS_FAMILY,
+from scar.codegen import cpp
+from scar.codegen.pipeline_resource_events import (
+    DIAGNOSTIC_CAPACITY_PER_EVENT,
+    DIAGNOSTIC_KINDS,
+    RESOURCE_EVENTS_FAMILY,
 )
 
+
+# One Python entry and one C++ host invocation for a pure array pipeline.
+#
+# The host calls existing operator ABI-1 tables in source order or under a
+# replayed CPU schedule. It owns workspace payload buffers and returns the
+# independent fresh NumPy final after successful execution.
 GuardFailure = cpp.GuardFailure
 _DIRECTORY = Path(__file__).resolve().parent
 _TablePointer = ctypes.POINTER(cpp._Table)
@@ -56,7 +64,7 @@ def _json_bytes(value):
 def pipeline_implementation_sha256():
     files = [{"path": name, "sha256": _digest((_DIRECTORY / name).read_bytes())}
              for name in ("pipeline.py", "pipeline_v1.cpp.in", "pipeline_parallel_v1.cpp.in",
-                          "pipeline_ready.py", "pipeline_ready_v1.cpp.in", "pipeline_solver_order.py",
+                          "pipeline_ready_v1.cpp.in",
                           "pipeline_resource_events.py", "pipeline_resource_events_v1.cpp.in",
                           "kernel_v1.cpp.in", "scar_abi_v1.h")]
     return semantic_sha256(files)
@@ -235,10 +243,8 @@ def _source(pipeline, memory, operators, execution_schedule=None):
         source = source.replace("@" + key + "@", value)
     if execution_schedule is None:return source
     if execution_schedule['execution_family']==READY_FAMILY:
-        from .pipeline_ready import render_ready_source
         return render_ready_source(source,pipeline,memory,execution_schedule)
     if execution_schedule['execution_family']==SOLVER_ORDER_FAMILY:
-        from .pipeline_solver_order import render_solver_order_source
         return render_solver_order_source(source,pipeline,memory,execution_schedule)
     if execution_schedule['execution_family']==RESOURCE_EVENTS_FAMILY:
         from .pipeline_resource_events import render_resource_events_source
@@ -521,4 +527,117 @@ def load(out):
                             diagnostic)
 
 
-__all__ = ["PipelineArtifact", "GuardFailure", "build", "load", "pipeline_implementation_sha256"]
+# Emit dependency-ready control around unchanged, CPU-bound ABI1 operators.
+_TEMPLATE_DIRECTORY=Path(__file__).resolve().parent
+
+
+def render_ready_source(serial_source,pipeline,memory,report):
+    marker='extern "C" SCAR_EXPORT_V1 const char *scar_pipeline_plan_sha256_v1()'
+    if serial_source.count(marker)!=1:raise ValueError('original ABI1 plan/descriptor helpers required')
+    prefix=serial_source.split(marker,1)[0]
+    kernel=(_TEMPLATE_DIRECTORY/'kernel_v1.cpp.in').read_text()
+    affinity='class ThreadAffinity {'+kernel.split('class ThreadAffinity {',1)[1].split('};\n#endif',1)[0]+'};'
+    wave=(_TEMPLATE_DIRECTORY/'pipeline_parallel_v1.cpp.in').read_text()
+    worker=wave[wave.index('// Save the complete environment'):wave.index('int32_t run_waves(')]
+    dependencies=['    {{'+','.join('1'if other.id in report['call_predecessors'][call.id]else'0'
+        for other in pipeline.calls)+'}},'for call in pipeline.calls]
+    values=dict(PLAN_AND_DESCRIPTOR_HELPERS=prefix,AFFINITY_IMPLEMENTATION=affinity,
+        WORKER_ENVIRONMENT_AND_ABI_CALL=worker,CPU_SLOTS=str(max(report['cpu_ids'])+1),
+        CALL_COUNT=str(len(pipeline.calls)),LANE_COUNT=str(len(report['cpu_ids'])),
+        LANE_CPUS=','.join(map(str,report['cpu_ids'])),
+        CALL_CPUS=','.join(str(report['call_cpu_ids'][call.id])for call in pipeline.calls),
+        CALL_PREDECESSORS='\n'.join(dependencies),PIPELINE_SHA256=pipeline_digest(pipeline),
+        MEMORY_SHA256=semantic_sha256(memory),EXECUTION_SCHEDULE_SHA256=semantic_sha256(report))
+    source=(_TEMPLATE_DIRECTORY/'pipeline_ready_v1.cpp.in').read_text()
+    for name,value in values.items():source=source.replace('@'+name+'@',value)
+    if '@'in source:raise ValueError('unresolved dependency-ready host template')
+    return source
+
+
+# Render only certified CPU-lane order over the original ready-host envelope.
+#
+# Full source/domain/cost replay belongs to pipeline._admit_execution_schedule.
+# These structural checks also prevent a partial or inconsistent lane policy
+# from being emitted if this renderer is called directly.
+_READY_POLICY = '''    auto next_for_cpu = [&](int cpu) {
+        for (size_t i = 0; i < call_plans.size(); ++i)
+            if (state[i] == 0 && call_cpu_ids[i] == cpu && predecessors_complete(i)) return i;
+        return call_plans.size();
+    };
+    auto any_ready = [&]() {
+        for (size_t i = 0; i < call_plans.size(); ++i)
+            if (state[i] == 0 && predecessors_complete(i)) return true;
+        return false;
+    };
+'''
+
+
+
+
+def render_solver_order_source(serial_source, pipeline, memory, report):
+    _require(report.get('schema') == 'scar.pipeline-execution-refinement'
+             and type(report.get('schema_version')) is int and report['schema_version'] == 1
+             and report.get('execution_family') == SOLVER_ORDER_FAMILY
+             and report.get('requires_serial_leaf_operators') is True
+             and report.get('dispatch_policy') ==
+             'FIXED_CPU_LANE_HEAD_ONLY_WAIT_TRUE_PREDECESSORS_NO_TIMESTAMP_WAIT'
+             and report.get('full_model_timeline_implemented') is False
+             and report.get('task_model_makespan_is_native_runtime_prediction') is False,
+             'a compute-only solver execution refinement is required')
+    indexes = {call.id: index for index, call in enumerate(pipeline.calls)}
+    cpus, rows = report['cpu_ids'], report['model_compute_order']
+    _require(type(cpus) is list and bool(cpus) and
+             all(type(cpu) is int and cpu >= 0 for cpu in cpus) and len(set(cpus)) == len(cpus),
+             'solver CPU lanes must be distinct explicit CPU IDs')
+    _require(len(indexes) == len(pipeline.calls) and type(rows) is list
+             and len(rows) == len(indexes) and
+             len({row['call'] for row in rows}) == len(rows) and
+             {row['call'] for row in rows} == set(indexes) and
+             set(report['call_cpu_ids']) == set(indexes),
+             'solver order must cover each original call exactly once')
+    lanes = {str(cpu): [] for cpu in cpus}
+    for row in rows:
+        cpu = report['call_cpu_ids'][row['call']]
+        _require(type(cpu) is int and cpu in cpus and row['cpu_id'] == cpu,
+                 'solver call placement differs from its fixed CPU lane')
+        lanes[str(cpu)].append(row['call'])
+    _require(report['lane_call_order'] == lanes,
+             'solver compute order and certified per-lane order differ')
+    ordered = [indexes[row['call']] for row in rows]
+    source = render_ready_source(serial_source, pipeline, memory, report)
+    declaration = ('constexpr std::array<size_t, ' + str(len(ordered))
+        + '> solver_compute_order = {{' + ','.join(map(str, ordered)) + '}};\n')
+    marker = 'constexpr int32_t worker_guard = 16;\n'
+    _require(source.count(marker) == 1 and source.count(_READY_POLICY) == 1,
+             'original ready-host lane policy and declaration marker must be unique')
+    source = source.replace(marker, marker + declaration, 1)
+    policy = '''    // Resource order is a certified implementation refinement. Never
+    // bypass a pending lane head merely because a later call is ready.
+    auto next_for_cpu = [&](int cpu) {
+        for (const size_t i : solver_compute_order) {
+            if (state[i] != 0 || call_cpu_ids[i] != cpu) continue;
+            return predecessors_complete(i) ? i : call_plans.size();
+        }
+        return call_plans.size();
+    };
+    auto any_ready = [&]() {
+        for (const int cpu : lane_cpu_ids)
+            if (next_for_cpu(cpu) != call_plans.size()) return true;
+        return false;
+    };
+'''
+    return source.replace(_READY_POLICY, policy, 1)
+
+
+__all__ = [
+    'PipelineArtifact',
+    'GuardFailure',
+    'build',
+    'load',
+    'pipeline_implementation_sha256',
+    'READY_FAMILY',
+    'render_ready_source',
+    'SOLVER_ORDER_FAMILY',
+    'render_solver_order_source',
+    'PARALLEL_FAMILY',
+]

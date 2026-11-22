@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 from types import CodeType
 
-from scar.analysis import source_execution, source_text_values, source_compilation_contexts
+from scar.analysis import source_execution, source_values as source_text_values, source_compilation_contexts as source_compilation_contexts
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
@@ -22,7 +22,7 @@ from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_launch import read_script_entry
 from scar.analysis.source_syntax import _digest
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.static.query import _Fragments
 from scar.ir.program import code_identity as X, source_protocols as E, source_bytes as S
 from scar.ir.program import normal_graph as F, normal_graph as T, normal_graph as G, source_productions as P

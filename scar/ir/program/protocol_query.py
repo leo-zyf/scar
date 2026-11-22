@@ -38,7 +38,7 @@ def _row_view(ctx, row, index=None):
             predicate = admission_view(ctx, row)
         if type(contract.subject) is ReferenceIsNoneCondition and not async_body_or_input:
             from .control import ProtocolValueKind
-            from .request_inputs import request_input_binding
+            from scar.ir.program.request_inputs import request_input_binding
             reports = []
             interface = ctx.interfaces.get(ctx.region_of[row.operation])
             if ctx.budget.truncated:

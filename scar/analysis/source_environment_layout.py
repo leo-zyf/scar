@@ -322,7 +322,7 @@ def validate_environment_body(model, graph, interface, metadata, semantic, *, la
                  "comprehension build lost its original opaque source scope")
             continue
         if kind is Kind.CALL_FUNCTION_EX:
-            from scar.analysis.source_call_validation import is_original_call_definition
+            from scar.analysis.static.lowering.source_call_lowering import is_original_call_definition
             from scar.ir.program.source_language import SourceLanguageCapability
             source = semantic.definitions.get(link.semantic_operation)
             atom = semantic.source_atoms.get(link.source.atom_id)

@@ -6,7 +6,7 @@ from scar.analysis.normal_targets import _Solver
 from scar.analysis.source_productions import production_plan_document
 from scar.analysis.source_root_rules import SourceRootRules
 from scar.analysis.source_statement_rules import SourceStatementRules
-from scar.analysis.source_template_links import build_template_graph
+from scar.analysis.source_templates import build_template_graph
 from scar.ir.program import normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.program.protocol_signatures import ExceptionABI
 from scar.ir.program.source_declarations import SourceMaterialDomain as D

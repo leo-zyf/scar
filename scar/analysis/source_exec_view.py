@@ -22,7 +22,7 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.program import source_exec_view as R, source_exec_roots as X, source_productions as P
 from scar.ir.program import source_frame_bindings as B, normal_graph as T, normal_graph as G, model as M, view as V
 from scar.ir.program.python_bindings import SourceCallSite

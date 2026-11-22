@@ -14,7 +14,7 @@ from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.aten_source_entry import LAUNCHER
+from scar.compiler.aten_entry_delivery import LAUNCHER
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.cpu_fixed_grid_cli_delivery import verify_cpu_fixed_grid_cli_delivery
 from scar.ir.execution_recipe import artifact_reference, read_artifact

@@ -230,13 +230,13 @@ def _discover(scope, request):
         return dict(cpu, options=[*cpu['options'], *device['options']], device_discovery=device,
                     coverage_frontier=[*cpu['coverage_frontier'], *device['coverage_frontier']])
     if _infer_cpu_catalog(request):
-        from scar.compiler.cpu_catalog_entry_variant import derive_cpu_catalog_entry
+        from scar.compiler.cpu_task_entry import derive_cpu_catalog_entry
 
         return derive_cpu_catalog_entry(scope, request['cpu_provider_catalog'])
     source = request.get('variant_source')
     if source is None:
         return None
-    from scar.compiler.aten_entry_variants import derive_aten_entry_variants
+    from scar.compiler.aten_entry_delivery import derive_aten_entry_variants
 
     return derive_aten_entry_variants(scope, source['proof'])
 
@@ -347,7 +347,7 @@ def _bind_cpu_observation(plan, scope, discovery, *, paired_evidence=None, check
 
 def _attach_cpu_pair(plan, scope, discovery, path, current, out, checked_pair):
     from scar.analysis.replay_transaction import current_transaction
-    from scar.compiler.cpu_catalog_entry_trial import _compilation, _observation_summary
+    from scar.compiler.cpu_task_entry import _compilation, _observation_summary
     from scar.compiler.cpu_entry_launch_scope import verify_paired_original_scope
     from scar.compiler.cpu_entry_replay import CheckedCpuPair, SCHEMA
 
@@ -758,7 +758,7 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_con
 
         return emit_nvhpc_device_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry)
     if _cpu_catalog_option(option):
-        from scar.compiler.cpu_catalog_entry_trial import emit_cpu_catalog_entry
+        from scar.compiler.cpu_task_entry import emit_cpu_catalog_entry
 
         return emit_cpu_catalog_entry(option, scope, out, plan_only=plan_only, verify_entry=verify_entry,
             capacity_contract=capacity_contract, retained_pair_ref=retained_pair_ref, checked_pair=checked_pair)
@@ -788,7 +788,7 @@ def _emit_generated(option, scope, out, *, plan_only, verify_entry, capacity_con
     if not verify_entry or admission['final_action'] != 'CANDIDATE_VALIDATION_REQUIRED':
         return result
 
-    from scar.compiler.aten_source_entry import validate_source_entry
+    from scar.compiler.aten_entry_delivery import validate_source_entry
 
     inputs = scope['argv'][plan['abi']['argv']['input_root'] - 1]
     steps = option['proof']['steps']

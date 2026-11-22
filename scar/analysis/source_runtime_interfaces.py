@@ -15,7 +15,7 @@ from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.source_observed_interfaces import build_observed_interfaces
 from scar.analysis.source_declared_catalog import _receipt
 from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 
 
 def publish(parent,trace,project_root,out,*,boundaries_out=None,activations_out=None,

@@ -119,7 +119,7 @@ def prepare_pipeline_temporal(program, out, *, caller_unit, function_ordinal,
         values, proof = publish_caller_values(proof_ref, out/'source-values',
             view=session.view, provider=provider, proof=proof, input_shapes=input_shapes)
         if memory_order == 'dependencies':
-            from scar.optimization.pipeline_partial_order_memory import plan_pipeline_partial_order_memory as planner
+            from scar.optimization.pipeline_memory import plan_pipeline_partial_order_memory as planner
         else:
             from scar.optimization.pipeline_memory import plan_pipeline_memory as planner
         memory = planner(proof.pipeline, input_shapes=input_shapes, memory_budget_bytes=memory_budget_bytes)

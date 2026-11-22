@@ -7,7 +7,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from scar.analysis import scalar_table_cse, source_call_handoff
+from scar.analysis import scalar_table_cse
+from scar.analysis.static.lowering import source_call_lowering as source_call_handoff
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.call_binding import plan_call_bindings
@@ -180,7 +181,7 @@ def prepare(proof, historical, handoff, *, case=0):
 
 
 def _f4_total(design, graph):
-    from scar.analysis.source_call_handoff import _body, _original_route
+    from scar.analysis.static.lowering.source_call_lowering import _body, _original_route
     from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
 
     view = ProgramView(Path(graph['catalog']['uri']).parent)

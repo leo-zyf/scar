@@ -14,7 +14,7 @@ from scar.analysis.program_dependency_export import _Tables
 from scar.analysis.replay_transaction import current_transaction, replay_transaction
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_stage import _durable_bytes
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.analysis.source_world_flow import _walk
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P

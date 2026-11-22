@@ -181,7 +181,7 @@ class ConnectionContext(ProtocolFlow):
 
     def origins(self, actual, *, guard=None):
         """Original input recipes; caches are scoped to this shared budget."""
-        from .input_origins import _input_origins_with_flow
+        from scar.ir.program.request_inputs import _input_origins_with_flow
         self.owned_use(actual.operation, actual.use)
         key = actual, guard
         if key not in self._connection_origins:
@@ -246,13 +246,13 @@ class ConnectionContext(ProtocolFlow):
                 'historical_origins': history, 'matching_historical_recipes': tuple(matching)}
 
     def request_binding(self, raw, input, ordinal=0, *, guard=None):
-        from .request_inputs import request_input_binding
+        from scar.ir.program.request_inputs import request_input_binding
         return request_input_binding(self.index, raw, input, ordinal,
                                      accounting=self.budget, _flow=self, _guard=guard)
 
     def recipe_context(self, recipe):
         """Project original caller/CFG context without adding a copy relation."""
-        from .request_inputs import _context
+        from scar.ir.program.request_inputs import _context
         calls, choices, rooted = _context(self.index, recipe, self.budget)
         complete = recipe.get('origin_inventory_complete', True)
         return {"match": True if rooted and complete and not self.budget.truncated else None,
@@ -290,7 +290,7 @@ class ConnectionContext(ProtocolFlow):
         Used for a declared request's latent/body projections. The anchor is
         an actual original Use; no RAW formal or semantic-copy fact is added.
         """
-        from .request_inputs import _context, _helper_context_extension
+        from scar.ir.program.request_inputs import _context, _helper_context_extension
         if type(anchor) is not OwnedUse:
             raise TypeError("context extension requires an exact original Use anchor")
         self.owned_use(anchor.operation, anchor.use)
@@ -419,7 +419,7 @@ class ConnectionContext(ProtocolFlow):
         comes from real caller/actual/formal recipes of this consumer's inputs.
         Availability alone does not prove that a native call uses the request.
         """
-        from .request_inputs import _context
+        from scar.ir.program.request_inputs import _context
         operation = self.operations.get(consumer)
         if operation is None:
             raise ProtocolReferenceError("availability consumer must be an original operation")
@@ -489,7 +489,7 @@ class ConnectionContext(ProtocolFlow):
 
     def _bind_cross_region(self, expected, port, actual, *, guard):
         """Follow original call/formal paths; never equate local reachability with global reachability."""
-        from .request_inputs import _context
+        from scar.ir.program.request_inputs import _context
         from scar.ir.program.call_composition import compose_route
         export = self._returns.export_applicable(self.region_of[port.operation],
                                                 self.region_of[actual.operation])

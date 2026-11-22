@@ -70,9 +70,9 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.analysis.build import BuildSession,_check
     from scar.analysis.build_admission import publish_build_admission
     from scar.analysis.build_f4 import _validate_catalog_parents
-    from scar.compiler.stateful_frontend import discover_stateful_regions
+    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
     from scar.compiler.stateful_model import write_stateful
-    from scar.compiler.invariant_loop_frontend import discover_invariant_loops,write_invariant_loop_proof
+    from scar.compiler.loop_admission import discover_invariant_loops, write_invariant_loop_proof
     from scar.compiler.pipeline_loop_frontend import (discover_pipeline_invariant_loops,
         write_composite_invariant_loop_proof)
     from scar.compiler.ordered_planning_graph import retain_ordered_planning_graph

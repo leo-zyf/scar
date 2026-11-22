@@ -8,7 +8,7 @@ import re
 import subprocess
 
 from scar.analysis.replay_transaction import replay_transaction
-from scar.compiler.aten_source_entry import ABI_FILE, BINDING_FILE
+from scar.compiler.aten_entry_delivery import ABI_FILE, BINDING_FILE
 from scar.ir.execution_recipe import _canonical, artifact_reference, read_artifact
 from scar.runtime.validate_native_project import verify_native_project
 

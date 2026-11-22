@@ -10,12 +10,12 @@ import json
 from pathlib import Path
 
 from scar.analysis import source_f4_variants as f4,source_execution,source_compiled_values as compiled
-from scar.analysis import source_context_variants,source_compilation_contexts
+from scar.analysis import source_context_variants, source_compilation_contexts as source_compilation_contexts
 from scar.analysis import source_symbol_variants
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
+from scar.analysis.source_templates import _json
 from scar.ir.effects import ActionLabel as L
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import source_exec_roots as X, source_protocols as E, code_identity as C
