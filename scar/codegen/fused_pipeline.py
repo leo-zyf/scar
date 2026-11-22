@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import sys
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler.model import document as operator_document
 from scar.compiler.pipeline_frontend import PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline
 from scar.optimization.hardware import bind_cpu_placement
@@ -99,18 +100,29 @@ def _compatible(expected, operator, memory):
                  "fused operator timed obligations differ from the selected representation")
 
 
-def _operator_receipt(operator):
+def _operator_files(directory, names, manifest_path, manifest_digest):
+    files = {kind: {"path": str(directory / name), "sha256": _digest((directory / name).read_bytes())}
+             for kind, name in names.items()}
+    files["manifest"] = {"path": str(manifest_path), "sha256": manifest_digest}
+    return files
+
+
+def _operator_receipt(operator, *, files=None):
     metadata = operator.report
-    files = {kind: {"path": str(operator.directory / name),
-                    "sha256": _digest((operator.directory / name).read_bytes())}
-             for kind, name in metadata["files"].items()}
-    files["manifest"] = {"path": str(operator.metadata_path),
-                         "sha256": _digest(operator.metadata_path.read_bytes())}
+    if files is None:
+        files = _operator_files(operator.directory, metadata["files"], operator.metadata_path,
+                                _digest(operator.metadata_path.read_bytes()))
     return {"artifact_directory": str(operator.directory), "build_id": metadata["build_id"],
             "plan_sha256": metadata["plan_sha256"], "library_sha256": metadata["sha256"]["library"],
             "cpu_threads": operator.plan.cpu_threads,
             "cpu_ids": list(operator.plan.resource_binding.cpu_ids) if operator.plan.resource_binding else None,
             "source_code_key": operator.plan.region.source.code_key, "files": files}
+
+
+def _verify_operator_files(files):
+    for receipt in files.values():
+        _require(_digest(Path(receipt["path"]).read_bytes()) == receipt["sha256"],
+                 "fused pipeline operator receipt differs")
 
 
 def _identity(pipeline, strategy, memory, operator_receipt, fingerprint):
@@ -120,13 +132,15 @@ def _identity(pipeline, strategy, memory, operator_receipt, fingerprint):
         "fused_implementation_sha256": fingerprint})
 
 
-def _manifest(pipeline, strategy, memory, operator, binding, fingerprint, directory):
+def _manifest(pipeline, strategy, memory, operator, binding, fingerprint, directory, *, sidecar_digests=None):
+    if sidecar_digests is None:
+        sidecar_digests = {key: _digest((directory / name).read_bytes()) for key, name in _FILES.items()}
     return {"schema": SCHEMA, "schema_version": 1, "backend": "cpp",
         "build_id": _identity(pipeline, strategy, memory, binding, fingerprint),
         "pipeline_sha256": pipeline_digest(pipeline), "strategy_sha256": semantic_sha256(strategy),
         "memory_plan_sha256": semantic_sha256(memory), "fused_implementation_sha256": fingerprint,
         "operator_runtime_implementation_sha256": operator.report.get("runtime_implementation_sha256"),
-        "files": dict(_FILES), "sha256": {key: _digest((directory / name).read_bytes()) for key, name in _FILES.items()},
+        "files": dict(_FILES), "sha256": sidecar_digests,
         "operators": [binding], "kernel_count": 1, "native_ffi_calls_per_run": 1,
         "original_call_count": len(pipeline.calls), "original_callee_guards_retained": True,
         "execution": "ONE_CPP_OPERATOR_RUN_OVER_REPLAYED_COMPLETE_FUSION",
@@ -183,19 +197,40 @@ def build(pipeline, out, *, strategy, operator):
     """Admit a selected complete fusion and retain the original pipeline guards."""
     pipeline = read_pipeline(pipeline) if isinstance(pipeline, (str, Path)) else pipeline_from_dict(document(pipeline))
     strategy, expected, memory = _admit(pipeline, strategy)
-    _sources(pipeline)
-    operator = cpp.load(operator.directory if isinstance(operator, cpp.CppArtifact) else operator)
-    _compatible(expected, operator, memory)
-    binding = _operator_receipt(operator)
-    fingerprint = fused_implementation_sha256()
-    directory = Path(out).resolve()
-    _require(not directory.exists(), "fresh fused pipeline output directory required")
-    directory.mkdir(parents=True)
-    for key, value in (("pipeline", document(pipeline)), ("strategy", strategy), ("memory_plan", memory)):
-        (directory / _FILES[key]).write_bytes(_json_bytes(value))
-    metadata = _manifest(pipeline, strategy, memory, operator, binding, fingerprint, directory)
-    (directory / "artifact.json").write_bytes(_json_bytes(metadata))
-    return load(directory)
+    path = Path(operator.directory if isinstance(operator, cpp.CppArtifact) else operator).resolve()
+    operator_directory = path if path.is_dir() else path.parent
+    manifest_path = operator_directory / "artifact.json"
+    manifest_bytes = manifest_path.read_bytes()
+    operator_metadata = json.loads(manifest_bytes)
+    names = operator_metadata["files"]
+    _require(all(Path(name).name == name for name in names.values()), "artifact files must be local basenames")
+    operator_files = _operator_files(operator_directory, names, manifest_path, _digest(manifest_bytes))
+
+    with replay_transaction():
+        _sources(pipeline)
+        operator = cpp.load(operator_directory)
+        _require(operator._metadata == operator_metadata, "fused pipeline operator receipt differs")
+        _compatible(expected, operator, memory)
+        binding = _operator_receipt(operator, files=operator_files)
+        fingerprint = fused_implementation_sha256()
+        directory = Path(out).resolve()
+        _require(not directory.exists(), "fresh fused pipeline output directory required")
+        directory.mkdir(parents=True)
+        sidecars = {key: _json_bytes(value) for key, value in (
+            ("pipeline", document(pipeline)), ("strategy", strategy), ("memory_plan", memory))}
+        for key, raw in sidecars.items():
+            (directory / _FILES[key]).write_bytes(raw)
+        metadata = _manifest(pipeline, strategy, memory, operator, binding, fingerprint, directory,
+                             sidecar_digests={key: _digest(raw) for key, raw in sidecars.items()})
+        published_manifest = _json_bytes(metadata)
+        (directory / "artifact.json").write_bytes(published_manifest)
+        for key, raw in sidecars.items():
+            _require((directory / _FILES[key]).read_bytes() == raw, "fused pipeline sidecar receipt differs: " + key)
+        _require((directory / "artifact.json").read_bytes() == published_manifest,
+                 "fused pipeline report changed during publication")
+        _verify_operator_files(operator_files)
+        _sources(pipeline)
+        return FusedPipelineArtifact(pipeline, directory, strategy, memory, metadata, operator)
 
 
 def load(out):
@@ -215,9 +250,7 @@ def load(out):
              "fused pipeline memory plan differs from strategy replay")
     _require(len(metadata["operators"]) == 1, "complete fusion requires exactly one native operator")
     binding = metadata["operators"][0]
-    for receipt in binding["files"].values():
-        _require(_digest(Path(receipt["path"]).read_bytes()) == receipt["sha256"],
-                 "fused pipeline operator receipt differs")
+    _verify_operator_files(binding["files"])
     operator = cpp.load(binding["artifact_directory"])
     _compatible(expected, operator, memory)
     _require(_operator_receipt(operator) == binding, "fused pipeline operator binding differs")

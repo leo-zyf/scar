@@ -2,6 +2,7 @@
 from copy import deepcopy
 from hashlib import sha256
 import json
+from pathlib import Path
 import shutil
 
 import numpy as np
@@ -17,7 +18,7 @@ from scar.optimization.pipeline_strategy import fused_execution_plan, plan_pipel
 from scar.trace.code_snapshot import code_key
 
 
-def test_complete_fusion_keeps_original_guards_and_one_fresh_native_result(tmp_path):
+def test_complete_fusion_keeps_original_guards_and_one_fresh_native_result(tmp_path, monkeypatch):
     if shutil.which("g++") is None:
         pytest.skip("g++ required for fused C++ execution")
     path = tmp_path / "functions.py"
@@ -84,3 +85,29 @@ def test_complete_fusion_keeps_original_guards_and_one_fresh_native_result(tmp_p
             load(artifact.directory)
     finally:
         plan_path.write_bytes(raw)
+
+    write = Path.write_bytes
+    for folder, member, reason in (
+        ("changed-sidecar", tmp_path / "changed-sidecar" / "strategy.json", "sidecar receipt"),
+        ("changed-operator", plan_path, "operator receipt"),
+        ("changed-source", path, "original pipeline/callee source snapshot differs"),
+    ):
+        destination = tmp_path / folder
+        saved = []
+
+        def write_then_change(filename, data):
+            written = write(filename, data)
+            if filename == destination / "artifact.json":
+                saved.append(member.read_bytes())
+                write(member, saved[0] + b" ")
+            return written
+
+        try:
+            with monkeypatch.context() as patched:
+                patched.setattr(Path, "write_bytes", write_then_change)
+                with pytest.raises(ValueError, match=reason):
+                    build(pipeline, destination, strategy=strategy, operator=operator)
+        finally:
+            if saved:
+                write(member, saved[0])
+        assert saved
