@@ -13,7 +13,6 @@ from scar.compiler.graph_frontend import (
     _reject,
     _origin,
     _discovery_for,
-    _metadata,
     _WORLD,
     _ENV,
 )
@@ -28,7 +27,6 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.normal_graph import Body
 from scar.ir.record_codec import encode
 from scar.optimization.optimizer import optimize_region
-from scar.trace.code_snapshot import code_key
 from copy import deepcopy
 import json
 
@@ -499,7 +497,7 @@ def _pipelines_from_leaf_plans(discovery, units, plans):
     for unit in units:
         original=view.unit(unit);functions=original.facts.functions
         resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in functions)
-        try:model,syntax,codes,recipe,digest=discovery.identity(unit)
+        try:model,_,_,recipe,digest=discovery.identity(unit)
         except (ValueError,KeyError,SyntaxError,OSError) as error:
             rejected.append(dict(unit=unit,code='PIPELINE_SOURCE_IDENTITY_UNAVAILABLE',detail=str(error)));continue
         local_plans={fn.template:plans[unit,fn.template.occurrence] for fn in functions
@@ -507,13 +505,12 @@ def _pipelines_from_leaf_plans(discovery, units, plans):
         globals=_global_functions(original.facts,local_plans)
         for ordinal,function in enumerate(functions):
             if function.template in local_plans:continue
-            name,span,lines=_metadata(syntax,function.template.occurrence)
-            candidates=[code for code in codes if code.co_name==name and code.co_firstlineno in lines
-                and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount]==function.parameter_names]
+            location = discovery.function_identity(unit, function)
+            code, span = location.code, location.span
             try:
-                if len(candidates)!=1:_reject('PIPELINE_CODE_IDENTITY','no unique complete code identity')
+                if code is None:_reject('PIPELINE_CODE_IDENTITY','no unique complete code identity')
                 calls,output,origins=_PipelineLowerer(original,function,resolver,globals).lower()
-                code=candidates[0];key=code_key(code)
+                key = location.key
                 identity=dict(kind='source_identity',method='COMPILE_ONLY_RETAINED_F0',
                     semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS',unit=unit,
                     f0_sha256=model['artifacts']['source_bytes']['decoded_sha256'],
@@ -523,8 +520,8 @@ def _pipelines_from_leaf_plans(discovery, units, plans):
                 plan_id='graph-array-pipeline:'+sha256((unit+'\0'+function.body.wire+'\0'+key).encode()).hexdigest()[:24]
                 result.append(compose_pipeline(reference,function.parameter_names,calls,output,id=plan_id))
             except GraphRegionRejected as error:
-                rejected.append(dict(unit=unit,function=ordinal,path=model['path'],qualname=candidates[0].co_qualname
-                    if len(candidates)==1 else name,code=error.code,reason=error.code,detail=error.detail,origin=error.origin))
+                rejected.append(dict(unit=unit,function=ordinal,path=model['path'],qualname=code.co_qualname
+                    if code is not None else location.name,code=error.code,reason=error.code,detail=error.detail,origin=error.origin))
     return result,rejected
 
 

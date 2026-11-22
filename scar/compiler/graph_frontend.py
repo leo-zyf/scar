@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from functools import cached_property
 from hashlib import sha256
 import json
 import math
@@ -455,6 +456,17 @@ def _source_identity(catalog, unit):
     return model, syntax, objects, recipe, sha256(raw).hexdigest()
 
 
+@dataclass(frozen=True)
+class _FunctionIdentity:
+    name: str | None
+    span: dict
+    code: CodeType | None
+
+    @cached_property
+    def key(self):
+        return code_key(self.code) if self.code is not None else None
+
+
 class RegionDiscovery:
     """One caller-owned admission of retained source and F4 body interfaces."""
 
@@ -462,6 +474,7 @@ class RegionDiscovery:
         self.view = catalog if isinstance(catalog, ProgramView) else ProgramView(catalog)
         self.resolver = BodyInterfaceResolver(self.view)
         self._identities = {}
+        self._functions = {}
         self._regions = {}
 
     def _identity_receipt(self, unit):
@@ -491,6 +504,16 @@ class RegionDiscovery:
             raise ValueError('retained source identity changed during admission')
         self._identities[unit] = receipt, identity
         return identity
+
+    def function_identity(self, unit, function):
+        key = unit, function.template
+        if key not in self._functions:
+            _, syntax, codes, _, _ = self._identities[unit][1]
+            name, span, lines = _metadata(syntax, function.template.occurrence)
+            matches = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
+                and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount] == function.parameter_names]
+            self._functions[key] = _FunctionIdentity(name, span, matches[0] if len(matches) == 1 else None)
+        return self._functions[key]
 
     def regions(self, unit, assertion_policy):
         key = unit, assertion_policy
@@ -563,24 +586,22 @@ def _project_graph_regions(discovery, unit, assertion_policy):
     resolver = discovery.resolver
     resolver.prepare_many(Body(unit, function.template, function.body) for function in functions)
     try:
-        model, syntax, codes, recipe, raw_digest = discovery.identity(unit)
+        model, syntax, _, recipe, raw_digest = discovery.identity(unit)
     except (ValueError, KeyError, SyntaxError, OSError) as error:
         return [], [dict(unit=unit, code='SOURCE_IDENTITY_UNAVAILABLE', detail=str(error))]
     assertions = SourceAssertions(syntax) if assertion_policy == OMIT_PROVEN_DEBUG else None
     regions, rejected = [], []
     for ordinal, function in enumerate(functions):
-        name, span, lines = _metadata(syntax, function.template.occurrence)
-        candidates = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
-            and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount] == function.parameter_names]
+        location = discovery.function_identity(unit, function)
+        code, span = location.code, location.span
         base = dict(unit=unit, function=ordinal, template=encode(function.template),
             region=function.body.wire, path=model['path'], sha256=raw_digest, **span)
         try:
-            if len(candidates) != 1:
+            if code is None:
                 _reject('CODE_IDENTITY_UNAVAILABLE', 'original function has no unique complete code identity')
-            code = candidates[0]
             lowerer = _GraphLowerer(source_view, function, resolver, syntax=syntax, source_assertions=assertions)
             nodes, output, origins = lowerer.lower()
-            key = code_key(code)
+            key = location.key
             identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
                 semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS', unit=unit,
                 f0_sha256=model['artifacts']['source_bytes']['decoded_sha256'],
@@ -594,7 +615,7 @@ def _project_graph_regions(discovery, unit, assertion_policy):
                 region = replace(region, assumptions=tuple(dict.fromkeys((*region.assumptions, *COPY_REQUIRED_GUARDS))))
             regions.append(region)
         except GraphRegionRejected as error:
-            rejected.append(dict(base, qualname=candidates[0].co_qualname if len(candidates)==1 else name,
+            rejected.append(dict(base, qualname=code.co_qualname if code is not None else location.name,
                 code=error.code, reason=error.code, detail=error.detail, origin=error.origin))
     return regions, rejected
 

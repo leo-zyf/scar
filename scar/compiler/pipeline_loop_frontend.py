@@ -13,7 +13,7 @@ import json
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRejected,
-    _discovery_for, _metadata, _reject, _origin, _ENV, _WORLD)
+    _discovery_for, _reject, _origin, _ENV, _WORLD)
 from scar.compiler.loop_admission import _InvariantLoopLowerer, _PendingLeafResult
 from scar.compiler.loop_admission import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
@@ -26,7 +26,6 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.pipeline_fusion import fuse_pipeline_region, verify_pipeline_fusion
-from scar.trace.code_snapshot import code_key
 
 
 @dataclass(frozen=True)
@@ -161,12 +160,11 @@ class _ImportedLoopLowerer(_InvariantLoopLowerer):
         return (_PendingLeafResult(tuple(value.index for value in actuals)),_WORLD)
 
 
-def _source_reference(unit,function,model,syntax,codes,recipe,digest,origins=()):
-    name,span,lines=_metadata(syntax,function.template.occurrence)
-    candidates=[code for code in codes if code.co_name==name and code.co_firstlineno in lines
-        and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount]==function.parameter_names]
-    if len(candidates)!=1:_reject('COMPOSITE_CODE_IDENTITY','unique original function CodeID required')
-    code=candidates[0];key=code_key(code)
+def _source_reference(discovery,unit,function,model,recipe,digest,origins=()):
+    location = discovery.function_identity(unit, function)
+    code, span = location.code, location.span
+    if code is None:_reject('COMPOSITE_CODE_IDENTITY','unique original function CodeID required')
+    key = location.key
     identity=dict(kind='source_identity',method='COMPILE_ONLY_RETAINED_F0',unit=unit,
         occurrence=function.template.occurrence,span=span,recipe=recipe,code_key=key,
         semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS')
@@ -238,13 +236,13 @@ def discover_pipeline_invariant_loops(catalog,source=None,*,_discovery=None):
         globals_by_unit={unit:routes.globals(unit,components) for unit in metadata}
         for unit,function in pending:
             key=unit,function.template;original=originals[unit]
-            model,syntax,codes,recipe,digest=metadata[unit]
+            model,_,_,recipe,digest=metadata[unit]
             try:
                 pipeline=pipeline_by_unit.get((unit,function.template.occurrence))
                 if pipeline is None:
                     calls,output,origins=_ImportedPipelineLowerer(original,function,resolver,
                         globals_by_unit[unit],function_routes=routes).lower()
-                    reference=_source_reference(unit,function,model,syntax,codes,recipe,digest,origins)
+                    reference=_source_reference(discovery,unit,function,model,recipe,digest,origins)
                     pipeline=compose_pipeline(reference,function.parameter_names,calls,output)
                 component=_component(pipeline,by_code);components[key]=component
                 ref=component.execution.region.source;by_code[ref.path,ref.code_key]=component;progress=True
@@ -255,7 +253,7 @@ def discover_pipeline_invariant_loops(catalog,source=None,*,_discovery=None):
         if not progress:break
     for unit in roots:
         if unit not in metadata:continue
-        original=originals[unit];model,syntax,codes,recipe,digest=metadata[unit]
+        original=originals[unit];model,syntax,_,recipe,digest=metadata[unit]
         globals=routes.globals(unit,components,fused=True)
         module_functions={value.function.template for values in _global_functions(original.facts,
             {fn.template:fn for fn in original.facts.functions}).values() for value in values}
@@ -267,7 +265,7 @@ def discover_pipeline_invariant_loops(catalog,source=None,*,_discovery=None):
                     syntax=syntax,function_routes=routes).lower()
                 root=by_code[body.source.path,body.source.code_key]
                 if not root.compositions:_reject('COMPOSITE_BODY_REQUIRED','loop body must expand a proven composition')
-                reference=_source_reference(unit,function,model,syntax,codes,recipe,digest)
+                reference=_source_reference(discovery,unit,function,model,recipe,digest)
                 root_guard=FunctionGlobalGuard(reference,name,body.source,(name,),
                     tuple(row for row in origins if row.get('role')=='invariant_array_leaf_call'))
                 guards=(root_guard,*(FunctionGlobalGuard(guard.owner_source,guard.lookup_name,guard.target_source,

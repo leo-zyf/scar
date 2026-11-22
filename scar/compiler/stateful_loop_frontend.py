@@ -19,7 +19,6 @@ from scar.compiler.graph_frontend import (
     _Array,
     _Slice,
     _OPS,
-    _metadata,
     _discovery_for,
     GraphRegionRejected,
     RegionDiscovery,
@@ -51,7 +50,6 @@ from scar.ir.program import source_productions as P, normal_graph as F, normal_g
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.ir.program.normal_graph import Body
-from scar.trace.code_snapshot import code_key
 
 
 # Original-F4 proof of a shared range loop over one stateful CALL.
@@ -774,17 +772,17 @@ def discover_stateful_regions(catalog, source=None, *, _discovery=None):
     for unit in units:
         original = view.unit(unit); functions = original.facts.functions
         resolver.prepare_many(Body(unit, fn.template, fn.body) for fn in functions)
-        model, syntax, codes, recipe, digest = discovery.identity(unit)
+        model, syntax, _, recipe, digest = discovery.identity(unit)
         metadata, leaves = {}, {}
         for ordinal, function in enumerate(functions):
-            name, span, lines = _metadata(syntax, function.template.occurrence)
-            matches = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
-                and code.co_varnames[:code.co_argcount + code.co_kwonlyargcount] == function.parameter_names]
-            if len(matches) != 1: continue
-            code = matches[0]; identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
+            location = discovery.function_identity(unit, function)
+            code, span = location.code, location.span
+            if code is None: continue
+            key = location.key
+            identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0',
                 semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS', unit=unit,
-                occurrence=function.template.occurrence, recipe=recipe, code_key=code_key(code), span=span)
-            source_ref = SourceRef(model['path'], digest, code.co_qualname, span['line'], span['column'], code_key(code), (identity,))
+                occurrence=function.template.occurrence, recipe=recipe, code_key=key, span=span)
+            source_ref = SourceRef(model['path'], digest, code.co_qualname, span['line'], span['column'], key, (identity,))
             metadata[function.template] = source_ref
             context = resolver.plan(unit, function.template)
             if not any(type(step.instruction) is P.ApplyDecorator for step in context.plan.steps): continue

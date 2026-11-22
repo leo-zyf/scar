@@ -32,7 +32,6 @@ from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (
     discover_graph_regions,
     _discovery_for,
-    _metadata,
     _origin,
     GraphRegionRejected,
     _reject,
@@ -44,7 +43,6 @@ from scar.ir.program import source_productions as P, normal_graph as F, normal_g
 from scar.ir.program.normal_graph import Body
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
-from scar.trace.code_snapshot import code_key
 
 
 # Typed loop plans and replay of their body, source and placement contracts.
@@ -446,18 +444,17 @@ def discover_graph_loops(catalog,source=None):
     for unit in units:
         original=view.unit(unit);functions=original.facts.functions
         resolver.prepare_many(Body(unit,fn.template,fn.body) for fn in functions)
-        model,syntax,codes,recipe,digest=discovery.identity(unit)
+        model,syntax,_,recipe,digest=discovery.identity(unit)
         selected={fn.template:bodies[unit,fn.template.occurrence] for fn in functions if (unit,fn.template.occurrence) in bodies}
         globals=_global_functions(original.facts,selected)
         for ordinal,function in enumerate(functions):
             if len(function.parameter_names)!=2:continue
-            name,span,lines=_metadata(syntax,function.template.occurrence)
-            candidates=[c for c in codes if c.co_name==name and c.co_firstlineno in lines
-                and c.co_varnames[:c.co_argcount+c.co_kwonlyargcount]==function.parameter_names]
+            location = discovery.function_identity(unit, function)
+            code, span = location.code, location.span
             try:
-                if len(candidates)!=1:_reject('LOOP_CODE_IDENTITY','unique original loop CodeID unavailable')
+                if code is None:_reject('LOOP_CODE_IDENTITY','unique original loop CodeID unavailable')
                 state,trip,body,guard,origins=_LoopLowerer(original,function,resolver,globals,syntax=syntax).lower()
-                code=candidates[0];key=code_key(code)
+                key = location.key
                 identity=dict(kind='source_identity',method='COMPILE_ONLY_RETAINED_F0',unit=unit,
                     occurrence=function.template.occurrence,span=span,recipe=recipe,code_key=key,
                     semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS')
@@ -466,8 +463,8 @@ def discover_graph_loops(catalog,source=None):
                     reference,function.parameter_names,state,trip,body,guard,origins)
                 loops.append(validate_loop(plan))
             except GraphRegionRejected as error:
-                rejected.append(dict(unit=unit,function=ordinal,path=model['path'],qualname=candidates[0].co_qualname
-                    if len(candidates)==1 else name,code=error.code,reason=error.code,detail=error.detail,origin=error.origin))
+                rejected.append(dict(unit=unit,function=ordinal,path=model['path'],qualname=code.co_qualname
+                    if code is not None else location.name,code=error.code,reason=error.code,detail=error.detail,origin=error.origin))
     return loops,rejected
 
 
@@ -661,7 +658,7 @@ def discover_invariant_loops(catalog, source=None, *, _discovery=None):
     for unit in units:
         original = view.unit(unit); functions = original.facts.functions
         resolver.prepare_many(Body(unit, fn.template, fn.body) for fn in functions)
-        try: model, syntax, codes, recipe, digest = discovery.identity(unit)
+        try: model, syntax, _, recipe, digest = discovery.identity(unit)
         except (ValueError, KeyError, SyntaxError, OSError) as error:
             rejected.append(dict(unit=unit, code='INVARIANT_LOOP_SOURCE_IDENTITY', detail=str(error))); continue
         selected = {fn.template:by_source[unit, fn.template.occurrence] for fn in functions
@@ -671,14 +668,13 @@ def discover_invariant_loops(catalog, source=None, *, _discovery=None):
             _global_functions(original.facts, {fn.template:fn for fn in functions}).values() for candidate in candidates}
         for ordinal, function in enumerate(functions):
             if function.template not in module_functions or function.template in selected: continue
-            name, span, lines = _metadata(syntax, function.template.occurrence)
-            candidates = [code for code in codes if code.co_name == name and code.co_firstlineno in lines
-                and code.co_varnames[:code.co_argcount+code.co_kwonlyargcount] == function.parameter_names]
+            location = discovery.function_identity(unit, function)
+            code, span = location.code, location.span
             try:
-                if len(candidates) != 1: _reject('INVARIANT_LOOP_CODE_IDENTITY', 'unique original CodeID unavailable')
+                if code is None: _reject('INVARIANT_LOOP_CODE_IDENTITY', 'unique original CodeID unavailable')
                 body, carry, trip, mapping, global_name, origins = _InvariantLoopLowerer(
                     original, function, resolver, globals, syntax=syntax).lower()
-                code = candidates[0]; key = code_key(code)
+                key = location.key
                 identity = dict(kind='source_identity', method='COMPILE_ONLY_RETAINED_F0', unit=unit,
                     occurrence=function.template.occurrence, span=span, recipe=recipe, code_key=key,
                     semantic_authority='ORIGINAL_F4_PRODUCTION_PLANS_AND_UNIT_FACTS')
@@ -688,7 +684,7 @@ def discover_invariant_loops(catalog, source=None, *, _discovery=None):
                     body, carry, trip, mapping, global_name, origins))
             except GraphRegionRejected as error:
                 rejected.append(dict(unit=unit, function=ordinal, path=model['path'],
-                    qualname=candidates[0].co_qualname if len(candidates)==1 else name,
+                    qualname=code.co_qualname if code is not None else location.name,
                     code=error.code, detail=error.detail, origin=error.origin))
     return loops, rejected
 
