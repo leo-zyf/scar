@@ -7,7 +7,7 @@ control transfers are visible in the import report and gate rewrites.
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import json
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -687,14 +687,21 @@ def capture_target(manifest, out, jobs):
 
 @dataclass(frozen=True, slots=True)
 class GraphBuild:
+    request: ProviderArtifact
     program: ProviderArtifact | None
     hardware: ProviderArtifact
     evidence: ProviderArtifact
     calls: ProviderArtifact
     report: dict
 
+    def references(self):
+        return {role: asdict(reference) for role, reference in (
+            ('request', self.request), ('program', self.program), ('hardware', self.hardware),
+            ('graph_evidence', self.evidence), ('calls', self.calls),
+        ) if reference is not None}
 
-def build_graph(manifest, directory, *, jobs, request) -> GraphBuild:
+
+def build_graph(manifest, directory, *, jobs, request: ProviderArtifact) -> GraphBuild:
     """Publish the program graph, platform facts and grounding evidence."""
     hardware = directory / 'hardware'
     build_target_graph(hardware, paths=(manifest['source_root'], str(directory)))
@@ -711,7 +718,7 @@ def build_graph(manifest, directory, *, jobs, request) -> GraphBuild:
     calls_path.write_text(json.dumps(dict(schema='scar.native-call-links', schema_version=1, **calls)) + '\n')
     call_receipt = file_reference(calls_path, 'scar.native-call-links')
     report.update(schema='scar.native-graph-evidence', schema_version=1, units=unit_evidence,
-                  request=request, program=program, hardware=target, calls=call_receipt,
+                  request=asdict(request), program=program, hardware=target, calls=call_receipt,
                   frontend_frontiers=frontiers, call_frontiers=len(calls['frontiers']),
                   call_sites=len(calls['calls']),
                   call_links=sum(row['status'] == 'BOUND' and row['operation'] is not None
@@ -720,7 +727,7 @@ def build_graph(manifest, directory, *, jobs, request) -> GraphBuild:
     evidence_path = directory / 'graph-report.json'
     (directory / 'compiler-cfg.json').write_text(json.dumps(functions, indent=2, ensure_ascii=False) + '\n')
     evidence_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
-    return GraphBuild(None if program is None else ProviderArtifact(**program),
+    return GraphBuild(request, None if program is None else ProviderArtifact(**program),
                       ProviderArtifact(**target),
                       ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
                       ProviderArtifact(**call_receipt), report)

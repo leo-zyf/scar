@@ -1,7 +1,7 @@
 """Verified graph rewrites and resource plans."""
 
 import argparse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 import os
@@ -9,8 +9,9 @@ from pathlib import Path
 import re
 from subprocess import CompletedProcess
 
+from scar.artifacts import file_reference
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program.codec import dumps, loads
+from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps, loads
 from scar.ir.implementation_plan import (
     CostEstimate, ImplementationOption, PlanningOperation, PlanningProblem,
     PlanningResource, problem_document, problem_from_dict,
@@ -19,6 +20,51 @@ from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.paired_entry_selection import compare_entry_pairs
 from scar.runtime.cpu_paired_runner import compare_native_outputs
+
+
+@dataclass(frozen=True, slots=True)
+class NativeRevision:
+    entry: str
+    artifacts: dict
+    rules: tuple[dict, ...]
+    edits: tuple[dict, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeSchedule:
+    entry: str
+    artifacts: dict
+    decision: dict
+    scope: str
+
+
+def rewrite_native(graph, out):
+    if graph.program is None:
+        raise ValueError('no validated entry region')
+    path = out / 'simplified.json'
+    artifacts = graph.references()
+    manifest = read_artifact(artifacts['request'])
+    rules = simplify_copies(graph.program, graph.report['anchors'], path)
+    edits = copy_source_edits(manifest, graph.report, rules)
+    simplified = file_reference(path, PROGRAM_SCHEMA)
+    ledger = publish_plan(out / 'rewrites.json', dict(
+        schema='scar.native-rewrites', schema_version=1, rules=rules, source_edits=edits,
+        program=artifacts['program'], result=simplified,
+    ))
+    return NativeRevision(graph.report['entry'], dict(artifacts, simplified=simplified, rewrites=ledger),
+                          tuple(rules), tuple(edits))
+
+
+def schedule_native(revision: NativeRevision, observation, cases, out) -> NativeSchedule:
+    artifacts = dict(revision.artifacts, cost=publish_plan(out / 'cost-observation.json', observation))
+    decision = native_cost_decision(observation, cases)
+    problem, schedule = plan_entry(revision.entry, artifacts, observation, revision.edits)
+    artifacts['planning_problem'] = publish_plan(out / 'planning-problem.json', problem)
+    artifacts['execution_plan'] = publish_plan(out / 'plan.json', schedule)
+    if not schedule.get('selected'):
+        raise ValueError('no feasible native execution schedule')
+    scope = 'BASELINE_ONLY' if observation['schema_version'] == 1 else decision['scope']
+    return NativeSchedule(revision.entry, artifacts, decision, scope)
 
 
 def entry_sources(artifacts):

@@ -1,6 +1,6 @@
 # SCAR 的分层和交接合同
 
-`scar/cli.py` 负责命令分派。`scar/compiler/pipeline.py` 编排原生和 Python 输入。各层只从上游规定的产物取数据。跨阶段的文件引用包含 `uri`、`schema`、`size_bytes`、`sha256`。原生运行把这些引用集中写入 `result.json` 的 `artifacts` 字段，原始图、证据和计划分别存放。
+`scar/cli.py` 负责命令分派。`scar/compiler/driver.py` 编排原生目标和 Python 循环。每层只消费规定的上游产物。跨阶段的文件引用包含 `uri`、`schema`、`size_bytes`、`sha256`。原生运行把这些引用集中写入 `result.json` 的 `artifacts` 字段，原始图、证据和计划分别存放。
 
 ## 1. 前端
 
@@ -28,7 +28,7 @@
 
 `compiler/middle/plan.py::simplify_copies` 核验前端图引用并验证改写后的 IR。`copy_source_edits` 把获准的 SSA 拷贝消除绑定到类型、名称和源码区间。有源码改写时，两份 C++20 产物在同一核上按用例交替测量，保留原始输出和样本。每个用例均须匹配原版，且改写版的实测区间均须低于保留版，方可采用改写。后端发布被选中的已测二进制并再次核对输出。没有源码改写时使用保留版。`scar plan --problem` 可独立重放，`--exact` 使用精确求解器。
 
-Python 的直接循环与跨函数组合循环共用 `plan_loop_region`。它从已准入的循环证明和硬件快照生成 `schedule.json`，记录输入形状、迭代次数、CPU 布局和内存预算。后端重读该引用并核对实际构建产物。
+Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端从循环证明和硬件快照生成 `schedule.json`，记录输入形状、迭代次数、CPU 布局和内存预算。后端接收声明了证明、搬移合法性和排程引用的 `ScheduledLoop`，逐项重放并核对实际构建产物。
 
 ## 3. 后端
 
@@ -39,7 +39,7 @@ Python 的直接循环与跨函数组合循环共用 `plan_loop_region`。它从
 | 构建与链接 | 构建独立工程，核对二进制、依赖和已绑定的跨语言目标符号 | 已生成源码、CMake 输入、原始调用图 | `project/CMakeLists.txt`、可执行文件、构建日志、ELF 依赖和符号核验记录 |
 | 验证 | 对照原版与生成版的退出状态和输出，按声明合同比较 | 两个可执行入口、同一输入和 CPU 配置 | `validation/` 的原始输出，以及 `result.json` 的逐用例正确性和计时 |
 
-`compiler/pipeline.py` 编排两类输入。原生源码适配器应用已准入的改写并交出 C++20 编译单元、编译选项和链接输入。Fortran 方言和 ABI 转换归源语言适配器处理。C++20 后端集中在 `compiler/backend/cpp20.py`，负责 C++20 工程、循环区域降级、构建及产物检查。Python 目前实测覆盖可证明的循环区域。原生数组描述符、未绑定调用和一般区域改写仍待覆盖。
+原生源码适配器应用已准入的改写并交出 C++20 编译单元、编译选项和链接输入。Fortran 方言和 ABI 转换归源语言适配器处理。C++20 后端集中在 `compiler/backend/cpp20.py`，负责计划重放、工程生成、循环区域降级及产物检查。`compiler/qualification.py` 独立运行锁定用例并保留校验与计时证据。Python 目前实测覆盖可证明的循环区域。原生数组描述符、未绑定调用和一般区域改写仍待覆盖。
 
 后续增加源语言沿用图与证据接口。新增 GPU 资源、传输与算子实现通过 `PlanningProblem` 和可重放的执行计划进入中端。C++20 交付消费计划选定的实现和资源绑定，并通过算子 ABI 接入外部高性能库。
 

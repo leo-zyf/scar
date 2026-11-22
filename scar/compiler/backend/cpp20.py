@@ -1,6 +1,6 @@
 """Emit one C++20 project from a locked native source revision."""
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 import shutil
@@ -18,7 +18,41 @@ from scar.optimization.joint_planner import verify_execution_plan
 from scar.compiler.model import CpuPlacement
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..middle.plan import copy_source_edits, entry_baseline_only, entry_cpus, entry_problem, publish_plan
+from ..middle.plan import NativeSchedule, copy_source_edits, entry_baseline_only, entry_cpus, entry_problem, publish_plan
+from ..middle.python import ScheduledLoop
+from ..qualification import executable_receipt
+
+
+@dataclass(frozen=True, slots=True)
+class NativeProject:
+    executable: Path
+    receipt: dict
+    observation: dict
+    delivery: dict
+    dynamic: dict
+    artifacts: dict
+
+
+def emit_native(schedule: NativeSchedule, project: Path) -> NativeProject:
+    """Replay the schedule, emit its C++20 project and seal the linked output."""
+    from ..frontend.clang import stage_source_revision, verify_mixed_linkage
+
+    artifacts = schedule.artifacts.copy()
+    manifest, observation, delivery = admit_entry(artifacts, schedule.entry)
+    if 'trial_variant' in delivery:
+        executable, inputs, dynamic = promote_cpp20_variant(project, artifacts, delivery)
+    else:
+        inputs = stage_source_revision(manifest, project, delivery['source_edits'],
+                                       captures=delivery['compiler_types'], plan=delivery['plan'])
+        executable, dynamic = build_cpp20_project(project, inputs, plan=delivery['plan'])
+    delivery['cpp20_inputs'] = artifacts['cpp20_inputs'] = inputs
+    delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
+    fortran = project / 'fortran-emission.json'
+    if fortran.is_file():
+        delivery['fortran_emission'] = artifacts['fortran_emission'] = file_reference(fortran, 'scar.fortran-emission')
+    receipt = executable_receipt(executable)
+    artifacts['delivery'] = publish_plan(project / 'delivery.json', dict(delivery, executable=receipt))
+    return NativeProject(executable, receipt, observation, delivery, dynamic, artifacts)
 
 
 def replay_native_revision(artifacts):
@@ -176,14 +210,19 @@ def promote_cpp20_variant(project, artifacts, delivery):
     return executable, inputs, cpu_executable_dynamic(executable)
 
 
-def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel, plan_only):
+def lower_loop(work: ScheduledLoop, *, catalog, plan_only) -> dict:
     from scar.compiler.invariant_export import export_temporal_invariant, export_composite_temporal_invariant
+    from scar.compiler.loop_admission import read_invariant_loop_motion
+    from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_motion
 
+    folder, composite, parallel = work.folder, work.composite, work.parallel
+    reader = read_composite_invariant_loop_motion if composite else read_invariant_loop_motion
     # Reopen the exact published schedule and source proof before codegen.
-    schedule = read_artifact(row['schedule'])
-    proof_again, motion = reader(spec['proof']['uri'], catalog=catalog)
-    if (semantic_sha256(asdict(proof_again)) != semantic_sha256(asdict(proof))
-            or semantic_sha256(motion) != semantic_sha256(read_artifact(row['source_motion']))):
+    schedule = read_artifact(work.schedule)
+    read_artifact(work.proof)
+    proof, motion = reader(work.proof['uri'], catalog=catalog)
+    if (work.loop_id != proof.id
+            or semantic_sha256(motion) != semantic_sha256(read_artifact(work.source_motion))):
         raise ValueError('loop movement changed between original F4 admission and lowering')
     binding = dict(schedule['resource_binding'])
     binding['cpu_ids'] = tuple(binding['cpu_ids'])
@@ -195,13 +234,13 @@ def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel
     if composite:
         from scar.compiler.composite_invariant_loop import _loop_interface
         interface = _loop_interface(proof, execution_specialization=specialization,
-                                    source_motion=row['source_motion'])
+                                    source_motion=work.source_motion)
     else:
         interface = dict(
             original_f4_proof=asdict(proof), carry_parameter=proof.carry_parameter,
             readonly_parameters=[name for name in proof.body.parameters if name != proof.carry_parameter],
             authority='ORIGINAL_F4_REPLAYED_WITH_RESOURCE_SCHEDULE',
-            execution_specialization=specialization, source_motion=row['source_motion'],
+            execution_specialization=specialization, source_motion=work.source_motion,
         )
     if parallel:
         from scar.compiler.parallel_temporal_invariant import (
@@ -213,11 +252,10 @@ def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel
     consumed = planned['execution_movement_binding']
     if consumed is None:
         raise ValueError('loop delivery requires consumed source movement legality')
-    row['movement_binding'] = publish_plan(folder / 'movement-binding.json', consumed)
+    movement = publish_plan(folder / 'movement-binding.json', consumed)
     family = 'COMPOSITE_LOOP' if composite else 'LOOP'
     if plan_only:
-        row['status'] = f'MODEL_SELECTED_{family}_PLAN_ONLY'
-        return
+        return dict(status=f'MODEL_SELECTED_{family}_PLAN_ONLY', movement_binding=movement)
 
     native = folder / 'native'
     if composite:
@@ -225,7 +263,7 @@ def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel
         artifact = build_composite_invariant_loop(
             proof, native, catalog=catalog, memory_budget_bytes=budget, resource_binding=placement,
             execution_specialization=specialization, parallel=True if parallel else None,
-            source_motion=row['source_motion'],
+            source_motion=work.source_motion,
         )
         export = export_composite_temporal_invariant
     else:
@@ -239,10 +277,11 @@ def lower_loop(proof, spec, row, folder, *, catalog, reader, composite, parallel
             or semantic_sha256(emitted['execution_plan']['resource_binding']) !=
                semantic_sha256(schedule['resource_binding'])):
         raise ValueError('compiled loop differs from the admitted movement, specialization or placement')
-    exported = export(native, folder / 'bundle', schedule_path=row['schedule']['uri'],
-                      proof_reference=spec['proof'], catalog=catalog)
-    row.update(
+    exported = export(native, folder / 'bundle', schedule_path=work.schedule['uri'],
+                      proof_reference=work.proof, catalog=catalog)
+    return dict(
         status=f'MODEL_SELECTED_{family}_COMPILED', native_directory=str(native),
+        movement_binding=movement,
         native_artifact=artifact_reference(native / 'artifact.json', artifact.report['schema']),
         bundle=exported['bundle'],
         bundle_export=artifact_reference(folder / 'bundle/export-report.json', exported['schema']),

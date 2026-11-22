@@ -5,11 +5,111 @@ hardware snapshot. Unsupported functions stay explicit; no AST fallback or
 target execution supplies a replacement semantic model.
 """
 import argparse
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import time
 
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledLoop:
+    loop_id: str
+    folder: Path
+    proof: dict
+    source_motion: dict
+    schedule: dict
+    composite: bool
+    parallel: bool
+
+
+def schedule_loops(document, out, catalog, *, trip_count=None, input_specs=None, cpu_threads=None,
+                   cpu_model=False, calibrations=(), original_costs=None, max_threads=None):
+    """Project proven loop movement and publish schedules independently of codegen."""
+    from scar.compiler.loop_admission import read_invariant_loop_motion, validate_invariant_loop_links
+    from scar.compiler.pipeline_loop_frontend import (
+        read_composite_invariant_loop_motion, validate_composite_invariant_loop_links,
+    )
+    from scar.ir.execution_recipe import read_artifact
+    from .plan import plan_loop_region, publish_plan
+
+    input_specs = input_specs or {}
+    original_costs = original_costs or {}
+    profiles = (
+        ('invariant_loops', 'loops', read_invariant_loop_motion, validate_invariant_loop_links),
+        ('composite_invariant_loops', 'composite-loops', read_composite_invariant_loop_motion,
+         validate_composite_invariant_loop_links),
+    )
+    known = {spec['id'] for name, *_ in profiles for spec in document.get(name, ())}
+    if (input_specs.keys() | original_costs.keys()) - known:
+        raise ValueError('loop inputs and original costs must name retained loop IDs')
+    direct, composite, work = [], [], []
+    if not known:
+        return direct, composite, work
+    if not cpu_model and (calibrations or original_costs or max_threads is not None):
+        raise ValueError('loop calibration and CPU model limits require --loop-cpu-model')
+    if cpu_model and cpu_threads is not None:
+        raise ValueError('choose automatic CPU selection or an explicit team preview')
+    hardware = document['hardware']
+    for (name, subdirectory, read_motion, check_links), rows in zip(profiles, (direct, composite)):
+        for index, spec in enumerate(document.get(name, ())):
+            folder = out / subdirectory / f'loop-{index}'
+            folder.mkdir(parents=True)
+            reference = spec['proof']
+            read_artifact(reference)
+            proof, motion = read_motion(reference['uri'], catalog=catalog)
+            if spec['id'] != proof.id or spec['hardware'] != hardware:
+                raise ValueError('loop proof or hardware differs from the original program domain')
+            check_links(proof, spec, document['loop_dependencies'])
+            composed = rows is composite
+            family = 'COMPOSITE_LOOP' if composed else 'LOOP'
+            retained = f'ORIGINAL_{family}_RETAINED'
+            row = dict(id=proof.id, proof=reference, source_loop_authority='ORIGINAL_F4_REPLAYED',
+                       native_directory=None, selected_for_use=False, whole_program_compiled=False,
+                       source_motion=publish_plan(folder / 'source-motion.json', motion))
+            if composed:
+                row.update(loop_links=spec['loop_links'], root_callee_source=asdict(proof.root_callee_source),
+                           body_identity=proof.body_identity, nested_global_guard_count=len(proof.nested_callee_guards),
+                           source_loop_authority='ORIGINAL_F4_COMPOSITION_AND_GLOBAL_ROUTES_REPLAYED')
+            rows.append(row)
+            legality = motion['movement_legality']
+            if legality['status'] != 'CONDITIONAL':
+                row.update(status=retained, selected_kind='NO_OP', selection_scope='SOURCE_MOVEMENT_LEGALITY',
+                           source_legality_status=legality['status'],
+                           reason='original source window does not justify all required invariant placements')
+                if composed:
+                    row['unresolved_roots'] = [root['expression'] for root in legality['roots']
+                                               if root['status'] != 'CONDITIONAL']
+                    row['source_blockers'] = [
+                        *legality['source_window_effects']['blockers'],
+                        *(dict(blocker, expression=root['expression'], property=field)
+                          for root in legality['roots'] for field in ('data_available', 'no_clobber', 'execution', 'effects')
+                          for blocker in root[field]['blockers']),
+                    ]
+                continue
+            inputs = input_specs.get(proof.id, {})
+            shapes = inputs.get('input_shapes', spec.get('input_shapes'))
+            count = inputs.get('trip_count', trip_count)
+            missing = [key for key, value in (('input_shapes', shapes), ('trip_count', count)) if value is None]
+            if missing:
+                row.update(status=f'{family}_INPUT_CONSTRAINTS_REQUIRED', missing=missing)
+                continue
+            budget = inputs.get('memory_budget_bytes', spec.get('memory_budget_bytes'))
+            if budget is None:
+                raise ValueError('loop requires retained incremental memory budget')
+            threads = inputs.get('cpu_threads', cpu_threads)
+            row.update(plan_loop_region(
+                proof, hardware, folder, shapes=shapes, count=count, budget=budget, threads=threads,
+                catalog=catalog if composed else None, model=cpu_model, max_threads=max_threads,
+                calibrations=calibrations, original_cost=original_costs.get(proof.id),
+            ))
+            if row['selected_kind'] == 'REGISTER_TEMPORAL_FUSION':
+                work.append((row, ScheduledLoop(proof.id, folder, reference, row['source_motion'], row['schedule'],
+                                                composed, cpu_model or threads is not None)))
+            else:
+                row['status'] = retained
+    return direct, composite, work
 
 
 def _invariant_loop_links(proof,loops,reference):
