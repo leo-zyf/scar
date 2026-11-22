@@ -1,6 +1,6 @@
 # SCAR
 
-**State · Control · Action · Resource**：面向 Python 程序的宏观编译器。
+**State · Control · Action · Resource** 是基于程序图的宏观编译器。
 
 ```text
 静态源码 + 必要动态绑定 + 硬件库存
@@ -9,6 +9,8 @@
 → C++20 / 算子 ABI1
 → 原入口、guard 和完整区域回退
 ```
+
+原生 CPU 主链使用 `scar compile-native`。构建清单按编译单元声明语言、方言和参数。三个阶段集中在 [建图](scar/compiler/native/frontend.py)、[化简与规划](scar/compiler/native/plan.py)、[C++20 生成](scar/compiler/native/cpp20.py)，由同一个[入口](scar/compiler/native/pipeline.py)串接。原生语言覆盖仍在验收中。
 
 当前优先完成三阶段核心开发，定期在同一完整边界验证。受支持的 CPU float64 二维数组、复合循环和事务区域已贯通；通用覆盖仍未完成，完整入口及兼容/I/O 仍保留 Python。
 
@@ -57,6 +59,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 `fixed-grid-lifecycle input-graph` 生成文件映射相对复制的子图差分，`input-counters` 在输入及递推边界采集进程缺页计数。`export-native-route` 固定已选 C++20 工程和启动合同，`run-native-route --stable-inputs` 显式验证一次原生启动并归档输出。用 `review-native-route` 合并这些收据，再把评审传给 `compile-build --cpu-fixed-grid-input-route-review`。对原生数组任务可用 `scar run-cpu-array-native-route --package PACKAGE/artifact.json --out FRESH_DIR` 验证选中路线。[原生路线验收](artifacts/baseline/cpu-native-route-execution-acceptance.json)
 
 `scar benchmark-fixed-grid-source-route --package PACKAGE/artifact.json --out FRESH_DIR` 直接比较原 Python 与选定映射版。`fixed-grid-lifecycle startup-graph`、`publication-effects` 和 `publication-guard` 分别核对导入来源、文件发布顺序及已有文件的行为。`scar qualify-fixed-grid-source-route` 合并收据，`compile-build --cpu-fixed-grid-source-qualification` 接回同一入口。作用域为稳定输入、新输出和正常完成，发布审查与整入口自动替换分别记录。[源码路线验收](artifacts/baseline/cpu-fixed-grid-source-route-qualification-acceptance.json)
+
+`scar fixed-grid-forward` 按 `graph`、`probe-python`、`probe-native`、`plan` 构建并计价一个带步数参数的时序图。三段时钟绑定原操作和资源，2 步、8 步校准预测 16 步整程。`check` 可重放拟合和留出检查，`compile-build --cpu-fixed-grid-forward` 接入同一源码入口。预测区间以固定核组、输入和仿射服务条件为前提。[前向计价验收](artifacts/baseline/cpu-fixed-grid-forward-acceptance.json)
 
 `scar export-native-cpu --project NATIVE --manifest-sha256 SHA256 --out RUNTIME` 打包已验收的 CPU-only 产物、LibTorch 依赖和权重。`scar export-native-cpu --check RUNTIME --manifest-sha256 SHA256` 校验迁移包，可加 `--reference FILE` 和 `-- ARGS` 验收输出。运行直接执行 `RUNTIME/launch.sh`。当前验收覆盖本机 Linux 下的目录迁移，并沿用原计划的 CPU 绑定。[纯 CPU 三阶段验收](artifacts/baseline/native-cpu-end-to-end.json)。
 

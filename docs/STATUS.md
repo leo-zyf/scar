@@ -4,6 +4,7 @@
 
 ## 固定网格源入口接入 CPU 目录
 
+- **前向计价。** 循环前、递推、循环后绑定原操作与 CPU、NUMA 和文件资源。两条路线各在 2 步与 8 步采样 3 次，仅用短探针拟合。16 步预测区间为原 Python **6.634–6.704 s**、映射 C++20 **2.281–2.347 s**，覆盖两条路线留出的所有干净样本。按模型区间最不利组合，预计节省 **64.63%**；固定条件下实际中位数节省 **65.33%**。[前向计价验收](../artifacts/baseline/cpu-fixed-grid-forward-acceptance.json)
 - **直接整程实测。** CPU 14–16 上，1 对预热、3 对干净计时，原 Python 与映射版 C++20 分别为 **6.675 → 2.314 s（2.884×）**。八次启动的终态、输出流、退出和文件权限一致。5 条模块级导入接到原启动图，两条路径均先关闭结果文件再写 stdout。原 Python 在读首个输入前执行了 `ldconfig` 并创建、删除了临时文件。私有已有文件试验中，Python 覆盖文件，C++ 保留原文件并退出。整入口仍为 `KEEP_ORIGINAL`。[验收记录](../artifacts/baseline/cpu-fixed-grid-source-route-qualification-acceptance.json)
 - **原生执行。** 7 个文件端口和 16 步循环共享既有图，新增映射差分。两条 C++20 路径各 3 次分段诊断，输入窗口中位数 **15.22 → 0.258 ms**，进程轻微缺页 **4,040 → 21**。递推窗口和实际存储流量另有未归因项。显式运行映射版核对了完整终态字节、输出流、退出和 `0664` 权限。[原生路线验收](../artifacts/baseline/cpu-native-route-execution-acceptance.json)
 - **生命周期与成本。** Python 和 C++ 入口各自贯通启动、输入、共享迭代体、文件、stdout 和退出。源码标记诊断中位数为 Python 导入 **1.694 s**、递推 **4.648 s**、C++ 递推 **2.028 s**。独立校准推得 C++ 递推 **2.095 s**，与实测相差 **67.3 ms**。首次触页、发布持久性与整入口成本范围仍待闭合，`compile-build` 保持 `KEEP_ORIGINAL`。[生命周期验收](../artifacts/baseline/cpu-fixed-grid-lifecycle-acceptance.json)
