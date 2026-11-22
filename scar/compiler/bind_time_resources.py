@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from scar.analysis.schedule_time import attach_task_time
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 from scar.ir.temporal_resources import projection_document, projection_from_dict
 from scar.ir.versioned_schedule import TemporalOccupancyKind, TemporalScopeKind, validate_versioned_schedule
 from scar.optimization.resource_solver import semantic_sha256
@@ -257,34 +257,19 @@ def _replay_implementation_time(reference):
     return result, saved
 
 
-def _read_workspace_receipt(reference):
-    if reference['schema'] == WORKSPACE_TIME:
-        from scar.compiler.project_workspace_time import read_workspace_time
-        receipt = read_workspace_time(reference['uri'])
-    else:
-        from scar.compiler.project_workspace_demands import read_workspace_demands
-        receipt = read_workspace_demands(reference['uri'])
-    if receipt != read_artifact(reference):
-        raise ValueError('original workspace time receipt changed during replay')
-    return receipt
-
-
 def replay_time_schedule(source):
     """Verify the retained time receipt and return its typed schedule."""
     reference = source if isinstance(source, dict) else time_schedule_reference(source)
     if reference['schema'] == IMPLEMENTATION_SCHEMA:
         return _replay_implementation_time(reference)
     if reference['schema'] in (WORKSPACE_TIME, WORKSPACE_DEMANDS):
-        receipt = _read_workspace_receipt(reference)
-        return receipt, schedule_from_dict(read_artifact(receipt['schedule']))
+        from scar.compiler.workspace_schedule import replay_workspace_schedule
+        return replay_workspace_schedule(reference)
     return _replay_semantic_time(reference)
 
 
 def read_time_schedule(path):
-    reference = time_schedule_reference(path)
-    if reference['schema'] in (WORKSPACE_TIME, WORKSPACE_DEMANDS):
-        return _read_workspace_receipt(reference)
-    return replay_time_schedule(reference)[0]
+    return replay_time_schedule(path)[0]
 
 
 def read_implementation_time(path):
@@ -330,7 +315,7 @@ def _derive_resources(time_reference):
     projection = derive_temporal_resources(schedule, Path(target['uri']).parent,
         source_context=context)
     read_artifact(time_reference, json_document=False)
-    return projection
+    return projection, receipt, schedule
 
 
 def _resource_summary(projection):
@@ -354,7 +339,7 @@ def _resource_report(time_reference, projection_ref, projection):
 
 def prepare_resource_bindings(time_schedule, out):
     reference = time_schedule_reference(time_schedule)
-    projection = _derive_resources(reference)
+    projection, _, _ = _derive_resources(reference)
     directory = Path(out).resolve()
     directory.mkdir(parents=True, exist_ok=False)
     projection_ref = _write(directory/'resources.json', projection_document(projection))
@@ -363,18 +348,26 @@ def prepare_resource_bindings(time_schedule, out):
     return report
 
 
-def read_resource_bindings(path):
-    reference = artifact_reference(Path(path).resolve(), SCHEMA)
-    report = read_artifact(reference)
+def replay_resource_bindings(source):
+    """Verify a resource projection and return its admitted typed inputs."""
+    if isinstance(source, dict):
+        reference, report = source, read_artifact(source)
+    else:
+        reference, report = open_artifact(Path(source).resolve(), SCHEMA)
     if (report.get('schema'), report.get('schema_version')) != (SCHEMA, 1):
         raise ValueError('temporal resource preparation receipt required')
     saved = projection_from_dict(read_artifact(report['projection']))
-    replay = _derive_resources(report['time_schedule'])
+    replay, time, schedule = _derive_resources(report['time_schedule'])
     expected = _resource_report(report['time_schedule'], report['projection'], replay)
     if projection_document(saved) != projection_document(replay) or report != expected:
         raise ValueError('resource binding differs from original time/source/hardware replay')
+    read_artifact(report['projection'], json_document=False)
     read_artifact(reference, json_document=False)
-    return report
+    return report, time, schedule, saved
+
+
+def read_resource_bindings(path):
+    return replay_resource_bindings(path)[0]
 
 
 def _time_cli(argv):

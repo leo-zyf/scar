@@ -3,21 +3,31 @@ import argparse
 import json
 from pathlib import Path
 
-from scar.compiler.bind_time_resources import read_resource_bindings, SCHEMA as RESOURCE_SCHEMA
+from scar.compiler.bind_time_resources import replay_resource_bindings, SCHEMA as RESOURCE_SCHEMA
 from scar.ir.activity_costs import (activity_cost_document, activity_cost_from_dict,
     validate_activity_cost_table)
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.temporal_resources import projection_from_dict
-from scar.optimization.schedule import schedule_from_dict
 from scar.optimization.resource_solver import semantic_sha256
 from scar.optimization.temporal_activity_costs import (boundary_calibration_reference, project_stateful_activity_costs,
     project_unknown_activity_costs)
 
 SCHEMA = 'scar.activity-cost-preparation'
+_OWNER = Path(__file__).resolve()
+
+
+def _workspace_source(recorded):
+    active = artifact_reference(_OWNER, 'scar.python-source')
+    if recorded is None or recorded == active:
+        return active
+    previous = {**active, 'sha256': '9c7927f39f7f951a34ede5071408c9fbeff10a5f44e8868630197379f43c3408',
+                'size_bytes': 13842}
+    if recorded != previous:
+        raise ValueError('workspace costing producer differs from its current or exact predecessor receipt')
+    return previous
 
 
 def _workspace_costs(schedule, resources, time, time_reference, resource_reference, domain_reference,
-                     candidate_id, calibration_refs, boundary_refs, dag_refs):
+                     candidate_id, calibration_refs, boundary_refs, dag_refs, workspace_producer):
     from scar.optimization.workspace_costs import derive_workspace_costs
     from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context, component_key
@@ -41,8 +51,8 @@ def _workspace_costs(schedule, resources, time, time_reference, resource_referen
     refs = ({'artifact':resource_reference,'locator':'#/time_schedule'},
             {'artifact':original_plan_reference,'locator':'#'},
             {'artifact':plan_reference,'locator':'#'},
-            {'artifact':artifact_reference(Path(__file__).resolve(),'scar.python-source'),'locator':'#'},
-            {'artifact':artifact_reference(Path(__file__).resolve().parents[1]/'optimization/workspace_costs.py',
+            {'artifact':_workspace_source(workspace_producer),'locator':'#'},
+            {'artifact':artifact_reference(_OWNER.parents[1]/'optimization/workspace_costs.py',
                  'scar.python-source'),'locator':'#'})
     primitive = None
     if domain_reference is None:
@@ -80,27 +90,23 @@ def _workspace_costs(schedule, resources, time, time_reference, resource_referen
         if any(reference['schema'] != BOUNDARY for reference in boundary_refs):
             raise ValueError('only matching workspace boundary cuts can price shared-loop phases')
         evidence = [dict(reference=reference,
-            document=_read_workspace_boundary(reference,qualified_time=time)) for reference in boundary_refs]
+            document=_read_workspace_boundary(reference,qualified_time=(time, schedule))) for reference in boundary_refs]
         table, accounting = apply_workspace_boundary_costs(table,accounting,schedule,resources,evidence,
             source_refs=tuple(dict(artifact=reference,locator='#/statistics') for reference in boundary_refs))
     for reference in (resource_reference,*([] if domain_reference is None else [domain_reference]),*calibration_refs,*boundary_refs):
-        read_artifact(reference)
+        read_artifact(reference, json_document=False)
     derivation = dict(protocol='SOURCE_QUALIFIED_WORKSPACE_ONCE_AND_INDEXED_PRIMITIVE_COSTS',
         workspace_accounting=accounting, summary=validate_activity_cost_table(table,schedule,resources))
     return table, derivation, schedule, resources
 
 
-def _derive(resource_reference, domain_reference, candidate_id, calibration_refs, boundary_refs=(), dag_refs=()):
-    resource_receipt = read_resource_bindings(resource_reference['uri'])
-    if resource_receipt != read_artifact(resource_reference):
-        raise ValueError('original resource preparation changed during cost replay')
-    resources = projection_from_dict(read_artifact(resource_receipt['projection']))
-    time = read_artifact(resource_receipt['time_schedule'])
-    schedule = schedule_from_dict(read_artifact(time['schedule']))
+def _derive(resource_reference, domain_reference, candidate_id, calibration_refs, boundary_refs=(), dag_refs=(),
+            *, workspace_producer=None):
+    resource_receipt, time, schedule, resources = replay_resource_bindings(resource_reference)
     refs = ({'artifact': resource_reference, 'locator': '#/time_schedule'},)
     if time['source_kind'] == 'stateful_workspace':
         return _workspace_costs(schedule, resources, time, resource_receipt['time_schedule'], resource_reference, domain_reference,
-            candidate_id, calibration_refs, boundary_refs, dag_refs)
+            candidate_id, calibration_refs, boundary_refs, dag_refs, workspace_producer)
     if domain_reference is None:
         if candidate_id is not None or calibration_refs or boundary_refs or dag_refs:
             raise ValueError('canonical facts require an explicit original domain and candidate')
@@ -118,7 +124,7 @@ def _derive(resource_reference, domain_reference, candidate_id, calibration_refs
         candidate_id, [ref['uri'] for ref in calibration_refs], source_refs=source_refs,
         boundary_calibrations=boundary_refs, dag_calibrations=dag_refs, scope_schedule_ref=time['schedule'])
     for ref in (resource_reference, domain_reference, *calibration_refs, *boundary_refs, *dag_refs):
-        read_artifact(ref)
+        read_artifact(ref, json_document=False)
     return table, derivation, schedule, resources
 
 
@@ -167,10 +173,15 @@ def replay_activity_costs(path):
     if (report.get('schema'), report.get('schema_version')) != (SCHEMA, 1):
         raise ValueError('source-replayed activity cost receipt required')
     table = activity_cost_from_dict(read_artifact(report['table']))
+    producers = [row['artifact'] for row in table.source_refs
+                 if row.get('artifact', {}).get('uri') == str(_OWNER) and row.get('locator') == '#']
+    if len(producers) > 1:
+        raise ValueError('one original workspace costing producer required')
     boundary_refs = report.get('boundary_calibrations', ())
     dag_refs = report.get('dag_calibrations', ())
     replay, derivation, schedule, resources = _derive(report['resources'], report['domain'],
-        report['candidate_id'], report['calibrations'], boundary_refs, dag_refs)
+        report['candidate_id'], report['calibrations'], boundary_refs, dag_refs,
+        workspace_producer=producers[0] if producers else None)
     expected = dict(schema=SCHEMA, schema_version=1, resources=report['resources'], domain=report['domain'],
         candidate_id=report['candidate_id'], calibrations=report['calibrations'],
         table=report['table'], derivation=report['derivation'],
@@ -186,7 +197,7 @@ def replay_activity_costs(path):
     if (table != replay or report != expected or semantic_sha256(saved_derivation) != semantic_sha256(dict(
             schema='scar.activity-cost-derivation', schema_version=1, **derivation))):
         raise ValueError('activity costs differ from original source/resource/component replay')
-    read_artifact(reference)
+    read_artifact(reference, json_document=False)
     return report, table, saved_derivation, schedule, resources
 
 

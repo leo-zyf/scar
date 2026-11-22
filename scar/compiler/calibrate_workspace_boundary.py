@@ -8,7 +8,6 @@ from pathlib import Path
 import subprocess
 
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.versioned_schedule import schedule_from_dict
 from scar.optimization.resource_solver import semantic_sha256
 from scar.optimization.workspace_boundary_costs import (SCHEMA, PHASE_DEFINITIONS,
     cut_layout, boundary_statistics)
@@ -49,25 +48,24 @@ def _receipt(path):
 
 def _pins():
     return {name:sha256((_ROOT/name).read_bytes()).hexdigest() for name in
-        ('compiler/calibrate_workspace_boundary.py','codegen/workspace_boundary_probe.py',
+        ('compiler/calibrate_workspace_boundary.py','compiler/workspace_schedule.py','codegen/workspace_boundary_probe.py',
          'optimization/workspace_boundary_costs.py','analysis/workspace_source.py',
          'codegen/stateful.py','codegen/stateful_v1.cpp.in','codegen/loop_v1.cpp.in',
          'codegen/stateful_workspace_v1.cpp.in','codegen/stateful_abi_v1.h','codegen/scar_abi_v1.h')}
 
 
 def _spec(reference, *, qualified_time=None):
-    from scar.compiler.project_workspace_demands import read_workspace_demands
+    from scar.compiler.workspace_schedule import DEMAND_SCHEMA, replay_workspace_schedule
     from scar.codegen.workspace_boundary_probe import render_workspace_boundary_probe
+    _need(reference.get('schema') == DEMAND_SCHEMA, 'exact source-refined workspace time reference required')
     if qualified_time is None:
-        time = read_workspace_demands(reference['uri'])
+        time, schedule = replay_workspace_schedule(reference)
     else:
         # Private bridge used only after the calling producer's complete
         # resource/time source replay. Never replace it by a supplied boolean.
-        time = qualified_time
-    _need(read_artifact(reference) == time
-        and time.get('schema') == 'scar.workspace-demand-time-preparation',
-        'exact source-refined workspace time reference required')
-    schedule = schedule_from_dict(read_artifact(time['schedule']))
+        time, schedule = qualified_time
+        _need(read_artifact(reference) == time and time.get('schema') == DEMAND_SCHEMA,
+            'exact source-refined workspace time reference required')
     proof = next(row for row in schedule.temporal.source_refs
         if row.get('schema') == 'scar.workspace-cpu-demand-source-proof')
     metadata = read_artifact(time['native_manifest']); plan = read_artifact(proof['stage_plan'])
@@ -179,7 +177,10 @@ def _read_workspace_boundary(reference, *, qualified_time=None):
         and document['native_manifest'] == spec['time']['native_manifest'] and document['cpp_source'] == spec['cpp']
         and document['trip_count'] == spec['count'] and document['conditions'] == list(CONDITIONS)
         and document['missing_terms'] == list(MISSING), 'canonical workspace boundary source/context differs')
-    _need(probe['implementation_files'] == _pins() and probe['source_provenance'] == spec['provenance']
+    current = _pins()
+    previous = {name: digest for name, digest in current.items() if name != 'compiler/workspace_schedule.py'}
+    previous['compiler/calibrate_workspace_boundary.py'] = '6c32acbbea5accd87d5df565a5c525396201561991b18331251f847dc0d89467'
+    _need(probe['implementation_files'] in (current, previous) and probe['source_provenance'] == spec['provenance']
         and probe['compiler'] == spec['metadata']['compiler'] and probe['target_dag_compiled'] is False
         and probe['target_program_executed'] is False, 'canonical workspace observer implementation differs')
     for receipt in (probe['source'],probe['library'],*probe['headers'].values()):
@@ -195,7 +196,8 @@ def _read_workspace_boundary(reference, *, qualified_time=None):
         and all(document.get(key) is False for key in ('target_workload_executed','target_variants_ranked',
             'target_variants_compiled','whole_target_call_measured','clock_overhead_subtracted',
             'physical_optimality_proven','deployment_authorized')), 'canonical observation scope/statistics differ')
-    read_artifact(reference); return document
+    _need(current == _pins(), 'workspace observer implementation changed during replay')
+    read_artifact(reference, json_document=False); return document
 
 
 def read_workspace_boundary(reference):
