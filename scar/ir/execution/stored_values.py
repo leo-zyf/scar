@@ -209,7 +209,6 @@ class _Sources:
 
     def copies(self, source, target):
         """Compare proven sources, including owners/keys obtained through loads."""
-        from .value_sources import source_pair
         return source_pair(self.ctx, source, target, self.shared)
 
     def address(self, left, right):
@@ -645,8 +644,6 @@ def source_pair(ctx, source, target, shared):
     """
     from .pending_payloads import copy_recipe
     from .resumable_identity import compatible
-    from .stored_value_projection import projection
-    from .stored_values import _flags
 
     if type(shared) is not ValidityBudget:
         raise TypeError('value-source query requires exact shared ValidityBudget')

@@ -365,7 +365,6 @@ def _terminal(ctx, definition, anchor, advance, parent_port, known, shared,
                        getattr(declared_source, 'operation', None))
         current_operation, _ = (locate(ctx, anchor, source_site, shared)
                                 if source_site is not None else (None, None))
-        from .await_outcome_evidence import port_value
         occurrences.update(_map(current_operation))
         current_value = port_value(ctx, declared_source, occurrences, shared)
         current_binding = pair(ctx, current_value, packet, shared)

@@ -165,7 +165,7 @@ def packets(ctx, source, choices):
 def continuation_rows(ctx, source, choices=(), *, candidates=None):
     """Demand-bound same-region receipts for the original known packets."""
     from .protocol_packet_routes import completion_continuations
-    from .copy_flow import required_choices, selected
+    from .data_materials import required_choices, selected
     required, complete = required_choices(ctx, source)
     choices = selected(ctx, ctx._returns.guards, choices, required)
     cache = getattr(ctx, '_completion_adapter_routes', None)

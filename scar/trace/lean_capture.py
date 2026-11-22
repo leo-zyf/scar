@@ -97,36 +97,6 @@ class LeanCapturePlan:
             unsupported=tuple(i.offset for i in instructions if _is_call_site(i.opname) and i.opname not in _OBSERVABLE_CALLS)
             bodies.append(LeanBodyPlan(sources[str(path)],decode(CapturedCode,describe_code(code)),calls,unsupported))
         return cls(str(Path(namespace_root).resolve()),tuple(bodies),max_codes)
-    @classmethod
-    def from_source_entry_plan(cls,plan,*,namespace_root,max_codes=4096):
-        """Derive selectors from one live normal entry plan, not its JSON.
-
-        Readonly CodeWitness supplies archived code identity. Neither source
-        preparation/lowering nor target execution/current-source guessing is
-        used. The result is still only a capture selection policy.
-        """
-        from scar.compiler.frontend.python_worklist import SourceEntryFrontendPlan
-        from scar.analysis.source_language import SourceCodeEvidence
-        _need(type(plan) is SourceEntryFrontendPlan,'a live normal source-entry plan is required')
-        _need(type(max_codes) is int and max_codes>0,'lean plan needs an independent positive code budget')
-        plan.require_unchanged()
-        bodies={}
-        for row in plan.dispatch:
-            entry=plan.catalog.resolve(row['entry_key'])
-            evidence=SourceCodeEvidence.from_entry(plan.catalog,entry)
-            evidence.require_definition(entry.reference.snapshot,entry.reference.definition,entry.reference.source)
-            code=evidence.code
-            _need(describe_code(code)==encode(entry.captured),'readonly entry code descriptor changed')
-            instructions=tuple(dis.get_instructions(code))
-            body=LeanBodyPlan(entry.reference.snapshot,entry.captured,
-                tuple(i.offset for i in instructions if _is_call_site(i.opname)),
-                tuple(i.offset for i in instructions if _is_call_site(i.opname) and i.opname not in _OBSERVABLE_CALLS))
-            previous=bodies.setdefault(body.code.key,body)
-            _need(previous==body,'one selector key has conflicting source/code variants')
-            _need(len(bodies)<=max_codes,'lean plan code budget exceeded')
-        plan.require_unchanged()
-        return cls(str(Path(namespace_root).resolve()),tuple(bodies.values()),max_codes)
-
     def candidate(self,code):
         bodies=self._by_source.get((code.co_filename,code.co_qualname,code.co_firstlineno),())
         return bodies[0] if bodies else None

@@ -70,6 +70,11 @@ def _prepare(ctx):
     return result
 
 
+def evaluated_literal(ctx, site):
+    """Read the literal for a canonical result site from the shared index."""
+    return _prepare(ctx)[1].get(site)
+
+
 def _local(ctx, choices, region):
     return ctx.selected_edges(choices, region=region)
 

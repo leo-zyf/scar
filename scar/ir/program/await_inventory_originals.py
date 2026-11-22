@@ -3,7 +3,7 @@
 from scar.ir.program.await_outcomes import selected, state_links
 from scar.ir.program.suspension_interfaces import continuation_rows
 from scar.ir.program.model import ExitKind, TerminatorKind, InvokeLiteralResult
-from scar.ir.program.operation_results import evaluated_sources
+from scar.ir.program.operation_results import evaluated_literal, evaluated_sources
 from scar.ir.program.protocol_await_records import (
     AwaitAcquisition,
     AwaitIteratorQualification,
@@ -212,8 +212,7 @@ def qualification_view(ctx, row, choices=()):
     declared_boolean, predicate_conflict = None, False
     if contract.branch is not None:
         from scar.ir.literals import LiteralKind, PythonLiteral
-        from .evaluated_sources import _prepare
-        literal = _prepare(ctx)[1].get(contract.result)
+        literal = evaluated_literal(ctx, contract.result)
         if (literal is not None and type(literal.literal) is PythonLiteral
                 and literal.literal.kind is LiteralKind.BOOL):
             declared_boolean = literal.literal.payload

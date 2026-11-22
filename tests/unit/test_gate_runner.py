@@ -6,7 +6,9 @@ an unrelated successful suite.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
+from importlib.util import resolve_name
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,33 @@ import pytest
 
 
 RUNNER = Path(__file__).resolve().parents[2] / "scripts" / "run_gate.py"
+
+
+def test_release_sources_do_not_import_retired_modules():
+    """Check deferred in-package imports even when their runtime branch is idle."""
+    root = RUNNER.parent.parent
+    tracked = subprocess.check_output(["git", "ls-files", "-z", "--", "scar"], cwd=root)
+    sources = [Path(path.decode()) for path in tracked.split(b"\0") if path.endswith(b".py")]
+    modules = {
+        ".".join(path.with_suffix("").parts).removesuffix(".__init__")
+        for path in sources
+    }
+    modules.update(".".join(parent.parts) for path in sources for parent in path.parents if parent.parts)
+    missing = []
+    for path in sources:
+        package = ".".join(path.parent.parts)
+        for node in ast.walk(ast.parse((root / path).read_bytes(), filename=str(path))):
+            if isinstance(node, ast.Import):
+                imports = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                source = node.module or ""
+                imports = [resolve_name("." * node.level + source, package) if node.level else source]
+            else:
+                continue
+            for name in imports:
+                if name.startswith("scar.") and name not in modules:
+                    missing.append(f"{path}:{node.lineno} imports {name}")
+    assert not missing, "\n".join(missing)
 
 
 @pytest.fixture

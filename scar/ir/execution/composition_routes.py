@@ -994,9 +994,6 @@ def _lifecycle(ctx, budget):
 
 def resource_composition(ctx, scopes, *, budget):
     """Return one detached projection; the caller already prepared this context."""
-    from .composition_requirements import requirements
-    from .composition_routes import routes
-
     observations = requirements(ctx, scopes, budget=budget)
     # Publish the Q-phase receipt, not the mutable traversal controller. Later
     # phases continue charging the same controller without changing this view.

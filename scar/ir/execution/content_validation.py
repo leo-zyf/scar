@@ -634,7 +634,6 @@ def content_errors(ctx):
         if type(consumer) is ResourceConsumer and type(row.placement) is not Unresolved:
             work = ctx.submissions.get(consumer.read.ticket)
             if work is not None:
-                from .work_validation import check_work_materialization
                 check_work_materialization(ctx, work, row.placement.materialization, path)
         denotation = None if actual is None else ctx.resolved_denotations.get(actual.id)
         identity = None if denotation is None else denotation['denotation'].identity

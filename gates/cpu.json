@@ -42,6 +42,7 @@
         "tests/integration/test_native_fortran_cfi.py::test_native_fortran_cfi_shapes_and_reverse_strides",
         "tests/unit/test_ir.py::test_graph_validation_proves_static_line_coverage",
         "tests/unit/test_program_async_close_chains.py::test_real_close_chain_keeps_same_body_current_session_and_only_terminal_f[illegal]",
+        "tests/unit/test_program_await_qualification_flow.py::test_own_bool_literal_cannot_contradict_the_known_predicate_result",
         "tests/unit/test_program_inventory_graph_contract.py",
         "tests/unit/test_source_productions.py::test_closed_grammar_exact_records_strict_codec_and_budgets",
         "tests/unit/test_source_productions.py::test_original_source_inputs_fields_contexts_and_binding_ports",
