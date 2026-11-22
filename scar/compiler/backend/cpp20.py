@@ -135,8 +135,10 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
 def admit_entry(schedule: ExecutionPlanRef):
     """Replay the selected implementation against the frozen problem and source."""
     artifacts = schedule.artifacts
-    manifest, edits, compiler_types = replay_native_revision(artifacts)
+    manifest, edits, compiler_types, effect_scope = replay_native_revision(artifacts)
     observation, binding = read_native_binding(schedule)
+    if effect_scope != binding.get('entry_effect_scope'):
+        raise ValueError('execution plan differs from the verified native entry effect scope')
     operations = binding.pop('rewrite_operations')
     selected_edits = edits if operations else []
     if operations != [edit['operation'] for edit in selected_edits]:

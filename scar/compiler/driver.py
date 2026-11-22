@@ -62,6 +62,7 @@ def _plan_graph(graph, out, result, *, repetitions, case_seconds):
         result.update(artifacts=revision.artifacts, graph_rewrites=len(revision.rules),
                       source_rewrites=len(revision.edits))
         layers[layer] = 'IR_VALIDATED'
+        layers['entry_effects'] = revision.entry_effect_scope
         layer = 'cost'
         if not request.get('baseline') or not request.get('cases'):
             raise ValueError('baseline executable and cases are required to qualify native delivery')
@@ -73,7 +74,7 @@ def _plan_graph(graph, out, result, *, repetitions, case_seconds):
         if observation['exit'] != 0:
             raise ValueError(f'baseline exited with status {observation["exit"]}')
         if revision.edits:
-            manifest, edits, types = replay_native_revision(revision.artifacts)
+            manifest, edits, types, _ = replay_native_revision(revision.artifacts)
             variants = out / 'variants'
 
             def build(mode):

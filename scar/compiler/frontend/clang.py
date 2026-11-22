@@ -45,7 +45,7 @@ _Visitor = CFUNCTYPE(c_uint, _Cursor, _Cursor, c_void_p)
 _CALLABLES = {'FunctionDecl', 'CXXMethod', 'Constructor', 'Destructor', 'ConversionFunction'}
 _CX_LINKAGE_EXTERNAL = 4
 _GNU_CFI_HEADER = 'ISO_Fortran_binding.h'
-_GNU_CFI_ROUTINES = {'CFI_establish', 'CFI_is_contiguous', 'CFI_section'}
+_GNU_CFI_ROUTINES = {'CFI_establish', 'CFI_is_contiguous', 'CFI_section', 'CFI_setpointer'}
 
 
 @lru_cache(maxsize=8)
@@ -242,7 +242,9 @@ def capture_unit(source_root, unit, *, source_override=None, cfi=None):
 
 def _compile_settings(flags, source_root, staged_root):
     include_dirs = []
-    compile_options = []
+    # The generated CMake Release profile defines NDEBUG independently of
+    # the original source command. Apply the caller's macro flags after it.
+    compile_options = ['-UNDEBUG']
     tokens = iter(flags)
     for flag in tokens:
         if flag.startswith(('-std=', '--std=')):

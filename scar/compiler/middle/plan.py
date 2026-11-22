@@ -20,6 +20,7 @@ from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.joint_planner import _verify_admitted_plan
 
 from ..contracts import ExecutionPlanRef, GraphBundle, verify_source_lock
+from .native_effects import is_ssa_copy, native_entry_effects
 
 
 _NATIVE_DELIVERY_PROFILE = 'CPP20_NATIVE_ENTRY'
@@ -39,6 +40,7 @@ class NativeRevision:
     artifacts: dict
     rules: tuple[dict, ...]
     edits: tuple[dict, ...]
+    entry_effect_scope: str | None = None
 
 
 def _native_input(reference):
@@ -60,6 +62,8 @@ def rewrite_native(graph: GraphBundle, out):
     original = graph.native_model
     if original is None:
         original = _read_program(artifacts['program'])
+    calls = graph.native_calls if graph.native_calls is not None else read_artifact(artifacts['calls'])
+    effects = native_entry_effects(original, graph.report, calls)
     simplified_graph, rules = _copy_revision(original, graph.report['anchors'])
     edits = copy_source_edits(manifest, graph.report, rules)
     simplified = artifacts['program']
@@ -68,15 +72,15 @@ def rewrite_native(graph: GraphBundle, out):
         simplified = file_reference(path, PROGRAM_SCHEMA)
     ledger = publish_plan(out / 'rewrites.json', dict(
         schema='scar.native-rewrites', schema_version=1, rules=rules, source_edits=edits,
-        program=artifacts['program'], result=simplified,
+        program=artifacts['program'], result=simplified, entry_effects=effects,
     ))
     revision = NativeRevision(graph.report['entry'], dict(artifacts, simplified=simplified, rewrites=ledger),
-                              tuple(rules), tuple(edits))
+                              tuple(rules), tuple(edits), effects['status'])
     from scar.analysis.replay_transaction import current_transaction
 
     if (transaction := current_transaction()) is not None:
         _retain_native_revision(transaction, revision.artifacts, lambda: _revision_inputs(
-            revision.artifacts, manifest, graph.report, edits))
+            revision.artifacts, manifest, graph.report, edits, effects['status']))
     return revision, manifest
 
 
@@ -92,7 +96,8 @@ def schedule_native(revision: NativeRevision, observation, cases, out) -> Execut
         raise ValueError('native observation differs from the locked request or target')
     artifacts = dict(revision.artifacts, cost=publish_plan(out / 'cost-observation.json', observation))
     decision = native_cost_decision(observation, cases)
-    problem = entry_problem(revision.entry, artifacts, observation, revision.edits, decision=decision)
+    problem = entry_problem(revision.entry, artifacts, observation, revision.edits, decision=decision,
+                            entry_effect_scope=revision.entry_effect_scope)
     schedule = construct_implementations(problem, baseline_only=entry_baseline_only(problem))
     artifacts['planning_problem'] = publish_plan(out / 'planning-problem.json', problem_document(problem))
     artifacts['execution_plan'] = publish_plan(out / 'plan.json', schedule)
@@ -160,6 +165,11 @@ def read_native_binding(reference: ExecutionPlanRef):
 
     binding = dict(cpus=[cpu], lowering=mode.lowering, selected=plan['selected'],
                    rewrite_operations=rewrites, verification=verification)
+    if 'entry_effect_scope' in mode.parameters:
+        scope = mode.parameters['entry_effect_scope']
+        if scope not in ('CLOSED_BODY', 'OPEN_BODY'):
+            raise ValueError('unsupported native entry effect scope')
+        binding['entry_effect_scope'] = scope
     if variant is not None:
         binding['trial_variant'] = variant
     return observation, binding
@@ -195,9 +205,7 @@ def _copy_revision(graph, anchors):
     for operation in graph.operations:
         # GCC's SSA copy is a value forwarding operation. A VUSE/VDEF
         # distinguishes memory-dependent loads, including volatile reads.
-        if (operation.label == 'gimple_assign' and len(operation.results) == 1
-                and len(operation.uses) == 1 and not operation.accesses
-                and 'gimple_assign <ssa_name,' in source.get(operation.id.wire, '')):
+        if is_ssa_copy(operation, source.get(operation.id.wire, '')):
             copied = operation.results[0]
             forwarded = operation.uses[0].value
             aliases[copied] = forwarded
@@ -359,7 +367,7 @@ def _retain_native_revision(transaction, artifacts, produce):
     return transaction.memo('scar.cpp20-native-revision.v1', identity, admit)
 
 
-def _revision_inputs(artifacts, manifest, evidence, edits):
+def _revision_inputs(artifacts, manifest, evidence, edits, entry_effect_scope):
     if any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
         raise ValueError('compiler evidence differs from the admitted frontend outputs')
     typed_units = {unit['path'] for unit in manifest['units']
@@ -372,7 +380,7 @@ def _revision_inputs(artifacts, manifest, evidence, edits):
                       if row['unit'] in retained_units and 'types' in row['artifacts']}
     if not typed_units <= compiler_types.keys():
         raise ValueError('C and Fortran translation require original type evidence for every unit')
-    return manifest, edits, compiler_types
+    return manifest, edits, compiler_types, entry_effect_scope
 
 
 def _read_native_revision(artifacts):
@@ -385,8 +393,13 @@ def _read_native_revision(artifacts):
 
     expected = artifacts['program']
     edits = []
+    effects = rewrite.get('entry_effects')
+    original = _read_program(artifacts['program']) if rewrite['rules'] or effects is not None else None
+    if effects is not None:
+        replayed = native_entry_effects(original, evidence, read_artifact(artifacts['calls']))
+        if replayed != effects:
+            raise ValueError('native entry effects differ from the original graph and call proof')
     if rewrite['rules']:
-        original = _read_program(artifacts['program'])
         simplified, rules = _copy_revision(original, evidence['anchors'])
         if rules != rewrite['rules']:
             raise ValueError('rewrite rules differ from the original SSA copy proof')
@@ -397,7 +410,7 @@ def _read_native_revision(artifacts):
         raise ValueError('simplified graph differs from canonical SSA replay')
     if edits != rewrite.get('source_edits', []):
         raise ValueError('source copy edits differ from frontend and IR evidence')
-    return _revision_inputs(artifacts, manifest, evidence, edits)
+    return _revision_inputs(artifacts, manifest, evidence, edits, effects['status'] if effects else None)
 
 
 def _trial_output(run):
@@ -460,7 +473,7 @@ def _native_delivery(cpu, variant):
     return binding
 
 
-def entry_problem(entry, artifacts, observation, edits=(), *, decision=None):
+def entry_problem(entry, artifacts, observation, edits=(), *, decision=None, entry_effect_scope=None):
     source_refs = entry_sources(artifacts)
     cpu = observation['cpu']
     core = f'cpu:{cpu}'
@@ -471,6 +484,8 @@ def entry_problem(entry, artifacts, observation, edits=(), *, decision=None):
         lowering = 'canonicalize_scalar_copies' if mode == 'canonical' else 'preserve_entry'
         variant = observation.get('variants', {}).get(mode)
         parameters = dict(region=entry, delivery=_native_delivery(cpu, variant))
+        if entry_effect_scope is not None:
+            parameters['entry_effect_scope'] = entry_effect_scope
         if mode == 'canonical':
             parameters['rewrites'] = [row['operation'] for row in edits]
         return ImplementationOption(mode, lowering, source_refs, {core: 1}, {}, {}, {}, estimate,

@@ -209,6 +209,10 @@ def _declarations(procedure, known, *, result=None, bridge=False, descriptors=No
         attrs = attr_list.items if attr_list else ()
         shape = next((item.items[1] for item in attrs if isinstance(item, F.Dimension_Attr_Spec)), None)
         for attr in attrs:
+            if str(attr).upper() == 'CONTIGUOUS' and all(
+                    descriptors.get(str(entity.items[0]).lower(), {}).get('contiguous')
+                    for entity in entities.items):
+                continue
             if not isinstance(attr, (F.Dimension_Attr_Spec, F.Intent_Attr_Spec)) and str(attr).upper() not in allowed:
                 raise ValueError(f'unsupported Fortran declaration attribute {attr}')
         for entity in entities.items:
@@ -338,6 +342,8 @@ def _cfi_expression(node, descriptors, symbols):
         raise ValueError(f'CFI array requires an element access or scalar shape inquiry. {node}')
     if isinstance(node, tuple):
         return tuple(_cfi_expression(item, descriptors, symbols) for item in node)
+    if isinstance(node, list):
+        return [_cfi_expression(item, descriptors, symbols) for item in node]
     if hasattr(node, 'items'):
         replacement = copy(node)
         replacement.items = _cfi_expression(node.items, descriptors, symbols)
@@ -465,8 +471,8 @@ def _c_export(procedure, transport):
             if result or by_value:
                 raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
             if isinstance(shape, F.Assumed_Shape_Spec_List):
-                if attributes & {'CONTIGUOUS', 'TARGET'}:
-                    raise ValueError(f'CFI CONTIGUOUS/TARGET dummy is outside the borrowed element ABI. {name}')
+                if 'TARGET' in attributes:
+                    raise ValueError(f'CFI TARGET dummy is outside the nonescaping element ABI. {name}')
                 bounds = [_integer_constant(axis.items[0], procedure.symbols) if axis.items[0] is not None else 1
                           for axis in shape.items]
                 while True:
@@ -481,6 +487,9 @@ def _c_export(procedure, transport):
                 row['descriptor'] = {'schema': 'scar.gnu-cfi-assumed-shape', 'schema_version': 1,
                                      'rank': len(bounds), 'cfi_type': f'CFI_type_{c_type}',
                                      'lower_bounds': bounds, 'array': array, 'axes': axes}
+                if 'CONTIGUOUS' in attributes:
+                    intent = re.search(r'\bDUMMY\((IN|OUT|INOUT)\)', fact.attributes)
+                    row['descriptor'].update(contiguous=True, intent=intent[1].lower() if intent else 'inout')
             elif not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec)):
                 raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
         return row

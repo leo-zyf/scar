@@ -125,6 +125,7 @@ class GraphBundle:
     report: dict
     declarations: ProviderArtifact | None = None
     native_model: ProgramGraph | None = None
+    native_calls: dict | None = None
 
     @classmethod
     def read_native(cls, directory: Path) -> 'GraphBundle':
@@ -154,8 +155,8 @@ class GraphBundle:
         for name in ('request', 'program', 'hardware', 'calls'):
             if report.get(name) != references[name]:
                 raise ValueError(f'native graph report and result disagree on {name}')
-        read_artifact(parts['calls'])
-        return cls(parts['request'], parts['program'], parts['hardware'], evidence, parts['calls'], report)
+        return cls(parts['request'], parts['program'], parts['hardware'], evidence, parts['calls'], report,
+                   native_calls=read_artifact(parts['calls']))
 
     @classmethod
     def from_python_session(cls, session) -> 'GraphBundle':

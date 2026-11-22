@@ -48,7 +48,8 @@ int main(void) {
 '''
 
 
-def test_native_indirect_targets_flow_through_cfg_and_cpp20(tmp_path):
+@pytest.fixture
+def native_tools():
     tools = ('gcc', 'g++', 'cmake', 'ninja', 'nm', 'readelf', 'taskset')
     if any(shutil.which(tool) is None for tool in tools):
         pytest.skip('native indirect delivery requires GNU compilers and tools')
@@ -57,6 +58,8 @@ def test_native_indirect_targets_flow_through_cfg_and_cpp20(tmp_path):
     except OSError:
         pytest.skip('native indirect delivery requires libclang1-18')
 
+
+def test_native_indirect_targets_flow_through_cfg_and_cpp20(tmp_path, native_tools):
     source = tmp_path / 'source'
     source.mkdir()
     provider = 'extern "C" int external_transform(int n) { return 3 * n; }\n'
@@ -111,3 +114,47 @@ def test_native_indirect_targets_flow_through_cfg_and_cpp20(tmp_path):
     assert delivery['delivery'] == 'COMPARED' and all(case['matches'] for case in delivery['validation'])
     project = json.loads((result / 'project/delivery.json').read_bytes())
     assert dict(caller='dispatch.c', callee='provider.cpp', symbol='external_transform') in project['mixed_linkage']
+
+
+def test_native_entry_effects_close_over_bound_targets(tmp_path, native_tools):
+    source = tmp_path / 'source'
+    source.mkdir()
+    caller = source / 'dispatch.c'
+    raw = b'''
+static int left(int x) { return x & 7; }
+static int right(int x) { return x & 3; }
+int main(int argc, char **argv) {
+    int (*selected)(int) = &left;
+    if (argc > 1) selected = &right;
+    return selected(0);
+}
+'''
+    caller.write_bytes(raw)
+    binary = tmp_path / 'original'
+    _run(tmp_path, 'original', ['gcc', '-std=c17', '-O2', caller, '-o', binary])
+    manifest = tmp_path / 'request.json'
+    manifest.write_text(json.dumps(dict(
+        schema='scar.native-entry', schema_version=1, language='c', entry='main',
+        source_root=str(source), units=[dict(path=caller.name, language='c', flags=['-std=c17'])],
+        source_lock=dict(files={caller.name: dict(sha256=sha256(raw).hexdigest(), size_bytes=len(raw))}),
+        cases=[dict(id='left', comparison='exact'),
+               dict(id='right', argv=['right'], comparison='exact')],
+        baseline=dict(argv=[str(binary)], cwd=str(tmp_path)),
+    )))
+    graph, plan, result = (tmp_path / label for label in ('graph', 'plan', 'delivery'))
+    prefix = [sys.executable, '-m', 'scar']
+    _run(tmp_path, 'scar-graph', [*prefix, 'build', '--manifest', manifest, '--out', graph])
+    _run(tmp_path, 'scar-plan', [*prefix, 'plan', '--graph', graph, '--out', plan, '--repetitions', '1'])
+    effects = json.loads((plan / 'rewrites.json').read_bytes())['entry_effects']
+    assert effects['status'] == 'CLOSED_BODY', effects
+    assert effects['normal_return_in_retained_graph'] is True and len(effects['regions']) == 3
+    for region in effects['regions'].values():
+        assert region['reachable_effects_closed'] is True and region['local_frontiers'] == {}
+    calls = json.loads((graph / 'call-links.json').read_bytes())['calls']
+    indirect, = [row for row in calls if row['status'] == 'FINITE_TARGETS']
+    assert {row['callee']['symbol'] for row in indirect['targets']} == {'left', 'right'}
+    _run(tmp_path, 'scar-delivery', [*prefix, 'compile', '--plan', plan / 'compiler-plan.json',
+                                    '--out', result, '--repetitions', '1'])
+    project = json.loads((result / 'project/delivery.json').read_bytes())
+    assert project['entry_effect_scope'] == 'CLOSED_BODY'
+    assert all(row['matches'] for row in json.loads((result / 'result.json').read_bytes())['validation'])

@@ -57,7 +57,11 @@
     },
     {
       "id": "M1_LEGAL_GRAPH_REWRITE",
-      "tests": ["tests/unit/test_array_motion_legality.py", "tests/unit/test_native_plan_contract.py"]
+      "tests": [
+        "tests/unit/test_array_motion_legality.py",
+        "tests/unit/test_native_plan_contract.py",
+        "tests/integration/test_native_indirect_calls.py::test_native_entry_effects_close_over_bound_targets"
+      ]
     },
     {
       "id": "M2_RESOURCE_AND_TIME_COST",

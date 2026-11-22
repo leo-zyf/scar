@@ -260,6 +260,7 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_
     _, graph = native_graph
     folder, plan = native_plan
     assert plan["status"] == "PLAN_SCHEDULED"
+    assert plan["layers"]["entry_effects"] == "OPEN_BODY"
     for role, status in (("rewrite", "IR_VALIDATED"), ("cost", "OBSERVED"), ("schedule", "SCHEDULED")):
         assert plan["layers"][role] == status
     frozen = ExecutionPlanRef.read(folder / "compiler-plan.json")
@@ -267,6 +268,7 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_
         assert frozen.artifacts[role] == graph["artifacts"][role]
     problem, schedule, verification = read_plan_contract(frozen)
     observation, binding = read_native_binding(frozen)
+    assert binding["entry_effect_scope"] == "OPEN_BODY"
     assert problem.operations and schedule["schema"] == "scar.implementation-execution-plan"
     assert verification["feasible"] and binding["cpus"] == [observation["cpu"]]
     assert set(observation["case_inputs"]) == set(INPUTS)
@@ -289,6 +291,17 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_
     forged = tmp_path / "forged.json"
     forged.write_text(json.dumps(unrelated))
     with pytest.raises(ValueError, match="original SSA copy proof"):
+        replay_native_revision(dict(frozen.artifacts, rewrites=file_reference(forged, original["schema"])))
+
+    forged_effects = read_artifact(original)
+    effects = forged_effects["entry_effects"]
+    assert effects["process_startup_and_shutdown_covered"] is False
+    assert effects["regions"][effects["entry"]]["reachable_effects_closed"] is False
+    assert any("CALL_TARGET_EFFECT_OPEN" in region["local_frontiers"]
+               for region in effects["regions"].values())
+    effects["status"] = "CLOSED_BODY"
+    forged.write_text(json.dumps(forged_effects))
+    with pytest.raises(ValueError, match="entry effects differ"):
         replay_native_revision(dict(frozen.artifacts, rewrites=file_reference(forged, original["schema"])))
 
 

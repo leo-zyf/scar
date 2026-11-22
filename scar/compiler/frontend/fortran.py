@@ -151,6 +151,61 @@ static ScarCFIView<T, Rank> scar_cfi_view(CFI_cdesc_t* descriptor,
     return result;
 }
 '''
+_CFI_PACKING = '''template<class T, std::size_t Rank>
+class ScarCFIPacking {
+public:
+    explicit ScarCFIPacking(ScarCFIView<T, Rank>& view) {
+        for (const auto& axis : view.axes) {
+            if (axis.extent == 0) return;
+        }
+
+        // GNU requires the exact packed stride at every axis, even singletons.
+        std::array<longint, Rank> packed_strides;
+        longint bytes = sizeof(T);
+        bool packed = true;
+        for (std::size_t i = 0; i < Rank; ++i) {
+            packed_strides[i] = bytes;
+            packed &= view.axes[i].stride == bytes;
+            if (__builtin_mul_overflow(bytes, view.axes[i].extent, &bytes)) std::abort();
+        }
+        if (packed) return;
+
+        count = bytes / sizeof(T);
+        buffer.reset(new (std::nothrow) T[count]);
+        if (!buffer) std::abort();
+        source = view;
+        // GNU's BIND(C) prologue copies the bytes in for all INTENT modes.
+        transfer<true>();
+        view.data = buffer.get();
+        for (std::size_t i = 0; i < Rank; ++i) view.axes[i].stride = packed_strides[i];
+    }
+
+    void copy_back() {
+        if (buffer) transfer<false>();
+    }
+
+private:
+    template<bool CopyIn>
+    void transfer() {
+        for (longint i = 0; i < count; ++i) {
+            longint linear = i;
+            longint offset = 0;
+            for (const auto& axis : source.axes) {
+                offset += (linear % axis.extent) * axis.stride;
+                linear /= axis.extent;
+            }
+            T* element = scar_cfi_element(source.data, offset);
+            T* packed = buffer.get() + i;
+            if constexpr (CopyIn) std::memcpy(packed, element, sizeof(T));
+            else std::memcpy(element, packed, sizeof(T));
+        }
+    }
+
+    ScarCFIView<T, Rank> source;
+    std::unique_ptr<T[]> buffer;
+    longint count = 0;
+};
+'''
 _CFI_AXIS_FIELDS = ('extent', 'stride', 'origin', 'lower', 'upper')
 
 
@@ -289,22 +344,28 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False, source_di
 
 
 def _c_abi_source(exports):
-    has_descriptors = any('descriptor' in arg for row in exports for arg in row['arguments'])
+    descriptors = [arg['descriptor'] for row in exports for arg in row['arguments'] if 'descriptor' in arg]
+    has_packing = any(row.get('contiguous') for row in descriptors)
     lines = ['#include <type_traits>']
-    if has_descriptors:
+    if descriptors:
         lines.extend(['#include <ISO_Fortran_binding.h>', '#include <array>', '#include <cstdlib>',
                       '#include <limits>', '#include "scar_f2c_call.hpp"'])
+    if has_packing:
+        lines.extend(['#include <cstring>', '#include <memory>', '#include <new>'])
     lines.extend(['#include "f2c.h"', 'static_assert(std::is_same_v<integer, int>);',
                   'static_assert(std::is_same_v<doublereal, double>);'])
     if any(argument['transport_type'] == 'real' for row in exports for argument in row['arguments']):
         lines.append('static_assert(std::is_same_v<real, float>);')
-    if has_descriptors:
+    if descriptors:
         lines.append(_CFI_VIEW)
+    if has_packing:
+        lines.append(_CFI_PACKING)
     for row in exports:
         result = row['result']
         native_return = result['c_type'] if result else 'void'
         transport_return = result['transport_type'] if result else 'int'
         types, parameters, arguments, checks = [], [], [], []
+        packings, copy_backs = [], []
         for index, argument in enumerate(row['arguments']):
             name = f'arg{index}'
             types.append(f'{argument["transport_type"]} *')
@@ -314,6 +375,11 @@ def _c_abi_source(exports):
                 lower = ', '.join(map(str, descriptor['lower_bounds']))
                 template = f'{argument["c_type"]}, {descriptor["cfi_type"]}, {descriptor["rank"]}'
                 checks.append(f'    auto {view} = scar_cfi_view<{template}>({name}, {{{lower}}});')
+                if descriptor.get('contiguous'):
+                    packing = f'packing{index}'
+                    packings.append(f'    ScarCFIPacking {packing}({view});')
+                    if descriptor['intent'] != 'in':
+                        copy_backs.append(f'    {packing}.copy_back();')
                 arguments.append(f'{view}.data')
                 for axis in range(descriptor['rank']):
                     for field in _CFI_AXIS_FIELDS:
@@ -331,8 +397,15 @@ def _c_abi_source(exports):
         lines.append(f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});')
         lines.append(f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) {{')
         lines.extend(checks)
+        lines.extend(packings)
         call = f'{row["transport"]}({", ".join(arguments)});'
-        lines.append('    ' + ('return ' if result else '') + call)
+        if result and copy_backs:
+            lines.append('    const auto result = ' + call)
+            lines.extend(copy_backs)
+            lines.append('    return result;')
+        else:
+            lines.append('    ' + ('return ' if result else '') + call)
+            lines.extend(copy_backs)
         lines.append('}')
     return '\n'.join(lines) + '\n'
 

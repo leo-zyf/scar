@@ -924,11 +924,12 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
     program = (file_reference(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None)
     target = file_reference(hardware / 'result.json', 'scar.target-hardware-graph')
     baseline = (manifest.get('baseline') or {}).get('argv') or [None]
-    calls = link_calls(captured.functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
-                       clang_units=captured.declarations, call_tables=captured.call_tables,
-                       source_root=Path(manifest['source_root']))
+    calls = dict(schema='scar.native-call-links', schema_version=1, **link_calls(
+        captured.functions, report['anchors'], entry=manifest['entry'], executable=baseline[0],
+        clang_units=captured.declarations, call_tables=captured.call_tables,
+        source_root=Path(manifest['source_root'])))
     calls_path = directory / 'call-links.json'
-    calls_path.write_text(json.dumps(dict(schema='scar.native-call-links', schema_version=1, **calls)) + '\n')
+    calls_path.write_text(json.dumps(calls) + '\n')
     call_receipt = file_reference(calls_path, 'scar.native-call-links')
     report.update(schema='scar.native-graph-evidence', schema_version=1, units=captured.evidence,
                   request=asdict(request), program=program, hardware=target, calls=call_receipt,
@@ -944,7 +945,7 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
     return GraphBundle(request, None if program is None else ProviderArtifact(**program),
                        ProviderArtifact(**target),
                        ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
-                       ProviderArtifact(**call_receipt), report, native_model=model)
+                       ProviderArtifact(**call_receipt), report, native_model=model, native_calls=calls)
 
 
 def check_main(argv=None):
