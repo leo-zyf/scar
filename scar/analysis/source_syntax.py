@@ -17,6 +17,7 @@ from functools import lru_cache
 from hashlib import sha256
 from io import BytesIO, StringIO
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -146,22 +147,68 @@ def decoded_source_bytes(document) -> str | None:
     return _read_bytes_material(document)[1]
 
 
+@lru_cache(maxsize=8)
+def _native_file_digest(binary, device=None, inode=None):
+    with binary.open('rb') as stream:
+        info = os.fstat(stream.fileno())
+        if device is not None and (info.st_dev, info.st_ino) != (device, inode):
+            raise ValueError('CPython native binary differs from the mapped file')
+        digest = sha256()
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(stream.fileno())
+        if (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('CPython native binary changed during hashing')
+    return digest.hexdigest()
+
+
+def _mapped_builtin(module):
+    """Find the Linux file that owns the built-in module's C definition."""
+    import ctypes
+
+    module_def = ctypes.PYFUNCTYPE(ctypes.c_void_p, ctypes.py_object)(
+        ('PyModule_GetDef', ctypes.pythonapi))
+    address = module_def(module)
+    if not address:
+        raise ValueError(f'{module.__name__} has no CPython module definition')
+    try:
+        with open('/proc/self/maps', 'rb') as maps:
+            for line in maps:
+                fields = line.rstrip(b'\n').split(None, 5)
+                low, high = (int(bound, 16) for bound in fields[0].split(b'-'))
+                if low <= address < high and len(fields) == 6 and fields[5].startswith(b'/'):
+                    major, minor = (int(part, 16) for part in fields[3].split(b':'))
+                    binary = Path(os.fsdecode(fields[5])).resolve(strict=True)
+                    return binary, os.makedev(major, minor), int(fields[4])
+    except OSError as error:
+        raise ValueError(f'loaded binary for {module.__name__} is unavailable') from error
+    raise ValueError(f'loaded binary for {module.__name__} is unavailable')
+
+
+def native_module_receipt(module):
+    origin = module.__spec__.origin
+    device = inode = None
+    if origin == 'built-in':
+        if sysconfig.get_config_var('Py_ENABLE_SHARED'):
+            binary, device, inode = _mapped_builtin(module)
+        else:
+            binary = Path(sys.executable).resolve(strict=True)
+    elif type(origin) is str and Path(origin).is_file():
+        binary = Path(origin).resolve(strict=True)
+    else:
+        raise ValueError(f'native binary for {module.__name__} is unavailable')
+    return origin, str(binary), _native_file_digest(binary, device, inode)
+
+
 @lru_cache(maxsize=1)
 def _tokenizer_implementation():
     import _tokenize
 
-    origin = _tokenize.__spec__.origin
-    if origin == 'built-in':
-        if sysconfig.get_config_var('Py_ENABLE_SHARED'):
-            raise ValueError('a built-in tokenizer in a shared runtime needs its loaded-library receipt')
-        binary = str(Path(sys.executable).resolve())
-    elif type(origin) is str and Path(origin).is_file():
-        binary = str(Path(origin).resolve())
-    else:
-        raise ValueError('native tokenizer implementation binary is unavailable')
+    origin, binary, binary_sha = native_module_receipt(_tokenize)
     return (sha256(Path(tokenize.__file__).read_bytes()).hexdigest(),
         sha256(Path(token.__file__).read_bytes()).hexdigest(), origin, binary,
-        sha256(Path(binary).read_bytes()).hexdigest())
+        binary_sha)
 
 
 def _tokenizer_profile(f0):

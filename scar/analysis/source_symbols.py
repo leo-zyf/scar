@@ -19,7 +19,7 @@ import sysconfig
 from types import MemberDescriptorType
 import warnings
 
-from scar.analysis.source_syntax import decoded_source_bytes, read_source_syntax, _native_diagnostic
+from scar.analysis.source_syntax import decoded_source_bytes, native_module_receipt, read_source_syntax, _native_diagnostic
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.program.source_paths import RawScopeMember, SourceScope, SourceSymbol, SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile, SymbolConstant, SymbolFrontier
 from scar.ir.program.source_bytes import SourceTokenWarning
@@ -48,16 +48,8 @@ def compiler_hash_context() -> str:
 
 @lru_cache(maxsize=1)
 def _implementation():
-    origin = _symtable.__spec__.origin
-    if origin == 'built-in':
-        if sysconfig.get_config_var('Py_ENABLE_SHARED'):
-            raise ValueError('a built-in symtable in a shared runtime needs its loaded-library receipt')
-        binary = str(Path(sys.executable).resolve())
-    elif type(origin) is str and Path(origin).is_file():
-        binary = str(Path(origin).resolve())
-    else:
-        raise ValueError('native symtable implementation binary is unavailable')
-    return origin, binary, sha256(Path(binary).read_bytes()).hexdigest(), sha256(Path(symtable.__file__).read_bytes()).hexdigest()
+    origin, binary, binary_sha = native_module_receipt(_symtable)
+    return origin, binary, binary_sha, sha256(Path(symtable.__file__).read_bytes()).hexdigest()
 
 
 def _profile(f0):
