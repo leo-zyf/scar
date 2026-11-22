@@ -7,6 +7,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scar.ir.program.queries import ProgramIndex
+    from scar.ir.program.validation import _ProgramAdmission
 
 from scar.ir.record_codec import decode, encode, loads as _loads
 
@@ -258,13 +259,32 @@ def _has_class_frame_capability(graph: ProgramGraph) -> bool:
                and type(row.entry) is ClassFrameABI for row in graph.frame_roots)
 
 
+def _require_graph_type(graph):
+    if type(graph) is not ProgramGraph:
+        raise TypeError("program graph must be ProgramGraph")
+
+
 def dumps(graph: ProgramGraph) -> str:
     """Select only present capabilities; preserve historical field/tag/byte profiles."""
     from scar.ir.program.validation import require_valid
 
-    if type(graph) is not ProgramGraph:
-        raise TypeError("program graph must be ProgramGraph")
+    _require_graph_type(graph)
     require_valid(graph)
+    wire, _ = _encode_program_graph(graph)
+    return wire
+
+
+def _dumps_with_admission(graph: ProgramGraph) -> tuple[str, int, _ProgramAdmission]:
+    """Return canonical wire, its schema version and this graph's validated facts."""
+    from scar.ir.program.validation import _admit
+
+    _require_graph_type(graph)
+    admission = _admit(graph)
+    wire, version = _encode_program_graph(graph)
+    return wire, version, admission
+
+
+def _encode_program_graph(graph: ProgramGraph) -> tuple[str, int]:
     if _has_cleanup_capability(graph) and not graph.handled_context_domains:
         raise ValueError("cleanup capability requires explicit handled-context domains")
     has_binding_capability = (
@@ -357,10 +377,11 @@ def dumps(graph: ProgramGraph) -> str:
     encoded = encode(graph, record_tags=tags)
     document = {"schema": SCHEMA, "schema_version": version,
                 **{name: encoded[name] for name in _FIELDS_BY_VERSION[version]}}
-    return json.dumps(document, sort_keys=True, separators=(",", ":"),
+    wire = json.dumps(document, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=(has_literals or has_protocols or has_protocol_connections
                                     or has_exception_matches),
                       allow_nan=False)
+    return wire, version
 
 
 def _upgrade_v1_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -667,13 +688,14 @@ def _loads_with_index(payload: str) -> tuple[ProgramGraph, "ProgramIndex"]:
     """Strictly load one graph and its index with one semantic validation.
 
     Both readers share every original schema, record and capability check.
-    ProgramIndex runs the full graph validator and consumes its internally
-    prepared index/facts. No caller can supply a validation verdict or reuse
-    an index from different input bytes; nothing is cached globally here.
+    The validator returns the admitted facts for exactly the decoded graph.
+    Index construction can reuse a query index needed during validation.
     """
-    graph = _decode_program_graph(payload)
     from scar.ir.program.queries import ProgramIndex
-    return graph, ProgramIndex(graph)
+    from scar.ir.program.validation import _admit
+
+    graph = _decode_program_graph(payload)
+    return graph, ProgramIndex._from_admission(_admit(graph))
 
 
 __all__ = ["SCHEMA", "SCHEMA_VERSION", "dumps", "loads"]

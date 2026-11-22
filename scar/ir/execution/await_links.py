@@ -215,11 +215,8 @@ def prepare_await_indexes(ctx):
         'separate from bounded projection traversal and detached result copying'}
     if not any(scope.profile in profiles for scope in ctx.program.protocol_scopes):
         return
-    from scar.ir.program.queries import ProgramIndex
-    index = ctx.body_program_index
-    if index is None:
-        index = ctx.body_program_index = ProgramIndex(ctx.program)
-        ctx.body_preparation['program_indexes'] = 1
+    index = ctx.require_program_index()
+    ctx.body_preparation['program_indexes'] = 1
     for occurrence in ctx.occurrences.values():
         ctx.await_occurrences_by_site.setdefault(occurrence.operation, []).append(occurrence)
         if occurrence.operation in ctx.body_drives:
@@ -419,7 +416,7 @@ def _required_choices(ctx, source, advance, choices, shared, *, input_guard=None
         if edge == source['accepted_edge']:
             answers.append(_accepted_edge(ctx, source, advance, shared))
             continue
-        owner_region = ctx.block_regions[ctx.operation_blocks[edge.operation].id]
+        owner_region = ctx.block_regions[ctx.operation_blocks[edge.operation]]
         answer = None
         for anchor in (advance, source['occurrence']):
             region = ctx.activations[ctx.activation_of(anchor.id)].region

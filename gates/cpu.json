@@ -55,6 +55,7 @@
       "isolated": true,
       "tests": [
         "tests/integration/test_build_cli.py::test_build_joins_actual_scoped_calls_without_executing_target_again",
+        "tests/unit/test_execution_external_snapshots.py::test_execution_index_reuses_prepared_program_but_rechecks_each_capture",
         "tests/unit/test_execution_production_codec.py::test_v4_golden_from_immutable_old_codec_is_byte_exact",
         "tests/unit/test_execution_production_codec.py::test_v5_roundtrip_reaches_all_production_records_and_target_variants"
       ]

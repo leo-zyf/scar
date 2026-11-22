@@ -338,7 +338,7 @@ def order_errors(ctx):
         if type(wait.selection) is not Unresolved:
             original = ctx.core_uses.get(wait.selection.use)
             occurrence = ctx.occurrences.get(wait.selection.operation)
-            if occurrence is None or original is None or original[0].id != occurrence.operation:
+            if occurrence is None or original is None or original[0] != occurrence.operation:
                 issue('wait_selection', path, 'known selection references an absent or mismatched original Use')
         work = ctx.submissions.get(wait.ticket)
         if work is None:
@@ -364,7 +364,7 @@ def order_errors(ctx):
         selection = wait.selection
         original = ctx.core_uses.get(selection.use)
         if (selection.operation not in ctx.occurrences or original is None
-                or original[0].id != ctx.occurrences[selection.operation].operation):
+                or original[0] != ctx.occurrences[selection.operation].operation):
             issue('wait_selection', path, 'selection is not an original Use of this occurrence')
             continue
         if type(work.origin) is WithinOperation and selection.operation != work.origin.operation:

@@ -68,7 +68,7 @@ def resolve_order_basis(ctx, basis, path):
     if type(basis) is UseRef:
         occurrence = ctx.occurrences.get(basis.operation)
         original = ctx.core_uses.get(basis.use)
-        if occurrence is None or original is None or original[0].id != occurrence.operation:
+        if occurrence is None or original is None or original[0] != occurrence.operation:
             ctx.issue('validity_basis_use', path, 'basis is not an original Use of this occurrence')
             return None
         return {'use': original[1], 'operation': occurrence,

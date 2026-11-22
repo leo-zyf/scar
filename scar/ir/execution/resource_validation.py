@@ -221,7 +221,7 @@ def resource_errors(ctx) -> None:
             issue("operation_region", path, "canonical operation has no owning block")
             return None
         try:
-            return ctx.block_regions[block.id]
+            return ctx.block_regions[block]
         except KeyError:
             issue("operation_region", path, "canonical operation block has no owning region")
             return None

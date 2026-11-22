@@ -267,26 +267,35 @@ class EnvironmentCall:
 
 class ProgramIndex:
     def __init__(self, graph: ProgramGraph):
-        # Reuse the validator's canonical CFG/dominators and derived cleanup
-        # result rather than running a second dataflow algorithm for queries.
-        from .validation import validate
-        cleanup, resumption, lifecycle, core, prepared = [], [], [], [], []
-        issues = validate(graph, _cleanup_facts=cleanup, _resumption_facts=resumption,
-                          _lifecycle_facts=lifecycle, _core_facts=core, _prepared_index=prepared)
-        if issues:
-            raise ValueError("; ".join(f"{i.code} at {i.path}: {i.message}" for i in issues))
-        if prepared:
-            self.__dict__.update(prepared[0].__dict__)
-            return
-        self._prepare(graph, cleanup[0], resumption[0], lifecycle[0], *core[0])
+        from .validation import _admit
+        self._apply_admission(_admit(graph))
+
+    @classmethod
+    def _from_admission(cls, admission):
+        """Materialize a query index from the exact admitted graph revision."""
+        from .validation import _ProgramAdmission
+        if type(admission) is not _ProgramAdmission:
+            raise TypeError("program index requires a validated program admission")
+        prepared = admission._query_index()
+        if type(prepared) is cls:
+            return prepared
+        index = cls.__new__(cls)
+        index._apply_admission(admission)
+        return index
+
+    def _apply_admission(self, admission):
+        if admission._index is not None:
+            self.__dict__.update(admission._index.__dict__)
+        else:
+            self._prepare(admission.graph, admission._cleanup, admission._resumption,
+                admission._lifecycle, admission.core, admission._driver_facts)
 
     @classmethod
     def _from_validated_core(cls, graph, cleanup, resumption, lifecycle, core, driver_facts):
         """Private validation-stage index over an already checked core.
 
-        Only validation calls this, after canonical CFG/SSA, resumptions,
-        lifecycles and provider/native checks. It avoids calling validation
-        recursively when a connection obligation needs original call routes.
+        Validation calls this for original call routes during protocol checks
+        and when a completed admission first needs a query index.
         This is preparation, not an alternative public graph validator.
         """
         index = cls.__new__(cls)

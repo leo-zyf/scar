@@ -103,7 +103,7 @@ def resolve_canonical_effect(ctx, effect, path):
 
     original = ctx.core_uses.get(effect.state_input.use)
     if (effect.state_input.operation != identity or original is None
-            or original[0].id != operation.id or effect.state_input.use not in operation.invoke_arguments):
+            or original[0] != operation.id or effect.state_input.use not in operation.invoke_arguments):
         ctx.issue("invoke_input", path, "state input is not an exact original invoke argument Use")
         return None
     input_value = ctx.core_values.get(original[1].value)

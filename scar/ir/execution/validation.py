@@ -1,11 +1,10 @@
 """Validate declared execution links without certifying source/runtime identity."""
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from copy import copy
 from enum import Enum
 import hashlib
-import json
+from types import MappingProxyType
 
-from scar.ir.program.codec import dumps as program_dumps
 from scar.ir.program.model import BlockArgument, LiteralOrigin, OperationResult, StateVersionValue, is_literal_origin
 from scar.ir.program.resumption import SuspendTerminator
 from scar.ir.v2._validation import record_errors
@@ -23,6 +22,13 @@ from .snapshot import ExternalSnapshots, SnapshotError
 
 
 _PREPARED_PROGRAM = object()
+
+
+def _program_materials(program):
+    from scar.ir.program.codec import _dumps_with_admission
+
+    payload, version, admission = _dumps_with_admission(program)
+    return payload.encode('utf-8'), version, admission
 
 
 def _immutable_program_value(value):
@@ -49,19 +55,21 @@ class PreparedProgramSnapshot:
     _key: object
     _program: object
     _wire: bytes
+    _admission: object = field(repr=False, compare=False)
     sha256: str
     schema_version: int
 
     def __init__(self, key, program):
         if key is not _PREPARED_PROGRAM:
             raise TypeError('use prepare_program_snapshot with an actual program')
-        wire = program_dumps(program).encode('utf-8')
+        wire, version, admission = _program_materials(program)
         _immutable_program_value(program)
         object.__setattr__(self, '_key', key)
         object.__setattr__(self, '_program', program)
         object.__setattr__(self, '_wire', wire)
+        object.__setattr__(self, '_admission', admission)
         object.__setattr__(self, 'sha256', hashlib.sha256(wire).hexdigest())
-        object.__setattr__(self, 'schema_version', json.loads(wire)['schema_version'])
+        object.__setattr__(self, 'schema_version', version)
 
     def canonical_bytes(self, program):
         if type(self) is not PreparedProgramSnapshot or self._key is not _PREPARED_PROGRAM or program is not self._program:
@@ -100,9 +108,11 @@ class ValidationReport:
 
 
 class _Context:
-    def __init__(self, model, program, value_graphs, evidence_graphs, semantic_graphs=None, artifact_bytes=None,
+    def __init__(self, model, admission, value_graphs, evidence_graphs, semantic_graphs=None, artifact_bytes=None,
                  provider_selector_resolver=None, native_port_evidence=None):
-        self.model, self.program = model, program
+        self.model, self.program = model, admission.graph
+        self._program_admission = admission
+        self.body_program_index = None
         self.issues, self.gaps = [], []
         self._gap_keys = set()
         self.provider_selector_resolver = provider_selector_resolver
@@ -128,13 +138,14 @@ class _Context:
                     self.issue('duplicate_id', name, f'duplicate {row.id}')
                 registry[row.id] = row
             setattr(self, 'occurrences' if name == 'operations' else name, registry)
-        self.regions = {row.id: row for row in program.regions}
-        self.blocks = {row.id: row for region in program.regions for row in region.blocks}
-        self.block_regions = {row.id: region.id for region in program.regions for row in region.blocks}
-        self.core_operations = {row.id: row for row in program.operations}
-        self.core_values = {row.id: row for row in program.values}
-        self.core_uses = {use.id: (row, use) for row in program.operations for use in row.uses}
-        self.operation_blocks = {op: block for block in self.blocks.values() for op in block.operations}
+        core = admission.core
+        self.regions = MappingProxyType(core.regions)
+        self.blocks = MappingProxyType(core.blocks)
+        self.block_regions = MappingProxyType(core.block_regions)
+        self.core_operations = MappingProxyType(core.operations)
+        self.core_values = MappingProxyType(core.values)
+        self.core_uses = MappingProxyType(core.uses)
+        self.operation_blocks = MappingProxyType(core.operation_blocks)
         self.uses = {}
         for row in model.uses:
             key = row.operation, row.use
@@ -160,6 +171,13 @@ class _Context:
                                (model.retentions, self.work_retentions)):
             for row in rows:
                 registry.setdefault(row.ticket, []).append(row)
+
+    def require_program_index(self):
+        if self.body_program_index is None:
+            from scar.ir.program.queries import ProgramIndex
+
+            self.body_program_index = ProgramIndex._from_admission(self._program_admission)
+        return self.body_program_index
 
     def issue(self, code, path, message):
         self.issues.append(ExecutionIssue(code, str(path), message))
@@ -377,7 +395,7 @@ def _coordinates(ctx):
     for row in m.uses:
         occurrence = ctx.occurrences.get(row.operation)
         site = ctx.core_uses.get(row.use)
-        if occurrence is None or site is None or site[0].id != occurrence.operation:
+        if occurrence is None or site is None or site[0] != occurrence.operation:
             ctx.issue('use_owner', row.use, 'Use is not owned by this operation occurrence')
         elif isinstance(row.value, Unresolved):
             ctx.gap('use_unresolved', row.use, row.value.reason)
@@ -524,11 +542,13 @@ def _analyze(model, program, *, value_graphs=None, evidence_graphs=None, semanti
         if errors:
             return ValidationReport(tuple(ExecutionIssue('record', 'model', e) for e in errors), ()), None
         if prepared_snapshot is None:
-            wire = program_dumps(program).encode('utf-8')
+            wire, schema_version, admission = _program_materials(program)
         else:
             if type(prepared_snapshot) is not PreparedProgramSnapshot:
                 raise TypeError('prepared_snapshot must be a live PreparedProgramSnapshot')
             wire = prepared_snapshot.canonical_bytes(program)
+            admission = prepared_snapshot._admission
+            schema_version = prepared_snapshot.schema_version
     except (TypeError, ValueError, AttributeError) as error:
         return ValidationReport((ExecutionIssue('record_or_program', 'model', str(error)),), ()), None
     if native_port_evidence is not None:
@@ -539,11 +559,11 @@ def _analyze(model, program, *, value_graphs=None, evidence_graphs=None, semanti
             native_port_evidence.require_scope(model, program)
         except (TypeError, ValueError) as error:
             return ValidationReport((ExecutionIssue("native_port_scope", "model", str(error)),), ()), None
-    ctx = _Context(model, program, value_graphs, evidence_graphs, semantic_graphs, artifact_bytes,
+    ctx = _Context(model, admission, value_graphs, evidence_graphs, semantic_graphs, artifact_bytes,
                    provider_selector_resolver, native_port_evidence)
     artifact = model.snapshot.artifact
     if (artifact.schema != 'scar.program-graph' or artifact.sha256 != hashlib.sha256(wire).hexdigest()
-            or artifact.size_bytes != len(wire) or model.snapshot.schema_version != json.loads(wire)['schema_version']):
+            or artifact.size_bytes != len(wire) or model.snapshot.schema_version != schema_version):
         ctx.issue('program_snapshot', 'snapshot', 'canonical program bytes/schema/version/digest mismatch')
     _coordinates(ctx)
     if not ctx.issues:

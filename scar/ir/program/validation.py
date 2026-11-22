@@ -6,6 +6,8 @@ purity, recover unobserved effects, or authorize any transformation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import Lock
+from typing import TYPE_CHECKING
 
 from ..v2._validation import cycle_errors, record_errors
 from .ids import UseID
@@ -22,6 +24,14 @@ from .resumption import (
 )
 from .drivers import BodyDriveResult, BodyDriveSuccessor, BodyDriveTerminator
 from .driver_validation import DriverFacts, driver_errors, no_body_errors
+
+if TYPE_CHECKING:
+    from _thread import LockType
+    from .cleanup_validation import CleanupFacts
+    from .lifecycle_validation import DriverLifecycleFacts
+    from .resumption_validation import ResumptionFacts
+    from .queries import ProgramIndex
+    from .ids import RegionID
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,12 +92,52 @@ class ProgramCoordinates:
         )
 
 
-def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None,
-             _lifecycle_facts=None, _prepared_index=None, _core_facts=None) -> tuple[ValidationIssue, ...]:
+_ADMISSION_AUTHORITY = object()
+
+
+@dataclass(frozen=True, slots=True, init=False, eq=False)
+class _ProgramAdmission:
+    """The exact core and facts retained after complete semantic validation."""
+
+    core: ProgramCoordinates
+    _cleanup: CleanupFacts
+    _resumption: ResumptionFacts
+    _lifecycle: dict[RegionID, DriverLifecycleFacts]
+    _driver_facts: DriverFacts
+    _index: ProgramIndex | None
+    _index_lock: LockType = field(repr=False)
+
+    def __init__(self, authority, core, cleanup, resumption, lifecycle, driver_facts, index):
+        if authority is not _ADMISSION_AUTHORITY:
+            raise TypeError("program admission must come from the graph validator")
+        object.__setattr__(self, 'core', core)
+        object.__setattr__(self, '_cleanup', cleanup)
+        object.__setattr__(self, '_resumption', resumption)
+        object.__setattr__(self, '_lifecycle', lifecycle)
+        object.__setattr__(self, '_driver_facts', driver_facts)
+        object.__setattr__(self, '_index', index)
+        object.__setattr__(self, '_index_lock', Lock())
+
+    @property
+    def graph(self):
+        return self.core.graph
+
+    def _query_index(self) -> ProgramIndex:
+        if self._index is None:
+            with self._index_lock:
+                if self._index is None:
+                    from .queries import ProgramIndex
+                    index = ProgramIndex._from_validated_core(self.graph, self._cleanup,
+                        self._resumption, self._lifecycle, self.core, self._driver_facts)
+                    object.__setattr__(self, '_index', index)
+        return self._index
+
+
+def validate(graph: ProgramGraph, *, _admission=None, _lifecycle_facts=None) -> tuple[ValidationIssue, ...]:
     """Check exact uses, CFG availability, interfaces and explicit state SSA.
 
-    The private output collectors transfer coordinates and derived facts to
-    ProgramIndex only after all validators pass.
+    The private admission output transfers checked facts after all validators
+    pass. The lifecycle output remains available to lifecycle fact readers.
     """
     issues: list[ValidationIssue] = []
 
@@ -807,23 +857,28 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
             from scar.ir.program.protocol_connection_validation import connection_reports
             for code, path, message in connection_reports(ctx)["issues"]:
                 error(code, path, message)
-    if not issues and _prepared_index is not None and prepared is not None:
-        _prepared_index.append(prepared)
-    if not issues and _core_facts is not None:
-        _core_facts.append((core, driver_facts))
-    if not issues and _cleanup_facts is not None:
-        _cleanup_facts.append(cleanup_facts)
-    if not issues and _resumption_facts is not None:
-        _resumption_facts.append(resumption_facts)
-    if not issues and _lifecycle_facts is not None:
-        _lifecycle_facts.append(lifecycle_facts)
+    if not issues:
+        if _admission is not None:
+            _admission.append(_ProgramAdmission(_ADMISSION_AUTHORITY, core, cleanup_facts,
+                resumption_facts, lifecycle_facts, driver_facts, prepared))
+        if _lifecycle_facts is not None:
+            _lifecycle_facts.append(lifecycle_facts)
     return tuple(issues)
 
 
-def require_valid(graph: ProgramGraph) -> None:
-    issues = validate(graph)
+def _raise_issues(issues):
     if issues:
         raise ValueError("; ".join(f"{issue.code} at {issue.path}: {issue.message}" for issue in issues))
+
+
+def _admit(graph: ProgramGraph) -> _ProgramAdmission:
+    products = []
+    _raise_issues(validate(graph, _admission=products))
+    return products[0]
+
+
+def require_valid(graph: ProgramGraph) -> None:
+    _raise_issues(validate(graph))
 
 
 __all__ = ["ValidationIssue", "validate", "require_valid"]

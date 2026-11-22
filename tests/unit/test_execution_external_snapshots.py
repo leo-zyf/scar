@@ -146,3 +146,75 @@ def test_artifact_nested_private_mutation_is_not_accepted_as_valid_identity():
     with pytest.raises(SnapshotError) as failure:
         ExternalSnapshots().graph(artifact, ValueGraph)
     assert failure.value.code == "external_snapshot"
+
+
+def test_execution_index_reuses_prepared_program_but_rechecks_each_capture(monkeypatch):
+    from scar.ir.execution.common import BlockVisitID
+    from scar.ir.execution.query import ExecutionIndex
+    from scar.ir.execution.validation import prepare_program_snapshot
+    from scar.ir.program import validation as program_validation
+    from scar.ir.program.queries import ProgramIndex
+    from tests.fixtures.execution_resumable_graphs import resumable_execution
+
+    program, capture, details = resumable_execution()
+    other_program, other_capture, other_details = resumable_execution(instances=2)
+    assert other_program is not program and other_capture.snapshot == capture.snapshot
+    validate = program_validation.validate
+    prepare = ProgramIndex._prepare
+    static_validations = []
+    index_preparations = []
+
+    def count_validation(graph, **options):
+        static_validations.append(graph)
+        return validate(graph, **options)
+
+    def count_preparation(index, graph, *args, **kwargs):
+        index_preparations.append(graph)
+        return prepare(index, graph, *args, **kwargs)
+
+    monkeypatch.setattr(program_validation, "validate", count_validation)
+    monkeypatch.setattr(ProgramIndex, "_prepare", count_preparation)
+    baseline = ExecutionIndex(capture, program, evidence_graphs=details["evidence_graphs"])
+    assert baseline.report.valid and static_validations == [program]
+    assert index_preparations == [program]
+    index_preparations.clear()
+    snapshot = prepare_program_snapshot(program)
+    assert static_validations == [program, program]
+    prepared = ExecutionIndex(capture, program, prepared_snapshot=snapshot,
+                              evidence_graphs=details["evidence_graphs"])
+    other = ExecutionIndex(other_capture, program, prepared_snapshot=snapshot,
+                           evidence_graphs=other_details["evidence_graphs"])
+    assert other.report.valid and prepared.report == baseline.report
+    for drive in details["instances"][0]["drives"]:
+        assert prepared.drive_execution(drive) == baseline.drive_execution(drive)
+
+    with pytest.raises(ValueError, match="prepared snapshot.*exact"):
+        ExecutionIndex(capture, other_program, prepared_snapshot=snapshot)
+
+    receipt = capture.snapshot
+    artifact = receipt.artifact
+    for wrong in (
+        replace(receipt, artifact=replace(artifact, schema="other-schema")),
+        replace(receipt, artifact=replace(artifact, sha256="0" * 64)),
+        replace(receipt, artifact=replace(artifact, size_bytes=artifact.size_bytes + 1)),
+        replace(receipt, schema_version=receipt.schema_version + 1),
+    ):
+        with pytest.raises(ValueError, match="program_snapshot"):
+            ExecutionIndex(replace(capture, snapshot=wrong), program, prepared_snapshot=snapshot)
+
+    first, *rest = capture.body_drive_executions
+    missing_entry = replace(first, entry=BlockVisitID("absent-captured-entry"))
+    invalid = replace(capture, body_drive_executions=(missing_entry, *rest))
+    with pytest.raises(ValueError, match="body_entry_endpoint"):
+        ExecutionIndex(invalid, program, prepared_snapshot=snapshot)
+
+    supplied_graph = details["evidence_graphs"][details["object_artifact"].sha256]
+    supplied_graph.add_control_event("changed-after-execution-index")
+    drive = details["instances"][0]["drives"][0]
+    with pytest.raises(ValueError, match="external_snapshot"):
+        prepared.drive_execution(drive)
+    assert prepared.report == baseline.report
+    other_drive = other_details["instances"][1]["drives"][1]
+    assert other.drive_execution(other_drive)["status"] == "DECLARED"
+    assert static_validations == [program, program]
+    assert index_preparations == [program]

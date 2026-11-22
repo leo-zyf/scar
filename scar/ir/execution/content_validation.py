@@ -151,7 +151,7 @@ def resolve_subject(ctx, subject, path):
     operation = ctx.core_operations[occurrence.operation]
     if type(subject) is UseRef:
         original = ctx.core_uses.get(subject.use)
-        if original is None or original[0].id != operation.id:
+        if original is None or original[0] != operation.id:
             ctx.issue('content_subject_use', path, 'subject is not an original Use of this occurrence')
             return None
         actual = ctx.uses.get((subject.operation, subject.use))
@@ -1101,7 +1101,7 @@ def work_errors(ctx):
         if type(basis) is UseRef:
             original = ctx.core_uses.get(basis.use)
             occurrence = ctx.occurrences.get(basis.operation)
-            if original is None or occurrence is None or original[0].id != occurrence.operation:
+            if original is None or occurrence is None or original[0] != occurrence.operation:
                 issue('retention_use', path, 'retention basis is not an exact canonical Use occurrence')
             elif (basis.operation, basis.use) not in ctx.uses:
                 gap('retention_use_unobserved', path, 'basis Use has no established dynamic binding')

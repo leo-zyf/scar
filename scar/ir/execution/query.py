@@ -39,9 +39,11 @@ class FormalRoute:
 
 
 class ExecutionIndex:
-    def __init__(self, model, program, *, value_graphs=None, evidence_graphs=None, semantic_graphs=None, artifact_bytes=None):
+    def __init__(self, model, program, *, value_graphs=None, evidence_graphs=None, semantic_graphs=None,
+                 artifact_bytes=None, prepared_snapshot=None):
         report, ctx = _analyze(model, program, value_graphs=value_graphs, evidence_graphs=evidence_graphs,
-                               semantic_graphs=semantic_graphs, artifact_bytes=artifact_bytes)
+                               semantic_graphs=semantic_graphs, artifact_bytes=artifact_bytes,
+                               prepared_snapshot=prepared_snapshot)
         if not report.valid:
             raise ValueError('; '.join(f'{x.code} at {x.path}: {x.message}' for x in report.issues))
         self._ctx = ctx

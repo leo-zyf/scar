@@ -6,7 +6,7 @@ links; no observation, native correspondence or value identity is invented.
 from collections import defaultdict
 
 from scar.ir.program.model import CompletionResult, ExitKind, StateVersionValue
-from scar.ir.program.queries import InstanceCaptureInput, ProgramIndex
+from scar.ir.program.queries import InstanceCaptureInput
 from scar.ir.program.resumption import saved_actual_use
 
 from scar.ir.execution.common import Unresolved
@@ -90,8 +90,8 @@ def prepare_resumables(ctx):
             ctx.body_outcomes_by_segment[visit.segment].append(occurrence)
     # ProgramIndex owns the original port recipes. One instance per model, not
     # one per drive; static-site recipes are cached across dynamic occurrences.
-    ctx.body_program_index = ProgramIndex(ctx.program) if (
-        ctx.body_drive_occurrences or ctx.model.body_activation_origins) else None
+    if ctx.body_drive_occurrences or ctx.model.body_activation_origins:
+        ctx.require_program_index()
     ctx.body_static_inputs, ctx.body_static_outputs, ctx.body_static_targets = {}, {}, {}
     if ctx.body_program_index is not None:
         captured_sites = dict.fromkeys(row.operation for row in ctx.body_drive_occurrences.values())

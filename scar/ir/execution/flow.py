@@ -131,7 +131,7 @@ def _operand(ctx, occurrence, use, environment, definitions):
             return
     if isinstance(static.origin, OperationResult):
         block = ctx.operation_blocks[static.origin.operation]
-        if block.id == ctx.visits[occurrence.visit].block:
+        if block == ctx.visits[occurrence.visit].block:
             producer = ctx.occurrences.get(actual.origin)
             if producer is None or producer.visit != occurrence.visit:
                 ctx.issue('stale_incarnation', use.id, 'operand binds a result from another block traversal')
