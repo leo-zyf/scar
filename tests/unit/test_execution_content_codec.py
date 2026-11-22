@@ -228,8 +228,8 @@ def test_codec_never_resolves_catalogs_or_opens_provider_artifacts(content, monk
 
 
 def test_versions_stay_exact_and_unsupported_versions_still_fail(content):
-    for version in (True, 0, 8, 9, "4"):
-        if type(version) is int and version == 8:
+    for version in (True, 0, "4", *range(8, SCHEMA_VERSION + 2)):
+        if type(version) is int and 8 <= version <= SCHEMA_VERSION:
             assert loads(dumps(content, schema_version=version)) == content
             continue
         with pytest.raises(ValueError, match="schema_version"):

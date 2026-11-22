@@ -177,12 +177,10 @@ def test_local_mutation_cannot_hide_capability_or_bypass_exact_records(corruptio
         dumps(model)
 
 
-@pytest.mark.parametrize('version', (True, 0, -1, '7', 8, 9))
+@pytest.mark.parametrize('version', (True, 0, -1, '7', *range(8, SCHEMA_VERSION + 2)))
 def test_new_max_version_does_not_admit_bool_string_or_future_version(version):
     model = _call_model()
-    if type(version) is int and version == 8:
-        # Preserve this historical case identity: v8 is now a supported explicit
-        # empty capability view. The new v9 case retains the future rejection.
+    if type(version) is int and 8 <= version <= SCHEMA_VERSION:
         assert from_dict(to_dict(model, schema_version=version)) == model
         return
     with pytest.raises(ValueError, match='schema_version'):

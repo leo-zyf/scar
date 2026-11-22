@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scar.ir.execution.codec import SCHEMA_VERSION, dumps, from_dict, loads, to_dict
+from scar.ir.execution.codec import dumps, from_dict, loads, to_dict
 from scar.ir.execution.common import MissingEvidence, Unresolved
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.program.providers import ProviderFactReference
@@ -32,7 +32,7 @@ def _resumable_model():
 def test_schema8_roundtrip_keeps_both_resumable_tables_and_unresolved_variants():
     model = _resumable_model()
     document = to_dict(model)
-    assert SCHEMA_VERSION == document["schema_version"] == 8
+    assert document["schema_version"] == 8
     fields = document["model"]["fields"]
     assert len(fields["body_drive_executions"]) == 1
     assert len(fields["body_activation_origins"]) == 1

@@ -38,8 +38,18 @@ _RESUMABLE_FIELDS = frozenset({"body_drive_executions", "body_activation_origins
 _PROVIDER_RESOURCE_FIELDS = frozenset({"provider_accesses"})
 
 
-def _tag(cls):
+def _module_tag(cls):
     return cls.__module__ + "." + cls.__qualname__
+
+
+def _tag(cls):
+    # Keep persistent tags stable when their Python definitions move.
+    module = cls.__module__
+    if module == 'scar.ir.execution.common' and issubclass(cls, Identifier):
+        module = 'scar.ir.execution.ids'
+    elif module == 'scar.ir.execution.observation_validation':
+        module = 'scar.ir.execution.observations'
+    return module + '.' + cls.__qualname__
 
 
 @lru_cache(maxsize=None)
@@ -86,10 +96,12 @@ def _vocabulary(schema_version):
             raise TypeError(f"unsupported execution schema type: {expected!r}")
         if not (issubclass(expected, (Identifier, Enum)) or is_dataclass(expected)):
             raise TypeError(f"unsupported execution schema type: {expected!r}")
-        name = _tag(expected)
-        if name in vocabulary and vocabulary[name] is not expected:
-            raise TypeError(f"conflicting execution wire tag: {name}")
-        vocabulary[name] = expected
+        # Both spellings can appear in retained evidence. Both resolve only
+        # to types already admitted through the declared schema.
+        for name in (_tag(expected), _module_tag(expected)):
+            if name in vocabulary and vocabulary[name] is not expected:
+                raise TypeError(f"conflicting execution wire tag: {name}")
+            vocabulary[name] = expected
         if expected is Identifier:
             # EvidenceEndpoint.reference intentionally accepts the typed v2
             # identifier family. Keep its finite wire tags closed to the
@@ -204,7 +216,8 @@ def _decode(value, expected, path, schema_version):
         return value
     if issubclass(expected, Identifier):
         _object(value, ("$id", "kind", "value", "wire"), path)
-        if value["$id"] != _tag(expected) or type(value["value"]) is not str:
+        if (value["$id"] not in (_tag(expected), _module_tag(expected))
+                or type(value["value"]) is not str):
             _fail(path, "invalid identifier tag or value")
         result = expected(value["value"])
         if (type(value["kind"]) is not str or value["kind"] != expected.prefix
@@ -222,7 +235,7 @@ def _decode(value, expected, path, schema_version):
             _fail(path, "invalid enum payload type")
         return member
     _object(value, ("$record", "fields"), path)
-    if value["$record"] != _tag(expected):
+    if value["$record"] not in (_tag(expected), _module_tag(expected)):
         _fail(path, "invalid record tag")
     schema = _record_schema(expected, schema_version)
     _object(value["fields"], (name for name, _ in schema), path + ".fields")
