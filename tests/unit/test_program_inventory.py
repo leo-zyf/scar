@@ -3,12 +3,15 @@ import ast
 import json
 from textwrap import dedent
 
+import pytest
+
+from scar.analysis.program_inventory import ProgramInventory, inventory_program
+from scar.ir.program.discovery import DiscoveryGapKind
 from scar.ir.program.validation import validate
 from scar.ir.v2.ids import OperationDefinitionID
 
 
 def inventory(tmp_path, source, **kwargs):
-    from scar.analysis.program_inventory import inventory_program
     path = tmp_path / "entry.py"
     path.write_text(dedent(source).lstrip(), encoding="utf-8")
     result = inventory_program(path, project_root=tmp_path, **kwargs)
@@ -48,7 +51,6 @@ def test_type_alias_value_is_an_annotation_boundary(tmp_path):
 
 
 def test_inventory_schema_and_independent_reconstruction(tmp_path):
-    from scar.analysis.program_inventory import ProgramInventory
     result, file, _, _ = inventory(tmp_path, """
         def identity(value):
             return value
@@ -239,3 +241,83 @@ def test_discovery_does_not_execute_definition_inputs_or_module(tmp_path):
     assert not marker.exists()
     assert len(file.calls) == 3
     assert result.to_dict()["schema"] == "scar.program-inventory"
+
+
+@pytest.fixture
+def separate_source_files(tmp_path):
+    marker = tmp_path / "executed"
+    helper = tmp_path / "helper.py"
+    helper.write_text(
+        f"open({str(marker)!r}, 'w').write('executed')\n"
+        "def identity(value):\n    return value\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        "from helper import identity\n"
+        "def first(x):\n    return identity(x)\n"
+        "def second(x):\n    return x\n"
+    )
+    return entry, helper, marker
+
+
+def test_inventory_discovers_bodies_and_replays_cross_file_call_witnesses(separate_source_files):
+    entry, helper, marker = separate_source_files
+    before = {path: path.read_bytes() for path in (entry, helper)}
+    document = inventory_program(entry, project_root=entry.parent).to_dict()
+    summary = document["summary"]
+    assert summary["source_files"] == 2
+    assert summary["definitions"] == 3
+    assert summary["body_statuses"]["LOWERED_WITH_GAPS"] == 3
+    assert summary["cross_file_call_witnesses"] >= 1
+    assert summary["whole_program_graph_established"] is False
+    assert ProgramInventory.from_dict(document).to_dict() == document
+    assert not marker.exists()
+    assert all(path.read_bytes() == content for path, content in before.items())
+
+
+def test_inventory_replays_partial_coverage_after_file_budget(separate_source_files):
+    entry, helper, marker = separate_source_files
+    document = inventory_program(entry, max_files=1).to_dict()
+    assert any(gap["kind"] == "FILE_BUDGET" and gap["path"] == str(helper)
+               for gap in document["discovery"]["gaps"])
+    assert document["summary"]["whole_program_graph_established"] is False
+    assert ProgramInventory.from_dict(document).to_dict() == document
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("field", ["target_executed", "transformation_authorized"])
+def test_inventory_replay_rejects_forged_authority(separate_source_files, field):
+    entry, _, _ = separate_source_files
+    document = inventory_program(entry).to_dict()
+    document[field] = True
+    with pytest.raises(ValueError):
+        ProgramInventory.from_dict(document)
+
+
+def test_dynamic_source_loader_is_located_without_executing_its_target(tmp_path):
+    marker = tmp_path / "executed"
+    target = tmp_path / "payload.py"
+    target.write_text(f"open({str(marker)!r}, 'w').write('executed')\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("def launch(path):\n    exec(compile(path.read_text(), str(path), 'exec'))\n")
+    result = inventory_program(entry)
+    assert str(target) not in {file.snapshot.path for file in result.files}
+    assert any(gap.kind is DiscoveryGapKind.DYNAMIC_EXECUTION and gap.source.start_line == 2
+               for gap in result.discovery.gaps)
+    assert not marker.exists()
+
+
+def test_unaliased_dotted_import_keeps_parent_and_child_bindings_distinct(tmp_path):
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("def work(x):\n    return 1\n")
+    (package / "child.py").write_text("def work(x):\n    return 2\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg.child\ndef f(x):\n    return pkg.work(x)\n")
+    result = inventory_program(entry)
+    file = next(file for file in result.files if file.snapshot.path == str(entry))
+    call, = file.calls
+    child_ids = {definition.id
+                 for file in result.files if file.snapshot.path.endswith("child.py")
+                 for definition in file.definitions}
+    assert not child_ids.intersection(call.candidates)

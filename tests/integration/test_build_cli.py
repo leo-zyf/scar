@@ -26,6 +26,25 @@ def built(tmp_path):
     return entry, out, report
 
 
+@pytest.mark.parametrize("link", ["hardlink", "symlink"])
+def test_graph_output_cannot_overwrite_discovered_source(tmp_path, link):
+    helper = tmp_path / "helper.py"
+    helper.write_text("def identity(value):\n    return value\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("from helper import identity\nresult = identity(3)\n")
+    output = tmp_path / "build"
+    if link == "hardlink":
+        output.hardlink_to(helper)
+    else:
+        output.symlink_to(helper)
+    before = helper.read_bytes()
+
+    with pytest.raises(ValueError, match="fresh canonical output directory"):
+        build(entry, None, output)
+
+    assert helper.read_bytes() == before
+
+
 def test_build_readback_queries_original_calls_loops_and_resources(built):
     entry, out, report = built
     assert report['workflow_complete'] and not report['first_stage_complete']
