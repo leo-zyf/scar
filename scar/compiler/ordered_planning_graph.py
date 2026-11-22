@@ -54,7 +54,7 @@ def retain_ordered_planning_graph(session,region,out):
 
 def verify_ordered_planning_graph(reference,*,program,region):
     """Consume the graph through independent original-source replay."""
-    from scar.analysis.read_ordered_lifetimes import read_ordered_lifetimes
+    from scar.analysis.ordered_loop_transfer_storage import read_ordered_lifetimes,read_ordered_loop_transfers
     graph=read_artifact(reference)
     expected_region=artifact_reference(region,'scar.stateful-array-region')
     if (graph.get('schema'),graph.get('schema_version'))!=('scar.ordered-program-planning-graph',1):
@@ -71,7 +71,6 @@ def verify_ordered_planning_graph(reference,*,program,region):
         raise ValueError('planning graph has disconnected source/body/interface/lifetime parents')
     summary=dict(body=body['summary'],interfaces=interface['summary'],lifetimes=life['summary'])
     if 'loop_transfers'in graph:
-        from scar.analysis.ordered_loop_transfer_storage import read_ordered_loop_transfers
         loop=read_artifact(graph['loop_transfers']);replay=read_ordered_loop_transfers(graph['loop_transfers']['uri'])
         if (loop['lifetime_publication']!=graph['lifetimes'] or replay['publication']!=graph['loop_transfers']
                 or replay['lifetime_publication']!=graph['lifetimes']):

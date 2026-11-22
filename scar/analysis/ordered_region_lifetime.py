@@ -184,19 +184,19 @@ def publish_ordered_lifetimes(provider,out,*,activation_publication):
     from scar.artifacts import read_record_table as _table
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.ir.record_codec import decode
-    from scar.analysis.read_ordered_activations import _header,_read_tables
+    from scar.analysis.ordered_loop_transfer_storage import _activation_header,_activation_tables
     from scar.analysis.inspect_ordered_activations import validate_public_interfaces
     out=Path(out).resolve()
     if out.exists():raise ValueError('fresh ordered lifetime output required')
     parent=Path(activation_publication).resolve()
     if parent.is_dir():parent=parent/'result.json'
     reference=artifact_reference(parent,'scar.ordered-activation-interfaces');report=read_artifact(reference)
-    _header(report)
+    _activation_header(report)
     if report['original_region']!=provider.ordered.reference or report['summary']!=provider.activation.summary():
         raise ValueError('ordered lifetime parent differs from the replayed activation')
     if provider._registered:
         raise ValueError('publish original activation validation before attaching lifetime extension')
-    _read_tables(parent.parent,report,provider.activation)
+    _activation_tables(parent.parent,report,provider.activation)
     if validate_public_interfaces(provider.activation)!=report['validation']:
         raise ValueError('ordered lifetime parent public graph validation differs')
     pins=_pins();provider.check();out.mkdir(parents=True)
@@ -234,7 +234,7 @@ def publish_ordered_lifetimes(provider,out,*,activation_publication):
 
 def main(argv=None):
     from scar.analysis.build import BuildSession
-    from scar.analysis.read_ordered_activations import _header
+    from scar.analysis.ordered_loop_transfer_storage import _activation_header
     from scar.analysis.stateful_dependency_view import StatefulDependencyProvider,read_stateful_graph
     from scar.analysis.ordered_region_activation import OrderedRegionActivationProvider
     from scar.analysis.source_call_view import SourceFunctionCallProvider
@@ -243,7 +243,7 @@ def main(argv=None):
     parser.add_argument('--interfaces',required=True);parser.add_argument('--out',required=True)
     args=parser.parse_args(argv);started=time.perf_counter();path=Path(args.interfaces).resolve()
     if path.is_dir():path=path/'result.json'
-    parent=read_artifact(artifact_reference(path,'scar.ordered-activation-interfaces'));_header(parent)
+    parent=read_artifact(artifact_reference(path,'scar.ordered-activation-interfaces'));_activation_header(parent)
     with BuildSession(Path(parent['program']['uri']).parent)as session:
         ordered=StatefulDependencyProvider(session.view,parent['original_region']['uri'])
         read_stateful_graph(Path(parent['shared_body']['uri']).parent,session.view,_provider=ordered)
