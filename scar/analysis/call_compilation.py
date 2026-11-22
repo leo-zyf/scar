@@ -12,7 +12,7 @@ import __future__
 from pathlib import Path
 import sys
 
-from scar.ir.program.function_origins import CallCompilationProfile
+from scar.ir.program.call_edges import CallCompilationProfile
 
 
 class UnsupportedCompilationFlags(ValueError):

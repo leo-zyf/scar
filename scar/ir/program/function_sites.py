@@ -1,4 +1,4 @@
-"""Function sites."""
+"""Function creation, body interfaces and qualified factory-to-entry origins."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -9,10 +9,14 @@ from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.normal_graph import CallLink, FunctionActivation, GlobalPort
 from scar.ir.program.call_inputs import CallInterfaceRecord, ContextReferenceSlice
 from scar.ir.program.functions import BodyEntryInterface, BodyLoweringProfile, BindingCondition
+from scar.ir.program.environments import EnvironmentMember, EnvironmentRole
 from scar.ir.program.ids import EnvironmentInterfaceID, OperationID, UseID, ValueID
 from scar.ir.v2.common import SourceReference
 from scar.ir.program.binding_ports import ConsumerBodyEntry
+from scar.ir.program.source_call_bindings import SourceBodyNamespace
+from scar.ir.program.source_references import SourceDefinitionReference
 from scar.ir.program.source_value_routes import SourceBodyValueFlow, SourceDataReach
+from scar.ir.program.structured import ControlEdgeReference
 
 
 # Source factory declarations, distinct from selected runtime callables.
@@ -102,6 +106,87 @@ class SourceFunctionCreationGraph:
     target_executed: bool = False
     first_stage_complete: bool = False
     semantics: str = 'SOURCE_FACTORY_OPERANDS_AND_CELL_HANDLES_NOT_CURRENT_CALLABLE_OR_CONTENT_VERSIONS'
+
+
+def _require_static_record(value, kind):
+    if type(value) is not kind:
+        raise TypeError("static calls require exact " + kind.__name__)
+    method = getattr(value, "__post_init__", None)
+    if method is not None:
+        method()
+
+
+@dataclass(frozen=True, slots=True)
+class StaticFunctionCreationRoute:
+    factory: OperationID
+    normal_edge: ControlEdgeReference
+    normal_value: ValueID
+    code_use: UseID
+    code_constant_operation: OperationID
+    code_layout_key: str
+    constant_path: tuple[int, ...]
+    definition: SourceDefinitionReference
+
+    def __post_init__(self):
+        for value, kind in ((self.factory, OperationID), (self.normal_edge, ControlEdgeReference),
+                            (self.normal_value, ValueID), (self.code_use, UseID),
+                            (self.code_constant_operation, OperationID), (self.definition, SourceDefinitionReference)):
+            _require_static_record(value, kind)
+        if type(self.code_layout_key) is not str or not self.code_layout_key:
+            raise ValueError("creation needs its source-compiled layout key")
+        if type(self.constant_path) is not tuple or not self.constant_path or any(type(i) is not int or i < 0 for i in self.constant_path):
+            raise ValueError("creation needs an exact original child constant path")
+
+
+@dataclass(frozen=True, slots=True)
+class StaticQualifiedFunctionCreation:
+    body: SourceBodyNamespace
+    creation: StaticFunctionCreationRoute
+
+    def __post_init__(self):
+        _require_static_record(self.body, SourceBodyNamespace)
+        _require_static_record(self.creation, StaticFunctionCreationRoute)
+
+
+class FactoryEntryOriginCondition(str, Enum):
+    ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE = "ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE"
+    FACTORY_COMPLETED_NORMALLY = "FACTORY_COMPLETED_NORMALLY"
+    FUNCTION_CODE_MATCHES_CREATION = "FUNCTION_CODE_MATCHES_CREATION"
+
+
+@dataclass(frozen=True, slots=True)
+class StaticFactoryEntryOrigin:
+    """Conditional factory occurrence supplying an original entry reference."""
+    creator: SourceBodyNamespace
+    creation: StaticFunctionCreationRoute
+    body: SourceBodyNamespace
+    environment: EnvironmentInterfaceID
+    member: EnvironmentMember
+    source_use: UseID | None
+    source_value: ValueID
+    conditions: tuple[FactoryEntryOriginCondition, ...] = tuple(FactoryEntryOriginCondition)
+
+    def __post_init__(self):
+        for value, expected in ((self.creator, SourceBodyNamespace), (self.creation, StaticFunctionCreationRoute),
+                (self.body, SourceBodyNamespace), (self.environment, EnvironmentInterfaceID),
+                (self.member, EnvironmentMember), (self.source_value, ValueID)):
+            if type(value) is not expected:
+                raise TypeError("factory entry origin needs exact " + expected.__name__)
+            if hasattr(value, "__post_init__"):
+                value.__post_init__()
+        if (self.body.definition != self.creation.definition.definition
+                or self.body.source != self.creation.definition.source):
+            raise ValueError("factory origin changed its qualified source body")
+        if self.member.role is EnvironmentRole.FUNCTION_OBJECT:
+            if self.source_use is not None or self.source_value != self.creation.normal_value:
+                raise ValueError("function-object origin must be the original normal factory reference")
+        elif self.member.role is EnvironmentRole.GLOBALS_NAMESPACE:
+            if type(self.source_use) is not UseID:
+                raise TypeError("globals origin needs its original factory capture Use")
+        else:
+            raise ValueError("factory origins cover only FUNCTION_OBJECT and GLOBALS_NAMESPACE references")
+        if (type(self.conditions) is not tuple or self.conditions != tuple(FactoryEntryOriginCondition)):
+            raise ValueError("factory entry origin must retain every explicit source/selection condition")
 
 
 # Original source-function candidates connected to conditional call ABIs.
@@ -272,6 +357,10 @@ __all__ = [
     'SourceFunctionCreation',
     'FunctionCreationObligation',
     'SourceFunctionCreationGraph',
+    'StaticFunctionCreationRoute',
+    'StaticQualifiedFunctionCreation',
+    'FactoryEntryOriginCondition',
+    'StaticFactoryEntryOrigin',
     'SourceFunctionInterface',
     'SourceFunctionInterfaceFrontier',
     'SourceFunctionInterfaceQuery',

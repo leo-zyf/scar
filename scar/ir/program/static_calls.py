@@ -14,25 +14,17 @@ import json
 from scar.ir.record_codec import decode, encode, loads as strict_loads
 from scar.ir.v2.common import SourceReference
 from scar.ir.v2.ids import OperationDefinitionID
+from .function_sites import StaticFunctionCreationRoute, StaticQualifiedFunctionCreation, _require_static_record as _exact
 from .functions import CandidateBinding, CallBindingStatus
 from .ids import BlockID, EnvironmentInterfaceID, LocationID, OperationID, UseID, ValueID
 from .environments import EnvironmentMember, EnvironmentRole
 from .model import ExitKind, ValueKind
 from .native import ExitPortRef
 from .providers import ProviderArtifact
-from .source_call_bindings import SourceArgumentPort, SourceBodyNamespace
+from .source_call_bindings import SourceArgumentPort, SourceBodyNamespace, SourceReturnSite
 from .source_references import SourceDefinitionReference
-from .source_returns import SourceReturnSite
 from .structured import ControlEdgeReference
 from .source_language import CodeConstantSource
-
-
-def _exact(value, kind):
-    if type(value) is not kind:
-        raise TypeError("static calls require exact " + kind.__name__)
-    method = getattr(value, "__post_init__", None)
-    if method is not None:
-        method()
 
 
 def _rows(value, kind):
@@ -227,28 +219,6 @@ class StaticNamespaceFlow:
 
 
 @dataclass(frozen=True, slots=True)
-class StaticFunctionCreationRoute:
-    factory: OperationID
-    normal_edge: ControlEdgeReference
-    normal_value: ValueID
-    code_use: UseID
-    code_constant_operation: OperationID
-    code_layout_key: str
-    constant_path: tuple[int, ...]
-    definition: SourceDefinitionReference
-
-    def __post_init__(self):
-        for value, kind in ((self.factory, OperationID), (self.normal_edge, ControlEdgeReference),
-                            (self.normal_value, ValueID), (self.code_use, UseID),
-                            (self.code_constant_operation, OperationID), (self.definition, SourceDefinitionReference)):
-            _exact(value, kind)
-        if type(self.code_layout_key) is not str or not self.code_layout_key:
-            raise ValueError("creation needs its source-compiled layout key")
-        if type(self.constant_path) is not tuple or not self.constant_path or any(type(i) is not int or i < 0 for i in self.constant_path):
-            raise ValueError("creation needs an exact original child constant path")
-
-
-@dataclass(frozen=True, slots=True)
 class StaticQualifiedNamespaceFlow:
     """A local dependence whose endpoint IDs retain their original body."""
     body: SourceBodyNamespace
@@ -257,16 +227,6 @@ class StaticQualifiedNamespaceFlow:
     def __post_init__(self):
         _exact(self.body, SourceBodyNamespace)
         _exact(self.flow, StaticNamespaceFlow)
-
-
-@dataclass(frozen=True, slots=True)
-class StaticQualifiedFunctionCreation:
-    body: SourceBodyNamespace
-    creation: StaticFunctionCreationRoute
-
-    def __post_init__(self):
-        _exact(self.body, SourceBodyNamespace)
-        _exact(self.creation, StaticFunctionCreationRoute)
 
 
 class FunctionEnvironmentRouteKind(str, Enum):

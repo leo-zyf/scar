@@ -1,4 +1,4 @@
-"""Qualified conditional source Use-to-formal ports, not observed identities."""
+"""Qualified source call ports and conditional argument and return interfaces."""
 from __future__ import annotations
 
 from collections import Counter
@@ -8,7 +8,8 @@ from enum import Enum
 from scar.ir.program.call_edges import CallLinkStatus, CallRecordAnchor, CallSiteLink, CodeSourceLink, InvocationKey
 from scar.ir.program.call_operand_routes import OperandRouteCondition
 from scar.ir.program.functions import BindingOrigin, CallBindingStatus, CandidateBinding, ParameterBinding
-from scar.ir.program.ids import OperationID, RegionID, UseID, ValueID
+from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
+from scar.ir.program.native import ExitPortRef
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.record_codec import decode, encode, loads as strict_loads
 from scar.ir.v2.common import SourceReference
@@ -79,6 +80,32 @@ class SourceArgumentPort:
         _need(type(self.formal_name) is str and bool(self.formal_name), "formal name")
         _need(self.parameter.slot == self.formal_slot and self.parameter.origin is BindingOrigin.ARGUMENT
               and self.parameter.argument_indices == (self.index,), "parameter route differs from source operand")
+
+
+class SourceReturnCondition(str, Enum):
+    ORIGINAL_TARGET_AND_ENTRY_BINDING = 'ORIGINAL_TARGET_AND_ENTRY_BINDING'
+    CALLEE_COMPLETES_NORMALLY = 'CALLEE_COMPLETES_NORMALLY'
+    CALL_NORMAL_EDGE_SELECTED = 'CALL_NORMAL_EDGE_SELECTED'
+    CALLEE_RETURN_SITE_SELECTED = 'CALLEE_RETURN_SITE_SELECTED'
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReturnSite:
+    exit_port: ExitPortRef
+    block: BlockID
+    operation: OperationID
+    use: UseID
+    value: ValueID
+    terminator_position: int
+    condition: SourceReturnCondition = SourceReturnCondition.CALLEE_RETURN_SITE_SELECTED
+
+    def __post_init__(self):
+        for value, kind in ((self.exit_port, ExitPortRef), (self.block, BlockID), (self.operation, OperationID),
+                            (self.use, UseID), (self.value, ValueID)):
+            _exact(value, kind)
+        _need(self.exit_port.index == 0 and type(self.terminator_position) is int and self.terminator_position == 0,
+              'Python return view selects original object payload0, never world')
+        _need(self.condition is SourceReturnCondition.CALLEE_RETURN_SITE_SELECTED, 'return-site condition changed')
 
 
 @dataclass(frozen=True, slots=True)

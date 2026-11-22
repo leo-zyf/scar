@@ -12,11 +12,12 @@ from types import SimpleNamespace
 
 from scar.ir.record_codec import decode, encode
 from scar.ir.program.environments import EnvironmentRole
+from scar.ir.program.function_sites import StaticFunctionCreationRoute, StaticQualifiedFunctionCreation
 from scar.ir.program.ids import OperationID, UseID, ValueID
 from scar.ir.program.model import (BlockArgument, CompletionResult, ExitKind,
     OperationResult, ReferenceValue, StateVersionValue, TerminatorKind, UseRole)
 from scar.ir.program.queries import ProgramIndex
-from scar.ir.program.static_calls import StaticCallFrontier, StaticFunctionCreationRoute
+from scar.ir.program.static_calls import StaticCallFrontier
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
 from scar.ir.program.source import LoweringMetadata
 from scar.ir.v2.common import SourceReference
@@ -286,7 +287,7 @@ def _derive_function_environment_routes(*, caller_graph, caller_document, caller
     """
     from scar.ir.program.static_calls import (
         FunctionEnvironmentCondition as C, FunctionEnvironmentRouteKind as K,
-        StaticFunctionEnvironmentRoute, StaticQualifiedFunctionCreation,
+        StaticFunctionEnvironmentRoute,
     )
     caller_inputs=facts.body(caller_graph,caller_document,caller_namespace,caller_index)
     callee_inputs=facts.body(callee_graph,callee_document,callee_namespace,callee_index)

@@ -38,7 +38,7 @@ from scar.ir.program.model import (
     StateVersionValue,
     TerminatorKind,
 )
-from scar.ir.program.static_calls import StaticQualifiedFunctionCreation
+from scar.ir.program.function_sites import StaticQualifiedFunctionCreation
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
 from scar.ir.semantics_v2 import Opcode
 from enum import Enum

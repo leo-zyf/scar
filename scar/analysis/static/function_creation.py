@@ -18,10 +18,9 @@ from scar.analysis.static.function_environment import (
 )
 from scar.analysis.static.namespace import normal_reference, protocol_kinds
 from scar.ir.program.environments import EnvironmentRole
-from scar.ir.program.function_origins import StaticFactoryEntryOrigin
+from scar.ir.program.function_sites import StaticFactoryEntryOrigin, StaticFunctionCreationRoute
 from scar.ir.program.model import ExitKind, OperationResult, ReferenceValue, TerminatorKind
 from scar.ir.program.source_language import decode_language_overlay
-from scar.ir.program.static_calls import StaticFunctionCreationRoute
 from scar.ir.v2.common import SourceReference
 from scar.ir.v2.semantic import OperationKind, SemanticRelation
 from scar.trace.code_snapshot import code_key

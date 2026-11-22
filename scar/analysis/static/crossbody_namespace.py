@@ -10,12 +10,13 @@ from __future__ import annotations
 from dataclasses import InitVar, dataclass, replace
 
 from scar.ir.program.environments import EnvironmentRole
+from scar.ir.program.function_sites import StaticQualifiedFunctionCreation
 from scar.ir.program.model import ReferenceValue, StateVersionValue, UseRole
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.static_calls import (
     NamespaceFlowCondition as C, NamespacePathStart,
     StaticCrossBodyNamespaceFlow, StaticNamespaceCallBridge, StaticNamespacePathSegment,
-    StaticQualifiedFunctionCreation, StaticQualifiedNamespaceRead, StaticQualifiedNamespaceWrite,
+    StaticQualifiedNamespaceRead, StaticQualifiedNamespaceWrite,
 )
 from scar.analysis.static.function_environment import (
     _EnvironmentFacts,

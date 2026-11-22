@@ -15,12 +15,11 @@ from pathlib import Path
 from scar.analysis.call_edges import _Sources
 from scar.analysis.call_trace_reader import scan_call_trace
 from scar.ir.program.call_edges import (
-    CallEdgeBudget, CallEdgeIssue, CallEdgeIssueKind, FrameEntry, FrameExit,
+    CallCompilationProfile, CallEdgeBudget, CallEdgeIssue, CallEdgeIssueKind, FrameEntry, FrameExit,
 )
 from scar.ir.program.call_seeds import (
     CallSourceSeedModel, EnteredCodeGroup, SeedCollectionMetadata,
 )
-from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.record_codec import decode, encode
 
 

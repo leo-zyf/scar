@@ -17,13 +17,13 @@ from .dependencies import (DependencyCondition as Condition, DependencyContext,
     DependencyPoint as Point, DependencyStrength as Strength, GraphNamespace,
     context_push)
 from .functions import CandidateBinding, CallBindingStatus
+from .function_sites import StaticQualifiedFunctionCreation
 from .ids import OperationID, UseID, ValueID
 from .model import ExitKind, ValueKind
-from .source_call_bindings import SourceArgumentPort, SourceBodyNamespace
+from .source_call_bindings import SourceArgumentPort, SourceBodyNamespace, SourceReturnSite
 from .source_references import SourceDefinitionReference
-from .source_returns import SourceReturnSite
 from .static_calls import (StaticCallFrontier, StaticCompletionRoute,
-    StaticFunctionEnvironmentRoute, StaticQualifiedFunctionCreation,
+    StaticFunctionEnvironmentRoute,
     StaticStateEntryRoute)
 
 

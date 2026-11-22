@@ -22,6 +22,11 @@ def _text(value, name):
         raise ValueError(name + " must be nonempty text")
 
 
+class CallCompilationProfile(str, Enum):
+    LEGACY_ZERO_FLAGS = "LEGACY_ZERO_FLAGS"
+    RECORDED_FUTURE_FLAGS = "RECORDED_FUTURE_FLAGS_V1"
+
+
 @dataclass(frozen=True, slots=True)
 class CallEdgeBudget:
     max_raw_bytes: int = 128_000_000

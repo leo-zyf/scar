@@ -119,6 +119,8 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
         assert edge.source.context is None and edge.target==point and not incoming.enumerated
         assert any(frontier.kind=='FUNCTION_ENTRY_ORIGIN_SET_OPEN'for frontier in incoming.frontiers)
         selected=next(c for c in edge.conditions if c.name=='ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE')
+        assert {c.domain for c in edge.conditions} == {
+            'scar.ir.program.function_origins.FactoryEntryOriginCondition'}
         callable_member=next(m for m in body.graph.environments[0].members if m.role is EnvironmentRole.FUNCTION_OBJECT)
         assert selected.subject.node==callable_member.reference and selected.subject.context==point.context
         assert tuple(p.node for p in selected.operands)==(creation.normal_value,creation.factory)

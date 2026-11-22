@@ -256,7 +256,7 @@ class ModuleGlobalsDependencies:
 
 def _validate_environment_state(route,state,*,modules,check_context,requirements):
     from scar.analysis.static.function_environment import validate_function_environment_route
-    from scar.ir.program.static_calls import StaticQualifiedFunctionCreation
+    from scar.ir.program.function_sites import StaticQualifiedFunctionCreation
     caller,callee=modules._body(route.caller),modules._body(route.callee)
     validate_function_environment_route(route,caller_graph=caller.graph,caller_document=caller.document,
         caller_namespace=caller.namespace,callee_graph=callee.graph,callee_document=callee.document,

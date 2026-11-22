@@ -18,7 +18,7 @@ from scar.ir.program.call_operands import (
     CALL_WINDOWS_RULE, LOAD_OCCURRENCES_RULE, OperandEventKind, OperandGap,
 )
 from scar.ir.program.call_operand_routes import OperandRouteCondition, OperandRouteIssueKind
-from scar.ir.program.function_origins import CallCompilationProfile
+from scar.ir.program.call_edges import CallCompilationProfile
 from scar.trace.call_edges import install as install_frames
 
 

@@ -21,6 +21,7 @@ from scar.ir.record_codec import decode, encode, loads as strict_loads
 from scar.ir.program.codec import loads as load_core
 from scar.ir.program.functions import (ArgumentKind, BindingOrigin, BodyEntryInterface,
     CallArgument, CallBindingStatus)
+from scar.ir.program.function_sites import StaticQualifiedFunctionCreation
 from scar.ir.program.ids import OperationID
 from scar.ir.program.inventory import SourceContextDigest
 from scar.ir.program.model import (BlockArgument, CompletionResult, ExitKind,
@@ -30,11 +31,10 @@ from scar.ir.program.native import ExitPortRef
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.program.source import LoweringMetadata
-from scar.ir.program.source_call_bindings import SourceArgumentPort, SourceBodyNamespace
+from scar.ir.program.source_call_bindings import SourceArgumentPort, SourceBodyNamespace, SourceReturnSite
 from scar.ir.program.source_references import SourceArtifactLocator, SourceDefinitionReference
-from scar.ir.program.source_returns import SourceReturnSite
 from scar.ir.program.static_calls import (StaticCallFrontier, StaticCallShard, StaticCallSite,
-    StaticCallTarget, StaticCompletionRoute, StaticStateEntryRoute, StaticTerminalPort, StaticFunctionCreationRoute,
+    StaticCallTarget, StaticCompletionRoute, StaticStateEntryRoute, StaticTerminalPort,
     dumps as dump_relations)
 from scar.ir.program.structured import ControlEdgeReference
 from scar.ir.semantics_v2 import Opcode, SourceSemanticsGraph
@@ -831,7 +831,7 @@ class StaticCallSession:
         # Follow only canonical binding payload/phi/creation references, never
         # every input of arbitrary computation as an alias to its result.
         from scar.analysis.static.namespace import normal_reference
-        from scar.ir.program.static_calls import StaticQualifiedNamespaceFlow, StaticQualifiedFunctionCreation
+        from scar.ir.program.static_calls import StaticQualifiedNamespaceFlow
         callee_uses = {row.use for row in body.uses_by_op.get(operation.id, ()) if row.role == "callee"}
         callee = next((use.value for use in operation.uses if use.id in callee_uses), None)
         pending, seen = [(body, callee, requirements)] if callee is not None else [], set()

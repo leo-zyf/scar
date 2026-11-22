@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from scar.analysis.call_edges import CallEdgeReport, _canonical, _link_call_model
 from scar.ir.program.call_edges import (
+    CallCompilationProfile,
     CallEdgeBudget,
     CallEdgeModel,
     CallLinkStatus,
@@ -41,7 +42,6 @@ from scar.ir.program.call_operands import (
     CallableKind,
     LoadNamespace,
 )
-from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.record_codec import decode, encode
 import ast
 import dis

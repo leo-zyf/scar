@@ -18,7 +18,7 @@ from scar.ir.program.dependencies import (
     context_push,
 )
 from scar.ir.program.environments import EnvironmentRole
-from scar.ir.program.function_origins import FactoryEntryOriginCondition, StaticFactoryEntryOrigin
+from scar.ir.program.function_sites import FactoryEntryOriginCondition, StaticFactoryEntryOrigin
 from scar.ir.program.model import ReferenceValue
 from scar.ir.program.source_references import SourceArtifactLocator
 from collections import Counter, defaultdict
@@ -39,6 +39,10 @@ from scar.analysis.static.namespace import normal_reference, protocol_kinds
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
 from scar.ir.record_codec import decode, encode
 from scar.ir.v2.ids import OperationDefinitionID
+
+
+# The published condition domain follows the original wire contract.
+_FACTORY_ENTRY_ORIGIN_DOMAIN = "scar.ir.program.function_origins.FactoryEntryOriginCondition"
 
 
 # Project conditional factory origins through the common dependency graph.
@@ -145,8 +149,8 @@ class FactoryEntryOriginDependencyProvider:
                         relational = condition in (
                             FactoryEntryOriginCondition.ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE,
                             FactoryEntryOriginCondition.FUNCTION_CODE_MATCHES_CREATION)
-                        selected = DependencyCondition.from_enum(condition)
-                        conditions.append(replace(selected, subject=entry_callable if relational else normal,
+                        conditions.append(DependencyCondition(_FACTORY_ENTRY_ORIGIN_DOMAIN, condition.name,
+                            subject=entry_callable if relational else normal,
                             index=origin.creation.normal_edge.successor_index
                             if condition is FactoryEntryOriginCondition.FACTORY_COMPLETED_NORMALLY else None,
                             operands=(normal, anchor) if relational else ()))

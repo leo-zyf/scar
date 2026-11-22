@@ -14,7 +14,7 @@ from scar.ir.program.call_operand_routes import (
     OperandQueryRouteKind, OperandRouteBudget, OperandRouteCondition,
     OperandRouteIssueKind, OperandRouteModel, ReferenceConsistency,
 )
-from scar.ir.program.function_origins import CallCompilationProfile
+from scar.ir.program.call_edges import CallCompilationProfile
 from scar.trace.call_edges import install as install_frames
 
 

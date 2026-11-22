@@ -25,6 +25,7 @@ from scar.analysis.function_interfaces import extract_signature
 from scar.analysis.program_inventory import _Inventory
 from scar.analysis.program_lowering import prepare_source, prepare_captured_source
 from scar.ir.program.call_edges import (
+    CallCompilationProfile,
     CallEdgeBudget, CallEdgeCondition, CallEdgeIssue, CallEdgeIssueKind,
     CallEdgeModel, CallLinkStatus, CallRecordAnchor, CallSiteLink,
     CapturedCode, CapturedSite, CodeSourceLink, CoreCallObservation,
@@ -35,7 +36,6 @@ from scar.ir.program.call_edges import (
 from scar.ir.program.frames import FrameExit as SourceFrameExit
 from scar.ir.program.functions import BodyLoweringProfile
 from scar.ir.program.structured import PythonProtocolKind
-from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.program.model import CompletionResult, ExitKind, TerminatorKind
 from scar.ir.program.source import SourceRole
 from scar.ir.record_codec import decode, encode

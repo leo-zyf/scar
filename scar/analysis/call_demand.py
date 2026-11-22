@@ -10,7 +10,7 @@ import heapq
 from pathlib import Path
 from scar.analysis.program_context_store import PreparedContextStore, ContextStoreLimit
 from scar.analysis.program_lowering import prepare_source
-from scar.ir.program.function_origins import CallCompilationProfile
+from scar.ir.program.call_edges import CallCompilationProfile
 from scar.ir.program.functions import BodyLoweringProfile
 from dataclasses import dataclass, field
 from scar.ir.program.call_composition import (

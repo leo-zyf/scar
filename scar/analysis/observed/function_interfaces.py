@@ -25,8 +25,7 @@ from scar.ir.program.functions import (
 )
 from scar.ir.program.model import LiteralOrigin, OperationResult, ReferenceValue, StateVersionValue, UseRole
 from scar.ir.program.python_call_targets import PythonEntryBinding, PythonTargetKind
-from scar.ir.program.source_call_bindings import SourceArgumentPort
-from scar.ir.program.source_returns import SourceReturnSite
+from scar.ir.program.source_call_bindings import SourceArgumentPort, SourceReturnSite
 from scar.ir.program.static_calls import StaticCallFrontier, StaticStateEntryRoute
 from scar.ir.program.structured import PythonProtocolKind, StructuredBodyModel
 from scar.ir.record_codec import decode

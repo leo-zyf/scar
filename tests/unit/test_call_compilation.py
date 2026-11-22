@@ -19,7 +19,7 @@ from scar.ir.program.call_edges import (
     CallLinkStatus,
     CapturedCode,
 )
-from scar.ir.program.function_origins import CallCompilationProfile
+from scar.ir.program.call_edges import CallCompilationProfile
 from scar.ir.record_codec import decode
 from scar.trace.code_snapshot import describe_code
 
