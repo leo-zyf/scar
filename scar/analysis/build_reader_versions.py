@@ -22,6 +22,21 @@ _BUILD_PREDECESSOR = {
     'build_reader_versions.py': 'a76a12c4ca908ce080bfaa9ff76684ce379e2f07dac008468ed57ff7f26cdb61',
 }
 
+# Observation state publication and lazy replay share one owner.
+# The pre-merge producer and reader remain reproducible at fc594dc8.
+_OBSERVED_STATE_PREDECESSOR = {
+    'build.py': 'a846d76fb8b5cd284657d2c7623172cd4fb5037fd71e246261eea7aef98de8e2',
+    'build_f4.py': 'e1c7aa6f147cb725d9ede6aa100869e8e717f4f7d569efa56d642d9d53ed7608',
+    'build_reader_versions.py': '4c887af0a0d14929e470033d8eb559654fc91d2fa281a66849302c36114e12e6',
+    'source_observed_state.py': '3fa70ecbf068bb13da1c022bbc28b704532ac2d38b4f228f6b8caf9f7afb83a5',
+    'source_observed_state_view.py': 'e9a68375d863f5630b148a7c70d0ae0c6e636abe487a9e758d2180c575d2dea0',
+}
+_OBSERVED_STATE_READER = {
+    'build.py': 'ba6bd5372e4387b5d3a6a3920304ad2041e0df4c6e9f9f54035694cb2ef860de',
+    'build_f4.py': 'bf3851276afecb329271f28f9cceae4a5b5b4e1ef4938ecedda16c9472e97ca7',
+    'source_observed_inventory_state.py': 'b669edfe93a007af019fb6b33ae4781f946d64f8108f42d2b4d83799326dc110',
+}
+
 LOOP_TRANSFER_TRANSITION = {
     'storage': (
         'bbe9c5ba441b19ff17b05aac9d7f01ea3fd19e9c3dacc9ca5b9ea73ccedaa4aa',
@@ -64,11 +79,21 @@ def compatible_pins(recorded, active, transition, *, added=()):
     return recorded == previous
 
 
-def compatible_build_pins(recorded, active):
+def _previous_build_reader_matches(recorded, active):
     if compatible_pins(recorded, active, BUILD_TRANSITION, added=('build_reader_versions.py',)):
         return True
     return (all(active.get(name) == new for name, (_, new) in BUILD_TRANSITION.items())
             and recorded == dict(active, **_BUILD_PREDECESSOR))
+
+
+def compatible_build_pins(recorded, active):
+    if _previous_build_reader_matches(recorded, active):
+        return True
+    if any(active.get(name) != digest for name, digest in _OBSERVED_STATE_READER.items()):
+        return False
+    previous = {name: digest for name, digest in active.items() if name != 'source_observed_inventory_state.py'}
+    previous.update(_OBSERVED_STATE_PREDECESSOR)
+    return _previous_build_reader_matches(recorded, previous)
 
 
 def compatible_entry_producer(recorded, active):

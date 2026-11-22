@@ -1,4 +1,4 @@
-"""Publish observed reaching definitions over the same frontend's static inventory."""
+"""Publish and admit observed reaching definitions over the sealed static graph."""
 
 import argparse
 from collections import Counter, defaultdict
@@ -12,20 +12,48 @@ from pathlib import Path
 import resource
 from time import monotonic
 
+from scar.analysis.binding_track_storage import ENCODING, pins as storage_pins
 from scar.analysis.program_inventory import admit_static_inventory
+from scar.analysis.program_state_view import _pins as state_pins
 from scar.analysis.program_state_coverage import _release
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_binding_inventory import BindingInventory
+from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_declared_catalog import _check, _receipt, read_source_catalog
 from scar.analysis.source_observed_interfaces import ObservedFunctionInterfaceStore
-from scar.analysis.source_observed_state import SCHEMA, _pins
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
 from scar.analysis.source_value_flow import _artifact
+from scar.ir.program.dependencies import DependencyNeighborhood as Neighborhood
 from scar.ir.record_codec import encode
 
 
+SCHEMA = 'scar.observed-source-binding-states'
 _WORKER = None
+
+
+def _pins():
+    from scar.analysis import source_graph_material, source_observed_interfaces, source_state
+    return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), state=state_pins(),
+        selection=sha256(Path(source_observed_interfaces.__file__).read_bytes()).hexdigest(),
+        materials=sha256(Path(source_graph_material.__file__).read_bytes()).hexdigest(),
+        local_slots=sha256(Path(source_state.__file__).read_bytes()).hexdigest(), storage=storage_pins())
+
+
+def compatible_pins(actual):
+    """Check used analysis rules while retaining the known historical wire formats."""
+    if type(actual) is not dict:
+        return False
+    expected = _pins()
+    producer = actual.get('producer')
+    if type(producer) is not str or len(producer) != 64 or any(c not in '0123456789abcdef' for c in producer):
+        return False
+    inputs = ('state', 'selection', 'materials', 'local_slots')
+    if any(actual.get(key) != expected[key] for key in inputs):
+        return False
+    keys = {'producer', *inputs}
+    return (set(actual) == keys or
+            (set(actual) == keys | {'storage'} and actual['storage'] == expected['storage']))
 
 
 def _initialize(catalog, inventory, index_sha256, out, limits, memory_mib):
@@ -86,8 +114,7 @@ def build(interfaces, inventory, out, *, jobs=8, memory_mib=8192):
         raise ValueError('actual body selection has no static shard')
     parent = _receipt(store.path / 'result.json'); catalog = store.catalog
     limits = dict(max_states=20000, max_stack=128, max_updates=1000000)
-    producer = Path(__file__)
-    pins = dict(_pins(), producer=sha256(producer.read_bytes()).hexdigest())
+    pins = _pins()
     plan = dict(schema=SCHEMA+'.plan', schema_version=1, parent=parent,
         catalog=encode(_artifact(catalog.path / 'result.json', catalog.report['schema'])),
         selection='RECORDED_FUNCTION_BODY_ALTERNATIVES_ALL_LOCAL_READ_SLOTS', functions=links,
@@ -110,7 +137,7 @@ def build(interfaces, inventory, out, *, jobs=8, memory_mib=8192):
             print(json.dumps(dict(done=len(rows), total=len(pending), unit=row['unit'],
                 slots=row['selected_local_read_slots'], versions=row['counts']['versions'], seconds=row['seconds'])), flush=True)
     store.validate(); _check(parent); _check(index_receipt)
-    if pins != dict(_pins(), producer=sha256(producer.read_bytes()).hexdigest()):
+    if pins != _pins():
         raise ValueError('binding inventory producer dependencies changed')
     rows.sort(key=lambda row: row['unit'])
     counts, frontiers = Counter(), Counter()
@@ -126,6 +153,88 @@ def build(interfaces, inventory, out, *, jobs=8, memory_mib=8192):
         target_executed=False, first_stage_complete=False, seconds=monotonic()-started)
     _durable_bytes(out / 'result.json', _json(report), replace=False)
     return report
+
+
+class SourceObservedStateProvider:
+    """Admit saved state receipts and open typed unit views on demand."""
+
+    def __init__(self,view,path,*,index=None):
+        self.view=view;self.path=Path(path).resolve();self.loaded={};self.headers={};self.guards={}
+        self.report=r=json.loads((self.path/'result.json').read_bytes());plan=r['plan']
+        if ((r['schema'],r['schema_version'])!=(SCHEMA,1) or not compatible_pins(plan['pins'])
+                or any(r[k]is not False for k in ('source_bodies_copied','loops_unrolled',
+                    'actual_frame_or_tensor_contents_proven','opaque_writers_excluded','target_executed','first_stage_complete'))):
+            raise ValueError('observed state schema, implementation or authority differs')
+        _check(plan['parent'])
+        if json.loads((self.path/'plan.json').read_bytes())!=plan:
+            raise ValueError('observed state plan differs from publication')
+        artifact=_artifact(view.catalog.path/'result.json',view.catalog.report['schema'])
+        if encode(artifact)!=plan['catalog']:raise ValueError('observed state uses another original catalog')
+        if index is None:
+            index=ObservedFunctionInterfaceStore(Path(plan['parent']['path']).parent).index
+        if (index.codes.targets.source_sha256!=plan['run_scope']
+                or index.view.catalog.path!=view.catalog.path):
+            raise ValueError('observed state index uses another catalog or actual capture')
+        selected, links = _selected(index)
+        units = set(selected)
+        key=lambda row:json.dumps(row,sort_keys=True)
+        if sorted(links,key=key)!=sorted(plan['functions'],key=key) or sorted(units)!=plan['units']:
+            raise ValueError('saved binding selection differs from actual code body alternatives')
+        if {row['unit'] for row in r['units']}!=units or len(r['units'])!=len(units):
+            raise ValueError('observed binding unit denominator differs')
+        totals=Counter()
+        for row in r['units']:
+            unit=row['unit'];path=self.path/'units'/unit/'result.json'
+            if row['state']['path']!=str(path):raise ValueError('observed state shard path differs')
+            _check(row['state']);header=json.loads(path.read_bytes())
+            if ((header['schema'],header['unit'],header['pins'])!=
+                    ('scar.source-state-view',unit,state_pins()) or header['schema_version'] not in (1,2)
+                    or header['parent']!=plan['catalog'] or header['counts']!=row['counts']):
+                raise ValueError('observed state shard domain or implementation differs')
+            if header['schema_version']==2:
+                if (header.get('track_encoding'),header.get('storage_pins'))!=(ENCODING,storage_pins()):
+                    raise ValueError('observed state storage contract differs')
+            self.headers[unit]=header;self.guards[path]=_stamp(path)
+            totals.update({k:v for k,v in row['counts'].items() if type(v)is int})
+        if dict(totals)!=r['counts']:raise ValueError('observed state aggregate differs from unit records')
+        for name in ('result.json','plan.json'):self.guards[self.path/name]=_stamp(self.path/name)
+        self.guards[Path(plan['parent']['path'])]=_stamp(Path(plan['parent']['path']))
+        self.index=index;self.check();view.register(self)
+
+    def check(self):
+        if any(_stamp(path)!=stamp for path,stamp in self.guards.items()):
+            raise ValueError('admitted observed state publication changed')
+        self.index.codes._check_trace()
+
+    def ensure(self,unit):
+        self.check()
+        if unit in self.loaded:return self.loaded[unit]
+        from scar.analysis.source_state import StoredBindingVersions
+        header=self.headers[unit];folder=self.path/'units'/unit
+        summary=next(row for row in self.report['units'] if row['unit']==unit)
+        state=StoredBindingVersions(self.view,folder,header,summary)
+        self.loaded[unit]=state;self.guards.update(state.guards);self.check();return state
+
+    def _state(self,point):
+        source=self.view.namespaces.get(point.namespace)
+        if source is None or source.unit not in self.headers:return None
+        return self.ensure(source.unit)
+
+    def incoming(self,point):
+        state=self._state(point);return Neighborhood() if state is None else state.incoming(point)
+    def outgoing(self,point):
+        state=self._state(point);return Neighborhood() if state is None else state.outgoing(point)
+    def describe(self,point):
+        state=self._state(point)
+        if state is None:return None
+        return state.describe(point)
+    def _owner(self,point):
+        state=self._state(point)
+        if state is None:raise ValueError('point is outside observed binding state units')
+        return state
+    def original(self,point):return self._owner(point).original(point)
+    def expand(self,point):return self._owner(point).expand(point)
+    def explain(self,point):return self._owner(point).explain(point)
 
 
 def main():
