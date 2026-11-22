@@ -39,10 +39,10 @@ def _source(store, unit, path):
         'scar.python-source-bytes'))
 
 
-def _admit(session, program, hardware, source_filter):
+def _admit(session, program, manifest, hardware, source_filter):
     if (session.report.get('backend') != 'F4' or session.report.get('workflow_complete') is not True
             or program['schema'] != PROGRAM or Path(program['uri']) != session.path/'manifest.json'
-            or read_artifact(program) != session.report):
+            or session.publication != program or manifest != session.report):
         raise ValueError('a published original F4 build is required')
     if hardware is None or hardware != session.report.get('target'):
         raise ValueError('hardware receipt differs from the original F4 build target')
@@ -114,8 +114,9 @@ def publish_build_admission(session, out_file, *, source_filter=None):
     """Publish a compact original F4 admission from an open planning session."""
     out_file = Path(out_file).absolute()
     with replay_transaction():
-        program = _pin(artifact_reference(session.path/'manifest.json', PROGRAM))
-        document = _admit(session, program, session.report.get('target'), source_filter)
+        program = _pin(session.publication.copy())
+        manifest = read_artifact(program)
+        document = _admit(session, program, manifest, session.report.get('target'), source_filter)
     _durable_bytes(out_file, _json(document), replace=False)
     return artifact_reference(out_file, SCHEMA)
 
@@ -128,10 +129,10 @@ def verify_build_admission(reference, *, program, hardware, source_filter=None, 
                 or saved.get('program') != program
                 or saved.get('target', {}).get('snapshot') != _reference(hardware, TARGET)):
             raise ValueError('F4 admission does not bind the original build and target')
-        read_artifact(_pin(program))
+        manifest = read_artifact(_pin(program))
         session_context = BuildSession(Path(program['uri']).parent) if _session is None else nullcontext(_session)
         with session_context as session:
-            expected = _admit(session, program, hardware, source_filter)
+            expected = _admit(session, program, manifest, hardware, source_filter)
         if _json(expected) != _json(saved):
             raise ValueError('F4 admission differs from original source/target replay')
     return saved

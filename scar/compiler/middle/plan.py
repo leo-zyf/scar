@@ -19,11 +19,19 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.joint_planner import _verify_admitted_plan
 
-from ..contracts import ExecutionPlanRef, GraphBundle
+from ..contracts import ExecutionPlanRef, GraphBundle, verify_source_lock
 
 
 _NATIVE_DELIVERY_PROFILE = 'CPP20_NATIVE_ENTRY'
 _NATIVE_COST_SCHEMA = 'scar.native-entry-cost'
+
+_REVISION_SCHEMAS = {
+    'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
+    'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
+    'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
+    'rewrites': 'scar.native-rewrites',
+}
+
 
 @dataclass(frozen=True, slots=True)
 class NativeRevision:
@@ -33,12 +41,22 @@ class NativeRevision:
     edits: tuple[dict, ...]
 
 
+def _native_input(reference):
+    """Share request and inventory documents within one pinned compiler replay."""
+    from scar.analysis.replay_transaction import detached_replay
+
+    identity = tuple(sorted(reference.items()))
+    return detached_replay('scar.native-input-metadata.v1', identity, lambda: read_artifact(reference))
+
+
 def rewrite_native(graph: GraphBundle, out):
+    """Publish the source-locked revision and pass its parsed request to qualification."""
     if graph.program is None:
         raise ValueError('no validated entry region')
     path = out / 'simplified.json'
     artifacts = graph.references()
-    manifest = read_artifact(artifacts['request'])
+    manifest = _native_input(artifacts['request'])
+    verify_source_lock(manifest)
     rules = simplify_copies(graph.program, graph.report['anchors'], path)
     edits = copy_source_edits(manifest, graph.report, rules)
     simplified = file_reference(path, PROGRAM_SCHEMA) if rules else artifacts['program']
@@ -46,8 +64,9 @@ def rewrite_native(graph: GraphBundle, out):
         schema='scar.native-rewrites', schema_version=1, rules=rules, source_edits=edits,
         program=artifacts['program'], result=simplified,
     ))
-    return NativeRevision(graph.report['entry'], dict(artifacts, simplified=simplified, rewrites=ledger),
-                          tuple(rules), tuple(edits))
+    revision = NativeRevision(graph.report['entry'], dict(artifacts, simplified=simplified, rewrites=ledger),
+                              tuple(rules), tuple(edits))
+    return revision, manifest
 
 
 def schedule_native(revision: NativeRevision, observation, cases, out) -> ExecutionPlanRef:
@@ -57,7 +76,7 @@ def schedule_native(revision: NativeRevision, observation, cases, out) -> Execut
     cpu = observation['cpu']
     if (observation.get('schema') != _NATIVE_COST_SCHEMA or observation['request'] != request
             or observation['exit'] != 0 or type(cpu) is not int
-            or cases != read_artifact(request)['cases']
+            or cases != _native_input(request)['cases']
             or cpu not in entry_cpus(revision.artifacts['hardware'])):
         raise ValueError('native observation differs from the locked request or target')
     artifacts = dict(revision.artifacts, cost=publish_plan(out / 'cost-observation.json', observation))
@@ -141,8 +160,8 @@ def entry_sources(artifacts):
 
 
 def entry_cpus(hardware):
-    target = read_artifact(hardware)
-    inventory = read_artifact(dict(target['inventory'], schema='scar.target-inventory'))
+    target = _native_input(hardware)
+    inventory = _native_input(dict(target['inventory'], schema='scar.target-inventory'))
     available = os.sched_getaffinity(0).intersection(inventory['cpu']['online_cpu_ids'])
     constraints = inventory['execution_constraints']
     if constraints.get('allowed_cpu_ids') is not None:
@@ -286,6 +305,60 @@ def copy_source_edits(manifest, evidence, rewrites):
                               original_sha256=sha256(original).hexdigest(),
                               replacement=replacement.decode('ascii')))
     return sorted(edits, key=lambda row: (row['unit'], row['span']))
+
+
+def replay_native_revision(artifacts):
+    """Verify the original graph, source lock and exact proposed rewrites."""
+    from scar.analysis.replay_transaction import detached_replay
+
+    identity = tuple((role, tuple(sorted(artifacts[role].items()))) for role in _REVISION_SCHEMAS)
+    material = detached_replay('scar.cpp20-native-revision.v1', identity, lambda: _read_native_revision(artifacts))
+    verify_source_lock(material[0])
+    return material
+
+
+def _read_native_revision(artifacts):
+    for role, schema in _REVISION_SCHEMAS.items():
+        ref = artifacts[role]
+        if ref['schema'] != schema:
+            raise ValueError(f'invalid {role} artifact schema')
+        if role in {'graph_evidence', 'simplified'} and str(Path(ref['uri']).absolute()) != ref['uri']:
+            raise ValueError(f'{role} artifact differs from the plan input')
+    manifest = _native_input(artifacts['request'])
+    rewrite = read_artifact(artifacts['rewrites'])
+    _native_input(artifacts['hardware'])
+    if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
+            or rewrite['result'] != artifacts['simplified']):
+        raise ValueError('rewrite ledger does not bind the admitted input and output graphs')
+    edits = rewrite.get('source_edits', [])
+    typed_units = {unit['path'] for unit in manifest['units']
+                   if unit.get('language', manifest['language']) in ('c', 'fortran')}
+    inspect_evidence = bool(edits or typed_units)
+    hash_only = ['program', 'calls']
+    if not inspect_evidence:
+        hash_only.append('graph_evidence')
+    if not edits and artifacts['simplified'] != artifacts['program']:
+        hash_only.append('simplified')
+    for role in hash_only:
+        ref = artifacts[role]
+        if file_reference(ref['uri'], ref['schema']) != ref:
+            raise ValueError(f'{role} artifact differs from the plan input')
+    evidence = read_artifact(artifacts['graph_evidence']) if inspect_evidence else None
+    if evidence and any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
+        raise ValueError('compiler evidence differs from the admitted frontend outputs')
+    compiler_types = {row['unit']: row['artifacts']['types'] for row in (evidence or {}).get('units', ())
+                      if row['unit'] in typed_units and 'types' in row['artifacts']}
+    if compiler_types.keys() != typed_units:
+        raise ValueError('C and Fortran translation require original type evidence for every unit')
+    if edits:
+        if copy_source_edits(manifest, evidence, rewrite['rules']) != edits:
+            raise ValueError('source copy edits differ from frontend and IR evidence')
+        simplified = loads(read_artifact(artifacts['simplified'], json_document=False).decode('utf-8'))
+        remaining = {op.id.wire for op in simplified.operations}
+        regions = {region.id.wire for region in simplified.regions}
+        if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
+            raise ValueError('source edits do not match the simplified IR')
+    return manifest, edits, compiler_types
 
 
 def _trial_output(run):

@@ -52,18 +52,15 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
 
 
 def _plan_graph(graph, out, result, *, repetitions, case_seconds):
-    from scar.ir.execution_recipe import read_artifact
-    from .backend.cpp20 import build_trial_variant, replay_native_revision
+    from .backend.cpp20 import build_trial_variant
     from .contracts import verify_source_lock
-    from .middle.plan import entry_cpus, publish_plan, rewrite_native, schedule_native
+    from .middle.plan import entry_cpus, publish_plan, replay_native_revision, rewrite_native, schedule_native
     from .qualification import NativeCases
 
     layers = result['layers']
     layer = 'rewrite'
     try:
-        request = read_artifact(graph.request)
-        verify_source_lock(request)
-        revision = rewrite_native(graph, out)
+        revision, request = rewrite_native(graph, out)
         result.update(artifacts=revision.artifacts, graph_rewrites=len(revision.rules),
                       source_rewrites=len(revision.edits))
         layers[layer] = 'IR_VALIDATED'

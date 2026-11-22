@@ -12,11 +12,10 @@ from scar.codegen.native_project import (
     build_native_project, publish_cpp20_inputs, replay_cpp20_inputs, write_native_project,
 )
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, loads
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..contracts import ExecutionPlanRef, ScheduledArrayLoop, ScheduledLoop, verify_source_lock
-from ..middle.plan import copy_source_edits, publish_plan, read_native_binding
+from ..contracts import ExecutionPlanRef, ScheduledArrayLoop, ScheduledLoop
+from ..middle.plan import publish_plan, read_native_binding, replay_native_revision
 from ..operator_stack import (
     load_operator_stack, nvidia_stack_build, verify_operator_stack_linkage, verify_stack_components_once,
 )
@@ -29,12 +28,6 @@ _OPENMP_LOOP = 'CPP_OPENMP_EXPLICIT_ROW_PARTITION_TEMPORAL'
 _ABI1_PROFILES = frozenset((_NATIVE_ENTRY, _SERIAL_LOOP, _OPENMP_LOOP))
 _ENTRY_TARGET = 'scar_entry'
 _ENTRY_BINARY = Path('bin') / _ENTRY_TARGET
-_REVISION_SCHEMAS = {
-    'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
-    'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
-    'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
-    'rewrites': 'scar.native-rewrites',
-}
 
 
 def cpp20_capability(profile: str, *, operator_abi_version: int = 1) -> dict:
@@ -136,60 +129,6 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
     receipt = executable_receipt(executable)
     artifacts['delivery'] = publish_plan(project / 'delivery.json', dict(delivery, executable=receipt))
     return NativeProject(executable, receipt, manifest, observation, delivery, dynamic, artifacts)
-
-
-def replay_native_revision(artifacts):
-    """Verify the original graph, source lock and exact proposed rewrites."""
-    from scar.analysis.replay_transaction import detached_replay
-
-    identity = tuple((role, tuple(sorted(artifacts[role].items()))) for role in _REVISION_SCHEMAS)
-    material = detached_replay('scar.cpp20-native-revision.v1', identity, lambda: _read_native_revision(artifacts))
-    verify_source_lock(material[0])
-    return material
-
-
-def _read_native_revision(artifacts):
-    for role, schema in _REVISION_SCHEMAS.items():
-        ref = artifacts[role]
-        if ref['schema'] != schema:
-            raise ValueError(f'invalid {role} artifact schema')
-        if role in {'graph_evidence', 'simplified'} and str(Path(ref['uri']).absolute()) != ref['uri']:
-            raise ValueError(f'{role} artifact differs from the plan input')
-    manifest = read_artifact(artifacts['request'])
-    rewrite = read_artifact(artifacts['rewrites'])
-    read_artifact(artifacts['hardware'])
-    if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
-            or rewrite['result'] != artifacts['simplified']):
-        raise ValueError('rewrite ledger does not bind the admitted input and output graphs')
-    edits = rewrite.get('source_edits', [])
-    typed_units = {unit['path'] for unit in manifest['units']
-                   if unit.get('language', manifest['language']) in ('c', 'fortran')}
-    inspect_evidence = bool(edits or typed_units)
-    hash_only = ['program', 'calls']
-    if not inspect_evidence:
-        hash_only.append('graph_evidence')
-    if not edits:
-        hash_only.append('simplified')
-    for role in hash_only:
-        ref = artifacts[role]
-        if file_reference(ref['uri'], ref['schema']) != ref:
-            raise ValueError(f'{role} artifact differs from the plan input')
-    evidence = read_artifact(artifacts['graph_evidence']) if inspect_evidence else None
-    if evidence and any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
-        raise ValueError('compiler evidence differs from the admitted frontend outputs')
-    compiler_types = {row['unit']: row['artifacts']['types'] for row in (evidence or {}).get('units', ())
-                      if row['unit'] in typed_units and 'types' in row['artifacts']}
-    if compiler_types.keys() != typed_units:
-        raise ValueError('C and Fortran translation require original type evidence for every unit')
-    if edits:
-        if copy_source_edits(manifest, evidence, rewrite['rules']) != edits:
-            raise ValueError('source copy edits differ from frontend and IR evidence')
-        simplified = loads(read_artifact(artifacts['simplified'], json_document=False).decode('utf-8'))
-        remaining = {op.id.wire for op in simplified.operations}
-        regions = {region.id.wire for region in simplified.regions}
-        if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
-            raise ValueError('source edits do not match the simplified IR')
-    return manifest, edits, compiler_types
 
 
 def admit_entry(schedule: ExecutionPlanRef):

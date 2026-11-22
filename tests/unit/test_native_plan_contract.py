@@ -4,8 +4,9 @@ import pytest
 
 from scar.compiler.contracts import ExecutionPlanRef
 from scar.compiler.middle.plan import (
-    NativeRevision, publish_plan, read_native_binding, read_plan_contract, schedule_native,
+    NativeRevision, entry_cpus, publish_plan, read_native_binding, read_plan_contract, schedule_native,
 )
+from scar.analysis.replay_transaction import replay_transaction
 
 
 def test_native_baseline_observation_cannot_apply_an_unmeasured_rewrite(tmp_path):
@@ -37,3 +38,22 @@ def test_native_baseline_observation_cannot_apply_an_unmeasured_rewrite(tmp_path
     replay = ExecutionPlanRef('main', dict(result.artifacts, execution_plan=incompatible), {}, result.scope)
     with pytest.raises(ValueError, match='baseline scope'):
         read_plan_contract(replay)
+
+
+def test_reused_cpu_inventory_still_checks_affinity_and_file_identity(tmp_path, monkeypatch):
+    inventory_path = tmp_path / 'inventory.json'
+    inventory = publish_plan(inventory_path, dict(schema='scar.target-inventory',
+        cpu={'online_cpu_ids': [0, 1]}, execution_constraints={'allowed_cpu_ids': [0, 1]}))
+    hardware = publish_plan(tmp_path / 'hardware.json', dict(
+        schema='scar.target-hardware-graph', inventory=inventory,
+    ))
+    live_cpus = {0}
+    monkeypatch.setattr(os, 'sched_getaffinity', lambda process: set(live_cpus))
+    with pytest.raises(ValueError, match='identity differs'):
+        with replay_transaction():
+            assert entry_cpus(hardware) == {0}
+            live_cpus.clear()
+            live_cpus.add(1)
+            assert entry_cpus(hardware) == {1}
+            inventory_path.write_text('{}')
+            entry_cpus(hardware)
