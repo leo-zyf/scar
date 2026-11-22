@@ -124,7 +124,7 @@ def _finish(state, owner):
         index for index, group in enumerate(state.classes) if group == same))
 
 
-def derive_terminal_facts(graph, interface) -> TerminalFacts:
+def derive_terminal_facts(graph, interface, *, core=None, protocol_context=None) -> TerminalFacts:
     """Derive finite E/F, then T, in exactly this enabled driver's real CFG.
 
     No validate/ProgramIndex recursion, external identity assumptions, current
@@ -133,14 +133,17 @@ def derive_terminal_facts(graph, interface) -> TerminalFacts:
     """
     if not any(scope.region == interface.region for scope in graph.driver_lifecycles):
         raise ValueError("terminal facts require an explicit DriverLifecycle scope")
-    region = next((row for row in graph.regions if row.id == interface.region), None)
+    if core is None:
+        from .validation import ProgramCoordinates
+        core = ProgramCoordinates.from_graph(graph)
+    region = core.regions.get(interface.region)
     if region is None:
         raise ValueError("terminal facts require their existing driver Region")
     blocks = {block.id: block for block in region.blocks}
-    all_operations = {operation.id: operation for operation in graph.operations}
+    all_operations = core.operations
     operations = {identity: all_operations[identity]
                   for block in region.blocks for identity in block.operations}
-    values = {value.id: value for value in graph.values}
+    values = core.values
     carriers = tuple(value.id for value in graph.values
                      if value.region == region.id and isinstance(value, ReferenceValue))
     indices = {identity: index for index, identity in enumerate(carriers)}
@@ -158,7 +161,7 @@ def derive_terminal_facts(graph, interface) -> TerminalFacts:
             seeds[row.operation] = next(indices[use.value] for use in operations[row.operation].uses
                                         if use.id == row.instance)
     from .protocol_validation import no_entry_seeds
-    protocol_seeds = no_entry_seeds(graph, interface.region)
+    protocol_seeds = no_entry_seeds(graph, interface.region, context=protocol_context)
     edge_seeds = {}
     for (identity, successor), owner in protocol_seeds.items():
         if successor is None:

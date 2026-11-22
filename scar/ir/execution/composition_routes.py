@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from scar.ir.program.control import PendingPayload
 from scar.ir.program.drivers import BodyDriveResult
-from scar.ir.program.driver_flow import body_outcome_uses
+from scar.ir.program.driver_validation import body_outcome_uses
 from scar.ir.program.ids import UseID
 from scar.ir.program.model import BlockArgument, CompletionResult
 from scar.ir.program.resumption import ResumeInput, SavedInput, saved_actual_use

@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.execution.validity_budget import ValidityBudget
-from scar.ir.program.driver_flow import body_drive_target
+from scar.ir.program.driver_validation import body_drive_target
 from scar.ir.program.model import (
     BlockArgument, CompletionResult, ExitKind, InvokeLiteralResult, StateVersionValue,
     TerminatorKind, value_type,

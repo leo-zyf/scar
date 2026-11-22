@@ -6,9 +6,10 @@ Native/source applicability and runtime instance correspondence stay separate.
 """
 from collections import deque
 from dataclasses import dataclass
+from functools import cached_property
 
 from .drivers import BodyDriveResult
-from .driver_flow import body_outcome_uses
+from .driver_validation import DriverFacts, body_outcome_uses
 from .control import ProtocolValueKind
 from .model import (BlockArgument, CompletionResult, CompletionSuccessor,
                     InvokeLiteralResult, OperationResult, ProtocolValue, ReferenceValue, StateVersionValue,
@@ -39,22 +40,24 @@ class ProtocolReferenceError(ValueError):
 class ProtocolFlow:
     """One immutable-model query context with shared indexes/cache/budget."""
 
-    def __init__(self, graph, *, budget=None):
+    def __init__(self, graph, *, budget=None, core=None, driver_facts=None):
+        if core is None:
+            from .validation import ProgramCoordinates
+            core = ProgramCoordinates.from_graph(graph)
+        if driver_facts is None:
+            driver_facts = DriverFacts(graph, core)
+        elif driver_facts.graph is not graph or driver_facts.operations is not core.operations:
+            raise ValueError("protocol flow needs driver facts from its exact core")
         self.graph, self.budget = graph, budget
-        self.operations = {row.id: row for row in graph.operations}
-        self.values = {row.id: row for row in graph.values}
-        self.regions = {row.id: row for row in graph.regions}
-        self.blocks, self.region_of, self.block_of, self.positions = {}, {}, {}, {}
-        self.uses = {}
-        for region in graph.regions:
-            for block in region.blocks:
-                self.blocks[block.id] = block
-                for number, identity in enumerate(block.operations):
-                    self.region_of[identity] = region.id
-                    self.block_of[identity], self.positions[identity] = block.id, number
-        for operation in graph.operations:
-            for use in operation.uses:
-                self.uses[use.id] = operation.id, use
+        self._driver_facts = driver_facts
+        self.operations = core.operations
+        self.values = core.values
+        self.regions = core.regions
+        self.blocks = core.blocks
+        self.region_of = core.operation_regions
+        self.block_of = core.operation_blocks
+        self.positions = core.positions
+        self.uses = core.uses
         self.scopes = {row.id: row for row in graph.protocol_scopes}
         self.rows = {(row.scope, row.clause, row.operation, row.slot): row
                      for row in graph.protocol_operations}
@@ -63,8 +66,8 @@ class ProtocolFlow:
             self.rows_by_clause.setdefault((row.scope, row.clause), []).append(row)
         self.drives = {row.operation: row for row in graph.body_drives}
         self.gates = {row.operation: row for row in graph.final_body_gates}
-        self.interfaces = {row.region: row for row in graph.driver_interfaces}
-        self.bodies = {row.region: row for row in graph.resumable_bodies}
+        self.interfaces = driver_facts.interfaces
+        self.bodies = driver_facts.bodies
         self._driver_roles = {}
         self.drives_by_region = {}
         for row in graph.body_drives:
@@ -72,14 +75,18 @@ class ProtocolFlow:
         self.raw = {row.value: row for row in graph.raw_driver_requests}
         self.packets = {row.value: row for row in graph.exception_packets}
         self.boundaries = {row.id: row for row in graph.native_boundaries}
-        self._ports, self._flows, self._region_edges, self._universes = {}, {}, {}, {}
+        self._ports, self._flows, self._region_edges = {}, {}, {}
         self._reachability = {}
-        for value in graph.values:
-            self._universes.setdefault(value.region, set()).add(value.id)
-        self._universes = {key: frozenset(values) for key, values in self._universes.items()}
         self.preparation = {"operations": len(self.operations), "values": len(self.values),
                             "uses": len(self.uses), "blocks": len(self.blocks),
                             "protocol_rows": len(self.rows), "final_body_gates": len(self.gates)}
+
+    @cached_property
+    def _universes(self):
+        regions = {}
+        for value in self.values.values():
+            regions.setdefault(value.region, set()).add(value.id)
+        return {region: frozenset(values) for region, values in regions.items()}
 
     def spend(self, kind, cost=1):
         return self.budget is None or self.budget.spend(kind, cost, "protocol." + kind)
@@ -124,11 +131,12 @@ class ProtocolFlow:
     def driver_roles(self, region):
         """Prepared must-copy roles, not object identity or a second state graph."""
         if region not in self._driver_roles:
-            from .driver_flow import driver_role_copies
-            self._driver_roles[region] = tuple(frozenset(items) for items in
-                driver_role_copies(self.graph, self.interfaces[region]))
+            self._driver_roles[region] = self._driver_facts.role_copies(region)
             self.preparation['driver_role_copy_analyses'] = len(self._driver_roles)
         return self._driver_roles[region]
+
+    def drive_target(self, drive):
+        return self._driver_facts.drive_target(drive)
 
     def row_result(self, row):
         from .protocols import AdmissionPredicate, OutcomeAdapter, ProtocolCall, RequestProcessing

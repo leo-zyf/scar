@@ -94,12 +94,10 @@ def prepare_resumables(ctx):
         ctx.body_drive_occurrences or ctx.model.body_activation_origins) else None
     ctx.body_static_inputs, ctx.body_static_outputs, ctx.body_static_targets = {}, {}, {}
     if ctx.body_program_index is not None:
-        from scar.ir.program.driver_flow import body_drive_target
         captured_sites = dict.fromkeys(row.operation for row in ctx.body_drive_occurrences.values())
         for identity in captured_sites:
-            drive = ctx.body_drives[identity]
             ctx.body_static_inputs[identity] = ctx.body_program_index.drive_input_bindings(identity)
-            ctx.body_static_targets[identity] = body_drive_target(ctx.program, drive)
+            ctx.body_static_targets[identity] = ctx.body_program_index.body_drive_target(identity)
             for edge in ctx.core_operations[identity].terminator.successors:
                 ctx.body_static_outputs[identity, edge.source] = (
                     ctx.body_program_index.drive_bindings(identity, edge.source))

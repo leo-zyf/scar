@@ -88,13 +88,16 @@ def _rename_relation(relation, targets):
                      for request in targets.get(old_request, ()) for body in targets.get(old_body, ()))
 
 
-def derive_session_facts(graph, interface, terminal) -> SessionFacts:
+def derive_session_facts(graph, interface, terminal, *, core=None) -> SessionFacts:
     """Call only after shape validation and fixed E/F/T in this enabled driver."""
-    region = next(row for row in graph.regions if row.id == interface.region)
+    if core is None:
+        from .validation import ProgramCoordinates
+        core = ProgramCoordinates.from_graph(graph)
+    region = core.regions[interface.region]
     blocks = {block.id: block for block in region.blocks}
-    all_ops = {op.id: op for op in graph.operations}
+    all_ops = core.operations
     operations = {identity: all_ops[identity] for block in region.blocks for identity in block.operations}
-    values = {value.id: value for value in graph.values}
+    values = core.values
     updates = {row.operation: row for row in graph.session_updates if row.operation in operations}
     if not updates:
         # Empty-entry must analysis with no post sources cannot create a P.
@@ -572,16 +575,15 @@ def occupancy_errors(ctx, row):
 #
 # The declared native conditions are not proved here. Historical terminal
 # eligibility is checked only after these local shapes and the core have passed.
-def session_release_errors(graph, *, operation_blocks, region_domains):
+def session_release_errors(graph, *, core, region_domains):
+    if not (graph.session_updates or graph.terminal_frame_releases):
+        return ()
     errors = []
 
     def error(code, path, message):
         errors.append((code, str(path), message))
 
-    values = {value.id: value for value in graph.values}
-    operations = {operation.id: operation for operation in graph.operations}
-    blocks = {block.id: block for region in graph.regions for block in region.blocks}
-    owners = {block.id: region.id for region in graph.regions for block in region.blocks}
+    values, operations, blocks = core.values, core.operations, core.blocks
     interfaces = {row.region: row for row in graph.driver_interfaces}
     scopes = {row.region for row in graph.driver_lifecycles}
 
@@ -590,7 +592,7 @@ def session_release_errors(graph, *, operation_blocks, region_domains):
         if op is None:
             error("session_release_operation", row.operation, "declaration must name its real operation")
             return None, None
-        interface = interfaces.get(owners[operation_blocks[op.id]])
+        interface = interfaces.get(core.operation_regions[op.id])
         if interface is None or interface.region not in scopes:
             error("session_release_scope", row.operation, "declaration requires its owning enabled driver scope")
             return op, None

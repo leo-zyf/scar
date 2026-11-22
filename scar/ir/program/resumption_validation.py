@@ -37,7 +37,7 @@ class ResumptionFacts:
     roots: dict
 
 
-def analyze_resumption(graph, *, operation_blocks, region_domains, incoming_edges):
+def analyze_resumption(graph, *, core, region_domains, incoming_edges):
     """Check declarations only, after the base CFG/state and cleanup checks."""
     issues = []
 
@@ -49,11 +49,8 @@ def analyze_resumption(graph, *, operation_blocks, region_domains, incoming_edge
     attaches = {row.operation: row for row in graph.frame_context_attaches}
     detaches = {row.operation: row for row in graph.frame_context_detaches}
     actions = {**initials, **attaches, **detaches}
-    operations = {op.id: op for op in graph.operations}
-    values = {value.id: value for value in graph.values}
-    regions = {region.id: region for region in graph.regions}
-    blocks = {block.id: block for region in graph.regions for block in region.blocks}
-    owners = {block.id: region.id for region in graph.regions for block in region.blocks}
+    operations, values, regions = core.operations, core.values, core.regions
+    blocks, owners, operation_blocks = core.blocks, core.block_regions, core.operation_blocks
     private_kinds = {P.FRAME_CONTEXT, P.DRIVE_CALLER_CONTEXT}
     private = {value.id: value for value in graph.values
                if isinstance(value, ProtocolValue) and value.protocol in private_kinds}

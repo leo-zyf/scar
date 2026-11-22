@@ -6,7 +6,6 @@ does not infer a native method from an operation label or construct another
 producer, state or scheduling graph.
 """
 from .control import ProtocolValueKind as P
-from .driver_flow import body_drive_target
 from .drivers import BodyResume, RawRequestKind
 from .model import (AccessMode, BlockArgument, ExitKind, InvokeLiteralResult, LiteralOrigin,
                     OperationResult, ProtocolValue, ReferenceValue,
@@ -309,7 +308,7 @@ def _close_frontier(ctx, row, case, pending_by_operation, check, issue, missing)
             if type(drive.target) is not BodyResume:
                 issue("protocol_close_continuation", _site(row), "delegate close cannot invent a parent Start ingress")
             else:
-                _, _, successor = body_drive_target(ctx.graph, drive)
+                _, _, successor = ctx.drive_target(drive)
                 payloads = tuple(actual for actual in drive.resume_inputs
                     if successor.inputs[actual.slot].kind is not ResumeSlotKind.STATE)
                 for actual in payloads:
@@ -505,7 +504,7 @@ def continuation_connections(ctx):
             view["status"] = "CONTRADICTED"
             continue
         try:
-            _, _, successor = body_drive_target(ctx.graph, drive)
+            _, _, successor = ctx.drive_target(drive)
             if (row.slot >= len(successor.inputs) or successor.inputs[row.slot].kind is ResumeSlotKind.STATE
                     or not any(actual.slot == row.slot for actual in drive.resume_inputs)):
                 raise ValueError("resume source slot must be an actual non-STATE delivery slot")
@@ -649,7 +648,7 @@ def continuation_connections(ctx):
             if type(scope.subject) is DriverSubject and scope.subject.interface_region == region)
         if not scopes:
             continue
-        _, _, successor = body_drive_target(ctx.graph, drive)
+        _, _, successor = ctx.drive_target(drive)
         for actual in drive.resume_inputs:
             kind = successor.inputs[actual.slot].kind
             if kind is ResumeSlotKind.STATE:

@@ -1,5 +1,5 @@
 """Bounded protocol obligations over a supplied model, not source recovery."""
-from .driver_flow import body_drive_target, body_outcome_uses
+from .driver_validation import body_outcome_uses
 from .ids import ProtocolScopeID
 from .model import InvokeLiteralResult, OperationResult, ProtocolValue, TerminatorKind
 from .protocol_flow import ProtocolFlow
@@ -125,7 +125,7 @@ def _derived(ctx, scope, clause):
               else scope.subject.region)
     drives = ctx.drives_by_region.get(region, ())
     if clause is ProtocolClause.BODY_INGRESS:
-        return tuple({'drive': drive, 'target': body_drive_target(ctx.graph, drive),
+        return tuple({'drive': drive, 'target': ctx.drive_target(drive),
                       'state_inputs': drive.state_inputs, 'resume_inputs': drive.resume_inputs}
                      for drive in drives)
     if clause in (ProtocolClause.BODY_SUSPENSION, ProtocolClause.BODY_TERMINAL):

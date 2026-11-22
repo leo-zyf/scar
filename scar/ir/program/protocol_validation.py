@@ -4,7 +4,7 @@ Known contradictions are issues; missing source/ports stay query gaps.  Nothing
 here proves the native implementation, purity, runtime identity or a rewrite.
 """
 from .control import ProtocolValueKind
-from .driver_flow import body_outcome_uses
+from .driver_validation import body_outcome_uses
 from .drivers import RawRequestKind
 from .model import (AccessMode, CompletionResult, DataValue, ExitKind, InvokeLiteralResult, OperationResult,
                     ProtocolValue, ReferenceValue, StateVersionValue, TerminatorKind)
@@ -20,7 +20,6 @@ from .protocols import (
 from .resumption import SuspendTerminator
 from .resumption import ResumeSlotKind, SuspensionFlavor
 from .drivers import BodyResume
-from .driver_flow import body_drive_target
 from .state_addresses import ExistingAccess, InvokeStateOperand
 from .structured import ControlEdgeReference
 
@@ -305,7 +304,15 @@ def _no_entry_contract(ctx, row, *, check_payload=True):
     return no_entry_route(ctx, row, check_payload=check_payload)
 
 
-def no_entry_preconditions(graph):
+def _no_entry_context(graph, context):
+    if context is None:
+        return ProtocolFlow(graph)
+    if type(context) is not ProtocolFlow or context.graph is not graph or context.budget is not None:
+        raise TypeError("no-entry analysis requires the original unbudgeted local protocol flow")
+    return context
+
+
+def no_entry_preconditions(graph, *, context=None):
     """Check seed-consumer foreign keys/routes before lifecycle derivation.
 
     This structural admission grants no payload copy or lifecycle seed. Full
@@ -315,7 +322,8 @@ def no_entry_preconditions(graph):
                  if type(row.contract) is NoEntryOutcome)
     if not rows:
         return ()
-    ctx, errors = ProtocolFlow(graph), []
+    ctx = _no_entry_context(graph, context)
+    errors = []
     for number, row in rows:
         try:
             _no_entry_contract(ctx, row, check_payload=False)
@@ -697,7 +705,7 @@ def connection_errors(ctx):
             if ctx.region_of[drive.operation] != region:
                 continue
             if type(drive.target) is BodyResume:
-                _, _, ingress = body_drive_target(ctx.graph, drive)
+                _, _, ingress = ctx.drive_target(drive)
                 for actual in drive.resume_inputs:
                     slot = ingress.inputs[actual.slot]
                     if slot.kind not in (ResumeSlotKind.SENT_VALUE, ResumeSlotKind.THROWN_PACKET):
@@ -841,7 +849,7 @@ def connection_errors(ctx):
     return tuple(errors)
 
 
-def no_entry_seeds(graph, region):
+def no_entry_seeds(graph, region, *, context=None):
     """Conditional E/F/T sources, only on the exact validated transition edge.
 
     Structural admission precedes this analysis. Full return-aware protocol
@@ -853,7 +861,8 @@ def no_entry_seeds(graph, region):
                                ProtocolClause.INITIAL_THROW_CONSTRUCTOR_FAILURE)]
     if not rows:
         return {}
-    ctx, result = ProtocolFlow(graph), {}
+    ctx = _no_entry_context(graph, context)
+    result = {}
     for row in rows:
         if ctx.region_of[row.operation] != region:
             continue

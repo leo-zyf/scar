@@ -235,20 +235,23 @@ class PendingFacts:
     complete: bool
 
 
-def derive_pending_facts(graph):
+def derive_pending_facts(graph, *, core=None):
     """Derive port unions; no caller-supplied union or independent edge store.
 
     This internal derivation expects core structural validation first. Unknown
     cross-region/boundary origins stay incomplete instead of an empty proof.
     ProgramIndex exposes it only after full graph validation.
     """
-    values = {v.id: v for v in graph.values}
     pending = {v.id for v in graph.values if _protocol(v, P.PENDING_COMPLETION)}
+    if not pending:
+        return {}
+    if core is None:
+        from .validation import ProgramCoordinates
+        core = ProgramCoordinates.from_graph(graph)
+    values, blocks, operations = core.values, core.blocks, core.operations
     facts = {v: set() for v in pending}
     incomplete = set()
     definitions = {d.value: d for d in graph.pending_completions}
-    blocks = {b.id: b for r in graph.regions for b in r.blocks}
-    operations = {o.id: o for o in graph.operations}
     region_entries = {r.entry for r in graph.regions}
     for identity in pending:
         value = values[identity]
@@ -296,16 +299,10 @@ def derive_pending_facts(graph):
             for v, ports in facts.items()}
 
 
-def control_errors(graph):
+def control_errors(graph, *, core=None):
     """Return structural issues after the ordinary core has validated CFG/state."""
     scopes = {s.id: s for s in graph.control_scopes}
     ports = {p.id: p for p in graph.control_ports}
-    values = {v.id: v for v in graph.values}
-    operations = {o.id: o for o in graph.operations}
-    regions = {r.id: r for r in graph.regions}
-    blocks = {b.id: b for r in graph.regions for b in r.blocks}
-    block_region = {b.id: r.id for r in graph.regions for b in r.blocks}
-    operation_block = {o: b.id for b in blocks.values() for o in b.operations}
     # Frame/caller and raw driver requests have dedicated interface validators.
     # Delivered exception packets still use C0 lexical ownership and packing.
     protocol_values = [v for v in graph.values if isinstance(v, ProtocolValue)
@@ -316,6 +313,11 @@ def control_errors(graph):
     if not (scopes or ports or protocol_values or dispatches or graph.frame_roots
             or graph.exception_packets or graph.pending_completions):
         return []
+    if core is None:
+        from .validation import ProgramCoordinates
+        core = ProgramCoordinates.from_graph(graph)
+    values, operations, regions = core.values, core.operations, core.regions
+    blocks, block_region, operation_block = core.blocks, core.block_regions, core.operation_blocks
     issues = []
 
     def error(code, path, text):
@@ -552,7 +554,7 @@ def control_errors(graph):
     if issues:
         return issues
 
-    facts = derive_pending_facts(graph)
+    facts = core.pending_facts()
     for fact in facts.values():
         if not fact.complete:
             error("pending_origin", fact.value, "pending case set has an unsupported boundary or no constructor source")

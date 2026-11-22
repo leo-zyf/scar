@@ -398,7 +398,7 @@ class ConnectionContext(ProtocolFlow):
         accounting = ValidityBudget(1000000) if budget is None else budget
         if type(accounting) is not ValidityBudget:
             raise TypeError("connections require one exact shared ValidityBudget")
-        super().__init__(graph, budget=accounting)
+        super().__init__(graph, budget=accounting, core=index._core, driver_facts=index._driver_facts)
         self.index = index
         self.call_inputs = {row.site: row for row in graph.protocol_call_inputs}
         self.result_consumers = {row.site: row for row in graph.protocol_result_consumers}

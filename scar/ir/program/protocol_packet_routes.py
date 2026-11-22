@@ -5,7 +5,6 @@ model copy relation; in particular C1 packaging is not proof of later dispatch.
 """
 from .cleanup import CleanupEnter, CleanupReplace, CleanupResume
 from .control import LanguageCompletionKind
-from .driver_flow import body_drive_target
 from .drivers import BodyResume
 from .model import OperationResult, TerminatorKind
 from .protocols import HostTerminal, OwnedUse, StaticProtocolGap
@@ -76,7 +75,7 @@ def packet_frontiers(ctx, source, *, start, choices=(), cuts=()):
             if type(drive.target) is not BodyResume:
                 gaps.append('packet_route_parent_ingress_unresolved')
                 continue
-            _, _, successor = body_drive_target(ctx.graph, drive)
+            _, _, successor = ctx.drive_target(drive)
             payloads = tuple(actual for actual in drive.resume_inputs
                              if successor.inputs[actual.slot].kind is not ResumeSlotKind.STATE)
             if not payloads:
@@ -573,7 +572,7 @@ def _completion_walk(ctx, source, *, start, choices=(), cuts=(),
                 gaps.append('packet_continuation_parent_ingress_unresolved')
                 boundary(operation, 'PARENT_START', expected, (block_id, position))
                 continue
-            _, _, successor = body_drive_target(ctx.graph, drive)
+            _, _, successor = ctx.drive_target(drive)
             actuals = tuple(actual for actual in drive.resume_inputs
                             if successor.inputs[actual.slot].kind is not ResumeSlotKind.STATE)
             if not actuals:

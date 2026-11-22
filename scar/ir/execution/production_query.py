@@ -766,8 +766,6 @@ def write_errors(ctx):
 
 
 def produced_errors(ctx):
-    from .production_ranges import resolve_actual_range
-
     ctx.resolved_produced = {}
     for row in ctx.produced.values():
         path = f'produced[{row.id}]'

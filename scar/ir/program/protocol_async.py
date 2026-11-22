@@ -5,6 +5,7 @@ projections remain declarations; they never enter the ordinary copy closure.
 Missing source/collection is distinct from a known wrong core connection.
 """
 from .control import ProtocolValueKind
+from .driver_validation import body_outcome_uses
 from .drivers import BodyResume
 from .lifecycle import DriveOutcomeRef, SessionPost
 from .model import (AccessMode, BlockArgument, DataValue, ExitKind, InvokeLiteralResult,
@@ -275,7 +276,6 @@ class _Analysis:
 
     def request_delivery(self, scope, drive, projections, path):
         from .drivers import RawRequestKind
-        from .driver_flow import body_drive_target
         if type(drive.target) is not BodyResume:
             return
         first = self.initial_step(scope, drive)
@@ -298,7 +298,7 @@ class _Analysis:
                                 for detail in recipe['raw_requests'])
             projections = ({'raw_requests': definitions, 'context': None, 'scheduler': True,
                             'source_inventory_complete': scheduler['source_inventory_complete']},)
-        _, _, ingress = body_drive_target(self.ctx.graph, drive)
+        _, _, ingress = self.ctx.drive_target(drive)
         for item in drive.resume_inputs:
             if not self.spend('delivery_slots', path):
                 break
@@ -592,7 +592,6 @@ class _Analysis:
         self.return_sources = [{'source': source, 'checked': False, 'payload': None,
                                 'known_none': (), 'status': 'NOT_CHECKED'}
                                for source in self.return_inventory]
-        from .driver_flow import body_outcome_uses
         from scar.ir.program.request_inputs import _none_content
         for number, source in enumerate(self.return_inventory):
             body = source['body_source']
@@ -746,8 +745,7 @@ class _Analysis:
         if drive is not None:
             if type(drive.target) is not BodyResume:
                 raise ValueError('cancel packet cannot be injected into BodyStart')
-            from .driver_flow import body_drive_target
-            _, _, ingress = body_drive_target(self.ctx.graph, drive)
+            _, _, ingress = self.ctx.drive_target(drive)
             candidates = [item for item in drive.resume_inputs if item.source == consumer.use]
             if len(candidates) != 1 or ingress.inputs[candidates[0].slot].kind is not ResumeSlotKind.THROWN_PACKET:
                 raise ValueError('cancel consumer is not the exact THROWN_PACKET input')

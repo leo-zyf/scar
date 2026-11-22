@@ -514,7 +514,7 @@ class _CloseDriver:
         return reply, terminal
 
     def finish(self):
-        from scar.ir.program.driver_flow import body_drive_target, body_outcome_uses
+        from scar.ir.program.driver_validation import body_drive_target, body_outcome_uses
         from scar.ir.program.resumption_flow import first_body_outcome_operations
         b, mode = self.b, self.mode
         entry_types = (REFERENCE, RAW, REFERENCE, *self.state_types)

@@ -141,7 +141,7 @@ def driver_program(*, target="start", create=False, extra_domain=False, async_re
                         for index, value in enumerate(landing[:len(roles)]))
     drive_states = tuple(_use(f"driver.drive.state.{index}", value, state=True)
                          for index, value in enumerate(landing[len(roles):len(roles) + len(body_domains)]))
-    from scar.ir.program.driver_flow import body_drive_target, body_outcome_uses
+    from scar.ir.program.driver_validation import body_drive_target, body_outcome_uses
     from scar.ir.program.resumption_flow import first_body_outcome_operations
     if target == "start":
         target_record = BodyStart(body.id)

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from scar.ir.program.ids import BlockID, OperationID
+from scar.ir.program.ids import BlockID, OperationID, RegionID
 from scar.ir.program.model import (
+    Block,
     Operation,
     Region,
     TerminatorKind,
@@ -30,6 +31,9 @@ def first_body_outcome_operations(
     region: Region,
     operations: Mapping[OperationID, Operation],
     start: BlockID,
+    *,
+    blocks: Mapping[BlockID, Block] | None = None,
+    block_regions: Mapping[BlockID, RegionID] | None = None,
 ) -> tuple[OperationID, ...]:
     """Return terminal body operations reached before the next suspension.
 
@@ -39,10 +43,15 @@ def first_body_outcome_operations(
     are deliberately not traversed. Operation IDs are sorted only to make the
     result stable; that order is not an execution order.
     """
-    blocks = {block.id: block for block in region.blocks}
+    if blocks is None:
+        blocks = {block.id: block for block in region.blocks}
+
+    def in_region(block_id):
+        return block_id in blocks and (block_regions is None or block_regions.get(block_id) == region.id)
+
     if type(start) is not BlockID:
         raise TypeError("body outcome start must be BlockID")
-    if start not in blocks:
+    if not in_region(start):
         raise ValueError("body outcome start must belong to the region")
 
     pending = [start]
@@ -64,7 +73,7 @@ def first_body_outcome_operations(
             found.add(block.operations[-1])
             continue
         for successor in terminator.successors:
-            if successor.block not in blocks:
+            if not in_region(successor.block):
                 raise ValueError("validated body CFG successor leaves its region")
             if successor.block not in seen_blocks:
                 pending.append(successor.block)

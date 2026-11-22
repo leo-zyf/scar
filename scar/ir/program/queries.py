@@ -9,16 +9,14 @@ from .ids import (BlockID, BoundaryRelationID, ControlScopeID, EnvironmentInterf
 from .model import (CompletionResult, CompletionSuccessor, DataValue, ExitKind, Operation, ProgramGraph, ReferenceValue,
                     StateAccess, StateVersionValue, Successor, TerminatorKind, Use)
 from .control import ProtocolValueKind
-from scar.ir.program.control_validation import derive_pending_facts
 from .model import ProtocolValue
 from .providers import ProviderBinding, ProviderEnvelope, ProviderRegion
 from .native import BoundaryRelation, EntryPortRef, ExitPortRef, NativeBoundary
 from scar.ir.program.native_callables import port_key, region_port_keys
 from .cleanup_validation import CleanupRouteKind, CleanupRouteStep
 from .resumption import ResumeInput, ResumeSlot, ResumeSlotKind, SuspendTerminator, saved_actual_use
-from scar.ir.program.resumption_flow import first_body_outcome_operations
 from .drivers import BodyDrive, BodyDriveResult, DriverInterface, NormalResultPort
-from .driver_flow import body_drive_target, body_outcome_uses
+from .driver_validation import body_outcome_uses
 from .lifecycle import (
     BodyOutcomeCommit, CreatedCloseTest, DriverLifecycle, LifecyclePostBinding, NoBodyFinish,
     SessionUpdate, TerminalFrameRelease,
@@ -272,18 +270,18 @@ class ProgramIndex:
         # Reuse the validator's canonical CFG/dominators and derived cleanup
         # result rather than running a second dataflow algorithm for queries.
         from .validation import validate
-        cleanup, resumption, lifecycle, prepared = [], [], [], []
+        cleanup, resumption, lifecycle, core, prepared = [], [], [], [], []
         issues = validate(graph, _cleanup_facts=cleanup, _resumption_facts=resumption,
-                          _lifecycle_facts=lifecycle, _prepared_index=prepared)
+                          _lifecycle_facts=lifecycle, _core_facts=core, _prepared_index=prepared)
         if issues:
             raise ValueError("; ".join(f"{i.code} at {i.path}: {i.message}" for i in issues))
         if prepared:
             self.__dict__.update(prepared[0].__dict__)
             return
-        self._prepare(graph, cleanup[0], resumption[0], lifecycle[0])
+        self._prepare(graph, cleanup[0], resumption[0], lifecycle[0], *core[0])
 
     @classmethod
-    def _from_validated_core(cls, graph, cleanup, resumption, lifecycle):
+    def _from_validated_core(cls, graph, cleanup, resumption, lifecycle, core, driver_facts):
         """Private validation-stage index over an already checked core.
 
         Only validation calls this, after canonical CFG/SSA, resumptions,
@@ -292,16 +290,18 @@ class ProgramIndex:
         This is preparation, not an alternative public graph validator.
         """
         index = cls.__new__(cls)
-        index._prepare(graph, cleanup, resumption, lifecycle)
+        index._prepare(graph, cleanup, resumption, lifecycle, core, driver_facts)
         return index
 
-    def _prepare(self, graph, cleanup, resumption, lifecycle):
+    def _prepare(self, graph, cleanup, resumption, lifecycle, core, driver_facts):
+        self._core = core
+        self._driver_facts = driver_facts
         self._call_effect_expansions = {row.operation: row for row in graph.call_effect_expansions}
         self._exception_matches = {row.operation: row for row in graph.exception_matches}
         self._cleanup_facts = cleanup
         self._resumption_facts = resumption
         self._lifecycle_facts = lifecycle
-        self._bodies = {row.region: row for row in graph.resumable_bodies}
+        self._bodies = driver_facts.bodies
         self._frame_context_actions = {row.operation: row for rows in (
             graph.frame_context_initials, graph.frame_context_attaches,
             graph.frame_context_detaches) for row in rows}
@@ -309,7 +309,7 @@ class ProgramIndex:
         self._resumable_creates = {row.operation: row for row in graph.resumable_creates}
         self._async_request_creates = {row.operation: row for row in graph.async_request_creates}
         self._association_reads = {row.operation: row for row in graph.request_association_reads}
-        self._driver_interfaces = {row.region: row for row in graph.driver_interfaces}
+        self._driver_interfaces = driver_facts.interfaces
         self._final_body_gates = {row.operation: row for row in graph.final_body_gates}
         self._body_drives = {row.operation: row for row in graph.body_drives}
         self._driver_lifecycles = {row.region: row for row in graph.driver_lifecycles}
@@ -327,32 +327,30 @@ class ProgramIndex:
         self._state_resource_uses = {(row.operation, row.requirement): row
                                      for row in graph.resource_uses}
         self.graph = graph
-        self.values = {value.id: value for value in graph.values}
-        self.locations = {location.id: location for location in graph.locations}
-        self.regions = {region.id: region for region in graph.regions}
-        self.operations = {operation.id: operation for operation in graph.operations}
+        self.values = core.values
+        self.locations = core.locations
+        self.regions = core.regions
+        self.operations = core.operations
         self._environments = {interface.region: interface for interface in graph.environments}
         self._function_entries = {layout.environment: layout for layout in graph.function_entries}
-        self._pending_facts = derive_pending_facts(graph) if graph.control_scopes else {}
+        self._pending_facts = core.pending_facts()
         self._control_ports = {port.id: port for port in graph.control_ports}
         self._control_scope = {block: scope for scope in graph.control_scopes for block in scope.blocks}
         self._scopes = {scope.id: scope for scope in graph.control_scopes}
-        self._blocks = {b.id: r.id for r in graph.regions for b in r.blocks}
-        self._block_records = {b.id: b for r in graph.regions for b in r.blocks}
-        self._operation_blocks = {operation: block.id for region in graph.regions
-                                  for block in region.blocks for operation in block.operations}
+        self._blocks = core.block_regions
+        self._block_records = core.blocks
+        self._operation_blocks = core.operation_blocks
         self._context_domains = {row.region: row for row in graph.handled_context_domains}
         self._cleanups = {row.scope: row for row in graph.cleanup_interfaces}
         self._cleanup_actions = {row.operation: row for rows in (
             graph.cleanup_enters, graph.cleanup_resumes, graph.cleanup_replacements,
             graph.handled_context_reads) for row in rows}
-        self._consumers = {value.id: [] for value in graph.values}
+        self._consumers = {identity: [] for identity in self.values}
         self._uses = {}
-        for operation in graph.operations:
-            for use in operation.uses:
-                site = UseSite(operation.id, use)
-                self._consumers[use.value].append(site)
-                self._uses[use.id] = site
+        for identity, (operation, use) in core.uses.items():
+            site = UseSite(operation, use)
+            self._consumers[use.value].append(site)
+            self._uses[identity] = site
         self._providers = {row.id: row for row in graph.provider_envelopes}
         self._provider_regions = {region.id: [] for region in graph.regions}
         for association in graph.provider_regions:
@@ -708,7 +706,7 @@ class ProgramIndex:
         from .protocol_flow import ProtocolFlow
         from .protocol_validation import no_entry_route
         from .protocols import ProtocolClause
-        ctx = ProtocolFlow(self.graph)
+        ctx = ProtocolFlow(self.graph, core=self._core, driver_facts=self._driver_facts)
         result = []
         for row in self.graph.protocol_operations:
             if (row.operation != operation_id or type(row.contract) is not NoEntryOutcome
@@ -808,6 +806,11 @@ class ProgramIndex:
         return None if row is None else tuple(
             DriverBinding(capture.formal, self._uses[capture.source]) for capture in row.captures)
 
+    def body_drive_target(self, operation_id: OperationID):
+        """The original body Region, entry or resume block, and resumption edge."""
+        drive = self.body_drive(operation_id)
+        return None if drive is None else self._driver_facts.drive_target(drive)
+
     def drive_input_bindings(self, operation_id: OperationID):
         """Derive Start captures or Resume saved/current inputs, without copying actuals.
 
@@ -819,7 +822,7 @@ class ProgramIndex:
         drive = self.body_drive(operation_id)
         if drive is None:
             return None
-        region, start, edge = body_drive_target(self.graph, drive)
+        _, start, edge = self._driver_facts.drive_target(drive)
         states = {item.location: self._uses[item.source] for item in drive.state_inputs}
         if edge is None:
             bindings = []
@@ -965,7 +968,7 @@ class ProgramIndex:
         if start not in roots:
             raise ValueError("body_outcomes start must be the entry or a temporal landing")
 
-        outcome_operations = first_body_outcome_operations(region, self.operations, start)
+        outcome_operations = self._driver_facts.first_outcomes(region.id, start)
         sites = []
         for operation_id in outcome_operations:
             operation = self.operations[operation_id]

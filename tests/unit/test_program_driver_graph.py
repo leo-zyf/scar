@@ -4,14 +4,14 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.program.control import ProtocolValueKind as P
-from scar.ir.program.driver_validation import driver_errors
+from scar.ir.program.driver_validation import DriverFacts, driver_errors
 from scar.ir.program.drivers import BodyDriveResult, BodyResume, BodyStart, NormalResultPort, RawRequestKind
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
     Behavior, BlockArgument, CompletionResult, ExitKind, Operation,
     ProtocolValue, ReferenceValue, StateVersionValue, Use, UseRole,
 )
-from scar.ir.program.validation import require_valid, validate
+from scar.ir.program.validation import ProgramCoordinates, require_valid, validate
 from tests.fixtures.program_driver_graphs import (
     async_request_program, create_only_program, driver_program, raw_only_program,
 )
@@ -32,9 +32,8 @@ def _codes(graph):
 
 def _metadata_codes(graph):
     """Exercise metadata errors independently of intentionally broken core shape."""
-    operation_blocks = {identity: block.id for region in graph.regions for block in region.blocks
-                        for identity in block.operations}
-    values = {value.id: value for value in graph.values}
+    core = ProgramCoordinates.from_graph(graph)
+    values = core.values
     domains = {region.id: {values[formal].location
                            for block in region.blocks if block.id == region.entry
                            for formal in block.arguments if isinstance(values[formal], StateVersionValue)}
@@ -44,7 +43,7 @@ def _metadata_codes(graph):
         if operation.terminator is not None:
             for index, edge in enumerate(operation.terminator.successors):
                 incoming[edge.block].append((operation.id, index))
-    return {code for code, _, _ in driver_errors(graph, operation_blocks=operation_blocks,
+    return {code for code, _, _ in driver_errors(graph, facts=DriverFacts(graph, core),
                                                region_domains=domains, incoming_edges=incoming)}
 
 

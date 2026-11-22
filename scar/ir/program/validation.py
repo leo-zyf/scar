@@ -5,7 +5,7 @@ purity, recover unobserved effects, or authorize any transformation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..v2._validation import cycle_errors, record_errors
 from .ids import UseID
@@ -21,7 +21,7 @@ from .resumption import (
     ResumeInput, SuspendTerminator, saved_actual_use, resume_slot_type,
 )
 from .drivers import BodyDriveResult, BodyDriveSuccessor, BodyDriveTerminator
-from .driver_flow import body_outcome_types
+from .driver_validation import DriverFacts, driver_errors, no_body_errors
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,12 +31,63 @@ class ValidationIssue:
     message: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProgramCoordinates:
+    """Coordinate tables shared by callers over a single immutable program."""
+
+    graph: ProgramGraph = field(repr=False)
+    regions: dict
+    operations: dict
+    values: dict
+    locations: dict
+    blocks: dict
+    block_regions: dict
+    operation_blocks: dict
+    positions: dict
+    uses: dict
+    operation_regions: dict = field(init=False)
+    _pending: dict | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, 'operation_regions', {
+            operation: self.block_regions[block]
+            for operation, block in self.operation_blocks.items()
+        })
+
+    def pending_facts(self):
+        if self._pending is None:
+            from .control_validation import derive_pending_facts
+            object.__setattr__(self, '_pending', derive_pending_facts(self.graph, core=self))
+        return self._pending
+
+    @classmethod
+    def from_graph(cls, graph):
+        """Prepare coordinates for a standalone query on an admitted graph."""
+        blocks, owners, operation_blocks, positions = {}, {}, {}, {}
+        for region in graph.regions:
+            for block in region.blocks:
+                blocks[block.id] = block
+                owners[block.id] = region.id
+                for position, operation in enumerate(block.operations):
+                    operation_blocks[operation] = block.id
+                    positions[operation] = position
+        return cls(
+            graph,
+            {row.id: row for row in graph.regions},
+            {row.id: row for row in graph.operations},
+            {row.id: row for row in graph.values},
+            {row.id: row for row in graph.locations},
+            blocks, owners, operation_blocks, positions,
+            {use.id: (operation.id, use) for operation in graph.operations for use in operation.uses},
+        )
+
+
 def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None,
-             _lifecycle_facts=None, _prepared_index=None) -> tuple[ValidationIssue, ...]:
+             _lifecycle_facts=None, _prepared_index=None, _core_facts=None) -> tuple[ValidationIssue, ...]:
     """Check exact uses, CFG availability, interfaces and explicit state SSA.
 
-    The private output collector lets ProgramIndex reuse derived cleanup facts
-    after every validator passes; it never accepts caller-supplied proof facts.
+    The private output collectors transfer coordinates and derived facts to
+    ProgramIndex only after all validators pass.
     """
     issues: list[ValidationIssue] = []
 
@@ -144,14 +195,16 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
     if issues:
         return tuple(issues)
 
+    core = ProgramCoordinates(graph, regions, operations, values, locations, blocks,
+                              block_region, operation_block, positions, uses)
+    driver_facts = DriverFacts(graph, core)
+
     from scar.ir.program.resource_validation import resource_errors
-    for code, path, message in resource_errors(
-            graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
+    for code, path, message in resource_errors(graph, core.operation_regions, uses):
         error(code, path, message)
 
     from scar.ir.program.interface_validation import environment_errors
-    for code, path, message in environment_errors(
-            graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
+    for code, path, message in environment_errors(graph, core.operation_regions, uses):
         error(code, path, message)
 
     from scar.ir.program.resource_validation import state_address_errors
@@ -274,7 +327,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
             drive_types = None
             if isinstance(edge, BodyDriveSuccessor):
                 try:
-                    drive_types = body_outcome_types(graph, edge.source)
+                    drive_types = driver_facts.outcome_types(edge.source)
                 except ValueError as exc:
                     error("driver_outcome_source", final.id, str(exc))
             for actual, formal in zip(edge.arguments, target.arguments):
@@ -674,26 +727,23 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
             error(code, path, message)
     if not issues:
         from scar.ir.program.control_validation import control_errors
-        for code, path, message in control_errors(graph):
+        for code, path, message in control_errors(graph, core=core):
             error(code, path, message)
     if not issues:
         from .cleanup_validation import analyze_cleanup
         cleanup_issues, cleanup_facts = analyze_cleanup(
-                graph, operation_blocks=operation_block, dominators=dominators)
+                graph, operation_blocks=operation_block, dominators=dominators, core=core)
         for code, path, message in cleanup_issues:
             error(code, path, message)
     if not issues:
         from .resumption_validation import analyze_resumption
         resumption_issues, resumption_facts = analyze_resumption(
-                graph, operation_blocks=operation_block, region_domains=region_domains,
-                incoming_edges=incoming_edges)
+                graph, core=core, region_domains=region_domains, incoming_edges=incoming_edges)
         for code, path, message in resumption_issues:
             error(code, path, message)
     if not issues:
-        from .driver_validation import driver_errors
         for code, path, message in driver_errors(
-                graph, operation_blocks=operation_block, region_domains=region_domains,
-                incoming_edges=incoming_edges):
+                graph, facts=driver_facts, region_domains=region_domains, incoming_edges=incoming_edges):
             error(code, path, message)
     if not issues:
         from .lifecycle_validation import body_publication_errors
@@ -703,29 +753,29 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
                 incoming_edges=incoming_edges):
             error(code, path, message)
     if not issues:
-        from .no_body_validation import no_body_errors
-        for code, path, message in no_body_errors(
-                graph, operation_blocks=operation_block, incoming_edges=incoming_edges):
+        for code, path, message in no_body_errors(graph, facts=driver_facts, incoming_edges=incoming_edges):
             error(code, path, message)
     if not issues:
         from scar.ir.program.session_flow import session_release_errors
         for code, path, message in session_release_errors(
-                graph, operation_blocks=operation_block, region_domains=region_domains):
+                graph, core=core, region_domains=region_domains):
             error(code, path, message)
-    if not issues:
+    flow = None
+    if not issues and (graph.protocol_scopes or graph.protocol_operations):
+        from .protocol_flow import ProtocolFlow
         from .protocol_validation import no_entry_preconditions
-        for code, path, message in no_entry_preconditions(graph):
+        flow = ProtocolFlow(graph, core=core, driver_facts=driver_facts)
+        for code, path, message in no_entry_preconditions(graph, context=flow):
             error(code, path, message)
     if not issues:
         from .lifecycle_validation import analyze_lifecycles
         lifecycle_issues, lifecycle_facts = analyze_lifecycles(
-            graph, operations=operations, owners=block_region, operation_blocks=operation_block)
+            graph, core=core, protocol_context=flow)
         for code, path, message in lifecycle_issues:
             error(code, path, message)
     if not issues:
         from scar.ir.program.resource_validation import provider_errors
-        for code, path, message in provider_errors(
-                graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
+        for code, path, message in provider_errors(graph, core.operation_regions, uses):
             error(code, path, message)
     if not issues:
         from scar.ir.program.native_callables import native_errors
@@ -743,10 +793,10 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
             from .queries import ProgramIndex
             from scar.ir.program.protocol_connection_validation import ConnectionContext
             prepared = ProgramIndex._from_validated_core(
-                graph, cleanup_facts, resumption_facts, lifecycle_facts)
+                graph, cleanup_facts, resumption_facts, lifecycle_facts, core, driver_facts)
             ctx = ConnectionContext(graph, index=prepared)
         from .protocol_validation import protocol_errors
-        for code, path, message in protocol_errors(graph, context=ctx):
+        for code, path, message in protocol_errors(graph, context=ctx if ctx is not None else flow):
             error(code, path, message)
     if not issues and graph.exception_matches:
         from .exception_match_query import exception_match_errors
@@ -759,6 +809,8 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
                 error(code, path, message)
     if not issues and _prepared_index is not None and prepared is not None:
         _prepared_index.append(prepared)
+    if not issues and _core_facts is not None:
+        _core_facts.append((core, driver_facts))
     if not issues and _cleanup_facts is not None:
         _cleanup_facts.append(cleanup_facts)
     if not issues and _resumption_facts is not None:

@@ -1,44 +1,211 @@
-"""D1 driver declarations over canonical Uses, CFG and completion state.
+"""Driver declarations and port queries over canonical Uses and control flow.
 
 These checks establish a static interface contract, never an instance, runtime
 admission, source correspondence or lifecycle proof.
 """
 from __future__ import annotations
 
+from collections import deque
+
 from .control import ProtocolValueKind as P
 from .drivers import (
-    BodyDriveResult, BodyDriveTerminator, BodyResume, BodyStart,
+    BodyDrive, BodyDriveResult, BodyDriveTerminator, BodyResume, BodyStart,
     DriverReceiverKind,
 )
 from .environments import EnvironmentRole
-from .driver_flow import body_drive_target, body_outcome_uses, driver_role_copies
+from .ids import UseID
 from .model import (
-    Behavior, BlockArgument, CompletionResult, ExitKind, OperationResult, ProtocolValue,
-    ReferenceValue, StateVersionValue, TerminatorKind, value_type,
+    AccessMode, Behavior, BlockArgument, CompletionResult, DataValue, ExitKind,
+    FootprintKind, OperationResult, ProtocolValue, ReferenceValue, StateVersionValue,
+    TerminatorKind, UseRole, value_type,
 )
 from .resumption import SuspendTerminator, resume_slot_type, saved_actual_use
 from scar.ir.program.resumption_flow import first_body_outcome_operations
 
 
-def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
+def _driver_role_copies(interface, region, blocks, operations):
+    from .cleanup_forward import _must_forward
+
+    incoming = {formal: [] for block in region.blocks for formal in block.arguments}
+    for block in region.blocks:
+        operation = operations[block.operations[-1]]
+        own = {use.id: use.value for use in operation.uses}
+        for edge in operation.terminator.successors:
+            for actual, formal in zip(edge.arguments, blocks[edge.block].arguments):
+                incoming[formal].append(own.get(saved_actual_use(operation, actual)))
+    return (
+        _must_forward({interface.receiver}, incoming),
+        _must_forward({interface.scheduler_request}, incoming),
+    )
+
+
+def _drive_target(target, bodies, regions, find_operation, find_owner):
+    if type(target) is BodyStart:
+        region = regions.get(target.body)
+        if region is None or region.id not in bodies:
+            raise ValueError("start target must name a declared resumable body")
+        return region, region.entry, None
+    if type(target) is not BodyResume:
+        raise ValueError("drive target must be BodyStart or BodyResume")
+    source = find_operation(target.suspend)
+    if source is None or type(source.terminator) is not SuspendTerminator:
+        raise ValueError("resume target must name a real Suspend operation")
+    region = find_owner(source.id)
+    if region is None or region.id not in bodies:
+        raise ValueError("resume source must belong to a declared resumable body")
+    if target.successor >= len(source.terminator.successors):
+        raise ValueError("resume successor index exceeds the suspension signature")
+    edge = source.terminator.successors[target.successor]
+    return region, edge.block, edge
+
+
+def body_drive_target(graph, drive):
+    """Resolve a drive's original body and entry or resume landing."""
+    if type(drive) is not BodyDrive:
+        raise TypeError("body drive target needs an exact BodyDrive")
+    bodies = {body.region for body in graph.resumable_bodies}
+    regions = {region.id: region for region in graph.regions}
+
+    def find_operation(identity):
+        return next((operation for operation in graph.operations if operation.id == identity), None)
+
+    def find_owner(identity):
+        return next((region for region in graph.regions
+                     if any(identity in block.operations for block in region.blocks)), None)
+
+    return _drive_target(drive.target, bodies, regions, find_operation, find_owner)
+
+
+def body_outcome_uses(operation):
+    """Return only the source operation's public handoff/terminal UseIDs."""
+    term = operation.terminator
+    if type(term) is SuspendTerminator:
+        return (term.exported, *term.handoff)
+    if term is not None and term.kind in (TerminatorKind.RETURN, TerminatorKind.RAISE):
+        return term.values
+    raise ValueError("drive outcome source must be Suspend, Return or Raise")
+
+
+def _outcome_types(operation, values, find_use):
+    result = []
+    for identity in body_outcome_uses(operation):
+        use = find_use(identity)
+        if use is None or use.value not in values:
+            raise ValueError("outcome signature must use the source's canonical operands")
+        result.append(value_type(values[use.value]))
+    return tuple(result)
+
+
+class DriverFacts:
+    """Driver queries scoped to one graph and its registered core records."""
+
+    def __init__(self, graph, core):
+        self.graph = graph
+        self.operations = core.operations
+        self.values = core.values
+        self.regions = core.regions
+        self.blocks = core.blocks
+        self.operation_blocks = core.operation_blocks
+        self.block_regions = core.block_regions
+        self.uses = core.uses
+        self.bodies = {row.region: row for row in graph.resumable_bodies}
+        self.interfaces = {row.region: row for row in graph.driver_interfaces}
+        self._roles = {}
+        self._outcomes = {}
+        self._frontiers = {}
+
+    def _owning_region(self, operation):
+        block = self.operation_blocks.get(operation)
+        return self.regions.get(self.block_regions.get(block))
+
+    def owned_use(self, operation, identity):
+        row = self.uses.get(identity)
+        return row[1] if row is not None and row[0] == operation else None
+
+    def drive_target(self, drive):
+        if type(drive) is not BodyDrive:
+            raise TypeError("body drive target needs an exact BodyDrive")
+        return _drive_target(drive.target, self.bodies, self.regions,
+                             self.operations.get, self._owning_region)
+
+    def outcome_types(self, source):
+        if source not in self._outcomes:
+            operation = self.operations.get(source)
+            if operation is None:
+                raise ValueError("drive outcome source operation is missing")
+            self._outcomes[source] = _outcome_types(
+                operation, self.values, lambda identity: self.owned_use(source, identity))
+        return self._outcomes[source]
+
+    def role_copies(self, region_id):
+        if region_id not in self._roles:
+            roles = _driver_role_copies(self.interfaces[region_id], self.regions[region_id],
+                                        self.blocks, self.operations)
+            self._roles[region_id] = tuple(frozenset(role) for role in roles)
+        return self._roles[region_id]
+
+    def first_outcomes(self, region_id, start):
+        key = region_id, start
+        if key not in self._frontiers:
+            self._frontiers[key] = first_body_outcome_operations(
+                self.regions[region_id], self.operations, start,
+                blocks=self.blocks, block_regions=self.block_regions)
+        return self._frontiers[key]
+
+
+def _created_body_origins(facts, create_results):
+    """Propagate proved body origins along existing reference routes."""
+    if not create_results:
+        return {}
+    consumers = {}
+
+    def connect(operation, actual_formal_pairs):
+        for actual, formal in actual_formal_pairs:
+            use = facts.owned_use(operation.id, actual)
+            if use is not None:
+                consumers.setdefault(use.value, []).append(formal)
+
+    for operation in facts.operations.values():
+        if operation.terminator is not None:
+            for edge in operation.terminator.successors:
+                connect(operation, zip(
+                    (saved_actual_use(operation, actual) for actual in edge.arguments),
+                    facts.blocks[edge.block].arguments))
+        if operation.callee is not None:
+            callee = facts.regions[operation.callee]
+            actuals = operation.invoke_arguments if operation.terminator is not None else operation.call_arguments
+            connect(operation, zip(actuals, facts.blocks[callee.entry].arguments))
+
+    origins = {value: {body} for value, body in create_results.items()}
+    pending = deque(create_results.items())
+    while pending:
+        value, body = pending.popleft()
+        for formal in consumers.get(value, ()):
+            known = origins.setdefault(formal, set())
+            if body not in known:
+                known.add(body)
+                pending.append((formal, body))
+    return origins
+
+
+def driver_errors(graph, *, facts, region_domains, incoming_edges):
     """Return D1 errors after canonical core and body validation have succeeded."""
+    if facts.graph is not graph:
+        raise ValueError("driver facts must index the exact program graph")
     errors = []
 
     def error(code, path, message):
         errors.append((code, str(path), message))
 
-    values = {row.id: row for row in graph.values}
-    operations = {row.id: row for row in graph.operations}
-    regions = {row.id: row for row in graph.regions}
-    blocks = {row.id: row for region in graph.regions for row in region.blocks}
-    owners = {row.id: region.id for region in graph.regions for row in region.blocks}
-    bodies = {row.region: row for row in graph.resumable_bodies}
+    values, operations, regions, blocks = facts.values, facts.operations, facts.regions, facts.blocks
+    owners, operation_blocks = facts.block_regions, facts.operation_blocks
+    bodies, interfaces = facts.bodies, facts.interfaces
 
     def protocol(value, kind):
         return isinstance(values.get(value), ProtocolValue) and values[value].protocol is kind
 
     def owned(op, use_id):
-        return next((use for use in op.uses if use.id == use_id), None)
+        return facts.owned_use(op.id, use_id)
 
     def argument(op, index):
         if index >= len(op.invoke_arguments):
@@ -178,35 +345,14 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
         normal_result(op, row.latent_result, row.operation,
                       lambda value: isinstance(value, ProtocolValue) and value.protocol is P.RAW_DRIVER_REQUEST)
 
-    known_bodies = {identity: {body} for identity, body in create_results.items()}
-    changed = True
-    while changed:
-        changed = False
-        bindings = []
-        for op in graph.operations:
-            if op.terminator is not None:
-                for edge in op.terminator.successors:
-                    bindings.extend((saved_actual_use(op, actual), formal)
-                                    for actual, formal in zip(edge.arguments, blocks[edge.block].arguments))
-            if op.callee is not None:
-                callee = regions[op.callee]
-                actuals = op.invoke_arguments if op.terminator is not None else op.call_arguments
-                bindings.extend(zip(actuals, blocks[callee.entry].arguments))
-            for actual, formal in bindings:
-                use = owned(op, actual) if actual is not None else None
-                if use is not None and use.value in known_bodies:
-                    before = len(known_bodies.get(formal, ()))
-                    known_bodies.setdefault(formal, set()).update(known_bodies[use.value])
-                    changed |= len(known_bodies[formal]) != before
-            bindings.clear()
+    known_bodies = _created_body_origins(facts, create_results)
 
-    interfaces = {row.region: row for row in graph.driver_interfaces}
     drives = {row.operation: row for row in graph.body_drives}
     gates = {row.drive: row for row in graph.final_body_gates}
     if len(gates) != len(graph.final_body_gates):
         error("driver_gate_pair", "final_body_gates", "each Drive has exactly one final gate")
 
-    role_copies = {}
+    role_regions = set()
     for region_id, interface in interfaces.items():
         region = regions.get(region_id)
         if region is None or interface.body not in bodies:
@@ -220,7 +366,7 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
         domains = region_domains[region_id]
         if not interface.lifecycle or not set(interface.lifecycle).issubset(domains):
             error("driver_lifecycle", region_id, "lifecycle must be a nonempty subset of the driver's entry state domains")
-        role_copies[region_id] = driver_role_copies(graph, interface)
+        role_regions.add(region_id)
 
     for operation in operations.values():
         if isinstance(operation.terminator, BodyDriveTerminator) and operation.id not in drives:
@@ -238,7 +384,7 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
         if row.operation not in gates:
             error("driver_gate_pair", row.operation, "BodyDrive requires exactly one final gate")
         try:
-            body, start, edge = body_drive_target(graph, row)
+            body, start, edge = facts.drive_target(row)
         except ValueError as exc:
             error("driver_target", row.operation, str(exc))
             continue
@@ -280,7 +426,7 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
             error("driver_role", row.operation, "scheduler must be RAW_DRIVER_REQUEST")
         if row.session is not None and owned(op, row.session) is not None and not isinstance(values[owned(op, row.session).value], ReferenceValue):
             error("driver_role", row.operation, "session must be a request Reference")
-        expected_sources = set(first_body_outcome_operations(body, operations, start))
+        expected_sources = set(facts.first_outcomes(body.id, start))
         sources = [successor.source for successor in op.terminator.successors]
         if len(set(sources)) != len(sources) or set(sources) != expected_sources:
             error("driver_outcomes", row.operation, "successors must cover exactly the first source outcomes")
@@ -322,7 +468,7 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
         if any(argument(op, index) is None for index in role_indices):
             error("driver_gate_roles", row.operation, "gate role index exceeds invoke inputs")
             continue
-        receiver_copy, scheduler_copy = role_copies.get(region_id, (set(), set()))
+        receiver_copy, scheduler_copy = facts.role_copies(region_id) if region_id in role_regions else ((), ())
         if gate_scheduler.value not in scheduler_copy:
             error("driver_scheduler_copy", row.operation, "scheduler must copy the fixed interface scheduler")
         if interface.receiver_kind is DriverReceiverKind.BODY:
@@ -370,4 +516,147 @@ def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):
     return tuple(errors)
 
 
-__all__ = ["driver_errors", "body_drive_target", "body_outcome_uses"]
+def no_body_errors(graph, *, facts, incoming_edges):
+    """Check the private mark and predicate after driver/body validation."""
+    if facts.graph is not graph:
+        raise ValueError("driver facts must index the exact program graph")
+    if not graph.created_close_tests and not graph.no_body_finishes:
+        return ()
+
+    from .lifecycle_validation import _body_update_errors
+
+    errors = []
+
+    def error(code, path, message):
+        errors.append((code, str(path), message))
+
+    values, operations, blocks = facts.values, facts.operations, facts.blocks
+    owners, operation_blocks = facts.block_regions, facts.operation_blocks
+    interfaces = facts.interfaces
+    scopes = {row.region for row in graph.driver_lifecycles}
+    predicates = {}
+
+    def scope(operation, path):
+        region = owners[operation_blocks[operation.id]]
+        interface = interfaces.get(region)
+        if region not in scopes or interface is None:
+            error("no_body_scope", path, "no-body declarations require their owning enabled driver scope")
+            return None
+        return interface
+
+    for row in graph.created_close_tests:
+        op = operations.get(row.operation)
+        if op is None:
+            error("no_body_test_operation", row.operation, "test must name its real operation")
+            continue
+        interface = scope(op, row.operation)
+        if interface is None:
+            continue
+        own = {use.id: use for use in op.uses}
+        receivers, schedulers = facts.role_copies(interface.region)
+
+        def role(identity, expected, kind):
+            use = own.get(identity)
+            valid = use is not None and use.role is kind
+            if expected is ReferenceValue:
+                valid = valid and isinstance(values[use.value], ReferenceValue)
+            else:
+                valid = (valid and isinstance(values[use.value], ProtocolValue)
+                         and values[use.value].protocol is P.RAW_DRIVER_REQUEST)
+            return use if valid else None
+
+        instance = role(row.instance, ReferenceValue, UseRole.REFERENCE)
+        scheduler = role(row.scheduler_request, ProtocolValue, UseRole.PROTOCOL)
+        effective = role(row.effective_request, ProtocolValue, UseRole.PROTOCOL)
+        session = None if row.session is None else role(row.session, ReferenceValue, UseRole.REFERENCE)
+        if (instance is None or scheduler is None or effective is None
+                or scheduler.value not in schedulers):
+            error("no_body_test_roles", row.operation, "test requires actual Reference/RAW roles and fixed scheduler copy")
+        if interface.receiver_kind is DriverReceiverKind.BODY:
+            if (row.session is not None or instance is None or instance.value not in receivers
+                    or effective is None or scheduler is None or effective.value != scheduler.value):
+                error("no_body_test_roles", row.operation, "BODY test uses its fixed instance, independent Uses of the same scheduler, and no session")
+        elif session is None or session.value not in receivers:
+            error("no_body_test_roles", row.operation, "ASYNC_REQUEST test requires its fixed session; body and latent remain actual values")
+
+        result = values.get(row.result)
+        if (op.results != (row.result,) or not isinstance(result, DataValue)
+                or result.data_type != "builtins.bool"
+                or not isinstance(result.origin, OperationResult)
+                or result.origin.operation != op.id):
+            error("no_body_test_result", row.operation, "test defines exactly its own builtins.bool result")
+        if (op.terminator is not None or op.callee is not None or op.call_arguments
+                or op.invoke_arguments or op.completions or not op.effects_complete
+                or set(op.behaviors) != {Behavior.CONTROL, Behavior.READ}):
+            error("no_body_test_shape", row.operation, "predicate is a complete callback-free ordinary read intrinsic")
+        lifecycle = set(interface.lifecycle)
+        locations, state_uses = [], set()
+        for access in op.accesses:
+            locations.append(access.location)
+            state_uses.add(access.before)
+            before = own.get(access.before)
+            if (access.mode is not AccessMode.READ or access.after is not None
+                    or access.full_overwrite or access.footprint.kind is not FootprintKind.WHOLE
+                    or before is None or before.role is not UseRole.STATE_CONTENT
+                    or not isinstance(values[before.value], StateVersionValue)):
+                error("no_body_test_access", row.operation, "predicate only reads whole current lifecycle state")
+        if set(locations) != lifecycle or len(locations) != len(lifecycle):
+            error("no_body_test_access", row.operation, "predicate reads each lifecycle domain exactly once")
+        roles = {row.instance, row.scheduler_request, row.effective_request}
+        if row.session is not None:
+            roles.add(row.session)
+        if set(own) != state_uses | roles:
+            error("no_body_test_uses", row.operation, "predicate owns only its independent roles and access-before Uses")
+        block = blocks[operation_blocks[op.id]]
+        branch = operations[block.operations[-1]]
+        condition = next((use for use in branch.uses
+                          if branch.terminator is not None and use.id == branch.terminator.condition), None)
+        if (len(block.operations) < 2 or block.operations[-2] != op.id
+                or branch.terminator is None or branch.terminator.kind is not TerminatorKind.BRANCH
+                or condition is None or condition.value != row.result):
+            error("no_body_test_branch", row.operation, "test must immediately precede the branch of its own bool")
+        else:
+            if (not branch.effects_complete or set(branch.behaviors) != {Behavior.CONTROL}
+                    or branch.results or branch.accesses or branch.callee is not None
+                    or branch.call_arguments or branch.invoke_arguments or branch.completions):
+                error("no_body_branch_shape", branch.id, "guard branch is complete callback-free control forwarding without writes")
+            predicates[branch.id] = row
+
+    # Only an explicit Finish asserts a mark. A predicate alone never does.
+    for row in graph.no_body_finishes:
+        op = operations.get(row.operation)
+        if op is None:
+            error("no_body_operation", row.operation, "finish must name its real operation")
+            continue
+        interface = scope(op, row.operation)
+        if interface is None:
+            continue
+        branch = operations.get(row.precondition.operation)
+        test = predicates.get(row.precondition.operation)
+        if (row.precondition.successor_index != 0 or branch is None or test is None
+                or owners[operation_blocks[branch.id]] != interface.region):
+            error("no_body_precondition", row.operation, "finish requires its driver's declared predicate branch true edge")
+            continue
+        edge = branch.terminator.successors[0]
+        landing = blocks[edge.block]
+        if (operation_blocks[op.id] != edge.block or landing.operations[0] != op.id
+                or len(incoming_edges[edge.block]) != 1):
+            error("no_body_landing", row.operation, "finish is first on the exact private true landing")
+        own = {use.id: use for use in op.uses}
+        instance = own.get(row.instance)
+        test_op = operations[test.operation]
+        test_owner = next((use.value for use in test_op.uses if use.id == test.instance), None)
+        branch_uses = {use.id: use for use in branch.uses}
+        owner_matches = instance is not None and instance.value == test_owner
+        if instance is not None and instance.value in landing.arguments:
+            actual = edge.arguments[landing.arguments.index(instance.value)]
+            owner_matches = (isinstance(actual, UseID) and actual in branch_uses
+                             and branch_uses[actual].value == test_owner)
+        if (instance is None or instance.role is not UseRole.REFERENCE
+                or not isinstance(values[instance.value], ReferenceValue) or not owner_matches):
+            error("no_body_owner", row.operation, "finish owner must exactly copy this predicate instance")
+        _body_update_errors(op, row.instance, interface, values, error, "no_body")
+    return tuple(errors)
+
+
+__all__ = ["DriverFacts", "body_drive_target", "body_outcome_uses", "driver_errors", "no_body_errors"]

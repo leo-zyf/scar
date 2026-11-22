@@ -271,7 +271,7 @@ def state_as_close_payload_program():
     drive = _operation(graph, commit.outcome.drive)
     values = {value.id: value for value in graph.values}
     source = _operation(graph, commit.outcome.source)
-    from scar.ir.program.driver_flow import body_outcome_uses
+    from scar.ir.program.driver_validation import body_outcome_uses
     source_uses = {use.id: use.value for use in source.uses}
     state_slot = next(number for number, identity in enumerate(body_outcome_uses(source))
         if isinstance(values[source_uses[identity]], StateVersionValue)

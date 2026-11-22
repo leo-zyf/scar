@@ -9,7 +9,6 @@ from enum import Enum
 from .cleanup import CleanupEnter, CleanupReplace, CleanupResume, CleanupRouteTerminator
 from scar.ir.program.cleanup_forward import derive_cleanup_forward
 from .control import ControlScopeKind, PendingDispatchTerminator, ProtocolValueKind as P
-from scar.ir.program.control_validation import derive_pending_facts
 from .ids import BlockID, ControlPortID, ControlScopeID
 from .model import (
     AccessMode, Behavior, BlockArgument, FootprintKind, OperationResult,
@@ -41,7 +40,7 @@ class CleanupFacts:
     routes: dict
 
 
-def analyze_cleanup(graph, *, operation_blocks, dominators):
+def analyze_cleanup(graph, *, operation_blocks, dominators, core=None):
     """Run after core and C0 checks, returning issues and derived query facts."""
     issues = []
     empty = CleanupFacts({}, {}, {})
@@ -56,16 +55,19 @@ def analyze_cleanup(graph, *, operation_blocks, dominators):
              if isinstance(v, ProtocolValue) and v.protocol is P.SAVED_HANDLED_CONTEXT}
     if not (domains or interfaces or actions or routes or saved):
         return [], empty
-    regions = {row.id: row for row in graph.regions}
+    if core is None:
+        from .validation import ProgramCoordinates
+        core = ProgramCoordinates.from_graph(graph)
+    regions = core.regions
     scopes = {row.id: row for row in graph.control_scopes}
-    blocks = {b.id: b for r in graph.regions for b in r.blocks}
-    block_region = {b.id: r.id for r in graph.regions for b in r.blocks}
+    blocks, block_region = core.blocks, core.block_regions
     owners = {b: s.id for s in graph.control_scopes for b in s.blocks}
-    operations = {row.id: row for row in graph.operations}
-    values = {row.id: row for row in graph.values}
+    operations, values = core.operations, core.values
     ports = {row.id: row for row in graph.control_ports}
-    pending = derive_pending_facts(graph)
-    uses = {use.id: use for op in graph.operations for use in op.uses}
+    pending = core.pending_facts()
+
+    def used_value(identity):
+        return core.uses[identity][1].value
 
     def error(code, path, message):
         issues.append((code, path, message))
@@ -232,13 +234,13 @@ def analyze_cleanup(graph, *, operation_blocks, dominators):
                 or not isinstance(route.terminator, CleanupRouteTerminator)):
             error("cleanup_corridor", action.operation, "post-pop target is a route-only block directly in the parent scope")
             continue
-        route_value = uses[route.terminator.pending].value
+        route_value = used_value(route.terminator.pending)
         if route_value not in target.arguments:
             error("cleanup_corridor_selector", action.operation, "corridor selector is an actual target argument")
             continue
         actual = edge.arguments[target.arguments.index(route_value)]
         selected = action.replacement if isinstance(action, CleanupReplace) else action.pending
-        if uses[actual].value != uses[selected].value:
+        if used_value(actual) != used_value(selected):
             error("cleanup_corridor_pending", action.operation, "exit must forward the exact selected pending value")
     if issues:
         return issues, empty
@@ -288,7 +290,7 @@ def analyze_cleanup(graph, *, operation_blocks, dominators):
     for operation in routes.values():
         source = operation_blocks[operation.id]
         term = operation.terminator
-        selected = uses[term.pending].value
+        selected = used_value(term.pending)
         route_steps = []
         for edge in term.successors:
             port = ports[edge.port]
@@ -317,16 +319,16 @@ def analyze_cleanup(graph, *, operation_blocks, dominators):
                 if not isinstance(target_action, CleanupReplace) or target_action.cleanup != cleanup:
                     error("cleanup_route_next", operation.id, "new transfer must replace the active outer cleanup's saved transfer")
                 else:
-                    formal = uses[target_action.replacement].value
+                    formal = used_value(target_action.replacement)
             else:
                 if len(target.operations) != 1 or not isinstance(first.terminator, PendingDispatchTerminator):
                     error("cleanup_route_final", operation.id, "completed obligations go to a final C0 dispatch-only block")
                 else:
-                    formal = uses[first.terminator.pending].value
+                    formal = used_value(first.terminator.pending)
             if formal is not None:
                 if formal not in target.arguments:
                     error("cleanup_route_selector", operation.id, "next-step pending selector must be a target block parameter")
-                elif uses[edge.arguments[target.arguments.index(formal)]].value != selected:
+                elif used_value(edge.arguments[target.arguments.index(formal)]) != selected:
                     error("cleanup_route_pending", operation.id, "route forwards its exact selected pending, without repacking")
             route_steps.append(CleanupRouteStep(edge.port, required, cleanup, edge.block))
         steps[operation.id] = tuple(route_steps)
@@ -361,12 +363,12 @@ def analyze_cleanup(graph, *, operation_blocks, dominators):
     for action in exits.values():
         facts = forward[action.cleanup]
         original = action.saved_pending if isinstance(action, CleanupReplace) else action.pending
-        if uses[original].value not in facts.pending:
+        if used_value(original) not in facts.pending:
             error("cleanup_pending_forward", action.operation, "exit must consume this entry's original pending, not an equal port or repack")
-        if uses[action.context].value not in facts.context:
+        if used_value(action.context) not in facts.context:
             error("cleanup_context_forward", action.operation, "restore must consume this activation's saved context")
         if isinstance(action, CleanupReplace):
-            replacement = uses[action.replacement].value
+            replacement = used_value(action.replacement)
             if replacement not in facts.fresh:
                 error("cleanup_replacement_fresh", action.operation, "replacement must be freshly constructed after this entry on all incoming paths")
             for port_id in pending[replacement].ports:

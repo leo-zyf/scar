@@ -237,7 +237,7 @@ def test_supplied_resume_rows_outside_the_canonical_slot_inventory_are_rejected(
     from scar.ir.program.ids import OperationID, ProtocolScopeID
     from scar.ir.program.protocols import DriverSubject, ProtocolClause, ProtocolOperation, ProtocolProfile, ProtocolScope
     from scar.ir.program.resumption import ResumeSlotKind
-    from scar.ir.program.driver_flow import body_drive_target
+    from scar.ir.program.driver_validation import body_drive_target
     from tests.fixtures.program_driver_graphs import driver_program
     from tests.fixtures.program_protocol_graphs import _source_gap
     if wrong_site == "start":
