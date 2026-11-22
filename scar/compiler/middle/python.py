@@ -29,7 +29,7 @@ def _prepare_loop_lowering(proof, folder, proof_ref, source_motion, schedule_ref
     specialization = dict(input_shapes=schedule['input_shapes'], trip_count=schedule['trip_count'],
                           input_layout='C_CONTIGUOUS')
     if composite:
-        from scar.compiler.composite_invariant_loop import _loop_interface
+        from scar.compiler.invariant_loop_runtime import _loop_interface
 
         interface = _loop_interface(proof, execution_specialization=specialization,
                                     source_motion=source_motion)

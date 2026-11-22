@@ -59,7 +59,7 @@ def test_composed_invariant_dependencies_keep_nested_code_and_global_routes():
 def test_composite_boundary_checks_nested_globals_and_zero_trip_alias(tmp_path):
     """The stub observes guard admission; real C++ runs are separate artifacts."""
     import numpy as np
-    from scar.compiler.composite_invariant_loop import guarded_composite_invariant_loop
+    from scar.compiler.invariant_loop_runtime import guarded_composite_invariant_loop
     from scar.compiler.runtime import SourceMismatch
     path=tmp_path/'program.py'
     path.write_bytes((Path(__file__).parents[1]/'workloads/pipeline_licm_program.py').read_bytes())
@@ -126,7 +126,7 @@ def test_composite_movement_consumes_pinned_materials_effects_and_optimized_plac
     from scar.analysis.array_call_effects import derive_composite_call_effects
     from scar.analysis.array_motion import derive_array_motion
     from scar.analysis.array_motion_legality import derive_array_motion_legality
-    from scar.compiler.composite_invariant_loop import _loop_interface
+    from scar.compiler.invariant_loop_runtime import _loop_interface
     from scar.compiler.invariant_loop_runtime import _require_source_movement_binding
     from scar.compiler.runtime import SourceMismatch
     from scar.compiler.pipeline_loop_frontend import (canonical_composite_invariant_motion_interface,
