@@ -27,10 +27,10 @@ class RootInterfaceIndex:
         self.source=source;self.syntax=source.context.syntax;self.root=self.syntax.root
         self.scope=source.context.material.root_context.environment
         self.kind=self.syntax.nodes[self.root].constructor
-        self.annotations=tuple(i for i,node in enumerate(self.syntax.nodes) if node.constructor=='AnnAssign'
-            and source.context.entry_context(i).environment==self.scope)
-        self.publications=tuple(p for i in self.annotations if (p:=source.statements.annotation_publication(
-            i,ExceptionABI.EXCEPTION_WORLD)) is not None)
+        annotations = source.scope_annotations
+        self.annotations = annotations.by_scope[self.scope]
+        self.publications = tuple(publication for occurrence in self.annotations
+            if (publication := annotations.publication(occurrence, ExceptionABI.EXCEPTION_WORLD)) is not None)
         self.deferred=any(p.publication is P.AnnotationPublicationKind.DEFERRED for p in self.publications)
         self.future=False
         if self.kind in ('Module','Interactive'):

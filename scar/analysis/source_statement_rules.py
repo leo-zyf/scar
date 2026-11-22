@@ -31,7 +31,7 @@ def _binding(b, root, occurrence, action, state, value=None):
     site = b.auxiliary(occurrence, 'id', P.ProductionDispositionKind.ROLE_PORT)
     b.auxiliary(occurrence, 'ctx', P.ProductionDispositionKind.MARKER)
     field = 'read_plan' if action is P.BindingActionKind.READ else 'write_target'
-    ports = [p for p in b.rules._ports.get(site, ()) if getattr(b.rules.source.frontend.bindings.ports[p], field) is not None]
+    ports = [p for p in b.rules.source.role_ports(site) if getattr(b.rules.source.frontend.bindings.ports[p], field) is not None]
     _require(len(ports) == 1, 'BINDING_INTERFACE_FRONTIER', str(site), 'target requires one original namespace access')
     return b.emit(root, P.AccessBinding(action, ports[0]), (state,) if value is None else (value, state),
         (_REF, b.world) if value is None else (b.world,), source=P.ProductionOccurrence(occurrence))

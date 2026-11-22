@@ -114,36 +114,7 @@ class SourceStatementInterfaceIndex:
         return not constant and parts[2].kind != 'NODE'
 
     def annotation_publication(self, occurrence, exception_abi):
-        _require(self.nodes[occurrence].constructor == 'AnnAssign', occurrence, 'expected annotated assignment')
-        annotation = P.SlotRef(occurrence, 'FIELD', self.roles.fields['AnnAssign']['annotation'])
-        context = self.source.context.context_at_slot(annotation).state
-        region = self.source.context.material.regions[context.region]
-        simple = self.roles.field(occurrence, 'simple').scalar.to_python()
-        if region.suppression_reason in ('FUNCTION_LOCAL_ANNOTATION', 'NON_SIMPLE_ANNOTATION'):
-            return None
-        target = self.roles.field(occurrence, 'target').reference
-        _require(simple == 1 and self.nodes[target].constructor == 'Name', occurrence,
-            'published variable annotation requires a simple original name')
-        name = P.SlotRef(target, 'FIELD', self.roles.fields['Name']['id'])
-        if region.suppression_reason == 'FUTURE_ANNOTATION_STRINGIZED':
-            return P.PublishAnnotation(annotation, name, P.AnnotationPublicationKind.STRINGIZED, False, exception_abi)
-        _require(region.eligibility == 'ELIGIBLE' and region.kind == 'VARIABLE_ANNOTATION',
-            occurrence, 'unknown original variable annotation policy')
-        environment = self.source.context.entry_context(occurrence).environment
-        scope = self.source.context.material.scopes[environment]
-        _require(scope.kind in ('ROOT_EXEC', 'ROOT_INTERACTIVE', 'CLASS'), occurrence,
-            'published annotation requires an original module/class namespace')
-        conditional = scope.kind != 'CLASS'
-        current = occurrence
-        compound = frozenset(('If', 'While', 'For', 'AsyncFor', 'Try', 'TryStar', 'With', 'AsyncWith', 'Match'))
-        while current in self.roles.parents:
-            edge = self.roles.parents[current]
-            parent = self.nodes[edge.occurrence].constructor
-            if parent in ('ClassDef', 'FunctionDef', 'AsyncFunctionDef'):
-                break  # compiler conditional depth restarts in each code scope
-            conditional |= parent in compound
-            current = edge.occurrence
-        return P.PublishAnnotation(annotation, name, P.AnnotationPublicationKind.DEFERRED, conditional, exception_abi)
+        return self.source.scope_annotations.publication(occurrence, exception_abi)
 
     def import_request(self, occurrence, exception_abi, alias=None):
         kind = self.nodes[occurrence].constructor

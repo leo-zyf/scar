@@ -29,8 +29,7 @@ from scar.analysis.source_pattern_interfaces import PatternInterfaceIndex
 from scar.analysis.source_root_interfaces import RootInterfaceIndex
 from scar.analysis.source_evaluation_interfaces import EvaluationInterfaceIndex
 from scar.analysis.source_class_namespace_interfaces import ClassNamespaceIndex
-from scar.analysis.source_scope_annotation_interfaces import ScopeAnnotationIndex
-from scar.analysis.source_annotation_state_interfaces import AnnotationStateIndex
+from scar.analysis.source_scope_annotation_interfaces import AnnotationStateIndex, ScopeAnnotationIndex
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
 from scar.analysis.source_compilation_contexts import CompilationFlowIndex, validate_flow
 from scar.analysis.source_core_interfaces import validate_core_interfaces
@@ -77,7 +76,7 @@ def production_type_catalog():
                  'scar.analysis.source_pattern_interfaces',
                  'scar.analysis.source_root_interfaces','scar.analysis.source_evaluation_interfaces','scar.analysis.source_syntax',
                  'scar.analysis.source_class_namespace_interfaces',
-                 'scar.analysis.source_scope_annotation_interfaces','scar.analysis.source_annotation_state_interfaces',
+                 'scar.analysis.source_scope_annotation_interfaces',
                  'scar.analysis.source_compilation_contexts',
                  'scar.analysis.source_core_interfaces'):
         modules[name] = sha256(Path(sys.modules[name].__file__).read_bytes()).hexdigest()

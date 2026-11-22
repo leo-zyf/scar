@@ -79,7 +79,7 @@ _RULE_MODULES = ('static/lowering/source_displays.py', 'static/lowering/source_s
                  'source_root_rules.py', 'source_evaluation_interfaces.py',
                  'source_evaluation_rules.py', 'source_class_namespace_interfaces.py',
                  'source_class_namespace_rules.py',
-                 'source_scope_annotation_interfaces.py', 'source_annotation_state_interfaces.py',
+                 'source_scope_annotation_interfaces.py',
                  'annotation_state.py', 'source_compilation_contexts.py',
                  'source_core_interfaces.py')
 
@@ -125,9 +125,6 @@ class SourceExpressionRules:
         limits = re.findall(rb'^#define\s+_PY_STACK_USE_GUIDELINE\s+([0-9]+)\s*$', raw, re.MULTILINE)
         _require(len(limits) == 1 and int(limits[0]) > 0, 'COMPILER_PROFILE', str(header), 'no unique stack guideline')
         self.call_profile = dict(header=str(header), header_sha256=sha256(raw).hexdigest(), stack_guideline=int(limits[0]))
-        self._ports = {}
-        for ordinal, port in enumerate(source.frontend.roles.ports):
-            self._ports.setdefault(port.site, []).append(ordinal)
         for constructor, expected in {**_FIELDS, **_AUX_FIELDS}.items():
             actual = tuple(source.roles.fields[constructor])
             _require(actual == expected, 'SOURCE_SCHEMA', constructor, 'original field grammar differs from the rule')
@@ -558,7 +555,7 @@ class _Builder:
                 P.ProductionPurpose.STORE: (P.BindingActionKind.WRITE, 'write_target'),
                 P.ProductionPurpose.DELETE: (P.BindingActionKind.DELETE, 'delete_target'),
             }[self.purpose]
-            ports = [p for p in self.rules._ports.get(self.site('id'), ())
+            ports = [p for p in self.rules.source.role_ports(self.site('id'))
                      if getattr(self.rules.source.frontend.bindings.ports[p], interface) is not None]
             _require(len(ports) == 1, 'BINDING_INTERFACE_FRONTIER', str(self.occurrence),
                      'no unique original namespace access for this Name/purpose')

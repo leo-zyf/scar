@@ -8,6 +8,7 @@ parsing, target execution or query capture-layout reuse is involved.
 """
 import ast
 import dis
+from collections import defaultdict
 from copy import deepcopy
 from types import CodeType
 from scar.analysis.source_syntax import _restore_ast
@@ -15,10 +16,10 @@ from scar.ir.program import source_productions as P
 from scar.ir.program.protocol_signatures import ExceptionABI
 
 
-def _require(condition,path,detail):
+def _require(condition, path, detail, *, code='SCOPE_ANNOTATION_INTERFACE'):
     if not condition:
         from scar.analysis.source_productions import ProductionError
-        raise ProductionError('SCOPE_ANNOTATION_INTERFACE',str(path),detail)
+        raise ProductionError(code, str(path), detail)
 
 
 def _codes(root):
@@ -30,9 +31,97 @@ def _codes(root):
         pending.extend(c for c in item.co_consts if type(c) is CodeType)
 
 
+_CONDITIONAL_CONTAINERS = frozenset(
+    ('If', 'While', 'For', 'AsyncFor', 'Try', 'TryStar', 'With', 'AsyncWith', 'Match'))
+
+
 class ScopeAnnotationIndex:
-    def __init__(self,source):
-        self.source=source;self._interfaces=None
+    """Own variable annotation sites, publication contracts and emission queries."""
+
+    def __init__(self, source):
+        self.source = source
+        self._interfaces = None
+        self._publications = {}
+        self._deferred_publications = None
+        self._creators = {}
+        by_scope = defaultdict(list)
+        for occurrence, node in enumerate(source.context.syntax.nodes):
+            if node.constructor == 'AnnAssign':
+                creator = source.context.entry_context(occurrence).environment
+                self._creators[occurrence] = creator
+                by_scope[creator].append(occurrence)
+        self.by_scope = defaultdict(tuple, {creator: tuple(occurrences)
+            for creator, occurrences in by_scope.items()})
+
+    def publication(self, occurrence, exception_abi):
+        # Only exact original coordinates and enum values share a cache key.
+        if type(occurrence) is not int or type(exception_abi) is not ExceptionABI:
+            return self._publication(occurrence, exception_abi)
+        key = occurrence, exception_abi
+        if key not in self._publications:
+            self._publications[key] = self._publication(occurrence, exception_abi)
+        return self._publications[key]
+
+    def _publication(self, occurrence, exception_abi):
+        source = self.source
+        roles, nodes = source.roles, source.context.syntax.nodes
+        _require(nodes[occurrence].constructor == 'AnnAssign', occurrence,
+            'expected annotated assignment', code='STATEMENT_INTERFACE')
+        annotation = P.SlotRef(occurrence, 'FIELD', roles.fields['AnnAssign']['annotation'])
+        context = source.context.context_at_slot(annotation).state
+        region = source.context.material.regions[context.region]
+        simple = roles.field(occurrence, 'simple').scalar.to_python()
+        if region.suppression_reason in ('FUNCTION_LOCAL_ANNOTATION', 'NON_SIMPLE_ANNOTATION'):
+            return None
+        target = roles.field(occurrence, 'target').reference
+        _require(simple == 1 and nodes[target].constructor == 'Name', occurrence,
+            'published variable annotation requires a simple original name', code='STATEMENT_INTERFACE')
+        name = P.SlotRef(target, 'FIELD', roles.fields['Name']['id'])
+        if region.suppression_reason == 'FUTURE_ANNOTATION_STRINGIZED':
+            return P.PublishAnnotation(annotation, name, P.AnnotationPublicationKind.STRINGIZED, False, exception_abi)
+        _require(region.eligibility == 'ELIGIBLE' and region.kind == 'VARIABLE_ANNOTATION', occurrence,
+            'unknown original variable annotation policy', code='STATEMENT_INTERFACE')
+        environment = self._creators[occurrence]
+        scope = source.context.material.scopes[environment]
+        _require(scope.kind in ('ROOT_EXEC', 'ROOT_INTERACTIVE', 'CLASS'), occurrence,
+            'published annotation requires an original module/class namespace', code='STATEMENT_INTERFACE')
+        conditional = scope.kind != 'CLASS'
+        current = occurrence
+        while current in roles.parents:
+            edge = roles.parents[current]
+            parent = nodes[edge.occurrence].constructor
+            if parent in ('ClassDef', 'FunctionDef', 'AsyncFunctionDef'):
+                break  # compiler conditional depth restarts in each code scope
+            conditional |= parent in _CONDITIONAL_CONTAINERS
+            current = edge.occurrence
+        return P.PublishAnnotation(annotation, name, P.AnnotationPublicationKind.DEFERRED, conditional, exception_abi)
+
+    def deferred_publications(self):
+        if self._deferred_publications is None:
+            self._deferred_publications = {occurrence: publication for occurrence in self._creators
+                if (publication := self.publication(occurrence, ExceptionABI.EXCEPTION_WORLD)) is not None
+                and publication.publication is P.AnnotationPublicationKind.DEFERRED}
+        return self._deferred_publications
+
+    def restore_source_objects(self):
+        """Build a working AST for one marker query from the accepted occurrences."""
+        syntax, roles = self.source.context.syntax, self.source.roles
+        tree = _restore_ast(syntax.root, syntax.nodes)
+        objects = {syntax.root: tree}
+        pending = [syntax.root]
+        while pending:
+            occurrence = pending.pop()
+            node, restored = syntax.nodes[occurrence], objects[occurrence]
+            for name, value in zip(roles.fields[node.constructor], node.fields):
+                if value.kind == 'NODE':
+                    objects[value.reference] = getattr(restored, name)
+                    pending.append(value.reference)
+                elif value.kind == 'LIST':
+                    for member, child in zip(value.items, getattr(restored, name)):
+                        if member.kind == 'NODE':
+                            objects[member.reference] = child
+                            pending.append(member.reference)
+        return tree, objects
 
     def _emissions(self,code,markers,level):
         by_scope={}
@@ -117,24 +206,11 @@ class ScopeAnnotationIndex:
         return query[syntax.root]
 
     def _collect(self):
-        source=self.source;syntax=source.context.syntax;roles=source.roles
-        publications={}
-        for occurrence,node in enumerate(syntax.nodes):
-            if node.constructor!='AnnAssign':continue
-            publication=source.statements.annotation_publication(occurrence,ExceptionABI.EXCEPTION_WORLD)
-            if publication is not None and publication.publication is P.AnnotationPublicationKind.DEFERRED:
-                publications[occurrence]=publication
-        if not publications:return {}
-        # Restore once, then pair original field references with their restored
-        # objects. Temporary object identities never escape into the IR.
-        tree=_restore_ast(syntax.root,syntax.nodes);objects={syntax.root:tree};pending=[syntax.root]
-        while pending:
-            original=pending.pop();node=syntax.nodes[original];restored=objects[original]
-            for name,value in zip(roles.fields[node.constructor],node.fields):
-                if value.kind=='NODE':objects[value.reference]=getattr(restored,name);pending.append(value.reference)
-                elif value.kind=='LIST':
-                    for item,other in zip(value.items,getattr(restored,name)):
-                        if item.kind=='NODE':objects[item.reference]=other;pending.append(item.reference)
+        source, syntax = self.source, self.source.context.syntax
+        publications = self.deferred_publications()
+        if not publications:
+            return {}
+        tree, objects = self.restore_source_objects()
         # Reserve markers absent from all original compiled constants, including
         # folded tuples/bytes, for every supported target optimization policy.
         constants=set()
@@ -194,3 +270,65 @@ class ScopeAnnotationIndex:
             and any(e.source==site and e.registration==reference for e in request.variants[reference.optimization_level].entries),
             reference,'registration must identify a source-bound compiler/template emission of this slot')
         return reference
+
+
+def _require_state(condition, path, detail):
+    _require(condition, path, detail, code='ANNOTATION_STATE_INTERFACE')
+
+
+class AnnotationStateIndex:
+    """Project namespace access and native registration inputs for a publication."""
+
+    def __init__(self,source):
+        self.source=source;self._parameters={}
+
+    def access(self,creator,name,*,request=False):
+        source=self.source;kind=source.context.material.scopes[creator].kind
+        _require_state(kind in ('ROOT_EXEC','ROOT_INTERACTIVE','CLASS'),creator,'annotation state requires its original class/root scope')
+        if name is P.AnnotationStateName.CONDITIONAL and kind=='CLASS':
+            rows=[(i,r) for i,r in enumerate(source.frontend.bindings.implicit)
+                if r.scope==creator and source.frontend.namespace.name(r.name)==name.value and r.binding is not None]
+            _require_state(len(rows)==1,creator,'class registry requires its original implicit protocol binding')
+            index,row=rows[0];binding=source.frontend.bindings.bindings[row.binding]
+            _require_state(binding.owner==creator and binding.domain=='CLASS_PROTOCOL',creator,'registry must use the original class protocol cell')
+            return P.AnnotationStateAccess(creator,P.AnnotationLookupKind.CLASS_PROTOCOL_CELL,name,row.binding,index,row.read_plan)
+        lookup=P.AnnotationLookupKind.GLOBALS_CHAIN if request else P.AnnotationLookupKind.LOCALS_CHAIN
+        return P.AnnotationStateAccess(creator,lookup,name)
+
+    def publication_access(self,publication):
+        scope=self.source.context.entry_context(publication.annotation.occurrence).environment
+        name=(P.AnnotationStateName.ANNOTATIONS if publication.publication is P.AnnotationPublicationKind.STRINGIZED
+            else P.AnnotationStateName.CONDITIONAL)
+        return self.access(scope,name)
+
+    def request_access(self,scope):
+        creator=self.source.context.material.scopes[scope].parent
+        return self.access(creator,P.AnnotationStateName.CONDITIONAL,request=True)
+
+    def key(self,publication):
+        source=self.source
+        declarations = source.frontend.declarations
+        names = {declarations.names[name].value for ordinal in source.role_ports(publication.name)
+            if (name := declarations.ports[ordinal].name) is not None}
+        _require_state(len(names)==1,publication.name,'annotation key needs its original projected declaration name')
+        return names.pop()
+
+    def parameter(self,publication):
+        _require_state(publication.publication is P.AnnotationPublicationKind.DEFERRED and publication.conditional_registration,
+            publication.annotation,'only conditional declarations have compiler registration indices')
+        if publication in self._parameters:return self._parameters[publication]
+        scope=self.source.context.context_at_slot(publication.annotation).state.environment
+        request=self.source.scope_annotations.request(scope);variants=[]
+        for variant in request.variants:
+            selected=tuple(e.registration for e in variant.entries if e.source==publication.annotation and e.registration is not None)
+            _require_state(bool(selected),publication.annotation,'compiler query omitted a conditional source registration')
+            status,sites,unverified=self.source.compilation_contexts.sites(scope,variant.optimization_level,emitted=variant.emitted_in_original_unit)
+            variants.append(P.AnnotationEmissionVariant(variant.optimization_level,selected,variant.emitted_in_original_unit,
+                tuple(site for site in sites if site.registration in selected),status,unverified))
+        result=P.AnnotationEmissionParameter(publication,tuple(variants));self._parameters[publication]=result
+        return result
+
+    def verify_access(self,access,*,request=False):
+        _require_state(access==self.access(access.scope,access.name,request=request),access,
+            'namespace/cell source or original implicit/read-plan reference differs')
+        return access

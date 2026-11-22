@@ -63,7 +63,7 @@ def _implementation():
         'analysis/source_evaluation_interfaces.py', 'analysis/source_evaluation_rules.py',
         'analysis/source_class_namespace_interfaces.py', 'analysis/source_class_namespace_rules.py',
         'analysis/source_scope_annotation_interfaces.py',
-        'analysis/source_annotation_state_interfaces.py','analysis/annotation_state.py',
+        'analysis/annotation_state.py',
         'analysis/source_compilation_contexts.py',
         'analysis/source_core_interfaces.py',
         'analysis/source_syntax.py', 'analysis/source_materials.py',

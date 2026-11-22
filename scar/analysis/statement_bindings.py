@@ -20,7 +20,7 @@ def _bind_definition(b,root,value,world):
         world,=b.evaluate(root,site,world,P.ProductionPurpose.STORE,value)
     else:
         b.mark('name',P.ProductionDispositionKind.ROLE_PORT)
-        ports=[p for p in b.rules._ports.get(site,())
+        ports=[p for p in b.rules.source.role_ports(site)
             if b.rules.source.frontend.bindings.ports[p].write_target is not None]
         _require(len(ports)==1,'BINDING_INTERFACE_FRONTIER',str(site),'class declaration needs one original name write port')
         world,=b.emit(root,P.AccessBinding(P.BindingActionKind.WRITE,ports[0]),(value,world),(b.world,),source=site)
@@ -141,7 +141,7 @@ def emit_function_definition(b,root,state):
     for site,decorator in reversed(decorators):
         function,state=b.emit(root,P.ApplyDecorator(site,b.rules.exception_abi),
             (decorator,function,state),(_REF,b.world),source=site)
-    ports=[p for p in b.rules._ports.get(b.site('name'),())
+    ports=[p for p in b.rules.source.role_ports(b.site('name'))
         if b.rules.source.frontend.bindings.ports[p].write_target is not None]
     _require(len(ports)==1,'BINDING_INTERFACE_FRONTIER',str(b.site('name')),'function definition needs one original name write port')
     state,=b.emit(root,P.AccessBinding(P.BindingActionKind.WRITE,ports[0]),(function,state),(b.world,),source=b.site('name'))
@@ -203,7 +203,7 @@ def _fields(b, alias):
 def _bind(b, root, alias, value, world):
     name, renamed = _fields(b, alias)
     site = name if b.value(renamed).scalar.to_python() is None else renamed
-    ports = [p for p in b.rules._ports.get(site, ())
+    ports = [p for p in b.rules.source.role_ports(site)
         if b.rules.source.frontend.bindings.ports[p].write_target is not None]
     _require(len(ports) == 1, 'BINDING_INTERFACE_FRONTIER', str(site), 'import requires one original namespace write target')
     world, = b.emit(root, P.AccessBinding(P.BindingActionKind.WRITE, ports[0]),

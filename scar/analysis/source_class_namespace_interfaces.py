@@ -19,9 +19,7 @@ class ClassNamespaceIndex:
         self.source=source;self.scopes=source.context.material.scopes;self.nodes=source.context.syntax.nodes
         self.resolutions={(r.scope,source.frontend.namespace.name(r.name)):i for i,r in enumerate(source.frontend.bindings.resolutions)}
         self._qualnames={};self._attributes=None
-        self.annotations=defaultdict(list)
-        for i,node in enumerate(self.nodes):
-            if node.constructor=='AnnAssign':self.annotations[source.context.entry_context(i).environment].append(i)
+        self.annotations = source.scope_annotations.by_scope
 
     def access(self,interface,name,action):
         _require(name in NAMES and action in (P.BindingActionKind.READ,P.BindingActionKind.WRITE)
@@ -103,5 +101,5 @@ class ClassNamespaceIndex:
 
     def deferred_annotations(self,scope):
         if self.source.roots.future:return False
-        return any(self.source.statements.annotation_publication(i,ExceptionABI.EXCEPTION_WORLD) is not None
+        return any(self.source.scope_annotations.publication(i, ExceptionABI.EXCEPTION_WORLD) is not None
             for i in self.annotations[scope])

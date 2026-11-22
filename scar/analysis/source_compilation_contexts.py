@@ -5,11 +5,9 @@ import dis
 import json
 from hashlib import sha256
 from types import CodeType
-from scar.analysis.source_syntax import _restore_ast
 from scar.ir.literals import PythonLiteral
 from scar.ir.record_codec import encode
 from scar.ir.program import source_productions as P
-from scar.ir.program.protocol_signatures import ExceptionABI
 from dataclasses import fields
 from functools import lru_cache
 
@@ -91,21 +89,12 @@ class CompilationContextIndex:
         self.source=source;self._contexts=None
 
     def _collect(self):
-        source=self.source;syntax=source.context.syntax;roles=source.roles
-        publications={}
-        for occurrence,node in enumerate(syntax.nodes):
-            if node.constructor!='AnnAssign':continue
-            pub=source.statements.annotation_publication(occurrence,ExceptionABI.EXCEPTION_WORLD)
-            if pub is not None and pub.publication is P.AnnotationPublicationKind.DEFERRED:publications[occurrence]=pub
-        if not publications:return {}
-        tree=_restore_ast(syntax.root,syntax.nodes);objects={syntax.root:tree};pending=[syntax.root]
-        while pending:
-            current=pending.pop();node=syntax.nodes[current];obj=objects[current]
-            for name,value in zip(roles.fields[node.constructor],node.fields):
-                if value.kind=='NODE':objects[value.reference]=getattr(obj,name);pending.append(value.reference)
-                elif value.kind=='LIST':
-                    for member,child in zip(value.items,getattr(obj,name)):
-                        if member.kind=='NODE':objects[member.reference]=child;pending.append(member.reference)
+        source, syntax = self.source, self.source.context.syntax
+        annotations = source.scope_annotations
+        publications = annotations.deferred_publications()
+        if not publications:
+            return {}
+        tree, objects = annotations.restore_source_objects()
         original=[compile(tree,source.input.path,syntax.mode,dont_inherit=True,optimize=i) for i in (0,1,2)]
         occupied={b for root in original for _,unit in code_paths(root) for c in unit.co_consts for b in _marker_values(c)}
         markers={}
