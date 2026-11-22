@@ -224,11 +224,12 @@ def _cpu_ids(value,field):
 
 def _scope_domains(schedule,graph,target_ref):
     """Replay new source-scoped domains; absence keeps legacy behavior exact."""
-    from scar.analysis.scope_demands import SCHEMA,derive_serial_scope_demands
-    proofs=[(i,row)for i,row in enumerate(schedule.temporal.source_refs)if row.get('schema')==SCHEMA]
-    if not proofs:return None
-    if len(proofs)!=1:raise ValueError('one original serial scope demand proof required')
-    ordinal,proof=proofs[0]
+    from scar.analysis.scope_demands import SCHEMA, demand_proof, derive_serial_scope_demands
+
+    witness = demand_proof(schedule, SCHEMA)
+    if witness is None:
+        return None
+    ordinal, proof = witness
     if (proof.get('schema_version')!=1 or proof.get('target')!=target_ref
             or type(proof.get('recipe'))is not dict):
         raise ValueError('serial scope demand recipe/target provenance differs')
@@ -237,34 +238,40 @@ def _scope_domains(schedule,graph,target_ref):
             or recipe.get('artifacts',{}).get('target_snapshot')!=target_ref
             or recipe['artifacts'].get('stage_plan')!=proof.get('stage_plan')):
         raise ValueError('serial scope demand proof is not this original recipe/target')
-    if derive_serial_scope_demands(schedule,recipe,graph)!=schedule:
+    if derive_serial_scope_demands(schedule, recipe, graph, source_rule=proof['source_rule']) != schedule:
         raise ValueError('serial scope demands differ from complete source replay')
-    rows=proof.get('occupancies')
-    if type(rows)is not list or len({row['occupancy']for row in rows})!=len(rows):
-        raise ValueError('unique source scope execution domains required')
-    return ordinal,proof,{row['occupancy']:row for row in rows}
+    return ordinal, proof, _indexed_demands(proof)
 
 
 def _workspace_domains(schedule,graph,target_ref):
     """Replay workspace domains from the exact original untimed-cost baseline."""
-    from scar.analysis.workspace_demands import SCHEMA,derive_workspace_demands
+    from scar.analysis.scope_demands import WORKSPACE_PROOF, demand_proof, derive_workspace_demands
     from scar.ir.versioned_schedule import schedule_from_dict
-    proofs=[(i,row)for i,row in enumerate(schedule.temporal.source_refs)if row.get('schema')==SCHEMA]
-    if not proofs:return None
-    if len(proofs)!=1:raise ValueError('one original workspace CPU demand proof required')
-    ordinal,proof=proofs[0]
+
+    witness = demand_proof(schedule, WORKSPACE_PROOF)
+    if witness is None:
+        return None
+    ordinal, proof = witness
     if proof.get('schema_version')!=1 or proof.get('target')!=target_ref:
         raise ValueError('workspace source demand target/version differs')
     parent=schedule_from_dict(read_artifact(proof['parent_schedule']))
     step_plan=read_artifact(proof['stage_plan']);native=read_artifact(proof['native_manifest'])
     replay=derive_workspace_demands(parent,step_plan,native,
         native_reference=proof['native_manifest'],cpp_reference=proof['cpp_source'],
-        workspace_plan_reference=proof['workspace_plan'],parent_schedule_reference=proof['parent_schedule'],target=graph)
+        workspace_plan_reference=proof['workspace_plan'],parent_schedule_reference=proof['parent_schedule'],
+        target=graph, source_rule=proof['source_rule'])
     if replay!=schedule:raise ValueError('workspace CPU domains differ from complete original source replay')
-    rows=proof.get('occupancies')
-    if type(rows)is not list or len({row['occupancy']for row in rows})!=len(rows):
-        raise ValueError('unique workspace source execution domains required')
-    return ordinal,proof,{row['occupancy']:row for row in rows}
+    return ordinal, proof, _indexed_demands(proof)
+
+
+def _indexed_demands(proof):
+    rows = proof.get('occupancies')
+    if type(rows) is not list:
+        raise ValueError('source execution domains must be a list')
+    indexed = {row['occupancy']: row for row in rows}
+    if len(indexed) != len(rows):
+        raise ValueError('unique source execution domains required')
+    return indexed
 
 
 def derive_temporal_resources(schedule,target,*,source_context):

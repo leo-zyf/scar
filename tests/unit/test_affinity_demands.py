@@ -6,7 +6,7 @@ import pytest
 
 from test_temporal_resources import inputs
 from test_versioned_schedule import ordered_state_schedule
-from scar.analysis.affinity_demands import derive_serial_affinity_demands
+from scar.analysis.scope_demands import derive_serial_affinity_demands
 from scar.analysis.implementation_envelope import derive_stateful_envelope
 from scar.analysis.schedule_time import attach_task_time
 from scar.analysis.target_graph import build_target_graph

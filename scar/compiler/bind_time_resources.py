@@ -166,7 +166,7 @@ def _replay_semantic_time(reference):
     return receipt, saved
 
 
-def _derive_implementation(reference, *, serial_demands=False, scope_cleanup=False):
+def _derive_implementation(reference, *, serial_demands=False, scope_cleanup=False, source_rule=None):
     from scar.analysis.implementation_envelope import derive_stateful_envelope
     if reference.get('schema') != TIME_SCHEMA:
         raise ValueError('implementation refinement requires the original unrefined time receipt')
@@ -198,9 +198,9 @@ def _derive_implementation(reference, *, serial_demands=False, scope_cleanup=Fal
         read_artifact(target)
         if scope_cleanup:
             from scar.analysis.scope_demands import derive_serial_scope_demands
-            schedule = derive_serial_scope_demands(schedule, recipe, Path(target['uri']).parent)
+            schedule = derive_serial_scope_demands(schedule, recipe, Path(target['uri']).parent, source_rule=source_rule)
         else:
-            from scar.analysis.affinity_demands import derive_serial_affinity_demands
+            from scar.analysis.scope_demands import derive_serial_affinity_demands
             schedule = derive_serial_affinity_demands(schedule, recipe, Path(target['uri']).parent)
     read_artifact(reference, json_document=False)
     return base, schedule, _summary(schedule)
@@ -233,6 +233,8 @@ def prepare_implementation_time(time_schedule, out, *, serial_demands=False, sco
 
 
 def _replay_implementation_time(reference):
+    from scar.analysis.scope_demands import SCHEMA as SCOPE_PROOF, demand_proof
+
     result = read_artifact(reference)
     if (result.get('schema'), result.get('schema_version')) != (IMPLEMENTATION_SCHEMA, 1):
         raise ValueError('implementation time preparation receipt required')
@@ -244,8 +246,10 @@ def _replay_implementation_time(reference):
     serial_demands = result.get('resource_refinement') in (SERIAL_AFFINITY, SERIAL_SCOPE)
     if serial_demands and scope_cleanup != (result['resource_refinement'] == SERIAL_SCOPE):
         raise ValueError('scope and legacy resource refinements cannot be mixed')
-    base, replay, summary = _derive_implementation(result['base_time'], serial_demands=serial_demands, scope_cleanup=scope_cleanup)
     saved = schedule_from_dict(read_artifact(result['schedule']))
+    proof = demand_proof(saved, SCOPE_PROOF) if serial_demands and scope_cleanup else None
+    base, replay, summary = _derive_implementation(result['base_time'], serial_demands=serial_demands,
+        scope_cleanup=scope_cleanup, source_rule=None if proof is None else proof[1]['source_rule'])
     if saved != replay or result != _implementation_report(result['base_time'], base, result['schedule'], summary,
             serial_demands=serial_demands, scope_cleanup=scope_cleanup):
         raise ValueError('implementation envelope differs from original source/backend/phase replay')

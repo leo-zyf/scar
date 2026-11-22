@@ -66,6 +66,7 @@
       "id": "M3_SEALED_SCHEDULE",
       "tests": [
         "tests/integration/test_native_stage_handoff.py::test_native_middle_replays_cost_and_schedule",
+        "tests/unit/test_affinity_demands.py",
         "tests/unit/test_execution_recipe.py",
         "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py"
       ]
