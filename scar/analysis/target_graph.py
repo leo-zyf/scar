@@ -131,12 +131,14 @@ def build_target_graph(out,paths=(),*,inventory=None):
 
 
 class TargetHardwareGraph:
-    def __init__(self,path):
+    def __init__(self,path,*,expected=None):
         from scar.analysis.replay_transaction import current_transaction
         self.path=Path(path).absolute()
         raw=(self.path/'result.json').read_bytes()
         self._snapshot=ProviderArtifact(str(self.path/'result.json'),sha256(raw).hexdigest(),
             len(raw),'scar.target-hardware-graph')
+        if expected is not None and self._snapshot != expected:
+            raise ValueError('target hardware snapshot differs from the admitted receipt')
         transaction=current_transaction()
         if transaction is None:
             self.report,self.inventory=self._validated_materials(raw)

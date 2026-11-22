@@ -181,13 +181,30 @@ def entry_sources(artifacts):
 
 
 def entry_cpus(hardware):
-    target = _native_input(hardware)
-    inventory = _native_input(dict(target['inventory'], schema='scar.target-inventory'))
-    available = os.sched_getaffinity(0).intersection(inventory['cpu']['online_cpu_ids'])
-    constraints = inventory['execution_constraints']
-    if constraints.get('allowed_cpu_ids') is not None:
-        available.intersection_update(constraints['allowed_cpu_ids'])
-    return available
+    from scar.analysis.replay_transaction import current_transaction
+    from scar.analysis.target_graph import TargetHardwareGraph
+    from scar.ir.program.target_hardware import CpuExecutor
+
+    target = ProviderArtifact(**hardware)
+
+    def admitted_cpus():
+        graph = TargetHardwareGraph(Path(target.uri).parent, expected=target)
+        cpu_ids = {cpu for executor in graph.resources() if isinstance(executor, CpuExecutor)
+                   for cpu in executor.cpu_ids}
+        cpu_ids.intersection_update(graph.inventory['cpu']['online_cpu_ids'] or ())
+        if graph.report['schema_version'] == 1:
+            allowed = graph.inventory.get('execution_constraints', {}).get('allowed_cpu_ids')
+            if allowed is not None:
+                cpu_ids.intersection_update(allowed)
+        for constraints in graph.constraints():
+            if constraints.allowed_cpu_ids is not None:
+                cpu_ids.intersection_update(constraints.allowed_cpu_ids)
+        return frozenset(cpu_ids)
+
+    transaction = current_transaction()
+    retained = (admitted_cpus() if transaction is None
+                else transaction.memo('scar.native-entry.cpu-admission/v1', target, admitted_cpus))
+    return os.sched_getaffinity(0).intersection(retained)
 
 
 def _read_program(reference):
