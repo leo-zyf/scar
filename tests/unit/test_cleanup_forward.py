@@ -8,9 +8,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from scar.ir.program.cleanup import CleanupEnter, CleanupInterface
-from scar.ir.program.cleanup_forward import (
-    CleanupForwardFacts, _must_forward, derive_cleanup_forward,
-)
+from scar.ir.program.cleanup_forward import CleanupForwardFacts, _must_forward, derive_cleanup_forward
 from scar.ir.program.control import (
     PendingCompletionDefinition, PendingDispatchTerminator, PendingPayload,
     PendingSuccessor, ProtocolValueKind as P, ProtocolValueType,

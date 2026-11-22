@@ -12,12 +12,12 @@ from scar.ir.v2._validation import record_errors
 from scar.ir.v2.values import ValueGraph
 from scar.ir.v2.evidence import EvidenceGraph
 from scar.ir.v2.semantic import SemanticGraph
-from .common import EvidencePoint, MissingEvidence, Unresolved
+from scar.ir.execution.common import EvidencePoint, MissingEvidence, Unresolved
 from .coordinates import (
     CaptureIngress, InitialEntry, OccurrencePhase, OccurrencePoint, ResumeIngress,
     UnresolvedHostThread,
 )
-from .ids import BlockVisitID, OperationOccurrenceID, RegionActivationID
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID, RegionActivationID
 from .model import ExecutionModel
 from .snapshot import ExternalSnapshots, SnapshotError
 
@@ -414,10 +414,10 @@ def _external_stages(ctx):
     """One ordering for construction and a fresh external query snapshot."""
     from scar.ir.execution.source_validation import source_inventory_errors, source_bridge_errors
     from .resource_validation import resource_errors
-    from .work_validation import work_errors
+    from scar.ir.execution.content_validation import work_errors
     from scar.ir.execution.order_validation import order_errors
     from scar.ir.execution.observation_validation import observation_errors
-    from .content_validation import content_errors
+    from scar.ir.execution.content_validation import content_errors
     from scar.ir.execution.production_query import write_errors, produced_errors
     from .validity_validation import validity_errors
     from scar.ir.execution.resumable_identity import body_identity_errors

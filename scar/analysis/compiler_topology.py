@@ -523,7 +523,7 @@ def _profile(native):
             or any(constants.get(name) != value for name, value in expected_types.items())):
         raise ValueError('C3-T requires the reviewed CPython 3.14.7 compiler scope profile/type constants')
     from scar.ir.program import compiler_symbols as topology_ir
-    from scar.analysis import compiler_topology_view as topology_view
+    from scar.analysis import compiler_topology_materials as topology_view
     catalog = _catalog()
     implementation = _digest({name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('analysis', __file__), ('view', topology_view.__file__), ('ir', topology_ir.__file__))})
@@ -549,7 +549,7 @@ def _derive(f0, f1, f2, f3b, c1, f3a, limits):
     if syntax.mode == 'func_type':
         empty['scopes'] = tuple(SourceScopeProjection(i, None, 'GRAMMAR_ONLY') for i in range(len(contexts.scopes)))
         material = CompilerTopologyMaterial(**base, status='SOURCE_ONLY_MODE', **empty)
-        from scar.analysis.compiler_topology_view import CompilerTopologyView
+        from scar.analysis.compiler_topology_materials import CompilerTopologyView
         CompilerTopologyView(roles, contexts, native, material,
             contexts=SourceContextView(syntax, roles, contexts)).verify()
         return material
@@ -568,7 +568,7 @@ def _derive(f0, f1, f2, f3b, c1, f3a, limits):
             status='BUDGET_STOPPED' if error.budget else 'PROJECTION_CONTRADICTION', **empty)
     material = CompilerTopologyMaterial(**base, status='PROJECTED', blocks=tuple(builder.blocks),
         scopes=scopes, rewrites=tuple(builder.rewrites), frontiers=(), visit_steps=builder.visit_steps)
-    from scar.analysis.compiler_topology_view import CompilerTopologyView
+    from scar.analysis.compiler_topology_materials import CompilerTopologyView
     CompilerTopologyView(roles, contexts, native, material, contexts=builder.view).verify()
     return material
 
@@ -593,7 +593,7 @@ def read_compiler_topology(document, f0, f1, f2, f3b, c1, f3a) -> CompilerTopolo
     return material
 
 
-from scar.analysis.compiler_topology_view import CompilerTopologyView
+from scar.analysis.compiler_topology_materials import CompilerTopologyView
 
 __all__ = ['compiler_topology_catalog', 'compiler_topology_document',
     'read_compiler_topology', 'CompilerTopologyView']

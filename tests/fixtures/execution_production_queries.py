@@ -5,7 +5,7 @@ import json
 from scar.ir.execution.common import MissingEvidence, Unresolved
 from scar.ir.execution.content import ContentRead, HostConsumer, ProtocolInterval
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-from scar.ir.execution.ids import ContentReadID, EvidenceInventoryID, WriteAssociationID
+from scar.ir.execution.common import ContentReadID, EvidenceInventoryID, WriteAssociationID
 from scar.ir.execution.inventory import InventoryResolver, build_inventory
 from scar.ir.execution.production import (
     EvidenceInventoryBinding, HostWrite, InventorySourceRef, SourceEdgeRef,

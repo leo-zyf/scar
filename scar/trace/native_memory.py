@@ -25,7 +25,7 @@ from hashlib import sha256
 from pathlib import Path
 from scar.ir.execution.common import EvidencePoint, Unresolved
 from scar.ir.execution.coordinates import ExecutionRun, ProcessInstance
-from scar.ir.execution.ids import ProcessInstanceID, RunID, TargetLifetimeEventID
+from scar.ir.execution.common import ProcessInstanceID, RunID, TargetLifetimeEventID
 from scar.ir.execution.resources import AllocationTarget
 from scar.ir.execution.snapshot import ExternalSnapshots, SnapshotError, external_artifact
 from scar.ir.execution.validity import LifetimeEventKind, TargetLifetimeEvent

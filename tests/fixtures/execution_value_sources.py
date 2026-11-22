@@ -6,7 +6,7 @@ The previous slot fixtures provide the same canonical access constructors.
 from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.program.ids import BlockID, OperationID, UseID, ValueID
 from scar.ir.program.model import (
     AccessMode, Behavior, Block, BlockArgument, CompletionResult, CompletionSignature, CompletionSuccessor,

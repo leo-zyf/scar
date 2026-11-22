@@ -10,9 +10,7 @@ from scar.ir.execution.codec import (
 )
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint, UseRef
-from scar.ir.execution.ids import (
-    NativeHandleLifetimeID, OperationOccurrenceID, ResourceBindingID,
-)
+from scar.ir.execution.common import NativeHandleLifetimeID, OperationOccurrenceID, ResourceBindingID
 from scar.ir.execution.model import ExecutionModel, LegacyOperationRef, OccurrenceEvidenceBinding
 from scar.ir.execution.resources import (
     ActivationHolder, CapacityAt, ConstraintEvidence, EndedAt,
@@ -114,7 +112,7 @@ def test_codec_does_not_open_artifacts_or_perform_graph_validation(base, monkeyp
     monkeypatch.setattr(validation, "validate", forbidden)
     # This occurrence points to a missing visit: a local record is valid,
     # although a separate graph validation must reject the foreign key.
-    from scar.ir.execution.ids import BlockVisitID
+    from scar.ir.execution.common import BlockVisitID
     model = replace(base, operations=(replace(base.operations[0], visit=BlockVisitID("missing")),))
     monkeypatch.setattr("builtins.open", forbidden)
     assert loads(dumps(model)) == model
@@ -154,7 +152,7 @@ def test_wire_rejects_missing_extra_tags_union_and_type_forgery(base, mutation):
         elif mutation == "bad-id-wire":
             identity["wire"] += ".forged"
         else:
-            identity["$id"] = "scar.ir.execution.ids.ValueOccurrenceID"
+            identity["$id"] = "scar.ir.execution.common.ValueOccurrenceID"
     elif mutation in ("bad-enum-class", "bad-enum-value", "primitive-enum"):
         resource = fields["resources"][0]["fields"]
         if mutation == "bad-enum-class":

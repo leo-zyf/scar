@@ -10,7 +10,7 @@ from scar.ir.program.model import (
     TerminatorKind,
 )
 
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import AccessRef
 from .work import ActualCompletionState, InvokeBoundaryStateEffect
 

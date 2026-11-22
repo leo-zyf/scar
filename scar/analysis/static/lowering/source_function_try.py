@@ -183,7 +183,7 @@ class FunctionTryBuilder(StructuredEnvironmentBuilder):
             # Conditional-expression joins use their own ordinary jump helper;
             # derive their actual binding carries with the same canonical
             # fixed-point implementation rather than guessing BOUND.
-            from scar.ir.program.binding_validation import _compute_binding_facts
+            from scar.ir.program.interface_validation import _compute_binding_facts
             from scar.ir.program.model import LocalBindingValue,BlockArgument
             tokens={k:v for k,v in self.values_by_id.items()if type(v)is LocalBindingValue}
             incoming={k:[]for k,v in tokens.items()if type(v.origin)is BlockArgument}

@@ -24,7 +24,7 @@ from scar.ir.v2.ids import (
     ValueVersionID,
 )
 
-from .common import EvidencePoint, FactSource, MissingEvidence, Unresolved
+from scar.ir.execution.common import EvidencePoint, FactSource, MissingEvidence, Unresolved
 from .content import (
     EndpointContent,
     NativeOutputRef,
@@ -35,15 +35,7 @@ from .content import (
 )
 from .coordinates import AccessRef, OperationOccurrenceID, ValueOccurrenceID
 from .coverage import RegionRef
-from .ids import (
-    EvidenceInventoryID,
-    OutcomeProductionID,
-    RunID,
-    SourceBridgeID,
-    WorkOutcomeID,
-    WriteAssociationID,
-    WorkTicketID,
-)
+from scar.ir.execution.common import EvidenceInventoryID, OutcomeProductionID, RunID, SourceBridgeID, WorkOutcomeID, WriteAssociationID, WorkTicketID
 from .resources import AllocationTarget, _exact, _id, _record, _source, _variant
 from .work import InvokeBoundaryStateEffect, MaterializationRef
 

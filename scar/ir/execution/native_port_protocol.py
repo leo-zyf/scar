@@ -13,7 +13,7 @@ import json
 
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.literals import PythonLiteral
-from .ids import ValueOccurrenceID
+from scar.ir.execution.common import ValueOccurrenceID
 from .content import NativeInputRef, NativeOutputRef, ObjectIdentity, VersionRef
 
 PROFILE = "PINNED_ATEN_HELD_REFERENCE_PORT_V1"
@@ -770,7 +770,7 @@ def _native_port_order_errors(program, model, interfaces, run, *, definition_sig
                 if not item['signature'][direction][i]['tensor']:
                     if profile == PROFILE_V2 and direction == 'inputs' and source.get('scalar_input_profile') in SCALAR_INPUT_CAPABILITIES:
                         from .content import DataIdentity
-                        from .common import Unresolved
+                        from scar.ir.execution.common import Unresolved
                         from scar.ir.record_codec import decode
                         from scar.ir.program.providers import ProviderFactReference
                         candidates = by_value.get(values[0].id, ())

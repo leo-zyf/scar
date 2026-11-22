@@ -7,11 +7,7 @@ from scar.ir.execution.common import EvidencePoint, MissingEvidence, Unresolved
 from scar.ir.execution.coordinates import (
     AccessRef, OperationOccurrenceID, ProgramSnapshot, UseRef, ValueOccurrenceID,
 )
-from scar.ir.execution.ids import (
-    EventRecordID, QueueOrderProfileID, QueuePrefixID, QueueWaitID,
-    ResourceAccessID, ResourceInstanceID, RunID, WorkTicketID,
-    ProcessInstanceID,
-)
+from scar.ir.execution.common import EventRecordID, QueueOrderProfileID, QueuePrefixID, QueueWaitID, ResourceAccessID, ResourceInstanceID, RunID, WorkTicketID, ProcessInstanceID
 from scar.ir.execution.model import ExecutionModel, TABLE_TYPES
 from scar.ir.execution.order import (
     EventRecord, EventSignal, OrderPoint, PrefixEnd, QueueOrderProfile,

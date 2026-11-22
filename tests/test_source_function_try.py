@@ -73,7 +73,7 @@ class FunctionTryChecks(unittest.TestCase):
             result, sources = self.lower(directory, text)
             self.assertIsNotNone(result.graph)
             SourceProgram.read_structure(result.to_dict(), source_texts=sources)
-            from scar.ir.program.binding_validation import validate_bindings
+            from scar.ir.program.interface_validation import validate_bindings
             # Merely retaining two exception References is insufficient: the
             # actual completion must reach its own canonical packet Uses.
             broken = replace(result.graph, exception_packets=())

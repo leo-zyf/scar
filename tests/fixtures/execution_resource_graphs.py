@@ -9,11 +9,7 @@ from scar.ir.execution.coordinates import (
     OccurrencePhase, OccurrencePoint, OperationOccurrence, ProcessInstance,
     ProgramSnapshot, RegionActivation, UseOccurrence, ValueOccurrence,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID, ExecutionSegmentID, HandleBindingID, HostThreadInstanceID,
-    OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID,
-    NativeHandleLifetimeID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import BlockVisitID, ExecutionSegmentID, HandleBindingID, HostThreadInstanceID, OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID, NativeHandleLifetimeID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID
 from scar.ir.execution.model import ExecutionModel
 from scar.ir.execution.resources import (
     AllocationPlacement, AllocationTarget, CreatedAt, ExplicitHandle, HandleBinding, HandleNamespace, ImplicitBinding, ImportedAt,

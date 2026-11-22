@@ -9,8 +9,8 @@ from scar.ir.program.model import CompletionResult, ExitKind, StateVersionValue
 from scar.ir.program.queries import InstanceCaptureInput, ProgramIndex
 from scar.ir.program.resumption import saved_actual_use
 
-from .common import Unresolved
-from .ids import BlockVisitID, OperationOccurrenceID, ValueOccurrenceID
+from scar.ir.execution.common import Unresolved
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID, ValueOccurrenceID
 
 
 def gap(ctx, target, code, path, message):

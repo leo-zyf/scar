@@ -57,7 +57,7 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 
 
 def _pins():
-    from scar.analysis import source_observed_calls as source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
+    from scar.analysis import source_observed_calls as source_observed_calls, source_observed_codes, source_type_materials as source_compiled_code_profiles, source_protocols as source_observed_protocols
     from scar.analysis import source_function_connections, source_observed_interfaces as source_observed_materials, source_fact_materials
     from scar.analysis.static import compilation as static_compilation
     from scar.analysis.observed import call_bindings as observed_positional_receiver
@@ -431,7 +431,7 @@ class ObservedFunctionInterfaceStore:
         if index is None:
             from scar.analysis.program_view import ProgramView
             from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
-            from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+            from scar.analysis.source_type_materials import CompiledCodeProfiles
 
             view=ProgramView(self.catalog)
             profiles=tuple(CompiledCodeProfiles(self.catalog,u) for u in r['compiled_units'])
@@ -549,7 +549,7 @@ def main():
         parent=open_function_interfaces(args.parent)
         from scar.analysis.program_view import ProgramView
         from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
-        from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+        from scar.analysis.source_type_materials import CompiledCodeProfiles
         from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
         profiles=tuple(CompiledCodeProfiles(parent.catalog,u) for u in args.compiled_unit)
         view=ProgramView(parent.catalog);codes=ObservedSourceCodeProvider(view,args.trace,args.project_root,

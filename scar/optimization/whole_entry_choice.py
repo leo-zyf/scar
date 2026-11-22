@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.scope_accounting import _pointer
-from .entry_mandatory_bound import KIND as MANDATORY_SUBGRAPH, mandatory_entry_lower_bound
+from scar.optimization.entry_mandatory_bound import KIND as MANDATORY_SUBGRAPH, mandatory_entry_lower_bound
 from .resource_solver import semantic_sha256
 
 

@@ -24,7 +24,7 @@ from scar.ir.program.state_addresses import (
 )
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint, ValueOccurrence
-from scar.ir.execution.ids import OperationOccurrenceID, BlockVisitID
+from scar.ir.execution.common import OperationOccurrenceID, BlockVisitID
 from scar.ir.execution.validity_budget import ValidityBudget
 from collections import deque
 

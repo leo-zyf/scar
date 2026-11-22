@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import ExecutionSegment, ResumeIngress
-from scar.ir.execution.ids import ExecutionSegmentID
+from scar.ir.execution.common import ExecutionSegmentID
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.program.ids import BlockID, OperationID
 from scar.ir.program.model import TerminatorKind

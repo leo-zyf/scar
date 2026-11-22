@@ -6,7 +6,7 @@ Neither operation labels, CellContent, state SSA nor the supplied path creates i
 from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.program.call_effect_expansion import CallEffectExpansion
 from scar.ir.program.control import ProtocolValueType
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID

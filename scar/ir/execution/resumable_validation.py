@@ -1,9 +1,9 @@
 """Check persistent-body associations against original ports and captured flow."""
 from scar.ir.program.drivers import BodyStart
 
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import CaptureIngress, InitialEntry, ResumeIngress, UnresolvedHostThread
-from .ids import BlockVisitID, OperationOccurrenceID
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID
 from .resumable_flow import (
     check_unresolved, creation_view, gap, input_views, output_views,
     prepare_resumables, prepare_value_copies, value_for_use,

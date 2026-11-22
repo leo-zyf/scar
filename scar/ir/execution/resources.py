@@ -16,14 +16,9 @@ from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.resources import ResourceKind, ResourceRole, _require_kind_role
 from scar.ir.v2.common import Completeness
 from scar.ir.v2.ids import ObjectID, StorageAllocationID
-from .common import EvidencePoint, FactSource, MissingEvidence, Unresolved
+from scar.ir.execution.common import EvidencePoint, FactSource, MissingEvidence, Unresolved
 from .coordinates import ExecutionPoint, OccurrencePoint, UseRef
-from .ids import (
-    ExternalRealmID, HandleBindingID, HostThreadInstanceID, NativeHandleLifetimeID,
-    OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID,
-    ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID,
-    ProviderResourceAccessID, WorkTicketID,
-)
+from scar.ir.execution.common import ExternalRealmID, HandleBindingID, HostThreadInstanceID, NativeHandleLifetimeID, OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID, ProviderResourceAccessID, WorkTicketID
 
 
 def _exact(value, expected, name):

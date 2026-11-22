@@ -10,14 +10,7 @@ from scar.ir.v2.ids import ContractID, ValueSlotID
 from scar.ir.execution.common import FactSource, Unresolved, EvidencePoint
 from scar.ir.execution.content import ProtocolInterval
 from scar.ir.execution.coordinates import OccurrencePoint, OccurrencePhase
-from scar.ir.execution.ids import (
-    ObservationRequirementID,
-    ObservationRootID,
-    ResourceBindingID,
-    ValueOccurrenceID,
-    OperationOccurrenceID,
-    RegionActivationID,
-)
+from scar.ir.execution.common import ObservationRequirementID, ObservationRootID, ResourceBindingID, ValueOccurrenceID, OperationOccurrenceID, RegionActivationID
 from scar.ir.execution.resources import (
     ResourceTarget,
     _exact,
@@ -136,7 +129,7 @@ def observation_errors(ctx) -> None:
     A valid declaration remains conditional: an artifact locator does not parse
     a protocol, prove an output denotation, or establish endpoint visibility.
     """
-    from .content_validation import check_interval, check_target
+    from scar.ir.execution.content_validation import check_interval, check_target
 
     static_requirements = {row.id: row for row in ctx.program.resource_requirements}
 

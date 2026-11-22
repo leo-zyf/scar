@@ -6,7 +6,7 @@ import pytest
 
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import AccessRef
-from scar.ir.execution.ids import OperationOccurrenceID, OutcomeProductionID, WorkOutcomeID, WorkTicketID, WriteAssociationID
+from scar.ir.execution.common import OperationOccurrenceID, OutcomeProductionID, WorkOutcomeID, WorkTicketID, WriteAssociationID
 from scar.ir.execution.production import HostWrite, StateProduction, WorkWrite
 from scar.ir.execution.snapshot import external_artifact
 from scar.ir.execution.validation import require_valid, validate
@@ -182,7 +182,7 @@ def test_source_write_uses_same_bundle_original_version_and_materialization(wron
 @pytest.mark.parametrize('literal', (4, 5, True))
 def test_only_exact_literal_integer_result_can_match_or_conflict_with_parsed_count(literal):
     from scar.ir.execution.coordinates import ValueOccurrence
-    from scar.ir.execution.ids import ValueOccurrenceID
+    from scar.ir.execution.common import ValueOccurrenceID
     from scar.ir.execution.snapshot import snapshot_for
     from scar.ir.program.ids import ValueID
     from scar.ir.program.model import DataValue, LiteralOrigin

@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-from scar.ir.execution.ids import OperationOccurrenceID, ResourceBindingID, ValueOccurrenceID
+from scar.ir.execution.common import OperationOccurrenceID, ResourceBindingID, ValueOccurrenceID
 from scar.ir.execution.resources import CapacityAt, ConstraintEvidence, EndedAt, ImplicitBinding, InstanceTarget, NativeHandle
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.execution.validation import require_valid, validate

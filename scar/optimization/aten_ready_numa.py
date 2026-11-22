@@ -2,7 +2,7 @@
 
 from math import prod
 
-from scar.optimization.aten_native_team import _validate_samples
+from scar.optimization.aten_team import _validate_samples
 from scar.optimization.aten_numa_locality import _ordered_samples, _remote_fraction
 from scar.optimization.aten_team_numa_locality import _MAX_PAGES_PER_STORAGE, _execution_nodes
 

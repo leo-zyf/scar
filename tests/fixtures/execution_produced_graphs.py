@@ -6,9 +6,9 @@ import json
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import StorageContent
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import EvidenceInventoryID, OutcomeProductionID, WriteAssociationID
+from scar.ir.execution.common import EvidenceInventoryID, OutcomeProductionID, WriteAssociationID
 from scar.ir.execution.coordinates import ValueOccurrence
-from scar.ir.execution.ids import ValueOccurrenceID
+from scar.ir.execution.common import ValueOccurrenceID
 from scar.ir.execution.production import (
     BytePrefixWrite, EvidenceInventoryBinding, ExternalEstablishment, HostWrite,
     InventorySourceRef, OutcomeProduction, RawRecordRef, SourceEdgeRef, StateProduction,

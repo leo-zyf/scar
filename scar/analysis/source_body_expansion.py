@@ -11,10 +11,7 @@ import re
 from collections import Counter, defaultdict
 from hashlib import sha256
 from pathlib import Path
-from scar.analysis.source_value_interface_graph import (
-    ValueInterfaceParents,
-    read_value_interface_graph,
-)
+from scar.analysis.source_value_interfaces import ValueInterfaceParents, read_value_interface_graph
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow, data_reach, _artifact
@@ -77,7 +74,7 @@ class ExpansionParents:
         self.certification_seconds = time.monotonic()-started
 
     def validate(self):
-        from scar.analysis.source_value_interface_graph import _pins
+        from scar.analysis.source_value_interfaces import _pins
         if self.raw != (self.root/'result.json').read_bytes() or self.report['pins'] != _pins():
             raise ValueError('body expansion original interface parent or rules changed')
         # Parent tables are small. Check their exact compressed receipts on
@@ -123,7 +120,7 @@ def expand_bodies(parents):
 
 
 def _pins():
-    from scar.analysis import source_graph_material as materials, source_value_flow, source_value_interface_graph
+    from scar.analysis import source_graph_material as materials, source_value_flow, source_value_interfaces as source_value_interface_graph
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', X.__file__), ('materials', materials.__file__),
         ('values', source_value_flow.__file__), ('interfaces', source_value_interface_graph.__file__))}

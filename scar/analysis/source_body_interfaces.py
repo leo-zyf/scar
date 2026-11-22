@@ -15,7 +15,7 @@ import time
 from types import MappingProxyType
 from typing import get_args
 
-from scar.analysis.source_connection_contracts import body_entry_rules, validate_connection_plan
+from scar.analysis.source_connections import body_entry_rules, validate_connection_plan
 from scar.analysis.source_productions import _digest as _plan_digest
 from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.program_view import ProgramView, _digest
@@ -234,7 +234,7 @@ def body_interface(view, body):
 
 
 def _modules():
-    from scar.analysis import source_connection_contracts, source_namespace_contents as source_namespace_interfaces
+    from scar.analysis import source_connections as source_connection_contracts, source_namespace_contents as source_namespace_interfaces
     from scar.analysis import source_productions, program_view
     from scar.ir import record_codec
     return (

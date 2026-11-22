@@ -2,8 +2,8 @@
 
 from .calls import CallActivation
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
-from .composition import CompositionScope
-from .ids import CallActivationID
+from scar.ir.execution.composition_routes import CompositionScope
+from scar.ir.execution.common import CallActivationID
 from .production import (
     BytePrefixWrite,
     EvidenceInventoryBinding,

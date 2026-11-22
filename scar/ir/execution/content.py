@@ -14,7 +14,7 @@ from scar.ir.program.ids import NativeBoundaryID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.v2.ids import LogicalValueID, ObjectID, OperationInstanceID, ValueVersionID
 
-from .common import FactSource, Unresolved
+from scar.ir.execution.common import FactSource, Unresolved
 from .coordinates import (
     AccessRef,
     BlockVisitID,
@@ -25,13 +25,7 @@ from .coordinates import (
     ValueOccurrenceID,
 )
 from .coverage import RegionRef
-from .ids import (
-    ContentReadID,
-    DenotationID,
-    ObservationRootID,
-    WorkEvidenceBindingID,
-    WorkTicketID,
-)
+from scar.ir.execution.common import ContentReadID, DenotationID, ObservationRootID, WorkEvidenceBindingID, WorkTicketID
 from .resources import (
     ResourceTarget,
     _exact,

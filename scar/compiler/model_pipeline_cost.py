@@ -30,7 +30,7 @@ def _reference(value, schema):
 def _pins():
     root = Path(__file__).resolve().parents[1]
     files = ('compiler/model_pipeline_cost.py', 'compiler/macro_pipeline.py',
-        'compiler/project_pipeline_temporal.py', 'analysis/pipeline_region_pass.py',
+        'compiler/project_pipeline_temporal.py', 'analysis/source_pipeline_graph.py',
         'compiler/pipeline_runtime.py', 'optimization/macro_pass.py',
         'optimization/pipeline_demand.py', 'optimization/demand.py',
         'optimization/pipeline_forward_cost.py', 'optimization/cost_model.py',

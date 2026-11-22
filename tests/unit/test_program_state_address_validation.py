@@ -9,7 +9,7 @@ from scar.ir.program.state_addresses import (
     InvokeStateOperand, ObjectField, ReferenceOwner, StateAddressRefinement,
     UnknownOwner, WholeOwner,
 )
-from scar.ir.program.state_address_validation import state_address_errors
+from scar.ir.program.resource_validation import state_address_errors
 from scar.ir.program.validation import require_valid
 from tests.fixtures.program_graphs import branch_state_program
 from tests.fixtures.program_state_addresses import state_address_program

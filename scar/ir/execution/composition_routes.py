@@ -8,19 +8,50 @@ from scar.ir.program.driver_flow import body_outcome_uses
 from scar.ir.program.ids import UseID
 from scar.ir.program.model import BlockArgument, CompletionResult
 from scar.ir.program.resumption import ResumeInput, SavedInput, saved_actual_use
-from scar.ir.execution.common import Unresolved, EvidencePoint
+from scar.ir.execution.common import (
+    Unresolved,
+    EvidencePoint,
+    BlockVisitID,
+    OperationOccurrenceID,
+    RegionActivationID,
+    RunID,
+    MissingEvidence,
+    _identifier,
+    _record,
+)
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.execution.validation import ExecutionIssue
-from scar.ir.execution.composition import CompositionScope
 from scar.ir.execution.coordinates import OccurrencePoint, OccurrencePhase
 from scar.ir.execution.content import ObservationConsumer
-from scar.ir.execution.ids import BlockVisitID, OperationOccurrenceID, RegionActivationID, RunID
-from scar.ir.execution.observation_validation import RequiredEndpoint, RequiredOutput
+from scar.ir.execution.observation_validation import RequiredEndpoint, RequiredOutput, ContractRef
 from copy import deepcopy
-from dataclasses import fields
+from dataclasses import fields, dataclass
 from scar.ir.execution.work import WithinOperation
+from scar.ir.program.providers import ProviderFactReference
 
 
+# Query-only scopes for composing explicit contract obligations.
+#
+# These records are analysis inputs, not execution facts or persistent model
+# rows.  A scope selects one exact contract and one run/activation/operation
+# owner for a particular query.
+@dataclass(frozen=True, slots=True)
+class CompositionScope:
+    contract: ContractRef
+    owner: RunID | RegionActivationID | OperationOccurrenceID
+    source: ProviderFactReference | MissingEvidence
+
+    def __post_init__(self) -> None:
+        _record(self.contract, ContractRef, "composition contract")
+        if type(self.owner) not in (RunID, RegionActivationID, OperationOccurrenceID):
+            raise TypeError("composition owner must be an exact RunID, RegionActivationID, or OperationOccurrenceID")
+        _identifier(self.owner, type(self.owner), "composition owner")
+        if type(self.source) not in (ProviderFactReference, MissingEvidence):
+            raise TypeError("composition source must be a ProviderFactReference or MissingEvidence")
+        self.source.__post_init__()
+
+
+# Composition routes.
 # Budgeted projections of original execution ports, never another use graph.
 #
 # This internal query does not detach: the public composition query owns its one
@@ -1001,4 +1032,5 @@ __all__ = [
     'requirements',
     'validate_scopes',
     'resource_composition',
+    'CompositionScope',
 ]

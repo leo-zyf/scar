@@ -199,7 +199,7 @@ def discover_pipeline_invariant_loops(catalog,source=None):
     The source argument filters returned loop owners, not their imported
     dependencies. Every dependency provider must already exist in the catalog.
     """
-    from scar.compiler.source_function_components import SourceFunctionComponents
+    from scar.compiler.provenance import SourceFunctionComponents
     view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
     roots=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))

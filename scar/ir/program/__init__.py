@@ -93,7 +93,7 @@ from scar.ir.program.exception_matches import (
     BuiltinExceptionCategory, ExceptionHandlerOperand, ExceptionMatcher, FixedBuiltinHandler,
 )
 from scar.ir.program.codec import SCHEMA, SCHEMA_VERSION, dumps, loads
-from scar.ir.program.binding_validation import derive_binding_facts
+from scar.ir.program.interface_validation import derive_binding_facts
 
 
 from .resumption import (

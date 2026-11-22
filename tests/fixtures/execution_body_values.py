@@ -4,7 +4,7 @@ from dataclasses import replace
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import DataIdentity, ValueDenotation, VersionRef
 from scar.ir.execution.coordinates import OperationOccurrence, UseOccurrence, ValueOccurrence
-from scar.ir.execution.ids import DenotationID, OperationOccurrenceID, ValueOccurrenceID
+from scar.ir.execution.common import DenotationID, OperationOccurrenceID, ValueOccurrenceID
 from scar.ir.execution.snapshot import external_artifact, snapshot_for
 from scar.ir.program.ids import OperationID, UseID, ValueID
 from scar.ir.program.model import Behavior, BlockArgument, DataValue, LiteralOrigin, Operation, Use, UseRole

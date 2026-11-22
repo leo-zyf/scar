@@ -22,7 +22,7 @@ from scar.ir.implementation_plan import CostEstimate
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
 from scar.optimization.scope_accounting import _digest
-from scar.optimization.implementation_costs import CostQuery, query_key
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key
 from scar.optimization.stateful_cpu_model import _cost, _domain, stateful_cpu_cost_context
 
 

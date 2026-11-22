@@ -25,8 +25,7 @@ import secrets
 
 from scar.ir.execution.common import EvidencePoint, Unresolved
 from scar.ir.execution.coordinates import ExecutionRun, HostThreadInstance, ProcessInstance
-from scar.ir.execution.ids import (HandleBindingID, HostThreadInstanceID, ProcessInstanceID,
-    ResourceInstanceID, RunID, TargetLifetimeEventID, WorkTicketID, WorkOutcomeID)
+from scar.ir.execution.common import HandleBindingID, HostThreadInstanceID, ProcessInstanceID, ResourceInstanceID, RunID, TargetLifetimeEventID, WorkTicketID, WorkOutcomeID
 from scar.ir.execution.resources import (EndedAt, HandleBinding, ImportedAt, InstanceTarget,
     ResourceInstance, RunRealm, UnresolvedHandle)
 from scar.ir.execution.validity import LifetimeEventKind, TargetLifetimeEvent

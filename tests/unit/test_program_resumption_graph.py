@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from scar.ir.program.binding_validation import derive_binding_facts
+from scar.ir.program.interface_validation import derive_binding_facts
 from scar.ir.program.bindings import BindingState
 from scar.ir.program.ids import BlockID, OperationID, UseID, ValueID
 from scar.ir.program.model import Operation, Behavior, Use, UseRole

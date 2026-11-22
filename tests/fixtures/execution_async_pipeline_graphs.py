@@ -18,15 +18,7 @@ from scar.ir.execution.coordinates import (
     ResumeIngress,
     RegionActivation,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID,
-    CallActivationID,
-    HostThreadInstanceID,
-    OperationOccurrenceID,
-    ProcessInstanceID,
-    RegionActivationID,
-    RunID,
-)
+from scar.ir.execution.common import BlockVisitID, CallActivationID, HostThreadInstanceID, OperationOccurrenceID, ProcessInstanceID, RegionActivationID, RunID
 from scar.ir.execution.model import ExecutionModel
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import snapshot_for

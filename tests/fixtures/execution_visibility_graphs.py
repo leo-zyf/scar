@@ -6,10 +6,7 @@ from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import ContentRead, ResourceConsumer, StorageContent, WholeWorkRead
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import (
-    ContentReadID, ContributionSupportID, EvidenceInventoryID, OutcomeProductionID,
-    ResourceAccessID, WorkOutcomeID, WorkTicketID, WriteAssociationID,
-)
+from scar.ir.execution.common import ContentReadID, ContributionSupportID, EvidenceInventoryID, OutcomeProductionID, ResourceAccessID, WorkOutcomeID, WorkTicketID, WriteAssociationID
 from scar.ir.execution.inventory import InventoryResolver, build_inventory
 from scar.ir.execution.order import WorkEnd
 from scar.ir.execution.production import (

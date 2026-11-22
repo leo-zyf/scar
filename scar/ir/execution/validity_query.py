@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .content import EndpointContent, VersionRef
-from .content_validation import artifact_key, target_key
+from scar.ir.execution.content_validation import artifact_key, target_key
 from .coverage import RegionRef, _ValueCatalog, _labeled_storage_coverage
 from .endpoint_protocol import same_materialization
-from .ids import ContentReadID
+from scar.ir.execution.common import ContentReadID
 from .production import RawRecordRef, WorkWrite
 from scar.ir.execution.production_query import production_shared
 from .validity_budget import ValidityBudget

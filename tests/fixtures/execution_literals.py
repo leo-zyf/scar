@@ -14,7 +14,7 @@ from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.content import ObjectIdentity, ObjectRef, ValueDenotation
 from scar.ir.execution.common import Unresolved
-from scar.ir.execution.ids import CallActivationID, DenotationID
+from scar.ir.execution.common import CallActivationID, DenotationID
 from scar.ir.execution.snapshot import external_artifact, snapshot_for
 from scar.ir.v2.evidence import EvidenceEndpoint, EvidenceGraph, EvidenceNodeKind
 from scar.ir.v2.ids import ObjectID

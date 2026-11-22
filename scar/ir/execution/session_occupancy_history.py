@@ -450,7 +450,7 @@ class _BodyHistory:
         # Select the local identity comparison before pair() could register a
         # global copy conflict for an ordinary, expected distinct object.
         from .content import ObjectIdentity
-        from .content_validation import artifact_key
+        from scar.ir.execution.content_validation import artifact_key
         identities = []
         for value in (source, target):
             row = (None if value is None or type(value) is Unresolved else

@@ -4,9 +4,7 @@ from dataclasses import replace
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import ProtocolInterval
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-from scar.ir.execution.ids import (
-    ObservationRequirementID, ObservationRootID, OperationOccurrenceID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import ObservationRequirementID, ObservationRootID, OperationOccurrenceID, ValueOccurrenceID
 from scar.ir.execution.observation_validation import BoundEndpoint, ContractRef, ExternalEndpoint, ObservationRequirement, ObservationRoot, OutputValue, RequiredEndpoint, RequiredOutput
 from scar.ir.execution.snapshot import external_artifact
 from scar.ir.program.providers import ProviderFactReference

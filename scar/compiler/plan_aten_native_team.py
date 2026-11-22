@@ -10,7 +10,7 @@ from scar.compiler.plan_aten_native_graph import (
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import problem_document
 from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
-from scar.optimization.aten_native_team import model_cpu_team
+from scar.optimization.aten_team import model_cpu_team
 
 
 def team_window_spec(windows):

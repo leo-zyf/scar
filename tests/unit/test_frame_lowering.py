@@ -6,7 +6,7 @@ from textwrap import dedent
 import pytest
 
 from scar.analysis.program_lowering import SourceProgram, lower_source, prepare_source
-from scar.ir.program.frame_validation import require_valid_frame_model
+from scar.ir.program.interface_validation import require_valid_frame_model
 from scar.ir.program.frames import (
     FrameBind, FrameDiscard, FrameEnter, FrameExit, FrameFinalizerErrors,
     FrameRelease, FrameTermination,

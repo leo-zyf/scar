@@ -12,11 +12,7 @@ from scar.ir.execution.coordinates import (
     AccessRef, OccurrencePhase, OccurrencePoint, OperationOccurrenceID, UseRef,
     ValueOccurrenceID,
 )
-from scar.ir.execution.ids import (
-    HandleBindingID, HostThreadInstanceID, ProcessInstanceID, QueuePrefixID,
-    ResourceAccessID, RunID,
-    WorkOutcomeID, WorkQuiescenceID, WorkRetentionID, WorkTicketID,
-)
+from scar.ir.execution.common import HandleBindingID, HostThreadInstanceID, ProcessInstanceID, QueuePrefixID, ResourceAccessID, RunID, WorkOutcomeID, WorkQuiescenceID, WorkRetentionID, WorkTicketID
 from scar.ir.execution.resources import (
     AllocationTarget, InstanceTarget, ReleaseAuthority, ResourceInstanceID, Sharing,
 )

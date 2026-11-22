@@ -13,7 +13,7 @@ from time import monotonic_ns
 from scar.analysis.cpu_entry_import_bindings import _key, _static
 from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler import cpu_entry_replay, cpu_import_binding_observation as bindings
-from scar.compiler.cpu_import_source_admission import SCHEMA as ADMISSION, verify_cpu_import_source_admission
+from scar.compiler.cpu_entry_launch_scope import SCHEMA as ADMISSION, verify_cpu_import_source_admission
 from scar.compiler.cpu_original_importtime import _observation, _raw, _ref, _write
 from scar.compiler.entry_delivery import _environment_digest
 from scar.ir.execution_recipe import read_artifact

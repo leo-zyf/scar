@@ -15,7 +15,7 @@ from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import _origin
-from scar.compiler.source_function_components import SourceFunctionComponents
+from scar.compiler.provenance import SourceFunctionComponents
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.record_codec import encode
 from scar.optimization.resource_solver import semantic_sha256

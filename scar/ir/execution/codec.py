@@ -17,8 +17,8 @@ from typing import Union, get_args, get_origin, get_type_hints
 
 from scar.ir.v2.ids import Identifier
 from .model import ExecutionModel
-from .common import Unresolved
-from .ids import ResourceAccessID, ProviderResourceAccessID
+from scar.ir.execution.common import Unresolved
+from scar.ir.execution.common import ResourceAccessID, ProviderResourceAccessID
 from .resources import HandleBinding, NativeHandle, ObjectHandle, ProviderHandle, UnresolvedHandle
 from .work import WorkSubmission
 from scar.ir.program.resources import ResourceRole

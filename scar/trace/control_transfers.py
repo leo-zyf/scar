@@ -19,7 +19,7 @@ from scar.ir.execution.coordinates import (
     ProcessInstance,
     UnresolvedHostThread,
 )
-from scar.ir.execution.ids import HostThreadInstanceID, ProcessInstanceID, RunID
+from scar.ir.execution.common import HostThreadInstanceID, ProcessInstanceID, RunID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
 

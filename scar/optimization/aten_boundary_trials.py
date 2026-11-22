@@ -7,7 +7,7 @@ from statistics import variance
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode
-from scar.optimization.implementation_costs import SCHEMA as COST_PROFILE, CostQuery, query_key
+from scar.optimization.entry_mandatory_bound import SCHEMA as COST_PROFILE, CostQuery, query_key
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN, _metrics
 
 

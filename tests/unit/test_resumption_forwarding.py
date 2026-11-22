@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from scar.ir.program.binding_validation import derive_binding_facts, validate_bindings
+from scar.ir.program.interface_validation import derive_binding_facts, validate_bindings
 from scar.ir.program.bindings import BindingDefinition, BindingState
 from scar.ir.program.cleanup_forward import derive_cleanup_forward
 from scar.ir.program.cleanup_validation import analyze_cleanup
@@ -17,7 +17,7 @@ from scar.ir.program.ids import BlockID, OperationID, UseID, ValueID
 from scar.ir.program.model import (
     Behavior, BlockArgument, LocalBindingValue, Operation, OperationResult, ProtocolValue, Use, UseRole,
 )
-from scar.ir.program.provider_validation import provider_errors
+from scar.ir.program.resource_validation import provider_errors
 from scar.ir.program.providers import (
     ProviderBinding, ProviderElement, ProviderElementKind, ProviderPathIndex,
     ProviderRegion, ProviderRegionRelation,

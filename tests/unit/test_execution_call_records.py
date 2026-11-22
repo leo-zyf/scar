@@ -5,7 +5,7 @@ import pytest
 
 from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import MissingEvidence, Unresolved
-from scar.ir.execution.ids import CallActivationID, OperationOccurrenceID
+from scar.ir.execution.common import CallActivationID, OperationOccurrenceID
 from scar.ir.execution.coordinates import BlockVisitID
 from scar.ir.execution.model import TABLE_TYPES
 from scar.ir.program.providers import ProviderFactReference

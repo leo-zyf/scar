@@ -7,8 +7,8 @@ original payload Use. No expected value, object name or sibling chooses it.
 from scar.ir.program.control import PendingDispatchTerminator, PendingPayload
 from scar.ir.program.model import BlockArgument, OperationResult, value_type
 
-from .common import Unresolved
-from .ids import BlockVisitID, OperationOccurrenceID
+from scar.ir.execution.common import Unresolved
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID
 from .resumable_flow import value_for_use
 
 

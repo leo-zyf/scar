@@ -10,7 +10,7 @@ import pytest
 from scar.ir.execution import CallActivation, CallActivationID
 from scar.ir.execution.codec import SCHEMA_VERSION, dumps, from_dict, loads, to_dict
 from scar.ir.execution.common import Unresolved
-from scar.ir.execution.ids import BlockVisitID, OperationOccurrenceID, RegionActivationID
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID, RegionActivationID
 from scar.ir.program.providers import ProviderFactReference
 from tests.fixtures.execution_validity_records import validity_record_model
 
@@ -113,7 +113,7 @@ def test_pre_call_schemas_reject_new_table_and_unreachable_call_tags(version, in
         message = 'unknown type tag'
     else:
         root['runs'][0]['fields']['id'] = {
-            '$id': 'scar.ir.execution.ids.CallActivationID', 'kind': 'exec_call_activation',
+            '$id': 'scar.ir.execution.common.CallActivationID', 'kind': 'exec_call_activation',
             'value': 'wire.call', 'wire': 'exec_call_activation:wire.call'}
         message = 'unknown type tag'
     with pytest.raises(ValueError, match=message):

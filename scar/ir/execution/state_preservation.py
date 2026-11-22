@@ -18,7 +18,7 @@ from scar.ir.program.state_addresses import AddressCoverage, InvokeStateOperand,
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
 from scar.ir.execution.effects import effect_context, resolve_canonical_effect
-from scar.ir.execution.ids import OperationOccurrenceID
+from scar.ir.execution.common import OperationOccurrenceID
 from scar.ir.execution.validity_budget import ValidityBudget
 from scar.ir.execution.work import ActualCompletionState, InvokeBoundaryStateEffect
 from copy import deepcopy

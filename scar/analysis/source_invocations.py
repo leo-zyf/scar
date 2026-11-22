@@ -23,7 +23,7 @@ from scar.analysis.call_trace_reader import scan_call_trace
 from scar.analysis.program_composition import CompositionIndex, ElementReference, QualifiedSourceBodyReference
 from scar.ir.execution.common import EvidencePoint
 from scar.ir.execution.coordinates import RegionActivation
-from scar.ir.execution.ids import RegionActivationID
+from scar.ir.execution.common import RegionActivationID
 from scar.ir.program.call_composition import CallSourceAdmissionStatus, CallSourceScope
 from scar.ir.program.call_edges import (
     CallEdgeBudget, CallLinkStatus, CallRecordAnchor, CapturedSite, FrameCompletion,

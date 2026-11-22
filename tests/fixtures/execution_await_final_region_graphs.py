@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import Unresolved
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.model import ExitKind
 from tests.fixtures.execution_await_outcome_graphs import await_outcome_execution

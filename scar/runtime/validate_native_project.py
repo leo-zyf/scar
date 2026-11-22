@@ -18,7 +18,7 @@ from scar.ir.v2.schemas import canonical_json
 
 
 def _replay_recurrence_rhs_storage(recipe, geometry, storage, placement):
-    from scar.optimization.aten_native_team import data_dependencies
+    from scar.optimization.aten_team import data_dependencies
     from scar.optimization.aten_live_values import ready_lifetime_bound
     from scar.optimization.aten_live_values import _bytes, tensor_footprint
 

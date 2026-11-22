@@ -14,7 +14,7 @@ from scar.optimization.resource_solver import semantic_sha256
 
 SCHEMA = 'scar.semantic-region-revision'
 _PRODUCERS = ('compiler/semantic_revision.py', 'analysis/source_pipeline_graph.py',
-    'optimization/semantic_rewrite.py', 'analysis/pipeline_region_pass.py',
+    'optimization/semantic_rewrite.py', 'analysis/source_pipeline_graph.py',
     'optimization/pipeline_fusion.py', 'ir/v2/semantic.py', 'ir/v2/codec.py')
 
 
@@ -31,7 +31,7 @@ def _write(path, document):
 
 
 def _selection(selected_region):
-    from scar.analysis.pipeline_region_pass import read_fusion_region, ORIGINAL, FUSION
+    from scar.analysis.source_pipeline_graph import read_fusion_region, ORIGINAL, FUSION
     from scar.ir.v2.optimization import PlanDisposition
 
     oir = read_fusion_region(selected_region)

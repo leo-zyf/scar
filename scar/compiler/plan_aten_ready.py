@@ -18,7 +18,7 @@ from scar.ir.implementation_plan import (
 )
 from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY
 from scar.optimization.aten_native_schedule import _declared_operators
-from scar.optimization.aten_native_team import model_cpu_team
+from scar.optimization.aten_team import model_cpu_team
 from scar.optimization.aten_ready_dag import plan_ready_dag
 from scar.optimization.aten_ready_replica import nominate_ready_replica, price_ready_replica
 from scar.optimization.aten_ready_retained import price_ready_retained

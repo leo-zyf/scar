@@ -11,7 +11,7 @@ from scar.ir.implementation_plan import (
     PlanningProblem,
 )
 from scar.optimization.constructive_planner import construct_implementations
-from scar.optimization.implementation_costs import CostQuery, query_key
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key
 from scar.optimization.native_device_comparison import native_device_probe_reason
 from collections import defaultdict
 from graphlib import CycleError, TopologicalSorter

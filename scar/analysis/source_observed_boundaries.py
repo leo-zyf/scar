@@ -387,7 +387,7 @@ class BoundaryStore:
         basis = r['basis']
         if index is None:
             from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
-            from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+            from scar.analysis.source_type_materials import CompiledCodeProfiles
             view = ProgramView(Path(basis['catalog']['uri']).parent)
             profiles = tuple(CompiledCodeProfiles(view.catalog, u) for u in basis['compiled_units'])
             codes = ObservedSourceCodeProvider(view, basis['trace'], basis['project_root'],

@@ -5,10 +5,7 @@ import pytest
 
 from scar.ir.execution.common import EvidencePoint, Unresolved
 from scar.ir.execution.coordinates import ExecutionRun, HostThreadInstance, OccurrencePhase, OccurrencePoint, ProcessInstance
-from scar.ir.execution.ids import (
-    ObservationRequirementID, ObservationRootID, OperationOccurrenceID,
-    HostThreadInstanceID, ProcessInstanceID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import ObservationRequirementID, ObservationRootID, OperationOccurrenceID, HostThreadInstanceID, ProcessInstanceID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID
 from scar.ir.execution.observation_validation import BoundEndpoint, ExternalEndpoint, OutputValue, RequiredOutput
 from scar.ir.execution.resources import InstanceTarget, ProcessTarget, ThreadTarget
 from scar.ir.execution.snapshot import snapshot_for

@@ -85,7 +85,7 @@ def _initializer(reference, source):
 @reuse_decoded_source_bodies()
 def derive_cpu_import_source_effect_plan(admission_ref):
     """Retain source projection as local evidence and preserve original execution."""
-    from scar.compiler.cpu_import_source_admission import verify_cpu_import_source_admission
+    from scar.compiler.cpu_entry_launch_scope import verify_cpu_import_source_admission
 
     _require(admission_ref['schema'] == ADMISSION, 'admitted source composite required')
     admission = verify_cpu_import_source_admission(admission_ref)

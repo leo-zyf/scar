@@ -10,7 +10,7 @@ from scar.ir.program.ids import ProtocolScopeID
 from scar.ir.program.model import CompletionResult, InvokeLiteralResult, OperationResult
 from scar.ir.program.protocols import OwnedUse, StaticProtocolGap
 
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import OccurrencePhase, OccurrencePoint
 from .resumable_flow import gap, value_for_use
 

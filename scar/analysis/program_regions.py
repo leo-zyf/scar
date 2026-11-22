@@ -517,7 +517,7 @@ def expand_inventory(discovery, runtime_builder, budget, context_budget, ordered
     from scar.analysis.program_inventory import _Inventory, _attach_bodies, _body_connections, _CallLinker, prepare_source
     from scar.analysis.function_interfaces import FunctionInterfaceBuilder
     from scar.ir.program.functions import BodyLoweringProfile
-    from scar.ir.program.frame_validation import require_valid_frame_model
+    from scar.ir.program.interface_validation import require_valid_frame_model
     selected_profile = body_profile or BodyLoweringProfile.BOUND_FORMALS
     interfaces = FunctionInterfaceBuilder(profile=selected_profile) if interface_model else None
     frames, structured = [], []

@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.program.codec import dumps, loads
-from scar.ir.program.environment_validation import environment_errors
+from scar.ir.program.interface_validation import environment_errors
 from scar.ir.program.environments import (
     EnvironmentInterface, EnvironmentMember, EnvironmentRole, FunctionEntryLayout,
 )

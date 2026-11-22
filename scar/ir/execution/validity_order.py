@@ -8,8 +8,8 @@ from collections import deque
 
 from scar.ir.v2.evidence import EvidenceNodeKind, EvidenceRelation
 
-from .common import EvidencePoint, Unresolved
-from .content_validation import artifact_key, point_scope
+from scar.ir.execution.common import EvidencePoint, Unresolved
+from scar.ir.execution.content_validation import artifact_key, point_scope
 from .coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
 from .order import EventSignal, PrefixEnd, WorkEnd, WorkStart
 from .production import RawRecordRef, SourceEdgeRef

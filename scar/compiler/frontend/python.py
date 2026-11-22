@@ -31,7 +31,7 @@ _WORKERS = {
     'source-bindings': 'scar.analysis.source_binding_materials',
     'compiler-topology': 'scar.analysis.compiler_topology_materials',
     'compiler-symbols': 'scar.analysis.compiler_symbol_materials',
-    'program-types': 'scar.analysis.program_type_materials',
+    'program-types': 'scar.analysis.source_type_materials',
     'source-anchors': 'scar.analysis.source_anchor_materials',
 }
 _DOMAINS = ('expressions', 'statements', 'roots')
@@ -264,8 +264,8 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
     try:
         if adapter_directory is not None:
             report['symbol_adapter'] = _receipt(adapter_directory/'result.json')
-        from scar.analysis.source_connection_domains import connection_domains
-        from scar.analysis.source_connection_contracts import connection_reference_catalog
+        from scar.analysis.source_connections import connection_domains
+        from scar.analysis.source_connections import connection_reference_catalog
         if not connection_domains()['type_domains_closed']:
             raise ValueError('connection input classification domains are not closed')
         connection_reference_catalog()
@@ -315,7 +315,7 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
 
         # Independent typed-reference rules supply the denominator. In
         # particular this does not ask the edge producer what it emitted.
-        run.stage('connection-contract', 'scar.analysis.source_connection_contracts',
+        run.stage('connection-contract', 'scar.analysis.source_connections',
             [*[part for domain in _DOMAINS for part in ('--materials',out/domain)],
                 '--out',out/'connection-contract.json'],
             out/'connection-contract.json','scar.source-connection-gate',

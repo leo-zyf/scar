@@ -8,7 +8,7 @@ from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import (CostEstimate, ImplementationChoice, PlanningActivity,
     PlanningTimingConstraint, PlanningResource, digest, validate_problem)
 from scar.ir.record_codec import decode, encode
-from scar.optimization.implementation_costs import CostQuery, query_key, resolve_cost
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key, resolve_cost
 
 SCHEMA = 'scar.pipeline-lifecycle-source'
 PREFIX = 'pipeline:lifecycle:'

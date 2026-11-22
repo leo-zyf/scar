@@ -5,7 +5,7 @@ import pytest
 
 from scar.ir.literals import PythonLiteral, literal_builtin_type
 from scar.ir.execution.coordinates import ValueOccurrence
-from scar.ir.execution.ids import ValueOccurrenceID
+from scar.ir.execution.common import ValueOccurrenceID
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.execution.validation import validate
 from scar.ir.program.ids import ValueID
@@ -37,7 +37,7 @@ def test_new_exact_content_only_matches_native_byte_count_for_builtin_int(value)
 def test_matching_exact_count_does_not_prove_original_host_return_port():
     from scar.ir.execution.common import Unresolved
     from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-    from scar.ir.execution.ids import EstablishedProductionID
+    from scar.ir.execution.common import EstablishedProductionID
     from scar.ir.execution.validity import EstablishedProduction
     from tests.fixtures.execution_produced_graphs import produced_execution
     program, model, values = produced_execution(host=True)

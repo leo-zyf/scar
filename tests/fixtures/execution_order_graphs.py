@@ -3,11 +3,7 @@ from dataclasses import replace
 
 from scar.ir.execution.common import MissingEvidence, Unresolved
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
-from scar.ir.execution.ids import (
-    EventRecordID, HandleBindingID, QueueOrderProfileID, QueuePrefixID, QueueWaitID,
-    RealizationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID,
-    WorkTicketID,
-)
+from scar.ir.execution.common import EventRecordID, HandleBindingID, QueueOrderProfileID, QueuePrefixID, QueueWaitID, RealizationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, WorkTicketID
 from scar.ir.execution.order import EventRecord, QueueOrderProfile, QueueWait, RecordedPrefix
 from scar.ir.execution.resources import (
     ExplicitHandle, HandleBinding, ImplicitBinding, ImportedAt, InstanceTarget,

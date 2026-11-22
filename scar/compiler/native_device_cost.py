@@ -48,7 +48,7 @@ from scar.compiler.tensor_planning_inputs import (
 )
 from scar.ir.program import codec
 from scar.ir.record_codec import encode
-from scar.optimization.implementation_costs import CostQuery, query_key
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key
 
 
 # Native export placement costs.

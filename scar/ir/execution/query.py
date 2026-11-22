@@ -12,10 +12,10 @@ from scar.ir.program.ids import UseID, ValueID
 from scar.ir.program.model import BlockArgument, CompletionResult, TerminatorKind
 from scar.ir.program.drivers import BodyDriveResult
 from scar.ir.program.resumption import ResumeInput, SavedInput, saved_actual_use
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import AccessRef, ControlTransfer, OccurrencePhase, OccurrencePoint, UseOccurrence
 from .effects import effect_context, resolve_canonical_effect
-from .ids import BlockVisitID, OperationOccurrenceID, QueuePrefixID, RegionActivationID, ValueOccurrenceID
+from scar.ir.execution.common import BlockVisitID, OperationOccurrenceID, QueuePrefixID, RegionActivationID, ValueOccurrenceID
 from .validation import _analyze
 from .work import InvokeBoundaryStateEffect, WithinOperation
 from .order import EventSignal, PrefixEnd, WorkEnd, WorkStart
@@ -161,7 +161,7 @@ class ExecutionIndex:
         """Conditional source-derived contribution coverage and interval safety."""
         from .validity_budget import ValidityBudget
         from .validity_query import validity
-        from .ids import ContentReadID
+        from scar.ir.execution.common import ContentReadID
         # Reject malformed budgets before replaying any external artifact.
         ValidityBudget(budget)
         if type(identity) is not ContentReadID:

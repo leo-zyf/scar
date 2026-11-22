@@ -13,7 +13,7 @@ from scar.ir.execution.coordinates import (
     UnresolvedHostThread,
 )
 from scar.ir.execution.effects import effect_context, resolve_canonical_effect
-from scar.ir.execution.ids import QueuePrefixID, BlockVisitID, OperationOccurrenceID
+from scar.ir.execution.common import QueuePrefixID, BlockVisitID, OperationOccurrenceID
 from scar.ir.execution.order import EventSignal, PrefixEnd, WorkEnd, WorkStart
 from scar.ir.execution.resources import InstanceTarget, ProcessRealm, RunRealm
 from scar.ir.execution.work import (

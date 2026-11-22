@@ -22,19 +22,7 @@ from scar.ir.execution.coordinates import (
     UseRef,
     ValueOccurrence,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID,
-    ExecutionSegmentID,
-    HostThreadInstanceID,
-    OperationOccurrenceID,
-    ProcessInstanceID,
-    RegionActivationID,
-    ResourceAccessID,
-    ResourceBindingID,
-    ResourceInstanceID,
-    RunID,
-    ValueOccurrenceID,
-)
+from scar.ir.execution.common import BlockVisitID, ExecutionSegmentID, HostThreadInstanceID, OperationOccurrenceID, ProcessInstanceID, RegionActivationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID
 from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode

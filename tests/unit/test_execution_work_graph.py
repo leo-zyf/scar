@@ -5,10 +5,7 @@ import pytest
 
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import ExecutionRun, HostThreadInstance, OccurrencePhase, OccurrencePoint, ProcessInstance, UseRef
-from scar.ir.execution.ids import (
-    HandleBindingID, HostThreadInstanceID, ProcessInstanceID, QueuePrefixID,
-    RunID, ValueOccurrenceID, WorkOutcomeID,
-)
+from scar.ir.execution.common import HandleBindingID, HostThreadInstanceID, ProcessInstanceID, QueuePrefixID, RunID, ValueOccurrenceID, WorkOutcomeID
 from scar.ir.execution.resources import EndedAt, InstanceTarget
 from scar.ir.execution.validation import require_valid, validate
 from scar.ir.execution.work import (

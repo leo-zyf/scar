@@ -16,14 +16,7 @@ from scar.ir.execution.content import (
 )
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import (
-    CallActivationID, ContentReadID, ContributionSupportID, DenotationID,
-    EstablishedProductionID, EvidenceInventoryID, HandleBindingID,
-    ObservationRequirementID, ObservationRootID, RealizationID, ResourceAccessID,
-    ResourceBindingID, ResourceInstanceID, QueuePrefixID, QueueOrderProfileID,
-    OutcomeProductionID, WorkOutcomeID, WorkQuiescenceID,
-    WorkRetentionID, WorkTicketID, WriteAssociationID,
-)
+from scar.ir.execution.common import CallActivationID, ContentReadID, ContributionSupportID, DenotationID, EstablishedProductionID, EvidenceInventoryID, HandleBindingID, ObservationRequirementID, ObservationRootID, RealizationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, QueuePrefixID, QueueOrderProfileID, OutcomeProductionID, WorkOutcomeID, WorkQuiescenceID, WorkRetentionID, WorkTicketID, WriteAssociationID
 from scar.ir.execution.inventory import build_inventory
 from scar.ir.execution.observation_validation import BoundEndpoint, ContractRef, ObservationRequirement, ObservationRoot, OutputValue, RequiredEndpoint, RequiredOutput
 from scar.ir.execution.production import (

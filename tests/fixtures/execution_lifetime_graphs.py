@@ -5,10 +5,7 @@ import json
 
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint
-from scar.ir.execution.ids import (
-    ContributionSupportID, EstablishedProductionID, EvidenceInventoryID,
-    TargetLifetimeEventID, WriteAssociationID,
-)
+from scar.ir.execution.common import ContributionSupportID, EstablishedProductionID, EvidenceInventoryID, TargetLifetimeEventID, WriteAssociationID
 from scar.ir.execution.inventory import build_inventory
 from scar.ir.execution.production import (
     BytePrefixWrite, EvidenceInventoryBinding, HostWrite, InventorySourceRef,
@@ -71,7 +68,7 @@ __all__ = ['host_lifetime_execution']
 def queue_lifetime_execution(*, terminal=False):
     """An actual six-work record/wait path, with original resource read ports."""
     from scar.ir.execution.content import ContentRead, ResourceConsumer, WholeWorkRead
-    from scar.ir.execution.ids import ContentReadID, OutcomeProductionID, WorkOutcomeID, WorkTicketID
+    from scar.ir.execution.common import ContentReadID, OutcomeProductionID, WorkOutcomeID, WorkTicketID
     from scar.ir.execution.production import OutcomeProduction, WorkWrite
     from scar.ir.execution.validity import OrderedVisibility
     from scar.ir.execution.work import ResourceOutcome, WorkOutcomeKind
@@ -131,7 +128,7 @@ __all__.append('queue_lifetime_execution')
 def endpoint_lifetime_execution():
     """Exact Q endpoint observation; unsupported native selector stays a gap."""
     from scar.ir.execution.content import ContentRead, EndpointContent, ObservationConsumer, ProtocolSelector
-    from scar.ir.execution.ids import ContentReadID
+    from scar.ir.execution.common import ContentReadID
     from scar.ir.execution.snapshot import external_artifact
     from scar.ir.execution.validity import EndpointDomain
     from scar.ir.execution.work import MaterializationRef

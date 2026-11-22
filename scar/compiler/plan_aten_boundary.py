@@ -14,7 +14,7 @@ from scar.ir.program.target_hardware import CpuCore, HardwareThread
 from scar.ir.record_codec import encode
 from scar.optimization.aten_boundary_trials import EVIDENCE, SCOPE, project_aten_boundary_trial
 from scar.optimization.constructive_planner import construct_implementations
-from scar.optimization.implementation_costs import SCHEMA as COST_PROFILE, resolve_cost
+from scar.optimization.entry_mandatory_bound import SCHEMA as COST_PROFILE, resolve_cost
 
 
 OBSERVATIONS = 'scar.aten-native-boundary-ab.v1'

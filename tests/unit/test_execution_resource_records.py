@@ -9,11 +9,7 @@ import pytest
 
 from scar.ir.execution.common import EvidencePoint, MissingEvidence, Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint, UseRef
-from scar.ir.execution.ids import (
-    ExternalRealmID, HandleBindingID, HostThreadInstanceID, NativeHandleLifetimeID,
-    OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID,
-    ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import ExternalRealmID, HandleBindingID, HostThreadInstanceID, NativeHandleLifetimeID, OperationOccurrenceID, ProcessInstanceID, RealizationID, RegionActivationID, ResourceAccessID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID
 from scar.ir.execution.resources import (
     ActivationHolder, AllocationPlacement, AllocationTarget, CapacityAt,
     ConstraintEvidence, CreatedAt, EndedAt, ExplicitHandle, ExternalRealm,

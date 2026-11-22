@@ -30,7 +30,7 @@ def _reference(value,schema):
 def _pins():
     root=Path(__file__).resolve().parents[1]
     names=('compiler/macro_pipeline.py','compiler/project_pipeline_temporal.py',
-        'analysis/pipeline_region_pass.py','optimization/macro_pass.py',
+        'analysis/source_pipeline_graph.py','optimization/macro_pass.py',
         'compiler/semantic_revision.py','analysis/source_pipeline_graph.py',
         'optimization/semantic_rewrite.py','optimization/semantic_region_demand.py',
         'optimization/optimizer.py','optimization/graph.py',
@@ -40,7 +40,7 @@ def _pins():
 
 def _derive(inputs,profile,cpus,budget,gain,*,strict_minimum_gain=True):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs
-    from scar.analysis.pipeline_region_pass import derive_fusion_region
+    from scar.analysis.source_pipeline_graph import derive_fusion_region
     from scar.compiler.pipeline_runtime import derive_fusion_blueprint
     from scar.optimization.macro_pass import run_fusion_pass
     if profile is not None:read_artifact(profile)
@@ -70,7 +70,7 @@ def _metadata(inputs,profile,cpus,budget,gain,files,decision,*,strict_minimum_ga
 
 
 def _structural_selection(region, report):
-    from scar.analysis.pipeline_region_pass import select_fusion_region
+    from scar.analysis.source_pipeline_graph import select_fusion_region
 
     if not report['legality']['qualified']:
         return None

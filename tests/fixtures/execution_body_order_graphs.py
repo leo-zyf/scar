@@ -5,9 +5,7 @@ from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.coordinates import (
     BlockVisit, ControlTransfer, OperationOccurrence, UseOccurrence, ValueOccurrence,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID, CallActivationID, OperationOccurrenceID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import BlockVisitID, CallActivationID, OperationOccurrenceID, ValueOccurrenceID
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.control import ProtocolValueKind
 from scar.ir.program.drivers import RawRequestDefinition, RawRequestKind

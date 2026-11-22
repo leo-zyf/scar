@@ -2,7 +2,7 @@
 
 from statistics import median_low
 
-from scar.optimization.aten_native_team import _bounded_duration
+from scar.optimization.aten_team import _bounded_duration
 from scar.optimization.aten_ready_dag import _prediction
 from scar.optimization.aten_ready_replica import _CALIBRATION_FIELDS, price_ready_replica
 

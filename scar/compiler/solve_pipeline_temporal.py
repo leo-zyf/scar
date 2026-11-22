@@ -350,7 +350,7 @@ def _resource_event_report(declaration, *, output=None, stored=None):
 def solve_pipeline_resource_events(inputs, out, *, cost_profile=None, search_budget=100000):
     """Replay source events and construct original/native resource alternatives."""
     from .project_pipeline_temporal import INPUTS
-    from scar.optimization.implementation_costs import SCHEMA as COSTS
+    from scar.optimization.entry_mandatory_bound import SCHEMA as COSTS
 
     output = Path(out).resolve()
     if output.exists():

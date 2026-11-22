@@ -10,15 +10,10 @@ from enum import Enum
 from typing import TypeAlias
 
 from scar.ir.program.providers import ProviderFactReference
-from .common import EvidencePoint, FactSource, Unresolved
+from scar.ir.execution.common import EvidencePoint, FactSource, Unresolved
 from .coordinates import AccessRef, ExecutionPoint, OccurrencePoint, UseRef
 from .coverage import RegionRef
-from .ids import (
-    ContentReadID, ContributionSupportID, EstablishedProductionID,
-    HostThreadInstanceID, OrderAssociationID, OutcomeProductionID,
-    ResourceInstanceID, TargetLifetimeEventID, ValueOccurrenceID,
-    WriteAssociationID,
-)
+from scar.ir.execution.common import ContentReadID, ContributionSupportID, EstablishedProductionID, HostThreadInstanceID, OrderAssociationID, OutcomeProductionID, ResourceInstanceID, TargetLifetimeEventID, ValueOccurrenceID, WriteAssociationID
 from .order import EventSignal, PrefixEnd, WorkEnd, WorkStart
 from .production import BytePrefixWrite, RawRecordRef, SourceEdgeRef
 from .content import ProtocolSelector

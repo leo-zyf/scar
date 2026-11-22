@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.program.ids import BlockID, OperationID
 from tests.fixtures.execution_call_graphs import _model

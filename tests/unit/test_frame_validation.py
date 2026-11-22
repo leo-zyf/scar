@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from scar.ir.frontend_v2 import build_semantic_files
-from scar.ir.program.frame_validation import require_valid_frame_model, validate_frame_model
+from scar.ir.program.interface_validation import require_valid_frame_model, validate_frame_model
 from scar.ir.program.frames import FrameBind, FrameDiscard, FrameEnter, FrameExit, FrameFormal, FrameModel
 from scar.ir.program.functions import BodyEntryInterface, FormalPort
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID

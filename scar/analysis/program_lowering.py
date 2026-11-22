@@ -1228,7 +1228,7 @@ class _Builder:
                                  attribute_lookups=tuple(self.attribute_lookups) if self.attribute_lookups else None)
             require_valid(graph)
             if self.frame is not None:
-                from scar.ir.program.frame_validation import require_valid_frame_model
+                from scar.ir.program.interface_validation import require_valid_frame_model
                 require_valid_frame_model(self.frame, graph, interface=self.interface, semantic=self.semantic)
         except _Unsupported as error:
             self.gap(error.kind, error.node, error.detail)
@@ -1506,7 +1506,7 @@ def validate_source_program(result: SourceProgram, *, max_operations: int = 1000
         else:
             if result.structured is not None:
                 raise ValueError("historical frame bodies cannot contain structured protocols")
-            from scar.ir.program.frame_validation import require_valid_frame_model
+            from scar.ir.program.interface_validation import require_valid_frame_model
             if result.interface is None or result.interface.profile is not result.profile:
                 raise ValueError("frame source program needs its matching body interface")
             require_valid_frame_model(result.frame, result.graph, interface=result.interface,

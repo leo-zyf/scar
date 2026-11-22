@@ -49,7 +49,7 @@ _ENTRY_SOURCES = (
     'codegen/scar_abi_v1.h', 'trace/code_snapshot.py', 'runtime/array_copy_guard.py',
 )
 _PRODUCERS = ('optimization/macro_pass.py', 'optimization/scope_accounting.py',
-    'analysis/pipeline_region_pass.py', 'optimization/pipeline_strategy.py',
+    'analysis/source_pipeline_graph.py', 'optimization/pipeline_strategy.py',
     'optimization/pipeline_fusion.py')
 
 
@@ -72,7 +72,7 @@ def _sources(names):
 
 
 def _admit(region_document, blueprint):
-    from scar.analysis.pipeline_region_pass import read_fusion_region
+    from scar.analysis.source_pipeline_graph import read_fusion_region
     from scar.compiler.pipeline_frontend import pipeline_from_dict, pipeline_digest
     from scar.compiler.pipeline_runtime import verify_fusion_blueprint
     from scar.optimization.pipeline_strategy import verify_pipeline_strategy
@@ -172,7 +172,7 @@ def run_fusion_pass(region_document, blueprint, *, cost_profile=None,
                     available_cpu_ids, memory_budget_bytes, minimum_gain=DEFAULT_MINIMUM_GAIN,
                     strict_minimum_gain=True):
     """Replay one fusion's legality and reuse the existing exact deployment gate."""
-    from scar.analysis.pipeline_region_pass import select_fusion_region
+    from scar.analysis.source_pipeline_graph import select_fusion_region
 
     region, blueprint, graph, fusion, legal = _admit(region_document, blueprint)
     context = _cost_context(region, blueprint, graph)

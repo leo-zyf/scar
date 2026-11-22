@@ -34,7 +34,7 @@ from scar.optimization.pipeline_memory import (
 from scar.optimization.resource_solver import semantic_sha256
 from itertools import combinations
 from scar.ir.program.target_hardware import CpuCore, CpuExecutor, HardwareThread
-from scar.optimization.implementation_costs import CostQuery, query_key, resolve_cost
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key, resolve_cost
 
 
 # Pipeline schedule.

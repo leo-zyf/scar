@@ -13,7 +13,7 @@ from scar.ir.program import (
     TerminatorKind, Use, UseID, UseRole, ValueID, ValueKind, ValueType,
     derive_binding_facts, dumps, loads, value_type,
 )
-from scar.ir.program.binding_validation import validate_bindings
+from scar.ir.program.interface_validation import validate_bindings
 from scar.ir.program.validation import validate
 from scar.ir.record_codec import encode
 from scar.ir.v2.ids import ValueSlotID

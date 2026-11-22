@@ -13,9 +13,7 @@ from scar.ir.execution.coordinates import (
     BlockVisit, CaptureIngress, ExecutionSegment, HostThreadInstance, InitialEntry,
     UnresolvedHostThread,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID, CallActivationID, ExecutionSegmentID, HostThreadInstanceID,
-)
+from scar.ir.execution.common import BlockVisitID, CallActivationID, ExecutionSegmentID, HostThreadInstanceID
 from scar.ir.execution.validation import validate
 from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (

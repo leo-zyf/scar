@@ -20,12 +20,7 @@ from scar.ir.execution.coordinates import (
     RegionActivation, UseOccurrence, UseRef, ValueOccurrence,
 )
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import (
-    BlockVisitID, ContentReadID, DenotationID, ExecutionSegmentID,
-    HostThreadInstanceID, ObservationRequirementID, ObservationRootID,
-    ProcessInstanceID, RegionActivationID, RunID,
-    ValueOccurrenceID, WorkEvidenceBindingID, WorkTicketID,
-)
+from scar.ir.execution.common import BlockVisitID, ContentReadID, DenotationID, ExecutionSegmentID, HostThreadInstanceID, ObservationRequirementID, ObservationRootID, ProcessInstanceID, RegionActivationID, RunID, ValueOccurrenceID, WorkEvidenceBindingID, WorkTicketID
 from scar.ir.execution.model import (
     ExecutionModel, LegacyOperationRef, OccurrenceEvidenceBinding,
 )

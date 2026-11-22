@@ -119,7 +119,7 @@ def derive_stateful_entry_protocol(native_manifest, *, trial, exclusive_inputs, 
     from scar.codegen import stateful
     from scar.compiler.stateful_model import stateful_from_dict, stateful_digest
     from scar.compiler.stateful_runtime import project_stateful_contract, _replay_selection
-    from scar.compiler.export_loop import _receipt
+    from scar.compiler.invariant_loop_runtime import _receipt
     _need(type(trial) is bool and type(exclusive_inputs) is bool, 'exact trial and exclusive_inputs booleans required')
     _need(selection is None or type(selection) is dict, 'selection must be the original optional factory dictionary')
     _need(trial or selection is not None, 'non-trial protocol requires a real retained measured selection')

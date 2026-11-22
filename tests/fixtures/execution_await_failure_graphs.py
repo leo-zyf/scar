@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.program.ids import BlockID
 from tests.fixtures.execution_call_graphs import _model
 from tests.fixtures.program_await_failure_graphs import await_failure_program

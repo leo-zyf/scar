@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from scar.ir.execution.coordinates import AccessRef
-from scar.ir.execution.ids import ContributionSupportID, OutcomeProductionID, ValueOccurrenceID
+from scar.ir.execution.common import ContributionSupportID, OutcomeProductionID, ValueOccurrenceID
 from scar.ir.execution.validity import CompletedVisibility, ContributionSupport, LifetimeEventKind
 from scar.ir.execution.validity_budget import ValidityBudget
 from tests.fixtures.execution_validity_records import validity_record_model

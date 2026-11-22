@@ -18,13 +18,7 @@ from pathlib import Path
 import platform
 import struct
 import sys
-from scar.compiler.export_loop import (
-    _json_bytes,
-    _read_json,
-    _receipt,
-    _source,
-    _profile_artifacts,
-)
+from scar.compiler.invariant_loop_runtime import _json_bytes, _read_json, _receipt, _source, _profile_artifacts
 
 
 # Compatibility facade for the shared lightweight stateful boundary guards.

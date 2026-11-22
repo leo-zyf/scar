@@ -26,14 +26,7 @@ from scar.ir.literals import (
     LiteralKind,
     require_legacy_literal,
 )
-from scar.ir.program import (
-    normal_graph as F,
-    normal_graph as T,
-    scalar_values as V,
-    source_bytes as X,
-    normal_graph as G,
-    source_productions as P,
-)
+from scar.ir.program import normal_graph as F, normal_graph as T, literal_validation as V, source_bytes as X, normal_graph as G, source_productions as P
 import argparse
 import json
 import pathlib

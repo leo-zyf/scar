@@ -13,7 +13,7 @@ from scar.ir.program.protocols import HostTerminal, OwnedUse
 
 from .await_links import _flags
 from scar.ir.execution.await_outcomes import pair, status
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import ResumeIngress
 from .pending_payloads import projection
 from .resumable_flow import value_for_use

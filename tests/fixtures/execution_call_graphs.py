@@ -12,10 +12,7 @@ from scar.ir.execution.coordinates import (
     InitialEntry, OperationOccurrence, ProcessInstance, RegionActivation,
     UseOccurrence, ValueOccurrence,
 )
-from scar.ir.execution.ids import (
-    BlockVisitID, CallActivationID, ExecutionSegmentID, HostThreadInstanceID,
-    OperationOccurrenceID, ProcessInstanceID, RegionActivationID, RunID, ValueOccurrenceID,
-)
+from scar.ir.execution.common import BlockVisitID, CallActivationID, ExecutionSegmentID, HostThreadInstanceID, OperationOccurrenceID, ProcessInstanceID, RegionActivationID, RunID, ValueOccurrenceID
 from scar.ir.execution.model import ExecutionModel
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID

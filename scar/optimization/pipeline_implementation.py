@@ -17,7 +17,7 @@ from scar.ir.implementation_plan import (CostEstimate, ImplementationOption,
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.hardware import propose_cpu_placements, bind_cpu_placement
 from scar.optimization.joint_planner import verify_execution_plan
-from scar.optimization.implementation_costs import CostQuery, query_key, resolve_cost
+from scar.optimization.entry_mandatory_bound import CostQuery, query_key, resolve_cost
 from scar.optimization.pipeline_schedule import _closed, _dependencies, _target
 from scar.optimization.resource_solver import semantic_sha256
 

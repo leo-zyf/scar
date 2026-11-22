@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from scar.ir.execution.coordinates import _identifier, InitialEntry, UnresolvedHostThread
-from scar.ir.execution.ids import OperationOccurrenceID, BlockVisitID, RegionActivationID
+from scar.ir.execution.common import OperationOccurrenceID, BlockVisitID, RegionActivationID
 from collections import deque
 from itertools import chain
 from scar.ir.program.model import CompletionResult, ExitKind, TerminatorKind
@@ -25,7 +25,7 @@ def _view(resolved):
 
 def call_activation(ctx, identity):
     """Return original ports for one association, including unresolved ends."""
-    from .ids import CallActivationID
+    from scar.ir.execution.common import CallActivationID
 
     _identifier(identity, CallActivationID, 'call activation query ID')
     return deepcopy(_view(ctx.resolved_call_activations[identity]))

@@ -11,17 +11,8 @@ from typing import TypeAlias
 
 from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from .common import EvidencePoint, FactSource, MissingEvidence, Unresolved
-from .ids import (
-    BlockVisitID,
-    ExecutionSegmentID,
-    HostThreadInstanceID,
-    OperationOccurrenceID,
-    ProcessInstanceID,
-    RegionActivationID,
-    RunID,
-    ValueOccurrenceID,
-)
+from scar.ir.execution.common import EvidencePoint, FactSource, MissingEvidence, Unresolved
+from scar.ir.execution.common import BlockVisitID, ExecutionSegmentID, HostThreadInstanceID, OperationOccurrenceID, ProcessInstanceID, RegionActivationID, RunID, ValueOccurrenceID
 
 
 def _exact(value, expected, name):

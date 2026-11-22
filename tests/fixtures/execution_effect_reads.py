@@ -8,7 +8,7 @@ from scar.ir.execution.content import (
 from scar.ir.execution.coordinates import (
     OccurrencePhase, OccurrencePoint, UseRef,
 )
-from scar.ir.execution.ids import ContentReadID, WorkTicketID
+from scar.ir.execution.common import ContentReadID, WorkTicketID
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.execution.work import (
     ActualCompletionState, InvokeBoundaryStateEffect, WorkOutcomeKind,

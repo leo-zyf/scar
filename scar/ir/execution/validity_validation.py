@@ -8,14 +8,14 @@ from collections import deque
 
 from scar.ir.program.model import BlockArgument, CompletionResult, LiteralOrigin, TerminatorKind, is_literal_origin
 
-from .common import EvidencePoint, Unresolved
+from scar.ir.execution.common import EvidencePoint, Unresolved
 from .content import EndpointContent, HostConsumer, ObservationConsumer, ProtocolSelector, ResourceConsumer
 from .endpoint_protocol import (
     resolve_endpoint_profile, same_fact_reference, same_materialization,
 )
-from .content_validation import check_target, target_key
+from scar.ir.execution.content_validation import check_target, target_key
 from .coordinates import AccessRef, OccurrencePhase, OccurrencePoint
-from .ids import OperationOccurrenceID, ValueOccurrenceID
+from scar.ir.execution.common import OperationOccurrenceID, ValueOccurrenceID
 from .effects import resolve_canonical_effect
 from .order import WorkEnd, WorkStart
 from .production import ExternalEstablishment, HostWrite, RawRecordRef, SourceEdgeRef, WorkWrite
@@ -470,7 +470,7 @@ def _supports(ctx):
                                     if type(placement.selector) is ProtocolSelector else None)
                     visibility_profile = resolve_endpoint_profile(ctx, visibility.protocol, path,
                                                                   budget=profile_budget)
-                    from .content_validation import _content_interval
+                    from scar.ir.execution.content_validation import _content_interval
                     interval = _content_interval(ctx, read['read'].consumer,
                                                  read['observation_root'])
                     interval_profile = (None if interval is None else
@@ -561,7 +561,7 @@ def _endpoint_visibility_matches(ctx, support, read, production, budget, path, c
         return False
     profile_refs = [read_row.placement.selector]
     interval = None
-    from .content_validation import _content_interval
+    from scar.ir.execution.content_validation import _content_interval
     interval = _content_interval(ctx, read_row.consumer, read.get('observation_root'))
     if interval is None:
         conditions.append('endpoint read interval is not available for the fixed byte-prefix rule')

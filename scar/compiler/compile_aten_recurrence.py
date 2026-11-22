@@ -15,7 +15,7 @@ from scar.codegen.aten_native_graph import _installed_linkage, _read_declared
 from scar.codegen.aten_recurrence_source import render_recurrence
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
-from scar.compiler.aten_region_inputs import read_aten_region_inputs
+from scar.compiler.aten_source_entry_plan import read_aten_region_inputs
 from scar.compiler.plan_aten_ready import read_ready_selection
 from scar.compiler.tensor_planning_inputs import calibrate_tensor_body, compare_native_projects, operation_costs, replay_recurrence_placement, scheduled_tensor_body
 from scar.compiler.tensor_planning_inputs import tensor_physical_problem

@@ -2,9 +2,9 @@
 from dataclasses import replace
 
 from scar.ir.execution.common import Unresolved
-from scar.ir.execution.composition import CompositionScope
+from scar.ir.execution.composition_routes import CompositionScope
 from scar.ir.execution.content import ContentRead, ObservationConsumer
-from scar.ir.execution.ids import ContentReadID
+from scar.ir.execution.common import ContentReadID
 from scar.ir.execution.observation_validation import ContractRef
 from tests.fixtures.execution_observation_graphs import observation_execution
 

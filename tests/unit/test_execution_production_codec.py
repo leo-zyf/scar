@@ -20,15 +20,7 @@ from scar.ir.execution.content import (
 )
 from scar.ir.execution.coordinates import AccessRef
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import (
-    EvidenceInventoryID,
-    OutcomeProductionID,
-    RunID,
-    SourceBridgeID,
-    WorkOutcomeID,
-    WorkTicketID,
-    WriteAssociationID,
-)
+from scar.ir.execution.common import EvidenceInventoryID, OutcomeProductionID, RunID, SourceBridgeID, WorkOutcomeID, WorkTicketID, WriteAssociationID
 from scar.ir.execution.production import (
     BytePrefixWrite,
     EvidenceInventoryBinding,

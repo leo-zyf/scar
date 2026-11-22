@@ -6,7 +6,7 @@ import pytest
 
 from scar.analysis.source_values import ScalarValueFlow
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import normal_graph as T, scalar_values as V, source_productions as P
+from scar.ir.program import normal_graph as T, literal_validation as V, source_productions as P
 from scar.ir.record_codec import decode, encode
 from tests.unit.test_source_construction_connections import source_facts
 

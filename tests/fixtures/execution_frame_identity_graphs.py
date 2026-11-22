@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import ObjectIdentity, ObjectRef, ValueDenotation
-from scar.ir.execution.ids import DenotationID
+from scar.ir.execution.common import DenotationID
 from scar.ir.execution.snapshot import external_artifact, snapshot_for
 from scar.ir.program.ids import OperationID, UseID, ValueID
 from scar.ir.program.model import (

@@ -144,21 +144,21 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
     if issues:
         return tuple(issues)
 
-    from .resource_validation import resource_errors
+    from scar.ir.program.resource_validation import resource_errors
     for code, path, message in resource_errors(
             graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
         error(code, path, message)
 
-    from .environment_validation import environment_errors
+    from scar.ir.program.interface_validation import environment_errors
     for code, path, message in environment_errors(
             graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
         error(code, path, message)
 
-    from .state_address_validation import state_address_errors
+    from scar.ir.program.resource_validation import state_address_errors
     for code, path, message in state_address_errors(graph):
         error(code, path, message)
 
-    from .attribute_lookup_validation import attribute_lookup_errors
+    from scar.ir.program.interface_validation import attribute_lookup_errors
     for code, path, message in attribute_lookup_errors(graph):
         error(code, path, message)
 
@@ -167,7 +167,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         for code, path, message in stored_value_errors(graph):
             error(code, path, message)
 
-    from .literal_validation import literal_errors
+    from scar.ir.program.literal_validation import literal_errors
     for code, path, message in literal_errors(graph):
         error(code, path, message)
 
@@ -665,7 +665,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         elif (first not in dominators[second]
               or (first == second and positions[edge.before] >= positions[edge.after])):
             error("order_direction", "ordering", "order must agree with mandatory control order")
-    from .binding_validation import validate_bindings
+    from scar.ir.program.interface_validation import validate_bindings
     for issue in validate_bindings(graph):
         error(issue.code, issue.path, issue.message)
     if not issues and graph.call_effect_expansions:
@@ -721,7 +721,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         for code, path, message in lifecycle_issues:
             error(code, path, message)
     if not issues:
-        from .provider_validation import provider_errors
+        from scar.ir.program.resource_validation import provider_errors
         for code, path, message in provider_errors(
                 graph, {op: block_region[block] for op, block in operation_block.items()}, uses):
             error(code, path, message)

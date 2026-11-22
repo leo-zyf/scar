@@ -671,7 +671,7 @@ def connection_errors(ctx):
     """Consumer obligations are derived from core markers, not row count."""
     errors = []
     from scar.ir.program.suspension_interfaces import terminal_relation
-    from .handled_completion_routes import handled_terminal_relation
+    from scar.ir.program.cleanup_forward import handled_terminal_relation
     if hasattr(ctx, 'index'):
         from .protocol_await import await_connections
         errors.extend(await_connections(ctx)['issues'])
@@ -682,7 +682,7 @@ def connection_errors(ctx):
     errors.extend(handoff_consumers(ctx)['issues'])
     for scope in ctx.scopes.values():
         if scope.profile is ProtocolProfile.CREATED_CLOSE_V1:
-            from .created_close import created_close_view
+            from scar.ir.program.resumption_flow import created_close_view
             for route in created_close_view(ctx, scope)['routes']:
                 if route['declared_none_result'] is False:
                     errors.append(('protocol_close_result', str(route['terminal'].operation),

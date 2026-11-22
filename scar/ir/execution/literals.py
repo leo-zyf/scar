@@ -10,8 +10,8 @@ from copy import deepcopy
 from scar.ir.program.model import InvokeLiteralResult, OperationResult, ReferenceValue
 from scar.ir.program.queries import ProgramIndex
 
-from .common import Unresolved
-from .ids import OperationOccurrenceID
+from scar.ir.execution.common import Unresolved
+from scar.ir.execution.common import OperationOccurrenceID
 from .validity_budget import ValidityBudget
 
 

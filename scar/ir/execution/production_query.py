@@ -15,16 +15,10 @@ from scar.ir.execution.content import (
     ProtocolSelector,
     StorageContent,
 )
-from scar.ir.execution.content_validation import (
-    artifact_key,
-    point_scope,
-    target_key,
-    native_port,
-    resolve_placement,
-)
+from scar.ir.execution.content_validation import artifact_key, point_scope, target_key, native_port, resolve_placement
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
 from scar.ir.execution.coverage import RegionRef, CoverageStatus, _ValueCatalog, _storage_coverage
-from scar.ir.execution.ids import ContentReadID, OperationOccurrenceID
+from scar.ir.execution.common import ContentReadID, OperationOccurrenceID
 from scar.ir.execution.production import (
     InventorySourceRef,
     RawRecordRef,
@@ -746,7 +740,7 @@ def write_errors(ctx):
                         'endpoint write requires an explicit WRITE_REQUEST ProtocolSelector')
         if (type(row.writer) is WorkWrite and writer is not None
                 and type(row.placement) is not Unresolved):
-            from .work_validation import check_work_materialization
+            from scar.ir.execution.content_validation import check_work_materialization
             check_work_materialization(ctx, writer, row.placement.materialization, path)
         edge_sources = ([(row.stage, stage)] if type(row.stage) is SourceEdgeRef and stage is not None else []) + source_pairs
         for reference, resolved in edge_sources:

@@ -9,7 +9,7 @@ from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.content import ObjectIdentity, ObjectRef, ValueDenotation
 from scar.ir.execution.coordinates import ExecutionSegment, HostThreadInstance, ResumeIngress
-from scar.ir.execution.ids import CallActivationID, DenotationID, ExecutionSegmentID, HostThreadInstanceID
+from scar.ir.execution.common import CallActivationID, DenotationID, ExecutionSegmentID, HostThreadInstanceID
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import external_artifact
 from scar.ir.program.control import ProtocolValueKind as P

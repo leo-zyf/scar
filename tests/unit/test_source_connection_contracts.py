@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from scar.analysis import source_compilation_contexts as producer
-from scar.analysis import source_connection_contracts as gate
+from scar.analysis import source_connections as gate
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_contexts import ContextState, OwnerRef
 

@@ -16,7 +16,7 @@ from .native import BoundaryRelation, EntryPortRef, ExitPortRef, NativeBoundary
 from scar.ir.program.native_callables import port_key, region_port_keys
 from .cleanup_validation import CleanupRouteKind, CleanupRouteStep
 from .resumption import ResumeInput, ResumeSlot, ResumeSlotKind, SuspendTerminator, saved_actual_use
-from .resumption_flow import first_body_outcome_operations
+from scar.ir.program.resumption_flow import first_body_outcome_operations
 from .drivers import BodyDrive, BodyDriveResult, DriverInterface, NormalResultPort
 from .driver_flow import body_drive_target, body_outcome_uses
 from .lifecycle import (
@@ -392,7 +392,7 @@ class ProgramIndex:
 
     def literal_evaluation(self, site) -> dict:
         """Original production and optional content declaration, never identity proof."""
-        from .literal_validation import literal_site
+        from scar.ir.program.literal_validation import literal_site
         from .literal_sources import CodeConstant, SourceExpression, UninterpretedConstant, UnlocatedLiteral
         resolved = literal_site(self.graph, site)
         row = next((row for row in self.graph.literal_evaluations if row.site == site), None)
@@ -789,7 +789,7 @@ class ProgramIndex:
 
     def handled_completion(self, source, terminal, *, budget=4096):
         """Separate packet copies from selected handler-produced completions."""
-        from .handled_completion_routes import handled_completion
+        from scar.ir.program.cleanup_forward import handled_completion
         return handled_completion(self, source, terminal, budget=budget)
 
     def paired_input_origins(self, raw, pack_operand, *, budget=4096):

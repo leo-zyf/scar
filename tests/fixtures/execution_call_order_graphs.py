@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from scar.ir.execution.calls import CallActivation
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
     Behavior, Block, BlockArgument, DataValue, ExitKind, ExitPort, LiteralOrigin,

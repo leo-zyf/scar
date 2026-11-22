@@ -35,15 +35,7 @@ from scar.ir.execution.coordinates import (
     ValueOccurrenceID,
 )
 from scar.ir.execution.coverage import RegionRef
-from scar.ir.execution.ids import (
-    ContentReadID,
-    DenotationID,
-    ObservationRootID,
-    ProcessInstanceID,
-    RunID,
-    WorkEvidenceBindingID,
-    WorkTicketID,
-)
+from scar.ir.execution.common import ContentReadID, DenotationID, ObservationRootID, ProcessInstanceID, RunID, WorkEvidenceBindingID, WorkTicketID
 from scar.ir.execution.resources import InstanceTarget
 from scar.ir.execution.work import MaterializationRef
 from scar.ir.program.ids import NativeBoundaryID, UseID

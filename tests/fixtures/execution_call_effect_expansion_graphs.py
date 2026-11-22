@@ -4,7 +4,7 @@ from dataclasses import replace
 from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-from scar.ir.execution.ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 from scar.ir.program.ids import BlockID
 from scar.ir.program.model import ExitKind, StateVersionValue
 from scar.ir.program.validation import require_valid

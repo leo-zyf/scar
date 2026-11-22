@@ -9,7 +9,7 @@ from dataclasses import replace
 from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import EvidencePoint, MissingEvidence
 from scar.ir.execution.coordinates import ExecutionRun, HostThreadInstance, ProcessInstance
-from scar.ir.execution.ids import CallActivationID, HostThreadInstanceID, ProcessInstanceID, RunID
+from scar.ir.execution.common import CallActivationID, HostThreadInstanceID, ProcessInstanceID, RunID
 from scar.ir.execution.model import ExecutionModel
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.model import CompletionResult, InvokeLiteralResult, OperationResult, StateVersionValue

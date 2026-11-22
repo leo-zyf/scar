@@ -13,16 +13,12 @@ from typing import TypeAlias
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.v2.common import Completeness
 from scar.ir.v2.ids import MaterializationID
-from .common import FactSource, Unresolved
+from scar.ir.execution.common import FactSource, Unresolved
 from .coordinates import (
     AccessRef, EvidencePoint, ExecutionPoint, OccurrencePoint, OperationOccurrenceID,
     UseRef, ValueOccurrenceID,
 )
-from .ids import (
-    HandleBindingID, HostThreadInstanceID, QueuePrefixID, ResourceAccessID,
-    ResourceInstanceID, WorkOutcomeID, WorkQuiescenceID, WorkRetentionID,
-    WorkTicketID, ProviderResourceAccessID,
-)
+from scar.ir.execution.common import HandleBindingID, HostThreadInstanceID, QueuePrefixID, ResourceAccessID, ResourceInstanceID, WorkOutcomeID, WorkQuiescenceID, WorkRetentionID, WorkTicketID, ProviderResourceAccessID
 from .resources import (
     AllocationTarget, ReleaseAuthority, ResourceTarget, Sharing, _exact, _id,
     _index, _point, _record, _source, _variant,

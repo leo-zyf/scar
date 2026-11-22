@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from scar.ir.program.providers import ProviderFactReference
-from .common import MissingEvidence, Unresolved, _identifier, _record
+from scar.ir.execution.common import MissingEvidence, Unresolved, _identifier, _record
 from .coordinates import BlockVisitID, OperationOccurrenceID, RegionActivationID
-from .ids import CallActivationID
+from scar.ir.execution.common import CallActivationID
 
 
 @dataclass(frozen=True, slots=True)

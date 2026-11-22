@@ -8,9 +8,9 @@ from itertools import chain
 
 from scar.ir.program.model import AccessMode, TerminatorKind
 
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .content import EndpointContent, HostConsumer, ObservationConsumer, ResourceConsumer
-from .content_validation import artifact_key, target_key
+from scar.ir.execution.content_validation import artifact_key, target_key
 from .coordinates import AccessRef, OccurrencePhase, OccurrencePoint
 from .coverage import RegionRef, _Coverage, _ValueCatalog
 from .order import WorkEnd, WorkStart

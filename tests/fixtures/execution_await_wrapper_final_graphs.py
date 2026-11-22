@@ -13,10 +13,7 @@ from scar.ir.execution.coordinates import (
     ControlTransfer, ExecutionRun, HostThreadInstance, InitialEntry,
     ProcessInstance, ResumeIngress,
 )
-from scar.ir.execution.ids import (
-    CallActivationID, DenotationID, HostThreadInstanceID, ProcessInstanceID,
-    RegionActivationID, RunID,
-)
+from scar.ir.execution.common import CallActivationID, DenotationID, HostThreadInstanceID, ProcessInstanceID, RegionActivationID, RunID
 from scar.ir.execution.model import ExecutionModel
 from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import external_artifact, snapshot_for

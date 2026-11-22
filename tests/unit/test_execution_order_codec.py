@@ -14,9 +14,7 @@ import pytest
 from scar.ir.execution.codec import SCHEMA_VERSION, dumps, from_dict, loads, to_dict
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint, UseRef
-from scar.ir.execution.ids import (
-    EventRecordID, QueueOrderProfileID, QueueWaitID, ResourceInstanceID,
-)
+from scar.ir.execution.common import EventRecordID, QueueOrderProfileID, QueueWaitID, ResourceInstanceID
 from scar.ir.execution.order import EventRecord, QueueOrderProfile, QueueWait, RecordedPrefix
 from scar.ir.execution.resources import ImportedAt, ProcessRealm, ResourceInstance
 from scar.ir.execution.work import InvokeBoundaryStateEffect, QueueStart
@@ -178,7 +176,7 @@ def test_v3_order_wire_rejects_tag_id_union_and_field_forgery(ordered, mutation)
     if mutation == "extra-proof":
         record["completed"] = True
     elif mutation == "wrong-record-id":
-        wait["record"]["$id"] = "scar.ir.execution.ids.ResourceInstanceID"
+        wait["record"]["$id"] = "scar.ir.execution.common.ResourceInstanceID"
     elif mutation == "wrong-queue-id":
         fields["queue_order_profiles"][0]["fields"]["queue"] = deepcopy(record["id"])
     elif mutation == "wrong-union":

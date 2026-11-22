@@ -5,10 +5,7 @@ from pathlib import Path
 from scar.ir.execution.codec import loads
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
-from scar.ir.execution.ids import (
-    ContributionSupportID, EstablishedProductionID, OrderAssociationID, TargetLifetimeEventID,
-    QueuePrefixID, ResourceInstanceID,
-)
+from scar.ir.execution.common import ContributionSupportID, EstablishedProductionID, OrderAssociationID, TargetLifetimeEventID, QueuePrefixID, ResourceInstanceID
 from scar.ir.execution.order import EventSignal, PrefixEnd, WorkEnd, WorkStart
 from scar.ir.execution.production import BytePrefixWrite, SourceEdgeRef
 from scar.ir.execution.resources import AllocationTarget

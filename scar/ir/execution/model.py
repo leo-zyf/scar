@@ -3,13 +3,13 @@ from dataclasses import dataclass
 
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.v2.ids import OperationInstanceID
-from .common import FactSource, _identifier
+from scar.ir.execution.common import FactSource, _identifier
 from .coordinates import (
     BlockVisit, ControlTransfer, ExecutionRun, ExecutionSegment, HostThreadInstance,
     OperationOccurrence, ProcessInstance, ProgramSnapshot, RegionActivation,
     UseOccurrence, ValueOccurrence,
 )
-from .ids import OperationOccurrenceID
+from scar.ir.execution.common import OperationOccurrenceID
 from .resources import (
     AllocationPlacement, HandleBinding, RequirementBinding, ResourceAccessBinding,
     ResourceInstance, ResourceRealization, ProviderResourceAccess,
@@ -49,7 +49,7 @@ class OccurrenceEvidenceBinding:
 
     def __post_init__(self):
         from scar.ir.program.providers import ProviderFactReference
-        from .common import MissingEvidence
+        from scar.ir.execution.common import MissingEvidence
         if type(self.operation) is not OperationOccurrenceID or type(self.legacy) is not LegacyOperationRef:
             raise TypeError('occurrence evidence binding requires distinct core/legacy endpoints')
         if type(self.source) not in (ProviderFactReference, MissingEvidence):

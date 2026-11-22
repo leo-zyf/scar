@@ -277,7 +277,7 @@ def compile_aten_native_graph(recipe, *, recipe_sha256, linkage, linkage_sha256,
         if any(item is None for item in requested):
             raise ValueError('CPU scheduling requires its contract, digest, target graph and CPU IDs')
         from scar.optimization.aten_native_schedule import propose_cpu_windows
-        from scar.optimization.aten_native_team import propose_cpu_team
+        from scar.optimization.aten_team import propose_cpu_team
 
         _, contract, contract_receipt = _read_declared(concurrency_contract, concurrency_sha256)
         if len(cpu_ids) == 3:

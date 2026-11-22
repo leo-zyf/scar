@@ -17,7 +17,7 @@ from .model import (
     ReferenceValue, StateVersionValue, TerminatorKind, value_type,
 )
 from .resumption import SuspendTerminator, resume_slot_type, saved_actual_use
-from .resumption_flow import first_body_outcome_operations
+from scar.ir.program.resumption_flow import first_body_outcome_operations
 
 
 def driver_errors(graph, *, operation_blocks, region_domains, incoming_edges):

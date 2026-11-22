@@ -131,7 +131,7 @@ def run_spawn_trial(entry, argv, trial, out, *, exclusive_normal_completion=Fals
             os.environ[_ENV] = prior
 
     from scar.ir.execution.coordinates import ProcessInstance
-    from scar.ir.execution.ids import ProcessInstanceID, RunID
+    from scar.ir.execution.common import ProcessInstanceID, RunID
     from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
     from scar.ir.record_codec import encode
 

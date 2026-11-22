@@ -17,7 +17,7 @@ def driver_role_copies(graph, interface):
     ordinary CFG edges stay inside that Region. Noncopy completion/resume ports
     contribute None; distinct successor edges never collapse into origin sets.
     """
-    from .cleanup_forward import _must_forward
+    from scar.ir.program.cleanup_forward import _must_forward
     from .resumption import saved_actual_use
 
     region = next(region for region in graph.regions if region.id == interface.region)

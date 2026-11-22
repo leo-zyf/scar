@@ -76,7 +76,7 @@ def replay_catalog_code(raw, profile):
 def _compiler_bodies(material, topology, selected):
     """Resolve only requested C3 scopes to original five-kind body entries."""
     from scar.analysis.source_annotation_code_bridge import _recipe_reference
-    from scar.analysis.source_connection_contracts import body_entry_rules
+    from scar.analysis.source_connections import body_entry_rules
     from scar.analysis.source_namespace_contents import NamespacePlanView
     rules = dict(body_entry_rules()); keys = defaultdict(list)
     for key in material.interfaces['nodes']: keys[key.occurrence].append(key)
@@ -491,7 +491,7 @@ def read_observed_request_codes(path, *, max_stored_bytes=32_000_000,
         raise ValueError('observed request decoded receipt differs')
     stored=tuple(decode(ObservedSourceRequestCodeLink,json.loads(line),record_tags=P.PRODUCTION_RECORD_TAGS)
         for line in decoded.splitlines())
-    from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+    from scar.analysis.source_type_materials import CompiledCodeProfiles
     view=ProgramView(report['catalog'])
     profiles=tuple(CompiledCodeProfiles(view.catalog,u) for u in report['compiled_units'])
     provider=ObservedSourceCodeProvider(view,report['trace'],report['project_root'],
@@ -520,7 +520,7 @@ def main():
     parser.add_argument('--target-max-rows',type=int,default=100_000)
     parser.add_argument('--frame-max-events',type=int,default=100_000)
     parser.add_argument('--out',required=True);args=parser.parse_args()
-    from scar.analysis.source_compiled_code_profiles import CompiledCodeProfiles
+    from scar.analysis.source_type_materials import CompiledCodeProfiles
     view=ProgramView(args.catalog)
     profiles=tuple(CompiledCodeProfiles(view.catalog,u) for u in args.compiled_unit)
     provider=ObservedSourceCodeProvider(view,args.trace,args.project_root,units=args.unit,compiled=profiles,

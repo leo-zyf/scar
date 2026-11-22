@@ -4,7 +4,7 @@ from fractions import Fraction
 from math import prod
 from statistics import median_low
 
-from scar.optimization.aten_native_team import _bounded_duration, _validate_samples, data_dependencies
+from scar.optimization.aten_team import _bounded_duration, _validate_samples, data_dependencies
 from scar.optimization.aten_numa_locality import _page_sample, _remote_fraction
 from scar.optimization.aten_ready_dag import _finish, _intervals, _prediction
 from scar.optimization.aten_team_numa_locality import _MAX_PAGES_PER_STORAGE

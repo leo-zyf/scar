@@ -77,7 +77,7 @@ def test_legacy_evidence_link_is_artifact_scoped_and_many_to_many_without_id_reb
 
 @pytest.mark.parametrize('realm_kind', ['run', 'external'])
 def test_native_handle_namespace_and_referent_identity_realm_need_not_be_identical(realm_kind):
-    from scar.ir.execution.ids import ExternalRealmID
+    from scar.ir.execution.common import ExternalRealmID
     from scar.ir.execution.resources import ExternalRealm, RunRealm
     from scar.ir.program.providers import ProviderFactReference
     program, model = resource_execution_program(activations=1, native_handles=True)
@@ -91,7 +91,7 @@ def test_native_handle_namespace_and_referent_identity_realm_need_not_be_identic
 def test_requirement_owner_cannot_bind_a_known_other_run_even_before_any_access():
     from scar.ir.execution.common import EvidencePoint
     from scar.ir.execution.coordinates import ExecutionRun
-    from scar.ir.execution.ids import ResourceInstanceID, RunID
+    from scar.ir.execution.common import ResourceInstanceID, RunID
     from scar.ir.execution.resources import ImportedAt, InstanceTarget, RunRealm
     program, model = resource_execution_program(activations=1)
     other = ExecutionRun(RunID('other'), model.runs[0].source)

@@ -141,7 +141,7 @@ def _derived(ctx, scope, clause):
                                    'original_uses': body_outcome_uses(body)})
         return tuple(result)
     if clause is ProtocolClause.CREATED_CLOSE_BRANCH:
-        from .created_close import created_close_view
+        from scar.ir.program.resumption_flow import created_close_view
         return (created_close_view(ctx, scope),)
     if clause is ProtocolClause.ASYNC_REQUEST_ASSOCIATE:
         return tuple({'association': row, 'operation': ctx.operations[row.operation]}

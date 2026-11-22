@@ -8,7 +8,7 @@ from collections import deque
 
 from scar.ir.program.model import BlockArgument, LiteralOrigin, OperationResult, StateVersionValue, TerminatorKind, is_literal_origin
 from scar.ir.program.resumption import SuspendTerminator
-from .common import Unresolved
+from scar.ir.execution.common import Unresolved
 from .coordinates import CaptureIngress, InitialEntry, ResumeIngress
 
 

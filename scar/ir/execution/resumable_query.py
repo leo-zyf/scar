@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 from .coordinates import _identifier
-from .ids import OperationOccurrenceID, RegionActivationID
+from scar.ir.execution.common import OperationOccurrenceID, RegionActivationID
 
 
 def _flags():

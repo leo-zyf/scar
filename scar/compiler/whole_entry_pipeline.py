@@ -595,7 +595,7 @@ def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, acti
         if source_path is None:
             source_path = activation['admission']['uri']
     if source_path is not None:
-        from scar.compiler.cpu_import_source_admission import SCHEMA as ADMISSION
+        from scar.compiler.cpu_entry_launch_scope import SCHEMA as ADMISSION
 
         admission_ref = artifact_reference(Path(source_path).resolve(strict=True), ADMISSION)
         admission = read_artifact(admission_ref)

@@ -9,12 +9,9 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from scar.ir.program.providers import ProviderFactReference
-from .common import FactSource, Unresolved
+from scar.ir.execution.common import FactSource, Unresolved
 from .coordinates import AccessRef, ExecutionPoint, UseRef
-from .ids import (
-    EventRecordID, QueueOrderProfileID, QueuePrefixID, QueueWaitID,
-    ResourceAccessID, ResourceInstanceID, WorkTicketID,
-)
+from scar.ir.execution.common import EventRecordID, QueueOrderProfileID, QueuePrefixID, QueueWaitID, ResourceAccessID, ResourceInstanceID, WorkTicketID
 from .resources import _id, _point, _record, _source, _variant
 from .work import InvokeBoundaryStateEffect, QueueStart
 

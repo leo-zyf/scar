@@ -4,7 +4,7 @@ import re
 
 from scar.codegen.aten_native_graph import _READY_HEADER, _TEAM_HEADER, _render
 from scar.codegen.aten_recurrence_source import _FILE_CLI, _PROBE
-from scar.optimization.aten_native_team import data_dependencies
+from scar.optimization.aten_team import data_dependencies
 
 
 _PROFILE = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,47}')

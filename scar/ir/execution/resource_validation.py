@@ -14,7 +14,7 @@ from scar.ir.program.resources import (
     ResourceRole,
 )
 from scar.ir.v2.common import Completeness
-from .common import EvidencePoint, Unresolved
+from scar.ir.execution.common import EvidencePoint, Unresolved
 from .coordinates import (
     OccurrencePhase, OccurrencePoint, OperationOccurrenceID, RegionActivationID,
 )

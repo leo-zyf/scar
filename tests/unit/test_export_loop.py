@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from scar.codegen import loop as complete
-from scar.compiler.export_loop import export_loop
+from scar.compiler.invariant_loop_runtime import export_loop
 from scar.compiler.model import SourceRef
 from scar.runtime.loop_contract import ASSUMPTIONS,TRUST_POLICY,canonical_sha256,validate_contract,validate_admission
 
