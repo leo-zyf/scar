@@ -27,6 +27,14 @@ _NATIVE_ENTRY = 'CPP20_NATIVE_ENTRY'
 _SERIAL_LOOP = 'CPP_SERIAL_TEMPORAL'
 _OPENMP_LOOP = 'CPP_OPENMP_EXPLICIT_ROW_PARTITION_TEMPORAL'
 _ABI1_PROFILES = frozenset((_NATIVE_ENTRY, _SERIAL_LOOP, _OPENMP_LOOP))
+_ENTRY_TARGET = 'scar_entry'
+_ENTRY_BINARY = Path('bin') / _ENTRY_TARGET
+_REVISION_SCHEMAS = {
+    'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
+    'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
+    'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
+    'rewrites': 'scar.native-rewrites',
+}
 
 
 def cpp20_capability(profile: str, *, operator_abi_version: int = 1) -> dict:
@@ -95,7 +103,7 @@ def deliver(plan: ExecutionPlanRef | ScheduledLoop, project: Path | None = None,
             catalog=None, plan_only: bool = False) -> NativeProject | dict:
     """Lower a verified entry or region plan through the C++20 backend."""
     if isinstance(plan, ExecutionPlanRef) and project is not None and not plan_only:
-        return _emit_native(plan, Path(project))
+        return _emit_native(plan, Path(project).resolve())
     if isinstance(plan, ScheduledLoop) and project is None and catalog is not None:
         return _lower_loop(plan, catalog=catalog, plan_only=plan_only)
     raise ValueError('C++20 delivery requires a project path for an entry or a source catalog for a loop')
@@ -103,7 +111,7 @@ def deliver(plan: ExecutionPlanRef | ScheduledLoop, project: Path | None = None,
 
 def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
     """Replay the schedule, emit its C++20 project and seal the linked output."""
-    from ..frontend.clang import stage_source_revision, verify_mixed_linkage
+    from ..frontend.clang import verify_mixed_linkage
 
     artifacts = schedule.artifacts.copy()
     manifest, observation, delivery = admit_entry(schedule)
@@ -113,10 +121,10 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
         if 'trial_variant' in delivery:
             executable, inputs, dynamic = promote_cpp20_variant(project, artifacts, delivery, toolchain=toolchain)
         else:
-            inputs = stage_source_revision(manifest, project, delivery['source_edits'],
-                                           captures=delivery['compiler_types'], plan=delivery['plan'],
-                                           target_inputs=toolchain.inputs)
-            executable, dynamic = build_cpp20_project(project, inputs, plan=delivery['plan'], toolchain=toolchain)
+            executable, inputs, dynamic = _realize_entry(
+                project, manifest, delivery['source_edits'], delivery['compiler_types'],
+                plan=delivery['plan'], toolchain=toolchain,
+            )
     delivery['cpp20_inputs'] = artifacts['cpp20_inputs'] = inputs
     delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
     fortran = project / 'fortran-emission.json'
@@ -129,31 +137,32 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
 
 def replay_native_revision(artifacts):
     """Verify the original graph, source lock and exact proposed rewrites."""
-    schemas = {
-        'request': 'scar.native-entry', 'program': PROGRAM_SCHEMA,
-        'graph_evidence': 'scar.native-graph-evidence', 'calls': 'scar.native-call-links',
-        'hardware': 'scar.target-hardware-graph', 'simplified': PROGRAM_SCHEMA,
-        'rewrites': 'scar.native-rewrites',
-    }
-    documents = {}
-    for role, schema in schemas.items():
+    for role, schema in _REVISION_SCHEMAS.items():
         ref = artifacts[role]
         if ref['schema'] != schema:
             raise ValueError(f'invalid {role} artifact schema')
-        if role in {'program', 'graph_evidence', 'calls', 'simplified'}:
-            if file_reference(ref['uri'], schema) != ref:
-                raise ValueError(f'{role} artifact differs from the plan input')
-        else:
-            documents[role] = read_artifact(ref)
-    manifest = documents['request']
-    rewrite = documents['rewrites']
+        if role in {'graph_evidence', 'simplified'} and str(Path(ref['uri']).absolute()) != ref['uri']:
+            raise ValueError(f'{role} artifact differs from the plan input')
+    manifest = read_artifact(artifacts['request'])
+    rewrite = read_artifact(artifacts['rewrites'])
+    read_artifact(artifacts['hardware'])
     if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
             or rewrite['result'] != artifacts['simplified']):
         raise ValueError('rewrite ledger does not bind the admitted input and output graphs')
     edits = rewrite.get('source_edits', [])
     typed_units = {unit['path'] for unit in manifest['units']
                    if unit.get('language', manifest['language']) in ('c', 'fortran')}
-    evidence = read_artifact(artifacts['graph_evidence']) if edits or typed_units else None
+    inspect_evidence = bool(edits or typed_units)
+    hash_only = ['program', 'calls']
+    if not inspect_evidence:
+        hash_only.append('graph_evidence')
+    if not edits:
+        hash_only.append('simplified')
+    for role in hash_only:
+        ref = artifacts[role]
+        if file_reference(ref['uri'], ref['schema']) != ref:
+            raise ValueError(f'{role} artifact differs from the plan input')
+    evidence = read_artifact(artifacts['graph_evidence']) if inspect_evidence else None
     if evidence and any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
         raise ValueError('compiler evidence differs from the admitted frontend outputs')
     compiler_types = {row['unit']: row['artifacts']['types'] for row in (evidence or {}).get('units', ())
@@ -208,11 +217,20 @@ def build_cpp20_project(project, inputs, *, plan, toolchain=None):
     toolchain = toolchain or bind_cpp20_toolchain()
     _verify_toolchain_inputs(toolchain, configuration)
     _verify_compiler(toolchain)
-    write_native_project(project, 'scar_entry', **configuration)
-    executable, dependencies = build_native_project(project, 'scar_entry', (toolchain.compiler['uri'],))
+    write_native_project(project, _ENTRY_TARGET, **configuration)
+    executable, dependencies = build_native_project(project, _ENTRY_TARGET, (toolchain.compiler['uri'],))
     replay_cpp20_inputs(project, inputs, plan=plan)
     _verify_compiler(toolchain)
     return executable, _verify_linkage(executable, toolchain, dependencies)
+
+
+def _realize_entry(project, manifest, edits, compiler_types, *, plan, toolchain):
+    from ..frontend.clang import stage_source_revision
+
+    inputs = stage_source_revision(manifest, project, edits, captures=compiler_types, plan=plan,
+                                   target_inputs=toolchain.inputs)
+    executable, dynamic = build_cpp20_project(project, inputs, plan=plan, toolchain=toolchain)
+    return executable, inputs, dynamic
 
 
 def _verify_compiler(toolchain):
@@ -227,20 +245,18 @@ def _verify_toolchain_inputs(toolchain, configuration):
             raise ValueError(f'selected toolchain inputs are absent from the C++20 project: {key}')
 
 
-def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *, mode):
-    from ..frontend.clang import stage_source_revision
+def _trial_source(artifacts, edits, mode):
+    return dict(schema='scar.native-source-variant', schema_version=1,
+                request=artifacts['request'], rewrites=artifacts['rewrites'], mode=mode, source_edits=edits)
 
+
+def build_trial_variant(directory, artifacts, manifest, edits, compiler_types, *, mode):
     directory.mkdir(parents=True)
-    plan = publish_plan(directory / 'source-variant.json', dict(
-        schema='scar.native-source-variant', schema_version=1,
-        request=artifacts['request'], rewrites=artifacts['rewrites'], mode=mode, source_edits=edits,
-    ))
-    project = directory / 'project'
+    plan = publish_plan(directory / 'source-variant.json', _trial_source(artifacts, edits, mode))
     with verify_stack_components_once():
         toolchain = _entry_toolchain(manifest)
-        inputs = stage_source_revision(manifest, project, edits, captures=compiler_types, plan=plan,
-                                       target_inputs=toolchain.inputs)
-        executable, _ = build_cpp20_project(project, inputs, plan=plan, toolchain=toolchain)
+        executable, inputs, _ = _realize_entry(directory / 'project', manifest, edits, compiler_types,
+                                              plan=plan, toolchain=toolchain)
     binary = file_reference(executable, 'scar.cpp20-executable')
     variant = publish_plan(directory / 'result.json', dict(
         schema='scar.native-compiled-variant', schema_version=1, plan=plan, inputs=inputs, binary=binary,
@@ -257,26 +273,35 @@ def promote_cpp20_variant(project, artifacts, delivery, *, toolchain):
     variant = read_artifact(reference)
     recipe = read_artifact(variant['plan'])
     mode = delivery['selected'][0]['option']
-    if (recipe != dict(schema='scar.native-source-variant', schema_version=1,
-                       request=artifacts['request'], rewrites=artifacts['rewrites'],
-                       mode=mode, source_edits=delivery['source_edits'])
+    if (recipe != _trial_source(artifacts, delivery['source_edits'], mode)
             or variant['schema_version'] != 1 or variant.get('toolchain') != toolchain.receipt()):
         raise ValueError('selected trial belongs to a different source revision')
     staged = Path(reference['uri']).parent / 'project'
-    original = staged / 'bin/scar_entry'
+    original = staged / _ENTRY_BINARY
     binary = variant['binary']
     if file_reference(original, 'scar.cpp20-executable') != binary:
         raise ValueError('selected executable differs from the calibrated binary')
     build = replay_cpp20_inputs(staged, variant['inputs'], plan=variant['plan'])
     _verify_toolchain_inputs(toolchain, build)
-    shutil.copytree(staged, project, ignore=shutil.ignore_patterns('cpp20-inputs.json'))
+    project.mkdir()
+    for name in ('src', 'include', 'validation'):
+        if (staged / name).is_dir():
+            shutil.copytree(staged / name, project / name)
+    for name in ('translation.json', 'fortran-emission.json'):
+        if (staged / name).is_file():
+            shutil.copy2(staged / name, project / name)
+    # CMakeLists is derived from the sealed configuration, not part of a
+    # calibrated binary's identity. Generate it from the verified inputs.
+    write_native_project(project, _ENTRY_TARGET, **build)
+    executable = project / _ENTRY_BINARY
+    executable.parent.mkdir()
+    shutil.copy2(original, executable)
     inputs = publish_cpp20_inputs(project, build, plan=delivery['plan'])
-    before = read_artifact(variant['inputs'])['files']
-    after = read_artifact(inputs)['files']
-    if ({name: (row['sha256'], row['size_bytes']) for name, row in before.items()}
-            != {name: (row['sha256'], row['size_bytes']) for name, row in after.items()}):
-        raise ValueError('delivered project sources differ from the calibrated variant')
-    executable = project / 'bin/scar_entry'
+    before = read_artifact(variant['inputs'])
+    after = read_artifact(inputs)
+    if ({name: dict(row, uri=str(project / name)) for name, row in before['files'].items()} != after['files']
+            or before['libraries'] != after['libraries']):
+        raise ValueError('delivered project inputs differ from the calibrated variant')
     delivered = file_reference(executable, binary['schema'])
     if delivered != dict(binary, uri=str(executable)):
         raise ValueError('published executable differs from the calibrated binary')

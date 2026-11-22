@@ -54,11 +54,12 @@ end function formula
 INPUTS = {"positive": (b"7\n", b"77\n"), "negative": (b"-3\n", b"-3\n")}
 
 
-def _run(directory, name, args):
+def _run(directory, name, args, *, stdin=None, environment=None):
     argv = list(map(str, args))
     (directory / f"{name}.command.json").write_text(json.dumps(argv) + "\n", encoding="utf-8")
     env = dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE="1", LC_ALL="C")
-    result = subprocess.run(argv, cwd=directory, env=env, capture_output=True, timeout=120)
+    env.update(environment or {})
+    result = subprocess.run(argv, cwd=directory, env=env, input=stdin, capture_output=True, timeout=120)
     (directory / f"{name}.stdout").write_bytes(result.stdout)
     (directory / f"{name}.stderr").write_bytes(result.stderr)
     assert result.returncode == 0, (f"{name} failed in {directory}\n"
@@ -102,6 +103,9 @@ def native_request(tmp_path_factory, request):
     rows = (*SOURCE_UNITS, (fortran_name, "fortran", fortran_standard, fortran_text))
     units, files, objects = [], {}, []
     for index, (name, language, standard, text) in enumerate(rows):
+        if name == "modern.c" and profile == "free-f2008":
+            text = ("int keep_value(int n) { int same = n; return same; }\n"
+                    "int c_value(int n) { return keep_value(n) * 2; }\n")
         path = sources / name
         path.write_text(text, encoding="utf-8")
         data = path.read_bytes()
@@ -151,8 +155,16 @@ def native_plan(native_graph):
 def cpp20_delivery(native_plan):
     plan, _ = native_plan
     output = plan.parent / "delivery"
+    frozen = ExecutionPlanRef.read(plan / "compiler-plan.json")
+    _, binding = read_native_binding(frozen)
+    environment = None
+    if variant := binding.get("trial_variant"):
+        trial = Path(variant["uri"]).parent / "project"
+        (trial / "CMakeLists.txt").write_text('message(FATAL_ERROR "stale trial build script")\n', encoding="utf-8")
+        environment = {"CMAKE_GENERATOR": "SCAR unavailable test generator"}
     _run(plan.parent, "delivery", [sys.executable, "-m", "scar", "compile", "--plan",
-                                     plan / "compiler-plan.json", "--out", output, "--repetitions", "1"])
+                                     plan / "compiler-plan.json", "--out", output, "--repetitions", "1"],
+         environment=environment)
     return output, json.loads((output / "result.json").read_bytes())
 
 
@@ -208,8 +220,9 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan):
     assert set(observation["case_inputs"]) == set(INPUTS)
 
 
-def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_plan, cpp20_delivery):
-    _, plan = native_plan
+def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_request, native_plan, cpp20_delivery):
+    _, _, request = native_request
+    plan_path, plan = native_plan
     folder, delivery = cpp20_delivery
     assert delivery["delivery"] == "COMPARED"
     project = folder / "project"
@@ -217,6 +230,7 @@ def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_plan, cpp
     cmake = (project / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "LANGUAGES CXX" in cmake and "CXX_STANDARD 20" in cmake
     assert receipt["schema"] == "scar.cpp20-project-inputs" and receipt["cxx_standard"] == 20
+    assert all(Path(name).suffix == ".cpp" for name in receipt["configuration"]["sources"])
     translations = json.loads((project / "translation.json").read_bytes())
     old, = [row for row in translations if row["source"] == "old.c"]
     definition, = old["c_identifier_definitions"]
@@ -225,11 +239,25 @@ def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_plan, cpp
     assert delivery["artifacts"]["execution_plan"] == plan["artifacts"]["execution_plan"]
     executable = Path(delivery["executable"]["path"])
     assert executable.read_bytes().startswith(b"\x7fELF")
+    frozen = ExecutionPlanRef.read(plan_path / "compiler-plan.json")
+    observation, binding = read_native_binding(frozen)
+    if any(unit["flags"] == ["-std=f2008"] for unit in request["units"]):
+        assert set(observation["variants"]) == {"original", "canonical"}
+        calibrated = read_artifact(binding["trial_variant"])["binary"]
+        assert delivery["executable"]["sha256"] == calibrated["sha256"]
+        assert executable.read_bytes() == read_artifact(calibrated, json_document=False)
+    else:
+        assert "trial_variant" not in binding
+
+    standalone = folder / "standalone-build"
+    _run(folder, "standalone-cmake", ["cmake", "-S", project, "-B", standalone, "-DCMAKE_BUILD_TYPE=Release"])
+    _run(folder, "standalone-build", ["cmake", "--build", standalone, "--parallel", "2"])
     assert {row["case"] for row in delivery["validation"] if row["matches"]} == set(INPUTS)
-    for case, (_, expected) in INPUTS.items():
+    for case, (stdin, expected) in INPUTS.items():
         retained = folder / "validation" / case
         assert (retained / "1-original.stdout").read_bytes() == expected
         assert (retained / "1-generated.stdout").read_bytes() == expected
+        assert _run(folder, f"standalone-{case}", [standalone / "scar_entry"], stdin=stdin) == expected
 
 
 def test_native_lowering_requires_an_abi_bridge_for_kr_promotions(tmp_path):
