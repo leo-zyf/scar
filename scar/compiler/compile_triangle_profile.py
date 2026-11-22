@@ -22,7 +22,6 @@ from scar.optimization import native_ordered_profile as profiles
 from scar.optimization.native_ordered_publication import ENV
 
 SCHEMA = 'scar.source-triangle-profile-compilation'
-BENCHMARK = 'scar.source-triangle-profile-benchmark'
 AUTOMATIC = 'scar.source-triangle-entry-compilation'
 
 
@@ -118,7 +117,7 @@ def _measure(out, plans, packages, *, repeats):
     launch = dict(cpu_ids=cpus, argv=argv, environment=environment, entry=entry, cwd=cwd,
         interpreter=interpreter, stdin='DEVNULL', internal_native_cwd='/',
         shared_executable_or_library_paths=shared)
-    return dict(schema=BENCHMARK, schema_version=1, plans=plans, packages=packages,
+    return dict(schema=profiles.BENCHMARK, schema_version=profiles.BENCHMARK_VERSION, plans=plans, packages=packages,
         launch=launch, raw=raw, arms=arms, warmup_rounds=1, measured_rounds=repeats)
 
 

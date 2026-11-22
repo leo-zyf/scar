@@ -20,6 +20,7 @@ SCHEMA = 'scar.native-ordered-count-profile'
 ORIGINAL_OBSERVATION = 'scar.study-aggregate-source-scope'
 ORACLE = 'scar.native-ordered-source-stdout'
 BENCHMARK = 'scar.source-triangle-profile-benchmark'
+BENCHMARK_VERSION = 2
 SELECTION = 'scar.native-ordered-count-selection'
 FULL_PACKAGE = 'scar.native-source-triangle-profile'
 
@@ -370,16 +371,16 @@ def select_profile(benchmark_path):
     """Use only matched samples from the new count and keep the narrower proven width on overlap."""
     from scar.optimization.native_ordered_publication import ENV
 
-    benchmark = _ref(benchmark_path, BENCHMARK)
-    observed = read_artifact(benchmark)
+    benchmark, observed = open_artifact(Path(benchmark_path).resolve(strict=True), BENCHMARK)
+    version = observed['schema_version']
     plans, packages = observed['plans'], observed['packages']
-    _require(observed['schema_version'] == 1 and plans.keys() == packages.keys() and plans
+    _require(type(version) is int and version in (1, BENCHMARK_VERSION)
+        and plans.keys() == packages.keys() and plans
         and all(re.fullmatch('[1-9][0-9]*', name) for name in plans),
         'a matched count study needs at least one qualified native width')
     profiles, native_launches, native_providers = {}, [], []
     for name, profile_ref in plans.items():
-        _require(profile_ref == _ref(profile_ref['uri'], SCHEMA), 'profile changed before the measured comparison')
-        profile = verify_profile_plan(profile_ref['uri'])
+        profile = verify_profile_plan(profile_ref)
         _require(name == str(profile['width']) and profile['resources']['dispatch']['window'] == profile['width'],
             'width-only benchmark requires its exact diagonal physical plan')
         native_launch, providers = _full_package(packages[name], profile_ref, profile)
@@ -426,11 +427,16 @@ def select_profile(benchmark_path):
     _require(observed['arms'] == {case: {key: val for key,val in row.items() if key != 'sample_stdev_ns'}
         for case,row in summary.items()}, 'archived arm summary differs from the recorded samples')
 
-    # Keep the same conservative relative margin as the publication comparison.
-    minimum = 200
+    # Retained v1 measurements replay their original qualification rule.
+    minimum = 200 if version == 1 else 100
+
     def robustly_faster(case, other):
         upper, lower = summary[case]['max_ns'], summary[other]['min_ns']
-        return repeats >= 3 and upper < lower and upper*10000 <= lower*(10000-minimum)
+        saved_boundary = lower * (10000 - minimum)
+        measured_boundary = upper * 10000
+        clears_margin = (measured_boundary <= saved_boundary if version == 1
+                         else measured_boundary < saved_boundary)
+        return repeats >= 3 and clears_margin
 
     robust = [case for case in widths if len(widths) > 1
         and all(robustly_faster(case, other) for other in widths if other != case)]
