@@ -10,9 +10,10 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.codegen import native_numpy_vector_normalize as normalize
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
+from scar.codegen.native_provider_bundle import (
+    SCHEMA as BUNDLE_SCHEMA, cpu_executable_dynamic, validate_native_provider_bundle,
+)
 from scar.codegen.native_project import build_native_project, write_native_project
-from scar.codegen.native_provider_bundle import SCHEMA as BUNDLE_SCHEMA, validate_native_provider_bundle
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 SCHEMA = 'scar.native-numpy-observables'

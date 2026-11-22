@@ -10,9 +10,8 @@ from tempfile import TemporaryDirectory
 from time import monotonic_ns
 
 from scar.analysis.fixed_grid_entry_abi import _span
-from scar.codegen.native_cpu_elf import _dependencies
+from scar.codegen.native_provider_bundle import _content, _dependencies
 from scar.codegen.native_project import build_native_project
-from scar.codegen.native_provider_bundle import _content
 from scar.compiler.compile_exported_aten import _calibration_paths, _write_record
 from scar.compiler.compile_exported_nvhpc import _compare, check_nvhpc_project
 from scar.compiler.nvhpc_source_validation import _context, _receipt

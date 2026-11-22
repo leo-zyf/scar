@@ -1,5 +1,6 @@
 """Build and check an independent C++20 project from admitted native sources."""
 
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -10,12 +11,20 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.artifacts import _durable_bytes, file_reference
-from scar.codegen.native_cpu_elf import _dependencies
+from scar.codegen.native_provider_bundle import _dependencies
 from scar.ir.execution_recipe import read_artifact
 
 
 CPP20_INPUTS = 'scar.cpp20-project-inputs'
 _CXX_SUFFIXES = {'.cpp', '.cc', '.cxx'}
+
+
+def read_native_manifest(path, manifest_sha256, *, mismatch, object_pairs_hook=None):
+    """Validate the exact bytes decoded by a native project or package reader."""
+    raw = path.read_bytes()
+    if sha256(raw).hexdigest() != manifest_sha256:
+        raise ValueError(mismatch)
+    return json.loads(raw, object_pairs_hook=object_pairs_hook)
 
 
 def _project_material(root, configuration):

@@ -1,8 +1,7 @@
-"""Package an ELF's explicitly resolved DT_NEEDED graph without relinking it.
+"""Verify ELF dependencies, relocate executables and package provider libraries.
 
-The receipt stops at the named host libraries. It does not capture libraries
-opened by executable code, or establish an ABI outside the qualified host.
-Validate in the target process before preloading in the recorded order.
+Provider receipts cover the explicitly resolved DT_NEEDED graph up to the
+named host libraries. Verify the receipt in the target process before preload.
 """
 
 import ctypes
@@ -10,20 +9,124 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
+import stat
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_cpu_elf import _dynamic_tags, _name
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
 SCHEMA = 'scar.native-provider-bundle'
 FORMAT = 'ELF_DT_NEEDED_PRELOAD'
+PACKAGE_RUNPATH = '$ORIGIN/../lib'
 _OBJECTS = 'objects'
 _MANIFEST = 'bundle.json'
 _ABI = ('class', 'data', 'machine')
 _RTLD_DI_LINKMAP = 2
+_NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_.+-]*\Z')
+_TAG = re.compile(r'^\s*0x[0-9a-fA-F]+\s+\(([^)]+)\)')
+_STRING = re.compile(r'[^\[]*\[(.*)\]\s*\Z')
+_EXTRA_LOAD = ('AUDIT', 'DEPAUDIT', 'FILTER', 'AUXILIARY')
+_LDD_ENTRY = re.compile(
+    r'[ \t]*(?:(?P<soname>[A-Za-z0-9_+.-]+)[ \t]+=>[ \t]+(?P<resolved>/[^\x00\r\n]+)'
+    r'|(?P<direct>/[^\x00\r\n]+)|(?P<virtual>linux-(?:vdso(?:64)?|gate)\.so\.1))'
+    r'[ \t]\(0x[0-9a-fA-F]+\)[ \t]*'
+)
+
+
+def _name(value):
+    if type(value) is not str or not _NAME.fullmatch(value):
+        raise ValueError('expected a plain ELF file or SONAME: ' + repr(value))
+    return value
+
+
+def _dependencies(listing):
+    result = {}
+    for line in listing.splitlines():
+        # The loader prints raw paths followed by one separator and the address.
+        entry = _LDD_ENTRY.fullmatch(line)
+        if entry is None:
+            raise ValueError('native ELF dependency was not resolved: ' + line)
+        name = entry['soname'] or entry['direct'] or entry['virtual']
+        path = entry['resolved'] or entry['direct']
+        if name in result:
+            raise ValueError('ambiguous ELF dependency: ' + name)
+        result[name] = None if path is None else str(Path(path).resolve(strict=True))
+    return result
+
+
+def _dynamic_tags(listing, *, shared=False):
+    """Read lookup tags common to executable and shared-object receipts."""
+    dynamic = dict(runpath=None, needed=[], rpath=None)
+    if shared:
+        dynamic['soname'] = None
+    for row in listing.splitlines():
+        tag = _TAG.match(row)
+        if tag is None:
+            continue
+        name = tag[1]
+        if name in _EXTRA_LOAD:
+            raise ValueError(f'unsupported ELF loader redirection: {name}')
+        key = name.lower()
+        if key not in dynamic:
+            continue
+        value = _STRING.fullmatch(row[tag.end():])
+        if value is None or shared and (not value[1] or '[' in value[1] or ']' in value[1]):
+            raise ValueError(f'cannot decode ELF lookup tag: {name}')
+        if key == 'needed':
+            dynamic[key].append(_name(value[1]))
+        elif dynamic[key] is None:
+            dynamic[key] = _name(value[1]) if key == 'soname' else value[1]
+        else:
+            raise ValueError(f'duplicate ELF lookup tag: {name}')
+    if len(set(dynamic['needed'])) != len(dynamic['needed']):
+        raise ValueError('duplicate ELF dependency name')
+    return dynamic
+
+
+def cpu_executable_dynamic(path) -> dict:
+    """Read ordinary ELF lookup tags without running the file."""
+    try:
+        listing = subprocess.check_output(['/usr/bin/readelf', '-W', '-d', str(Path(path).absolute())],
+                                          env={'LC_ALL': 'C'}, encoding='utf-8', errors='surrogateescape')
+    except subprocess.CalledProcessError as error:
+        raise ValueError('cannot read ELF dynamic tags') from error
+    return _dynamic_tags(listing)
+
+
+def relocate_cpu_executable(source, target, *, original_runpath) -> None:
+    """Publish a fresh executable with one exact, size-preserving string change."""
+    source, target = Path(source), Path(target)
+    mode = source.stat().st_mode
+    if not stat.S_ISREG(mode) or not mode & 0o111 or mode & (stat.S_ISUID | stat.S_ISGID):
+        raise ValueError('an ordinary executable file is required for ELF relocation')
+    before = cpu_executable_dynamic(source)
+    if (type(original_runpath) is not str or not original_runpath or '\0' in original_runpath
+            or before['rpath'] is not None or before['runpath'] != original_runpath):
+        raise ValueError('executable does not have the declared single RUNPATH')
+    original = os.fsencode(original_runpath)
+    packaged = os.fsencode(PACKAGE_RUNPATH)
+    if len(packaged) > len(original):
+        raise ValueError('package RUNPATH does not fit in the original ELF string')
+
+    payload = source.read_bytes()
+    marker = b'\0' + original + b'\0'
+    start = payload.find(marker)
+    if start == -1 or payload.find(marker, start + 1) != -1:
+        raise ValueError('original RUNPATH must identify one complete ELF string')
+    start += 1
+    end = start + len(original)
+    expected = payload[:start] + packaged.ljust(len(original), b'\0') + payload[end:]
+    with TemporaryDirectory(prefix='.scar-cpu-elf-', dir=target.parent) as temporary:
+        staged = Path(temporary) / 'executable'
+        staged.write_bytes(expected)
+        staged.chmod(stat.S_IMODE(mode))
+        after = cpu_executable_dynamic(staged)
+        if after != dict(before, runpath=PACKAGE_RUNPATH) or staged.read_bytes() != expected:
+            raise ValueError('ELF relocation did not preserve all other executable bytes and lookup tags')
+        os.link(staged, target)
 
 
 
@@ -237,4 +340,5 @@ def load_native_provider_bundle(reference):
     return library
 
 
-__all__ = ['SCHEMA', 'build_native_provider_bundle', 'validate_native_provider_bundle', 'load_native_provider_bundle']
+__all__ = ['PACKAGE_RUNPATH', 'SCHEMA', 'build_native_provider_bundle', 'cpu_executable_dynamic',
+           'load_native_provider_bundle', 'relocate_cpu_executable', 'validate_native_provider_bundle']

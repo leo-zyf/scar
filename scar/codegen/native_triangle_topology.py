@@ -156,7 +156,7 @@ def export(capture_path, provider, out):
 
 
 def check(package):
-    from scar.codegen.native_cpu_elf import _dependencies
+    from scar.codegen.native_provider_bundle import _dependencies
     from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
     root = Path(package).resolve(strict=True)

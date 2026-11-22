@@ -14,8 +14,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from scar.analysis.scalar_score_reuse_evidence import _compile, _one
-from scar.codegen.native_cpu_elf import _dependencies
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
+from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dynamic
 from scar.codegen import scalar_recursive_lowering as core
 from scar.codegen import scalar_recursive_standalone as kernel
 from scar.codegen import scalar_sorted_library as sorted_library

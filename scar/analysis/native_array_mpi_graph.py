@@ -34,7 +34,7 @@ def _ref(path, schema):
 
 
 def _runtime(environment):
-    from scar.codegen.native_cpu_elf import _dependencies
+    from scar.codegen.native_provider_bundle import _dependencies
 
     # Explicit launcher options fix placement. MPI/loader overrides in the
     # recipe would change the provider and resource domain of that launch.

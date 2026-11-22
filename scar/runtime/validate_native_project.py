@@ -9,8 +9,8 @@ import re
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_cpu_elf import _dependencies
-from scar.codegen.native_provider_bundle import _content
+from scar.codegen.native_project import read_native_manifest
+from scar.codegen.native_provider_bundle import _content, _dependencies
 from scar.compiler.tensor_planning_inputs import replay_native_comparison, replay_operation_costs, replay_recurrence_placement, scheduled_tensor_body
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
@@ -495,10 +495,8 @@ def _replay_single(manifest, member):
 
 def verify_native_project(directory, manifest_sha256):
     root = Path(directory).resolve(strict=True)
-    path = root / 'artifact.json'
-    if _content(path)['sha256'] != manifest_sha256:
-        raise ValueError('native project manifest differs from its declared digest')
-    manifest = json.loads(path.read_bytes())
+    manifest = read_native_manifest(root / 'artifact.json', manifest_sha256,
+                                    mismatch='native project manifest differs from its declared digest')
     files = manifest['files']
     if 'source_entry_cli' in manifest and (manifest['schema'] != 'scar.aten-recurrence-delivery'
             or 'profiles' in manifest or 'cpu_linkage' not in manifest or 'plan/schedule.json' not in files):

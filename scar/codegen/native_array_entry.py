@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from scar.codegen import native_array_tape as tape_backend
 from scar.codegen import native_numpy_complex as stock
 from scar.codegen import native_controller_argv as argv_backend
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
+from scar.codegen.native_provider_bundle import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 

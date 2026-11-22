@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 from scar.artifacts import file_reference
-from scar.codegen.native_cpu_elf import _dependencies, cpu_executable_dynamic
+from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dynamic
 from scar.codegen.native_project import (
     build_native_project, publish_cpp20_inputs, replay_cpp20_inputs, write_native_project,
 )

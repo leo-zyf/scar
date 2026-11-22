@@ -10,9 +10,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.codegen.aten_provider import _build_interface, _resolve
-from scar.codegen.native_cpu_elf import _dependencies
+from scar.codegen.native_provider_bundle import _content, _dependencies
 from scar.codegen.aten_team_graph_source import render_team_calls
-from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe
 from scar.ir.record_codec import loads
 from scar.optimization.aten_live_values import tensor_releases

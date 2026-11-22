@@ -1,7 +1,6 @@
 """Publish and replay the detached runtime package of a CPU native project."""
 
 import argparse
-from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -9,10 +8,10 @@ import stat
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_cpu_elf import (
-    PACKAGE_RUNPATH, _dependencies, _name, cpu_executable_dynamic, relocate_cpu_executable,
+from scar.codegen.native_project import read_native_manifest
+from scar.codegen.native_provider_bundle import (
+    PACKAGE_RUNPATH, _content, _dependencies, _elf, _name, cpu_executable_dynamic, relocate_cpu_executable,
 )
-from scar.codegen.native_provider_bundle import _content, _elf
 from scar.ir.v2.schemas import canonical_json
 from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
@@ -87,10 +86,8 @@ def verify_native_cpu_package(directory, manifest_sha256):
     found = _package_files(root)
     if _MANIFEST not in found:
         raise ValueError('native CPU package has no local artifact manifest')
-    raw = (root / _MANIFEST).read_bytes()
-    if sha256(raw).hexdigest() != manifest_sha256:
-        raise ValueError('native CPU package manifest differs from its declared digest')
-    manifest = json.loads(raw, object_pairs_hook=_unique_members)
+    manifest = read_native_manifest(root / _MANIFEST, manifest_sha256, object_pairs_hook=_unique_members,
+                                    mismatch='native CPU package manifest differs from its declared digest')
     if (type(manifest) is not dict or manifest.keys() - {'source_project'} != _FIELDS
             or manifest['schema'] != SCHEMA or type(manifest['schema_version']) is not int
             or manifest['schema_version'] != 1 or manifest['runtime_search_path'] != PACKAGE_RUNPATH
@@ -179,10 +176,8 @@ def export_native_cpu(project, manifest_sha256, *, out):
     project, proof = verify_native_project(project, manifest_sha256)
     if 'cpu_linkage' not in proof:
         raise ValueError('build the source project with --require-cpu-only before packaging')
-    manifest_path = project / 'artifact.json'
-    manifest = json.loads(manifest_path.read_bytes())
-    if _content(manifest_path)['sha256'] != manifest_sha256:
-        raise ValueError('native project manifest changed after source verification')
+    manifest = read_native_manifest(project / _MANIFEST, manifest_sha256,
+                                    mismatch='native project manifest changed after source verification')
     dependencies = manifest['dependencies']
     provider_root = Path(dependencies['libtorch_cpu.so']).parent
     providers = {name: f'lib/{name}' for name, path in dependencies.items()

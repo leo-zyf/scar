@@ -9,8 +9,7 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_cpu_elf import _dependencies
-from scar.codegen.native_provider_bundle import _content
+from scar.codegen.native_provider_bundle import _content, _dependencies
 
 
 _SCHEMA = 'scar.aten-provider-linkage'

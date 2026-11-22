@@ -9,8 +9,7 @@ from tempfile import TemporaryDirectory
 from scar.analysis.replay_transaction import replay_transaction
 from scar.codegen.cpu_catalog_runtime_package import _host, _loader, _signature, _write_json
 from scar.codegen.native_cpu_arena_reuse import _path
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
-from scar.codegen.native_provider_bundle import _content
+from scar.codegen.native_provider_bundle import _content, cpu_executable_dynamic
 from scar.compiler.aten_entry_delivery import LAUNCHER
 from scar.compiler.entry_delivery import _environment_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
