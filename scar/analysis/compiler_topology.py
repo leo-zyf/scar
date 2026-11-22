@@ -789,17 +789,21 @@ def compiler_topology_document(f0, f1, f2, f3b, c1, f3a, *, max_blocks=100_000,
 
 
 def read_compiler_topology(document, f0, f1, f2, f3b, c1, f3a) -> CompilerTopologyMaterial:
+    native = decode(SourceSymbolsMaterial, f3a)
+    return _verify_topology(document, native, lambda limits: _derive(f0, f1, f2, f3b, c1, f3a, limits))
+
+
+def _verify_topology(document, native, rederive):
     material = decode(CompilerTopologyMaterial, document)
-    # Check the current implementation before any compiler call. The original
-    # native profile is itself validated by the one fresh F3-A read below.
-    recorded_native = decode(SourceSymbolsMaterial, f3a)
-    profile = _profile(recorded_native)
+    profile = _profile(native)
     if material.profile.implementation_sha256 in _PREVIOUS_IMPLEMENTATIONS:
         profile = replace(profile, implementation_sha256=material.profile.implementation_sha256)
     if material.profile != profile:
         raise ValueError('C3-T compiler topology implementation/catalog profile mismatch')
-    fresh = _derive(f0, f1, f2, f3b, c1, f3a,
-        (material.max_blocks, material.max_rewrites, material.max_visit_steps))
+    limits = material.max_blocks, material.max_rewrites, material.max_visit_steps
+    if any(type(n) is not int or n < 0 for n in limits):
+        raise ValueError('compiler topology budgets must be exact nonnegative integers')
+    fresh = rederive(limits)
     if material != replace(fresh, profile=profile):
         raise ValueError('C3-T topology differs from original source contexts/public compiler entries')
     return material

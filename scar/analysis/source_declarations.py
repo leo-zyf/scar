@@ -394,11 +394,17 @@ def source_declarations_document(f0, f1, f2, f3b, c1, *, max_names=1_000_000,
 
 
 def read_source_declarations(document, f0, f1, f2, f3b, c1) -> SourceDeclarationsMaterial:
+    return _verify_declarations(document, lambda limits: _derive(f0, f1, f2, f3b, c1, limits))
+
+
+def _verify_declarations(document, rederive):
     material = decode(SourceDeclarationsMaterial, document)
     if material.profile != _profile():
         raise ValueError('C2a declaration implementation/catalog profile mismatch')
-    fresh = _derive(f0, f1, f2, f3b, c1,
-        (material.max_names, material.max_contributions, material.max_conflicts))
+    limits = material.max_names, material.max_contributions, material.max_conflicts
+    if any(type(n) is not int or n < 0 for n in limits):
+        raise ValueError('declaration budgets must be exact nonnegative integers')
+    fresh = rederive(limits)
     if material != fresh:
         raise ValueError('C2a projections/contributions differ from original B ports and C1 contexts')
     return material

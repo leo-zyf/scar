@@ -463,6 +463,47 @@ def read_frontend_bindings(f0, f1, f2, roles, contexts, declarations, bindings, 
         (SourceRolesMaterial, roles), (SourceContextsMaterial, contexts),
         (SourceDeclarationsMaterial, declarations), (SourceSymbolsMaterial, native),
         (CompilerTopologyMaterial, topology)))
-    view = FrontendBindingView(b, c, d, q, a, t, s)
+    return _checked_frontend(b, c, d, q, a, t, s)
+
+
+def _checked_frontend(roles, contexts, declarations, bindings, native, topology, symbols):
+    view = FrontendBindingView(roles, contexts, declarations, bindings, native, topology, symbols)
     view.verify()
     return view
+
+
+def _replay_frontend_unit(f0, f1, f2, roles, contexts, declarations, bindings, native, topology, symbols):
+    """Derive each sealed prerequisite once in this cold F4 worker call.
+
+    Read budgets and profiles from the individual recorded layers. Keep the
+    recorded documents as the inputs to downstream fingerprints even when a
+    historical producer is admitted by its exact reader. No typed result from
+    collection or publication enters this call.
+    """
+    from scar.analysis import compiler_symbols as compiled, compiler_topology as scopes
+    from scar.analysis import source_syntax as syntax_rules, source_symbols as native_rules
+    from scar.analysis import source_role_materials as role_rules, source_contexts as context_rules
+    from scar.analysis import source_declarations as declaration_rules, source_bindings as binding_rules
+
+    original = syntax_rules.decoded_source_bytes(f0)
+    syntax_rules._verify_tokens(f1, f0, original)
+    syntax, _ = syntax_rules._verify_syntax(f2,
+        lambda mode, limit: syntax_rules._project_syntax(f0, f1, original, mode, limit))
+    native_material = native_rules._verify_source_symbols(native, f0,
+        lambda scope_limit, symbol_limit: native_rules._project_symbols(f0, f1, f2, original, scope_limit, symbol_limit))
+    role_material = role_rules._verify_roles(roles,
+        lambda ports, slots: role_rules._project_roles(f0, f1, f2, syntax, ports, slots))
+    context_material = context_rules._verify_contexts(contexts,
+        lambda limits: context_rules._project_contexts(f0, f1, f2, roles, syntax, role_material, limits))
+    declaration_material = declaration_rules._verify_declarations(declarations,
+        lambda limits: declaration_rules._project_declarations(f0, f1, f2, roles, contexts, syntax, role_material, context_material, limits))
+    binding_material = binding_rules._verify_bindings(bindings,
+        lambda limits: binding_rules._project_bindings(f0, f1, f2, roles, contexts, declarations, syntax, role_material, context_material, declaration_material, limits))
+    topology_material = scopes._verify_topology(topology, native_material,
+        lambda limits: scopes._project_topology(f0, f1, f2, roles, contexts, native, syntax, role_material, context_material, native_material, limits))
+    symbol_material = compiled._verify_compiler_symbols(symbols, native_material,
+        lambda limits: compiled._project_symbols(f0, f1, f2, roles, contexts, declarations, native, topology,
+            syntax, role_material, context_material, declaration_material, native_material, topology_material, limits))
+    view = _checked_frontend(role_material, context_material, declaration_material, binding_material,
+                             native_material, topology_material, symbol_material)
+    return view, syntax

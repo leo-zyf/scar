@@ -366,13 +366,20 @@ def source_roles_document(f0, f1, f2, *, max_ports=1_000_000, max_slots=10_000_0
 
 
 def read_source_roles(document, f0, f1, f2) -> SourceRolesMaterial:
+    return _verify_roles(document, lambda ports, slots: _produce(f0, f1, f2, ports, slots))
+
+
+def _verify_roles(document, rederive):
     material = decode(SourceRolesMaterial, document)
     profile = _profile()
     if material.profile.implementation_sha256 == _PREVIOUS_IMPLEMENTATION:
         profile = replace(profile, implementation_sha256=_PREVIOUS_IMPLEMENTATION)
     if material.profile != profile:
         raise ValueError('field-role implementation/catalog profile mismatch')
-    fresh = _produce(f0, f1, f2, material.max_ports, material.max_slots)
+    limits = material.max_ports, material.max_slots
+    if any(type(n) is not int or n < 0 for n in limits):
+        raise ValueError('role budgets must be exact nonnegative integers')
+    fresh = rederive(*limits)
     if material != replace(fresh, profile=profile):
         raise ValueError('role ports/counters differ from original F2 slots and the reviewed catalog')
     return material

@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import time
 
-from scar.analysis.frontend_bindings import read_frontend_bindings
+from scar.analysis.frontend_bindings import _replay_frontend_unit
 from scar.analysis.source_contexts import SourceContextView
 from scar.analysis.source_expression_rules import SourceExpressionRules, SourceRuleError
 from scar.analysis.source_statement_rules import SourceStatementRules
@@ -26,7 +26,6 @@ from scar.ir.program import source_productions as P
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.protocol_signatures import ExceptionABI
-from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.record_codec import decode, encode
 
 
@@ -50,6 +49,7 @@ def _json(value):
 def _implementation():
     package = Path(__file__).resolve().parents[1]
     names = ('artifacts.py', 'analysis/source_expression_materials.py', 'analysis/source_expression_rules.py',
+        'analysis/frontend_bindings.py',
         'analysis/static/lowering/source_displays.py', 'analysis/static/lowering/source_string.py',
         'analysis/static/lowering/source_comprehension.py',
         'analysis/await_protocol.py', 'ir/program/delegation_signatures.py',
@@ -98,8 +98,8 @@ def _source_index(model, unit, limits, pins):
                                                ('F2', f2, 'max_nodes', limits['nodes'])):
         if type(material[budget]) is not int or not 0 <= material[budget] <= ceiling:
             raise ValueError(f'{stage} replay budget exceeds the requested {budget} limit')
-    frontend = read_frontend_bindings(f0, f1, f2, *(reader.read(unit['artifacts'][name]) for name in _PARENTS))
-    syntax = decode(SourceSyntaxMaterial, f2)
+    frontend, syntax = _replay_frontend_unit(f0, f1, f2,
+        *(reader.read(unit['artifacts'][name]) for name in _PARENTS))
     contexts = SourceContextView(syntax, frontend.roles, frontend.contexts)
     categories = {row.name: row.bases for row in syntax.profile.ast_schema if not row.abstract}
     return ProductionSourceIndex(f0, contexts, frontend), categories

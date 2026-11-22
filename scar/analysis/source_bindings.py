@@ -667,12 +667,18 @@ def source_bindings_document(f0, f1, f2, f3b, c1, c2a, *, max_bindings=1_000_000
 
 
 def read_source_bindings(document, f0, f1, f2, f3b, c1, c2a) -> SourceBindingsMaterial:
+    return _verify_bindings(document, lambda limits: _derive(f0, f1, f2, f3b, c1, c2a, limits))
+
+
+def _verify_bindings(document, rederive):
     material = decode(SourceBindingsMaterial, document)
     if material.profile != _profile():
         raise ValueError('C2b namespace implementation/catalog profile mismatch')
-    fresh = _derive(f0, f1, f2, f3b, c1, c2a, (material.max_bindings, material.max_interfaces,
-        material.max_plans, material.max_plan_steps, material.max_captures, material.max_relays,
-        material.max_search_steps, material.max_conflicts))
+    limits = (material.max_bindings, material.max_interfaces, material.max_plans, material.max_plan_steps,
+        material.max_captures, material.max_relays, material.max_search_steps, material.max_conflicts)
+    if any(type(n) is not int or n < 0 for n in limits):
+        raise ValueError('namespace budgets must be exact nonnegative integers')
+    fresh = rederive(limits)
     if material != fresh:
         raise ValueError('C2b namespace plans differ from original C1 contexts/C2a source declarations')
     return material

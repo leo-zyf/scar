@@ -400,14 +400,19 @@ def compiler_symbols_document(f0, f1, f2, f3b, c1, c2a, f3a, topology, *,
 
 
 def read_compiler_symbols(document, f0, f1, f2, f3b, c1, c2a, f3a, topology):
-    material = decode(CompilerSymbolsMaterial, document)
     native = decode(SourceSymbolsMaterial, f3a)
+    return _verify_compiler_symbols(document, native,
+        lambda limits: _derive(f0, f1, f2, f3b, c1, c2a, f3a, topology, limits))
+
+
+def _verify_compiler_symbols(document, native, rederive):
+    material = decode(CompilerSymbolsMaterial, document)
     profile = _profile(native)
     if material.profile.implementation_sha256 in _PREVIOUS_IMPLEMENTATIONS:
         profile = replace(profile, implementation_sha256=material.profile.implementation_sha256)
     if material.profile != profile:
         raise ValueError('C3-S compiler symbol implementation/catalog profile mismatch')
-    fresh = _derive(f0, f1, f2, f3b, c1, c2a, f3a, topology, material.limits)
+    fresh = rederive(material.limits)
     if material != replace(fresh, profile=profile):
         raise ValueError('C3-S compiler symbol provenance differs from its original source/compiler inputs')
     return material

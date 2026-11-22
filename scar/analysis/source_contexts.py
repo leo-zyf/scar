@@ -680,11 +680,16 @@ def source_contexts_document(f0, f1, f2, f3b, *, max_scopes=100_000, max_regions
 
 
 def read_source_contexts(document, f0, f1, f2, f3b) -> SourceContextsMaterial:
+    return _verify_contexts(document, lambda limits: _derive(f0, f1, f2, f3b, limits)[0])
+
+
+def _verify_contexts(document, rederive):
     material = decode(SourceContextsMaterial, document)
     if material.profile != _profile():
         raise ValueError('C1 context implementation/catalog profile mismatch')
     limits = material.max_scopes, material.max_regions, material.max_boundaries, material.max_slots
-    fresh, _, _ = _derive(f0, f1, f2, f3b, limits)
+    _limits(limits)
+    fresh = rederive(limits)
     if material != fresh:
         raise ValueError('C1 templates differ from original F2/B slots and field transfers')
     return material

@@ -231,12 +231,20 @@ def source_symbols_document(f0, f1, f2, *, max_scopes=100_000, max_symbols=1_000
 
 
 def read_source_symbols(document, f0, f1, f2) -> SourceSymbolsMaterial:
+    return _verify_source_symbols(document, f0,
+        lambda scopes, symbols: _produce(f0, f1, f2, scopes, symbols))
+
+
+def _verify_source_symbols(document, f0, rederive):
     material = decode(SourceSymbolsMaterial, document)
     if material.profile != _profile(f0):
         raise ValueError('F3-A compiler profile mismatch (including effective hash context)')
     if material.status == 'CAPTURED':
         _validate_graph(material.scopes)
-    fresh = _produce(f0, f1, f2, material.max_scopes, material.max_symbols)
+    limits = material.max_scopes, material.max_symbols
+    if any(type(n) is not int or n < 0 for n in limits):
+        raise ValueError('scope/symbol budgets must be exact nonnegative integers')
+    fresh = rederive(*limits)
     if material != fresh:
         raise ValueError('F3-A material differs from its F0/F1/F2/profile/fresh official compiler view')
     return material

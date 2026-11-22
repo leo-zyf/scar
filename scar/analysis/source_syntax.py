@@ -622,11 +622,15 @@ def _restore_ast(root_index, nodes):
     return objects[root_index]
 
 
-def _produce_syntax(f0, f1, mode, max_nodes):
+def _syntax_limits(mode, max_nodes):
     if type(mode) is not str or mode not in ('exec', 'eval', 'single', 'func_type'):
         raise ValueError('mode must be exec/eval/single/func_type')
     if type(max_nodes) is not int or max_nodes < 0:
         raise ValueError('max_nodes must be an exact nonnegative integer')
+
+
+def _produce_syntax(f0, f1, mode, max_nodes):
+    _syntax_limits(mode, max_nodes)
     original = decoded_source_bytes(f0)
     _verify_tokens(f1, f0, original)
     return _project_syntax(f0, f1, original, mode, max_nodes)
@@ -667,8 +671,13 @@ def source_syntax_document(f0_document, f1_document, *, mode='exec', max_nodes=1
 
 
 def _read_source_syntax(document, f0, f1):
+    return _verify_syntax(document, lambda mode, max_nodes: _produce_syntax(f0, f1, mode, max_nodes))
+
+
+def _verify_syntax(document, rederive):
     material = decode(SourceSyntaxMaterial, document)
-    fresh = _produce_syntax(f0, f1, material.mode, material.max_nodes)
+    _syntax_limits(material.mode, material.max_nodes)
+    fresh = rederive(material.mode, material.max_nodes)
     if material != fresh:
         raise ValueError('F2 document differs from its F0/F1/profile/fresh official parser')
     return material, _restore_syntax(material)
