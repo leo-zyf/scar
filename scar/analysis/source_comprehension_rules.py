@@ -83,7 +83,7 @@ def emit_clause_loops(b, scope, clauses, initial, world, container=None, *, susp
         target, iterable, filters, asynchronous = clauses[index]
         advance = b.region(target, (_REF, b.world), loop, P.ProductionRegionKind.LOOP_CONDITION)
         if asynchronous:
-            from scar.analysis.source_delegation_rules import emit_delegate_loop
+            from scar.analysis.await_protocol import emit_delegate_loop
             qualified, current = b.delegation(advance, P.DelegationProtocolKind.GET_ASYNC_NEXT,
                 (b.parameter(advance, 0),), b.parameter(advance, 1))
             next_item = emit_delegate_loop(b, advance, qualified, current, P.SuspensionKind.AWAIT)
@@ -127,7 +127,7 @@ def emit_clause_loops(b, scope, clauses, initial, world, container=None, *, susp
                 value, world = b.evaluate(body, b.site(name), world)
                 values.append(value)
             if current_container is None:
-                from scar.analysis.source_suspension_rules import emit_suspension
+                from scar.analysis.await_protocol import emit_suspension
                 _, world = emit_suspension(b, body, suspension, values[0], world)
             else:
                 kind = {'ListComp':'LIST', 'SetComp':'SET', 'DictComp':'DICT'}[b.node.constructor]

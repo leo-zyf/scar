@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sys
 
-from scar.ir.program import source_interfaces as L, source_productions as P, normal_links as F
+from scar.ir.program import source_protocols as L, source_productions as P, normal_links as F
 from scar.ir.record_codec import decode
 
 
@@ -21,7 +21,7 @@ def projection_pins():
     from scar.analysis.source_template_links import _compiler_profile
     package = Path(__file__).resolve().parents[1]
     names = ('analysis/source_interface_store.py', 'analysis/source_interface_build.py',
-             'analysis/source_suspension_interfaces.py', 'ir/program/source_interfaces.py',
+             'analysis/source_suspension_interfaces.py', 'ir/program/source_protocols.py',
              'ir/program/suspension_interfaces.py', 'ir/program/normal_targets.py')
     paths = {str(package/name) for name in (*names,*_implementation())}
     paths.update(str(path) for path in _declaration_files())

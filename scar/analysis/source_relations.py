@@ -1,0 +1,150 @@
+"""Source relations."""
+
+import gzip
+import json
+from hashlib import sha256
+from io import BytesIO
+from pathlib import Path
+from collections import defaultdict
+from scar.analysis.source_construction import ConstructionFlow
+from scar.analysis.source_container_delta import DeltaContainerFlow
+from scar.analysis.source_class_queries import subtype_relation, inherited_object_relation
+
+
+# Read selected relation rows with bounded decoded memory and full receipts.
+def select_relation_rows(root,receipt,predicate):
+    """Return original (ordinal, wire) pairs after validating the entire table.
+
+    Retain compressed bytes and selected records only. Large decoded tables are
+    never split into an additional in-memory list of all line documents.
+    """
+    path=Path(root)/receipt['path'];payload=path.read_bytes()
+    if len(payload)!=receipt['bytes'] or sha256(payload).hexdigest()!=receipt['sha256']:
+        raise ValueError('relation compressed receipt differs')
+    digest=sha256();decoded_bytes=0;count=0;selected=[]
+    with gzip.GzipFile(fileobj=BytesIO(payload),mode='rb') as stream:
+        for ordinal,line in enumerate(stream):
+            if not line.endswith(b'\n'):raise ValueError('relation record lacks its line terminator')
+            digest.update(line);decoded_bytes+=len(line);count+=1
+            wire=json.loads(line)
+            if predicate(wire):selected.append((ordinal,wire))
+    if (decoded_bytes!=receipt['decoded_bytes'] or digest.hexdigest()!=receipt['decoded_sha256']
+            or count!=receipt['records']):raise ValueError('relation decoded receipt differs')
+    return tuple(selected)
+
+
+# Avoid repeated analysis queries while retaining the existing may domain.
+class SharedConstructionFlow(ConstructionFlow):
+    def __init__(self, solver):
+        super().__init__(solver)
+        self.base_semantics = defaultdict(set)
+        self.query_stats = dict(subtype_queries=0,object_queries=0,classes_read=0,
+            semantic_refreshes=0,redundant_base_refreshes=0)
+
+    def bases(self, cls):
+        self.query_stats['classes_read']+=1
+        unit,descriptor = self.s.classes[cls]
+        offset = self.s.offsets[unit.unit]
+        return descriptor.bases_pack is not None,tuple((offset+base,self.s.values.get(offset+base,()))
+            for base in descriptor.bases)
+
+    def subtype(self, cls, requested, call, seen=None):
+        if seen is not None:
+            return super().subtype(cls,requested,call,seen)
+        self.query_stats['subtype_queries']+=1
+        return subtype_relation(cls,requested,self.bases,
+            lambda point:self.refresh_points[point].add((call.index,call.cls)))
+
+    def inherited_object(self, cls, name, call, seen=None):
+        if seen is not None:
+            return super().inherited_object(cls,name,call,seen)
+        self.query_stats['object_queries']+=1
+        return inherited_object_relation(cls,lambda value:self.declared(value,name),self.bases,
+            lambda point:self.refresh_points[point].add((call.index,call.cls)))
+
+    def consume(self, point, value):
+        if point in self.lookups:
+            self.target(*self.lookups[point],value)
+        for identity in tuple(self.results.get(point,())):
+            self.returned(self.calls[identity],value)
+        if point in self.refresh_points:
+            semantic = (('class',value[1]) if value[0]=='class' else
+                ('object',) if value==('external','builtins.object') else ('open',))
+            if semantic not in self.base_semantics[point]:
+                self.base_semantics[point].add(semantic)
+                for identity in tuple(self.refresh_points[point]):
+                    self.query_stats['semantic_refreshes']+=1
+                    self.refresh(self.calls[identity])
+            else:
+                self.query_stats['redundant_base_refreshes']+=1
+        for index in tuple(self.allocations.get(point,())):
+            self.allocate(index,value)
+
+
+class SharedContainerFlow(DeltaContainerFlow):
+    def __init__(self, solver, units):
+        self.subscription_stats = dict(iteration_replays=0,iteration_reuses=0,
+            mode_replays=0,mode_reuses=0)
+        super().__init__(solver,units)
+
+    @property
+    def analysis_stats(self):
+        return dict(super().analysis_stats,subscriptions=dict(self.subscription_stats))
+
+    def iterate(self, container, target):
+        frames=getattr(self.s,'frames',None)
+        if frames is not None and container[0]=='source_root_namespace':
+            container=frames.views.proxy(container)
+        if container[0]=='container':
+            if target in self.iter_sources[container]:
+                self.subscription_stats['iteration_reuses']+=1
+                return
+            self.subscription_stats['iteration_replays']+=1
+        super().iterate(container,target)
+
+    def iterate_mode(self, container, target, mode):
+        if (mode,target) in self.content_readers[container]:
+            self.subscription_stats['mode_reuses']+=1
+            return
+        self.subscription_stats['mode_replays']+=1
+        super().iterate_mode(container,target,mode)
+
+    def _notify_write(self, container, key, source):
+        super()._notify_write(container,key,source)
+        namespace = getattr(self.s,'namespace_flow',None)
+        if namespace is not None:
+            namespace.builtins.content_write(container,key,source)
+        frames=getattr(self.s,'frames',None)
+        if frames is not None:
+            frames.views.content_write(container,key,source)
+
+    def access(self, receiver, key, target, write):
+        frames=getattr(self.s,'frames',None)
+        if receiver[0]=='source_root_namespace' and frames is not None:
+            frames.access_root(receiver,key,target,write)
+            return
+        super().access(receiver,key,target,write)
+
+    def copy(self, source, target):
+        frames=getattr(self.s,'frames',None)
+        if frames is not None:
+            if source[0]=='source_root_namespace':source=frames.views.proxy(source)
+            if target[0]=='source_root_namespace':target=frames.views.proxy(target)
+        super().copy(source,target)
+
+    def attribute(self, value, name, target):
+        if value[0]=='container' and value[2]=='MAPPING' and name=='copy':
+            self.s.add(target,('container_method',value,name))
+            return
+        super().attribute(value,name,target)
+
+    def call(self, unit, call, value):
+        if value[0]=='container_method' and value[1][2]=='MAPPING' and value[2]=='copy':
+            # Open packs may be empty; preserve their accepting normal branch.
+            if not call.positional and not call.keywords:
+                result=self.s.offsets[unit.unit]+call.result
+                target=('container',result,'MAPPING')
+                self.s.add(result,target)
+                self.copy(value[1],target)
+            return
+        super().call(unit,call,value)

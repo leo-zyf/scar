@@ -8,7 +8,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
-from scar.ir.program.source_observed_codes import ObservedSourceRequestCodeLink, ObservedSourceRequestKind
+from scar.ir.program.source_observations import ObservedSourceRequestCodeLink, ObservedSourceRequestKind
 
 
 def request_callback_abi(view, request):

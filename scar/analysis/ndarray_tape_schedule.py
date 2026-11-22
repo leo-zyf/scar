@@ -7,7 +7,7 @@ import re
 import numpy as np
 
 from scar.analysis.numpy_partition_iteration import _steps
-from scar.optimization.array_tape_lifetime import pack_roots
+from scar.optimization.array_live_regions import pack_roots
 
 
 SCHEMA = 'scar.complex-array-tape-schedule'

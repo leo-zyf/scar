@@ -174,7 +174,7 @@ def export(witness_path, out, *, point_order, scalar, compact_proof=None):
 
 def check(package):
     """Check the detached executable, source and locally resolved native providers."""
-    from scar.codegen.aten_provider import _dependencies
+    from scar.codegen.native_cpu_elf import _dependencies
     from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
 
     root = Path(package).resolve(strict=True)

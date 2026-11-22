@@ -2,8 +2,8 @@
 
 from math import floor
 
-from scar.optimization.aten_ready_lifetime import _validate, ready_lifetime_bound
-from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
+from scar.optimization.aten_live_values import _validate, ready_lifetime_bound
+from scar.optimization.aten_live_values import _bounded_sum, _bytes
 
 
 _LANE_COUNT = 3

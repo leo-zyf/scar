@@ -10,12 +10,12 @@ from scar.analysis.binding_track_storage import ENCODING, TrackPacker, pins as s
 from scar.analysis.normal_output import write_table
 from scar.analysis.program_state_view import _edges, _pins, _tracks
 from scar.analysis.program_view_shard_reader import open_source_graph_shard
-from scar.analysis.source_local_state import local_read_tracks
+from scar.analysis.state_materialization import local_read_tracks
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import source_productions as P, source_state as S
+from scar.ir.program import source_productions as P, state_ports as S
 from scar.ir.record_codec import _decode, _record_tags, encode, loads
 
 

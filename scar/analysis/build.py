@@ -23,30 +23,31 @@ SCHEMA = 'scar.program-build'
 
 def _rules():
     return {name: sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
-        for name in ('build.py', 'observed_body_scope.py', 'observed_call_bindings.py',
-            'observed_function_interfaces.py', 'build_resources.py','build_target_resources.py','build_f4.py','build_f4_resources.py',
-            'source_declared_catalog.py','source_fact_materials.py',
-            'source_observed_boundaries.py','../ir/program/source_observed_boundaries.py',
-            'source_body_interfaces.py','source_body_activations.py','source_body_activation_view.py',
-            'source_observed_resumptions.py','source_resumption_view.py','../trace/resumptions.py',
-            'compiler_code_paths.py','source_observed_codes.py','source_observed_calls.py',
-            '../ir/program/compiler_code_paths.py','../ir/program/source_observed_codes.py',
-            'source_resource_scopes.py','source_resource_scope_view.py','../ir/program/resource_scopes.py',
-            'source_observed_state.py','source_observed_state_view.py','source_stored_bindings.py',
-            'binding_track_storage.py','../ir/program/binding_track_storage.py',
-            '../ir/program/source_body_interfaces.py','../ir/program/source_body_activations.py',
-            'program_view.py','program_view_storage.py','../ir/program/view.py',
-            'source_region_projection.py','source_content.py','source_content_lineage.py',
-            '../ir/program/source_content_lineage.py','program_state_view.py','source_local_state.py',
-            'program_state_coverage.py','program_inventory_admission.py',
-            'source_graph_material.py','source_effect_projection.py','source_effects.py','source_state.py',
-            'source_call_binding_view.py','bounded_function_interfaces.py','source_call_view.py','retained_code_bodies.py',
-            'source_function_connections.py','source_call_defaults.py','source_call_captures.py',
-            'observed_source_catalog.py','lazy_compiled_interfaces.py','reissue_observed_catalog.py',
-            '../compiler/call_binding.py','../compiler/graph_frontend.py','../trace/call_binding.py',
-            '../trace/code_snapshot.py','../trace/lean_capture.py',
-            '../ir/program/source_state.py',
-            '../ir/program/build_f4_resources.py','build_reader_versions.py')}
+        for name in ('build.py', 'observed_boundaries.py', 'observed_call_bindings.py',
+            'observed_function_interfaces.py', 'build_resources.py', 'build_target_resources.py',
+            'build_f4.py', 'build_f4_resources.py', 'source_declared_catalog.py',
+            'source_fact_materials.py', 'source_observed_boundaries.py',
+            '../ir/program/source_observations.py', 'source_body_interfaces.py',
+            'source_body_activations.py', 'source_body_activation_view.py',
+            'source_observed_resumptions.py', 'source_resumption_view.py',
+            '../trace/resumptions.py', 'compiler_contexts.py', 'source_observed_codes.py',
+            'source_observed_calls.py', '../ir/program/code_identity.py',
+            'source_resource_scopes.py', 'source_resource_scope_view.py',
+            '../ir/program/resource_observations.py', 'source_observed_state.py',
+            'source_observed_state_view.py', 'state_materialization.py', 'binding_track_storage.py',
+            '../ir/program/binding_ports.py', '../ir/program/body_observations.py',
+            'program_view.py', 'program_view_storage.py', '../ir/program/view.py',
+            'source_region_projection.py', 'source_content.py', 'source_content_lineage.py',
+            '../ir/program/content_routes.py', 'program_state_view.py', 'program_state_coverage.py',
+            'program_inventory_admission.py', 'source_graph_material.py',
+            'source_effect_projection.py', 'source_effects.py', 'source_state.py',
+            'source_call_binding_view.py', 'bounded_function_interfaces.py', 'source_call_view.py',
+            'retained_code_bodies.py', 'source_function_connections.py', 'call_inputs.py',
+            'source_call_captures.py', 'observed_source_catalog.py', 'lazy_compiled_interfaces.py',
+            'reissue_observed_catalog.py', '../compiler/call_binding.py',
+            '../compiler/graph_frontend.py', '../trace/call_binding.py',
+            '../trace/code_snapshot.py', '../trace/lean_capture.py', '../ir/program/state_ports.py',
+            'build_reader_versions.py')}
 
 
 def _admit_rules(recorded, *, publishing=False):
@@ -303,7 +304,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         observed_scope = None
         source_files = ()
         if body_scope == 'observed':
-            from scar.analysis.observed_body_scope import read_observed_scope
+            from scar.analysis.observed_boundaries import read_observed_scope
             observed_scope = read_observed_scope(trace_path)
             source_files = tuple(sorted({c.code.filename for c in observed_scope.captures
                 if Path(c.code.filename).suffix == '.py' and Path(c.code.filename).is_file()}))
@@ -312,7 +313,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         from scar.analysis.static_body import expand_static_bodies
         entries=()
         if body_scope == 'observed':
-            from scar.analysis.observed_body_scope import select_observed_bodies
+            from scar.analysis.observed_boundaries import select_observed_bodies
             entries, selection=select_observed_bodies(selected, trace_path, entry,scope=observed_scope)
             selection['observed_source_files'] = list(source_files)
             _write(out/'body-selection.json',selection)

@@ -11,11 +11,11 @@ import time
 from types import FunctionType
 
 from scar.analysis import source_context_solver,source_context_fact_store,source_context_interfaces
-from scar.analysis import source_namespace_flow,source_relation_replay,source_class_queries
+from scar.analysis import namespace_flow as source_namespace_flow, source_relations as source_relation_replay, source_class_queries
 from scar.analysis import normal_targets,source_launch,source_namespace_graph
-from scar.analysis import normal_entry,normal_facts,source_namespace_builtins
+from scar.analysis import normal_entry, normal_facts, namespace_values as source_namespace_builtins
 from scar.analysis import source_frame_captures,source_frame_globals
-from scar.analysis import source_root_namespace_views
+from scar.analysis import namespace_flow as source_root_namespace_views
 from scar.ir.program import source_builtin_namespaces
 from scar.ir.program import source_frame_bindings
 from scar.analysis.normal_facts import SourceFactStore

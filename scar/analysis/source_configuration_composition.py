@@ -17,7 +17,7 @@ from scar.analysis.source_data_materials import parse_yaml_material,_artifact,_t
 from scar.analysis.source_data_material_store import write_data_material
 from scar.analysis.static_sources import _absolute
 from scar.analysis.source_template_links import _json
-from scar.ir.program import configuration_composition as C
+from scar.ir.program import configuration as C
 from scar.ir.program.data_materials import DataNodeKind
 from scar.ir.program.providers import ProviderArtifact
 

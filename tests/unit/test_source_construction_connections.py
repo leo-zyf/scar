@@ -209,7 +209,7 @@ g = stream(leaf)
     terminal=next(v for v in module('terminal') if v[0]=='function')
     assert leaf in module('result') and terminal not in module('result')
     assert solver.generators.getters and solver.generators.advances
-    from scar.ir.program import source_generators as D
+    from scar.ir.program import source_protocols as D
     for driven in solver.generators.advances.values():
         assert driven.connection.activation is T.FunctionActivation.RESUME_BODY
         assert not driven.connection.returns

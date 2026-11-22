@@ -27,15 +27,15 @@ from scar.ir.program import normal_graph as G
 from scar.ir.record_codec import decode,encode
 from scar.analysis.source_template_links import _json
 from scar.analysis import source_template_batch,source_template_workers,normal_output,source_interface_store,source_content_factors,normal_containers,source_container_delta,source_pack_shapes
-from scar.ir.program import source_interfaces as L,content_factors as C
+from scar.ir.program import source_protocols as L, content_routes as C
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.static_query import _Fragments
 from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
 from scar.analysis.source_function_connections import Invocation,connect
 from scar.analysis.source_descriptors import DescriptorFlow
-from scar.ir.program import normal_namespaces as N
-from scar.ir.program import source_generators as D,suspension_interfaces as S
+from scar.ir.program import namespace_routes as N
+from scar.ir.program import source_protocols as D, suspension_interfaces as S
 
 
 def propagation_pins():

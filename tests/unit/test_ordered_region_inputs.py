@@ -5,7 +5,7 @@ from scar.analysis.ordered_region_inputs import derive_ordered_inputs
 from scar.ir.program import normal_graph as G,normal_links as F,normal_targets as T
 from scar.ir.program import ordered_regions as R, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.source_reference_slices import ReferenceTransitionKind
+from scar.ir.program.source_value_routes import ReferenceTransitionKind
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.record_codec import decode,encode
 

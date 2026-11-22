@@ -17,11 +17,11 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_consumer_parents import _stamp
-from scar.ir.program import source_state as S, source_productions as P
+from scar.ir.program import state_ports as S, source_productions as P
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
 from scar.ir.program import view as V, model as M
 from scar.ir.program.source_bindings import EnvironmentInterface
-from scar.ir.program.source_name_definitions import NameDefinitionKind as D
+from scar.ir.program.name_flow import NameDefinitionKind as D
 from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEdge,
     DependencyKind as K, DependencyMeaning as Meaning, DependencyStrength as Strength,
     DependencyEvidence, DependencyCondition, DependencyFrontier, DependencyNeighborhood)
@@ -119,7 +119,7 @@ class SourceStateProvider:
                 staged.environment_values={};staged.in_edges=defaultdict(list);staged.out_edges=defaultdict(list)
                 accesses=staged._identify(context,step,identity);projection=None
                 if type(step.instruction)is P.ReadClassTypeParameters:
-                    from scar.analysis.source_environment_values import identify_class_type_parameters,attach_class_type_parameters
+                    from scar.analysis.class_bindings import identify_class_type_parameters, attach_class_type_parameters
                     projection=identify_class_type_parameters(self.source,context,step,identity)
                     staged.environment_values[identity]=projection
                     attach_class_type_parameters(staged,projection)
@@ -231,7 +231,7 @@ class SourceStateProvider:
             payload = context.result(step) if kind is S.BindingAccessKind.HANDLE else context.value(step.arguments[1])
         else:
             from scar.analysis.source_implicit_namespaces import identify_implicit_namespace
-            from scar.analysis.source_annotation_namespaces import identify_annotation_namespace
+            from scar.analysis.annotation_state import identify_annotation_namespace
             implicit = identify_annotation_namespace(self.bindings,self.declarations,
                 self.root_scopes,self.class_scopes,context,step)
             if implicit is None:

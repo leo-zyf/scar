@@ -10,7 +10,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from scar.analysis.source_call_defaults import FunctionDefaultStateProvider
+from scar.analysis.call_inputs import FunctionDefaultStateProvider
 from scar.analysis.source_function_connections import Invocation,connect
 from scar.ir.program import normal_graph as G,normal_targets as T,source_productions as P,model as M
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint,DependencyFrame,context_push,context_pop,

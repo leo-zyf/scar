@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from scar.analysis.program_view import _digest
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import source_invocations as I, normal_targets as T, source_productions as P, view as V, normal_graph as G
+from scar.ir.program import source_value_routes as I, normal_targets as T, source_productions as P, view as V, normal_graph as G
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import ProviderID
@@ -373,7 +373,7 @@ def _original_invocation_groups(store,unit):
     """Reuse the admitted unit replay; decode its original group table once."""
     from scar.analysis.source_symbol_variants import _table
     from scar.analysis.source_world_returns import _table_ref
-    from scar.ir.program.source_observed_calls import ObservedSourceFunctionGroup
+    from scar.ir.program.source_observations import ObservedSourceFunctionGroup
     from scar.ir.record_codec import decode
     store.read_unit(unit)
     shard=store.report['shards'][unit];folder=store.path/shard['path'];receipt=shard['tables']['groups']
@@ -398,7 +398,7 @@ class LazySourceInvocationProvider:
         from pathlib import Path
         from scar.analysis.source_value_flow import _artifact
         from scar.ir.record_codec import encode
-        from scar.ir.program import source_invocations
+        from scar.ir.program import source_value_routes as source_invocations
         self.view,self.activations,self.checkpoint=view,activations,checkpoint
         self.gaps=[] if gaps is None else gaps;self.materials={};self.providers={};self.failed={}
         self.out_edges=defaultdict(list);self.in_edges=defaultdict(list);self.group_tables={}

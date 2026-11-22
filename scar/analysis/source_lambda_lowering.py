@@ -24,7 +24,7 @@ from scar.analysis.function_interfaces import formal_nodes
 from scar.ir.program.environments import EnvironmentInterface, EnvironmentMember, EnvironmentRole, FunctionEntryLayout
 from scar.ir.program.functions import BodyEntryInterface, BodyLoweringProfile, FormalPort
 from scar.ir.program.ids import EnvironmentInterfaceID, OperationID, RegionID, ValueID
-from scar.ir.program.lambda_bodies import LambdaBodyDefinition, LambdaCapture, LambdaEnvironmentField
+from scar.ir.program.function_sites import LambdaBodyDefinition, LambdaCapture, LambdaEnvironmentField
 from scar.ir.program.model import (Behavior, Block, BlockArgument, ExitKind, ExitPort, LiteralOrigin,
     Operation, ReferenceValue, Region, Terminator, TerminatorKind)
 from scar.ir.program.source import GapKind, SourceRole

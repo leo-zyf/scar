@@ -18,7 +18,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_roles import SyntaxRoleView
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
-from scar.analysis.observed_boundary_continuations import CONTINUATION_CONDITIONS, normal_continuation
+from scar.analysis.observed_boundaries import CONTINUATION_CONDITIONS, normal_continuation
 from scar.analysis.source_request_callback_abi import request_callback_abi
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_world_returns import _table_ref
@@ -27,9 +27,9 @@ from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_observed_boundaries as R, source_productions as P, view as V
+from scar.ir.program import source_observations as R, source_productions as P, view as V
 from scar.ir.program.call_edges import CallEdgeBudget
-from scar.ir.program.source_observed_codes import ObservedSourceRequestCodeLink
+from scar.ir.program.source_observations import ObservedSourceRequestCodeLink
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.python_call_targets import PythonTargetKind as Target
 from scar.ir.program.structured import PythonProtocolKind
@@ -55,11 +55,11 @@ _FALSE = ('source_bodies_copied', 'loops_unrolled', 'implementation_entry_proven
 
 def _pins():
     from scar.analysis import source_observed_codes, source_observed_calls, source_call_view, source_observed_protocols
-    from scar.analysis import native_callables, observed_boundary_continuations
+    from scar.analysis import native_callables, observed_boundaries as observed_boundary_continuations
     from scar.ir import record_codec
     from scar.ir.program import native_callables as native_types
-    from scar.ir.program import source_observed_codes as code_types
-    from scar.ir.program import source_observed_calls as call_types
+    from scar.ir.program import source_observations as code_types
+    from scar.ir.program import source_observations as call_types
     from scar.analysis import source_request_callback_abi
     result = {name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (
         ('producer', __import__(__name__, fromlist=['__file__'])), ('types', R),

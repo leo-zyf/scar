@@ -17,7 +17,7 @@ from scar.analysis.python_binding_query import PythonBindingGraph
 from scar.analysis.target_graph import TargetHardwareGraph,_artifact
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json,_stream
-from scar.ir.program import software_resources as S,target_hardware as H,native_resource_declarations as R,python_bindings as B,source_productions as P
+from scar.ir.program import native_contracts as S, target_hardware as H, native_contracts as R, python_bindings as B, source_productions as P
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.record_codec import decode
 

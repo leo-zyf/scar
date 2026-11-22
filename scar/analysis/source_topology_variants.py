@@ -19,7 +19,7 @@ from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_contexts import _digest
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_topology_variants as V,source_symbol_variants as NV
+from scar.ir.program import code_identity as V, code_identity as NV
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.compiler_topology import CompilerTopologyInput,CompilerTopologyMaterial

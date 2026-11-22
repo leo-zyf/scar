@@ -19,8 +19,8 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_body_expansion as X, source_value_flow as V
-from scar.ir.program import reference_consumers as R, normal_targets as T, source_productions as P, normal_graph as G
+from scar.ir.program import function_sites as X, source_value_routes as V
+from scar.ir.program import binding_ports as R, normal_targets as T, source_productions as P, normal_graph as G
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.record_codec import encode, decode
 

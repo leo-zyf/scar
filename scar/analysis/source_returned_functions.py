@@ -26,9 +26,9 @@ from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.normal_output import write_table
-from scar.ir.program import source_returned_functions as R, source_function_interfaces as I
-from scar.ir.program import normal_targets as T, source_productions as P, source_reference_slices as S
-from scar.ir.program.source_call_contexts import CallInterfaceRecord
+from scar.ir.program import function_sites as R, function_sites as I
+from scar.ir.program import normal_targets as T, source_productions as P, source_value_routes as S
+from scar.ir.program.call_inputs import CallInterfaceRecord
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.record_codec import encode, decode
 
@@ -65,9 +65,9 @@ class _SealedEngine(StackedReferenceEngine):
 
 
 def _pins():
-    from scar.analysis import source_call_contexts,source_stacked_references,source_reference_slice
+    from scar.analysis import call_inputs as source_call_contexts, source_stacked_references, source_reference_slice
     from scar.analysis import source_function_connections,source_field_interfaces,source_function_creations
-    from scar.ir.program import source_call_contexts as C,source_function_creations as F
+    from scar.ir.program import call_inputs as C, function_sites as F
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),**{
         name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
             ('types',R),('interface_types',I),('targets',T),('production_types',P),('reference_types',S),

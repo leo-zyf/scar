@@ -22,7 +22,7 @@ from scar.analysis.program_state_view import _pins as state_pins
 from scar.analysis.binding_track_storage import publish_state_view,pins as storage_pins
 from scar.analysis.program_state_coverage import _release
 from scar.analysis.source_declared_catalog import read_source_catalog,_receipt,_check
-from scar.analysis.source_local_state import local_read_tracks
+from scar.analysis.state_materialization import local_read_tracks
 from scar.analysis.source_observed_interfaces import ObservedFunctionInterfaceStore
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
@@ -35,7 +35,7 @@ _WORKER=None
 
 
 def _pins():
-    from scar.analysis import source_observed_interfaces,source_local_state,source_graph_material
+    from scar.analysis import source_observed_interfaces, state_materialization as source_local_state, source_graph_material
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),state=state_pins(),
         selection=sha256(Path(source_observed_interfaces.__file__).read_bytes()).hexdigest(),
         materials=sha256(Path(source_graph_material.__file__).read_bytes()).hexdigest(),

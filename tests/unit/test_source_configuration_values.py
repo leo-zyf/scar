@@ -5,13 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from scar.ir.literals import PythonLiteral
-from scar.ir.program.configuration_composition import ConfigurationStep,ConfigurationStepKind
-from scar.ir.program.configuration_overrides import ConfigurationOverride,OverrideAction,OverrideExpression,OverrideExpressionKind
+from scar.ir.program.configuration import ConfigurationStep, ConfigurationStepKind
+from scar.ir.program.configuration import ConfigurationOverride, OverrideAction, OverrideExpression, OverrideExpressionKind
 from scar.ir.program.normal_links import CodeScopeRef,CodeScopeWitness
 from scar.ir.program.source_frame_bindings import StaticInputPort
 from scar.ir.program.source_productions import ProductionRegionID,ProductionPurpose
 from scar.ir.program.source_template_links import SourceTemplateKey
-from scar.ir.program.configuration_values import ConfigurationValueKind as K
+from scar.ir.program.configuration import ConfigurationValueKind as K
 
 
 def _query(tmp_path,texts,writes=(),*,open_prefix=False):

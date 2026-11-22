@@ -19,7 +19,7 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.program.source_fact_materials import FactMaterialRoute
+from scar.ir.program.launch_provenance import FactMaterialRoute
 from scar.ir.record_codec import decode, encode
 
 
@@ -143,7 +143,7 @@ def _inputs(paths):
 
 
 def _pins():
-    from scar.ir.program import source_fact_materials
+    from scar.ir.program import launch_provenance as source_fact_materials
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),
         types=sha256(Path(source_fact_materials.__file__).read_bytes()).hexdigest())
 

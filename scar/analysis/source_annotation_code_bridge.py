@@ -13,7 +13,7 @@ from types import CodeType
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.ir.program import source_productions as P, normal_targets as T
-from scar.ir.program.source_observed_codes import ObservedSourceRequestKind as Kind
+from scar.ir.program.source_observations import ObservedSourceRequestKind as Kind
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode

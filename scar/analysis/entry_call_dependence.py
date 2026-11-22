@@ -9,13 +9,13 @@ from scar.analysis.bounded_entry_calls import SCHEMA as ENTRY_CALLS, _admit_entr
 from scar.analysis.build import BuildSession
 from scar.analysis.normal_graph import _Emitter, normal_edges
 from scar.analysis.replay_transaction import replay_transaction
-from scar.analysis.source_call_operands import call_operands
+from scar.analysis.call_inputs import call_operands
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_world_flow import STRUCTURAL, _state, _walk
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.reference_consumers import ArgumentRole
+from scar.ir.program.binding_ports import ArgumentRole
 from scar.ir.record_codec import decode, encode
 
 

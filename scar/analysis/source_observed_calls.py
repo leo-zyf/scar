@@ -19,8 +19,7 @@ from scar.analysis.static_query import _Fragments
 from scar.analysis.source_observed_codes import replay_catalog_code
 from scar.ir.program import source_productions as P, normal_targets as T
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
-from scar.ir.program.source_observed_calls import (ObservedSourceCallsite,ObservedSourceCallsiteFrontier,
-    ObservedSourceProtocolCallsite)
+from scar.ir.program.source_observations import ObservedSourceCallsite, ObservedSourceCallsiteFrontier, ObservedSourceProtocolCallsite
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.call_edges import CodeCapture
 from scar.ir.program.normal_links import CodeScopeWitness

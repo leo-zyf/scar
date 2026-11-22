@@ -17,11 +17,11 @@ import time
 from scar.analysis.source_template_links import _json
 from scar.analysis import compiler_stage_cache
 from scar.ir.program import source_productions as P, normal_links as F
-from scar.ir.program import source_context_variants as CV, source_binding_variants as BV
-from scar.ir.program import source_symbol_variants as NV, source_topology_variants as TV
-from scar.ir.program import source_compiler_symbol_variants as SV
+from scar.ir.program import code_identity as CV, code_identity as BV
+from scar.ir.program import code_identity as NV, code_identity as TV
+from scar.ir.program import code_identity as SV
 from scar.ir.program.source_template_links import SourceTemplateGraph, SourceTemplateKey
-from scar.ir.program.source_interfaces import UnitSourceInterfaces
+from scar.ir.program.source_protocols import UnitSourceInterfaces
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode
 
@@ -96,9 +96,9 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
     from scar.ir.program.source_bytes import SourceBytesProfile
     from scar.ir.program.source_roles import SourceRolesMaterial
-    from scar.ir.program.source_symbol_variants import SymbolSourceParent, SymbolTextInput
+    from scar.ir.program.code_identity import SymbolSourceParent, SymbolTextInput
     from scar.ir.program.source_text import TextOpenInterpretation
-    from scar.ir.program.source_compiled_values import EffectiveCompileContext
+    from scar.ir.program.code_identity import EffectiveCompileContext
     from scar.trace.code_snapshot import describe_code
 
     started = time.monotonic(); recipe = _recipe(recipe); out = Path(out).absolute()

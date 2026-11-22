@@ -11,7 +11,7 @@ from scar.analysis import source_data_material_store as data_store
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir import record_codec as codec
-from scar.ir.program import configuration_values as V, configuration_composition as C
+from scar.ir.program import configuration as V, configuration as C
 
 _SCHEMA = 'scar.configuration-values'
 _STATUS = 'CONDITIONAL_STATIC_INPUT_VALUE_GRAPH'

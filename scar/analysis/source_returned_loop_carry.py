@@ -10,7 +10,7 @@ from scar.analysis.program_view import ProgramView
 from scar.analysis.session_caller_effects import _source
 from scar.analysis.source_decoded_bodies import source_body_access
 from scar.analysis.source_declared_catalog import read_source_catalog
-from scar.analysis.source_loop_dependencies import _enclosed, loop_dependencies
+from scar.analysis.source_control import _enclosed, loop_dependencies
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
 from scar.analysis.source_name_definitions import reaching_name_definitions
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
@@ -20,7 +20,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.source_name_definitions import NameDefinitionKind as D
+from scar.ir.program.name_flow import NameDefinitionKind as D
 from scar.ir.record_codec import decode, encode
 
 SCHEMA = 'scar.source-returned-loop-carry'

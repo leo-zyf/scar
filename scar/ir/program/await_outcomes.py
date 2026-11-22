@@ -13,7 +13,7 @@ from .protocol_connections import ProtocolOperationRef
 from .protocols import (ContractResult, DriveResult, HostTerminal, OutcomeAdapterRule,
                         OwnedUse, StaticProtocolGap)
 from .structured import ControlEdgeReference
-from .completion_adapter_routes import packets as _packets, structured_region
+from scar.ir.program.continuation_ports import packets as _packets, structured_region
 
 
 COMPLETION_RULES = (OutcomeAdapterRule.GENERATOR_RETURN_TO_STOP_ITERATION,

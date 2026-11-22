@@ -19,7 +19,7 @@ from scar.analysis.source_call_view import prepare_source_ports
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.program_view import _digest
 from scar.ir.record_codec import encode, decode
-from scar.ir.program import source_body_interfaces as B, source_productions as P, view as V
+from scar.ir.program import body_observations as B, source_productions as P, view as V
 from scar.ir.program.ids import RegionID, ProviderID
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.program.source_references import SourceArtifactLocator

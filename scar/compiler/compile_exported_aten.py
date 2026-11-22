@@ -27,7 +27,7 @@ from scar.ir.record_codec import encode
 from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS, eliminate_dead_export_ops
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.aten_native_schedule import recorded_cpu_domain
-from scar.optimization.aten_tensor_lifetime import tensor_footprint
+from scar.optimization.aten_live_values import tensor_footprint
 
 
 SCHEMA = 'scar.native-exported-aten'

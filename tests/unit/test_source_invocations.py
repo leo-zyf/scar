@@ -8,7 +8,7 @@ from scar.ir.program.call_edges import (InvocationKey,CallRecordAnchor,CapturedS
     FrameEntry,FrameExit,FrameCompletion)
 from scar.ir.program.call_operands import (OperandCallAttempt,OperandEventKind,CallableShape,CallableKind,FunctionLayout)
 from scar.ir.program.python_call_targets import PythonCallTarget,PythonTargetKind,PythonCodeScope,PythonEntryBinding
-from scar.ir.program.source_body_activations import SourceBodyActivation,SourceBodyActivationObservation
+from scar.ir.program.body_observations import SourceBodyActivation, SourceBodyActivationObservation
 from scar.ir.program.ids import ProviderID,RegionID,ValueID
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator

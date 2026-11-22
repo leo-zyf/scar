@@ -50,7 +50,7 @@ def _planning_sources(catalog,source):
 
 
 def _planning_loops(view,sources,source_filter):
-    from scar.analysis.source_loop_dependencies import source_loop_dependencies
+    from scar.analysis.source_control import source_loop_dependencies
     functions=[]
     for source in sources:
         projection=source_loop_dependencies(view,source)
@@ -76,7 +76,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.compiler.pipeline_loop_frontend import (discover_pipeline_invariant_loops,
         write_composite_invariant_loop_proof)
     from scar.compiler.ordered_planning_graph import retain_ordered_planning_graph
-    from scar.analysis.source_loop_dependencies import attach_loop_call_observations
+    from scar.analysis.source_control import attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
     program=Path(program).absolute();out=Path(out).absolute()

@@ -1,7 +1,7 @@
 """May-value dependencies joined to original source argument interfaces."""
 from dataclasses import dataclass
 
-from .reference_consumers import ReferenceArgumentUse, SourceConsumerBinding, ConsumerFrontier
+from scar.ir.program.binding_ports import ReferenceArgumentUse, SourceConsumerBinding, ConsumerFrontier
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,7 +19,7 @@ from scar.analysis.source_template_links import _json, _worker_stores, read_temp
 from scar.analysis.source_template_batch import _check_catalog
 from scar.analysis.source_productions import _digest
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
-from scar.ir.program import normal_links as F, source_productions as P, source_interfaces as L
+from scar.ir.program import normal_links as F, source_productions as P, source_protocols as L
 from scar.ir.program import suspension_interfaces as I
 from scar.ir.program.normal_targets import GlobalPort
 from scar.ir.program.structured import PythonProtocolKind as K

@@ -3,7 +3,7 @@ from types import SimpleNamespace as NS
 
 from scar.analysis import source_world_returns as M
 from scar.ir.program import normal_targets as T, normal_links as F, normal_graph as G, source_productions as P
-from scar.ir.program import source_world_flow as W, source_address_paths as A
+from scar.ir.program import state_ports as W, content_routes as A
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode

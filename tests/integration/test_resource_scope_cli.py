@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from scar.analysis.source_resource_scopes import ResourceScopeStore, build_resource_scopes
-from scar.ir.program.resource_scopes import ObservedPythonResourceScope, ScopeEventKind
+from scar.ir.program.resource_observations import ObservedPythonResourceScope, ScopeEventKind
 from test_call_operand_cli import cli
 
 

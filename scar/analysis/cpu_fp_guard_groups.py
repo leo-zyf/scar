@@ -7,7 +7,7 @@ import re
 
 from scar.analysis.cpu_task_arena_reuse import verify_cpu_task_arena_reuse
 from scar.codegen import native_numpy_complex as stock, native_seeded_array_task_entry as generator
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 

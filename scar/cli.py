@@ -10,7 +10,7 @@ COMMANDS = {
     'import-capture': ('scar.trace.cli', 'import_main', 'import retained trace evidence'),
     'build': (None, None, 'build the program and hardware graph'),
     'build-query': ('scar.analysis.build', 'query_main', 'inspect a program graph'),
-    'plan': ('scar.compiler.middle.plan', 'main', 'plan from a resource and dependency graph'),
+    'plan': (None, None, 'plan from a resource and dependency graph'),
     'compile': (None, None, 'build, simplify and deliver a target'),
     'run': (None, None, 'run a published execution contract'),
     'view-graph': ('scar.visualization.cli', 'main', 'view a program graph'),
@@ -51,6 +51,14 @@ def _compile(arguments):
     return compile_target(arguments)
 
 
+def _plan(arguments):
+    if _has_option(arguments, '--build'):
+        from scar.compiler.plan_build import main as plan
+    else:
+        from scar.compiler.middle.plan import main as plan
+    return plan(arguments)
+
+
 def _run(arguments):
     if _has_option(arguments, '--pipeline'):
         from scar.runtime.compiled_entry import main as run
@@ -67,6 +75,8 @@ def main(argv=None):
             return _compile(options) or 0
         if command == 'build':
             return _build(options) or 0
+        if command == 'plan':
+            return _plan(options) or 0
         if command == 'run':
             return _run(options) or 0
         if command in COMMANDS:

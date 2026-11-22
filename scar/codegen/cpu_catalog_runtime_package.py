@@ -9,7 +9,7 @@ import stat
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.cpu_entry_replay import _OUTPUT, _TIMEOUT

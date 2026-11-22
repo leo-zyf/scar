@@ -18,7 +18,7 @@ from scar.ir.program import normal_graph as G, normal_links as F, source_product
 from scar.ir.program.control import LanguageCompletionKind
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.normal_targets import Body
-from scar.ir.program.source_value_flow import SourceBodyValueFlow
+from scar.ir.program.source_value_routes import SourceBodyValueFlow
 from scar.ir.program.structured import PythonProtocolKind as K
 from scar.ir.record_codec import encode
 from scar.optimization.resource_solver import semantic_sha256

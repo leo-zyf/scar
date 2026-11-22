@@ -8,7 +8,7 @@ from scar.analysis.build import BuildSession
 from scar.analysis.cpu_provider_graph import SCHEMA as PROVIDER
 from scar.analysis.cpu_stream_graph import SCHEMA as STREAM
 from scar.analysis.entry_obligations import SCHEMA as OBLIGATIONS
-from scar.analysis.source_loop_dependencies import _control_states
+from scar.analysis.source_control import _control_states
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind

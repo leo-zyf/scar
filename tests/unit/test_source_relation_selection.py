@@ -5,7 +5,7 @@ from hashlib import sha256
 import pytest
 
 from scar.analysis.normal_output import write_table
-from scar.analysis.source_relation_selection import select_relation_rows
+from scar.analysis.source_relations import select_relation_rows
 
 
 def test_selected_rows_require_unselected_parent_content_to_match(tmp_path):

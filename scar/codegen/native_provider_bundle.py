@@ -15,6 +15,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
+from scar.codegen.native_cpu_elf import _name
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 
@@ -23,17 +24,11 @@ FORMAT = 'ELF_DT_NEEDED_PRELOAD'
 _OBJECTS = 'objects'
 _MANIFEST = 'bundle.json'
 _ABI = ('class', 'data', 'machine')
-_NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_.+-]*\Z')
 _DYNAMIC = re.compile(r'\((NEEDED|SONAME|RPATH|RUNPATH)\)')
 _DYNAMIC_VALUE = re.compile(r'[^\[]*\[([^\[\]]+)\]\s*\Z')
 _EXTRA_LOAD = re.compile(r'\((AUDIT|DEPAUDIT|FILTER|AUXILIARY)\)')
 _RTLD_DI_LINKMAP = 2
 
-
-def _name(value):
-    if type(value) is not str or not _NAME.fullmatch(value):
-        raise ValueError('expected a plain ELF file or SONAME: ' + repr(value))
-    return value
 
 
 def _object(name):

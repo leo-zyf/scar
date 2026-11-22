@@ -69,17 +69,20 @@ _SELECTORS = {
     'Compare': frozenset(('Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE', 'Is', 'IsNot', 'In', 'NotIn')),
 }
 _TARGETS = frozenset(('Name', 'Attribute', 'Subscript', 'List', 'Tuple'))
-_RULE_MODULES = ('source_display_rules.py', 'source_string_rules.py', 'source_comprehension_rules.py',
-                 'source_suspension_rules.py', 'source_delegation_rules.py', 'source_callable_rules.py',
-                 'source_deferred_interfaces.py', 'source_statement_atoms.py', 'source_statement_imports.py',
-                 'source_statement_functions.py', 'source_type_parameter_interfaces.py', 'source_type_parameter_rules.py',
-                 'source_definition_interfaces.py', 'source_statement_definitions.py', 'source_statement_contexts.py',
-                 'source_statement_exceptions.py', 'source_statement_exception_groups.py', 'source_condition_rules.py',
-                 'source_pattern_interfaces.py','source_statement_patterns.py','source_root_interfaces.py','source_root_rules.py',
-                 'source_evaluation_interfaces.py','source_evaluation_rules.py',
-                 'source_class_namespace_interfaces.py','source_class_namespace_rules.py','source_capture_interfaces.py',
-                 'source_scope_annotation_interfaces.py','source_annotation_state_interfaces.py','source_annotation_state_rules.py',
-                 'source_compilation_contexts.py', 'source_compilation_flow.py', 'source_core_interfaces.py')
+_RULE_MODULES = ('source_display_rules.py', 'source_string_rules.py',
+                 'source_comprehension_rules.py', 'await_protocol.py', 'source_callable_rules.py',
+                 'source_deferred_interfaces.py', 'source_statement_atoms.py',
+                 'statement_bindings.py', 'type_parameter_rules.py',
+                 'source_definition_interfaces.py', 'source_statement_contexts.py',
+                 'source_statement_exceptions.py', 'source_statement_exception_groups.py',
+                 'source_control.py', 'source_pattern_interfaces.py',
+                 'source_statement_patterns.py', 'source_root_interfaces.py',
+                 'source_root_rules.py', 'source_evaluation_interfaces.py',
+                 'source_evaluation_rules.py', 'source_class_namespace_interfaces.py',
+                 'source_class_namespace_rules.py', 'source_capture_interfaces.py',
+                 'source_scope_annotation_interfaces.py', 'source_annotation_state_interfaces.py',
+                 'annotation_state.py', 'source_compilation_contexts.py',
+                 'source_compilation_flow.py', 'source_core_interfaces.py')
 
 
 class SourceRuleError(ProductionError):
@@ -441,7 +444,7 @@ class _Builder:
         for name in _FIELDS[kind]:
             self.mark(name, P.ProductionDispositionKind.METADATA)
         if self.purpose is P.ProductionPurpose.CONDITION:
-            from scar.analysis.source_condition_rules import emit_condition
+            from scar.analysis.source_control import emit_condition
             emit_condition(self,root,state)
             return self.plan(root,root_source)
         if kind in ('Name', 'Attribute', 'Subscript'):
@@ -456,10 +459,10 @@ class _Builder:
             from scar.analysis.source_comprehension_rules import emit_comprehension
             emit_comprehension(self, root, state)
         elif kind == 'Yield':
-            from scar.analysis.source_suspension_rules import emit_yield
+            from scar.analysis.await_protocol import emit_yield
             emit_yield(self, root, state)
         elif kind in ('YieldFrom', 'Await'):
-            from scar.analysis.source_delegation_rules import emit_delegation
+            from scar.analysis.await_protocol import emit_delegation
             emit_delegation(self, root, state)
         elif kind in ('Lambda', 'GeneratorExp'):
             from scar.analysis.source_callable_rules import emit_callable

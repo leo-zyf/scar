@@ -18,7 +18,7 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.call_compilation import future_flags_for
 from scar.ir.program.compilation import CallCompilationProfile
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_launch as L, normal_links as F
+from scar.ir.program import launch_provenance as L, normal_links as F
 from scar.ir.program import normal_graph as G, normal_targets as T, source_productions as P
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.record_codec import decode, encode

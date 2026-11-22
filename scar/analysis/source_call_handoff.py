@@ -8,7 +8,7 @@ from scar.analysis.entry_call_dependence import _index, _path
 from scar.analysis.normal_graph import normal_edges
 from scar.analysis.program_view import ProgramView
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
-from scar.analysis.source_call_operands import call_operands
+from scar.analysis.call_inputs import call_operands
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import artifact_reference, read_artifact
@@ -16,8 +16,8 @@ from scar.ir.program import normal_graph as G
 from scar.ir.program.call_edges import CapturedCode, InvocationKey
 from scar.ir.program.control import LanguageCompletionKind
 from scar.ir.program.normal_targets import GlobalPort
-from scar.ir.program.reference_consumers import ArgumentRole
-from scar.ir.program.source_invocations import SourceCallScope, SourceInvocationPort
+from scar.ir.program.binding_ports import ArgumentRole
+from scar.ir.program.source_value_routes import SourceCallScope, SourceInvocationPort
 from scar.ir.record_codec import decode, encode
 from scar.runtime.source_call_handoff_observe import SCHEMA as CAPTURE
 

@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 import __future__
 
-from scar.analysis.source_compile_interfaces import ContextCompiler,_bind_query
+from scar.analysis.compiler_contexts import ContextCompiler, _bind_query
 
 
 class Query:

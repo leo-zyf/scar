@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 from scar.analysis.scalar_table_cse import check as check_proof
 from scar.analysis.scalar_table_handoff import CAPTURE as OBSERVATION, DESIGN as CAPTURE_DESIGN, table_version
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.scalar_table_native import MAX_LIVE_KEYS

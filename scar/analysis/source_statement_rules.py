@@ -139,15 +139,15 @@ class _StatementBuilder(_Builder):
             emit_atomic_statement(self, root, current)
             return self.plan(root, source)
         elif kind in ('Import', 'ImportFrom'):
-            from scar.analysis.source_statement_imports import emit_import_statement
+            from scar.analysis.statement_bindings import emit_import_statement
             emit_import_statement(self, root, current)
             return self.plan(root, source)
         elif kind in ('FunctionDef','AsyncFunctionDef'):
-            from scar.analysis.source_statement_functions import emit_function_definition
+            from scar.analysis.statement_bindings import emit_function_definition
             emit_function_definition(self, root, current)
             return self.plan(root, source)
         elif kind in ('ClassDef','TypeAlias'):
-            from scar.analysis.source_statement_definitions import emit_definition
+            from scar.analysis.statement_bindings import emit_definition
             emit_definition(self,root,current)
             return self.plan(root,source)
         elif kind in ('With','AsyncWith'):
@@ -229,7 +229,7 @@ class _StatementBuilder(_Builder):
         else:
             asynchronous = self.node.constructor == 'AsyncFor'
             if asynchronous:
-                from scar.analysis.source_delegation_rules import emit_delegate_loop
+                from scar.analysis.await_protocol import emit_delegate_loop
                 qualified, state = self.delegation(condition, P.DelegationProtocolKind.GET_ASYNC_NEXT,
                     (self.parameter(condition, 0),), state)
                 advanced = emit_delegate_loop(self, condition, qualified, state, P.SuspensionKind.AWAIT)

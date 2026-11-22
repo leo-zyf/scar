@@ -3,7 +3,7 @@
 from statistics import median_low
 
 from scar.optimization.aten_team_numa_locality import _BUDGET_FRONTIER, _legal_contexts
-from scar.optimization.aten_tensor_lifetime import tensor_releases
+from scar.optimization.aten_live_values import tensor_releases
 
 
 def _operation_parents(recipe):

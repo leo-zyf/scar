@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scar.analysis import source_execution as analysis
-from scar.ir.program import source_execution as X, source_productions as P
+from scar.ir.program import source_protocols as X, source_productions as P
 from scar.ir.record_codec import encode, decode
 from tests.unit.test_source_construction_connections import source_facts
 from tests.fixtures.source_rules import _documents

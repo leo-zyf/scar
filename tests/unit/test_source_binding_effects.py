@@ -6,9 +6,9 @@ import pytest
 from scar.analysis import source_binding_effects as E, source_name_definitions as solver
 from scar.analysis import source_frame_binding_effects as I
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
-from scar.ir.program import source_bindings as B, source_name_access_anchors as A
-from scar.ir.program import source_namespaces as N, source_productions as P, source_value_flow as V
-from scar.ir.program import source_name_definitions as D
+from scar.ir.program import source_bindings as B, name_flow as A
+from scar.ir.program import namespace_routes as N, source_productions as P, source_value_routes as V
+from scar.ir.program import name_flow as D
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.program.ids import LocationID

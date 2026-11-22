@@ -4,7 +4,7 @@ import __future__
 
 from scar.analysis.source_context_variants import context_variant_document
 from scar.analysis.source_binding_variants import binding_variant_document, read_binding_variant
-from scar.ir.program.source_compiled_values import EffectiveCompileContext
+from scar.ir.program.code_identity import EffectiveCompileContext
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.record_codec import decode
 from tests.unit.test_source_contexts import _inputs

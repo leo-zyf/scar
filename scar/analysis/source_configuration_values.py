@@ -11,9 +11,9 @@ from scar.analysis.source_data_material_store import DataMaterialStore
 from scar.analysis.source_data_materials import _artifact
 from scar.analysis.source_interpolation_syntax import InterpolationSyntax
 from scar.analysis.source_configuration_value_query import ConfigurationValueQuery
-from scar.ir.program import configuration_values as V
-from scar.ir.program.configuration_composition import ConfigurationStepKind,ConfigurationProtocolSource
-from scar.ir.program.configuration_overrides import OverrideAction,OverrideExpressionKind
+from scar.ir.program import configuration as V
+from scar.ir.program.configuration import ConfigurationStepKind, ConfigurationProtocolSource
+from scar.ir.program.configuration import OverrideAction, OverrideExpressionKind
 from scar.ir.program.providers import ProviderArtifact
 
 

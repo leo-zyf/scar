@@ -11,7 +11,7 @@ from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.ids import LocationID
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode, decode
-from scar.ir.program import source_value_flow as V
+from scar.ir.program import source_value_routes as V
 
 
 def test_producer_location_and_state_are_distinct():

@@ -10,7 +10,7 @@ from scar.compiler import cpu_fixed_grid_short_python_probe as python_probe
 from scar.compiler import cpu_fixed_grid_source_route_benchmark as benchmark
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.ir.execution_recipe import _canonical, read_artifact
-from scar.optimization.affine_lifecycle import WINDOWS, fit_affine_lifecycle
+from scar.optimization.array_live_regions import WINDOWS, fit_affine_lifecycle
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 

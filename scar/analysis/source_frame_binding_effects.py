@@ -14,7 +14,7 @@ from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
-from scar.ir.program import source_productions as P, source_name_definitions as D
+from scar.ir.program import source_productions as P, name_flow as D
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.control import LanguageCompletionKind as C
 
@@ -187,7 +187,7 @@ def frame_isolated_reaching_name_definitions(snapshot, source_function, namespac
 
 def frame_isolated_local_read_tracks(state):
     from scar.analysis.source_name_access_anchors import anchor_name_accesses
-    from scar.analysis.source_local_state import local_read_tracks
+    from scar.analysis.state_materialization import local_read_tracks
     if state.anchors is None:
         state.anchors = anchor_name_accesses(state.view.catalog, state.material.unit, material=state.material)
     context = FrameBindingIsolationContext(state.material); result = []

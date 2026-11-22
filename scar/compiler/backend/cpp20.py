@@ -4,7 +4,11 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from scar.codegen.native_cpu_elf import cpu_executable_dynamic
+from scar.codegen.native_project import build_native_project, write_native_project
+
 from ..frontend.clang import capture_unit
+
 
 def _compile_settings(flags, source_root):
     include_dirs = []
@@ -113,3 +117,16 @@ def emit_sources(manifest, project, edits):
                 compile_options=compile_options,
                 libraries=linkage.get('libraries', ()), link_options=linkage.get('link_options', ()),
                 runtime_dirs=linkage.get('runtime_dirs', ()))
+
+
+def build_reference_project(manifest, project):
+    """Build the source-preserving C++20 route and check its runtime ABI."""
+    project.mkdir()
+    build = emit_sources(manifest, project, {})
+    write_native_project(project, 'scar_entry', **build)
+    executable, _ = build_native_project(project, 'scar_entry', ('g++',))
+    dynamic = cpu_executable_dynamic(executable)
+    for name in dynamic['needed']:
+        if any(provider in name for provider in ('libpython', 'libtorch', 'libgfortran')):
+            raise ValueError(f'unqualified target dependency: {name}')
+    return executable, dynamic

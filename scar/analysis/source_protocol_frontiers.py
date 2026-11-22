@@ -9,7 +9,7 @@ from scar.analysis.source_call_view import prepare_source_ports, source_call_sit
 from scar.analysis.source_declared_calls import _owners
 from scar.analysis.source_reference_slice import source_port
 from scar.ir.program.dependencies import DependencyFrontier, DependencyNeighborhood
-from scar.ir.program.source_protocol_frontiers import ProtocolCallFrontier
+from scar.ir.program.source_protocols import ProtocolCallFrontier
 from scar.ir.program.ids import OperationID, ValueID, UseID, ControlPortID, RegionID
 
 

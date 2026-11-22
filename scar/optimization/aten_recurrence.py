@@ -4,8 +4,8 @@ from math import isfinite, prod
 
 from scar.compiler.aten_native_recipe import SCHEMA as RHS_SCHEMA, SCHEMA_VERSION as RHS_VERSION
 from scar.compiler.aten_native_recipe import _fields, _identifier, _shape
-from scar.optimization.aten_recurrence_liveness import plan_step_lifetime_order
-from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes, tensor_releases
+from scar.optimization.aten_live_values import plan_step_lifetime_order
+from scar.optimization.aten_live_values import _bounded_sum, _bytes, tensor_releases
 
 
 SCHEMA = 'scar.aten-recurrence-plan'

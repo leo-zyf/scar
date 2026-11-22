@@ -6,7 +6,7 @@ from scar.ir.effects import ActionLabel,Knowledge
 from scar.ir.literals import PythonLiteral
 from . import normal_links as F,normal_targets as T,normal_graph as G
 from .python_bindings import SourceCallSite
-from .source_execution import CompiledCodeUse
+from scar.ir.program.source_protocols import CompiledCodeUse
 
 
 class ExecNamespaceKind(str,Enum):

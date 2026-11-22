@@ -16,10 +16,10 @@ from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_graph as G,normal_targets as T,source_productions as P
-from scar.ir.program import source_content as C,source_content_forwarding as F
+from scar.ir.program import content_routes as C, content_routes as F
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.structured import PythonProtocolKind as Protocol
-from scar.ir.program.source_reference_slices import ReferenceOriginKind
+from scar.ir.program.source_value_routes import ReferenceOriginKind
 from scar.ir.program.dependencies import (DependencyPoint as Point,DependencyEdge as Edge,
     DependencyCondition as Condition,DependencyEvidence as Evidence,DependencyFrontier as Frontier,
     DependencyNeighborhood as Neighborhood,DependencyKind as K,DependencyMeaning as Meaning,

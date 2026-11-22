@@ -19,12 +19,12 @@ from scar.analysis import normal_containers
 from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
 from scar.analysis import source_template_batch,source_template_workers,normal_output,source_interface_store,source_content_factors
-from scar.ir.program import source_interfaces as L,content_factors as C
-from scar.ir.program import source_generators as D,suspension_interfaces as S
+from scar.ir.program import source_protocols as L, content_routes as C
+from scar.ir.program import source_protocols as D, suspension_interfaces as S
 from scar.analysis.source_template_links import read_template_body
 from scar.ir.program import normal_targets as T
 from scar.ir.program import source_productions as P
-from scar.ir.program import normal_namespaces as N
+from scar.ir.program import namespace_routes as N
 from scar.ir.program import normal_graph as G
 from scar.ir.program import normal_links as F
 from scar.ir.program.python_bindings import SourceCallSite

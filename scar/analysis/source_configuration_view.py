@@ -20,7 +20,7 @@ from scar.analysis.source_call_view import prepare_source_ports,source_call_site
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import source_configuration_view as R,source_content as C,model as M,view as V
+from scar.ir.program import configuration as R, content_routes as C, model as M, view as V
 from scar.ir.program.dependencies import (
     DependencyPoint as Point,DependencyEdge as Edge,DependencyKind as K,DependencyMeaning as Meaning,
     DependencyStrength as Strength,DependencyCondition as Condition,DependencyEvidence as Evidence,

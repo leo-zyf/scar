@@ -9,7 +9,7 @@ import re
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.tensor_execution import (
     replay_native_comparison, replay_operation_costs, replay_recurrence_placement, scheduled_tensor_body,
@@ -21,8 +21,8 @@ from scar.ir.v2.schemas import canonical_json
 
 def _replay_recurrence_rhs_storage(recipe, geometry, storage, placement):
     from scar.optimization.aten_native_team import data_dependencies
-    from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
-    from scar.optimization.aten_tensor_lifetime import _bytes, tensor_footprint
+    from scar.optimization.aten_live_values import ready_lifetime_bound
+    from scar.optimization.aten_live_values import _bytes, tensor_footprint
 
     inputs, results = geometry['inputs'], geometry['operations']
     cpus = placement['cpus']
@@ -251,7 +251,7 @@ def _replay_exported(member, manifest, base, label, graph, execution, document, 
     from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
     from scar.ir.program.model import DataValue
     from scar.optimization.aten_export_rewrite import eliminate_dead_export_ops
-    from scar.optimization.aten_tensor_lifetime import tensor_footprint
+    from scar.optimization.aten_live_values import tensor_footprint
 
     files = manifest['files']
     if execution['schema'] != 'scar.native-tensor-entry-plan' or execution['source'] != manifest['source']:

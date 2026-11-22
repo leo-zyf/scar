@@ -1,5 +1,5 @@
 """Expose inferred namespace origins and open member-binding requirements."""
-from scar.ir.program import normal_links as F, normal_namespaces as N
+from scar.ir.program import normal_links as F, namespace_routes as N
 
 
 def namespace_lookups(solver):

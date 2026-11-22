@@ -5,9 +5,9 @@ from statistics import median_low
 from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _passes_gain
 from scar.optimization.aten_native_team import READY_SERVICE_SCOPE, _measurements, _storage, _team_groups, data_dependencies
 from scar.optimization.aten_ready_joint import ordered_ready_intervals, solve_ready_joint
-from scar.optimization.aten_ready_lifetime import ready_lifetime_bound
+from scar.optimization.aten_live_values import ready_lifetime_bound
 from scar.optimization.aten_ready_numa import model_ready_numa_locality
-from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
+from scar.optimization.aten_live_values import _bounded_sum, _bytes
 
 _LANE_DOMAINS = ((0, 1), (0, 2), (0, 1, 2))
 

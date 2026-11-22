@@ -9,9 +9,9 @@ from collections import defaultdict, deque
 from scar.analysis.normal_entry import EntrySolver
 from scar.analysis.source_context_fact_store import ContextFactStore
 from scar.analysis.source_context_interfaces import ContextInterfaceStore
-from scar.analysis.source_namespace_flow import NamespaceFlow
+from scar.analysis.namespace_flow import NamespaceFlow
 from scar.analysis.source_frame_globals import FrameGlobalsFlow
-from scar.analysis.source_relation_replay import SharedConstructionFlow, SharedContainerFlow
+from scar.analysis.source_relations import SharedConstructionFlow, SharedContainerFlow
 from scar.analysis.source_reference_transport import ActiveReferenceTransport
 from scar.ir.program import normal_links as F, normal_entry as E
 

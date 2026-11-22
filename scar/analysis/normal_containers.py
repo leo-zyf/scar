@@ -8,7 +8,7 @@ from collections import defaultdict,deque
 
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import normal_links as F, normal_targets as T
-from scar.ir.program.content_factors import ContentIndexCycle
+from scar.ir.program.content_routes import ContentIndexCycle
 
 
 def _key(value):

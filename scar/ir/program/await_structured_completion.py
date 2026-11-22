@@ -1,6 +1,6 @@
 """Connect typed same-region completion receipts to their exact caller ports."""
 from .await_outcome_flow import selected, state_links
-from .completion_adapter_routes import continuation_rows
+from scar.ir.program.continuation_ports import continuation_rows
 from .model import ExitKind, TerminatorKind
 
 

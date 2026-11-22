@@ -5,7 +5,7 @@ LogicalValueIDs nor storage/allocation identities or cross-call cache keys.
 """
 from dataclasses import dataclass
 
-from .array_value_templates import ArrayMaterializationRole
+from scar.ir.program.layout_templates import ArrayMaterializationRole
 from .dependencies import DependencyFrame
 from .normal_targets import GlobalPort,Body
 from .providers import ProviderFactReference

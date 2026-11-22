@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scar.analysis.source_configuration_composition import _Builder,_package
-from scar.ir.program.configuration_composition import ConfigurationStepKind
+from scar.ir.program.configuration import ConfigurationStepKind
 
 
 def test_nested_group_uses_group_base_not_choice_directory_and_shares_materials(tmp_path):

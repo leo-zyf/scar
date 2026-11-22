@@ -3,7 +3,7 @@
 from hashlib import sha256
 
 from scar.ir.v2.schemas import canonical_json
-from scar.optimization.aten_tensor_lifetime import tensor_releases
+from scar.optimization.aten_live_values import tensor_releases
 
 
 # Exact schemas within the statically specialized contiguous CPU FP32 ABI.

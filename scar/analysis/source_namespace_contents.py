@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from scar.analysis.source_namespace_interfaces import CallerReferencePaths, NamespacePlanView
-from scar.ir.program import normal_links as F, normal_targets as T, source_namespaces as N
+from scar.ir.program import normal_links as F, normal_targets as T, namespace_routes as N
 from scar.ir.program.source_exec_roots import ExecNamespaceKind
 from scar.ir.literals import PythonLiteral
 

@@ -12,7 +12,7 @@ import sys
 from typing import get_args, get_origin, get_type_hints
 
 from scar.ir.program import source_productions as P
-from scar.ir.program.source_observed_codes import ObservedSourceScopeKind, ObservedSourceRequestKind
+from scar.ir.program.source_observations import ObservedSourceScopeKind, ObservedSourceRequestKind
 from scar.ir.program.python_call_targets import PythonTargetKind, PythonCodeScope
 from scar.ir.program.normal_targets import FunctionActivation, ArgumentBinding
 from scar.ir.program.call_edges import FrameCompletion

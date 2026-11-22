@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from scar.analysis.source_reference_slice import source_port as _gp
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.ir.program import normal_links as F, normal_targets as T
-from scar.ir.program import source_reference_slices as R
+from scar.ir.program import source_value_routes as R
 
 
 def _ancestors(incoming, point):

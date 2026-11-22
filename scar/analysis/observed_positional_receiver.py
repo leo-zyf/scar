@@ -213,7 +213,7 @@ def recover_positional_receiver(index, observation, frame):
             or returned.return_ref == frame.parameters[count - 1].ref
             or not replay.uninterrupted(preceding, handshake, {attempt.invocation, frame.invocation, producer_entry.invocation})):
         return None
-    from scar.ir.program.source_observed_calls import ObservedPositionalReceiver
+    from scar.ir.program.source_observations import ObservedPositionalReceiver
 
     return ObservedPositionalReceiver(producer_attempt=preceding.anchor, producer_handshake=producer_handshake.anchor,
         producer_return=returned.anchor, caller_entry=caller.anchor, callee_entry=frame.anchor,

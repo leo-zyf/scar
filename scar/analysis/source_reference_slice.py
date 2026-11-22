@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_links as F, normal_targets as T
-from scar.ir.program import source_reference_slices as R
+from scar.ir.program import source_value_routes as R
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, decode
 

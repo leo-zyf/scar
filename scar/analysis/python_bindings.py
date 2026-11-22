@@ -30,9 +30,9 @@ from scar.analysis.normal_output import write_table as _stream
 from scar.analysis.static_native_materials import read_static_native_materials,NativeMaterialBudget
 from scar.analysis.static_native_interfaces import native_material_document,lower_static_native_materials
 from scar.analysis import tensor_stub_contracts,tensor_return_flow,tensor_language_flow
-from scar.ir.program import python_bindings as B,normal_namespaces as N,source_productions as P,normal_targets as T
+from scar.ir.program import python_bindings as B, namespace_routes as N, source_productions as P, normal_targets as T
 from scar.ir.program.binding_returns import ReceiverMode,NativeReturnSlot
-from scar.ir.program import binding_returns,tensor_values
+from scar.ir.program import binding_returns, layout_templates as tensor_values
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.codec import dumps as graph_dumps,loads as graph_loads

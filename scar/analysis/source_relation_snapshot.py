@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from scar.analysis.source_context_query import ContextTargetGraph
-from scar.analysis.source_relation_selection import select_relation_rows
+from scar.analysis.source_relations import select_relation_rows
 from scar.ir.program import source_productions as P
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode

@@ -24,7 +24,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_declared_calls as D, normal_links as F, source_productions as P
+from scar.ir.program import call_inputs as D, normal_links as F, source_productions as P
 from scar.ir.record_codec import decode, encode
 
 
@@ -170,7 +170,7 @@ def _pins():
     from scar.analysis import source_namespace_references, source_reference_slice, source_class_base_graph
     from scar.analysis import source_context_query, source_context_fact_store, normal_facts, normal_output
     from scar.analysis import source_symbol_variants
-    from scar.ir.program import source_namespace_references as N, normal_targets as T, normal_graph as G
+    from scar.ir.program import namespace_routes as N, normal_targets as T, normal_graph as G
     from scar.ir import record_codec
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{
         name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (

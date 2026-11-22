@@ -5,7 +5,7 @@ reference provenance, not the live caller stack or a snapshot of cell contents.
 """
 from dataclasses import dataclass,replace
 from collections import defaultdict
-from scar.ir.program.source_returned_functions import ReturnedCallableProvenance
+from scar.ir.program.function_sites import ReturnedCallableProvenance
 
 from scar.analysis.source_call_view import source_call_site,source_active_scope
 from scar.ir.program.dependencies import (

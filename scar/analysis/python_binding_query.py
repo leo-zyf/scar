@@ -10,11 +10,11 @@ from scar.analysis.normal_query import NormalCallGraph
 from scar.analysis.normal_targets import propagation_pins
 from scar.analysis import python_bindings
 from scar.analysis import tensor_return_flow,tensor_stub_contracts,tensor_language_flow
-from scar.ir.program import python_bindings as B,normal_namespaces as N,source_productions as P
-from scar.ir.program import tensor_values as V,binding_returns as R
+from scar.ir.program import python_bindings as B, namespace_routes as N, source_productions as P
+from scar.ir.program import layout_templates as V, binding_returns as R
 from scar.ir.program import normal_targets as T
-from scar.ir.program import content_factors as C
-from scar.ir.program import source_generators as D,suspension_interfaces as S
+from scar.ir.program import content_routes as C
+from scar.ir.program import source_protocols as D, suspension_interfaces as S
 from scar.ir.program import normal_entry as E
 from scar.analysis import normal_entry,normal_facts
 from scar.ir.program.codec import loads as graph_loads

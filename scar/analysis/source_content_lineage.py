@@ -8,8 +8,8 @@ version is inferred from a GET, a stable receiver, a shape, or a world token.
 from collections import Counter, defaultdict
 from dataclasses import replace
 
-from scar.ir.program import source_content as C, normal_graph as G
-from scar.ir.program import source_content_lineage as L
+from scar.ir.program import content_routes as C, normal_graph as G
+from scar.ir.program import content_routes as L
 from scar.ir.program.ids import OperationID
 from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEdge as Edge,
     DependencyCondition as Condition, DependencyEvidence as Evidence,

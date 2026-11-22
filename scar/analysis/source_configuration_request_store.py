@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scar.analysis import source_configuration_requests as producer
 from scar.analysis.source_symbol_variants import _table
-from scar.ir.program import configuration_requests as R
+from scar.ir.program import configuration as R
 from scar.ir.record_codec import decode
 
 

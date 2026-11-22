@@ -26,7 +26,7 @@ from scar.analysis.source_template_links import _json
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import source_productions as P, normal_graph as G
-from scar.ir.program import source_body_interfaces as R
+from scar.ir.program import body_observations as R
 from scar.ir.program.normal_targets import Body
 from scar.ir.program.ids import ProviderID
 from scar.ir.record_codec import encode, decode

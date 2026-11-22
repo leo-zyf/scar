@@ -18,8 +18,8 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.effects import ActionLabel as L
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_exec_roots as X,source_execution as E,source_compiled_values as C
-from scar.ir.program import source_context_variants as CV,normal_graph as G,normal_targets as T,normal_links as F
+from scar.ir.program import source_exec_roots as X, source_protocols as E, code_identity as C
+from scar.ir.program import code_identity as CV, normal_graph as G, normal_targets as T, normal_links as F
 from scar.ir.program.source_template_links import SourceTemplateGraph
 from scar.ir.program.control import LanguageCompletionKind as K
 from scar.ir.program.model import ValueType,ValueKind

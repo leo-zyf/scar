@@ -14,10 +14,10 @@ from scar.analysis.source_constructor_interfaces import _site, _stage, _source_e
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_consumer_parents import _stamp
-from scar.ir.program import source_constructor_interfaces as C, declared_contexts as D
+from scar.ir.program import class_ports as C, declared_contexts as D
 from scar.ir.program import source_productions as P, normal_targets as T
 from scar.ir.program.providers import ProviderArtifact
-from scar.ir.program.source_value_flow import SourceBodyCall
+from scar.ir.program.source_value_routes import SourceBodyCall
 from scar.ir.record_codec import decode, encode
 
 

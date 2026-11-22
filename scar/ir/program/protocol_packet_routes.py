@@ -804,7 +804,7 @@ def completion_continuations(ctx, source, *, start=None, choices=(), cross_resum
     """Typed completion-payload evidence; future resume is explicitly opt-in."""
     from .control import ProtocolValueKind
     from .model import ProtocolValue, ReferenceValue
-    from .continuation_receipts import ContinuationReceipts
+    from scar.ir.program.continuation_ports import ContinuationReceipts
     if type(cross_resume) is not bool:
         raise TypeError('cross_resume requires an exact bool')
     port = ctx.port(source)

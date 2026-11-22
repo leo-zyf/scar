@@ -77,7 +77,7 @@ class SourceObservedStateProvider:
     def ensure(self,unit):
         self.check()
         if unit in self.loaded:return self.loaded[unit]
-        from scar.analysis.source_stored_bindings import StoredBindingVersions
+        from scar.analysis.state_materialization import StoredBindingVersions
         header=self.headers[unit];folder=self.path/'units'/unit
         summary=next(row for row in self.report['units'] if row['unit']==unit)
         state=StoredBindingVersions(self.view,folder,header,summary)

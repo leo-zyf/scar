@@ -28,7 +28,7 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
-from scar.ir.program import resource_scopes as R
+from scar.ir.program import resource_observations as R
 from scar.ir.program import source_productions as P
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.ids import ProviderID

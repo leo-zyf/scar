@@ -9,7 +9,7 @@ from pathlib import Path
 import platform
 import subprocess
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_provider_bundle import _content, _elf
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file

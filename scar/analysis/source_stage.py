@@ -10,14 +10,7 @@ import shutil
 import tempfile
 
 from scar.analysis.source_materials import _remove_owned_previous, _stamps
-
-
-def _sync_directory(path):
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory
 
 
 def _sync_file(path, descriptor=None):
@@ -30,38 +23,6 @@ def _sync_file(path, descriptor=None):
             if size != descriptor['bytes'] or digest.hexdigest() != descriptor['sha256']:
                 raise ValueError('new source sidecar bytes differ from its publication receipt')
         os.fsync(stream.fileno())
-
-
-def _durable_bytes(path, payload, *, replace):
-    """Publish a complete file; no-clobber mode preserves former xb semantics."""
-    fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
-    temporary = Path(temporary)
-    try:
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if replace:
-            os.replace(temporary, path)
-        else:
-            # link publishes the fully synced inode while atomically refusing
-            # a concurrently created report. replace would overwrite that file.
-            os.link(temporary, path)
-            temporary.unlink()
-        _sync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _durable_mkdir(path):
-    missing, parent = [], path
-    while not parent.exists():
-        missing.append(parent)
-        parent = parent.parent
-    path.mkdir(parents=True, exist_ok=True)
-    for directory in reversed(missing):
-        _sync_directory(directory)
-        _sync_directory(directory.parent)
 
 
 class SourceStage:

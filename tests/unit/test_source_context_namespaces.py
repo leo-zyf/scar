@@ -2,11 +2,11 @@
 from types import SimpleNamespace
 
 from scar.analysis.normal_targets import _Solver
-from scar.analysis.source_relation_replay import SharedContainerFlow
-from scar.analysis.source_namespace_builtins import BuiltinNamespaceFlow
+from scar.analysis.source_relations import SharedContainerFlow
+from scar.analysis.namespace_values import BuiltinNamespaceFlow
 from scar.analysis.source_namespace_interfaces import CallerReferencePaths,extract_namespace_interfaces
 from scar.ir.program import source_productions as P,source_bindings as B,source_declarations as D,normal_graph as G
-from scar.ir.program.source_namespaces import NamespaceInterfaceBinding
+from scar.ir.program.namespace_routes import NamespaceInterfaceBinding
 from scar.ir.program.normal_targets import GlobalPort
 from scar.ir.record_codec import decode,encode
 from tests.unit.test_source_construction_connections import source_facts

@@ -23,8 +23,8 @@ from scar.analysis.source_template_links import _json
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.normal_output import write_table
-from scar.ir.program import source_body_activations as R, source_body_interfaces as B
-from scar.ir.program import source_observed_codes as C, source_productions as P, normal_graph as G
+from scar.ir.program import body_observations as R, body_observations as B
+from scar.ir.program import source_observations as C, source_productions as P, normal_graph as G
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.call_edges import CallEdgeBudget
@@ -205,7 +205,7 @@ def derive_body_activations(index):
 
 
 def _pins():
-    from scar.ir.program import source_observed_codes
+    from scar.ir.program import source_observations as source_observed_codes
     from scar.analysis import source_observed_codes as code_reader,source_observed_calls as call_reader
     return {**body_pins(), **{'correspondence_'+name:digest
         for name,digest in code_reader.request_code_pins().items()},

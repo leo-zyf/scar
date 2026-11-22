@@ -9,7 +9,8 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _build_interface, _dependencies, _resolve
+from scar.codegen.aten_provider import _build_interface, _resolve
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe

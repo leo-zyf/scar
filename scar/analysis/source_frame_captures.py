@@ -9,7 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
 
-from scar.analysis.source_namespace_captures import extract_captures
+from scar.analysis.namespace_values import extract_captures
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_suspension_interfaces import SuspensionInterfaceIndex
 from scar.analysis.source_productions import _digest

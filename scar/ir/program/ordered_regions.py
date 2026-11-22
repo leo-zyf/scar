@@ -5,13 +5,13 @@ from enum import Enum
 from .dependencies import DependencyPoint, DependencyFrame, DependencyKind, DependencyMeaning
 from .providers import ProviderFactReference
 from .normal_targets import GlobalPort
-from .source_content_lineage import ContentAccessRef
-from .source_content import ContentAccessTemplate
+from scar.ir.program.content_routes import ContentAccessRef
+from scar.ir.program.content_routes import ContentAccessTemplate
 from .dependencies import DependencyPoint, DependencyFrame
 from .normal_links import CodeScopeRef
 from .ids import OperationID
-from .source_address_paths import FieldSelector
-from .source_reference_slices import ReferenceSlice
+from scar.ir.program.content_routes import FieldSelector
+from scar.ir.program.source_value_routes import ReferenceSlice
 from . import normal_graph as G, normal_targets as T
 from .dependencies import DependencyFrame
 

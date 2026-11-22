@@ -7,9 +7,9 @@ from dataclasses import dataclass,replace
 import re
 
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import configuration_values as V
+from scar.ir.program import configuration as V
 from scar.ir.program.data_materials import DataNodeKind
-from scar.ir.program.configuration_overrides import OverrideExpressionKind
+from scar.ir.program.configuration import OverrideExpressionKind
 
 
 K=V.ConfigurationValueKind

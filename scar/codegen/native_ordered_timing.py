@@ -13,7 +13,7 @@ from time import perf_counter_ns
 
 from scar.codegen import native_ordered_profile as profile
 from scar.codegen import native_ordered_sparse_export as ordered
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_project import build_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.ir.execution_recipe import artifact_reference, read_artifact

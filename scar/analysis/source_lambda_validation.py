@@ -194,7 +194,7 @@ def validate_lambda_regions(model,graph,interface,metadata,semantic,control,lang
         need(len(closure)==len(environment.members)-5 and all(u.value in parent_cells for u in closure)
              and [(r.role,r.index)for r in roles[cursor:]]==[('lambda-closure-cell',i)for i in range(len(closure))],
              'capture substituted contents/foreign cells or changed order')
-        from scar.ir.program.lambda_bodies import LambdaEnvironmentField
+        from scar.ir.program.function_sites import LambdaEnvironmentField
         need(tuple(c.formal for c in record.captures)==tuple(m.reference for m in environment.members)
              and record.captures[0].normal_result==0 and record.captures[1].source_use==args[1].id
              and tuple(c.created_field for c in record.captures[2:5])==tuple(LambdaEnvironmentField)

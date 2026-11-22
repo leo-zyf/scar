@@ -22,9 +22,9 @@ from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_declared_calls import _NoTargets, _check_targets, _folder, _flat_tables
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_namespace_captures import extract_captures
+from scar.analysis.namespace_values import extract_captures
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
-from scar.ir.program import source_function_creations as R
+from scar.ir.program import function_sites as R
 from scar.ir.program import source_productions as P, normal_graph as G, normal_targets as T
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.model import ValueKind, ValueType
@@ -232,7 +232,7 @@ def _stamp(path):
 
 def _pins():
     from scar.analysis import source_graph_material as materials, source_world_material
-    from scar.analysis import source_namespace_interfaces, source_namespace_captures, source_reference_slice
+    from scar.analysis import source_namespace_interfaces, namespace_values as source_namespace_captures, source_reference_slice
     from scar.analysis import source_symbol_variants, normal_output, source_declared_calls, source_stage
     from scar.ir import record_codec
     from scar.ir.program import normal_links, protocol_signatures, signature_patterns, model, source_template_links

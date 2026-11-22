@@ -9,7 +9,8 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _dependencies, _resolve
+from scar.codegen.aten_provider import _resolve
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_export_cuda_source import qualify_cuda_export
@@ -19,7 +20,7 @@ from scar.compiler.tensor_physical_problem import tensor_physical_problem
 from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import codec
-from scar.optimization.aten_tensor_lifetime import tensor_footprint
+from scar.optimization.aten_live_values import tensor_footprint
 
 
 SCHEMA = 'scar.native-exported-nvhpc-cpu'
@@ -67,7 +68,7 @@ def _plan(recipe, projection, program, hardware, budget, cpus, threads, *, obser
     costs = None
     if observations:
         from scar.ir.program.providers import ProviderArtifact
-        from scar.optimization.nvhpc_sgemm_cost import sgemm_body_costs
+        from scar.optimization.device_cost_bounds import sgemm_body_costs
 
         target_ref = artifact_reference(Path(hardware).resolve()/'result.json', 'scar.target-hardware-graph')
         costs = sgemm_body_costs(projection, observations, stack=stack, target=ProviderArtifact(**target_ref), cpus=cpus)
@@ -188,7 +189,7 @@ def compile_exported_nvhpc(model=None, *, model_sha256=None, stack, stack_sha256
         if direct_source and any(source[key] != source_contract['source'][key] for key in source):
             raise ValueError('original Python entry changed while the numerical graph was built')
     cpus = list(cpus)
-    from scar.optimization.nvhpc_sgemm_cost import SCHEMA as OBSERVATION
+    from scar.optimization.device_cost_bounds import SCHEMA as OBSERVATION
 
     observations = [artifact_reference(Path(path).resolve(), OBSERVATION) for path in sgemm_observations]
     problem, footprint = _plan(recipe, projection, program, target, tensor_budget_bytes, cpus, threads,

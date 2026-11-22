@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from scar.analysis.program_view import _digest
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.ir.program import source_content as C, view as V, model as M, normal_graph as G
+from scar.ir.program import content_routes as C, view as V, model as M, normal_graph as G
 from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEdge,
     DependencyCondition, DependencyEvidence, DependencyFrontier, DependencyNeighborhood,
     DependencyKind as K, DependencyMeaning as Meaning)

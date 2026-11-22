@@ -8,7 +8,7 @@ from scar.analysis.csr_topology_scope import _Transport, _body, _only, _require
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_declared_catalog import DeclaredSourceCatalog
-from scar.analysis.source_loop_dependencies import _enclosed, loop_dependencies
+from scar.analysis.source_control import _enclosed, loop_dependencies
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.sparse_pipeline_scope import SCHEMA as PIPELINE, _interface, check_sparse_pipeline_scope
 from scar.compiler.graph_frontend import _metadata, _source_identity

@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 
-from scar.analysis.source_class_bases import project_class_bases
+from scar.analysis.class_bindings import project_class_bases
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_symbol_variants import _table
@@ -19,7 +19,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_class_bases as B, source_constructor_contexts as C, source_productions as P
+from scar.ir.program import class_ports as B, class_ports as C, source_productions as P
 from scar.ir.program import normal_targets as T
 from scar.ir.record_codec import encode, decode
 
@@ -35,8 +35,8 @@ def _catalog(path):
 
 
 def _pins():
-    from scar.analysis import source_class_bases, source_namespace_references, source_address_paths
-    from scar.ir.program import source_namespace_references as N
+    from scar.analysis import class_bindings as source_class_bases, source_namespace_references, source_address_paths
+    from scar.ir.program import namespace_routes as N
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('bases', source_class_bases.__file__), ('types', B.__file__),
         ('namespaces', source_namespace_references.__file__), ('namespace_types', N.__file__),

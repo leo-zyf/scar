@@ -2,9 +2,9 @@
 
 import argparse
 from dataclasses import replace
+from hashlib import sha256
 import json
 from pathlib import Path
-import sys
 
 from scar.ir.program.codec import dumps, loads
 from scar.ir.implementation_plan import (
@@ -15,8 +15,11 @@ from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.constructive_planner import construct_implementations
 
 
-def simplify_copies(graph_path, anchors, out):
-    graph = loads(Path(graph_path).read_text())
+def simplify_copies(program: ProviderArtifact, anchors, out):
+    payload = Path(program.uri).read_bytes()
+    if len(payload) != program.size_bytes or sha256(payload).hexdigest() != program.sha256:
+        raise ValueError('program graph differs from the frontend receipt')
+    graph = loads(payload.decode('utf-8'))
     source = {row['operation']: row['source'] for row in anchors}
     aliases, rewrites = {}, []
     retained = []
@@ -52,31 +55,26 @@ def simplify_copies(graph_path, anchors, out):
     return rewrites
 
 
-def plan_entry(graph, reference, target_receipt, core, calibration_ns):
-    source_refs = (dict(reference, region=graph['entry']),)
+def plan_entry(entry: str, program: ProviderArtifact, hardware: ProviderArtifact, core, calibration_ns):
+    source_refs = (dict(path=program.uri, sha256=program.sha256, size_bytes=program.size_bytes,
+                        region=entry),)
     cost = CostEstimate(calibration_ns, None, None, 'EMPIRICAL_MODEL', 'baseline_launch', source_refs)
     baseline = ImplementationOption('original', 'preserve_entry', source_refs, {f'cpu:{core}': 1},
                                     {}, {}, {}, cost, parameters={})
     problem = PlanningProblem(
-        ProviderArtifact(target_receipt['path'], target_receipt['sha256'], target_receipt['size_bytes'],
-                         'scar.target-hardware-graph'),
-        source_refs, (PlanningResource(f'cpu:{core}', 'EXECUTION', 1),),
+        hardware, source_refs, (PlanningResource(f'cpu:{core}', 'EXECUTION', 1),),
         (PlanningOperation('entry', source_refs, (), (baseline,), baseline.id),), (),
         assumptions=('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY'))
     return problem_document(problem), construct_implementations(problem, baseline_only=True)
 
 
 def main(argv=None):
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if any(arg == '--build' or arg.startswith('--build=') for arg in arguments):
-        from scar.compiler.plan_build import main as plan_build
-        return plan_build(arguments)
     parser = argparse.ArgumentParser(prog='scar plan', description=__doc__,
                                      epilog='For a Python graph, use scar plan --build BUILD --help.')
     parser.add_argument('--problem', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--exact', action='store_true', help='use the optional exact resource solver')
-    args = parser.parse_args(arguments)
+    args = parser.parse_args(argv)
     problem = problem_from_dict(json.loads(args.problem.read_bytes()))
     if args.exact:
         from scar.optimization.joint_planner import solve_implementations

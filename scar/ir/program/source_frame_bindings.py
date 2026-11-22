@@ -4,7 +4,7 @@ from scar.ir.literals import PythonLiteral
 
 from . import normal_links as F,normal_targets as T
 from .source_exec_roots import ExecEndpoint
-from .source_namespaces import FunctionGlobalsCapture
+from scar.ir.program.namespace_routes import FunctionGlobalsCapture
 from .suspension_interfaces import StepWitness
 
 

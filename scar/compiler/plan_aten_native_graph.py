@@ -23,7 +23,7 @@ from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _measuremen
 from scar.optimization.aten_joint_numa_locality import model_aten_joint_numa_locality
 from scar.optimization.aten_native_schedule import propose_cpu_pair, propose_cpu_windows, select_cpu_windows
 from scar.optimization.aten_numa_locality import model_aten_numa_locality
-from scar.optimization.aten_tensor_lifetime import tensor_footprint, tensor_releases
+from scar.optimization.aten_live_values import tensor_footprint, tensor_releases
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
 from scar.optimization.paired_entry_selection import _metrics

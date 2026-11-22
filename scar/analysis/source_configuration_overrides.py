@@ -19,8 +19,8 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes
 from scar.analysis.source_template_links import _json
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import configuration_overrides as O,source_launch as L,source_productions as P
-from scar.ir.program.configuration_composition import ConfigurationProtocolSource
+from scar.ir.program import configuration as O, launch_provenance as L, source_productions as P
+from scar.ir.program.configuration import ConfigurationProtocolSource
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_frame_bindings import StaticInputPort
 from scar.ir.record_codec import decode,encode

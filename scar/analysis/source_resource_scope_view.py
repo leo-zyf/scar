@@ -7,7 +7,7 @@ from scar.analysis.source_resource_scopes import ResourceScopeStore,SCHEMA
 from scar.analysis.program_view import _digest
 from scar.analysis.source_call_view import prepare_source_ports
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import resource_scopes as R,view as V
+from scar.ir.program import resource_observations as R, view as V
 from scar.ir.program.ids import ProviderID,RegionID,ResourceDefinitionID
 from scar.ir.program.resources import ResourceDefinition,ResourceKind,ResourceRole,ExternalResource
 from scar.ir.program.model import ValueType,ValueKind

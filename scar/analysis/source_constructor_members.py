@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 
 from scar.analysis.source_call_context_graph import CallContextParents, read_call_context_graph
-from scar.analysis.source_constructor_contexts import constructor_context_inputs
+from scar.analysis.class_bindings import constructor_context_inputs
 from scar.analysis.source_declared_contexts import DeclaredResolver, expand_contexts
 from scar.analysis.source_reference_slice import ReferenceSlicer
 from scar.analysis.source_graph_material import source_graph_material
@@ -23,9 +23,9 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.program import declared_contexts as D, normal_targets as T, source_productions as P
-from scar.ir.program import source_constructor_contexts as C, source_constructor_interfaces as I
-from scar.ir.program import source_constructor_members as X, source_value_flow as V
-from scar.ir.program.source_body_expansion import SharedBodyReference
+from scar.ir.program import class_ports as C, class_ports as I
+from scar.ir.program import class_ports as X, source_value_routes as V
+from scar.ir.program.function_sites import SharedBodyReference
 from scar.ir.record_codec import encode, decode
 
 
@@ -150,7 +150,7 @@ def _counts(classes, graph, bodies, mapped, old_count):
 
 
 def _pins():
-    from scar.analysis import source_declared_contexts, source_constructor_contexts, source_graph_material, source_value_flow
+    from scar.analysis import source_declared_contexts, class_bindings as source_constructor_contexts, source_graph_material, source_value_flow
     return {name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
         ('producer', __file__), ('types', X.__file__), ('declared_types', D.__file__), ('class_types', C.__file__),
         ('declared', source_declared_contexts.__file__), ('class_inputs', source_constructor_contexts.__file__),

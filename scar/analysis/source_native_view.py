@@ -17,7 +17,7 @@ from scar.analysis.source_call_view import Flow, source_call_site, source_caller
 from scar.analysis.source_declared_calls import DeclaredCallStore, _owners
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import software_resources as S
+from scar.ir.program import native_contracts as S
 from scar.ir.program.dependencies import (
     DependencyPoint as Point, DependencyFrame as Frame, DependencyEdge as Edge,
     DependencyCondition as Condition, DependencyEvidence as Evidence,

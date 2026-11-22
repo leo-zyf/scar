@@ -1,6 +1,7 @@
 """Compile a locked native build target through SCAR's shared ProgramGraph."""
 
 import argparse
+from dataclasses import asdict
 from hashlib import sha256
 import json
 import os
@@ -10,10 +11,9 @@ import statistics
 import subprocess
 import time
 
-from scar.analysis.target_graph import build_target_graph
-from scar.codegen.native_cpu_elf import cpu_executable_dynamic
-from scar.codegen.native_project import build_native_project, write_native_project
-from .frontend.graph import capture_target, write_graph
+from scar.ir.execution_recipe import artifact_reference
+from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PLANNING_SCHEMA
+from .frontend.graph import build_graph
 from .middle.plan import plan_entry, simplify_copies
 
 
@@ -131,18 +131,17 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     _write(out / 'request.json', manifest)
-    target = out / 'hardware'
-    build_target_graph(target, paths=(manifest['source_root'], str(out)))
-    functions, capture_frontiers = capture_target(manifest, out / 'frontend', jobs)
-    graph = write_graph(functions, out / 'program.json', entry=manifest['entry'])
-    _write(out / 'compiler-cfg.json', functions)
-    _write(out / 'graph-report.json', dict(graph, frontend_frontiers=capture_frontiers))
+    frontend = build_graph(manifest, out, jobs=jobs)
+    graph = frontend.report
+    artifacts = {'graph_evidence': asdict(frontend.evidence), 'hardware': asdict(frontend.hardware)}
+    if frontend.program is not None:
+        artifacts['program'] = asdict(frontend.program)
     report = dict(schema='scar.native-entry-result', schema_version=1, graph={
-        key: value for key, value in graph.items() if key not in ('anchors', 'frontiers')},
-        frontend_frontiers=len(capture_frontiers), cfg_frontiers=len(graph['frontiers']),
-        status='GRAPH_PARTIAL', selection='KEEP_ORIGINAL')
-    if graph['entry'] is not None and not graph_only:
-        rewrites = simplify_copies(out / 'program.json', graph['anchors'], out / 'simplified.json')
+        key: value for key, value in graph.items() if key not in ('anchors', 'frontiers', 'frontend_frontiers')},
+        frontend_frontiers=len(graph['frontend_frontiers']), cfg_frontiers=len(graph['frontiers']),
+        status='GRAPH_PARTIAL', selection='KEEP_ORIGINAL', artifacts=artifacts)
+    if frontend.program is not None and not graph_only:
+        rewrites = simplify_copies(frontend.program, graph['anchors'], out / 'simplified.json')
         _write(out / 'rewrites.json', rewrites)
         report['graph_rewrites'] = len(rewrites)
         core = min(os.sched_getaffinity(0))
@@ -155,30 +154,24 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
                                 [core], time.monotonic() + case_seconds)
             if result.returncode == 0:
                 problem, schedule = plan_entry(
-                    graph, _receipt(out / 'program.json'), _receipt(target / 'result.json'), core, cost)
-                _write(out / 'planning-problem.json', problem)
-                _write(out / 'plan.json', schedule)
+                    graph['entry'], frontend.program, frontend.hardware, core, cost)
+                problem_path = out / 'planning-problem.json'
+                schedule_path = out / 'plan.json'
+                _write(problem_path, problem)
+                _write(schedule_path, schedule)
+                artifacts['planning_problem'] = artifact_reference(problem_path, PLANNING_SCHEMA)
+                artifacts['execution_plan'] = artifact_reference(schedule_path, PLAN_SCHEMA)
                 report['planning_scope'] = 'BASELINE_ONLY'
     _write(out / 'result.json', report)
     if graph_only or manifest['language'] == 'mixed':
         return report
 
     try:
-        from .backend.cpp20 import emit_sources
+        from .backend.cpp20 import build_reference_project
 
-        project = out / 'project'
-        project.mkdir()
-        build = emit_sources(manifest, project, {})
-        write_native_project(project, 'scar_entry', **build)
-        executable = build_native_project(project, 'scar_entry', ('g++',))
-        if isinstance(executable, tuple):
-            executable = executable[0]
-        executable = Path(executable)
+        executable, dynamic = build_reference_project(manifest, out / 'project')
         report['executable'] = _receipt(executable)
-        report['elf'] = cpu_executable_dynamic(executable)
-        for forbidden in ('libpython', 'libtorch', 'libgfortran'):
-            if any(forbidden in name for name in report['elf']['needed']):
-                raise ValueError(f'unqualified target dependency: {forbidden}')
+        report['elf'] = dynamic
         comparison = out / 'validation'
         comparison.mkdir()
         rows = _paired(manifest, executable, comparison, report.get('cpus', [min(os.sched_getaffinity(0))]),

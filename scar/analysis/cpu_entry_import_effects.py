@@ -10,7 +10,7 @@ from scar.analysis.cpu_entry_import_initializers import _coordinates, verify_cpu
 from scar.analysis.entry_obligations import _body
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_loop_dependencies import _control_states
+from scar.analysis.source_control import _control_states
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_state import SourceStateProvider

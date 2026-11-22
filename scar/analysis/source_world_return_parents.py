@@ -9,8 +9,8 @@ from pathlib import Path
 
 from scar.analysis.source_world_flow import read_world_flow
 from scar.analysis.source_symbol_variants import _table
-from scar.ir.program import declared_contexts as D, declared_state_connections as J
-from scar.ir.program import source_reference_slices as F, source_state_projections as S, source_productions as P
+from scar.ir.program import declared_contexts as D, state_ports as J
+from scar.ir.program import source_value_routes as F, state_ports as S, source_productions as P
 from scar.ir.record_codec import decode
 
 

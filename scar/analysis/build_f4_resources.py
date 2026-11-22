@@ -20,9 +20,9 @@ from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_resource_graph import SourceResourceGraph, _target, _pins as resource_pins
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import build_f4_resources as R, source_effects as F
+from scar.ir.program import resource_observations as R, source_effects as F
 from scar.ir.program import source_productions as P, normal_graph as G, model as M, view as V
-from scar.ir.program import target_hardware as H, source_resource_graph as S
+from scar.ir.program import target_hardware as H, resource_observations as S
 from scar.ir.program.resources import ResourceDefinition, ExternalResource, ResourceKind, ResourceRole
 from scar.ir.program.ids import OperationID, RegionID, ResourceDefinitionID
 from scar.ir.program.dependencies import (

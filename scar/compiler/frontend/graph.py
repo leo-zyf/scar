@@ -7,14 +7,15 @@ control transfers are visible in the import report and gate rewrites.
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 import re
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.ir.program.codec import dumps
+from scar.analysis.target_graph import _artifact, build_target_graph
+from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
     AccessMode, Behavior, Block, BlockArgument, DataValue, ExitKind, ExitPort,
@@ -22,6 +23,7 @@ from scar.ir.program.model import (
     StateVersionValue, Successor, Terminator, TerminatorKind, Use, UseRole,
     ValueKind, ValueType,
 )
+from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.validation import require_valid
 
 from .clang import capture_unit
@@ -584,3 +586,27 @@ def capture_target(manifest, out, jobs):
             functions.extend(read_ssa(Path(unit['raw']).read_text(), unit['path']))
         (out / 'fortran.json').write_text(json.dumps(fortran))
     return functions, frontiers
+
+
+@dataclass(frozen=True, slots=True)
+class GraphBuild:
+    program: ProviderArtifact | None
+    hardware: ProviderArtifact
+    evidence: ProviderArtifact
+    report: dict
+
+
+def build_graph(manifest, directory, *, jobs) -> GraphBuild:
+    """Publish the program graph, platform facts and grounding evidence."""
+    hardware = directory / 'hardware'
+    build_target_graph(hardware, paths=(manifest['source_root'], str(directory)))
+    functions, frontiers = capture_target(manifest, directory / 'frontend', jobs)
+    program_path = directory / 'program.json'
+    report = write_graph(functions, program_path, entry=manifest['entry'])
+    report['frontend_frontiers'] = frontiers
+    evidence_path = directory / 'graph-report.json'
+    (directory / 'compiler-cfg.json').write_text(json.dumps(functions, indent=2, ensure_ascii=False) + '\n')
+    evidence_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+    program = _artifact(program_path, PROGRAM_SCHEMA) if report['entry'] is not None else None
+    return GraphBuild(program, _artifact(hardware / 'result.json', 'scar.target-hardware-graph'),
+                      _artifact(evidence_path, 'scar.native-graph-evidence'), report)

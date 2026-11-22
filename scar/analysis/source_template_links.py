@@ -27,6 +27,7 @@ from scar.ir.program import source_template_links as T
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.record_codec import encode, decode
+from scar.artifacts import _json
 
 
 class TemplateLinkError(ValueError):
@@ -188,10 +189,6 @@ def _link_template_graph(unit, syntax, records, admit):
             step.id, 'child compilation environment differs from the target entry')
         links.append(T.SourceTemplateLink(caller, step.id, target, step.arguments))
     return T.SourceTemplateGraph(unit, common_input, common_profile, tuple(nodes.values()), tuple(links))
-
-
-def _json(value):
-    return (json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
 
 
 def _compiler_profile():

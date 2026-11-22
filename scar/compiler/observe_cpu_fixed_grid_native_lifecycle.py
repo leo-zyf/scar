@@ -9,7 +9,7 @@ from struct import Struct
 import subprocess
 from time import CLOCK_MONOTONIC, clock_gettime_ns
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project

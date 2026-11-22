@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 
 from scar.ir.program.ids import OperationID
-from scar.ir.program.lambda_bodies import LambdaBodyDefinition
+from scar.ir.program.function_sites import LambdaBodyDefinition
 from scar.ir.program.class_construction import ClassConstruction, CLASS_CONSTRUCTION_PROTOCOLS
 from scar.ir.semantics_v2 import SourceSnapshot
 from scar.ir.v2.common import SourceReference

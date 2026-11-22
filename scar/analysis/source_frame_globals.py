@@ -8,7 +8,7 @@ from collections import defaultdict
 from hashlib import sha256
 
 from scar.analysis.source_frame_captures import FrameCaptureIndex
-from scar.analysis.source_root_namespace_views import RootNamespaceViews
+from scar.analysis.namespace_flow import RootNamespaceViews
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_links as F,normal_graph as G,normal_targets as T
 from scar.ir.program import source_frame_bindings as B,source_productions as P

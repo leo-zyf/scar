@@ -27,7 +27,7 @@ _PLAN = 'scar.call-binding-plan'
 _RAW = 'scar.call-binding-observations'
 _REF_FIELDS = {'uri', 'schema', 'size_bytes', 'sha256'}
 _RESOURCE_SCOPE_READERS = frozenset((
-    'source_resource_scopes.py', 'source_resource_scope_view.py', '../ir/program/resource_scopes.py',
+    'source_resource_scopes.py', 'source_resource_scope_view.py', '../ir/program/resource_observations.py',
 ))
 
 

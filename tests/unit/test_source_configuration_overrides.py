@@ -10,7 +10,7 @@ def test_override_input_types_and_ordered_writes_keep_grammar_and_provenance():
     except PackageNotFoundError:pytest.skip('optional installed grammar tools are absent')
     from scar.analysis.source_configuration_overrides import _arguments,_protocol,lower_overrides
     from scar.analysis.source_override_syntax import OverrideSyntax
-    from scar.ir.program.configuration_overrides import OverrideAction,OverrideExpressionKind
+    from scar.ir.program.configuration import OverrideAction, OverrideExpressionKind
     from scar.ir.program.normal_links import CodeScopeRef,CodeScopeWitness
     from scar.ir.program.source_template_links import SourceTemplateKey
     from scar.ir.program.source_productions import ProductionRegionID,ProductionPurpose

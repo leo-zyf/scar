@@ -8,7 +8,7 @@ from scar.optimization.aten_native_team import _bounded_duration, _validate_samp
 from scar.optimization.aten_numa_locality import _page_sample, _remote_fraction
 from scar.optimization.aten_ready_dag import _finish, _intervals, _prediction
 from scar.optimization.aten_team_numa_locality import _MAX_PAGES_PER_STORAGE
-from scar.optimization.aten_tensor_lifetime import _bounded_sum, _bytes
+from scar.optimization.aten_live_values import _bounded_sum, _bytes
 
 
 _CALIBRATION_FIELDS = {

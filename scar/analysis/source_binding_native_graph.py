@@ -26,9 +26,9 @@ from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_binding_native_graph as N, source_named_bindings as M
+from scar.ir.program import native_contracts as N, name_flow as M
 from scar.ir.program import python_bindings as B, source_productions as P
-from scar.ir.program import software_resources as S
+from scar.ir.program import native_contracts as S
 from scar.ir.program.codec import dumps as graph_dumps
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_references import SourceArtifactLocator
@@ -230,7 +230,7 @@ def _counts(graph):
 
 def _pins():
     from scar.analysis import static_native_materials, source_native_binding_materials, normal_output
-    from scar.ir.program import software_resources as S, binding_returns as R, native, model, codec, validation
+    from scar.ir.program import native_contracts as S, binding_returns as R, native, model, codec, validation
     from scar.ir import record_codec
     result = dict(producer=sha256(Path(__file__).read_bytes()).hexdigest())
     result.update({name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (

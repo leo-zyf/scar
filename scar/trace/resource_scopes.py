@@ -17,7 +17,7 @@ import threading
 import types
 
 from scar.ir.program.call_edges import InvocationKey
-from scar.ir.program.resource_scopes import ScopeEventKind,ScopeEvent
+from scar.ir.program.resource_observations import ScopeEventKind, ScopeEvent
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
 from scar.trace.files import open_binary

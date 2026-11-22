@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import time
 
-from scar.analysis import source_compiler_symbol_variants as S,source_compile_interfaces
+from scar.analysis import source_compiler_symbol_variants as S, compiler_contexts as source_compile_interfaces
 from scar.analysis import source_expression_rules,source_statement_rules,source_root_rules,normal_graph,normal_links
 from scar.analysis.frontend_bindings import FrontendBindingView
 from scar.analysis.source_context_view import SourceContextView
@@ -24,9 +24,9 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import source_context_variants as CV,source_binding_variants as BV
-from scar.ir.program import source_symbol_variants as NV,source_topology_variants as TV
-from scar.ir.program import source_compiler_symbol_variants as SV
+from scar.ir.program import code_identity as CV, code_identity as BV
+from scar.ir.program import code_identity as NV, code_identity as TV
+from scar.ir.program import code_identity as SV
 from scar.ir.program import source_productions as P,normal_links as F
 from scar.ir.program.source_template_links import SourceMaterialDomain as D
 from scar.ir.program.protocol_signatures import ExceptionABI

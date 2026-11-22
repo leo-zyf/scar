@@ -14,8 +14,8 @@ from scar.analysis.source_name_access_anchors import _bindings, anchor_name_acce
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
-from scar.ir.program import source_productions as P, source_name_definitions as D
-from scar.ir.program import source_name_access_anchors as A, source_bindings as B
+from scar.ir.program import source_productions as P, name_flow as D
+from scar.ir.program import name_flow as A, source_bindings as B
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 
 
@@ -182,7 +182,7 @@ def conditional_reaching_name_definitions(snapshot, source_function, namespace, 
 
 def conditional_local_read_tracks(state):
     """Analyze one source provider without attaching conditional data edges."""
-    from scar.analysis.source_local_state import local_read_tracks
+    from scar.analysis.state_materialization import local_read_tracks
     if state.anchors is None:
         state.anchors = anchor_name_accesses(state.view.catalog, state.material.unit, material=state.material)
     context = LocalReadEffectContext(state.material)

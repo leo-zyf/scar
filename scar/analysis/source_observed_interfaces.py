@@ -28,8 +28,8 @@ from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.observed_positional_receiver import recover_positional_receiver
 from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
-from scar.ir.program import source_function_interfaces as I,normal_targets as T,source_productions as P
-from scar.ir.program import source_observed_calls as R
+from scar.ir.program import function_sites as I, normal_targets as T, source_productions as P
+from scar.ir.program import source_observations as R
 from scar.ir.program.python_call_targets import PythonTargetKind
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.record_codec import encode,decode
@@ -54,7 +54,7 @@ def _pins():
     from scar.analysis import observed_positional_receiver,source_frame_binding_effects
     from scar.ir import record_codec
     from scar.trace import operand_bytecode
-    from scar.ir.program import source_observed_codes as code_types
+    from scar.ir.program import source_observations as code_types
     return {**source_observed_codes.request_code_pins(),
         **{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer',__import__(__name__,fromlist=['__file__'])),('types',R),('interfaces',I),('connections',T),

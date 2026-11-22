@@ -7,12 +7,12 @@ from collections import defaultdict
 from dataclasses import replace
 
 from scar.analysis.program_view import ProgramView,_digest
-from scar.ir.program import native_state as N,view as V,model as M
+from scar.ir.program import native_contracts as N, view as V, model as M
 from scar.ir.program.dependencies import (DependencyPoint as Point,DependencyEdge,DependencyEvidence,
     DependencyCondition,DependencyFrontier,DependencyNeighborhood,DependencyKind as K,
     DependencyMeaning as Meaning,DependencyStrength as Strength)
 from scar.ir.program.ids import LocationID,ValueID
-from scar.ir.program.native_resource_declarations import TypeProjection as PathPart
+from scar.ir.program.native_contracts import TypeProjection as PathPart
 from scar.ir.program.providers import ProviderFactReference
 
 

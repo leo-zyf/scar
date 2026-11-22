@@ -778,7 +778,7 @@ class ProgramIndex:
     def completion_continuations(self, source, *, start=None, choices=(),
                                  cross_resume=False, budget=4096):
         """Typed payload continuation; declared future resume requires opt-in."""
-        from .completion_continuations import completion_continuations
+        from scar.ir.program.continuation_ports import completion_continuations
         return completion_continuations(self, source, start=start, choices=choices,
             cross_resume=cross_resume, budget=budget)
 

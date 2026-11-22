@@ -7,13 +7,39 @@ import stat
 from subprocess import CalledProcessError, check_output
 from tempfile import TemporaryDirectory
 
-from scar.codegen.native_provider_bundle import _name
-
-
+_NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_.+-]*\Z')
 PACKAGE_RUNPATH = '$ORIGIN/../lib'
 _TAG = re.compile(r'^\s*0x[0-9a-fA-F]+\s+\(([^)]+)\)')
 _STRING = re.compile(r'[^\[]*\[(.*)\]\s*\Z')
 _EXTRA_LOAD = ('AUDIT', 'DEPAUDIT', 'FILTER', 'AUXILIARY')
+
+
+_LDD_ENTRY = re.compile(
+    r'[ \t]*(?:(?P<soname>[A-Za-z0-9_+.-]+)[ \t]+=>[ \t]+(?P<resolved>/[^\x00\r\n]+)'
+    r'|(?P<direct>/[^\x00\r\n]+)|(?P<virtual>linux-(?:vdso(?:64)?|gate)\.so\.1))'
+    r'[ \t]\(0x[0-9a-fA-F]+\)[ \t]*'
+)
+
+
+def _name(value):
+    if type(value) is not str or not _NAME.fullmatch(value):
+        raise ValueError('expected a plain ELF file or SONAME: ' + repr(value))
+    return value
+
+
+def _dependencies(listing):
+    result = {}
+    for line in listing.splitlines():
+        # The loader prints raw paths followed by one separator and the address.
+        entry = _LDD_ENTRY.fullmatch(line)
+        if entry is None:
+            raise ValueError('native ELF dependency was not resolved: ' + line)
+        name = entry['soname'] or entry['direct'] or entry['virtual']
+        path = entry['resolved'] or entry['direct']
+        if name in result:
+            raise ValueError('ambiguous ELF dependency: ' + name)
+        result[name] = None if path is None else str(Path(path).resolve(strict=True))
+    return result
 
 
 def cpu_executable_dynamic(path) -> dict:

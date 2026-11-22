@@ -18,7 +18,7 @@ from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS,validate_copy
 from scar.optimization.graph import ordered_nodes,canonical_value
 from scar.optimization.pipeline_memory import _metadata
 from scar.analysis.source_consumer_parents import _stamp
-from scar.ir.program import caller_pipeline_values as R,array_value_templates as A,view as V
+from scar.ir.program import caller_pipeline_values as R, layout_templates as A, view as V
 from scar.ir.program import normal_targets as T,normal_graph as G
 from scar.ir.program.ids import RegionID,OperationID,ValueID,UseID
 from scar.ir.program.providers import ProviderFactReference,ProviderArtifact

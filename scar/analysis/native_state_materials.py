@@ -16,7 +16,7 @@ from scar.analysis import source_native_binding_materials as generated
 from scar.analysis import static_native_interfaces
 from scar.analysis.static_native_materials import StaticNativeDeclaration, StaticNativeMaterials
 from scar.analysis.source_symbol_variants import _table
-from scar.ir.program import codec, source_binding_native_graph as N
+from scar.ir.program import codec, native_contracts as N
 from scar.ir.program.dependencies import GraphNamespace
 from scar.ir.program.native import NativeBoundary
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference

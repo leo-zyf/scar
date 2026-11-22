@@ -8,7 +8,7 @@ from scar.optimization.aten_numa_locality import (
     _ordered_samples,
     _remote_fraction,
 )
-from scar.optimization.aten_tensor_lifetime import tensor_releases
+from scar.optimization.aten_live_values import tensor_releases
 
 
 _MAX_CONTEXTS = 8

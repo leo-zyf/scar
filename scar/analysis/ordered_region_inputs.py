@@ -12,10 +12,10 @@ from scar.analysis.source_content_interfaces import ContentInterfaceIndex
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.ir.program import normal_links as F,normal_targets as T,normal_graph as G,source_productions as P
-from scar.ir.program import source_content as C, ordered_regions as R
+from scar.ir.program import content_routes as C, ordered_regions as R
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
-from scar.ir.program.source_content_lineage import ContentAccessRef
-from scar.ir.program.source_address_paths import FieldSelector
+from scar.ir.program.content_routes import ContentAccessRef
+from scar.ir.program.content_routes import FieldSelector
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.record_codec import decode
 

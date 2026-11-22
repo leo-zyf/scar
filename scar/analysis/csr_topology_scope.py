@@ -8,7 +8,7 @@ from scar.analysis.bounded_entry_calls import _admit_entry_calls
 from scar.analysis.build import BuildSession
 from scar.analysis.csr_row_region import FAMILY, recognize
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
-from scar.analysis.source_loop_dependencies import loop_dependencies
+from scar.analysis.source_control import loop_dependencies
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.execution_recipe import read_artifact

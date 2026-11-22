@@ -10,7 +10,7 @@ from scar.compiler.native_export_hybrid_placement_costs import (
     load_native_hybrid_placement_costs, match_native_hybrid_placement_costs, native_hybrid_placement_cost_matches,
 )
 from scar.ir.v2.schemas import canonical_json
-from scar.optimization.empirical_device_placement import empirical_placement_candidate
+from scar.optimization.device_cost_bounds import empirical_placement_candidate
 from scar.optimization.native_device_placement_search import search_native_device_placements
 
 

@@ -16,7 +16,7 @@ import sys
 
 from scar.analysis.call_operand_reader import read_call_operands
 from scar.analysis.python_call_targets import read_python_call_targets
-from scar.analysis.compiler_code_paths import CompilerCodeIndex
+from scar.analysis.compiler_contexts import CompilerCodeIndex
 from scar.analysis.static_query import _Fragments
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import _artifact
@@ -28,9 +28,7 @@ from scar.analysis.source_stage import _durable_mkdir, _durable_bytes
 from scar.analysis.source_template_links import _json
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.compiler_topology import CompilerTopologyMaterial
-from scar.ir.program.source_observed_codes import (ObservedSourceCodeLink,
-    ObservedSourceScopeKind as ScopeKind, ObservedSourceScopeLink, ObservedSourceRequestCodeLink,
-    ObservedSourceCompilerCodeLink)
+from scar.ir.program.source_observations import ObservedSourceCodeLink, ObservedSourceScopeKind as ScopeKind, ObservedSourceScopeLink, ObservedSourceRequestCodeLink, ObservedSourceCompilerCodeLink
 from scar.ir.program import normal_targets as T, view as V, source_productions as P
 from scar.ir.program.call_edges import CapturedCode,CallEdgeBudget
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
@@ -434,9 +432,9 @@ class ObservedSourceCodeProvider:
 
 
 def request_code_pins():
-    from scar.analysis import source_annotation_code_bridge,compiler_code_paths
-    from scar.ir.program import compiler_code_paths as compiler_path_ir
-    from scar.ir.program import source_observed_codes as request_ir
+    from scar.analysis import source_annotation_code_bridge, compiler_contexts as compiler_code_paths
+    from scar.ir.program import code_identity as compiler_path_ir
+    from scar.ir.program import source_observations as request_ir
     return {name:sha256(Path(path).read_bytes()).hexdigest() for name,path in
         (('provider',__file__),('requests',request_ir.__file__),('bridge',source_annotation_code_bridge.__file__),
          ('compiler_paths',compiler_code_paths.__file__),('compiler_path_ir',compiler_path_ir.__file__))}

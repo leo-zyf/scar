@@ -6,7 +6,7 @@ from scar.ir.program import normal_graph as G,normal_targets as T,source_product
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_template_links import SourceTemplateKey
-from scar.ir.program.source_value_flow import SourceBodyValueFlow,SourceOperation
+from scar.ir.program.source_value_routes import SourceBodyValueFlow, SourceOperation
 
 
 def test_selected_call_excludes_opposite_branch_but_not_common_suffix_or_other_iterations():

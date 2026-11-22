@@ -139,7 +139,7 @@ def _annotated(b, root, state):
     if publication is not None:
         b.mark('annotation', P.ProductionDispositionKind.DEFERRED_CHILD
             if publication.publication is P.AnnotationPublicationKind.DEFERRED else P.ProductionDispositionKind.METADATA)
-        from scar.analysis.source_annotation_state_rules import publish
+        from scar.analysis.annotation_state import publish
         state=publish(b,root,publication,state)
     b.finish(root, (state,), (b.world,))
 

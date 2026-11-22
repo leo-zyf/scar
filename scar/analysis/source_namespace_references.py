@@ -7,7 +7,7 @@ IMPORT_FROM's attribute branch and import-registry fallback remain separate.
 from collections import defaultdict, deque
 
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port, DECLARED
-from scar.ir.program import normal_links as F, source_namespace_references as N
+from scar.ir.program import normal_links as F, namespace_routes as N
 
 
 _NAMESPACE_GUARDS = (*DECLARED, 'RECORDED_LOOKUP_NAMESPACE_ALTERNATIVE_SELECTED',

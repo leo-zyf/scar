@@ -180,7 +180,7 @@ def _compiler(out, graph, native):
 
 
 def _runtime_identity(probe, graph, native, environment):
-    from scar.codegen.aten_provider import _dependencies
+    from scar.codegen.native_cpu_elf import _dependencies
 
     runtime = graph['runtime']
     dependencies = _dependencies(subprocess.check_output(['/usr/bin/ldd', str(probe)],

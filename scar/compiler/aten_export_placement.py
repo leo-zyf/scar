@@ -17,7 +17,7 @@ from scar.ir.v2.schemas import canonical_json
 from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS
 from scar.optimization.aten_native_schedule import CONTRACT_SCHEMA, SCOPE, _ATTESTATIONS
 from scar.optimization.aten_native_team import aten_cpu_team_domain, propose_cpu_team, ready_team_available
-from scar.optimization.aten_tensor_lifetime import tensor_releases
+from scar.optimization.aten_live_values import tensor_releases
 from scar.optimization.joint_planner import verify_execution_plan
 
 

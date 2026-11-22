@@ -5,7 +5,7 @@ own protection; target stores and later managers are inside it. No execution
 or assumption about the selected context-manager implementation is involved.
 """
 from scar.analysis.source_expression_rules import _REF, _require
-from scar.analysis.source_delegation_rules import emit_delegate_loop
+from scar.analysis.await_protocol import emit_delegate_loop
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.structured import PythonProtocolKind as K

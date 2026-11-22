@@ -8,7 +8,7 @@ from .providers import ProviderFactReference
 from .signature_patterns import GroundType
 from .source_exec_roots import ExecProtocolValue, ExecProtocolAction, ExecPredicate
 from .source_frame_bindings import FrameGlobalsBinding, RootNamespaceBinding
-from .source_launch import ScriptEntryContract
+from scar.ir.program.launch_provenance import ScriptEntryContract
 from .normal_graph import Transition
 from scar.ir.literals import PythonLiteral
 

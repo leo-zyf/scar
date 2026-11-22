@@ -14,8 +14,8 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import source_state as S, source_productions as P, source_content as C
-from scar.ir.program import source_content_lineage as L
+from scar.ir.program import state_ports as S, source_productions as P, content_routes as C
+from scar.ir.program import content_routes as L
 from scar.ir.program import view as V
 from scar.ir.program.ids import OperationID
 from scar.ir.record_codec import encode, decode
@@ -25,11 +25,11 @@ def _pins():
     from scar.analysis import source_state, source_effects, source_name_definitions
     from scar.analysis import source_name_access_anchors, source_value_flow, program_view
     from scar.analysis import source_implicit_namespaces
-    from scar.analysis import source_annotation_namespaces
+    from scar.analysis import annotation_state as source_annotation_namespaces
     from scar.analysis import source_content, source_content_interfaces
-    from scar.analysis import source_environment_values
+    from scar.analysis import class_bindings as source_environment_values
     from scar.analysis import source_content_lineage
-    from scar.ir.program import source_environment_values as environment_types
+    from scar.ir.program import class_ports as environment_types
     from scar.ir.program import source_effects as effects_types
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer', __import__(__name__, fromlist=['__file__'])), ('state', source_state),
@@ -218,7 +218,7 @@ def main():
         state=ProgramView(args.catalog).state(args.unit)
         if args.interfaces_only and args.slot:parser.error('--interfaces-only cannot select slots')
         if not args.slot and not args.interfaces_only:
-            from scar.analysis.source_local_state import track_local_reads
+            from scar.analysis.state_materialization import track_local_reads
             track_local_reads(state)
         for index in dict.fromkeys(args.slot):
             if not 0<=index<len(state.bindings.bindings):parser.error('slot is outside original C2 binding domain')

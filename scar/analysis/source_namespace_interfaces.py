@@ -6,9 +6,9 @@ read plan, original world ports and the shared source scope witness.
 from collections import defaultdict, deque
 
 from scar.analysis.normal_graph import _Emitter
-from scar.analysis.source_namespace_captures import extract_captures
+from scar.analysis.namespace_values import extract_captures
 from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
-from scar.ir.program import source_productions as P, source_namespaces as N
+from scar.ir.program import source_productions as P, namespace_routes as N
 from scar.ir.program.control import LanguageCompletionKind as K
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.record_codec import decode

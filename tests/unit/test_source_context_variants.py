@@ -7,7 +7,7 @@ import pytest
 
 from scar.analysis.source_contexts import source_contexts_document, read_source_contexts
 from scar.analysis.source_context_variants import context_variant_document, read_context_variant
-from scar.ir.program.source_compiled_values import EffectiveCompileContext
+from scar.ir.program.code_identity import EffectiveCompileContext
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.record_codec import decode
 from tests.unit.test_source_contexts import _inputs

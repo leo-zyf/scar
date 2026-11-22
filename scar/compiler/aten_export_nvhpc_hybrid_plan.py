@@ -78,7 +78,7 @@ def replay_nvhpc_hybrid_export(projection, model, *, model_ref, problem, schedul
 
 def _pageable_calibration(projection, calibration, host):
     from scar.compiler.operator_stack import load_operator_stack
-    from scar.optimization.nvhpc_sgemm_cost import sgemm_body_costs
+    from scar.optimization.device_cost_bounds import sgemm_body_costs
 
     if (type(calibration) is not dict or set(calibration) != {'operator_stack', 'observations'}
             or type(calibration['operator_stack']) is not dict or type(calibration['observations']) is not list

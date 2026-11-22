@@ -13,10 +13,10 @@ from scar.analysis.program_view import _digest
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_name_access_anchors import _bindings
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
-from scar.ir.program import source_call_captures as C, source_state as S
+from scar.ir.program import call_inputs as C, state_ports as S
 from scar.ir.program import source_productions as P, source_bindings as B
 from scar.ir.program import normal_targets as T, view as V
-from scar.ir.program.source_function_interfaces import SourceFunctionInterface
+from scar.ir.program.function_sites import SourceFunctionInterface
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.v2._validation import record_errors
 from scar.ir.program.ids import LocationID, RegionID

@@ -12,7 +12,7 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_productions import _digest
 from scar.ir.program import source_exec_roots as X
 from scar.ir.program import source_builtin_namespaces as B
-from scar.ir.program import source_frame_bindings as F,source_namespaces as N
+from scar.ir.program import source_frame_bindings as F, namespace_routes as N
 from scar.ir.record_codec import decode,encode
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.ir.program import normal_targets as T, source_bindings as B
-from scar.ir.program import source_productions as P, source_state as S
+from scar.ir.program import source_productions as P, state_ports as S
 
 
 @dataclass(frozen=True, slots=True)

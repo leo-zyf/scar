@@ -22,7 +22,7 @@ from scar.ir.program.delegation_signatures import resolve_delegation_signature
 from scar.ir.record_codec import decode, encode
 from scar.analysis.source_deferred_interfaces import DeferredInterfaceIndex
 from scar.analysis.source_statement_interfaces import SourceStatementInterfaceIndex
-from scar.analysis.source_type_parameter_interfaces import TypeParameterInterfaceIndex
+from scar.analysis.type_parameter_rules import TypeParameterInterfaceIndex
 from scar.analysis.source_definition_interfaces import DefinitionInterfaceIndex
 from scar.analysis.source_pattern_interfaces import PatternInterfaceIndex
 from scar.analysis.source_root_interfaces import RootInterfaceIndex
@@ -73,7 +73,7 @@ def production_type_catalog():
     modules[__name__] = sha256(Path(__file__).read_bytes()).hexdigest()
     for name in ('scar.analysis.program_types', 'scar.ir.record_codec', 'scar.ir.program.protocol_signatures',
                  'scar.ir.program.delegation_signatures', 'scar.analysis.source_deferred_interfaces',
-                 'scar.analysis.source_statement_interfaces', 'scar.analysis.source_type_parameter_interfaces',
+                 'scar.analysis.source_statement_interfaces', 'scar.analysis.type_parameter_rules',
                  'scar.analysis.source_definition_interfaces','scar.analysis.source_pattern_interfaces',
                  'scar.analysis.source_root_interfaces','scar.analysis.source_evaluation_interfaces','scar.analysis.source_syntax',
                  'scar.analysis.source_class_namespace_interfaces','scar.analysis.source_capture_interfaces',

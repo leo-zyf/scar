@@ -26,7 +26,7 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_execution as X, normal_links as F, normal_targets as T
+from scar.ir.program import source_protocols as X, normal_links as F, normal_targets as T
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.python_bindings import SourceCallSite
 from scar.ir.record_codec import decode

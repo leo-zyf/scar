@@ -13,11 +13,11 @@ from scar.analysis.source_symbol_context_adapter import DEFAULT
 from scar.analysis.source_symbol_variants import SymbolVariantWorker, symbol_variant_document, read_symbol_variant
 from scar.analysis.source_symbols import source_symbols_document, read_source_symbols, _digest
 from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.source_compiled_values import EffectiveCompileContext
+from scar.ir.program.code_identity import EffectiveCompileContext
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_text import TextOpenInterpretation
-from scar.ir.program.source_symbol_variants import SymbolSourceParent, SymbolTextInput
+from scar.ir.program.code_identity import SymbolSourceParent, SymbolTextInput
 from scar.ir.record_codec import decode
 from tests.unit.test_source_contexts import _inputs
 

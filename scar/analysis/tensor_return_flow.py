@@ -6,7 +6,7 @@ ObjectID, StorageID, logical versions, new allocations, or reference aliases.
 from collections import defaultdict
 
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import binding_returns as R,tensor_values as V,python_bindings as B
+from scar.ir.program import binding_returns as R, layout_templates as V, python_bindings as B
 from scar.ir.program.providers import ProviderFactReference
 
 

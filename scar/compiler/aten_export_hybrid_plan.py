@@ -12,7 +12,7 @@ from scar.ir.implementation_plan import (
     TransferOption, problem_document, problem_from_dict,
 )
 from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS
-from scar.optimization.aten_tensor_lifetime import tensor_footprint
+from scar.optimization.aten_live_values import tensor_footprint
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
 from scar.optimization.material_routes import expand_shared_material_route

@@ -12,11 +12,10 @@ from pathlib import Path
 import time
 
 from scar.analysis import target_inventory
-from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
-from scar.analysis.source_template_links import _json
 from scar.ir.program import target_hardware as H
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.record_codec import encode
+from scar.artifacts import _durable_bytes, _durable_mkdir, _json
 
 
 def _artifact(path,schema):

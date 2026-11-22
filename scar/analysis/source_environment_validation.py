@@ -180,7 +180,7 @@ def validate_environment_body(model, graph, interface, metadata, semantic, *, la
                  and Behavior.MEMORY in operation.behaviors, "own-cell creation has an invalid initializer")
             continue
         if kind in (Kind.STORE_ATTRIBUTE, Kind.STORE_SUBSCRIPT):
-            from scar.analysis.source_heap_validation import validate_heap_store
+            from scar.analysis.state_materialization import validate_heap_store
             validate_heap_store(operation, kind, link, rows.get(operation.id), semantic)
             expected_rows.add(operation.id)
             continue

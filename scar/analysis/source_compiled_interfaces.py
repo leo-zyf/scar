@@ -23,8 +23,8 @@ from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.normal_output import write_table
-from scar.ir.program import source_declared_calls as D, source_function_interfaces as R
-from scar.ir.program import source_namespace_references as N, source_productions as P, normal_targets as T
+from scar.ir.program import call_inputs as D, function_sites as R
+from scar.ir.program import namespace_routes as N, source_productions as P, normal_targets as T
 from scar.ir.record_codec import decode, encode
 
 
@@ -39,7 +39,7 @@ NO_PROOF = ('source_scopes_activated', 'caller_contexts_selected', 'runtime_disp
 
 
 def _pins():
-    from scar.analysis import source_graph_material, source_world_material, source_relation_selection
+    from scar.analysis import source_graph_material, source_world_material, source_relations as source_relation_selection
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(),
         declaration_rules=declared._pins(), signature_rules=functions._pins(), **{
             name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (

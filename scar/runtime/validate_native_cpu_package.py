@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 import stat
 import subprocess
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_cpu_elf import PACKAGE_RUNPATH, cpu_executable_dynamic
 from scar.codegen.native_provider_bundle import _content, _elf, _name
 from scar.ir.v2.schemas import canonical_json

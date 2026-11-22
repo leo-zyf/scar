@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 
 
 def _cmake_arg(value):

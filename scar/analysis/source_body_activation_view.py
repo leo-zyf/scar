@@ -13,7 +13,7 @@ from scar.analysis.program_view import _digest
 from scar.analysis.source_body_activations import SourceBodyActivationStore, SCHEMA
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import source_body_interfaces as B, view as V
+from scar.ir.program import body_observations as B, view as V
 from scar.ir.program.normal_targets import GlobalPort
 from scar.ir.program.ids import OperationID, ProviderID, ValueID
 from scar.ir.program.model import ValueType, ValueKind

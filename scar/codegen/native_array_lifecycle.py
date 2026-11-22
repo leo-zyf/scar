@@ -7,7 +7,7 @@ from struct import unpack
 import subprocess
 import sys
 
-from scar.codegen.aten_provider import _dependencies
+from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_cpu_elf import cpu_executable_dynamic
 from scar.codegen.native_project import build_native_project
 from scar.compiler.cpu_entry_replay import _build_capacity_guard, _capacity_guard_receipt, _published

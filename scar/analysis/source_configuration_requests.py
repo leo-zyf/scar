@@ -15,10 +15,10 @@ from scar.analysis.static_query import _Fragments
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import configuration_requests as R,normal_targets as T,normal_graph as G
+from scar.ir.program import configuration as R, normal_targets as T, normal_graph as G
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_frame_bindings import StaticInputPort
-from scar.ir.program.source_compiled_values import CompiledSourceCandidate
+from scar.ir.program.code_identity import CompiledSourceCandidate
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.literals import PythonLiteral
 from scar.ir.record_codec import decode,encode
