@@ -17,7 +17,7 @@
 
 源语言适配位于 `compiler/frontend/`。Python 源码规则与结构校验集中在 `analysis/static/lowering/`，原生适配使用 `frontend/clang.py`、`frontend/fortran.py` 和 `frontend/graph.py`。构图交出操作、数据与状态、跨单元调用、硬件和原始证据。整数 `switch` 通过有序分支和 SSA 参数建模，无后继调用块以 `NO_RETURN` 结束。结构校验、调用绑定及效果证明分别记录。
 
-Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。F4 每个单元准备一次语义输入，供表达式、语句和根节点共用。独立重放在另一个批次重读输入并逐条校验。`GraphBundle` 同时支持已降级的 `ProgramGraph` 和由 F4 声明目录保留的区域证据。
+Python 的 F0 至 F3 由 `frontend/source.py` 按单元并行生成。同一单元从一份源码快照依次派生各层记录，各层分别发布原有类型、摘要和来源。F4 每个单元准备一次语义输入，供表达式、语句和根节点共用。独立重放重新验证各层输入和规则。`GraphBundle` 同时支持已降级的 `ProgramGraph` 和由 F4 声明目录保留的区域证据。
 
 原生前端通过 `SourceAdapter` 注册语言适配器。同一目标可以按单元显式选 `source_adapter`，并保留各自的标准、参数、编译器、解析器版本和源码摘要。适配器交付统一的控制流记录以及分离的类型与调用证据。为新语言生成独立 C++20 工程时还需提供经验证的源码转换或算子实现。
 

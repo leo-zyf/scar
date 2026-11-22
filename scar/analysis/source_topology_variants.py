@@ -13,13 +13,13 @@ import json
 from pathlib import Path
 
 from scar.analysis import source_context_variants as C,source_symbol_variants as N
-from scar.analysis import compiler_topology as T, compiler_topology_materials as compiler_topology_view
+from scar.analysis import compiler_topology as T
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_contexts import _digest
 from scar.artifacts import _durable_bytes, _durable_mkdir
 from scar.artifacts import _json
-from scar.ir.program import compiler_symbols as V, compiler_symbols as NV
+from scar.ir.program import compiler_symbols as V
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.compiler_symbols import CompilerTopologyInput, CompilerTopologyMaterial
@@ -27,9 +27,9 @@ from scar.ir.record_codec import encode,decode
 
 
 def pins():
-    return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
-        ('context_variant',C),('symbol_variant',N),('symbol_types',NV),
-        ('topology',T),('view',compiler_topology_view),('types',V))}
+    pins = {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
+        ('context_variant',C),('symbol_variant',N),('topology',T),('types',V))}
+    return dict(pins, view=pins['topology'], symbol_types=pins['types'])
 
 
 class _ContextBuilder(T._Builder):
@@ -63,7 +63,7 @@ def topology_variant_document(context_document,symbol_document,f0,f1,f2,f3b,payl
             producer=sha256(Path(__file__).read_bytes()).hexdigest())))
     material=CompilerTopologyMaterial(inputs,profile,*limits,'PROJECTED',tuple(builder.blocks),
         projections,tuple(builder.rewrites),(),builder.visit_steps)
-    compiler_topology_view.CompilerTopologyView(roles,context.material,native.material,material,
+    T.CompilerTopologyView(roles,context.material,native.material,material,
         contexts=builder.view).verify()
     return encode(V.SourceTopologyVariant(context.namespace,_digest(encode(context.material)),
         sha256(_json(symbol_document)).hexdigest(),material))
@@ -103,7 +103,7 @@ def build_topology_variants(facts,contexts,symbols,out):
             for raw,d in ((cdata,cd),(ndata,nd)):
                 if len(raw)!=d['bytes'] or sha256(raw).hexdigest()!=d['sha256']:
                     raise ValueError('context/native variant material differs')
-            cdoc,ndoc=json.loads(cdata),json.loads(ndata);native=decode(NV.SourceSymbolVariant,ndoc)
+            cdoc,ndoc=json.loads(cdata),json.loads(ndata);native=decode(V.SourceSymbolVariant,ndoc)
             materials,parents,_=N._source_parents(store,native.source_unit)
             text=native.text_inputs[0];interp=text.interpretation
             with TextIOWrapper(BytesIO(read_source_bytes(materials[0])),encoding=interp.encoding,

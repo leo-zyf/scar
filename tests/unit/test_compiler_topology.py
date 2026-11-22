@@ -87,7 +87,7 @@ gen=(lambda:item for item in DATA)
 def test_c3t_compiler_topology(family, monkeypatch):
     import _ast
     import scar.analysis.compiler_topology as api
-    from scar.analysis.compiler_topology_materials import CompilerTopologyView
+    from scar.analysis.compiler_topology import CompilerTopologyView
     from scar.analysis.source_contexts import SourceContextView
 
     def built(source, *, mode='exec', max_tokens=2_000_000):

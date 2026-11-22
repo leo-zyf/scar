@@ -8,7 +8,7 @@ typed construction only checks references and the declared composition rules.
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
-from scar.analysis.compiler_symbol_view import CompilerSymbolView
+from scar.analysis.compiler_symbols import CompilerSymbolView
 from scar.analysis.source_binding_view import SourceBindingView
 from scar.ir.program.source_roles import SlotRef, SourceRolesMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial

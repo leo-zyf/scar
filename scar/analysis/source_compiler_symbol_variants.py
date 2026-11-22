@@ -16,7 +16,7 @@ import time
 from scar.analysis import source_context_variants as C, source_binding_variants as B
 from scar.analysis import source_symbol_variants as N, source_topology_variants as T
 from scar.analysis import compiler_symbols as S, compiler_symbol_materials as collect
-from scar.analysis import compiler_symbol_solve as solve, compiler_symbol_view
+from scar.analysis import compiler_symbol_solve as solve
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_syntax import read_source_bytes
 from scar.analysis.source_contexts import _digest
@@ -31,9 +31,10 @@ from scar.ir.record_codec import decode, encode
 
 
 def pins():
-    return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
+    pins = {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('contexts',C),('bindings',B),('native',N),('topology',T),
-        ('symbols',S),('collect',collect),('solve',solve),('view',compiler_symbol_view),('types',V))}
+        ('symbols',S),('collect',collect),('solve',solve),('types',V))}
+    return dict(pins, view=pins['symbols'])
 
 
 class _ContextCollector(collect._Collector):
@@ -83,7 +84,7 @@ def compiler_symbol_variant_document(context_document,binding_document,symbol_do
     material = CompilerSymbolsMaterial(inputs,profile,limits,'PROJECTED',solution.slots,
         raw.contributions,raw.sources,solution.facts,solution.transforms,solution.protocols,
         solution.blocks,symbols,parameters,(),solution.steps)
-    compiler_symbol_view.CompilerSymbolView(declarations,tt,nt,material).verify()
+    S.CompilerSymbolView(declarations,tt,nt,material).verify()
     return encode(V.SourceCompilerSymbolVariant(context.namespace,sha256(_json(context_document)).hexdigest(),
         context_sha,sha256(_json(binding_document)).hexdigest(),_digest(encode(binding.bindings)),
         sha256(_json(symbol_document)).hexdigest(),sha256(_json(topology_document)).hexdigest(),material))
