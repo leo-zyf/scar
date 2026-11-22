@@ -318,13 +318,10 @@ def promote_cpp20_variant(project, artifacts, delivery, *, toolchain):
 
 
 def _lower_loop(work: ScheduledLoop, *, catalog, plan_only: bool) -> dict:
-    from scar.compiler.invariant_export import export_temporal_invariant, export_composite_temporal_invariant
-    from scar.compiler.loop_admission import read_invariant_loop_motion
-    from scar.compiler.pipeline_loop_frontend import read_composite_invariant_loop_motion
+    from scar.compiler.invariant_export import publish_temporal_export, read_temporal_export_source
     from scar.compiler.temporal_invariant_loop import emit_temporal_invariant_loop, uses_openmp
 
     folder, composite, parallel = work.folder, work.composite, work.parallel
-    reader = read_composite_invariant_loop_motion if composite else read_invariant_loop_motion
     expected = dict(schema='scar.cpp20-loop-lowering', schema_version=1,
                     loop_id=work.loop_id, proof=work.proof, source_motion=work.source_motion,
                     schedule=work.schedule, parallel=parallel)
@@ -332,8 +329,8 @@ def _lower_loop(work: ScheduledLoop, *, catalog, plan_only: bool) -> dict:
     if {key: value for key, value in prepared.items() if key != 'plan'} != expected:
         raise ValueError('loop lowering does not bind the scheduled source and resources')
     schedule = read_artifact(work.schedule)
-    read_artifact(work.proof)
-    proof, motion = reader(work.proof['uri'], catalog=catalog)
+    source = read_temporal_export_source(work.proof, catalog=catalog, composite=composite)
+    proof, motion, _ = source
     if (work.loop_id != proof.id
             or semantic_sha256(motion) != semantic_sha256(read_artifact(work.source_motion))):
         raise ValueError('loop movement changed between original F4 admission and lowering')
@@ -372,9 +369,11 @@ def _lower_loop(work: ScheduledLoop, *, catalog, plan_only: bool) -> dict:
             or artifact.report['operator_descriptor_abi_version'] != capability['operator_abi_version']
             or artifact.report['temporal_control_abi_version'] != capability['temporal_control_abi_version']):
         raise ValueError('compiled loop differs from the admitted lowering or ABI')
-    export = export_composite_temporal_invariant if composite else export_temporal_invariant
-    exported = export(native, folder / 'bundle', schedule_path=work.schedule['uri'],
-                      proof_reference=work.proof, catalog=catalog)
+    schedule_receipt = dict(path=str(Path(work.schedule['uri']).resolve()), sha256=work.schedule['sha256'],
+                           bytes=work.schedule['size_bytes'])
+    exported = publish_temporal_export(artifact, folder / 'bundle', schedule=schedule,
+        schedule_receipt=schedule_receipt, proof_reference=work.proof, source=source,
+        catalog=catalog, composite=composite)
     return dict(
         status=f'MODEL_SELECTED_{family}_COMPILED', native_directory=str(native),
         movement_binding=movement, capability=capability,
