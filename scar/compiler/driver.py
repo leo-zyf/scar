@@ -36,7 +36,10 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
     if graph_only and graph.program is None:
         result.update(delivery='INCOMPLETE', delivery_error='no validated entry region')
     if not graph_only:
-        _compile_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+        from scar.analysis.replay_transaction import replay_transaction
+
+        with replay_transaction():
+            _compile_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
     (out / 'result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
     return result
 

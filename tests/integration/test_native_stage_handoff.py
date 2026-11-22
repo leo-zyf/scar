@@ -11,8 +11,10 @@ import sys
 
 import pytest
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.artifacts import file_reference
+from scar.compiler.backend.cpp20 import replay_native_revision
 from scar.compiler.contracts import ExecutionPlanRef
 from scar.compiler.frontend.clang import stage_source_revision
 from scar.compiler.middle.plan import read_native_binding, read_plan_contract
@@ -204,7 +206,7 @@ def test_native_graph_links_calls_and_platform(native_graph):
     assert inventory["cpu"]["online_cpu_ids"] and inventory["execution_constraints"]["allowed_cpu_ids"]
 
 
-def test_native_middle_replays_cost_and_schedule(native_graph, native_plan):
+def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_path):
     _, graph = native_graph
     folder, plan = native_plan
     assert plan["status"] == "PLAN_SCHEDULED"
@@ -218,6 +220,18 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan):
     assert problem.operations and schedule["schema"] == "scar.implementation-execution-plan"
     assert verification["feasible"] and binding["cpus"] == [observation["cpu"]]
     assert set(observation["case_inputs"]) == set(INPUTS)
+
+    original = frozen.artifacts["rewrites"]
+    ledger = tmp_path / "rewrites.json"
+    ledger.write_bytes(read_artifact(original, json_document=False))
+    revision = dict(frozen.artifacts, rewrites=file_reference(ledger, original["schema"]))
+    with pytest.raises(ValueError, match="metadata dependency byte identity differs"):
+        with replay_transaction() as transaction:
+            assert replay_native_revision(revision) == replay_native_revision(revision)
+            assert transaction.by_namespace["scar.cpp20-native-revision.v1"] == {"hits": 1, "misses": 1}
+            with ledger.open("ab") as stream:
+                stream.write(b"\n")
+            replay_native_revision(revision)
 
 
 def test_native_backend_delivers_cpp20_and_matches_locked_cases(native_request, native_plan, cpp20_delivery):

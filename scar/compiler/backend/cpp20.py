@@ -137,6 +137,15 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
 
 def replay_native_revision(artifacts):
     """Verify the original graph, source lock and exact proposed rewrites."""
+    from scar.analysis.replay_transaction import detached_replay
+
+    identity = tuple((role, tuple(sorted(artifacts[role].items()))) for role in _REVISION_SCHEMAS)
+    material = detached_replay('scar.cpp20-native-revision.v1', identity, lambda: _read_native_revision(artifacts))
+    verify_source_lock(material[0])
+    return material
+
+
+def _read_native_revision(artifacts):
     for role, schema in _REVISION_SCHEMAS.items():
         ref = artifacts[role]
         if ref['schema'] != schema:
@@ -177,7 +186,6 @@ def replay_native_revision(artifacts):
         regions = {region.id.wire for region in simplified.regions}
         if any(edit['operation'] in remaining or edit['region'] not in regions for edit in edits):
             raise ValueError('source edits do not match the simplified IR')
-    verify_source_lock(manifest)
     return manifest, edits, compiler_types
 
 
