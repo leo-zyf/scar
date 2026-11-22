@@ -5,15 +5,6 @@ from scar.ir import (CodeID, Effect, Event, ExecutionGraph, GraphNode, Knowledge
 from scar.analysis.repetition import repeated_regions
 
 
-def test_source_graph_covers_every_line():
-    path = Path(__file__).resolve().parents[2] / "scar" / "workloads" / "micro.py"
-    graph = from_source(path)
-    lines = {node.line for node in graph.nodes.values() if node.source == str(path.resolve())}
-    assert set(range(1, len(path.read_text().splitlines()) + 1)) <= lines
-    assert any(node.kind == NodeKind.CONTROL for node in graph.nodes.values())
-    assert any(edge.relation == "ast_contains" for edge in graph.edges)
-
-
 def test_graph_validation_proves_static_line_coverage(tmp_path):
     source = tmp_path / "coverage.py"
     source.write_text("x = 1\n\nif x:\n    y = x + 1\n")
@@ -27,6 +18,10 @@ def test_graph_validation_proves_static_line_coverage(tmp_path):
     assert coverage["classification_complete"] is True
     assert all(coverage["line_labels"].get(str(line))
                for line in range(1, 5))
+    nodes = [node for node in graph.nodes.values() if node.source == str(source.resolve())]
+    assert set(range(1, 5)) <= {node.line for node in nodes}
+    assert any(node.kind == NodeKind.CONTROL for node in nodes)
+    assert any(edge.relation == "ast_contains" for edge in graph.edges)
 
 
 def test_graph_validation_rejects_dangling_edges():

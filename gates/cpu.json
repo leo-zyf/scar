@@ -37,6 +37,7 @@
       "tests": [
         "tests/integration/test_formal_call_operands.py",
         "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
+        "tests/unit/test_ir.py::test_graph_validation_proves_static_line_coverage",
         "tests/unit/test_source_binding_effects.py",
         "tests/unit/test_program_indexed_codec.py"
       ]
