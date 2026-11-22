@@ -10,11 +10,11 @@ from pathlib import Path
 from scar.analysis.source_declared_calls import _owners
 from scar.analysis import scalar_table_handoff, scalar_transition_evidence
 from scar.analysis.program_view import ProgramView
+from scar.analysis.scalar_score_evidence import _compile_source, _open, _pinned_document
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode
-from scar.runtime.source_value_observe import _codes
 from scar.trace.code_snapshot import describe_code, site
 
 SCHEMA = 'scar.scalar-score-reuse-evidence'
@@ -66,9 +66,8 @@ def _tuple_names(node):
 
 
 def _compile(source):
-    raw = read_artifact(source,json_document=False)
-    codes = {code.co_qualname:code for code in _codes(
-        compile(raw,source['uri'],'exec',dont_inherit=True,optimize=0))}
+    raw, compiled = _compile_source(source)
+    codes = {code.co_qualname: code for code in compiled}
     return ast.parse(raw,filename=source['uri']), codes
 
 
@@ -144,13 +143,14 @@ def _state_sites(caller, code, direct, receiver):
                 write=write,after=site(code,instructions[ordinal+1].offset))
 
 
-def _design(transition):
-    old = read_artifact(transition)
+def _design(transition, old):
     old_capture = read_artifact(old['capture'])
     old_design_ref = old_capture['selection']
     old_design = read_artifact(old_design_ref)
     source = old['source']
-    tree,codes = _compile(source)
+    raw, compiled = _compile_source(source)
+    tree = ast.parse(raw, filename=source['uri'])
+    codes = {code.co_qualname: code for code in compiled}
     from scar.compiler.scalar_table_region import _definition
 
     caller_code = codes[old['caller']['code']['qualname']]
@@ -174,14 +174,17 @@ def _design(transition):
     generator_code = codes[caller_code.co_qualname+'.<locals>.'+name]
     method = old['score']['code']['qualname'].rsplit('.',1)[-1]
     arms = _arms(generator,generator_code,codes,receiver,method)
-    return dict(schema=DESIGN,schema_version=1,source=source,transition_evidence=transition,
+    design = dict(schema=DESIGN,schema_version=1,source=source,transition_evidence=transition,
         transition_selection=old_design_ref,caller=describe_code(caller_code),generator=describe_code(generator_code),
         loop_span=_span(loop),loop_binding=dict(score=_tuple_names(loop.target)[0], move=move, receiver=receiver),
         loop_generator_call=_event(caller_code,loop.iter,'CALL'),arms=arms,state=_state_sites(caller,caller_code,arms[0],receiver))
+    return design, old_design, compiled, codes
 
 
 def prepare(transition):
-    return _design(scalar_table_handoff._ref(transition,scalar_transition_evidence.SCHEMA))
+    reference, old = _open(transition, scalar_transition_evidence.SCHEMA)
+    design, _, _, _ = _design(reference, old)
+    return design
 
 
 def _f4(prior, design):
@@ -233,9 +236,7 @@ def _increasing(*values):
     return all(type(value) is int and value > 0 for value in values) and list(values) == sorted(set(values))
 
 
-def _project_edges(raw,design,old):
-    _, code_map = _compile(design['source'])
-    score_code = code_map[old['score']['qualname']]
+def _project_edges(raw, design, score_code):
     arms = {arm['arm']:arm for arm in design['arms']}
     edges = []
     counts = Counter()
@@ -272,14 +273,11 @@ def _project_edges(raw,design,old):
         for (version,arm,equal),count in sorted(counts.items())]
 
 
-def project(capture):
-    reference = scalar_table_handoff._ref(capture,CAPTURE)
-    raw = read_artifact(reference)
+def _project(reference, raw):
     stored = read_artifact(raw['selection'])
     prior_ref = stored['transition_evidence']
     prior = read_artifact(prior_ref)
-    design = _design(prior_ref)
-    old = read_artifact(design['transition_selection'])
+    design, old, compiled, codes = _design(prior_ref, prior)
     launch = raw['launch']
     _need(raw['schema_version'] == 1 and stored == design and raw['source'] == design['source']
           and raw['score_evidence'] == old['score_evidence']
@@ -287,8 +285,9 @@ def project(capture):
           and raw['original_execution'] is True and raw['performance_measurement'] is False
           and launch['decision'] == 'NO_OP' and launch['exit_code'] == 0
           and launch['entry_path'] == design['source']['uri'], 'expected a completed unmodified source launch')
-    scalar_transition_evidence._check_capture(raw,old)
-    edges,counts = _project_edges(raw,design,old)
+    scalar_transition_evidence._check_capture(
+        raw, old, compiled=compiled if old['source'] == design['source'] else None)
+    edges, counts = _project_edges(raw, design, codes[old['score']['qualname']])
     state = design['state']
     for row in raw['state_events']:
         _need(row['same_key_object'] is row['exact_builtin_dict'] is True and
@@ -311,10 +310,13 @@ def project(capture):
             target_executed_by_projection=False))
 
 
+def project(capture):
+    return _project(*_open(capture, CAPTURE))
+
+
 def check(path):
-    stored = read_artifact(scalar_table_handoff._ref(path,SCHEMA))
-    read_artifact(stored['capture'])
-    result = project(stored['capture']['uri'])
+    _, stored = _open(path, SCHEMA)
+    result = _project(*_pinned_document(stored['capture'], CAPTURE))
     _need(result == stored,'stored observation graph differs from independent original replay')
     return result
 

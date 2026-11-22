@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from scar.analysis import scalar_score_evidence, scalar_table_handoff
+from scar.analysis.scalar_score_evidence import _compile_source, _open, _pinned_document
 from scar.analysis.program_view import ProgramView
 from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.analysis.static.lowering.source_call_lowering import _body
@@ -15,7 +16,6 @@ from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode
-from scar.runtime.source_value_observe import _codes
 from scar.trace.code_snapshot import describe_code, site
 
 SCHEMA = 'scar.scalar-transition-evidence'
@@ -57,10 +57,8 @@ def _constructor(node, width):
     return node.func.id
 
 
-def _design(score, per_version, max_versions):
-    observed = scalar_score_evidence.check(score['uri'])
-    score_raw = read_artifact(observed['capture'])
-    score_design = read_artifact(score_raw['selection'])
+def _design(score, stored_score, per_version, max_versions):
+    observed, score_raw, score_design = scalar_score_evidence._replay(stored_score)
     supplier = read_artifact(observed['handoff'])
     selection = read_artifact(read_artifact(supplier['capture'])['selection'])
     ordinary = read_artifact(supplier['handoff'])
@@ -71,10 +69,9 @@ def _design(score, per_version, max_versions):
           'outer result does not identify one original consumer formal')
     consumer_formal = ordinary['observed_edges'][0]['formal']
     source = observed['source']
-    raw = read_artifact(source, json_document=False)
+    raw, compiled = _compile_source(source)
     tree = ast.parse(raw, filename=source['uri'])
-    codes = {code.co_qualname: code for code in _codes(
-        compile(raw, source['uri'], 'exec', dont_inherit=True, optimize=0))}
+    codes = {code.co_qualname: code for code in compiled}
     from scar.compiler.scalar_table_region import _definition
 
     producer_code = codes[selected['producer']['code']['qualname']]
@@ -121,7 +118,7 @@ def _design(score, per_version, max_versions):
     _need(type(per_version) is int and 12 <= per_version <= 24
           and type(max_versions) is int and 2 <= max_versions <= 4,
           'small bounded two-or-more table-version study expected')
-    return dict(schema=DESIGN, schema_version=1, source=source, score_evidence=score, catalog=observed['catalog'],
+    design = dict(schema=DESIGN, schema_version=1, source=source, score_evidence=score, catalog=observed['catalog'],
         old_handoff=supplier['handoff'], caller=selected['caller'], producer=selected['producer'],
         consumer={**selected['consumer'], 'formal': consumer_formal}, score=observed['callee']['code'],
         score_call=selection['value_call'], score_receiver=selection['value_receiver'],
@@ -133,10 +130,13 @@ def _design(score, per_version, max_versions):
         constructor=dict(name=ctor, declaration_span=_span(owner), fields=names,
             sites=dict(producer=_sites(producer_code, inner), rotation=_sites(rotation_code, wrapped))),
         table=score_design['table'], globals=globals_, per_version=per_version, max_versions=max_versions)
+    return design, score_raw, compiled
 
 
 def prepare(score, *, per_version=16, max_versions=2):
-    return _design(scalar_table_handoff._ref(score, scalar_score_evidence.SCHEMA), per_version, max_versions)
+    reference, stored = _open(score, scalar_score_evidence.SCHEMA)
+    design, _, _ = _design(reference, stored, per_version, max_versions)
+    return design
 
 
 def field_kind(value):
@@ -208,8 +208,9 @@ def _f4(design):
     return bodies, outputs
 
 
-def _check_capture(raw, design):
-    prior = read_artifact(read_artifact(design['score_evidence'])['capture'])
+def _check_capture(raw, design, *, prior=None, compiled=None):
+    if prior is None:
+        prior = read_artifact(read_artifact(design['score_evidence'])['capture'])
     versions = raw['table_versions']
     schema = raw['state_fields']
     _need(list(versions) == sorted(prior['table_versions']) and
@@ -227,9 +228,9 @@ def _check_capture(raw, design):
     declared = {row['name']:row['kind'] for row in schema}
     _need(len(declared) == len(schema) and list(declared) == design['constructor']['fields']
           and set(declared.values()) <= set(KINDS), 'original exact state tuple ordinals/types differ')
-    raw_source = read_artifact(design['source'],json_document=False)
-    codes = {describe_code(code)['key']:code for code in _codes(
-        compile(raw_source,design['source']['uri'],'exec',dont_inherit=True,optimize=0))}
+    if compiled is None:
+        _, compiled = _compile_source(design['source'])
+    codes = {describe_code(code)['key']:code for code in compiled}
     seen = set()
     counts = Counter()
     constructors = set()
@@ -279,17 +280,17 @@ def _check_capture(raw, design):
     return counts, next(iter(constructors))
 
 
-def project(capture_path):
-    reference = scalar_table_handoff._ref(capture_path,CAPTURE)
-    raw = read_artifact(reference)
+def _project(reference, raw):
     selection = read_artifact(raw['selection'])
-    design = _design(raw['score_evidence'],selection['per_version'],selection['max_versions'])
+    score = raw['score_evidence']
+    _, stored_score = _pinned_document(score, scalar_score_evidence.SCHEMA)
+    design, prior, compiled = _design(score, stored_score, selection['per_version'], selection['max_versions'])
     launch = raw['launch']
     _need(raw['schema_version'] == 1 and selection == design and raw['source'] == design['source']
           and type(raw['process_id']) is int and raw['process_id'] > 0 and raw['original_execution'] is True
           and launch['entry_path'] == design['source']['uri'] and launch['decision'] == 'NO_OP' and launch['exit_code'] == 0,
           'complete actual original state transition capture required')
-    counts, constructor = _check_capture(raw,design)
+    counts, constructor = _check_capture(raw, design, prior=prior, compiled=compiled)
     bodies, calls = _f4(design)
     original = read_artifact(design['old_handoff'])
     _need(original['original_sites']['producer'] == calls['producer']
@@ -315,10 +316,13 @@ def project(capture_path):
             target_executed_by_projection=False))
 
 
+def project(capture_path):
+    return _project(*_open(capture_path, CAPTURE))
+
+
 def check(path):
-    stored = read_artifact(scalar_table_handoff._ref(path,SCHEMA))
-    read_artifact(stored['capture'])
-    rebuilt = project(stored['capture']['uri'])
+    _, stored = _open(path, SCHEMA)
+    rebuilt = _project(*_pinned_document(stored['capture'], CAPTURE))
     _need(stored == rebuilt,'stored complete transition differs from independent replay')
     return rebuilt
 

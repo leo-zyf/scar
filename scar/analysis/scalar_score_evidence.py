@@ -13,13 +13,31 @@ from scar.analysis.function_interface_observations import RetainedCodeBodyIndex
 from scar.analysis.static.lowering.source_call_lowering import _body
 from scar.analysis.source_references import source_port
 from scar.runtime.source_value_observe import _codes
-from scar.ir.execution_recipe import read_artifact
+from scar.ir.execution_recipe import open_artifact, read_artifact
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import describe_code, site
 
 SCHEMA = 'scar.scalar-score-evidence'
 CAPTURE = 'scar.scalar-score-capture'
 DESIGN = 'scar.scalar-score-selection'
+
+
+def _open(path, schema):
+    return open_artifact(Path(path).resolve(strict=True), schema)
+
+
+def _pinned_document(reference, schema):
+    raw = read_artifact(reference)
+    path = Path(reference['uri']).resolve(strict=True)
+    if raw['schema'] != schema:
+        raise ValueError('recipe component schema differs: ' + str(path))
+    return {**reference, 'uri': str(path)}, raw
+
+
+def _compile_source(source):
+    raw = read_artifact(source, json_document=False)
+    module = compile(raw, source['uri'], 'exec', dont_inherit=True, optimize=0)
+    return raw, tuple(_codes(module))
 
 
 def _need(valid, reason):
@@ -50,14 +68,13 @@ def _entry(instructions, node):
 
 
 def _exact_code(source, descriptor):
-    raw = read_artifact(source, json_document=False)
-    code = _one((candidate for candidate in _codes(compile(raw, source['uri'], 'exec', dont_inherit=True, optimize=0))
-                if describe_code(candidate) == descriptor), 'retained source code descriptor must be exact')
+    raw, codes = _compile_source(source)
+    code = _one((candidate for candidate in codes if describe_code(candidate) == descriptor),
+                'retained source code descriptor must be exact')
     return raw, code
 
 
-def _design(handoff, limits):
-    previous = read_artifact(handoff)
+def _design(handoff, previous, limits):
     scope = read_artifact(previous['capture'])
     selected = read_artifact(scope['selection'])
     proof, ordinal = previous['proof'], previous['proof_case']
@@ -90,19 +107,22 @@ def _design(handoff, limits):
     _need(all(type(limit) is int for limit in (per_version, attempts, max_versions))
           and 1 <= per_version <= 64 and per_version <= attempts <= 1024 and 1 <= max_versions <= 4,
           'bounded score observation budget required')
-    return dict(schema=DESIGN, schema_version=1, source=source, case=proof, case_index=ordinal, handoff=handoff,
+    design = dict(schema=DESIGN, schema_version=1, source=source, case=proof, case_index=ordinal, handoff=handoff,
         code=descriptor, receiver=receiver, argument=argument, receiver_fields=fields, table=table,
         global_loads=globals_, branches=branches, limits=limits,
         original_effect_frontiers=previous['table_write_frontiers'])
+    return design, code
 
 
 def prepare(handoff, *, per_version=24, attempts_per_version=192, max_versions=2):
     """Prepare a local score-body selector from existing F4 and source inputs."""
     limits = dict(per_version=per_version, attempts_per_version=attempts_per_version, max_versions=max_versions)
-    return _design(scalar_table_handoff._ref(handoff, scalar_table_handoff.SCHEMA), limits)
+    reference, previous = _open(handoff, scalar_table_handoff.SCHEMA)
+    design, _ = _design(reference, previous, limits)
+    return design
 
 
-def _validate_samples(raw, design):
+def _validate_samples(raw, design, *, code=None):
     versions = raw['table_versions']
     _need(0 < len(versions) <= design['limits']['max_versions'], 'expected bounded exact table versions')
     i64 = scalar_table_handoff._int64
@@ -119,7 +139,8 @@ def _validate_samples(raw, design):
           bool(builtins_) is raw['builtin_abs_verified'] and not global_names.keys() & builtins_.keys() and
           set(global_names) | set(builtins_) == set(design['global_loads']),
           'selected global bindings or builtin identities are unavailable')
-    _, code = _exact_code(design['source'], design['code'])
+    if code is None:
+        _, code = _exact_code(design['source'], design['code'])
     branches = {row['id']: row for row in design['branches']}
     counts, arms = Counter(), {version: Counter() for version in versions}
     keys = set()
@@ -154,19 +175,17 @@ def _validate_samples(raw, design):
         for version, outcomes in arms.items()}
 
 
-def project(capture_path):
-    capture = scalar_table_handoff._ref(capture_path, CAPTURE)
-    raw = read_artifact(capture)
-    selection = read_artifact(raw['selection'])
-    design = _design(selection['handoff'], selection['limits'])
+def _project(capture, raw, selection):
+    handoff = selection['handoff']
+    previous = read_artifact(handoff)
+    design, code = _design(handoff, previous, selection['limits'])
     launch = raw['launch']
     _need(raw['schema_version'] == 1 and selection == design and raw['source'] == design['source'] and
           raw['case'] == design['case'] and raw['case_index'] == design['case_index'] and
           type(raw['process_id']) is int and raw['process_id'] > 0 and raw['original_execution'] is True
           and launch['decision'] == 'NO_OP' and launch['entry_path'] == design['source']['uri'] and launch['exit_code'] == 0,
           'complete original score capture and exact source proof required')
-    counts, branches = _validate_samples(raw, design)
-    previous = read_artifact(design['handoff'])
+    counts, branches = _validate_samples(raw, design, code=code)
     prior_graph = read_artifact(previous['handoff'])
     catalog = prior_graph['catalog']
     read_artifact(catalog)
@@ -192,11 +211,22 @@ def project(capture_path):
             transformation_authorized=False, target_executed_by_projection=False))
 
 
-def check(path):
-    stored = read_artifact(scalar_table_handoff._ref(path, SCHEMA))
-    read_artifact(stored['capture'])
-    rebuilt = project(stored['capture']['uri'])
+def project(capture_path):
+    capture, raw = _open(capture_path, CAPTURE)
+    return _project(capture, raw, read_artifact(raw['selection']))
+
+
+def _replay(stored):
+    capture, raw = _pinned_document(stored['capture'], CAPTURE)
+    selection = read_artifact(raw['selection'])
+    rebuilt = _project(capture, raw, selection)
     _need(rebuilt == stored, 'published score evidence differs from cold replay')
+    return rebuilt, raw, selection
+
+
+def check(path):
+    _, stored = _open(path, SCHEMA)
+    rebuilt, _, _ = _replay(stored)
     return rebuilt
 
 

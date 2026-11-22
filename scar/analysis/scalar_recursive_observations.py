@@ -11,6 +11,7 @@ from pathlib import Path
 from scar.analysis import scalar_recursive_region as recursive
 from scar.analysis import scalar_score_reuse_evidence as observed
 from scar.analysis import scalar_transition_evidence as transition
+from scar.analysis.scalar_score_evidence import _open, _pinned_document
 from scar.analysis.scalar_table_handoff import _ref, _write
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact
@@ -57,7 +58,7 @@ def _state_sites(region, function, code):
     return sorted(results,key=lambda row:row['at']['offset'])
 
 
-def prepare(path):
+def _prepare(path):
     reference = _ref(path,recursive.SCHEMA)
     region = recursive.check(reference['uri'])
     tree,codes = observed._compile(region['source'])
@@ -97,12 +98,18 @@ def prepare(path):
     bodies = [producer,rotation,score]
     _require(all(describe_code(codes[desc['qualname']])==desc for desc in bodies),
              'original recursive phase version differs')
-    return dict(schema=DESIGN,schema_version=1,region=reference,source=region['source'],
+    design = dict(schema=DESIGN,schema_version=1,region=reference,source=region['source'],
         owner=owner,receiver=region['region']['receiver'],formals=region['region']['formals'],sites=rows,
         state_sites=_state_sites(region,source,code),state_fields=reuse_capture['state_fields'],
         state_constructor=origin['constructor']['name'],score=score,score_call=origin['score_call'],
         internal_rotation=origin['rotation']['caller_site'],rotation=rotation,
         score_table=origin['table'])
+    return design, code
+
+
+def prepare(path):
+    design, _ = _prepare(path)
+    return design
 
 
 def _integer(value):
@@ -176,9 +183,7 @@ def _state_order(rows, design):
     return events
 
 
-def _root_probes(raw, plan):
-    _,codes = observed._compile(plan['source'])
-    owner = codes[plan['owner']['qualname']]
+def _root_probes(raw, plan, owner):
     compiled = sorted({op.argval for op in get_instructions(owner) if op.opname=='LOAD_GLOBAL'})
     _require(compiled==raw['owner_global_reads'] and set(raw['module_i64'])<=set(compiled)
         and all(_integer(value) for value in raw['module_i64'].values()),
@@ -212,11 +217,9 @@ def _root_probes(raw, plan):
     return raw['root_probes']
 
 
-def project(path):
-    reference = _ref(path,CAPTURE)
-    raw = read_artifact(reference)
+def _project(reference, raw):
     retained = read_artifact(raw['design'])
-    plan = prepare(retained['region']['uri'])
+    plan, owner = _prepare(retained['region']['uri'])
     _require(raw['schema_version']==1 and retained==plan and raw['source']==plan['source']
         and raw['launch']['entry_path']==plan['source']['uri'] and raw['launch']['exit_code']==0
         and raw['launch']['decision']=='NO_OP' and raw['original_execution'] is True
@@ -231,7 +234,7 @@ def project(path):
         counts[str(selected['index'])] += 1
     order = _state_order(raw['state_events'],plan)
     totals = Counter(row['field']+' '+row['action'] for row in raw['state_events'])
-    root_probes = _root_probes(raw,plan)
+    root_probes = _root_probes(raw, plan, owner)
     return dict(schema=SCHEMA,schema_version=1,recursive_region=plan['region'],design=raw['design'],capture=reference,
         source=plan['source'],process_id=raw['process_id'],observed_site_counts=dict(counts),
         sites=[dict(index=row['index'],phase=row['phase'],site=row['site'],original_f4=row['f4'],counts=counts[str(row['index'])])
@@ -243,10 +246,14 @@ def project(path):
             external_time_and_throw_closed=False,native_lowering_authorized=False))
 
 
+def project(path):
+    return _project(*_open(path, CAPTURE))
+
+
 def check(path):
-    result = read_artifact(_ref(path,SCHEMA))
-    read_artifact(result['capture'])
-    _require(result==project(result['capture']['uri']),'stored observations differ from independent replay')
+    _, result = _open(path, SCHEMA)
+    rebuilt = _project(*_pinned_document(result['capture'], CAPTURE))
+    _require(result==rebuilt,'stored observations differ from independent replay')
     return result
 
 
