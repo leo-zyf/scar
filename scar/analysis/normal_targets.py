@@ -416,7 +416,8 @@ def solve_targets(facts,out,*,max_events=20_000_000,entries=(),jobs=None,interfa
     return _publish(solver,facts,root,report,out,started,max_events,fixed,stars)
 
 
-def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=None):
+def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=None,*,write_report=True):
+    """Write shared relations and return the envelope for the caller's scope."""
     publish_started=time.monotonic();table_write_seconds={}
     solver.generators.validate_parents()
     solver.generators.close()
@@ -483,7 +484,9 @@ def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=N
     result['publication_seconds']=time.monotonic()-publish_started
     result['table_write_seconds']=table_write_seconds
     result['seconds']=time.monotonic()-started
-    _durable_bytes(out/'result.json',_json(result),replace=False);return result
+    if write_report:
+        _durable_bytes(out/'result.json',_json(result),replace=False)
+    return result
 
 
 def solve_entry_targets(facts,out,entries,*,max_events=20_000_000,jobs=None,interfaces=None):
