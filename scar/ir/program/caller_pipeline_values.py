@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from scar.ir.program.layout_templates import ArrayMaterializationRole
 from .dependencies import DependencyFrame
-from .normal_targets import GlobalPort,Body
+from scar.ir.program.normal_graph import GlobalPort, Body
 from .providers import ProviderFactReference
 
 

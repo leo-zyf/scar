@@ -15,7 +15,7 @@ from scar.analysis.source_name_access_anchors import _bindings
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.ir.program import call_inputs as C, state_ports as S
 from scar.ir.program import source_productions as P, source_bindings as B
-from scar.ir.program import normal_targets as T, view as V
+from scar.ir.program import normal_graph as T, view as V
 from scar.ir.program.function_sites import SourceFunctionInterface
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.v2._validation import record_errors

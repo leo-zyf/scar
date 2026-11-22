@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from scar.ir.literals import PythonLiteral
-from . import normal_targets as T
+from scar.ir.program import normal_graph as T
 
 
 class ScalarEvaluationStatus(str, Enum):

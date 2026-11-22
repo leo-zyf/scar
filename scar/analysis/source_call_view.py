@@ -20,7 +20,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.call_inputs import FunctionDefaultStateProvider
 from scar.analysis.source_call_captures import FunctionCaptureStateProvider
-from scar.ir.program import normal_graph as G,normal_targets as T,normal_links as F
+from scar.ir.program import normal_graph as G, normal_graph as T, normal_graph as F
 from scar.ir.program.dependencies import (
     DependencyPoint as Point,DependencyFrame as Frame,DependencyEdge as Edge,
     DependencyCondition as Condition,DependencyEvidence as Evidence,

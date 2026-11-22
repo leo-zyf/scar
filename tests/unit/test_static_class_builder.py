@@ -6,7 +6,7 @@ import json
 import pytest
 
 from scar.analysis.program_lowering import prepare_source_text
-from scar.analysis.source_class_body_lowering import lower_class_suite
+from scar.analysis.source_class_body import lower_class_suite
 from scar.analysis.source_language import SourceLanguageOptions
 from scar.analysis.static_class_builder import (
     build_class_provider, connect_class_suite, validate_class_builder_expansion,

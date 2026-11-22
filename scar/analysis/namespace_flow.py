@@ -2,13 +2,8 @@
 
 from collections import defaultdict
 from scar.analysis.namespace_values import BuiltinNamespaceFlow
-from scar.ir.program import (
-    source_productions as P,
-    normal_links as F,
-    normal_graph as G,
-    source_frame_bindings as B,
-)
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G, source_frame_bindings as B
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_exec_roots import ExecNamespaceKind
 from hashlib import sha256
 from scar.analysis.source_template_links import _json

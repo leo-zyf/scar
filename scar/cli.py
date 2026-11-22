@@ -28,7 +28,7 @@ def _build(arguments):
         from scar.compiler.pipeline import main as build
         return build(['--graph-only', *arguments])
     if '--formal' in arguments:
-        from scar.analysis.source_frontend import main as build
+        from scar.compiler.frontend.python import main as build
         return build([argument for argument in arguments if argument != '--formal'])
     from scar.analysis.build import main as build
     return build(arguments)
@@ -47,13 +47,13 @@ def _compile(arguments):
     if _has_option(arguments, '--manifest'):
         from scar.compiler.pipeline import main as compile_target
     else:
-        from scar.compiler.compile_build import main as compile_target
+        from scar.compiler.backend.python import main as compile_target
     return compile_target(arguments)
 
 
 def _plan(arguments):
     if _has_option(arguments, '--build'):
-        from scar.compiler.plan_build import main as plan
+        from scar.compiler.middle.python import main as plan
     else:
         from scar.compiler.middle.plan import main as plan
     return plan(arguments)

@@ -23,9 +23,7 @@ from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode
 from scar.optimization.deployment_cost import _digest
 from scar.optimization.implementation_costs import CostQuery, query_key
-from scar.optimization.stateful_cpu_choices import (
-    _cost, _domain, stateful_cpu_cost_context,
-)
+from scar.optimization.stateful_cpu_model import _cost, _domain, stateful_cpu_cost_context
 
 
 SCHEMA = 'scar.stateful-entry-cost'

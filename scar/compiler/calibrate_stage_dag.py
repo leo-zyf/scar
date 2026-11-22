@@ -21,7 +21,7 @@ from scar.compiler.calibrate_stateful_boundary import _json, _now, _receipt
 from scar.compiler.stateful_model import stateful_from_dict
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
-from scar.optimization.stateful_cpu_choices import _domain
+from scar.optimization.stateful_cpu_model import _domain
 from scar.optimization.stateful_cpu_model import stateful_cpu_demand
 
 SCHEMA = 'scar.stateful-stage-dag-calibration'

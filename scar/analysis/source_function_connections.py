@@ -7,7 +7,7 @@ World/environment routes remain typed rather than reference-value aliases.
 """
 from dataclasses import dataclass, replace
 
-from scar.ir.program import normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as T, source_productions as P
 
 
 @dataclass(frozen=True, slots=True)

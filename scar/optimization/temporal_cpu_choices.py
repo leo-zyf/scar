@@ -15,7 +15,7 @@ import sys
 from types import SimpleNamespace
 
 from scar.compiler.invariant_loop_frontend import validate_invariant_loop_proof
-from scar.compiler.pipeline_model import prepare_pipeline_leaf
+from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode

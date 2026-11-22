@@ -23,9 +23,7 @@ from scar.analysis.source_semantics_v2 import validate_source_semantics
 from scar.ir.program.codec import dumps as dump_graph, _has_frame_root_capability
 from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.functions import BodyEntryInterface, BodyLoweringProfile, FormalPort
-from scar.ir.program.module_entries import (ModuleBodyOverlay, ModuleEntryProfile,
-    ModulePrefixOverlay, ModuleBodyExpansionProfile, StructuredFrameBodyOverlay, CompilerStructuredFrameBodyOverlay, ExpandedCompilerFrameBodyOverlay, FrameBodyProfile,
-    StaticModuleEntryDeclaration, ClassConstructionFrameBodyOverlay)
+from scar.ir.program.entry_namespaces import ModuleBodyOverlay, ModuleEntryProfile, ModulePrefixOverlay, ModuleBodyExpansionProfile, StructuredFrameBodyOverlay, CompilerStructuredFrameBodyOverlay, ExpandedCompilerFrameBodyOverlay, FrameBodyProfile, StaticModuleEntryDeclaration, ClassConstructionFrameBodyOverlay
 from scar.ir.program.frames import (
     FrameBind, FrameDiscard, FrameEnter, FrameExit, FrameFormal, FrameModel,
 )
@@ -173,7 +171,7 @@ class SourceProgram:
 
     def to_dict(self):
         if isinstance(self.module,StructuredFrameBodyOverlay):
-            from scar.ir.program.module_entries import encode_frame_body
+            from scar.ir.program.entry_namespaces import encode_frame_body
             if (self.profile is not self.module.profile or self.profile not in (
                     FrameBodyProfile.STRUCTURED_MAPPING_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_PROPAGATION_314_V1,
                     FrameBodyProfile.STRUCTURED_MAPPING_BODY_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_CLASS_314_V1) or self.graph is None
@@ -194,7 +192,7 @@ class SourceProgram:
         if self.graph is not None and _has_frame_root_capability(self.graph):
             raise ValueError("historical source1-7 writer cannot contain frame-root core capability")
         if type(self.module) is ModulePrefixOverlay:
-            from scar.ir.program.module_entries import encode_module_prefix
+            from scar.ir.program.entry_namespaces import encode_module_prefix
             if (self.profile is not ModuleBodyExpansionProfile.IMPORT_PREFIX_314_V1 or self.interface is not None
                     or self.frame is not None or self.structured is not None or self.language is not None):
                 raise ValueError("v7 prefix requires its separate capability and unchanged mapping ABI")
@@ -208,7 +206,7 @@ class SourceProgram:
                 "control": self.control.to_dict(), "summary": self.summary(),
                 "runtime_target_verified": False, "transformation_authorized": False}
         if self.module is not None:
-            from scar.ir.program.module_entries import encode_module_overlay
+            from scar.ir.program.entry_namespaces import encode_module_overlay
             if (self.profile is not ModuleEntryProfile.EXEC_MAPPING_314_V1 or self.interface is not None
                     or self.frame is not None or self.structured is not None or self.language is not None):
                 raise ValueError("v6 mapping entry cannot acquire function ABI overlays")
@@ -285,7 +283,7 @@ class SourceProgram:
                 raise ValueError("source fragments require a live typed context session and explicit SP5 STRUCTURE")
             expected_fields -= {"semantic", "semantics", "control"}
         if type(version) is int and version in (8,9,10,11,12):
-            from scar.ir.program.module_entries import decode_frame_body
+            from scar.ir.program.entry_namespaces import decode_frame_body
             if (set(document) != expected_fields | {'entry_kind','profile','module'}
                     or document['schema'] != 'scar.source-program' or document['entry_kind'] != 'MAPPING_FRAME'
                     or document['profile'] not in (FrameBodyProfile.STRUCTURED_MAPPING_314_V1.value,
@@ -336,7 +334,7 @@ class SourceProgram:
                             and (source.get("source_kind") == "MODULE_UNIT" or "snapshot" in source)):
                         raise ValueError("historical source1-7 reader cannot contain frame-root core capability")
         if type(version) is int and version == 7:
-            from scar.ir.program.module_entries import decode_module_prefix
+            from scar.ir.program.entry_namespaces import decode_module_prefix
             if (set(document) != expected_fields | {"entry_kind", "profile", "module"}
                     or document["schema"] != "scar.source-program" or document["entry_kind"] != "MAPPING_FRAME"
                     or document["profile"] != ModuleBodyExpansionProfile.IMPORT_PREFIX_314_V1.value
@@ -355,7 +353,7 @@ class SourceProgram:
                 raise ValueError("; ".join(checked["errors"]))
             return result
         if type(version) is int and version == 6:
-            from scar.ir.program.module_entries import decode_module_overlay
+            from scar.ir.program.entry_namespaces import decode_module_overlay
             if (set(document) != expected_fields | {"entry_kind", "profile", "module"}
                     or document["schema"] != "scar.source-program" or document["entry_kind"] != "MAPPING_FRAME"
                     or document["profile"] != ModuleEntryProfile.EXEC_MAPPING_314_V1.value
@@ -535,7 +533,7 @@ def _lower_prepared(context, entry, *, source, max_operations, expand_candidates
             if SourceLanguageCapability.FUNCTION_WITH_314_V1 in language_options.capabilities:
                 if SourceLanguageCapability.FUNCTION_TRY_314_V1 not in language_options.capabilities:
                     raise ValueError('function With requires the existing paired propagation/C0/C1 capability')
-                from scar.analysis.source_with_lowering import FunctionWithBuilder
+                from scar.analysis.source_with import FunctionWithBuilder
                 builder = FunctionWithBuilder
         return builder(context, entry, source=source, max_operations=max_operations,
                                              sealed_source=sealed_source, language_options=language_options).run()

@@ -45,7 +45,7 @@ def _raw(receipt):
 
 def _implementation(model_replays=()):
     root=Path(__file__).resolve().parents[1]
-    names=('optimization/stateful_cost_rebase.py','optimization/stateful_cpu_choices.py',
+    names=('optimization/stateful_cost_rebase.py','optimization/stateful_cpu_model.py',
         'optimization/stateful_cpu_model.py','compiler/observe_original_stateful_cost.py')
     schemas={r['schema']for r in model_replays}
     if schemas:
@@ -64,7 +64,7 @@ def _domain_value(domain):
 
 
 def _contexts(source,target,candidate):
-    from scar.optimization.stateful_cpu_choices import stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import stateful_cpu_cost_context
     left=stateful_cpu_cost_context(source,candidate);right=stateful_cpu_cost_context(target,candidate)
     normalized=deepcopy(left);changes=[]
     for path in _REFS:
@@ -140,7 +140,7 @@ def _original_dependencies(facts,domain,domain_ref,context):
 
 
 def _component_dependencies(facts,domain,candidate):
-    from scar.optimization.stateful_cpu_model import stateful_cpu_demand,component_key
+    from scar.optimization.stateful_cpu_model import stateful_cpu_demand, component_key
     derivation=facts['derivation']
     if (set(derivation)!={'origin','target_variant_trials','assumptions','component_refs'}
             or derivation['origin']not in ('DECLARED_FORWARD_MODEL','INDEPENDENT_PRIMITIVE_COMPOSITION')
@@ -227,7 +227,7 @@ def _model_dependencies(profile,domain,domain_ref,context,candidate):
 
 
 def _replay(source_profile,source_domain,target_domain,candidate):
-    from scar.optimization.stateful_cpu_choices import _domain,_cost
+    from scar.optimization.stateful_cpu_model import _domain, _cost
     source_ref,source=_ref(source_domain,_DOMAIN,'domain.json');source=_domain(source)
     target_ref,target=_ref(target_domain,_DOMAIN,'domain.json');target=_domain(target)
     original_ref,original=_ref(source_profile,_ORIGINAL)

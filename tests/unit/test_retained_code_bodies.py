@@ -44,7 +44,7 @@ def test_compiler_scope_body_join_does_not_cache_on_fingerprint_alone():
 
 def test_call_query_demand_keeps_original_ordinals_and_does_not_attach_unrelated_calls():
     from scar.analysis.source_call_binding_view import SourceCallBindingProvider
-    from scar.ir.program.normal_targets import FunctionActivation
+    from scar.ir.program.normal_graph import FunctionActivation
     repo=Path(__file__).resolve().parents[2]
     root=repo/'artifacts/current/experiments/cross-unit-composite-v1'
     raw=tuple(sorted((root/'call-bindings').glob('call-bindings.*.json')))

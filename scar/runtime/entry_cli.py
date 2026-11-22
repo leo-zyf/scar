@@ -36,7 +36,7 @@ def main(argv=None):
     report_path = Path(args.report).absolute() if args.report else None
     if report_path is not None and (report_path.exists() or report_path.is_symlink()):
         parser.error('--report requires a fresh path')
-    from .bundle_metadata import inspect_bundle
+    from scar.runtime.array_copy_guard import inspect_bundle
     from .entry_runner import run_script
     metadata = inspect_bundle(args.bundle, expected_admission_sha256=args.admission_sha256)
     contract = metadata['contract']

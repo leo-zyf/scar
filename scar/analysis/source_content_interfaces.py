@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import normal_links as F, normal_targets as T
-from scar.ir.program import content_routes as A, content_routes as O
+from scar.ir.program import normal_graph as F, normal_graph as T
+from scar.ir.program import data_materials as A, data_materials as O
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType

@@ -5,7 +5,7 @@ into a newly constructed one.  This view retains those two obligations rather
 than adding aliases or interpreting a constructor's name/native identity.
 """
 from .control import ProtocolValueKind
-from .copy_flow import required_choices
+from scar.ir.program.data_materials import required_choices
 from .model import (CompletionResult, ExitKind, InvokeLiteralResult,
                     OperationResult, ProtocolValue, ReferenceValue,
                     TerminatorKind)

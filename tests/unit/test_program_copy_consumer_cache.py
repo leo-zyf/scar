@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from scar.ir.execution.validity_budget import ValidityBudget
-from scar.ir.program.copy_consumers import consumer_graph
+from scar.ir.program.data_materials import consumer_graph
 from scar.ir.program.ids import BlockID, OperationID, RegionID, UseID, ValueID
 from scar.ir.program.model import (
     Behavior, Block, BlockArgument, ExitKind, ExitPort, Operation, OperationResult,

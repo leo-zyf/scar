@@ -416,7 +416,7 @@ def _external_stages(ctx):
     from .resource_validation import resource_errors
     from .work_validation import work_errors
     from .order_validation import order_errors
-    from .observation_validation import observation_errors
+    from scar.ir.execution.observation_validation import observation_errors
     from .content_validation import content_errors
     from .production_validation import write_errors, produced_errors
     from .validity_validation import validity_errors
@@ -549,7 +549,7 @@ def _analyze(model, program, *, value_graphs=None, evidence_graphs=None, semanti
     if not ctx.issues:
         _flow(ctx)
     if not ctx.issues:
-        from .call_validation import call_errors
+        from scar.ir.execution.call_query import call_errors
         call_errors(ctx)
     if not ctx.issues:
         from .resumable_validation import body_errors

@@ -16,7 +16,7 @@ from scar.analysis.source_reference_slice import source_port
 from scar.compiler.call_binding import read_call_binding_plan,plan_call_bindings,join_call_bindings,plan_digest
 from scar.ir.program import view as V
 from scar.ir.program.call_edges import CapturedSite,CapturedCode
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator

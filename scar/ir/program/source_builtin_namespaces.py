@@ -1,7 +1,7 @@
 """Conditional builtin-map selection over original namespace/world ports."""
 from dataclasses import dataclass
 
-from .normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from .source_exec_roots import ExecEndpoint
 from scar.ir.program.namespace_routes import NamespaceInterfaceRef
 from .source_frame_bindings import ContextEndpoint

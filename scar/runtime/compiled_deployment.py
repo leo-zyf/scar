@@ -28,7 +28,7 @@ def runner_identity():
     names=('entrypoint.py','__main__.py','runtime/compiled_entry.py','runtime/compiled_deployment.py',
         'runtime/entry_runner.py','runtime/native_temporal_invariant.py','runtime/native_loop.py',
         'runtime/loop_guard.py','runtime/native_stateful.py','runtime/stateful_guard.py',
-        'runtime/stateful_contract.py','runtime/bundle_metadata.py','trace/code_snapshot.py',
+        'runtime/stateful_contract.py','runtime/array_copy_guard.py','trace/code_snapshot.py',
         'optimization/paired_entry_selection.py')
     values=[(name,sha256((root/name).read_bytes()).hexdigest()) for name in names]
     return sha256(json.dumps(values,separators=(',',':')).encode()).hexdigest()

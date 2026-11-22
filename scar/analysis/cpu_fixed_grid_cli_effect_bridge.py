@@ -17,7 +17,7 @@ from scar.compiler import fixed_grid_source_provider as provider
 from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
 from scar.ir.execution_recipe import _canonical, read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P
-from scar.ir.program.normal_links import AttributeAction
+from scar.ir.program.normal_graph import AttributeAction
 from scar.ir.program.signature_patterns import CountBinding
 from scar.ir.program.structured import PythonProtocolKind
 from scar.ir.record_codec import encode

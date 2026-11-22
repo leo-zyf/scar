@@ -5,7 +5,7 @@ from enum import Enum
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.literals import PythonLiteral
 from scar.ir.program.source_frame_bindings import StaticInputPort, ContextEndpoint
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.ids import OperationID, RegionID, ValueID
 
 

@@ -157,7 +157,7 @@ def export(capture_path, provider, out):
 
 def check(package):
     from scar.codegen.native_cpu_elf import _dependencies
-    from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+    from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
     root = Path(package).resolve(strict=True)
     doc = read_artifact(artifact_reference(root/'artifact.json', SCHEMA))

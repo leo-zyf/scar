@@ -49,7 +49,7 @@ def _replay_recurrence_rhs_storage(recipe, geometry, storage, placement):
 
 
 def _replay_recurrence_lifetimes(manifest, member, graph, execution, recipe):
-    from scar.compiler.tensor_program_graph import recurrence_graph
+    from scar.compiler.tensor_planning_inputs import recurrence_graph
     from scar.optimization.aten_recurrence import plan_recurrence
 
     source = json.loads(member('plan/inputs.json').read_bytes())
@@ -248,7 +248,7 @@ def _replay_exported_choice(member, files, base, execution, recipe, sizes, obser
 
 def _replay_exported(member, manifest, base, label, graph, execution, document, problem):
     from scar.codegen.aten_export_source import render_exported_entry
-    from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+    from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
     from scar.ir.program.model import DataValue
     from scar.optimization.aten_export_rewrite import eliminate_dead_export_ops
     from scar.optimization.aten_live_values import tensor_footprint
@@ -534,7 +534,7 @@ def verify_native_project(directory, manifest_sha256):
     if current != manifest['dependencies'] or any(name.startswith(('libpython', 'libtorch_python')) for name in current):
         raise ValueError('runtime dependency resolution differs from the checked native project')
     if 'cpu_linkage' in manifest:
-        from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+        from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
         if manifest['schema'] not in ('scar.aten-recurrence-delivery', 'scar.native-exported-aten'):
             raise ValueError('the CPU-only dependency contract requires a native CPU project')

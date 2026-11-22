@@ -5,7 +5,7 @@ from enum import Enum
 from scar.ir.program.ids import LocationID, NativeBoundaryID, OperationID, ValueID
 from scar.ir.program.native import EntryPortRef, ExitPortRef, NativeOutputSlot
 from scar.ir.program.providers import ProviderFactReference
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.python_bindings import PythonBindingID, NativeSchemaReference
 from scar.ir.program.target_hardware import TargetResourceRef, ResourceCandidateKind
 from scar.ir.program.binding_returns import NativeReturnSlot, ValueShape

@@ -26,7 +26,7 @@ from scar.analysis.source_template_links import _json
 from scar.ir.program.call_edges import CapturedCode
 from scar.ir.record_codec import decode, loads, encode
 from scar.trace.code_snapshot import describe_code
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 
 
 SCHEMA='scar.observed-compilation-matches'

@@ -340,7 +340,7 @@ def _controlled_structured_join(monkeypatch, *, copied, root, delivery):
     The connector, its selected-edge join and consumer aggregation stay real.
     """
     from scar.ir.execution.validity_budget import ValidityBudget
-    from scar.ir.program import await_structured_completion as join
+    from scar.ir.program import await_inventory_originals as join
     from scar.ir.program.operation_results import result_legs
     from scar.ir.program.protocol_connection_flow import ConnectionContext
 

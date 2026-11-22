@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.ir.program import normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as F, normal_graph as T
 
 
 _TYPE_CALL = ('STANDARD_TYPE_CALL_SLOT_ADMISSION', 'CURRENT_CLASS_MRO_SELECTS_DECLARATION',

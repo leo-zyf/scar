@@ -9,7 +9,7 @@ import sys
 import threading
 from types import FunctionType
 
-from scar.compiler.pipeline_runtime import _state,_same_state
+from scar.compiler.pipeline_runtime import _state, _same_state
 from scar.compiler.runtime import SourceMismatch
 from scar.trace.code_snapshot import code_key
 from scar.optimization.resource_solver import semantic_sha256

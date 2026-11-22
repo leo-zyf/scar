@@ -72,7 +72,7 @@ def derive_attribute_accesses(body, *, source_text=None, semantic=None):
           'attribute source text differs from the retained snapshot')
     module = getattr(body, 'module', None)
     if module is None and body.document.get('module') is not None:
-        from scar.ir.program.module_entries import decode_frame_body
+        from scar.ir.program.entry_namespaces import decode_frame_body
         module = decode_frame_body(body.document['module'])
     sources = module if module is not None else metadata
     operations = defaultdict(list)

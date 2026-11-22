@@ -14,11 +14,11 @@ from typing import get_args, get_origin, get_type_hints
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_observations import ObservedSourceScopeKind, ObservedSourceRequestKind
 from scar.ir.program.python_call_targets import PythonTargetKind, PythonCodeScope
-from scar.ir.program.normal_targets import FunctionActivation, ArgumentBinding
+from scar.ir.program.normal_graph import FunctionActivation, ArgumentBinding
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.native_callables import NativeCarrier, NativeFieldState
 from scar.ir.program.source_contexts import OwnerRef, SourceScope, EvaluationRegion
-from scar.ir.program.compiler_topology import TopologyCatalog
+from scar.ir.program.compiler_symbols import TopologyCatalog
 from scar.analysis.compiler_topology import compiler_topology_catalog
 
 

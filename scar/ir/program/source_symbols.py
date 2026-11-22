@@ -1,8 +1,8 @@
 """F3-A official public compiler scope facts; AST correspondence is separate."""
 from dataclasses import dataclass
 
-from .source_bytes import SourceBytesProfile
-from .source_tokens import SourceTokenError, SourceTokenWarning
+from scar.ir.program.source_bytes import SourceBytesProfile
+from scar.ir.program.source_bytes import SourceTokenError, SourceTokenWarning
 
 
 @dataclass(frozen=True, slots=True)

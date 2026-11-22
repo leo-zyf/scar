@@ -20,14 +20,14 @@ from functools import lru_cache
 from types import SimpleNamespace
 from typing import get_type_hints
 
-from scar.ir.program import normal_links as F
-from scar.ir.program import normal_targets as T
+from scar.ir.program import normal_graph as F
+from scar.ir.program import normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program import normal_graph as G
 from scar.ir.record_codec import decode,encode
 from scar.analysis.source_template_links import _json
 from scar.analysis import source_template_batch,source_template_workers,normal_output,source_interface_store,source_content_factors,normal_containers,source_container_delta,source_pack_shapes
-from scar.ir.program import source_protocols as L, content_routes as C
+from scar.ir.program import source_protocols as L, data_materials as C
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.static_query import _Fragments
 from scar.analysis import normal_namespaces
@@ -487,7 +487,7 @@ def _publish(solver,facts,root,report,out,started,max_events,fixed,stars,extra=N
 
 def solve_entry_targets(facts,out,entries,*,max_events=20_000_000,jobs=None,interfaces=None):
     from scar.analysis import normal_entry,normal_facts
-    from scar.ir.program import normal_entry as E
+    from scar.ir.program import normal_graph as E
     from scar.analysis.normal_output import write_table as _stream
     from heapq import nlargest
     started=time.monotonic();store=normal_facts.SourceFactStore(facts);out=Path(out).absolute()

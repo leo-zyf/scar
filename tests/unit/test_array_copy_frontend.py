@@ -5,10 +5,10 @@ from types import SimpleNamespace as NS
 import pytest
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.compiler.array_copy_contract import COPY_ATTRS,COPY_REQUIRED_GUARDS
+from scar.compiler.array_copy_contract import COPY_ATTRS, COPY_REQUIRED_GUARDS
 from scar.compiler.graph_frontend import _GraphLowerer,GraphRegionRejected
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_productions as P,normal_graph as G,normal_links as F
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueType,ValueKind

@@ -9,7 +9,7 @@ from scar.analysis.cpu_import_source_body import (
     SCHEMA as BODY, derive_cpu_import_source_body, verify_cpu_import_source_body,
 )
 from scar.analysis.replay_transaction import detached_replay
-from scar.analysis.source_frontend import _LAYERS, _Run, build_frontend
+from scar.compiler.frontend.python import _LAYERS, _Run, build_frontend
 from scar.analysis.static_program import build_static_program, read_static_program
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.cpu_entry_import_frontier import SCHEMA as FRONTIER, verify_cpu_entry_import_frontier
@@ -131,7 +131,7 @@ def _source_model(root, sources, jobs):
     run = _Run(layers)
     for command, schema in _LAYERS:
         out = layers/command
-        run.stage(command, 'scar.compiler.frontend.stages', [command, '--model', model, '--out', out, '--jobs', jobs],
+        run.worker(command, [command, '--model', model, '--out', out, '--jobs', jobs],
                   out/'result.json', schema, complete_for_declared_units=True)
     return model
 

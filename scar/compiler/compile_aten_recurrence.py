@@ -20,13 +20,13 @@ from scar.compiler.plan_aten_ready import read_ready_selection
 from scar.compiler.tensor_execution import (
     calibrate_tensor_body, compare_native_projects, operation_costs, replay_recurrence_placement, scheduled_tensor_body,
 )
-from scar.compiler.tensor_physical_problem import tensor_physical_problem
-from scar.compiler.tensor_program_graph import recurrence_graph
+from scar.compiler.tensor_planning_inputs import tensor_physical_problem
+from scar.compiler.tensor_planning_inputs import recurrence_graph
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 from scar.optimization.constructive_planner import construct_implementations
-from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
 
 SCHEMA = 'scar.aten-recurrence-delivery'

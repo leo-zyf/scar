@@ -10,7 +10,7 @@ from .structured import ControlEdgeReference
 
 def _caller_cleanup(ctx, source, choices, issues):
     """Current caller completion, without retyping the callee's incoming R."""
-    from scar.ir.program.continuation_ports import continuation_rows, structured_region
+    from scar.ir.program.suspension_interfaces import continuation_rows, structured_region
     from .model import StateVersionValue
     if not structured_region(ctx, source):
         return None

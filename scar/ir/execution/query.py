@@ -184,7 +184,7 @@ class ExecutionIndex:
 
     def observation_root(self, identity):
         """Resolve an explicit Q requirement to its actual value/endpoint."""
-        from .observations import BoundEndpoint, OutputValue
+        from scar.ir.execution.observation_validation import BoundEndpoint, OutputValue
         ctx = self._content_context()
         root = ctx.observation_roots[identity]
         requirement = ctx.observation_requirements[root.requirement]
@@ -198,7 +198,7 @@ class ExecutionIndex:
 
     def call_activation(self, identity):
         """Inspect an explicit call link; declarations never prove identity."""
-        from .call_query import call_activation
+        from scar.ir.execution.call_query import call_activation
         return call_activation(self._ctx, identity)
 
     def drive_execution(self, identity, *, budget=4096):
@@ -231,7 +231,7 @@ class ExecutionIndex:
 
     def call_entries(self, caller_id):
         """This caller's links, retaining a missing dynamic callee as a gap."""
-        from .call_query import call_entries
+        from scar.ir.execution.call_query import call_entries
         return call_entries(self._ctx, caller_id)
 
     def definition_for_use(self, operation, use):
@@ -272,14 +272,14 @@ class ExecutionIndex:
 
     def state_preservation(self, start, end, *, locations, budget=4096):
         """Conditional whole-interval content support, separate from state SSA."""
-        from .state_preservation import state_preservation
+        from scar.ir.execution.state_preservation import state_preservation
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         return deepcopy(state_preservation(self._ctx, start, end, locations, shared=shared))
 
     def request_state_history(self, read, *, budget=4096):
         """Relate original session posts to this READ without assuming truth."""
-        from .request_state_history import request_state_history
+        from scar.ir.execution.session_occupancy_history import request_state_history
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         if type(read) is not OperationOccurrenceID:
@@ -291,7 +291,7 @@ class ExecutionIndex:
 
     def body_state_history(self, read, *, budget=4096):
         """Conditional active-Drive or terminal-history support for this READ."""
-        from .body_state_history import body_state_history
+        from scar.ir.execution.session_occupancy_history import body_state_history
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         if type(read) is not OperationOccurrenceID:
@@ -303,7 +303,7 @@ class ExecutionIndex:
 
     def session_occupancy_history(self, read, *, budget=4096):
         """Original HOLD support for this actual session-occupancy READ."""
-        from .session_occupancy_history import session_occupancy_history
+        from scar.ir.execution.session_occupancy_history import session_occupancy_history
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         if type(read) is not OperationOccurrenceID:
@@ -315,7 +315,7 @@ class ExecutionIndex:
 
     def state_address(self, effect, *, budget=4096):
         """Bind an address declaration to exact original dynamic state ports."""
-        from .state_addresses import state_address
+        from scar.ir.execution.state_preservation import state_address
         from .validity_budget import ValidityBudget
         ValidityBudget(budget)
         if type(effect) not in (AccessRef, InvokeBoundaryStateEffect):

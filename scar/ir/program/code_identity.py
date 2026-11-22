@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from scar.ir.program.call_edges import CapturedCode, CodeCapture
-from scar.ir.program.normal_links import CodeScopeWitness
+from scar.ir.program.normal_graph import CodeScopeWitness
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.source_protocols import SourceBuiltinInvocation, SourceCompilationRequest
 from scar.ir.program.source_exec_roots import ExecRootConnection
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_text import SourceTextCandidate, TextOpenInterpretation
-from scar.ir.program import normal_links as F, normal_targets as T
+from scar.ir.program.source_bytes import SourceTextCandidate, TextOpenInterpretation
+from scar.ir.program import normal_graph as F, normal_graph as T
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.program.python_bindings import SourceCallSite
 import re
@@ -17,7 +17,7 @@ from scar.ir.program.compiler_symbols import CompilerSymbolsMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial
 from scar.ir.program.source_declarations import SourceDeclarationsMaterial
 from scar.ir.program.source_bindings import SourceBindingsMaterial
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_symbols import SourceSymbolsMaterial
 
 

@@ -16,7 +16,7 @@ import time
 
 from scar.analysis.source_template_links import _json
 from scar.analysis import compiler_stage_cache
-from scar.ir.program import source_productions as P, normal_links as F
+from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program import code_identity as CV, code_identity as BV
 from scar.ir.program import code_identity as NV, code_identity as TV
 from scar.ir.program import code_identity as SV
@@ -97,7 +97,7 @@ def build_local_material(payload, recipe, out, *, raw=None, worker=None):
     from scar.ir.program.source_bytes import SourceBytesProfile
     from scar.ir.program.source_roles import SourceRolesMaterial
     from scar.ir.program.code_identity import SymbolSourceParent, SymbolTextInput
-    from scar.ir.program.source_text import TextOpenInterpretation
+    from scar.ir.program.source_bytes import TextOpenInterpretation
     from scar.ir.program.code_identity import EffectiveCompileContext
     from scar.trace.code_snapshot import describe_code
 

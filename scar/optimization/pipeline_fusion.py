@@ -10,7 +10,7 @@ from hashlib import sha256
 import json
 
 from scar.compiler.model import ArrayRegion,Expr,document as leaf_document
-from scar.compiler.pipeline_model import PipelinePlan,document as pipeline_document,validate_pipeline
+from scar.compiler.pipeline_frontend import PipelinePlan, document as pipeline_document, validate_pipeline
 from scar.compiler.validation import validate_region
 from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS
 

@@ -16,7 +16,7 @@ from scar.ir.v2.evidence import EvidenceEdge, EvidenceEndpoint, EvidenceNodeKind
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode
 from scar.trace.dispatch_evidence import PRODUCTION_PROFILE, PROVIDER_REVISION
-from scar.trace.files import open_binary, resolve as resolve_retained_path
+from scar.trace.reader import open_binary, resolve as resolve_retained_path
 from scar.trace.native_import import _canonical_hash, _constant, _float, _pairs
 
 _MARKER = re.compile(r"scar-dispatch:([0-9a-f]{32}):([1-9][0-9]*):([1-9][0-9]*):(span|output)")

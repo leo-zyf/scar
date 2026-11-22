@@ -23,12 +23,7 @@ import warnings
 
 from scar.analysis.source_bytes import decoded_source_bytes
 from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.source_tokens import (
-    ExactOperator, NativeTokenAttribute, NativeTokenParameter, NewlineRewrite,
-    SourceToken, SourceTokenError, SourceTokensInput, SourceTokensMaterial,
-    SourceTokensProfile, SourceTokenWarning, TokenCoverage, TokenExtent,
-    TokenSpan, TokenTextRef, TokenType, TokenView,
-)
+from scar.ir.program.source_bytes import ExactOperator, NativeTokenAttribute, NativeTokenParameter, NewlineRewrite, SourceToken, SourceTokenError, SourceTokensInput, SourceTokensMaterial, SourceTokensProfile, SourceTokenWarning, TokenCoverage, TokenExtent, TokenSpan, TokenTextRef, TokenType, TokenView
 from scar.ir.record_codec import decode, encode
 
 

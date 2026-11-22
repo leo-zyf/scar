@@ -14,10 +14,10 @@ from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.compiler.model import SourceRef
-from scar.ir.program import normal_graph as G, normal_links as F, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as F, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind
 from scar.ir.program.model import ValueKind, ValueType
-from scar.ir.program.normal_targets import Body
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.source_value_routes import SourceBodyValueFlow
 from scar.ir.program.structured import PythonProtocolKind as K
 from scar.ir.record_codec import encode

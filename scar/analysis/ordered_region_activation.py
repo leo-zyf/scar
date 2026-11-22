@@ -16,7 +16,7 @@ from scar.analysis.source_call_view import (SourceFunctionCallProvider,function_
     source_caller_scope)
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import ordered_regions as A, view as V, normal_graph as G, normal_targets as T
+from scar.ir.program import ordered_regions as A, view as V, normal_graph as G, normal_graph as T
 from scar.ir.program.ids import ValueID,ControlPortID
 from scar.ir.program.dependencies import (DependencyPoint as Point,
     DependencyCondition as Condition,DependencyEvidence as Evidence,DependencyEdge as Edge,

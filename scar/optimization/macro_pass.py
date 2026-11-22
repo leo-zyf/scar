@@ -46,7 +46,7 @@ FUSION_PASS = PassSpec('pipeline-full-fusion', 1,
      'prior_lowering_and_native_identity'))
 
 _ENTRY_SOURCES = (
-    'compiler/pipeline_fusion_delivery.py', 'compiler/pipeline_runtime.py',
+    'compiler/pipeline_runtime.py', 'compiler/pipeline_runtime.py',
     'codegen/fused_pipeline.py', 'codegen/cpp.py', 'codegen/kernel_v1.cpp.in',
     'codegen/scar_abi_v1.h', 'trace/code_snapshot.py', 'runtime/array_copy_guard.py',
 )
@@ -75,8 +75,8 @@ def _sources(names):
 
 def _admit(region_document, blueprint):
     from scar.analysis.pipeline_region_pass import read_fusion_region
-    from scar.compiler.pipeline_model import pipeline_from_dict, pipeline_digest
-    from scar.compiler.pipeline_fusion_delivery import verify_fusion_blueprint
+    from scar.compiler.pipeline_frontend import pipeline_from_dict, pipeline_digest
+    from scar.compiler.pipeline_runtime import verify_fusion_blueprint
     from scar.optimization.pipeline_strategy import verify_pipeline_strategy
 
     region, blueprint = _document(region_document), _document(blueprint)

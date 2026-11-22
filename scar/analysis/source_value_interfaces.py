@@ -9,7 +9,7 @@ from collections import defaultdict
 from scar.analysis.source_reference_consumers import argument_points, bind_consumer_interface
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_template_links import _json
-from scar.ir.program import normal_targets as T, binding_ports as R, source_value_interfaces as V
+from scar.ir.program import normal_graph as T, binding_ports as R, source_value_interfaces as V
 from scar.ir.record_codec import encode
 
 

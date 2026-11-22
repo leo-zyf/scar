@@ -22,7 +22,7 @@ from scar.analysis.source_template_links import _json
 from scar.ir.program import code_identity as V, code_identity as NV
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
-from scar.ir.program.compiler_topology import CompilerTopologyInput,CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyInput, CompilerTopologyMaterial
 from scar.ir.record_codec import encode,decode
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import time
 
 from scar.analysis import source_compiler_symbol_variants as S, compiler_contexts as source_compile_interfaces
-from scar.analysis import source_expression_rules,source_statement_rules,source_root_rules,normal_graph,normal_links
+from scar.analysis import source_expression_rules, source_statement_rules as source_statement_rules, source_root_rules, normal_graph, normal_links
 from scar.analysis.frontend_bindings import FrontendBindingView
 from scar.analysis.source_context_view import SourceContextView
 from scar.analysis.source_productions import ProductionSourceIndex
@@ -27,7 +27,7 @@ from scar.analysis.source_template_links import _json
 from scar.ir.program import code_identity as CV, code_identity as BV
 from scar.ir.program import code_identity as NV, code_identity as TV
 from scar.ir.program import code_identity as SV
-from scar.ir.program import source_productions as P,normal_links as F
+from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.source_template_links import SourceMaterialDomain as D
 from scar.ir.program.protocol_signatures import ExceptionABI
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

@@ -11,11 +11,7 @@ from scar.analysis.source_roles import _catalog as _role_catalog
 from scar.analysis.source_symbols import read_source_symbols
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
-from scar.ir.program.compiler_topology import (
-    TopologyFieldRule, TopologyConstructor, TopologyCatalog, BlockOrigin, CompilerBlock,
-    ProjectionStep, SourceScopeProjection, TopologyFrontier, CompilerTopologyInput,
-    CompilerTopologyProfile, CompilerTopologyMaterial,
-)
+from scar.ir.program.compiler_symbols import TopologyFieldRule, TopologyConstructor, TopologyCatalog, BlockOrigin, CompilerBlock, ProjectionStep, SourceScopeProjection, TopologyFrontier, CompilerTopologyInput, CompilerTopologyProfile, CompilerTopologyMaterial
 from scar.ir.record_codec import decode, encode
 
 _VERSION = 'CPYTHON_3_14_7_COMPILER_TOPOLOGY_C3T_V1'
@@ -526,7 +522,7 @@ def _profile(native):
             or runtime.implementation_version[:3] != (3, 14, 7)
             or any(constants.get(name) != value for name, value in expected_types.items())):
         raise ValueError('C3-T requires the reviewed CPython 3.14.7 compiler scope profile/type constants')
-    from scar.ir.program import compiler_topology as topology_ir
+    from scar.ir.program import compiler_symbols as topology_ir
     from scar.analysis import compiler_topology_view as topology_view
     catalog = _catalog()
     implementation = _digest({name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (

@@ -7,10 +7,10 @@ function-name matching establishes a callable target.
 from collections import defaultdict,deque
 from dataclasses import dataclass
 
-from scar.analysis.source_namespace_references import NamespaceReferenceResolver
+from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver
 from scar.analysis.source_reference_slice import source_port
-from scar.compiler.pipeline_frontend import _Callee,_global_functions
-from scar.ir.program import normal_links as F, namespace_routes as N
+from scar.compiler.pipeline_frontend import _Callee, _global_functions
+from scar.ir.program import normal_graph as F, namespace_routes as N
 from scar.ir.record_codec import encode
 
 

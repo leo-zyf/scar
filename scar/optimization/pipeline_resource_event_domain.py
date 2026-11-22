@@ -1,7 +1,7 @@
 """Finite CPU resource scenarios over replayed caller values and arena plans."""
 from itertools import combinations
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.program.target_hardware import CpuCore, CpuExecutor, HardwareThread
 from .hardware import _indexed_resources, _record_evidence, _target_materials
 from .implementation_costs import CostQuery, query_key, resolve_cost

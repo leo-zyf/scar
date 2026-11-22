@@ -8,7 +8,7 @@ Source admission and live guard enforcement belong to the enclosing producer.
 from copy import deepcopy
 import json
 
-from scar.compiler.pipeline_model import document as pipeline_document, pipeline_digest, validate_pipeline
+from scar.compiler.pipeline_frontend import document as pipeline_document, pipeline_digest, validate_pipeline
 from scar.ir.program.caller_pipeline_values import CallerValueProjection
 from scar.ir.program.dependencies import DependencyFrame
 from scar.ir.program.providers import ProviderFactReference

@@ -10,7 +10,7 @@ import re
 
 from scar.analysis.source_reference_slice import DECLARED, ReferenceSlicer
 from scar.analysis.source_relation_snapshot import _local_path
-from scar.ir.program import normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as F, normal_graph as T
 from scar.ir.program import source_value_routes as R
 from scar.ir.program.normal_graph import Port
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference

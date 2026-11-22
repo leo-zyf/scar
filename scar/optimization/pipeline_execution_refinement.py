@@ -3,7 +3,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.record_codec import loads
 from scar.ir.versioned_schedule import (

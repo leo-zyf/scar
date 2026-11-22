@@ -11,8 +11,8 @@ from scar.analysis.source_call_view import SourceFunctionCallProvider,function_i
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_value_flow import project_value_flow
-from scar.ir.program import normal_graph as G,normal_targets as T
-from scar.ir.program import return_ports as R
+from scar.ir.program import normal_graph as G, normal_graph as T
+from scar.ir.program import call_returns as R
 from scar.ir.program.control import LanguageCompletionKind as C
 
 

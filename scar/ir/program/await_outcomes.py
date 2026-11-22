@@ -13,7 +13,7 @@ from .protocol_connections import ProtocolOperationRef
 from .protocols import (ContractResult, DriveResult, HostTerminal, OutcomeAdapterRule,
                         OwnedUse, StaticProtocolGap)
 from .structured import ControlEdgeReference
-from scar.ir.program.continuation_ports import packets as _packets, structured_region
+from scar.ir.program.suspension_interfaces import packets as _packets, structured_region
 
 
 COMPLETION_RULES = (OutcomeAdapterRule.GENERATOR_RETURN_TO_STOP_ITERATION,
@@ -209,7 +209,7 @@ def outcome_connections(ctx, original_inventory, *, derive=True):
                     (({'source': own, 'definition': None, 'exception_binding': None},), ()) if own is not None
                     else ((), ('await_conversion_payload_unresolved',)))
                 if own is not None and structured_region(ctx, own):
-                    from .await_structured_completion import structured_completion
+                    from scar.ir.program.await_inventory_originals import structured_completion
                     joined = structured_completion(ctx, own, packets, leg_choices,
                         parents, advance, input_binding, own_rows, role, _caller_consumers, issues)
                     leg_gaps = [*packet_gaps, *joined['gaps']]
@@ -299,7 +299,7 @@ def outcome_connections(ctx, original_inventory, *, derive=True):
                 local.extend(leg_gaps)
         continued_raise = None
         if not producer_ids and kind == 'EXCEPTION' and structured_region(ctx, payload):
-            from .await_structured_completion import structured_completion
+            from scar.ir.program.await_inventory_originals import structured_completion
             packets, packet_gaps = _packets(ctx, payload, choices)
             continued_raise = structured_completion(ctx, payload, packets, choices,
                 parents, advance, None, (), 'EXCEPTION', _caller_consumers, issues)

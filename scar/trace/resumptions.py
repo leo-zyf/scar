@@ -14,7 +14,7 @@ import threading
 from scar.ir.program.call_edges import InvocationKey, CapturedSite
 from scar.ir.record_codec import decode
 from scar.trace.code_snapshot import site
-from scar.trace.files import open_binary
+from scar.trace.reader import open_binary
 
 SCHEMA = 'scar.resumption-boundaries'
 KINDS = ('PY_START', 'PY_RESUME', 'PY_THROW', 'PY_YIELD', 'PY_RETURN', 'PY_UNWIND')

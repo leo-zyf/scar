@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import asdict
 
 from scar.compiler.model import ArrayRegion, ExecutionPlan
-from scar.compiler.pipeline_model import document as pipeline_document, validate_pipeline
+from scar.compiler.pipeline_frontend import document as pipeline_document, validate_pipeline
 from scar.compiler.pipeline_loop_frontend import CompositeInvariantLoopProof
 from scar.compiler.validation import validate_region, validate_plan
 from scar.ir.execution_recipe import artifact_reference

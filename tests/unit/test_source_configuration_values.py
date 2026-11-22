@@ -7,7 +7,7 @@ import pytest
 from scar.ir.literals import PythonLiteral
 from scar.ir.program.configuration import ConfigurationStep, ConfigurationStepKind
 from scar.ir.program.configuration import ConfigurationOverride, OverrideAction, OverrideExpression, OverrideExpressionKind
-from scar.ir.program.normal_links import CodeScopeRef,CodeScopeWitness
+from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness
 from scar.ir.program.source_frame_bindings import StaticInputPort
 from scar.ir.program.source_productions import ProductionRegionID,ProductionPurpose
 from scar.ir.program.source_template_links import SourceTemplateKey

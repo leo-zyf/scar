@@ -12,7 +12,7 @@ from itertools import product
 from scar.analysis.constants_v2 import ConstantStatus
 from scar.analysis.source_builtin_values import BuiltinValueEvaluator
 from scar.ir.literals import PythonLiteral, _preflight_literal, literal_builtin_type
-from scar.ir.program import normal_links as F, normal_targets as T, scalar_values as V
+from scar.ir.program import normal_graph as F, normal_graph as T, scalar_values as V
 
 
 @dataclass(slots=True)

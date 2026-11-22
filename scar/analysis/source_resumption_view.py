@@ -64,7 +64,7 @@ class ResumptionStore:
                 r['records'],r['source_body_interfaces'],r['source_port_events'],r['frontier_count'],r['source_port_counts'],
                 r['activations'],r['process_id']):
             raise ValueError('source-resumption coverage denominator differs')
-        from scar.trace.files import resolve
+        from scar.trace.reader import resolve
         paths += [resolve(row['uri']) for row in self.rows['capture']['legacy_inputs']]
         paths.append(resolve(self.rows['capture']['events']['uri']))
         paths += list(index.codes._guard)

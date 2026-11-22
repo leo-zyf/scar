@@ -24,7 +24,7 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.normal_output import write_table
 from scar.ir.program import call_inputs as D, function_sites as R
-from scar.ir.program import namespace_routes as N, source_productions as P, normal_targets as T
+from scar.ir.program import namespace_routes as N, source_productions as P, normal_graph as T
 from scar.ir.record_codec import decode, encode
 
 

@@ -265,7 +265,7 @@ def _verify_model(path):
 
 
 def predict_fused_components_v3(domain,candidate_id,profile,out):
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand
     domain=_domain(domain);demand=stateful_cpu_demand(domain,candidate_id);reference,model=_verify_model(profile)
     _require(demand['resource_context']==model['resource_context'],'exact resource/compiler/runtime context differs')
@@ -321,7 +321,7 @@ def main(argv=None):
     if a.command=='project':
         r=predict_fused_components_v3(a.domain,a.candidate_id,a.profile,a.out)
         print(json.dumps(dict(components=len(r['components']),unsupported=r['unsupported_components']),sort_keys=True));return 0
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context
     r=calibrate_fused_cpu_v3(stateful_resource_context(_domain(a.domain),a.candidate_id),a.out,
         repetitions=a.repetitions,warmup=a.warmup,batch=a.batch)

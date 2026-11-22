@@ -10,7 +10,7 @@ from dataclasses import asdict
 import os
 from pathlib import Path
 
-from scar.compiler.pipeline_model import document,pipeline_digest,validate_pipeline
+from scar.compiler.pipeline_frontend import document, pipeline_digest, validate_pipeline
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import encode,loads

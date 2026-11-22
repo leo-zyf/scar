@@ -41,7 +41,7 @@ class ConnectionContext(ProtocolFlow):
         self._connection_reports = {}
         self._connection_guard_entries = {}
         self._connection_depth = 0
-        from .call_returns import CallReturns
+        from scar.ir.program.call_returns import CallReturns
         self._returns = CallReturns(self)
         self.preparation["prepared_program_index_reused"] = True
 

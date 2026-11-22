@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from scar.analysis import source_execution as E
 from scar.analysis.source_exec_roots import exec_root_connections
-from scar.ir.program import source_exec_roots as X,source_productions as P,normal_graph as G
+from scar.ir.program import source_exec_roots as X, source_productions as P, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as K
 from scar.ir.effects import Knowledge
 from scar.ir.record_codec import encode,decode

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from scar.ir.effects import Knowledge
 from scar.ir.program.ids import ProviderID
-from scar.ir.program.normal_links import CodeScopeWitness
-from scar.ir.program.normal_targets import GlobalPort, Body, FunctionConnection
+from scar.ir.program.normal_graph import CodeScopeWitness
+from scar.ir.program.normal_graph import GlobalPort, Body, FunctionConnection
 from scar.ir.program.providers import ProviderFactReference, ProviderArtifact
 from scar.ir.program.call_edges import (
     CallRecordAnchor,

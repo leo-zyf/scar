@@ -13,7 +13,7 @@ def test_module_assertion_message_pair_and_legacy_prefix(tmp_path, monkeypatch):
     import scar.analysis.source_module_lowering as lowering
     from scar.analysis.source_module_validation import require_valid_structured_module_program
     from scar.ir.program.model import ExitKind, TerminatorKind
-    from scar.ir.program.module_entries import FrameBodyProfile
+    from scar.ir.program.entry_namespaces import FrameBodyProfile
     from scar.ir.program.structured import PythonProtocolKind as K
 
     marker = tmp_path / 'target-was-executed'

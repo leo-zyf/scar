@@ -6,9 +6,8 @@ from test_cpu_hardware_placement import hardware
 from test_stateful_recipe import setup_stateful_recipe
 from scar.analysis.target_graph import build_target_graph
 from scar.ir.execution_recipe import read_artifact
-from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain,plan_stateful_cpu_choices
-from scar.optimization.stateful_cpu_model import (stateful_cpu_demand,stateful_resource_context,
-    predict_stateful_cpu_model)
+from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain, plan_stateful_cpu_choices
+from scar.optimization.stateful_cpu_model import stateful_cpu_demand, stateful_resource_context, predict_stateful_cpu_model
 
 
 def test_resource_reuse_complete_scope_and_missing_component_frontier(hardware,tmp_path):

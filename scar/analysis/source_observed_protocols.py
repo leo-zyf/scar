@@ -11,9 +11,9 @@ import dis
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program.normal_graph import SourceTemplateKey
-from scar.ir.program.normal_links import CodeScopeWitness
+from scar.ir.program.normal_graph import CodeScopeWitness
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.structured import PythonProtocolKind as K
 

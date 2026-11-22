@@ -17,12 +17,12 @@ from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.static_query import _Fragments
 from scar.analysis.source_observed_codes import replay_catalog_code
-from scar.ir.program import source_productions as P, normal_targets as T
+from scar.ir.program import source_productions as P, normal_graph as T
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_observations import ObservedSourceCallsite, ObservedSourceCallsiteFrontier, ObservedSourceProtocolCallsite
 from scar.ir.program.ids import ProviderID
 from scar.ir.program.call_edges import CodeCapture
-from scar.ir.program.normal_links import CodeScopeWitness
+from scar.ir.program.normal_graph import CodeScopeWitness
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.structured import PythonProtocolKind
 from scar.ir.record_codec import decode,encode

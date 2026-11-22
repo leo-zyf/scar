@@ -21,7 +21,7 @@ from scar.analysis.source_reference_slice import ReferenceSlicer
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static_query import _Fragments
-from scar.ir.program import code_identity as C, source_protocols as E, source_text as S
+from scar.ir.program import code_identity as C, source_protocols as E, source_bytes as S
 from scar.ir.program import code_identity as CV, code_identity as R
 from scar.ir.program.call_edges import CapturedCode, CodeCapture
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference

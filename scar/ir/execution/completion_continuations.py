@@ -12,7 +12,7 @@ from scar.ir.program.model import ProtocolValue, ReferenceValue, StateVersionVal
 from scar.ir.program.protocols import HostTerminal, OwnedUse
 
 from .await_links import _flags
-from .await_outcome_evidence import pair, status
+from scar.ir.execution.await_outcomes import pair, status
 from .common import Unresolved
 from .coordinates import ResumeIngress
 from .pending_payloads import projection

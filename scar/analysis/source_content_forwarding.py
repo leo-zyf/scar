@@ -15,8 +15,8 @@ from scar.analysis.source_name_access_anchors import anchor_name_accesses
 from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_template_links import _json
-from scar.ir.program import normal_graph as G,normal_targets as T,source_productions as P
-from scar.ir.program import content_routes as C, content_routes as F
+from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
+from scar.ir.program import data_materials as C, data_materials as F
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.structured import PythonProtocolKind as Protocol
 from scar.ir.program.source_value_routes import ReferenceOriginKind

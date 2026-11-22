@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scar.compiler.loop_model import loop_digest, read_loop, validate_loop
 from scar.compiler.model import document as plan_document
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.record_codec import loads
 from .pipeline_memory import _shape, plan_pipeline_memory
 from .pipeline_strategy import _fusion, _shape_replay

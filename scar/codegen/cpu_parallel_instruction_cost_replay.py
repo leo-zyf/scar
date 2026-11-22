@@ -23,8 +23,8 @@ def _replay_analysis(assembly,analysis,tool,**kwargs):
 
 def verify_parallel_instruction_projection(domain,candidate_id,projection):
     """Return exact admitted component rows after static source/tool replay."""
-    from scar.optimization.stateful_cpu_choices import _domain
-    from scar.optimization.stateful_cpu_model import stateful_cpu_demand,component_key
+    from scar.optimization.stateful_cpu_model import _domain
+    from scar.optimization.stateful_cpu_model import stateful_cpu_demand, component_key
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.compiler.model import CpuPlacement
     from scar.optimization.stateful_schedule import plan_stateful_region

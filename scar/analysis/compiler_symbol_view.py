@@ -3,7 +3,7 @@ from hashlib import sha256
 import json
 
 from scar.ir.program.compiler_symbols import CompilerName, CompilerSymbolsMaterial
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_declarations import SourceDeclarationsMaterial
 from scar.ir.program.source_symbols import SourceSymbolsMaterial
 from scar.ir.record_codec import encode

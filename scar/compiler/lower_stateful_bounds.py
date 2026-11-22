@@ -18,7 +18,7 @@ def _need(value,message):
 
 def lower_stateful_bounds(plan_path,out,*,plan_only=False):
     from scar.compiler.plan_stateful_bounds import verify_plan_stateful_bounds
-    from scar.optimization.stateful_cpu_choices import _domain,_cost,stateful_cpu_cost_context,_family
+    from scar.optimization.stateful_cpu_model import _domain, _cost, stateful_cpu_cost_context, _family
     from scar.compiler.stateful_model import stateful_from_dict
     from scar.compiler.model import CpuPlacement
     from scar.optimization.stateful_schedule import plan_stateful_region

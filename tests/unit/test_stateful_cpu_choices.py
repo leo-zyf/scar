@@ -7,8 +7,7 @@ import pytest
 from test_cpu_hardware_placement import hardware
 from test_stateful_recipe import setup_stateful_recipe
 from scar.ir.execution_recipe import artifact_reference
-from scar.optimization.stateful_cpu_choices import (build_stateful_cpu_domain,
-    stateful_cpu_cost_context,plan_stateful_cpu_choices,verify_stateful_cpu_choices,selected_stateful_plan)
+from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain, stateful_cpu_cost_context, plan_stateful_cpu_choices, verify_stateful_cpu_choices, selected_stateful_plan
 
 
 def test_every_worker_count_and_missing_noop_cost_prevent_unjustified_selection(hardware,tmp_path,monkeypatch):

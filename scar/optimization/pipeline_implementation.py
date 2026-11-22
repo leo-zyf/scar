@@ -11,7 +11,7 @@ import shlex
 import shutil
 
 from scar.compiler.model import document as leaf_document
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.implementation_plan import (CostEstimate, ImplementationOption,
     PlanningOperation, PlanningProblem, PlanningResource, digest, validate_problem)
 from scar.ir.program.providers import ProviderArtifact

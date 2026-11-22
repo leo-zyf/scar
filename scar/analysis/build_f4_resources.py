@@ -110,7 +110,7 @@ class LazyF4Resources:
     @staticmethod
     def _pins():
         from scar.analysis import build_resources, source_effects, source_resource_graph, target_graph
-        from scar.analysis import build_target_resources, source_call_view, source_namespace_interfaces
+        from scar.analysis import build_target_resources, source_call_view, source_namespace_interfaces as source_namespace_interfaces
         paths = {__file__, *(module.__file__ for module in (build_resources, source_effects,
             source_resource_graph, target_graph, build_target_resources, source_call_view,
             source_namespace_interfaces, R))}

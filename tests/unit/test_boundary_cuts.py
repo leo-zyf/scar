@@ -64,7 +64,7 @@ def test_exclusive_shared_cut_samples_partition_calls_and_reject_invalid_partiti
 def test_boundary_projection_only_replaces_complete_unknown_groups_and_preserves_known_pool(
         original_and_envelope, inputs, tmp_path, monkeypatch):
     from scar.compiler import calibrate_boundary_cuts as calibration
-    from scar.optimization import stateful_cpu_model
+    from scar.optimization import stateful_cpu_model as stateful_cpu_model
     _, envelope = original_and_envelope
     schedule = attach_task_time(envelope)
     _, target, _, _, context = inputs

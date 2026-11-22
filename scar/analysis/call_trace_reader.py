@@ -19,7 +19,7 @@ from scar.ir.program.call_edges import (
     FrameEntry, FrameExit, InvocationKey, NamedReference,
 )
 from scar.ir.record_codec import decode
-from scar.trace.files import open_binary
+from scar.trace.reader import open_binary
 
 
 _ENTER_FIELDS = {

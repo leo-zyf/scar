@@ -31,7 +31,7 @@ def _pins():
     root = Path(__file__).resolve().parents[1]
     files = ('compiler/model_pipeline_cost.py', 'compiler/macro_pipeline.py',
         'compiler/project_pipeline_temporal.py', 'analysis/pipeline_region_pass.py',
-        'compiler/pipeline_fusion_delivery.py', 'optimization/macro_pass.py',
+        'compiler/pipeline_runtime.py', 'optimization/macro_pass.py',
         'optimization/pipeline_demand.py', 'optimization/demand.py',
         'optimization/pipeline_forward_cost.py', 'optimization/cost_model.py',
         'optimization/deployment_cost.py', 'compiler/semantic_revision.py',

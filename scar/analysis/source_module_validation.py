@@ -4,8 +4,7 @@ from __future__ import annotations
 import ast
 from hashlib import sha256
 
-from scar.ir.program.module_entries import (ModuleBodyOverlay, ModuleBodyStatus, ModuleUnitSource,
-    ModuleProtocolKind, ModuleEntryProfile, encode_module_overlay, decode_module_overlay)
+from scar.ir.program.entry_namespaces import ModuleBodyOverlay, ModuleBodyStatus, ModuleUnitSource, ModuleProtocolKind, ModuleEntryProfile, encode_module_overlay, decode_module_overlay
 from scar.ir.program.model import (Behavior, BlockArgument, CompletionResult, ExitKind,
     LiteralOrigin, OperationResult, ReferenceValue, StateVersionValue, TerminatorKind, ValueKind, ValueType)
 from scar.ir.program.source import LoweringMetadata
@@ -43,7 +42,7 @@ def _normal_statement_path(expansion, blocks, operations):
 
 def _mapping_exception_holds(block_id, operations, protocols, blocks, use_links):
     """Read actual pre-handler releases/frame retention on the paired path."""
-    from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+    from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     cursor=(block_id,0);seen=set();released=[]
     while cursor not in seen:
         seen.add(cursor);block=blocks[cursor[0]]
@@ -71,7 +70,7 @@ def _mapping_exception_holds(block_id, operations, protocols, blocks, use_links)
 def validate_mapping_import_statement(node,expansion,*,overlay,code_evidence,invoke,protocols,blocks,operations,values,instructions):
     """Replay original import receiver stack and normal/exception world ports."""
     from scar.analysis.source_module_lowering import mapping_import_plan
-    from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+    from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     P=PythonProtocolKind
     plans=mapping_import_plan(node,code_evidence.code,instructions=instructions)
     source=expansion.source
@@ -430,7 +429,7 @@ def require_valid_module_program(result, *, source_texts, code_evidence=None, ma
 
 def module_validation_report(result, *, source_texts, code_evidence=None, max_operations=10000):
     try:
-        from scar.ir.program.module_entries import ModulePrefixOverlay,StructuredFrameBodyOverlay
+        from scar.ir.program.entry_namespaces import ModulePrefixOverlay, StructuredFrameBodyOverlay
         checker = (require_valid_structured_module_program if isinstance(result.module,StructuredFrameBodyOverlay)
                    else require_valid_module_prefix if type(result.module) is ModulePrefixOverlay else require_valid_module_program)
         checker(result, source_texts=source_texts, code_evidence=code_evidence,
@@ -438,7 +437,7 @@ def module_validation_report(result, *, source_texts, code_evidence=None, max_op
     except (ValueError,TypeError,KeyError,AttributeError,OSError,SyntaxError,RecursionError) as error:
         return {'valid':False,'errors':[str(error)]}
     from scar.analysis.source_language import SourceCodeEvidence
-    from scar.ir.program.module_entries import StaticModuleEntryDeclaration
+    from scar.ir.program.entry_namespaces import StaticModuleEntryDeclaration
     return {'valid':True,'errors':[], 'verification':'STRUCTURE',
         'compiler_root_witness_replayed':type(code_evidence) is SourceCodeEvidence,
         'static_source_compilation_replayed':type(result.module.declaration) is StaticModuleEntryDeclaration,
@@ -454,8 +453,7 @@ def require_valid_module_prefix(result,*,source_texts,code_evidence=None,max_ope
         require_root_evidence,first_import_selection)
     from scar.analysis.source_semantics_v2 import validate_source_semantics
     from scar.analysis.control_flow_v2 import validate_source_control_flow
-    from scar.ir.program.module_entries import (ModulePrefixOverlay,ModuleBodyExpansionProfile,
-        ModulePrefixProtocolKind as K,ModuleProtocolKind,encode_module_prefix,decode_module_prefix)
+    from scar.ir.program.entry_namespaces import ModulePrefixOverlay, ModuleBodyExpansionProfile, ModulePrefixProtocolKind as K, ModuleProtocolKind, encode_module_prefix, decode_module_prefix
     from scar.ir.program.validation import require_valid
     from scar.ir.program.state_addresses import (InvokeStateOperand,ReferenceOwner,NamespaceKey,AddressCoverage)
     overlay=result.module
@@ -653,9 +651,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
         _mapping_source_instructions,mapping_global_declaration,mapping_literal_bool_if_plan)
     from scar.analysis.source_semantics_v2 import validate_source_semantics
     from scar.analysis.control_flow_v2 import validate_source_control_flow
-    from scar.ir.program.module_entries import (StructuredFrameBodyOverlay,FrameBodyProfile,
-        FrameBodyProtocolKind as K,StatementSequenceField as F,FrameCompletionProfile,
-        NamespacePolicy,encode_frame_body,decode_frame_body)
+    from scar.ir.program.entry_namespaces import StructuredFrameBodyOverlay, FrameBodyProfile, FrameBodyProtocolKind as K, StatementSequenceField as F, FrameCompletionProfile, NamespacePolicy, encode_frame_body, decode_frame_body
     from scar.ir.program.source_subjects import MappingFramePorts,FrameKind
     from scar.ir.program.control import ControlScopeKind
     from scar.ir.program.state_addresses import (InvokeStateOperand,ReferenceOwner,NamespaceKey,AddressCoverage)
@@ -686,7 +682,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
     context=PreparedSource(Path(unit.snapshot.path),Path(unit.namespace_root),text,result.semantic,result.semantics,result.control,
         ast.parse(text,filename=unit.snapshot.path),{})
     _need(module_unit(context)==unit and module_source_census(context)==overlay.census,'SP8 original MODULE census differs')
-    from scar.ir.program.module_entries import StaticModuleEntryDeclaration
+    from scar.ir.program.entry_namespaces import StaticModuleEntryDeclaration
     from scar.ir.program.source_subjects import SourceCompilationFrameRoot, FrameRoot
     static_root = type(overlay.declaration) is StaticModuleEntryDeclaration
     _need(not extended or static_root,'mapping BODY requires source-compilation provenance')
@@ -797,7 +793,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
             (expression_nodes if isinstance(node,ast.expr) else nodes)[reference]=node
     annotation_plans={}
     if module_annotations:
-        from scar.analysis.source_module_annotation_lowering import module_annotation_plan
+        from scar.analysis.source_module_annotations import module_annotation_plan
         for expansion in overlay.expansions:
             if expansion.compiler_annotation is None:continue
             node=nodes.get(expansion.source)
@@ -1015,7 +1011,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                      if nodes[statement].value is node and plan.empty_dict is not None]
             if matches:
                 _need(len(matches)==1,'annotation dictionary has conflicting compiler plans')
-                from scar.analysis.source_module_annotation_validation import empty_dict_result
+                from scar.analysis.source_module_annotations import empty_dict_result
                 return empty_dict_result(node,matches[0],source_reference=lambda n:_module_statement_ref(context,n),
                     overlay=overlay,protocols=protocols,operations=operations,invoke=invoke,
                     ref_type=ref_type,state_type=state_type)
@@ -1071,7 +1067,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                 source_reference=lambda n:_module_statement_ref(context,n),exception_holds=_mapping_exception_holds,
                 ref_type=ref_type,state_type=state_type)
         elif isinstance(node,ast.AnnAssign):
-            from scar.analysis.source_module_annotation_validation import validate_module_annotation
+            from scar.analysis.source_module_annotations import validate_module_annotation
             validate_module_annotation(node,expansions[source],annotation_plans[source],
                 overlay=overlay,blocks=blocks,operations=operations,values=values,protocols=protocols,
                 expression_value=expression_value,invoke=invoke,source_reference=lambda n:_module_statement_ref(context,n),
@@ -1214,7 +1210,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
 
 def require_valid_module_propagation(result,*,context,code_evidence):
     """Source C: derive provenance and cleanup order from canonical endpoints."""
-    from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+    from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     from scar.ir.program.control import (ProtocolValueKind as P,ControlScopeKind as S,LanguageCompletionKind as L,
         PendingDispatchTerminator)
     from scar.ir.program.cleanup import CleanupRouteTerminator

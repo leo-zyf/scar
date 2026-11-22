@@ -862,7 +862,7 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
         else:
             raise ValueError("opaque protocol has no implemented structured control interface")
     if environment_profile:
-        from scar.analysis.source_environment_validation import validate_environment_body
+        from scar.analysis.source_environment_layout import validate_environment_body
         validate_environment_body(model, graph, interface, metadata, semantic, language=language)
         from scar.analysis.source_statement_lowering import validate_statement_protocols
         validate_statement_protocols(model, graph, interface, metadata, semantic, language=language)

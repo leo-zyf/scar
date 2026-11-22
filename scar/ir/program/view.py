@@ -9,7 +9,7 @@ from enum import Enum
 from .dependencies import (DependencyPoint, DependencyEdge, NodeID, DependencyKind,
     DependencyMeaning, DependencyStrength)
 from .providers import ProviderArtifact
-from .normal_graph import Port, Edge
+from scar.ir.program.normal_graph import Port, Edge
 from .source_productions import ProductionRegionID, ProductionStepID
 from .source_template_links import SourceTemplateKey
 from .signature_patterns import GroundType

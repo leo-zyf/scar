@@ -1,10 +1,10 @@
 """Class ports."""
 
 from dataclasses import dataclass
-from scar.ir.program.normal_links import CodeScopeRef
-from scar.ir.program.normal_targets import GlobalPort, ConstructionLink, FunctionConnection
+from scar.ir.program.normal_graph import CodeScopeRef
+from scar.ir.program.normal_graph import GlobalPort, ConstructionLink, FunctionConnection
 from scar.ir.program.providers import ProviderFactReference
-from scar.ir.program.content_routes import AddressPath
+from scar.ir.program.data_materials import AddressPath
 from scar.ir.program.namespace_routes import NamespaceReferenceSlice
 from scar.ir.program.declared_contexts import DeclaredContext
 from scar.ir.program.source_value_routes import SourceBodyCall

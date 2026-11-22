@@ -12,7 +12,7 @@ import pytest
 
 from scar.analysis.call_inputs import FunctionDefaultStateProvider
 from scar.analysis.source_function_connections import Invocation,connect
-from scar.ir.program import normal_graph as G,normal_targets as T,source_productions as P,model as M
+from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P, model as M
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint,DependencyFrame,context_push,context_pop,
     context_frames,context_is_closed,OpenDependencyContext,DependencyKind as K,
     DependencyMeaning as Meaning,DependencyStrength as Strength)

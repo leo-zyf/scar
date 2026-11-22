@@ -5,7 +5,7 @@ from enum import Enum
 from scar.ir.program.dependencies import DependencyPoint
 from scar.ir.program.ids import OperationID, NativeBoundaryID, ProviderID
 from scar.ir.program.providers import ProviderFactReference
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.python_bindings import NativeSchemaReference
 from scar.ir.program.native_contracts import DeclaredDispatchCandidate, TypeProjection
 from scar.ir.program.resources import ResourceDefinition

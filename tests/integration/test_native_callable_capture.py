@@ -19,7 +19,7 @@ def test_native_callable_capture_replay_and_shared_graph(tmp_path):
     from scar.ir.program.native_callables import NativeCarrier as Carrier, NativeFieldState as State
     from scar.ir.program.dependencies import DependencyKind as K, DependencyMeaning as M, DependencyStrength as Strength
     from scar.ir.program.observed_dependencies import ObservedPortPhase as Phase
-    from scar.trace.files import resolve as resolve_trace_file
+    from scar.trace.reader import resolve as resolve_trace_file
 
     repository = Path(__file__).resolve().parents[2]
     project = tmp_path / 'source'

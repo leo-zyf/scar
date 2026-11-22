@@ -6,12 +6,11 @@ import pytest
 
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.compiler.model import SourceRef,ArrayRegion,Expr
-from scar.compiler.pipeline_model import (CalleeGuard,RegionCall,compose_pipeline,document,pipeline_from_dict,
-    prepare_pipeline_leaf,pipeline_digest)
-from scar.compiler.pipeline_frontend import _PipelineLowerer,_global_functions
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline, document, pipeline_from_dict, prepare_pipeline_leaf, pipeline_digest
+from scar.compiler.pipeline_frontend import _PipelineLowerer, _global_functions
 from scar.compiler.graph_frontend import GraphRegionRejected
 from scar.optimization.optimizer import optimize_region
-from scar.ir.program import source_productions as P,normal_graph as G,normal_links as F
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueType,ValueKind

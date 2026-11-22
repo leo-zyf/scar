@@ -16,7 +16,7 @@ def prepare_stateful_candidate(program,domain,out,*,cpu_threads=1):
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.compiler.model import CpuPlacement
     from scar.ir.execution_recipe import artifact_reference,read_artifact
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_schedule import plan_stateful_region
     from scar.optimization.stateful_recipe import make_stateful_recipe
     from scar.codegen.recipe import build_recipe
@@ -71,7 +71,7 @@ def check_observed_specialization(value, *, _session=None):
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.resource_solver import semantic_sha256
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_recipe import unpack_stateful_recipe
 
     if not isinstance(value,dict):

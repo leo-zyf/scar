@@ -3,7 +3,7 @@
 Static frames do not identify occurrences. Each descent needs this caller's
 CallActivation, and each return needs that association's actual completion.
 """
-from .await_outcome_evidence import locate, pair, target, choice
+from scar.ir.execution.await_outcomes import locate, pair, target, choice
 from .resumable_flow import value_for_use
 
 

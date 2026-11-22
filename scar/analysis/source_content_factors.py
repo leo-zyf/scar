@@ -11,8 +11,8 @@ from time import monotonic
 
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_template_links import _json
-from scar.ir.program import normal_targets as T, source_productions as P
-from scar.ir.program.content_routes import ContentFactor
+from scar.ir.program import normal_graph as T, source_productions as P
+from scar.ir.program.data_materials import ContentFactor
 from scar.ir.record_codec import _encode, _record_tags
 
 

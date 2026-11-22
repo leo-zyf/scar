@@ -5,7 +5,7 @@ from math import prod
 from pathlib import PurePosixPath
 
 from scar.ir.v2.schemas import canonical_json
-from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
 
 SCHEMA = 'scar.aten-source-entry-binding'

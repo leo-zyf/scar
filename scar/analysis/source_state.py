@@ -18,7 +18,7 @@ from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_consumer_parents import _stamp
 from scar.ir.program import state_ports as S, source_productions as P
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import view as V, model as M
 from scar.ir.program.source_bindings import EnvironmentInterface
 from scar.ir.program.name_flow import NameDefinitionKind as D
@@ -230,7 +230,7 @@ class SourceStateProvider:
             kind = S.BindingAccessKind.HANDLE if ins.action is P.ClassProtocolActionKind.CELL_REFERENCE else S.BindingAccessKind.WRITE
             payload = context.result(step) if kind is S.BindingAccessKind.HANDLE else context.value(step.arguments[1])
         else:
-            from scar.analysis.source_implicit_namespaces import identify_implicit_namespace
+            from scar.analysis.source_namespace_interfaces import identify_implicit_namespace
             from scar.analysis.annotation_state import identify_annotation_namespace
             implicit = identify_annotation_namespace(self.bindings,self.declarations,
                 self.root_scopes,self.class_scopes,context,step)

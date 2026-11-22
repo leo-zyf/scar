@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from scar.compiler.model import ArrayRegion,Expr,SourceRef
-from scar.compiler.pipeline_model import CalleeGuard,RegionCall,compose_pipeline
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
 from scar.ir.versioned_schedule import validate_versioned_schedule
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.pipeline_memory import plan_pipeline_memory

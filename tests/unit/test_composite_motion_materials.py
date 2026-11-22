@@ -7,7 +7,7 @@ import pytest
 
 from scar.compiler.model import ArrayRegion,Expr,SourceRef
 from scar.compiler import pipeline_loop_frontend as frontend
-from scar.compiler.pipeline_model import CalleeGuard,RegionCall,compose_pipeline,prepare_pipeline_leaf
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline, prepare_pipeline_leaf
 from scar.optimization.optimizer import optimize_region
 
 

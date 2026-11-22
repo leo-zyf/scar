@@ -215,7 +215,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                         raise
                 if entry["kind"] == "MODULE":
                     from scar.analysis.source_module_lowering import module_unit, lower_module_entry
-                    from scar.ir.program.module_entries import FrameBodyProfile
+                    from scar.ir.program.entry_namespaces import FrameBodyProfile
                     unit_source = module_unit(prepared)
                     if unit_source.initializer != definition:
                         raise ValueError("module entry differs from the original initializer")
@@ -224,7 +224,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                     lowered = lower_module_entry(prepared, unit_source, code_evidence=evidence,
                         max_operations=max_operations, profile=FrameBodyProfile(plan["selected_profile"]))
                 elif entry["kind"] == "CLASS":
-                    from scar.analysis.source_class_body_lowering import lower_class_suite
+                    from scar.analysis.source_class_body import lower_class_suite
                     reference=decode(SourceReference,entry["source_ref"])
                     evidence=compiled.for_definition(definition,reference)
                     payload["static_compilation"] = evidence.to_dict()
@@ -260,7 +260,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                         row["class_frontiers"]=encode(class_body.frontiers)
                         payload["class_frontiers"]=row["class_frontiers"]
                     if module_body is not None:
-                        from scar.ir.program.module_entries import encode_frame_body
+                        from scar.ir.program.entry_namespaces import encode_frame_body
                         payload["module"] = encode_frame_body(module_body)
                         row["module_frontiers"] = encode(module_body.frontiers)
                         payload["module_frontiers"] = row["module_frontiers"]

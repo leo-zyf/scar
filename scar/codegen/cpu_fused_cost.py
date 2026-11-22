@@ -363,7 +363,7 @@ def predict_fused_components(domain,candidate_id,profile,out):
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand
     from scar.optimization.resource_solver import semantic_sha256
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     reference=artifact_reference(profile,'scar.cpu-fused-cost-model');model=read_artifact(reference)
     domain=_domain(domain);demand=stateful_cpu_demand(domain,candidate_id)
     _require(model['schema_version']==2 and model['resource_context']==demand['resource_context'], 'fused cost resource/compiler/runtime context differs')

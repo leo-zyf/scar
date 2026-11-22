@@ -4,7 +4,7 @@ Association projections are semantic declarations, never ordinary copy edges.
 Every query uses its caller's ConnectionContext and accounting budget.
 """
 from .admission import admission_routes, predicate_shape_errors
-from .copy_flow import required_choices, selected
+from scar.ir.program.data_materials import required_choices, selected
 from .drivers import BodyResume, BodyStart, DriverReceiverKind, RawRequestKind
 from .model import (CompletionResult, DataValue, ExitKind, InvokeLiteralResult,
                     OperationResult, StateVersionValue, TerminatorKind)

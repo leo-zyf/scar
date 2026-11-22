@@ -20,10 +20,7 @@ from scar.ir.execution.coverage import RegionRef
 from scar.ir.execution.ids import (
     ContentReadID, DenotationID, ObservationRequirementID, ObservationRootID, WorkEvidenceBindingID,
 )
-from scar.ir.execution.observations import (
-    BoundEndpoint, ContractRef, ExternalEndpoint, ObservationRequirement, ObservationRoot,
-    OutputValue, RequiredEndpoint, RequiredOutput,
-)
+from scar.ir.execution.observation_validation import BoundEndpoint, ContractRef, ExternalEndpoint, ObservationRequirement, ObservationRoot, OutputValue, RequiredEndpoint, RequiredOutput
 from scar.ir.execution.resources import InstanceTarget
 from scar.ir.execution.work import MaterializationRef
 from scar.ir.program.ids import NativeBoundaryID

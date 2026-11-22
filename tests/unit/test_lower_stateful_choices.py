@@ -14,8 +14,7 @@ from scar.compiler.model import Expr, SourceRef
 from scar.compiler.stateful_model import (StatefulRegion, StatefulInput,
     StatefulAction, REQUIRED_GUARDS)
 from scar.ir.execution_recipe import artifact_reference
-from scar.optimization.stateful_cpu_choices import (build_stateful_cpu_domain,
-    stateful_cpu_cost_context, plan_stateful_cpu_choices)
+from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain, stateful_cpu_cost_context, plan_stateful_cpu_choices
 
 
 def test_selected_model_lowers_exactly_one_real_kernel_and_unknown_keeps_original(tmp_path):

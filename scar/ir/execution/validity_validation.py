@@ -278,7 +278,7 @@ def _lifetime_events(ctx):
             target_run = ctx.processes[target_process].run
         if run is not None and target_run is not None and run != target_run:
             ctx.issue('validity_lifetime_target_run', path, 'target belongs to another known run')
-        from .native_memory_binding import resolve_native_memory_claim
+        from scar.ir.execution.native_memory_binding import resolve_native_memory_claim
         native = resolve_native_memory_claim(ctx, row, path)
         if native is None or not native['matched']:
             ctx.gap('validity_lifetime_protocol_unverified', path,

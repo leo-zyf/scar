@@ -4,11 +4,11 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 from scar.analysis.ordered_loop_transfer import OrderedLoopTransferProvider,_input_role
-from scar.ir.program import ordered_regions as R, normal_graph as G, normal_targets as T, source_productions as P
+from scar.ir.program import ordered_regions as R, normal_graph as G, normal_graph as T, source_productions as P
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint as Point,DependencyFrame as Frame,
     DependencyKind as K,DependencyStrength,context_push)
 from scar.ir.program.ids import RegionID,ValueID,ControlPortID,OperationID,UseID
-from scar.ir.program.normal_links import CodeScopeRef
+from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.source_template_links import SourceTemplateKey

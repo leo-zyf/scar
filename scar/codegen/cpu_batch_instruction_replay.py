@@ -22,7 +22,7 @@ from scar.ir.execution_recipe import artifact_reference,read_artifact
 class BatchReplaySession:
     """One full domain admission; repeat byte/source guards, not normalization."""
     def __init__(self,domain):
-        from scar.optimization import stateful_cpu_choices as choices
+        from scar.optimization import stateful_cpu_model as choices
         from scar.codegen import stateful
         self.domain=choices._domain(domain)
         self.domain_reference=artifact_reference(Path(self.domain['base_stage_plan']['uri']).parent/'domain.json',self.domain['schema'])
@@ -132,7 +132,7 @@ class BatchReplaySession:
 
 
 def verify_batch_projection(domain,candidate_id,projection_path,*,session=None):
-    from scar.optimization.stateful_cpu_model import stateful_cpu_demand,component_key
+    from scar.optimization.stateful_cpu_model import stateful_cpu_demand, component_key
     from scar.compiler.stateful_model import stateful_from_dict,stateful_digest
     from scar.compiler.model import CpuPlacement
     from scar.optimization.stateful_schedule import plan_stateful_region

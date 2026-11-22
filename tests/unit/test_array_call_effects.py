@@ -9,7 +9,7 @@ from scar.analysis.array_call_effects import derive_array_effects, derive_compos
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.pipeline_loop_frontend import (_Component, _component, CompositeInvariantLoopProof,
     FunctionGlobalGuard)
-from scar.compiler.pipeline_model import RegionCall, CalleeGuard, compose_pipeline, prepare_pipeline_leaf
+from scar.compiler.pipeline_frontend import RegionCall, CalleeGuard, compose_pipeline, prepare_pipeline_leaf
 from scar.optimization.optimizer import optimize_region
 
 

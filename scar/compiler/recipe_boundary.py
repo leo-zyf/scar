@@ -10,7 +10,7 @@ from pathlib import Path
 from .loop_admission import admit_loop
 from .loop_model import loop_digest, read_loop, validate_loop
 from .model import document as plan_document, read_plan
-from .pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from .validation import validate_plan
 from scar.optimization.loop_strategy import loop_execution_plan, verify_loop_strategy
 from scar.optimization.resource_solver import semantic_sha256

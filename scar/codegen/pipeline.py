@@ -21,9 +21,7 @@ import sys
 import tempfile
 
 from scar.compiler.model import document as leaf_document
-from scar.compiler.pipeline_model import (
-    PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline,
-)
+from scar.compiler.pipeline_frontend import PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline
 from scar.optimization.pipeline_memory import verify_pipeline_memory
 from scar.optimization.hardware import validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
@@ -292,7 +290,7 @@ class PipelineArtifact:
             raise GuardFailure("pipeline input count differs")
         if any('EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in call.plan.region.assumptions
                for call in self.pipeline.calls):
-            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            from scar.runtime.array_copy_guard import guard_copy_inputs, CopyGuardFailure
             try:guard_copy_inputs(arrays)
             except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         descriptors = [cpp._descriptor(array) for array in arrays]

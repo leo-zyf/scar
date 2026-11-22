@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from scar.compiler.model import document as leaf_document
-from scar.compiler.pipeline_model import document, pipeline_digest, read_pipeline, validate_pipeline
+from scar.compiler.pipeline_frontend import document, pipeline_digest, read_pipeline, validate_pipeline
 from scar.compiler.validation import validate_plan
 from scar.ir.record_codec import loads
 from .resource_solver import _shape_instantiation, semantic_sha256

@@ -25,7 +25,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.namespace_values import extract_captures
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.ir.program import function_sites as R
-from scar.ir.program import source_productions as P, normal_graph as G, normal_targets as T
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as T
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.signature_patterns import CountBinding, ChoiceBinding
@@ -232,10 +232,10 @@ def _stamp(path):
 
 def _pins():
     from scar.analysis import source_graph_material as materials, source_world_material
-    from scar.analysis import source_namespace_interfaces, namespace_values as source_namespace_captures, source_reference_slice
+    from scar.analysis import source_namespace_interfaces as source_namespace_interfaces, namespace_values as source_namespace_captures, source_reference_slice
     from scar.analysis import source_symbol_variants, normal_output, source_declared_calls, source_stage
     from scar.ir import record_codec
-    from scar.ir.program import normal_links, protocol_signatures, signature_patterns, model, source_template_links
+    from scar.ir.program import normal_graph as normal_links, protocol_signatures, signature_patterns, model, source_template_links
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer', sys.modules[__name__]), ('types', R), ('materials', materials),
         ('ordinary_materials', source_world_material), ('namespace_ports', source_namespace_interfaces),

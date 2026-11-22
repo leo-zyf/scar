@@ -13,9 +13,7 @@ from pathlib import Path
 import sys
 
 from scar.compiler.model import document as operator_document
-from scar.compiler.pipeline_model import (
-    PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline,
-)
+from scar.compiler.pipeline_frontend import PipelinePlan, document, pipeline_digest, pipeline_from_dict, read_pipeline
 from scar.optimization.hardware import bind_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
 from . import cpp
@@ -178,7 +176,7 @@ class FusedPipelineArtifact:
             raise GuardFailure("fused pipeline input count differs")
         if any('EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in call.plan.region.assumptions
                for call in self.pipeline.calls):
-            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            from scar.runtime.array_copy_guard import guard_copy_inputs, CopyGuardFailure
             try:guard_copy_inputs(arrays)
             except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         for parameter, array in zip(self.pipeline.parameters, arrays):

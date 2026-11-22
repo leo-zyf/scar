@@ -13,7 +13,7 @@ from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import data_reach
 from scar.analysis.sparse_solve_scope import SCHEMA as SOLVE, check_sparse_solve_scope
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.record_codec import decode, encode
 
 

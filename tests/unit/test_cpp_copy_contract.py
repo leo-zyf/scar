@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from scar.codegen.cpp import build
-from scar.compiler.array_copy_contract import copy_attributes,COPY_REQUIRED_GUARDS
+from scar.compiler.array_copy_contract import copy_attributes, COPY_REQUIRED_GUARDS
 from scar.compiler.model import ArrayRegion,Expr,ExecutionPlan,SourceRef
 from scar.compiler.runtime import guarded_function
 from scar.compiler.validation import InvalidPlan,validate_region

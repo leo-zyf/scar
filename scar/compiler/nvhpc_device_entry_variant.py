@@ -10,7 +10,7 @@ from scar.compiler.compile_exported_aten_cuda import (
 )
 from scar.compiler.nvhpc_entry_variant import matrix_entry_inputs
 from scar.compiler.operator_stack import load_operator_stack, nvidia_stack_build
-from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 

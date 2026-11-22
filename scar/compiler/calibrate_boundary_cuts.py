@@ -21,7 +21,7 @@ from scar.compiler.calibrate_stateful_boundary import (_canonical_binding,
     _json, _now, _receipt, _source)
 from scar.compiler.stateful_model import stateful_from_dict
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.stateful_cpu_choices import _domain
+from scar.optimization.stateful_cpu_model import _domain
 from scar.optimization.stateful_cpu_model import stateful_cpu_demand
 from scar.runtime.stateful_contract import (ASSUMPTIONS, FP_POLICY, MEMORY_SCOPE,
     canonical_sha256, validate_contract)

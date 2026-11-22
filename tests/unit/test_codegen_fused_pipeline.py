@@ -10,7 +10,7 @@ import pytest
 from scar.codegen import cpp
 from scar.codegen.fused_pipeline import GuardFailure, build, load
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.pipeline_model import CalleeGuard, RegionCall, compose_pipeline
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
 from scar.compiler.pipeline_runtime import guarded_pipeline_function
 from scar.optimization import optimize_region
 from scar.optimization.pipeline_strategy import fused_execution_plan, plan_pipeline_strategy

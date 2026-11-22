@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.pipeline_model import CalleeGuard, RegionCall, compose_pipeline
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
 from scar.optimization import optimize_region
 from scar.optimization.pipeline_memory import plan_pipeline_memory, verify_pipeline_memory
 

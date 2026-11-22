@@ -6,7 +6,7 @@ import pytest
 
 from scar.analysis.program_view import ProgramView,SOURCE_REPRESENTATION
 from scar.analysis.source_invocation_view import SourceInvocationProvider
-from scar.ir.program import source_value_routes as I, source_productions as P, normal_graph as G, normal_targets as T, view as V
+from scar.ir.program import source_value_routes as I, source_productions as P, normal_graph as G, normal_graph as T, view as V
 from scar.ir.program.call_edges import InvocationKey,CallRecordAnchor
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.dependencies import (DependencyPoint as Point,DependencyEdge as Edge,

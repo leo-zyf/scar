@@ -10,7 +10,7 @@ from scar.ir.effects import Knowledge as K
 from scar.ir.program import state_ports as S, source_productions as P
 from scar.ir.program import normal_graph as G, model as M
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 
 
 COLLECTION_FIELDS = ('reads', 'writes', 'allocates', 'frees', 'aliases', 'escapes')

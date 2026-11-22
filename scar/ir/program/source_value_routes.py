@@ -1,14 +1,8 @@
 """Source value routes."""
 
 from dataclasses import dataclass
-from scar.ir.program import source_productions as P, normal_graph as G, normal_links as F
-from scar.ir.program.normal_targets import (
-    GlobalPort,
-    Body,
-    Endpoint,
-    AttributeSite,
-    FunctionConnection,
-)
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F
+from scar.ir.program.normal_graph import GlobalPort, Body, Endpoint, AttributeSite, FunctionConnection
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.signature_patterns import GroundType
 from enum import Enum

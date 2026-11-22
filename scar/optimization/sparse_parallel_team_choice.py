@@ -9,8 +9,8 @@ from scar.analysis.sparse_parallel_scaling_scope import _lanes, _release_lineage
 from scar.analysis.target_inventory import _cpu_list
 from scar.ir.execution_recipe import artifact_reference, read_artifact, validate_recipe
 from . import sparse_parallel_cost as calibration
-from .sparse_parallel_recipe import CHOICE, PROFILE, SCOPE
-from .sparse_parallel_recipe_cost import project_recipe_window
+from scar.optimization.sparse_parallel_recipe import CHOICE, PROFILE, SCOPE
+from scar.optimization.sparse_parallel_recipe import project_recipe_window
 
 
 SCHEMA = 'scar.sparse-parallel-team-frontier'

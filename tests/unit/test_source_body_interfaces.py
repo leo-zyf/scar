@@ -6,8 +6,8 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis import source_body_interfaces as body_reader
 from scar.analysis import source_body_activation_view as port_view
 from scar.ir.program import body_observations as B, source_productions as P, normal_graph as G
-from scar.ir.program.normal_targets import Body, GlobalPort
-from scar.ir.program.normal_links import CodeScopeRef, CodeScopeWitness
+from scar.ir.program.normal_graph import Body, GlobalPort
+from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness
 from scar.ir.program.ids import ProviderID, LocationID
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.protocol_signatures import ExceptionABI

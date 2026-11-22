@@ -6,8 +6,7 @@ import json
 import pytest
 
 from scar.compiler.model import SourceRef,ArrayRegion,Expr
-from scar.compiler.pipeline_model import (CalleeGuard,RegionCall,compose_pipeline,document,
-    pipeline_digest,prepare_pipeline_leaf)
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline, document, pipeline_digest, prepare_pipeline_leaf
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.pipeline_fusion import fuse_pipeline_region,verify_pipeline_fusion,fusion_region_digest
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.optimization.resource_solver import semantic_sha256
 
 

@@ -219,7 +219,7 @@ def _measure_ordered(raw, choice, address_space, terms, *, phase_samples=None):
             or any(worker['address_space_limit_bytes'] != address_space for worker in workers.values())):
         raise ValueError('worker CPU and address-space contract differ from the study')
     if phase_samples is not None:
-        from scar.optimization import sparse_parallel_recipe_cost as typed
+        from scar.optimization import sparse_parallel_recipe as typed
 
         typed.check_group_order(samples, choice['window'])
         typed.append_bootstrap_phases(phase_samples, workers.values())
@@ -283,7 +283,7 @@ def project_calibration(design_path, observations):
         raise ValueError('parallel calibration does not match admitted original input or CPU team')
     recipe = phase_samples = None
     if 'execution_recipe' in design:
-        from scar.optimization import sparse_parallel_recipe_cost as typed
+        from scar.optimization import sparse_parallel_recipe as typed
 
         recipe = typed.bind_calibration(design, source, parallel, choice, native)
         phase_samples = typed.new_phase_samples()

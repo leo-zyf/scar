@@ -425,7 +425,7 @@ def _stage_source_range(source,root_order):
 
 
 def predict_instruction_components(domain,candidate_id,profile,out):
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand
     from scar.ir.execution_recipe import artifact_reference
     domain=_domain(domain);demand=stateful_cpu_demand(domain,candidate_id)

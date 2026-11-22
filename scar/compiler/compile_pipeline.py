@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from .pipeline_model import read_pipeline, write_pipeline, pipeline_digest
+from scar.compiler.pipeline_frontend import read_pipeline, write_pipeline, pipeline_digest
 
 
 def _write(path, value):
@@ -37,7 +37,7 @@ def compile_pipelines(out, *, source=None, catalog=None, pipeline_path=None, inp
     else:
         if source is None or catalog is None:
             raise ValueError('automatic pipeline discovery needs original source and F4 catalog')
-        from .pipeline_frontend import discover_graph_pipelines
+        from scar.compiler.pipeline_frontend import discover_graph_pipelines
         pipelines, rejected = discover_graph_pipelines(catalog, source=source)
     out = Path(out).absolute()
     if out.exists():

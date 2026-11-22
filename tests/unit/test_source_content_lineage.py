@@ -4,15 +4,15 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.program_view import ProgramView,SOURCE_REPRESENTATION,_digest
 from scar.analysis.source_content_lineage import SourceContentLineageProvider
-from scar.ir.program import content_routes as C, content_routes as L, normal_graph as G
-from scar.ir.program import normal_targets as T,source_productions as P
+from scar.ir.program import data_materials as C, data_materials as L, normal_graph as G
+from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint as Point,
     DependencyKind as K,DependencyMeaning as Meaning,DependencyStrength as Strength)
 from scar.ir.program.ids import RegionID,OperationID,ValueID,UseID,LocationID,ControlPortID
-from scar.ir.program.normal_links import CodeScopeRef
+from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.providers import ProviderArtifact
-from scar.ir.program.content_routes import FieldSelector
+from scar.ir.program.data_materials import FieldSelector
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.record_codec import encode,decode

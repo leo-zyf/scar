@@ -13,12 +13,9 @@ import re
 from scar.analysis.call_operand_reader import CallOperandTrace
 from scar.analysis.python_call_targets import read_python_call_targets
 from scar.ir.program.call_edges import CallRecordAnchor, CallTraceFile
-from scar.ir.program.native_callables import (
-    ADDRESS_FIELDS, NativeCallableCapture, NativeCallableFact,
-    NativeCallableMetadata, build_fields,
-)
+from scar.ir.program.native_callables import ADDRESS_FIELDS, NativeCallableCapture, NativeCallableFact, NativeCallableMetadata, build_fields
 from scar.ir.record_codec import decode, loads
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 
 
 _META = re.compile(r'native-callable-meta\.([1-9][0-9]*)\.json$')

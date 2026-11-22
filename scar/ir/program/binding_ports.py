@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 from scar.ir.program.normal_graph import Port, CallSite
-from scar.ir.program.normal_links import Namespace
-from scar.ir.program.normal_targets import GlobalPort, Body, Endpoint, Route, FunctionActivation
+from scar.ir.program.normal_graph import Namespace
+from scar.ir.program.normal_graph import GlobalPort, Body, Endpoint, Route, FunctionActivation
 from scar.ir.program.name_flow import (
     NameDefinition,
     NameDefinitionTransition,
@@ -11,7 +11,7 @@ from scar.ir.program.name_flow import (
 )
 from enum import Enum
 from scar.ir.program.providers import ProviderFactReference
-from scar.ir.program.content_routes import AddressPath
+from scar.ir.program.data_materials import AddressPath
 from scar.ir.program.state_ports import SourceWorldFlow
 
 

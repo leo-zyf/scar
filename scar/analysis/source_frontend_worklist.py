@@ -1053,7 +1053,7 @@ def module_entry_catalog(composition, *, max_files=4096):
     proof. Normal lower_entry must resolve the exact readonly exec-root witness.
     It deliberately does not add MODULE to DefinitionKind or invent bodies.
     """
-    from scar.ir.program.module_entries import ModuleCatalogEntry, ModuleUnitSource
+    from scar.ir.program.entry_namespaces import ModuleCatalogEntry, ModuleUnitSource
     from scar.ir.v2.ids import OperationDefinitionID
     _need(type(composition) is CompositionIndex and type(max_files) is int and max_files > 0
           and composition.inventory_file_count <= max_files, 'module metadata catalog ceiling exceeded')

@@ -1,8 +1,8 @@
 """Name flow."""
 
 from dataclasses import dataclass
-from scar.ir.program.normal_links import CodeScopeRef, CodeScopeWitness, NameAccess, Namespace
-from scar.ir.program.normal_targets import GlobalPort, Body
+from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness, NameAccess, Namespace
+from scar.ir.program.normal_graph import GlobalPort, Body
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.namespace_routes import (
     NamespaceAccess,

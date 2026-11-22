@@ -25,10 +25,7 @@ from scar.ir.execution.ids import (
     WorkRetentionID, WorkTicketID, WriteAssociationID,
 )
 from scar.ir.execution.inventory import build_inventory
-from scar.ir.execution.observations import (
-    BoundEndpoint, ContractRef, ObservationRequirement, ObservationRoot, OutputValue,
-    RequiredEndpoint, RequiredOutput,
-)
+from scar.ir.execution.observation_validation import BoundEndpoint, ContractRef, ObservationRequirement, ObservationRoot, OutputValue, RequiredEndpoint, RequiredOutput
 from scar.ir.execution.production import (
     BytePrefixWrite, EvidenceInventoryBinding, HostWrite, InventorySourceRef,
     RawRecordRef, StateProduction, WorkWrite, OutcomeProduction, WriteAssociation,

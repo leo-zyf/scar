@@ -3,7 +3,7 @@ import math
 import os
 from pathlib import Path
 from .model import ExecutionPlan,ArrayRegion,CpuPlacement,PROFILE,OPS
-from .array_copy_contract import COPY_REQUIRED_GUARDS,validate_copy_attributes
+from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, validate_copy_attributes
 
 class InvalidPlan(ValueError):pass
 

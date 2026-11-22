@@ -510,7 +510,7 @@ def normalize_records(records: Iterable[dict[str, Any]], *, source: str = "memor
 
 def normalize_trace(path: str | Path, *, namespace: str | None = None) -> NormalizationResult:
     """Read each physical JSONL line once per pass, retaining malformed lines."""
-    from .files import open_binary, resolve
+    from scar.trace.reader import open_binary, resolve
 
     path = resolve(Path(path).resolve(), default_name="events.jsonl")
     if namespace is None:

@@ -27,8 +27,8 @@ def _reference(value):
 
 
 def _derive(source_reference,target_reference):
-    from scar.optimization.stateful_cpu_choices import _domain
-    from scar.optimization import stateful_cost_rebase,stateful_cpu_choices
+    from scar.optimization.stateful_cpu_model import _domain
+    from scar.optimization import stateful_cost_rebase, stateful_cpu_model as stateful_cpu_choices
     source_reference=_reference(source_reference);target_reference=_reference(target_reference)
     source=_domain(read_artifact(source_reference));target=_domain(read_artifact(target_reference))
     identity=semantic_sha256(_domain_value(source))

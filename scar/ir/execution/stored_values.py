@@ -291,7 +291,7 @@ def stored_value_sources(ctx, site, occurrence, *, shared):
                     ctx.core_values[read['result'].value]):
                 candidate['gaps'] += ('stored_value_result_kind_mismatch',)
                 continue
-            from .state_preservation import state_preservation
+            from scar.ir.execution.state_preservation import state_preservation
             interval = state_preservation(ctx, binding['post_point'],
                 OccurrencePoint(occurrence, OccurrencePhase.BEFORE), (read['location'],), shared=shared)
             candidate['interval'] = interval

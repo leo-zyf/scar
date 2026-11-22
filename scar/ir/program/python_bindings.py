@@ -9,7 +9,7 @@ from enum import Enum
 from scar.ir.v2.ids import Identifier
 from .ids import NativeBoundaryID
 from .native import EntryPortRef
-from .normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from .providers import ProviderFactReference
 from .source_references import SourceArtifactLocator
 from .binding_returns import ValueShape,NativeReturnSlot,ReceiverMode

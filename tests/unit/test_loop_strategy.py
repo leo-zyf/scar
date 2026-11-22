@@ -6,7 +6,7 @@ import pytest
 from test_pipeline_memory import call, chain
 from scar.compiler.loop_model import ArrayLoopPlan
 from scar.compiler.model import ArrayRegion, Expr, SourceRef, document
-from scar.compiler.pipeline_model import CalleeGuard, compose_pipeline
+from scar.compiler.pipeline_frontend import CalleeGuard, compose_pipeline
 from scar.optimization import optimize_region
 from scar.optimization.loop_strategy import plan_loop_strategy, verify_loop_strategy, loop_execution_plan
 from scar.optimization.resource_solver import semantic_sha256

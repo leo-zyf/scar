@@ -8,7 +8,7 @@ proofs. The bounded exact objective is fixed payload capacity, never runtime.
 from copy import deepcopy
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.record_codec import loads
 from .pipeline_memory import _pipeline, _metadata
 from .resource_solver import semantic_sha256

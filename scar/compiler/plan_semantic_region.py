@@ -24,7 +24,7 @@ _PRODUCERS = ('compiler/plan_semantic_region.py', 'compiler/macro_pipeline.py',
     'optimization/semantic_rewrite.py', 'optimization/semantic_region_demand.py',
     'optimization/region_implementation.py', 'optimization/constructive_planner.py',
     'optimization/joint_planner.py', 'ir/implementation_plan.py',
-    'compiler/pipeline_fusion_delivery.py')
+    'compiler/pipeline_runtime.py')
 
 
 def _pins():
@@ -173,7 +173,7 @@ def _native_metadata(artifact_ref, blueprint):
     """
     from scar.codegen import cpp, fused_pipeline
     from scar.compiler.model import plan_from_dict
-    from scar.compiler.pipeline_model import pipeline_from_dict
+    from scar.compiler.pipeline_frontend import pipeline_from_dict
 
     metadata = read_artifact(artifact_ref)
     directory = Path(artifact_ref['uri']).parent
@@ -307,7 +307,7 @@ def prepare(parent, out, *, logical_analysis=False, max_seconds=30, compile_vali
     preparation = _write(directory/'preparation.json', metadata)
     native = binding = None
     if compile_validation and (not study_only or cost_binding is not None):
-        from scar.compiler.pipeline_fusion_delivery import build_fusion_blueprint
+        from scar.compiler.pipeline_runtime import build_fusion_blueprint
         artifact = build_fusion_blueprint(pipeline, blueprint, directory/'native')
         native = artifact_reference(artifact.directory/'artifact.json', artifact.report['schema'])
         binding = _write(directory/'native-binding.json',
@@ -382,9 +382,7 @@ def _trial(original, build, region, blueprint, report, *, exclusive_inputs, allo
     if build['native_artifact'] is None:
         raise ValueError('explicit validation trial requires a bound native artifact')
     from scar.codegen.fused_pipeline import load
-    from scar.compiler.pipeline_fusion_delivery import (
-        _guarded_fusion_entry, select_fusion_callable,
-    )
+    from scar.compiler.pipeline_runtime import _guarded_fusion_entry, select_fusion_callable
 
     if build['decision'] != 'REWRITE' and not allow_study:
         raise ValueError('a cost-KEEP candidate may only run isolated validation')

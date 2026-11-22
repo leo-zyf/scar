@@ -27,7 +27,7 @@ from scar.ir.program.source_symbols import (
     RawScopeMember, SourceScope, SourceSymbol, SourceSymbolsInput,
     SourceSymbolsMaterial, SourceSymbolsProfile, SymbolConstant, SymbolFrontier,
 )
-from scar.ir.program.source_tokens import SourceTokenWarning
+from scar.ir.program.source_bytes import SourceTokenWarning
 from scar.ir.record_codec import decode, encode
 
 

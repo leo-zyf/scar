@@ -3,18 +3,8 @@
 from collections import defaultdict
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port, DECLARED
-from scar.analysis.source_namespace_references import NamespaceReferenceResolver
-from scar.ir.program import (
-    normal_links as F,
-    normal_targets as T,
-    content_routes as A,
-    class_ports as B,
-    declared_contexts as D,
-    class_ports as X,
-    class_ports as C,
-    source_productions as P,
-    normal_graph as G,
-)
+from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver
+from scar.ir.program import normal_graph as F, normal_graph as T, data_materials as A, class_ports as B, declared_contexts as D, class_ports as X, class_ports as C, source_productions as P, normal_graph as G
 from scar.ir.program.namespace_routes import NamespaceOriginKind
 from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.model import ValueKind, ValueType

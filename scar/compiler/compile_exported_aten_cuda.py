@@ -15,7 +15,7 @@ from scar.codegen.native_project import build_native_project, write_native_proje
 from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_native_recipe import normalize_recipe
 from scar.compiler.compile_exported_aten import _project, _shape_profiles, _write_record
-from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.implementation_plan import problem_from_dict
 from scar.ir.program import codec
 
@@ -50,7 +50,7 @@ def _pipeline(model, *, treatment=False):
         from scar.compiler.aten_export_device_placement import qualify_device_export
 
         if treatment:
-            from scar.compiler.native_export_placement_treatment import plan_device_treatment, replay_device_treatment
+            from scar.compiler.native_export_placement_costs import plan_device_treatment, replay_device_treatment
 
             return qualify_device_export, plan_device_treatment, replay_device_treatment, _PLACEMENT_TREATMENT
         from scar.compiler.aten_export_device_placement import plan_device_export, replay_device_export

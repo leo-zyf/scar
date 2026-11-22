@@ -21,7 +21,7 @@ from scar.ir.v2 import (
     ResourceKind, ResourceRequirement, SemanticGraph, ValueGraph,
 )
 from scar.ir.v2.evidence import ProviderReference, EvidenceEdge
-from scar.trace.files import open_binary
+from scar.trace.reader import open_binary
 
 
 _REVISION = "cf30153c4c131c8164ee7798e5022d810682e2cb"

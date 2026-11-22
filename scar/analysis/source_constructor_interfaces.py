@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_template_links import _json
-from scar.ir.program import normal_targets as T, class_ports as C
+from scar.ir.program import normal_graph as T, class_ports as C
 from scar.ir.program import source_productions as P
 from scar.ir.program.source_value_routes import SourceBodyCall
 from scar.ir.record_codec import encode

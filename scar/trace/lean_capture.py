@@ -105,7 +105,7 @@ class LeanCapturePlan:
         preparation/lowering nor target execution/current-source guessing is
         used. The result is still only a capture selection policy.
         """
-        from scar.analysis.source_frontend_worklist import SourceEntryFrontendPlan
+        from scar.compiler.frontend.python_worklist import SourceEntryFrontendPlan
         from scar.analysis.source_language import SourceCodeEvidence
         _need(type(plan) is SourceEntryFrontendPlan,'a live normal source-entry plan is required')
         _need(type(max_codes) is int and max_codes>0,'lean plan needs an independent positive code budget')

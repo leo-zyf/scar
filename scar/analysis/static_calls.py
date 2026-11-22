@@ -567,10 +567,10 @@ class StaticCallSession:
             result=SimpleNamespace(index=index,graph=graph,metadata=metadata,interface=None,
                 namespace=namespace,document=document,context=context,module=None)
         elif document.get("module") is not None:
-            from scar.ir.program.module_entries import decode_frame_body, StaticModuleEntryDeclaration
+            from scar.ir.program.entry_namespaces import decode_frame_body, StaticModuleEntryDeclaration
             from scar.ir.program.source_subjects import ModuleUnitSource, FrameKind, SourceCompilationCodeRef
             overlay = decode_frame_body(document["module"])
-            from scar.ir.program.module_entries import CompilerStructuredFrameBodyOverlay
+            from scar.ir.program.entry_namespaces import CompilerStructuredFrameBodyOverlay
             if type(overlay) is CompilerStructuredFrameBodyOverlay:
                 from scar.analysis.source_module_compiler_lowering import validate_compiler_prologue_core
                 validate_compiler_prologue_core(overlay, graph)

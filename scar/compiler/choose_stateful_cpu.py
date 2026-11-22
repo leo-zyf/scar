@@ -13,8 +13,7 @@ def choose_stateful_cpu(out, *, region=None, domain=None, target=None,
                         input_shapes=None, shape=None, memory_budget_bytes=None,
                         affinity=None, max_threads=None, cost_profiles=None,
                         no_op_profile=None, search_budget=100000):
-    from scar.optimization.stateful_cpu_choices import (build_stateful_cpu_domain,
-        plan_stateful_cpu_choices)
+    from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain, plan_stateful_cpu_choices
     if (region is None)==(domain is None):
         raise ValueError('choose one original stateful region or an existing domain')
     if shape is not None and input_shapes is not None:

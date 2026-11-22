@@ -7,7 +7,7 @@ from collections import defaultdict,deque
 
 from scar.analysis.normal_facts import SourceFactStore,SourcePointSpace
 from scar.analysis.normal_targets import _Solver,_star_imports
-from scar.ir.program import normal_links as F,normal_entry as E
+from scar.ir.program import normal_graph as F, normal_graph as E
 
 
 class EntrySolver(_Solver):

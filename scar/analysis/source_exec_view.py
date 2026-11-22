@@ -24,7 +24,7 @@ from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_template_links import _json
 from scar.ir.program import source_exec_view as R, source_exec_roots as X, source_productions as P
-from scar.ir.program import source_frame_bindings as B, normal_targets as T, normal_graph as G, model as M, view as V
+from scar.ir.program import source_frame_bindings as B, normal_graph as T, normal_graph as G, model as M, view as V
 from scar.ir.program.python_bindings import SourceCallSite
 from scar.ir.program.ids import ValueID, ControlPortID, OperationID, ProviderID
 from scar.ir.program.providers import ProviderFactReference

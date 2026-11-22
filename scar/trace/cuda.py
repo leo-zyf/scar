@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from scar.ir import Effect, Event
-from .files import open_text
+from scar.trace.reader import open_text
 
 
 def correlate_transfer_states(transfer_records, physical_events) -> dict[str, int]:

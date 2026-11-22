@@ -25,7 +25,7 @@ from scar.ir.program.runtime_sources import (
     RuntimeTrace, RuntimeTraceBudget, RuntimeTraceIssue, RuntimeTraceIssueKind,
     TraceManifest,
 )
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 
 
 _SUPPORTED_KINDS = frozenset({

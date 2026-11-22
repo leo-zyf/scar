@@ -109,7 +109,7 @@ def launch_os_capture(target_argv,*,env,capture_root,strace_executable='strace',
                       selection_profile='all',postprocess_seconds=None):
     """Execute exactly one owned provider; no attach, shell, or foreign process."""
     budget=budgets or OSCaptureBudgets();_need(type(budget) is OSCaptureBudgets,'explicit OS budgets required')
-    from scar.trace.os_capture_selection import selection_contract
+    from scar.trace.native_callable_probe import selection_contract
     selection=selection_contract(selection_profile)
     root=Path(capture_root).absolute()
     _need(root.is_dir() and not root.is_symlink() and (root/'trace').is_dir(),'fresh capture/trace root required')
@@ -396,7 +396,7 @@ def bind_os_capture_provider(root,*,run,native,native_artifact,command,archive,p
           and launch['budget_stop'] is None,'closed successful capture required')
     from scar.trace.os_capture_coverage import _explicit_all
     _explicit_all(launch['actual_exec_argv'][1:launch['target_argv_index']])
-    from scar.trace.os_capture_selection import validate_launch_selection
+    from scar.trace.native_callable_probe import validate_launch_selection
     selection=validate_launch_selection(intent,launch,
         launch['actual_exec_argv'][1:launch['target_argv_index']])
     gaps=[{'code':'os_event_loss_not_established','basis':'selection/roundtrip/exit do not prove an event-complete stream'}]

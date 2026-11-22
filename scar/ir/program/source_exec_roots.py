@@ -4,7 +4,7 @@ from enum import Enum
 
 from scar.ir.effects import ActionLabel,Knowledge
 from scar.ir.literals import PythonLiteral
-from . import normal_links as F,normal_targets as T,normal_graph as G
+from scar.ir.program import normal_graph as F, normal_graph as T, normal_graph as G
 from .python_bindings import SourceCallSite
 from scar.ir.program.source_protocols import CompiledCodeUse
 

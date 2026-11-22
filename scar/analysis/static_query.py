@@ -178,7 +178,7 @@ def _canonical_dependencies(unit, entries, fragments, limit):
         module_view = None
         class_view = None
         if module_document is not None:
-            from scar.ir.program.module_entries import decode_frame_body, StaticModuleEntryDeclaration
+            from scar.ir.program.entry_namespaces import decode_frame_body, StaticModuleEntryDeclaration
             from scar.ir.program.source_subjects import SourceCompilationFrameRoot
             overlay = decode_frame_body(module_document)
             subject = overlay.declaration.unit

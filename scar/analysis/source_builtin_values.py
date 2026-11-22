@@ -12,7 +12,7 @@ from scar.analysis.constants_v2 import (
     _builtin, _literal, _literal_size, _python_value, _reserve,
 )
 from scar.ir.literals import LiteralKind, PythonLiteral, require_legacy_literal
-from scar.ir.program import normal_links as F
+from scar.ir.program import normal_graph as F
 
 
 _UNARY_SELECTORS = {

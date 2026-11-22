@@ -18,10 +18,9 @@ from scar.analysis.source_reference_slice import source_port
 from scar.compiler.graph_frontend import (_GraphLowerer,GraphRegionRejected,_reject,
     _source_identity,_metadata)
 from scar.compiler.model import ArrayRegion,SourceRef
-from scar.compiler.pipeline_frontend import _PipelineLowerer,_Callee,_Value
-from scar.compiler.pipeline_model import (PipelinePlan,compose_pipeline,prepare_pipeline_leaf,
-    document as pipeline_document,pipeline_from_dict,write_pipeline)
-from scar.ir.program import normal_targets as T,source_productions as P,normal_links as F
+from scar.compiler.pipeline_frontend import _PipelineLowerer, _Callee, _Value
+from scar.compiler.pipeline_frontend import PipelinePlan, compose_pipeline, prepare_pipeline_leaf, document as pipeline_document, pipeline_from_dict, write_pipeline
+from scar.ir.program import normal_graph as T, source_productions as P, normal_graph as F
 from scar.ir.program.dependencies import DependencyKind as K
 from scar.ir.record_codec import encode
 from scar.optimization.optimizer import optimize_region
@@ -45,8 +44,8 @@ def _digest(value):return sha256(_canonical(value).encode()).hexdigest()
 def _pins():
     root=Path(__file__).resolve().parents[1]
     names=('compiler/caller_pipeline.py','compiler/pipeline_frontend.py','compiler/graph_frontend.py',
-        'compiler/pipeline_model.py','analysis/source_call_view.py','analysis/source_body_interfaces.py',
-        'ir/program/normal_targets.py','optimization/optimizer.py')
+        'compiler/pipeline_frontend.py','analysis/source_call_view.py','analysis/source_body_interfaces.py',
+        'ir/program/normal_graph.py','optimization/optimizer.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 

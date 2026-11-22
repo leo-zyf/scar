@@ -14,7 +14,7 @@ import re
 from .call_edges import CallRecordAnchor, InvocationKey
 from .dependencies import DependencyCondition, DependencyEdge, DependencyPoint
 from .ids import OperationID, RegionID, UseID, ValueID
-from .native_callables import NativeCallableFact
+from scar.ir.program.native_callables import NativeCallableFact
 
 
 @dataclass(frozen=True, slots=True)

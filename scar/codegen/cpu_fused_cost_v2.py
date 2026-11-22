@@ -372,7 +372,7 @@ def _identified_value(fitted,features):
 
 def predict_fused_components_v2(domain,candidate_id,profile,out):
     """Project fixed independent facts; target DAG is read only at this step."""
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand
     domain=_domain(domain);demand=stateful_cpu_demand(domain,candidate_id)
     reference,model,raw=_verify_model(profile)
@@ -436,7 +436,7 @@ def main(argv=None):
     p=sub.add_parser('project');p.add_argument('--domain',required=True);p.add_argument('--candidate-id',required=True)
     p.add_argument('--profile',required=True);p.add_argument('--out',required=True)
     args=parser.parse_args(argv)
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context
     if args.command=='project':
         result=predict_fused_components_v2(args.domain,args.candidate_id,args.profile,args.out)

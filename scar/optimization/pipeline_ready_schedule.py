@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest, validate_pipeline
+from scar.compiler.pipeline_frontend import pipeline_digest, validate_pipeline
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import loads
 from scar.ir.versioned_schedule import schedule_document, validate_versioned_schedule

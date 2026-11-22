@@ -2,16 +2,10 @@
 
 from dataclasses import dataclass
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import (
-    normal_links as F,
-    normal_targets as T,
-    normal_graph as G,
-    source_bindings as B,
-    source_productions as P,
-)
+from scar.ir.program import normal_graph as F, normal_graph as T, normal_graph as G, source_bindings as B, source_productions as P
 from scar.ir.program.source_exec_roots import ExecEndpoint
 from enum import Enum
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.providers import ProviderFactReference
 
 

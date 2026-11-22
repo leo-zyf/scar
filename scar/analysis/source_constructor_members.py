@@ -22,7 +22,7 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import declared_contexts as D, normal_targets as T, source_productions as P
+from scar.ir.program import declared_contexts as D, normal_graph as T, source_productions as P
 from scar.ir.program import class_ports as C, class_ports as I
 from scar.ir.program import class_ports as X, source_value_routes as V
 from scar.ir.program.function_sites import SharedBodyReference

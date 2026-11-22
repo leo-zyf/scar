@@ -78,7 +78,7 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     from scar.compiler.ordered_planning_graph import retain_ordered_planning_graph
     from scar.analysis.source_control import attach_loop_call_observations
     from scar.ir.execution_recipe import artifact_reference,read_artifact
-    from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
+    from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain
     program=Path(program).absolute();out=Path(out).absolute()
     if shape is not None and input_shapes is not None:
         raise ValueError('choose one common shape or per-region named input shapes')

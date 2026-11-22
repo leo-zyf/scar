@@ -16,7 +16,7 @@ import time
 from scar.compiler import calibrate_boundary_cuts as base
 from scar.compiler.calibrate_stateful_boundary import _canonical_binding, _json, _now, _receipt
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.stateful_cpu_choices import _domain
+from scar.optimization.stateful_cpu_model import _domain
 from scar.runtime.stateful_contract import validate_contract
 
 SCHEMA = 'scar.stateful-scope-boundary-calibration'

@@ -5,7 +5,7 @@ flow and budget.  Native interpretation remains a condition; no Reference
 result becomes a global alias of an operand or of a hidden held object.
 """
 from .control import ProtocolValueKind
-from .evaluated_sources import evaluated_sources
+from scar.ir.program.operation_results import evaluated_sources
 from .model import (BlockArgument, CompletionResult, DataValue, ExitKind,
                     InvokeLiteralResult, OperationResult, ProtocolValue,
                     ReferenceValue, StateVersionValue, TerminatorKind)
@@ -105,7 +105,7 @@ def _prepare(ctx):
     ctx.preparation['await_local_contracts'] = sum(map(len, by_type.values()))
     ctx.preparation['await_advances'] = len(advances)
     ctx.preparation['await_body_links'] = len(links)
-    from .await_inventory_originals import prepare as prepare_original_inventory
+    from scar.ir.program.await_inventory_originals import prepare as prepare_original_inventory
     prepare_original_inventory(ctx, advances, links)
     return ctx._await_indexes
 
@@ -355,7 +355,7 @@ def await_inventory(ctx, scope=None):
             site, pending = next(iter(ctx._await_input_case_pending.items()))
             cursor = {'phase': 'await_input_case_inventory', 'advance': site, 'pending': pending}
         if ctx.budget.truncated:
-            from .await_inventory_originals import unchecked_suffix
+            from scar.ir.program.await_inventory_originals import unchecked_suffix
             jobs.extend(unchecked_suffix(ctx, jobs))
         originals = {**ctx._await_original_anchor_inventory,
             'sources': tuple((scope_id, owner, None if row is None else _site(row))
@@ -550,7 +550,7 @@ class _Await:
             return None
         source = dict(evaluated_sources(self.ctx, expected, anchor, choices, role=role))
         if role == 'GENERAL_RETURN':
-            from .await_qualification import BAD_ITERATORS
+            from scar.ir.program.await_inventory_originals import BAD_ITERATORS
             bad_kinds = BAD_ITERATORS
             code = 'protocol_await_return_qualification'
         elif role == 'WRAPPER_BODY':
@@ -563,7 +563,7 @@ class _Await:
         bad = tuple(case for case in source['cases'] if case['kind'] in bad_kinds)
         protection = None
         if bad and role == 'GENERAL_RETURN':
-            from .await_qualification import protected_advance
+            from scar.ir.program.await_inventory_originals import protected_advance
             protection = protected_advance(self.ctx, expected, iterator, choices)
             source['qualification_protection'] = protection
         for case in bad:
@@ -593,7 +593,7 @@ class _Await:
             branch_binding = ctx.bind(contract.result, OwnedUse(branch.id, branch.terminator.condition))
             self.check(branch_binding, 'protocol_await_qualification_branch', _site(row),
                        'qualification branch uses another bool evaluation')
-        from .await_qualification import qualification_view
+        from scar.ir.program.await_inventory_originals import qualification_view
         feasibility = qualification_view(ctx, row)
         if feasibility['predicate_conflict']:
             self.issues.append(('protocol_await_predicate_result', str(_site(row)),
@@ -893,7 +893,7 @@ def _legacy_qualification(ctx):
         # Other opaque results retain their original fast path and budget.
         if op.id not in creates and op.callee is None:
             from scar.ir.literals import PythonLiteral
-            from .evaluated_sources import _prepare as source_indexes
+            from scar.ir.program.operation_results import _prepare as source_indexes
             literal = source_indexes(ctx)[1].get(row.contract.result)
             if literal is None or type(literal.literal) is not PythonLiteral:
                 continue
@@ -910,7 +910,7 @@ def _legacy_qualification(ctx):
                     continue
                 source = evaluated_sources(ctx, row.contract.result, actual,
                                            ctx.selected_edges(case.guard), role='GENERAL_RETURN')
-                from .await_qualification import BAD_ITERATORS, protected_advance
+                from scar.ir.program.await_inventory_originals import BAD_ITERATORS, protected_advance
                 bad = tuple(item for item in source['cases'] if item['kind'] in BAD_ITERATORS)
                 protection = (protected_advance(ctx, row.contract.result, actual,
                     ctx.selected_edges(case.guard)) if bad else None)

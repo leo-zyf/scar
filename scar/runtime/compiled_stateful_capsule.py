@@ -26,7 +26,7 @@ def runtime_sources():
         'runtime/entry_runner.py','runtime/native_stateful.py','runtime/stateful_contract.py',
         'runtime/stateful_guard.py','runtime/native_loop.py','runtime/native_temporal_invariant.py',
         'runtime/loop_guard.py','runtime/loop_contract.py',
-        'runtime/bundle_metadata.py','trace/code_snapshot.py')
+        'runtime/array_copy_guard.py','trace/code_snapshot.py')
     return tuple(root/name for name in names)
 
 

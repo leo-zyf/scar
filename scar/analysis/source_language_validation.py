@@ -83,7 +83,7 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
     from scar.analysis.source_import_lowering import validate_imports
     imports = validate_imports(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.source_with_validation import validate_with
+    from scar.analysis.source_with import validate_with
     withs = validate_with(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
     from scar.analysis.source_set_lowering import validate_set_displays

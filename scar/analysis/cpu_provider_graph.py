@@ -15,7 +15,7 @@ from scar.analysis.source_roles import SyntaxRoleView
 from scar.analysis.static_query import _Fragments
 from scar.compiler.cpu_entry_replay import CheckedCpuPair, SCHEMA as PAIRED, check as check_paired
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program.normal_links import FactTable
+from scar.ir.program.normal_graph import FactTable
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.target_hardware import HardwareThread
 from scar.ir.record_codec import decode, encode

@@ -83,7 +83,7 @@ def _owned_v2(profile,launch,coords):
           and intent.get('target_argv_index')==launch['target_argv_index']
           and intent.get('target_argv')==launch['actual_exec_argv'][launch['target_argv_index']:],
           'owned actual target/intent namespace differs')
-    from scar.trace.os_capture_selection import validate_launch_selection
+    from scar.trace.native_callable_probe import validate_launch_selection
     selection=validate_launch_selection(intent,launch,
         launch['actual_exec_argv'][1:launch['target_argv_index']])
     if selection is not None:

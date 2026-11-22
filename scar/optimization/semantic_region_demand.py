@@ -8,7 +8,7 @@ slots are neither allocations nor evidence of physical data movement.
 from copy import deepcopy
 
 from scar.compiler.model import plan_from_dict
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.v2.codec import semantic_from_dict
 from scar.ir.v2.ids import OperationDefinitionID

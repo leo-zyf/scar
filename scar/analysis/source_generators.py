@@ -9,7 +9,7 @@ from dataclasses import replace
 from time import perf_counter
 
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import normal_targets as T, source_productions as P, source_protocols as D
+from scar.ir.program import normal_graph as T, source_productions as P, source_protocols as D
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.structured import PythonProtocolKind as K
 from scar.analysis.source_suspension_interfaces import SuspensionInterfaceIndex

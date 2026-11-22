@@ -20,7 +20,7 @@ SCHEMA = 'scar.activity-cost-preparation'
 def _workspace_costs(schedule, resources, time, time_reference, resource_reference, domain_reference,
                      candidate_id, calibration_refs, boundary_refs, dag_refs):
     from scar.optimization.workspace_costs import derive_workspace_costs
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context, component_key
     from scar.optimization.temporal_activity_costs import _samples
     from scar.optimization.stateful_recipe import stateful_backend_capability

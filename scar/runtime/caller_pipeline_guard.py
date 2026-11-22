@@ -190,7 +190,7 @@ def validate_contract(value):
         and value['input_writes']is False and value['fresh_output']is True,
         'guarded unmeasured caller profile required')
     if 'array_copy_contract' in value:
-        from .array_copy_guard import runtime_copy_contract
+        from scar.runtime.array_copy_guard import runtime_copy_contract
         _need(value['array_copy_contract']==runtime_copy_contract(),
             'exact ndarray C-order copy runtime contract required')
     return value
@@ -223,7 +223,7 @@ class NativeCallerPipeline:
         contract=self._contract;_contract_cpu_available(contract)
         if len(arrays)!=len(contract['parameters']):raise GuardFailure('caller native array count differs')
         if 'array_copy_contract'in contract:
-            from .array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            from scar.runtime.array_copy_guard import guard_copy_inputs, CopyGuardFailure
             try:guard_copy_inputs(arrays)
             except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         import numpy as np
@@ -433,7 +433,7 @@ def guarded_caller_pipeline(original,artifact,*,exclusive_inputs=False,measure_c
                 bound=signature.bind(*args,**kwargs)
                 arrays=[bound.arguments[name]for name in parameters]
             if 'array_copy_contract'in contract:
-                from .array_copy_guard import guard_copy_inputs
+                from scar.runtime.array_copy_guard import guard_copy_inputs
                 guard_copy_inputs(arrays)
             import numpy as np
             for name,value in zip(parameters,arrays):

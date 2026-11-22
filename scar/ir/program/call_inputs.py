@@ -1,14 +1,7 @@
 """Call inputs."""
 
 from dataclasses import dataclass
-from scar.ir.program.normal_targets import (
-    CallLink,
-    Endpoint,
-    GlobalPort,
-    FunctionConnection,
-    RouteKind,
-    Body,
-)
+from scar.ir.program.normal_graph import CallLink, Endpoint, GlobalPort, FunctionConnection, RouteKind, Body
 from scar.ir.program.providers import ProviderFactReference, ProviderArtifact
 from scar.ir.program.source_value_routes import (
     ReferenceTransition,
@@ -21,7 +14,7 @@ from scar.ir.program.source_productions import DeferredParameter
 from scar.ir.program import source_bindings as B, source_productions as P
 from scar.ir.program.dependencies import DependencyFrame
 from scar.ir.program.state_ports import BindingLocationTemplate
-from scar.ir.program.normal_links import CodeScopeRef
+from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.namespace_routes import NamespaceReferenceSlice, NamespaceSelector
 
 

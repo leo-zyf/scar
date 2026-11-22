@@ -2,8 +2,8 @@
 from dataclasses import dataclass
 
 from scar.ir.literals import PythonLiteral
-from .source_bytes import SourceBytesProfile
-from .source_tokens import SourceTokenError, SourceTokenWarning
+from scar.ir.program.source_bytes import SourceBytesProfile
+from scar.ir.program.source_bytes import SourceTokenError, SourceTokenWarning
 
 
 @dataclass(frozen=True, slots=True)

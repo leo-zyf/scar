@@ -18,12 +18,10 @@ from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRej
 from scar.compiler.invariant_loop_frontend import _InvariantLoopLowerer,_PendingLeafResult
 from scar.compiler.loop_frontend import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
-from scar.compiler.pipeline_frontend import (_PipelineLowerer, _Value, _Callee, _global_functions,
-    discover_graph_pipelines)
-from scar.compiler.pipeline_model import (PipelinePlan, compose_pipeline, prepare_pipeline_leaf,
-    document as pipeline_document,pipeline_from_dict)
-from scar.ir.program import source_productions as P, normal_links as F
-from scar.ir.program.normal_targets import Body
+from scar.compiler.pipeline_frontend import _PipelineLowerer, _Value, _Callee, _global_functions, discover_graph_pipelines
+from scar.compiler.pipeline_frontend import PipelinePlan, compose_pipeline, prepare_pipeline_leaf, document as pipeline_document, pipeline_from_dict
+from scar.ir.program import source_productions as P, normal_graph as F
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.optimization.optimizer import optimize_region
@@ -491,7 +489,7 @@ def verify_composite_invariant_loop_motion(report,*,catalog):
 
 def validate_composite_invariant_loop_links(proof,spec,loopsref):
     """Verify composite caller ports directly, without a schema-v1 proof cast."""
-    from scar.compiler.plan_build import _invariant_loop_links
+    from scar.compiler.middle.python import _invariant_loop_links
     from scar.ir.execution_recipe import read_artifact
     from scar.optimization.deployment_cost import _pointer
     if (type(proof) is not CompositeInvariantLoopProof or spec.get('id')!=proof.id

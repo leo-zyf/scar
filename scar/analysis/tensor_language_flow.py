@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from scar.analysis.tensor_return_flow import value_shape
-from scar.ir.program import normal_links as F, layout_templates as V, binding_returns as R, python_bindings as B
+from scar.ir.program import normal_graph as F, layout_templates as V, binding_returns as R, python_bindings as B
 from scar.ir.program.providers import ProviderFactReference
 
 

@@ -1,13 +1,7 @@
 """State materialization."""
 
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import (
-    normal_links as F,
-    state_ports as S,
-    source_productions as P,
-    view as V,
-    model as M,
-)
+from scar.ir.program import normal_graph as F, state_ports as S, source_productions as P, view as V, model as M
 from collections import defaultdict
 from dataclasses import replace
 from hashlib import sha256

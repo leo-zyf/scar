@@ -22,7 +22,7 @@ from scar.ir.program.class_builder import (
 )
 from scar.ir.program.class_entries import ClassSuiteOverlay, ClassSuiteMethodOverlay, decode_class_entry_overlay
 from scar.ir.program.codec import loads as load_core
-from scar.ir.program.module_entries import decode_frame_body
+from scar.ir.program.entry_namespaces import decode_frame_body
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_language import decode_language_overlay
 from scar.ir.program.source_references import SourceArtifactLocator

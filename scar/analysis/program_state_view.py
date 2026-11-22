@@ -14,8 +14,8 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_value_flow import _artifact
-from scar.ir.program import state_ports as S, source_productions as P, content_routes as C
-from scar.ir.program import content_routes as L
+from scar.ir.program import state_ports as S, source_productions as P, data_materials as C
+from scar.ir.program import data_materials as L
 from scar.ir.program import view as V
 from scar.ir.program.ids import OperationID
 from scar.ir.record_codec import encode, decode
@@ -24,7 +24,7 @@ from scar.ir.record_codec import encode, decode
 def _pins():
     from scar.analysis import source_state, source_effects, source_name_definitions
     from scar.analysis import source_name_access_anchors, source_value_flow, program_view
-    from scar.analysis import source_implicit_namespaces
+    from scar.analysis import source_namespace_interfaces as source_implicit_namespaces
     from scar.analysis import annotation_state as source_annotation_namespaces
     from scar.analysis import source_content, source_content_interfaces
     from scar.analysis import class_bindings as source_environment_values
@@ -214,7 +214,7 @@ def main():
     else:
         if not all((args.catalog,args.unit,args.out)):parser.error('--catalog --unit --out are required')
         from scar.analysis.source_reference_slice import source_port
-        from scar.ir.program import normal_links as F
+        from scar.ir.program import normal_graph as F
         state=ProgramView(args.catalog).state(args.unit)
         if args.interfaces_only and args.slot:parser.error('--interfaces-only cannot select slots')
         if not args.slot and not args.interfaces_only:

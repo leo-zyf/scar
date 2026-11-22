@@ -10,10 +10,7 @@ from dataclasses import replace
 from scar.analysis.compiler_topology import _Builder, _FUNCTIONLIKE, TopologyStop
 from scar.analysis.source_declaration_view import SourceDeclarationView
 from scar.ir.program.source_roles import SlotRef
-from scar.ir.program.compiler_symbols import (
-    INTRINSIC_NAMES, CompilerName, SymbolLimits, SymbolStop, RawCollection,
-    RawContribution, RawSlot, RawParameters, SourceDisposition,
-)
+from scar.ir.program.compiler_symbols import INTRINSIC_NAMES, CompilerName, SymbolLimits, SymbolStop, RawCollection, RawContribution, RawSlot, RawParameters, SourceDisposition
 
 RAW_RULES = (
     'SOURCE_BINDER', 'SOURCE_PARAMETER', 'TYPE_PARAMETER', 'NAME_LOAD', 'NAME_STORE',

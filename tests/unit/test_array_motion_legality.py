@@ -6,7 +6,7 @@ import pytest
 
 from scar.analysis.array_motion_legality import derive_array_motion_legality, verify_array_motion_legality
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.structured import PythonProtocolKind
 from scar.ir.record_codec import encode

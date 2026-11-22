@@ -11,7 +11,7 @@ from .composition import CompositionScope
 from .coordinates import OccurrencePoint
 from .content import ObservationConsumer
 from .ids import BlockVisitID, OperationOccurrenceID, RegionActivationID, RunID
-from .observations import RequiredEndpoint, RequiredOutput
+from scar.ir.execution.observation_validation import RequiredEndpoint, RequiredOutput
 from .validation import ExecutionIssue
 
 
@@ -103,7 +103,7 @@ def _point_owner(ctx, point):
 
 
 def _actual_owner(ctx, actual):
-    from .observations import BoundEndpoint, ExternalEndpoint, OutputValue
+    from scar.ir.execution.observation_validation import BoundEndpoint, ExternalEndpoint, OutputValue
 
     if type(actual) is Unresolved:
         return _point_owner(ctx, actual.point)

@@ -13,7 +13,7 @@ from scar.analysis.namespace_flow import NamespaceFlow
 from scar.analysis.source_frame_globals import FrameGlobalsFlow
 from scar.analysis.source_relations import SharedConstructionFlow, SharedContainerFlow
 from scar.analysis.source_reference_transport import ActiveReferenceTransport
-from scar.ir.program import normal_links as F, normal_entry as E
+from scar.ir.program import normal_graph as F, normal_graph as E
 
 
 class ContextEntrySolver(EntrySolver):

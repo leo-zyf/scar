@@ -59,10 +59,10 @@ def _write(path, document):
 
 def _pins():
     root = Path(__file__).resolve().parents[1]
-    names = ('compiler/calibrate_stateful_entry.py', 'compiler/canonical_stateful_inputs.py',
+    names = ('compiler/calibrate_stateful_entry.py', 'compiler/array_copy_contract.py',
         'analysis/stateful_entry_protocol.py', 'compiler/stateful_runtime.py',
         'compiler/export_stateful.py', 'compiler/native_lowering_view.py',
-        'compiler/stateful_model.py', 'optimization/stateful_cpu_choices.py',
+        'compiler/stateful_model.py', 'optimization/stateful_cpu_model.py',
         'runtime/stateful_guard.py', 'runtime/stateful_contract.py',
         'trace/code_snapshot.py', 'codegen/stateful.py', 'codegen/cpp.py')
     return {name:artifact_reference(root/name, 'scar.implementation-source') for name in names}
@@ -72,7 +72,7 @@ def _materials(specialization):
     from scar.compiler.native_lowering_view import derive_stateful_lowering_view
     from scar.compiler.stateful_model import stateful_from_dict
     from scar.compiler.export_stateful import project_stateful_contract
-    from scar.optimization.stateful_cpu_choices import _domain, stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import _domain, stateful_cpu_cost_context
 
     spec = read_artifact(specialization)
     _need((spec.get('schema'), spec.get('schema_version')) ==
@@ -97,7 +97,7 @@ def _materials(specialization):
 
 def _derive(request):
     from scar.analysis.stateful_entry_protocol import derive_stateful_entry_protocol
-    from scar.compiler.canonical_stateful_inputs import bind_canonical_stateful_inputs
+    from scar.compiler.array_copy_contract import bind_canonical_stateful_inputs
     from scar.compiler.stateful_holdout import TIMER
     from scar.runtime.compiled_deployment import thread_environment
 
@@ -181,7 +181,7 @@ def _summary(samples):
 def run_canonical_entry_calibration(path, *, expected_sha256):
     import numpy as np
     from scar.codegen.stateful import load
-    from scar.compiler.canonical_stateful_inputs import bind_canonical_stateful_inputs
+    from scar.compiler.array_copy_contract import bind_canonical_stateful_inputs
     from scar.compiler.stateful_runtime import _ArtifactAdapter
     from scar.runtime.stateful_guard import guarded_stateful_function
     from scar.runtime.compiled_deployment import thread_environment

@@ -226,7 +226,7 @@ class StreamInterfaceObserver:
 
 def read_stream_interfaces(metadata, *, expected_sha256, max_bytes=64_000_000):
     """Read closed observations and join their exact original CALL attempts."""
-    from scar.trace.files import open_binary
+    from scar.trace.reader import open_binary
     from collections import Counter
     path = Path(metadata).absolute()
     raw = path.read_bytes()

@@ -17,7 +17,7 @@ from scar.ir.record_codec import encode, loads
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.execution.ids import ProcessInstanceID
 from scar.trace.capture_coordinates import CaptureCoordinates
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 from scar.trace.os_resources import (
     OSResourceFragment, _CLONE, _EXIT, _TIME, _CALL, _UNFINISHED, _RESUMED,
     _arguments, _clone_flags, _number,

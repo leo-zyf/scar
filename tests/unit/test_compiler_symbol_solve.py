@@ -5,14 +5,8 @@ import sys
 import pytest
 
 from scar.analysis.compiler_symbol_solve import solve_symbols
-from scar.ir.program.compiler_symbols import (
-    CompilerName, INTRINSIC_NAMES, RawCollection, RawContribution, RawParameters,
-    RawSlot, SymbolLimits, SymbolStop,
-)
-from scar.ir.program.compiler_topology import (
-    BlockOrigin, CompilerBlock, CompilerTopologyInput, CompilerTopologyMaterial,
-    CompilerTopologyProfile,
-)
+from scar.ir.program.compiler_symbols import CompilerName, INTRINSIC_NAMES, RawCollection, RawContribution, RawParameters, RawSlot, SymbolLimits, SymbolStop
+from scar.ir.program.compiler_symbols import BlockOrigin, CompilerBlock, CompilerTopologyInput, CompilerTopologyMaterial, CompilerTopologyProfile
 from scar.ir.program.source_declarations import NameKey
 
 pytestmark = pytest.mark.skipif(sys.implementation.name != 'cpython' or sys.version_info[:3] != (3, 14, 7),

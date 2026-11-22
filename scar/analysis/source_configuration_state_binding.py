@@ -19,7 +19,7 @@ from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_mkdir,_durable_bytes
 from scar.analysis.source_template_links import _json
-from scar.ir.program import state_ports as S, source_productions as P, normal_links as F
+from scar.ir.program import state_ports as S, source_productions as P, normal_graph as F
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.record_codec import decode
 

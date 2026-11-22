@@ -29,10 +29,7 @@ from scar.ir.execution.ids import (
 from scar.ir.execution.model import (
     ExecutionModel, LegacyOperationRef, OccurrenceEvidenceBinding,
 )
-from scar.ir.execution.observations import (
-    ContractRef, ObservationRequirement, ObservationRoot, OutputValue,
-    RequiredOutput,
-)
+from scar.ir.execution.observation_validation import ContractRef, ObservationRequirement, ObservationRoot, OutputValue, RequiredOutput
 from scar.ir.execution.snapshot import external_artifact, snapshot_for
 from scar.ir.execution.work import DirectExecution, MaterializationRef, WithinOperation, WorkSubmission
 from scar.ir.program.ids import (

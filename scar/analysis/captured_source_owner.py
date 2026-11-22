@@ -20,7 +20,7 @@ from scar.ir.semantics_v2 import SourceSnapshot
 from scar.trace.captured_sources import (
     PROGRAM_PORTS_PROFILE, PROGRAM_PORTS_PROFILES, SOURCE_SCHEMA, SOURCE_SCOPE,
     PROCESS_SOURCE_SCOPE, validate_source_metadata, validate_source_row)
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 
 
 def _need(value, detail):

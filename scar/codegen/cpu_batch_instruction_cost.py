@@ -171,7 +171,7 @@ def _analyze(assembly,tool,cache,*,function=None,source_range=None,source_path=N
 
 
 def build_instruction_pack(domain,mode,out,*,cache):
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_resource_context
     domain=_domain(domain);_algorithm(mode);out=Path(out).resolve();_require(not out.exists(),'fresh kernel pack required')
     candidates=[r for r in domain['candidates'] if (r['worker_count']==1)==(mode=='serial')]
@@ -373,8 +373,8 @@ def project_instruction_context(domain,candidate_id,model_path,out):
 
 
 def make_calibration_context(domain,candidate_id):
-    from scar.optimization.stateful_cpu_model import stateful_resource_context,stateful_cpu_demand
-    from scar.optimization.stateful_cpu_choices import stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import stateful_resource_context, stateful_cpu_demand
+    from scar.optimization.stateful_cpu_model import stateful_cpu_cost_context
     row=next(r for r in domain['candidates'] if r['id']==candidate_id)
     parent=artifact_reference(Path(domain['base_stage_plan']['uri']).parent/'domain.json',domain['schema'])
     return dict(schema='scar.cpu-batch-calibration-context',schema_version=1,domain=parent,candidate_id=candidate_id,

@@ -23,7 +23,7 @@ from scar.analysis.source_template_links import _json
 from scar.analysis.source_world_flow import STRUCTURAL, _walk, _state
 from scar.analysis.source_world_material import WorldMaterial
 from scar.ir.program import source_value_routes as V, source_productions as P
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode, decode
 

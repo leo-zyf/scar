@@ -12,7 +12,7 @@ from scar.analysis.source_mapping_function_lowering import mapping_function_plan
 from scar.ir.program.model import (AccessMode, Behavior, BlockArgument, CompletionResult,
     ExitKind, LiteralOrigin, OperationResult, ReferenceValue, StateVersionValue,
     TerminatorKind, ValueKind, ValueType, value_type)
-from scar.ir.program.module_entries import FrameBodyProtocolKind as K, FrameCompletionProfile
+from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K, FrameCompletionProfile
 from scar.ir.program.source import SourceRole
 from scar.ir.program.state_addresses import AddressCoverage, AddressEffect, InvokeStateOperand, NamespaceKey, ReferenceOwner
 from scar.ir.program.structured import PythonProtocolKind as P
@@ -33,8 +33,7 @@ def validate_mapping_function(node, *, source, graph, overlay, semantic, code_ev
                               globals_namespace, locals_namespace):
     """Check one original definition; return its claimed factory/apply/store IDs."""
     from scar.analysis.source_module_lowering import require_root_evidence
-    from scar.ir.program.module_entries import (CompilerStructuredFrameBodyOverlay,
-        ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay, FrameBodyProfile)
+    from scar.ir.program.entry_namespaces import CompilerStructuredFrameBodyOverlay, ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay, FrameBodyProfile
     unit = overlay.declaration.unit
     compiler_profiles = {
         CompilerStructuredFrameBodyOverlay: FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,

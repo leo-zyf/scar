@@ -24,8 +24,8 @@ from scar.analysis.source_syntax import _digest
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.static_query import _Fragments
-from scar.ir.program import code_identity as X, source_protocols as E, source_text as S
-from scar.ir.program import normal_links as F, normal_targets as T, normal_graph as G, source_productions as P
+from scar.ir.program import code_identity as X, source_protocols as E, source_bytes as S
+from scar.ir.program import normal_graph as F, normal_graph as T, normal_graph as G, source_productions as P
 from scar.ir.program.python_bindings import SourceCallSite
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator

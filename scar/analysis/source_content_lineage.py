@@ -8,14 +8,14 @@ version is inferred from a GET, a stable receiver, a shape, or a world token.
 from collections import Counter, defaultdict
 from dataclasses import replace
 
-from scar.ir.program import content_routes as C, normal_graph as G
-from scar.ir.program import content_routes as L
+from scar.ir.program import data_materials as C, normal_graph as G
+from scar.ir.program import data_materials as L
 from scar.ir.program.ids import OperationID
 from scar.ir.program.dependencies import (DependencyPoint as Point, DependencyEdge as Edge,
     DependencyCondition as Condition, DependencyEvidence as Evidence,
     DependencyFrontier as Frontier, DependencyNeighborhood as Neighborhood,
     DependencyKind as K, DependencyMeaning as Meaning, DependencyStrength as Strength)
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_productions import ProductionStepID
 from scar.ir.record_codec import encode
 

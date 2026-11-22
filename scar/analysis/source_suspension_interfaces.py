@@ -14,11 +14,11 @@ from time import perf_counter
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_productions import _digest, production_plan_document
 from scar.analysis.source_template_links import read_template_graph, _worker_stores
-from scar.ir.program import normal_graph as G, normal_links as F, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as F, source_productions as P
 from scar.ir.program import suspension_interfaces as I
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.record_codec import decode, encode
 
 

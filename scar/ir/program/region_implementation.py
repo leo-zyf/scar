@@ -6,10 +6,10 @@ semantics, purity, identity or transformation authority.
 """
 from collections import deque
 
-from .copy_flow import flow, selected
-from .copy_consumers import consumer_graph
+from scar.ir.program.data_materials import flow, selected
+from scar.ir.program.data_materials import consumer_graph
 from .model import (CompletionResult, ExitKind, InvokeLiteralResult, OperationResult)
-from .operation_results import produced_slots, result_legs
+from scar.ir.program.operation_results import produced_slots, result_legs
 from .protocols import OwnedUse
 from .structured import ControlEdgeReference
 

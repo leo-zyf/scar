@@ -3,7 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 from scar.analysis.source_invocation_view import derive_invocation_bindings,SourceInvocationProvider
-from scar.ir.program import source_productions as P,normal_graph as G,normal_links as F,normal_targets as T
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program.call_edges import (InvocationKey,CallRecordAnchor,CapturedSite,CapturedCode,CodeCapture,
     FrameEntry,FrameExit,FrameCompletion)
 from scar.ir.program.call_operands import (OperandCallAttempt,OperandEventKind,CallableShape,CallableKind,FunctionLayout)

@@ -13,7 +13,7 @@ from scar.analysis.fixed_grid_entry_abi import (
 from scar.analysis.fixed_grid_source import _attribute, _binding
 from scar.compiler.aten_export_cuda_source import qualify_cuda_export
 from scar.compiler.aten_native_recipe import SCHEMA as RECIPE, _fields, _identifier
-from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.program import codec
 from scar.ir.v2.schemas import canonical_json
 from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS

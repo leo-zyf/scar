@@ -9,7 +9,7 @@ from scar.ir.program.call_edges import CapturedSite, InvocationKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode, loads
 from scar.trace.capture_coordinates import collector_namespace
-from scar.trace.files import open_binary
+from scar.trace.reader import open_binary
 from scar.trace.torch_call_scopes import LIMIT, PROFILE
 
 

@@ -7,14 +7,14 @@ import pytest
 
 from scar.analysis.program_view import SOURCE_REPRESENTATION,_digest
 from scar.analysis.source_content_forwarding import SourceContentForwardingProvider,_control_window,_Refuse
-from scar.ir.program import normal_graph as G,normal_targets as T,source_productions as P
-from scar.ir.program import content_routes as F
+from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
+from scar.ir.program import data_materials as F
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint as Point,
     DependencyMeaning,DependencyStrength)
 from scar.ir.program.ids import RegionID,ValueID,OperationID
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
-from scar.ir.program.content_routes import ContentAccessRef
+from scar.ir.program.data_materials import ContentAccessRef
 from scar.ir.program.source_value_routes import ReferenceSlice
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.source_template_links import SourceTemplateKey

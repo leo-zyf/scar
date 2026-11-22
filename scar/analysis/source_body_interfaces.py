@@ -27,7 +27,7 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import source_productions as P, normal_graph as G
 from scar.ir.program import body_observations as R
-from scar.ir.program.normal_targets import Body
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.ids import ProviderID
 from scar.ir.record_codec import encode, decode
 
@@ -234,7 +234,7 @@ def body_interface(view, body):
 
 
 def _modules():
-    from scar.analysis import source_connection_contracts, source_namespace_interfaces
+    from scar.analysis import source_connection_contracts, source_namespace_interfaces as source_namespace_interfaces
     from scar.analysis import source_productions, program_view
     from scar.ir import record_codec
     return (

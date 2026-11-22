@@ -202,7 +202,7 @@ def read_state_view(path):
     from scar.analysis.program_view import ProgramView
     from scar.analysis.program_state_view import _rows,_counts,_pins,_restore_request_order
     from scar.analysis.source_value_flow import _artifact
-    from scar.ir.program import normal_targets as T,normal_links as F
+    from scar.ir.program import normal_graph as T, normal_graph as F
     path=Path(path).resolve();raw=(path/'result.json').read_bytes();header=json.loads(raw)
     if header['schema_version']==1:
         from scar.analysis.program_state_view import read_state_view as legacy_read

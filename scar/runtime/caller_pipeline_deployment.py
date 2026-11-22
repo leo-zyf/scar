@@ -37,7 +37,7 @@ def runner_identity():
         'runtime/caller_pipeline_cli.py', 'runtime/caller_pipeline_guard.py',
         'runtime/compiled_deployment.py', 'runtime/entry_runner.py', 'runtime/native_loop.py',
         'runtime/stateful_guard.py', 'runtime/native_stateful.py', 'runtime/stateful_contract.py',
-        'runtime/bundle_metadata.py', 'runtime/aten_provider_identity.py', 'trace/code_snapshot.py',
+        'runtime/array_copy_guard.py', 'runtime/aten_provider_identity.py', 'trace/code_snapshot.py',
         'optimization/paired_entry_selection.py')
     return sha256(json.dumps([(name, sha256((root/name).read_bytes()).hexdigest()) for name in names],
         separators=(',', ':')).encode()).hexdigest()
@@ -48,7 +48,7 @@ _NUMPY_MODULES = ('numpy', 'numpy._core', 'numpy._core._multiarray_umath')
 
 
 def _provider_member(path, expected=None, old_identity=None):
-    from .aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
+    from scar.runtime.aten_provider_identity import file_stat_identity, local_file_identity, verify_library_file
 
     with path.open('rb') as member:
         baseline = file_stat_identity(os.fstat(member.fileno()))

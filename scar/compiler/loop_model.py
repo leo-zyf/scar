@@ -5,8 +5,7 @@ import json
 from pathlib import Path
 
 from scar.compiler.model import SourceRef
-from scar.compiler.pipeline_model import (PipelinePlan,CalleeGuard,validate_pipeline,
-    document as pipeline_document,pipeline_from_dict)
+from scar.compiler.pipeline_frontend import PipelinePlan, CalleeGuard, validate_pipeline, document as pipeline_document, pipeline_from_dict
 
 SCHEMA='scar.array-loop-plan'
 PROFILE='cpu-array-loop-v1'

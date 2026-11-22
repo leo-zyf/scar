@@ -19,7 +19,7 @@ from scar.ir.program.call_edges import CallLinkStatus, InvocationKey
 from scar.ir.program.call_operands import CallableKind
 from scar.ir.program.environments import EnvironmentRole
 from scar.ir.record_codec import encode
-from scar.trace.files import open_binary
+from scar.trace.reader import open_binary
 
 
 _PATTERN = re.compile(r"function-(environments|environment-meta)\.([1-9][0-9]*)\.(jsonl|json)(?:\.gz)?$")

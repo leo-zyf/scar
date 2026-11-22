@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from scar.ir.program.ids import ValueID
 from scar.ir.literals import PythonLiteral
-from scar.ir.program.normal_targets import GlobalPort, LanguageOperationSite
+from scar.ir.program.normal_graph import GlobalPort, LanguageOperationSite
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.python_bindings import PythonBindingID, SourceCallSite
-from scar.ir.program.normal_links import LanguageOperationKind, OperatorSelector
+from scar.ir.program.normal_graph import LanguageOperationKind, OperatorSelector
 from scar.ir.program.binding_returns import (
     ValueShapeKind,
     ValueShape,

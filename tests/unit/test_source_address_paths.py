@@ -3,8 +3,8 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_reference_slice import source_port
-from scar.ir.program import normal_links as F, normal_graph as G, source_productions as P
-from scar.ir.program import content_routes as A
+from scar.ir.program import normal_graph as F, normal_graph as G, source_productions as P
+from scar.ir.program import data_materials as A
 from scar.ir.program.source_template_links import SourceTemplateKey
 from scar.ir.record_codec import encode, decode
 

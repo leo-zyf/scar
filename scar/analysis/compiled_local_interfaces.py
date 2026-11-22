@@ -18,7 +18,7 @@ from scar.analysis.source_productions import _digest
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import normal_links as F, source_productions as P
+from scar.ir.program import normal_graph as F, source_productions as P
 from scar.ir.program.suspension_interfaces import WitnessSource
 from scar.ir.record_codec import decode, encode
 

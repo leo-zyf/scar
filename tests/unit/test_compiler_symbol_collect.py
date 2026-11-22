@@ -18,7 +18,7 @@ from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial
 from scar.ir.program.source_declarations import SourceDeclarationsMaterial
 from scar.ir.program.source_symbols import SourceSymbolsMaterial
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.compiler_symbols import SymbolLimits, SymbolStop, RawCollection
 from scar.ir.record_codec import decode, encode
 

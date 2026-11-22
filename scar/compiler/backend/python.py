@@ -30,7 +30,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
     from scar.compiler.lower_stateful_choices import lower_stateful_choices
     from scar.ir.execution_recipe import artifact_reference,read_artifact
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import build_stateful_cpu_profiles
     domains=Path(domains).resolve();out=Path(out).resolve()
     if domains.is_dir():domains=domains/'result.json'

@@ -207,7 +207,7 @@ class ModuleAttributeDependencies:
         tree,semantic,text=self.source_context(body)
         module=getattr(body,'module',None)
         if module is None and body.document.get('module') is not None:
-            from scar.ir.program.module_entries import decode_frame_body
+            from scar.ir.program.entry_namespaces import decode_frame_body
             module=decode_frame_body(body.document['module'])
         metadata=getattr(body,'metadata',None)
         if metadata is None:

@@ -17,7 +17,7 @@ from .resources import (
 from .order import EventRecord, QueueOrderProfile, QueueWait
 from .work import QueuePrefix, ResourceOutcome, WorkQuiescence, WorkRetention, WorkSubmission
 from .content import ContentRead, ValueDenotation, WorkEvidenceBinding
-from .observations import ObservationRequirement, ObservationRoot
+from scar.ir.execution.observation_validation import ObservationRequirement, ObservationRoot
 from .production import (
     EvidenceInventoryBinding, OutcomeProduction, SourceEndpointBridge,
     WriteAssociation,

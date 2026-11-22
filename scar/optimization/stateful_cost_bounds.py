@@ -69,12 +69,12 @@ def _comparison_context(context):
 
 
 def derive_stateful_cost_bounds(admission_report,out):
-    from scar.optimization import stateful_batch_cost,stateful_cpu_choices,stateful_cpu_model
+    from scar.optimization import stateful_batch_cost, stateful_cpu_model as stateful_cpu_choices, stateful_cpu_model as stateful_cpu_model
     from scar.codegen import cpu_batch_boundary_resource,cpu_batch_boundary_resource_replay
     from scar.codegen.cpu_batch_instruction_cost import make_calibration_context
     from scar.codegen.cpu_batch_boundary_resource_replay import verify_aux_sample
-    from scar.optimization.stateful_cpu_choices import _domain,_cost,stateful_cpu_cost_context
-    from scar.optimization.stateful_cpu_model import stateful_cpu_demand,component_key
+    from scar.optimization.stateful_cpu_model import _domain, _cost, stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import stateful_cpu_demand, component_key
 
     out=Path(out).resolve();_need(not out.exists(),'fresh stateful cost-bound output required')
     admission_ref=artifact_reference(admission_report,'scar.admitted-cpu-domain-batch-plan')

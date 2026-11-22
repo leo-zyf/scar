@@ -2,13 +2,13 @@
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.call_inputs import call_operands
-from scar.analysis.source_frontend import build_frontend
+from scar.compiler.frontend.python import build_frontend
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.effects import Knowledge
 from scar.ir.program.dependencies import DependencyKind as K
 from scar.ir.program.binding_ports import ArgumentRole
-from scar.ir.program.content_routes import ContentRequestKind, WholeOwner
+from scar.ir.program.data_materials import ContentRequestKind, WholeOwner
 from scar.ir.program.source_productions import ApplyInplaceOperator, ApplyPythonProtocol, ProductionStep
 from scar.ir.program.structured import PythonProtocolKind
 

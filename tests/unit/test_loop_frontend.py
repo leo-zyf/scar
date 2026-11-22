@@ -10,8 +10,8 @@ from scar.compiler.loop_frontend import _LoopLowerer
 from scar.compiler.loop_model import ArrayLoopPlan,document,loop_from_dict,loop_digest
 from scar.compiler.model import SourceRef,ArrayRegion,Expr
 from scar.compiler.pipeline_frontend import _Callee
-from scar.compiler.pipeline_model import CalleeGuard,RegionCall,compose_pipeline
-from scar.ir.program import source_productions as P,normal_graph as G,normal_links as F
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueType,ValueKind

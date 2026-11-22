@@ -7,6 +7,7 @@ of runtime dispatch, resource placement or whole-program graph closure.
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
+from importlib import import_module
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,35 @@ import threading
 import time
 
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
+
+
+_WORKERS = {
+    'static': 'scar.analysis.static_program',
+    'source-bytes': 'scar.analysis.source_materials',
+    'source-tokens': 'scar.analysis.source_lexing',
+    'source-syntax': 'scar.analysis.source_parsing',
+    'source-symbols': 'scar.analysis.source_symbol_materials',
+    'source-roles': 'scar.analysis.source_role_materials',
+    'source-contexts': 'scar.analysis.source_context_materials',
+    'source-declarations': 'scar.analysis.source_declaration_materials',
+    'source-bindings': 'scar.analysis.source_binding_materials',
+    'compiler-topology': 'scar.analysis.compiler_topology_materials',
+    'compiler-symbols': 'scar.analysis.compiler_symbol_materials',
+    'program-types': 'scar.analysis.program_type_materials',
+    'source-anchors': 'scar.analysis.source_anchor_materials',
+}
+_DOMAINS = ('expressions', 'statements', 'roots')
+
+
+def _run_worker(argv):
+    stage, *arguments = argv
+    domain = stage.removeprefix('source-')
+    if stage != domain and domain in _DOMAINS:
+        from scar.analysis.source_expression_materials import main as materials
+        return materials(arguments, domain=domain)
+    if stage not in _WORKERS:
+        raise SystemExit(f'unknown frontend stage {stage}')
+    return import_module(_WORKERS[stage]).main(arguments)
 
 
 _LAYERS = (
@@ -30,9 +60,6 @@ _LAYERS = (
     ('compiler-topology', 'scar.compiler-topology-gate'),
     ('compiler-symbols', 'scar.compiler-symbol-gate'),
 )
-_DOMAINS = ('expressions', 'statements', 'roots')
-
-
 def _receipt(path):
     raw = path.read_bytes()
     return dict(path=str(path), bytes=len(raw), sha256=sha256(raw).hexdigest())
@@ -49,6 +76,9 @@ class _Run:
         raw = json.dumps(dict(schema='scar.source-frontend-progress', schema_version=1,
             stages=self.rows), indent=2).encode()+b'\n'
         _durable_bytes(self.out/'progress.json', raw, replace=True)
+
+    def worker(self, name, arguments, report, schema, **required):
+        return self.stage(name, __spec__.name, ['--worker', *arguments], report, schema, **required)
 
     def stage(self, name, module, arguments, report, schema, **required):
         command = [sys.executable, '-B', '-m', module, *map(str, arguments)]
@@ -241,11 +271,11 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
         connection_reference_catalog()
         if source_model is None:
             extra_roots = [part for p in paths[1:] for part in ('--source-root',p)]
-            run.stage('source', 'scar.compiler.frontend.stages', ['static',paths[0],*extra_roots,'--out',model,
+            run.worker('source', ['static',paths[0],*extra_roots,'--out',model,
                 '--phase','sources','--jobs',jobs], model/'manifest.json', 'scar.static-program',
                 phase='sources', source_catalog_status='COMPLETE', worker_errors=[], source_changed=[])
             for command, schema in _LAYERS:
-                run.stage(command, 'scar.compiler.frontend.stages', [command,'--model',model,'--out',out/command,
+                run.worker(command, [command,'--model',model,'--out',out/command,
                     '--jobs',jobs], out/command/'result.json', schema, complete_for_declared_units=True)
         else:
             model, source_manifest = _reuse_source_model(run,source_model,paths,sources)
@@ -262,9 +292,9 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
             singular = domain[:-1] if domain != 'roots' else 'root'
             schema = 'scar.source-'+singular+'-materials'
             common = ['source-'+domain,'--model',model,*selection,'--jobs',workers]
-            run.stage(domain, 'scar.compiler.frontend.stages', [*common,'--out',out/domain],
+            run.worker(domain, [*common,'--out',out/domain],
                 out/domain/'result.json', schema, status='LOCAL_RULES_VERIFIED', mode='COLLECTION')
-            run.stage(domain+'-verified', 'scar.compiler.frontend.stages', [*common,'--out',out/(domain+'-verified'),
+            run.worker(domain+'-verified', [*common,'--out',out/(domain+'-verified'),
                 '--materials',out/domain], out/(domain+'-verified')/'result.json', schema,
                 status='LOCAL_RULES_VERIFIED', mode='FRESH_VERIFICATION')
 
@@ -421,6 +451,9 @@ def build_frontend(paths, out, *, sources=(), jobs=4, trace=None, project_root=N
 
 
 def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments[:1] == ['--worker']:
+        return _run_worker(arguments[1:])
     parser = argparse.ArgumentParser(prog='scar frontend', description=__doc__)
     parser.add_argument('paths', nargs='+', metavar='PATH', help='source directories; never imported or executed')
     parser.add_argument('--out', required=True, help='fresh output directory')
@@ -432,7 +465,7 @@ def main(argv=None):
     parser.add_argument('--trace', help='existing trace to join after local call interfaces; no target execution')
     parser.add_argument('--project-root', help='original trace namespace root; required with --trace')
     parser.add_argument('--adapter-directory', help='explicit CPython symbol adapter for observed source replay')
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if (args.trace is None) != (args.project_root is None):
         parser.error('--trace and --project-root must be supplied together')
     report = build_frontend(args.paths,args.out,sources=args.source,jobs=args.jobs,

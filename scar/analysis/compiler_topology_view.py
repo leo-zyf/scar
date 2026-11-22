@@ -2,7 +2,7 @@
 from hashlib import sha256
 import json
 
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.source_symbols import SourceSymbolsMaterial

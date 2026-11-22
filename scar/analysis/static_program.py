@@ -303,7 +303,7 @@ def _read_fragment(root, descriptor):
 def _lowering_route(entry):
     if entry["kind"] == "CLASS" and entry["source_ref"] is not None and len(entry.get("semantic_definition_ids") or ()) == 1:
         return {"status": "READY_TO_ATTEMPT", "body_supported": None,
-                "adapter": "scar.analysis.source_class_body_lowering.lower_class_suite",
+                "adapter": "scar.analysis.source_class_body.lower_class_suite",
                 "profile": "STATIC_CLASS_SUITE_METHOD_314_V1", "runtime_witness_required": False,
                 "required_inputs": ["original_class_definition", "prepared_source_layers", "static_class_code_layout"],
                 "qualification": "Class suite namespace/cell/frame and conditional method-call protocols; explicit continuations and open effects remain, not a claim of complete class construction."}

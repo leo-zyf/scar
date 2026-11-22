@@ -52,7 +52,7 @@ def guarded_function(original,artifact,*,exclusive_inputs=False,selection=None,t
         bound.apply_defaults()
         values=[bound.arguments[p] for p in artifact.plan.region.parameters]
         if 'EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in artifact.plan.region.assumptions:
-            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            from scar.runtime.array_copy_guard import guard_copy_inputs, CopyGuardFailure
             try:guard_copy_inputs(values)
             except CopyGuardFailure as error:return fallback(str(error),args,kwargs)
         if observer_active and observer(source,artifact.plan.region.parameters,values) is False:

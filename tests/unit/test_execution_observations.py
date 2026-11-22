@@ -9,9 +9,7 @@ from scar.ir.execution.ids import (
     ObservationRequirementID, ObservationRootID, OperationOccurrenceID,
     HostThreadInstanceID, ProcessInstanceID, ResourceBindingID, ResourceInstanceID, RunID, ValueOccurrenceID,
 )
-from scar.ir.execution.observations import (
-    BoundEndpoint, ExternalEndpoint, OutputValue, RequiredOutput,
-)
+from scar.ir.execution.observation_validation import BoundEndpoint, ExternalEndpoint, OutputValue, RequiredOutput
 from scar.ir.execution.resources import InstanceTarget, ProcessTarget, ThreadTarget
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.execution.validation import require_valid, validate

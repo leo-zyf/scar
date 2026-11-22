@@ -16,7 +16,7 @@ import subprocess
 from scar.codegen import cpp
 from scar.analysis.array_motion import derive_array_motion,verify_array_motion
 from scar.compiler.model import document,plan_from_dict,region_from_dict
-from scar.compiler.pipeline_model import prepare_pipeline_leaf
+from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
 from scar.compiler.invariant_loop import plan_invariant_loop
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.hardware import bind_cpu_placement,validate_cpu_placement

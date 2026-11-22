@@ -7,11 +7,7 @@ from pathlib import Path
 
 from scar.analysis.compiler_topology import read_compiler_topology, _catalog as _topology_catalog
 from scar.analysis.source_declarations import read_source_declarations, _catalog as _declaration_catalog
-from scar.ir.program.compiler_symbols import (
-    INTRINSIC_NAMES, SymbolLimits, SourceDisposition, CompilerSymbolCatalog,
-    CompilerSymbolsInput, CompilerSymbolsProfile, CompilerSymbolsMaterial,
-    SymbolProjection, ParameterProjection, SymbolStop, SymbolFrontier,
-)
+from scar.ir.program.compiler_symbols import INTRINSIC_NAMES, SymbolLimits, SourceDisposition, CompilerSymbolCatalog, CompilerSymbolsInput, CompilerSymbolsProfile, CompilerSymbolsMaterial, SymbolProjection, ParameterProjection, SymbolStop, SymbolFrontier
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial

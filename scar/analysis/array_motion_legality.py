@@ -12,7 +12,7 @@ import json
 from scar.analysis.array_motion import derive_array_motion
 from scar.analysis.source_effects import classify_instruction
 from scar.ir.execution_recipe import artifact_reference
-from scar.ir.program import normal_graph as G, normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
 from scar.ir.record_codec import decode, encode
 from scar.optimization.resource_solver import semantic_sha256
 

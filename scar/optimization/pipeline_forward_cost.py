@@ -42,7 +42,7 @@ def _document(value):
 
 
 def _materials(region_document, blueprint, demand):
-    from scar.compiler.pipeline_model import pipeline_from_dict
+    from scar.compiler.pipeline_frontend import pipeline_from_dict
     from scar.optimization.pipeline_demand import (
         SUCCESSOR_SCHEMA, verify_pipeline_demand, verify_successor_pipeline_cost_demand,
     )

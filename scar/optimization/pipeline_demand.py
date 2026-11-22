@@ -8,7 +8,7 @@ source program, imports a workload, compiles native code or loads a library.
 from copy import deepcopy
 
 from scar.compiler.model import document as plan_document, plan_from_dict
-from scar.compiler.pipeline_model import document as pipeline_document, pipeline_digest, validate_pipeline
+from scar.compiler.pipeline_frontend import document as pipeline_document, pipeline_digest, validate_pipeline
 from scar.ir.execution_recipe import read_artifact
 from scar.optimization.demand import analyze_region_demand
 from scar.optimization.resource_solver import _shape_instantiation, semantic_sha256
@@ -138,7 +138,7 @@ def derive_pipeline_demand(pipeline, blueprint):
     compilation, CDLL or workload execution.  It does not perform the original
     F4 source replay or discharge any of its live runtime guards.
     """
-    from scar.compiler.pipeline_fusion_delivery import verify_fusion_blueprint
+    from scar.compiler.pipeline_runtime import verify_fusion_blueprint
     pipeline = validate_pipeline(pipeline)
     value = verify_fusion_blueprint(pipeline, blueprint['original_memory_plan'],
         blueprint['target'], blueprint, available_cpu_ids=blueprint['execution']['allowed_cpu_ids'])

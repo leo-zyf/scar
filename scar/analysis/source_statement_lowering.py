@@ -248,7 +248,7 @@ def try_statement(builder,node,cursor):
     from scar.ir.program.model import (DataValue,Operation,OperationResult,ProtocolValue,StateVersionValue,StateAccess,
         AccessMode,Footprint,FootprintKind,BlockArgument)
     from scar.ir.program.state_addresses import ExistingAccess
-    from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+    from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     from scar.analysis.program_lowering import _REF
     parent=builder.current_owner;handler=node.handlers[0]
     after=builder.new_block(node)

@@ -6,7 +6,7 @@ import pytest
 from scar.analysis import interprocedural_summary as summary
 from scar.analysis.interprocedural_summary import (_compose, expand_interprocedural_dependencies,
     resolve_dependency_set, verify_interprocedural_summary)
-from scar.ir.program import normal_graph as G, normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
 from scar.ir.record_codec import encode
 from scar.optimization.resource_solver import semantic_sha256
 

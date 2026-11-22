@@ -21,7 +21,7 @@ _STATEFUL = 'scar.stateful-runtime-contract'
 def runner_implementation_sha256():
     package = Path(__file__).resolve().parents[1]
     names = ("runtime/entry_runner.py", "runtime/native_loop.py", "runtime/loop_guard.py",
-             "runtime/loop_contract.py", "runtime/bundle_metadata.py", "runtime/entry_cli.py",
+             "runtime/loop_contract.py", "runtime/array_copy_guard.py", "runtime/entry_cli.py",
              "runtime/__init__.py", "entrypoint.py", "__main__.py", "trace/code_snapshot.py", "trace/__init__.py",
              "optimization/deployment_gate.py", "optimization/deployment_cost.py", "optimization/__init__.py")
     names += ('runtime/native_stateful.py', 'runtime/stateful_guard.py', 'runtime/stateful_contract.py')
@@ -233,7 +233,7 @@ def run_script(entry, argv, *, bundle, expected_admission_sha256, exclusive_inpu
         return _execute(entry, argv, None, "native_disabled_by_policy")
     if exclusive_inputs is not True:
         return _execute(entry, argv, None, "exclusive_inputs_not_explicitly_true")
-    from .bundle_metadata import inspect_bundle
+    from scar.runtime.array_copy_guard import inspect_bundle
     metadata = inspect_bundle(bundle, expected_admission_sha256=expected_admission_sha256)
     if Path(metadata["contract"]["source"]["path"]).resolve() == entry:
         return _execute(entry, argv, None, "entry_defined_loop_main_installation_not_supported")

@@ -14,7 +14,7 @@ from scar.analysis.source_namespace_interfaces import extract_namespace_interfac
 from scar.analysis.source_productions import _digest
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.static_query import _Fragments
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T, source_productions as P
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.program import source_bindings as B, source_declarations as D
 from scar.ir.program import code_identity as V, name_flow as A
 from scar.ir.program.providers import ProviderArtifact

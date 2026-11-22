@@ -18,7 +18,7 @@ from scar.optimization.resource_solver import semantic_sha256
 
 def project_source_pipeline_graph(pipeline, region_document, source_values):
     from scar.analysis.pipeline_region_pass import read_fusion_region, _contract
-    from scar.compiler.pipeline_model import pipeline_digest
+    from scar.compiler.pipeline_frontend import pipeline_digest
 
     oir=read_fusion_region(region_document)
     qualification=region_document['qualification'];projection=region_document['projection']

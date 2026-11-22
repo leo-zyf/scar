@@ -20,8 +20,8 @@ from scar.compiler.graph_frontend import (discover_graph_regions, _source_identi
 from scar.compiler.loop_frontend import _LoopLowerer, _Parameter, _Range, _Iterator, _Carry, _RANGE, _ITEM
 from scar.compiler.pipeline_frontend import _global_functions, _Callee
 from scar.compiler.model import ArrayRegion, SourceRef, region_from_dict
-from scar.ir.program import source_productions as P, normal_links as F, normal_graph as G
-from scar.ir.program.normal_targets import Body
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import code_key
@@ -355,7 +355,7 @@ def canonical_invariant_motion_interface(proof):
 def _motion_origin_entry(origin):
     """Recover the original ENTER from its retained typed result coordinate."""
     from scar.ir.record_codec import decode
-    from scar.ir.program.normal_targets import GlobalPort
+    from scar.ir.program.normal_graph import GlobalPort
 
     results=[decode(GlobalPort, value) for value in origin['results']]
     candidates=[value for value in results if value.unit==origin['unit']

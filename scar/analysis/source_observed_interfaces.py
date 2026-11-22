@@ -28,7 +28,7 @@ from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.observed_positional_receiver import recover_positional_receiver
 from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
-from scar.ir.program import function_sites as I, normal_targets as T, source_productions as P
+from scar.ir.program import function_sites as I, normal_graph as T, source_productions as P
 from scar.ir.program import source_observations as R
 from scar.ir.program.python_call_targets import PythonTargetKind
 from scar.ir.program.call_edges import CallEdgeBudget
@@ -120,7 +120,7 @@ def _receiver_base(facts,callee):
     another receiver, so this source path alone never proves its identity.
     """
     from scar.analysis.source_field_interfaces import _ancestors
-    from scar.ir.program.normal_links import AttributeAction
+    from scar.ir.program.normal_graph import AttributeAction
     incoming=defaultdict(list)
     for source,target in facts.aliases:incoming[target].append(source)
     values=_ancestors(incoming,callee)
@@ -131,7 +131,7 @@ def _receiver_base(facts,callee):
 def _positional_receiver_sources(facts, call, witness):
     """Require the replayed fast locals to be the original F4 source operands."""
     from scar.analysis.source_field_interfaces import _ancestors
-    from scar.ir.program.normal_links import NamespaceKind
+    from scar.ir.program.normal_graph import NamespaceKind
 
     if (call.keywords or call.positional_pack is not None or call.keyword_pack is not None
             or not 0 <= witness.explicit_position < len(call.positional)):

@@ -7,8 +7,8 @@ Unknown receivers remain requirements in the original item-access facts.
 from collections import defaultdict,deque
 
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import normal_links as F, normal_targets as T
-from scar.ir.program.content_routes import ContentIndexCycle
+from scar.ir.program import normal_graph as F, normal_graph as T
+from scar.ir.program.data_materials import ContentIndexCycle
 
 
 def _key(value):
@@ -167,7 +167,7 @@ class ContainerFlow:
         from its sealed F4 parent rather than interpreting a generic update as
         a complete dictionary or deriving key closure from observed contents.
         """
-        from scar.ir.program import normal_graph as G,source_productions as P
+        from scar.ir.program import normal_graph as G, source_productions as P
         from scar.ir.program.structured import PythonProtocolKind as K
         from scar.ir.record_codec import decode
         from scar.analysis.normal_graph import _Emitter

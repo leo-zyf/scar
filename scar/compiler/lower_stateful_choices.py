@@ -23,8 +23,7 @@ def _write(path, value):
 
 def lower_stateful_choices(choice_path, out, *, plan_only=False):
     """Verify the full recorded domain; plan or compile its selected CPU only."""
-    from scar.optimization.stateful_cpu_choices import (
-        verify_stateful_cpu_choices, selected_stateful_plan)
+    from scar.optimization.stateful_cpu_model import verify_stateful_cpu_choices, selected_stateful_plan
     from scar.compiler.selected_stateful_lowering import lower_selected_stateful
 
     _require(type(plan_only) is bool, 'plan_only must be an exact boolean')

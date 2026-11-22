@@ -1,16 +1,252 @@
-"""Source-first await obligations left joined to exact captured continuations.
+"""Await outcomes."""
 
-Static definitions remain separate from occurrence evidence. Missing captures
-do not remove obligations; declared associations do not authorize rewriting.
-"""
-from scar.ir.program.model import ExitKind, InvokeLiteralResult, TerminatorKind
-from scar.ir.program.protocols import DriveResult, HostTerminal, OwnedUse
+from scar.ir.program.model import (
+    ExitKind,
+    InvokeLiteralResult,
+    TerminatorKind,
+    OperationResult,
+    StateVersionValue,
+)
+from scar.ir.program.protocols import DriveResult, HostTerminal, OwnedUse, ContractResult
+from scar.ir.execution.resumable_flow import value_for_use, gap
+from scar.ir.execution.common import Unresolved
+from scar.ir.program.await_inventory_originals import qualification_view
+from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
 
-from .await_outcome_evidence import (append_gaps, choice, locate, pair, port_value,
-                                    selected_choices, states, status, target)
-from .resumable_flow import value_for_use
+
+# Bounded original-port evidence for one captured await continuation.
+#
+# These helpers query existing occurrences and copy recipes.  They create no
+# identity, value, state or control facts, and never search sibling activations.
+def status(selected=True, *, gaps=(), children=(), bindings=(), definition=None):
+    if selected is False:
+        return 'NOT_APPLICABLE'
+    relevant = tuple(child for child in children if child.get('status') != 'NOT_APPLICABLE')
+    if (definition is not None and definition.get('status') == 'CONTRADICTED'
+            or any(child.get('status') == 'CONTRADICTED' for child in relevant)
+            or any(binding.get('match') is False for binding in bindings)):
+        return 'CONTRADICTED'
+    if (selected is None or gaps or any(binding.get('match') is None for binding in bindings)
+            or any(child.get('status') in ('PARTIAL', 'NOT_CHECKED', 'MISSING') for child in relevant)
+            or definition is not None and definition.get('status') in ('PARTIAL', 'NOT_CHECKED', 'MISSING')):
+        return 'PARTIAL'
+    return 'DECLARED'
 
 
+def append_gaps(local, rows):
+    for row in rows:
+        if row.get('status') != 'NOT_APPLICABLE':
+            for item in row.get('gaps', ()):
+                if item not in local:
+                    local.append(item)
+
+
+def choice(ctx, occurrence, edge):
+    if occurrence is None or occurrence.operation != edge.operation:
+        return None
+    transfer = ctx.outgoing.get(occurrence.id)
+    return None if transfer is None else transfer.successor_index == edge.successor_index
+
+
+def locate(ctx, anchor, site, shared, *, entry=False):
+    """First original site on this captured same-segment suffix.
+
+    A missing occurrence at the original position stays missing.  A fully
+    captured different branch can establish nonselection; a truncated suffix
+    cannot.  A second evaluation of the anchor bounds this evaluation's suffix.
+    """
+    if anchor is None:
+        return None, None
+    if not entry and anchor.operation == site:
+        return anchor, True
+    key = (anchor.id, site, entry)
+    cache = getattr(ctx, '_await_outcome_locations', None)
+    if cache is None:
+        cache = ctx._await_outcome_locations = {}
+    if not shared.spend('await_outcome_location_queries', path='await.outcome.location'):
+        return None, None
+    if key in cache:
+        return cache[key]
+    visit = anchor if entry else ctx.visits[anchor.visit]
+    segment, seen = visit.segment, set()
+    first = True
+    while visit.id not in seen:
+        if not shared.spend('await_outcome_suffix_visits', path='await.outcome.suffix'):
+            return None, None
+        seen.add(visit.id)
+        block = ctx.blocks[visit.block]
+        start = 0 if entry or not first else block.operations.index(anchor.operation) + 1
+        for operation in block.operations[start:]:
+            if not shared.spend('await_outcome_suffix_operations', path='await.outcome.suffix'):
+                return None, None
+            if operation == site:
+                result = ctx.session_occurrences_by_visit_site.get((visit.id, operation)), True
+                cache[key] = result
+                return result
+            if (not entry and operation == anchor.operation) or operation in ctx.body_drives:
+                cache[key] = None, False
+                return cache[key]
+        last = ctx.core_operations[block.operations[-1]]
+        occurrence = ctx.session_occurrences_by_visit_site.get((visit.id, last.id))
+        if last.terminator is None or last.terminator.kind in (
+                TerminatorKind.RETURN, TerminatorKind.RAISE, TerminatorKind.SUSPEND):
+            # A missing terminal does not establish a captured completion.
+            result = None, False if occurrence is not None else None
+            cache[key] = result
+            return result
+        transfer = None if occurrence is None else ctx.outgoing.get(occurrence.id)
+        if transfer is None or ctx.visits[transfer.target].segment != segment:
+            cache[key] = None, None
+            return cache[key]
+        visit, first = ctx.visits[transfer.target], False
+    return None, None
+
+
+def pair(ctx, source, target, shared):
+    """A common *original copy ancestor*, separately from denotation checks."""
+    from .await_links import _flags
+    from .resumable_identity import compatible
+    from .pending_payloads import copy_recipe
+    gaps, support, match, comparison = [], [], None, None
+    present = all(value is not None and type(value) is not Unresolved for value in (source, target))
+    if not shared.spend('await_outcome_copy_pairs', path='await.outcome.copy'):
+        gaps.append('await_outcome_copy_budget')
+    elif not present:
+        gaps.append('await_outcome_value_unobserved')
+    else:
+        ancestors, cursor, seen, left, conflict = {}, source.id, set(), [], False
+        while cursor not in seen:
+            if not shared.spend('await_outcome_copy_ancestors', path='await.outcome.copy.source'):
+                break
+            seen.add(cursor)
+            ancestors[cursor] = len(left)
+            recipe, missing, contradicted = copy_recipe(ctx, cursor, shared)
+            gaps.extend(missing)
+            conflict |= contradicted
+            if recipe is None:
+                break
+            left.append(recipe)
+            cursor = recipe['source']
+        cursor, seen, right = target.id, set(), []
+        while not shared.truncated and cursor not in seen:
+            if not shared.spend('await_outcome_copy_ancestors', path='await.outcome.copy.target'):
+                break
+            seen.add(cursor)
+            if cursor in ancestors:
+                count = ancestors[cursor] + len(right)
+                if shared.spend('await_outcome_copy_support', count + 1, path='await.outcome.copy.support'):
+                    support = [*left[:ancestors[cursor]], *right]
+                    match = True
+                break
+            recipe, missing, contradicted = copy_recipe(ctx, cursor, shared)
+            gaps.extend(missing)
+            conflict |= contradicted
+            if recipe is None:
+                break
+            right.append(recipe)
+            cursor = recipe['source']
+        if match is None:
+            gaps.append('await_original_copy_unproved')
+        if conflict:
+            match = False
+        if shared.spend('await_outcome_compatibility', path='await.outcome.compatibility'):
+            comparison = compatible(ctx, source, target, gaps, 'await.outcome.copy')
+            if comparison['status'] == 'CONFLICT':
+                match = False
+        else:
+            match = None
+            gaps.append('await_outcome_copy_budget')
+        for recipe in support:
+            if not shared.spend('await_outcome_recipe_compatibility', path='await.outcome.copy.recipe'):
+                if match is not False:
+                    match = None
+                gaps.append('await_outcome_copy_budget')
+                break
+            evidence = compatible(ctx, ctx.values[recipe['source']], ctx.values[recipe['target']],
+                                  gaps, 'await.outcome.recipe')
+            if evidence['status'] == 'CONFLICT':
+                match = False
+    return {'source_value': source, 'target_value': target, 'match': match,
+        'support': tuple(support), 'compatibility': comparison, 'gaps': tuple(gaps), **_flags()}
+
+
+def port_value(ctx, port, occurrences, shared=None):
+    from .await_links import _result, _use
+    from scar.ir.program.protocols import DriveResult
+    if type(port) is ContractResult:
+        port = port.result_port
+    if type(port) is OwnedUse:
+        return value_for_use(ctx, _use(ctx, occurrences.get(port.operation), port))
+    site = (port.operation if type(port) is OperationResult else
+            port.edge.operation if type(port) is InvokeLiteralResult else
+            port.outcome.drive if type(port) is DriveResult else None)
+    return _result(ctx, occurrences.get(site), port, shared=shared)
+
+
+def states(ctx, definitions, occurrences, shared):
+    rows = []
+    for definition in definitions:
+        admitted = shared.spend('await_outcome_states', path='await.outcome.states')
+        source = port_value(ctx, definition['source'], occurrences, shared) if admitted else None
+        target = port_value(ctx, definition['target'], occurrences, shared) if admitted else None
+        binding = pair(ctx, source, target, shared)
+        local = list(binding['gaps'])
+        rows.append({'definition': definition, 'source': source, 'target': target,
+            'binding': binding, 'status': status(gaps=local, bindings=(binding,), definition=definition),
+            'gaps': tuple(local)})
+    return tuple(rows)
+
+
+def target(ctx, definition, anchor, source, shared):
+    """An original terminal/Use on this anchor's actual continuation."""
+    from .await_links import _use
+    operation, reached = locate(ctx, anchor, definition.operation, shared)
+    local, use = [], None
+    if type(definition) is OwnedUse:
+        use = _use(ctx, operation, definition)
+    elif type(definition) is HostTerminal and operation is not None:
+        original = ctx.core_operations[operation.operation]
+        payload = tuple(use for use in original.uses if use.id in original.terminator.values
+                        and not isinstance(ctx.core_values[use.value], StateVersionValue))
+        if len(payload) == 1:
+            use = ctx.uses.get((operation.id, payload[0].id))
+    value = value_for_use(ctx, use)
+    binding = pair(ctx, source, value, shared) if reached is not False else {
+        'source_value': source, 'target_value': None, 'match': None, 'support': (), 'gaps': ()}
+    if reached is not False:
+        if operation is None:
+            local.append('await_outcome_consumer_occurrence_missing')
+        if use is None:
+            local.append('await_outcome_consumer_use_missing')
+        local.extend(binding['gaps'])
+    return {'definition': definition, 'operation': operation, 'use': use, 'value': value,
+        'selected': reached, 'binding': binding,
+        'status': status(reached, gaps=local, bindings=(binding,)), 'gaps': tuple(local)}
+
+
+def selected_choices(ctx, choices, known, anchors, shared, *, input_guard=None):
+    """Project a tuple in its exact original caller/child contexts."""
+    from .await_links import _guard
+    answers = []
+    for edge in choices:
+        if not shared.spend('await_outcome_choices', path='await.outcome.choices'):
+            return None
+        occurrence = known.get(edge.operation)
+        if occurrence is not None and edge != input_guard:
+            answers.append(choice(ctx, occurrence, edge))
+            continue
+        region = ctx.await_flow.region_of[edge.operation]
+        candidates = tuple(anchor for anchor in anchors if anchor is not None
+                           and ctx.activations[ctx.activation_of(anchor.id)].region == region)
+        answers.append(_guard(ctx, candidates[-1], edge, shared,
+            incoming=edge == input_guard) if candidates else None)
+    return False if False in answers else None if None in answers else True
+
+
+# Source-first await obligations left joined to exact captured continuations.
+#
+# Static definitions remain separate from occurrence evidence. Missing captures
+# do not remove obligations; declared associations do not authorize rewriting.
 def _finish(row, *, selected=True, children=(), bindings=(), definition=None):
     local = list(row.get('gaps', ()))
     append_gaps(local, children)
@@ -565,4 +801,111 @@ def project_outcomes(ctx, scope, shared):
     return result
 
 
-__all__ = ['project_outcomes']
+# Actual qualification choices over the original predicate and copy ports.
+def qualification_occurrences(ctx, flow, shared, *, scope=None):
+    from .await_links import _flags, _result, _root, _use
+    from .host_order import host_path
+    from scar.ir.program.protocols import OwnedUse
+
+    sites = (tuple((row, ctx.await_occurrences_by_site.get(row.operation, ()))
+                   for row in ctx.await_qualification_sites) if scope is None else
+             getattr(ctx, 'await_qualifications_by_scope', {}).get(scope, ()))
+    total = sum(len(occurrences) for _, occurrences in sites)
+    rows, gaps, checked, cursor = [], [], 0, None
+    for row, occurrences in sites:
+        for occurrence in occurrences:
+            local = []
+            if not shared.spend('await_qualification_occurrences', path='await.qualification.occurrences'):
+                rows.append({'record': row, 'occurrence': occurrence, 'feasibility': None,
+                    'acceptance_selected': None, 'status': 'NOT_CHECKED', 'gaps': (), **_flags()})
+                cursor = cursor or {'phase': 'qualification_occurrences', 'occurrence': occurrence.id}
+                continue
+            view = qualification_view(flow, row)
+            contract = row.contract
+            candidate = value_for_use(ctx, _use(ctx, occurrence, OwnedUse(row.operation, contract.input_use)))
+            expected = None
+            root = _root(ctx, candidate)
+            creation = ctx.body_known_create_handles.get(root)
+            if creation is not None and view['source']['binding']['match'] is True:
+                declaration = ctx.body_creates[ctx.occurrences[creation].operation]
+                cases = tuple(case for case in view['cases']
+                              if case['source_case']['create'] is not None
+                              and case['source_case']['create'].operation == declaration.operation
+                              and case['source_case']['current'] is True)
+                truths = {case['accepts'] for case in cases}
+                if len(truths) == 1:
+                    expected = next(iter(truths))
+            elif candidate is not None and type(candidate) is not Unresolved and root is not None:
+                original = ctx.core_values[ctx.values[root].value].origin
+                cases = tuple(case for case in view['cases']
+                              if case['source_case']['kind'] == 'NON_ITERATOR'
+                              and case['source_case']['origin'] == original
+                              and case['source_case']['current'] is True)
+                if cases and view['source']['binding']['match'] is True:
+                    expected = False
+            selected, branches = None, []
+            if contract.branch is None:
+                transfer = ctx.outgoing.get(occurrence.id)
+                if transfer is not None:
+                    edge = ctx.core_operations[row.operation].terminator.successors[transfer.successor_index]
+                    selected = edge.kind is ExitKind.NORMAL
+            else:
+                boolean = _result(ctx, occurrence, contract.result)
+                boolean_root = _root(ctx, boolean)
+                for branch in ctx.await_occurrences_by_site.get(contract.branch, ()):
+                    if not shared.spend('await_qualification_branch_occurrences', path='await.qualification.branch'):
+                        break
+                    if ctx.activation_of(branch.id) != ctx.activation_of(occurrence.id):
+                        continue
+                    operation = ctx.core_operations[branch.operation]
+                    actual = value_for_use(ctx, _use(ctx, branch,
+                        OwnedUse(branch.operation, operation.terminator.condition)))
+                    if boolean_root is None or boolean_root != _root(ctx, actual):
+                        continue
+                    path = host_path(ctx, OccurrencePoint(occurrence.id, OccurrencePhase.AFTER),
+                                     OccurrencePoint(branch.id, OccurrencePhase.BEFORE), budget=shared)
+                    transfer = ctx.outgoing.get(branch.id)
+                    if path is not None and transfer is not None:
+                        branches.append({'branch': branch, 'transfer': transfer, 'host_path': path})
+                if len(branches) == 1:
+                    selected = branches[0]['transfer'].successor_index == (0 if contract.accepts_true else 1)
+            if expected is None:
+                gap(ctx, local, 'await_qualification_input_kind_unproved', occurrence.id,
+                    'this exact input lacks a complete independent declared source kind')
+            if selected is None:
+                gap(ctx, local, 'await_qualification_choice_unobserved', occurrence.id,
+                    'this own predicate result lacks one exact captured accepting/rejecting choice')
+            if expected is False and selected is True and not shared.truncated:
+                ctx.issue('await_qualification_acceptance', occurrence.id,
+                    'known unsuitable candidate selected the accepting leg of its exact qualification')
+            if (contract.branch is not None and expected is True and selected is False
+                    and not shared.truncated):
+                ctx.issue('await_qualification_rejection', occurrence.id,
+                    'declared iterator selected the rejecting leg of the fixed bool predicate')
+            complete = not shared.truncated
+            checked += int(complete)
+            rows.append({'record': row, 'occurrence': occurrence, 'feasibility': view,
+                'candidate': candidate, 'expected_acceptance': expected, 'acceptance_selected': selected,
+                'branches': tuple(branches), 'status': 'PARTIAL' if local or not complete else 'DECLARED',
+                'gaps': tuple(local), **_flags()})
+            gaps.extend(local)
+            if not complete:
+                cursor = cursor or {'phase': 'qualification_occurrences', 'occurrence': occurrence.id}
+    return {'records': len(sites), 'occurrence_count': total, 'checked_occurrence_count': checked,
+        'pending_occurrence_count': total - checked, 'occurrences': tuple(rows), 'gaps': tuple(gaps),
+        'cursor': cursor, 'known_inventory_complete': checked == total and not shared.truncated, **_flags()}
+
+
+__all__ = [
+    'project_outcomes',
+    'append_gaps',
+    'choice',
+    'locate',
+    'pair',
+    'port_value',
+    'selected_choices',
+    'states',
+    'status',
+    'target',
+    'qualification_occurrences',
+]

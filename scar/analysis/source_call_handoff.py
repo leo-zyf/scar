@@ -15,7 +15,7 @@ from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G
 from scar.ir.program.call_edges import CapturedCode, InvocationKey
 from scar.ir.program.control import LanguageCompletionKind
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.binding_ports import ArgumentRole
 from scar.ir.program.source_value_routes import SourceCallScope, SourceInvocationPort
 from scar.ir.record_codec import decode, encode

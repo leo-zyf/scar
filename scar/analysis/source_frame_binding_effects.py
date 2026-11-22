@@ -13,7 +13,7 @@ from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_reference_slice import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_productions as P, name_flow as D
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.control import LanguageCompletionKind as C

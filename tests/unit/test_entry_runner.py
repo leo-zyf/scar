@@ -7,7 +7,7 @@ from types import CodeType, SimpleNamespace
 
 import pytest
 
-from scar.runtime import entry_runner, bundle_metadata, native_loop, loop_guard
+from scar.runtime import entry_runner, array_copy_guard as bundle_metadata, native_loop, loop_guard
 from scar.trace.code_snapshot import code_key
 
 

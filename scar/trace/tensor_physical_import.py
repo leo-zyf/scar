@@ -15,7 +15,7 @@ from scar.ir.v2.evidence import EvidenceEdge, EvidenceEndpoint, EvidenceNodeKind
 from scar.ir.v2.ids import StorageAllocationID, StorageRegionID
 from scar.ir.v2.values import StorageAllocation, StorageRegion
 from scar.trace.dispatch_import import _retained_artifact
-from scar.trace.files import open_binary, resolve
+from scar.trace.reader import open_binary, resolve
 from scar.trace.native_import import _canonical_hash, _pairs, _constant
 from scar.trace.tensor_physical import PROFILE, PROVIDER_REVISION
 

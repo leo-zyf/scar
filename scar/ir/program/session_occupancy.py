@@ -5,7 +5,7 @@ Neither an observed bool nor a future BodyDrive selects that source.  These
 views describe supplied ports and conditions; HOLD history is a separate query.
 """
 from .admission import admission_routes
-from .copy_flow import required_choices, selected
+from scar.ir.program.data_materials import required_choices, selected
 from .drivers import DriverReceiverKind
 from .model import CompletionResult, ExitKind, InvokeLiteralResult, StateVersionValue
 from .protocol_async import _Analysis

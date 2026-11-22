@@ -5,7 +5,7 @@ from struct import calcsize
 
 from .native_ordered_resources import SCHEMA as RESOURCE_PLAN
 from .resource_solver import semantic_sha256
-from .sparse_parallel_recipe import DETACHED as DETACHED_RECIPE
+from scar.optimization.sparse_parallel_recipe import DETACHED as DETACHED_RECIPE
 
 
 SCHEMA = 'scar.native-ordered-stream'

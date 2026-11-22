@@ -19,7 +19,7 @@ from scar.compiler.loop_frontend import _LoopLowerer,_Parameter,_Range,_Iterator
 from scar.compiler.model import SourceRef
 from scar.compiler.stateful_model import StatefulRegion,stateful_digest,stateful_from_dict,document as step_document
 from scar.ir.execution_recipe import artifact_reference,read_artifact
-from scar.ir.program import source_productions as P,normal_links as F,normal_graph as G
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 

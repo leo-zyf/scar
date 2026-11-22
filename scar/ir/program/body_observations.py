@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from scar.ir.program import normal_graph as G, source_productions as P, control as C
 from scar.ir.program.ids import ProviderID
-from scar.ir.program.normal_targets import GlobalPort, Body
-from scar.ir.program.normal_links import CodeScopeWitness, CodeScopeRef
+from scar.ir.program.normal_graph import GlobalPort, Body
+from scar.ir.program.normal_graph import CodeScopeWitness, CodeScopeRef
 from scar.ir.program.call_edges import (
     CapturedCode,
     CapturedSite,

@@ -13,7 +13,7 @@ from .control_validation import derive_pending_facts
 from .model import ProtocolValue
 from .providers import ProviderBinding, ProviderEnvelope, ProviderRegion
 from .native import BoundaryRelation, EntryPortRef, ExitPortRef, NativeBoundary
-from .native_validation import port_key, region_port_keys
+from scar.ir.program.native_callables import port_key, region_port_keys
 from .cleanup_validation import CleanupRouteKind, CleanupRouteStep
 from .resumption import ResumeInput, ResumeSlot, ResumeSlotKind, SuspendTerminator, saved_actual_use
 from .resumption_flow import first_body_outcome_operations
@@ -384,7 +384,7 @@ class ProgramIndex:
                     if term is not None and term.kind in (TerminatorKind.RETURN, TerminatorKind.RAISE):
                         for index, actual in enumerate(term.values):
                             self._exit_ports[(region.id, term.exit, index)].append(self._uses[actual])
-        from .copy_consumers import prepare_index
+        from scar.ir.program.data_materials import prepare_index
         prepare_index(self)
 
     def producer(self, value_id: ValueID):
@@ -767,18 +767,18 @@ class ProgramIndex:
         the pending token itself is not a payload alias. Supplied-model evidence
         only; not dynamic identity or rewrite authority.
         """
-        from .call_returns import source_binding
+        from scar.ir.program.call_returns import source_binding
         return source_binding(self, expected, actual, guard=guard, budget=budget)
 
     def copy_consumers(self, source, *, guard=None, budget=4096):
         """Original copy Uses with distinct static call frames and full ports."""
-        from .copy_consumers import copy_consumers
+        from scar.ir.program.data_materials import copy_consumers
         return copy_consumers(self, source, guard=guard, budget=budget)
 
     def completion_continuations(self, source, *, start=None, choices=(),
                                  cross_resume=False, budget=4096):
         """Typed payload continuation; declared future resume requires opt-in."""
-        from scar.ir.program.continuation_ports import completion_continuations
+        from scar.ir.program.suspension_interfaces import completion_continuations
         return completion_continuations(self, source, start=start, choices=choices,
             cross_resume=cross_resume, budget=budget)
 

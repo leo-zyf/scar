@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 
 from scar.ir.program.functions import BodyLoweringProfile
-from scar.ir.program.module_entries import FrameBodyProfile
+from scar.ir.program.entry_namespaces import FrameBodyProfile
 from scar.ir.program.source_language import SourceLanguageCapability as C
 
 

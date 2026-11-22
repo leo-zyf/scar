@@ -1,10 +1,10 @@
 """Namespace values."""
 
-from scar.ir.program import source_productions as P, namespace_routes as N, normal_links as F
+from scar.ir.program import source_productions as P, namespace_routes as N, normal_graph as F
 from scar.ir.program.structured import PythonProtocolKind as K
 from collections import defaultdict
 from dataclasses import dataclass
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_exec_roots import ExecEndpoint
 from scar.ir.program.namespace_routes import NamespaceInterfaceRef
 from scar.ir.program.source_builtin_namespaces import (

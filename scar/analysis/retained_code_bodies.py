@@ -17,7 +17,7 @@ from scar.analysis.static_query import _Fragments
 from scar.compiler.graph_frontend import _source_identity
 from scar.ir.program.call_edges import CapturedCode
 from scar.ir.program.code_identity import CompilerCodeRole as Role
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode
 from scar.trace.code_snapshot import describe_code

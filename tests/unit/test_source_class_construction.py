@@ -12,7 +12,7 @@ from scar.analysis.static_compilation import compile_source_unit
 from scar.analysis.static_lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
 from scar.ir.program.functions import BodyLoweringProfile
-from scar.ir.program.module_entries import FrameBodyProfile
+from scar.ir.program.entry_namespaces import FrameBodyProfile
 from scar.ir.program.source_language import SourceLanguageCapability as C
 from scar.ir.record_codec import decode
 from scar.ir.v2.common import SourceReference
@@ -23,7 +23,7 @@ def test_module_literal_bool_if_maps_compiler_elision_without_executing_source(t
     import ast
     import dis
     import scar.analysis.source_module_lowering as lowering
-    from scar.ir.program.module_entries import StatementSequenceField as F
+    from scar.ir.program.entry_namespaces import StatementSequenceField as F
     from scar.ir.program.structured import PythonProtocolKind as P
 
     profile=FrameBodyProfile.STRUCTURED_MAPPING_CLASS_314_V1
@@ -137,7 +137,7 @@ def test_module_literal_bool_if_maps_compiler_elision_without_executing_source(t
 
     # Module annotation indices belong to original compilation, including
     # source in a compiler-elided arm; they must not be renumbered at runtime.
-    from scar.ir.program.module_entries import ModuleAnnotationMode as AM,FrameBodyProtocolKind as MK
+    from scar.ir.program.entry_namespaces import ModuleAnnotationMode as AM, FrameBodyProtocolKind as MK
     from scar.ir.program.model import ExitKind
     for future in (False,True):
         text=('from __future__ import annotations\n' if future else '')+(

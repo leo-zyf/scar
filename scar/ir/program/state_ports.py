@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 from scar.ir.program.configuration import ConfigurationProtocolSource
-from scar.ir.program.normal_links import CodeScopeWitness, CodeScopeRef, Namespace
-from scar.ir.program.normal_targets import GlobalPort, Endpoint, FunctionConnection, Route, Body
+from scar.ir.program.normal_graph import CodeScopeWitness, CodeScopeRef, Namespace
+from scar.ir.program.normal_graph import GlobalPort, Endpoint, FunctionConnection, Route, Body
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.normal_graph import Edge
 from enum import Enum

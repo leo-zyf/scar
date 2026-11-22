@@ -51,7 +51,7 @@ def _decoded_source_inputs(document):
     metadata=decode(LoweringMetadata,document['metadata'])
     module=class_entry=interface=None
     if document.get('module') is not None:
-        from scar.ir.program.module_entries import decode_frame_body
+        from scar.ir.program.entry_namespaces import decode_frame_body
         module=decode_frame_body(document['module'])
     elif document.get('class') is not None:
         from scar.ir.program.class_entries import decode_class_entry_overlay

@@ -46,7 +46,7 @@ def _sources(body, metadata, facts=None):
     # class suites retain them in LoweringMetadata. Class entry overlays carry
     # the class ABI/compiler protocols, not operation_links/use_links.
     if body.document.get('module') is not None:
-        from scar.ir.program.module_entries import decode_frame_body
+        from scar.ir.program.entry_namespaces import decode_frame_body
         return decode_frame_body(body.document['module'])
     return metadata
 

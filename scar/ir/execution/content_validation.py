@@ -454,7 +454,7 @@ def content_errors(ctx):
             if root is None:
                 ctx.issue('content_observation_root', path, 'observation consumer references an absent root')
             else:
-                from .observations import BoundEndpoint, ExternalEndpoint, OutputValue
+                from scar.ir.execution.observation_validation import BoundEndpoint, ExternalEndpoint, OutputValue
                 if type(root.actual) is OutputValue:
                     actual = ctx.values.get(root.actual.value)
                 if type(row.placement) is EndpointContent:

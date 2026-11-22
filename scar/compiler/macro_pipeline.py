@@ -34,14 +34,14 @@ def _pins():
         'compiler/semantic_revision.py','analysis/source_pipeline_graph.py',
         'optimization/semantic_rewrite.py','optimization/semantic_region_demand.py',
         'optimization/optimizer.py','optimization/graph.py',
-        'optimization/deployment_cost.py','compiler/pipeline_fusion_delivery.py')
+        'optimization/deployment_cost.py','compiler/pipeline_runtime.py')
     return {name:sha256((root/name).read_bytes()).hexdigest()for name in names}
 
 
 def _derive(inputs,profile,cpus,budget,gain,*,strict_minimum_gain=True):
     from scar.compiler.project_pipeline_temporal import open_temporal_inputs
     from scar.analysis.pipeline_region_pass import derive_fusion_region
-    from scar.compiler.pipeline_fusion_delivery import derive_fusion_blueprint
+    from scar.compiler.pipeline_runtime import derive_fusion_blueprint
     from scar.optimization.macro_pass import run_fusion_pass
     if profile is not None:read_artifact(profile)
     with open_temporal_inputs(inputs,include_source=True)as(pipeline,memory,_,target,proof,values,raw):
@@ -113,7 +113,7 @@ def prepare(inputs,out,*,cost_profile=None,available_cpu_ids=None,memory_budget_
     preparation=_write(output/'preparation.json',metadata)
     native=None
     if compile_native and report['decision']=='REWRITE':
-        from scar.compiler.pipeline_fusion_delivery import build_fusion_blueprint
+        from scar.compiler.pipeline_runtime import build_fusion_blueprint
         artifact=build_fusion_blueprint(pipeline,blueprint,output/'native')
         native=artifact_reference(artifact.directory/'artifact.json',artifact.report['schema'])
     result=dict(schema='scar.macro-pipeline-build',schema_version=1,preparation=preparation,
@@ -172,7 +172,7 @@ def select_callable(original,build,*,trial=False,exclusive_inputs=False):
         raise ValueError('a selected and compiled source-qualified fusion is required')
     native=published['native_artifact'];read_artifact(native)
     from scar.codegen.fused_pipeline import load
-    from scar.compiler.pipeline_fusion_delivery import select_fusion_callable
+    from scar.compiler.pipeline_runtime import select_fusion_callable
     artifact=load(Path(native['uri']).parent)
     return select_fusion_callable(original,report,artifact=artifact,trial=True,
         exclusive_inputs=exclusive_inputs,region_document=region,blueprint=blueprint)

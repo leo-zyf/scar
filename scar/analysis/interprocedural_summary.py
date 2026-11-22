@@ -12,7 +12,7 @@ import json
 import networkx as nx
 
 from scar.ir.execution_recipe import artifact_reference
-from scar.ir.program import normal_targets as T
+from scar.ir.program import normal_graph as T
 from scar.ir.record_codec import decode, encode
 from scar.optimization.resource_solver import semantic_sha256
 

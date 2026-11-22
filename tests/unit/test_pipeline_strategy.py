@@ -5,7 +5,7 @@ import pytest
 
 from test_pipeline_memory import call, chain
 from scar.compiler.model import ArrayRegion, Expr, SourceRef, document
-from scar.compiler.pipeline_model import compose_pipeline
+from scar.compiler.pipeline_frontend import compose_pipeline
 from scar.optimization import optimize_region
 from scar.optimization.pipeline_strategy import (
     fused_execution_plan, plan_pipeline_strategy, verify_pipeline_strategy,

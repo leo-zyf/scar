@@ -22,7 +22,7 @@ import types
 
 from scar.compiler.stateful_model import stateful_from_dict
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.optimization.stateful_cpu_choices import _domain
+from scar.optimization.stateful_cpu_model import _domain
 from scar.optimization.stateful_cpu_model import stateful_cpu_demand
 from scar.runtime.native_stateful import NativeStateful, _Scalar, _Table, _resolve_providers
 from scar.runtime.stateful_contract import (ASSUMPTIONS, FP_POLICY, MEMORY_SCOPE,

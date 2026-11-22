@@ -29,9 +29,9 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.static_query import _Fragments
 from scar.ir.program import code_identity as V, code_identity as C
-from scar.ir.program import code_identity as X, source_text as S
+from scar.ir.program import code_identity as X, source_bytes as S
 from scar.ir.program.source_symbols import SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile
-from scar.ir.program.source_tokens import SourceTokenWarning
+from scar.ir.program.source_bytes import SourceTokenWarning
 from scar.ir.record_codec import decode, encode
 
 

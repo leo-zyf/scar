@@ -17,7 +17,7 @@ from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.compiler.graph_frontend import _metadata
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.name_flow import NameDefinitionKind as D

@@ -2,10 +2,7 @@
 from dataclasses import dataclass
 import sys
 
-from scar.ir.program.compiler_symbols import (
-    BlockSymbols, CompilerName, CompilerSlot, INTRINSIC_NAMES, ProtocolRequirement,
-    RawCollection, SlotTransform, SymbolFact, SymbolLimits, SymbolSolution, SymbolStop,
-)
+from scar.ir.program.compiler_symbols import BlockSymbols, CompilerName, CompilerSlot, INTRINSIC_NAMES, ProtocolRequirement, RawCollection, SlotTransform, SymbolFact, SymbolLimits, SymbolSolution, SymbolStop
 
 FACT_RULES = ('COLLECT', 'GLOBAL_DIRECTIVE', 'NONLOCAL_BINDING', 'LOCAL_BINDING',
     'CLASS_GLOBAL', 'CLASS_BOUND', 'ENCLOSING_BINDING', 'IMPLICIT_GLOBAL',

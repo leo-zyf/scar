@@ -115,7 +115,7 @@ def _body_input(ctx, flow, occurrence, row, source_value, shared):
         actual = _source_input(ctx, occurrence, row)
         return actual, () if actual is not None else ('await_body_input_unobserved',)
     if type(contract.expansion) is not ExpandedAwaitCallee:
-        from scar.ir.program.evaluated_sources import evaluated_sources
+        from scar.ir.program.operation_results import evaluated_sources
         from scar.ir.program.resumption import ResumableKind
         report = evaluated_sources(flow, contract.expected,
             OwnedUse(row.operation, contract.operand_use), role='DIRECT_INPUT')
@@ -751,7 +751,7 @@ def await_body_links(ctx, scope, *, shared):
         raise ValueError('await body links scope is not declared')
     project_await_links(ctx, scope, shared)
     await_identity_errors(ctx, shared)
-    from .await_qualification import qualification_occurrences
+    from scar.ir.execution.await_outcomes import qualification_occurrences
     qualification = qualification_occurrences(ctx, ctx.await_flow, shared, scope=scope)
     from .resumable_query import drive_execution
     jobs, cursor, checked, checked_jobs, all_gaps = [], qualification['cursor'], 0, 0, list(qualification['gaps'])
@@ -836,7 +836,7 @@ def await_body_links(ctx, scope, *, shared):
     incomplete = inventory.get('known_inventory_complete') is False
     if incomplete and cursor is None:
         cursor = inventory.get('cursor')
-    from .await_outcomes import project_outcomes
+    from scar.ir.execution.await_outcomes import project_outcomes
     outcomes = project_outcomes(ctx, scope, shared)
     all_gaps.extend(outcomes.pop('gaps'))
     if cursor is None:

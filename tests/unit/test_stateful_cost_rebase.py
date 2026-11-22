@@ -11,8 +11,8 @@ import pytest
 
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.stateful_cost_rebase import rebase_stateful_cpu_cost,verify_rebased_stateful_cpu_cost,PROOF
-from scar.optimization.stateful_cpu_choices import _cost,stateful_cpu_cost_context,build_stateful_cpu_domain
-from scar.optimization.stateful_cpu_model import stateful_cpu_demand,predict_stateful_cpu_model
+from scar.optimization.stateful_cpu_model import _cost, stateful_cpu_cost_context, build_stateful_cpu_domain
+from scar.optimization.stateful_cpu_model import stateful_cpu_demand, predict_stateful_cpu_model
 from test_cpu_hardware_placement import hardware
 from test_stateful_recipe import setup_stateful_recipe
 

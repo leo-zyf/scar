@@ -9,12 +9,12 @@ from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_reference_slice import source_port
 from scar.compiler.graph_frontend import (_GraphLowerer,_source_identity,_metadata,_origin,
     GraphRegionRejected,_reject,_ENV,_WORLD)
-from scar.compiler.pipeline_frontend import discover_graph_pipelines,_global_functions,_Callee
-from scar.compiler.pipeline_model import CalleeGuard
+from scar.compiler.pipeline_frontend import discover_graph_pipelines, _global_functions, _Callee
+from scar.compiler.pipeline_frontend import CalleeGuard
 from scar.compiler.loop_model import ArrayLoopPlan,validate_loop
 from scar.compiler.model import SourceRef
-from scar.ir.program import source_productions as P,normal_links as F,normal_graph as G
-from scar.ir.program.normal_targets import Body
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import code_key

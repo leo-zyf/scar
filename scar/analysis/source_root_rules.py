@@ -2,7 +2,7 @@
 from hashlib import sha256
 from pathlib import Path
 from scar.analysis.source_expression_rules import SourceExpressionRules,_REF,_BOOL,_require
-from scar.analysis.source_statement_rules import SourceStatementRules,_StatementBuilder
+from scar.analysis.source_statement_rules import SourceStatementRules, _StatementBuilder
 from scar.analysis.source_root_interfaces import FIELDS,clean_docstring
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C

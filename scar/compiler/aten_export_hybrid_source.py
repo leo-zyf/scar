@@ -5,7 +5,7 @@ from hashlib import sha256
 
 from scar.compiler.aten_export_cuda_source import _MM, _matrix
 from scar.compiler.aten_native_recipe import SCHEMA as RECIPE_SCHEMA, SCHEMA_VERSION, _arguments, _fields, _identifier
-from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.program import codec
 from scar.optimization.aten_export_rewrite import FUNCTIONAL_EXPORT_SCHEMAS
 

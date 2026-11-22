@@ -2,7 +2,7 @@
 from scar.analysis.normal_containers import ContainerFlow
 from scar.analysis.normal_targets import _Solver
 from scar.analysis.source_container_delta import DeltaContainerFlow
-from scar.ir.program import normal_targets as T
+from scar.ir.program import normal_graph as T
 from tests.unit.test_source_construction_connections import source_facts
 
 

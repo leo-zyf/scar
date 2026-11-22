@@ -19,14 +19,14 @@ from scar.analysis import normal_containers
 from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
 from scar.analysis import source_template_batch,source_template_workers,normal_output,source_interface_store,source_content_factors
-from scar.ir.program import source_protocols as L, content_routes as C
+from scar.ir.program import source_protocols as L, data_materials as C
 from scar.ir.program import source_protocols as D, suspension_interfaces as S
 from scar.analysis.source_template_links import read_template_body
-from scar.ir.program import normal_targets as T
+from scar.ir.program import normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program import namespace_routes as N
 from scar.ir.program import normal_graph as G
-from scar.ir.program import normal_links as F
+from scar.ir.program import normal_graph as F
 from scar.ir.program.python_bindings import SourceCallSite
 from scar.ir.record_codec import decode
 
@@ -77,7 +77,7 @@ class NormalCallGraph:
         self.templates=self.fact_store.templates
         if self.report.get('analysis_mode')=='ENTRY_SCOPED_MAY_ANALYSIS':
             from scar.analysis import normal_entry,normal_facts
-            from scar.ir.program import normal_entry as E
+            from scar.ir.program import normal_graph as E
             for field,module in (('entry_implementation_sha256',normal_entry),('fact_reader_sha256',normal_facts),('entry_types_sha256',E)):
                 if self.report[field]!=sha256(Path(module.__file__).read_bytes()).hexdigest():raise ValueError('entry scope implementation differs')
 
@@ -244,13 +244,13 @@ class NormalCallGraph:
 
     def entry_activations(self,source=None):
         """Scopes admitted by entry analysis; never runtime invocation records."""
-        from scar.ir.program.normal_entry import ScopeActivationEvidence
+        from scar.ir.program.normal_graph import ScopeActivationEvidence
         if 'entry_activations' not in self.report:return
         for row in self._documents('entry_activations',source,None,'target'):
             yield decode(ScopeActivationEvidence,row,record_tags=P.PRODUCTION_RECORD_TAGS)
 
     def module_demands(self,source=None):
-        from scar.ir.program.normal_entry import ModuleEntryDemand
+        from scar.ir.program.normal_graph import ModuleEntryDemand
         if 'entry_module_demands' not in self.report:return
         unit=self.units_for_source(source)
         for row in self._documents('entry_module_demands',None,None,'producer'):
@@ -260,13 +260,13 @@ class NormalCallGraph:
                 yield decode(ModuleEntryDemand,row,record_tags=P.PRODUCTION_RECORD_TAGS)
 
     def body_demands(self,source=None):
-        from scar.ir.program.normal_entry import BodyEntryDemand
+        from scar.ir.program.normal_graph import BodyEntryDemand
         if 'entry_body_demands' not in self.report:return
         for row in self._documents('entry_body_demands',source,None,'producer'):
             yield decode(BodyEntryDemand,row,record_tags=P.PRODUCTION_RECORD_TAGS)
 
     def call_demands(self,source=None):
-        from scar.ir.program.normal_entry import CallEntryDemand
+        from scar.ir.program.normal_graph import CallEntryDemand
         if 'entry_call_demands' not in self.report:return
         for row in self._documents('entry_call_demands',source,None,'result'):
             yield decode(CallEntryDemand,row,record_tags=P.PRODUCTION_RECORD_TAGS)

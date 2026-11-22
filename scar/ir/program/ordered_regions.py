@@ -4,15 +4,15 @@ from dataclasses import dataclass
 from enum import Enum
 from .dependencies import DependencyPoint, DependencyFrame, DependencyKind, DependencyMeaning
 from .providers import ProviderFactReference
-from .normal_targets import GlobalPort
-from scar.ir.program.content_routes import ContentAccessRef
-from scar.ir.program.content_routes import ContentAccessTemplate
+from scar.ir.program.normal_graph import GlobalPort
+from scar.ir.program.data_materials import ContentAccessRef
+from scar.ir.program.data_materials import ContentAccessTemplate
 from .dependencies import DependencyPoint, DependencyFrame
-from .normal_links import CodeScopeRef
+from scar.ir.program.normal_graph import CodeScopeRef
 from .ids import OperationID
-from scar.ir.program.content_routes import FieldSelector
+from scar.ir.program.data_materials import FieldSelector
 from scar.ir.program.source_value_routes import ReferenceSlice
-from . import normal_graph as G, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as T
 from .dependencies import DependencyFrame
 
 

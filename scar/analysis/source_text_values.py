@@ -25,7 +25,7 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.literals import PythonLiteral
-from scar.ir.program import source_text as X, normal_links as F, normal_targets as T
+from scar.ir.program import source_bytes as X, normal_graph as F, normal_graph as T
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.python_bindings import SourceCallSite

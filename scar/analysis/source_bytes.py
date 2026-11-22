@@ -16,9 +16,7 @@ from threading import RLock
 import tokenize
 import warnings
 
-from scar.ir.program.source_bytes import (
-    SourceBytesDecoding, SourceBytesError, SourceBytesMaterial, SourceBytesProfile, SourceRawBytes,
-)
+from scar.ir.program.source_bytes import SourceBytesDecoding, SourceBytesError, SourceBytesMaterial, SourceBytesProfile, SourceRawBytes
 from scar.ir.record_codec import decode, encode
 
 

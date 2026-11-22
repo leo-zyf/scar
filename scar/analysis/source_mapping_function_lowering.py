@@ -143,7 +143,7 @@ def _hold(builder, cursor, node, value, role):
 def lower_mapping_function(builder, node, cursor):
     """Create and bind one function through the original mapping-frame ABI."""
     from scar.analysis.source_module_lowering import require_root_evidence
-    from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+    from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
     from scar.ir.v2.semantic import OperationKind
     evidence = builder.evidence
     require_root_evidence(builder.unit, evidence,

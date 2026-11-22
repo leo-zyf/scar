@@ -12,7 +12,7 @@ from scar.ir.program.providers import ProviderFactReference
 
 from .common import MissingEvidence, _identifier, _record
 from .ids import OperationOccurrenceID, RegionActivationID, RunID
-from .observations import ContractRef
+from scar.ir.execution.observation_validation import ContractRef
 
 
 @dataclass(frozen=True, slots=True)

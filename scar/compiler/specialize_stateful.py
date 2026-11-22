@@ -28,7 +28,7 @@ def specialize(program, inputs, out, *, memory_budget_bytes, max_threads=1,
                affinity=None, compile_native=False, boundary=None):
     from scar.compiler.input_metadata import stateful_shapes_from_metadata
     from scar.compiler.stateful_model import stateful_from_dict, stateful_digest
-    from scar.optimization.stateful_cpu_choices import build_stateful_cpu_domain
+    from scar.optimization.stateful_cpu_model import build_stateful_cpu_domain
     from scar.compiler.stateful_candidate import prepare_stateful_candidate
     directory = Path(out).resolve()
     if directory.exists():

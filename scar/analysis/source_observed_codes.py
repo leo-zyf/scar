@@ -27,9 +27,9 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_mkdir, _durable_bytes
 from scar.analysis.source_template_links import _json
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
-from scar.ir.program.compiler_topology import CompilerTopologyMaterial
+from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
 from scar.ir.program.source_observations import ObservedSourceCodeLink, ObservedSourceScopeKind as ScopeKind, ObservedSourceScopeLink, ObservedSourceRequestCodeLink, ObservedSourceCompilerCodeLink
-from scar.ir.program import normal_targets as T, view as V, source_productions as P
+from scar.ir.program import normal_graph as T, view as V, source_productions as P
 from scar.ir.program.call_edges import CapturedCode,CallEdgeBudget
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.ids import ProviderID
@@ -40,7 +40,7 @@ from scar.ir.program.dependencies import (
     DependencyNeighborhood as Neighborhood)
 from scar.ir.record_codec import decode, encode
 from scar.trace.code_snapshot import describe_code
-from scar.trace.files import open_binary, resolve as resolve_trace_file
+from scar.trace.reader import open_binary, resolve as resolve_trace_file
 
 
 SCHEMA = 'scar.source-observed-code-view'

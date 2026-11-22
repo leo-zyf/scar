@@ -17,7 +17,7 @@ from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_project import build_native_project, write_native_project
 from scar.codegen.native_provider_bundle import _content
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
 
 SCHEMA = 'scar.native-mesh-basis-export'

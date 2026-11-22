@@ -1,7 +1,7 @@
 """Descending varargs cycles retain may-content without enumerating positions."""
 from scar.analysis.normal_targets import _Solver
-from scar.ir.program import normal_targets as T, source_productions as P
-from scar.ir.program.content_routes import ContentIndexCycle
+from scar.ir.program import normal_graph as T, source_productions as P
+from scar.ir.program.data_materials import ContentIndexCycle
 from scar.ir.record_codec import decode, encode
 from tests.unit.test_source_construction_connections import source_facts
 

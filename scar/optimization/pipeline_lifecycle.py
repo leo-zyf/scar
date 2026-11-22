@@ -3,7 +3,7 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.execution_recipe import artifact_reference
 from scar.ir.implementation_plan import (CostEstimate, ImplementationChoice, PlanningActivity,
     PlanningTimingConstraint, PlanningResource, digest, validate_problem)

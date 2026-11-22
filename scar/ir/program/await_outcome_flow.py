@@ -8,9 +8,9 @@ from .model import (CompletionResult, ExitKind, InvokeLiteralResult, OperationRe
                     ProtocolValue, StateVersionValue, TerminatorKind, ValueKind)
 from .protocols import HostTerminal, OutcomeAdapter, OwnedUse
 from .structured import ControlEdgeReference
-from .copy_flow import flow, required_choices, selected
-from .copy_flow import inventory_flow
-from .operation_results import result_legs
+from scar.ir.program.data_materials import flow, required_choices, selected
+from scar.ir.program.data_materials import inventory_flow
+from scar.ir.program.operation_results import result_legs
 
 
 def flags():
@@ -183,7 +183,7 @@ def consumers(ctx, source, choices=()):
                         gaps.append('await_consumer_callee_expansion_pending')
     if ctx.budget.truncated:
         gaps.append('await_consumer_inventory_budget')
-    from .copy_consumers import consumer_graph
+    from scar.ir.program.data_materials import consumer_graph
     graph = consumer_graph(ctx, source, choices)
     if graph['inventory']['known_inventory_complete']:
         gaps = [gap for gap in gaps if gap != 'await_consumer_callee_expansion_pending']

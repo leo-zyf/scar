@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from .normal_targets import GlobalPort, Body, FunctionConnection
+from scar.ir.program.normal_graph import GlobalPort, Body, FunctionConnection
 from .providers import ProviderFactReference
 
 

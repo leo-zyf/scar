@@ -17,9 +17,9 @@ from scar.compiler.graph_frontend import (_GraphLowerer, _Array, _Scalar, _Slice
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.stateful_model import (StatefulRegion, StatefulInput, StatefulAction,
     StatefulCallee, StatefulProvider, validate_stateful_region, REQUIRED_GUARDS, POWER2_SEMANTICS)
-from scar.ir.program import source_productions as P, normal_links as F, normal_graph as G
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.normal_targets import Body
+from scar.ir.program.normal_graph import Body
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import code_key
 

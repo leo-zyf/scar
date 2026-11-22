@@ -18,10 +18,7 @@ from scar.analysis.static_compilation import StaticCodeEvidence
 from scar.ir.program.ids import RegionID, OperationID, UseID, ValueID
 from scar.ir.program.model import (Behavior, ExitKind, Operation, ReferenceValue, StateVersionValue,
     Terminator, TerminatorKind, Use, UseRole)
-from scar.ir.program.module_entries import (ModuleUnitSource, ModuleCodeWitness, ModuleEntryDeclaration,
-    ModuleBodyOverlay, ModuleBodyStatus, MappingFrameEntry, ModuleFrontier, ModuleSourceCensus,
-    ModuleOperationSource, ModuleValueSource, ModuleUseSource, ModuleProtocol, ModuleProtocolKind,
-    ModuleEntryProfile, UnexpandedModuleBody, StaticModuleEntryDeclaration)
+from scar.ir.program.entry_namespaces import ModuleUnitSource, ModuleCodeWitness, ModuleEntryDeclaration, ModuleBodyOverlay, ModuleBodyStatus, MappingFrameEntry, ModuleFrontier, ModuleSourceCensus, ModuleOperationSource, ModuleValueSource, ModuleUseSource, ModuleProtocol, ModuleProtocolKind, ModuleEntryProfile, UnexpandedModuleBody, StaticModuleEntryDeclaration
 from scar.ir.program.inventory import SourceContextDigest
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source import SourceRole, GapKind
@@ -203,7 +200,7 @@ class ModuleBuilder(StructuredBuilder):
 def lower_module_entry(context,selection,*,code_evidence,max_operations=10000,profile=ModuleEntryProfile.EXEC_MAPPING_314_V1):
     if type(max_operations) is not int or not 1<=max_operations<=100000:
         raise ValueError('module operation budget must be in [1,100000]')
-    from scar.ir.program.module_entries import ModuleBodyExpansionProfile,FrameBodyProfile
+    from scar.ir.program.entry_namespaces import ModuleBodyExpansionProfile, FrameBodyProfile
     if type(code_evidence) is StaticCodeEvidence and profile not in (
             FrameBodyProfile.STRUCTURED_MAPPING_314_V1, FrameBodyProfile.STRUCTURED_MAPPING_PROPAGATION_314_V1,
             FrameBodyProfile.STRUCTURED_MAPPING_BODY_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_CLASS_314_V1):
@@ -247,7 +244,7 @@ def _module_statement_ref(context,node):
 def first_import_selection(context,code_evidence=None):
     """Mechanical first statement, original SG/CFG and an exact residual suffix."""
     from scar.ir.control_flow_v2 import SuiteKind,NodeKind,InsertionKind
-    from scar.ir.program.module_entries import ModuleStatementSlice
+    from scar.ir.program.entry_namespaces import ModuleStatementSlice
     unit=module_unit(context);nodes=context.tree.body
     if (len(nodes)<2 or not isinstance(nodes[0],ast.Import) or len(nodes[0].names)!=1
             or '.' in nodes[0].names[0].name):
@@ -296,7 +293,7 @@ def first_import_selection(context,code_evidence=None):
 class ModulePrefixBuilder(ModuleBuilder):
     """One source import protocol and attempted store, then exact opaque suffix."""
     def protocol(self,operation,kind,node):
-        from scar.ir.program.module_entries import ModulePrefixProtocol
+        from scar.ir.program.entry_namespaces import ModulePrefixProtocol
         self.protocols.append(ModulePrefixProtocol(operation,kind,self.source(node)))
 
     def _start_region(self,identity):
@@ -314,8 +311,7 @@ class ModulePrefixBuilder(ModuleBuilder):
         return normal,result,identity
 
     def run_module(self):
-        from scar.ir.program.module_entries import (ModulePrefixProtocolKind as K,ModuleImportPrefix,
-            UnexpandedModuleSlice,ModulePrefixOverlay,ModuleBodyExpansionProfile)
+        from scar.ir.program.entry_namespaces import ModulePrefixProtocolKind as K, ModuleImportPrefix, UnexpandedModuleSlice, ModulePrefixOverlay, ModuleBodyExpansionProfile
         from scar.ir.program.state_addresses import (StateAddressRefinement,InvokeStateOperand,AddressEffect,
             ReferenceOwner,NamespaceKey,AddressCoverage)
         from scar.ir.program.model import AccessMode
@@ -398,7 +394,7 @@ class ModulePrefixBuilder(ModuleBuilder):
 
 def frame_statement_slice(context, owner, field, nodes):
     """A source collection with an original boundary, or its explicit absence."""
-    from scar.ir.program.module_entries import FrameStatementSlice,SourceControlBoundary
+    from scar.ir.program.entry_namespaces import FrameStatementSlice, SourceControlBoundary
     from scar.ir.control_flow_v2 import InsertionKind
     unit=module_unit(context)
     refs=tuple(_module_statement_ref(context,node) for node in nodes)
@@ -442,7 +438,7 @@ def _mapping_source_instructions(context, evidence, *, profile=None):
     independently classified instruction prefix; positions alone cannot do so.
     """
     import dis
-    from scar.ir.program.module_entries import FrameBodyProfile
+    from scar.ir.program.entry_namespaces import FrameBodyProfile
     instructions=tuple(dis.get_instructions(evidence.code,adaptive=False,show_caches=False))
     if profile in (FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,
             FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1,
@@ -481,7 +477,7 @@ def mapping_literal_bool_if_plan(context, evidence, node, *, profile=None):
     have independent ownership even if they share this If's source span.
     """
     import dis
-    from scar.ir.program.module_entries import ModuleLiteralBoolIfElision, StatementSequenceField as F
+    from scar.ir.program.entry_namespaces import ModuleLiteralBoolIfElision, StatementSequenceField as F
     if (type(evidence) is not StaticCodeEvidence or not isinstance(node,ast.If)
             or not isinstance(node.test,ast.Constant) or type(node.test.value) is not bool):
         raise ValueError('literal-bool If mapping requires original static module compilation')
@@ -578,7 +574,7 @@ def mapping_prefix_selection(context, evidence, *, profile=None, literal_bool_el
                              module_annotations=False, dictionary_displays=False,module_assertions=False):
     """Maximal contiguous supported statements; no workload/name allowlist."""
     unit=module_unit(context)
-    from scar.ir.program.module_entries import FrameBodyProfile
+    from scar.ir.program.entry_namespaces import FrameBodyProfile
     require_root_evidence(unit,evidence,allow_compiler_locals=profile in (FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_CLASS_314_V1))
     instructions=_mapping_source_instructions(context,evidence,profile=profile)
     def positioned(node,opnames):
@@ -617,7 +613,7 @@ def mapping_prefix_selection(context, evidence, *, profile=None, literal_bool_el
             and all(expression(child) for child in (node.func,*node.args,*(keyword.value for keyword in node.keywords))))
         return False
     def target(node):return isinstance(node,ast.Name) and len([row for row in positioned(node,('STORE_NAME','STORE_GLOBAL')) if row.argval==node.id])==1
-    from scar.ir.program.module_entries import FrameBodyProfile
+    from scar.ir.program.entry_namespaces import FrameBodyProfile
     expanded = profile in (FrameBodyProfile.STRUCTURED_MAPPING_BODY_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1,FrameBodyProfile.STRUCTURED_MAPPING_CLASS_314_V1)
     def heap_target(node):
         if not expanded:return False
@@ -633,7 +629,7 @@ def mapping_prefix_selection(context, evidence, *, profile=None, literal_bool_el
             return (mapping_assertion_supported(context,evidence,node,profile=profile)
                 and expression(node.test) and (node.msg is None or expression(node.msg)))
         if expanded and module_annotations and isinstance(node,ast.AnnAssign):
-            from scar.analysis.source_module_annotation_lowering import module_annotation_plan
+            from scar.analysis.source_module_annotations import module_annotation_plan
             try:plan=module_annotation_plan(context,evidence,node,profile=profile)
             except (ValueError,_Unsupported):return False
             return node.value is None or plan.empty_dict is not None or expression(node.value)
@@ -729,7 +725,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         super().__init__(context,selection,evidence,max_operations)
         from scar.analysis.source_language import SourceLanguageOptions
         from scar.ir.program.source_language import SourceLanguageCapability
-        from scar.ir.program.module_entries import FrameBodyProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile
         from scar.ir.program.ids import ControlScopeID
         self.language_options=SourceLanguageOptions((SourceLanguageCapability.SLICE_KEYS,),evidence)
         self.instructions=None;self.address_refinements=[];self.statement_expansions=[]
@@ -739,7 +735,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         self.root_scope=ControlScopeID(_key('module-frame-scope',self.unit.initializer.wire,self.unit.snapshot.fingerprint))
         self.frame_region=RegionID(_key('module-structured-frame',self.unit.initializer.wire,self.unit.snapshot.fingerprint))
         self.prefix_nodes,self.remaining_nodes=mapping_prefix_selection(context,evidence,profile=source_profile,dictionary_displays=True)
-        from scar.ir.program.module_entries import FrameBodyProfile,FrameCompletionProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile, FrameCompletionProfile
         self.frame_body_profile=FrameBodyProfile.STRUCTURED_MAPPING_314_V1
         self.frame_completion_profile=FrameCompletionProfile.RAW_EXCEPTION_REF_314_V1
 
@@ -757,7 +753,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         return record.id
 
     def protocol(self,operation,kind,node):
-        from scar.ir.program.module_entries import FrameBodyProtocol
+        from scar.ir.program.entry_namespaces import FrameBodyProtocol
         self.protocols.append(FrameBodyProtocol(operation,kind,self.source(node)))
 
     def _addresses(self,operation_id,effects):
@@ -766,7 +762,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         self.address_refinements.append(StateAddressRefinement(InvokeStateOperand(operation_id,operation.uses[-1].id),tuple(effects),AddressCoverage.PARTIAL))
 
     def read_source_name(self,node,cursor,old=None):
-        from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+        from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
         from scar.ir.program.state_addresses import AddressEffect,ReferenceOwner,NamespaceKey
         from scar.ir.program.model import AccessMode
         from scar.ir.program.structured import PythonProtocolKind as P
@@ -785,7 +781,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         return cursor,value
 
     def store_name(self,node,name,value,cursor,*,failure_handler=None,opcode=None):
-        from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+        from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
         from scar.ir.program.state_addresses import AddressEffect,ReferenceOwner,NamespaceKey
         from scar.ir.program.model import AccessMode
         from scar.ir.program.structured import PythonProtocolKind as P
@@ -846,7 +842,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         return super().condition(node,cursor) if result is NotImplemented else result
 
     def import_statement(self,node,cursor):
-        from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+        from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
         from scar.ir.program.state_addresses import AddressEffect,ReferenceOwner,NamespaceKey
         from scar.ir.program.model import AccessMode
         from scar.analysis.source_slice_lowering import _constant
@@ -919,7 +915,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         return cursor
 
     def statements(self,nodes,cursor):
-        from scar.ir.program.module_entries import FrameStatementExpansion,StatementSequenceField as F
+        from scar.ir.program.entry_namespaces import FrameStatementExpansion, StatementSequenceField as F
         for node in nodes:
             if cursor is None:raise _Unsupported(GapKind.CONTROL_FLOW,node,'mapping prefix lost its normal continuation')
             start=len(self.operations);entry=cursor.block
@@ -935,8 +931,7 @@ class StructuredModuleBuilder(ModuleBuilder):
         return cursor
 
     def run_module(self):
-        from scar.ir.program.module_entries import (FrameBodyProfile,StructuredFrameBodyOverlay,
-            FrameBodyProtocolKind as K,StatementSequenceField as F,UnexpandedFrameSlice)
+        from scar.ir.program.entry_namespaces import FrameBodyProfile, StructuredFrameBodyOverlay, FrameBodyProtocolKind as K, StatementSequenceField as F, UnexpandedFrameSlice
         from scar.ir.program.source_subjects import FrameRoot,SourceCompilationFrameRoot,FrameKind,MappingFramePorts
         from scar.ir.program.control import ControlScope,ControlScopeKind
         compiler_child=None;compiler_prologue=None
@@ -988,14 +983,14 @@ class StructuredModuleBuilder(ModuleBuilder):
             'exact remaining statement collection starts at unsupported '+type(self.remaining_nodes[0]).__name__))
         overlay_type=StructuredFrameBodyOverlay;extra={}
         if getattr(self,'supports_compiler_prologue',False):
-            from scar.ir.program.module_entries import CompilerStructuredFrameBodyOverlay
+            from scar.ir.program.entry_namespaces import CompilerStructuredFrameBodyOverlay
             overlay_type=CompilerStructuredFrameBodyOverlay
             if getattr(self,'supports_expanded_compiler',False):
-                from scar.ir.program.module_entries import ExpandedCompilerFrameBodyOverlay
+                from scar.ir.program.entry_namespaces import ExpandedCompilerFrameBodyOverlay
                 overlay_type=ExpandedCompilerFrameBodyOverlay
             extra={'compiler_prologue':compiler_prologue}
         if getattr(self,'supports_class_construction',False):
-            from scar.ir.program.module_entries import ClassConstructionFrameBodyOverlay
+            from scar.ir.program.entry_namespaces import ClassConstructionFrameBodyOverlay
             overlay_type=ClassConstructionFrameBodyOverlay
             extra['class_constructions']=tuple(self.class_constructions)
         overlay=overlay_type(self.declaration,module_source_census(self.prepared_source),self.root_scope,
@@ -1027,7 +1022,7 @@ class PropagationOperands:
 class PropagationModuleBuilder(StructuredModuleBuilder):
     def __init__(self,context,selection,evidence,max_operations):
         super().__init__(context,selection,evidence,max_operations)
-        from scar.ir.program.module_entries import FrameBodyProfile,FrameCompletionProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile, FrameCompletionProfile
         from scar.ir.program.control import ControlScopeKind
         self.frame_body_profile=(FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1 if getattr(self,'supports_compiler_prologue',False) else FrameBodyProfile.STRUCTURED_MAPPING_PROPAGATION_314_V1)
         self.frame_completion_profile=FrameCompletionProfile.PROPAGATION_REF_PAIR_314_V1
@@ -1101,7 +1096,7 @@ class PropagationModuleBuilder(StructuredModuleBuilder):
     def raise_landing(self,node):
         """Internal Raise landing, not an exit-port shim containing extra work."""
         from scar.ir.program.control import ControlPort,LanguageCompletionKind,ProtocolValueKind,ProtocolValueType
-        from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+        from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
         from scar.ir.program.ids import ControlPortID
         with self.in_owner(self.root_scope):
             landing=self.new_block(node,role=SourceRole.EXCEPTION,extra_types=(ProtocolValueType(ProtocolValueKind.EXCEPTION_PACKET),))
@@ -1153,7 +1148,7 @@ class PropagationModuleBuilder(StructuredModuleBuilder):
         return replace(original,exits=tuple(replace(port,types=raise_types) if port.kind is ExitKind.RAISE else port for port in original.exits))
 
     def delete_name(self,node,name,cursor):
-        from scar.ir.program.module_entries import FrameBodyProtocolKind as K
+        from scar.ir.program.entry_namespaces import FrameBodyProtocolKind as K
         from scar.ir.program.state_addresses import AddressEffect,ReferenceOwner,NamespaceKey
         from scar.ir.program.model import AccessMode
         key=self.literal(node,name)
@@ -1205,7 +1200,7 @@ class PropagationModuleBuilder(StructuredModuleBuilder):
         return self.cleanup_exit(cursor,node,cleanup,original,selected,context,ports)
 
     def statements(self,nodes,cursor):
-        from scar.ir.program.module_entries import FrameStatementExpansion,StatementSequenceField as F
+        from scar.ir.program.entry_namespaces import FrameStatementExpansion, StatementSequenceField as F
         from scar.analysis.source_statement_lowering import try_statement
         for node in nodes:
             if not isinstance(node,ast.Try):cursor=super().statements((node,),cursor);continue
@@ -1236,7 +1231,7 @@ class MappingBodyBuilder(PropagationModuleBuilder):
 
     def __init__(self,context,selection,evidence,max_operations):
         super().__init__(context,selection,evidence,max_operations)
-        from scar.ir.program.module_entries import FrameBodyProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile
         self.frame_body_profile=(FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_314_V1 if getattr(self,'supports_compiler_prologue',False) else FrameBodyProfile.STRUCTURED_MAPPING_BODY_314_V1)
         self.prefix_nodes,self.remaining_nodes=mapping_prefix_selection(context,evidence,
             profile=self.frame_body_profile,literal_bool_elision=True,module_annotations=True,dictionary_displays=True,module_assertions=True)
@@ -1258,7 +1253,7 @@ class MappingBodyBuilder(PropagationModuleBuilder):
         return store_heap_target(self,target,value,cursor)
 
     def statements(self,nodes,cursor):
-        from scar.ir.program.module_entries import FrameStatementExpansion,StatementSequenceField as F
+        from scar.ir.program.entry_namespaces import FrameStatementExpansion, StatementSequenceField as F
         for node in nodes:
             if isinstance(node,ast.Assert):
                 if not mapping_assertion_supported(self.prepared_source,self.evidence,node,profile=self.frame_body_profile):
@@ -1269,7 +1264,7 @@ class MappingBodyBuilder(PropagationModuleBuilder):
                 self.statement_expansions.append(FrameStatementExpansion(self.source(node),self.frame_region,
                     entry,cursor.block,tuple(op.id for op in self.operations[start:]),()))
             elif isinstance(node,ast.AnnAssign):
-                from scar.analysis.source_module_annotation_lowering import module_annotation_plan,lower_module_annotation
+                from scar.analysis.source_module_annotations import module_annotation_plan, lower_module_annotation
                 plan=module_annotation_plan(self.prepared_source,self.evidence,node,profile=self.frame_body_profile)
                 start=len(self.operations);entry=cursor.block
                 cursor=lower_module_annotation(self,node,cursor,plan)
@@ -1325,7 +1320,7 @@ class ExpandedCompilerMappingBodyBuilder(CompilerMappingBodyBuilder):
 
     def __init__(self,context,selection,evidence,max_operations):
         super().__init__(context,selection,evidence,max_operations)
-        from scar.ir.program.module_entries import FrameBodyProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile
         self.frame_body_profile=FrameBodyProfile.STRUCTURED_MAPPING_COMPILER_OPS_314_V1
         self.prefix_nodes,self.remaining_nodes=mapping_prefix_selection(context,evidence,
             profile=self.frame_body_profile,literal_bool_elision=True,module_annotations=True,dictionary_displays=True,module_assertions=True)
@@ -1336,7 +1331,7 @@ class ClassConstructionMappingBodyBuilder(ExpandedCompilerMappingBodyBuilder):
 
     def __init__(self,context,selection,evidence,max_operations):
         super().__init__(context,selection,evidence,max_operations)
-        from scar.ir.program.module_entries import FrameBodyProfile
+        from scar.ir.program.entry_namespaces import FrameBodyProfile
         from scar.analysis.source_language import SourceLanguageOptions
         from scar.ir.program.source_language import SourceLanguageCapability as C
         self.class_constructions=[]
@@ -1346,7 +1341,7 @@ class ClassConstructionMappingBodyBuilder(ExpandedCompilerMappingBodyBuilder):
             profile=self.frame_body_profile,literal_bool_elision=True,module_annotations=True,dictionary_displays=True,module_assertions=True)
 
     def statements(self,nodes,cursor):
-        from scar.ir.program.module_entries import FrameStatementExpansion
+        from scar.ir.program.entry_namespaces import FrameStatementExpansion
         from scar.analysis.source_class_construction_lowering import lower_class_construction
         for node in nodes:
             if isinstance(node,ast.ClassDef):

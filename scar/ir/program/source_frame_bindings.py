@@ -2,10 +2,10 @@
 from dataclasses import dataclass
 from scar.ir.literals import PythonLiteral
 
-from . import normal_links as F,normal_targets as T
+from scar.ir.program import normal_graph as F, normal_graph as T
 from .source_exec_roots import ExecEndpoint
 from scar.ir.program.namespace_routes import FunctionGlobalsCapture
-from .suspension_interfaces import StepWitness
+from scar.ir.program.suspension_interfaces import StepWitness
 
 
 @dataclass(frozen=True,slots=True)

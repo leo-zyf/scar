@@ -1,7 +1,7 @@
 """Emit dependency-ready control around unchanged, CPU-bound ABI1 operators."""
 from pathlib import Path
 
-from scar.compiler.pipeline_model import pipeline_digest
+from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.optimization.resource_solver import semantic_sha256
 
 READY_FAMILY='DEPENDENCY_READY_CPU_SERIAL_LEAVES_V1'

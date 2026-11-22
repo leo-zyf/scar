@@ -7,7 +7,7 @@ from scar.ir.program.python_call_targets import PythonCallTarget,PythonEntryBind
 from scar.ir.program.call_edges import CallRecordAnchor, CallTraceFile
 from scar.ir.program.call_operands import CallableKind
 from scar.ir.record_codec import decode,encode,loads as strict_loads
-from scar.trace.files import open_binary,resolve as resolve_trace_file
+from scar.trace.reader import open_binary, resolve as resolve_trace_file
 
 
 

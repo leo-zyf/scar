@@ -13,7 +13,7 @@ from scar.analysis.target_graph import build_target_graph
 from scar.codegen import cpp
 from scar.codegen.pipeline import GuardFailure, build, load
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.pipeline_model import CalleeGuard, RegionCall, compose_pipeline
+from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
 from scar.optimization import bind_cpu_placement, optimize_region, propose_cpu_placements
 from scar.optimization.pipeline_memory import plan_pipeline_memory
 from scar.optimization.resource_solver import hardware_model_skeleton, solve_resource_schedule

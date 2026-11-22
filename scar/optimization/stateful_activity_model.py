@@ -32,7 +32,7 @@ def _reference(path, schema):
 def _facts(reference):
     from scar.compiler.cost_activities import replay_activity_costs
     from scar.ir.versioned_schedule import TemporalScopeKind
-    from scar.optimization.stateful_cpu_choices import _domain, stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import _domain, stateful_cpu_cost_context
 
     saved = read_artifact(reference)
     report, table, derivation, schedule, _ = replay_activity_costs(reference['uri'])

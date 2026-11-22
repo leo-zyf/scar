@@ -15,7 +15,7 @@ from types import FunctionType
 
 from scar.compiler.pipeline_loop_frontend import (CompositeInvariantLoopProof,
     validate_composite_invariant_loop_proof)
-from scar.compiler.pipeline_runtime import _state,_same_state
+from scar.compiler.pipeline_runtime import _state, _same_state
 from scar.compiler.runtime import SourceMismatch
 from scar.optimization.resource_solver import semantic_sha256
 from scar.trace.code_snapshot import code_key

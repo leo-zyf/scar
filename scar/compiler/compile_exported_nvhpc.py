@@ -16,8 +16,8 @@ from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_export_cuda_source import qualify_cuda_export
 from scar.compiler.aten_native_recipe import normalize_recipe
 from scar.compiler.compile_exported_aten import _calibration_paths, _project, _shape_profiles, _write_record
-from scar.compiler.tensor_physical_problem import tensor_physical_problem
-from scar.compiler.tensor_program_graph import straight_line_graph, tensor_type
+from scar.compiler.tensor_planning_inputs import tensor_physical_problem
+from scar.compiler.tensor_planning_inputs import straight_line_graph, tensor_type
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import codec
 from scar.optimization.aten_live_values import tensor_footprint

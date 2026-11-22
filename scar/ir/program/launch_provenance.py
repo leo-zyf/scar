@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 from scar.ir.literals import PythonLiteral
-from scar.ir.program.normal_links import CodeScopeWitness, Namespace
-from scar.ir.program.normal_targets import GlobalPort
+from scar.ir.program.normal_graph import CodeScopeWitness, Namespace
+from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_bytes import SourceBytesProfile
 from scar.ir.program.providers import ProviderArtifact
 

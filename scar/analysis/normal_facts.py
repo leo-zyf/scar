@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import get_type_hints
 
 from scar.analysis.normal_links import _pins
-from scar.ir.program import normal_links as F, source_productions as P
+from scar.ir.program import normal_graph as F, source_productions as P
 from scar.ir.record_codec import decode
 
 

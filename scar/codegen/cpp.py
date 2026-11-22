@@ -495,7 +495,7 @@ class CppArtifact:
         if len(arrays) != len(self.plan.region.parameters):
             raise GuardFailure("C++ input count does not match region parameters")
         if 'EXACT_NUMPY_NDARRAY_COPY_METHOD_DESCRIPTOR' in self.plan.region.assumptions:
-            from scar.runtime.array_copy_guard import guard_copy_inputs,CopyGuardFailure
+            from scar.runtime.array_copy_guard import guard_copy_inputs, CopyGuardFailure
             try:guard_copy_inputs(arrays)
             except CopyGuardFailure as error:raise GuardFailure(str(error))from error
         descriptors = [_descriptor(array) for array in arrays]

@@ -1,7 +1,7 @@
 """Source control."""
 
 from scar.analysis.source_expression_rules import _REF, _BOOL, _require
-from scar.ir.program import source_productions as P, normal_graph as G, normal_targets as T
+from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as T
 from scar.ir.program.structured import PythonProtocolKind as K
 from collections import defaultdict, deque
 from pathlib import Path

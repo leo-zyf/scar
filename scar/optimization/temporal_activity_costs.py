@@ -113,7 +113,7 @@ def project_stateful_activity_costs(schedule, resources, recipe, domain, candida
     binding, backend and canonical facts are independently replayed here.
     """
     from scar.optimization.stateful_cpu_model import evaluate_stateful_cpu_components
-    from scar.optimization.stateful_cpu_choices import _family
+    from scar.optimization.stateful_cpu_model import _family
     original = semantic_sha256(recipe['task_graph'])
     actual = semantic_sha256(schedule_document(replace(schedule, temporal=None)))
     if actual != original:

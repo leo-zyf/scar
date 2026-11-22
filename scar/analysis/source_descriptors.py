@@ -9,7 +9,7 @@ from dataclasses import dataclass,replace
 from enum import Enum
 
 from scar.analysis.source_function_connections import Invocation,connect
-from scar.ir.program import normal_links as F,normal_targets as T
+from scar.ir.program import normal_graph as F, normal_graph as T
 
 
 class _OpenAccessor(str,Enum):

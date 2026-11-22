@@ -44,7 +44,7 @@ def read_input_boundary(path):
         return InputBoundary(loop.source,loop.parameters,(loop.body_callee,),
             ((loop.body_callee,leaves),),1,(loop.trip_count_parameter,))
     if document.get('schema')=='scar.array-pipeline-plan':
-        from .pipeline_model import pipeline_from_dict
+        from scar.compiler.pipeline_frontend import pipeline_from_dict
         pipeline=pipeline_from_dict(document)
         return InputBoundary(pipeline.source,pipeline.parameters,
             tuple({(call.callee.lookup_path,call.callee.source.code_key):call.callee

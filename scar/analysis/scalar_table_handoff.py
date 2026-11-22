@@ -13,7 +13,7 @@ from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import artifact_reference, read_artifact
-from scar.ir.program.normal_links import LanguageOperationKind
+from scar.ir.program.normal_graph import LanguageOperationKind
 from scar.ir.record_codec import encode
 from scar.runtime.source_call_handoff_observe import DESIGN as HANDOFF
 from scar.runtime.source_value_observe import _codes

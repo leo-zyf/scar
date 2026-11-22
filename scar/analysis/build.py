@@ -38,7 +38,7 @@ def _rules():
             '../ir/program/binding_ports.py', '../ir/program/body_observations.py',
             'program_view.py', 'program_view_storage.py', '../ir/program/view.py',
             'source_region_projection.py', 'source_content.py', 'source_content_lineage.py',
-            '../ir/program/content_routes.py', 'program_state_view.py', 'program_state_coverage.py',
+            '../ir/program/data_materials.py', 'program_state_view.py', 'program_state_coverage.py',
             'program_inventory_admission.py', 'source_graph_material.py',
             'source_effect_projection.py', 'source_effects.py', 'source_state.py',
             'source_call_binding_view.py', 'bounded_function_interfaces.py', 'source_call_view.py',

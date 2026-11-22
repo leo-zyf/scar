@@ -11,7 +11,7 @@ from scar.codegen.native_cpu_elf import _dependencies
 from scar.codegen.native_cpu_elf import PACKAGE_RUNPATH, cpu_executable_dynamic
 from scar.codegen.native_provider_bundle import _content, _elf, _name
 from scar.ir.v2.schemas import canonical_json
-from scar.runtime.native_cpu_linkage import qualify_cpu_dependencies
+from scar.runtime.aten_provider_identity import qualify_cpu_dependencies
 
 
 SCHEMA = 'scar.native-cpu-package'

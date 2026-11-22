@@ -14,7 +14,7 @@ from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_control import loop_dependencies
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
-from scar.ir.program import normal_graph as G, normal_links as F, normal_targets as T
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_productions as P
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode

@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from types import SimpleNamespace
 
 from scar.analysis.source_reference_slice import DECLARED, ReferenceSlicer, source_port
-from scar.ir.program import normal_links as F, content_routes as A
+from scar.ir.program import normal_graph as F, data_materials as A
 from scar.ir.literals import PythonLiteral
 
 

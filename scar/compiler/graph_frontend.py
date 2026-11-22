@@ -23,9 +23,9 @@ from scar.analysis.source_reference_slice import source_port, ReferenceSlicer
 from scar.analysis.static_query import _Fragments
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes, copy_semantics
-from scar.ir.program import source_productions as P, normal_links as F, normal_graph as G
+from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.normal_targets import Body
+from scar.ir.program.normal_graph import Body
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.record_codec import decode, encode
 from scar.trace.code_snapshot import code_key

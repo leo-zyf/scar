@@ -12,11 +12,7 @@ from dataclasses import dataclass, replace
 import dis
 from types import CodeType
 
-from scar.ir.program.module_entries import (
-    CompilerStructuredFrameBodyOverlay, FrameBodyProtocolKind as K,
-    ModuleCompilerCellSlot, ModuleCompilerChild, ModuleCompilerGlobalRead,
-    ModuleCompilerInstruction, ModuleCompilerPrologue,
-)
+from scar.ir.program.entry_namespaces import CompilerStructuredFrameBodyOverlay, FrameBodyProtocolKind as K, ModuleCompilerCellSlot, ModuleCompilerChild, ModuleCompilerGlobalRead, ModuleCompilerInstruction, ModuleCompilerPrologue
 from scar.ir.program.ids import RegionID
 from scar.ir.program.model import Behavior, ExitKind, TerminatorKind
 from scar.ir.program.source import GapKind
@@ -148,7 +144,7 @@ def invoke_compiler_region(builder,cursor,child):
         plan.first_source_offset,region,opaque,identity,cursor.block)
     builder.gap(GapKind.EFFECT_SUMMARY,builder.tree,
         'compiler-generated prefix has an exact layout and connected normal/raise/world interface; internal cell allocation, namespace setup and deferred factory remain required expansion')
-    from scar.ir.program.module_entries import ModuleFrontier
+    from scar.ir.program.entry_namespaces import ModuleFrontier
     builder.module_frontiers.append(ModuleFrontier(builder.unit,'COMPILER_PROLOGUE_REQUIRED_EXPANSION',
         'only the exact compiler-generated entry prefix remains internally unexpanded; owned cell slots, namespace setup and deferred child facts are separate from original AST statements'))
     return cursor,record
@@ -157,9 +153,9 @@ def invoke_compiler_region(builder,cursor,child):
 def validate_compiler_prologue(result,code_evidence,context):
     """Independently read original code layout and actual core endpoints."""
     from scar.ir.program.model import ReferenceValue,StateVersionValue,LiteralOrigin
-    from scar.ir.program.module_entries import RequiredModuleExpansion
+    from scar.ir.program.entry_namespaces import RequiredModuleExpansion
     overlay=result.module
-    from scar.ir.program import module_entries as module_ir
+    from scar.ir.program import entry_namespaces as module_ir
     if type(overlay) in (getattr(module_ir,'ExpandedCompilerFrameBodyOverlay',None),getattr(module_ir,'ClassConstructionFrameBodyOverlay',None)):
         return validate_expanded_compiler_prologue(result,code_evidence,context)
     if type(overlay)is not CompilerStructuredFrameBodyOverlay:
@@ -178,7 +174,7 @@ def validate_compiler_prologue(result,code_evidence,context):
 
 def validate_compiler_prologue_core(overlay,graph):
     """Join stored declarations to real graph ports; no source replay claim."""
-    from scar.ir.program import module_entries as module_ir
+    from scar.ir.program import entry_namespaces as module_ir
     if type(overlay) in (getattr(module_ir,'ExpandedCompilerFrameBodyOverlay',None),getattr(module_ir,'ClassConstructionFrameBodyOverlay',None)):
         return validate_expanded_compiler_prologue_core(overlay,graph)
     from scar.ir.program.model import ReferenceValue,StateVersionValue,LiteralOrigin
@@ -285,7 +281,7 @@ def build_expanded_compiler_region(builder):
     from scar.ir.program.ids import OperationID,ValueID
     from scar.ir.program.model import (AccessMode,Operation,OperationResult,ReferenceValue,StateAccess)
     from scar.ir.program.source import SourceRole
-    from scar.ir.program.module_entries import ModuleCompilerOperation,ModuleCompilerConstant
+    from scar.ir.program.entry_namespaces import ModuleCompilerOperation, ModuleCompilerConstant
     from scar.ir.program.state_addresses import AddressEffect,NamespaceKey,ReferenceOwner
     plan=builder.compiler_plan
     if not plan.required:return None
@@ -378,7 +374,7 @@ def build_expanded_compiler_region(builder):
 
 def invoke_expanded_compiler_region(builder,cursor,child):
     from scar.analysis.program_lowering import _REF
-    from scar.ir.program.module_entries import ExpandedModuleCompilerPrologue,ModuleFrontier
+    from scar.ir.program.entry_namespaces import ExpandedModuleCompilerPrologue, ModuleFrontier
     if child is None:
         builder.compiler_cell_references=()
         return cursor,None
@@ -404,7 +400,7 @@ def invoke_expanded_compiler_region(builder,cursor,child):
 
 def validate_expanded_compiler_prologue(result,code_evidence,context):
     """Check generated source layout independently of recorded operation joins."""
-    from scar.ir.program.module_entries import ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay
+    from scar.ir.program.entry_namespaces import ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay
     overlay=result.module
     if type(overlay) not in (ExpandedCompilerFrameBodyOverlay,ClassConstructionFrameBodyOverlay):
         raise ValueError('expanded compiler prefix needs its explicit source profile')
@@ -425,7 +421,7 @@ def validate_expanded_compiler_prologue_core(overlay,graph):
     which needs source semantics must also run the independent source-plan
     check above. It does not turn partial namespace effects into content facts.
     """
-    from scar.ir.program.module_entries import ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay
+    from scar.ir.program.entry_namespaces import ExpandedCompilerFrameBodyOverlay, ClassConstructionFrameBodyOverlay
     from scar.ir.program.model import (AccessMode,BlockArgument,CompletionResult,LiteralOrigin,
         OperationResult,ReferenceValue,StateVersionValue,ValueKind,ValueType,value_type)
     from scar.ir.program.source_subjects import FrameKind,MappingFramePorts,SourceCompilationFrameRoot

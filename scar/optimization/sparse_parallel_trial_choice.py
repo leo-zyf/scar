@@ -8,7 +8,7 @@ from scar.analysis.sparse_parallel_scaling_scope import _lanes
 from scar.analysis.target_inventory import _cpu_list
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from .sparse_parallel_cost import collect_hardware
-from .sparse_parallel_recipe import CHOICE, HARDWARE, SCOPE, SERIAL_LAUNCH, _serial_evidence, _storage_requirements
+from scar.optimization.sparse_parallel_recipe import CHOICE, HARDWARE, SCOPE, SERIAL_LAUNCH, _serial_evidence, _storage_requirements
 
 
 BASIS = 'CAPACITY_ONLY_CALIBRATION_SEED'

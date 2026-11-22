@@ -133,7 +133,7 @@ def _holdout_model_material(reference):
 
 
 def _derive(request, frozen_policy):
-    from scar.optimization.stateful_cpu_choices import _domain,stateful_cpu_cost_context
+    from scar.optimization.stateful_cpu_model import _domain, stateful_cpu_cost_context
     from scar.compiler.stateful_model import read_stateful,stateful_digest
     _need(type(request)is dict and set(request)=={'model','policy','specialization','prior_correctness','entry',
         'argv','output_token','caller_cpu_ids','output_directory','capture_epoch'},'complete known holdout request fields required')

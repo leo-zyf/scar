@@ -170,7 +170,7 @@ def _specialized_demand(demand, row):
 
 def build_aux_pack(domain, mode, out):
     """One full domain admission and two canonical compilations per mode."""
-    from scar.optimization.stateful_cpu_choices import _domain
+    from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import stateful_cpu_demand
     from scar.ir.execution_recipe import read_artifact
     from scar.compiler.stateful_model import stateful_from_dict
