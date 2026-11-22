@@ -12,7 +12,7 @@ from types import MappingProxyType
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_productions import _digest
 from scar.ir.program import normal_graph as G, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import encode
 
 

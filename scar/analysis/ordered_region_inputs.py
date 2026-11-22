@@ -16,7 +16,7 @@ from scar.ir.program import data_materials as C, ordered_regions as R
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.data_materials import ContentAccessRef
 from scar.ir.program.data_materials import FieldSelector
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode
 
 

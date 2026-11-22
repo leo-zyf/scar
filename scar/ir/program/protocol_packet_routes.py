@@ -204,7 +204,7 @@ def _continuation_ranks(ctx, region):
 
 def _possible_pending(ctx, region, choices):
     """Reuse the independent carrier/port fixed point, never source support."""
-    from .pending_payload_flow import has_pending_region, prepare_pending_payload_flow
+    from scar.ir.program.control_validation import has_pending_region, prepare_pending_payload_flow
 
     guards = ctx.selected_edges(choices, region=region)
     cache = getattr(ctx, '_pending_payload_flows', {})

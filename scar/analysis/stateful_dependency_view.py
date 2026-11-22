@@ -21,7 +21,7 @@ from scar.ir.program import view as V, source_productions as P
 from scar.ir.program.ids import RegionID, OperationID, ValueID
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.dependencies import (GraphNamespace, DependencyPoint as Point,
     DependencyEdge as Edge, DependencyEvidence as Evidence, DependencyCondition as Condition,
     DependencyKind as K, DependencyMeaning as Meaning, DependencyStrength as Strength,

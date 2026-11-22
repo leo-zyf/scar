@@ -7,7 +7,7 @@ from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind, ProtocolValueKind
 from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness, GlobalPort
 from scar.ir.program.protocol_signatures import ExceptionABI
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.structured import PythonProtocolKind
 from scar.ir.program.model import OperationResult, ProtocolValue
 from scar.ir.program.protocols import OwnedUse, HostTerminal

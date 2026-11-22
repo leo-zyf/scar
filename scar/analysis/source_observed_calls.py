@@ -127,7 +127,7 @@ class ObservedSourceCallsiteIndex:
                 if encode(attempt.site)!=site(caller.code,attempt.site.offset):raise ValueError('real CALL differs from original compiler instruction')
                 matches=self._index(caller).get(attempt.site.offset,())
                 if not matches:
-                    from scar.analysis.source_observed_protocols import protocol_index
+                    from scar.analysis.source_protocols import protocol_index
                     protocols=protocol_index(self,caller).get(attempt.site.offset,())
                     if len(protocols)==1:
                         p=protocols[0];anchor,target=targets[attempt.process_id,attempt.index]

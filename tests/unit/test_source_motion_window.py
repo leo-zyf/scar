@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from scar.analysis.source_motion_window import _control_walk, _transport_slice
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.model import ValueKind, ValueType
 
 

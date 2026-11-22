@@ -13,7 +13,7 @@ from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_template_batch import read_template_bodies
 from scar.analysis.source_template_links import read_template_graph
 from scar.ir.program.providers import ProviderArtifact
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 class WorldMaterial:

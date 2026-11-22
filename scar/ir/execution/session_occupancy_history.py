@@ -25,7 +25,7 @@ from scar.ir.execution.await_outcomes import pair
 from scar.ir.execution.await_links import _result
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import OccurrencePhase, OccurrencePoint
-from scar.ir.execution.host_order import host_path
+from scar.ir.execution.order_validation import host_path
 from scar.ir.execution.resumable_flow import value_for_use
 from scar.ir.program.queries import ProgramIndex
 from scar.ir.execution.state_preservation import state_preservation
@@ -502,7 +502,7 @@ class _BodyHistory:
 
     def object_binding(self, source, target, *, ordinary=None):
         """A supplied current object identity, never a new original copy."""
-        from .reference_identity import object_identity
+        from scar.ir.execution.source_validation import object_identity
         guard = object_identity(self.ctx, source, target, shared=self.shared)
         match = guard['match']
         if match is True and self.ctx.issues:

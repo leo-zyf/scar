@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-from scar.ir.program.class_call_sources import ContextualClassStatementSource
+from scar.ir.program.class_construction import ContextualClassStatementSource
 from scar.ir.program.codec import dumps
 from scar.ir.program.dependencies import (
     DependencyCondition as Condition, DependencyEdge as Edge,

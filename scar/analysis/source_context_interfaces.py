@@ -7,7 +7,7 @@ from scar.analysis import source_interface_build
 from scar.analysis.source_interface_store import SourceInterfaceStore
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode
 
 

@@ -7,8 +7,8 @@ Resource admission is reused; this module neither chooses nor schedules CPUs.
 from copy import deepcopy
 from pathlib import Path
 
-from .loop_admission import admit_loop
-from .loop_model import loop_digest, read_loop, validate_loop
+from scar.compiler.loop_admission import admit_loop
+from scar.compiler.loop_admission import loop_digest, read_loop, validate_loop
 from .model import document as plan_document, read_plan
 from scar.compiler.pipeline_frontend import pipeline_digest
 from .validation import validate_plan

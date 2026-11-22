@@ -9,7 +9,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from scar.codegen.loop import _admit, loop_implementation_sha256
-from scar.compiler.loop_model import loop_digest
+from scar.compiler.loop_admission import loop_digest
 from scar.compiler.model import document
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import encode, loads

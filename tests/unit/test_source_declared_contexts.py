@@ -6,7 +6,7 @@ from scar.analysis.source_declared_contexts import DeclaredResolver, expand_cont
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.ir.program import declared_contexts as D, normal_graph as F, normal_graph as T
 from scar.ir.program import normal_graph as G, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 
 

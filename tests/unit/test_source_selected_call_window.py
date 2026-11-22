@@ -5,7 +5,7 @@ from scar.analysis.source_selected_call_window import _normal_window
 from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.providers import ProviderArtifact
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.source_value_routes import SourceBodyValueFlow, SourceOperation
 
 

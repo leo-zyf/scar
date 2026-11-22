@@ -193,7 +193,7 @@ def _schedule(operation, cpu, budget):
     compute = TaskKind.COMPUTE
     task('admit-boundary',compute,_ONCE,'scar.runtime.sparse_solve_entry.admit',
         source_dispatch='LIVE_ORIGINAL_F4_CARRIER_REQUIRED')
-    task('load-native',compute,_ONCE,'scar.runtime.sparse_lu.load_symbolic_solve',needs=('admit-boundary',),
+    task('load-native',compute,_ONCE,'scar.runtime.sparse_lu_native.load_symbolic_solve',needs=('admit-boundary',),
         trigger='FIRST_ELIGIBLE_ORIGINAL_CALL')
     task('allocate-symbolic',TaskKind.ALLOCATION,_ONCE,create,needs=('load-native',),writes=symbolic,
         budget_bytes=budget,budget_scope=_BUDGET_SCOPE,establishes_value_ready=False)
@@ -222,7 +222,7 @@ def _schedule(operation, cpu, budget):
     task('release-numeric',TaskKind.RELEASE,_CALL,apply,
         reads=tuple(name for name in per_call if name not in ('solution','status')),needs=('triangular-solve',),
         retains_publication_outputs=True)
-    task('validate-first-result',compute,_FIRST,'scar.runtime.sparse_lu._Solver._run',
+    task('validate-first-result',compute,_FIRST,'scar.runtime.sparse_lu_native._Solver._run',
         reads=('solution','status','csr-values','csr-structure','right-hand-side'),needs=('release-numeric',),
         requires_original_carrier_bitwise_or_fallback=True)
     task('publish-result',TaskKind.EXPORT,_CALL,'ORIGINAL_SOURCE_STATUS_BRANCH',reads=('solution','status'),

@@ -17,7 +17,7 @@ from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.data_materials import ContentAccessRef
 from scar.ir.program.source_value_routes import ReferenceSlice
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.source_value_routes import SourceBodyValueFlow, SourceOperation
 from scar.ir.literals import PythonLiteral
 from scar.ir.v2.common import ProofStatus

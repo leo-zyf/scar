@@ -673,7 +673,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
         for code, path, message in call_effect_expansion_errors(graph):
             error(code, path, message)
     if not issues:
-        from .control_validation import control_errors
+        from scar.ir.program.control_validation import control_errors
         for code, path, message in control_errors(graph):
             error(code, path, message)
     if not issues:

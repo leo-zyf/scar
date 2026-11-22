@@ -19,7 +19,7 @@ from threading import RLock
 import time
 
 from scar.ir.program import source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 class _NoTorch(importlib.abc.MetaPathFinder):

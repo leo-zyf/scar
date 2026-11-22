@@ -14,7 +14,7 @@ from .coordinates import AccessRef, OccurrencePhase, OccurrencePoint, UseRef
 from .order import EventSignal, PrefixEnd, WorkEnd, WorkStart
 from .production import RawRecordRef, SourceEdgeRef
 from .work import InvokeBoundaryStateEffect, WithinOperation
-from .host_order import host_path, host_steps, local_point_precedes
+from scar.ir.execution.order_validation import host_path, host_steps, local_point_precedes
 
 
 def point_run(ctx, point):
@@ -57,7 +57,7 @@ def check_validity_point(ctx, point, path):
 def resolve_order_basis(ctx, basis, path):
     """Check all known foreign keys even when the protocol is unsupported."""
     from .effects import resolve_canonical_effect
-    from .source_validation import resolve_edge, resolve_raw
+    from scar.ir.execution.source_validation import resolve_edge, resolve_raw
 
     if type(basis) is RawRecordRef:
         return resolve_raw(ctx, basis, path)

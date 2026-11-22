@@ -87,7 +87,7 @@ def _actual_placement(ctx, write, actual_ref, actual, path):
 
 
 def resolve_actual_range(ctx, write, actual_ref, rule, result, path):
-    from .source_validation import resolve_raw
+    from scar.ir.execution.source_validation import resolve_raw
 
     actual = None
     actual_endpoint = None

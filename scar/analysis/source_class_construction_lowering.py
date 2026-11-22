@@ -15,8 +15,7 @@ from scar.analysis.program_lowering import _Unsupported
 from scar.analysis.source_call_lowering import _constant, _invoke
 from scar.analysis.source_mapping_lowering import _transfer
 from scar.analysis.source_language import supports_cpython_compiler
-from scar.ir.program.class_construction import (ClassConstruction, ClassDecoratorApplication,
-    ImplicitCallArgument, ImplicitCallPorts)
+from scar.ir.program.class_construction import ClassConstruction, ClassDecoratorApplication, ImplicitCallArgument, ImplicitCallPorts
 from scar.ir.program.environments import EnvironmentRole
 from scar.ir.program.functions import ArgumentKind
 from scar.ir.program.model import AccessMode, ExitKind

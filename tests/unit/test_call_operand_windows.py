@@ -13,7 +13,7 @@ from scar.trace.call_edges import install as install_frames
 import scar.trace.call_operands as operand_module
 from scar.trace.call_operands import CallOperandObserver, install as install_operands
 from scar.trace.code_snapshot import describe_code
-from scar.trace.operand_bytecode import call_window_selection, load_slots
+from scar.trace.python_call_targets import call_window_selection, load_slots
 
 
 def _module(root: Path, name: str, source: str):

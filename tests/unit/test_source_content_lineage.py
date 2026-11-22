@@ -14,7 +14,7 @@ from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.data_materials import FieldSelector
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import encode,decode
 from scar.ir.v2.common import ProofStatus
 from scar.ir.v2.values import ProvenanceRelation,EquivalenceClaim

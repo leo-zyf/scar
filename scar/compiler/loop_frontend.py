@@ -11,7 +11,7 @@ from scar.compiler.graph_frontend import (_GraphLowerer,_source_identity,_metada
     GraphRegionRejected,_reject,_ENV,_WORLD)
 from scar.compiler.pipeline_frontend import discover_graph_pipelines, _global_functions, _Callee
 from scar.compiler.pipeline_frontend import CalleeGuard
-from scar.compiler.loop_model import ArrayLoopPlan,validate_loop
+from scar.compiler.loop_admission import ArrayLoopPlan, validate_loop
 from scar.compiler.model import SourceRef
 from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G
 from scar.ir.program.normal_graph import Body

@@ -21,7 +21,7 @@ _ONCE = 'ONCE_PER_SCOPE'
 _PER_CALL = 'PER_CALL'
 _TASKS = {
     'admit-boundary': ('COMPUTE', _ONCE, 'scar.runtime.sparse_solve_entry.admit'),
-    'load-native': ('COMPUTE', _ONCE, 'scar.runtime.sparse_lu.load_symbolic_solve'),
+    'load-native': ('COMPUTE', _ONCE, 'scar.runtime.sparse_lu_native.load_symbolic_solve'),
     'allocate-symbolic': ('ALLOCATION', _ONCE, _CREATE),
     'column-order': ('COMPUTE', _ONCE, _CREATE),
     'preorder': ('COMPUTE', _ONCE, _CREATE),
@@ -31,7 +31,7 @@ _TASKS = {
     'numeric-factorization': ('COMPUTE', _PER_CALL, _SOLVE),
     'triangular-solve': ('COMPUTE', _PER_CALL, _SOLVE),
     'release-numeric': ('RELEASE', _PER_CALL, _SOLVE),
-    'validate-first-result': ('COMPUTE', 'ON_FIRST_SUCCESS', 'scar.runtime.sparse_lu._Solver._run'),
+    'validate-first-result': ('COMPUTE', 'ON_FIRST_SUCCESS', 'scar.runtime.sparse_lu_native._Solver._run'),
     'publish-result': ('EXPORT', _PER_CALL, 'ORIGINAL_SOURCE_STATUS_BRANCH'),
     'release-symbolic': ('RELEASE', 'PER_SCOPE_EXIT', _DESTROY),
 }

@@ -88,7 +88,7 @@ class ExecutionIndex:
 
     def object_identity(self, source, target, *, budget=4096):
         """Compare current scoped Reference declarations without adding a copy."""
-        from .reference_identity import object_identity
+        from scar.ir.execution.source_validation import object_identity
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         for value in (source, target):

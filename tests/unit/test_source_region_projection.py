@@ -12,8 +12,7 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.source_contexts import ContextState, OwnerRef
-from scar.ir.program.source_template_links import (SourceMaterialDomain, SourceTemplateKey,
-    SourceTemplateLink, SourceTemplateNode, SourceTemplateOrigin)
+from scar.ir.program.source_declarations import SourceMaterialDomain, SourceTemplateKey, SourceTemplateLink, SourceTemplateNode, SourceTemplateOrigin
 from scar.ir.record_codec import encode
 
 

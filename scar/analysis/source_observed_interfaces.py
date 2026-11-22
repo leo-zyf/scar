@@ -49,11 +49,11 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 
 
 def _pins():
-    from scar.analysis import source_observed_calls,source_observed_codes,source_compiled_code_profiles,source_observed_protocols
+    from scar.analysis import source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
     from scar.analysis import source_function_connections,static_compilation,source_observed_materials,source_fact_materials
     from scar.analysis import observed_positional_receiver,source_frame_binding_effects
     from scar.ir import record_codec
-    from scar.trace import operand_bytecode
+    from scar.trace import python_call_targets as operand_bytecode
     from scar.ir.program import source_observations as code_types
     return {**source_observed_codes.request_code_pins(),
         **{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (

@@ -62,7 +62,7 @@ def _effect(ctx, effect, path):
 
 
 def write_errors(ctx):
-    from .source_validation import resolve_edge, resolve_endpoint, resolve_raw
+    from scar.ir.execution.source_validation import resolve_edge, resolve_endpoint, resolve_raw
 
     ctx.resolved_writes = {}
     write_relations = {EvidenceRelation.PRODUCES, EvidenceRelation.OBSERVED_WRITE,

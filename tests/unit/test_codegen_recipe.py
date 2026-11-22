@@ -12,7 +12,7 @@ from test_loop_recipe import setup_recipe
 from scar.codegen import loop as backend
 from scar.codegen.recipe import build_recipe
 from scar.compiler.loop_admission import admit_loop, check_loop_sources
-from scar.compiler.loop_model import loop_digest
+from scar.compiler.loop_admission import loop_digest
 from scar.compiler.model import document
 from scar.ir.execution_recipe import recipe_id
 from scar.optimization.loop_recipe import estimate_loop_recipe

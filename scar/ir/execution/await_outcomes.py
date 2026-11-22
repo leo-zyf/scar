@@ -804,7 +804,7 @@ def project_outcomes(ctx, scope, shared):
 # Actual qualification choices over the original predicate and copy ports.
 def qualification_occurrences(ctx, flow, shared, *, scope=None):
     from .await_links import _flags, _result, _root, _use
-    from .host_order import host_path
+    from scar.ir.execution.order_validation import host_path
     from scar.ir.program.protocols import OwnedUse
 
     sites = (tuple((row, ctx.await_occurrences_by_site.get(row.operation, ()))

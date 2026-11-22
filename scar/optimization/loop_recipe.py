@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from scar.compiler.loop_admission import admit_loop, check_loop_sources
-from scar.compiler.loop_model import document as loop_document, loop_from_dict
+from scar.compiler.loop_admission import document as loop_document, loop_from_dict
 from scar.compiler.model import document as plan_document, plan_from_dict
 from scar.compiler.recipe_boundary import build_loop_boundary
 from scar.ir.execution_recipe import (artifact_reference, make_recipe, read_artifact,

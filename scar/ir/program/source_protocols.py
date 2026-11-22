@@ -7,7 +7,7 @@ from scar.ir.program.source_value_routes import SourceBodyCall
 from scar.ir.program.ids import LocationID, ValueID
 from scar.ir.program.normal_graph import ConstructionPort, Endpoint, GlobalPort
 from scar.ir.program import suspension_interfaces as S, normal_graph as F, normal_graph as T, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.suspension_interfaces import StepWitness
 from scar.ir.literals import PythonLiteral
 from enum import Enum

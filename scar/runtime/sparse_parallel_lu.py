@@ -14,9 +14,7 @@ from threading import Lock, get_ident
 from time import perf_counter_ns, thread_time_ns
 
 from scar.ir.execution_recipe import artifact_reference
-from scar.runtime.sparse_lu_native import (
-    SCHEMA, Timings, bind_symbolic_abi, read_native_manifest, validate_native_elf,
-)
+from scar.runtime.sparse_lu_native import SCHEMA, Timings, bind_symbolic_abi, read_native_manifest, validate_native_elf
 
 
 _MIB = 1024**2
@@ -75,7 +73,7 @@ class _Worker:
 
 class _ParallelSolver:
     def __init__(self, native, cpus, limit, extra, budget, original=None):
-        from scar.runtime.sparse_lu import load_symbolic_solve
+        from scar.runtime.sparse_lu_native import load_symbolic_solve
 
         self.manifest = (native if type(native) is dict
                          else artifact_reference(Path(native).resolve() / 'artifact.json', SCHEMA))

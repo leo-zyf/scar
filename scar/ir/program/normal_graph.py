@@ -6,7 +6,7 @@ from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.signature_patterns import GroundType
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.source_productions import ProductionRegionID
 from scar.ir.literals import PythonLiteral
 

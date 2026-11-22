@@ -11,7 +11,7 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 def test_local_summary_keeps_call_return_cut_and_control_selector(tmp_path, monkeypatch):

@@ -19,7 +19,7 @@ from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint,Depende
 from scar.ir.program.ids import LocationID,OperationID,RegionID,UseID,ValueID
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 def _signature_fixture():

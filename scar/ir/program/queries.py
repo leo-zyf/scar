@@ -9,7 +9,7 @@ from .ids import (BlockID, BoundaryRelationID, ControlScopeID, EnvironmentInterf
 from .model import (CompletionResult, CompletionSuccessor, DataValue, ExitKind, Operation, ProgramGraph, ReferenceValue,
                     StateAccess, StateVersionValue, Successor, TerminatorKind, Use)
 from .control import ProtocolValueKind
-from .control_validation import derive_pending_facts
+from scar.ir.program.control_validation import derive_pending_facts
 from .model import ProtocolValue
 from .providers import ProviderBinding, ProviderEnvelope, ProviderRegion
 from .native import BoundaryRelation, EntryPortRef, ExitPortRef, NativeBoundary

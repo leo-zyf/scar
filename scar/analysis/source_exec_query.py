@@ -6,7 +6,7 @@ from pathlib import Path
 from scar.analysis import source_exec_roots as producer,source_f4_variants
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import source_exec_roots as X, normal_graph as F, normal_graph as G, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateGraph
+from scar.ir.program.source_declarations import SourceTemplateGraph
 from scar.ir.record_codec import _decode,_record_tags
 
 

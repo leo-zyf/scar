@@ -30,7 +30,7 @@ from scar.ir.program.control import LanguageCompletionKind as Completion
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.program.signature_patterns import CountBinding, ChoiceBinding
 from scar.ir.program.structured import PythonProtocolKind as Protocol
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode, decode
 from scar.analysis.normal_output import write_table
@@ -235,7 +235,7 @@ def _pins():
     from scar.analysis import source_namespace_interfaces as source_namespace_interfaces, namespace_values as source_namespace_captures, source_reference_slice
     from scar.analysis import source_symbol_variants, normal_output, source_declared_calls, source_stage
     from scar.ir import record_codec
-    from scar.ir.program import normal_graph as normal_links, protocol_signatures, signature_patterns, model, source_template_links
+    from scar.ir.program import normal_graph as normal_links, protocol_signatures, signature_patterns, model, source_declarations as source_template_links
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer', sys.modules[__name__]), ('types', R), ('materials', materials),
         ('ordinary_materials', source_world_material), ('namespace_ports', source_namespace_interfaces),

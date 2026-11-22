@@ -54,7 +54,7 @@ _FALSE = ('source_bodies_copied', 'loops_unrolled', 'implementation_entry_proven
 
 
 def _pins():
-    from scar.analysis import source_observed_codes, source_observed_calls, source_call_view, source_observed_protocols
+    from scar.analysis import source_observed_codes, source_observed_calls, source_call_view, source_protocols as source_observed_protocols
     from scar.analysis import native_callables, observed_boundaries as observed_boundary_continuations
     from scar.ir import record_codec
     from scar.ir.program import native_callables as native_types

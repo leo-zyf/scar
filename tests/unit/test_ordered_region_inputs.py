@@ -6,7 +6,7 @@ from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph a
 from scar.ir.program import ordered_regions as R, source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.source_value_routes import ReferenceTransitionKind
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode,encode
 
 

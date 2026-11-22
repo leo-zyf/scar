@@ -72,7 +72,7 @@ def _build_loop_recipe(recipe, out):
     from scar.ir.execution_recipe import read_recipe, validate_recipe, recipe_id, write_recipe
     from scar.optimization.loop_recipe import verify_loop_recipe, unpack_loop_recipe
     from scar.optimization.resource_solver import semantic_sha256
-    from scar.compiler.loop_model import loop_digest
+    from scar.compiler.loop_admission import loop_digest
     from scar.compiler.model import document
     from . import loop as backend
 

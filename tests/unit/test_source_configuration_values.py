@@ -10,7 +10,7 @@ from scar.ir.program.configuration import ConfigurationOverride, OverrideAction,
 from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness
 from scar.ir.program.source_frame_bindings import StaticInputPort
 from scar.ir.program.source_productions import ProductionRegionID,ProductionPurpose
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.configuration import ConfigurationValueKind as K
 
 

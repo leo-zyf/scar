@@ -130,7 +130,7 @@ def test_sparse_profile_survives_large_inlined_loop_before_real_call_chain(tmp_p
 
 def test_old_profile_does_not_use_sparse_selection_or_suspended_caller_guard(tmp_path, monkeypatch):
     case = capture(tmp_path, monkeypatch, rule=LOAD_OCCURRENCES_RULE)
-    import scar.trace.operand_bytecode as bytecode
+    import scar.trace.python_call_targets as bytecode
     def forbidden(*args, **kwargs):
         raise AssertionError('old profile must not invoke new sparse selector')
     monkeypatch.setattr(bytecode, 'call_window_selection', forbidden)
@@ -140,7 +140,7 @@ def test_old_profile_does_not_use_sparse_selection_or_suspended_caller_guard(tmp
 
 def test_sparse_profile_recomputes_selector_from_current_verified_source_code(tmp_path, monkeypatch):
     case = capture(tmp_path, monkeypatch)
-    import scar.trace.operand_bytecode as bytecode
+    import scar.trace.python_call_targets as bytecode
     original = bytecode.call_window_selection
     seen = []
     def verified(code, instructions=None):
@@ -254,7 +254,7 @@ def test_handler_and_normal_continuation_remain_live_after_initially_empty_pendi
     exercise, = named(model, 'exercise')
     owned = [item for item in scan.instructions if item.invocation == exercise.entry.invocation]
     import dis
-    from scar.trace.operand_bytecode import call_window_selection
+    from scar.trace.python_call_targets import call_window_selection
     code = sources.objects[exercise.entry.code]
     instructions = list(dis.get_instructions(code))
     windows, expiry = call_window_selection(code, instructions)

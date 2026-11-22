@@ -261,7 +261,7 @@ class _Context:
                 self.issue('stale_state', path, 'support is not the exact current dynamic state incarnation')
 
     def point_precedes(self, left, right, *, budget=None):
-        from .host_order import host_path, local_point_precedes
+        from scar.ir.execution.order_validation import host_path, local_point_precedes
         local = local_point_precedes(self, left, right)
         if local is not None:
             return local
@@ -412,10 +412,10 @@ def _evidence_gaps(ctx):
 
 def _external_stages(ctx):
     """One ordering for construction and a fresh external query snapshot."""
-    from .source_validation import source_inventory_errors, source_bridge_errors
+    from scar.ir.execution.source_validation import source_inventory_errors, source_bridge_errors
     from .resource_validation import resource_errors
     from .work_validation import work_errors
-    from .order_validation import order_errors
+    from scar.ir.execution.order_validation import order_errors
     from scar.ir.execution.observation_validation import observation_errors
     from .content_validation import content_errors
     from .production_validation import write_errors, produced_errors
@@ -555,7 +555,7 @@ def _analyze(model, program, *, value_graphs=None, evidence_graphs=None, semanti
         from .resumable_validation import body_errors
         body_errors(ctx)
     if not ctx.issues:
-        from .host_order import prepare_host_order, host_cycle_errors
+        from scar.ir.execution.order_validation import prepare_host_order, host_cycle_errors
         prepare_host_order(ctx)
         host_cycle_errors(ctx)
     if not ctx.issues:

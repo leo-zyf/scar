@@ -198,7 +198,7 @@ class _Sources:
         return source_pair(self.ctx, source, target, self.shared)
 
     def address(self, left, right):
-        from .reference_identity import object_identity
+        from scar.ir.execution.source_validation import object_identity
         result = {'match': None, 'owner': None, 'selectors': ()}
         a, b = left['owner'], right['owner']
         if a is None or b is None:

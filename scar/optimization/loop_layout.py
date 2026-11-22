@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 
 from scar.compiler.model import document
-from scar.compiler.loop_model import loop_digest
+from scar.compiler.loop_admission import loop_digest
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.record_codec import decode, loads
 from .cost_model import _pointer

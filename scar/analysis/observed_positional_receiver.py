@@ -18,7 +18,7 @@ from scar.ir.program.call_operands import CallableKind, OperandCallAttempt, Oper
 from scar.ir.program.python_call_targets import PythonTargetKind
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import code_parameters, site
-from scar.trace.operand_bytecode import load_slots
+from scar.trace.python_call_targets import load_slots
 
 
 _UNSUPPORTED = (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS | inspect.CO_GENERATOR

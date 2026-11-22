@@ -204,7 +204,7 @@ class _Core:
 
 def _instruction_plan(code, site, node, rule=LOAD_OCCURRENCES_RULE, *, selection=None):
     """Build the narrow LOAD/PUSH_NULL window from exact verified bytecode."""
-    from scar.trace.operand_bytecode import load_slots
+    from scar.trace.python_call_targets import load_slots
     instructions = list(dis.get_instructions(code))
     positions = {item.offset: index for index, item in enumerate(instructions)}
     _need(site.offset in positions, Issue.INSTRUCTION_WINDOW, 'CALL offset has no verified instruction')
@@ -238,7 +238,7 @@ def _instruction_plan(code, site, node, rule=LOAD_OCCURRENCES_RULE, *, selection
         # Recompute from the exact source-verified CodeType. A sparse row
         # subsequence cannot itself prove that no skipped control transfer
         # entered the middle of this physical instruction interval.
-        from scar.trace.operand_bytecode import call_window_selection
+        from scar.trace.python_call_targets import call_window_selection
         suspended = inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
         _need(not code.co_flags & suspended, Issue.DISPATCH_BOUNDARY,
               'suspended caller code is outside the sparse call-window rule')
@@ -264,7 +264,7 @@ def _load_window(attempt, node, caller_code, instructions, instruction_indices, 
     if key not in plans:
         selection = None
         if rule == CALL_WINDOWS_RULE:
-            from scar.trace.operand_bytecode import call_window_selection
+            from scar.trace.python_call_targets import call_window_selection
             selection_key = rule, attempt.site.code
             if selection_key not in plans:
                 plans[selection_key] = call_window_selection(caller_code)[0]

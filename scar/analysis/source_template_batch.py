@@ -12,7 +12,7 @@ from scar.analysis.source_productions import _digest, read_production_plan
 from scar.analysis.source_template_links import (
     _implementation, _require, _worker_stores, read_template_graph,
 )
-from scar.ir.program import source_productions as P, source_template_links as T
+from scar.ir.program import source_productions as P, source_declarations as T
 
 
 _GRAPHS = OrderedDict()

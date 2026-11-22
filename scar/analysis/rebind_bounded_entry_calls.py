@@ -102,7 +102,7 @@ def _artifacts(value):
 
 def _templates(materials, root, units):
     from scar.analysis.source_template_links import _implementation, _worker_stores
-    from scar.ir.program import source_template_links as link_types
+    from scar.ir.program import source_declarations as link_types
 
     report = json.loads((root/'result.json').read_bytes())
     _require(report['schema'] == 'scar.source-template-link-store' and report['schema_version'] == 1

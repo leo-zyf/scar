@@ -9,7 +9,7 @@ from enum import Enum
 from .cleanup import CleanupEnter, CleanupReplace, CleanupResume, CleanupRouteTerminator
 from .cleanup_forward import derive_cleanup_forward
 from .control import ControlScopeKind, PendingDispatchTerminator, ProtocolValueKind as P
-from .control_validation import derive_pending_facts
+from scar.ir.program.control_validation import derive_pending_facts
 from .ids import BlockID, ControlPortID, ControlScopeID
 from .model import (
     AccessMode, Behavior, BlockArgument, FootprintKind, OperationResult,

@@ -8,7 +8,7 @@ from scar.analysis import program_view_storage as storage
 from scar.ir.program import view as V, source_productions as P
 from scar.ir.program.dependencies import DependencyKind as K, DependencyMeaning as M, DependencyStrength as S
 from scar.ir.program.ids import RegionID, OperationID
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import encode
 
 

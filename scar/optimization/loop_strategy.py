@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 
-from scar.compiler.loop_model import loop_digest, read_loop, validate_loop
+from scar.compiler.loop_admission import loop_digest, read_loop, validate_loop
 from scar.compiler.model import document as plan_document
 from scar.compiler.pipeline_frontend import pipeline_digest
 from scar.ir.record_codec import loads

@@ -28,7 +28,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
     from scar.analysis.build import _check
     from scar.analysis.stateful_dependencies import project_stateful_dependencies
     from scar.compiler.choose_stateful_cpu import choose_stateful_cpu
-    from scar.compiler.lower_stateful_choices import lower_stateful_choices
+    from scar.compiler.selected_stateful_lowering import lower_stateful_choices
     from scar.ir.execution_recipe import artifact_reference,read_artifact
     from scar.optimization.stateful_cpu_model import _domain
     from scar.optimization.stateful_cpu_model import build_stateful_cpu_profiles
@@ -156,7 +156,7 @@ def compile_build(domains, out, *, calibrations=(), no_op_profiles=None, plan_on
             raise ValueError('planning domain differs from the program hardware snapshot')
         interval_value=stateful_interval_plans.get(original['region_id'])
         if interval_value is not None:
-            from scar.compiler.lower_stateful_bounds import lower_stateful_bounds
+            from scar.compiler.selected_stateful_lowering import lower_stateful_bounds
             from scar.compiler.stateful_domain_equivalence import retain_stateful_domain_equivalence
             if isinstance(interval_value,(str,Path)):
                 interval_path=Path(interval_value).resolve()

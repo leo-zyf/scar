@@ -24,9 +24,7 @@ from scar.ir.program.call_operands import (
 )
 from scar.ir.record_codec import encode
 from scar.trace.code_snapshot import code_key, code_parameters, site, _key_record
-from scar.trace.operand_bytecode import (
-    call_family_offsets, call_window_selection, load_slots,
-)
+from scar.trace.python_call_targets import call_family_offsets, call_window_selection, load_slots
 
 
 _SCHEMA = "scar.call-operands-trace"

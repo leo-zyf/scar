@@ -60,7 +60,7 @@ def source_result_barrier(ctx, write, *, budget=None):
     from scar.ir.v2.evidence import EvidenceNodeKind
     from .effects import effect_context
     from .production_ranges import _profile
-    from .source_validation import resolve_edge, resolve_raw
+    from scar.ir.execution.source_validation import resolve_edge, resolve_raw
 
     path = f'writes[{write.id}].source_result'
     raw_refs, unresolved = {}, False

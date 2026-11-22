@@ -28,7 +28,7 @@ from scar.ir.program import code_identity as CV, code_identity as BV
 from scar.ir.program import code_identity as NV, code_identity as TV
 from scar.ir.program import code_identity as SV
 from scar.ir.program import source_productions as P, normal_graph as F
-from scar.ir.program.source_template_links import SourceMaterialDomain as D
+from scar.ir.program.source_declarations import SourceMaterialDomain as D
 from scar.ir.program.protocol_signatures import ExceptionABI
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial

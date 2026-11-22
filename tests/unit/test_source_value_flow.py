@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 from scar.analysis.source_value_flow import project_value_flow, data_reach
 from scar.analysis.source_productions import _digest
 from scar.ir.program import source_productions as P, normal_graph as G, normal_graph as F, normal_graph as T
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.source_contexts import ContextState, OwnerRef
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType

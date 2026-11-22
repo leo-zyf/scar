@@ -23,7 +23,7 @@ from scar.analysis.source_productions import _digest, production_type_catalog, r
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
 from scar.analysis.static_query import _Fragments
 from scar.ir.program import source_productions as P
-from scar.ir.program import source_template_links as T
+from scar.ir.program import source_declarations as T
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueKind, ValueType
 from scar.ir.record_codec import encode, decode

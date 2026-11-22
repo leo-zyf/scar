@@ -10,7 +10,7 @@ from scar.ir.program.ids import OperationID,RegionID,ValueID,UseID
 from scar.ir.program.ordered_regions import OrderedInlineRoute
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import encode,decode
 
 

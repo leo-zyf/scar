@@ -37,7 +37,7 @@ def read_input_boundary(path):
             stateful_inputs=tuple((row.id,row.path,row.kind) for row in region.inputs),
             region_id=region.id,region_sha256=stateful_digest(region))
     if document.get('schema')=='scar.array-loop-plan':
-        from .loop_model import loop_from_dict
+        from scar.compiler.loop_admission import loop_from_dict
         loop=loop_from_dict(document)
         leaves=tuple({(call.callee.lookup_path,call.callee.source.code_key):call.callee
             for call in loop.body.calls}.values())

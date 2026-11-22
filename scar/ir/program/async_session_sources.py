@@ -142,7 +142,7 @@ def source_routes(ctx, source):
         # never from whether this expected payload happens to match a branch.
         possible = None
         if ctx.graph.pending_completions:
-            from .pending_payload_flow import has_pending_region
+            from scar.ir.program.control_validation import has_pending_region
             if has_pending_region(ctx, ctx.region_of[operation.id]):
                 from .protocol_packet_routes import _possible_pending
                 possible = _possible_pending(ctx, ctx.region_of[operation.id], choices)

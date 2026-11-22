@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 from scar.analysis.source_reference_consumers import bind_consumer_interface
 from scar.ir.program import binding_ports as R, normal_graph as T, normal_graph as G, source_productions as P
 from scar.ir.program import data_materials as A
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 
 

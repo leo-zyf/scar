@@ -11,11 +11,7 @@ from scar.analysis.source_roles import _catalog as _role_catalog, _state
 from scar.analysis.source_contexts import _catalog as _context_catalog, read_source_contexts, SourceContextView
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
-from scar.ir.program.source_declarations import (
-    DeclarationCatalog, DeclarationConflict, DeclarationContribution, DeclarationFrontier,
-    LexicalField, NameKey, NameProjection, PortDisposition, ScopeDeclarations,
-    SourceDeclarationsInput, SourceDeclarationsMaterial, SourceDeclarationsProfile,
-)
+from scar.ir.program.source_declarations import DeclarationCatalog, DeclarationConflict, DeclarationContribution, DeclarationFrontier, LexicalField, NameKey, NameProjection, PortDisposition, ScopeDeclarations, SourceDeclarationsInput, SourceDeclarationsMaterial, SourceDeclarationsProfile
 from scar.ir.record_codec import decode, encode
 
 

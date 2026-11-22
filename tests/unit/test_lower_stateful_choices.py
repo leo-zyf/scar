@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from scar.analysis.target_graph import build_target_graph
-from scar.compiler.lower_stateful_choices import lower_stateful_choices
+from scar.compiler.selected_stateful_lowering import lower_stateful_choices
 from scar.compiler.model import Expr, SourceRef
 from scar.compiler.stateful_model import (StatefulRegion, StatefulInput,
     StatefulAction, REQUIRED_GUARDS)

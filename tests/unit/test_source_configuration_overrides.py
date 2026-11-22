@@ -12,7 +12,7 @@ def test_override_input_types_and_ordered_writes_keep_grammar_and_provenance():
     from scar.analysis.source_override_syntax import OverrideSyntax
     from scar.ir.program.configuration import OverrideAction, OverrideExpressionKind
     from scar.ir.program.normal_graph import CodeScopeRef, CodeScopeWitness
-    from scar.ir.program.source_template_links import SourceTemplateKey
+    from scar.ir.program.source_declarations import SourceTemplateKey
     from scar.ir.program.source_productions import ProductionRegionID,ProductionPurpose
     _,function=_protocol(root);syntax=OverrideSyntax(root)
     argv=('example.py','--config-name=example','n=1e3','flag=on','flag=False','empty=',

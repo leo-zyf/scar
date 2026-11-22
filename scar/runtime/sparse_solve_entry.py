@@ -116,7 +116,7 @@ def admit(entry, argv, selection_path, expected_sha256, *, study, exclusive):
         read_artifact(native)
 
         def loader(original):
-            from scar.runtime.sparse_lu import load_symbolic_solve
+            from scar.runtime.sparse_lu_native import load_symbolic_solve
 
             return load_symbolic_solve(native, budget_bytes=selection['budget_bytes'], original=original)
 

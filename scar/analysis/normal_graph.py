@@ -20,7 +20,7 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_dir
 from scar.analysis.source_template_links import read_template_graph, _worker_stores, _stream, _json, _read_graph_table
 from scar.ir.program import normal_graph as G
 from scar.ir.program import source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.record_codec import encode

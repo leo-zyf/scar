@@ -13,7 +13,7 @@ from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.program.ids import LocationID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.protocol_signatures import ExceptionABI
 
 

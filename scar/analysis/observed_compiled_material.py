@@ -20,7 +20,7 @@ from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program import code_identity as CV, code_identity as BV
 from scar.ir.program import code_identity as NV, code_identity as TV
 from scar.ir.program import code_identity as SV
-from scar.ir.program.source_template_links import SourceTemplateGraph, SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateGraph, SourceTemplateKey
 from scar.ir.program.source_protocols import UnitSourceInterfaces
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import decode, encode

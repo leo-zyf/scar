@@ -95,7 +95,7 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
     """
     from scar.trace.capture_coordinates import bind_capture_coordinates
     from scar.trace.native_import import import_native_evidence
-    from scar.trace.native_memory_export import export_native_memory
+    from scar.trace.native_memory import export_native_memory
     from scar.trace.os_resources import import_os_resources, publish_os_interfaces
 
     if type(os_interface_work) is not bool:
@@ -162,7 +162,7 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
                   direct_schema_operator_observations=scopes['direct_schema_operator_observations'], gaps=scopes['gaps'])
         dispatch_config = manifest.get('configuration', {}).get('dispatch_observations')
         if dispatch_config is not None and dispatch_config.get('started') is True:
-            from scar.trace.dispatch_import import import_dispatch_bridge
+            from scar.trace.dispatch_evidence import import_dispatch_bridge
             original_trace = str(Path(manifest['artifacts']['kineto']['path']).parent)
             pid = manifest['pid']
             stage('dispatch_bridge', 'RUNNING')

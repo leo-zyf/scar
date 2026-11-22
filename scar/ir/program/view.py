@@ -11,7 +11,7 @@ from .dependencies import (DependencyPoint, DependencyEdge, NodeID, DependencyKi
 from .providers import ProviderArtifact
 from scar.ir.program.normal_graph import Port, Edge
 from .source_productions import ProductionRegionID, ProductionStepID
-from .source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from .signature_patterns import GroundType
 from .ids import LocationID
 

@@ -15,7 +15,7 @@ from scar.analysis.static_query import _Fragments
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import normal_graph as G, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode, encode
 
 

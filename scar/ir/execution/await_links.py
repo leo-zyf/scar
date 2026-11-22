@@ -388,7 +388,7 @@ def _accepted_edge(ctx, source, advance, shared):
     edge = source['accepted_edge']
     if edge is None:
         return True
-    from .host_order import host_path
+    from scar.ir.execution.order_validation import host_path
     answers = []
     for occurrence in ctx.await_occurrences_by_site.get(edge.operation, ()):
         if not shared.spend('await_qualification_edges', path='await.qualification.edge'):
@@ -516,7 +516,7 @@ def _wrapper_projection(ctx, source, advance, route, projection, gaps, shared):
     Expected B is read at the original constructor/lookup operand. It is never
     chosen from the drive or inferred from the only visible body activation.
     """
-    from .host_order import host_path
+    from scar.ir.execution.order_validation import host_path
     from .resumable_identity import compatible, distinct_objects
     ref = projection.constructor
     row = ctx.await_protocol_rows.get((ref.scope, ref.clause, ref.operation, ref.slot))
@@ -615,7 +615,7 @@ def _wrapper_projection(ctx, source, advance, route, projection, gaps, shared):
 def await_identity_errors(ctx, shared):
     """Refresh conditional compatibility against this query's external snapshot."""
     from .resumable_identity import compatible
-    from .host_order import host_path
+    from scar.ir.execution.order_validation import host_path
     from scar.ir.program.protocol_await_records import WrapperHeldBody
     comparisons = 0
     for job in getattr(ctx, 'await_jobs', ()):

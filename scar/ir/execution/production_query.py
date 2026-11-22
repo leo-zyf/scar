@@ -20,7 +20,7 @@ from .coverage import RegionRef
 from .ids import ContentReadID
 from .production import InventorySourceRef, RawRecordRef, SourceEdgeRef, SourceEndpointRef
 from .endpoint_protocol import same_materialization
-from .source_validation import resolve_endpoint
+from scar.ir.execution.source_validation import resolve_endpoint
 from .work import MaterializationRef
 from .validity_budget import ValidityBudget
 

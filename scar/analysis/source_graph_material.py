@@ -14,7 +14,7 @@ from scar.analysis.source_relations import select_relation_rows
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_productions import _digest, read_production_plan
 from scar.ir.program.providers import ProviderArtifact
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 class ObservedGraphMaterial:

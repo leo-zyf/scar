@@ -9,7 +9,7 @@ import pytest
 from test_cpu_hardware_placement import hardware
 from test_loop_layout import setup_layout
 from scar.codegen import loop as backend
-from scar.compiler.loop_model import ArrayLoopPlan
+from scar.compiler.loop_admission import ArrayLoopPlan
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
 from scar.ir.execution_recipe import artifact_reference, recipe_id

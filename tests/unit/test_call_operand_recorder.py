@@ -16,7 +16,7 @@ from scar.ir.program.call_operands import CallableKind
 from scar.trace.call_edges import install as install_frames
 from scar.trace.call_operands import install as install_operands
 from scar.trace.code_snapshot import describe_code
-from scar.trace.operand_bytecode import load_slots
+from scar.trace.python_call_targets import load_slots
 
 
 @pytest.fixture

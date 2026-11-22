@@ -355,7 +355,7 @@ class ProtocolFlow:
                 and self.values[value].protocol is ProtocolValueKind.EXCEPTION_PACKET
                 for values in (port.values, *(values for _, values in port.completion_values))
                 for value in values):
-            from .pending_payload_flow import has_pending_region, prepare_pending_payload_flow
+            from scar.ir.program.control_validation import has_pending_region, prepare_pending_payload_flow
             if has_pending_region(self, region):
                 payload = prepare_pending_payload_flow(self, region, outgoing, incoming, order, guards)
                 if payload is None:

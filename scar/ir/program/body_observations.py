@@ -15,7 +15,7 @@ from scar.ir.program.call_edges import (
 )
 from scar.ir.program.signature_patterns import GroundType, _ground
 from typing import get_args
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.model import ValueType, ValueKind
 
 

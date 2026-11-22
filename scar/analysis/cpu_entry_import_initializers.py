@@ -11,7 +11,7 @@ from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import decode, encode
 
 SCHEMA = 'scar.f4-cpu-entry-import-initializers'

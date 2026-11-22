@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 
-from scar.compiler.loop_model import document, loop_digest, loop_from_dict, read_loop
+from scar.compiler.loop_admission import document, loop_digest, loop_from_dict, read_loop
 from scar.compiler.model import document as plan_document, plan_from_dict, read_plan
 from scar.optimization.hardware import bind_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256

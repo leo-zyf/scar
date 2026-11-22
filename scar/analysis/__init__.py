@@ -1,6 +1,6 @@
-from .candidates import detect
-from .invariance import same_logical_version
-from .liveness import consumer_counts, graph_liveness
+from scar.analysis.candidates import detect
+from scar.analysis.candidates import same_logical_version
+from scar.analysis.candidates import consumer_counts, graph_liveness
 from .graph_candidates import graph_candidates
 from .graph_loops import graph_loop_candidates
 from .inventory import summarize_action_inventory

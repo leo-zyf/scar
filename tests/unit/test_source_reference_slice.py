@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from scar.analysis.source_reference_slice import ReferenceSlicer
 from scar.ir.program import normal_graph as T, normal_graph as F, normal_graph as G
 from scar.ir.program import source_productions as P
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.record_codec import encode
 
 

@@ -11,7 +11,7 @@ from scar.ir.program.ids import RegionID,ValueID,ControlPortID,OperationID,UseID
 from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_references import SourceArtifactLocator
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 
 
 def test_caller_store_and_effect_barriers_prevent_false_scalar_invariance_and_frame_splicing():

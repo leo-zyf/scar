@@ -14,7 +14,7 @@ from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program import ordered_regions as R
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
-from scar.ir.program.source_template_links import SourceTemplateKey
+from scar.ir.program.source_declarations import SourceTemplateKey
 from scar.ir.program.dependencies import context_push,context_pop
 from scar.ir.record_codec import decode
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from scar.ir.program import normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
-from scar.ir.program.source_template_links import SourceTemplateKey, SourceTemplateOrigin
+from scar.ir.program.source_declarations import SourceTemplateKey, SourceTemplateOrigin
 from scar.ir.program.normal_graph import CodeScopeRef
 from scar.ir.program.normal_graph import CallLink, FunctionActivation, GlobalPort
 from scar.ir.program.call_inputs import CallInterfaceRecord, ContextReferenceSlice

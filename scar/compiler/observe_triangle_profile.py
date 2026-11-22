@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from scar.analysis import source_triangle_seed
-from scar.compiler.observe_call_bindings import observe_call_bindings
+from scar.compiler.call_binding import observe_call_bindings
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 
 SCHEMA = 'scar.source-triangle-profile-frontend'
