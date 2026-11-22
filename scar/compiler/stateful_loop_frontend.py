@@ -6,7 +6,6 @@ from hashlib import sha256
 import json
 import math
 from pathlib import Path
-from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_call_view import source_call_site, function_interface_fact
 from scar.analysis.source_references import source_port
 from scar.compiler.caller_pipeline import _abi, _global_name, _reference, _signature
@@ -23,6 +22,7 @@ from scar.compiler.graph_frontend import (
     _metadata,
     _discovery_for,
     GraphRegionRejected,
+    RegionDiscovery,
 )
 from scar.compiler.loop_admission import (
     _LoopLowerer,
@@ -242,10 +242,13 @@ class _StatefulLoopLowerer(_LoopLowerer):
 
 
 def _pins():
-    from scar.compiler import loop_admission as loop_frontend, stateful_loop_frontend as stateful_frontend, caller_pipeline, graph_frontend
-    return {name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in(
-        ('loop_proof',__import__(__name__,fromlist=['__file__'])),('loop_control',loop_frontend),
-        ('stateful_source',stateful_frontend),('call_abi',caller_pipeline),('source_values',graph_frontend))}
+    from scar.compiler import caller_pipeline, graph_frontend, loop_admission
+
+    source = sha256(Path(__file__).read_bytes()).hexdigest()
+    pins = {name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (
+        ('loop_control', loop_admission), ('call_abi', caller_pipeline), ('source_values', graph_frontend))}
+    return dict(loop_proof=source, loop_control=pins['loop_control'], stateful_source=source,
+                call_abi=pins['call_abi'], source_values=pins['source_values'])
 
 
 def document(proof):
@@ -255,10 +258,12 @@ def document(proof):
 
 
 def build_stateful_loop(view,provider,*,caller_unit,function_ordinal,interface_ordinal,step_reference):
-    from scar.compiler.stateful_loop_frontend import discover_stateful_regions
     if step_reference.get('schema')!='scar.stateful-array-region':raise ValueError('retained stateful step required')
-    step=stateful_from_dict(read_artifact(step_reference));matches,_=discover_stateful_regions(view,source=step.source.path)
-    if len([r for r in matches if stateful_digest(r)==stateful_digest(step)])!=1:
+    step = stateful_from_dict(read_artifact(step_reference))
+    discovery = RegionDiscovery(view)
+    matches, _ = discover_stateful_regions(view, source=step.source.path, _discovery=discovery)
+    step_digest = stateful_digest(step)
+    if sum(stateful_digest(region) == step_digest for region in matches) != 1:
         raise ValueError('stateful loop step differs from complete original source discovery')
     source=view.unit(caller_unit);function=source.facts.functions[function_ordinal];_signature(function)
     material=provider.store.read_unit(caller_unit);interface=material.interfaces[interface_ordinal]
@@ -266,15 +271,20 @@ def build_stateful_loop(view,provider,*,caller_unit,function_ordinal,interface_o
     targets=[f for f in target.facts.functions if f.template==interface.link.body.template and f.body==interface.link.body.region]
     if len(targets)!=1:raise ValueError('selected step interface lacks one original function body')
     target_function=targets[0]
-    target_identity=_reference(view,target.unit,target_function,(),{})
+    identities = {target.unit: discovery.identity(target.unit)}
+    target_identity=_reference(view,target.unit,target_function,(),identities)
     if any(getattr(target_identity,k)!=getattr(step.source,k)for k in('path','sha256','code_key','qualname')):
         raise ValueError('selected source CALL does not target the admitted stateful step')
     routes,formals=_abi(source,function,interface,target_function)
     name=_global_name(source.facts,interface.link.callee)
-    resolver=BodyInterfaceResolver(view);resolver.prepare(interface.link.body)
-    identities={};_reference(view,caller_unit,function,(),identities)
+    resolver = discovery.resolver
+    resolver.prepare(interface.link.body)
+    if caller_unit not in identities:
+        identities[caller_unit] = discovery.identity(caller_unit)
+    reference = _reference(view, caller_unit, function, (), identities)
     lowerer=_StatefulLoopLowerer(source,function,resolver,name,interface,syntax=identities[caller_unit][1])
-    trip,args,origins=lowerer.lower();reference=_reference(view,caller_unit,function,origins,identities)
+    trip, args, origins = lowerer.lower()
+    reference = replace(reference, origins=(*reference.origins, *origins))
     fact=source.facts.calls[interface.query]
     positions={source_port(source.facts,i):function.parameter_names[p]
         for i,p in zip(fact.positional,args['positional'],strict=True)}
@@ -292,8 +302,9 @@ def build_stateful_loop(view,provider,*,caller_unit,function_ordinal,interface_o
         snapshot_guards_are_not_runtime_dispatch_proof=True)
     proof=StatefulLoopProof('',reference,function.parameter_names,step,step_reference,function.parameter_names[trip],mapping,
         name,caller_unit,function_ordinal,interface_ordinal,evidence,origins,_pins())
-    provider.store.validate();source.check();read_artifact(step_reference,json_document=False)
-    from dataclasses import replace
+    provider.store.validate()
+    discovery.validate()
+    read_artifact(step_reference, json_document=False)
     return replace(proof,id='stateful-loop-proof:'+_digest(document(proof)))
 
 
