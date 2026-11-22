@@ -1,9 +1,11 @@
 """Aten team."""
 
 from statistics import median_low
-from scar.optimization.aten_team_numa_locality import (
-    _BUDGET_FRONTIER,
+from scar.optimization.aten_numa_locality import (
+    _TEAM_BUDGET_FRONTIER as _BUDGET_FRONTIER,
+    _bounded_duration,
     _legal_contexts,
+    _validate_samples,
     model_aten_team_numa_locality,
 )
 from scar.optimization.aten_live_values import tensor_releases, _bounded_sum, tensor_footprint
@@ -348,22 +350,6 @@ def propose_cpu_team(recipe, *, contract, target, cpu_ids, allow_cross_numa=Fals
             schedule['host_numa_node_ids'] = sorted({row.numa_node for row in inventory
                 if type(row) is MemoryDomain and row.kind is MemoryKind.HOST and row.numa_node is not None})
     return schedule
-
-
-def _bounded_duration(value):
-    return type(value) is int and 0 < value < 2**63
-
-
-def _validate_samples(samples, count, operation_count, positions):
-    if (type(samples) is not list or len(samples) != count
-            or any(type(row) is not list or len(row) != operation_count for row in samples)):
-        raise ValueError('native team calibration requires a rectangular operation sample matrix per lane')
-    for row in samples:
-        for index, duration in enumerate(row):
-            if index in positions and not _bounded_duration(duration):
-                raise ValueError('a legal native team lane is missing its measured service time')
-            if index not in positions and duration is not None:
-                raise ValueError('native team calibration measured a disallowed worker position')
 
 
 def _team_groups(recipe, schedule):

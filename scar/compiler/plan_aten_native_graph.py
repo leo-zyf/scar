@@ -20,9 +20,8 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.target_hardware import CpuExecutor, MemoryDomain, MemoryKind
 from scar.ir.record_codec import encode, loads
 from scar.optimization.aten_boundary_trials import ATEN_GAIN_POLICY, _measurements, _passes_gain
-from scar.optimization.aten_joint_numa_locality import model_aten_joint_numa_locality
 from scar.optimization.aten_native_schedule import propose_cpu_pair, propose_cpu_windows, select_cpu_windows
-from scar.optimization.aten_numa_locality import model_aten_numa_locality
+from scar.optimization.aten_numa_locality import model_aten_joint_numa_locality, model_aten_numa_locality
 from scar.optimization.aten_live_values import tensor_footprint, tensor_releases
 from scar.optimization.constructive_planner import construct_implementations
 from scar.optimization.joint_planner import verify_execution_plan
