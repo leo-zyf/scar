@@ -159,7 +159,7 @@ def simplify(nodes: tuple[Expr, ...], output: str, *, forward_exact_copies=False
             node = Expr(node.id, "const", attrs={"value": value})
             folded.append(node.id)
         if node.op == "copy" and forward_exact_copies and source.id != output:
-            from scar.compiler.array_copy_contract import validate_copy_attributes
+            from scar.compiler.model import validate_copy_attributes
             validate_copy_attributes(node.attrs)
             if original_kinds[source.inputs[0]] == "array":
                 aliases[source.id] = inputs[0]

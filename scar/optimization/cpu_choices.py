@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from scar.compiler.model import ExecutionPlan, document, plan_from_dict
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode, loads
 from .cost_model import predict_region_costs

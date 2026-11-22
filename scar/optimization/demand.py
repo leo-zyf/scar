@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import Counter
 
 from scar.compiler.provenance import graph_value_sources
-from scar.compiler.validation import validate_region
+from scar.compiler.model import validate_region
 from .graph import value_kinds
 from .optimizer import _ARITHMETIC, _classify, _cost
 

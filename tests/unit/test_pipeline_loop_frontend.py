@@ -224,7 +224,7 @@ def test_composite_movement_consumes_pinned_materials_effects_and_optimized_plac
         _require_source_movement_binding(SimpleNamespace(plan=micro),'scar.source-composite-loop-motion')
     # Exercise the existing exact-copy scalar rule as a conditional micro view;
     # no caller replacement or source admission is obtained from this view.
-    from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes
+    from scar.compiler.model import COPY_REQUIRED_GUARDS, copy_attributes
     copied=replace(proof.body,nodes=(*proof.body.nodes,Expr('final-copy','copy',(proof.body.output,),copy_attributes())),
         output='final-copy',assumptions=tuple(dict.fromkeys((*proof.body.assumptions,*COPY_REQUIRED_GUARDS))))
     copy_interface=dict(carry_parameter=proof.carry_parameter,

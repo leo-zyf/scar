@@ -386,7 +386,7 @@ def _read_composite_invariant_loop_materials(path):
             or proof.body_identity!='DERIVED_FUSED_DAG_NOT_A_NEW_PYTHON_CALLABLE'
             or proof.transformation_authorized is not False or not proof.compositions):
         raise ValueError('original separate composite proof without source permission required')
-    from scar.compiler.validation import validate_region
+    from scar.compiler.model import validate_region
     validate_region(proof.body)
     canonical=lambda value:json.dumps(asdict(value),sort_keys=True,separators=(',',':'),allow_nan=False)
     roots=[row for row in proof.compositions if row.pipeline.source==proof.root_callee_source]

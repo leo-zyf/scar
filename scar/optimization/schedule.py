@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 
 from scar.compiler.model import ExecutionPlan, LoopAxis
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.ir.program import target_hardware as H
 from scar.ir.record_codec import decode, encode
 from .hardware import _boundaries, _target_materials, validate_cpu_placement

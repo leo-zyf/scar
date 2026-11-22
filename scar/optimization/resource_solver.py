@@ -99,7 +99,7 @@ def hardware_model_skeleton(plan, schedule, *, input_shapes=None) -> dict:
     NUMA page placement. This helper does not jointly optimize placements.
     """
     from scar.compiler.model import document
-    from scar.compiler.validation import validate_plan
+    from scar.compiler.model import validate_plan
     from scar.ir.record_codec import encode
     from .hardware import validate_cpu_placement
 

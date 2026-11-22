@@ -12,7 +12,7 @@ from pathlib import Path
 
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.compiler.model import CpuPlacement, ExecutionPlan
-from scar.compiler.validation import validate_plan, validate_resource_binding
+from scar.compiler.model import validate_plan, validate_resource_binding
 from scar.ir.program import target_hardware as H
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.record_codec import encode

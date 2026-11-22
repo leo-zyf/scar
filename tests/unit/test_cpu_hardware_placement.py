@@ -7,7 +7,7 @@ import pytest
 
 from scar.analysis.target_graph import build_target_graph
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.optimization import (bind_cpu_placement, optimize_region,
                                propose_cpu_placements, validate_cpu_placement)
 from scar.optimization.schedule import (

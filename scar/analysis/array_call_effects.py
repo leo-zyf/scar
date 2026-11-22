@@ -11,7 +11,7 @@ from dataclasses import asdict
 from scar.compiler.model import ArrayRegion, ExecutionPlan
 from scar.compiler.pipeline_frontend import document as pipeline_document, validate_pipeline
 from scar.compiler.pipeline_loop_frontend import CompositeInvariantLoopProof
-from scar.compiler.validation import validate_region, validate_plan
+from scar.compiler.model import validate_region, validate_plan
 from scar.ir.execution_recipe import artifact_reference
 from scar.optimization.graph import value_kinds
 from scar.optimization.optimizer import optimize_region, _RUNTIME_GUARDS, _EXTERNAL_ASSUMPTIONS

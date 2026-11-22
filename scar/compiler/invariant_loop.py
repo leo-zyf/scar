@@ -13,7 +13,7 @@ import subprocess
 
 from scar.compiler.model import ArrayRegion,ExecutionPlan,Expr,region_from_dict
 from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
-from scar.compiler.validation import validate_region
+from scar.compiler.model import validate_region
 from scar.analysis.array_motion import derive_array_motion
 from scar.codegen import cpp
 from scar.optimization.optimizer import optimize_region

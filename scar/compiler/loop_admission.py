@@ -24,7 +24,7 @@ from scar.compiler.pipeline_frontend import (
     _Callee,
     discover_graph_pipelines,
 )
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from collections import Counter
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
@@ -700,7 +700,7 @@ PROOF_SCHEMA = 'scar.invariant-loop-proof'
 
 def validate_invariant_loop_proof(proof):
     """Validate the retained shape/bytes, never replace original F4 replay."""
-    from scar.compiler.validation import validate_region
+    from scar.compiler.model import validate_region
     if type(proof) is not InvariantLoopProof:
         raise ValueError('typed original invariant loop proof required')
     validate_region(proof.body)

@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from scar.compiler.model import document as plan_document
 from scar.compiler.pipeline_frontend import pipeline_digest, read_pipeline, validate_pipeline
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.ir.record_codec import loads
 from scar.optimization.optimizer import optimize_region
 from scar.optimization.pipeline_memory import plan_pipeline_memory, verify_pipeline_memory

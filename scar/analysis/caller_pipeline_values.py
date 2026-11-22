@@ -14,7 +14,7 @@ import json
 
 from scar.compiler.caller_pipeline import CallerPipelineProof,document as proof_document
 from scar.compiler.pipeline_frontend import document as pipeline_document, validate_pipeline, pipeline_digest
-from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, validate_copy_attributes
+from scar.compiler.model import COPY_REQUIRED_GUARDS, validate_copy_attributes
 from scar.optimization.graph import ordered_nodes,canonical_value
 from scar.optimization.pipeline_memory import _metadata
 from scar.analysis.source_consumer_parents import _stamp
@@ -231,11 +231,11 @@ class CallerPipelineValueProvider:
 
 
 def _pins():
-    from scar.compiler import caller_pipeline, pipeline_frontend as pipeline_model, array_copy_contract as array_copy_contract
+    from scar.compiler import caller_pipeline, pipeline_frontend as pipeline_model, model as array_model
     from scar.optimization import graph, pipeline_memory as pipeline_memory, optimizer
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest()for name,module in(
         ('projection',__import__(__name__,fromlist=['__file__'])),('types',R),('source_proof',caller_pipeline),
-        ('pipeline',pipeline_model),('copy_contract',array_copy_contract),('ordered_values',graph),
+        ('pipeline',pipeline_model),('copy_contract',array_model),('ordered_values',graph),
         ('optimizer',optimizer),('memory_metadata',pipeline_memory))}
 
 

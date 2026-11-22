@@ -11,10 +11,11 @@ SCAR 是基于程序图的宏观编译器。它把源码、运行绑定和硬件
 `scar trace` 和 `scar import-capture` 提供前端证据。`scar build-query` 查询图。`scar check-program` 检查持久化的类型图。`scar run` 加载已生成的执行合同。`scar view-graph` 提供可选的图查看。
 
 ```bash
-scar build --manifest entry.json --out graph
-scar compile --manifest entry.json --out compiled
-scar plan --problem compiled/planning-problem.json --out replay.json
-scar compile --plan compiled/compiler-plan.json --out delivered
+output=$(mktemp -d /tmp/scar-run.XXXXXX)
+scar build --manifest entry.json --out "$output/graph"
+scar compile --manifest entry.json --out "$output/compiled"
+scar plan --problem "$output/compiled/planning-problem.json" --out "$output/replay.json"
+scar compile --plan "$output/compiled/compiler-plan.json" --out "$output/delivered"
 ```
 
 每个原生编译单元在清单中声明源码路径、语言和编译参数。原版与生成版按同一输入核对。原生程序覆盖、跨语言调用和调度成本的缺口在结果中单独记录。跨语言支持取决于入口的实际图与交付证据。

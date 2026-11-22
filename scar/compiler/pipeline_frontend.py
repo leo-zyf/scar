@@ -74,7 +74,7 @@ class PipelinePlan:
 
 def prepare_pipeline_leaf(plan):
     """Admit a callable component without claiming standalone profitability."""
-    from scar.compiler.validation import validate_plan
+    from scar.compiler.model import validate_plan
     validate_plan(plan)
     if (plan.resource_binding is not None or plan.proof.get('supported')is not True
             or plan.proof.get('legal')is not True or plan.proof.get('frontiers')
@@ -103,7 +103,7 @@ def prepare_pipeline_leaf(plan):
 
 
 def validate_pipeline(pipeline):
-    from scar.compiler.validation import validate_plan
+    from scar.compiler.model import validate_plan
     if type(pipeline)is not PipelinePlan or pipeline.schema_version!=1 or pipeline.profile!=PROFILE:
         raise ValueError('supported typed array pipeline required')
     if (type(pipeline.id)is not str or not pipeline.id or pipeline.frontiers

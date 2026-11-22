@@ -6,7 +6,7 @@ from numbers import Real
 import statistics
 
 from scar.compiler.model import ExecutionPlan
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
 

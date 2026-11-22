@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes
+from scar.compiler.model import COPY_REQUIRED_GUARDS, copy_attributes
 from scar.compiler.model import ArrayRegion,ExecutionPlan,Expr,SourceRef
 from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline, prepare_pipeline_leaf
 from scar.optimization.graph import ordered_nodes,simplify

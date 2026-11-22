@@ -2,7 +2,7 @@
 from dataclasses import asdict
 import json
 
-from scar.compiler.validation import validate_plan
+from scar.compiler.model import validate_plan
 from scar.optimization.schedule import (
     ResourceSchedule,TaskKind,build_region_schedule,schedule_document,schedule_from_dict,validate_schedule,
 )

@@ -1,21 +1,13 @@
 """SCAR's compiler and the tools used to inspect its input and output."""
 
 import argparse
+from functools import partial
 from importlib import import_module
 import sys
 
 
-COMMANDS = {
-    'trace': ('scar.trace.cli', 'trace_main', 'record evidence from a child program'),
-    'import-capture': ('scar.trace.cli', 'import_main', 'import retained trace evidence'),
-    'build': (None, None, 'build the program and hardware graph'),
-    'build-query': ('scar.analysis.build', 'query_main', 'inspect a program graph'),
-    'check-program': ('scar.compiler.frontend.graph', 'check_main', 'validate a saved program graph'),
-    'plan': (None, None, 'plan from a resource and dependency graph'),
-    'compile': (None, None, 'build, simplify and deliver a target'),
-    'run': (None, None, 'run a published execution contract'),
-    'view-graph': ('scar.visualization.cli', 'main', 'view a program graph'),
-}
+def _invoke(module, function, arguments):
+    return getattr(import_module(module), function)(arguments)
 
 
 def _has_option(arguments, option):
@@ -25,6 +17,18 @@ def _has_option(arguments, option):
 
 
 def _build(arguments):
+    if arguments in (['--help'], ['-h']):
+        parser = argparse.ArgumentParser(prog='scar build',
+                                         description='Build the program and hardware graph.')
+        inputs = parser.add_mutually_exclusive_group(required=True)
+        inputs.add_argument('--manifest', metavar='FILE', help='build a native target')
+        inputs.add_argument('--entry', metavar='FILE', help='build a Python entry with optional trace evidence')
+        inputs.add_argument('--formal', action='store_true', help='publish a Python formal source catalog')
+        inputs.add_argument('--static', action='store_true', help='build a Python static source graph')
+        parser.add_argument('--out', required=True)
+        parser.epilog = 'Pass --help after selecting an input mode to see its options.'
+        parser.parse_args(arguments)
+        return 0
     if _has_option(arguments, '--manifest'):
         from scar.compiler.driver import main as build
         return build(['--graph-only', *arguments])
@@ -69,26 +73,31 @@ def _run(arguments):
     return run(arguments)
 
 
+COMMANDS = {
+    'trace': ('record evidence from a child program', partial(_invoke, 'scar.trace.cli', 'trace_main')),
+    'import-capture': ('import retained trace evidence', partial(_invoke, 'scar.trace.cli', 'import_main')),
+    'build': ('build the program and hardware graph', _build),
+    'build-query': ('inspect a program graph', partial(_invoke, 'scar.analysis.build', 'query_main')),
+    'check-program': ('validate a saved program graph',
+                      partial(_invoke, 'scar.compiler.frontend.graph', 'check_main')),
+    'plan': ('plan from a resource and dependency graph', _plan),
+    'compile': ('build, simplify and deliver a target', _compile),
+    'run': ('run a published execution contract', _run),
+    'view-graph': ('view a program graph', partial(_invoke, 'scar.visualization.cli', 'main')),
+}
+
+
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments:
         command, *options = arguments
-        if command == 'compile':
-            return _compile(options) or 0
-        if command == 'build':
-            return _build(options) or 0
         if command == 'static':
             return _build(['--static', *options]) or 0
-        if command == 'plan':
-            return _plan(options) or 0
-        if command == 'run':
-            return _run(options) or 0
         if command in COMMANDS:
-            module, function, _ = COMMANDS[command]
-            return getattr(import_module(module), function)(options) or 0
+            return COMMANDS[command][1](options) or 0
     parser = argparse.ArgumentParser(prog='scar', description=__doc__)
     commands = parser.add_subparsers(required=True)
-    for command, (_, _, help_) in COMMANDS.items():
+    for command, (help_, _) in COMMANDS.items():
         commands.add_parser(command, help=help_)
     parser.parse_args(arguments)
     return 0

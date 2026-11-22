@@ -23,7 +23,7 @@ import sys
 import tempfile
 
 from scar.compiler.model import (
-    ExecutionPlan, PROFILE, document, plan_from_dict, read_plan, write_plan,
+    ExecutionPlan, PROFILE, document, plan_from_dict, read_plan, validate_plan, write_plan,
 )
 
 ABI_VERSION = 1
@@ -79,9 +79,6 @@ def _plan_digest(plan: ExecutionPlan) -> str:
 
 
 def _supported(plan: ExecutionPlan) -> dict[str, bool]:
-    # Import at call time so the compiler/validation module remains the owner
-    # of shared structural policy, including when backends load separately.
-    from scar.compiler.validation import validate_plan
     validate_plan(plan)
     if plan.proof.get("folded_nodes") and plan.proof.get("numerical_policy", {}).get(
             "planner_constant_folding") != "CLOSED_BOUNDED_INTEGER_NEG_ADD_SUB_MUL_ONLY":

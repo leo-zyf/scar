@@ -4,7 +4,7 @@ from dataclasses import replace
 import os
 
 from scar.compiler.model import ArrayRegion, ExecutionPlan, OPS
-from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, validate_copy_attributes, copy_semantics
+from scar.compiler.model import COPY_REQUIRED_GUARDS, validate_copy_attributes, copy_semantics
 from .graph import numeric_value, ordered_nodes, simplify, value_kinds
 
 

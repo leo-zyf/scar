@@ -7,7 +7,7 @@ does not construct CFG, MemorySSA, runtime values or a replacement source IR.
 from dataclasses import asdict
 import json
 
-from scar.compiler.validation import validate_region
+from scar.compiler.model import validate_region
 from scar.optimization.graph import value_kinds
 from scar.optimization.resource_solver import semantic_sha256
 
