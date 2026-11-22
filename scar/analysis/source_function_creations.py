@@ -167,7 +167,13 @@ def project_creations(catalog, unit, templates=None):
     source-fact evidence keys are retained, including collection routing keys;
     consumers materializing them must use the existing fact-material resolver.
     """
-    material = source_graph_material(catalog, unit); facts = material.fact_store.load(unit)
+    material = source_graph_material(catalog, unit)
+    graph, _ = _project_creations(material, material.fact_store.load(unit), templates)
+    return graph
+
+
+def _project_creations(material, facts, templates):
+    unit = material.unit
     keys = ({f.template for f in facts.functions} if templates is None else set(templates))
     if any(type(k) is not SourceTemplateKey or k not in material.interfaces['nodes'] for k in keys):
         raise ValueError('source creation template is absent from original unit materials')
@@ -217,7 +223,8 @@ def project_creations(catalog, unit, templates=None):
         for default in record.defaults:
             if default.expression is None: missing('INITIAL_DEFAULT_EXPRESSION_PORT_NOT_RETAINED_IN_FUNCTION_FACT')
     material.validate_parents()
-    return R.SourceFunctionCreationGraph(unit,material.result_artifact,keys,tuple(creations),tuple(obligations))
+    graph = R.SourceFunctionCreationGraph(unit,material.result_artifact,keys,tuple(creations),tuple(obligations))
+    return graph, {key:view for key,(view,_,_) in references.items()}
 
 
 def _artifact(path, schema):
@@ -462,10 +469,26 @@ class SourceFunctionCreationStore:
         self.validate();return graph
 
     def read_unit(self,unit):
+        graph, _ = self._read_unit_with_views(unit)
+        return graph
+
+    def _read_unit_with_views(self, unit, *, source=None):
         graph=self.load_unit(unit)
-        if graph!=project_creations(self.catalog,unit):
+        if source is None:
+            material = source_graph_material(self.catalog, unit)
+            facts = material.fact_store.load(unit)
+        else:
+            material = source.material
+            if (source.unit != unit or (material.catalog.path,material.catalog.report)
+                    != (self.catalog.path,self.catalog.report)):
+                raise ValueError('creation replay requires the same original source unit and catalog')
+            source.check()
+            facts = source.facts
+        projected, views = _project_creations(material, facts, None)
+        if graph != projected:
             raise ValueError('function creation records differ from original F4 factories/function facts')
-        self.validate();return graph
+        self.validate()
+        return graph, views
 
 
 def read_creations(path, *, unit, catalog=None):

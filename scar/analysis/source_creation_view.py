@@ -2,8 +2,8 @@
 
 from collections import Counter, defaultdict
 from dataclasses import replace, dataclass
+from threading import Lock
 from scar.analysis.source_function_creations import SourceFunctionCreationStore
-from scar.analysis.source_namespace_contents import NamespacePlanView
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import normal_graph as G
 from scar.ir.program.ids import OperationID, UseID, ValueID
@@ -44,21 +44,33 @@ class SourceFunctionCreationProvider:
         if (self.store.catalog.path,self.store.catalog.report)!=(view.catalog.path,view.catalog.report):
             raise ValueError('creation roles require the same original source catalog')
         self.graphs={};self.records={};self.in_edges=defaultdict(list);self.out_edges=defaultdict(list)
+        self._attachment_lock = Lock()
         self.roles=Counter();artifact=_artifact(self.store.path/'result.json',self.store.report['schema'])
         self.manifest=SourceArtifactLocator(artifact,artifact.sha256,artifact.size_bytes,'canonical-json')
         for unit in units:self.attach(unit)
         view.register(self)
 
     def attach(self,unit):
-        if unit in self.graphs:return self.graphs[unit]
-        graph=self.store.read_unit(unit);self.graphs[unit]=graph
-        source=self.view.unit(unit);source._expand(graph.templates)
-        for ordinal,record in enumerate(graph.creations):
-            operation=source._node(record.site.port.template,record.site.port.owner)
-            step=self.view.original(operation);plan=source.plans[record.site.port.template]
-            context=NamespacePlanView(unit,plan)
+        with self._attachment_lock:
+            if unit in self.graphs:
+                return self.graphs[unit]
+            return self._attach(unit)
+
+    def _attach(self, unit):
+        source = self.view.unit(unit)
+        graph, contexts = self.store._read_unit_with_views(unit, source=source)
+        source._expand(graph.templates)
+        records = {}; incoming = defaultdict(list); outgoing = defaultdict(list); counts = Counter()
+        locator = replace(self.manifest, pointer='#/shards/'+unit+'/tables/creations')
+        for record in graph.creations:
+            key = record.site.port.template
+            operation = source._node(key, record.site.port.owner)
+            step = self.view.original(operation)
+            context = contexts[key]
+            if context.plan is not source.plans[key]:
+                raise ValueError('creation replay and graph projection retained different factory plans')
             if context.result(step)!=record.function:raise ValueError('creation role has a different factory result')
-            result=self.view.source_port(record.function);self.records[source.namespace,result.node]=record
+            result=self.view.source_port(record.function);records[source.namespace,result.node]=record
             roles=[('CODE',0,Kind.ENVIRONMENT),('GLOBALS',1,Kind.ENVIRONMENT)]
             roles.extend(('INITIAL_DEFAULT',d.operand_ordinal,Kind.FIELD_INITIALIZER) for d in record.defaults)
             roles.extend(('CELL_HANDLE_NOT_CONTENT',c.operand_ordinal,Kind.ENVIRONMENT) for c in record.captures)
@@ -66,15 +78,23 @@ class SourceFunctionCreationProvider:
                 found=[i for i,v in enumerate(step.arguments[:-1]) if context.value(v)==record.annotation]
                 if len(found)!=1:raise ValueError('annotation role lacks its exact original owned operand')
                 roles.append(('DEFERRED_ANNOTATION_OPERAND',found[0],Kind.ENVIRONMENT))
-            locator=replace(self.manifest,pointer='#/shards/'+unit+'/tables/creations')
             for role,index,kind in roles:
                 use=source.port(context.emitter.port(step.id,G.PortKind.ARGUMENT,index))
                 condition=Condition('scar.source-creation.operand',role,operation,index,(use,result))
                 evidence=Evidence('scar.source-creation.initial-operand-role.v1',(source.locator,locator),(use,operation))
                 edge=Edge(use,operation,kind,Meaning.DEPENDENCE,(evidence,),(condition,),Strength.MAY)
-                self.out_edges[source.namespace,use.node].append(edge)
-                self.in_edges[source.namespace,operation.node].append(edge);self.roles[role]+=1
-        self.store.validate();return graph
+                outgoing[source.namespace,use.node].append(edge)
+                incoming[source.namespace,operation.node].append(edge)
+                counts[role] += 1
+        self.store.validate()
+        self.records.update(records)
+        for key, edges in incoming.items():
+            self.in_edges[key].extend(edges)
+        for key, edges in outgoing.items():
+            self.out_edges[key].extend(edges)
+        self.roles.update(counts)
+        self.graphs[unit] = graph
+        return graph
 
     def _demand(self,point):
         if type(point.node) not in (OperationID,UseID,ValueID):return

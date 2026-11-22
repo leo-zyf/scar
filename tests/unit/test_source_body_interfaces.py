@@ -85,8 +85,8 @@ def test_prepare_many_reads_two_body_closures_in_one_original_plan_batch(monkeyp
     material=NS(interfaces=dict(nodes=original,links={
         (first,'a'):NS(callee=shared),(second,'b'):NS(callee=shared),(shared,'c'):NS(callee=first)}),plans=read)
     resolver=BodyInterfaceResolver(NS(unit=lambda unit:NS(material=material,check=lambda:None)))
-    monkeypatch.setattr(body_reader,'extract_body_interfaces',lambda *args,**kwargs:())
-    monkeypatch.setattr(body_reader,'NamespacePlanView',lambda unit,plan:plan)
+    monkeypatch.setattr(body_reader,'_checked_plan',lambda unit,plan,digest:(plan,digest))
+    monkeypatch.setattr(body_reader,'_local_body_interfaces',lambda *args:())
     resolver.prepare_many(iter(bodies))
     assert reads==[(second,shared,first)]
     assert set(resolver.plans)=={('unit',key) for key in (first,second,shared)}

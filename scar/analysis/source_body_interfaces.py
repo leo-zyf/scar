@@ -49,14 +49,49 @@ def extract_body_interfaces(unit, plan, *, plan_sha256=None):
     World ports are taken from types. A resume delivers a fresh world before
     its saved-reference suffix; it does not bind the function formals again.
     """
-    rules = _entry_rules()
+    view, digest = _checked_plan(unit, plan, plan_sha256)
+    return _local_body_interfaces(view, digest, {})
+
+
+def _checked_plan(unit, plan, plan_sha256):
     validate_connection_plan(plan)
     digest = _plan_digest(encode(plan, record_tags=P.PRODUCTION_RECORD_TAGS))
     if plan_sha256 is not None and digest != plan_sha256:
         raise ValueError('body interface plan differs from its original template receipt')
-    view = NamespacePlanView(unit, plan)
-    entries = [step for step in plan.steps if type(step.instruction) in rules]
-    suspensions = [step for step in plan.steps if type(step.instruction) is P.SuspendExecution]
+    return NamespacePlanView(unit, plan), digest
+
+
+def _suspension_records(view, step):
+    instruction = step.instruction
+    arguments = tuple(view.value(value) for value in step.arguments)
+    types = tuple(view.emitter.value(value)[1] for value in step.arguments)
+    site = view.site(step)
+    suspension = R.SourceBodySuspension(site, instruction.suspension, arguments, types)
+    ingresses = []
+    for route in instruction.routes:
+        region = view.regions[route.region]
+        parameters = tuple(view.value(P.ProductionParameter(region.id, i))
+            for i in range(len(region.parameters)))
+        payload = len(parameters) - len(instruction.saved)
+        if payload < 0:
+            raise ValueError('resume parameters cannot hold their original saved references')
+        saved = tuple((parameters[i], view.value(value))
+            for i, value in enumerate(instruction.saved, payload))
+        ingresses.append(R.SourceBodyIngress(Body(site.unit, site.port.template, region.id),
+            parameters, region.parameters, site, route.kind, saved))
+    return suspension, tuple(ingresses)
+
+
+def _project_suspension(view, step, records):
+    if step.id not in records:
+        records[step.id] = _suspension_records(view, step)
+    return records[step.id]
+
+
+def _local_body_interfaces(view, digest, records):
+    rules = _entry_rules()
+    entries = [step for step in view.plan.steps if type(step.instruction) in rules]
+    suspensions = [step for step in view.plan.steps if type(step.instruction) is P.SuspendExecution]
     ancestor_cache = {}
     def ancestors(region):
         if region not in ancestor_cache:
@@ -70,7 +105,7 @@ def extract_body_interfaces(unit, plan, *, plan_sha256=None):
     result = []
     for step in entries:
         region = view.regions[step.region]; owner = view.owner(region.id)
-        body = Body(unit, view.key, region.id)
+        body = Body(view.unit, view.key, region.id)
         parameters = tuple(view.value(P.ProductionParameter(region.id, i))
             for i in range(len(region.parameters)))
         ingresses = [R.SourceBodyIngress(body, parameters, region.parameters)]
@@ -79,22 +114,9 @@ def extract_body_interfaces(unit, plan, *, plan_sha256=None):
             if (owner.owner != view.owner(suspended.region).owner
                     or region.id not in ancestors(suspended.region)):
                 continue
-            instruction = suspended.instruction
-            arguments = tuple(view.value(value) for value in suspended.arguments)
-            types = tuple(view.emitter.value(value)[1] for value in suspended.arguments)
-            suspension=view.site(suspended)
-            handoffs.append(R.SourceBodySuspension(suspension, instruction.suspension, arguments, types))
-            for route in instruction.routes:
-                resume = view.regions[route.region]
-                parameters = tuple(view.value(P.ProductionParameter(resume.id, i))
-                    for i in range(len(resume.parameters)))
-                payload = len(resume.parameters) - len(instruction.saved)
-                if payload < 0:
-                    raise ValueError('resume parameters cannot hold their original saved references')
-                saved = tuple((parameters[i], view.value(value))
-                    for i, value in enumerate(instruction.saved, payload))
-                ingresses.append(R.SourceBodyIngress(Body(unit,view.key,resume.id), parameters, resume.parameters,
-                    suspension, route.kind, saved))
+            suspension, resumes = _project_suspension(view, suspended, records)
+            handoffs.append(suspension)
+            ingresses.extend(resumes)
         completions = tuple(R.SourceBodyCompletion(completion.kind, completion.target, completion.types,
             tuple(view.gp(view.emitter.port(region.id, G.PortKind.RESULT, i, completion))
                 for i in range(len(completion.types))),
@@ -126,6 +148,7 @@ class BodyInterfaceResolver:
     def __init__(self, view):
         self.view = view; self.plans = {}; self.heads = {}; self.interfaces = {}
         self.prepared = set(); self.children = {}
+        self.region_children = {}; self.suspension_records = defaultdict(dict)
 
     def prepare(self, body):
         """Admit one body through the shared batched closure reader."""
@@ -163,11 +186,12 @@ class BodyInterfaceResolver:
     def seed(self,unit,plans):
         material=self.view.unit(unit).material
         for key,plan in plans.items():
-            if (unit,key) in self.plans:continue
-            rows=extract_body_interfaces(unit,plan,
-                plan_sha256=material.interfaces['nodes'][key].origin.plan_sha256)
+            identity = unit, key
+            if identity in self.plans:continue
+            context, digest = _checked_plan(unit, plan, material.interfaces['nodes'][key].origin.plan_sha256)
+            rows = _local_body_interfaces(context, digest, self.suspension_records[identity])
             self.heads.update((row.body,row) for row in rows)
-            self.plans[unit,key]=NamespacePlanView(unit,plan)
+            self.plans[identity] = context
 
     def plan(self, unit, key):
         identity = unit,key
@@ -194,14 +218,19 @@ class BodyInterfaceResolver:
             if (key,root) in visited:continue
             visited.add((key,root)); context=self.plan(body.unit,key)
             if context.owner(root).owner != head.scope.owner:continue
-            children=defaultdict(list)
-            for region in context.plan.regions:
-                if region.parent is not None:children[region.parent].append(region.id)
+            identity = body.unit, key
+            if identity not in self.region_children:
+                children = defaultdict(list)
+                for region in context.plan.regions:
+                    if region.parent is not None:
+                        children[region.parent].append(region.id)
+                self.region_children[identity] = children
+            children = self.region_children[identity]
             regions=[root]; selected=set()
             while regions:
                 region=regions.pop()
                 if context.owner(region).owner != head.scope.owner:continue
-                selected.add(region); regions.extend(children[region])
+                selected.add(region); regions.extend(children.get(region, ()))
             for step in context.plan.steps:
                 if step.region not in selected:continue
                 link=material.interfaces['links'].get((key,step.id))
@@ -209,18 +238,10 @@ class BodyInterfaceResolver:
                     callee=material.interfaces['nodes'][link.callee]
                     pending.append((link.callee,callee.root))
                 if type(step.instruction) is not P.SuspendExecution:continue
-                site=context.site(step)
-                if site in suspensions:continue
-                arguments=tuple(context.value(value) for value in step.arguments)
-                types=tuple(context.emitter.value(value)[1] for value in step.arguments)
-                suspensions[site]=R.SourceBodySuspension(site,step.instruction.suspension,arguments,types)
-                for route in step.instruction.routes:
-                    region=context.regions[route.region]
-                    parameters=tuple(context.value(P.ProductionParameter(region.id,i)) for i in range(len(region.parameters)))
-                    payload=len(parameters)-len(step.instruction.saved)
-                    saved=tuple((parameters[i],context.value(value)) for i,value in enumerate(step.instruction.saved,payload))
-                    ingresses.append(R.SourceBodyIngress(Body(body.unit,key,region.id),parameters,region.parameters,
-                        site,route.kind,saved))
+                suspension, resumes = _project_suspension(context, step, self.suspension_records[identity])
+                if suspension.step not in suspensions:
+                    suspensions[suspension.step] = suspension
+                    ingresses.extend(resumes)
         payload=(SCHEMA,head.body,head.scope,head.plan_sha256,head.entry,head.instruction,
             tuple(ingresses),head.completions,tuple(suspensions.values()))
         result=replace(head,id=ProviderID(_digest(payload)),ingresses=tuple(ingresses),suspensions=tuple(suspensions.values()))
