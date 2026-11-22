@@ -56,6 +56,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `fixed-grid-lifecycle input-graph` 生成文件映射相对复制的子图差分，`input-counters` 在输入及递推边界采集进程缺页计数。`export-native-route` 固定已选 C++20 工程和启动合同，`run-native-route --stable-inputs` 显式验证一次原生启动并归档输出。用 `review-native-route` 合并这些收据，再把评审传给 `compile-build --cpu-fixed-grid-input-route-review`。对原生数组任务可用 `scar run-cpu-array-native-route --package PACKAGE/artifact.json --out FRESH_DIR` 验证选中路线。[原生路线验收](artifacts/baseline/cpu-native-route-execution-acceptance.json)
 
+`scar benchmark-fixed-grid-source-route --package PACKAGE/artifact.json --out FRESH_DIR` 直接比较原 Python 与选定映射版。`fixed-grid-lifecycle startup-graph`、`publication-effects` 和 `publication-guard` 分别核对导入来源、文件发布顺序及已有文件的行为。`scar qualify-fixed-grid-source-route` 合并收据，`compile-build --cpu-fixed-grid-source-qualification` 接回同一入口。作用域为稳定输入、新输出和正常完成，发布审查与整入口自动替换分别记录。[源码路线验收](artifacts/baseline/cpu-fixed-grid-source-route-qualification-acceptance.json)
+
 `scar export-native-cpu --project NATIVE --manifest-sha256 SHA256 --out RUNTIME` 打包已验收的 CPU-only 产物、LibTorch 依赖和权重。`scar export-native-cpu --check RUNTIME --manifest-sha256 SHA256` 校验迁移包，可加 `--reference FILE` 和 `-- ARGS` 验收输出。运行直接执行 `RUNTIME/launch.sh`。当前验收覆盖本机 Linux 下的目录迁移，并沿用原计划的 CPU 绑定。[纯 CPU 三阶段验收](artifacts/baseline/native-cpu-end-to-end.json)。
 
 重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。

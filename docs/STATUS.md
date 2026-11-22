@@ -4,6 +4,7 @@
 
 ## 固定网格源入口接入 CPU 目录
 
+- **直接整程实测。** CPU 14–16 上，1 对预热、3 对干净计时，原 Python 与映射版 C++20 分别为 **6.675 → 2.314 s（2.884×）**。八次启动的终态、输出流、退出和文件权限一致。5 条模块级导入接到原启动图，两条路径均先关闭结果文件再写 stdout。原 Python 在读首个输入前执行了 `ldconfig` 并创建、删除了临时文件。私有已有文件试验中，Python 覆盖文件，C++ 保留原文件并退出。整入口仍为 `KEEP_ORIGINAL`。[验收记录](../artifacts/baseline/cpu-fixed-grid-source-route-qualification-acceptance.json)
 - **原生执行。** 7 个文件端口和 16 步循环共享既有图，新增映射差分。两条 C++20 路径各 3 次分段诊断，输入窗口中位数 **15.22 → 0.258 ms**，进程轻微缺页 **4,040 → 21**。递推窗口和实际存储流量另有未归因项。显式运行映射版核对了完整终态字节、输出流、退出和 `0664` 权限。[原生路线验收](../artifacts/baseline/cpu-native-route-execution-acceptance.json)
 - **生命周期与成本。** Python 和 C++ 入口各自贯通启动、输入、共享迭代体、文件、stdout 和退出。源码标记诊断中位数为 Python 导入 **1.694 s**、递推 **4.648 s**、C++ 递推 **2.028 s**。独立校准推得 C++ 递推 **2.095 s**，与实测相差 **67.3 ms**。首次触页、发布持久性与整入口成本范围仍待闭合，`compile-build` 保持 `KEEP_ORIGINAL`。[生命周期验收](../artifacts/baseline/cpu-fixed-grid-lifecycle-acceptance.json)
 - **输入物化。** SCAR 证明 7 个稳定输入在固定网格计算图中只读，可保留原源码的私有文件映射。独立系统调用诊断确认 C++ 路径从显式读取 16,515,072 B 改为映射同样的范围。5 对干净原生计时中位数 **2.360 → 2.318 s**，收益 **1.74%**。按当前规则重放，计划在限定的 C++ 入口范围内选出文件映射。终态、输出和文件权限均匹配。 [原始输入物化验收](../artifacts/baseline/cpu-fixed-grid-mapped-input-acceptance.json)

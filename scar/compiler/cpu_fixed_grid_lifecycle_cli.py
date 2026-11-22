@@ -44,6 +44,17 @@ def main(argv=None):
     for option in ('graph', 'package', 'out'):
         review.add_argument('--' + option, type=Path, required=True)
     review.add_argument('--counters', type=Path)
+    startup = commands.add_parser('startup-graph', help='bind source-level import requests to observed module origins')
+    for option in ('lifecycle', 'initializers', 'out'):
+        startup.add_argument('--' + option, type=Path, required=True)
+    startup.add_argument('--observation', type=Path)
+    for name, help_text in (
+        ('publication-effects', 'observe file and stream publication from the original and C++20 routes'),
+        ('publication-guard', 'verify the occupied-file difference on a private publication path'),
+    ):
+        publication = commands.add_parser(name, help=help_text)
+        publication.add_argument('--package', type=Path, required=True)
+        publication.add_argument('--out', type=Path, required=True)
     args = parser.parse_args(argv)
 
     from scar.analysis.cpu_fixed_grid_lifecycle import SCHEMA as GRAPH, derive_cpu_fixed_grid_lifecycle
@@ -81,6 +92,24 @@ def main(argv=None):
         reference = _ref(args.cost, COST)
         result = verify_cpu_fixed_grid_lifecycle_cost(reference)
         print(json.dumps(dict(cost=reference, status=result['status'], execution_default=result['execution_default'])))
+        return 0
+    elif args.command == 'startup-graph':
+        from scar.analysis.cpu_entry_import_initializers import SCHEMA as INITIALIZERS
+        from scar.analysis.cpu_fixed_grid_startup_graph import derive_cpu_fixed_grid_startup_graph
+        from scar.compiler.cpu_import_binding_observation import SCHEMA as IMPORTS
+
+        observed = None if args.observation is None else _ref(args.observation, IMPORTS)
+        result = derive_cpu_fixed_grid_startup_graph(_ref(args.lifecycle, GRAPH), _ref(args.initializers, INITIALIZERS),
+                                                     observation_ref=observed)
+        path = args.out
+    elif args.command in ('publication-effects', 'publication-guard'):
+        from scar.codegen.cpu_fixed_grid_native_route_package import SCHEMA as PACKAGE
+        from scar.compiler.cpu_fixed_grid_publication_guard_study import study
+        from scar.compiler.observe_cpu_fixed_grid_publication import measure_cpu_fixed_grid_publication
+
+        measure = measure_cpu_fixed_grid_publication if args.command == 'publication-effects' else study
+        measure(_ref(args.package, PACKAGE), args.out)
+        print(args.out / 'result.json')
         return 0
     else:
         from scar.analysis.cpu_fixed_grid_input_route_graph import SCHEMA as INPUT_GRAPH, derive_cpu_fixed_grid_input_route_graph
