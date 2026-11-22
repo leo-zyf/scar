@@ -479,7 +479,7 @@ def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=
 
 
 def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, mapped_path=None,
-                               lifecycle_cost_path=None):
+                               lifecycle_cost_path=None, input_route_review_path=None):
     from scar.analysis.cpu_fixed_grid_cli_effect_bridge import derive_cpu_fixed_grid_cli_effect_bridge
     from scar.analysis.cpu_fixed_grid_cli_resources import derive_cpu_fixed_grid_cli_resources
     from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA
@@ -504,13 +504,31 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
         cpu_fixed_grid_cli_resources=_write(out/'whole-entry-fixed-grid-resources.json', resources),
         cpu_fixed_grid_cli_review=_write(out/'whole-entry-fixed-grid-cli-review.json', review),
     )
-    if mapped_path is not None:
+    input_route = None
+    if input_route_review_path is not None:
+        from scar.optimization.cpu_fixed_grid_input_route_review import (
+            SCHEMA as INPUT_ROUTE_REVIEW, verify_cpu_fixed_grid_input_route_review,
+        )
+
+        input_route_ref = artifact_reference(Path(input_route_review_path).resolve(strict=True), INPUT_ROUTE_REVIEW)
+        input_route = verify_cpu_fixed_grid_input_route_review(input_route_ref)
+        if input_route['cli_delivery'] != delivery_ref:
+            raise ValueError('native input route review must match the exact fixed-grid source CLI')
+        grid = read_artifact(input_route['lifecycle'])
+        if read_artifact(grid['effects']) != bridge or read_artifact(grid['resources']) != resources:
+            raise ValueError('native input route graph differs from the admitted fixed-grid effects and resources')
+        frontiers['cpu_fixed_grid_input_route_review'] = input_route_ref
+    if mapped_path is not None or input_route is not None:
         from scar.optimization.cpu_fixed_grid_mapped_input_plan import (
             SCHEMA as MAPPED_PLAN, verify_cpu_fixed_grid_mapped_input_plan,
         )
 
-        mapped_ref = artifact_reference(Path(mapped_path).resolve(strict=True), MAPPED_PLAN)
-        mapped = verify_cpu_fixed_grid_mapped_input_plan(mapped_ref)
+        mapped_ref = (input_route['mapped_plan'] if mapped_path is None else
+                      artifact_reference(Path(mapped_path).resolve(strict=True), MAPPED_PLAN))
+        if input_route is not None and mapped_ref != input_route['mapped_plan']:
+            raise ValueError('fixed-grid native route review and mapped input decision differ')
+        mapped = (verify_cpu_fixed_grid_mapped_input_plan(mapped_ref) if input_route is None else
+                  read_artifact(mapped_ref))
         if (read_artifact(mapped['proof'])['project'] != delivery['project']
                 or mapped['observation'] is None
                 or read_artifact(mapped['observation'])['control_delivery'] != delivery_ref):
@@ -525,6 +543,7 @@ def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out, map
         old_review = read_artifact(cost['review'])
         if (graph['delivery'] != delivery_ref or read_artifact(graph['effects']) != bridge
                 or read_artifact(graph['resources']) != resources
+                or input_route is not None and cost['lifecycle'] != input_route['lifecycle']
                 or dict(old_review, bridge=bridge_ref) != review):
             raise ValueError('fixed-grid lifecycle costs belong to a different exact source CLI review')
         frontiers['cpu_fixed_grid_lifecycle_cost'] = cost_ref
@@ -817,7 +836,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
                        cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
                        cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None,
                        cpu_native_array_route_cost=None, cpu_fixed_grid_cli_evidence=None,
-                       cpu_fixed_grid_mapped_input_plan=None, cpu_fixed_grid_lifecycle_cost=None):
+                       cpu_fixed_grid_mapped_input_plan=None, cpu_fixed_grid_lifecycle_cost=None,
+                       cpu_fixed_grid_input_route_review=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -845,6 +865,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('mapped input decisions require the scoped fixed-grid source CLI evidence')
     if cpu_fixed_grid_lifecycle_cost is not None and cpu_fixed_grid_cli_evidence is None:
         raise ValueError('fixed-grid lifecycle costs require the scoped source CLI evidence')
+    if cpu_fixed_grid_input_route_review is not None and cpu_fixed_grid_cli_evidence is None:
+        raise ValueError('fixed-grid native input route requires the scoped source CLI evidence')
     if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
         raise ValueError('CPU native array route costs require the exact C++ route package')
     if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
@@ -904,7 +926,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     fixed_grid_frontiers = {}
     if cpu_fixed_grid_cli_evidence is not None:
         _attach_cpu_fixed_grid_cli(plan, live_scope, generated, fixed_grid_frontiers, cpu_fixed_grid_cli_evidence, out,
-                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost)
+                                   cpu_fixed_grid_mapped_input_plan, cpu_fixed_grid_lifecycle_cost,
+                                   cpu_fixed_grid_input_route_review)
     cpu_frontiers = _cpu_frontiers(plan, live_scope, frontier_entry, out, priced_domain=priced_domain,
                                   import_frontier=import_frontiers.get('cpu_entry_import_frontier'),
                                   import_source_effects=import_frontiers.get('cpu_entry_import_source_effects'),

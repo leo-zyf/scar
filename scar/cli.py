@@ -858,6 +858,7 @@ def main(argv=None) -> int:
         'review-cpu-fixed-grid-cli': 'scar.compiler.cpu_fixed_grid_cli_delivery',
         'fixed-grid-mapped-inputs': 'scar.compiler.cpu_fixed_grid_mapped_input_study',
         'fixed-grid-lifecycle': 'scar.compiler.cpu_fixed_grid_lifecycle_cli',
+        'run-cpu-array-native-route': 'scar.compiler.run_cpu_array_native_route',
         'observe-cpu-fixed-grid-python-lifecycle': 'scar.compiler.observe_cpu_fixed_grid_python_lifecycle',
         'calibrate-cpu-fixed-grid-loader': 'scar.compiler.calibrate_cpu_fixed_grid_loader',
         'compile-exported-aten': 'scar.compiler.compile_exported_aten',
@@ -1019,10 +1020,10 @@ def main(argv=None) -> int:
         original_argv = sys.argv
         try:
             sys.argv = ['scar '+cli_argv[0], *cli_argv[1:]]
-            importlib.import_module(source_graph_commands[cli_argv[0]]).main()
+            status = importlib.import_module(source_graph_commands[cli_argv[0]]).main()
         finally:
             sys.argv = original_argv
-        return 0
+        return status if type(status) is int else 0
     if cli_argv and cli_argv[0] == "observed-calls":
         from scar.analysis.observed_call_bindings import main as observed_calls_main
         return observed_calls_main(cli_argv[1:])
@@ -1238,6 +1239,7 @@ def main(argv=None) -> int:
             ('review-cpu-fixed-grid-cli', 'run or replay an exact fixed-grid source CLI comparison'),
             ('fixed-grid-mapped-inputs', 'prove, measure and review file-backed native recurrence inputs'),
             ('fixed-grid-lifecycle', 'build and replay fixed-grid lifecycle graphs and cost evidence'),
+            ('run-cpu-array-native-route', 'validate a guarded standalone CPU array route'),
             ('observe-cpu-fixed-grid-python-lifecycle', 'measure marked source phases and a separate imports-only exit'),
             ('calibrate-cpu-fixed-grid-loader', 'time the native source entry through its early argument-count exit'),
             ('compile-exported-aten', 'build standalone C++20 shape specializations from a functional torch.export graph'),

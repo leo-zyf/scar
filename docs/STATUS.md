@@ -4,6 +4,7 @@
 
 ## 固定网格源入口接入 CPU 目录
 
+- **原生执行。** 7 个文件端口和 16 步循环共享既有图，新增映射差分。两条 C++20 路径各 3 次分段诊断，输入窗口中位数 **15.22 → 0.258 ms**，进程轻微缺页 **4,040 → 21**。递推窗口和实际存储流量另有未归因项。显式运行映射版核对了完整终态字节、输出流、退出和 `0664` 权限。[原生路线验收](../artifacts/baseline/cpu-native-route-execution-acceptance.json)
 - **生命周期与成本。** Python 和 C++ 入口各自贯通启动、输入、共享迭代体、文件、stdout 和退出。源码标记诊断中位数为 Python 导入 **1.694 s**、递推 **4.648 s**、C++ 递推 **2.028 s**。独立校准推得 C++ 递推 **2.095 s**，与实测相差 **67.3 ms**。首次触页、发布持久性与整入口成本范围仍待闭合，`compile-build` 保持 `KEEP_ORIGINAL`。[生命周期验收](../artifacts/baseline/cpu-fixed-grid-lifecycle-acceptance.json)
 - **输入物化。** SCAR 证明 7 个稳定输入在固定网格计算图中只读，可保留原源码的私有文件映射。独立系统调用诊断确认 C++ 路径从显式读取 16,515,072 B 改为映射同样的范围。5 对干净原生计时中位数 **2.360 → 2.318 s**，收益 **1.74%**。按当前规则重放，计划在限定的 C++ 入口范围内选出文件映射。终态、输出和文件权限均匹配。 [原始输入物化验收](../artifacts/baseline/cpu-fixed-grid-mapped-input-acceptance.json)
 - **建图。** RK4 的 8 条入口与发布值依赖接回原 F4。原图证明文件写入正常返回后才进入 stdout 调用。7 个输入文件和终态输出接到同一个 ext4 端点，计算绑定 CPU 14–16 与 NUMA 1 的内存候选。逻辑 Tensor 峰值为 40,108,040 B。
@@ -16,7 +17,7 @@
 - **前向时序。** 每条路线的 15 类操作带源码位置、资源和必要的先后关系。独立服务探针给出多进程正文 **138.115 ms**、OpenMP 分组正文 **135.974 ms** 的条件估算。区间相交，两个探针的并发条件也不同。另一次 C++20 插桩诊断记录了启动、汇合和发布，单独保留时钟。图中的首触达、带载传输、退出等成本仍待闭合。 [时序验收](../artifacts/baseline/cpu-array-native-route-forward-acceptance.json)
 - **建图。** Cirq 的 8 任务、48 轮入口固定了源码、输入、六核启动范围和已链接的数值实现。图保留了两条路线各自的工作核、地址空间预算及发布顺序。
 - **原始评审。** 1 对预热、7 对计时，多进程路线中位数为 **144.710 ms**，OpenMP 分组路线为 **139.821 ms**。OpenMP 的 384 个逐轮状态与多进程逐字节一致。耗时下降 **3.38%**，旧评审按当时的 5% 规则保留多进程。完整前向时序成本仍待补齐。
-- **交付。** `compile-build` 回读同一 F4 入口及路线包。独立 C++20 启动的 stdout 和发布文件均通过校验。原 Python 导入与失败效果仍有未闭合项，整入口保持 `KEEP_ORIGINAL`。 [验收记录](../artifacts/baseline/cpu-array-native-route-acceptance.json)
+- **交付。** `compile-build` 回读同一 F4 入口及路线包。分组 OpenMP 和保留多进程各实际启动一次，stdout 和发布文件均复现原结果。原 Python 导入与失败效果仍有未闭合项，整入口保持 `KEEP_ORIGINAL`。[原生路线验收](../artifacts/baseline/cpu-native-route-execution-acceptance.json)
 
 ## 合并原生系数装载分段
 

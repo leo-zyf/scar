@@ -38,6 +38,9 @@ WINDOWS = dict(launcher_to_main=('launcher_start_ns', 'MAIN_ENTER'), main_ingres
     stdout_submission=('STDOUT_BEGIN', 'STDOUT_SUBMIT_END'),
     owner_local_teardown=('INVOKE_RETURN', 'MAIN_END'), main_end_to_reap=('MAIN_END', 'process_reaped_ns'))
 _CLOCKS = Struct('=' + 'Q' * len(MARKERS))
+USAGE_MARKERS = ('INPUTS_BEGIN', 'INPUTS_READY', 'RECURRENCE_BEGIN', 'RECURRENCE_RETURN')
+USAGE_FIELDS = ('minor_faults', 'major_faults', 'block_input_events')
+_USAGE = Struct('=4Q')
 
 
 def _need(ok, detail):
@@ -139,7 +142,31 @@ class _SourceEdits:
         return b''.join(chunks)
 
 
-def _render(main_ref, file_ref):
+def _usage_header():
+    header = _clock_header().decode('ascii')
+    header = header.replace('#include <time.h>', '#include <time.h>\n#include <sys/resource.h>')
+    header = header.replace('inline void stamp', '''using Usage = std::array<std::uint64_t, 4>;
+static std::array<Usage, 4> usage_stamps{};
+static_assert(sizeof(usage_stamps) == 128);
+
+inline void stamp''')
+    header = header.replace('    timespec observed{};', '''    if (point >= INPUTS_BEGIN && point <= RECURRENCE_RETURN) {
+        rusage observed_usage{};
+        if (getrusage(RUSAGE_SELF, &observed_usage) == 0) {
+            usage_stamps[point - INPUTS_BEGIN] = {
+                1, static_cast<std::uint64_t>(observed_usage.ru_minflt),
+                static_cast<std::uint64_t>(observed_usage.ru_majflt),
+                static_cast<std::uint64_t>(observed_usage.ru_inblock)
+            };
+        }
+    }
+    timespec observed{};''')
+    header = header.replace('        std::fclose(out);',
+        '        std::fwrite(usage_stamps.data(), sizeof(usage_stamps), 1, out);\n        std::fclose(out);')
+    return header.encode('ascii')
+
+
+def _render(main_ref, file_ref, *, usage=False):
     main = _SourceEdits(main_ref, _raw(main_ref))
     header = _SourceEdits(file_ref, _raw(file_ref))
     entry = b'int main(int argc, char** argv) {\n'
@@ -175,21 +202,22 @@ def _render(main_ref, file_ref):
     return dict(sites={**main.sites, **header.sites}, files={
         _MAIN: main.render(b'#include "runtime/scar_fixed_grid_owner_clock.hpp"\n'),
         _FILE: header.render(b'#include "scar_fixed_grid_owner_clock.hpp"\n'),
-        _HEADER: _clock_header()})
+        _HEADER: _usage_header() if usage else _clock_header()})
 
 
-def _project(root, delivery, compiler, *, build):
+def _project(root, delivery, compiler, *, build, usage=False, mapped_proof=None):
     project_ref = delivery['project']
     project = read_artifact(project_ref)
     description = project['source_entry_cli']
-    _need(description.get('source_file_publication') == FRESH_SOURCE_FILE and 'mapped_input_proof' not in description
-          and project['cxx_standard'] == 20, 'owned-copy source ABI and fresh mode 0666 sink required')
+    _need(description.get('source_file_publication') == FRESH_SOURCE_FILE
+          and description.get('mapped_input_proof') == mapped_proof
+          and project['cxx_standard'] == 20, 'exact source input route and fresh mode 0666 sink required')
     parent = Path(project_ref['uri']).parent
     references = {}
     for name, signature in project['files'].items():
         if name.startswith(('src/', 'include/')) or name in ('CMakeLists.txt', 'launch.sh', LAUNCHER):
             references[name] = dict(uri=str(parent/name), schema='scar.native-project-member', **signature)
-    changes = _render(references[_MAIN], references[_FILE])
+    changes = _render(references[_MAIN], references[_FILE], usage=usage)
     _need(_HEADER not in references, 'retained project is already instrumented')
     files = {name: _raw(reference) for name, reference in references.items()}
     files.update(changes['files'])
@@ -250,7 +278,7 @@ def _capture(folder, command, observation, publication):
                                     returncode=result.returncode, publication_mode=mode))
 
 
-def _sample(folder, command, delivery, ordinal, expected_mode):
+def _sample(folder, command, delivery, ordinal, expected_mode, *, usage=False):
     clock_ref = _ref(folder/'clock.json', _CLOCK_SCHEMA)
     clock = read_artifact(clock_ref)
     stdout, stderr, published, marker_bytes = [_ref(folder/name) for name in
@@ -263,15 +291,24 @@ def _sample(folder, command, delivery, ordinal, expected_mode):
           and clock['publication_mode'] == expected_mode == _mode(Path(published['uri'])),
           'observed output, mode or clean native CLI status differs')
     raw = _raw(marker_bytes)
-    _need(len(raw) == _CLOCKS.size, 'one complete owner clock record required')
-    marks = _CLOCKS.unpack(raw)
+    usage_size = _USAGE.size * len(USAGE_MARKERS) if usage else 0
+    _need(len(raw) == _CLOCKS.size + usage_size, 'one complete owner clock record required')
+    marks = _CLOCKS.unpack_from(raw)
     bounds = (clock['launcher_start_ns'], *marks, clock['process_reaped_ns'])
     _need(all(type(value) is int and value > 0 for value in bounds) and list(bounds) == sorted(bounds),
           'native phase clocks do not follow source or parent order')
-    return dict(ordinal=ordinal, argv=command, launcher_start_ns=clock['launcher_start_ns'],
+    sample = dict(ordinal=ordinal, argv=command, launcher_start_ns=clock['launcher_start_ns'],
         process_reaped_ns=clock['process_reaped_ns'], returncode=0, publication_mode=expected_mode,
         stdout=stdout, stderr=stderr, publication=published, clock=clock_ref, raw_markers=marker_bytes,
         markers_ns=dict(zip(MARKERS, marks, strict=True)))
+    if usage:
+        values = tuple(_USAGE.iter_unpack(raw[_CLOCKS.size:]))
+        _need(all(valid == 1 for valid, *_ in values)
+              and all(list(column) == sorted(column) for column in tuple(zip(*values))[1:]),
+              'cumulative process resource counters do not follow observation order')
+        sample['process_usage'] = {name: dict(zip(USAGE_FIELDS, fields, strict=True))
+                                   for name, (_, *fields) in zip(USAGE_MARKERS, values, strict=True)}
+    return sample
 
 
 def _record(delivery_ref, root, count, compiler, *, build=False):

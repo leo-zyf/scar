@@ -25,6 +25,25 @@ def main(argv=None):
         plan.add_argument('--' + option, type=Path)
     check = commands.add_parser('check', help='replay a saved cost receipt without running the entry')
     check.add_argument('cost', type=Path)
+    input_graph = commands.add_parser('input-graph', help='project copy and mapped input subgraphs')
+    for option in ('lifecycle', 'mapped-plan', 'out'):
+        input_graph.add_argument('--' + option, type=Path, required=True)
+    counters = commands.add_parser('input-counters', help='diagnose native process faults at source phase boundaries')
+    counters.add_argument('--mapped-plan', type=Path, required=True)
+    counters.add_argument('--out', type=Path, required=True)
+    counters.add_argument('--pairs', type=int, default=3)
+    counters.add_argument('--compiler', default='g++')
+    export = commands.add_parser('export-native-route', help='publish the selected C++20 source route package')
+    export.add_argument('--mapped-plan', type=Path, required=True)
+    export.add_argument('--out', type=Path, required=True)
+    run = commands.add_parser('run-native-route', help='validate one explicitly requested native launch')
+    run.add_argument('--package', type=Path, required=True)
+    run.add_argument('--out', type=Path, required=True, help='fresh validation directory for stdout, stderr and the generated file')
+    run.add_argument('--stable-inputs', action='store_true', help='commit to stable input files through process exit')
+    review = commands.add_parser('review-native-route', help='join source graph, counters and C++20 delivery evidence')
+    for option in ('graph', 'package', 'out'):
+        review.add_argument('--' + option, type=Path, required=True)
+    review.add_argument('--counters', type=Path)
     args = parser.parse_args(argv)
 
     from scar.analysis.cpu_fixed_grid_lifecycle import SCHEMA as GRAPH, derive_cpu_fixed_grid_lifecycle
@@ -58,11 +77,38 @@ def main(argv=None):
             native_diagnostic=_ref(args.native, NATIVE) if args.native is not None else None,
             loader_probe=_ref(args.loader, LOADER) if args.loader is not None else None)
         path = args.out
-    else:
+    elif args.command == 'check':
         reference = _ref(args.cost, COST)
         result = verify_cpu_fixed_grid_lifecycle_cost(reference)
         print(json.dumps(dict(cost=reference, status=result['status'], execution_default=result['execution_default'])))
         return 0
+    else:
+        from scar.analysis.cpu_fixed_grid_input_route_graph import SCHEMA as INPUT_GRAPH, derive_cpu_fixed_grid_input_route_graph
+        from scar.codegen.cpu_fixed_grid_native_route_package import SCHEMA as PACKAGE, export_cpu_fixed_grid_native_route_package
+        from scar.compiler.observe_cpu_fixed_grid_input_counters import SCHEMA as COUNTERS, measure as measure_counters
+        from scar.compiler.run_cpu_fixed_grid_native_route import execute_cpu_fixed_grid_native_route
+        from scar.optimization.cpu_fixed_grid_input_route_review import derive_cpu_fixed_grid_input_route_review
+        from scar.optimization.cpu_fixed_grid_mapped_input_plan import SCHEMA as MAPPED
+
+        path = args.out
+        if args.command == 'input-graph':
+            result = derive_cpu_fixed_grid_input_route_graph(_ref(args.lifecycle, GRAPH), _ref(args.mapped_plan, MAPPED))
+        elif args.command == 'input-counters':
+            measure_counters(_ref(args.mapped_plan, MAPPED), path, pairs=args.pairs, compiler=args.compiler)
+            print(path / 'result.json')
+            return 0
+        elif args.command == 'export-native-route':
+            print(export_cpu_fixed_grid_native_route_package(_ref(args.mapped_plan, MAPPED), path)['uri'])
+            return 0
+        elif args.command == 'run-native-route':
+            result = execute_cpu_fixed_grid_native_route(_ref(args.package, PACKAGE), path,
+                        stable_inputs_for_process_lifetime=args.stable_inputs)
+            print(json.dumps({key: result.get(key) for key in ('status', 'route', 'reasons', 'target_executed')}))
+            return 0 if result['target_executed'] else 1
+        else:
+            counter_ref = None if args.counters is None else _ref(args.counters, COUNTERS)
+            result = derive_cpu_fixed_grid_input_route_review(_ref(args.graph, INPUT_GRAPH), _ref(args.package, PACKAGE),
+                                                              counters_ref=counter_ref)
 
     _write(path, result)
     print(path)
