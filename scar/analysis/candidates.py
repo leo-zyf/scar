@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from scar.ir import ExecutionGraph, Opportunity, ProgramGraph
-from scar.analysis.memory import allocation_candidates
-from scar.analysis.materialization import materialization_candidates
-from scar.analysis.repetition import repeated_regions
-from scar.analysis.synchronization import synchronization_candidates
-from scar.analysis.loops import loop_invariant_candidates
+from scar.analysis.materialization import allocation_candidates, materialization_candidates, synchronization_candidates
+from scar.analysis.repetition import loop_invariant_candidates, repeated_regions
 from collections import Counter
 from dataclasses import asdict, dataclass
 

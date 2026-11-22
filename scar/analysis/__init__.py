@@ -17,10 +17,9 @@ __all__ += ["audit_candidates", "audit_report", "audit_path"]
 __all__ += ["RegionSummary", "PlacementEvidence", "DynamicRegionIndex", "topdown_report"]
 __all__ += ["ConstantDefinition", "ConstantUse", "find_constant_uses",
             "ModuleEffectSummary", "constant_candidates", "constant_report"]
-from .synchronization import synchronization_candidates
-from .memory import allocation_candidates
+from .materialization import allocation_candidates, synchronization_candidates
 from scar.analysis.static.candidates import loop_invariant_candidates
-from .loops import loop_invariant_candidates as dynamic_loop_invariant_candidates
+from .repetition import loop_invariant_candidates as dynamic_loop_invariant_candidates
 
 __all__.append("synchronization_candidates")
 __all__.append("allocation_candidates")
