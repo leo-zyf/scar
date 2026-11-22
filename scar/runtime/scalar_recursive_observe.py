@@ -14,7 +14,7 @@ from scar.analysis.scalar_recursive_observations import CAPTURE, DESIGN, _intege
 from scar.analysis.scalar_table_handoff import _ref, _write
 from scar.ir.execution_recipe import read_artifact
 from scar.runtime.entry_runner import run_original_script
-from scar.runtime.scalar_transition_observe import _state
+from scar.runtime.scalar_observe import _state
 from scar.runtime.source_value_observe import _codes, _coordinate, _instance_field, _target_coordinate
 from scar.trace.code_snapshot import describe_code, site
 
