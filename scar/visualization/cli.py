@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from scar.ir.execution_recipe import _bytes, _json, read_artifact
+from scar.ir.execution_recipe import _bytes, _json
 from .adapters import project_schedule
 from .bundle import write_view_bundle
 
@@ -37,9 +37,9 @@ def main(argv=None):
     elif args.schedule:
         projection=project_schedule(_json(_bytes(args.schedule)))
     else:
-        from scar.compiler.time_schedule import read_time_schedule
-        receipt=read_time_schedule(args.time_schedule)
-        projection=project_schedule(read_artifact(receipt['schedule']))
+        from scar.compiler.bind_time_resources import replay_time_schedule
+        receipt,schedule=replay_time_schedule(args.time_schedule)
+        projection=project_schedule(schedule)
         if hardware is None and receipt.get('target') is not None:
             hardware=Path(receipt['target']['uri']).parent
     result=write_view_bundle(projection,args.out,title=args.title,hardware=hardware)
