@@ -392,9 +392,13 @@ def _produce_tokens(f0, original, max_tokens, *, retain_items=False):
         tuple(refs.pool), tuple(rows), _coverage(rows, len(text)), failure, _warning_records(captured)), tuple(items)
 
 
+def _project_tokens(f0, original, max_tokens=2_000_000):
+    return _produce_tokens(f0, original, max_tokens)[0]
+
+
 def source_tokens_document(f0_document, *, max_tokens=2_000_000) -> dict:
     """Lex a strict F0 document; no implicit downstream compiler stage runs."""
-    return encode(_produce_tokens(f0_document, decoded_source_bytes(f0_document), max_tokens)[0])
+    return encode(_project_tokens(f0_document, decoded_source_bytes(f0_document), max_tokens))
 
 
 def _verify_tokens(document, f0_document, original, *, retain_items=False):
@@ -625,6 +629,11 @@ def _produce_syntax(f0, f1, mode, max_nodes):
         raise ValueError('max_nodes must be an exact nonnegative integer')
     original = decoded_source_bytes(f0)
     _verify_tokens(f1, f0, original)
+    return _project_syntax(f0, f1, original, mode, max_nodes)
+
+
+def _project_syntax(f0, f1, original, mode='exec', max_nodes=1_000_000):
+    """Parse against the F1 stream already produced for this source unit."""
     profile = _profile(f0)
     inputs = SourceSyntaxInput(_digest(f0), _digest(f1), f0['path'], f0['raw']['sha256'],
         f1['view']['sha256'] if f1['view'] is not None else None, f1['status'])
@@ -662,12 +671,16 @@ def _read_source_syntax(document, f0, f1):
     fresh = _produce_syntax(f0, f1, material.mode, material.max_nodes)
     if material != fresh:
         raise ValueError('F2 document differs from its F0/F1/profile/fresh official parser')
+    return material, _restore_syntax(material)
+
+
+def _restore_syntax(material):
     if material.status != 'PARSED':
-        return material, None
+        return None
     root = _restore_ast(material.root, material.nodes)
-    if _flatten_ast(root, max_nodes=material.max_nodes) != (fresh.root, fresh.nodes):
+    if _flatten_ast(root, max_nodes=material.max_nodes) != (material.root, material.nodes):
         raise ValueError('restored AST differs in an occurrence/field/presence/exact scalar')
-    return material, root
+    return root
 
 
 def read_source_syntax(document, f0, f1) -> ast.AST | None:

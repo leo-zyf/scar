@@ -538,6 +538,11 @@ def _derive(f0, f1, f2, f3b, c1, f3a, limits):
     contexts = read_source_contexts(c1, f0, f1, f2, f3b)
     native = read_source_symbols(f3a, f0, f1, f2)
     syntax, roles = decode(SourceSyntaxMaterial, f2), decode(SourceRolesMaterial, f3b)
+    return _project_topology(f0, f1, f2, f3b, c1, f3a, syntax, roles, contexts, native, limits)
+
+
+def _project_topology(f0, f1, f2, f3b, c1, f3a, syntax, roles, contexts, native,
+                      limits=(100_000, 200_000, 4_000_000)):
     inputs = CompilerTopologyInput(*(_digest(doc) for doc in (f0, f1, f2, f3b, c1, f3a)),
         f0['path'], syntax.mode, contexts.status, native.status, len(contexts.scopes), len(native.scopes))
     base = dict(input=inputs, profile=_profile(native), max_blocks=limits[0],

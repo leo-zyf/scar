@@ -351,6 +351,10 @@ def _produce(f0, f1, f2, max_ports, max_slots):
     if any(type(n) is not int or n < 0 for n in (max_ports, max_slots)):
         raise ValueError('role budgets must be exact nonnegative integers')
     syntax = read_source_syntax_material(f2, f0, f1)
+    return _project_roles(f0, f1, f2, syntax, max_ports, max_slots)
+
+
+def _project_roles(f0, f1, f2, syntax, max_ports=1_000_000, max_slots=10_000_000):
     result = classify_syntax_roles(syntax, max_ports=max_ports, max_slots=max_slots)
     inputs = SourceRolesInput(_digest(f0), _digest(f1), _digest(f2), f0['path'], syntax.mode, syntax.status)
     return SourceRolesMaterial(inputs, _profile(), max_ports, max_slots, result.status,

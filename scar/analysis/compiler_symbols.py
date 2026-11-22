@@ -100,14 +100,20 @@ def _project(solution, topology, declarations, native):
 
 
 def _derive(f0, f1, f2, f3b, c1, c2a, f3a, topology_document, limits):
-    from scar.analysis.compiler_symbol_materials import collect_symbols
-    from scar.analysis.compiler_symbol_solve import solve_symbols
-    # Both public parent readers remain strict. A future owner-bound validated
-    # bundle can remove repeated work without accepting an external boolean.
     topology = read_compiler_topology(topology_document, f0, f1, f2, f3b, c1, f3a)
     declarations = read_source_declarations(c2a, f0, f1, f2, f3b, c1)
     syntax, roles, contexts, native = (decode(SourceSyntaxMaterial, f2), decode(SourceRolesMaterial, f3b),
         decode(SourceContextsMaterial, c1), decode(SourceSymbolsMaterial, f3a))
+    return _project_symbols(f0, f1, f2, f3b, c1, c2a, f3a, topology_document,
+        syntax, roles, contexts, declarations, native, topology, limits)
+
+
+def _project_symbols(f0, f1, f2, f3b, c1, c2a, f3a, topology_document,
+                     syntax, roles, contexts, declarations, native, topology,
+                     limits=SymbolLimits(2_000_000, 4_000_000, 4_000_000, 2_000_000, 20_000_000)):
+    from scar.analysis.compiler_symbol_materials import collect_symbols
+    from scar.analysis.compiler_symbol_solve import solve_symbols
+
     docs = (f0, f1, f2, f3b, c1, c2a, f3a, topology_document)
     inputs = CompilerSymbolsInput(*(_digest(doc) for doc in docs), f0['path'], syntax.mode,
         declarations.status, topology.status, len(declarations.contributions), len(topology.blocks),

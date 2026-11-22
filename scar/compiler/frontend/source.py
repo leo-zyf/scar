@@ -3,36 +3,27 @@
 import argparse
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
 from multiprocessing import get_context
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
-from typing import Callable
 
-from scar.analysis.compiler_symbols import compiler_symbols_document
-from scar.analysis.compiler_topology import compiler_topology_document
-from scar.analysis.source_bindings import source_bindings_document
-from scar.analysis.source_contexts import source_contexts_document
-from scar.analysis.source_declarations import source_declarations_document
+from scar.analysis.compiler_symbols import _project_symbols as _project_compiler_symbols
+from scar.analysis.compiler_topology import _project_topology
+from scar.analysis.source_bindings import _project_bindings
+from scar.analysis.source_contexts import _project_contexts
+from scar.analysis.source_declarations import _project_declarations
 from scar.analysis.source_materials import _material
-from scar.analysis.source_role_materials import source_roles_document
-from scar.analysis.source_symbols import compiler_hash_context, source_symbols_document
-from scar.analysis.source_syntax import source_syntax_document, source_tokens_document
+from scar.analysis.source_role_materials import _project_roles
+from scar.analysis.source_symbols import compiler_hash_context, _project_symbols
+from scar.analysis.source_syntax import decoded_source_bytes, _project_tokens, _project_syntax, _restore_syntax
 from scar.analysis.static.query import _Fragments
 from scar.analysis.static_program import (
     _artifacts, _json, _write, build_static_program, read_static_program, refine_static_program,
 )
 from scar.artifacts import _durable_bytes, _durable_mkdir, _sync_directory, file_reference
-
-
-@dataclass(frozen=True, slots=True)
-class Layer:
-    artifact: str
-    stage: str
-    requires: tuple[str, ...]
-    derive: Callable
+from scar.ir.record_codec import encode
 
 
 _RAW = ('source_bytes',)
@@ -40,19 +31,51 @@ _SYNTAX = (*_RAW, 'source_tokens', 'source_syntax')
 _ROLES = (*_SYNTAX, 'source_roles')
 _CONTEXT = (*_ROLES, 'source_contexts')
 _DECLARATIONS = (*_CONTEXT, 'source_declarations')
-_LAYERS = (
-    Layer('source_tokens', 'F1', _RAW, source_tokens_document),
-    Layer('source_syntax', 'F2', _SYNTAX[:2], source_syntax_document),
-    Layer('source_symbols', 'F3-A', _SYNTAX, source_symbols_document),
-    Layer('source_roles', 'F3-B', _SYNTAX, source_roles_document),
-    Layer('source_contexts', 'F3-C1', _ROLES, source_contexts_document),
-    Layer('source_declarations', 'F3-C2a', _CONTEXT, source_declarations_document),
-    Layer('source_bindings', 'F3-C2b', _DECLARATIONS, source_bindings_document),
-    Layer('compiler_topology', 'F3-C3T', (*_CONTEXT, 'source_symbols'), compiler_topology_document),
-    Layer('compiler_symbols', 'F3-C3S', (*_DECLARATIONS, 'source_symbols', 'compiler_topology'),
-          compiler_symbols_document),
-)
+_LAYERS = {
+    'source_tokens': ('F1', _RAW),
+    'source_syntax': ('F2', _SYNTAX[:2]),
+    'source_symbols': ('F3-A', _SYNTAX),
+    'source_roles': ('F3-B', _SYNTAX),
+    'source_contexts': ('F3-C1', _ROLES),
+    'source_declarations': ('F3-C2a', _CONTEXT),
+    'source_bindings': ('F3-C2b', _DECLARATIONS),
+    'compiler_topology': ('F3-C3T', (*_CONTEXT, 'source_symbols')),
+    'compiler_symbols': ('F3-C3S', (*_DECLARATIONS, 'source_symbols', 'compiler_topology')),
+}
 _BLOCKED = frozenset({'BUDGET_STOPPED', 'PARSER_RESOURCE_ERROR', 'RESOURCE_ERROR', 'PROJECTION_CONTRADICTION'})
+
+
+def _derive_layers(f0):
+    """Publish a source unit's original layers from one owned typed derivation."""
+    original = decoded_source_bytes(f0)
+    docs = {'source_bytes': f0}
+    records = {}
+
+    def produce(name, project, *arguments):
+        start = time.monotonic()
+        material = project(*arguments)
+        status = material.status
+        if status in _BLOCKED:
+            raise ValueError(f'{_LAYERS[name][0]} {status} for {f0["path"]}')
+        if name == 'source_syntax':
+            _restore_syntax(material)
+        doc = encode(material)
+        docs[name] = doc
+        records[name] = dict(status=status, seconds=time.monotonic() - start)
+        return material, doc
+
+    _, f1 = produce('source_tokens', _project_tokens, f0, original)
+    syntax, f2 = produce('source_syntax', _project_syntax, f0, f1, original)
+    native, f3a = produce('source_symbols', _project_symbols, f0, f1, f2, original)
+    roles, f3b = produce('source_roles', _project_roles, f0, f1, f2, syntax)
+    contexts, c1 = produce('source_contexts', _project_contexts, f0, f1, f2, f3b, syntax, roles)
+    declarations, c2a = produce('source_declarations', _project_declarations,
+        f0, f1, f2, f3b, c1, syntax, roles, contexts)
+    produce('source_bindings', _project_bindings, f0, f1, f2, f3b, c1, c2a, syntax, roles, contexts, declarations)
+    topology, c3t = produce('compiler_topology', _project_topology, f0, f1, f2, f3b, c1, f3a, syntax, roles, contexts, native)
+    produce('compiler_symbols', _project_compiler_symbols,
+        f0, f1, f2, f3b, c1, c2a, f3a, c3t, syntax, roles, contexts, declarations, native, topology)
+    return docs, records
 
 
 def _derive_unit(task):
@@ -66,16 +89,9 @@ def _derive_unit(task):
     f0, origin, detail = _material(unit, _Fragments(root).read)
     if f0 is None:
         raise ValueError(f'F0 unavailable for {unit["path"]}: {detail}')
-    docs = {'source_bytes': f0}
-    records = {'source_bytes': dict(status=origin, seconds=time.monotonic() - start)}
-    for spec in _LAYERS:
-        start = time.monotonic()
-        doc = spec.derive(*(docs[name] for name in spec.requires))
-        status = doc['status']
-        if status in _BLOCKED:
-            raise ValueError(f'{spec.stage} {status} for {unit["path"]}')
-        docs[spec.artifact] = doc
-        records[spec.artifact] = dict(status=status, seconds=time.monotonic() - start)
+    acquisition = time.monotonic() - start
+    docs, records = _derive_layers(f0)
+    records['source_bytes'] = dict(status=origin, seconds=acquisition)
     refs = {name: _write(root, f'units/{key}/{name}.json.gz', doc) for name, doc in docs.items()}
     return key, refs, records, os.getpid()
 
@@ -114,7 +130,7 @@ def build_source_layers(roots, model, report, *, jobs, source_files=(), max_file
             unit['artifacts'].update(refs)
         layers = []
         for name, stage, requires in (('source_bytes', 'F0', ('source',)), *(
-                (spec.artifact, spec.stage, spec.requires) for spec in _LAYERS)):
+                (artifact, stage, requires) for artifact, (stage, requires) in _LAYERS.items())):
             rows = [record[name] for _, _, record, _ in results]
             layers.append(dict(stage=stage, artifact=name, requires=list(requires),
                                statuses=dict(Counter(row['status'] for row in rows)),

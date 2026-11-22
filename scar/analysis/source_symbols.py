@@ -184,6 +184,11 @@ def _produce(f0, f1, f2, max_scopes, max_symbols):
     if any(type(n) is not int or n < 0 for n in (max_scopes, max_symbols)):
         raise ValueError('scope/symbol budgets must be exact nonnegative integers')
     read_source_syntax(f2, f0, f1)
+    original = decoded_source_bytes(f0) if f2['status'] == 'PARSED' and f2['mode'] != 'func_type' else None
+    return _project_symbols(f0, f1, f2, original, max_scopes, max_symbols)
+
+
+def _project_symbols(f0, f1, f2, original, max_scopes=100_000, max_symbols=1_000_000):
     profile, mode = _profile(f0), f2['mode']
     inputs = SourceSymbolsInput(_digest(f0), _digest(f1), _digest(f2), f0['path'], f2['input']['view_sha256'], f2['status'])
     if f2['status'] != 'PARSED':
@@ -192,7 +197,6 @@ def _produce(f0, f1, f2, max_scopes, max_symbols):
     if mode == 'func_type':
         return SourceSymbolsMaterial(inputs, profile, mode, max_scopes, max_symbols,
             'UNSUPPORTED_SYMTABLE_MODE', None, (), (), None, ())
-    original = decoded_source_bytes(f0)
     text = original.replace('\r\n', '\n').replace('\r', '\n')
     status, scopes, frontiers, failure = 'CAPTURED', (), (), None
     with warnings.catch_warnings(record=True) as caught:

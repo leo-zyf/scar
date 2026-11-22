@@ -363,6 +363,11 @@ def _derive(f0, f1, f2, f3b, c1, limits):
         raise ValueError('declaration budgets must be exact nonnegative integers')
     contexts = read_source_contexts(c1, f0, f1, f2, f3b)
     syntax, roles = decode(SourceSyntaxMaterial, f2), decode(SourceRolesMaterial, f3b)
+    return _project_declarations(f0, f1, f2, f3b, c1, syntax, roles, contexts, limits)
+
+
+def _project_declarations(f0, f1, f2, f3b, c1, syntax, roles, contexts,
+                          limits=(1_000_000, 1_000_000, 100_000)):
     inputs = SourceDeclarationsInput(_digest(f0), _digest(f1), _digest(f2), _digest(f3b),
         _digest(c1), f0['path'], syntax.mode, contexts.status, len(roles.ports))
     profile = _profile()

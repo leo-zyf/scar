@@ -625,6 +625,11 @@ def _derive(f0, f1, f2, f3b, c1, c2a, limits):
     declarations = read_source_declarations(c2a, f0, f1, f2, f3b, c1)
     syntax, roles, contexts = (decode(SourceSyntaxMaterial, f2), decode(SourceRolesMaterial, f3b),
         decode(SourceContextsMaterial, c1))
+    return _project_bindings(f0, f1, f2, f3b, c1, c2a, syntax, roles, contexts, declarations, limits)
+
+
+def _project_bindings(f0, f1, f2, f3b, c1, c2a, syntax, roles, contexts, declarations,
+                      limits=(1_000_000, 1_000_000, 1_000_000, 4_000_000, 2_000_000, 2_000_000, 10_000_000, 100_000)):
     inputs = SourceBindingsInput(*(_digest(doc) for doc in (f0, f1, f2, f3b, c1, c2a)),
         f0['path'], syntax.mode, declarations.status, len(roles.ports), len(contexts.scopes))
     profile = _profile()

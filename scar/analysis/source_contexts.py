@@ -636,8 +636,9 @@ class _Router:
 def _profile():
     from scar.ir.program import source_contexts as context_ir
     catalog = _catalog()
-    implementation = _digest({name: sha256(Path(path).read_bytes()).hexdigest() for name, path in (
-        ('analysis', __file__), ('view', __file__), ('ir', context_ir.__file__))})
+    source = sha256(Path(__file__).read_bytes()).hexdigest()
+    implementation = _digest(dict(analysis=source, view=source,
+        ir=sha256(Path(context_ir.__file__).read_bytes()).hexdigest()))
     return SourceContextsProfile(_VERSION, catalog.f2_schema_sha256,
         catalog.role_catalog_sha256, catalog.content_sha256, implementation)
 
@@ -648,27 +649,28 @@ def _derive(f0, f1, f2, f3b, limits):
     # Decode that exact, already-verified F2 rather than parsing it once more.
     roles = read_source_roles(f3b, f0, f1, f2)
     syntax = decode(SourceSyntaxMaterial, f2)
+    return _project_contexts(f0, f1, f2, f3b, syntax, roles, limits), syntax, roles
+
+
+def _project_contexts(f0, f1, f2, f3b, syntax, roles, limits=(100_000, 200_000, 1_000_000, 10_000_000)):
     inputs = SourceContextsInput(_digest(f0), _digest(f1), _digest(f2), _digest(f3b),
         f0['path'], syntax.mode, syntax.status, roles.status)
     profile = _profile()
     if roles.status != 'CLASSIFIED':
-        material = SourceContextsMaterial(inputs, profile, *limits, 'UPSTREAM_NOT_CLASSIFIED',
+        return SourceContextsMaterial(inputs, profile, *limits, 'UPSTREAM_NOT_CLASSIFIED',
             None, (), (), (), (), _zero_counts(), 0, ())
-        return material, syntax, roles
     router = _Router(syntax, roles, limits)
     try:
         root, counts = router.run()
     except ContextBudgetExceeded as error:
-        material = SourceContextsMaterial(inputs, profile, *limits, 'BUDGET_STOPPED',
+        return SourceContextsMaterial(inputs, profile, *limits, 'BUDGET_STOPPED',
             None, (), (), (), (), _zero_counts(), 0, (error.frontier,))
-        return material, syntax, roles
     material = SourceContextsMaterial(inputs, profile, *limits, 'CONTEXTUALIZED', root,
         tuple(router.scopes), tuple(router.regions), tuple(router.privates),
         tuple(router.boundaries), counts, router.slots, ())
     del router
-    from scar.analysis.source_contexts import SourceContextView
     SourceContextView(syntax, roles, material).verify_totality()
-    return material, syntax, roles
+    return material
 
 
 def source_contexts_document(f0, f1, f2, f3b, *, max_scopes=100_000, max_regions=200_000,
