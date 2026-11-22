@@ -12,7 +12,7 @@ from pathlib import Path
 from scar.analysis.source_declared_calls import _owners
 from scar.analysis.source_field_interfaces import _InterfaceOnly, _ancestors
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.ir.program import normal_graph as T, normal_graph as F, function_sites as I
 from scar.ir.program.ids import RegionID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference

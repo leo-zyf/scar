@@ -11,14 +11,7 @@ from scar.ir.effects import Knowledge
 from scar.ir.program.ids import LocationID, OperationID, ValueID
 from scar.ir.program.source_bindings import EnvironmentInterface
 from scar.ir.program.source_effects import FamilyRule
-from scar.ir.program.name_flow import (
-    NameDefinitionKind,
-    NameDefinition,
-    NameDefinitionState,
-    NameDefinitionTransition,
-    NameDefinitionRead,
-    NameDefinitionFrontier,
-)
+from scar.ir.program.name_flow import NameDefinitionKind, NameDefinition, NameDefinitionState, NameDefinitionTransition, NameDefinitionRead, NameDefinitionFrontier
 from scar.ir.program.dependencies import (
     NodeID,
     DependencyKind,

@@ -6,7 +6,7 @@ Only the exact recorded source connection may provide a guarded body entry.
 """
 from collections import defaultdict
 
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_graph as T, class_ports as C
 from scar.ir.program import source_productions as P

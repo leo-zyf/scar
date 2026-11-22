@@ -10,7 +10,7 @@ import pytest
 from scar.analysis.source_bytes import decoded_source_bytes, source_bytes_document
 from scar.analysis.source_tokens import source_tokens_document
 from scar.analysis.source_syntax import source_syntax_document
-from scar.analysis.source_roles import source_roles_document
+from scar.analysis.source_role_materials import source_roles_document
 from scar.analysis.source_contexts import source_contexts_document
 from scar.analysis.source_symbols import source_symbols_document
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
@@ -95,7 +95,7 @@ def test_c3t_compiler_topology(family, monkeypatch):
         syntax = decode(SourceSyntaxMaterial, inputs[2])
         roles = decode(SourceRolesMaterial, inputs[3])
         contexts = decode(SourceContextsMaterial, inputs[4])
-        from scar.ir.program.source_symbols import SourceSymbolsMaterial
+        from scar.ir.program.source_paths import SourceSymbolsMaterial
         native = decode(SourceSymbolsMaterial, inputs[5])
         return inputs, doc, material, syntax, roles, contexts, native
 

@@ -116,7 +116,7 @@ def build_adapter(directory=DEFAULT, *, jobs=24):
             configure_environment=dict(CFLAGS='-O1',CXX='g++ -std=c++20'))
     from scar.analysis import source_symbols
     from scar.ir import record_codec
-    from scar.ir.program import source_symbols as symbol_types
+    from scar.ir.program import source_paths as symbol_types
     receipt = dict(schema='scar.cpython-symtable-context-adapter',schema_version=1,
         runtime=dict(version=sys.version,executable=_file(sys.executable),headers=_tree(include),
             pyconfig=_file(include/'pyconfig.h'),soabi=sysconfig.get_config_var('SOABI')),
@@ -221,7 +221,7 @@ class SymbolContextAdapter:
     def capture(self, text, filename, mode='exec', *, flags=0, dont_inherit=True,
                 inherited_flags=None, max_scopes=100_000, max_symbols=1_000_000):
         from scar.analysis.call_compilation import supported_future_flag_mask
-        from scar.ir.program.source_symbols import SourceScope
+        from scar.ir.program.source_paths import SourceScope
         from scar.ir.record_codec import decode
         if type(text) is not str or type(filename) is not str or mode not in ('exec','eval','single'):
             raise ValueError('retained text/filename and executable parser mode required')

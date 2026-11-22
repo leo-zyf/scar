@@ -16,7 +16,7 @@ from scar.ir.program.call_edges import (
 )
 from scar.ir.program.call_operand_routes import OperandRouteBudget, OperandRouteModel
 from scar.ir.program.call_operands import CallOperandBudget
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.record_codec import decode, encode
 
 if TYPE_CHECKING:

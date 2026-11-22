@@ -11,7 +11,7 @@ from scar.ir.execution.ids import (
     CallActivationID, HostThreadInstanceID, ProcessInstanceID, RegionActivationID, RunID,
 )
 from scar.ir.execution.model import ExecutionModel
-from scar.ir.execution.resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.cleanup import CleanupRouteTerminator
 from scar.ir.program.control import PendingDispatchTerminator

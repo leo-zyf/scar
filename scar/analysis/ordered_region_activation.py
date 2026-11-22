@@ -15,7 +15,7 @@ from scar.analysis.ordered_region_inline import OrderedRegionInlineIndex
 from scar.analysis.source_call_view import (SourceFunctionCallProvider,function_interface_fact,
     source_caller_scope)
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.ir.program import ordered_regions as A, view as V, normal_graph as G, normal_graph as T
 from scar.ir.program.ids import ValueID,ControlPortID
 from scar.ir.program.dependencies import (DependencyPoint as Point,

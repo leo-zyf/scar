@@ -9,7 +9,7 @@ import inspect,json,os,sys,threading,types
 from pathlib import Path
 
 from scar.compiler.call_binding import read_call_binding_plan,plan_digest,OBSERVATION_SCHEMA
-from scar.trace.code_snapshot import code_key,describe_code
+from scar.trace.code_snapshot import code_key, describe_code
 from scar.trace.lean_capture import LeanCapturePlan
 
 

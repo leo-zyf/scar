@@ -18,7 +18,7 @@ from scar.analysis.call_operand_reader import read_call_operands
 from scar.analysis.python_call_targets import read_python_call_targets
 from scar.analysis.compiler_contexts import CompilerCodeIndex
 from scar.analysis.static_query import _Fragments
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_observed_materials import ObservedFactMaterials

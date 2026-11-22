@@ -17,7 +17,7 @@ from scar.ir.program.source_language import decode_language_overlay
 from scar.ir.program.static_calls import StaticFunctionCreationRoute
 from scar.ir.v2.semantic import OperationKind, SemanticRelation
 from scar.analysis.program_lowering import _Unsupported
-from scar.analysis.source_function_definition_lowering import compiler_plan
+from scar.analysis.source_function_definitions import compiler_plan
 from scar.analysis.static_compilation import StaticCodeEvidence, _scope_nodes
 from scar.analysis.static_function_environment import validate_static_body_namespace
 from scar.analysis.static_namespace import normal_reference, protocol_kinds

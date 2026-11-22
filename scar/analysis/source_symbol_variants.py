@@ -30,7 +30,7 @@ from scar.analysis.source_template_links import _json
 from scar.analysis.static_query import _Fragments
 from scar.ir.program import code_identity as V, code_identity as C
 from scar.ir.program import code_identity as X, source_bytes as S
-from scar.ir.program.source_symbols import SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile
+from scar.ir.program.source_paths import SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile
 from scar.ir.program.source_bytes import SourceTokenWarning
 from scar.ir.record_codec import decode, encode
 
@@ -113,7 +113,7 @@ class SymbolVariantWorker:
         self.command = command
 
     def capture(self,payload,context,max_scopes,max_symbols):
-        from scar.ir.program.source_symbols import SourceScope
+        from scar.ir.program.source_paths import SourceScope
         request = dict(text=payload,filename=context.filename,mode=context.mode,
             effective_flags=context.compiler_input_flags,max_scopes=max_scopes,max_symbols=max_symbols)
         self.process.stdin.write(json.dumps(request)+'\n');self.process.stdin.flush()

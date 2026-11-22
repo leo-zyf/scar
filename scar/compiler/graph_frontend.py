@@ -15,11 +15,10 @@ from types import CodeType
 from types import SimpleNamespace
 
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_assert_policy import (PRESERVE, OMIT_PROVEN_DEBUG, SourceAssertions,
-    AssertionEffectUnproven, validate_assertion_policy)
+from scar.analysis.source_guards import PRESERVE, OMIT_PROVEN_DEBUG, SourceAssertions, AssertionEffectUnproven, validate_assertion_policy
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_bytes import read_source_bytes
-from scar.analysis.source_reference_slice import source_port, ReferenceSlicer
+from scar.analysis.source_references import source_port, ReferenceSlicer
 from scar.analysis.static_query import _Fragments
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes, copy_semantics

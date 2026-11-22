@@ -3,7 +3,7 @@
 from scar.analysis.program_view import ProgramView
 from scar.analysis.call_inputs import call_operands
 from scar.compiler.frontend.python import build_frontend
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.effects import Knowledge
 from scar.ir.program.dependencies import DependencyKind as K

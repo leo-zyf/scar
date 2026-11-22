@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_call_view import source_call_site
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.compiler.model import SourceRef

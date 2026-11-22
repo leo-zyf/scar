@@ -14,7 +14,7 @@ from scar.analysis import normal_facts, source_configuration_state_binding, sour
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.source_configuration_state_binding import read_configuration_state_bindings
 from scar.analysis.source_declared_graph import read_declared_graph
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table

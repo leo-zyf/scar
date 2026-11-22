@@ -6,7 +6,7 @@ import sys
 
 from scar.analysis.call_demand import inventory_from_calls
 from scar.analysis.program_lowering import PreparedSource
-from scar.ir.program.call_demand import EnteredCallCode, SourceCallCandidate
+from scar.ir.program.call_composition import EnteredCallCode, SourceCallCandidate
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.program.expansion import ContextStoreBudget
 from scar.ir.program.inventory import BodyStatus, InventoryBudget
@@ -175,7 +175,7 @@ def test_restore_failure_keeps_indexed_child_candidate_and_other_file_body(tmp_p
 
 def test_remainder_origin_is_not_kept_when_a_pending_body_gets_a_call_source(tmp_path):
     from scar.analysis.call_demand_schedule import CallDemandQueue
-    from scar.ir.program.call_demand import Remainder
+    from scar.ir.program.call_composition import Remainder
     from scar.ir.program.inventory import DefinitionKind, DefinitionInventory
     from scar.ir.semantics_v2 import SourceSnapshot
     from scar.ir.v2.common import SourceReference

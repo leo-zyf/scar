@@ -9,7 +9,7 @@ import pytest
 
 from scar.analysis.call_seeds import read_call_source_seeds
 from scar.analysis.program_inventory import ProgramInventory, inventory_program
-from scar.ir.program.call_demand import CallSourceAdmissionStatus, EnteredCallCode
+from scar.ir.program.call_composition import CallSourceAdmissionStatus, EnteredCallCode
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.program.expansion import ContextStoreBudget
 from scar.trace.call_edges import CallEdgeRecorder

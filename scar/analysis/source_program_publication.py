@@ -21,7 +21,7 @@ from scar.analysis.program_lowering import SourceProgram, _symbol_tables
 from scar.analysis.source_language import SourceCodeEvidence, SourceLanguageOptions
 from scar.analysis.structured_lowering import require_valid_structured_body
 from scar.ir.program.call_edges import CapturedCode, CodeCapture, CodeSourceLink
-from scar.ir.program.call_demand import CallSourceScope
+from scar.ir.program.call_composition import CallSourceScope
 from scar.ir.program.inventory import BodyInventory, BodyStatus, DefinitionInventory
 from scar.ir.program.functions import BodyEntryInterface, BodyLoweringProfile, FunctionSignature
 from scar.ir.program.codec import dumps as dump_graph
@@ -504,7 +504,7 @@ def _entry_program(catalog, request, max_operations, max_record_bytes, *, public
 
 def _entry_admissions(catalog, entry, body):
     from scar.analysis.call_demand import derive_entry_source_admission
-    from scar.ir.program.call_demand import EnteredCallCode
+    from scar.ir.program.call_composition import EnteredCallCode
     return [encode(derive_entry_source_admission(EnteredCallCode(row["process_id"], row["code"]),
         entry.source_link, catalog=catalog, entry=entry, body=body))
         for row in catalog.metadata()["groups"] if row.get("entry_key") == entry.key]

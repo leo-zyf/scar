@@ -109,7 +109,7 @@ def _owned_v2(profile,launch,coords):
           and native.get('status') in ('CLOSED','NOT_COLLECTED') and native.get('failures')==[],
           'owned native manifest exact bytes/close differ')
     declaration=native.get('configuration',{}).get('os_capture_intent',{})
-    from scar.trace.capture_coordinates import collector_namespace
+    from scar.trace.control_transfers import collector_namespace
     _,native_nonce,collected=collector_namespace(native)
     if not collected:
         _need(coords.get('native_execution_evidence')=='NOT_COLLECTED',

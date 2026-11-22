@@ -12,7 +12,7 @@ from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_control import _control_states
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_state import SourceStateProvider
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P

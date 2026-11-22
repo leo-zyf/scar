@@ -17,7 +17,7 @@ from pathlib import Path
 from threading import get_ident
 
 from scar.analysis.source_call_view import Flow, source_call_site
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.ir.program.dependencies import context_push, DependencyKind
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode

@@ -10,7 +10,7 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.source_content_interfaces import ContentInterfaceIndex
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.ir.program import normal_graph as F, normal_graph as T, normal_graph as G, source_productions as P
 from scar.ir.program import data_materials as C, ordered_regions as R
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference

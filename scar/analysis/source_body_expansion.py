@@ -12,7 +12,7 @@ import time
 
 from scar.analysis.source_value_interface_graph import ValueInterfaceParents, read_value_interface_graph
 from scar.analysis.source_graph_material import source_graph_material
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow, data_reach, _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.normal_output import write_table

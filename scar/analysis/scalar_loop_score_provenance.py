@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scar.analysis import scalar_score_reuse_evidence as observed, scalar_table_handoff
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.compiler.scalar_table_region import _definition
 from scar.ir.execution_recipe import read_artifact

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from scar.analysis.source_contexts import read_source_contexts, SourceContextView, _catalog as _context_catalog
-from scar.analysis.source_roles import _catalog as _role_catalog
+from scar.analysis.source_role_materials import _catalog as _role_catalog
 from scar.analysis.source_symbols import read_source_symbols
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
@@ -119,7 +119,7 @@ def _projection_children(blocks):
 def _block_metadata(blocks, syntax, contexts, role_view=None):
     """Predict native metadata from original source anchors, never native rows."""
     if role_view is None:
-        from scar.analysis.source_roles import SyntaxRoleView
+        from scar.analysis.source_role_materials import SyntaxRoleView
         role_view = SyntaxRoleView(syntax)
     attributes = {row.name: { _role_catalog().rules[i].name: _role_catalog().rules[i].ordinal
         for i in row.attributes} for row in _role_catalog().constructors}
@@ -582,7 +582,7 @@ def read_compiler_topology(document, f0, f1, f2, f3b, c1, f3a) -> CompilerTopolo
     material = decode(CompilerTopologyMaterial, document)
     # Check the current implementation before any compiler call. The original
     # native profile is itself validated by the one fresh F3-A read below.
-    from scar.ir.program.source_symbols import SourceSymbolsMaterial
+    from scar.ir.program.source_paths import SourceSymbolsMaterial
     recorded_native = decode(SourceSymbolsMaterial, f3a)
     if material.profile != _profile(recorded_native):
         raise ValueError('C3-T compiler topology implementation/catalog profile mismatch')

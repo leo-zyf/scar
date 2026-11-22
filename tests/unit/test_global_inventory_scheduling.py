@@ -11,9 +11,7 @@ import json
 
 import pytest
 
-from scar.analysis.program_inventory import (
-    ProgramInventory, _inventory_from_inputs, inventory_program,
-)
+from scar.analysis.program_inventory import ProgramInventory, _inventory_from_inputs, inventory_program
 from scar.analysis.runtime_sources import read_runtime_trace
 from scar.ir.ids import CodeID
 from scar.ir.program.expansion import BodyDemandKind, ContextStoreBudget

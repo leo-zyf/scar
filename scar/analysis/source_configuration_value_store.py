@@ -33,7 +33,7 @@ def pins():
     directory = Path(__file__).parent
     paths = dict(producer=directory/'source_configuration_values.py', store=Path(__file__),
         query=directory/'source_configuration_value_query.py', types=Path(V.__file__), codec=Path(codec.__file__),
-        interpolation=directory/'source_interpolation_syntax.py', override_syntax=directory/'source_override_syntax.py',
+        interpolation=directory/'source_string.py', override_syntax=directory/'source_override_syntax.py',
         parent=Path(parent.__file__), composition=Path(composition.__file__), data_store=Path(data_store.__file__),
         table_writer=Path(normal_output.__file__), table_reader=Path(source_symbol_variants.__file__))
     return {name: sha256(path.read_bytes()).hexdigest() for name, path in paths.items()}

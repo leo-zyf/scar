@@ -10,7 +10,7 @@ import json
 from pathlib import Path, PurePosixPath
 
 from scar.analysis.source_bytes import decoded_source_bytes
-from scar.analysis.source_roles import SyntaxRoleView
+from scar.analysis.source_role_materials import SyntaxRoleView
 from scar.analysis.source_syntax import _profile, read_source_syntax_material
 from scar.ir.program.source_anchors import SourceAnchorInput, SourceAtomAnchor, SourceAtomAnchors
 from scar.ir.program.source_roles import SlotRef

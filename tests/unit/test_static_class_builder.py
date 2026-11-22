@@ -8,9 +8,7 @@ import pytest
 from scar.analysis.program_lowering import prepare_source_text
 from scar.analysis.source_class_body import lower_class_suite
 from scar.analysis.source_language import SourceLanguageOptions
-from scar.analysis.static_class_builder import (
-    build_class_provider, connect_class_suite, validate_class_builder_expansion,
-)
+from scar.analysis.static_class_construction import build_class_provider, connect_class_suite, validate_class_builder_expansion
 from scar.analysis.static_compilation import compile_source_unit
 from scar.analysis.static_lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
@@ -132,7 +130,7 @@ def test_class_builder_connects_prepared_mapping_current_environment_and_shared_
     # shared provider shards, not require hand-picking a particular class.
     from scar.analysis.static_program import build_static_program, refine_static_program
     from scar.analysis.static_body import expand_static_bodies
-    from scar.analysis.static_class_links import build_static_class_links, read_static_class_links
+    from scar.analysis.static_class_construction import build_static_class_links, read_static_class_links
     source_root = tmp_path / 'application'
     source_root.mkdir()
     (source_root / 'app.py').write_text(SOURCE)
@@ -210,7 +208,7 @@ def test_class_builder_connects_prepared_mapping_current_environment_and_shared_
     # Publish into the one owned model and read through its manifest registry.
     # A preexisting call index and every original graph remain unchanged.
     from scar.analysis.static_program import link_static_program, read_static_program, _artifacts
-    from scar.analysis.static_class_publication import link_static_class_program
+    from scar.analysis.static_class_construction import link_static_class_program
     from scar.analysis.static_calls import input_basis_unit
     from scar.analysis.static_jobs import read_static_link_task
     called = link_static_program(model)

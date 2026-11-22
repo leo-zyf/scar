@@ -391,7 +391,7 @@ def connect_current_capture(composition, coordinates, trace_directory, out_dir, 
     from scar.ir.program.call_operand_routes import OperandRouteBudget
     from scar.analysis.program_composition import CompositionIndex
     from scar.analysis.code_witness import CodeWitnessStore
-    from scar.trace.capture_coordinates import CaptureCoordinates
+    from scar.trace.control_transfers import CaptureCoordinates
     frame_budget = CallEdgeBudget() if frame_budget is None else frame_budget
     operand_budget = CallOperandBudget() if operand_budget is None else operand_budget
     route_budget = OperandRouteBudget() if route_budget is None else route_budget

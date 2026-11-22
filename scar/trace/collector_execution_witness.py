@@ -401,7 +401,7 @@ def collector_witness_members(path,*,expected_sha256):
 
 def bind_collector_execution_witness(path,*,expected_sha256,coordinates):
     """Explicit postcapture join; existing coordinates/Run are never rewritten."""
-    from scar.trace.capture_coordinates import CaptureCoordinates
+    from scar.trace.control_transfers import CaptureCoordinates
     from scar.ir.record_codec import decode
     from scar.ir.program.providers import ProviderArtifact
     if type(coordinates) is not CaptureCoordinates or hashlib.sha256(coordinates.payload).hexdigest()!=coordinates.artifact.sha256:

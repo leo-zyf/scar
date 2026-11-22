@@ -69,7 +69,7 @@ _SELECTORS = {
     'Compare': frozenset(('Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE', 'Is', 'IsNot', 'In', 'NotIn')),
 }
 _TARGETS = frozenset(('Name', 'Attribute', 'Subscript', 'List', 'Tuple'))
-_RULE_MODULES = ('source_display_rules.py', 'source_string_rules.py',
+_RULE_MODULES = ('source_displays.py', 'source_string.py',
                  'source_comprehension_rules.py', 'await_protocol.py', 'source_callable_rules.py',
                  'source_deferred_interfaces.py', 'source_statement_rules.py',
                  'statement_bindings.py', 'type_parameter_rules.py',
@@ -449,10 +449,10 @@ class _Builder:
         if kind in ('Name', 'Attribute', 'Subscript'):
             self.target(root, state)
         elif kind in ('List', 'Tuple', 'Set', 'Dict'):
-            from scar.analysis.source_display_rules import emit_display
+            from scar.analysis.source_displays import emit_display
             emit_display(self, root, state)
         elif kind in ('JoinedStr', 'FormattedValue', 'TemplateStr', 'Interpolation'):
-            from scar.analysis.source_string_rules import emit_string
+            from scar.analysis.source_string import emit_string
             emit_string(self, root, state)
         elif kind in _COMPREHENSIONS:
             from scar.analysis.source_comprehension_rules import emit_comprehension

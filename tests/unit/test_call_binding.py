@@ -6,7 +6,7 @@ import pytest
 
 from scar.compiler.call_binding import write_call_binding_plan,join_call_bindings
 from scar.trace.call_binding import CallBindingCollector,target_metadata
-from scar.trace.code_snapshot import code_key,site
+from scar.trace.code_snapshot import code_key, site
 from scar.trace.lean_capture import LeanCapturePlan,LeanBodyPlan
 
 

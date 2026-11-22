@@ -30,7 +30,7 @@ from scar.ir.program.source_references import SourceDefinitionReference
 from scar.ir.record_codec import decode, encode, loads as strict_loads
 from scar.ir.semantics_v2 import SourceSnapshot
 from scar.ir.v2.ids import OperationDefinitionID
-from scar.trace.capture_coordinates import CaptureCoordinates
+from scar.trace.control_transfers import CaptureCoordinates
 
 
 def _need(condition, detail):

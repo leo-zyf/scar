@@ -7,7 +7,7 @@ arguments nor a library name can establish address or content equality.
 from collections import defaultdict, deque
 from types import SimpleNamespace
 
-from scar.analysis.source_reference_slice import DECLARED, ReferenceSlicer, source_port
+from scar.analysis.source_references import DECLARED, ReferenceSlicer, source_port
 from scar.ir.program import normal_graph as F, data_materials as A
 from scar.ir.literals import PythonLiteral
 

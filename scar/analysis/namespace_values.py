@@ -1,16 +1,13 @@
 """Namespace values."""
 
-from scar.ir.program import source_productions as P, namespace_routes as N, normal_graph as F
+from scar.ir.program import source_productions as P, name_flow as N, normal_graph as F
 from scar.ir.program.structured import PythonProtocolKind as K
 from collections import defaultdict
 from dataclasses import dataclass
 from scar.ir.program.normal_graph import GlobalPort
 from scar.ir.program.source_exec_roots import ExecEndpoint
-from scar.ir.program.namespace_routes import NamespaceInterfaceRef
-from scar.ir.program.source_builtin_namespaces import (
-    GuardedBuiltinCandidate,
-    BuiltinNamespaceSelection,
-)
+from scar.ir.program.name_flow import NamespaceInterfaceRef
+from scar.ir.program.source_paths import GuardedBuiltinCandidate, BuiltinNamespaceSelection
 
 
 # Extract actual globals operands from original function-creation steps.

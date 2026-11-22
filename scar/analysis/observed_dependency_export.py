@@ -1,16 +1,17 @@
-"""Normalized observation DTOs; readback does not revalidate source or trace.
+"""Observed dependency export."""
 
-Original static points, conditions and edges use the common tables. Runtime
-CALL scopes and interface points have separate tables and never become static
-DependencyContexts or duplicated program graphs.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
 import re
-
+import json
 from scar.analysis.contextual_call_export import (
-    _MAX_BYTES, _Reader, _TABLES, _array, _object, _preflight,
+    _MAX_BYTES,
+    _Reader,
+    _TABLES,
+    _array,
+    _object,
+    _preflight,
 )
 from scar.analysis.observed_call_bindings import ObservedCallBinding
 from scar.analysis.observed_function_interfaces import ObservedFunctionInterface
@@ -20,12 +21,26 @@ from scar.ir.program.native_callables import NativeCallableMetadata, NativeCarri
 from scar.ir.program.dependencies import GraphNamespace
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.program.observed_dependencies import (
-    ObservedCallLayout, ObservedCallScope, ObservedDependencyEdge, ObservedDependencyFrontier,
-    ObservedNativeCallable, ObservedNativeCallableFrontier, ObservedPortPhase, ObservedPortPoint,
+    ObservedCallLayout,
+    ObservedCallScope,
+    ObservedDependencyEdge,
+    ObservedDependencyFrontier,
+    ObservedNativeCallable,
+    ObservedNativeCallableFrontier,
+    ObservedPortPhase,
+    ObservedPortPoint,
 )
 from scar.ir.record_codec import decode, encode, loads
+from array import array
+from collections import OrderedDict
+from hashlib import sha256
 
 
+# Normalized observation DTOs; readback does not revalidate source or trace.
+#
+# Original static points, conditions and edges use the common tables. Runtime
+# CALL scopes and interface points have separate tables and never become static
+# DependencyContexts or duplicated program graphs.
 _OBSERVED_TABLES = ('observed_scopes', 'observed_points')
 _FLAGS = {'observation_only': True, 'target_set_closed': False,
     'normal_landing_observed': False, 'whole_program_complete': False,
@@ -344,5 +359,76 @@ def read_observed_dependencies(document):
     return result
 
 
-__all__ = ['ObservedDependencySnapshot', 'export_observed_dependencies',
-           'read_observed_dependencies']
+# Index the existing canonical JSON plan arrays for repeated source lookups.
+_PREFIX = '{"records":['
+_SUFFIX = ']}\n'
+
+
+class PlanRows:
+    """A single wire document and its row offsets, with no retained JSON tree."""
+
+    def __init__(self, decoded):
+        self.text = text = decoded.decode('ascii')
+        self.decoder = json.JSONDecoder()
+        self.offsets = offsets = array('Q')
+        if not text.startswith(_PREFIX):
+            raise ValueError('expected an original canonical plan table')
+        position = len(_PREFIX)
+        if not text.startswith(_SUFFIX, position):
+            while position < len(text):
+                start = position
+                row, position = self.decoder.raw_decode(text, start)
+                if type(row) is not dict:
+                    raise ValueError('compiled plan table must contain object records')
+                offsets.append(start)
+                if position == len(text) or text[position] != ',':
+                    break
+                position += 1
+        if text[position:] != _SUFFIX:
+            raise ValueError('compiled plan table has an invalid record boundary')
+
+    @property
+    def byte_cost(self):
+        return len(self.text) + self.offsets.itemsize * len(self.offsets)
+
+    def row(self, line):
+        if type(line) is not int or not 1 <= line <= len(self.offsets):
+            raise ValueError('compiled plan ordinal is outside the original table')
+        return self.decoder.raw_decode(self.text, self.offsets[line-1])[0]
+
+
+class PlanRowCache:
+    """Bound retained wire bytes to one admitted catalog's working set."""
+
+    def __init__(self, limit=64 * 1024**2):
+        self.limit = limit
+        self.bytes = 0
+        self.tables = OrderedDict()
+
+    def load(self, key, descriptor, read):
+        table = self.tables.get(key)
+        if table is not None:
+            self.tables.move_to_end(key)
+            return table
+        decoded = read()
+        if (len(decoded) != descriptor['decoded_bytes']
+                or sha256(decoded).hexdigest() != descriptor['decoded_sha256']):
+            raise ValueError('indexed compiled plan table differs from the original receipt')
+        table = PlanRows(decoded)
+        cost = table.byte_cost
+        if cost <= self.limit:
+            while self.bytes + cost > self.limit:
+                _, removed = self.tables.popitem(last=False)
+                self.bytes -= removed.byte_cost
+            self.tables[key] = table
+            self.bytes += cost
+        return table
+
+
+__all__ = [
+    'ObservedDependencySnapshot',
+    'export_observed_dependencies',
+    'read_observed_dependencies',
+    'PlanRows',
+    'PlanRowCache',
+]

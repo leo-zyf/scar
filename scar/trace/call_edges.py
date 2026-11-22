@@ -101,7 +101,7 @@ class CallEdgeRecorder:
         self._is_capture_writer = None
         from scar.trace.deferred_jsonl import DeferredJsonl, snapshot_transport_enabled
         if snapshot_transport_enabled():
-            from scar.trace.snapshot_journal import is_journal_writer_thread
+            from scar.trace.code_snapshot import is_journal_writer_thread
             self._is_capture_writer = is_journal_writer_thread
             self._deferred = {fd: DeferredJsonl(path, max_bytes=max_bytes)
                               for fd, path in ((self.events_fd, self.event_path),

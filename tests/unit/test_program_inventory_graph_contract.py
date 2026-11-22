@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scar.analysis import program_inventory_admission as admission
+from scar.analysis import program_inventory as admission
 from scar.analysis import program_state_coverage as coverage
 
 

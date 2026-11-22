@@ -18,7 +18,7 @@ from scar.ir.program.source_contexts import SourceContextsMaterial
 from scar.ir.program.source_declarations import SourceDeclarationsMaterial
 from scar.ir.program.source_bindings import SourceBindingsMaterial
 from scar.ir.program.compiler_symbols import CompilerTopologyMaterial
-from scar.ir.program.source_symbols import SourceSymbolsMaterial
+from scar.ir.program.source_paths import SourceSymbolsMaterial
 
 
 # Compiler construction paths; source scopes and runtime values stay distinct.

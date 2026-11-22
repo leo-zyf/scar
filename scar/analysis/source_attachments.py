@@ -28,7 +28,7 @@ from scar.analysis.call_trace_reader import CallTraceScan
 from scar.analysis.source_layers import load_source_graph_artifact
 from scar.ir.program.call_edges import CodeSourceLink, CapturedCode
 from scar.ir.program.call_seeds import EnteredCodeGroup
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.program.inventory import SourceContextDigest
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.source_references import SourceArtifactLocator, SourceDefinitionReference

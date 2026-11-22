@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_name_access_anchors import _bindings, anchor_name_accesses
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_productions as P, name_flow as D

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_control import loop_dependencies
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_productions as P

@@ -5,7 +5,7 @@ import pytest
 from scar.ir.execution.common import MissingEvidence, Unresolved
 from scar.ir.execution.coordinates import BlockVisitID, OperationOccurrenceID, RegionActivationID
 from scar.ir.execution.model import TABLE_TYPES
-from scar.ir.execution.resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.program.providers import ProviderFactReference
 from tests.fixtures.execution_validity_records import validity_record_model
 

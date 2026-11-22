@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.normal_output import write_table
@@ -167,10 +167,10 @@ def _totals(shards):
 
 
 def _pins():
-    from scar.analysis import source_namespace_interfaces as source_namespace_references, source_reference_slice, source_class_base_graph
+    from scar.analysis import source_namespace_interfaces as source_namespace_references, source_references as source_reference_slice, source_class_base_graph
     from scar.analysis import source_context_query, source_context_fact_store, normal_facts, normal_output
     from scar.analysis import source_symbol_variants
-    from scar.ir.program import namespace_routes as N, normal_graph as T, normal_graph as G
+    from scar.ir.program import name_flow as N, normal_graph as T, normal_graph as G
     from scar.ir import record_codec
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{
         name: sha256(Path(module.__file__).read_bytes()).hexdigest() for name, module in (

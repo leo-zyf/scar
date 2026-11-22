@@ -146,7 +146,7 @@ def read_native_tensor_inputs(path, *, expected_sha256, max_bytes=512000000, max
     _need(_integer(max_bytes, 1) and _integer(max_rows, 1) and (on_row is None or callable(on_row)), "invalid reader bounds")
     path = Path(path).absolute()
     if _retained_files is not None:
-        from scar.trace.capture_coordinates import _Files
+        from scar.trace.control_transfers import _Files
         _need(type(_retained_files) is _Files, "exact retained file resolver required")
 
     def locate(logical, schema):
@@ -317,7 +317,7 @@ class NativeInputPayloadBudget:
 
 
 def _association_members(coordinates):
-    from scar.trace.capture_coordinates import CaptureCoordinates
+    from scar.trace.control_transfers import CaptureCoordinates
     from scar.ir.record_codec import decode
     from scar.ir.program.providers import ProviderArtifact
     _need(type(coordinates) is CaptureCoordinates
@@ -508,7 +508,7 @@ def prepare_native_input_metadata(coordinates, *, budget):
     from collections import defaultdict
     from scar.ir.record_codec import encode
     from scar.ir.execution.native_port_protocol import attributes, flat_native
-    from scar.trace.capture_coordinates import _Files
+    from scar.trace.control_transfers import _Files
     _need(type(budget) is NativeInputPayloadBudget, 'exact shared payload budget required')
     members = _association_members(coordinates)
     root = Path(coordinates.report['local_root'])

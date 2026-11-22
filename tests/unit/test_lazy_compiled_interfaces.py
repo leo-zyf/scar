@@ -8,7 +8,7 @@ import shutil
 import pytest
 
 from scar.analysis.lazy_compiled_interfaces import LazyCompiledInterfaces
-from scar.analysis.observed_compiled_material import ObservedCompiledLocalMaterial
+from scar.analysis.observed_code_correspondence import ObservedCompiledLocalMaterial
 
 
 @pytest.fixture(scope='module')

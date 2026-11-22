@@ -15,7 +15,7 @@ import sys
 
 from scar.analysis.source_world_flow import project_world_flow
 from scar.analysis.source_relation_snapshot import RelationSnapshot
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_world_return_parents import CertifiedWorldParents
 from scar.analysis.normal_output import write_table

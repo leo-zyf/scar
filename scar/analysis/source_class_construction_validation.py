@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import replace
 
 from scar.analysis.static_compilation import StaticCodeEvidence
-from scar.analysis.source_mapping_function_validation import _next_stage, _world_after
+from scar.analysis.source_mapping_functions import _next_stage, _world_after
 from scar.ir.program.bindings import BindingState
 from scar.ir.program.class_construction import ClassConstruction, CLASS_CONSTRUCTION_PROTOCOLS
 from scar.ir.program.environments import EnvironmentRole

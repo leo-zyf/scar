@@ -639,7 +639,7 @@ def import_os_resources(directory, *, scope, run=None, root_tid=None, coordinate
     if run is not None and type(run) is not RunID:
         raise TypeError("run must be an exact RunID or None")
     if coordinates is not None:
-        from scar.trace.capture_coordinates import CaptureCoordinates
+        from scar.trace.control_transfers import CaptureCoordinates
         if type(coordinates) is not CaptureCoordinates:
             raise TypeError("OS coordinates must be a bound CaptureCoordinates")
         if run is not None and run != coordinates.run.id:

@@ -189,7 +189,8 @@ def link_static_program(directory, *, budget=None, progress=None):
             name: hashlib.sha256((analysis / name).read_bytes()).hexdigest()
             for name in ("static_calls.py", "static_namespace.py", "static_function_environment.py",
                          "static_interprocedural.py", "static_crossbody_namespace.py",
-                         "static_nested_creation.py", "static_function_creation.py", "static_value_flows.py", "static_module_attributes.py", "static_import_from.py", "static_fields.py",
+                         "static_nested_creation.py", "static_function_creation.py", "static_value_flows.py",
+                         "static_module_attributes.py", "static_imports.py", "static_fields.py",
                          "static_module_state.py",
                          "function_binding.py", "function_interfaces.py", "source_layers.py")}}
     producer = call_producer()
@@ -745,7 +746,7 @@ def main(argv=None):
                               "last": unit.get("path")}), file=sys.stderr, flush=True)
 
     if args.link_classes:
-        from scar.analysis.static_class_publication import link_static_class_program
+        from scar.analysis.static_class_construction import link_static_class_program
         from scar.analysis.static_calls import StaticCallBudget
         existing = read_static_program(args.out, verify=False)
         if Path(existing["project_root"]).resolve() != Path(args.source).resolve():
@@ -753,7 +754,7 @@ def main(argv=None):
         budget = StaticCallBudget(**link_limits, **({} if args.max_class_bodies is None else {'max_bodies': args.max_class_bodies}))
         result = link_static_class_program(args.out, budget=budget)
     elif args.expand_dependencies:
-        from scar.analysis.static_dependency_publication import expand_static_dependency_program
+        from scar.analysis.static_dependencies import expand_static_dependency_program
         existing = read_static_program(args.out, verify=False)
         if Path(existing["project_root"]).resolve() != Path(args.source).resolve():
             raise ValueError("dependency expansion source root differs from the current model")

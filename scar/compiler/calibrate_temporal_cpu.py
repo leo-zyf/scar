@@ -397,7 +397,7 @@ def calibrate_composite_temporal_boundary(guard_profile,out,*,repetitions=9,warm
         raise ValueError('at least three repetitions and one warmup required')
     if sys.gettrace() is not None or sys.getprofile() is not None:raise ValueError('untraced calibration required')
     from scar.runtime import native_temporal_invariant,loop_guard
-    from scar.trace import code_snapshot
+    from scar.trace import code_snapshot as code_snapshot
     helpers=[_receipt(module.__file__) for module in (native_temporal_invariant,loop_guard,code_snapshot)]
     caller=sorted(os.sched_getaffinity(0));environment=thread_environment()
     out.mkdir(parents=True)

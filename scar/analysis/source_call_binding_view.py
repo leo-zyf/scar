@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.program_view import _digest
 from scar.analysis.source_call_view import source_call_site,prepare_source_ports
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import read_call_binding_plan,plan_call_bindings,join_call_bindings,plan_digest
 from scar.ir.program import view as V
 from scar.ir.program.call_edges import CapturedSite,CapturedCode

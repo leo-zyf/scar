@@ -16,9 +16,9 @@ from scar.optimization.aten_native_schedule import (
     _live_inputs,
     recorded_cpu_domain,
 )
-from scar.optimization.aten_post_join_evidence import read_aten_post_join_evidence
+from scar.optimization.aten_team import read_aten_post_join_evidence
 from scar.optimization.aten_live_values import _bounded_sum, tensor_footprint, tensor_releases
-from scar.optimization.aten_team_group_evidence import read_aten_team_group_evidence
+from scar.optimization.aten_team import read_aten_team_group_evidence
 from scar.optimization.aten_team_numa_locality import model_aten_team_numa_locality
 
 

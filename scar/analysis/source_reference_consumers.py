@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 from scar.analysis.source_consumer_parents import ConsumerParents
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_address_paths import AddressResolver
 from scar.analysis.source_world_material import WorldMaterial
 from scar.analysis.source_world_flow import project_world_flow

@@ -2,7 +2,7 @@
 from collections import deque
 from types import SimpleNamespace
 
-from scar.analysis.source_reference_slice import source_port as _gp
+from scar.analysis.source_references import source_port as _gp
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.ir.program import normal_graph as F, normal_graph as T
 from scar.ir.program import source_value_routes as R

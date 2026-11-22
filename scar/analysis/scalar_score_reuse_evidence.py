@@ -10,7 +10,7 @@ from pathlib import Path
 from scar.analysis.source_declared_calls import _owners
 from scar.analysis import scalar_table_handoff, scalar_transition_evidence
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode

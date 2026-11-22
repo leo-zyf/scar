@@ -1,29 +1,27 @@
-"""Automatic source scope -> interfaces/coverage -> bounded core body graphs.
+"""Program inventory."""
 
-The inventory describes source candidates. It never executes the target, proves
-an import result or accepts an optimization. Old source layers are prepared once
-per file; their digests bind the compact report without repeating those layers
-for every body.
-"""
 from __future__ import annotations
 
 import ast
-from collections import Counter, defaultdict, deque
-from dataclasses import dataclass, field, replace
 import hashlib
 import json
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
-
 from scar.analysis.program_lowering import prepare_source
 from scar.analysis.source_discovery import discover_sources, _discover_sources_from_entries
 from scar.analysis.runtime_inventory import (
-    RuntimeScope, RuntimeScopeBuilder, available_paths, check_compile_limit, check_runtime_ceiling,
+    RuntimeScope,
+    RuntimeScopeBuilder,
+    available_paths,
+    check_compile_limit,
+    check_runtime_ceiling,
 )
 from scar.analysis.runtime_sources import read_runtime_trace, resolve_runtime_seeds
 from scar.ir.program.runtime_sources import RuntimeTraceBudget
 from scar.ir.program.expansion import ContextStoreBudget, ExpansionMeasurements, ExpansionSchedule
-from scar.ir.program.call_demand import ExpansionScheduleV6, CallSourceScope
+from scar.ir.program.call_composition import ExpansionScheduleV6, CallSourceScope
 from scar.ir.program.call_edges import CallEdgeBudget
 from scar.ir.program.functions import BodyLoweringProfile, FunctionInterfaces
 from scar.ir.program.frames import FrameModel
@@ -33,16 +31,41 @@ from scar.ir.program.codec import dumps as dump_graph
 from scar.ir.program.model import LiteralOrigin
 from scar.ir.program.discovery import DiscoveryRootMode, SourceDiscovery
 from scar.ir.program.inventory import (
-    BodyInventory, BodyStatus, CallCandidateWitness, CallInventory, CandidateCondition,
-    CoverageEntry, CoverageStatus,
-    DefinitionInput, DefinitionInputRole, DefinitionInventory, DefinitionKind,
-    ExecutionPhase, FileInventory, ImplicitInvocation, InventoryBudget,
-    ImportBindingWitness, InventoryIssue, ParameterInventory, ParameterKind, SourceContextDigest,
+    BodyInventory,
+    BodyStatus,
+    CallCandidateWitness,
+    CallInventory,
+    CandidateCondition,
+    CoverageEntry,
+    CoverageStatus,
+    DefinitionInput,
+    DefinitionInputRole,
+    DefinitionInventory,
+    DefinitionKind,
+    ExecutionPhase,
+    FileInventory,
+    ImplicitInvocation,
+    InventoryBudget,
+    ImportBindingWitness,
+    InventoryIssue,
+    ParameterInventory,
+    ParameterKind,
+    SourceContextDigest,
 )
 from scar.ir.record_codec import decode, encode
 from scar.ir.semantics_v2 import SourceSnapshot
 from scar.ir.v2.ids import OperationDefinitionID
+from scar.analysis.program_state_coverage import _pins, _inventory_index, _graph_contract
+from scar.analysis.source_declared_catalog import read_source_catalog
+from scar.analysis.source_value_flow import _artifact
 
+
+# Automatic source scope -> interfaces/coverage -> bounded core body graphs.
+#
+# The inventory describes source candidates. It never executes the target, proves
+# an import result or accepts an optimization. Old source layers are prepared once
+# per file; their digests bind the compact report without repeating those layers
+# for every body.
 if TYPE_CHECKING:
     from scar.analysis.call_seeds import CallSourceSeedReport
 
@@ -980,4 +1003,45 @@ class _CallLinker:
         return tuple(result)
 
 
-__all__ = ["ProgramInventory", "inventory_program"]
+# Admit static graph inventories under the dependencies they actually used.
+#
+# The static inventory explicitly does not run reaching-definition fixed
+# points. Its receipts, producer, graph/state types and all used rules remain
+# exact; changing only that unused solver cannot invalidate its empty tracks.
+# Stored bytes and historical pins are never modified.
+def compatible_static_pins(plan):
+    if plan.get('local_graph_shards') and plan.get('graph_contract')!=_graph_contract():return False
+    expected=_pins();actual=plan['pins']
+    if actual==expected:return True
+    if plan.get('binding_fixed_points_run')is not False:return False
+    a=dict(actual,state=dict(actual.get('state',{})));b=dict(expected,state=dict(expected['state']))
+    a['state'].pop('definitions',None);b['state'].pop('definitions',None)
+    return a==b
+
+
+def admit_static_inventory(path,*,catalog=None):
+    path=Path(path).resolve();raw=(path/'index.json').read_bytes();index=json.loads(raw)
+    if index!=_inventory_index(path):raise ValueError('stored inventory differs from complete original shards')
+    report=json.loads((path/'result.json').read_bytes());plan=report['plan']
+    if not compatible_static_pins(plan):raise ValueError('used static inventory rules differ')
+    ignored=plan['pins']!=_pins()
+    if ignored and (any(report['counts'].get(k,0)!=0 for k in ('tracks','versions','read_selections'))
+            or report['binding_fixed_points_complete']is not False):
+        raise ValueError('inventory contains solver results but its solver changed')
+    source=read_source_catalog(catalog if catalog is not None else plan['catalog'])
+    if (str(source.path)!=plan['catalog']
+            or encode(_artifact(source.path/'result.json',source.report['schema']))!=plan['parent']
+            or plan['scope']=='CATALOG' and set(plan['selected_units'])!=set(source.fact_store.rows)):
+        raise ValueError('static inventory source unit denominator differs')
+    if raw!=(path/'index.json').read_bytes():raise ValueError('static inventory changed during admission')
+    return dict(index,admission=dict(profile='STATIC_GRAPH_AND_STATE_WITHOUT_BINDING_FIXED_POINTS',
+        unused_definition_solver_pin_ignored=ignored,stored_receipts_rewritten=False,
+        graph_wire_contract_checked=bool(plan.get('local_graph_shards'))))
+
+
+__all__ = [
+    'ProgramInventory',
+    'inventory_program',
+    'compatible_static_pins',
+    'admit_static_inventory',
+]

@@ -707,7 +707,7 @@ def validate(graph: ProgramGraph, *, _cleanup_facts=None, _resumption_facts=None
                 graph, operation_blocks=operation_block, incoming_edges=incoming_edges):
             error(code, path, message)
     if not issues:
-        from .session_release_validation import session_release_errors
+        from scar.ir.program.session_flow import session_release_errors
         for code, path, message in session_release_errors(
                 graph, operation_blocks=operation_block, region_domains=region_domains):
             error(code, path, message)

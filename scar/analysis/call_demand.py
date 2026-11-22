@@ -14,7 +14,7 @@ from pathlib import Path
 
 from scar.analysis.program_context_store import PreparedContextStore, ContextStoreLimit
 from scar.analysis.program_lowering import prepare_source
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.program.functions import BodyLoweringProfile
 
 
@@ -218,9 +218,7 @@ def derive_call_source_admission(origin, code_source_link, *, source_snapshot,
     body pipeline, not a caller success flag or standalone region claim.
     This correspondence does not prove effects or any current invocation.
     """
-    from scar.ir.program.call_demand import (
-        CallSourceAdmission, CallSourceAdmissionStatus as Status, EnteredCallCode,
-    )
+    from scar.ir.program.call_composition import CallSourceAdmission, CallSourceAdmissionStatus as Status, EnteredCallCode
     from scar.ir.program.call_edges import CodeSourceLink, CallLinkStatus
     from scar.ir.program.inventory import BodyInventory, BodyStatus, DefinitionInventory
     from scar.ir.semantics_v2 import SourceSnapshot
@@ -266,7 +264,7 @@ def derive_entry_source_admission(origin, code_source_link, *, catalog, entry, b
     independently by the invocation binder; no callable/environment is inferred.
     """
     from scar.analysis.source_entry_catalog import SourceEntryCatalog, ResolvedSourceEntry
-    from scar.ir.program.call_demand import EnteredCallCode, CallSourceAdmission, CallSourceAdmissionStatus
+    from scar.ir.program.call_composition import EnteredCallCode, CallSourceAdmission, CallSourceAdmissionStatus
     from scar.ir.program.call_edges import CodeSourceLink, CallLinkStatus
     from scar.ir.program.inventory import BodyInventory, BodyStatus
     if (type(catalog) is not SourceEntryCatalog or type(entry) is not ResolvedSourceEntry
@@ -295,7 +293,7 @@ def derive_entry_source_admission(origin, code_source_link, *, catalog, entry, b
 
 def _call_source_scope(report, files):
     """Link only final bodies, after every preparation/interface failure."""
-    from scar.ir.program.call_demand import CallSourceScope, EnteredCallCode
+    from scar.ir.program.call_composition import CallSourceScope, EnteredCallCode
     by_path = {file.snapshot.path: file for file in files}
     links = {link.code: link for link in report.eligible_code_links()}
     admissions = []
@@ -314,7 +312,7 @@ def _call_source_scope(report, files):
 def replay_inventory_from_calls(document, *, discovery, roots, budget, context_ceiling, call_ceiling):
     from scar.analysis.call_seeds import CallSourceSeedReport
     from scar.analysis.program_inventory import _check_context_budget
-    from scar.ir.program.call_demand import CallSourceScope, ExpansionScheduleV6
+    from scar.ir.program.call_composition import CallSourceScope, ExpansionScheduleV6
     from scar.ir.program.frames import FrameModel
     from scar.ir.program.functions import BodyLoweringProfile, FunctionInterfaces
     from scar.ir.record_codec import decode

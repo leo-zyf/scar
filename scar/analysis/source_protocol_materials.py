@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scar.analysis.source_context_query import ContextTargetGraph
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_constructor_interfaces import _site, _stage, _source_entry, _SOURCE, _PENDING
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_world_returns import _table_ref

@@ -1,7 +1,7 @@
 """Typed execution occurrences and resource associations over canonical program IR."""
 
 from .calls import CallActivation
-from .resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from .composition import CompositionScope
 from .ids import CallActivationID
 from .production import (

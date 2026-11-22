@@ -1,20 +1,20 @@
-"""Conditional source-factory origins of existing function-entry references.
+"""Function origins."""
 
-These records describe no CALL or invocation.  A factory site can create many
-objects; selecting one source occurrence remains a condition, and neither the
-set of entry origins nor the contents of a captured namespace is closed.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from scar.ir.program.environments import EnvironmentMember, EnvironmentRole
+from scar.ir.program.ids import EnvironmentInterfaceID, UseID, ValueID
+from scar.ir.program.source_call_bindings import SourceBodyNamespace
+from scar.ir.program.static_calls import StaticFunctionCreationRoute
 
-from .environments import EnvironmentMember, EnvironmentRole
-from .ids import EnvironmentInterfaceID, UseID, ValueID
-from .source_call_bindings import SourceBodyNamespace
-from .static_calls import StaticFunctionCreationRoute
 
-
+# Conditional source-factory origins of existing function-entry references.
+#
+# These records describe no CALL or invocation.  A factory site can create many
+# objects; selecting one source occurrence remains a condition, and neither the
+# set of entry origins nor the contents of a captured namespace is closed.
 class FactoryEntryOriginCondition(str, Enum):
     ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE = "ENTRY_CALLABLE_FROM_THIS_FACTORY_OCCURRENCE"
     FACTORY_COMPLETED_NORMALLY = "FACTORY_COMPLETED_NORMALLY"
@@ -55,4 +55,14 @@ class StaticFactoryEntryOrigin:
             raise ValueError("factory entry origin must retain every explicit source/selection condition")
 
 
-__all__ = ["FactoryEntryOriginCondition", "StaticFactoryEntryOrigin"]
+# Source-reproduction policies; these are not effect or execution proofs.
+class CallCompilationProfile(str, Enum):
+    LEGACY_ZERO_FLAGS = "LEGACY_ZERO_FLAGS"
+    RECORDED_FUTURE_FLAGS = "RECORDED_FUTURE_FLAGS_V1"
+
+
+__all__ = [
+    'FactoryEntryOriginCondition',
+    'StaticFactoryEntryOrigin',
+    'CallCompilationProfile',
+]

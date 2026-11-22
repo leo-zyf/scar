@@ -17,7 +17,7 @@ from scar.analysis import source_compiled_values as compiled, source_execution, 
 from scar.analysis import source_compilation_contexts, source_context_variants, source_f4_variants
 from scar.analysis.call_compilation import supported_future_flag_mask
 from scar.analysis.source_context_query import ContextTargetGraph
-from scar.analysis.source_reference_slice import ReferenceSlicer
+from scar.analysis.source_references import ReferenceSlicer
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_syntax import _digest
 from scar.analysis.static_query import _Fragments

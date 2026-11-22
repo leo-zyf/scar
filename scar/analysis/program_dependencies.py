@@ -536,7 +536,7 @@ class LocalDependencyProvider:
             if use.definition is not None:edge(use.definition, use.requirement, K.RESOURCE)
             if use.handle is not None:edge(use.handle, use.requirement, K.RESOURCE)
         for location in graph.resource_locations:edge(location.resource, location.location, K.RESOURCE)
-        from scar.analysis.program_native_dependencies import native_declaration_relations
+        from scar.analysis.program_call_dependencies import native_declaration_relations
         native_edges, native_frontiers = native_declaration_relations(namespace, index)
         for item in native_edges:
             before[item.target.node].append(item); after[item.source.node].append(item)

@@ -16,7 +16,7 @@ import time
 from scar.analysis.source_declared_calls import DeclaredCallStore
 from scar.analysis.source_native_binding_materials import read_binding_materials
 from scar.analysis.python_bindings import _symbols
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_symbol_variants import _table

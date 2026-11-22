@@ -24,7 +24,7 @@ from .lifecycle import (
     SessionUpdate, TerminalFrameRelease,
 )
 from .lifecycle_flow import TerminalPointFacts
-from .session_flow import SessionPointFacts
+from scar.ir.program.session_flow import SessionPointFacts
 from .protocols import NoEntryOutcome, ProtocolOperation
 from .protocol_flow import ProtocolPort
 from .structured import ControlEdgeReference

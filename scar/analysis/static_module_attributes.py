@@ -229,7 +229,7 @@ class ModuleAttributeDependencies:
         protocols=protocol_kinds(body.document)
         imports=[];normal_producers={}
         blocks={block.id:block for region in body.graph.regions for block in region.blocks}
-        from scar.analysis.static_import_from import derive_import_from_interfaces
+        from scar.analysis.static_imports import derive_import_from_interfaces
         from_requests,from_reads,from_frontiers=derive_import_from_interfaces(body,text=text,semantic=semantic,
             module=module,metadata=metadata,links=links,protocols=protocols,blocks=blocks)
         for frontier in from_frontiers:

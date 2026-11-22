@@ -7,9 +7,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from scar.analysis.source_roles import (
-    SyntaxRoleView, read_source_roles, _catalog as _role_catalog, _state,
-)
+from scar.analysis.source_role_materials import SyntaxRoleView, read_source_roles, _catalog as _role_catalog, _state
 from scar.ir.program.source_roles import SourceRolesMaterial, RolePort, SlotRef
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_contexts import (

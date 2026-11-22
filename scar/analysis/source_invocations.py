@@ -24,7 +24,7 @@ from scar.analysis.program_composition import CompositionIndex, ElementReference
 from scar.ir.execution.common import EvidencePoint
 from scar.ir.execution.coordinates import RegionActivation
 from scar.ir.execution.ids import RegionActivationID
-from scar.ir.program.call_demand import CallSourceAdmissionStatus, CallSourceScope
+from scar.ir.program.call_composition import CallSourceAdmissionStatus, CallSourceScope
 from scar.ir.program.call_edges import (
     CallEdgeBudget, CallLinkStatus, CallRecordAnchor, CapturedSite, FrameCompletion,
     FrameEntry, FrameExit, InvocationKey,
@@ -37,7 +37,7 @@ from scar.ir.v2.ids import OperationDefinitionID
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.record_codec import decode, encode
 from scar.ir.semantics_v2 import SourceSnapshot
-from scar.trace.capture_coordinates import CaptureCoordinates
+from scar.trace.control_transfers import CaptureCoordinates
 
 
 _PATTERN = re.compile(r"call-(codes|events|meta)\.([1-9][0-9]*)\.(jsonl|json)(?:\.gz)?$")

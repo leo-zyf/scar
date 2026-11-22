@@ -13,8 +13,7 @@ from .protocols import (AdmissionPredicate, BodyStateCondition, BodyStatePredica
                         DriverSubject, HostTerminal, OwnedUse, ProtocolProfile, ReferenceIsNoneCondition,
                         RequestProcessing, RequestProcessingRule)
 from .request_inputs import _none_content
-from .session_occupancy import (_aggregate, _answer, _declarations, _prepare,
-                                _read_branch_support)
+from scar.ir.program.session_flow import _aggregate, _answer, _declarations, _prepare, _read_branch_support
 from .structured import ControlEdgeReference
 
 

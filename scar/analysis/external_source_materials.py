@@ -17,7 +17,7 @@ import time
 from types import CodeType
 
 from scar.analysis.compiled_local_interfaces import build_material_interfaces, CompiledLocalInterfaces
-from scar.analysis.observed_compiled_material import build_local_material, ObservedCompiledLocalMaterial
+from scar.analysis.observed_code_correspondence import build_local_material, ObservedCompiledLocalMaterial
 from scar.analysis.observed_external_sources import ExternalSourceMatches
 from scar.analysis.source_interface_store import file_receipt, projection_pins
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
@@ -35,7 +35,7 @@ _MATCHES = _WORKER = _PINS = None
 
 
 def _pins():
-    from scar.analysis import observed_compiled_material, compiled_local_interfaces, observed_external_sources
+    from scar.analysis import observed_code_correspondence as observed_compiled_material, compiled_local_interfaces, observed_external_sources
     from scar.analysis.source_f4_variants import pins
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), f4=pins(),
         interface_projection=projection_pins(), dependencies={name:sha256(Path(module.__file__).read_bytes()).hexdigest()

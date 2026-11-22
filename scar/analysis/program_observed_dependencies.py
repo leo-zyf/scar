@@ -657,7 +657,7 @@ def main(argv=None):
     expansion = None
     if args.expand_missing:
         from dataclasses import replace
-        from scar.analysis.observed_body_demands import expand_observed_bodies
+        from scar.analysis.observed_source_demands import expand_observed_bodies
         from scar.analysis.static_calls import StaticCallBudget
         expansion = expand_observed_bodies(args.model, args.trace, out / 'expansion',
             replace(StaticCallBudget(), max_seconds=args.max_seconds),

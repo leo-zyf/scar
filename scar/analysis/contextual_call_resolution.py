@@ -41,7 +41,7 @@ class ContextualCallResolver:
     def __init__(self, owner):
         from scar.analysis.static_call_dependency_view import StaticCallDependencyView
         from scar.analysis.static_module_attributes import ModuleAttributeDependencies
-        from scar.analysis.program_module_reference_dependencies import ModuleReferenceDependencyProvider
+        from scar.analysis.program_class_dependencies import ModuleReferenceDependencyProvider
         self.owner = owner
         self.session = StaticCallDependencyView(owner)
         self._active = set()

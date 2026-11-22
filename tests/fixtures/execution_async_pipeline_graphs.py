@@ -28,7 +28,7 @@ from scar.ir.execution.ids import (
     RunID,
 )
 from scar.ir.execution.model import ExecutionModel
-from scar.ir.execution.resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.ids import BlockID, OperationID
 from scar.ir.program.model import ExitKind, TerminatorKind

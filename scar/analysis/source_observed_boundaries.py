@@ -15,8 +15,8 @@ from types import SimpleNamespace
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_call_view import source_call_site, source_active_scope, prepare_source_ports
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_roles import SyntaxRoleView
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_role_materials import SyntaxRoleView
+from scar.analysis.source_references import source_port
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.observed_boundaries import CONTINUATION_CONDITIONS, normal_continuation
 from scar.analysis.source_request_callback_abi import request_callback_abi

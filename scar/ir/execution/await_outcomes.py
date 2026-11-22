@@ -105,7 +105,7 @@ def locate(ctx, anchor, site, shared, *, entry=False):
 def pair(ctx, source, target, shared):
     """A common *original copy ancestor*, separately from denotation checks."""
     from .await_links import _flags
-    from .resumable_identity import compatible
+    from scar.ir.execution.resumable_identity import compatible
     from .pending_payloads import copy_recipe
     gaps, support, match, comparison = [], [], None, None
     present = all(value is not None and type(value) is not Unresolved for value in (source, target))

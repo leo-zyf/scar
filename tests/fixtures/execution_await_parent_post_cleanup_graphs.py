@@ -5,7 +5,7 @@ from scar.ir.execution.calls import CallActivation
 from scar.ir.execution.common import Unresolved
 from scar.ir.execution.coordinates import ControlTransfer, InitialEntry, ResumeIngress
 from scar.ir.execution.ids import CallActivationID, RegionActivationID
-from scar.ir.execution.resumables import BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyDriveExecution
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.model import ExitKind
 from tests.fixtures.execution_async_pipeline_graphs import _body_path

@@ -26,7 +26,7 @@ from .validity import (
     ContributionSupport, EstablishedProduction, OrderAssociation, TargetLifetimeEvent,
 )
 from .calls import CallActivation
-from .resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 
 
 @dataclass(frozen=True, slots=True)

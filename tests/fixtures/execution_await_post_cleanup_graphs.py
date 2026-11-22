@@ -17,7 +17,7 @@ from scar.ir.execution.ids import (
     CallActivationID, HostThreadInstanceID, ProcessInstanceID, RegionActivationID, RunID,
 )
 from scar.ir.execution.model import ExecutionModel
-from scar.ir.execution.resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.execution.snapshot import snapshot_for
 from scar.ir.program.model import ExitKind, OperationResult
 from tests.fixtures.execution_async_pipeline_graphs import _body_path

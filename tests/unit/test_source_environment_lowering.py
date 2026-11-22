@@ -68,7 +68,7 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
     from scar.analysis.static_function_origins import (
         derive_factory_entry_origins,validate_factory_entry_origin,factory_entry_origin_evidence,factory_entry_origin_ports,
     )
-    from scar.analysis.program_function_origin_dependencies import FactoryEntryOriginDependencyProvider
+    from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
     from scar.ir.program.dependencies import DependencyPoint,DependencyStrength,GraphNamespace
     from scar.ir.record_codec import decode,encode
 
@@ -212,7 +212,7 @@ def test_session_discovers_factory_origins_without_call_targets_and_keeps_open_c
     import subprocess
     import sys
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static_class_publication import link_static_class_program
+    from scar.analysis.static_class_construction import link_static_class_program
     from scar.analysis.program_dependency_export import export_dependency_walk
     from scar.ir.program.dependencies import (
         DependencyKind as K, DependencyPoint as P, DependencyStrength, GraphNamespace,
@@ -267,7 +267,7 @@ def test_session_discovers_factory_origins_without_call_targets_and_keeps_open_c
 
         # A query budget must preserve the already emitted prefix, and a
         # failure before direction discovery must retain its actual reason.
-        from scar.analysis.program_function_origin_dependencies import FactoryEntryOriginDependencyProvider
+        from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
         discovery=session._origin_discovery
         selected_source=origins[0].source
         def prefix_then_budget(point):

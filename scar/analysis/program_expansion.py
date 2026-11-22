@@ -33,9 +33,7 @@ def expand_inventory(discovery, runtime_builder, budget, context_budget, ordered
                      body_profile=None, call_source_report=None, source_workspace=None):
     # Local import avoids a module cycle: the source adapter owns FileInventory
     # construction; this module owns only its global analysis work schedule.
-    from scar.analysis.program_inventory import (
-        _Inventory, _attach_bodies, _body_connections, _CallLinker, prepare_source,
-    )
+    from scar.analysis.program_inventory import _Inventory, _attach_bodies, _body_connections, _CallLinker, prepare_source
     from scar.analysis.function_interfaces import FunctionInterfaceBuilder
     from scar.ir.program.functions import BodyLoweringProfile
     from scar.ir.program.frame_validation import require_valid_frame_model
@@ -47,7 +45,7 @@ def expand_inventory(discovery, runtime_builder, budget, context_budget, ordered
         from scar.analysis.call_demand_schedule import (
             CallDemandQueue, _matched_call_sources, entry_frontier_initializers, entry_roots_for,
         )
-        from scar.ir.program.call_demand import EnteredCallCode, LegacyObservation, SourceCallCandidate
+        from scar.ir.program.call_composition import EnteredCallCode, LegacyObservation, SourceCallCandidate
     files, unavailable, bodies, issues = [], {}, {}, defaultdict(list)
     module_initializers = {}
     store_scope = (nullcontext(source_workspace.store) if source_workspace is not None

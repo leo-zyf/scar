@@ -732,7 +732,7 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
     delegated = set()
     if language is not None:
         if language.lambda_bodies:
-            from scar.analysis.source_lambda_validation import validate_lambda_regions,root_projection as lambda_projection
+            from scar.analysis.source_lambda import validate_lambda_regions, root_projection as lambda_projection
             delegated.update(validate_lambda_regions(model,graph,interface,metadata,semantic,control,language,
                 source_tree=source_tree,options=language_options,structural_only=structural_only,sealed_source=sealed_source))
             model,graph,metadata,language=lambda_projection(model,graph,metadata,language,delegated)
@@ -866,12 +866,12 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
         validate_environment_body(model, graph, interface, metadata, semantic, language=language)
         from scar.analysis.source_statement_lowering import validate_statement_protocols
         validate_statement_protocols(model, graph, interface, metadata, semantic, language=language)
-        from scar.analysis.source_string_lowering import validate_string_protocols
+        from scar.analysis.source_string import validate_string_protocols
         validate_string_protocols(model, graph, interface, metadata, semantic, language=language)
         from scar.analysis.source_mapping_lowering import validate_mapping_protocols
         validate_mapping_protocols(model, graph, interface, metadata, semantic, language=language)
     if language is not None:
-        from scar.analysis.source_language_validation import validate_language_body
+        from scar.analysis.source_language import validate_language_body
         validate_language_body(model, graph, interface, metadata, semantic, language,
                                source_tree=source_tree, options=language_options, structural_only=structural_only,
                                control=control,sealed_source=sealed_source,pending_protocols=pending_protocols)

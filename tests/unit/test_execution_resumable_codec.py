@@ -8,7 +8,7 @@ import pytest
 
 from scar.ir.execution.codec import SCHEMA_VERSION, dumps, from_dict, loads, to_dict
 from scar.ir.execution.common import MissingEvidence, Unresolved
-from scar.ir.execution.resumables import BodyActivationOrigin, BodyDriveExecution
+from scar.ir.execution.resumable_identity import BodyActivationOrigin, BodyDriveExecution
 from scar.ir.program.providers import ProviderFactReference
 from tests.fixtures.execution_validity_records import validity_record_model
 
@@ -106,7 +106,7 @@ def test_pre_resumable_schemas_reject_new_tables_and_record_tags(version, inject
         root["body_drive_executions"] = []
     else:
         root["runs"][0]["fields"]["source"] = {
-            "$record": "scar.ir.execution.resumables.BodyDriveExecution", "fields": {}}
+            "$record": "scar.ir.execution.resumable_identity.BodyDriveExecution", "fields": {}}
     with pytest.raises(ValueError):
         from_dict(document)
 

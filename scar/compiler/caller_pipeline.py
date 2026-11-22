@@ -14,7 +14,7 @@ from pathlib import Path
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_call_view import SourceFunctionCallProvider,function_interface_fact
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (_GraphLowerer,GraphRegionRejected,_reject,
     _source_identity,_metadata)
 from scar.compiler.model import ArrayRegion,SourceRef

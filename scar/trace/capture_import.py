@@ -93,7 +93,7 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
     native and OS adapters independently validate their own provider contracts.
     Stored outputs include both the identity joins and their unresolved edges.
     """
-    from scar.trace.capture_coordinates import bind_capture_coordinates
+    from scar.trace.control_transfers import bind_capture_coordinates
     from scar.trace.native_import import import_native_evidence
     from scar.trace.native_memory import export_native_memory
     from scar.trace.os_resources import import_os_resources, publish_os_interfaces
@@ -148,7 +148,7 @@ def import_capture(capture_dir, output_dir, *, max_bytes=1_000_000_000, max_line
             max_bytes=max_bytes, provider_revision=manifest['provider']['torch_git_version'])
         scope_config = manifest.get('configuration', {}).get('native_call_scopes')
         if scope_config is not None:
-            from scar.trace.native_call_scope_import import import_native_call_scopes
+            from scar.trace.native_import import import_native_call_scopes
             stage('native_call_scopes', 'RUNNING')
             scopes = import_native_call_scopes(native, manifests[0], coordinates,
                                               max_bytes=max_bytes, max_lines=max_lines)

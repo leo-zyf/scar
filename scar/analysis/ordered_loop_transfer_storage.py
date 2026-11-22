@@ -35,7 +35,7 @@ _FIELDS={'schema','schema_version','lifetime_publication','activation_publicatio
 
 
 def _pins():
-    from scar.analysis import ordered_loop_transfer, source_control as source_loop_dependencies, source_value_flow, source_reference_slice, source_namespace_interfaces as source_namespace_interfaces, source_call_view, normal_graph, normal_output, read_ordered_lifetimes, ordered_region_lifetime, source_selected_call_window
+    from scar.analysis import ordered_loop_transfer, source_control as source_loop_dependencies, source_value_flow, source_references as source_reference_slice, source_namespace_interfaces as source_namespace_interfaces, source_call_view, normal_graph, normal_output, read_ordered_lifetimes, ordered_region_lifetime, source_selected_call_window
     from scar.ir.program import call_returns as W
     from scar.ir import record_codec
     modules=(('storage',__import__(__name__,fromlist=['__file__'])),('transfer',ordered_loop_transfer),

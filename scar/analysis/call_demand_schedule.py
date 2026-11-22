@@ -9,10 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import heapq
 
-from scar.ir.program.call_demand import (
-    BodyExpansionV6, DemandOrigin, EnteredCallCode, EntryRoot, LegacyObservation,
-    Remainder, SourceCallCandidate, ExpansionScheduleV6,
-)
+from scar.ir.program.call_composition import BodyExpansionV6, DemandOrigin, EnteredCallCode, EntryRoot, LegacyObservation, Remainder, SourceCallCandidate, ExpansionScheduleV6
 from scar.ir.program.expansion import ContextStoreBudget, ContextUnavailable
 from scar.ir.program.inventory import BodyStatus, DefinitionInventory, FileInventory
 from scar.ir.v2.common import SourceReference

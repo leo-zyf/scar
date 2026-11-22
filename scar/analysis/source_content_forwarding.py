@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.source_binding_effects import LocalReadEffectContext
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
-from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P

@@ -498,7 +498,7 @@ def session_endpoints(view):
 
 
 def body_session_identity_errors(ctx):
-    from .resumable_identity import compatible
+    from scar.ir.execution.resumable_identity import compatible
     comparisons = 0
 
     def check(binding, gaps, path):

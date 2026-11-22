@@ -26,7 +26,7 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.observed_positional_receiver import recover_positional_receiver
+from scar.analysis.observed_call_bindings import recover_positional_receiver
 from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
 from scar.ir.program import function_sites as I, normal_graph as T, source_productions as P
 from scar.ir.program import source_observations as R
@@ -51,7 +51,7 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 def _pins():
     from scar.analysis import source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
     from scar.analysis import source_function_connections,static_compilation,source_observed_materials,source_fact_materials
-    from scar.analysis import observed_positional_receiver,source_frame_binding_effects
+    from scar.analysis import observed_call_bindings as observed_positional_receiver, source_frame_binding_effects
     from scar.ir import record_codec
     from scar.trace import python_call_targets as operand_bytecode
     from scar.ir.program import source_observations as code_types
@@ -350,7 +350,7 @@ def _overlay(parent,unit,groups,frontiers,folder,receipt,*,base=None):
         c=group.connection;query=group.query;call=group.observations[0].call
         reference=_table_ref(folder,receipt,'scar.observed-source-function-group',i)
         original=parent.catalog.fact_store.load(unit).calls[query]
-        from scar.analysis.source_reference_slice import source_port
+        from scar.analysis.source_references import source_port
         facts=parent.catalog.fact_store.load(unit)
         link=c.to_link(source_port(facts,original.result),source_port(facts,original.callee),
             'SOURCE_FUNCTION' if c.activation is T.FunctionActivation.NORMAL else 'CREATE_DEFERRED_BODY')

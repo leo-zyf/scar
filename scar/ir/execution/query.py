@@ -60,8 +60,8 @@ class ExecutionIndex:
 
     def resource_composition(self, *, scopes=(), budget=4096):
         """Whole supplied-model projection under explicit, typed Q scopes."""
-        from .composition_requirements import validate_scopes, prepare_scopes
-        from .composition_query import resource_composition
+        from scar.ir.execution.composition_routes import validate_scopes, prepare_scopes
+        from scar.ir.execution.composition_routes import resource_composition
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         validate_scopes(scopes)
@@ -102,7 +102,7 @@ class ExecutionIndex:
 
     def stored_value_sources(self, site, occurrence, *, budget=4096):
         """Original primitive-slot payload sources, never a global copy union."""
-        from .stored_values import stored_value_sources, validate_request
+        from scar.ir.execution.stored_values import stored_value_sources, validate_request
         from .validity_budget import ValidityBudget
         validate_request(site, occurrence, budget)
         return deepcopy(stored_value_sources(self._content_context(), site, occurrence,
@@ -110,7 +110,7 @@ class ExecutionIndex:
 
     def value_source_pair(self, source, target, *, budget=4096):
         """Original copy or conditional stored source; never a global identity union."""
-        from .value_sources import source_pair
+        from scar.ir.execution.stored_values import source_pair
         from .validity_budget import ValidityBudget
         shared = ValidityBudget(budget)
         for value in (source, target):
@@ -153,7 +153,7 @@ class ExecutionIndex:
 
     def production(self, identity, *, budget=4096):
         """Inspect independent source candidates, not an authoritative writer set."""
-        from .production_query import production
+        from scar.ir.execution.production_query import production
         # The public P wrapper already detaches once, as the V wrapper does.
         return production(self._content_context(), identity, budget=budget)
 

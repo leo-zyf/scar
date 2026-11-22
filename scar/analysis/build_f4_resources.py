@@ -19,7 +19,7 @@ from scar.analysis.program_view import SOURCE_REPRESENTATION, _digest
 from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_resource_graph import SourceResourceGraph, _target, _pins as resource_pins
 from scar.analysis.source_world_returns import _table_ref
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.ir.program import resource_observations as R, source_effects as F
 from scar.ir.program import source_productions as P, normal_graph as G, model as M, view as V
 from scar.ir.program import target_hardware as H, resource_observations as S

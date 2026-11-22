@@ -9,7 +9,7 @@ from scar.analysis.source_configuration_overrides import read_configuration_over
 from scar.analysis.source_configuration_composition_store import read_configuration_composition
 from scar.analysis.source_data_material_store import DataMaterialStore
 from scar.analysis.source_data_materials import _artifact
-from scar.analysis.source_interpolation_syntax import InterpolationSyntax
+from scar.analysis.source_string import InterpolationSyntax
 from scar.analysis.source_configuration_value_query import ConfigurationValueQuery
 from scar.ir.program import configuration as V
 from scar.ir.program.configuration import ConfigurationStepKind, ConfigurationProtocolSource

@@ -213,7 +213,7 @@ def main():
         report,_,_=read_state_view(args.read)
     else:
         if not all((args.catalog,args.unit,args.out)):parser.error('--catalog --unit --out are required')
-        from scar.analysis.source_reference_slice import source_port
+        from scar.analysis.source_references import source_port
         from scar.ir.program import normal_graph as F
         state=ProgramView(args.catalog).state(args.unit)
         if args.interfaces_only and args.slot:parser.error('--interfaces-only cannot select slots')

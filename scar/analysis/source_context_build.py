@@ -10,13 +10,13 @@ import sys
 import time
 from types import FunctionType
 
-from scar.analysis import source_context_solver,source_context_fact_store,source_context_interfaces
-from scar.analysis import namespace_flow as source_namespace_flow, source_relations as source_relation_replay, source_class_queries
+from scar.analysis import source_context_solver, source_context_fact_store, source_context_interfaces as source_context_interfaces
+from scar.analysis import namespace_flow as source_namespace_flow, source_relations as source_relation_replay, source_class_body as source_class_queries
 from scar.analysis import normal_targets,source_launch,source_namespace_graph
 from scar.analysis import normal_entry, normal_facts, namespace_values as source_namespace_builtins
 from scar.analysis import source_frame_captures,source_frame_globals
 from scar.analysis import namespace_flow as source_root_namespace_views
-from scar.ir.program import source_builtin_namespaces
+from scar.ir.program import source_paths as source_builtin_namespaces
 from scar.ir.program import source_frame_bindings
 from scar.analysis.normal_facts import SourceFactStore
 from scar.analysis.normal_output import write_table
@@ -26,7 +26,7 @@ from scar.analysis.source_template_links import _json
 
 def pins():
     from scar.analysis import source_solver_observations
-    from scar.analysis import source_reference_transport
+    from scar.analysis import source_references as source_reference_transport
     return {name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('solver',source_context_solver),('facts',source_context_fact_store),
         ('interfaces',source_context_interfaces),('namespaces',source_namespace_flow),

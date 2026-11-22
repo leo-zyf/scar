@@ -4,11 +4,7 @@ from dataclasses import dataclass
 from scar.ir.program.normal_graph import Port, CallSite
 from scar.ir.program.normal_graph import Namespace
 from scar.ir.program.normal_graph import GlobalPort, Body, Endpoint, Route, FunctionActivation
-from scar.ir.program.name_flow import (
-    NameDefinition,
-    NameDefinitionTransition,
-    NameDefinitionFrontier,
-)
+from scar.ir.program.name_flow import NameDefinition, NameDefinitionTransition, NameDefinitionFrontier
 from enum import Enum
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.data_materials import AddressPath

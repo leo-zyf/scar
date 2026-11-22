@@ -7,7 +7,7 @@ from dataclasses import replace
 from hashlib import sha256
 import json
 
-from scar.analysis.source_roles import SyntaxRoleView, _state
+from scar.analysis.source_role_materials import SyntaxRoleView, _state
 from scar.ir.program.source_contexts import ContextResolution, ContextState, OwnerRef, SourceContextsMaterial
 from scar.ir.program.source_roles import RolePort, SlotRef, SourceRolesMaterial
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

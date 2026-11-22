@@ -182,7 +182,7 @@ def model_compiler_symbols(model, out, *, roles_materials=None, contexts_materia
     from scar.analysis.compiler_topology import compiler_topology_catalog
     from scar.analysis.source_declarations import source_declaration_catalog
     from scar.analysis.source_contexts import source_context_catalog
-    from scar.analysis.source_roles import source_role_catalog
+    from scar.analysis.source_role_materials import source_role_catalog
     from scar.analysis.source_symbols import compiler_hash_context
     limits = {key: value for key, value in locals().items() if key in _DEFAULTS}
     external = (roles_materials, contexts_materials, declarations_materials, symbols_materials, topology_materials)

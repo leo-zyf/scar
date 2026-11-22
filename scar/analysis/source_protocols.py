@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import CodeType
 import dis
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.program.normal_graph import SourceTemplateKey, CodeScopeWitness
 from scar.ir.program.providers import ProviderFactReference

@@ -14,7 +14,7 @@ import time
 from scar.analysis.normal_graph import normal_edges, _Emitter
 from scar.analysis.source_declared_state import read_declared_state
 from scar.analysis.source_configuration_state_binding import read_configuration_state_bindings
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_world_material import WorldMaterial
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.normal_output import write_table

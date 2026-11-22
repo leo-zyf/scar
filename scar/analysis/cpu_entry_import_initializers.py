@@ -8,7 +8,7 @@ from scar.analysis.build import BuildSession
 from scar.analysis.entry_obligations import SCHEMA as OBLIGATIONS
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies, source_body_access
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program import normal_graph as G, source_productions as P
 from scar.ir.program.source_declarations import SourceTemplateKey

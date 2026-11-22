@@ -16,7 +16,7 @@ from scar.analysis import source_function_interfaces as functions
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
 from scar.analysis.source_graph_material import CompiledGraphMaterial
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
@@ -24,7 +24,7 @@ from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.normal_output import write_table
 from scar.ir.program import call_inputs as D, function_sites as R
-from scar.ir.program import namespace_routes as N, source_productions as P, normal_graph as T
+from scar.ir.program import name_flow as N, source_productions as P, normal_graph as T
 from scar.ir.record_codec import decode, encode
 
 

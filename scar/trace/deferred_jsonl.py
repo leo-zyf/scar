@@ -24,7 +24,7 @@ class DeferredJsonl:
     """An internal collector-owned plain snapshot stream, never application values."""
 
     def __init__(self, path, *, max_bytes, max_line_bytes=2_000_000):
-        from scar.trace.snapshot_journal import SnapshotJournal
+        from scar.trace.code_snapshot import SnapshotJournal
         self.path = Path(path)
         # The existing recorder created this empty placeholder with O_EXCL.
         info = self.path.stat(follow_symlinks=False)

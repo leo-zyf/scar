@@ -10,8 +10,7 @@ import os
 from pathlib import Path
 import sys
 
-from scar.trace.snapshot_journal import (FORMAT, FRAME, FOOTER, FOOTER_RESERVE,
-    HEADER_LENGTH, HEADER_LIMIT, MAGIC, RECORD)
+from scar.trace.code_snapshot import FORMAT, FRAME, FOOTER, FOOTER_RESERVE, HEADER_LENGTH, HEADER_LIMIT, MAGIC, RECORD
 
 
 def _need(value, detail):

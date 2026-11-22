@@ -17,7 +17,7 @@ from scar.analysis.program_view import ProgramView,_digest
 from scar.analysis.source_configuration_state_binding import read_configuration_state_bindings
 from scar.analysis.source_configuration_value_store import read_configuration_values
 from scar.analysis.source_call_view import prepare_source_ports,source_call_site,source_active_scope
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import configuration as R, data_materials as C, model as M, view as V

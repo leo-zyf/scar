@@ -656,7 +656,7 @@ def mapping_prefix_selection(context, evidence, *, profile=None, literal_bool_el
                 return all(statement(child) for child in (node.body if node.test.value else node.orelse))
             return expression(node.test) and all(statement(child) for child in (*node.body,*node.orelse))
         if expanded and isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
-            from scar.analysis.source_mapping_function_lowering import mapping_function_plan
+            from scar.analysis.source_mapping_functions import mapping_function_plan
             try:mapping_function_plan(node,evidence.code)
             except (ValueError,_Unsupported):return False
             return all(expression(child) for child in (*node.decorator_list,*node.args.defaults,*(v for v in node.args.kw_defaults if v is not None)))
@@ -1286,7 +1286,7 @@ class MappingBodyBuilder(PropagationModuleBuilder):
                 self.statement_expansions.append(FrameStatementExpansion(self.source(node),self.frame_region,entry,cursor.block,
                     tuple(op.id for op in self.operations[start:]),()))
             elif isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
-                from scar.analysis.source_mapping_function_lowering import lower_mapping_function
+                from scar.analysis.source_mapping_functions import lower_mapping_function
                 start=len(self.operations);entry=cursor.block
                 cursor=lower_mapping_function(self,node,cursor)
                 self.statement_expansions.append(FrameStatementExpansion(self.source(node),self.frame_region,entry,cursor.block,

@@ -9,8 +9,8 @@ from scar.analysis.build import BuildSession
 from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.nvhpc_source_effects import TENSOR_FLOW, verify_nvhpc_tensor_flow
 from scar.analysis.call_inputs import call_operands
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
-from scar.analysis.source_roles import SyntaxRoleView
+from scar.analysis.source_references import ReferenceSlicer, source_port
+from scar.analysis.source_role_materials import SyntaxRoleView
 from scar.analysis.source_template_links import _json
 from scar.analysis.static_query import _Fragments
 from scar.ir.execution_recipe import artifact_reference, read_artifact

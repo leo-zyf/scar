@@ -1,24 +1,25 @@
-"""Incremental source-only canonical bodies over a saved static program.
+"""Static body."""
 
-Source layers are shared unchanged. Each worker loads one source unit, owns
-one sealed lowering session and publishes only body payloads and their ledger.
-"""
 from __future__ import annotations
 
 import ast
-from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
 import json
 import multiprocessing
 import os
-from pathlib import Path
 import shutil
 import sys
 import tempfile
 import time
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 
+# Incremental source-only canonical bodies over a saved static program.
+#
+# Source layers are shared unchanged. Each worker loads one source unit, owns
+# one sealed lowering session and publishes only body payloads and their ledger.
 PROFILE = "SCAR_STATIC_BODY_V1"
 
 
@@ -37,7 +38,8 @@ def _producer():
     paths.update(analysis.glob("source_*validation.py"))
     paths.update(analysis / name for name in (
         "static_body.py", "static_program.py", "static_rules.py", "static_compilation.py",
-        "static_body_materialization.py",
+        "source_displays.py", "source_function_definitions.py", "source_generator_create.py",
+        "source_guards.py", "source_lambda.py", "source_mapping_functions.py", "source_string.py",
         "program_lowering.py", "structured_lowering.py", "environment_lowering.py",
         "source_attribute_lookup.py", "attribute_selector.py",
         "source_language.py", "source_environment_layout.py", "function_interfaces.py",
@@ -337,7 +339,7 @@ def expand_static_bodies(directory, *, jobs=4, max_operations=10000, max_bodies=
         from copy import deepcopy
         from scar.analysis.static_calls import input_basis_unit
         from scar.analysis.static_basis_compatibility import _units_basis_compatible
-        from scar.analysis.static_body_materialization import diagnostic_materializations, null_body_diagnostic
+        from scar.analysis.static_body import diagnostic_materializations, null_body_diagnostic
         original_basis = deepcopy([input_basis_unit(unit) for unit in manifest['units']])
     started = time.monotonic()
     producer = _producer()
@@ -521,3 +523,68 @@ def expand_static_bodies(directory, *, jobs=4, max_operations=10000, max_bodies=
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+# Distinguish an unbuilt body diagnostic from an existing canonical graph.
+#
+# An old diagnostic is retained as an owned input when its lexical entry gains
+# a body. Relationship readers check its original bytes; a status or manifest
+# claim alone never authorizes replacing existing core ports.
+def null_body_diagnostic(unit, row, document):
+    if (type(document) is not dict or document.get('schema') != 'scar.static-body'
+            or type(document.get('schema_version')) is not int or document['schema_version'] != 1
+            or document.get('entry_key') != row['entry_key']
+            or document.get('status') != row['status']
+            or document.get('cache_key') != row.get('cache_key')
+            or document.get('inputs') != {name: unit['artifacts'].get(name)
+                for name in ('source', 'semantic', 'semantics', 'control')}):
+        raise ValueError('body diagnostic differs from its original entry/source receipts')
+    return (row['status'] != 'LOWERED_WITH_GAPS' and 'graph' in document
+        and all(document.get(name) is None for name in
+            ('graph', 'metadata', 'interface', 'structured', 'language', 'frame', 'module', 'class')))
+
+
+def diagnostic_materializations(manifest, read):
+    """Build a fresh reader callback, not a serialized compatibility token.
+
+    The usual source/entry projection comparison is still required. This
+    callback admits only a current canonical row with the exact archived old
+    receipt and an independently read old payload containing no graph/ports.
+    """
+    units = {unit['key']: unit for unit in manifest['units']}
+    checked, projected = {}, {}
+
+    def admits(old_unit, old, new_unit, new):
+        from scar.analysis.static_basis_compatibility import _same
+        from scar.analysis.static_calls import input_basis_unit
+        unit = units.get(new_unit['key'])
+        if unit is None or old_unit['key'] != new_unit['key']:
+            return False
+        if unit['key'] not in projected:
+            projected[unit['key']] = input_basis_unit(unit)
+        if not _same(projected[unit['key']], new_unit):
+            return False
+        matches = [row for row in unit['bodies'] if row['entry_key'] == new['entry_key']]
+        if len(matches) != 1:
+            return False
+        row, = matches
+        if (new.get('status') != 'LOWERED_WITH_GAPS'
+                or not _same(row.get('diagnostic_input'), old.get('artifact'))
+                or any(not _same(row.get(name), new.get(name)) for name in
+                    ('status', 'artifact', 'cache_key', 'definitions', 'source', 'kind'))):
+            return False
+        key = (unit['key'], old['entry_key'], old['artifact']['path'], old['artifact']['sha256'],
+               old['status'], old.get('cache_key'))
+        if key not in checked:
+            checked[key] = null_body_diagnostic(unit, old, read(old['artifact']))
+        return checked[key]
+
+    return admits
+
+
+__all__ = [
+    'null_body_diagnostic',
+    'diagnostic_materializations',
+    'PROFILE',
+    'expand_static_bodies',
+]

@@ -11,7 +11,7 @@ from scar.analysis import scalar_score_evidence, scalar_table_handoff
 from scar.analysis.program_view import ProgramView
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
 from scar.analysis.source_call_handoff import _body
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.record_codec import encode
@@ -151,7 +151,7 @@ def field_kind(value):
 
 def _f4(design):
     from scar.analysis.source_declared_calls import _owners
-    from scar.analysis.source_reference_slice import ReferenceSlicer
+    from scar.analysis.source_references import ReferenceSlicer
     from scar.compiler.graph_frontend import _metadata, _source_identity
 
     view = ProgramView(Path(design['catalog']['uri']).parent)

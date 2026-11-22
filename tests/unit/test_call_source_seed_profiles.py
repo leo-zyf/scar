@@ -15,7 +15,7 @@ import pytest
 import scar.analysis.call_seeds as seeds
 from scar.analysis.call_seeds import CallSourceSeedReport, read_call_source_seeds
 from scar.ir.program.call_edges import CallEdgeBudget, CallLinkStatus
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.trace.call_edges import CallEdgeRecorder
 
 

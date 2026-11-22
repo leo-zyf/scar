@@ -194,7 +194,7 @@ def discover(entry,trace,*,catalog=None,cache_roots=(),catalog_handoff=None):
             if not binding_pins_match(plan['pins']):
                 gaps.append(dict(layer=key,kind='CACHED_COMPONENT_RULES_CHANGED',path=str(path)));continue
         if key=='source_coverage':
-            from scar.analysis.program_inventory_admission import compatible_static_pins
+            from scar.analysis.program_inventory import compatible_static_pins
             plan=r['plan']
             if Path(plan['catalog']).resolve()!=c.path.resolve() or not plan.get('local_graph_shards'):continue
             if not compatible_static_pins(plan):
@@ -413,7 +413,7 @@ class F4BuildSession:
                         self.gaps.append(dict(layer=name,kind='RESUMPTION_SOURCE_PORTS_UNRESOLVED',
                             missing=store.report['records']-store.report['source_port_events']))
                 elif name=='source_coverage':
-                    from scar.analysis.program_inventory_admission import admit_static_inventory
+                    from scar.analysis.program_inventory import admit_static_inventory
                     self.source_coverage=admit_static_inventory(path,catalog=self.catalog);self.coverage_path=path
                     if not self.source_coverage['catalog_local_graph_materialized']:
                         self.gaps.append(dict(layer=name,kind='CATALOG_LOCAL_GRAPH_INCOMPLETE'))
@@ -503,7 +503,7 @@ class F4BuildSession:
                 points.append(self.view.entry(unit,context=() if unit==self.report['f4']['entry_unit'] else None))
             if entry is not None or kind in ('FUNCTION','ASYNC_FUNCTION'):
                 from scar.analysis.static_query import _Fragments
-                from scar.analysis.source_roles import SyntaxRoleView
+                from scar.analysis.source_role_materials import SyntaxRoleView
                 from scar.ir.program.source_syntax import SourceSyntaxMaterial
                 from scar.ir.record_codec import decode
                 original=self.catalog.fact_store.original_source_units.get(unit,unit)
@@ -587,7 +587,7 @@ class F4BuildSession:
             raise ValueError('stored execution evidence differs from admitted observations')
         if (self.path/'coverage.json').exists():
             if self.source_coverage is not None:
-                from scar.analysis.program_inventory_admission import admit_static_inventory
+                from scar.analysis.program_inventory import admit_static_inventory
                 if admit_static_inventory(self.coverage_path,catalog=self.catalog)!=self.source_coverage:
                     raise ValueError('admitted graph coverage changed during publication')
             if json.loads((self.path/'coverage.json').read_bytes())!=canonical(self.coverage_summary()):

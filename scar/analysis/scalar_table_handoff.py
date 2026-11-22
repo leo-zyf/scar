@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scar.analysis import scalar_table_cse, source_call_handoff
 from scar.analysis.program_view import ProgramView
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import artifact_reference, read_artifact

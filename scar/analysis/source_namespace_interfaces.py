@@ -3,19 +3,11 @@
 from collections import defaultdict, deque
 from scar.analysis.normal_graph import _Emitter
 from scar.analysis.namespace_values import extract_captures
-from scar.ir.program import (
-    normal_graph as G,
-    normal_graph as F,
-    normal_graph as T,
-    source_productions as P,
-    namespace_routes as N,
-    source_bindings as B,
-    state_ports as S,
-)
+from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P, name_flow as N, source_bindings as B, state_ports as S
 from scar.ir.program.control import LanguageCompletionKind as K
 from scar.ir.program.model import ValueType, ValueKind
 from scar.ir.record_codec import decode
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port, DECLARED
+from scar.analysis.source_references import ReferenceSlicer, source_port, DECLARED
 from dataclasses import dataclass
 
 

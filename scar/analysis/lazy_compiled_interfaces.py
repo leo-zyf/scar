@@ -13,7 +13,7 @@ from types import MappingProxyType
 
 from scar.analysis.compiled_local_interfaces import (CompiledLocalInterfaces,SCHEMA,
     _FALSE,_FAMILIES,_producer,projection_pins)
-from scar.analysis.observed_compiled_material import ObservedCompiledLocalMaterial
+from scar.analysis.observed_code_correspondence import ObservedCompiledLocalMaterial
 from scar.ir.program.suspension_interfaces import WitnessSource
 
 

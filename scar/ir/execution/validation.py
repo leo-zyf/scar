@@ -418,9 +418,9 @@ def _external_stages(ctx):
     from scar.ir.execution.order_validation import order_errors
     from scar.ir.execution.observation_validation import observation_errors
     from .content_validation import content_errors
-    from .production_validation import write_errors, produced_errors
+    from scar.ir.execution.production_query import write_errors, produced_errors
     from .validity_validation import validity_errors
-    from .resumable_identity import body_identity_errors
+    from scar.ir.execution.resumable_identity import body_identity_errors
 
     def evidence_bindings(context):
         for row in context.model.evidence_bindings:

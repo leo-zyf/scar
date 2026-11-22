@@ -12,8 +12,8 @@ from pathlib import Path
 from types import CodeType, SimpleNamespace
 
 from scar.analysis.program_view import _digest
-from scar.analysis.source_roles import SyntaxRoleView
-from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+from scar.analysis.source_role_materials import SyntaxRoleView
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.static_query import _Fragments
 from scar.analysis.source_observed_codes import replay_catalog_code
@@ -26,7 +26,7 @@ from scar.ir.program.normal_graph import CodeScopeWitness
 from scar.ir.program.providers import ProviderFactReference
 from scar.ir.program.structured import PythonProtocolKind
 from scar.ir.record_codec import decode,encode
-from scar.trace.code_snapshot import describe_code,site
+from scar.trace.code_snapshot import describe_code, site
 
 
 @dataclass(frozen=True,slots=True)

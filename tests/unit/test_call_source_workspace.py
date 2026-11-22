@@ -14,7 +14,7 @@ from scar.analysis.call_seeds import read_call_source_seeds
 from scar.analysis.program_context_store import PreparedContextStore
 from scar.analysis.program_inventory import inventory_program
 from scar.analysis.program_lowering import prepare_source
-from scar.ir.program.call_demand import CallSourceAdmissionStatus
+from scar.ir.program.call_composition import CallSourceAdmissionStatus
 from scar.ir.program.call_edges import CallLinkStatus
 from scar.ir.program.expansion import ContextStoreBudget
 from scar.trace.call_edges import CallEdgeRecorder

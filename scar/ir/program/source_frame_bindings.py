@@ -4,7 +4,7 @@ from scar.ir.literals import PythonLiteral
 
 from scar.ir.program import normal_graph as F, normal_graph as T
 from .source_exec_roots import ExecEndpoint
-from scar.ir.program.namespace_routes import FunctionGlobalsCapture
+from scar.ir.program.name_flow import FunctionGlobalsCapture
 from scar.ir.program.suspension_interfaces import StepWitness
 
 

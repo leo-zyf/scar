@@ -26,7 +26,7 @@ _WORKERS = {
     'source-syntax': 'scar.analysis.source_parsing',
     'source-symbols': 'scar.analysis.source_symbol_materials',
     'source-roles': 'scar.analysis.source_role_materials',
-    'source-contexts': 'scar.analysis.source_context_materials',
+    'source-contexts': 'scar.analysis.source_context_interfaces',
     'source-declarations': 'scar.analysis.source_declaration_materials',
     'source-bindings': 'scar.analysis.source_binding_materials',
     'compiler-topology': 'scar.analysis.compiler_topology_materials',

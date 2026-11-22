@@ -44,7 +44,7 @@ def _json(value):
 def _implementation():
     package = Path(__file__).resolve().parents[1]
     names = ('analysis/source_expression_materials.py', 'analysis/source_expression_rules.py',
-        'analysis/source_display_rules.py', 'analysis/source_string_rules.py',
+        'analysis/source_displays.py', 'analysis/source_string.py',
         'analysis/source_comprehension_rules.py',
         'analysis/await_protocol.py',
         'analysis/await_protocol.py', 'ir/program/delegation_signatures.py',

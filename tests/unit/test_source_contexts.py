@@ -11,7 +11,7 @@ import pytest
 from scar.analysis.source_bytes import source_bytes_document
 from scar.analysis.source_tokens import source_tokens_document
 from scar.analysis.source_syntax import source_syntax_document
-from scar.analysis.source_roles import source_roles_document
+from scar.analysis.source_role_materials import source_roles_document
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.record_codec import decode
 
@@ -96,7 +96,7 @@ _MARKERS = {(constructor, 'ctx') for constructor in ('Attribute', 'Subscript', '
 
 @pytest.mark.parametrize('family', ('schema', 'matrix', 'coverage_and_gates'))
 def test_c1_source_context_routes(family, monkeypatch):
-    from scar.analysis.source_roles import source_role_catalog
+    from scar.analysis.source_role_materials import source_role_catalog
     from scar.ir.program.source_roles import SourceRolesMaterial
     import scar.analysis.source_contexts as api
 

@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import replace
 
 from scar.analysis.program_view import _digest
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.ir.program import source_value_routes as I, normal_graph as T, source_productions as P, view as V, normal_graph as G
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.control import LanguageCompletionKind as C

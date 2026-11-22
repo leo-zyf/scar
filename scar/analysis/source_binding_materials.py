@@ -179,7 +179,7 @@ def model_source_bindings(model, out, *, roles_materials=None, contexts_material
     from scar.analysis.source_bindings import source_binding_catalog
     from scar.analysis.source_declarations import source_declaration_catalog
     from scar.analysis.source_contexts import source_context_catalog
-    from scar.analysis.source_roles import source_role_catalog
+    from scar.analysis.source_role_materials import source_role_catalog
     limits = {key: value for key, value in locals().items() if key in _DEFAULTS}
     external = (roles_materials, contexts_materials, declarations_materials)
     if (type(jobs) is not int or not 1 <= jobs <= 32 or type(collect_only) is not bool or type(verify) is not bool

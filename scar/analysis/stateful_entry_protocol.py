@@ -76,7 +76,7 @@ def _implementations():
     from scar.codegen import stateful, cpp
     from scar.compiler import stateful_runtime, export_stateful, stateful_model
     from scar.runtime import stateful_guard, stateful_contract
-    from scar.trace import code_snapshot
+    from scar.trace import code_snapshot as code_snapshot
     from scar.optimization.selection import select_stateful_measured
     from scar.optimization.stateful_schedule import verify_stateful_plan
     functions = dict(compiler_guard_factory=stateful_runtime.guarded_stateful_function,

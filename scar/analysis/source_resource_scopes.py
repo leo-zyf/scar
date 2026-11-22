@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import time
 
-from scar.trace.capture_coordinates import bind_capture_coordinates
+from scar.trace.control_transfers import bind_capture_coordinates
 from scar.trace.resource_scopes import read_resource_scopes,RECORD
 from scar.trace.os_resources import _scan,_number,_interface_family,_WRITE
 from scar.analysis.call_operand_reader import read_call_operands
@@ -46,7 +46,7 @@ def _receipt(path):
 
 
 def _pins():
-    from scar.trace import resource_scopes,os_resources,capture_coordinates
+    from scar.trace import resource_scopes, os_resources, control_transfers as capture_coordinates
     from scar.analysis import python_call_targets,source_body_activations,source_observed_codes,source_observed_calls
     return {**source_observed_codes.request_code_pins(),**{name:sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (
         ('producer',__import__(__name__,fromlist=['__file__'])),('types',R),

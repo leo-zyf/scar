@@ -11,7 +11,7 @@ from scar.ir.program.compiler_symbols import INTRINSIC_NAMES, SymbolLimits, Sour
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.source_roles import SourceRolesMaterial
 from scar.ir.program.source_contexts import SourceContextsMaterial
-from scar.ir.program.source_symbols import SourceSymbolsMaterial
+from scar.ir.program.source_paths import SourceSymbolsMaterial
 from scar.ir.record_codec import decode, encode
 
 

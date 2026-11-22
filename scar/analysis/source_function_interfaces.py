@@ -19,14 +19,14 @@ from scar.analysis.source_declared_calls import DeclaredCallStore, _NoTargets, _
 from scar.analysis.source_control_namespaces import ControlNamespaceStore
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.ir.program import function_sites as R, namespace_routes as N
+from scar.ir.program import function_sites as R, name_flow as N
 from scar.ir.program import normal_graph as T, source_productions as P
 from scar.ir.record_codec import decode, encode
 
@@ -173,7 +173,7 @@ def _totals(shards):
 
 def _pins():
     from scar.analysis import source_function_connections, source_field_interfaces
-    from scar.analysis import normal_output, source_reference_slice, source_symbol_variants
+    from scar.analysis import normal_output, source_references as source_reference_slice, source_symbol_variants
     from scar.analysis import source_world_returns, source_value_flow
     from scar.ir import record_codec
     return dict(producer=sha256(Path(__file__).read_bytes()).hexdigest(), **{

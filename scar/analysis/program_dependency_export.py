@@ -1,20 +1,31 @@
-"""Normalized query records: original namespaces, contexts and evidence once."""
+"""Program dependency export."""
+
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import fields, is_dataclass
 from enum import Enum
-
 from scar.analysis.program_dependencies import DependencyWalk
-from scar.ir.program.dependencies import (GraphNamespace, DependencyFrame, DependencyPoint,
-    DependencyCondition, DependencyEvidence, DependencyEdge, DependencyFrontier,
-    OpenDependencyContext, context_frames, context_is_closed)
+from scar.ir.program.dependencies import (
+    GraphNamespace,
+    DependencyFrame,
+    DependencyPoint,
+    DependencyCondition,
+    DependencyEvidence,
+    DependencyEdge,
+    DependencyFrontier,
+    OpenDependencyContext,
+    context_frames,
+    context_is_closed,
+)
 from scar.ir.program.source_references import SourceArtifactLocator
 from scar.ir.literals import PythonLiteral
 from scar.ir.record_codec import encode
 from scar.ir.v2.ids import Identifier
+from scar.analysis.program_dependency_session import ProgramDependencySession
 
 
+# Normalized query records: original namespaces, contexts and evidence once.
 class _Tables:
     def __init__(self, visited=()):
         self.tables = {name: [] for name in ('locators', 'namespaces', 'frames', 'contexts',
@@ -197,3 +208,25 @@ def export_boundary_analysis(result):
         'transformation_authorized': False,
         'qualification': 'A cut of original operations and field-wise interface/effect knowledge. '
             'Implementation transfers and outside consumers do not prove observable escape; missing contracts stay open.'}
+
+
+# Static field and boundary queries using the one dependency session/view.
+def query_program_values(directory, *, file=None, entry=None, kind=None, node=None, roots=None,
+                         context=(), budget=None, value_budget=None):
+    from scar.analysis.program_value_analysis import ProgramValueAnalysis
+    with ProgramDependencySession(directory, budget=budget) as session:
+        if roots is None:
+            if node is None:
+                raise ValueError("value inference needs an original typed root")
+            roots = (session.point(file=file, entry=entry, kind=kind, node=node, context=context),)
+        return ProgramValueAnalysis(session, budget=value_budget).analyze(roots)
+
+
+def query_program_boundary(directory, *, file=None, entry=None, kind=None, nodes=(), operations=None,
+                           context=(), budget=None, max_members=16384):
+    from scar.analysis.program_regions import analyze_boundary
+    with ProgramDependencySession(directory, budget=budget) as session:
+        if operations is None:
+            operations = tuple(session.point(file=file, entry=entry, kind=kind, node=node, context=context)
+                               for node in nodes)
+        return analyze_boundary(session.graph(), operations, max_members=max_members)

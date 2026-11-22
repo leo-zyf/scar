@@ -12,7 +12,7 @@ from scar.analysis.call_inputs import ContextReferenceEngine
 from scar.analysis.source_constructor_interfaces import project_constructor_interfaces
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.normal_output import write_table

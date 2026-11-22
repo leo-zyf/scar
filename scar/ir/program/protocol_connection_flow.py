@@ -490,7 +490,7 @@ class ConnectionContext(ProtocolFlow):
     def _bind_cross_region(self, expected, port, actual, *, guard):
         """Follow original call/formal paths; never equate local reachability with global reachability."""
         from .request_inputs import _context
-        from .call_composition import compose_route
+        from scar.ir.program.call_composition import compose_route
         export = self._returns.export_applicable(self.region_of[port.operation],
                                                 self.region_of[actual.operation])
         if export is None:

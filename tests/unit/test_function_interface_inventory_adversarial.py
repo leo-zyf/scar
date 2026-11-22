@@ -6,9 +6,7 @@ from textwrap import dedent
 
 import pytest
 
-from scar.analysis.program_inventory import (
-    ProgramInventory, _inventory_from_inputs, inventory_program,
-)
+from scar.analysis.program_inventory import ProgramInventory, _inventory_from_inputs, inventory_program
 from scar.analysis.program_lowering import PreparedSource, lower_source, prepare_source
 from scar.ir.program.functions import (
     BindingCondition, BindingIssueKind, BindingOrigin, BodyLoweringProfile,

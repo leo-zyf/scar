@@ -10,7 +10,7 @@ from scar.analysis.build_admission import verify_build_admission
 from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.scalar_recursive_driver import CAPTURE, _replay
 from scar.analysis.scalar_score_reuse_evidence import _compile, _event, _span
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.static_query import _Fragments
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

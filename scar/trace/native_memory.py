@@ -377,7 +377,7 @@ def export_native_memory(result, output, *, coordinates=None):
     else:
         # The membership binder checked exact bytes and OS/collector receipts.
         # Matching a PID alone never selects the shared process instance.
-        from scar.trace.capture_coordinates import CaptureCoordinates
+        from scar.trace.control_transfers import CaptureCoordinates
         if type(coordinates) is not CaptureCoordinates:
             raise TypeError("native memory coordinates must be a bound CaptureCoordinates")
         process = coordinates.process_for(kineto, result.report["pid"])

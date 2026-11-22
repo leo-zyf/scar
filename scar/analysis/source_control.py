@@ -6,7 +6,7 @@ from scar.ir.program.structured import PythonProtocolKind as K
 from collections import defaultdict, deque
 from pathlib import Path
 from scar.analysis.normal_graph import _Emitter
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.record_codec import encode
 

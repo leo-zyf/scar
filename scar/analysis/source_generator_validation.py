@@ -136,7 +136,7 @@ def validate_generator_regions(model, graph, interface, metadata, semantic, lang
                 and owners[key] == graph.root and any(e.kind is ExitKind.NORMAL and e.block == iterator_origin.block
                                                      for e in operations[key].terminator.successors)]
         _need(len(gets) == 1, "outermost iterable must be acquired eagerly exactly once")
-        from scar.analysis.source_string_validation import _ordered_next
+        from scar.analysis.source_string import _ordered_next
         stages = {make, gets[0], identity}
         _ordered_next(make, gets[0], stages, operations, blocks, positions)
         _ordered_next(gets[0], identity, stages, operations, blocks, positions)
@@ -353,7 +353,7 @@ def validate_generator_regions(model, graph, interface, metadata, semantic, lang
             _need(len(nodes) == 1, "generator needs its exact source AST")
             node, = nodes
             if creation_only:
-                from scar.analysis.source_generator_creation_lowering import creation_code_sources
+                from scar.analysis.source_generator_create import creation_code_sources
                 index, code, _sites = creation_code_sources(options.code_evidence.code, node)
             else: index, code = child_code(options.code_evidence.code, node)
             _need(constant.code_key == options.code_evidence.code_layout_key and constant.constant_path == (index,),
@@ -365,7 +365,7 @@ def validate_generator_regions(model, graph, interface, metadata, semantic, lang
                   == tuple(captured_cell_slot(definition.id, name) for name in code.co_freevars),
                   "closure order/names differ from childCode")
             if creation_only:
-                from scar.analysis.source_generator_creation_lowering import creation_rule
+                from scar.analysis.source_generator_create import creation_rule
                 expected_rule = creation_rule()
             else: expected_rule = driver_rule()
             _need(create.rule == expected_rule and all(row.rule == create.rule for row in local_drivers),
@@ -426,7 +426,7 @@ def validate_generator_regions(model, graph, interface, metadata, semantic, lang
                       if link.source in lazy_sources and link.semantic_operation is not None),
                   "element/filter or attribute lookup executed eagerly outside B")
         else:
-            from scar.analysis.source_generator_creation_lowering import VERSION as CREATION_VERSION
+            from scar.analysis.source_generator_create import VERSION as CREATION_VERSION
             _need(create.rule.implementation.artifact.schema == (CREATION_VERSION if creation_only else VERSION),
                   "unsupported generator construction policy")
         claimed |= {body.id, *consumer_ids, *(row.region for row in local_drivers)}
@@ -453,7 +453,7 @@ def _validate_lazy_filters(body, source, local_operations, suspend, advance, met
         _need(not selected, 'lazy filters require the retained original source AST')
         return set()
     from scar.analysis.source_language import require_source_tree
-    from scar.analysis.source_string_validation import _ordered_next
+    from scar.analysis.source_string import _ordered_next
     from scar.ir.program.control import ProtocolValueKind as P
     nodes = [node for node in require_source_tree(tree, language.source, source)
              if isinstance(node, ast.GeneratorExp)]
@@ -575,7 +575,7 @@ def _validate_lazy_strings(body, local_operations, model, graph, metadata, seman
     Uses; all CFG, state, releases and escape adapters remain the real records.
     """
     from scar.analysis.source_language import require_source_tree
-    from scar.analysis.source_string_validation import _ordered_next, _pending_group
+    from scar.analysis.source_string import _ordered_next, _pending_group
     from scar.ir.program.control import ProtocolValueKind as P
     from types import SimpleNamespace
     kinds = (Kind.FSTRING_CONVERT, Kind.FSTRING_FORMAT, Kind.BUILD_STRING)

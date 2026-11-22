@@ -59,7 +59,7 @@ def source_result_barrier(ctx, write, *, budget=None):
     """
     from scar.ir.v2.evidence import EvidenceNodeKind
     from .effects import effect_context
-    from .production_ranges import _profile
+    from scar.ir.execution.production_query import _profile
     from scar.ir.execution.source_validation import resolve_edge, resolve_raw
 
     path = f'writes[{write.id}].source_result'
@@ -140,7 +140,7 @@ def source_result_barrier(ctx, write, *, budget=None):
 
 
 def _establishments(ctx):
-    from .production_ranges import resolve_actual_range
+    from scar.ir.execution.production_query import resolve_actual_range
 
     ctx.resolved_establishments = {}
     for row in ctx.established_productions.values():

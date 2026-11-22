@@ -11,9 +11,7 @@ from dataclasses import dataclass
 import dis
 import inspect
 
-from scar.analysis.observed_call_bindings import (
-    ObservedCallBinding, _check_owner, _dependency_session, _locate_body,
-)
+from scar.analysis.observed_call_bindings import ObservedCallBinding, _check_owner, _dependency_session, _locate_body
 from scar.analysis.program_dependency_export import _Tables
 from scar.ir.program.call_edges import CallRecordAnchor, CapturedSite, FrameCompletion, FrameExit
 from scar.ir.program.contextual_calls import StaticCallInterface
@@ -164,7 +162,7 @@ def _implicit_terminal(body, terminal, structured):
 
 
 def _protected_return_site(body, code, exit_, returns, protected, interface):
-    from scar.analysis.observed_return_routes import compiler_return_producer, cleanup_continuation
+    from scar.analysis.observed_call_bindings import compiler_return_producer, cleanup_continuation
     producer = compiler_return_producer(code, exit_.return_site.offset)
     if producer is None or body.document.get('structured') is None:
         return None

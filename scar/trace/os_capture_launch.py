@@ -389,7 +389,7 @@ def bind_os_capture_provider(root,*,run,native,native_artifact,command,archive,p
           and launch['target_argv_index']==intent['target_argv_index']
           and launch['actual_exec_argv'][launch['target_argv_index']:]==command,
           'actual launch namespace/target boundary differs')
-    from scar.trace.capture_coordinates import collector_namespace
+    from scar.trace.control_transfers import collector_namespace
     _,native_nonce,_=collector_namespace(native)
     _need(declaration.get('native_nonce')==native_nonce,'native/provider nonce association differs')
     _need(launch['status']=='CLOSED' and launch['returncode']==0 and launch['failure'] is None

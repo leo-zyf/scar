@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import sys
 
-from scar.analysis import source_contexts as C, source_context_view, source_roles, source_syntax
+from scar.analysis import source_contexts as C, source_context_view, source_role_materials as source_roles, source_syntax
 from scar.analysis import compiler_stage_cache
 from scar.analysis import source_compiled_values as compiled, source_text_values, source_compilation_contexts
 from scar.analysis.normal_facts import SourceFactStore

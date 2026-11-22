@@ -215,7 +215,7 @@ def expression(builder, node, cursor):
         return lower_source_expression(builder, node, cursor, definition=definition,
             evaluate=lambda child, at: expression(builder, child, at))
     if isinstance(node, ast.JoinedStr):
-        from scar.analysis.source_string_lowering import lower_joined_string
+        from scar.analysis.source_string import lower_joined_string
         return lower_joined_string(builder, node, cursor, recover_missing_children=True)
     if isinstance(node, ast.Attribute):
         children = ((node.value, 'receiver', 0),); opcode = Opcode.ATTRIBUTE

@@ -1060,7 +1060,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
     for node in expected_statements:
         source=_module_statement_ref(context,node)
         if isinstance(node,ast.Assert):
-            from scar.analysis.source_module_assertion_validation import validate_module_assertion
+            from scar.analysis.source_guards import validate_module_assertion
             validate_module_assertion(node,expansions[source],context=context,code_evidence=code_evidence,
                 profile=result.profile,overlay=overlay,blocks=blocks,operations=operations,values=values,
                 protocols=protocols,invoke=invoke,expression_value=expression_value,
@@ -1089,7 +1089,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
                   'class statement has no checked parent construction')
         elif isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
             _need(extended,'function construction requires explicit mapping BODY profile')
-            from scar.analysis.source_mapping_function_validation import validate_mapping_function
+            from scar.analysis.source_mapping_functions import validate_mapping_function
             validate_mapping_function(node,source=source,graph=graph,overlay=overlay,semantic=result.semantic,
                 code_evidence=code_evidence,globals_namespace=abi.globals_namespace,locals_namespace=abi.locals_namespace)
         elif isinstance(node,ast.If):

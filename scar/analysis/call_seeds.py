@@ -20,7 +20,7 @@ from scar.ir.program.call_edges import (
 from scar.ir.program.call_seeds import (
     CallSourceSeedModel, EnteredCodeGroup, SeedCollectionMetadata,
 )
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.record_codec import decode, encode
 
 
@@ -195,7 +195,7 @@ class _CapturedSourceSession:
         from scar.analysis.captured_source_owner import CapturedSourceOwner
         from scar.analysis.source_discovery import _root_has_initializer
         from scar.ir.program.providers import ProviderArtifact
-        from scar.trace.capture_coordinates import CaptureCoordinates
+        from scar.trace.control_transfers import CaptureCoordinates
         from scar.trace.captured_sources import PROGRAM_PORTS_PROFILES
         candidates=[meta for meta in scanned.metadata if meta.get('capture_profile') in PROGRAM_PORTS_PROFILES]
         _require(candidates,'captured session needs an original program-ports process')

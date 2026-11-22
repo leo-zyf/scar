@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from .lifecycle_flow import TerminalFacts, derive_terminal_facts
-from .session_flow import SessionFacts, derive_session_facts
+from scar.ir.program.session_flow import SessionFacts, derive_session_facts
 
 
 @dataclass(frozen=True, slots=True)

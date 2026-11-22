@@ -11,7 +11,7 @@ from pathlib import Path
 
 from scar.analysis.compiler_contexts import CompilerCodeIndex
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.source_reference_slice import ReferenceSlicer
+from scar.analysis.source_references import ReferenceSlicer
 from scar.analysis.source_template_links import _json
 from scar.analysis.static_query import _Fragments
 from scar.compiler.graph_frontend import _source_identity

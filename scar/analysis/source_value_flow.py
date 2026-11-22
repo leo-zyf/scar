@@ -16,7 +16,7 @@ from scar.analysis.normal_graph import normal_edges, _Emitter
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_reference_consumers import read_reference_consumers, argument_points
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_template_links import _json

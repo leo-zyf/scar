@@ -9,7 +9,7 @@ from scar.analysis.csr_topology_scope import (
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_declared_catalog import DeclaredSourceCatalog
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import data_reach
 from scar.analysis.sparse_solve_scope import SCHEMA as SOLVE, check_sparse_solve_scope
 from scar.ir.execution_recipe import artifact_reference, read_artifact

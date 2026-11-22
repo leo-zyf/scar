@@ -15,7 +15,7 @@ from typing import Protocol,runtime_checkable
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_function_interfaces import SourceFunctionInterfaceStore
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.analysis.source_world_returns import _table_ref
 from scar.analysis.call_inputs import FunctionDefaultStateProvider

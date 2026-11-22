@@ -84,7 +84,7 @@ literal = None
 def test_f3b_closed_source_field_roles(family, monkeypatch):
     from dataclasses import replace
     import _symtable
-    import scar.analysis.source_roles as api
+    import scar.analysis.source_role_materials as api
     from scar.ir.program.source_roles import SlotRef
     from scar.ir.program.source_syntax import AstOccurrence, AstValue
 

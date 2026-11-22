@@ -10,7 +10,7 @@ import multiprocessing
 import re
 import time
 
-from scar.analysis import source_context_materials as _c1, source_role_materials as _b
+from scar.analysis import source_context_interfaces as _c1, source_role_materials as _b
 from scar.analysis.source_materials import _stamps
 from scar.analysis.source_stage import SourceStage
 from scar.analysis.source_store import (
@@ -178,7 +178,7 @@ def model_source_declarations(model, out, *, roles_materials=None, contexts_mate
         max_boundaries=1_000_000, max_names=1_000_000, max_contributions=1_000_000, max_conflicts=100_000):
     from scar.analysis.source_declarations import source_declaration_catalog
     from scar.analysis.source_contexts import source_context_catalog
-    from scar.analysis.source_roles import source_role_catalog
+    from scar.analysis.source_role_materials import source_role_catalog
     limits = dict(max_nodes=max_nodes, max_tokens=max_tokens, max_ports=max_ports, max_slots=max_slots,
         max_scopes=max_scopes, max_regions=max_regions, max_boundaries=max_boundaries,
         max_names=max_names, max_contributions=max_contributions, max_conflicts=max_conflicts)

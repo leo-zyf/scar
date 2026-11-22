@@ -13,7 +13,7 @@ from scar.analysis.source_declared_catalog import read_source_catalog
 from scar.analysis.source_control import _enclosed, loop_dependencies
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
 from scar.analysis.source_name_definitions import reaching_name_definitions
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.compiler.graph_frontend import _metadata
 from scar.ir.execution_recipe import artifact_reference, read_artifact

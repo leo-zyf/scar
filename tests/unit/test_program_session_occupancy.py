@@ -10,7 +10,7 @@ from scar.ir.program.protocol_connection_flow import ConnectionContext
 from scar.ir.program.protocol_connections import RequestAssociation, SessionOccupancyCondition
 from scar.ir.program.protocols import AdmissionPredicate
 from scar.ir.program.queries import ProgramIndex
-from scar.ir.program.session_occupancy import occupancy_errors, occupancy_view
+from scar.ir.program.session_flow import occupancy_errors, occupancy_view
 from scar.ir.program.validation import require_valid, validate
 from tests.fixtures.program_async_competition_graphs import async_competition_program
 

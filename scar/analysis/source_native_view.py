@@ -15,7 +15,7 @@ from scar.analysis.native_state import NativeStateSession
 from scar.analysis.native_state_materials import NativeStateMaterials
 from scar.analysis.source_call_view import Flow, source_call_site, source_caller_scope, prepare_source_ports
 from scar.analysis.source_declared_calls import DeclaredCallStore, _owners
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import native_contracts as S
 from scar.ir.program.dependencies import (

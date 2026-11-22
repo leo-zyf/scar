@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import (_GraphLowerer,_source_identity,_metadata,_origin,
     GraphRegionRejected,_reject,_ENV,_WORLD)
 from scar.compiler.pipeline_frontend import discover_graph_pipelines, _global_functions, _Callee

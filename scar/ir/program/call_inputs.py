@@ -3,11 +3,7 @@
 from dataclasses import dataclass
 from scar.ir.program.normal_graph import CallLink, Endpoint, GlobalPort, FunctionConnection, RouteKind, Body
 from scar.ir.program.providers import ProviderFactReference, ProviderArtifact
-from scar.ir.program.source_value_routes import (
-    ReferenceTransition,
-    ReferenceOrigin,
-    ReferenceFrontier,
-)
+from scar.ir.program.source_value_routes import ReferenceTransition, ReferenceOrigin, ReferenceFrontier
 from enum import Enum
 from scar.ir.program.ids import LocationID, ValueID, OperationID
 from scar.ir.program.source_productions import DeferredParameter
@@ -15,7 +11,7 @@ from scar.ir.program import source_bindings as B, source_productions as P
 from scar.ir.program.dependencies import DependencyFrame
 from scar.ir.program.state_ports import BindingLocationTemplate
 from scar.ir.program.normal_graph import CodeScopeRef
-from scar.ir.program.namespace_routes import NamespaceReferenceSlice, NamespaceSelector
+from scar.ir.program.name_flow import NamespaceReferenceSlice, NamespaceSelector
 
 
 # Matched static incoming interfaces, distinct from runtime invocations.

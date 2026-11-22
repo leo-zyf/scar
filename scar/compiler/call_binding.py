@@ -61,7 +61,7 @@ def _function_code_matches(code,function,name,lines):
 def _static_call_mapping(view,unit):
     """Load the original static mapper only for explicit planning/replay."""
     from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
-    from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+    from scar.analysis.source_references import ReferenceSlicer, source_port
     from scar.analysis.source_namespace_interfaces import NamespacePlanView
     from scar.analysis.source_declared_calls import _owners
 
@@ -91,12 +91,12 @@ def plan_call_bindings(catalog,source,*,entry=None,call_indices=None,max_targets
     original F4 ABI checks in ObservedSourceCallsiteIndex own correspondence.
     """
     from scar.analysis.program_view import ProgramView
-    from scar.analysis.source_reference_slice import source_port
+    from scar.analysis.source_references import source_port
     from scar.compiler.graph_frontend import _source_identity,_metadata
     from scar.ir.program.call_edges import CapturedCode
     from scar.ir.record_codec import decode,encode
     from scar.ir.semantics_v2 import SourceSnapshot
-    from scar.trace.code_snapshot import describe_code,site
+    from scar.trace.code_snapshot import describe_code, site
     from scar.trace.lean_capture import LeanBodyPlan
 
     if type(max_targets_per_site)is not int or max_targets_per_site not in (1,2):

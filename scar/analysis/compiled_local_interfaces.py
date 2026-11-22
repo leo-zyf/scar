@@ -11,11 +11,11 @@ import json
 from pathlib import Path
 import time
 
-from scar.analysis.observed_compiled_material import ObservedCompiledLocalMaterial
+from scar.analysis.observed_code_correspondence import ObservedCompiledLocalMaterial
 from scar.analysis.source_interface_build import _project
 from scar.analysis.source_interface_store import SourceInterfaceStore, file_receipt, projection_pins
 from scar.analysis.source_productions import _digest
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.program import normal_graph as F, source_productions as P

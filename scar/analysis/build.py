@@ -39,7 +39,7 @@ def _rules():
             'program_view.py', 'program_view_storage.py', '../ir/program/view.py',
             'source_region_projection.py', 'source_content.py', 'source_content_lineage.py',
             '../ir/program/data_materials.py', 'program_state_view.py', 'program_state_coverage.py',
-            'program_inventory_admission.py', 'source_graph_material.py',
+            'program_inventory.py', 'source_graph_material.py',
             'source_effect_projection.py', 'source_effects.py', 'source_state.py',
             'source_call_binding_view.py', 'bounded_function_interfaces.py', 'source_call_view.py',
             'retained_code_bodies.py', 'source_function_connections.py', 'call_inputs.py',

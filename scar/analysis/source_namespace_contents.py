@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from scar.analysis.source_namespace_interfaces import CallerReferencePaths, NamespacePlanView
-from scar.ir.program import normal_graph as F, normal_graph as T, namespace_routes as N
+from scar.ir.program import normal_graph as F, normal_graph as T, name_flow as N
 from scar.ir.program.source_exec_roots import ExecNamespaceKind
 from scar.ir.literals import PythonLiteral
 

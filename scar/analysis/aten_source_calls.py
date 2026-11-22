@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
 from scar.analysis.source_observed_codes import ObservedSourceCodeProvider
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state
 from scar.ir.program import normal_graph as G, normal_graph as T, source_productions as P

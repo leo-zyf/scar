@@ -171,7 +171,7 @@ class ProgramDependencySession:
     def _register_publication(self, publication, index_directory, family):
         from scar.analysis.static_calls import input_basis_unit
         from scar.analysis.static_basis_compatibility import published_units_basis_compatible
-        from scar.analysis.static_body_materialization import diagnostic_materializations
+        from scar.analysis.static_body import diagnostic_materializations
         expected = "scar.static-call-publication" if family == "calls" else "scar.static-class-publication"
         if publication.get("schema") != expected:
             raise ValueError("unsupported " + family + " dependency publication")
@@ -940,7 +940,7 @@ class ProgramDependencySession:
                     yield shard, locator
 
     def class_bindings_for(self, point):
-        from scar.analysis.static_class_builder import validate_class_builder_expansion
+        from scar.analysis.static_class_construction import validate_class_builder_expansion
         from scar.ir.program.class_builder import ClassBuilderExpansion, StaticClassBuilderBinding
         from scar.ir.program.source_language import decode_language_overlay
         from dataclasses import fields
@@ -994,8 +994,8 @@ class ProgramDependencySession:
         from scar.analysis.program_dependencies import ProgramDependencyGraph
         from scar.analysis.program_call_dependencies import StaticCallDependencyProvider
         from scar.analysis.program_class_dependencies import ClassDependencyProvider
-        from scar.analysis.program_function_origin_discovery import AutomaticFactoryEntryOrigins
-        from scar.analysis.program_function_origin_dependencies import FactoryEntryOriginDependencyProvider
+        from scar.analysis.program_function_origins import AutomaticFactoryEntryOrigins
+        from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
         from scar.analysis.program_entry_namespace_dependencies import EntryNamespaceDependencyProvider
         from scar.analysis.program_unpack_dependencies import UnpackProjectionProvider
         graph = getattr(self, "_view", None)
@@ -1051,7 +1051,7 @@ class ProgramDependencySession:
         mapped parent. The bindings have already passed this session's fresh
         original-input checks; this callback does not rescan relationship IO.
         """
-        from scar.analysis.static_class_links import _constructions
+        from scar.analysis.static_class_construction import _constructions
         from scar.ir.program.dependencies import DependencyFrontier, DependencyNeighborhood
         if not self._class_interface_point(point, incoming):
             return DependencyNeighborhood()
@@ -1075,7 +1075,7 @@ class ProgramDependencySession:
 
     def _class_interface_point(self, point, incoming):
         """Limit a missing-publication frontier to actual interface endpoints."""
-        from scar.analysis.static_class_links import _constructions
+        from scar.analysis.static_class_construction import _constructions
         from scar.ir.program.ids import UseID, ValueID
         from scar.ir.program.model import TerminatorKind
         body = self.load(point.namespace)

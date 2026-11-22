@@ -11,7 +11,7 @@ from scar.analysis.call_demand import inventory_from_calls
 from scar.analysis.call_seeds import CallSourceSeedReport, read_call_source_seeds
 from scar.analysis.program_inventory import ProgramInventory
 from scar.ir.program.call_edges import CallEdgeBudget
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.program.expansion import ContextStoreBudget
 from scar.ir.program.inventory import InventoryBudget
 from tests.integration.test_call_source_seeds_cli import cli, read

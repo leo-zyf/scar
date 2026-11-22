@@ -12,7 +12,7 @@ from pathlib import Path
 
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_call_view import source_call_site,function_interface_fact
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.caller_pipeline import _abi,_global_name,_reference,_signature
 from scar.compiler.graph_frontend import _origin,_reject,_ENV,_WORLD,_Scalar
 from scar.compiler.loop_frontend import _LoopLowerer,_Parameter,_Range,_Iterator,_RANGE,_ITEM

@@ -21,14 +21,14 @@ from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_name_access_anchors import anchor_name_accesses, _bindings
 from scar.analysis.source_name_definitions import reaching_name_definitions
 from scar.analysis.source_namespace_interfaces import NamespaceReferenceResolver, _Query
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_value_flow import _artifact, project_value_flow
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.ir.program import name_flow as R, name_flow as A
-from scar.ir.program import name_flow as D, namespace_routes as N
+from scar.ir.program import name_flow as D, name_flow as N
 from scar.ir.program import normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.record_codec import decode, encode
 

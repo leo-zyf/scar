@@ -8,7 +8,7 @@ from pathlib import Path
 from collections import defaultdict
 from scar.analysis.source_construction import ConstructionFlow
 from scar.analysis.source_container_delta import DeltaContainerFlow
-from scar.analysis.source_class_queries import subtype_relation, inherited_object_relation
+from scar.analysis.source_class_body import subtype_relation, inherited_object_relation
 
 
 # Read selected relation rows with bounded decoded memory and full receipts.

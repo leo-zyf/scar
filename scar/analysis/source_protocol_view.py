@@ -18,7 +18,7 @@ from scar.analysis.source_call_captures import FunctionCaptureStateProvider
 from scar.analysis.source_declared_calls import _owners
 from scar.analysis.source_protocol_materials import SourceProtocolMaterials
 from scar.analysis.source_protocols import SourceProtocolFrontierProvider
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import _artifact
 from scar.ir.program import normal_graph as T, model as M, view as V, source_protocols as R
 from scar.ir.program.dependencies import (

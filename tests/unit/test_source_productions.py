@@ -781,7 +781,7 @@ def test_original_source_inputs_fields_contexts_and_binding_ports():
     from scar.analysis.source_bytes import source_bytes_document
     from scar.analysis.source_tokens import source_tokens_document
     from scar.analysis.source_syntax import source_syntax_document
-    from scar.analysis.source_roles import source_roles_document
+    from scar.analysis.source_role_materials import source_roles_document
     from scar.analysis.source_contexts import source_contexts_document
     from scar.analysis.source_declarations import source_declarations_document
     from scar.analysis.source_bindings import source_bindings_document

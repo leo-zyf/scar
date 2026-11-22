@@ -337,7 +337,7 @@ def connection_reports(ctx):
         if type(row.contract) is AdmissionPredicate and type(row.contract.subject) is RequestStateCondition:
             predicate_issues.extend(request_state_errors(ctx, row))
         elif type(row.contract) is AdmissionPredicate and type(row.contract.subject) is SessionOccupancyCondition:
-            from .session_occupancy import occupancy_errors
+            from scar.ir.program.session_flow import occupancy_errors
             predicate_issues.extend(occupancy_errors(ctx, row))
         elif (type(row.contract) is AdmissionPredicate
               and type(row.contract.subject) in (BodyStateCondition, ReferenceIsNoneCondition)

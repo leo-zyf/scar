@@ -24,7 +24,7 @@ from scar.ir.program import source_protocols as D, suspension_interfaces as S
 from scar.analysis.source_template_links import read_template_body
 from scar.ir.program import normal_graph as T
 from scar.ir.program import source_productions as P
-from scar.ir.program import namespace_routes as N
+from scar.ir.program import name_flow as N
 from scar.ir.program import normal_graph as G
 from scar.ir.program import normal_graph as F
 from scar.ir.program.python_bindings import SourceCallSite

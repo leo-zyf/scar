@@ -9,7 +9,7 @@ from types import SimpleNamespace as NS
 
 from scar.analysis.source_call_view import SourceFunctionCallProvider,function_interface_fact,source_call_site
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import ReferenceSlicer,source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.ir.program import normal_graph as G, normal_graph as T
 from scar.ir.program import call_returns as R

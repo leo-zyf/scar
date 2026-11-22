@@ -4,11 +4,7 @@ from dataclasses import fields, replace
 
 import pytest
 
-from scar.ir.program.call_demand import (
-    BodyExpansionV6, CallSourceAdmission, CallSourceAdmissionStatus, CallSourceScope,
-    DemandOrigin, DemandOriginKind, EnteredCallCode, EntryRoot, ExpansionScheduleV6,
-    LegacyObservation, Remainder, SourceCallCandidate,
-)
+from scar.ir.program.call_composition import BodyExpansionV6, CallSourceAdmission, CallSourceAdmissionStatus, CallSourceScope, DemandOrigin, DemandOriginKind, EnteredCallCode, EntryRoot, ExpansionScheduleV6, LegacyObservation, Remainder, SourceCallCandidate
 from scar.ir.program.expansion import ContextStoreBudget, ContextUnavailable
 from scar.ir.program.ids import OperationID, RegionID
 from scar.ir.program.inventory import BodyStatus

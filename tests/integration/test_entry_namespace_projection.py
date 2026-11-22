@@ -10,7 +10,7 @@ import pytest
 
 def test_entry_globals_reach_initializer_without_call_publication_and_respect_overwrites(tmp_path):
     from scar.analysis.program_dependency_session import ProgramDependencySession, ProgramDependencyBudget
-    from scar.analysis.static_class_publication import link_static_class_program
+    from scar.analysis.static_class_construction import link_static_class_program
     from scar.analysis.static_crossbody_namespace import StaticNamespaceBody
     from scar.analysis.static_entry_namespace import validate_entry_namespace_projection
     from scar.ir.program.dependencies import DependencyPoint as P, DependencyKind as K, GraphNamespace
@@ -85,7 +85,7 @@ def test_entry_globals_reach_initializer_without_call_publication_and_respect_ov
 
 def test_contextual_call_solver_consumes_entry_and_import_sources_with_guarded_interfaces(tmp_path):
     from scar.analysis.static_calls import StaticCallSession
-    from scar.analysis.static_class_publication import link_static_class_program
+    from scar.analysis.static_class_construction import link_static_class_program
     from scar.ir.program.contextual_calls import ContextualCallTarget
     from scar.ir.program.dependencies import OpenDependencyContext, DependencyKind as K, DependencyPoint as P, GraphNamespace
     from scar.ir.record_codec import decode, encode

@@ -61,7 +61,7 @@ def dispatch_source_expression(builder, node, cursor):
                 return lower_source_literal(builder, node, cursor)
     if (builder.has_language("STARRED_DISPLAY_314_V1") and isinstance(node,(ast.Tuple,ast.List))
             and isinstance(node.ctx,ast.Load) and any(isinstance(n,ast.Starred)for n in node.elts)):
-        from scar.analysis.source_display_lowering import lower_starred_display
+        from scar.analysis.source_displays import lower_starred_display
         return lower_starred_display(builder,node,cursor)
     if builder.has_language("COMPREHENSION_314_V1") and isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp)):
         from scar.analysis.source_comprehension_lowering import lower_comprehension
@@ -71,13 +71,13 @@ def dispatch_source_expression(builder, node, cursor):
         if needs_code_constant(node):
             return lower_code_constant(builder, node, cursor)
     if builder.has_language('LAMBDA_EXPRESSION_314_V1') and isinstance(node,ast.Lambda):
-        from scar.analysis.source_lambda_lowering import lower_lambda
+        from scar.analysis.source_lambda import lower_lambda
         return lower_lambda(builder,node,cursor)
     if builder.has_language("SET_DISPLAY_314_V1") and isinstance(node, ast.Set):
         from scar.analysis.source_set_lowering import lower_set_display
         return lower_set_display(builder, node, cursor)
     if builder.has_language("GENEXPR_CREATION_314_V1") and isinstance(node, ast.GeneratorExp):
-        from scar.analysis.source_generator_creation_lowering import lower_creation
+        from scar.analysis.source_generator_create import lower_creation
         return lower_creation(builder, node, cursor)
     if builder.has_language("GENEXPR_314_V1") and isinstance(node, ast.GeneratorExp):
         from scar.analysis.source_generator_lowering import lower_generator
@@ -98,7 +98,7 @@ def dispatch_source_expression(builder, node, cursor):
         from scar.analysis.source_mapping_lowering import lower_dictionary
         return lower_dictionary(builder, node, cursor)
     if isinstance(node, ast.JoinedStr):
-        from scar.analysis.source_string_lowering import lower_joined_string
+        from scar.analysis.source_string import lower_joined_string
         return lower_joined_string(builder, node, cursor)
     if isinstance(node, ast.BoolOp):
         from scar.analysis.source_conditional_lowering import lower_bool_expression
@@ -143,7 +143,7 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
             from scar.analysis.source_generator_lowering import assemble_generators
             graph = assemble_generators(self, graph)
         if hasattr(self,'lambda_bodies'):
-            from scar.analysis.source_lambda_lowering import assemble_lambda_bodies
+            from scar.analysis.source_lambda import assemble_lambda_bodies
             graph = assemble_lambda_bodies(self,graph)
         return graph
 
@@ -268,7 +268,7 @@ class StructuredEnvironmentBuilder(StructuredBuilder):
                 from scar.analysis.source_class_construction_lowering import lower_class_construction
                 cursor = lower_class_construction(self, node, cursor)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and self.has_language('NESTED_FUNCTION_314_V1'):
-                from scar.analysis.source_function_definition_lowering import lower_function_definition
+                from scar.analysis.source_function_definitions import lower_function_definition
                 cursor = lower_function_definition(self, node, cursor)
             elif isinstance(node, (ast.Import, ast.ImportFrom)) and self.has_language('FUNCTION_IMPORT_314_V1'):
                 from scar.analysis.source_import_lowering import lower_import

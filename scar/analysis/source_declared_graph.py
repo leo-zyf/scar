@@ -9,7 +9,7 @@ import time
 from scar.analysis import source_declared_contexts as engine
 from scar.analysis.source_declared_contexts import DeclaredResolver, expand_contexts
 from scar.analysis.source_field_graph import read_field_graph
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_relation_snapshot import RelationSnapshot
 from scar.analysis.normal_output import write_table
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir

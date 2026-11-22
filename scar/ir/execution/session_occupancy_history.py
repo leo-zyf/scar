@@ -468,7 +468,7 @@ class _BodyHistory:
             return ordinary
         stored = None
         if self.ctx.program.stored_value_reads:
-            from .value_sources import source_pair
+            from scar.ir.execution.stored_values import source_pair
             stored = source_pair(self.ctx, source, target, self.shared)
             if stored['match'] is False or self.shared.truncated:
                 return {**stored, 'ordinary_binding': ordinary, 'stored_source_binding': stored}

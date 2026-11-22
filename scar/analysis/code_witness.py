@@ -22,7 +22,7 @@ from types import CodeType
 
 from scar.analysis.call_compilation import compile_cache_key
 from scar.ir.program.call_edges import CapturedCode
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.record_codec import encode, loads as strict_loads
 from scar.trace.code_snapshot import describe_code
 

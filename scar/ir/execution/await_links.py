@@ -517,7 +517,7 @@ def _wrapper_projection(ctx, source, advance, route, projection, gaps, shared):
     chosen from the drive or inferred from the only visible body activation.
     """
     from scar.ir.execution.order_validation import host_path
-    from .resumable_identity import compatible, distinct_objects
+    from scar.ir.execution.resumable_identity import compatible, distinct_objects
     ref = projection.constructor
     row = ctx.await_protocol_rows.get((ref.scope, ref.clause, ref.operation, ref.slot))
     constructors = []
@@ -614,7 +614,7 @@ def _wrapper_projection(ctx, source, advance, route, projection, gaps, shared):
 
 def await_identity_errors(ctx, shared):
     """Refresh conditional compatibility against this query's external snapshot."""
-    from .resumable_identity import compatible
+    from scar.ir.execution.resumable_identity import compatible
     from scar.ir.execution.order_validation import host_path
     from scar.ir.program.protocol_await_records import WrapperHeldBody
     comparisons = 0
@@ -825,7 +825,7 @@ def await_body_links(ctx, scope, *, shared):
             if cursor is None:
                 cursor = {'phase': 'await_copy_support', 'target': value.id}
             break
-        from .resumable_identity import compatible
+        from scar.ir.execution.resumable_identity import compatible
         gaps = []
         comparison = compatible(ctx, ctx.values[recipe['source']], value, gaps,
                                 f'await-copy:{value.id}')

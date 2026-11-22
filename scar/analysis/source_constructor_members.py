@@ -14,7 +14,7 @@ import time
 from scar.analysis.source_call_context_graph import CallContextParents, read_call_context_graph
 from scar.analysis.class_bindings import constructor_context_inputs
 from scar.analysis.source_declared_contexts import DeclaredResolver, expand_contexts
-from scar.analysis.source_reference_slice import ReferenceSlicer
+from scar.analysis.source_references import ReferenceSlicer
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_value_flow import project_value_flow, _artifact
 from scar.analysis.source_world_returns import _table_ref

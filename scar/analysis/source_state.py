@@ -14,7 +14,7 @@ from scar.analysis.source_effects import classify_instruction
 from scar.analysis.source_name_access_anchors import _bindings, anchor_name_accesses
 from scar.analysis.source_name_definitions import reaching_name_definitions
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_consumer_parents import _stamp
 from scar.ir.program import state_ports as S, source_productions as P

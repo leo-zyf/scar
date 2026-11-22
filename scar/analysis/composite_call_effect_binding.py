@@ -13,7 +13,7 @@ from pathlib import Path
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.graph_frontend import _origin
 from scar.compiler.source_function_components import SourceFunctionComponents
 from scar.ir.program import normal_graph as T, source_productions as P

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from scar.analysis.normal_graph import normal_edges
 from scar.analysis.program_view import ProgramView
 from scar.analysis.source_content_forwarding import _Refuse, _normal_route
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P

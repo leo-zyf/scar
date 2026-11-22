@@ -1,7 +1,7 @@
 """Call inputs."""
 
 from collections import defaultdict, deque
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port, DECLARED
+from scar.analysis.source_references import ReferenceSlicer, source_port, DECLARED
 from scar.ir.program import call_inputs as X, source_value_routes as R, normal_graph as T, normal_graph as F, source_productions as P, call_inputs as D, view as V, model as M
 from dataclasses import replace, dataclass
 from scar.analysis.program_view import _digest

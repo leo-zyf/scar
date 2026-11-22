@@ -23,10 +23,7 @@ from scar.analysis.source_bytes import decoded_source_bytes
 from scar.analysis.source_syntax import read_source_syntax
 from scar.analysis.source_tokens import _error
 from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.source_symbols import (
-    RawScopeMember, SourceScope, SourceSymbol, SourceSymbolsInput,
-    SourceSymbolsMaterial, SourceSymbolsProfile, SymbolConstant, SymbolFrontier,
-)
+from scar.ir.program.source_paths import RawScopeMember, SourceScope, SourceSymbol, SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile, SymbolConstant, SymbolFrontier
 from scar.ir.program.source_bytes import SourceTokenWarning
 from scar.ir.record_codec import decode, encode
 

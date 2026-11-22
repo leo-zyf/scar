@@ -9,7 +9,7 @@ from scar.analysis.normal_graph import normal_edges
 from scar.analysis.program_view import ProgramView
 from scar.analysis.retained_code_bodies import RetainedCodeBodyIndex
 from scar.analysis.call_inputs import call_operands
-from scar.analysis.source_reference_slice import source_port
+from scar.analysis.source_references import source_port
 from scar.compiler.call_binding import plan_call_bindings
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G

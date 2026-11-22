@@ -23,7 +23,7 @@ from scar.ir.program.call_edges import CallRecordAnchor, InvocationKey
 from scar.ir.program.providers import ProviderArtifact, ProviderFactReference
 from scar.ir.program.source_references import SourceDefinitionReference
 from scar.ir.record_codec import decode, encode, loads as strict_loads
-from scar.trace.capture_coordinates import CaptureCoordinates
+from scar.trace.control_transfers import CaptureCoordinates
 from scar.trace.dispatch_evidence import PRODUCTION_PROFILE
 
 
@@ -208,7 +208,7 @@ class _PartitionedSourceScope:
 
     def binding(self, binding):
         from scar.ir.program.call_edges import CodeCapture, CodeSourceLink, CallLinkStatus
-        from scar.ir.program.call_demand import CallSourceAdmission, CallSourceAdmissionStatus
+        from scar.ir.program.call_composition import CallSourceAdmission, CallSourceAdmissionStatus
         from scar.ir.program.ids import RegionID
         from scar.ir.v2.ids import OperationDefinitionID
         _need(type(binding["process_id"]) is int and binding["process_id"] > 0,

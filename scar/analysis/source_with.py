@@ -5,11 +5,7 @@ from __future__ import annotations
 import ast
 import dis
 from scar.analysis.program_lowering import _Unsupported, _BOOL, _REF
-from scar.analysis.source_language import (
-    supports_cpython_compiler,
-    function_exception_types,
-    require_source_tree,
-)
+from scar.analysis.source_language import supports_cpython_compiler, function_exception_types, require_source_tree
 from scar.analysis.source_function_try_lowering import FunctionTryBuilder
 from scar.ir.program.control import (
     ControlPort,

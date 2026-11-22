@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 
 from scar.analysis.source_field_interfaces import _InterfaceOnly
 from scar.analysis.source_function_connections import Invocation, connect
-from scar.analysis.source_reference_slice import DECLARED, source_port
+from scar.analysis.source_references import DECLARED, source_port
 from scar.ir.program import declared_contexts as D, normal_graph as F, normal_graph as T
 
 

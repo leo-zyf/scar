@@ -1,10 +1,40 @@
-"""F3-A official public compiler scope facts; AST correspondence is separate."""
+"""Source paths."""
+
 from dataclasses import dataclass
+from scar.ir.program.normal_graph import GlobalPort
+from scar.ir.program.source_exec_roots import ExecEndpoint
+from scar.ir.program.name_flow import NamespaceInterfaceRef
+from scar.ir.program.source_frame_bindings import ContextEndpoint
+from scar.ir.program.source_bytes import SourceBytesProfile, SourceTokenError, SourceTokenWarning
 
-from scar.ir.program.source_bytes import SourceBytesProfile
-from scar.ir.program.source_bytes import SourceTokenError, SourceTokenWarning
+
+# Conditional builtin-map selection over original namespace/world ports.
+@dataclass(frozen=True, slots=True)
+class GuardedBuiltinCandidate:
+    connection: str
+    access: GlobalPort
+    interface: NamespaceInterfaceRef
+    selected_at: ExecEndpoint
+    capturing_function: GlobalPort | None
+    conditions: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class BuiltinNamespaceSelection:
+    """A possible globals entry at selection time, not an immutable snapshot."""
+    connection: str
+    access: GlobalPort
+    interface: NamespaceInterfaceRef
+    selected_at: ExecEndpoint
+    capturing_function: GlobalPort | None
+    globals_reference: GlobalPort
+    globals_container: GlobalPort
+    source: ContextEndpoint
+    read_world: GlobalPort
+    conditions: tuple[str, ...]
+
+
+# F3-A official public compiler scope facts; AST correspondence is separate.
 @dataclass(frozen=True, slots=True)
 class SymbolConstant:
     name: str

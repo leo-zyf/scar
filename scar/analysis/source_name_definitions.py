@@ -10,7 +10,7 @@ from functools import cache
 from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_compilation_flow import _at, _item
 from scar.analysis.source_name_access_anchors import anchor_name_accesses
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T

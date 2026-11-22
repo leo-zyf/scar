@@ -17,7 +17,7 @@ from scar.analysis.source_call_view import source_call_site, prepare_source_port
 from scar.analysis.source_context_query import ContextTargetGraph
 from scar.analysis.source_declared_calls import _NoTargets, _check_targets, _owners
 from scar.analysis.source_launch import read_script_entry
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_value_flow import _artifact

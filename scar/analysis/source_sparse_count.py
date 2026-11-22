@@ -12,7 +12,7 @@ from struct import Struct
 
 from scar.analysis import source_triangle_seed as seed
 from scar.analysis.source_declared_catalog import read_source_catalog
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.compiler.graph_frontend import _metadata, _source_identity
 from scar.ir.execution_recipe import _canonical, artifact_reference, read_artifact
 from scar.ir.record_codec import encode

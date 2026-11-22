@@ -12,7 +12,7 @@ from pathlib import Path
 import resource
 from time import monotonic
 
-from scar.analysis.program_inventory_admission import admit_static_inventory
+from scar.analysis.program_inventory import admit_static_inventory
 from scar.analysis.program_state_coverage import _release
 from scar.analysis.program_view import ProgramView, _digest
 from scar.analysis.source_binding_inventory import BindingInventory

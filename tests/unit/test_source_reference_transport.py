@@ -2,7 +2,7 @@
 from collections import defaultdict,deque
 from types import SimpleNamespace
 
-from scar.analysis.source_reference_transport import ActiveReferenceTransport
+from scar.analysis.source_references import ActiveReferenceTransport
 
 
 def test_directed_cycle_late_edge_and_activation_boundary():

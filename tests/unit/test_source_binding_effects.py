@@ -7,7 +7,7 @@ from scar.analysis import source_binding_effects as E, source_name_definitions a
 from scar.analysis import source_frame_binding_effects as I
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T
 from scar.ir.program import source_bindings as B, name_flow as A
-from scar.ir.program import namespace_routes as N, source_productions as P, source_value_routes as V
+from scar.ir.program import name_flow as N, source_productions as P, source_value_routes as V
 from scar.ir.program import name_flow as D
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.model import ValueType, ValueKind

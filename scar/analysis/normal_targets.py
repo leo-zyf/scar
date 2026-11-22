@@ -34,7 +34,7 @@ from scar.analysis import normal_namespaces
 from scar.analysis import source_descriptors,source_function_connections,source_construction,source_generators,source_suspension_interfaces
 from scar.analysis.source_function_connections import Invocation,connect
 from scar.analysis.source_descriptors import DescriptorFlow
-from scar.ir.program import namespace_routes as N
+from scar.ir.program import name_flow as N
 from scar.ir.program import source_protocols as D, suspension_interfaces as S
 
 

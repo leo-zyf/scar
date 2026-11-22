@@ -8,7 +8,7 @@ from scar.ir.program.structured import PythonProtocolKind as K
 from hashlib import sha256
 import json
 from pathlib import Path
-from scar.analysis.source_roles import source_role_catalog
+from scar.analysis.source_role_materials import source_role_catalog
 from scar.analysis.source_syntax import _schema_and_digests
 from scar.ir.record_codec import encode
 

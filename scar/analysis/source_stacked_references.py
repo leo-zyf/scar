@@ -7,7 +7,7 @@ in another frame merely because both share an original source result port.
 from collections import defaultdict
 
 from scar.analysis.call_inputs import ContextReferenceEngine, _Query
-from scar.analysis.source_reference_slice import source_port, DECLARED
+from scar.analysis.source_references import source_port, DECLARED
 from scar.ir.program import call_inputs as X, source_value_routes as R
 from scar.ir.program import normal_graph as T, normal_graph as F
 

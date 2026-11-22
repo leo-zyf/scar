@@ -15,7 +15,7 @@ from .coverage import RegionRef, _ValueCatalog, _labeled_storage_coverage
 from .endpoint_protocol import same_materialization
 from .ids import ContentReadID
 from .production import RawRecordRef, WorkWrite
-from .production_query import production_shared
+from scar.ir.execution.production_query import production_shared
 from .validity_budget import ValidityBudget
 from .validity_stability import production_interval, read_domain, read_interval, stability
 from .validity_validation import resolve_support

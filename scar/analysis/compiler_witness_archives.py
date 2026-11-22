@@ -21,9 +21,9 @@ from scar.analysis.call_compilation import compile_cache_key, UnsupportedCompila
 from scar.analysis.code_witness import CodeWitnessBudget, CodeWitnessStore, CodeWitnessUnavailable
 from scar.analysis.program_composition import CompositionIndex
 from scar.ir.program.call_edges import CapturedCode, CodeCapture, CodeSourceLink, CallLinkStatus
-from scar.ir.program.compilation import CallCompilationProfile
+from scar.ir.program.function_origins import CallCompilationProfile
 from scar.ir.program.source_references import SourceDefinitionReference
-from scar.ir.program.call_demand import EnteredCallCode
+from scar.ir.program.call_composition import EnteredCallCode
 from scar.ir.record_codec import decode, encode
 from scar.ir.semantics_v2 import SourceSnapshot
 

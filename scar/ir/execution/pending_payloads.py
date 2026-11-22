@@ -124,7 +124,7 @@ def projection(ctx, target, shared):
                                             path='pending.payload.compatibility'):
                             local.append('pending_payload_budget')
                             break
-                        from .resumable_identity import compatible
+                        from scar.ir.execution.resumable_identity import compatible
                         identity_gaps = []
                         compatibility = compatible(ctx, payload_value, target,
                             identity_gaps, 'pending.payload.compatibility')

@@ -233,7 +233,7 @@ def _trace(args) -> int:
                                                 "wall_s": time.perf_counter() - start}, indent=2))
     if os_capture_root is not None and result.returncode == 0:
         from scar.trace.os_capture_launch import archive_owned_capture, publish_bytes
-        from scar.trace.capture_coordinates import bind_capture_coordinates
+        from scar.trace.control_transfers import bind_capture_coordinates
         archive_owned_capture(os_capture_root, budgets=os_budgets,workers=args.archive_workers)
         coordinate_path = os_capture_root / 'capture-coordinates.json'
         coordinates = bind_capture_coordinates(os_capture_root, max_bytes=os_budgets.max_raw_bytes,

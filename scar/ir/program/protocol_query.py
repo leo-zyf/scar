@@ -28,7 +28,7 @@ def _row_view(ctx, row, index=None):
             from .protocol_async import request_state_view
             predicate = request_state_view(ctx, row)
         elif type(contract.subject) is SessionOccupancyCondition:
-            from .session_occupancy import occupancy_view
+            from scar.ir.program.session_flow import occupancy_view
             predicate = occupancy_view(ctx, row)
         elif async_body_or_input:
             from .async_initial import async_predicate_view

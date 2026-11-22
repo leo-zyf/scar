@@ -307,7 +307,7 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
     from types import SimpleNamespace
     from scar.analysis.static_calls import input_basis_unit
     from scar.analysis.static_basis_compatibility import published_units_basis_compatible
-    from scar.analysis.static_body_materialization import diagnostic_materializations
+    from scar.analysis.static_body import diagnostic_materializations
     from scar.analysis.static_function_environment import (
         derive_function_environment_routes, validate_static_body_namespace, _source_reference,
     )
@@ -1153,14 +1153,14 @@ def main(argv=None):
             parser.error(str(error))
         started = time.monotonic()
         if args.infer_values:
-            from scar.analysis.program_queries import query_program_values
+            from scar.analysis.program_dependency_export import query_program_values
             from scar.analysis.program_value_analysis import ValueAnalysisBudget
             from scar.analysis.program_dependency_export import export_value_analysis
             report = query_program_values(args.model, file=args.file, entry=args.name, kind=args.kind,
                 node=args.node, value_budget=ValueAnalysisBudget(max_points=args.max_points, max_edges=args.max_edges))
             result = export_value_analysis(report)
         elif args.boundary_operation:
-            from scar.analysis.program_queries import query_program_boundary
+            from scar.analysis.program_dependency_export import query_program_boundary
             from scar.analysis.program_dependency_export import export_boundary_analysis
             report = query_program_boundary(args.model, file=args.file, entry=args.name, kind=args.kind,
                 nodes=args.boundary_operation, max_members=args.max_points)

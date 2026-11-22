@@ -41,7 +41,7 @@ class _BasisInputs(MutableMapping):
     def __setitem__(self, artifact, document):
         from scar.analysis.static_calls import input_basis_unit
         from scar.analysis.static_basis_compatibility import published_units_basis_compatible
-        from scar.analysis.static_body_materialization import diagnostic_materializations
+        from scar.analysis.static_body import diagnostic_materializations
         if (document.get("schema") != "scar.static-call-source-basis"
                 or document.get("schema_version") != 1
                 or document.get("logical_root") != str(self.view.root)
@@ -423,8 +423,8 @@ class StaticCallDependencyView(ProgramDependencySession):
 
     def class_bindings_for(self, point):
         """Reuse original class material, freshly checking each chosen binding."""
-        from scar.analysis.static_class_builder import validate_class_builder_expansion
-        from scar.analysis.static_class_links import _constructions
+        from scar.analysis.static_class_construction import validate_class_builder_expansion
+        from scar.analysis.static_class_construction import _constructions
         from scar.ir.program.class_builder import ClassBuilderExpansion, StaticClassBuilderBinding
         if self.class_publication is None:
             raise ValueError("CLASS_RELATIONS_NOT_PUBLISHED: no saved class relationships were supplied")
@@ -464,8 +464,8 @@ class StaticCallDependencyView(ProgramDependencySession):
     def graph(self):
         from scar.analysis.program_dependencies import ProgramDependencyGraph
         from scar.analysis.program_class_dependencies import ClassDependencyProvider
-        from scar.analysis.program_function_origin_discovery import AutomaticFactoryEntryOrigins
-        from scar.analysis.program_function_origin_dependencies import FactoryEntryOriginDependencyProvider
+        from scar.analysis.program_function_origins import AutomaticFactoryEntryOrigins
+        from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
         from scar.analysis.program_entry_namespace_dependencies import EntryNamespaceDependencyProvider
         from scar.analysis.program_unpack_dependencies import UnpackProjectionProvider
         graph = getattr(self, "_view", None)

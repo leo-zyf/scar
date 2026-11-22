@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 import re
 
-from scar.analysis.source_reference_slice import DECLARED, ReferenceSlicer
+from scar.analysis.source_references import DECLARED, ReferenceSlicer
 from scar.analysis.source_relation_snapshot import _local_path
 from scar.ir.program import normal_graph as F, normal_graph as T
 from scar.ir.program import source_value_routes as R

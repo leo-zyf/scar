@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scar.analysis.source_effects import classify_instruction
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_value_flow import project_value_flow
 from scar.analysis.source_world_flow import _state
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T

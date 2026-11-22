@@ -10,7 +10,7 @@ from scar.analysis.build import BuildSession
 from scar.analysis.normal_graph import _Emitter, normal_edges
 from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.call_inputs import call_operands
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_world_flow import STRUCTURAL, _state, _walk
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T

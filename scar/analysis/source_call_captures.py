@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from scar.analysis.program_view import _digest
 from scar.analysis.source_consumer_parents import _stamp
 from scar.analysis.source_name_access_anchors import _bindings
-from scar.analysis.source_reference_slice import ReferenceSlicer, source_port
+from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.ir.program import call_inputs as C, state_ports as S
 from scar.ir.program import source_productions as P, source_bindings as B
 from scar.ir.program import normal_graph as T, view as V
