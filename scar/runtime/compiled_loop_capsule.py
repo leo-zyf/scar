@@ -3,7 +3,7 @@ import argparse
 from hashlib import sha256
 from pathlib import Path
 
-from scar.runtime.compiled_entry import artifact_reference, read_artifact, run_build
+from scar.runtime.compiled_entry import artifact_reference, read_artifact, read_pipeline, run_build
 from .compiled_deployment import selected_rows
 from .native_loop import _small_raw,_json,_file_hash_and_header
 from .native_temporal_invariant import validate_contract,SCHEMA,ADMISSION,TRUST
@@ -24,8 +24,7 @@ def runtime_sources():
 
 
 def describe_pipeline(pipeline):
-    path=Path(pipeline).resolve();path=path/'result.json'if path.is_dir()else path
-    reference=artifact_reference(path,'scar.program-compiler-pipeline');program=read_artifact(reference)
+    reference, program = read_pipeline(pipeline)
     rows=selected_rows(program);_need(rows,'one or more existing model-selected loops required')
     records=[]
     for row in rows:

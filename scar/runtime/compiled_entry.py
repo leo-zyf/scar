@@ -82,23 +82,40 @@ class _Finder(importlib.abc.MetaPathFinder):
         return spec
 
 
-def artifact_reference(path,schema):
-    path=Path(path).resolve();raw=path.read_bytes()
-    return dict(uri=str(path),sha256=sha256(raw).hexdigest(),size_bytes=len(raw),schema=schema)
+def _artifact_snapshot(path, schema):
+    path = Path(path).resolve()
+    raw = path.read_bytes()
+    return dict(uri=str(path), sha256=sha256(raw).hexdigest(), size_bytes=len(raw), schema=schema), raw
 
 
-def read_artifact(reference):
-    if artifact_reference(reference['uri'],reference['schema'])!=reference:
-        raise ValueError('compiled entry receipt differs')
-    value=json.loads(Path(reference['uri']).read_bytes())
-    if value.get('schema')!=reference['schema']:raise ValueError('compiled entry schema differs')
+def artifact_reference(path, schema):
+    return _artifact_snapshot(path, schema)[0]
+
+
+def _artifact_document(raw, schema):
+    value = json.loads(raw)
+    if type(value) is not dict or value.get('schema') != schema:
+        raise ValueError('compiled entry schema differs')
     return value
 
 
+def read_artifact(reference):
+    actual, raw = _artifact_snapshot(reference['uri'], reference['schema'])
+    if actual != reference:
+        raise ValueError('compiled entry receipt differs')
+    return _artifact_document(raw, reference['schema'])
+
+
+def read_pipeline(pipeline):
+    path = Path(pipeline).resolve()
+    if path.is_dir():
+        path = path / 'result.json'
+    reference, raw = _artifact_snapshot(path, 'scar.program-compiler-pipeline')
+    return reference, _artifact_document(raw, reference['schema'])
+
+
 def run_build(pipeline,entry,argv=(),*,exclusive_inputs=False,measure_candidate=False,deployment=None):
-    pipeline=Path(pipeline).resolve()
-    if pipeline.is_dir():pipeline=pipeline/'result.json'
-    reference=artifact_reference(pipeline,'scar.program-compiler-pipeline');report=read_artifact(reference)
+    reference, report = read_pipeline(pipeline)
     from scar.runtime.compiled_deployment import deployment_gate,selected_rows
     gate=(dict(decision='MEASURE_SELECTED_MODEL_IMPLEMENTATION',deployment_authorized=False)
         if measure_candidate else deployment_gate(deployment,reference,entry,argv))

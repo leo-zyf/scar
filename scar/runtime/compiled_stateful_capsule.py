@@ -7,7 +7,7 @@ cost authority: this profile currently permits unmeasured validation only.
 from hashlib import sha256
 from pathlib import Path
 
-from scar.runtime.compiled_entry import artifact_reference, read_artifact, run_build
+from scar.runtime.compiled_entry import artifact_reference, read_artifact, read_pipeline, run_build
 from .compiled_deployment import selected_rows
 from .native_loop import _file_hash_and_header
 from .stateful_contract import inspect_stateful_bundle,SCHEMA,ADMISSION_SCHEMA
@@ -36,8 +36,7 @@ def _original_evidence(admission,reference,role):
 
 
 def describe_pipeline(pipeline):
-    path=Path(pipeline).resolve();path=path/'result.json'if path.is_dir()else path
-    reference=artifact_reference(path,'scar.program-compiler-pipeline');program=read_artifact(reference)
+    reference, program = read_pipeline(pipeline)
     rows=selected_rows(program);_need(rows,'one or more admitted compact stateful regions required')
     records=[]
     for row in rows:

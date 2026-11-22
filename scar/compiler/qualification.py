@@ -203,8 +203,8 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
     inherited CPU-affinity/thread-environment and pipeline, not other inputs.
     """
     from scar.runtime.compiled_deployment import entry_context,runner_identity,selected_rows
-    pipeline=Path(pipeline).resolve()
-    if pipeline.is_dir():pipeline=pipeline/'result.json'
+    from scar.runtime.compiled_entry import read_pipeline
+
     entry=Path(entry).resolve();out=Path(out).resolve();argv=list(argv)
     if (type(warmup) is not int or warmup<0 or type(repetitions) is not int or repetitions<3
             or type(minimum_gain) not in (int,float) or not math.isfinite(minimum_gain)
@@ -212,7 +212,8 @@ def validate_build(pipeline,entry,argv,out,*,warmup=1,repetitions=3,minimum_gain
         raise ValueError('nonnegative warmup, at least three repetitions, finite gain in [0,1) and string argv required')
     if out.exists():raise ValueError('fresh compiled-program validation output required')
     if entry.suffix!='.py' or not entry.is_file():raise ValueError('original Python script entry required')
-    pipeline_ref=_reference(pipeline,'scar.program-compiler-pipeline');compiled=read_artifact(pipeline_ref)
+    pipeline_ref, compiled = read_pipeline(pipeline)
+    pipeline = Path(pipeline_ref['uri'])
     selected=selected_rows(compiled)
     if not selected:raise ValueError('an already-model-selected compiled loop implementation is required')
     specializations=[]
