@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 
 _FILE_CLI = Path(__file__).with_name('aten_native_cli_v1.cpp.in')
 _PROBE = Path(__file__).with_name('aten_tensor_probe_v1.h')
+FRESH_SOURCE_FILE = 'FRESH_EXCLUSIVE_CREATE_MODE_0666'
 _ENTRIES = {
     'ADD': ('add', 'add_Tensor'),
     'SUB': ('sub', 'sub_Tensor'),
@@ -89,7 +90,7 @@ def _cpp_text(value):
                          else f'\\{byte:03o}' for byte in value.encode('utf-8')) + '"'
 
 
-def _source_entry(plan, abi, team_argument):
+def _source_entry(plan, abi, team_argument, publication_arg=''):
     if (abi.get('schema'), abi.get('schema_version')) != ('scar.fixed-grid-file-entry', 1):
         raise ValueError('expected an admitted fixed-grid source entry ABI')
     argv, inputs, publication = abi['argv'], abi['inputs'], abi['publication']
@@ -163,12 +164,53 @@ def _source_entry(plan, abi, team_argument):
                     throw std::runtime_error("recurrence result differs from the source output shape");
                 }}
                 return result;
-            }}, load_order, [&](const auto&, const auto&) {{ std::cout << {stdout}; }});
+            }}, load_order, [&](const auto&, const auto&) {{ std::cout << {stdout}; }}{publication_arg});
         }}
 '''
 
 
-def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None, source_entry_abi=None):
+def _fresh_source_file(file_cli):
+    signature = 'Stdout&& stdout_record) {'
+    original = '''    std::array<StagedFile, graph::output_count> staged;
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        staged[i].stage(destinations[i], outputs[i].const_data_ptr<float>(), sizes[i]);
+    }
+    for (std::size_t i = 0; i < staged.size(); ++i) staged[i].publish(destinations[i]);'''
+    write_start = '        const auto* next = static_cast<const char*>(data);\n'
+    write_end = '        if (close(fd) == -1) throw std::system_error(errno, std::generic_category(), temporary);'
+    anchors = (signature, original, write_start, write_end, 'struct StagedFile {', '#include <fstream>')
+    if any(file_cli.count(anchor) != 1 for anchor in anchors):
+        raise ValueError('fixed-grid source publisher does not match its generated file ABI')
+    begin = file_cli.index(write_start)
+    end = file_cli.index(write_end, begin) + len(write_end)
+    body = file_cli[begin:end]
+    writer = '\n'.join(line[4:] for line in body.replace('temporary', 'path').splitlines())
+    common_writer = 'void write_and_close(int fd, const fs::path& path, const void* data, std::size_t bytes) {\n'
+    helper = common_writer + writer + '''
+}
+
+void write_fresh_source_file(const fs::path& path, const void* data, std::size_t bytes) {
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd == -1) throw std::system_error(errno, std::generic_category(), path.string());
+    write_and_close(fd, path, data, bytes);
+}
+
+'''
+    file_cli = file_cli.replace(body, '        write_and_close(fd, temporary, data, bytes);')
+    # A path can be rendered as a std::system_error diagnostic only as text.
+    helper = helper.replace('std::generic_category(), path);', 'std::generic_category(), path.string());')
+    return (file_cli.replace('#include <fstream>', '#include <fcntl.h>\n#include <fstream>')
+        .replace('struct StagedFile {', helper + 'struct StagedFile {')
+        .replace(signature, 'Stdout&& stdout_record, bool fresh_source_file = false) {')
+        .replace(original, '''    if (fresh_source_file) {
+        static_assert(graph::output_count == 1);
+        write_fresh_source_file(destinations[0], outputs[0].const_data_ptr<float>(), sizes[0]);
+    } else {
+''' + '\n'.join('    ' + line for line in original.splitlines()) + '\n    }'))
+
+
+def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None, source_entry_abi=None,
+                      source_file_publication=None):
     """Use an admitted recurrence plan to emit one shared loop body and native main."""
     definitions, constructor, call = _placement(rhs_mode, cpus, lanes, operation_order)
     state_index = plan['state_input_index']
@@ -218,9 +260,15 @@ def render_recurrence(plan, *, rhs_mode, cpus, lanes=None, operation_order=None,
     argc_test = 'static_cast<std::size_t>(argc) != first + 1 + graph::input_count + graph::output_count'
     count_arg = 'first'
     source_call = ''
+    if source_file_publication not in (None, FRESH_SOURCE_FILE) or (
+            source_file_publication is not None and source_entry_abi is None):
+        raise ValueError('source file creation requires the admitted normal-completion entry ABI')
     if source_entry_abi is not None:
         file_cli = _source_file_abi(file_cli)
-        source_call = _source_entry(plan, source_entry_abi, team_argument)
+        if source_file_publication == FRESH_SOURCE_FILE:
+            file_cli = _fresh_source_file(file_cli)
+        publication_arg = ', true' if source_file_publication == FRESH_SOURCE_FILE else ''
+        source_call = _source_entry(plan, source_entry_abi, team_argument, publication_arg)
         cli_mode = '    const bool source_entry = argc > 1 && std::string_view(argv[1]) == "--source-entry";\n'
         first = '(probe || source_entry) ? 2 : 1'
         argc_test = f'source_entry ? argc != 5 : {argc_test}'

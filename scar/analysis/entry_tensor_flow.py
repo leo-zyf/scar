@@ -91,7 +91,8 @@ class _SourceRoutes:
         self.attributes = {field.name: field.attributes for field in syntax.profile.ast_schema}
         wanted = contract['source']['function']
         function = _only((f for f in self.facts.functions
-            if self.roles.field(f.template.occurrence, 'name').scalar.to_python() == wanted),
+            if syntax.nodes[f.template.occurrence].constructor in ('FunctionDef', 'AsyncFunctionDef')
+            and self.roles.field(f.template.occurrence, 'name').scalar.to_python() == wanted),
             'observed exact source must have one original F4 function declaration')
         region = self.view.source_region(self.unit, function.template, function.body)
         self.body_index = _only((i for i, row in enumerate(obligations['bodies'])

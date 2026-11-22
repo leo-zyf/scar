@@ -32,11 +32,18 @@ def _write(path, document):
         stream.write('\n')
 
 
-def source_entry_description(manifest_sha256):
-    return dict(abi=ABI_FILE, physical_binding=BINDING_FILE, launcher=LAUNCHER,
+def source_entry_description(manifest_sha256, *, source_file_publication=None):
+    from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE
+
+    if source_file_publication not in (None, FRESH_SOURCE_FILE):
+        raise ValueError('unsupported source-entry file creation contract')
+    result = dict(abi=ABI_FILE, physical_binding=BINDING_FILE, launcher=LAUNCHER,
         parent_manifest_sha256=manifest_sha256,
         scope='PROVEN_SOURCE_CLI_NORMAL_COMPLETION_WITH_FRESH_OUTPUT',
         source_cli_performance_measured=False, deployment_authorized=False)
+    if source_file_publication is not None:
+        result['source_file_publication'] = source_file_publication
+    return result
 
 
 def render_source_launcher(cpus):
@@ -49,10 +56,10 @@ def render_source_launcher(cpus):
     return original.removesuffix(marker) + ' --source-entry "$@"\n'
 
 
-def bind_source_entry(project, manifest_sha256, out, *, compiler='g++'):
+def bind_source_entry(project, manifest_sha256, out, *, compiler='g++', preserve_source_file_mode=False):
     """Rebuild one verified physical schedule with a source-derived argument mode."""
     from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
-    from scar.codegen.aten_recurrence_source import render_recurrence
+    from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE, render_recurrence
     from scar.codegen.native_project import build_native_project
     from scar.compiler.aten_source_entry_binding import verify_source_entry_binding
     from scar.compiler.tensor_execution import scheduled_tensor_body
@@ -75,8 +82,10 @@ def bind_source_entry(project, manifest_sha256, out, *, compiler='g++'):
     binding = verify_source_entry_binding(abi, execution, recipe, manifest=manifest)
     lowered = scheduled_tensor_body(_read(root/'plan/problem.json'), _read(root/'plan/schedule.json'), execution)
     placement = execution['placement']
+    publication = FRESH_SOURCE_FILE if preserve_source_file_mode else None
     generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
-        lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=abi)
+        lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=abi,
+        source_file_publication=publication)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.scar-source-aten-', dir=out.parent) as scratch:
@@ -108,7 +117,7 @@ def bind_source_entry(project, manifest_sha256, out, *, compiler='g++'):
             expected_libraries=libraries, require_cpu_only=True)
         if dependencies != emitted:
             raise ValueError('source-entry ELF changed the original qualified CPU dependency closure')
-        manifest['source_entry_cli'] = source_entry_description(manifest_sha256)
+        manifest['source_entry_cli'] = source_entry_description(manifest_sha256, source_file_publication=publication)
         manifest['files'] = {path.relative_to(stage).as_posix(): _content(path)
                              for path in sorted(stage.rglob('*')) if path.is_file()}
         _write(stage/'artifact.json', manifest)
@@ -268,6 +277,8 @@ def main(argv=None):
         command.add_argument('--manifest-sha256', required=True)
         command.add_argument('--out', required=True)
     bind.add_argument('--compiler', default='g++')
+    bind.add_argument('--preserve-source-file-mode', action='store_true',
+                      help='create the fresh source output with the normal process and directory permissions')
     validate.add_argument('--input-root', required=True)
     validate.add_argument('--steps', required=True, type=int)
     validate.add_argument('--measure', action='store_true')

@@ -46,6 +46,8 @@ C++20 交付生成现成算子的调用及资源调度。稀疏求解使用 Supe
 
 `scar aten-source-entry bind --project PROJECT --manifest-sha256 SHA --out SOURCE_CLI` 从已重放的 CPU-only 固定网格工程推导原 argv、Tensor 文件输入和终态发布。`SOURCE_CLI/launch-source.sh` 接受原入口参数，现有 `launch.sh` 仍接受原生文件参数。`scar aten-source-entry validate --project SOURCE_CLI --manifest-sha256 NEW_SHA --input-root DATA --steps 96 --measure --out AB` 用同一 LibTorch CPU 安装和 CPU 域核对原入口与 C++ 入口。源入口合同限定正整数步数、稳定定长输入和新输出文件。[端到端验收](artifacts/baseline/aten-source-cli.json)。
 
+`aten-source-entry bind --preserve-source-file-mode` 让源 CLI 通过独占创建应用进程与目录的正常权限规则。`scar review-cpu-fixed-grid-cli --main-chain ENTRY.json --project SOURCE_CLI/artifact.json --out REVIEW` 使用原目录方案的参数、环境和 CPU 核组，校验终态字节、输出流、退出和文件权限。`compile-build --cpu-fixed-grid-cli-evidence REVIEW/result.json --plan-only` 将评审接回原 F4 调用和文件资源。
+
 `scar export-native-cpu --project NATIVE --manifest-sha256 SHA256 --out RUNTIME` 打包已验收的 CPU-only 产物、LibTorch 依赖和权重。`scar export-native-cpu --check RUNTIME --manifest-sha256 SHA256` 校验迁移包，可加 `--reference FILE` 和 `-- ARGS` 验收输出。运行直接执行 `RUNTIME/launch.sh`。当前验收覆盖本机 Linux 下的目录迁移，并沿用原计划的 CPU 绑定。[纯 CPU 三阶段验收](artifacts/baseline/native-cpu-end-to-end.json)。
 
 重复传入 `--shape-profile PROFILE:NAME=DIM,DIM` 可把多个形状交付为同一个 C++20 推理程序，使用 `launch.sh PROFILE INPUT... OUTPUT...` 选择。各形状的图、物理问题和证书存放在 `plan/profiles/PROFILE/`，权重共用。各形状可用 `--calibration-input PROFILE:NAME=FILE` 标定。`--simplify-normal-completion` 允许按精确算子合同删除无可见消费者的计算，合同覆盖成功完成的返回及可见效果。生成时保留原图和修改收据。见 [形状与设备交付验证](artifacts/baseline/native-shape-and-copy-replay.json)。

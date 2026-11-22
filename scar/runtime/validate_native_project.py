@@ -458,6 +458,7 @@ def _replay_single(manifest, member):
                 _replay_recurrence_selection(manifest, member, execution, observation, schedule, rhs_recipe,
                                              lifetimes=lifetimes)
             source_abi = None
+            source_file_publication = None
             if 'source_entry_cli' in manifest:
                 from scar.analysis.fixed_grid_entry_abi import derive_fixed_grid_file_entry
                 from scar.compiler.aten_source_entry import (
@@ -468,9 +469,10 @@ def _replay_single(manifest, member):
 
                 descriptor = manifest['source_entry_cli']
                 parent = descriptor['parent_manifest_sha256']
+                source_file_publication = descriptor.get('source_file_publication')
                 if (not manifest.get('source_entry_inferred') or not manifest.get('source_entry_replayable')
                         or not isinstance(parent, str) or re.fullmatch('[a-f0-9]{64}', parent) is None
-                        or descriptor != source_entry_description(parent)):
+                        or descriptor != source_entry_description(parent, source_file_publication=source_file_publication)):
                     raise ValueError('invalid source-entry delivery descriptor')
                 source_abi = derive_fixed_grid_file_entry(source, boundary['entry'],
                     source_bytes=member('plan/source-entry.py').read_bytes())
@@ -481,7 +483,8 @@ def _replay_single(manifest, member):
                 _require_generated(member, {LAUNCHER: render_source_launcher(placement['cpus']),
                                             'launch.sh': _render_recurrence_launch(placement['cpus'])})
             generated = render_recurrence(lowered, rhs_mode=placement['mode'], cpus=placement['cpus'],
-                lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=source_abi)
+                lanes=placement['lanes'], operation_order=placement['operation_order'], source_entry_abi=source_abi,
+                source_file_publication=source_file_publication)
         else:
             raise ValueError('native schedule is missing a source replay implementation')
         _require_generated(member, generated)

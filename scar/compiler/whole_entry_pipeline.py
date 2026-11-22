@@ -476,6 +476,33 @@ def _attach_cpu_native_array_route(scope, generated, frontiers, path, cost_path=
         frontiers['cpu_native_array_route_cost'] = cost_ref
 
 
+def _attach_cpu_fixed_grid_cli(plan, scope, generated, frontiers, path, out):
+    from scar.analysis.cpu_fixed_grid_cli_effect_bridge import derive_cpu_fixed_grid_cli_effect_bridge
+    from scar.analysis.cpu_fixed_grid_cli_resources import derive_cpu_fixed_grid_cli_resources
+    from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA
+    from scar.optimization.cpu_fixed_grid_cli_review import derive_cpu_fixed_grid_cli_review
+
+    delivery_ref = artifact_reference(Path(path).resolve(strict=True), SCHEMA)
+    delivery = read_artifact(delivery_ref)
+    provider = delivery['provider']
+    matching = [row for row in generated.values() if _cpu_catalog_option(row)
+                and row['proof']['emission_plan']['authority'] == provider]
+    if provider['schema'] != 'scar.cpu-fixed-grid-source-provider' or len(matching) != 1:
+        raise ValueError('fixed-grid source CLI must name one original CPU catalog option')
+    option, = matching
+    bridge = derive_cpu_fixed_grid_cli_effect_bridge(
+        plan['program'], plan['entry_obligations'], provider, scope['argv'])
+    bridge_ref = _write(out/'whole-entry-fixed-grid-source-effects.json', bridge)
+    review = derive_cpu_fixed_grid_cli_review(option, scope, bridge_ref, delivery_ref)
+    inputs = option['proof']['emission_plan']['contract']['inputs']
+    resources = derive_cpu_fixed_grid_cli_resources(delivery['project'], scope['target'], scope['argv'], inputs)
+    frontiers.update(
+        cpu_fixed_grid_cli_effects=bridge_ref,
+        cpu_fixed_grid_cli_resources=_write(out/'whole-entry-fixed-grid-resources.json', resources),
+        cpu_fixed_grid_cli_review=_write(out/'whole-entry-fixed-grid-cli-review.json', review),
+    )
+
+
 def _cpu_import_frontiers(plan, scope, out, binding_path, source_path=None, activation_path=None):
     from scar.analysis.cpu_entry_import_effects import derive_cpu_entry_import_effects
     from scar.analysis.cpu_entry_import_initializers import derive_cpu_entry_import_initializers
@@ -762,7 +789,7 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
                        cpu_entry_forward=False, cpu_launch_probes=(), cpu_team_probe=None, cpu_native_phase_cost=None,
                        cpu_python_import_cost=None, cpu_paired_evidence=None, cpu_import_bindings=None,
                        cpu_import_sources=None, cpu_initializer_observation=None, cpu_native_array_route=None,
-                       cpu_native_array_route_cost=None):
+                       cpu_native_array_route_cost=None, cpu_fixed_grid_cli_evidence=None):
     from scar.analysis.build_admission import verify_build_admission
     from scar.analysis.replay_transaction import current_transaction
     from scar.compiler.cpu_entry_replay import CheckedCpuPair
@@ -782,6 +809,10 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
         raise ValueError('CPU paired evidence requires a CPU catalog domain')
     if cpu_native_array_route is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
         raise ValueError('CPU native array routes require a catalog domain with original F4 obligations')
+    if cpu_fixed_grid_cli_evidence is not None and (not _infer_cpu_catalog(request) or plan.get('entry_obligations') is None):
+        raise ValueError('fixed-grid source CLI evidence requires a catalog domain with original F4 obligations')
+    if cpu_fixed_grid_cli_evidence is not None and 'cpu_paired_observation' not in request:
+        raise ValueError('fixed-grid source CLI evidence requires the frozen original paired launch')
     if cpu_native_array_route_cost is not None and cpu_native_array_route is None:
         raise ValueError('CPU native array route costs require the exact C++ route package')
     if ((cpu_import_bindings is not None or cpu_import_sources is not None or cpu_initializer_observation is not None)
@@ -790,7 +821,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if cpu_paired_evidence is None and 'cpu_paired_observation' not in request and 'cpu_stream_capture' not in request:
         verify_build_admission(plan['source_admission'], program=plan['program'], hardware=plan['hardware'],
                                source_filter=plan.get('source_filter'))
-    live_scope = _scope(plan, request)
+    scope_request = dict(request, use_captured_launch=True) if cpu_fixed_grid_cli_evidence is not None else request
+    live_scope = _scope(plan, scope_request)
     if 'operator_stack_lock' in request:
         stack_target = entry['scope']['stack_target']
         retained = read_artifact(stack_target)
@@ -852,6 +884,8 @@ def replay_whole_entry(plan, out, *, plan_only, entry_costs=None, verify_entry=F
     if cpu_native_array_route is not None:
         _attach_cpu_native_array_route(live_scope, generated, cpu_frontiers, cpu_native_array_route,
                                        cpu_native_array_route_cost)
+    if cpu_fixed_grid_cli_evidence is not None:
+        _attach_cpu_fixed_grid_cli(plan, live_scope, generated, cpu_frontiers, cpu_fixed_grid_cli_evidence, out)
     choice = solve_whole_entry_choice(domain, expected_option_ids=['original', *sorted(candidates), *sorted(generated)])
     selected = choice['selected_option_id']
     capacity_contract = None
