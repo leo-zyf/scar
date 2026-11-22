@@ -1,6 +1,6 @@
 """Execute gate criteria from a manifest and write evidence for each test case.
 
-Usage: conda run -n lewm python scripts/run_gate.py gates/g1.json
+Usage: python scripts/run_gate.py gates/cpu.json --out /tmp/scar-gates.json
 Reports bind both the Git revision and the tested source hashes. A missing or
 skipped test fails its criterion; one successful suite cannot fill every row.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,29 +21,45 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def fingerprint():
-    paths = [*ROOT.joinpath("scar").rglob("*.py"),
-             *ROOT.joinpath("tests").rglob("*.py"),
-             *ROOT.joinpath("scripts").rglob("*.py"),
-             *ROOT.joinpath("gates").glob("*.json"), ROOT / "pyproject.toml"]
-    # The installed startup hook selects the actual collector. A frozen trace
-    # gate must include this root module as well as the scar package.
-    if ROOT.joinpath("sitecustomize.py").is_file():
-        paths.append(ROOT / "sitecustomize.py")
-    digests = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-               for path in sorted(paths)}
+    files = subprocess.check_output(
+        ["git", "ls-files", "-z", "-c", "-o", "--exclude-standard", "--",
+         "scar", "tests", "scripts", "gates", ".github/workflows", "pyproject.toml", "sitecustomize.py"],
+        cwd=ROOT,
+    ).decode(errors="surrogateescape")
+    digests = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name in sorted(set(files.split("\0")) - {""})
+        if (path := ROOT / name).is_file()
+    }
     combined = hashlib.sha256(json.dumps(digests, sort_keys=True).encode()).hexdigest()
     return combined, digests
+
+
+def _run_tests(nodes, evidence_dir, junit):
+    command = [sys.executable, "-B", "-m", "pytest", "-p", "no:cacheprovider", "-q",
+               f"--basetemp={evidence_dir}", *nodes, f"--junitxml={junit}"]
+    environment = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
+    cases = []
+    if junit.is_file():
+        for case in ET.parse(junit).iter("testcase"):
+            failed = any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
+            cases.append({"class": case.get("classname", ""), "name": case.get("name", ""),
+                          "status": "FAIL" if failed else "PASS"})
+    return result, cases
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--evidence-dir", type=Path, help="new directory for retained test artifacts")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     criteria = manifest.get("criteria")
     if (not isinstance(criteria, list) or not criteria
             or any(not isinstance(row, dict) or not row.get("id")
+                   or type(row.get("isolated", False)) is not bool
                    or not isinstance(row.get("tests"), list) or not row["tests"]
                    or any(not isinstance(node, str) or not node for node in row["tests"])
                    for row in criteria)
@@ -61,21 +78,26 @@ def main():
             + "\n".join(report["errors"]) + "\n")
         print(json.dumps(report))
         return 1
-    nodes = sorted({node for row in criteria for node in row["tests"]})
+    nodes = {node for row in criteria for node in row["tests"]}
+    isolated = {node for row in criteria if row.get("isolated") for node in row["tests"]}
+    batches = (nodes - isolated, isolated)
     code_hash, hashes = fingerprint()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="scar-gate-") as temp:
-        junit = Path(temp) / "results.xml"
-        command = [sys.executable, "-m", "pytest", "-q", *nodes, f"--junitxml={junit}"]
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        evidence_dir = Path(temp) / "pytest"
+        if args.evidence_dir is not None:
+            evidence_dir = args.evidence_dir.absolute()
+            evidence_dir.mkdir(parents=True, exist_ok=False)
+        runs = []
         cases = []
-        if junit.exists():
-            for case in ET.parse(junit).iter("testcase"):
-                cases.append({"class": case.get("classname", ""), "name": case.get("name", ""),
-                              "status": "FAIL" if any(case.find(tag) is not None
-                                                       for tag in ("failure", "error", "skipped")) else "PASS"})
+        for index, batch in enumerate(batches):
+            if batch:
+                result, collected = _run_tests(sorted(batch), evidence_dir / str(index),
+                                               Path(temp) / f"results-{index}.xml")
+                runs.append(result)
+                cases.extend(collected)
     rows = []
     for row in criteria:
         evidence = []
@@ -98,15 +120,19 @@ def main():
                      "status": "PASS" if evidence and all(item["status"] == "PASS"
                                                            for item in evidence) else "FAIL"})
     unchanged = fingerprint()[0] == code_hash
-    passed = result.returncode == 0 and unchanged and all(row["status"] == "PASS" for row in rows)
+    returncode = next((run.returncode for run in runs if run.returncode != 0), 0)
+    passed = returncode == 0 and unchanged and all(row["status"] == "PASS" for row in rows)
+    stdout = "\n".join(run.stdout for run in runs)
+    stderr = "\n".join(run.stderr for run in runs)
     report = {"schema": "scar.gate-report", "schema_version": 2,
               "gate": manifest["gate"], "status": "PASS" if passed else "FAIL",
               "revision": revision, "worktree_status": dirty, "source_sha256": code_hash,
               "tested_files": hashes, "source_unchanged_during_test": unchanged,
               "scope": manifest["scope"], "limitations": manifest.get("limitations", []),
-              "criteria": rows, "command": command[:-1], "returncode": result.returncode,
+              "criteria": rows, "command": runs[0].args[:-1],
+              "commands": [run.args[:-1] for run in runs], "returncode": returncode,
               "duration_seconds": round(time.monotonic() - started, 3),
-              "stdout": result.stdout, "stderr": result.stderr, "python": sys.version}
+              "stdout": stdout, "stderr": stderr, "python": sys.version}
     out = args.out or ROOT / "artifacts/reports/gates" / f"{manifest['gate'].lower()}-verified.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
@@ -121,8 +147,8 @@ def main():
     print(json.dumps({"gate": manifest["gate"], "status": report["status"],
                       "report": str(out), "tests": len(cases)}))
     if not passed:
-        print(result.stdout)
-        print(result.stderr)
+        print(stdout)
+        print(stderr)
     return 0 if passed else 1
 
 

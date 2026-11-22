@@ -36,6 +36,8 @@ Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端�
 
 原生 `compiler-plan.json` 锁定规划问题、计划和各项证据。`scar compile --plan` 在独立进程重放交付并核对锁定用例。发布 wheel 时先生成源码分发包，再从该分发包构建，以便打包输入与当前源码版本一致。
 
+分阶段运行时，`scar build --manifest` 发布结果及 `graph-report.json` 的双向引用。`scar plan --graph` 核对各工件角色、重新确认源锁并使用已有图，发布改写、硬件成本和封存计划。`scar compile --plan` 消费该计划，重新验证排程、生成工程并比对锁定输入的结果。同一目标用 `scar compile --manifest` 可串接三阶段。
+
 ## 3. 后端
 
 | 层 | 功能 | 输入 | 交接产物 |
@@ -54,3 +56,7 @@ Python 的直接循环与跨函数组合循环共用 `schedule_loops`。中端�
 `ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。前端的静态分析、观测关系和跨区域依赖查询分别归入 `analysis/static/`、`analysis/observed/`、`analysis/dependencies/`。`artifacts.py` 统一管理工件摘要、原子发布和证据表读写。证据表以相对路径、压缩与解码摘要、字节数及记录数作为交接合同。图查看由 `visualization/` 独立提供。构建证明记录分析实现摘要，历史源码保存在 Git，已有产物可按对应版本回读或重新构建。
 
 留存的旧 `SourceAtomID` 映射使用 Git `8c99524559bb58d46a146d8bac64f3a0ad19b836` 和 `artifacts/current/queries/source-anchors/query.py` 重放。
+
+## 持续验收
+
+CPU 清单分别验证 F0–F5、硬件拓扑、M1–M3 和 B1–B2。真实混合方言目标跨进程交换图、计划和 C++20 项目。任一判据未收集到有效测试、时序或资源验证失败、原版与生成版输出不同，均会阻止发包。 [CPU 验收清单](../gates/cpu.json)

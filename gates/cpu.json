@@ -1,0 +1,73 @@
+{
+  "gate": "CPU_COMPILER",
+  "scope": "Independent source, graph, planning and C++20 delivery contracts on Linux CPU.",
+  "limitations": [
+    "Cases are bounded CPU workloads and verify the supported language profiles.",
+    "CI verifies output equivalence, resource constraints and receipt replay. Wall-clock speed is not an acceptance threshold on shared runners.",
+    "GPU and NPU qualification use separate target evidence."
+  ],
+  "criteria": [
+    {
+      "id": "F0_SOURCE_LOCK",
+      "tests": [
+        "tests/unit/test_source_bytes.py",
+        "tests/integration/test_native_stage_handoff.py::test_native_frontend_locks_each_dialect"
+      ]
+    },
+    {
+      "id": "F1_TOKENS",
+      "tests": ["tests/unit/test_source_tokens.py"]
+    },
+    {
+      "id": "F2_SYNTAX",
+      "tests": ["tests/unit/test_source_syntax.py"]
+    },
+    {
+      "id": "F3_SYMBOLS_AND_CONTEXT",
+      "tests": ["tests/unit/test_source_symbols.py", "tests/unit/test_source_contexts.py"]
+    },
+    {
+      "id": "F4_TYPED_PROGRAM_GRAPH",
+      "tests": [
+        "tests/integration/test_formal_call_operands.py",
+        "tests/integration/test_native_stage_handoff.py::test_native_graph_links_calls_and_platform",
+        "tests/unit/test_program_indexed_codec.py"
+      ]
+    },
+    {
+      "id": "F5_EXECUTION_BINDINGS",
+      "isolated": true,
+      "tests": ["tests/integration/test_build_cli.py::test_build_joins_actual_scoped_calls_without_executing_target_again"]
+    },
+    {
+      "id": "HARDWARE_TOPOLOGY",
+      "tests": ["tests/unit/test_target_replay_transaction.py", "tests/unit/test_cpu_hardware_placement.py"]
+    },
+    {
+      "id": "M1_LEGAL_GRAPH_REWRITE",
+      "tests": ["tests/unit/test_array_motion_legality.py", "tests/unit/test_native_plan_contract.py"]
+    },
+    {
+      "id": "M2_RESOURCE_AND_TIME_COST",
+      "tests": ["tests/unit/test_cpu_instruction_cost.py", "tests/unit/test_resource_solver.py"]
+    },
+    {
+      "id": "M3_SEALED_SCHEDULE",
+      "tests": [
+        "tests/integration/test_native_stage_handoff.py::test_native_middle_replays_cost_and_schedule",
+        "tests/unit/test_invariant_loop_schedule.py", "tests/unit/test_temporal_cpu_choices.py"
+      ]
+    },
+    {
+      "id": "B1_CPP20_LOWERING_AND_LINKAGE",
+      "tests": [
+        "tests/integration/test_native_stage_handoff.py::test_native_backend_delivers_cpp20_and_matches_locked_cases",
+        "tests/integration/test_native_stage_handoff.py::test_native_lowering_requires_an_abi_bridge_for_kr_promotions"
+      ]
+    },
+    {
+      "id": "B2_NATIVE_CONTRACT",
+      "tests": ["tests/unit/test_native_temporal_invariant.py", "tests/unit/test_gate_runner.py"]
+    }
+  ]
+}
