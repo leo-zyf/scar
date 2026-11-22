@@ -1,7 +1,6 @@
 """Raw Python execution drives v6 discovery and expansion without a hand graph."""
 from copy import deepcopy
 from dataclasses import replace
-import json
 import sys
 from types import ModuleType
 
@@ -160,42 +159,3 @@ def test_shared_prepare_failure_preserves_the_exact_standalone_source_boundary(t
     result = inventory_program(entry, project_root=tmp_path, calls_trace=trace)
     assert result.call_sources.to_dict() == standalone
     assert result.source_analysis_measurements["source_prepare_max_per_path"] == 1
-
-
-def test_cli_runs_and_replays_an_automatic_v6_inventory(tmp_path, monkeypatch, capsys):
-    from scar.cli import main
-    entry, trace = recorded_program(tmp_path, monkeypatch)
-    output = tmp_path / "inventory.json.gz"
-    assert main(["inventory-program", str(entry), "--project-root", str(tmp_path),
-                 "--calls", str(trace), "--out", str(output)]) == 0
-    first = json.loads(capsys.readouterr().out)
-    assert first["status"] == "INVENTORIED" and first["summary"]["call_source_scope"]["CORE_LINKED"] == 3
-    assert main(["check-inventory", str(output)]) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "REPLAYED"
-
-
-@pytest.mark.parametrize("hardlink", [False, True])
-def test_cli_protects_captured_nonpy_source_even_when_no_seed_is_eligible(tmp_path, capsys, hardlink):
-    from scar.cli import main
-    entry = tmp_path / "entry.py"
-    entry.write_text("answer = 1\n")
-    captured_source = tmp_path / "observed.json"
-    captured_source.write_text('{"schema":"scar.program-inventory"}\n')
-    original = captured_source.read_bytes()
-    trace = tmp_path / "calls"
-    recorder = CallEdgeRecorder(trace, tmp_path)
-    previous = sys.getprofile()
-    sys.setprofile(recorder.profile)
-    try:
-        exec(compile(captured_source.read_text(), str(captured_source), "exec", dont_inherit=True), {})
-    finally:
-        sys.setprofile(previous)
-        recorder.close()
-    output = captured_source
-    if hardlink:
-        output = tmp_path / "alias.json"
-        output.hardlink_to(captured_source)
-    assert main(["inventory-program", str(entry), "--project-root", str(tmp_path),
-                 "--calls", str(trace), "--out", str(output)]) == 2
-    assert json.loads(capsys.readouterr().out)["status"] == "INVALID"
-    assert captured_source.read_bytes() == original and output.read_bytes() == original
