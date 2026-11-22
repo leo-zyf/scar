@@ -19,4 +19,10 @@ scar compile --plan compiled/compiler-plan.json --out delivered
 
 每个原生编译单元在清单中声明源码路径、语言和编译参数。原版与生成版按同一输入核对。原生程序覆盖、跨语言调用和调度成本的缺口在结果中单独记录。跨语言支持取决于入口的实际图与交付证据。
 
+## 工作区
+
+`scar/` 是可安装包，`tests/` 放验收和最小输入，`examples/` 放公开入口示例，`scripts/` 放开发和验收工具。大型外部程序放在仓库外。每次运行用 `--out` 指定独立输出目录。已发布的图、计划和证据会按引用复核，搬动前需检查其依赖方。
+
+`artifacts/baseline/` 保留环境基线。旧实验报告和已退役样例可从 Git 的 `archive/scar-before-workspace-cleanup` 读取，例如 `git ls-tree -r --name-only archive/scar-before-workspace-cleanup artifacts/baseline testcases`。
+
 [编译器组织](docs/ARCHITECTURE.md) · [IR 数据模型](docs/MODEL.md)
