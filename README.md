@@ -8,7 +8,7 @@ SCAR 是基于程序图的宏观编译器。它把源码、运行绑定和硬件
 | `scar plan` | 从 `--problem` 计算资源和时序，或用 `--build` 从 Python 图构造编译域。 |
 | `scar compile` | 执行完整编译。用 `--manifest` 读取原生输入，用 `--domains` 读取已建模的 Python 编译域。 |
 
-`scar trace` 和 `scar import-capture` 提供前端证据。`scar build-query` 查询图。`scar run` 加载已生成的执行合同。`scar view-graph` 提供可选的图查看。
+`scar trace` 和 `scar import-capture` 提供前端证据。`scar build-query` 查询图。`scar check-program` 检查持久化的类型图。`scar run` 加载已生成的执行合同。`scar view-graph` 提供可选的图查看。
 
 ```bash
 scar build --manifest entry.json --out graph

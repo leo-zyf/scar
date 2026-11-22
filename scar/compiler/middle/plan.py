@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
 
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.program.codec import dumps, loads
@@ -72,22 +73,107 @@ def simplify_copies(program: ProviderArtifact, anchors, out):
     return rewrites
 
 
-def entry_problem(entry, artifacts, observation):
+_SIMPLE_COPY = re.compile(
+    rb'\{\s*int\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*;\s*return\s+\1\s*;\s*\}')
+
+
+def copy_source_edits(manifest, evidence, rewrites):
+    """Join a removed SSA copy to a typed, source-replayable function body."""
+    removed = {row['operation'] for row in rewrites}
+    anchored = {}
+    for row in evidence['anchors']:
+        if row['operation'] in removed:
+            anchored.setdefault(row['unit'], {}).setdefault(row['symbol'], []).append(row)
+    root = Path(manifest['source_root'])
+    edits = []
+    for unit in evidence['units']:
+        path = unit['unit']
+        if unit['language'] not in ('c', 'c++') or 'types' not in unit['artifacts']:
+            continue
+        candidates = anchored.get(path)
+        if not candidates:
+            continue
+        typed = json.loads(read_artifact(unit['artifacts']['types'], json_document=False))
+        records = typed['records']
+        children_by_parent = {}
+        for index, node in enumerate(records):
+            if node['path'] == path and node['parent'] is not None:
+                children_by_parent.setdefault(node['parent'], []).append((index, node))
+
+        def scalar_reference(index):
+            children = children_by_parent.get(index, ())
+            while len(children) == 1 and children[0][1]['kind'] == 'UnexposedExpr':
+                children = children_by_parent.get(children[0][0], ())
+            if len(children) == 1 and children[0][1]['kind'] == 'DeclRefExpr':
+                return (children[0][1]['reference'] or {}).get('usr')
+            return None
+
+        source = (root / path).read_bytes()
+        if sha256(source).hexdigest() != manifest['source_lock']['files'][path]['sha256']:
+            raise ValueError(f'copy lowering source changed: {path}')
+        for index, function in enumerate(records):
+            symbol = function['symbol']
+            if (function['path'] != path or function['kind'] != 'FunctionDecl'
+                    or not function['definition'] or function['parent'] is not None
+                    or function['canonical_type'] not in ('int (int)', 'int (int) noexcept')
+                    or symbol not in candidates):
+                continue
+            children = children_by_parent.get(index, ())
+            bodies = [(serial, node['span']) for serial, node in children if node['kind'] == 'CompoundStmt']
+            params = [node for _, node in children if node['kind'] == 'ParmDecl']
+            if len(bodies) != 1 or not bodies[0][1] or len(params) != 1 or params[0]['canonical_type'] != 'int':
+                continue
+            body_index, body = bodies[0]
+            statements = children_by_parent.get(body_index, ())
+            if [node['kind'] for _, node in statements] != ['DeclStmt', 'ReturnStmt']:
+                continue
+            locals_ = children_by_parent.get(statements[0][0], ())
+            if len(locals_) != 1 or locals_[0][1]['kind'] != 'VarDecl' or locals_[0][1]['canonical_type'] != 'int':
+                continue
+            local_index, declaration = locals_[0]
+            if (not params[0]['usr'] or not declaration['usr']
+                    or scalar_reference(local_index) != params[0]['usr']
+                    or scalar_reference(statements[1][0]) != declaration['usr']):
+                continue
+            start, stop = body
+            original = source[start:stop]
+            match = _SIMPLE_COPY.fullmatch(original)
+            if not match or match.groups() != (declaration['name'].encode(), params[0]['name'].encode()):
+                continue
+            local, parameter = (name.decode('ascii') for name in match.groups())
+            assignment = re.compile(
+                rf'gimple_assign <ssa_name, {local}_\d+, {parameter}_\d+\(D\), NULL, NULL>$')
+            origins = [row for row in candidates[symbol] if assignment.search(row['source'])]
+            if len(origins) != 1:
+                continue
+            replacement = b'{ return ' + match[2] + b';' + b'\n' * original.count(b'\n') + b' }'
+            edits.append(dict(unit=path, symbol=symbol, operation=origins[0]['operation'],
+                              region=origins[0]['region'], span=body,
+                              original_sha256=sha256(original).hexdigest(),
+                              replacement=replacement.decode('ascii')))
+    return sorted(edits, key=lambda row: (row['unit'], row['span']))
+
+
+def entry_problem(entry, artifacts, observation, edits=()):
     source_refs = entry_sources(artifacts)
     core = f'cpu:{observation["cpu"]}'
     cost = CostEstimate(observation['elapsed_ns'], None, None, 'EMPIRICAL_MODEL',
                         'baseline_launch', (dict(role='cost', **artifacts['cost']),))
-    baseline = ImplementationOption('original', 'preserve_entry', source_refs, {core: 1},
-                                    {}, {}, {}, cost, parameters={'region': entry})
+    lowering = 'canonicalize_scalar_copies' if edits else 'preserve_entry'
+    parameters = {'region': entry}
+    if edits:
+        parameters['rewrites'] = [row['operation'] for row in edits]
+    implementation = ImplementationOption('canonical' if edits else 'original', lowering, source_refs,
+        {core: 1}, {}, {}, {}, cost, parameters=parameters)
     return PlanningProblem(
         ProviderArtifact(**artifacts['hardware']), source_refs,
         (PlanningResource(core, 'EXECUTION', 1, source_refs=cost.source_refs),),
-        (PlanningOperation('entry', source_refs, (), (baseline,), baseline.id),), (),
+        (PlanningOperation('entry', source_refs, (), (implementation,), implementation.id),), (),
         assumptions=('NORMAL_COMPLETION_ONLY', 'PHYSICAL_COST_BASELINE_ONLY'))
 
 
-def plan_entry(entry, artifacts, observation):
-    problem = entry_problem(entry, artifacts, observation)
+def plan_entry(entry, artifacts, observation, edits=()):
+    problem = entry_problem(entry, artifacts, observation, edits)
     return problem_document(problem), construct_implementations(problem, baseline_only=True)
 
 

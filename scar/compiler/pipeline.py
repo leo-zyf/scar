@@ -15,7 +15,7 @@ from scar.artifacts import file_reference
 from scar.ir.implementation_plan import PLAN_SCHEMA, SCHEMA as PLANNING_SCHEMA
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA
 from .frontend.graph import build_graph
-from .middle.plan import entry_cpus, plan_entry, simplify_copies
+from .middle.plan import copy_source_edits, entry_cpus, plan_entry, simplify_copies
 
 
 _LANGUAGES = {'c', 'c++', 'fortran'}
@@ -201,12 +201,15 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
             raise ValueError('no validated entry region')
         simplified = out / 'simplified.json'
         rewrites = simplify_copies(frontend.program, graph['anchors'], simplified)
+        source_edits = copy_source_edits(manifest, graph, rewrites)
         artifacts['simplified'] = file_reference(simplified, PROGRAM_SCHEMA)
         rewrite_path = out / 'rewrites.json'
         _write(rewrite_path, dict(schema='scar.native-rewrites', schema_version=1, rules=rewrites,
+                                  source_edits=source_edits,
                                   program=artifacts['program'], result=artifacts['simplified']))
         artifacts['rewrites'] = file_reference(rewrite_path, 'scar.native-rewrites')
         report['graph_rewrites'] = len(rewrites)
+        report['source_rewrites'] = len(source_edits)
         layers[layer] = 'IR_VALIDATED'
         layer = 'cost'
         if not manifest.get('baseline') or not manifest.get('cases'):
@@ -219,7 +222,7 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
             raise ValueError(f'baseline exited with status {observation["exit"]}')
         layers[layer] = 'OBSERVED'
         layer = 'schedule'
-        problem, schedule = plan_entry(graph['entry'], artifacts, observation)
+        problem, schedule = plan_entry(graph['entry'], artifacts, observation, source_edits)
         for role, path, document, schema in (
             ('planning_problem', out / 'planning-problem.json', problem, PLANNING_SCHEMA),
             ('execution_plan', out / 'plan.json', schedule, PLAN_SCHEMA),
@@ -231,15 +234,17 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
         report['planning_scope'] = 'BASELINE_ONLY'
         layers[layer] = 'SCHEDULED'
         layer = 'admission'
-        from .backend.cpp20 import admit_entry, build_reference_project
+        from .backend.cpp20 import admit_entry, build_reference_project, verify_mixed_linkage
 
         manifest, observation, delivery = admit_entry(artifacts, graph['entry'])
         report['cpus'] = delivery['cpus']
         layers[layer] = 'REPLAYED'
         layer = 'build'
-        executable, dynamic = build_reference_project(manifest, out / 'project')
+        executable, dynamic = build_reference_project(
+            manifest, out / 'project', delivery['source_edits'], captures=delivery['compiler_types'])
         report['executable'] = _receipt(executable)
         report['elf'] = dynamic
+        delivery['mixed_linkage'] = verify_mixed_linkage(manifest, artifacts['calls'], executable)
         delivery_path = out / 'project' / 'delivery.json'
         _write(delivery_path, dict(delivery, executable=report['executable']))
         artifacts['delivery'] = file_reference(delivery_path, delivery['schema'])
@@ -251,6 +256,8 @@ def compile_native(manifest_path, out, *, jobs, repetitions, case_seconds, graph
                        repetitions, case_seconds)
         report['validation'] = rows
         report['delivery'] = 'COMPARED' if all(case['matches'] for case in rows) else 'MISMATCH'
+        if report['delivery'] == 'COMPARED' and source_edits:
+            report['selection'] = 'CANONICALIZED'
         layers[layer] = 'MATCHED' if report['delivery'] == 'COMPARED' else 'MISMATCH'
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as error:
         layers[layer] = 'BLOCKED'

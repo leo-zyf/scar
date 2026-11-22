@@ -4,7 +4,7 @@ The compiler-specific records remain evidence. Unknown effects and unsupported
 control transfers are visible in the import report and gate rewrites.
 """
 
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import json
 from dataclasses import dataclass, replace
@@ -247,7 +247,8 @@ def _lower_function(function):
             operations.append(Operation(oid, opcode, tuple(behaviors), tuple(uses), tuple(results),
                                         tuple(accesses), effects_complete=False))
             oids.append(oid)
-            anchors.append(dict(operation=oid.wire, source=op['source'], call=op['call']))
+            anchors.append(dict(operation=oid.wire, source=op['source'], call=op['call'],
+                                unit=function['unit'], symbol=function['symbol'], region=region.wire))
 
         oid = OperationID(f'{identity}:{number}:end')
         uses = []
@@ -650,3 +651,180 @@ def build_graph(manifest, directory, *, jobs, request) -> GraphBuild:
                       ProviderArtifact(**target),
                       ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
                       ProviderArtifact(**call_receipt), report)
+
+
+def check_main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(prog='scar check-program',
+                                     description='Validate the retained typed program graph.')
+    parser.add_argument('graph')
+    parser.add_argument('--out')
+    args = parser.parse_args(argv)
+    from scar.ir.program.codec import _has_driver_capability, _has_no_body_capability, loads as load_program
+    from scar.ir.program.model import LocalBindingValue, value_type
+    from scar.ir.program.cleanup import CleanupRouteTerminator
+    from scar.ir.program.resumption import SuspendTerminator
+    from scar.ir.program.drivers import BodyDriveTerminator
+    from scar.ir.record_codec import encode as encode_record
+    from scar.ir.v2.common import ProofStatus
+
+    source = Path(args.graph)
+    report = {"schema": "scar.program-graph-check", "schema_version": 1,
+              "input": str(source.resolve()), "scope": "declared graph structure and dependencies",
+              "source_recovery": False, "transformation_authorized": False,
+              "cleanup_structure_validated": False,
+              "body_structure_validated": False,
+              "body_driver_verified": False,
+              "body_source_verified": False,
+              "body_runtime_verified": False,
+              "body_exclusivity_verified": False,
+              "driver_structure_validated": False,
+              "driver_lifecycle_verified": False,
+              "body_publication_structure_validated": False,
+              "no_body_structure_validated": False,
+              "session_release_structure_validated": False,
+              "conditional_lifecycle_facts_derived": False,
+              "conditional_lifecycle_scopes": []}
+    if args.out and Path(args.out).resolve() == source.resolve():
+        report.update(status="INVALID", errors=["report path must differ from input graph"])
+        print(json.dumps(report, ensure_ascii=False))
+        return 2
+    try:
+        graph = load_program(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        report.update(status="INVALID", errors=[str(exc)])
+    else:
+        report.update(status="WELL_FORMED", errors=[], counts={
+            "regions": len(graph.regions), "blocks": sum(len(r.blocks) for r in graph.regions),
+            "operations": len(graph.operations), "values": len(graph.values),
+            "locations": len(graph.locations), "uses": sum(len(op.uses) for op in graph.operations),
+            "value_kinds": dict(Counter(
+                "LOCAL_BINDING" if isinstance(value, LocalBindingValue)
+                else value_type(value).kind.value for value in graph.values)),
+            "declared_incomplete_effects": sum(not op.effects_complete for op in graph.operations),
+        })
+        if any((graph.resources, graph.resource_requirements, graph.resource_uses,
+                graph.resource_locations)):
+            report["counts"].update(
+                resources=len(graph.resources),
+                resource_requirements=len(graph.resource_requirements),
+                resource_uses=len(graph.resource_uses),
+                resource_locations=len(graph.resource_locations))
+            report.update(resource_realization_verified=False, readiness_verified=False)
+        if graph.environments:
+            report["counts"].update(
+                environments=len(graph.environments),
+                environment_members=sum(len(item.members) for item in graph.environments),
+                function_entries=len(graph.function_entries),
+                python_parameters=sum(len(item.parameters) for item in graph.function_entries))
+            report.update(environment_realization_verified=False,
+                          environment_extraction_verified=False,
+                          python_signature_binding_verified=False,
+                          runtime_callable_verified=False)
+        if graph.control_scopes:
+            report["counts"].update(
+                control_scopes=len(graph.control_scopes), control_ports=len(graph.control_ports),
+                exception_packets=len(graph.exception_packets),
+                pending_completions=len(graph.pending_completions))
+            report.update(lexical_source_verified=False, cleanup_unwinding_verified=False,
+                          exception_context_verified=False,
+                          pending_runtime_realization_verified=False)
+        if graph.handled_context_domains:
+            report["counts"].update(
+                cleanup_interfaces=len(graph.cleanup_interfaces),
+                cleanup_actions=sum(len(rows) for rows in (
+                    graph.cleanup_enters, graph.cleanup_resumes,
+                    graph.cleanup_replacements, graph.handled_context_reads)),
+                cleanup_routes=sum(isinstance(op.terminator, CleanupRouteTerminator)
+                                   for op in graph.operations))
+            report.update(cleanup_structure_validated=True,
+                          cleanup_structure_scope="declared static interfaces, CFG routes and state flow",
+                          cleanup_unwinding_verified=False,
+                          exception_context_verified=False,
+                          pending_runtime_realization_verified=False)
+        if graph.provider_envelopes:
+            report["counts"].update(
+                provider_envelopes=len(graph.provider_envelopes),
+                provider_regions=len(graph.provider_regions),
+                provider_bindings=len(graph.provider_bindings))
+            report.update(provider_artifact_replay_verified=False,
+                          provider_conditions_verified=False,
+                          provider_source_correspondence_verified=False,
+                          cross_representation_equivalence_verified=False,
+                          provider_runtime_correspondence_verified=False)
+        if graph.native_boundaries:
+            report["counts"].update(native_boundaries=len(graph.native_boundaries),
+                                    boundary_relations=len(graph.boundary_relations))
+            report.update(native_signature_replay_verified=False,
+                          native_tree_mapping_verified=False,
+                          native_state_binding_verified=False,
+                          boundary_relations_verified=False)
+        if graph.resumable_bodies:
+            report["counts"].update(
+                resumable_bodies=len(graph.resumable_bodies),
+                suspensions=sum(type(operation.terminator) is SuspendTerminator
+                                for operation in graph.operations),
+                frame_context_actions=(len(graph.frame_context_initials)
+                                       + len(graph.frame_context_attaches)
+                                       + len(graph.frame_context_detaches)))
+            report["body_structure_validated"] = True
+        if _has_driver_capability(graph):
+            report["counts"].update(
+                resumable_creates=len(graph.resumable_creates),
+                raw_driver_requests=len(graph.raw_driver_requests),
+                async_request_creates=len(graph.async_request_creates),
+                request_association_reads=len(graph.request_association_reads),
+                driver_interfaces=len(graph.driver_interfaces),
+                final_body_gates=len(graph.final_body_gates),
+                body_drives=len(graph.body_drives),
+                body_drive_outcomes=sum(
+                    len(operation.terminator.successors)
+                    for operation in graph.operations
+                    if type(operation.terminator) is BodyDriveTerminator))
+            report.update(driver_structure_validated=True,
+                          driver_structure_scope="declared static driver ports, CFG and current state flow",
+                          driver_lifecycle_verified=False)
+        if graph.driver_lifecycles:
+            interfaces = {row.region: row for row in graph.driver_interfaces}
+            operation_regions = {operation: region.id for region in graph.regions
+                                 for block in region.blocks for operation in block.operations}
+            tables = ("body_outcome_commits", "created_close_tests", "no_body_finishes",
+                      "session_updates", "terminal_frame_releases")
+            report["conditional_lifecycle_scopes"] = [
+                {"region": scope.region.wire,
+                 "rule_profile": interfaces[scope.region].rule.profile.value,
+                 "implementation": encode_record(interfaces[scope.region].rule.implementation),
+                 "applicability": ProofStatus.UNKNOWN.value,
+                 "conditional_facts_derived": True,
+                 "declared_capabilities": {
+                     name: sum(operation_regions[row.operation] == scope.region
+                               for row in getattr(graph, name)) for name in tables}}
+                for scope in graph.driver_lifecycles]
+            report["conditional_lifecycle_facts_derived"] = True
+            report["counts"].update(
+                driver_lifecycles=len(graph.driver_lifecycles),
+                body_outcome_commits=len(graph.body_outcome_commits))
+            report.update(body_publication_structure_validated=True,
+                          body_publication_structure_scope="declared body outcome, owner and publication state links",
+                          driver_lifecycle_verified=False)
+        if graph.driver_lifecycles and _has_no_body_capability(graph):
+            report["counts"].update(created_close_tests=len(graph.created_close_tests),
+                                    no_body_finishes=len(graph.no_body_finishes))
+            report.update(no_body_structure_validated=True,
+                          no_body_structure_scope="declared predicate, real branch edges and optional no-body finish links",
+                          driver_lifecycle_verified=False)
+        if graph.session_updates or graph.terminal_frame_releases:
+            report["counts"].update(session_updates=len(graph.session_updates),
+                                    terminal_frame_releases=len(graph.terminal_frame_releases))
+            report.update(session_release_structure_validated=True,
+                          session_release_structure_scope="declared post states and conditional terminal owner history; no native applicability or resource-release guarantee",
+                          conditional_lifecycle_facts_derived=True,
+                          driver_lifecycle_verified=False)
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.out:
+        destination = Path(args.out)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(payload + "\n", encoding="utf-8")
+    print(payload)
+    return 0 if report["status"] == "WELL_FORMED" else 2

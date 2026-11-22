@@ -10,6 +10,7 @@ COMMANDS = {
     'import-capture': ('scar.trace.cli', 'import_main', 'import retained trace evidence'),
     'build': (None, None, 'build the program and hardware graph'),
     'build-query': ('scar.analysis.build', 'query_main', 'inspect a program graph'),
+    'check-program': ('scar.compiler.frontend.graph', 'check_main', 'validate a saved program graph'),
     'plan': (None, None, 'plan from a resource and dependency graph'),
     'compile': (None, None, 'build, simplify and deliver a target'),
     'run': (None, None, 'run a published execution contract'),

@@ -8,6 +8,8 @@ import re
 import sys
 from tempfile import TemporaryDirectory
 
+from scar.ir.execution_recipe import read_artifact
+
 from ..frontend.fortran import _run, _tool, _units, capture_fortran
 
 
@@ -96,11 +98,11 @@ def _repair_f2c_source(source):
     return '#include "scar_f2c_call.hpp"\n' + _apply_spans(source, edits)
 
 
-def _translate_f2c(units, edits, project, config, *, long_lines=False):
+def _translate_f2c(units, edits, project, config, *, long_lines=False, source_directory='src'):
     translator = _tool(config, 'f2c')
     header = _runtime(config, 'f2c_header')
     archive = _runtime(config, 'f2c_archive')
-    source_dir = project / 'src'
+    source_dir = project / source_directory
     generated = project / 'include' / 'scar_generated'
     source_dir.mkdir(parents=True, exist_ok=True)
     generated.mkdir(parents=True, exist_ok=True)
@@ -147,7 +149,7 @@ def _translate_f2c(units, edits, project, config, *, long_lines=False):
             'compile_options': ('-ffp-contract=off', '-fno-fast-math', '-Werror=write-strings')}
 
 
-def _translate_freeform(manifest, units, edits, project, config):
+def _translate_freeform(manifest, units, edits, project, config, captures):
     env = os.environ.copy()
     if 'fparser_path' in config:
         dependency = Path(config['fparser_path']).resolve()
@@ -167,10 +169,17 @@ def _translate_freeform(manifest, units, edits, project, config):
             snapshot.parent.mkdir(parents=True, exist_ok=True)
             snapshot.write_bytes(edits[name] if name in edits else path.read_bytes())
             snapshots[name] = str(snapshot)
-        captured = capture_fortran({**manifest, 'source_root': str(sources)}, temporary / 'capture')
+        if captures and not edits:
+            captured = []
+            for index, (name, _, _) in enumerate(units):
+                semantics = temporary / f'unit-{index}.fortran-original'
+                semantics.write_bytes(read_artifact(captures[name], json_document=False))
+                captured.append({'path': name, 'semantics': str(semantics)})
+        else:
+            captured = capture_fortran({**manifest, 'source_root': str(sources)}, temporary / 'capture')['units']
         request = {'entry': manifest.get('entry', 'main'),
                    'units': [{'source': snapshots[unit['path']], 'semantics': unit['semantics']}
-                             for unit in captured['units']]}
+                             for unit in captured]}
         arguments = temporary / 'lowering.json'
         arguments.write_text(json.dumps(request), encoding='utf-8')
         helper = Path(__file__).with_name('_fortran_freeform.py')
@@ -183,17 +192,19 @@ def _translate_freeform(manifest, units, edits, project, config):
         return _translate_f2c(transport, {}, project, config, long_lines=True)
 
 
-def emit_fortran(manifest, project, edits):
+def emit_fortran(manifest, project, edits, *, source_directory='src', fixed_only=False, captures=None):
     """Emit standalone C++20 host sources. Return shared CMake writer arguments."""
     config = manifest.get('fortran', {})
     units = list(_units(manifest))
     project = Path(project).resolve()
     project.mkdir(parents=True, exist_ok=True)
     if all(path.suffix.lower() in _FIXED_SUFFIXES for _, path, _ in units):
-        build = _translate_f2c(units, edits, project, config)
+        build = _translate_f2c(units, edits, project, config, source_directory=source_directory)
         translation = 'f2c-cxx20'
     else:
-        build = _translate_freeform(manifest, units, edits, project, config)
+        if fixed_only:
+            raise ValueError('mixed Fortran requires the fixed-form external procedure ABI')
+        build = _translate_freeform(manifest, units, edits, project, config, captures)
         translation = 'gfortran-typed-fparser-fixed-form-f2c-cxx20'
     recipe = {'compiler': translation,
               'sources': [{'path': name, 'sha256': hashlib.sha256(

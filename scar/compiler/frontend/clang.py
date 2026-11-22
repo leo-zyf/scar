@@ -32,6 +32,7 @@ class _Unsaved(Structure):
 
 _Visitor = CFUNCTYPE(c_uint, _Cursor, _Cursor, c_void_p)
 _CALLABLES = {'FunctionDecl', 'CXXMethod', 'Constructor', 'Destructor', 'ConversionFunction'}
+_CX_LINKAGE_EXTERNAL = 4
 
 
 @lru_cache(maxsize=1)
@@ -53,6 +54,7 @@ def _library():
         'getTypeSpelling': (_String, _Type),
         'getCanonicalType': (_Type, _Type),
         'getCursorReferenced': (_Cursor, _Cursor),
+        'getCursorLinkage': (c_uint, _Cursor),
         'Cursor_isNull': (c_int, _Cursor),
         'isCursorDefinition': (c_uint, _Cursor),
         'getCursorExtent': (_Range, _Cursor),
@@ -139,6 +141,8 @@ def capture_unit(source_root, unit, *, source_override=None):
                 records.append(dict(kind=kind, name=string(lib.clang_getCursorSpelling(cur)),
                                     usr=string(lib.clang_getCursorUSR(cur)), symbol=symbol,
                                     reference=target, definition=definition, parent=parent,
+                                    external_linkage=(parent is None
+                                                      and lib.clang_getCursorLinkage(cur) == _CX_LINKAGE_EXTERNAL),
                                     path=str(path.relative_to(source_root)), line=line, column=column,
                                     offset=offset, span=[begin, end] if begin_path == end_path == path else None,
                                     type=string(lib.clang_getTypeSpelling(type_)),
