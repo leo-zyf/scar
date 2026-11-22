@@ -14,7 +14,10 @@ import pytest
 def test_native_callable_capture_replay_and_shared_graph(tmp_path):
     from scar.analysis.call_operand_reader import read_call_operands
     from scar.analysis.native_callables import read_native_callables
-    from scar.analysis.observed_dependency_export import export_observed_dependencies, read_observed_dependencies
+    from scar.analysis.observed.dependency_export import (
+        export_observed_dependencies,
+        read_observed_dependencies,
+    )
     from scar.analysis.program_dependency_session import ProgramDependencySession
     from scar.ir.program.native_callables import NativeCarrier as Carrier, NativeFieldState as State
     from scar.ir.program.dependencies import DependencyKind as K, DependencyMeaning as M, DependencyStrength as Strength

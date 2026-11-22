@@ -20,7 +20,7 @@ from scar.ir.program.static_calls import (StaticCallFrontier, StaticImportModule
     MODULE_FLOW_BASE_CONDITIONS,MODULE_IMPORT_INITIALIZER_CONDITIONS,
     StaticImportFromRead)
 from scar.ir.program.structured import ControlEdgeReference
-from scar.analysis.static_namespace import normal_reference, protocol_kinds
+from scar.analysis.static.namespace import normal_reference, protocol_kinds
 
 
 def _need(value, detail):
@@ -203,7 +203,7 @@ class ModuleAttributeDependencies:
             self.index_metrics['hits']+=1
             self._facts.move_to_end(key);return saved[2]
         from types import SimpleNamespace
-        from scar.analysis.static_fields import derive_attribute_accesses,FieldCFGPaths
+        from scar.analysis.static.fields import derive_attribute_accesses, FieldCFGPaths
         tree,semantic,text=self.source_context(body)
         module=getattr(body,'module',None)
         if module is None and body.document.get('module') is not None:
@@ -229,7 +229,7 @@ class ModuleAttributeDependencies:
         protocols=protocol_kinds(body.document)
         imports=[];normal_producers={}
         blocks={block.id:block for region in body.graph.regions for block in region.blocks}
-        from scar.analysis.static_imports import derive_import_from_interfaces
+        from scar.analysis.static.imports import derive_import_from_interfaces
         from_requests,from_reads,from_frontiers=derive_import_from_interfaces(body,text=text,semantic=semantic,
             module=module,metadata=metadata,links=links,protocols=protocols,blocks=blocks)
         for frontier in from_frontiers:

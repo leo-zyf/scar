@@ -8,7 +8,7 @@ import time
 from scar.analysis.program_types import program_type_catalog, read_program_type_catalog
 from scar.analysis.type_parameter_rules import source_type_catalog, read_source_type_catalog
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.record_codec import loads
 
 

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from scar.analysis.static_calls import input_basis_unit
-from scar.analysis.static_diagnostics import body_diagnostics, compact_static_diagnostics
+from scar.analysis.static.calls import input_basis_unit
+from scar.analysis.static.diagnostics import body_diagnostics, compact_static_diagnostics
 from scar.analysis.static_program import _json, _read_fragment, _write
 
 

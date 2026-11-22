@@ -23,8 +23,8 @@ SCHEMA = 'scar.program-build'
 
 def _rules():
     return {name: sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
-        for name in ('build.py', 'observed_boundaries.py', 'observed_call_bindings.py',
-            'observed_function_interfaces.py', 'build_resources.py', 'build_target_resources.py',
+        for name in ('build.py', 'observed/boundaries.py', 'observed/call_bindings.py',
+            'observed/function_interfaces.py', 'build_resources.py', 'build_target_resources.py',
             'build_f4.py', 'build_f4_resources.py', 'source_declared_catalog.py',
             'source_fact_materials.py', 'source_observed_boundaries.py',
             '../ir/program/source_observations.py', 'source_body_interfaces.py',
@@ -85,7 +85,7 @@ def _check(receipt):
 
 def _configuration_inputs(roots, out, gaps):
     """Admit declared YAML graphs; do not compose Hydra or evaluate tags."""
-    from scar.analysis.static_sources import _EXCLUDED_DIRECTORIES
+    from scar.analysis.static.sources import _EXCLUDED_DIRECTORIES
     result = []
     seen = set()
     for root in roots:
@@ -255,7 +255,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
           max_seconds=3600, max_input_bytes=16 * 1024**3,catalog=None,cache_roots=(),target=None,
           body_scope='all', call_binding=None, bounded_call_bindings=(), configuration_roots=None):
     from scar.analysis.static_program import build_static_program, link_static_program, read_static_program
-    from scar.analysis.static_calls import StaticCallBudget
+    from scar.analysis.static.calls import StaticCallBudget
     from scar.analysis.program_dependency_export import export_dependency_walk
     entry, out = Path(entry).resolve(), Path(out).absolute()
     if not entry.is_file() or entry.suffix != '.py':
@@ -304,7 +304,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         observed_scope = None
         source_files = ()
         if body_scope == 'observed':
-            from scar.analysis.observed_boundaries import read_observed_scope
+            from scar.analysis.observed.boundaries import read_observed_scope
             observed_scope = read_observed_scope(trace_path)
             source_files = tuple(sorted({c.code.filename for c in observed_scope.captures
                 if Path(c.code.filename).suffix == '.py' and Path(c.code.filename).is_file()}))
@@ -313,7 +313,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         from scar.analysis.static_body import expand_static_bodies
         entries=()
         if body_scope == 'observed':
-            from scar.analysis.observed_boundaries import select_observed_bodies
+            from scar.analysis.observed.boundaries import select_observed_bodies
             entries, selection=select_observed_bodies(selected, trace_path, entry,scope=observed_scope)
             selection['observed_source_files'] = list(source_files)
             _write(out/'body-selection.json',selection)
@@ -338,7 +338,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         raise ValueError('source catalog does not contain current entry')
     trace_ref = None
     if trace_path is not None:
-        from scar.analysis.program_observed_dependencies import _inputs
+        from scar.analysis.dependencies.observed import _inputs
         trace_ref = dict(path=str(trace_path), inputs=[_receipt(p) for p in sorted(_inputs(trace_path))])
     # Missing dependencies remain individually referenced, not hidden behind totals.
     gaps = []
@@ -400,7 +400,7 @@ def build(entry, trace, out, *, model=None, jobs=4, source_roots=(),
         try:
             observed = session.attach_trace()
             if observed is not None:
-                from scar.analysis.observed_dependency_export import export_observed_dependencies
+                from scar.analysis.observed.dependency_export import export_observed_dependencies
                 _write(out/'observed.json', export_observed_dependencies(observed))
                 report['observed'] = dict(scopes=len(observed.scopes), edges=len(observed.edges))
                 report['observed_admission'] = 'ADMITTED'

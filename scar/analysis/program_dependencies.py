@@ -65,7 +65,7 @@ class ProgramDependencyGraph:
             raise TypeError("dependency view needs a shared original graph loader")
         self.load_index = load_index
         self.local = LocalDependencyProvider(load_index, max_cached_edges=max_local_edges)
-        from scar.analysis.program_control_dependencies import ControlDependencyProvider
+        from scar.analysis.dependencies.control import ControlDependencyProvider
         self.control = ControlDependencyProvider(load_index)
         self.providers = [self.local, self.control]
         self._observations = {}
@@ -80,7 +80,7 @@ class ProgramDependencyGraph:
 
     def _register_observations(self, provider):
         """Keep runtime occurrences on an explicit axis, outside static edges."""
-        from scar.analysis.program_observed_dependencies import ObservedDependencyProvider
+        from scar.analysis.dependencies.observed import ObservedDependencyProvider
         if type(provider) is not ObservedDependencyProvider or provider.session.graph() is not self:
             raise TypeError('observed interfaces must belong to this original graph session')
         provider.check()
@@ -536,7 +536,7 @@ class LocalDependencyProvider:
             if use.definition is not None:edge(use.definition, use.requirement, K.RESOURCE)
             if use.handle is not None:edge(use.handle, use.requirement, K.RESOURCE)
         for location in graph.resource_locations:edge(location.resource, location.location, K.RESOURCE)
-        from scar.analysis.program_call_dependencies import native_declaration_relations
+        from scar.analysis.dependencies.call import native_declaration_relations
         native_edges, native_frontiers = native_declaration_relations(namespace, index)
         for item in native_edges:
             before[item.target.node].append(item); after[item.source.node].append(item)

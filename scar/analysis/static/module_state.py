@@ -17,8 +17,12 @@ from scar.ir.program.static_calls import (
     StaticNamespacePathSegment, StaticReferencePoint,
     ModuleFlowCondition,MODULE_FLOW_BASE_CONDITIONS,MODULE_IMPORT_INITIALIZER_CONDITIONS,
 )
-from scar.analysis.static_module_attributes import (_need,validate_reference_source_path,
-    _import_initializer_bindings,_uses_import_initializer_contract)
+from scar.analysis.static.module_attributes import (
+    _need,
+    validate_reference_source_path,
+    _import_initializer_bindings,
+    _uses_import_initializer_contract,
+)
 
 
 def _context(route):
@@ -33,7 +37,7 @@ def _factory_path(path,route):
 
 
 def _segment(body,witness,owner,dependencies):
-    from scar.analysis.static_crossbody_namespace import _guard_entry_path
+    from scar.analysis.static.crossbody_namespace import _guard_entry_path
     witness=_guard_entry_path(dependencies,witness,owner)
     return StaticNamespacePathSegment(body.namespace,NamespacePathStart.ENTRY,witness.entry,None,
         owner,witness.query_operation,witness.query_owner,witness.query_world,witness.key,
@@ -221,7 +225,7 @@ class ModuleGlobalsDependencies:
         self._active.add(token);self._stack.append(token);self._pending_frontiers[token]={}
         previous_frontiers=self._demand_frontiers.get(token,())
         try:
-            from scar.analysis.static_crossbody_namespace import _read_endpoint
+            from scar.analysis.static.crossbody_namespace import _read_endpoint
             segments=[_segment(key_body,entry_paths[0],route.member.reference,self.modules.namespace_for(key_body))]
             for bridge,witness in zip(bridges,entry_paths[1:]):
                 child=self.modules._body(bridge.environment.callee)
@@ -251,7 +255,7 @@ class ModuleGlobalsDependencies:
 
 
 def _validate_environment_state(route,state,*,modules,check_context,requirements):
-    from scar.analysis.static_function_environment import validate_function_environment_route
+    from scar.analysis.static.function_environment import validate_function_environment_route
     from scar.ir.program.static_calls import StaticQualifiedFunctionCreation
     caller,callee=modules._body(route.caller),modules._body(route.callee)
     validate_function_environment_route(route,caller_graph=caller.graph,caller_document=caller.document,
@@ -317,7 +321,10 @@ def validate_module_globals_flow(flow,*,engine,check_support,check_context=None)
                 if cross or args or returns or globalsflows:
                     yield SimpleNamespace(body_namespace=after.body,value=after.value,requirements=after.requirements,
                         crossflows=cross,argflows=args,returnflows=returns,globalsflows=globalsflows)
-    from scar.analysis.static_module_attributes import ModuleAttributeDependencies,validate_import_module_route
+    from scar.analysis.static.module_attributes import (
+        ModuleAttributeDependencies,
+        validate_import_module_route,
+    )
     fresh_modules=ModuleAttributeDependencies(load_body=modules.load_body,source_context=modules.source_context,
         module_bodies=modules.module_bodies,namespace_for=modules.namespace_for,reference_sources=reference_sources,
         max_steps=modules.max_steps,max_facts=modules.max_facts,check=modules.check,
@@ -335,9 +342,9 @@ def validate_module_globals_flow(flow,*,engine,check_support,check_context=None)
         context=_context(route),requirements=projection.callable_source.points[0].requirements)
     _need(projection in fresh.projections(activation,projection.key),
         'module CALL state source/owner/world/payload/snapshot/overwrite differs from original inputs')
-    from scar.analysis.static_namespace import NamespaceEntryPathWitness
-    from scar.analysis.static_crossbody_namespace import StaticNamespaceBody,_validate_bridge
-    from scar.analysis.static_function_environment import _EnvironmentFacts
+    from scar.analysis.static.namespace import NamespaceEntryPathWitness
+    from scar.analysis.static.crossbody_namespace import StaticNamespaceBody, _validate_bridge
+    from scar.analysis.static.function_environment import _EnvironmentFacts
     read_body=modules._body(flow.read.body);dependencies=modules.namespace_for(read_body)
     read=dependencies.by_result.get(flow.read.result)
     _need(read is not None and flow.read.owner in read.owners,'globals flow changed its original namespace read')

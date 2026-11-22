@@ -21,7 +21,7 @@ from scar.analysis.source_store import (
     pin_material_store, check_material_store,
 )
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 
 
 def _row(unit, descriptor, document, f1, f2):

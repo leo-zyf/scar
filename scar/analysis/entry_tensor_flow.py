@@ -12,7 +12,7 @@ from scar.analysis.call_inputs import call_operands
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_role_materials import SyntaxRoleView
 from scar.analysis.source_template_links import _json
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.normal_graph import AttributeAction, FactTable
 from scar.ir.program.binding_ports import ArgumentRole

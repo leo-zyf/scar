@@ -8,8 +8,8 @@ from scar.analysis.program_lowering import SourceProgram, prepare_source_text
 from scar.analysis.source_class_construction_validation import validate_class_constructions
 from scar.analysis.source_language import SourceLanguageOptions
 from scar.analysis.source_module_lowering import lower_module_entry, module_unit
-from scar.analysis.static_compilation import compile_source_unit
-from scar.analysis.static_lexical import inspect_lexical
+from scar.analysis.static.compilation import compile_source_unit
+from scar.analysis.static.lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
 from scar.ir.program.functions import BodyLoweringProfile
 from scar.ir.program.entry_namespaces import FrameBodyProfile

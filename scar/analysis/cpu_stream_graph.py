@@ -11,7 +11,7 @@ from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.scalar_recursive_driver import CAPTURE, _replay
 from scar.analysis.scalar_score_reuse_evidence import _compile, _event, _span
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.source_syntax import SourceSyntaxMaterial
 from scar.ir.program.target_hardware import HardwareThread

@@ -133,12 +133,12 @@ class EntryNamespaceDependencyProvider:
                 pending.append((edge.source, (*reverse_path, edge), ancestors | {edge.source}))
 
     def _namespace_body(self, body):
-        from scar.analysis.static_crossbody_namespace import StaticNamespaceBody
+        from scar.analysis.static.crossbody_namespace import StaticNamespaceBody
         return StaticNamespaceBody(body.graph, body.document, body.namespace,
             body.index, body.dependencies, _facts=self.session._environment_facts)
 
     def _budget(self):
-        from scar.analysis.static_entry_namespace import EntryNamespaceBudget
+        from scar.analysis.static.entry_namespace import EntryNamespaceBudget
         return EntryNamespaceBudget(max_owner_edges=self.session.budget.max_entry_owner_edges,
             max_snapshots=self.session.budget.max_entry_snapshots,
             max_projections=self.session.budget.max_entry_projections)
@@ -184,8 +184,9 @@ class EntryNamespaceDependencyProvider:
         body = self._read_body(point)
         if body is None:
             return
-        from scar.analysis.static_entry_namespace import (
-            derive_entry_namespace_projections, validate_entry_namespace_projection,
+        from scar.analysis.static.entry_namespace import (
+            derive_entry_namespace_projections,
+            validate_entry_namespace_projection,
         )
         if body.interface is None:
             self._note(point, "ENTRY_NAMESPACE_INTERFACE_UNSUPPORTED",

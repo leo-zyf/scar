@@ -65,8 +65,11 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
     from copy import deepcopy
     from scar.analysis.static_program import link_static_program
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static_function_origins import (
-        derive_factory_entry_origins,validate_factory_entry_origin,factory_entry_origin_evidence,factory_entry_origin_ports,
+    from scar.analysis.static.function_origins import (
+        derive_factory_entry_origins,
+        validate_factory_entry_origin,
+        factory_entry_origin_evidence,
+        factory_entry_origin_ports,
     )
     from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
     from scar.ir.program.dependencies import DependencyPoint,DependencyStrength,GraphNamespace
@@ -119,7 +122,7 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
         callable_member=next(m for m in body.graph.environments[0].members if m.role is EnvironmentRole.FUNCTION_OBJECT)
         assert selected.subject.node==callable_member.reference and selected.subject.context==point.context
         assert tuple(p.node for p in selected.operands)==(creation.normal_value,creation.factory)
-        from scar.analysis.static_namespace import normal_reference,protocol_kinds
+        from scar.analysis.static.namespace import normal_reference, protocol_kinds
         other_factory=next(op for op in creator.graph.operations if op.id!=creation.factory
             and protocol_kinds(creator.document).get(op.id)=='MAKE_FUNCTION_314')
         _,other_normal=normal_reference(creator.index,other_factory.id)
@@ -173,8 +176,8 @@ def test_factory_entry_origins_are_conditional_reference_ports_without_call_or_s
 
         # Class creators use their original ClassSuite constants/CodeRef and
         # an ordered operand ABI.  They do not have a function language overlay.
-        from scar.analysis.static_calls import StaticCallSession
-        from scar.analysis.static_namespace import normal_reference
+        from scar.analysis.static.calls import StaticCallSession
+        from scar.analysis.static.namespace import normal_reference
         from scar.ir.program.class_entries import decode_class_entry_overlay
         from scar.ir.program.static_calls import StaticFunctionCreationRoute
         class_ns,=session.select_bodies(file=str(path),entry='<module>.Box')

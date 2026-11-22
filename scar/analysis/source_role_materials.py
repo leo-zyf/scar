@@ -25,7 +25,7 @@ from scar.analysis.source_store import (
     check_material_store,
 )
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from functools import lru_cache
 from scar.analysis.source_syntax import _schema_and_digests, read_source_syntax_material
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

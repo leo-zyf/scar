@@ -1490,7 +1490,7 @@ def validate_source_program(result: SourceProgram, *, max_operations: int = 1000
                     raise ValueError("v5 source text changed")
                 source_tree = ast.parse(source_text, filename=result.metadata.source.path)
                 if class_source and language_options is None:
-                    from scar.analysis.static_compilation import compile_source_unit
+                    from scar.analysis.static.compilation import compile_source_unit
                     from scar.analysis.source_language import SourceLanguageOptions
                     # Reuse the original qualified source graph; recompilation
                     # needs source/compiler facts, not a second SG namespace.

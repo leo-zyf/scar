@@ -8,9 +8,9 @@ import pytest
 
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_materials import archive_model_source_bytes, verify_model_source_bytes, main
-from scar.analysis.static_calls import input_basis_unit
+from scar.analysis.static.calls import input_basis_unit
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 
 
 def test_f0_material_gate_keeps_all_bytes_and_never_requires_parser(tmp_path, monkeypatch):

@@ -28,6 +28,9 @@ def _build(arguments):
     if _has_option(arguments, '--manifest'):
         from scar.compiler.pipeline import main as build
         return build(['--graph-only', *arguments])
+    if '--static' in arguments:
+        from scar.analysis.static_program import main as build
+        return build([argument for argument in arguments if argument != '--static'])
     if '--formal' in arguments:
         from scar.compiler.frontend.python import main as build
         return build([argument for argument in arguments if argument != '--formal'])
@@ -76,6 +79,8 @@ def main(argv=None):
             return _compile(options) or 0
         if command == 'build':
             return _build(options) or 0
+        if command == 'static':
+            return _build(['--static', *options]) or 0
         if command == 'plan':
             return _plan(options) or 0
         if command == 'run':

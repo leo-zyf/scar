@@ -7,7 +7,7 @@ import pytest
 
 
 def test_owned_source_inputs_reuse_without_lending_namespace_authority(monkeypatch, tmp_path):
-    import scar.analysis.static_function_environment as environment
+    import scar.analysis.static.function_environment as environment
     from scar.ir.program.codec import dumps
     from scar.ir.program.functions import BodyEntryInterface, FormalPort
     from scar.ir.program.ids import BlockID, LocationID, OperationID, RegionID, UseID, ValueID

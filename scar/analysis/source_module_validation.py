@@ -689,7 +689,7 @@ def require_valid_structured_module_program(result,*,source_texts,code_evidence=
     if static_root:
         # Independently recompile retained text. The declaration is a receipt,
         # never permission to trust its code path or borrow a runtime witness.
-        from scar.analysis.static_compilation import compile_source_unit, StaticCodeEvidence
+        from scar.analysis.static.compilation import compile_source_unit, StaticCodeEvidence
         replayed = compile_source_unit(context).for_module(unit)
         _need(replayed.to_reference() == overlay.declaration.compilation,
               'static module declaration differs from independently compiled retained source')

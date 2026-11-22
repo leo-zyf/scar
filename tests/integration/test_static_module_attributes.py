@@ -12,7 +12,7 @@ import pytest
 
 
 def _check_read_frontier_recomputation(root,model,application):
-    from scar.analysis.static_calls import StaticCallSession
+    from scar.analysis.static.calls import StaticCallSession
     from scar.ir.program.static_calls import StaticCallContext,StaticReferencePoint
 
     with StaticCallSession(model,out=root/'frontier-check')as session:
@@ -54,7 +54,7 @@ def _check_read_frontier_recomputation(root,model,application):
 
 def test_static_module_attributes_preserve_sources_and_caller_overwrites():
     from scar.ir.program.static_calls import loads
-    from scar.analysis.static_query import query_static_program
+    from scar.analysis.static.query import query_static_program
 
     provider='NUMBER = 7\ndef a():\n    return 11\ndef b():\n    return 22\ndef identity(value):\n    return value\n'
     application='''import provider as p  # type: ignore[import-not-found]
@@ -152,8 +152,11 @@ def test_from_imports_keep_original_requests_member_ports_and_conditional_source
     from dataclasses import replace
     from scar.analysis.static_program import link_static_program
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static_query import query_static_program
-    from scar.analysis.static_module_attributes import ModuleAttributeDependencies, validate_module_attribute_flow
+    from scar.analysis.static.query import query_static_program
+    from scar.analysis.static.module_attributes import (
+        ModuleAttributeDependencies,
+        validate_module_attribute_flow,
+    )
     from scar.ir.program.static_calls import (
         StaticImportFromRead, ModuleFlowCondition as C, dumps, loads,
     )

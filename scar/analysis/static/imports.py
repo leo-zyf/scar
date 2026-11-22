@@ -8,7 +8,7 @@ import ast
 import dis
 import hashlib
 from types import SimpleNamespace
-from scar.analysis.static_namespace import normal_reference
+from scar.analysis.static.namespace import normal_reference
 from scar.ir.program.environments import EnvironmentRole as E
 from scar.ir.program.model import (
     CompletionResult,
@@ -562,7 +562,7 @@ def derive_import_from_interfaces(body,*,text,semantic,module,metadata,links,pro
           'retained source fingerprint differs')
     # Reuse the shared audited exact CodeRef/CodeEvidence replay; this verifies
     # compiler identity, flags, both code keys and the complete constant path.
-    from scar.analysis.static_function_origins import _replay_compilation
+    from scar.analysis.static.function_origins import _replay_compilation
     root=compile(text,metadata.source.path,'exec',flags=0,dont_inherit=True,optimize=0)
     namespace_root=(module.declaration.unit.namespace_root if module is not None else
                     body.document['static_compilation']['namespace_root'])
@@ -570,7 +570,7 @@ def derive_import_from_interfaces(body,*,text,semantic,module,metadata,links,pro
         metadata=metadata,namespace=body.namespace)
     code_path,code=_replay_compilation(inputs,root,namespace_root)
     if body.namespace.source is not None:
-        from scar.analysis.static_compilation import _scope_nodes
+        from scar.analysis.static.compilation import _scope_nodes
         found={};issues=[];_scope_nodes(tree,root,(),ast.Module,found,issues)
         source=body.namespace.source
         matches=[row for row in found.get((source.start_line,source.end_line,source.start_column,source.end_column),())

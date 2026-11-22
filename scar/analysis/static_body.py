@@ -37,7 +37,7 @@ def _producer():
     paths.update(analysis.glob("source_*lowering.py"))
     paths.update(analysis.glob("source_*validation.py"))
     paths.update(analysis / name for name in (
-        "static_body.py", "static_program.py", "static_rules.py", "static_compilation.py",
+        "static_body.py", "static_program.py", "static_rules.py", "static/compilation.py",
         "source_displays.py", "source_function_definitions.py", "source_generator_create.py",
         "source_guards.py", "source_lambda.py", "source_mapping_functions.py", "source_string.py",
         "program_lowering.py", "structured_lowering.py", "environment_lowering.py",
@@ -206,7 +206,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                 if len(ids) != 1:
                     raise ValueError("entry requires one exact original semantic definition")
                 definition = decode(OperationDefinitionID, ids[0])
-                from scar.analysis.static_compilation import compile_source_unit
+                from scar.analysis.static.compilation import compile_source_unit
                 if compiled is None:
                     if compilation_error is not None:
                         raise ValueError("source-unit compilation failed: " + compilation_error)
@@ -272,7 +272,7 @@ def _run_unit(unit, catalog, selected, output, max_operations, producer):
                 row.update(status="ERROR", issue={"stage": "body", "kind": type(error).__name__, "detail": str(error)})
             payload.update({name: row[name] for name in ("status", "gaps", "construction_operations", "issue") if name in row})
             row["artifact"] = _write(root, relative, payload)
-            from scar.analysis.static_diagnostics import _diagnostic_refs, DIAGNOSTIC_FIELDS
+            from scar.analysis.static.diagnostics import _diagnostic_refs, DIAGNOSTIC_FIELDS
             references = _diagnostic_refs(payload)
             if references:
                 row["diagnostics"] = references
@@ -337,8 +337,8 @@ def expand_static_bodies(directory, *, jobs=4, max_operations=10000, max_bodies=
     original_basis = None
     if additive_only:
         from copy import deepcopy
-        from scar.analysis.static_calls import input_basis_unit
-        from scar.analysis.static_basis_compatibility import _units_basis_compatible
+        from scar.analysis.static.calls import input_basis_unit
+        from scar.analysis.static.basis_compatibility import _units_basis_compatible
         from scar.analysis.static_body import diagnostic_materializations, null_body_diagnostic
         original_basis = deepcopy([input_basis_unit(unit) for unit in manifest['units']])
     started = time.monotonic()
@@ -555,8 +555,8 @@ def diagnostic_materializations(manifest, read):
     checked, projected = {}, {}
 
     def admits(old_unit, old, new_unit, new):
-        from scar.analysis.static_basis_compatibility import _same
-        from scar.analysis.static_calls import input_basis_unit
+        from scar.analysis.static.basis_compatibility import _same
+        from scar.analysis.static.calls import input_basis_unit
         unit = units.get(new_unit['key'])
         if unit is None or old_unit['key'] != new_unit['key']:
             return False

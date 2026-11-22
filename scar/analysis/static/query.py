@@ -146,7 +146,7 @@ def _canonical_dependencies(unit, entries, fragments, limit):
         if compilation is None or "layout" not in compilation:
             row["compiler_layout"] = {"status": "NOT_RECORDED", "runtime_facts": False}
         else:
-            from scar.analysis.static_compilation import StaticCompilerLayout
+            from scar.analysis.static.compilation import StaticCompilerLayout
             layout = StaticCompilerLayout.from_dict(compilation["layout"])
             if (compilation.get("evidence_kind") != "SOURCE_COMPILATION"
                     or compilation.get("runtime_code_instance_established") is not False
@@ -305,13 +305,15 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
     """
     from collections import OrderedDict
     from types import SimpleNamespace
-    from scar.analysis.static_calls import input_basis_unit
-    from scar.analysis.static_basis_compatibility import published_units_basis_compatible
+    from scar.analysis.static.calls import input_basis_unit
+    from scar.analysis.static.basis_compatibility import published_units_basis_compatible
     from scar.analysis.static_body import diagnostic_materializations
-    from scar.analysis.static_function_environment import (
-        derive_function_environment_routes, validate_static_body_namespace, _source_reference,
+    from scar.analysis.static.function_environment import (
+        derive_function_environment_routes,
+        validate_static_body_namespace,
+        _source_reference,
     )
-    from scar.analysis.static_namespace import NamespaceDependencies, normal_reference
+    from scar.analysis.static.namespace import NamespaceDependencies, normal_reference
     from scar.ir.program.codec import loads as load_core
     from scar.ir.program.model import OperationResult
     from scar.ir.program.queries import ProgramIndex
@@ -551,7 +553,7 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
                         and tuple(record["constant_path"]) == creation.constant_path
                         for record in class_overlay["factories"]))
         if dependencies.protocols[creation.factory] == "MAKE_NESTED_FUNCTION":
-            from scar.analysis.static_nested_creation import validate_nested_function_creation
+            from scar.analysis.static.nested_creation import validate_nested_function_creation
             source = fragments.read(body.unit["artifacts"]["source"])
             if (source.get("path") != body.unit["path"]
                     or source.get("namespace_root") != body.unit["namespace_root"]
@@ -678,8 +680,9 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
         for qualified in call.qualified_function_creations:
             check_creation(qualified.body, qualified.creation)
         for flow in call.cross_body_namespace_flows:
-            from scar.analysis.static_crossbody_namespace import (
-                StaticNamespaceBody, validate_cross_body_namespace_flow,
+            from scar.analysis.static.crossbody_namespace import (
+                StaticNamespaceBody,
+                validate_cross_body_namespace_flow,
             )
             namespaces = {flow.write.body, flow.read.body, *(segment.body for segment in flow.segments)}
             for bridge in flow.bridges:
@@ -772,8 +775,11 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
                   caller_source_text=source_text(caller.unit), load_body=load_body,
                   load_signature=load_signature, target=target)
 
-    from scar.analysis.static_module_attributes import (
-        ModuleAttributeDependencies, validate_import_module_route, validate_module_attribute_flow)
+    from scar.analysis.static.module_attributes import (
+        ModuleAttributeDependencies,
+        validate_import_module_route,
+        validate_module_attribute_flow,
+    )
     from scar.ir.program.static_calls import (
         StaticArgumentValueFlow, StaticReturnValueFlow, StaticCrossBodyNamespaceFlow,
         StaticAttributeAccess, StaticImportFromRead,
@@ -827,23 +833,26 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
         callee=load_body(context.callee)
         check_definition(context.definition,callee.unit)
         target=context_target(context,requirements)
-        from scar.analysis.static_value_flows import validate_call_context
+        from scar.analysis.static.value_flows import validate_call_context
         validate_call_context(context,caller=load_body(context.caller),callee=callee,
             signature=signature_for(context.definition,callee))
         return target
-    from scar.analysis.static_module_state import ModuleGlobalsDependencies,validate_module_globals_flow
+    from scar.analysis.static.module_state import ModuleGlobalsDependencies, validate_module_globals_flow
     module_state_engine=ModuleGlobalsDependencies(modules=module_engine)
     checked_module=set()
     checking_module=set()
     def check_module_support(flow):
         if type(flow)is StaticArgumentValueFlow:
-            from scar.analysis.static_value_flows import validate_argument_value_flow
+            from scar.analysis.static.value_flows import validate_argument_value_flow
             check_value_flow(flow,validate_argument_value_flow)
         elif type(flow)is StaticReturnValueFlow:
-            from scar.analysis.static_value_flows import validate_return_value_flow
+            from scar.analysis.static.value_flows import validate_return_value_flow
             check_value_flow(flow,validate_return_value_flow)
         elif type(flow)is StaticCrossBodyNamespaceFlow:
-            from scar.analysis.static_crossbody_namespace import StaticNamespaceBody,validate_cross_body_namespace_flow
+            from scar.analysis.static.crossbody_namespace import (
+                StaticNamespaceBody,
+                validate_cross_body_namespace_flow,
+            )
             namespaces={flow.write.body,flow.read.body,*(s.body for s in flow.segments)}
             for bridge in flow.bridges:
                 route=bridge.environment;check_environment_creation(route)
@@ -891,7 +900,7 @@ def _call_relations(manifest, unit, entries, fragments, limit, *, body_loader=No
         for call in shard.calls:
             check_call_dependencies(call, caller)
             if document["schema_version"] >= 5:
-                from scar.analysis.static_value_flows import validate_argument_value_flow, validate_return_value_flow
+                from scar.analysis.static.value_flows import validate_argument_value_flow, validate_return_value_flow
                 for flow in call.argument_value_flows:
                     check_value_flow(flow, validate_argument_value_flow)
                 for flow in call.return_value_flows:

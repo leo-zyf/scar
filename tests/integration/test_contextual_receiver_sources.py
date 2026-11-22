@@ -4,9 +4,9 @@ import sys
 
 
 def test_receiver_walk_follows_matching_formal_and_retains_unbound_context(tmp_path):
-    from scar.analysis.static_calls import StaticCallSession, StaticCallBudget
+    from scar.analysis.static.calls import StaticCallSession, StaticCallBudget
     from scar.analysis.static_program import link_static_program
-    from scar.analysis.static_namespace import normal_reference, protocol_kinds
+    from scar.analysis.static.namespace import normal_reference, protocol_kinds
     from scar.ir.program.dependencies import (DependencyPoint as P, GraphNamespace,
         DependencyKind as K, DependencyMeaning as M, context_frames)
 

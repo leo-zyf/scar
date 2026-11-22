@@ -16,7 +16,7 @@ from scar.analysis.source_stage import SourceStage
 def _parse_unit(task):
     from scar.analysis.source_syntax import read_source_syntax, source_syntax_document
     from scar.analysis.static_program import _write
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     root, staging, unit, mode, max_nodes, max_tokens = task
     reader = _Fragments(root)
     source = reader.read(unit['artifacts']['source'])
@@ -125,7 +125,7 @@ def main(argv=None):
         parser.error('--verify requires --model')
     from scar.analysis.source_lexing import main as lex_main
     from scar.analysis.source_syntax import source_syntax_document
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     upstream_args = ['--file', args.file, '--out', args.out,
         '--max-bytes', str(args.max_bytes), '--max-tokens', str(args.max_tokens)]
     if args.namespace_root:

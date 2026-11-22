@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
 
-from scar.analysis.static_crossbody_namespace import (StaticNamespaceBody,
-    _read_endpoint, _write_endpoint)
-from scar.analysis.static_namespace import NamespaceDependencies
+from scar.analysis.static.crossbody_namespace import StaticNamespaceBody, _read_endpoint, _write_endpoint
+from scar.analysis.static.namespace import NamespaceDependencies
 from scar.ir.program.dependencies import (DependencyCondition as Condition,
     DependencyContext, DependencyEdge, DependencyEvidence as Evidence,
     DependencyFrontier as Frontier, DependencyKind as K, DependencyMeaning as M,

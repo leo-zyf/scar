@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from scar.analysis.static_dependencies import expand_static_dependency_materials
+from scar.analysis.static.dependencies import expand_static_dependency_materials
 from scar.analysis.static_program import _read_fragment
 from scar.ir.program.discovery import ModuleMapping
 from scar.ir.program.providers import ProviderArtifact
@@ -103,8 +103,8 @@ def test_selected_materials_make_normal_units_without_selection_or_execution(tmp
     # import indices must not destroy the basis of their original provenance.
     from scar.analysis.static_program import (build_static_program, refine_static_program,
         inventory_static_program, read_static_program)
-    from scar.analysis.static_dependencies import read_static_dependencies
-    from scar.analysis.static_dependencies import expand_static_dependency_program
+    from scar.analysis.static.dependencies import read_static_dependencies
+    from scar.analysis.static.dependencies import expand_static_dependency_program
     seed = tmp_path / "seed"
     seed.mkdir()
     (seed / "app.py").write_text("import pkg.provider\nimport declaration\n")

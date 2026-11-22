@@ -15,7 +15,7 @@ import time
 from scar.analysis.source_bytes import (
     decoded_source_bytes, read_source_bytes, source_bytes_document,
 )
-from scar.analysis.static_sources import _Changed, _ByteBudget, _read_raw_source
+from scar.analysis.static.sources import _Changed, _ByteBudget, _read_raw_source
 
 
 def _stamps(root, descriptors):
@@ -109,7 +109,7 @@ def _material(unit, read):
 def _acquire_material(task):
     # A process owns its warning filters: codec interpretation must not race
     # with a sibling task's temporary warning policy on GIL builds.
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     root, unit = task
     document, origin, detail = _material(unit, _Fragments(root).read)
     return unit['key'], document, origin, detail
@@ -131,7 +131,7 @@ def archive_model_source_bytes(model, out, *, jobs=4, max_bytes=64 * 1024 * 1024
     The two renames retain the same recoverable gap as SourceStage.
     """
     from scar.analysis.static_program import _artifacts, _json, _write, read_static_program
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     from scar.analysis.source_stage import _durable_bytes, _sync_directory, _sync_file
     if type(jobs) is not int or not 1 <= jobs <= 32 or type(max_bytes) is not int or max_bytes < 1:
         raise ValueError('F0 requires bounded positive jobs and byte budgets')
@@ -265,7 +265,7 @@ def archive_model_source_bytes(model, out, *, jobs=4, max_bytes=64 * 1024 * 1024
 def verify_model_source_bytes(model, out):
     """Freshly check all declared F0 artifacts; do not repair or run later layers."""
     from scar.analysis.static_program import _json, read_static_program
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     started = time.monotonic()
     root, out = Path(model).absolute(), Path(out).absolute()
     if (root.resolve() != root or out.resolve() != out or out.is_relative_to(root)

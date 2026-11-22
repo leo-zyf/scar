@@ -131,7 +131,7 @@ def _rule(node):
     module, function = "structured_lowering", "StructuredBuilder.expr"
     compiler = False
     if isinstance(node, _FUNCS):
-        module, function = "source_function_definition_lowering", "lower_function_definition"
+        module, function = "source_function_definitions", "lower_function_definition"
         caps, compiler = [C.NESTED_FUNCTION_314_V1], True
         if isinstance(node, ast.AsyncFunctionDef) or node.decorator_list or getattr(node, "type_params", ()) or any(x is not None for x in node.args.kw_defaults):
             unsupported = "Nested creation currently rejects async/decorators/type parameters/keyword defaults (compiler_plan)."
@@ -142,7 +142,7 @@ def _rule(node):
                 keyword.arg is None for keyword in node.keywords):
             unsupported = 'Class type parameters, starred bases and expanded keywords require a later explicit profile.'
     elif isinstance(node, ast.Lambda):
-        module, function = "source_lambda_lowering", "lower_lambda"
+        module, function = "source_lambda", "lower_lambda"
         caps, compiler = [C.LAMBDA_EXPRESSION_314_V1], True
         needs.append(_needs("STATIC_CHILD_CODE_AND_CELLS", "Use this lambda's exact child code/constants and closure layout; do not substitute parent co_consts."))
     elif isinstance(node, _COMPS):
@@ -156,7 +156,7 @@ def _rule(node):
             unsupported = "Current comprehension shape requires one synchronous clause, recursive Tuple/List-to-Name target, no filters/nesting/walrus/suspension."
         needs.append(_needs("COMPREHENSION_LOCAL_SCOPE_AND_UNWIND", "Recursive target bindings use original comprehension slots; failed partial unpack preserves earlier writes, releases local references and forwards original propagation/world to enclosing cleanup."))
     elif isinstance(node, ast.GeneratorExp):
-        module, function = "source_generator_creation_lowering", "lower_creation"
+        module, function = "source_generator_create", "lower_creation"
         # Its deferred elt has its own SG/source children, intentionally not
         # traversed as eager parent code by _owned. The lazy builder still
         # needs the generic expression capability, even when the outer body
@@ -184,7 +184,7 @@ def _rule(node):
             unsupported = "Unpack target star binding has no current target adapter."
         needs.append(_needs("STATIC_BINDING_CLASSIFICATION", "Name leaves must resolve to original local/cell/global slots; heap leaves obey _check and exact ordered compiler consumption."))
     elif isinstance(node, (ast.Tuple, ast.List)) and any(isinstance(x, ast.Starred) for x in node.elts):
-        module, function = "source_display_lowering", "lower_starred_display"
+        module, function = "source_displays", "lower_starred_display"
         caps, compiler = [C.STARRED_DISPLAY_314_V1, C.SOURCE_EXPRESSIONS_314_V1,
                           C.SOURCE_REFERENCE_LIFETIME_314_V1], True
         if len(node.elts) > 30:
@@ -233,11 +233,11 @@ def _rule(node):
         module, function = "source_mapping_lowering", "lower_dictionary"
         caps = [C.SOURCE_EXPRESSIONS_314_V1, C.SOURCE_REFERENCE_LIFETIME_314_V1]
     elif isinstance(node, ast.JoinedStr):
-        module, function = "source_string_lowering", "lower_joined_string"
+        module, function = "source_string", "lower_joined_string"
         if len(node.values) > 30:
             unsupported = "Incremental f-string list/append/join for more than 30 pieces is not implemented."
     elif isinstance(node, ast.FormattedValue):
-        module, function = "source_string_lowering", "_formatted_value"
+        module, function = "source_string", "_formatted_value"
         if node.conversion not in (-1, 115, 114, 97):
             unsupported = "Unknown f-string conversion protocol."
     elif isinstance(node, (ast.BoolOp, ast.IfExp)):
@@ -262,7 +262,7 @@ def _rule(node):
             unsupported = "_try_shape rejects nested/combined try and nested yield/await transfers."
         needs.append(_needs("PAIRED_EXCEPTION_AND_CLEANUP_PROTOCOL", "Reuse existing C0/C1 pending, current propagation packet and namespace cleanup; no runtime traceback observation is asserted."))
     elif isinstance(node, ast.With):
-        module, function = "source_with_lowering", "FunctionWithBuilder.with_statement"
+        module, function = "source_with", "FunctionWithBuilder.with_statement"
         caps, compiler = [C.FUNCTION_TRY_314_V1, C.FUNCTION_WITH_314_V1], True
         if len(node.items) != 1:
             unsupported = "Current with_shape accepts exactly one synchronous item."
@@ -356,7 +356,7 @@ def plan_static_entry(tree, entry, *, path, fingerprint):
         caps=[]
         base_needs.append(_needs("STATIC_COMPILER_CLASS_LAYOUT", "Original ClassDef child code determines outer freevar inputs, local compiler cell roles and Python-reference normal payload; no runtime class or prepared namespace is established."))
         base_needs.append(_needs("CLASS_BODY_REQUIRED_EXPANSION", "Preserve every original class-scope statement and compiler-owned cell stage; parent class construction and body internals remain distinct open relations."))
-        add(node,entry["ast_path"],"source_class_body_lowering","lower_class_suite",needs=base_needs,
+        add(node,entry["ast_path"],"source_class_body","lower_class_suite",needs=base_needs,
             status="ENTRY_ADAPTER_MISSING" if node.type_params else "NEEDS_STATIC_COMPILER")
         if node.type_params:
             rules[0]["prerequisites"].append(_needs("TYPE_PARAMETER_CLASS_ENTRY_ADAPTER", "Generic parameter scope needs its exact parent compiler-code adapter; do not guess a same-name child."))

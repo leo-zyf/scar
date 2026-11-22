@@ -61,8 +61,10 @@ def test_static_native_materials_exact_overloads_effects_and_isolation(tmp_path,
     # The same real parser result becomes canonical native interface regions,
     # without a target run, invented runtime evidence, effects or device use.
     import json
-    from scar.analysis.static_native_interfaces import (
-        SCHEMA, native_material_document, lower_static_native_materials,
+    from scar.analysis.static.native_interfaces import (
+        SCHEMA,
+        native_material_document,
+        lower_static_native_materials,
     )
     from scar.analysis.program_dependencies import ProgramDependencyGraph
     from scar.ir.program.codec import SCHEMA_VERSION, dumps, loads

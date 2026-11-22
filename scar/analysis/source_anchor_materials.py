@@ -14,7 +14,7 @@ from scar.analysis.source_atom_anchors import (
 from scar.analysis.source_syntax import read_source_syntax_material
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_store import read_source_prerequisites
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 
 
 _INPUTS = ('source', 'source_bytes', 'source_tokens', 'source_syntax', 'semantic')

@@ -10,8 +10,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, replace
 
-from scar.analysis.static_imports import _unit_mappings, _importer_contexts, _resolve_from
-from scar.analysis.static_namespace import normal_reference
+from scar.analysis.static.imports import _unit_mappings, _importer_contexts, _resolve_from
+from scar.analysis.static.namespace import normal_reference
 from scar.ir.program.dependencies import (DependencyCondition as Condition,
     DependencyEvidence as Evidence, DependencyFrontier as Frontier,
     DependencyPoint as Point, GraphNamespace)

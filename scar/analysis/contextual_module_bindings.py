@@ -14,7 +14,7 @@ from scar.analysis.attribute_selector import derive_attribute_selector, prepare_
 from scar.analysis.contextual_module_imports import ContextualImportSources, ContextualModuleImport
 from scar.analysis.contextual_receiver_sources import walk_reference_sources
 from scar.analysis.source_attribute_lookup import _source_lookup
-from scar.analysis.static_namespace import NamespaceBindingWitness
+from scar.analysis.static.namespace import NamespaceBindingWitness
 from scar.ir.program.attribute_lookups import StaticAttributeSelector
 from scar.ir.program.dependencies import (
     DependencyCondition as Condition, DependencyEdge as Edge, DependencyEvidence as Evidence,

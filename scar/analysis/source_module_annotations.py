@@ -6,7 +6,7 @@ import ast
 import __future__
 import dis
 from dataclasses import dataclass, replace
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.entry_namespaces import (
     ModuleAnnotationCompilerWitness,
     ModuleAnnotationMode as Mode,

@@ -9,8 +9,8 @@ from scar.analysis.program_lowering import prepare_source_text
 from scar.analysis.source_class_body import lower_class_suite
 from scar.analysis.source_language import SourceLanguageOptions
 from scar.analysis.static_class_construction import build_class_provider, connect_class_suite, validate_class_builder_expansion
-from scar.analysis.static_compilation import compile_source_unit
-from scar.analysis.static_lexical import inspect_lexical
+from scar.analysis.static.compilation import compile_source_unit
+from scar.analysis.static.lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
 from scar.ir.program.class_builder import ClassBuilderExpansion, ClassBuilderStageKind as K
 from scar.ir.program.class_entries import ClassNormalPayloadKind
@@ -157,7 +157,7 @@ def test_class_builder_connects_prepared_mapping_current_environment_and_shared_
     # interfaces. The implementation graph is shared; its contexts are not.
     from scar.analysis.program_dependencies import ProgramDependencyGraph
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.program_class_dependencies import ClassDependencyProvider, class_dependency_frames
+    from scar.analysis.dependencies.classes import ClassDependencyProvider, class_dependency_frames
     from scar.ir.program.dependencies import DependencyKind as DK, DependencyPoint, GraphNamespace
     with ProgramDependencySession(model, class_publication=publication,
             class_index_directory=tmp_path / 'class-index') as session:
@@ -209,8 +209,8 @@ def test_class_builder_connects_prepared_mapping_current_environment_and_shared_
     # A preexisting call index and every original graph remain unchanged.
     from scar.analysis.static_program import link_static_program, read_static_program, _artifacts
     from scar.analysis.static_class_construction import link_static_class_program
-    from scar.analysis.static_calls import input_basis_unit
-    from scar.analysis.static_jobs import read_static_link_task
+    from scar.analysis.static.calls import input_basis_unit
+    from scar.analysis.static.jobs import read_static_link_task
     called = link_static_program(model)
     calls_before = called['static_calls']
     basis_before = [input_basis_unit(unit) for unit in called['units']]
@@ -242,7 +242,7 @@ def test_class_builder_connects_prepared_mapping_current_environment_and_shared_
         # A publication can lack this original mapping even when some other
         # classes were published. Missing edges then remain an open interface,
         # rather than an exhausted empty neighborhood.
-        from scar.analysis.program_class_dependencies import ClassDependencyProvider
+        from scar.analysis.dependencies.classes import ClassDependencyProvider
         omitted = ClassDependencyProvider(lambda p: (), session.index, session.load_provider,
             coverage=session._class_relation_coverage)
         missing = omitted.outgoing(point)

@@ -86,7 +86,7 @@ class InterproceduralDependencies:
         self._entry_stacks=defaultdict(dict);self._arguments=defaultdict(dict);self._returns=defaultdict(dict)
         self._value_flows={};self._value_frontiers={};self._watchers=defaultdict(set)
         self._derived_values=OrderedDict()
-        from scar.analysis.static_function_environment import _EnvironmentFacts
+        from scar.analysis.static.function_environment import _EnvironmentFacts
         self._environment_facts=_EnvironmentFacts()
 
     @property
@@ -231,7 +231,7 @@ class InterproceduralDependencies:
         derived_key=key,target.binding,target.arguments,target.completions
         derived=self._derived_values.get(derived_key)
         if derived is None:
-            from scar.analysis.static_value_flows import derive_static_value_flows
+            from scar.analysis.static.value_flows import derive_static_value_flows
             args,returns,frontiers=derive_static_value_flows(caller=caller,callee=callee,
                 call_operation=call.operation,callee_use=call.callee_use,target=target,requirements=requirements,
                 load_body=self._body)
@@ -346,8 +346,9 @@ class InterproceduralDependencies:
         return body.index.use_site(binding.write.payload).use.value
 
     def _compose(self,write_body,binding,bridges,paths,read_body,read,slot):
-        from scar.analysis.static_crossbody_namespace import (
-            StaticNamespaceBody,compose_cross_body_namespace_flow,
+        from scar.analysis.static.crossbody_namespace import (
+            StaticNamespaceBody,
+            compose_cross_body_namespace_flow,
         )
         namespaces={write_body.namespace,read_body.namespace}
         for bridge in bridges:

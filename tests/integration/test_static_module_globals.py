@@ -11,8 +11,8 @@ import pytest
 
 def _check_demand_refresh(session):
     from types import SimpleNamespace
-    from scar.analysis.static_module_state import ModuleGlobalsDependencies,_context
-    from scar.analysis.static_namespace import NamespaceEntryPathWitness
+    from scar.analysis.static.module_state import ModuleGlobalsDependencies, _context
+    from scar.analysis.static.namespace import NamespaceEntryPathWitness
     modules=session._module_dependencies();dependencies=session._dependencies()
     original=session._module_state
     nested=[f for rows in original.flows.values()for f in rows if f.projection.owner_routes and not f.bridges]
@@ -61,7 +61,7 @@ def _check_demand_refresh(session):
 
 
 def test_call_time_globals_follow_original_writes_and_creator_contexts(tmp_path,monkeypatch):
-    from scar.analysis.static_query import query_static_program
+    from scar.analysis.static.query import query_static_program
     from scar.ir.program.static_calls import loads
 
     source=tmp_path/'source';source.mkdir();model=tmp_path/'model'
@@ -122,7 +122,7 @@ raise RuntimeError("SCAR must never execute this application")
     result=subprocess.run([sys.executable,'-B','-m','scar.cli','static',str(source),
         '--out',str(model),'--jobs','1','--phase','bodies'],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
-    from scar.analysis.static_calls import StaticCallSession
+    from scar.analysis.static.calls import StaticCallSession
     from scar.analysis.static_program import link_static_program
     original_recount=StaticCallSession._recount_relations
     def recount(session):

@@ -12,8 +12,8 @@ import hashlib
 import sys
 from types import CodeType
 
-from scar.analysis.static_compilation import StaticCodeEvidence, _scope_nodes
-from scar.analysis.static_function_environment import _EnvironmentFacts, _factory, _roles
+from scar.analysis.static.compilation import StaticCodeEvidence, _scope_nodes
+from scar.analysis.static.function_environment import _EnvironmentFacts, _factory, _roles
 from scar.ir.program.environments import EnvironmentRole
 from scar.ir.program.function_origins import StaticFactoryEntryOrigin
 from scar.ir.program.model import ReferenceValue
@@ -258,7 +258,7 @@ def factory_entry_origin_ports(*, graph, document, namespace, index=None, _facts
     An empty explicit origin list cannot close a real MAKE normal/capture port.
     Unsupported/unselected factory sources remain interfaces with open origins.
     """
-    from scar.analysis.static_namespace import normal_reference
+    from scar.analysis.static.namespace import normal_reference
     if _facts is None and _inputs is not None:
         raise ValueError('factory origin ports need the original private input owner')
     owner = _EnvironmentFacts() if _facts is None else _facts

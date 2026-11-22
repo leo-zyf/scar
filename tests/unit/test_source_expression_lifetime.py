@@ -7,8 +7,8 @@ import pytest
 from scar.analysis.program_lowering import SourceProgram, prepare_source_text
 from scar.analysis.source_expression_validation import validate_source_expressions
 from scar.analysis.source_language import SourceLanguageOptions
-from scar.analysis.static_compilation import compile_source_unit
-from scar.analysis.static_lexical import inspect_lexical
+from scar.analysis.static.compilation import compile_source_unit
+from scar.analysis.static.lexical import inspect_lexical
 from scar.analysis.static_rules import plan_static_entry
 from scar.ir.program.functions import BodyLoweringProfile
 from scar.ir.program.model import ReferenceValue

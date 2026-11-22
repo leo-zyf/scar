@@ -174,7 +174,7 @@ class StaticCallSession:
         self.input_bytes = self.output_bytes = 0
         self._stamps, self._cache = {}, OrderedDict()
         self._cache_bytes = 0
-        from scar.analysis.static_function_environment import _EnvironmentFacts
+        from scar.analysis.static.function_environment import _EnvironmentFacts
         self._environment_facts = _EnvironmentFacts(max_bodies=16,
             max_bytes=max(1, min(64 * 1024 * 1024, self.budget.max_cached_bytes // 8)))
         self._closed = False
@@ -334,7 +334,7 @@ class StaticCallSession:
         return body
 
     def _namespace_for(self, body):
-        from scar.analysis.static_namespace import NamespaceDependencies
+        from scar.analysis.static.namespace import NamespaceDependencies
         dependency = getattr(body, "namespace_dependencies", None)
         if dependency is None:
             dependency = NamespaceDependencies(body.graph, body.document, index=body.index,
@@ -344,7 +344,7 @@ class StaticCallSession:
 
     def _dependencies(self):
         if self._interprocedural is None:
-            from scar.analysis.static_interprocedural import InterproceduralDependencies
+            from scar.analysis.static.interprocedural import InterproceduralDependencies
             self._interprocedural = InterproceduralDependencies(load_body=self._load_body_namespace,
                 namespace_for=self._namespace_for, max_contexts=self.budget.max_contexts,
                 max_depth=self.budget.max_context_depth, max_facts=self.budget.max_namespace_facts,
@@ -356,7 +356,7 @@ class StaticCallSession:
 
     def _module_dependencies(self):
         if self._module_attributes is None:
-            from scar.analysis.static_module_attributes import ModuleAttributeDependencies
+            from scar.analysis.static.module_attributes import ModuleAttributeDependencies
             def module_bodies(name):
                 for number in self._module_units.get(name, ()):
                     unit=self.units[number]
@@ -385,7 +385,7 @@ class StaticCallSession:
 
     def _module_state_dependencies(self):
         if self._module_state is None:
-            from scar.analysis.static_module_state import ModuleGlobalsDependencies
+            from scar.analysis.static.module_state import ModuleGlobalsDependencies
             self._module_state=ModuleGlobalsDependencies(modules=self._module_dependencies(),
                 incoming=lambda point:self._dependencies().owner_activations(point),
                 max_depth=self.budget.max_context_depth,max_facts=self.budget.max_namespace_facts,
@@ -757,12 +757,12 @@ class StaticCallSession:
 
     def _class_function_creation(self, body, operation, value, normal_edge):
         """Compatibility delegate to the shared source/compiler extractor."""
-        from scar.analysis.static_function_creation import extract_class_function_creation
+        from scar.analysis.static.function_creation import extract_class_function_creation
         return extract_class_function_creation(body, operation, value, normal_edge)
 
     def _function_creation(self, body, operation, value, normal_edge):
         """Compatibility delegate to the shared source/compiler extractor."""
-        from scar.analysis.static_function_creation import extract_function_creation
+        from scar.analysis.static.function_creation import extract_function_creation
         return extract_function_creation(body, operation, value, normal_edge)
 
     def _source_candidates(self, body, operation, source, semantic_call, *, requirements=()):
@@ -830,7 +830,7 @@ class StaticCallSession:
                     frontiers.append(_front("IMPORT_ENVIRONMENT_OPEN", "Import candidates retain loader/package/export mutation conditions.", producer.source))
         # Follow only canonical binding payload/phi/creation references, never
         # every input of arbitrary computation as an alias to its result.
-        from scar.analysis.static_namespace import normal_reference
+        from scar.analysis.static.namespace import normal_reference
         from scar.ir.program.static_calls import StaticQualifiedNamespaceFlow, StaticQualifiedFunctionCreation
         callee_uses = {row.use for row in body.uses_by_op.get(operation.id, ()) if row.role == "callee"}
         callee = next((use.value for use in operation.uses if use.id in callee_uses), None)
@@ -1142,7 +1142,7 @@ class StaticCallSession:
                 state_entry = StaticStateEntryRoute(states[0].id, before.id, before.location, after.id, after.location)
             else:
                 frontiers.append(_front("CALL_STATE_ENTRY_OPEN", "CALL has no unique STATE_CONTENT invoke argument in its caller's coarse-world location; the current SSA version need not equal the entry version."))
-        from scar.analysis.static_function_environment import _derive_function_environment_routes
+        from scar.analysis.static.function_environment import _derive_function_environment_routes
         callee_uses = [row.use for row in caller.uses_by_op.get(operation.id, ()) if row.role == "callee"]
         environment_routes, environment_frontiers = _derive_function_environment_routes(
             caller_graph=caller.graph, caller_document=caller.document, caller_namespace=caller.namespace,

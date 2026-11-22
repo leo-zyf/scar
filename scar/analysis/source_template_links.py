@@ -21,7 +21,7 @@ import time
 from scar.analysis.source_expression_materials import _implementation, _basis
 from scar.analysis.source_productions import _digest, production_type_catalog, read_production_plan
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.program import source_productions as P
 from scar.ir.program import source_declarations as T
 from scar.ir.program.control import LanguageCompletionKind as C

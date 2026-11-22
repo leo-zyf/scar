@@ -16,7 +16,7 @@ from scar.analysis.source_tokens import read_source_tokens, source_tokens_docume
 
 def _lex_unit(task):
     from scar.analysis.static_program import _write
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     root, staging, unit, max_tokens = task
     reader = _Fragments(root)
     source = reader.read(unit['artifacts']['source'])
@@ -102,7 +102,7 @@ def model_source_tokens(model, out, *, jobs=4, max_tokens=2_000_000, verify=Fals
 def main(argv=None):
     from scar.analysis.source_materials import main as source_materials_main
     from scar.analysis.static_program import _json, _write
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     parser = argparse.ArgumentParser(prog='scar source-tokens')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--model')

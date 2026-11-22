@@ -95,7 +95,7 @@ class ProgramDependencySession:
         self._origin_discovery = None
         self._entry_namespace_provider = None
         self._unpack_projection_provider = None
-        from scar.analysis.static_function_environment import _EnvironmentFacts
+        from scar.analysis.static.function_environment import _EnvironmentFacts
         self._environment_facts = _EnvironmentFacts(max_bodies=self.budget.max_graphs,
             max_bytes=max(1, min(32 * 1024 * 1024, self.budget.max_cached_bytes // 4)))
         manifest_path = self.root / "manifest.json"
@@ -169,8 +169,8 @@ class ProgramDependencySession:
         self._logical[uri] = key
 
     def _register_publication(self, publication, index_directory, family):
-        from scar.analysis.static_calls import input_basis_unit
-        from scar.analysis.static_basis_compatibility import published_units_basis_compatible
+        from scar.analysis.static.calls import input_basis_unit
+        from scar.analysis.static.basis_compatibility import published_units_basis_compatible
         from scar.analysis.static_body import diagnostic_materializations
         expected = "scar.static-call-publication" if family == "calls" else "scar.static-class-publication"
         if publication.get("schema") != expected:
@@ -258,7 +258,7 @@ class ProgramDependencySession:
 
     def _read_registered(self, key, *, cache_document=True):
         self.check()
-        from scar.analysis.static_query import _Fragments
+        from scar.analysis.static.query import _Fragments
         physical, descriptor = self._artifacts[key]
         if physical.resolve() != physical or physical.is_symlink() or not physical.is_file():
             raise ValueError("dependency artifact is absent or traverses symlinks")
@@ -469,7 +469,7 @@ class ProgramDependencySession:
             raise ValueError("body namespace declaration is outside registered immutable bases")
 
     def _catalog(self, number):
-        from scar.analysis.static_query import _catalog
+        from scar.analysis.static.query import _catalog
         key = "catalog", number
         cached = self._get(key)
         if cached is not None:
@@ -481,7 +481,7 @@ class ProgramDependencySession:
         return self._put(key, value, unit["artifacts"]["lexical"]["decoded_bytes"])
 
     def _base_body(self, number, position):
-        from scar.analysis.static_namespace import NamespaceDependencies
+        from scar.analysis.static.namespace import NamespaceDependencies
         from scar.ir.program.codec import _loads_with_index
         from scar.ir.v2.common import SourceReference
         key = "body", number, position
@@ -770,7 +770,7 @@ class ProgramDependencySession:
 
     def body_locations(self, *, file=None, entry=None, kind=None):
         """Select declaration rows before reading any canonical fragment."""
-        from scar.analysis.static_query import _file_matches
+        from scar.analysis.static.query import _file_matches
         candidates = []
         for number, unit in enumerate(self.units):
             if not _file_matches(unit["path"], file):
@@ -865,7 +865,7 @@ class ProgramDependencySession:
         return record
 
     def load_call_shard(self, locator):
-        from scar.analysis.static_query import _call_relations
+        from scar.analysis.static.query import _call_relations
         from scar.ir.program.static_calls import loads
         item = self._call_items.get(locator.artifact.uri)
         if item is None or locator.pointer != "#/relations":
@@ -992,12 +992,12 @@ class ProgramDependencySession:
     def graph(self):
         """Return the shared dependency interface, with lazy source discovery."""
         from scar.analysis.program_dependencies import ProgramDependencyGraph
-        from scar.analysis.program_call_dependencies import StaticCallDependencyProvider
-        from scar.analysis.program_class_dependencies import ClassDependencyProvider
+        from scar.analysis.dependencies.call import StaticCallDependencyProvider
+        from scar.analysis.dependencies.classes import ClassDependencyProvider
         from scar.analysis.program_function_origins import AutomaticFactoryEntryOrigins
         from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
-        from scar.analysis.program_entry_namespace_dependencies import EntryNamespaceDependencyProvider
-        from scar.analysis.program_unpack_dependencies import UnpackProjectionProvider
+        from scar.analysis.dependencies.entry_namespace import EntryNamespaceDependencyProvider
+        from scar.analysis.dependencies.unpack import UnpackProjectionProvider
         graph = getattr(self, "_view", None)
         if graph is None:
             calls = StaticCallDependencyProvider(self)
@@ -1026,7 +1026,7 @@ class ProgramDependencySession:
         No saved DTO is accepted as authority; no target or new capture is
         run. Runtime scope does not change ordinary static neighborhoods.
         """
-        from scar.analysis.program_observed_dependencies import ObservedDependencyProvider
+        from scar.analysis.dependencies.observed import ObservedDependencyProvider
         self.check()
         provider = ObservedDependencyProvider(self, trace)
         return self.graph()._register_observations(provider)
@@ -1039,7 +1039,7 @@ class ProgramDependencySession:
     def unpack_projection(self, point):
         """Return this original normal output's checked fixed-unpack slot."""
         if self._unpack_projection_provider is None:
-            from scar.analysis.program_unpack_dependencies import UnpackProjectionProvider
+            from scar.analysis.dependencies.unpack import UnpackProjectionProvider
             self._unpack_projection_provider = UnpackProjectionProvider(self)
         return self._unpack_projection_provider.projection(point)
 

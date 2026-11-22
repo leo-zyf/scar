@@ -11,8 +11,8 @@ import sys
 from types import SimpleNamespace
 
 from scar.analysis.source_class_construction_validation import validate_class_constructions
-from scar.analysis.static_compilation import StaticCodeEvidence
-from scar.analysis.static_function_origins import _replay_compilation
+from scar.analysis.static.compilation import StaticCodeEvidence
+from scar.analysis.static.function_origins import _replay_compilation
 from scar.ir.program.class_construction import ContextualClassStatementSource
 from scar.ir.program.dependencies import (
     DependencyCondition as Condition, DependencyEvidence as Evidence,

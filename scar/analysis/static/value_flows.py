@@ -28,7 +28,7 @@ from scar.ir.program.static_calls import (
 from scar.ir.program.structured import ControlEdgeReference
 from scar.analysis.function_binding import bind_call
 from scar.analysis.function_interfaces import validate_body_interface
-from scar.analysis.static_function_environment import validate_static_body_namespace
+from scar.analysis.static.function_environment import validate_static_body_namespace
 
 
 def _body(body, facts=None):

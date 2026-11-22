@@ -11,8 +11,8 @@ def test_import_initializer_globals_reach_shared_graph_without_alias_invention(t
     from scar.analysis.static_program import link_static_program
     from scar.analysis.program_dependency_session import ProgramDependencySession,ProgramDependencyBudget
     from scar.analysis.program_value_analysis import ProgramValueAnalysis,ValueAnalysisBudget
-    from scar.analysis.program_call_dependencies import dependency_context
-    from scar.analysis.static_namespace import NamespaceDependencies
+    from scar.analysis.dependencies.call import dependency_context
+    from scar.analysis.static.namespace import NamespaceDependencies
     from scar.ir.program.dependencies import DependencyPoint,GraphNamespace,DependencyKind
     from scar.ir.program.model import ExitKind,ValueKind
     from scar.ir.program.queries import ProgramIndex
@@ -70,7 +70,7 @@ def test_import_initializer_globals_reach_shared_graph_without_alias_invention(t
         # IR variant, not the source model or any saved source receipt.
         projection=next(p for name,owner,p in owners if name=='a_provider.py')
         body=session.load_body(projection.source_body);original=NamespaceDependencies(body.graph,body.document,index=body.index)
-        from scar.analysis.static_module_attributes import ModuleAttributeDependencies
+        from scar.analysis.static.module_attributes import ModuleAttributeDependencies
         options=dict(load_body=session.load_body,source_context=session.source_context,
             module_bodies=lambda name:(),namespace_for=session.namespace_for)
         indexes=ModuleAttributeDependencies(**options,max_cached_bytes=body.namespace.graph.decoded_bytes)
@@ -121,9 +121,11 @@ def test_import_initializer_globals_reach_shared_graph_without_alias_invention(t
         # Replay a legacy L-only projection against original inputs. Its
         # support can carry newer independent contracts without upgrading
         # this particular old initializer premise.
-        from scar.analysis.static_module_attributes import (ModuleAttributeDependencies,
-            validate_module_attribute_flow)
-        from scar.analysis.static_module_state import ModuleGlobalsDependencies,validate_module_globals_flow
+        from scar.analysis.static.module_attributes import (
+            ModuleAttributeDependencies,
+            validate_module_attribute_flow,
+        )
+        from scar.analysis.static.module_state import ModuleGlobalsDependencies, validate_module_globals_flow
         from scar.ir.program.static_calls import StaticModuleAttributeFlow
         saved_routes=[r for shard,locator in session.relation_shards(app)for r in shard.import_routes]
         # Replay uses saved source namespaces, not a synthesized declaration

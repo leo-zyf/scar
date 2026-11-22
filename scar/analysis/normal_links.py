@@ -17,7 +17,7 @@ from scar.analysis.normal_graph import _Emitter
 from scar.analysis.source_productions import _digest
 from scar.analysis.source_template_links import read_template_graph,_worker_stores,_json
 from scar.analysis.source_stage import _durable_bytes,_durable_mkdir,_sync_directory
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.program import normal_graph as F
 from scar.ir.program import normal_graph as G
 from scar.ir.program import source_productions as P

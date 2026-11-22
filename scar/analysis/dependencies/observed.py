@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import re
 
-from scar.analysis.observed_call_bindings import derive_observed_interfaces
+from scar.analysis.observed.call_bindings import derive_observed_interfaces
 from scar.ir.program.call_edges import FrameCompletion
 from scar.ir.program.dependencies import (DependencyCondition, DependencyEdge,
     DependencyEvidence, DependencyKind as K, DependencyMeaning as M,
@@ -304,9 +304,9 @@ class ObservedDependencyProvider:
     def _native_protocol_plan(self):
         """Derive each explicit source operand afresh, without native entry claims."""
         from scar.analysis.cpython_native_interfaces import NativeProtocolShape, build_native_protocol
-        from scar.analysis.observed_call_bindings import _session_body
+        from scar.analysis.observed.call_bindings import _session_body
         from scar.analysis.program_dependency_export import _Tables
-        from scar.analysis.static_calls import StaticCallSession
+        from scar.analysis.static.calls import StaticCallSession
         self.check()
         if self.native_callables is None:
             raise ValueError('native callable capability was not recorded for this original trace')
@@ -477,7 +477,7 @@ class ObservedDependencyProvider:
         self._before[target][edge] = None
 
     def _join_native_protocol(self, item, caller, operation, actuals, namespace, manifest):
-        from scar.analysis.static_calls import StaticCallSession
+        from scar.analysis.static.calls import StaticCallSession
         binding, scope = self._bindings[item.scope], item.scope
         protocol = self.session.load(namespace)
         root = next(region for region in protocol.graph.regions if region.id == protocol.graph.root)
@@ -633,7 +633,7 @@ def main(argv=None):
     import gzip
     import json
     import time
-    from scar.analysis.observed_dependency_export import export_observed_dependencies
+    from scar.analysis.observed.dependency_export import export_observed_dependencies
     from scar.analysis.program_dependency_session import ProgramDependencyBudget, ProgramDependencySession
     parser = argparse.ArgumentParser(prog='scar observed-graph')
     parser.add_argument('--model', required=True)
@@ -657,8 +657,8 @@ def main(argv=None):
     expansion = None
     if args.expand_missing:
         from dataclasses import replace
-        from scar.analysis.observed_source_demands import expand_observed_bodies
-        from scar.analysis.static_calls import StaticCallBudget
+        from scar.analysis.observed.source_demands import expand_observed_bodies
+        from scar.analysis.static.calls import StaticCallBudget
         expansion = expand_observed_bodies(args.model, args.trace, out / 'expansion',
             replace(StaticCallBudget(), max_seconds=args.max_seconds),
             max_bodies=args.max_expand_bodies, max_source_files=args.max_source_files,

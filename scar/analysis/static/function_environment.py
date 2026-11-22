@@ -20,7 +20,7 @@ from scar.ir.program.static_calls import StaticCallFrontier, StaticFunctionCreat
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
 from scar.ir.program.source import LoweringMetadata
 from scar.ir.v2.common import SourceReference
-from scar.analysis.static_namespace import protocol_kinds, normal_reference
+from scar.analysis.static.namespace import protocol_kinds, normal_reference
 
 
 def _index(graph, existing):

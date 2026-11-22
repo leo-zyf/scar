@@ -11,7 +11,7 @@ from scar.analysis.replay_transaction import detached_replay, replay_transaction
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies, source_body_access
 from scar.analysis.source_productions import _digest
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.execution_recipe import read_artifact
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import normal_graph as G, source_productions as P

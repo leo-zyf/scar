@@ -9,7 +9,7 @@ def test_outgoing_routes_all_saved_interfaces_without_replaying_unrelated_graphs
     import pytest
     from dataclasses import replace
     from scar.analysis.program_dependencies import ProgramDependencyGraph
-    from scar.analysis.program_call_dependencies import StaticCallDependencyProvider
+    from scar.analysis.dependencies.call import StaticCallDependencyProvider
     from scar.analysis.program_dependency_session import ProgramDependencyBudget,ProgramDependencySession
     from scar.analysis.static_program import link_static_program
     from scar.ir.program.dependencies import (DependencyKind as K,DependencyPoint,GraphNamespace,
@@ -79,7 +79,7 @@ def test_outgoing_routes_all_saved_interfaces_without_replaying_unrelated_graphs
 
 
 def test_saved_call_relationships_are_queryable_as_one_contextual_graph(tmp_path):
-    from scar.analysis.program_call_dependencies import StaticCallDependencyProvider, dependency_context
+    from scar.analysis.dependencies.call import StaticCallDependencyProvider, dependency_context
     from scar.analysis.program_dependencies import ProgramDependencyGraph
     from scar.analysis.program_dependency_session import ProgramDependencyBudget,ProgramDependencySession
     from scar.analysis.static_program import link_static_program

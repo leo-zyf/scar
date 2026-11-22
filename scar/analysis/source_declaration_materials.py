@@ -18,7 +18,7 @@ from scar.analysis.source_store import (
     read_material_manifest, pin_material_store, check_material_store, material_store_members,
 )
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 
 
 _ARTIFACT = 'source_declarations'

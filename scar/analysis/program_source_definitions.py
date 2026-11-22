@@ -71,7 +71,7 @@ def _owned_body(session, namespace):
 
 def _root_locator(session, body, authority=None):
     """Retain the supplied body's declaration authority, including plain roots."""
-    from scar.analysis.static_calls import input_basis_unit
+    from scar.analysis.static.calls import input_basis_unit
     declaration = body.namespace.graph.declaration
     if declaration is None:
         raise ValueError("source definition body has no original declaration authority")

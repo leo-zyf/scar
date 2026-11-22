@@ -13,7 +13,7 @@ import json
 import time
 from types import CodeType
 from scar.analysis.call_operand_reader import CallOperandTrace
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.call_edges import CodeCapture
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
@@ -475,7 +475,7 @@ class ObservedCompiledLocalMaterial:
         return tuple(dict.fromkeys((*self._parents, *self._stamps)))
 
     def plans(self, keys):
-        from scar.analysis.observed_dependency_export import PlanRowCache
+        from scar.analysis.observed.dependency_export import PlanRowCache
         from scar.analysis.source_productions import _digest, read_production_plan
         keys = tuple(dict.fromkeys(keys)); self.validate_parents()
         if any(type(key) is not SourceTemplateKey or key not in self.interfaces['nodes'] for key in keys):

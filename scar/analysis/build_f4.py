@@ -502,7 +502,7 @@ class F4BuildSession:
             if entry is None and kind in (None,'MODULE'):
                 points.append(self.view.entry(unit,context=() if unit==self.report['f4']['entry_unit'] else None))
             if entry is not None or kind in ('FUNCTION','ASYNC_FUNCTION'):
-                from scar.analysis.static_query import _Fragments
+                from scar.analysis.static.query import _Fragments
                 from scar.analysis.source_role_materials import SyntaxRoleView
                 from scar.ir.program.source_syntax import SourceSyntaxMaterial
                 from scar.ir.record_codec import decode
@@ -626,7 +626,7 @@ def build_f4(entry,trace,out,spec,*,source_roots=(),max_points=128,max_seconds=3
     target=_build_target(out,entry,source_roots,target)
     trace_ref=None
     if trace:
-        from scar.analysis.program_observed_dependencies import _inputs
+        from scar.analysis.dependencies.observed import _inputs
         trace_ref=dict(path=str(trace),inputs=[_receipt(p) for p in sorted(_inputs(trace))])
     report=dict(schema='scar.program-build',schema_version=1,backend='F4',entry=str(entry),rules=_rules(),
         f4=spec,model=None,trace=trace_ref,

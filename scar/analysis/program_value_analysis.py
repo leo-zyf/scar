@@ -504,7 +504,7 @@ class ProgramValueAnalysis:
         if table is None:
             from scar.ir.record_codec import decode
             from scar.ir.program.source_language import CodeConstantSource
-            from scar.analysis.static_namespace import protocol_kinds
+            from scar.analysis.static.namespace import protocol_kinds
             owner='module'if getattr(body,'module',None)is not None else'language'
             rows=(getattr(body,'module',None).constants if owner=='module'else
                 tuple(decode(CodeConstantSource,row)for row in(body.document.get('language')or{}).get('constants',())))
@@ -521,7 +521,7 @@ class ProgramValueAnalysis:
             import dis,json
             from scar.ir.record_codec import encode
             from scar.analysis.program_lowering import PreparedSource
-            from scar.analysis.static_compilation import compile_source_unit
+            from scar.analysis.static.compilation import compile_source_unit
             from scar.ir.semantics_v2 import SourceSemanticsGraph
             compilation=body.document.get('static_compilation')
             if type(compilation)is not dict or compilation.get('evidence_kind')!='SOURCE_COMPILATION':
@@ -539,7 +539,7 @@ class ProgramValueAnalysis:
                 # and AST fields; it does not need another CFG or symbol walk.
                 prepared=PreparedSource(Path(body.metadata.source.path),Path(body.unit['namespace_root']),
                     text,semantic,semantics,None,tree,{})
-                from scar.analysis.static_compilation import StaticCompilationError
+                from scar.analysis.static.compilation import StaticCompilationError
                 try:compiled=compile_source_unit(prepared)
                 except StaticCompilationError as error:
                     return self._unknown(point,'CODE_CONSTANT_PROVENANCE_OPEN',str(error))

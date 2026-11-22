@@ -24,7 +24,7 @@ from scar.ir.program.structured import ControlEdgeReference
 from scar.ir.semantics_v2 import Opcode
 from scar.ir.v2.common import SourceReference
 from scar.ir.v2.semantic import OperationKind, SemanticGraph, SemanticRelation
-from scar.analysis.static_namespace import normal_reference, protocol_kinds
+from scar.analysis.static.namespace import normal_reference, protocol_kinds
 
 
 def _need(condition, detail):

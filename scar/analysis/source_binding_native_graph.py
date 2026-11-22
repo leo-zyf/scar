@@ -16,7 +16,8 @@ import re
 import time
 from types import SimpleNamespace
 
-from scar.analysis import python_bindings, software_resources, static_native_interfaces
+from scar.analysis import python_bindings, software_resources
+from scar.analysis.static import native_interfaces as static_native_interfaces
 from scar.analysis import source_named_bindings, source_declared_calls
 from scar.analysis.source_native_binding_materials import read_binding_materials, _target_guard
 from scar.analysis.static_native_materials import StaticNativeMaterials

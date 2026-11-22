@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 import sys
 
-from scar.analysis.static_dependencies import inventory_static_dependencies
-from scar.analysis.static_imports import build_import_index
-from scar.analysis.static_lexical import inspect_lexical
+from scar.analysis.static.dependencies import inventory_static_dependencies
+from scar.analysis.static.imports import build_import_index
+from scar.analysis.static.lexical import inspect_lexical
 from scar.ir.program.static_dependencies import (
     DependencyMaterialKind as Kind, DependencySearchStatus as Search,
     DependencyVersionStatus as Version, StaticDependencyInventory,
@@ -108,7 +108,7 @@ def test_original_import_materials_are_conditional_versioned_and_never_imported(
     # Publish through the normal owned model and read back from original
     # import/source endpoints, without changing any original fragment.
     from scar.analysis.static_program import inventory_static_program, read_static_program
-    from scar.analysis.static_dependencies import read_static_dependencies
+    from scar.analysis.static.dependencies import read_static_dependencies
     before = {path.relative_to(model): path.read_bytes() for path in model.rglob("*.gz")}
     published = inventory_static_program(model, search_roots=(first, second), native_suffixes=(".so",))
     assert published["completion"]["dependency_inventory_present"] is True

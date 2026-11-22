@@ -4,7 +4,7 @@ SCAR 是基于程序图的宏观编译器。它把源码、运行绑定和硬件
 
 | 入口 | 用途 |
 | --- | --- |
-| `scar build` | 只建图。用 `--manifest` 读取原生编译单元，用 `--entry` 读取 Python 入口，或用 `--formal` 生成 Python 源码目录。 |
+| `scar build` | 只建图。用 `--manifest` 读取原生编译单元，用 `--entry` 读取 Python 入口，用 `--formal` 生成 Python 源码目录，或用 `--static` 构建静态源码和函数体图。 |
 | `scar plan` | 从 `--problem` 计算资源和时序，或用 `--build` 从 Python 图构造编译域。 |
 | `scar compile` | 执行完整编译。用 `--manifest` 读取原生输入，用 `--domains` 读取已建模的 Python 编译域。 |
 

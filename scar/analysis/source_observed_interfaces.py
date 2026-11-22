@@ -26,7 +26,7 @@ from scar.analysis.source_stage import _durable_bytes,_durable_mkdir
 from scar.analysis.source_template_links import _json
 from scar.analysis.source_declared_calls import _folder
 from scar.analysis.source_consumer_parents import _stamp
-from scar.analysis.observed_call_bindings import recover_positional_receiver
+from scar.analysis.observed.call_bindings import recover_positional_receiver
 from scar.analysis.source_frame_binding_effects import FRAME_REQUIRED_Q
 from scar.ir.program import function_sites as I, normal_graph as T, source_productions as P
 from scar.ir.program import source_observations as R
@@ -50,8 +50,10 @@ GUARDS=('OBSERVED_CODE_AND_IMMEDIATE_ENTRY_BELONG_TO_RECORDED_RUN_AND_ATTEMPTS',
 
 def _pins():
     from scar.analysis import source_observed_calls, source_observed_codes, source_compiled_code_profiles, source_protocols as source_observed_protocols
-    from scar.analysis import source_function_connections,static_compilation,source_observed_materials,source_fact_materials
-    from scar.analysis import observed_call_bindings as observed_positional_receiver, source_frame_binding_effects
+    from scar.analysis import source_function_connections, source_observed_materials, source_fact_materials
+    from scar.analysis.static import compilation as static_compilation
+    from scar.analysis.observed import call_bindings as observed_positional_receiver
+    from scar.analysis import source_frame_binding_effects
     from scar.ir import record_codec
     from scar.trace import python_call_targets as operand_bytecode
     from scar.ir.program import source_observations as code_types
@@ -254,7 +256,7 @@ def _groups(parent,index,unit,*,original=None):
     entries_by_code={code.id:{(e.caller,e.attempt_index):e for _,e in code.entries}
         for rows in by_code.values() for code in rows}
     frames={frame.invocation:frame for frame in index.codes.trace.entries}
-    from scar.analysis.observed_function_interfaces import _known_receiver
+    from scar.analysis.observed.function_interfaces import _known_receiver
     grouped=defaultdict(list);frontiers=[];selected={};body_entries={};replayed={}
     for observation in index.bindings:
         if observation.unit!=unit:continue

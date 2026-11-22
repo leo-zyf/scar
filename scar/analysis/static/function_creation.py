@@ -31,9 +31,9 @@ def extract_class_function_creation(body, operation, value, normal_edge):
     or evidence that any decorator returned this function unchanged.
     """
     from scar.ir.program.class_entries import ClassSuiteOverlay, ClassSuiteMethodOverlay
-    from scar.analysis.static_compilation import _scope_nodes
+    from scar.analysis.static.compilation import _scope_nodes
     from scar.trace.code_snapshot import code_key
-    from scar.analysis.static_namespace import normal_reference
+    from scar.analysis.static.namespace import normal_reference
     overlay=body.class_entry
     if type(overlay) not in (ClassSuiteOverlay, ClassSuiteMethodOverlay):return None
     factories=[record for record in overlay.factories if record.operation==operation.id]
@@ -111,7 +111,7 @@ def extract_function_creation(body, operation, value, normal_edge):
     if body.module is None:
         if body.class_entry is not None:
             return extract_class_function_creation(body,operation,value,normal_edge)
-        from scar.analysis.static_nested_creation import verify_nested_function_creation
+        from scar.analysis.static.nested_creation import verify_nested_function_creation
         return verify_nested_function_creation(body,operation,value,normal_edge)
     from scar.analysis.source_mapping_functions import mapping_function_plan
     from scar.trace.code_snapshot import code_key

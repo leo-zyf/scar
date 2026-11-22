@@ -99,7 +99,7 @@ def _write(path, value):
 def _observed_effects(kind, reference, resource_scopes):
     if kind != 'stateful_recipe':
         raise ValueError('observed effect order needs an original stateful recipe source')
-    from scar.analysis.observed_boundaries import project_observed_effect_order
+    from scar.analysis.observed.boundaries import project_observed_effect_order
     from scar.analysis.source_resource_scopes import SCHEMA as SCOPES
     scopes = read_artifact(resource_scopes)
     path = Path(resource_scopes['uri'])

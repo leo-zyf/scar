@@ -292,7 +292,7 @@ class ClassDependencyProvider:
         explicit read-world predicate below is therefore never discharged here.
         No namespace contents, saved builtins, code or closure identity follows.
         """
-        from scar.analysis.static_namespace import normal_reference
+        from scar.analysis.static.namespace import normal_reference
         def need(ok,detail):
             if not ok:raise ValueError('class function globals capture: '+detail)
         def point(namespace,node):return Point(namespace,node,contexts[namespace])
@@ -443,7 +443,7 @@ class ModuleReferenceDependencyProvider:
     relation_kinds = frozenset((K.STATE_VALUE,))
 
     def __init__(self, session, engine, *, body_for=None):
-        from scar.analysis.static_module_attributes import ModuleAttributeDependencies
+        from scar.analysis.static.module_attributes import ModuleAttributeDependencies
         if type(engine) is not ModuleAttributeDependencies:
             raise TypeError("module reference provider needs the original module engine")
         if engine.reference_sources is not None:
@@ -518,7 +518,7 @@ class ModuleReferenceDependencyProvider:
         return tuple(modules), tuple(dict.fromkeys(namespaces))
 
     def _validate(self, flow, active=None):
-        from scar.analysis.static_module_attributes import validate_module_attribute_flow
+        from scar.analysis.static.module_attributes import validate_module_attribute_flow
         self._call_free_records(flow)
         active = set() if active is None else active
         if id(flow) in active:

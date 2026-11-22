@@ -13,7 +13,7 @@ from scar.analysis.source_graph_material import source_graph_material
 from scar.analysis.source_namespace_interfaces import extract_namespace_interfaces
 from scar.analysis.source_productions import _digest
 from scar.analysis.source_references import ReferenceSlicer, source_port
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.program import normal_graph as G, normal_graph as F, normal_graph as T, source_productions as P
 from scar.ir.program import source_bindings as B, source_declarations as D
 from scar.ir.program import code_identity as V, name_flow as A

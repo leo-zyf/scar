@@ -19,7 +19,7 @@ from scar.analysis.source_guards import PRESERVE, OMIT_PROVEN_DEBUG, SourceAsser
 from scar.analysis.source_body_interfaces import BodyInterfaceResolver
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_references import source_port, ReferenceSlicer
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.array_copy_contract import COPY_REQUIRED_GUARDS, copy_attributes, copy_semantics
 from scar.ir.program import source_productions as P, normal_graph as F, normal_graph as G

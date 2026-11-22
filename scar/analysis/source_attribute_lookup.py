@@ -117,7 +117,7 @@ def register_attribute_lookup(builder, node, operation, *, receiver=None,
     _need(source is not None and source == original(node), "registered lookup lost its original Attribute source")
     if selector is None:
         from scar.analysis.attribute_selector import derive_attribute_selector
-        from scar.analysis.static_compilation import StaticCodeEvidence
+        from scar.analysis.static.compilation import StaticCodeEvidence
         evidence = getattr(builder, "evidence", None)
         evidence = evidence if type(evidence) is StaticCodeEvidence else None
         selector = derive_attribute_selector(node, source_tree=tree, source=source,

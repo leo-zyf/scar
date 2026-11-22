@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scar.analysis import source_binding_native_graph as native_graph
 from scar.analysis import source_native_binding_materials as generated
-from scar.analysis import static_native_interfaces
+from scar.analysis.static import native_interfaces as static_native_interfaces
 from scar.analysis.static_native_materials import StaticNativeDeclaration, StaticNativeMaterials
 from scar.analysis.source_symbol_variants import _table
 from scar.ir.program import codec, native_contracts as N

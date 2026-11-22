@@ -38,7 +38,7 @@ from scar.analysis.source_store import (
     check_material_store,
 )
 from scar.analysis.static_program import _json, _write
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 
 
 # Reuse local F5 interface projection for compiled-context graph fragments.

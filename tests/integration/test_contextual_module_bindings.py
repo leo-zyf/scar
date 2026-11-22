@@ -7,7 +7,7 @@ import sys
 
 def test_module_argument_fields_follow_relative_reexports_without_receiver_callee_identity(tmp_path):
     from scar.analysis.contextual_module_bindings import ContextualModuleBindingProvider
-    from scar.analysis.static_calls import StaticCallBudget, StaticCallSession
+    from scar.analysis.static.calls import StaticCallBudget, StaticCallSession
     from scar.ir.program.dependencies import (
         DependencyKind as K, DependencyMeaning as M, DependencyPoint as P,
         DependencyStrength as Strength, GraphNamespace, OpenDependencyContext, context_frames,

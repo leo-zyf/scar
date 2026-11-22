@@ -1,7 +1,7 @@
 """Control dependencies differ from CFG predecessors and sequence order."""
 import hashlib
 
-from scar.analysis.program_control_dependencies import ControlDependencyProvider
+from scar.analysis.dependencies.control import ControlDependencyProvider
 from scar.analysis.program_dependencies import ProgramDependencyGraph
 from scar.ir.program.codec import SCHEMA_VERSION, dumps
 from scar.ir.program.dependencies import DependencyFrame, DependencyKind as K, DependencyPoint, DependencyStrength, GraphNamespace

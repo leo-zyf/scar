@@ -190,7 +190,7 @@ def build_exec_roots(facts,executions,compiled_sources,f4_graphs,out):
         snapshots.append((path,raw))
     connections=[];obligations=[]
     caller=store.load(er['unit'])
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     caller_manifest=Path(store.model_for(caller.unit))/'manifest.json'
     snapshots.append((caller_manifest,caller_manifest.read_bytes()))
     caller_context=_Fragments(store.model_for(caller.unit)).read(store.model_units[caller.unit]['artifacts']['source_contexts'])

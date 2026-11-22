@@ -127,7 +127,7 @@ def inventory_static_program(directory, *, search_roots, max_modules=4096, max_f
     Only the new inventory/manifest are written. Original graph fragments keep
     their bytes and IDs; external material availability is not graph coverage.
     """
-    from scar.analysis.static_dependencies import inventory_static_dependencies
+    from scar.analysis.static.dependencies import inventory_static_dependencies
     from scar.analysis.static_body import _stamp
 
     output = Path(directory).absolute()
@@ -180,18 +180,18 @@ def inventory_static_program(directory, *, search_roots, max_modules=4096, max_f
 
 def link_static_program(directory, *, budget=None, progress=None):
     """Publish qualified static call relations alongside the original graphs."""
-    from scar.analysis.static_calls import build_static_call_links, StaticCallBudget
+    from scar.analysis.static.calls import build_static_call_links, StaticCallBudget
     from scar.analysis.static_body import _stamp, _producer
-    from scar.analysis.static_jobs import StaticLinkTask
+    from scar.analysis.static.jobs import StaticLinkTask
     def call_producer():
         analysis = Path(__file__).parent
         return {"shared": _producer(), "call_sources": {
             name: hashlib.sha256((analysis / name).read_bytes()).hexdigest()
-            for name in ("static_calls.py", "static_namespace.py", "static_function_environment.py",
-                         "static_interprocedural.py", "static_crossbody_namespace.py",
-                         "static_nested_creation.py", "static_function_creation.py", "static_value_flows.py",
-                         "static_module_attributes.py", "static_imports.py", "static_fields.py",
-                         "static_module_state.py",
+            for name in ("static/calls.py", "static/namespace.py", "static/function_environment.py",
+                         "static/interprocedural.py", "static/crossbody_namespace.py",
+                         "static/nested_creation.py", "static/function_creation.py", "static/value_flows.py",
+                         "static/module_attributes.py", "static/imports.py", "static/fields.py",
+                         "static/module_state.py",
                          "function_binding.py", "function_interfaces.py", "source_layers.py")}}
     producer = call_producer()
     output = Path(directory).absolute()
@@ -332,8 +332,8 @@ def refine_static_program(directory, *, refresh_lexical=True):
     Only new catalog facts and graph references are published in the same
     current directory. This operation executes no target and creates no calls.
     """
-    from scar.analysis.static_lexical import inspect_lexical
-    from scar.analysis.static_imports import build_import_index
+    from scar.analysis.static.lexical import inspect_lexical
+    from scar.analysis.static.imports import build_import_index
     output = Path(directory).absolute()
     manifest = read_static_program(output, verify=False)
     prior = hashlib.sha256((output / "manifest.json").read_bytes()).hexdigest()
@@ -435,7 +435,7 @@ def refine_static_program(directory, *, refresh_lexical=True):
 
 def _build_file(source, output, phase, max_body_operations):
     """One process owns a source unit; no live target objects cross workers."""
-    from scar.analysis.static_lexical import inspect_lexical
+    from scar.analysis.static.lexical import inspect_lexical
     from scar.ir.record_codec import encode
     from scar.ir.frontend_v2 import build_semantic_source_texts
 
@@ -568,7 +568,7 @@ def build_static_program(project_root, *, source_roots=(), out="artifacts/curren
                          max_directories=16384, max_body_operations=10000, progress=None,
                          source_files=()):
     """Publish the current source model; replace only an owned prior output."""
-    from scar.analysis.static_sources import collect_sources
+    from scar.analysis.static.sources import collect_sources
     if isinstance(source_files, (str, bytes, Path)):
         raise TypeError('source_files must be a sequence of exact source files')
     source_files = tuple(source_files)
@@ -674,7 +674,7 @@ def build_static_program(project_root, *, source_roots=(), out="artifacts/curren
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="scar static", description=__doc__)
+    parser = argparse.ArgumentParser(prog="scar build --static", description=__doc__)
     parser.add_argument("source", help="source directory, not a command to execute")
     parser.add_argument("--source-root", action="append", default=[], help="additional explicit dependency source root")
     parser.add_argument("--out", default="artifacts/current/static")
@@ -747,14 +747,14 @@ def main(argv=None):
 
     if args.link_classes:
         from scar.analysis.static_class_construction import link_static_class_program
-        from scar.analysis.static_calls import StaticCallBudget
+        from scar.analysis.static.calls import StaticCallBudget
         existing = read_static_program(args.out, verify=False)
         if Path(existing["project_root"]).resolve() != Path(args.source).resolve():
             raise ValueError("class linking source root differs from the current model")
         budget = StaticCallBudget(**link_limits, **({} if args.max_class_bodies is None else {'max_bodies': args.max_class_bodies}))
         result = link_static_class_program(args.out, budget=budget)
     elif args.expand_dependencies:
-        from scar.analysis.static_dependencies import expand_static_dependency_program
+        from scar.analysis.static.dependencies import expand_static_dependency_program
         existing = read_static_program(args.out, verify=False)
         if Path(existing["project_root"]).resolve() != Path(args.source).resolve():
             raise ValueError("dependency expansion source root differs from the current model")
@@ -769,7 +769,7 @@ def main(argv=None):
             max_modules=args.max_dependency_modules, max_files=args.max_files,
             max_bytes=args.max_bytes, max_file_bytes=args.max_dependency_file_bytes)
     elif args.link_calls:
-        from scar.analysis.static_calls import StaticCallBudget
+        from scar.analysis.static.calls import StaticCallBudget
         existing = read_static_program(args.out, verify=False)
         if Path(existing["project_root"]).resolve() != Path(args.source).resolve():
             raise ValueError("call linking source root differs from the current model")

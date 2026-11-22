@@ -45,7 +45,7 @@ def read_observed_scope(trace):
 
 
 def select_observed_bodies(model, trace, entry, *, scope=None):
-    from scar.analysis.static_compilation import _scope_nodes
+    from scar.analysis.static.compilation import _scope_nodes
     from scar.analysis.static_program import _read_fragment
     from scar.trace.code_snapshot import describe_code
     model, trace, entry = Path(model), Path(trace).resolve(), Path(entry)

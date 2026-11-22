@@ -21,7 +21,7 @@ from scar.analysis.source_productions import ProductionSourceIndex, ProductionEr
 from scar.analysis.source_core_interfaces import CORE_INSTRUCTIONS
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir, _sync_directory
 from scar.analysis.source_store import read_source_prerequisites
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.program import source_productions as P
 from scar.ir.program.ids import LocationID
 from scar.ir.program.model import ValueKind, ValueType

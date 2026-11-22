@@ -351,8 +351,8 @@ F4局部图先按源码单元投影为`UnitSourceInterfaces`，再由F5连接；
 运行 code 与原实现图的连接须核完整 descriptor、compiler path/profile 和已记录的源码版本，不能靠 qualname/行号猜测。
 没有历史全文件指纹时，当前源码仍可建图；匹配函数 Code 只证明该作用域的对应，不证明历史文件、父模块或运行环境。
 缺失 body 可由真实 code 证据驱动按需静态展开；已有规范图、原 ID 和端口继续复用。
-见 [调用观测](../scar/analysis/observed_call_bindings.py)、[函数接口](../scar/analysis/observed_function_interfaces.py)
-与 [按需展开](../scar/analysis/observed_source_demands.py)。这些接口不是静态全程序闭合证明。
+见 [调用观测](../scar/analysis/observed/call_bindings.py)、[函数接口](../scar/analysis/observed/function_interfaces.py)
+与 [按需展开](../scar/analysis/observed/source_demands.py)。这些接口不是静态全程序闭合证明。
 
 ## 语言、native 与资源边界
 

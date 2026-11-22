@@ -13,8 +13,8 @@ from scar.analysis.contextual_call_export import (
     _object,
     _preflight,
 )
-from scar.analysis.observed_call_bindings import ObservedCallBinding
-from scar.analysis.observed_function_interfaces import ObservedFunctionInterface
+from scar.analysis.observed.call_bindings import ObservedCallBinding
+from scar.analysis.observed.function_interfaces import ObservedFunctionInterface
 from scar.analysis.program_dependency_export import _Tables
 from scar.ir.program.call_edges import CallTraceFile
 from scar.ir.program.native_callables import NativeCallableMetadata, NativeCarrier

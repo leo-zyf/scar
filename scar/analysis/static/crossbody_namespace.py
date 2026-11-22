@@ -17,10 +17,12 @@ from scar.ir.program.static_calls import (
     StaticCrossBodyNamespaceFlow, StaticNamespaceCallBridge, StaticNamespacePathSegment,
     StaticQualifiedFunctionCreation, StaticQualifiedNamespaceRead, StaticQualifiedNamespaceWrite,
 )
-from scar.analysis.static_function_environment import (
-    _EnvironmentFacts, _validate_function_environment_route, validate_static_body_namespace,
+from scar.analysis.static.function_environment import (
+    _EnvironmentFacts,
+    _validate_function_environment_route,
+    validate_static_body_namespace,
 )
-from scar.analysis.static_namespace import NamespaceDependencies
+from scar.analysis.static.namespace import NamespaceDependencies
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +141,7 @@ def _region(body):
 
 def _guard_entry_path(dependencies, witness, entry_owner):
     """Replay the input path under the bridge's exact owner-alias premise."""
-    from scar.analysis.static_namespace import NamespaceEntryPathWitness
+    from scar.analysis.static.namespace import NamespaceEntryPathWitness
     if type(witness) is not NamespaceEntryPathWitness:
         raise TypeError('cross-body call entry needs its typed original entry-path witness')
     dependencies.validate_entry_path(witness)
@@ -164,7 +166,7 @@ def compose_cross_body_namespace_flow(*, write_body, binding, bridges, entry_pat
     has one item per bridge: callee entry to the next CALL, or the final read.
     ``bodies`` contains every qualified body used by the bridges and factories.
     """
-    from scar.analysis.static_namespace import NamespaceBindingWitness
+    from scar.analysis.static.namespace import NamespaceBindingWitness
     facts=_EnvironmentFacts()if _facts is None else _facts
     if type(facts)is not _EnvironmentFacts:
         raise TypeError('cross-body composition requires its private typed environment input scope')
@@ -207,8 +209,10 @@ def compose_cross_body_namespace_flow(*, write_body, binding, bridges, entry_pat
 
 def validate_cross_body_namespace_flow(flow, *, bodies):
     """Replay qualified endpoints/CFG/factory/entry joins from original bodies."""
-    from scar.analysis.static_namespace import (
-        NamespaceBindingWitness, NamespaceEntryPathWitness, NamespaceOwnerRelation,
+    from scar.analysis.static.namespace import (
+        NamespaceBindingWitness,
+        NamespaceEntryPathWitness,
+        NamespaceOwnerRelation,
     )
     if type(flow) is not StaticCrossBodyNamespaceFlow:
         raise TypeError('cross-body namespace reader needs the typed stored relation')

@@ -9,7 +9,7 @@ import sys
 
 import yaml
 
-from scar.analysis.static_sources import _absolute,_has_symlink_component,_read_raw_source
+from scar.analysis.static.sources import _absolute, _has_symlink_component, _read_raw_source
 from scar.ir.literals import PythonLiteral
 from scar.ir.program import data_materials as D
 from scar.ir.program.providers import ProviderArtifact

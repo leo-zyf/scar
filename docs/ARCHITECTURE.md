@@ -41,4 +41,4 @@ Python 三阶段入口位于 `compiler/frontend/python.py`、`compiler/middle/py
 
 ## 共享职责
 
-`ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。`artifacts.py` 负责工件字节、摘要和原子发布。图查看由 `visualization/` 独立提供。构建证明记录了分析实现的摘要，旧的已封存产物按对应版本回读或重新构建。历史源码保存在 Git。
+`ir/` 定义图、数据、状态与计划类型。调用出口、编译器符号、源码字节、执行观测等类型和紧邻的查询按职责归并。前端的静态分析、观测关系和跨区域依赖查询分别归入 `analysis/static/`、`analysis/observed/`、`analysis/dependencies/`。`artifacts.py` 负责工件字节、摘要和原子发布。图查看由 `visualization/` 独立提供。构建证明记录分析实现摘要，历史源码保存在 Git，已有产物可按对应版本回读或重新构建。

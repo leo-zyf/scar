@@ -24,17 +24,17 @@ from scar.ir.program.source_references import SourceArtifactLocator
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
-from scar.analysis.program_class_dependencies import class_dependency_frames
+from scar.analysis.dependencies.classes import class_dependency_frames
 from scar.analysis.program_lowering import _Unsupported
 from scar.analysis.program_source_definitions import SourceDefinitionUnavailable
-from scar.analysis.static_function_creation import extract_function_creation
-from scar.analysis.static_function_origins import (
+from scar.analysis.static.function_creation import extract_function_creation
+from scar.analysis.static.function_origins import (
     derive_factory_entry_origins,
     factory_entry_origin_evidence,
     factory_entry_origin_ports,
     validate_factory_entry_origin,
 )
-from scar.analysis.static_namespace import normal_reference, protocol_kinds
+from scar.analysis.static.namespace import normal_reference, protocol_kinds
 from scar.ir.program.source_call_bindings import SourceBodyNamespace
 from scar.ir.record_codec import decode, encode
 from scar.ir.v2.ids import OperationDefinitionID

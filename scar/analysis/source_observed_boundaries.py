@@ -18,7 +18,7 @@ from scar.analysis.source_namespace_interfaces import NamespacePlanView
 from scar.analysis.source_role_materials import SyntaxRoleView
 from scar.analysis.source_references import source_port
 from scar.analysis.source_observed_calls import ObservedSourceCallsiteIndex
-from scar.analysis.observed_boundaries import CONTINUATION_CONDITIONS, normal_continuation
+from scar.analysis.observed.boundaries import CONTINUATION_CONDITIONS, normal_continuation
 from scar.analysis.source_request_callback_abi import request_callback_abi
 from scar.analysis.source_symbol_variants import _table
 from scar.analysis.source_world_returns import _table_ref
@@ -55,7 +55,8 @@ _FALSE = ('source_bodies_copied', 'loops_unrolled', 'implementation_entry_proven
 
 def _pins():
     from scar.analysis import source_observed_codes, source_observed_calls, source_call_view, source_protocols as source_observed_protocols
-    from scar.analysis import native_callables, observed_boundaries as observed_boundary_continuations
+    from scar.analysis import native_callables
+    from scar.analysis.observed import boundaries as observed_boundary_continuations
     from scar.ir import record_codec
     from scar.ir.program import native_callables as native_types
     from scar.ir.program import source_observations as code_types

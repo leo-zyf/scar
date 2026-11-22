@@ -39,9 +39,9 @@ class ContextualCallResolver:
     relation_kinds = frozenset((K.CALL_TARGET, K.ARGUMENT, K.COMPLETION))
 
     def __init__(self, owner):
-        from scar.analysis.static_call_dependency_view import StaticCallDependencyView
-        from scar.analysis.static_module_attributes import ModuleAttributeDependencies
-        from scar.analysis.program_class_dependencies import ModuleReferenceDependencyProvider
+        from scar.analysis.static.call_dependency_view import StaticCallDependencyView
+        from scar.analysis.static.module_attributes import ModuleAttributeDependencies
+        from scar.analysis.dependencies.classes import ModuleReferenceDependencyProvider
         self.owner = owner
         self.session = StaticCallDependencyView(owner)
         self._active = set()
@@ -117,7 +117,7 @@ class ContextualCallResolver:
         body=self._body(point.namespace)
         value=body.index.values[point.node]
         if type(value)is not ReferenceValue or type(value.origin)is not BlockArgument:return None
-        from scar.analysis.static_namespace import normal_reference
+        from scar.analysis.static.namespace import normal_reference
         saved=getattr(body,'contextual_factory_inputs',None)
         if saved is None:
             dependencies=self.owner._namespace_for(body)

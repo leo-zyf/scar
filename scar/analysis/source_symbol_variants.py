@@ -27,7 +27,7 @@ from scar.analysis.normal_output import write_table
 from scar.analysis.source_bytes import read_source_bytes
 from scar.analysis.source_stage import _durable_bytes, _durable_mkdir
 from scar.analysis.source_template_links import _json
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.ir.program import code_identity as V, code_identity as C
 from scar.ir.program import code_identity as X, source_bytes as S
 from scar.ir.program.source_paths import SourceSymbolsInput, SourceSymbolsMaterial, SourceSymbolsProfile

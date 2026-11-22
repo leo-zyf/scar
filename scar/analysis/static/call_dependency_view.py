@@ -39,8 +39,8 @@ class _BasisInputs(MutableMapping):
         return self.view.read_artifact(locator)
 
     def __setitem__(self, artifact, document):
-        from scar.analysis.static_calls import input_basis_unit
-        from scar.analysis.static_basis_compatibility import published_units_basis_compatible
+        from scar.analysis.static.calls import input_basis_unit
+        from scar.analysis.static.basis_compatibility import published_units_basis_compatible
         from scar.analysis.static_body import diagnostic_materializations
         if (document.get("schema") != "scar.static-call-source-basis"
                 or document.get("schema_version") != 1
@@ -82,7 +82,7 @@ class StaticCallDependencyView(ProgramDependencySession):
     stricter view limits never modify the owner's own access permissions.
     """
     def __init__(self, owner, *, budget=None, class_index_directory=None):
-        from scar.analysis.static_calls import StaticCallSession
+        from scar.analysis.static.calls import StaticCallSession
         if not isinstance(owner, StaticCallSession):
             raise TypeError("dependency view requires its owning StaticCallSession")
         owner._check()
@@ -463,11 +463,11 @@ class StaticCallDependencyView(ProgramDependencySession):
 
     def graph(self):
         from scar.analysis.program_dependencies import ProgramDependencyGraph
-        from scar.analysis.program_class_dependencies import ClassDependencyProvider
+        from scar.analysis.dependencies.classes import ClassDependencyProvider
         from scar.analysis.program_function_origins import AutomaticFactoryEntryOrigins
         from scar.analysis.program_function_origins import FactoryEntryOriginDependencyProvider
-        from scar.analysis.program_entry_namespace_dependencies import EntryNamespaceDependencyProvider
-        from scar.analysis.program_unpack_dependencies import UnpackProjectionProvider
+        from scar.analysis.dependencies.entry_namespace import EntryNamespaceDependencyProvider
+        from scar.analysis.dependencies.unpack import UnpackProjectionProvider
         graph = getattr(self, "_view", None)
         if graph is None:
             classes = (ClassDependencyProvider(self.class_bindings_for, self.index, self.load_provider,

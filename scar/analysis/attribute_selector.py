@@ -16,7 +16,7 @@ import sys
 from types import CodeType, MappingProxyType
 from typing import Callable
 
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.attribute_lookups import SelectorResolution, StaticAttributeSelector
 from scar.ir.v2.common import SourceReference
 from scar.trace.code_snapshot import code_key

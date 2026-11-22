@@ -14,7 +14,7 @@ import sys
 from scar.analysis.program_lowering import _Unsupported, _key, _REF, LoweringMetadata, SourceProgram
 from scar.analysis.structured_lowering import StructuredBuilder
 from scar.analysis.source_language import SourceCodeEvidence
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.ids import RegionID, OperationID, UseID, ValueID
 from scar.ir.program.model import (Behavior, ExitKind, Operation, ReferenceValue, StateVersionValue,
     Terminator, TerminatorKind, Use, UseRole)

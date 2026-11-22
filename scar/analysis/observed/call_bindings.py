@@ -19,9 +19,9 @@ from types import SimpleNamespace
 from scar.analysis.call_operand_reader import CallOperandTrace, read_call_operands
 from scar.analysis.program_dependency_export import _Tables
 from scar.analysis.python_call_targets import read_python_call_targets
-from scar.analysis.static_calls import StaticCallBudget, StaticCallSession
-from scar.analysis.static_function_origins import _replay_compilation
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.calls import StaticCallBudget, StaticCallSession
+from scar.analysis.static.function_origins import _replay_compilation
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.call_edges import (
     CallRecordAnchor,
     CapturedCode,
@@ -413,7 +413,7 @@ def derive_observed_interfaces(session, trace, *, argument_layouts=None):
     bindings, issues, cache = [], [], {}
     from scar.analysis.observed_code_correspondence import ObservedCodeSources
     cache['observed-code-sources'] = ObservedCodeSources(raw, observed.source_sha256)
-    from scar.analysis.observed_function_interfaces import derive_observed_function_interfaces
+    from scar.analysis.observed.function_interfaces import derive_observed_function_interfaces
     interfaces, interface_issues, pending = [], [], []
 
     def connect_pending():
@@ -497,7 +497,7 @@ def build_observed_call_bindings(model, trace, out, budget=None):
                     'attempt_index': attempt.index, 'detail': type(error).__name__ + ': ' + str(error)})
                 if isinstance(error, (OverflowError, TimeoutError)):
                     break
-        from scar.analysis.observed_function_interfaces import derive_observed_function_interfaces
+        from scar.analysis.observed.function_interfaces import derive_observed_function_interfaces
         function_interfaces, function_issues = derive_observed_function_interfaces(
             owner, raw, observed, tuple(bindings), cache)
     finally:
@@ -516,7 +516,7 @@ def build_observed_call_bindings(model, trace, out, budget=None):
     out.mkdir(parents=True, exist_ok=True)
     with (out / 'bindings.json.gz').open('xb') as stream:
         stream.write(stored)
-    from scar.analysis.observed_function_interfaces import export_observed_function_interfaces
+    from scar.analysis.observed.function_interfaces import export_observed_function_interfaces
     function_raw = _json(export_observed_function_interfaces(function_interfaces))
     function_stored = gzip.compress(function_raw, compresslevel=3, mtime=0)
     if (len(function_raw) > limits.max_record_bytes
@@ -586,7 +586,7 @@ def main(argv=None):
                          normal_out.with_name(normal_out.name + '-expansion'))
         if expansion_out.is_relative_to(normal_out) or normal_out.is_relative_to(expansion_out):
             raise ValueError('binding and expansion reports need separate directories')
-        from scar.analysis.observed_source_demands import expand_observed_bodies
+        from scar.analysis.observed.source_demands import expand_observed_bodies
         expansion = expand_observed_bodies(args.model, args.trace, expansion_out,
             limits, max_bodies=args.max_expand_bodies,
             max_source_files=args.max_source_files, max_source_bytes=args.max_source_bytes)

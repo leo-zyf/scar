@@ -9,7 +9,7 @@ import pytest
 
 def test_class_sources_constructor_protocol_and_shared_implementation_graph(tmp_path):
     from scar.analysis.static_program import link_static_program
-    from scar.analysis.static_calls import StaticCallSession, StaticCallBudget
+    from scar.analysis.static.calls import StaticCallSession, StaticCallBudget
     from scar.analysis.program_dependency_session import ProgramDependencySession
     from scar.analysis.contextual_class_sources import validate_class_statement_source
     from scar.analysis.contextual_type_calls import validate_type_call_alternative

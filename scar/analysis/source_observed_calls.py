@@ -15,7 +15,7 @@ from scar.analysis.program_view import _digest
 from scar.analysis.source_role_materials import SyntaxRoleView
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_namespace_interfaces import NamespacePlanView
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.analysis.source_observed_codes import replay_catalog_code
 from scar.ir.program import source_productions as P, normal_graph as T
 from scar.ir.program.source_syntax import SourceSyntaxMaterial

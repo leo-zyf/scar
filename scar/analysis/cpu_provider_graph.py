@@ -12,7 +12,7 @@ from scar.analysis.cpu_stream_graph import bind_cpu_stream_capture_graph as bind
 from scar.analysis.entry_obligations import verify_entry_obligations
 from scar.analysis.source_references import ReferenceSlicer, source_port
 from scar.analysis.source_role_materials import SyntaxRoleView
-from scar.analysis.static_query import _Fragments
+from scar.analysis.static.query import _Fragments
 from scar.compiler.cpu_entry_replay import CheckedCpuPair, SCHEMA as PAIRED, check as check_paired
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.normal_graph import FactTable

@@ -89,7 +89,7 @@ def test_static_call_contexts_preserve_values_and_stop_unseeded_cycles():
                             if call.source.start_line == lines.index("unseeded()") + 1]
         assert len(recursive_result) == 1 and not recursive_result[0].targets
         assert any(flow.requirements for call in calls for flow in call.return_value_flows)
-        from scar.analysis.static_query import query_static_program
+        from scar.analysis.static.query import query_static_program
         entry = next(body["entry_key"] for unit in manifest["units"] for body in unit["bodies"]
                      if body["name"] == "<module>.relay")
         query = query_static_program(model, file=str(application), name=entry, limit=100,

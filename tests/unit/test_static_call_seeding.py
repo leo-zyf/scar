@@ -2,7 +2,7 @@
 import json
 
 from scar.analysis.static_program import build_static_program
-from scar.analysis.static_calls import StaticCallBudget, StaticCallSession, build_static_call_links
+from scar.analysis.static.calls import StaticCallBudget, StaticCallSession, build_static_call_links
 
 
 def test_source_only_seed_preserves_scope_and_demanded_definition_material(tmp_path):

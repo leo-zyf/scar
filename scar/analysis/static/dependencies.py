@@ -32,12 +32,7 @@ from scar.ir.program.static_dependencies import (
 )
 from scar.ir.v2.common import SourceVersion
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from scar.analysis.static_sources import (
-    _ByteBudget,
-    _Changed,
-    _has_symlink_component,
-    _read_source,
-)
+from scar.analysis.static.sources import _ByteBudget, _Changed, _has_symlink_component, _read_source
 from scar.ir.program.static_sources import StaticSourceFile
 
 
@@ -665,11 +660,14 @@ def append_static_source_units(directory, sources, *, provenance, jobs=4,
     import re
     from scar.analysis.static_program import (_artifacts, _json, _lowering_route,
         _read_fragment, _run_file, _write, read_static_program)
-    from scar.analysis.static_sources import _read_source
+    from scar.analysis.static.sources import _read_source
     from scar.analysis.static_body import _stamp
-    from scar.analysis.static_calls import input_basis_unit
-    from scar.analysis.static_basis_compatibility import (_same, _source_expansion_valid,
-        source_units_identity)
+    from scar.analysis.static.calls import input_basis_unit
+    from scar.analysis.static.basis_compatibility import (
+        _same,
+        _source_expansion_valid,
+        source_units_identity,
+    )
     from scar.ir.program.static_sources import StaticSourceFile
 
     if type(sources) is not tuple or any(type(source) is not StaticSourceFile for source in sources):
@@ -830,9 +828,9 @@ def expand_static_dependency_program(directory, *, material_indices=None, max_fi
     from scar.analysis.static_program import (_discard_static_calls,
         _discard_static_dependencies, _json, _lowering_route, _read_fragment, _write,
         read_static_program)
-    from scar.analysis.static_dependencies import inventory_static_dependencies, read_static_dependencies
-    from scar.analysis.static_dependencies import expand_static_dependency_materials
-    from scar.analysis.static_imports import build_import_index
+    from scar.analysis.static.dependencies import inventory_static_dependencies, read_static_dependencies
+    from scar.analysis.static.dependencies import expand_static_dependency_materials
+    from scar.analysis.static.imports import build_import_index
     from scar.analysis.static_body import _stamp
     from scar.ir.record_codec import encode
     from scar.ir.program.providers import ProviderArtifact

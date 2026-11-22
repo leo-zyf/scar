@@ -15,15 +15,18 @@ import pytest
     reason='the existing lean CALL collector uses the CPython 3.14.7 contract')
 @pytest.mark.parametrize('initial_diagnostic', (False, True))
 def test_observed_missing_body_preserves_original_call_publication_and_shards(tmp_path, monkeypatch, initial_diagnostic):
-    from scar.analysis.observed_source_demands import expand_observed_bodies
-    from scar.analysis.observed_call_bindings import build_observed_call_bindings
-    from scar.analysis.observed_function_interfaces import read_observed_function_interfaces
+    from scar.analysis.observed.source_demands import expand_observed_bodies
+    from scar.analysis.observed.call_bindings import build_observed_call_bindings
+    from scar.analysis.observed.function_interfaces import read_observed_function_interfaces
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static_basis_compatibility import units_basis_compatible, published_units_basis_compatible
+    from scar.analysis.static.basis_compatibility import (
+        units_basis_compatible,
+        published_units_basis_compatible,
+    )
     from scar.analysis.static_body import diagnostic_materializations
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     from scar.analysis.static_body import expand_static_bodies
-    from scar.analysis.static_calls import input_basis_unit
+    from scar.analysis.static.calls import input_basis_unit
     from scar.analysis.static_program import link_static_program
     from scar.ir.program.dependencies import DependencyKind as K, DependencyPoint as P, GraphNamespace
     from scar.trace.code_snapshot import describe_code
@@ -178,11 +181,11 @@ def test_observed_missing_body_preserves_original_call_publication_and_shards(tm
 @pytest.mark.skipif(sys.implementation.name != 'cpython' or sys.version_info[:3] != (3, 14, 7),
     reason='the existing lean CALL collector uses the CPython 3.14.7 contract')
 def test_observed_external_source_appends_without_replacing_prior_graph(tmp_path):
-    from scar.analysis.observed_source_demands import expand_observed_bodies
+    from scar.analysis.observed.source_demands import expand_observed_bodies
     from scar.analysis.program_dependency_session import ProgramDependencySession
-    from scar.analysis.static_calls import input_basis_unit
+    from scar.analysis.static.calls import input_basis_unit
     from scar.analysis.static_class_construction import link_static_class_program
-    from scar.analysis.static_basis_compatibility import published_units_basis_compatible
+    from scar.analysis.static.basis_compatibility import published_units_basis_compatible
     from scar.analysis.static_program import _artifacts, link_static_program
     from scar.ir.program.dependencies import DependencyKind as K, DependencyPoint as P, GraphNamespace
     from scar.trace.code_snapshot import code_key
@@ -320,7 +323,7 @@ def test_observed_external_source_appends_without_replacing_prior_graph(tmp_path
 @pytest.mark.skipif(sys.implementation.name != 'cpython' or sys.version_info[:3] != (3, 14, 7),
     reason='observed code correspondence uses the CPython 3.14.7 contract')
 def test_current_library_source_is_only_a_matched_code_scope_candidate(tmp_path):
-    from scar.analysis.observed_source_demands import expand_observed_bodies
+    from scar.analysis.observed.source_demands import expand_observed_bodies
     from scar.analysis.program_dependency_session import ProgramDependencySession
     from scar.trace.code_snapshot import code_key
 

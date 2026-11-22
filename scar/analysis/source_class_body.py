@@ -101,7 +101,7 @@ from scar.ir.program.state_addresses import (
     ReferenceOwner,
     StateAddressRefinement,
 )
-from scar.analysis.static_compilation import compile_source_unit
+from scar.analysis.static.compilation import compile_source_unit
 from scar.ir.program.validation import require_valid
 
 
@@ -139,7 +139,7 @@ class ClassSuiteBuilder:
         self.attribute_lookups=[]
         self.protocols=[];self.witnesses=[];self.constants=[];self.factories=[];self.cells=[]
         self.cell_refs={};self.stack=[];self.literal_values={};self.code_refs={};self.tuple_items={};self.function_codes={};self.returned=False;self.remaining=None
-        from scar.analysis.static_compilation import compile_source_unit
+        from scar.analysis.static.compilation import compile_source_unit
         self.compilation_index=compile_source_unit(prepared)
         self.instructions=tuple(dis.get_instructions(self.code,adaptive=False,show_caches=False))
         self.normal_mode=compiler_cell_protocol(self.code)[1]

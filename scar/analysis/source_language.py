@@ -7,7 +7,7 @@ import json
 import dis
 from dataclasses import dataclass, field
 from types import CodeType
-from scar.analysis.static_compilation import StaticCodeEvidence
+from scar.analysis.static.compilation import StaticCodeEvidence
 from scar.ir.program.call_edges import CapturedCode, CodeSourceLink, CodeCapture, CallLinkStatus
 from scar.ir.program.source_language import (
     SourceLanguageCapability,

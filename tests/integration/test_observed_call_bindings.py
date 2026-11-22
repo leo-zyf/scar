@@ -13,9 +13,12 @@ import pytest
 @pytest.mark.skipif(sys.implementation.name != 'cpython' or sys.version_info[:3] != (3, 14, 7),
     reason='the existing lean CALL collector uses the CPython 3.14.7 contract')
 def test_two_actual_classes_bind_one_static_call_without_claiming_class_origin(tmp_path):
-    from scar.analysis.observed_call_bindings import build_observed_call_bindings
-    from scar.analysis.observed_dependency_export import export_observed_dependencies, read_observed_dependencies
-    from scar.analysis.observed_function_interfaces import read_observed_function_interfaces
+    from scar.analysis.observed.call_bindings import build_observed_call_bindings
+    from scar.analysis.observed.dependency_export import (
+        export_observed_dependencies,
+        read_observed_dependencies,
+    )
+    from scar.analysis.observed.function_interfaces import read_observed_function_interfaces
     from scar.analysis.program_dependency_session import ProgramDependencySession
     from scar.ir.program.call_edges import FrameCompletion
     from scar.ir.program.dependencies import DependencyKind as K, DependencyMeaning as M, DependencyStrength as S
@@ -351,7 +354,7 @@ def test_two_actual_classes_bind_one_static_call_without_claiming_class_origin(t
         # Reordering across ABI groups is allowed; reordering two ordinary
         # positional parameters would silently change the binding and is not.
         from dataclasses import replace
-        from scar.analysis.observed_function_interfaces import _code_layout
+        from scar.analysis.observed.function_interfaces import _code_layout
         pair, = (candidate for candidate in provider.interfaces
                  if candidate.binding.source.start_line == keyword_line)
         pair_signature = session.signature_for(pair.interface.definition, session.load_body(pair.interface.body))

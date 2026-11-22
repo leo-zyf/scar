@@ -10,17 +10,12 @@ import time
 import ast
 import hashlib
 from types import CodeType
-from scar.analysis.observed_call_bindings import _json, _read_trace
+from scar.analysis.observed.call_bindings import _json, _read_trace
 from scar.analysis.program_dependency_session import _stamp
-from scar.analysis.program_observed_dependencies import _inputs
+from scar.analysis.dependencies.observed import _inputs
 from scar.analysis.python_call_targets import read_python_call_targets
-from scar.analysis.static_calls import StaticCallBudget, StaticCallSession
-from scar.analysis.static_sources import (
-    _ByteBudget,
-    _Changed,
-    _has_symlink_component,
-    _read_source,
-)
+from scar.analysis.static.calls import StaticCallBudget, StaticCallSession
+from scar.analysis.static.sources import _ByteBudget, _Changed, _has_symlink_component, _read_source
 from scar.ir.program.call_operands import LEAN_PORTS_RULE
 from scar.ir.program.providers import ProviderArtifact
 from scar.ir.program.static_sources import StaticSourceFile
@@ -29,7 +24,7 @@ from scar.trace.code_snapshot import code_key, describe_code
 from scar.trace.lean_capture import LeanCapturePlan
 from dataclasses import dataclass
 from scar.analysis.observed_code_correspondence import ObservedCodeSources, SourceScopeAuthority
-from scar.analysis.static_compilation import StaticCodeEvidence, _scope_nodes
+from scar.analysis.static.compilation import StaticCodeEvidence, _scope_nodes
 from scar.analysis.static_rules import _at_path, plan_static_entry
 from scar.analysis.static_body import null_body_diagnostic
 from scar.ir.program.call_edges import CodeCapture
@@ -234,7 +229,7 @@ def expand_observed_sources(model, trace, out, budget=None, *, max_source_files=
     # managers. Only this existing owner may now mutate the static model.
     old_keys = {unit['key'] for unit in manifest['units']}
     if sources:
-        from scar.analysis.static_dependencies import append_static_source_units
+        from scar.analysis.static.dependencies import append_static_source_units
         updated = append_static_source_units(model, tuple(sources), provenance=provenance,
             jobs=1, max_bytes=max_source_bytes, expected_manifest_sha256=prior)
     else:
@@ -357,7 +352,7 @@ def expand_observed_bodies(model, trace, out, budget=None, max_bodies=32, *,
         raise TypeError('observed body demands need StaticCallBudget')
     if type(max_bodies) is not int or max_bodies < 1 or max_bodies > limits.max_bodies:
         raise ValueError('max_bodies must be positive and within the static body budget')
-    from scar.analysis.observed_source_demands import expand_observed_sources
+    from scar.analysis.observed.source_demands import expand_observed_sources
     source_expansion = expand_observed_sources(model, trace, out / 'sources', limits,
         max_source_files=max_source_files, max_source_bytes=max_source_bytes)
     # Source publication closes its readers before mutation. Reopen original

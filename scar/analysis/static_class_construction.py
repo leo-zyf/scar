@@ -371,7 +371,7 @@ def build_static_class_links(directory, out, *, logical_root=None, expected_mani
     is the existing StaticCallBudget reader/cache/time/byte policy; no CALL
     detection or target-program execution is performed here.
     """
-    from scar.analysis.static_calls import StaticCallSession
+    from scar.analysis.static.calls import StaticCallSession
     started = monotonic()
     counts, frontiers, shards, providers = Counter(), [], [], {}
     session = StaticCallSession(directory, out=out, logical_root=logical_root,
@@ -563,10 +563,10 @@ def read_static_class_links(directory, publication, *, index_directory=None, log
     may supply ``index_directory``; otherwise it is the source-basis parent.
     This reader executes no target or saved validation result.
     """
-    from scar.analysis.static_calls import input_basis_unit
-    from scar.analysis.static_basis_compatibility import published_units_basis_compatible
+    from scar.analysis.static.calls import input_basis_unit
+    from scar.analysis.static.basis_compatibility import published_units_basis_compatible
     from scar.analysis.static_body import diagnostic_materializations
-    from scar.analysis.static_query import _Fragments
+    from scar.analysis.static.query import _Fragments
     from scar.analysis.static_program import read_static_program
     root = Path(directory).absolute()
     manifest = read_static_program(root, verify=False)
@@ -692,7 +692,7 @@ def _producer():
     return {"shared": shared_producer(), "class_sources": {
         name: hashlib.sha256((analysis / name).read_bytes()).hexdigest()
         for name in ("static_class_construction.py",
-                     "static_calls.py", "static_function_environment.py", "function_interfaces.py", "source_layers.py")}}
+                     "static/calls.py", "static/function_environment.py", "function_interfaces.py", "source_layers.py")}}
 
 
 def link_static_class_program(directory, *, budget=None, progress=None):
@@ -706,9 +706,9 @@ def link_static_class_program(directory, *, budget=None, progress=None):
     from scar.analysis.static_program import (_artifacts, _discard_static_classes,
         _json, read_static_program)
     from scar.analysis.static_body import _stamp
-    from scar.analysis.static_calls import StaticCallBudget
+    from scar.analysis.static.calls import StaticCallBudget
     from scar.analysis.static_class_construction import build_static_class_links
-    from scar.analysis.static_jobs import StaticLinkTask
+    from scar.analysis.static.jobs import StaticLinkTask
 
     producer = _producer()
     output = Path(directory).absolute()

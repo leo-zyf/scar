@@ -175,7 +175,7 @@ def compact_static_diagnostics(directory, *, jobs=8):
     The sole temporary file holds the new manifest and is removed on failure;
     there is no old-version checkout, graph rewrite or retained backup.
     """
-    from scar.analysis.static_calls import input_basis_unit
+    from scar.analysis.static.calls import input_basis_unit
     from scar.analysis.static_program import _json
     if type(jobs) is not int or not 1 <= jobs <= 32:
         raise ValueError("diagnostic workers must be in [1, 32]")

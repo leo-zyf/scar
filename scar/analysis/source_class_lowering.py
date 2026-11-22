@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 from scar.analysis.program_lowering import _key
-from scar.analysis.static_compilation import StaticCodeEvidence, compile_source_unit
+from scar.analysis.static.compilation import StaticCodeEvidence, compile_source_unit
 from scar.ir.program.class_entries import (
     ClassBodyStatement,
     ClassCompilerStage,
@@ -350,7 +350,7 @@ def lower_class_entry(prepared, definition, source, *, code_evidence, max_operat
     """
     if type(max_operations) is not int or not 3 <= max_operations <= 100000:
         raise ValueError("class-entry operation budget must be in [3,100000]")
-    from scar.analysis.static_compilation import StaticCodeEvidence
+    from scar.analysis.static.compilation import StaticCodeEvidence
     from scar.analysis.source_language import supports_cpython_compiler
 
     snapshot, semantic_definition, node = _resolve_class(prepared, definition, source)
