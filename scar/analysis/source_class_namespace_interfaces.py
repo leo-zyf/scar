@@ -43,11 +43,11 @@ class ClassNamespaceIndex:
         kind=self.nodes[owner].constructor
         if kind not in ('ClassDef','FunctionDef','AsyncFunctionDef'):return False
         site=P.SlotRef(owner,'FIELD',self.source.roles.fields[kind]['name'])
-        for i,p in enumerate(self.source.frontend.roles.ports):
-            if p.site==site:
-                resolution=self.source.frontend.bindings.ports[i].resolution
-                if resolution is not None:
-                    return self.source.frontend.bindings.resolutions[resolution].classification=='GLOBAL_EXPLICIT'
+        bindings = self.source.frontend.bindings
+        for ordinal in self.source.role_ports(site):
+            resolution = bindings.ports[ordinal].resolution
+            if resolution is not None:
+                return bindings.resolutions[resolution].classification == 'GLOBAL_EXPLICIT'
         return False
 
     def qualname(self,scope):

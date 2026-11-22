@@ -11,6 +11,7 @@ from scar.ir.program.control import LanguageCompletionKind as C
 _NORMAL = (C.FALLTHROUGH, None)
 _RAISE = (C.RAISE, None)
 _LOOPS = frozenset(('For', 'While', 'AsyncFor'))
+_IMPORT_ROLES = ('IMPORT_MODULE_SPEC', 'IMPORT_MEMBER_SPEC', 'IMPORT_FROM_MODULE_SPEC', 'RELATIVE_MODULE_MARKER')
 _ATOMIC = frozenset(('Expr', 'Assign', 'AnnAssign', 'AugAssign', 'Delete', 'Import',
     'ImportFrom', 'Assert', 'FunctionDef', 'AsyncFunctionDef', 'ClassDef', 'TypeAlias'))
 _SUITES = {'If': ('body', 'orelse'), 'For': ('body', 'orelse'), 'While': ('body', 'orelse'),
@@ -33,10 +34,6 @@ class SourceStatementInterfaceIndex:
         self.nodes = source.context.syntax.nodes
         self.roles = source.roles
         self._summaries = {}
-        self._import_projections = {port.site: source.frontend.declarations.ports[i].projection
-            for i, port in enumerate(source.frontend.roles.ports) if port.role in (
-                'IMPORT_MODULE_SPEC','IMPORT_MEMBER_SPEC','IMPORT_FROM_MODULE_SPEC','RELATIVE_MODULE_MARKER')}
-        self._exception_ports={port.site:i for i,port in enumerate(source.frontend.roles.ports) if port.role=='EXCEPTION_BINDING_SYNTAX'}
         declared = {row.name for row in source.context.syntax.profile.ast_schema if 'stmt' in row.bases}
         _require(declared == _CONSTRUCTORS, 'constructor domain',
             'finite statement completion rules differ from the original grammar')
@@ -78,7 +75,7 @@ class SourceStatementInterfaceIndex:
         value=self.roles.locate(site)[1]
         _require(value.kind=='SCALAR',site,'handler binder requires its original optional name')
         if value.scalar.to_python() is None:return None
-        port=self._exception_ports.get(site)
+        port = self.source.last_role_port(site, ('EXCEPTION_BINDING_SYNTAX',))
         _require(port is not None,site,'handler name lacks its original role port')
         binding=self.source.frontend.bindings.ports[port]
         _require(binding.write_target is not None and binding.declref is not None
@@ -178,7 +175,8 @@ class SourceStatementInterfaceIndex:
         This uses the private policy/prefix, not IMPORT_HEAD binder projection:
         a full module request and its binding head are distinct names.
         """
-        basis = self._import_projections.get(site)
+        port = self.source.last_role_port(site, _IMPORT_ROLES)
+        basis = None if port is None else self.source.frontend.declarations.ports[port].projection
         _require(basis is not None, site, 'import name has no original F3 projection basis')
         if basis.private_mode == 'NONE':
             return text

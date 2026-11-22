@@ -20,15 +20,15 @@ from scar.ir.program.protocol_signatures import ExceptionABI, protocol_signature
 from scar.ir.program.signature_patterns import SignatureError, SignatureForm
 from scar.ir.program.delegation_signatures import resolve_delegation_signature
 from scar.ir.record_codec import decode, encode
-from scar.analysis.source_deferred_interfaces import DeferredInterfaceIndex
+from scar.analysis.source_deferred_interfaces import (
+    CaptureInterfaceIndex, DeclarationScopeIndex, DeferredInterfaceIndex, DefinitionInterfaceIndex,
+)
 from scar.analysis.source_statement_interfaces import SourceStatementInterfaceIndex
 from scar.analysis.type_parameter_rules import TypeParameterInterfaceIndex
-from scar.analysis.source_definition_interfaces import DefinitionInterfaceIndex
 from scar.analysis.source_pattern_interfaces import PatternInterfaceIndex
 from scar.analysis.source_root_interfaces import RootInterfaceIndex
 from scar.analysis.source_evaluation_interfaces import EvaluationInterfaceIndex
 from scar.analysis.source_class_namespace_interfaces import ClassNamespaceIndex
-from scar.analysis.source_capture_interfaces import CaptureInterfaceIndex
 from scar.analysis.source_scope_annotation_interfaces import ScopeAnnotationIndex
 from scar.analysis.source_annotation_state_interfaces import AnnotationStateIndex
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
@@ -74,11 +74,11 @@ def production_type_catalog():
     for name in ('scar.analysis.program_types', 'scar.ir.record_codec', 'scar.ir.program.protocol_signatures',
                  'scar.ir.program.delegation_signatures', 'scar.analysis.source_deferred_interfaces',
                  'scar.analysis.source_statement_interfaces', 'scar.analysis.type_parameter_rules',
-                 'scar.analysis.source_definition_interfaces','scar.analysis.source_pattern_interfaces',
+                 'scar.analysis.source_pattern_interfaces',
                  'scar.analysis.source_root_interfaces','scar.analysis.source_evaluation_interfaces','scar.analysis.source_syntax',
-                 'scar.analysis.source_class_namespace_interfaces','scar.analysis.source_capture_interfaces',
+                 'scar.analysis.source_class_namespace_interfaces',
                  'scar.analysis.source_scope_annotation_interfaces','scar.analysis.source_annotation_state_interfaces',
-                 'scar.analysis.source_compilation_contexts', 'scar.analysis.source_compilation_contexts',
+                 'scar.analysis.source_compilation_contexts',
                  'scar.analysis.source_core_interfaces'):
         modules[name] = sha256(Path(sys.modules[name].__file__).read_bytes()).hexdigest()
     payload = dict(schema='scar.source-production-type-catalog', schema_version=1,
@@ -1175,6 +1175,7 @@ class ProductionSourceIndex:
         self.context, self.frontend = context_view, frontend_view
         self.roles = context_view.role_view
         self._deferred = None
+        self._declaration_scopes = None
         self._statements = None
         self._type_parameters = None
         self._definitions = None
@@ -1188,11 +1189,30 @@ class ProductionSourceIndex:
         self._compilation_contexts = None
         self._compilation_flow = None
         self._expressions=frozenset(row.name for row in syntax.profile.ast_schema if 'expr' in row.bases)
-        self._role_sites = frozenset(port.site for port in frontend_view.roles.ports)
+        ports_by_site = {}
+        for ordinal, port in enumerate(frontend_view.roles.ports):
+            ports_by_site.setdefault(port.site, []).append(ordinal)
+        self._ports_by_site = {site: tuple(ports) for site, ports in ports_by_site.items()}
         self.input = P.ProductionInput(f0['path'], f0['namespace_root'], _digest(encode(syntax)),
             _digest(encode(context_view.roles)), _digest(encode(context_view.material)),
             _digest(encode(frontend_view.declarations)), _digest(encode(frontend_view.bindings)),
             _digest(encode(frontend_view.native)),_digest(encode(frontend_view.topology)),_digest(encode(frontend_view.symbols)))
+
+    def role_ports(self, site):
+        """Return original F3 role ordinals in their recorded order."""
+        return self._ports_by_site.get(site, ())
+
+    def last_role_port(self, site, roles):
+        for ordinal in reversed(self.role_ports(site)):
+            if self.frontend.roles.ports[ordinal].role in roles:
+                return ordinal
+        return None
+
+    @property
+    def declaration_scopes(self):
+        if self._declaration_scopes is None:
+            self._declaration_scopes = DeclarationScopeIndex(self.context.material.scopes)
+        return self._declaration_scopes
 
     @property
     def capture_paths(self):
@@ -1588,7 +1608,7 @@ class ProductionSourceIndex:
             for disposition in plan.slots:
                 self.roles.locate(disposition.field)
                 if disposition.disposition is P.ProductionDispositionKind.ROLE_PORT:
-                    _require(disposition.field in self._role_sites, 'SOURCE_PORT', 'plan.slots',
+                    _require(disposition.field in self._ports_by_site, 'SOURCE_PORT', 'plan.slots',
                              'role disposition must refer to an original F3 role port')
             if plan.purpose is P.ProductionPurpose.STATEMENT:
                 _require(type(plan.source) is P.ProductionOccurrence and

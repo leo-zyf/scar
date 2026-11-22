@@ -8,6 +8,9 @@ FIELDS={'MatchValue':('value',),'MatchSingleton':('value',),'MatchSequence':('pa
     'MatchStar':('name',),'MatchAs':('pattern','name'),'MatchOr':('patterns',)}
 
 
+_CAPTURE_ROLES = ('PATTERN_MAPPING_BINDING_SYNTAX', 'PATTERN_STAR_BINDING_SYNTAX', 'PATTERN_AS_BINDING_SYNTAX')
+
+
 def _require(condition,path,detail):
     if not condition:
         from scar.analysis.source_productions import ProductionError
@@ -25,8 +28,6 @@ class PatternInterfaceIndex:
     def __init__(self,source):
         self.source=source;self.roles=source.roles;self.nodes=source.context.syntax.nodes
         self._captures={};self._irrefutable={}
-        self.ports={p.site:i for i,p in enumerate(source.frontend.roles.ports) if p.role in (
-            'PATTERN_MAPPING_BINDING_SYNTAX','PATTERN_STAR_BINDING_SYNTAX','PATTERN_AS_BINDING_SYNTAX')}
         for kind,fields in FIELDS.items():
             _require(tuple(self.roles.fields[kind])==fields,kind,'pattern field grammar differs')
 
@@ -52,7 +53,7 @@ class PatternInterfaceIndex:
         _require(value.kind=='SCALAR',site,'capture name must be an optional scalar')
         raw=value.scalar.to_python()
         if raw is None:return None
-        port=self.ports.get(site)
+        port = self.source.last_role_port(site, _CAPTURE_ROLES)
         _require(type(raw) is str and port is not None and self.source.frontend.bindings.ports[port].write_target is not None,
             site,'capture requires its original namespace write port')
         return Capture(site,port,raw)
