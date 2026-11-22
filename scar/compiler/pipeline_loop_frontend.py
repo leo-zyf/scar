@@ -18,7 +18,8 @@ from scar.compiler.graph_frontend import (discover_graph_regions, GraphRegionRej
 from scar.compiler.loop_admission import _InvariantLoopLowerer, _PendingLeafResult
 from scar.compiler.loop_admission import _Parameter
 from scar.compiler.model import ArrayRegion, SourceRef,region_from_dict
-from scar.compiler.pipeline_frontend import _PipelineLowerer, _Value, _Callee, _global_functions, discover_graph_pipelines
+from scar.compiler.pipeline_frontend import (_PipelineLowerer, _Value, _Callee, _global_functions,
+    _pipelines_from_leaf_plans, _prepare_leaf_plans, _source_occurrence)
 from scar.compiler.pipeline_frontend import PipelinePlan, compose_pipeline, prepare_pipeline_leaf, document as pipeline_document, pipeline_from_dict
 from scar.ir.program import source_productions as P, normal_graph as F
 from scar.ir.program.normal_graph import Body
@@ -207,17 +208,13 @@ def discover_pipeline_invariant_loops(catalog,source=None):
     routes=SourceFunctionComponents(view);units=routes.dependency_units(roots)
     store=view.catalog.fact_store
     paths=sorted({store.model_units[unit].get('path',store.rows[unit]['path']) for unit in units})
-    leaves=[];pipelines=[]
+    leaves = []
     for path in paths:
-        found,_=discover_graph_regions(view,path);leaves.extend(found)
-        found,_=discover_graph_pipelines(view,path);pipelines.extend(found)
-    leaf_by_unit={};pipeline_by_unit={}
-    for leaf in leaves:
-        identity=next(row for row in leaf.source.origins if row.get('kind')=='source_identity')
-        if identity['unit'] in units:leaf_by_unit[identity['unit'],identity['occurrence']]=leaf
-    for pipeline in pipelines:
-        identity=next(row for row in pipeline.source.origins if row.get('kind')=='source_identity')
-        if identity['unit'] in units:pipeline_by_unit[identity['unit'],identity['occurrence']]=pipeline
+        found, _ = discover_graph_regions(view, path)
+        leaves.extend(found)
+    leaf_plans = _prepare_leaf_plans(leaves, units)
+    pipelines, _ = _pipelines_from_leaf_plans(view, units, leaf_plans)
+    pipeline_by_unit = {_source_occurrence(pipeline.source): pipeline for pipeline in pipelines}
     result=[];rejections=[];resolver=BodyInterfaceResolver(view);originals={};metadata={}
     for unit in units:
         original=view.unit(unit);originals[unit]=original
@@ -229,10 +226,14 @@ def discover_pipeline_invariant_loops(catalog,source=None):
     for unit in units:
         if unit not in metadata:continue
         for function in originals[unit].facts.functions:
-            leaf=leaf_by_unit.get((unit,function.template.occurrence));key=unit,function.template
-            if leaf is None:pending.append((unit,function));continue
-            component=_Component(prepare_pipeline_leaf(optimize_region(leaf)))
-            components[key]=component;by_code[leaf.source.path,leaf.source.code_key]=component
+            plan = leaf_plans.get((unit, function.template.occurrence))
+            if plan is None:
+                pending.append((unit, function))
+                continue
+            component = _Component(plan)
+            source_ref = plan.region.source
+            components[unit, function.template] = component
+            by_code[source_ref.path, source_ref.code_key] = component
     while pending:
         progress=False;remaining=[]
         globals_by_unit={unit:routes.globals(unit,components) for unit in metadata}

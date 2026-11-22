@@ -335,18 +335,34 @@ class _PipelineLowerer(_GraphLowerer):
         return tuple(self.calls),result[0].id,tuple(self.origins)
 
 
+def _source_occurrence(source):
+    identity = next(row for row in source.origins if row.get('kind') == 'source_identity')
+    return identity['unit'], identity['occurrence']
+
+
+def _prepare_leaf_plans(leaves, units):
+    """Prepare one component per original admitted function occurrence."""
+    selected = set(units)
+    regions = {}
+    for leaf in leaves:
+        site = _source_occurrence(leaf.source)
+        if site[0] in selected:
+            regions[site] = leaf
+    return {site: prepare_pipeline_leaf(optimize_region(region)) for site, region in regions.items()}
+
+
 def discover_graph_pipelines(catalog,source=None):
     """Return automatically routed pipelines plus explicit profile rejections."""
     view=catalog if isinstance(catalog,ProgramView) else ProgramView(catalog)
-    leaves,_=discover_graph_regions(view,source)
-    plans={}
-    for region in leaves:
-        identity=next(row for row in region.source.origins if row.get('kind')=='source_identity')
-        plans[identity['unit'],identity['occurrence']]=prepare_pipeline_leaf(optimize_region(region))
     units=tuple(view.catalog.fact_store.rows) if source is None else tuple(sorted(
         view.catalog.units_for_source(str(Path(source).absolute())) or ()))
     if source is not None and not units:
         return [],[dict(path=str(Path(source).absolute()),code='SOURCE_NOT_IN_CATALOG')]
+    leaves, _ = discover_graph_regions(view, source)
+    return _pipelines_from_leaf_plans(view, units, _prepare_leaf_plans(leaves, units))
+
+
+def _pipelines_from_leaf_plans(view, units, plans):
     result=[];rejected=[];resolver=BodyInterfaceResolver(view)
     for unit in units:
         original=view.unit(unit);functions=original.facts.functions
