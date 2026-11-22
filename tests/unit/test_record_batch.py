@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from scar.ir import record_batch as batch
+from scar.ir import record_codec as codec
 from scar.ir.literals import PythonLiteral
 from scar.ir.record_codec import decode, encode
 from scar.ir.v2.ids import LogicalValueID, ObjectID, ValueVersionID
@@ -55,13 +55,13 @@ class Parent:
 def test_one_snapshot_before_iteration_and_mapping_changes_are_rechecked_next_batch(monkeypatch):
     tags = {Left: ('kind', 'left'), Right: ('kind', 'right')}
     admitted = []
-    original = batch._record_tags
+    original = codec._record_tags
 
     def count(value):
         admitted.append(value)
         return original(value)
 
-    monkeypatch.setattr(batch, '_record_tags', count)
+    monkeypatch.setattr(codec, '_record_tags', count)
 
     def rows():
         assert len(admitted) == 1
@@ -69,11 +69,11 @@ def test_one_snapshot_before_iteration_and_mapping_changes_are_rechecked_next_ba
         tags[Left] = ('kind', 'changed')
         yield {'value': 2, 'kind': 'left'}
 
-    assert batch.decode_records(Left | Right, rows(), record_tags=tags) == (Left(1), Left(2))
+    assert codec.decode_records(Left | Right, rows(), record_tags=tags) == (Left(1), Left(2))
     assert len(admitted) == 1
     with pytest.raises(ValueError):
-        batch.decode_records(Left, [{'value': 1, 'kind': 'left'}], record_tags=tags)
-    assert batch.decode_records(Left, [{'value': 1, 'kind': 'changed'}], record_tags=tags) == (Left(1),)
+        codec.decode_records(Left, [{'value': 1, 'kind': 'left'}], record_tags=tags)
+    assert codec.decode_records(Left, [{'value': 1, 'kind': 'changed'}], record_tags=tags) == (Left(1),)
     tags[Left] = ('value', 'conflicts')
     consumed = []
 
@@ -83,7 +83,7 @@ def test_one_snapshot_before_iteration_and_mapping_changes_are_rechecked_next_ba
         yield
 
     with pytest.raises(ValueError, match='conflicts'):
-        batch.decode_records(Left, empty(), record_tags=tags)
+        codec.decode_records(Left, empty(), record_tags=tags)
     assert consumed == []
 
 
@@ -94,7 +94,7 @@ def test_union_branch_validation_and_nested_post_init_trace_match_individual_dec
     original = tuple(decode(expected, row) for row in rows)
     trace = list(TRACE)
     TRACE.clear()
-    actual = batch.decode_records(expected, rows)
+    actual = codec.decode_records(expected, rows)
     assert actual == original and all(type(row) is Checked for row in actual)
     assert TRACE == trace
     nested = [{'child': {'value': 3}}, {'child': {'value': 4}}]
@@ -102,7 +102,7 @@ def test_union_branch_validation_and_nested_post_init_trace_match_individual_dec
     original = tuple(decode(Parent, row) for row in nested)
     trace = list(TRACE)
     TRACE.clear()
-    assert batch.decode_records(Parent, nested) == original
+    assert codec.decode_records(Parent, nested) == original
     assert TRACE == trace
 
 
@@ -125,5 +125,5 @@ def test_malformed_rows_propagate_the_original_exception(expected, wire, tags):
     else:
         raise AssertionError('fixture must fail the original decoder')
     with pytest.raises(error_type) as actual:
-        batch.decode_records(expected, [deepcopy(wire)], record_tags=tags)
+        codec.decode_records(expected, [deepcopy(wire)], record_tags=tags)
     assert str(actual.value) == message

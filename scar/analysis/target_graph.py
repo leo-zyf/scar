@@ -14,8 +14,8 @@ import time
 from scar.analysis import target_inventory
 from scar.ir.program import target_hardware as H
 from scar.ir.program.providers import ProviderArtifact,ProviderFactReference
-from scar.ir.record_codec import encode
-from scar.artifacts import _durable_bytes, _durable_mkdir, _json
+from scar.ir.record_codec import _encode, _record_tags, decode_records
+from scar.artifacts import _durable_bytes, _durable_mkdir, _json, read_gzip_payload
 
 
 def _artifact(path,schema):
@@ -23,7 +23,8 @@ def _artifact(path,schema):
 
 
 def _table(path,records):
-    raw=b''.join(_json(encode(row,record_tags=H.TARGET_RECORD_TAGS)) for row in records)
+    tags = _record_tags(H.TARGET_RECORD_TAGS)
+    raw = b''.join(_json(_encode(row, tags)) for row in records)
     payload=gzip.compress(raw,compresslevel=3,mtime=0);_durable_bytes(path,payload,replace=False)
     return dict(path=path.name,records=raw.count(b'\n'),bytes=len(payload),sha256=sha256(payload).hexdigest(),
         decoded_bytes=len(raw),decoded_sha256=sha256(raw).hexdigest())
@@ -189,7 +190,10 @@ class TargetHardwareGraph:
 
     def table(self,receipt,cls):
         from scar.analysis.replay_transaction import current_transaction
-        path=self.path/receipt['path']
+        name = receipt['path']
+        if type(name) is not str or name in ('', '.', '..') or Path(name).name != name:
+            raise ValueError('target table must be a file inside the hardware graph')
+        path=self.path/name
         transaction=current_transaction()
         if transaction is None:
             return self._decode_table(path,receipt,cls)
@@ -200,14 +204,11 @@ class TargetHardwareGraph:
 
     @staticmethod
     def _decode_table(path,receipt,cls):
-        from scar.ir.record_batch import decode_records
-        payload=path.read_bytes()
-        if len(payload)!=receipt['bytes'] or sha256(payload).hexdigest()!=receipt['sha256']:raise ValueError('target table differs')
-        raw=gzip.decompress(payload)
-        if len(raw)!=receipt['decoded_bytes'] or sha256(raw).hexdigest()!=receipt['decoded_sha256'] or raw.count(b'\n')!=receipt['records']:
-            raise ValueError('decoded target table differs')
-        return tuple(decode_records(cls,(json.loads(line) for line in raw.splitlines()),
-            record_tags=H.TARGET_RECORD_TAGS))
+        raw = read_gzip_payload(path.parent, receipt, kind='target table')
+        if raw.count(b'\n') != receipt['records']:
+            raise ValueError('decoded target table differs in record count')
+        return decode_records(cls, (json.loads(line) for line in raw.splitlines()),
+                              record_tags=H.TARGET_RECORD_TAGS)
 
     def resources(self):
         return tuple(row for table in self.report['nodes'].values() for row in self.table(table,H.TargetResource))

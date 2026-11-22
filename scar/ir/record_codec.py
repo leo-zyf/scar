@@ -86,6 +86,12 @@ def decode(expected, value, *, record_tags=None):
     return _decode(expected, value, _record_tags(record_tags))
 
 
+def decode_records(expected, rows, *, record_tags=None):
+    """Decode a batch under one validated snapshot of the tag policy."""
+    tags = _record_tags(record_tags)
+    return tuple(_decode(expected, row, tags) for row in rows)
+
+
 def _decode(expected, value, tags, shape=None):
     if expected is str or expected is int or expected is bool or expected is type(None):
         if type(value) is not expected:
@@ -180,4 +186,4 @@ def loads(payload):
                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON number")))
 
 
-__all__ = ["encode", "decode", "loads"]
+__all__ = ["encode", "decode", "decode_records", "loads"]
