@@ -241,14 +241,20 @@ def validate_language_body(model, graph, interface, metadata, semantic, language
     from scar.analysis.static.lowering.source_with import validate_with
     withs = validate_with(model, graph, interface, metadata, semantic, language,
         source_tree=source_tree, options=options, structural_only=structural_only)
-    from scar.analysis.static.lowering.source_set_lowering import validate_set_displays
-    sets = validate_set_displays(model, graph, interface, metadata, semantic, language,
+    from scar.analysis.source_expression_validation import validate_set_displays
+    from scar.analysis.static.lowering.source_displays import KINDS, validate_starred_displays
+    from scar.ir.program.structured import PythonProtocolKind
+    display_uses = ({(row.operation, row.use): row for row in metadata.use_links}
+        if any(row.kind is PythonProtocolKind.BUILD_SET_DISPLAY or row.kind in KINDS
+               for row in protocols.values()) else {})
+    sets = validate_set_displays(model, interface, metadata, semantic, language,
+        protocols=protocols, operations=operations, values=values, links=links, uses=display_uses,
         source_tree=source_tree, options=options, structural_only=structural_only)
     from scar.analysis.static.lowering.source_comprehension import validate_comprehensions
     comprehensions=validate_comprehensions(model,graph,interface,metadata,semantic,language,
         source_tree=source_tree,options=options,structural_only=structural_only)
-    from scar.analysis.static.lowering.source_displays import validate_starred_displays
-    displays=validate_starred_displays(model,graph,interface,metadata,semantic,language,
+    displays=validate_starred_displays(model, interface, metadata, semantic, language,
+        protocols=protocols, operations=operations, values=values, blocks=blocks, links=links, uses=display_uses,
         source_tree=source_tree,options=options,structural_only=structural_only)
     from scar.analysis.static.lowering.source_slice import validate_slice_access
     slice_access = validate_slice_access(model, graph, interface, metadata, semantic, language,

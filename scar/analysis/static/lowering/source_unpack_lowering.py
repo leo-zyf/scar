@@ -5,7 +5,7 @@ import ast
 
 from scar.analysis.program_lowering import _REF, _Unsupported
 from scar.analysis.static.lowering.source_heap_lowering import _hold
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.model import ExitKind
 from scar.ir.program.source import GapKind, SourceRole
 from scar.ir.program.source_language import UnpackShape

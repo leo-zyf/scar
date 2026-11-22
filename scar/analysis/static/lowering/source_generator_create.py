@@ -14,7 +14,7 @@ from scar.analysis.static.lowering.source_heap_lowering import (
     expression_for_heap_target,
     _hold,
 )
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.drivers import (
     ResumableCreate,
     CreationCapture,

@@ -14,7 +14,7 @@ from scar.analysis.source_language import (
 )
 from scar.analysis.static.lowering.source_call_lowering import _constant, _invoke
 from scar.analysis.static.lowering.source_heap_lowering import expression_for_heap_target
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.environments import EnvironmentRole
 from scar.ir.program.ids import OperationID, ValueID
 from scar.ir.program.model import (

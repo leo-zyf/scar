@@ -1,4 +1,4 @@
-"""Source displays."""
+"""Source collection displays and their ordered compiler protocols."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import ast
 import dis
 from scar.analysis.program_lowering import _Unsupported
 from scar.analysis.static.lowering.source_call_lowering import _invoke, _instructions
-from scar.analysis.static.lowering.source_heap_lowering import _source_definition, _associate
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.static.lowering.source_heap_lowering import (
+    _associate, _hold as _hold_expression, _source_definition, expression_for_heap_target,
+)
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.source import GapKind, SourceRole
 from scar.ir.program.structured import PythonProtocolKind as K, PythonProtocolKind as Kind
 from scar.ir.semantics_v2 import Opcode
@@ -43,11 +45,12 @@ from scar.ir.v2.semantic import OperationKind
 # both completions, while initial BUILD_LIST steals only on success. Tuple
 # conversion consumes the temporary list; a List display forwards that list.
 KINDS=frozenset((K.BUILD_DISPLAY_LIST,K.EXTEND_DISPLAY,K.APPEND_DISPLAY,K.DISPLAY_LIST_TO_TUPLE))
+_LEGACY_STACK_GUIDELINE = 30
 
 
 def _shape(node):
     return (isinstance(node,(ast.Tuple,ast.List)) and isinstance(node.ctx,ast.Load)
-        and any(isinstance(n,ast.Starred)for n in node.elts) and len(node.elts)<=30)
+        and any(isinstance(n,ast.Starred)for n in node.elts) and len(node.elts)<=_LEGACY_STACK_GUIDELINE)
 
 
 def _expected(node):
@@ -118,20 +121,20 @@ def lower_starred_display(builder,node,cursor):
     finally:del builder.active_temporaries[baseline:]
 
 
-def validate_starred_displays(model,graph,interface,metadata,semantic,language,*,source_tree=None,options=None,structural_only=False):
+def validate_starred_displays(model, interface, metadata, semantic, language, *,
+                              protocols, operations, values, blocks, links, uses,
+                              source_tree=None, options=None, structural_only=False):
     from scar.analysis.program_lowering import _REF
     from scar.analysis.source_language import require_source_tree,function_exception_types
     from scar.analysis.static.lowering.source_call_lowering import _pop_suffix, _check_failure_pending
     from scar.analysis.static.lowering.source_string import _ordered_next
     from scar.ir.program.model import Behavior,CompletionResult,ExitKind,ReferenceValue,StateVersionValue,TerminatorKind,value_type
     from scar.ir.program.source_language import SourceLanguageCapability as C
-    selected={p.operation:p for p in model.protocols if p.kind in KINDS}
+    selected={key:row for key,row in protocols.items() if row.kind in KINDS}
     if not selected:return set()
     def need(ok,detail):
         if not ok:raise ValueError('starred display: '+detail)
     need(C.STARRED_DISPLAY_314_V1 in language.capabilities and isinstance(source_tree,ast.Module),'capability and exact retained AST required')
-    operations={o.id:o for o in graph.operations};values={v.id:v for v in graph.values};blocks={b.id:b for r in graph.regions for b in r.blocks}
-    protocols={p.operation:p for p in model.protocols};links={r.operation:r for r in metadata.operation_links};uses={(r.operation,r.use):r for r in metadata.use_links}
     positions={o:(b.id,i)for b in blocks.values()for i,o in enumerate(b.operations)};world=value_type(values[interface.world])
     grouped={}
     for identity,p in selected.items():grouped.setdefault(p.source,[]).append(identity)
@@ -207,6 +210,167 @@ def validate_starred_displays(model,graph,interface,metadata,semantic,language,*
             options.code_evidence.require_definition(metadata.source,interface.definition,model.source)
             _compiler(node,tuple(dis.get_instructions(options.code_evidence.code)))
     return set(selected)
+
+
+def _ordinary_set_shape(node):
+    return (isinstance(node, ast.Set) and 0 < len(node.elts) <= _LEGACY_STACK_GUIDELINE
+            and not any(isinstance(n, ast.Starred) for n in node.elts))
+
+
+def lower_set_display(builder, node, cursor):
+    if not _ordinary_set_shape(node):
+        raise _Unsupported(GapKind.UNSUPPORTED_SYNTAX, node,
+                           'SET_DISPLAY_STARRED_OR_INCREMENTAL_CONSTRUCTION_UNIMPLEMENTED')
+    if builder.language_options.code_evidence is None:
+        raise _Unsupported(GapKind.CODE_VERSION, node, 'SET_DISPLAY_READONLY_CODE_WITNESS_REQUIRED')
+    definition = _source_definition(builder, node)
+    if (definition.kind is not OperationKind.OPERATOR or definition.metadata.get('ast_type') != 'Set'
+            or len(definition.output_slots) != 1):
+        raise _Unsupported(GapKind.SOURCE_MAPPING, node, 'set display requires its exact original SG output')
+    baseline = len(builder.active_temporaries)
+    held, inputs = [], []
+    try:
+        for index, child in enumerate(node.elts):
+            cursor, value = expression_for_heap_target(builder, child, cursor)
+            if cursor is None:
+                return None, None
+            _hold_expression(builder, cursor, child, value)
+            held.append((child, value)); inputs.append((value, child, 'element', index, None))
+        # CPython BUILD_SET consumes these input holds on both completions.
+        cursor, result, identity = _invoke(builder, cursor, node, inputs,
+                                           K.BUILD_SET_DISPLAY, tuple(held), result=True)
+        _associate(builder, identity, node, definition, Opcode.BUILD_SET)
+        builder.link_value(builder.values_by_id[result], node, SourceRole.EXPRESSION)
+        builder.gap(GapKind.EFFECT_SUMMARY, node,
+            'set element evaluation order and construction are connected; allocation/hash/equality, '
+            'deduplication, mutation, finalizers, identity and runtime contents remain inside the incomplete world interface')
+        return cursor, result
+    finally:
+        del builder.active_temporaries[baseline:]
+
+
+def _dictionary_parts(unpack_sites, stack_guideline):
+    """Yield pair runs (start, stop, incremental), with stop=None for **."""
+    pair_limit = stack_guideline // 2
+    start = stop = 0
+    for index, unpack in enumerate(unpack_sites):
+        stop = index + 1
+        if unpack:
+            if start < index:
+                yield start, index, index - start > pair_limit
+            yield index, None, False
+            start = stop
+        elif index - start > pair_limit:
+            # Include the pair that triggers the CPython run flush.
+            yield start, stop, True
+            start = stop
+    if start < stop:
+        yield start, stop, stop - start > pair_limit
+
+
+def _hold_mapping_reference(builder, cursor, node, reference):
+    builder.frame_transition(cursor, node, ((reference, node, "mapping-held-reference"),),
+                             K.FRAME_HOLD_TEMPORARY)
+    builder.active_temporaries.append(reference)
+
+
+def _empty_mapping(builder, node, cursor):
+    cursor, result, _ = _invoke(builder, cursor, node, (), K.BUILD_MAP, result=True)
+    _hold_mapping_reference(builder, cursor, node, result)
+    return cursor, result
+
+
+def _lower_mapping_run(builder, node, begin, end, incremental, cursor):
+    """Return one held subdict, preserving the compiler's insertion boundary."""
+    result, held, inputs = None, [], []
+    if incremental:
+        cursor, result = _empty_mapping(builder, node, cursor)
+    for index in range(begin, end):
+        key_node, value_node = node.keys[index], node.values[index]
+        if key_node is None:
+            raise _Unsupported(GapKind.SOURCE_MAPPING, node, "ordinary dictionary run contains unpacking")
+        cursor, key = builder.expr(key_node, cursor)
+        if cursor is None:
+            return None, None
+        _hold_mapping_reference(builder, cursor, key_node, key)
+        cursor, value = builder.expr(value_node, cursor)
+        if cursor is None:
+            return None, None
+        _hold_mapping_reference(builder, cursor, value_node, value)
+        pair = ((key, key_node, "mapping-key", index, None),
+                (value, value_node, "mapping-value", index, None))
+        consumed = ((key_node, key), (value_node, value))
+        if incremental:
+            cursor, _, _ = _invoke(builder, cursor, node,
+                ((result, node, "mapping-owner", 0, None),) + pair, K.MAP_ADD, consumed)
+        else:
+            inputs.extend(pair)
+            held.extend(consumed)
+    if not incremental:
+        cursor, result, _ = _invoke(builder, cursor, node, inputs, K.BUILD_MAP,
+                                    tuple(held), result=True)
+        _hold_mapping_reference(builder, cursor, node, result)
+    return cursor, result
+
+
+def _update_mapping(builder, node, cursor, receiver, update, update_node):
+    cursor, _, _ = _invoke(builder, cursor, node,
+        ((receiver, node, "mapping-owner", 0, None),
+         (update, update_node, "mapping-update", 0, None)),
+        K.DICT_UPDATE, ((update_node, update),))
+    return cursor
+
+
+def _merge_mapping_run(builder, node, begin, end, incremental, cursor, receiver):
+    cursor, subdict = _lower_mapping_run(builder, node, begin, end, incremental, cursor)
+    if cursor is None or receiver is None:
+        return cursor, subdict
+    return _update_mapping(builder, node, cursor, receiver, subdict, node), receiver
+
+
+def lower_dictionary(builder, node, cursor):
+    """Lower ast.Dict only, retaining original children and exact source atoms.
+
+    Child expressions use the existing builder, so calls/names/state remain
+    connected.  Dict comprehensions and unsupported child expressions retain
+    their ordinary explicit coverage boundary.  No target is executed here.
+    """
+    if not isinstance(node, ast.Dict) or len(node.keys) != len(node.values):
+        raise _Unsupported(GapKind.SOURCE_MAPPING, node, "expected a dictionary display source")
+    initial_holds = len(builder.active_temporaries)
+    receiver = None
+    try:
+        for begin, end, incremental in _dictionary_parts(
+                (key is None for key in node.keys), _LEGACY_STACK_GUIDELINE):
+            if end is not None:
+                cursor, receiver = _merge_mapping_run(
+                    builder, node, begin, end, incremental, cursor, receiver)
+                if cursor is None:
+                    return None, None
+                continue
+            if receiver is None:
+                cursor, receiver = _empty_mapping(builder, node, cursor)
+            child = node.values[begin]
+            cursor, update = builder.expr(child, cursor)
+            if cursor is None:
+                return None, None
+            _hold_mapping_reference(builder, cursor, child, update)
+            cursor = _update_mapping(builder, node, cursor, receiver, update, child)
+        if receiver is None:
+            cursor, receiver = _empty_mapping(builder, node, cursor)
+        from scar.analysis.static.lowering.source_expression_lowering import forward_source_reference
+        forward_source_reference(builder, cursor, node, receiver)
+        _transfer(builder, ((node, receiver),), node)
+        records = builder.old_by_atom.get(builder.source(node).atom_id, ())
+        if len(records) > 1:
+            raise _Unsupported(GapKind.SOURCE_MAPPING, node, "dictionary has ambiguous computational source records")
+        builder.link_value(builder.values_by_id[receiver], node, SourceRole.EXPRESSION,
+                           semantic_value=records[0].result if records else None)
+        builder.gap(GapKind.EFFECT_SUMMARY, node,
+            "dictionary hash/equality, mapping dispatch, allocation, partial mutation and cleanup effects remain unproved")
+        return cursor, receiver
+    finally:
+        del builder.active_temporaries[initial_holds:]
 
 
 # Container display/target productions; original fields, not AST visitation.
@@ -304,7 +468,7 @@ def _mapping(b, region, state):
     keys, values = b.value(b.site('keys')), b.value(b.site('values'))
     _require(keys.kind == values.kind == 'LIST' and len(keys.items) == len(values.items),
              'RULE_SHAPE', str(b.occurrence), 'dict key/value source lists differ')
-    mapping, elements = None, 0
+    mapping = None
 
     def commit(update):
         nonlocal mapping, state
@@ -313,10 +477,10 @@ def _mapping(b, region, state):
         else:
             state, = b.protocol(region, K.DICT_UPDATE, (mapping, update), state, selectors=(b.site('keys'), b.site('values')))
 
-    def subdict(begin, end):
+    def subdict(begin, end, incremental):
         nonlocal state
         result, pairs = None, []
-        if (end-begin)*2 > b.rules.call_profile['stack_guideline']:
+        if incremental:
             result, state = b.protocol(region, K.BUILD_MAP, (), state, (CountBinding('pair_count', 0),), (b.site('keys'),))
         for ordinal in range(begin, end):
             key, state = b.evaluate(region, b.site('keys', ordinal), state)
@@ -331,25 +495,23 @@ def _mapping(b, region, state):
                 (CountBinding('pair_count', end-begin),), (b.site('keys'),))
         return result
 
-    for ordinal, key in enumerate(keys.items):
-        hole = key.kind == 'SCALAR' and key.scalar.to_python() is None
-        _require(hole or key.kind == 'NODE', 'RULE_SHAPE', str(b.site('keys', ordinal)), 'dict key must be an expression or an unpack hole')
-        if hole:
-            b.slots[b.site('keys', ordinal)] = P.ProductionDispositionKind.METADATA
-            if elements:
-                commit(subdict(ordinal-elements, ordinal))
-                elements = 0
-            if mapping is None:
-                mapping, state = b.protocol(region, K.BUILD_MAP, (), state, (CountBinding('pair_count', 0),), (b.site('keys'),))
-            update, state = b.evaluate(region, b.site('values', ordinal), state)
-            state, = b.protocol(region, K.DICT_UPDATE, (mapping, update), state, selectors=(b.site('values', ordinal),))
-        elif elements*2 > b.rules.call_profile['stack_guideline']:
-            commit(subdict(ordinal-elements, ordinal+1))
-            elements = 0
-        else:
-            elements += 1
-    if elements:
-        commit(subdict(len(keys.items)-elements, len(keys.items)))
+    def unpack_sites():
+        for ordinal, key in enumerate(keys.items):
+            hole = key.kind == 'SCALAR' and key.scalar.to_python() is None
+            _require(hole or key.kind == 'NODE', 'RULE_SHAPE', str(b.site('keys', ordinal)),
+                     'dict key must be an expression or an unpack hole')
+            if hole:
+                b.slots[b.site('keys', ordinal)] = P.ProductionDispositionKind.METADATA
+            yield hole
+
+    for begin, end, incremental in _dictionary_parts(unpack_sites(), b.rules.call_profile['stack_guideline']):
+        if end is not None:
+            commit(subdict(begin, end, incremental))
+            continue
+        if mapping is None:
+            mapping, state = b.protocol(region, K.BUILD_MAP, (), state, (CountBinding('pair_count', 0),), (b.site('keys'),))
+        update, state = b.evaluate(region, b.site('values', begin), state)
+        state, = b.protocol(region, K.DICT_UPDATE, (mapping, update), state, selectors=(b.site('values', begin),))
     if mapping is None:
         mapping, state = b.protocol(region, K.BUILD_MAP, (), state, (CountBinding('pair_count', 0),), (b.site('keys'),))
     b.finish(region, (mapping, state), (_REF, b.world))
@@ -649,6 +811,8 @@ __all__ = [
     'validate_tuple_key_ownership',
     'KINDS',
     'lower_starred_display',
+    'lower_dictionary',
+    'lower_set_display',
     'validate_starred_displays',
     'emit_display',
 ]

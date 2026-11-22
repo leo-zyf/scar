@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from types import CodeType
 from scar.analysis.program_lowering import _Unsupported
 from scar.analysis.static.lowering.source_call_lowering import _constant, _invoke
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.source import GapKind, SourceRole
 from scar.ir.program.model import (
     ExitKind,

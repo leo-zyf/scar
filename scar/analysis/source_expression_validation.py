@@ -9,7 +9,7 @@ from scar.analysis.source_language import function_exception_types, require_sour
 from scar.ir.program.control import ProtocolValueKind as P
 from scar.ir.program.model import (AccessMode, Behavior, BlockArgument, CompletionResult, DataValue, ExitKind,
     LiteralOrigin, OperationResult, ProtocolValue, ReferenceValue, StateVersionValue,
-    TerminatorKind, value_type)
+    TerminatorKind, ValueKind, ValueType, value_type)
 from scar.ir.program.source_language import SourceLanguageCapability as C, SOURCE_EXPRESSION_PROTOCOLS
 from scar.ir.program.structured import PythonProtocolKind as K
 from scar.ir.semantics_v2 import Opcode
@@ -27,6 +27,114 @@ def _span(reference):
 
 def _node_span(node):
     return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
+
+
+def validate_mapping_protocols(model, interface, semantic, *, operations, values, links, blocks,
+                               language=None):
+    """Check dict protocol shapes; fixed-source replay owns exact child order."""
+    from scar.analysis.static.lowering.source_displays import _LEGACY_STACK_GUIDELINE
+
+    kinds = (K.BUILD_MAP, K.MAP_ADD, K.DICT_UPDATE)
+    selected = tuple(protocol for protocol in model.protocols if protocol.kind in kinds)
+    if not selected:
+        return
+    built_maps = {}
+    for protocol in selected:
+        if protocol.kind is K.BUILD_MAP:
+            operation = operations[protocol.operation]
+            if operation.terminator is not None:
+                for edge in operation.terminator.successors:
+                    block = blocks.get(edge.block)
+                    if edge.kind is ExitKind.NORMAL and block is not None and block.arguments:
+                        built_maps[block.arguments[0]] = links[protocol.operation].source
+    location = values[interface.world].location
+    ref_type, state_type = ValueType(ValueKind.REFERENCE), ValueType(ValueKind.STATE, location=location)
+    for protocol in selected:
+        operation, link = operations[protocol.operation], links[protocol.operation]
+        atom = semantic.source_atoms.get(link.source.atom_id)
+        if atom is not None and atom.kind == "Call":
+            if (language is None or C.CALL_KWARGS_314_V1 not in language.capabilities
+                    or protocol.kind is K.DICT_UPDATE):
+                raise ValueError("call keyword packing requires its explicit capability and cannot use DICT_UPDATE")
+            # The independent call validator owns the original Call, compiler,
+            # receiver, ordered child Uses and both completion cleanup rules.
+            continue
+        arity = len(operation.uses) - 1
+        build = protocol.kind is K.BUILD_MAP
+        arity_ok = 0 <= arity <= _LEGACY_STACK_GUIDELINE and arity % 2 == 0 if build else (
+            arity == (3 if protocol.kind is K.MAP_ADD else 2))
+        if (atom is None or atom.kind != "Dict" or protocol.source != link.source
+                or link.semantic_operation is not None or not arity_ok
+                or any(type(values[use.value]) is not ReferenceValue for use in operation.uses[:-1])
+                or not operation.uses or type(values[operation.uses[-1].value]) is not StateVersionValue
+                or values[operation.uses[-1].value].location != location
+                or operation.effects_complete or operation.callee is not None
+                or not all(behavior in operation.behaviors for behavior in
+                           (Behavior.CONTROL, Behavior.READ, Behavior.WRITE, Behavior.MEMORY))
+                or operation.terminator is None or operation.terminator.kind is not TerminatorKind.INVOKE
+                or operation.invoke_arguments != tuple(use.id for use in operation.uses)):
+            raise ValueError("dictionary protocol source, ordered references or incomplete world invoke differ")
+        normal_types = (ref_type, state_type) if build else (state_type,)
+        if (tuple((signature.kind, signature.types) for signature in operation.completions) !=
+                ((ExitKind.NORMAL, normal_types), (ExitKind.RAISE, function_exception_types(language, ref_type, state_type)))
+                or tuple(edge.kind for edge in operation.terminator.successors) != (ExitKind.NORMAL, ExitKind.RAISE)
+                or any(edge.arguments != tuple(CompletionResult(index) for index in range(len(signature.types)))
+                       for edge, signature in zip(operation.terminator.successors, operation.completions))):
+            raise ValueError("dictionary protocol must retain its normal and exceptional payload/post-world")
+        if not build and built_maps.get(operation.uses[0].value) != link.source:
+            raise ValueError("dictionary mutation receiver must come from this display's exact BUILD_MAP result")
+
+
+def validate_set_displays(model, interface, metadata, semantic, language, *,
+                          protocols, operations, values, links, uses,
+                          source_tree=None, options=None, structural_only=False):
+    from scar.analysis.static.lowering.source_displays import _ordinary_set_shape
+
+    selected = {key: row for key, row in protocols.items() if row.kind is K.BUILD_SET_DISPLAY}
+    if not selected:
+        return set()
+    def need(condition, detail):
+        if not condition: raise ValueError('set display: ' + detail)
+    need(C.SET_DISPLAY_314_V1 in language.capabilities, 'explicit capability required')
+    need(isinstance(source_tree, ast.Module), 'exact retained AST required even for STRUCTURE')
+    world = value_type(values[interface.world])
+    for identity, protocol in selected.items():
+        link = links[identity]; operation = operations[identity]
+        nodes = [n for n in require_source_tree(source_tree, language.source, protocol.source) if isinstance(n,ast.Set)]
+        need(len(nodes)==1 and _ordinary_set_shape(nodes[0]), 'exact ordinary Set source/shape differs')
+        node, = nodes
+        definition = semantic.definitions.get(link.semantic_operation)
+        need(link.source==protocol.source and link.opcode is Opcode.BUILD_SET
+             and definition is not None and definition.kind is OperationKind.OPERATOR
+             and definition.metadata.get('ast_type')=='Set' and definition.code_id==link.source.atom_id.wire
+             and link.source.atom_id in definition.source_atoms and len(definition.output_slots)==1,
+             'original SG/source/output association differs')
+        need(operation.terminator is not None and operation.terminator.kind is TerminatorKind.INVOKE
+             and operation.callee is None and not operation.effects_complete
+             and Behavior.MEMORY in operation.behaviors
+             and tuple(u.id for u in operation.uses)==operation.invoke_arguments,
+             'construction must be an incomplete allocation/hash/equality invoke')
+        args = operation.uses
+        need(len(args)==len(node.elts)+1 and all(type(values[u.value]) is ReferenceValue for u in args[:-1])
+             and type(values[args[-1].value]) is StateVersionValue
+             and values[args[-1].value].location==values[interface.world].location,
+             'ordered element references/world differ')
+        for index,(child,use) in enumerate(zip(node.elts,args[:-1])):
+            source = uses.get((identity,use.id))
+            need(source is not None and source.role=='element' and source.index==index
+                 and source.source.path==language.source.path and source.source.fingerprint==language.source.fingerprint
+                 and (source.source.start_line,source.source.end_line,source.source.start_column,source.source.end_column)==_node_span(child),
+                 'element original Use order/source differs')
+        need(tuple((c.kind,c.types)for c in operation.completions)==(
+            (ExitKind.NORMAL,(_REF,world)),(ExitKind.RAISE,function_exception_types(language,_REF,world)))
+            and tuple(e.kind for e in operation.terminator.successors)==(ExitKind.NORMAL,ExitKind.RAISE)
+            and all(edge.arguments==tuple(CompletionResult(i)for i in range(len(c.types)))
+                    for edge,c in zip(operation.terminator.successors,operation.completions)),
+            'normal/reference and exceptional payloads must retain their own completion/world ports')
+    if not structural_only:
+        need(options is not None and options.code_evidence is not None, 'independent readonly CodeWitness required')
+        options.code_evidence.require_definition(metadata.source,interface.definition,model.source)
+    return set(selected)
 
 
 def validate_source_expressions(model, graph, interface, metadata, semantic, language, *,

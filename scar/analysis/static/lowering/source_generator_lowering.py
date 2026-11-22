@@ -17,7 +17,7 @@ from types import CodeType
 from scar.analysis.environment_lowering import StructuredEnvironmentBuilder, captured_cell_slot, _PREFIX
 from scar.analysis.program_lowering import _Unsupported, _key, _REF, _BOOL, _Cursor
 from scar.analysis.static.lowering.source_heap_lowering import expression_for_heap_target, _source_definition, _hold
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.ir.program.bindings import BindingState
 from scar.ir.program.control import ProtocolValueKind as P, ProtocolValueType
 from scar.ir.program.drivers import (

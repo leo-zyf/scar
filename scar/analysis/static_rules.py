@@ -173,7 +173,7 @@ def _rule(node):
                 "The lazy target-child dispatcher has no BoolOp adapter; enclosing creation does not execute deferred lambda or generator bodies."))
         needs.append(_needs("STATIC_CHILD_CODE_AND_CELLS", "Creation and lazy body remain distinct; child .0/freevars/constant slot must match. Drive/close are not selected by creation."))
     elif isinstance(node, ast.Set):
-        module, function = "static.lowering.source_set_lowering", "lower_set_display"
+        module, function = "static.lowering.source_displays", "lower_set_display"
         caps, compiler = [C.SET_DISPLAY_314_V1], True
         if not 0 < len(node.elts) <= 30 or any(isinstance(x, ast.Starred) for x in node.elts):
             unsupported = "Set display requires 1..30 non-starred elements."
@@ -230,7 +230,7 @@ def _rule(node):
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice) and node.slice.step is None and not all(x is None or isinstance(x, ast.Constant) for x in (node.slice.lower, node.slice.upper)):
             needs.append(_needs("STATIC_SLICE_SEQUENCE", "Compiler must select a supported BINARY_SLICE/BUILD_SLICE protocol; source shape alone cannot decide."))
     elif isinstance(node, ast.Dict):
-        module, function = "static.lowering.source_mapping_lowering", "lower_dictionary"
+        module, function = "static.lowering.source_displays", "lower_dictionary"
         caps = [C.SOURCE_EXPRESSIONS_314_V1, C.SOURCE_REFERENCE_LIFETIME_314_V1]
     elif isinstance(node, ast.JoinedStr):
         module, function = "static.lowering.source_string", "lower_joined_string"

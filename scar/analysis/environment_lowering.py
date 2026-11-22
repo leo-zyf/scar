@@ -74,7 +74,7 @@ def dispatch_source_expression(builder, node, cursor):
         from scar.analysis.static.lowering.source_lambda import lower_lambda
         return lower_lambda(builder,node,cursor)
     if builder.has_language("SET_DISPLAY_314_V1") and isinstance(node, ast.Set):
-        from scar.analysis.static.lowering.source_set_lowering import lower_set_display
+        from scar.analysis.static.lowering.source_displays import lower_set_display
         return lower_set_display(builder, node, cursor)
     if builder.has_language("GENEXPR_CREATION_314_V1") and isinstance(node, ast.GeneratorExp):
         from scar.analysis.static.lowering.source_generator_create import lower_creation
@@ -95,7 +95,7 @@ def dispatch_source_expression(builder, node, cursor):
         from scar.analysis.static.lowering.source_slice import lower_slice, lower_subscript
         return lower_slice(builder, node, cursor) if isinstance(node, ast.Slice) else lower_subscript(builder, node, cursor)
     if isinstance(node, ast.Dict):
-        from scar.analysis.static.lowering.source_mapping_lowering import lower_dictionary
+        from scar.analysis.static.lowering.source_displays import lower_dictionary
         return lower_dictionary(builder, node, cursor)
     if isinstance(node, ast.JoinedStr):
         from scar.analysis.static.lowering.source_string import lower_joined_string

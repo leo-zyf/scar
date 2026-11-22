@@ -12,7 +12,7 @@ from scar.analysis.static.lowering.source_heap_lowering import (
     _hold,
     _normal_producer,
 )
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.analysis.static.lowering.source_slice import _invoke
 from scar.ir.program.bindings import BindingRead
 from scar.ir.program.ids import OperationID, ValueID

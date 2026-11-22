@@ -16,7 +16,7 @@ from scar.analysis.static.lowering.source_heap_lowering import (
     _hold as hold_expression,
 )
 from scar.analysis.static.lowering.source_slice import _invoke
-from scar.analysis.static.lowering.source_mapping_lowering import _transfer
+from scar.analysis.structured_lowering import _transfer
 from scar.analysis.structured_lowering import StructuredBuilder
 from scar.analysis.function_interfaces import formal_nodes
 from scar.ir.program.environments import (
@@ -141,7 +141,7 @@ class _ExpressionBody(_Nested):
         if isinstance(node,ast.Dict):
             if len(node.keys)>15 or any(k is None for k in node.keys):
                 raise _Unsupported(GapKind.UNSUPPORTED_SYNTAX,node,'LAMBDA_DICT_EXPANSION_OR_INCREMENTAL_INTERFACE_UNIMPLEMENTED')
-            from scar.analysis.static.lowering.source_mapping_lowering import lower_dictionary
+            from scar.analysis.static.lowering.source_displays import lower_dictionary
             return lower_dictionary(self,node,cursor)
         if isinstance(node,ast.Call) and not any(isinstance(a,ast.Starred)for a in node.args) and all(k.arg is not None for k in node.keywords):
             children=[(node.func,'callee',0),*((n,'argument',i)for i,n in enumerate(node.args)),

@@ -31,6 +31,15 @@ from scar.ir.program.source_language import FUNCTION_TRY_PROTOCOLS, NESTED_FUNCT
 from scar.ir.v2.common import EvidenceKind
 
 
+def _transfer(builder, held, node):
+    """Remove interpreter-consumed/forwarded holds, without a second decref."""
+    references = tuple(reference for _, reference in held)
+    if references:
+        if tuple(builder.active_temporaries[-len(references):]) != references:
+            raise _Unsupported(GapKind.SOURCE_MAPPING, node, "dictionary temporary ownership is not nested")
+        del builder.active_temporaries[-len(references):]
+
+
 @dataclass
 class _Loop:
     node: object
@@ -482,7 +491,6 @@ class StructuredBuilder(_Builder):
         if len(node.targets) == 1:
             return self.store(node.targets[0], value, cursor)
         from scar.analysis.static.lowering.source_heap_lowering import _hold
-        from scar.analysis.static.lowering.source_mapping_lowering import _transfer
         baseline = len(self.active_temporaries)
         _hold(self, cursor, node.value, value)
         try:
@@ -868,8 +876,9 @@ def _require_valid_structured_body(model, graph, interface, metadata, *, semanti
         validate_statement_protocols(model, graph, interface, metadata, semantic, language=language)
         from scar.analysis.static.lowering.source_string import validate_string_protocols
         validate_string_protocols(model, graph, interface, metadata, semantic, language=language)
-        from scar.analysis.static.lowering.source_mapping_lowering import validate_mapping_protocols
-        validate_mapping_protocols(model, graph, interface, metadata, semantic, language=language)
+        from scar.analysis.source_expression_validation import validate_mapping_protocols
+        validate_mapping_protocols(model, interface, semantic, operations=operations,
+                                   values=values, links=links, blocks=blocks, language=language)
     if language is not None:
         from scar.analysis.source_language import validate_language_body
         validate_language_body(model, graph, interface, metadata, semantic, language,
