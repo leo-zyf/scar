@@ -70,7 +70,7 @@ def method(cursor, unit):
     if ref:
         result["ref_qualifier"] = ref
     exception = cursor.exception_specification_kind.name
-    tokens = [t.spelling for t in cursor.get_tokens()]
+    tokens = [t.spelling for t in unit.facts.tokens(cursor)]
     # An omitted destructor exception specification is inferred from subobjects
     # by the target language. The compiler may resolve it later in another TU.
     if kind == "DESTRUCTOR" and "noexcept" not in tokens and "throw" not in tokens:
@@ -98,7 +98,7 @@ def record(cursor, unit):
             ty = _record_type(child.type, child, unit)
             if ty is None:
                 raise BindingError(child, "base class has no concrete object type")
-            virtual = any(t.spelling == "virtual" for t in child.get_tokens())
+            virtual = any(t.spelling == "virtual" for t in unit.facts.tokens(child))
             bases.append(dict(name=ty["name"], virtual=virtual))
         else:
             info = method(child, unit)
@@ -118,6 +118,10 @@ def _arguments(cursor, reader):
     return reader.arguments(cursor, cursor.referenced)
 
 
+def _parameters(declaration, reader):
+    return [reader.unit.param_info(p)["type"] for p in declaration.get_arguments()]
+
+
 def invoke(cursor, reader):
     kind = _kind(cursor)
     if kind != "CALL_EXPR" or not cursor.referenced:
@@ -133,6 +137,7 @@ def invoke(cursor, reader):
             op="object_construct",
             type=ty,
             args=_arguments(cursor, reader),
+            parameter_types=_parameters(declaration, reader),
             symbol=symbol,
         )
     info = method(declaration, reader.unit)
@@ -164,11 +169,12 @@ def invoke(cursor, reader):
             explicit=True,
             destructor=symbol,
         )
-    tokens = [t.spelling for t in member.get_tokens()]
+    tokens = [t.spelling for t in reader.unit.facts.tokens(member)]
     return dict(
         op="object_dispatch",
         receiver=receiver,
         args=_arguments(cursor, reader),
+        parameter_types=[p["type"] for p in info["params"]],
         owner=info["owner"],
         slot=info["slot"],
         symbol=symbol,
@@ -181,7 +187,7 @@ def allocation(cursor, reader):
     spec = _record_type(ty, cursor, reader.unit)
     if spec is None:
         return None
-    tokens = [t.spelling for t in cursor.get_tokens()]
+    tokens = [t.spelling for t in reader.unit.facts.tokens(cursor)]
     if "new" not in tokens or tokens[tokens.index("new") + 1 :][:1] == ["("]:
         raise BindingError(
             cursor, "placement allocation requires an explicit storage binding"
@@ -197,11 +203,16 @@ def allocation(cursor, reader):
         ),
         None,
     )
-    result = dict(op="object_new", type=spec, args=[], init_mode="default")
+    result = dict(
+        op="object_new", type=spec, args=[], parameter_types=[], init_mode="default"
+    )
     if call:
         construction = invoke(call, reader)
         result.update(
-            args=construction["args"], symbol=construction["symbol"], init_mode="value"
+            args=construction["args"],
+            parameter_types=construction["parameter_types"],
+            symbol=construction["symbol"],
+            init_mode="value",
         )
     end = min((i for i, t in enumerate(tokens) if t in {"(", "{"}), default=len(tokens))
     if "[" in tokens[:end]:
@@ -225,7 +236,7 @@ def deletion(cursor, reader):
     spec = _record_type(ty, cursor, reader.unit)
     if spec is None:
         return None
-    tokens = [t.spelling for t in cursor.get_tokens()]
+    tokens = [t.spelling for t in reader.unit.facts.tokens(cursor)]
     out = dict(
         op="object_destroy",
         value=reader.expression(children[0]),
@@ -266,6 +277,9 @@ def prepare(function, cursor, reader):
             continue
         if kind == "MEMBER_REF":
             pending = dict(kind="member", name=child.spelling)
+            field = child.referenced
+            if field and _kind(field) == "FIELD_DECL":
+                pending["parameter_types"] = [reader.unit.type_info(field.type, field)]
         elif kind == "TYPE_REF":
             ty = _record_type(child.type, child, reader.unit)
             if ty:
@@ -281,6 +295,7 @@ def prepare(function, cursor, reader):
             ):
                 _require(child.referenced, reader)
                 args = _arguments(child, reader)
+                pending["parameter_types"] = _parameters(child.referenced, reader)
             elif kind == "INIT_LIST_EXPR":
                 args = [
                     reader.expression(c)

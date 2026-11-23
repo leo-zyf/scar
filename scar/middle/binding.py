@@ -1,7 +1,12 @@
 """Resolve program entries and reconstruct executable operations from graph ports."""
 
 from collections import defaultdict
-from scar.contract import json_bytes, read_member
+from scar.contract import (
+    json_bytes,
+    read_member,
+    semantic_form as semantics,
+    walk_operations as _operations,
+)
 
 
 def _definition(graph):
@@ -26,34 +31,6 @@ def _definition(graph):
         return {key: read(field) for key, field in value.items()}
 
     return {**read(graph["signature"]), "body": read(graph["entry"])}
-
-
-def _abi_type(t):
-    if not isinstance(t, dict):
-        return t
-    if t["kind"] in {"const", "volatile"}:
-        return _abi_type(t["of"])
-    if t["kind"] in {"ptr", "ref"}:
-        return {"ptr": _abi_type(t["to"])}
-    return t
-
-
-def _abi(fn):
-    return [
-        _abi_type(fn["result"]),
-        [_abi_type(p["type"]) for p in fn["params"]],
-        bool(fn.get("variadic")),
-    ]
-
-
-def semantics(value):
-    if isinstance(value, dict):
-        return {
-            k: semantics(v) for k, v in value.items() if k not in {"location", "site"}
-        }
-    if isinstance(value, list):
-        return [semantics(v) for v in value]
-    return value
 
 
 def _global_definition(previous, current):
@@ -106,6 +83,12 @@ def _global_definition(previous, current):
     return previous
 
 
+def _parameter_identity(spec):
+    while isinstance(spec, dict) and spec.get("kind") in {"const", "volatile"}:
+        spec = spec["of"]
+    return spec
+
+
 def _record_definition(previous, current):
     if previous.get("opaque"):
         return current
@@ -123,7 +106,7 @@ def _record_definition(previous, current):
             def signature(m):
                 return {
                     **{k: v for k, v in m.items() if k not in {"params", "order"}},
-                    "params": [_abi_type(p["type"]) for p in m["params"]],
+                    "params": [_parameter_identity(p["type"]) for p in m["params"]],
                 }
 
             if signature(methods[name]) != signature(method):
@@ -138,18 +121,6 @@ def _record_definition(previous, current):
     }
 
 
-def _operations(value):
-    pending = [value]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, list):
-            pending.extend(item)
-        elif isinstance(item, dict):
-            if "op" in item:
-                yield item
-            pending.extend(item.values())
-
-
 def _function_pointer(spec):
     while isinstance(spec, dict) and spec["kind"] == "const":
         spec = spec["of"]
@@ -158,103 +129,6 @@ def _function_pointer(spec):
         if isinstance(pointee, dict) and pointee["kind"] == "function":
             return pointee
     return None
-
-
-def _discarded_scalar_result(
-    symbol, declarations, definition, functions, globals_, architecture
-):
-    if architecture != "x86_64" or definition["result"] != "void":
-        return None
-    integers = {prefix + str(bits) for prefix in ("i", "u") for bits in (8, 16, 32, 64)}
-    expected = _abi(definition)
-    for signature in declarations:
-        actual = _abi(signature)
-        if (
-            not isinstance(signature["result"], str)
-            or signature["result"] not in integers | {"void"}
-            or actual[1:] != expected[1:]
-        ):
-            return None
-    calls = 0
-    invalid = False
-
-    def visit(value, parent=None, field=None):
-        nonlocal calls, invalid
-        if isinstance(value, list):
-            for child in value:
-                visit(child)
-        elif isinstance(value, dict):
-            if value.get("op") == "function_ref" and value["name"] == symbol:
-                invalid = True
-            if value.get("op") == "call" and value["callee"] == symbol:
-                calls += 1
-                if not parent or parent.get("op") != "expr" or field != "value":
-                    invalid = True
-            for key, child in value.items():
-                visit(child, value, key)
-
-    visit([list(functions.values()), list(globals_.values())])
-    if invalid or not calls:
-        return None
-    return dict(
-        code="discarded_scalar_result_abi",
-        symbol=symbol,
-        classification="baseline_defect",
-        calls=calls,
-        proof="direct calls discard every result; no address escape; parameter ABI agrees; target x86_64 scalar return has no hidden result argument",
-        lowering="use the defined void result and preserve arguments and effects",
-    )
-
-
-def _bind_call_arguments(functions, externs, globals_, records):
-    """Make per-call reference/pointer ABI bindings explicit in executable IR."""
-    declarations = {**externs, **functions}
-    changes = []
-    for node in _operations(
-        [list(functions.values()), list(globals_.values()), records]
-    ):
-        if node["op"] == "cast" and node.get("conversion") == "legacy_string_pointer":
-            changes.append(
-                dict(
-                    code="explicit_legacy_string_binding",
-                    source_type=node["source_type"],
-                    target_type=node["type"],
-                    location=node.get("location"),
-                    proof="compiler-admitted literal binding; preserve static read-only storage with an explicit qualification conversion",
-                )
-            )
-        if node["op"] != "call" or "parameter_types" not in node:
-            continue
-        target = declarations.get(node["callee"])
-        if target is None:
-            continue
-        for index, (source, param) in enumerate(
-            zip(node["parameter_types"], target["params"])
-        ):
-            dest = param["type"]
-            if not isinstance(source, dict) or not isinstance(dest, dict):
-                continue
-            if source.get("kind") == "ref" and dest.get("kind") == "ptr":
-                node["args"][index] = dict(
-                    op="unary", operator="addr", value=node["args"][index]
-                )
-            elif source.get("kind") == "ptr" and dest.get("kind") == "ref":
-                node["args"][index] = dict(
-                    op="unary", operator="deref", value=node["args"][index]
-                )
-            else:
-                continue
-            changes.append(
-                dict(
-                    code="explicit_argument_binding",
-                    symbol=node["callee"],
-                    parameter=index,
-                    source_type=source,
-                    target_type=dest,
-                    proof="the callsite and definition share an ABI address; preserve the referred storage",
-                )
-            )
-    return changes
 
 
 def _close_callbacks(functions, externs, globals_, entry):
@@ -402,7 +276,7 @@ def _close_callbacks(functions, externs, globals_, entry):
     return issues
 
 
-def link(graph, folder):
+def bind(graph, folder):
     definitions = defaultdict(list)
     roots = {graph["entry"]}
     all_issues, records = [], {}
@@ -552,7 +426,7 @@ def link(graph, folder):
         issues.append(dict(code=code, symbol=symbol, detail=detail))
 
     signatures = defaultdict(list)
-    functions, globals_, externs = {}, {}, {}
+    functions, globals_, externs, state_evidence = {}, {}, {}, {}
     for unit in graph["units"]:
         payload = read_member(folder, unit["graph"])
         for decl in payload["externs"]:
@@ -587,6 +461,12 @@ def link(graph, folder):
                     )
                 else:
                     functions[name] = body
+                    state_evidence[name] = dict(
+                        graph_id=fn["id"],
+                        states=fn.get("states", {}),
+                        accesses=fn.get("accesses", []),
+                        state_flow=fn.get("state_flow"),
+                    )
     referenced_globals = {
         n["name"]
         for n in _operations(
@@ -609,7 +489,6 @@ def link(graph, folder):
         for m in r.get("methods", ())
         if m.get("defaulted") or m.get("implicit")
     }
-    baseline_defects = []
     for name in sorted(reachable):
         if name in functions:
             externs.pop(name, None)
@@ -623,28 +502,6 @@ def link(graph, folder):
                 name,
                 "reachable symbol requires a definition or external ABI",
             )
-        signatures_for_name = {json_bytes(_abi(sig)) for sig in signatures[name]}
-        if len(signatures_for_name) > 1:
-            witness = (
-                _discarded_scalar_result(
-                    name,
-                    signatures[name],
-                    functions[name],
-                    functions,
-                    globals_,
-                    graph.get("platform", {}).get("architecture"),
-                )
-                if name in functions
-                else None
-            )
-            if witness:
-                baseline_defects.append(witness)
-            else:
-                issue(
-                    "incompatible_abi",
-                    name,
-                    "parameter or result types differ across declarations",
-                )
     if graph["entry"] not in functions:
         issue(
             "missing_entry_body", graph["entry"], "no executable definition for entry"
@@ -678,12 +535,6 @@ def link(graph, folder):
             used_records.update(b["name"] for b in record.get("bases", ()))
     issues.extend(d for d in layout_issues if d["symbol"] in used_records)
     issues.extend(_close_callbacks(functions, externs, globals_, graph["entry"]))
-    normalizations = _bind_call_arguments(
-        functions,
-        externs,
-        globals_,
-        [r for name, r in records.items() if name in used_records],
-    )
     issues = list({json_bytes(d): d for d in issues}.values())
     return (
         dict(
@@ -692,8 +543,27 @@ def link(graph, folder):
             globals=list(globals_.values()),
             externs=list(externs.values()),
             records=[r for name, r in records.items() if name in used_records],
-            baseline_defects=baseline_defects,
-            normalizations=normalizations,
+            state_evidence=state_evidence,
+            declarations={
+                name: [
+                    dict(
+                        name=name,
+                        result=s["result"],
+                        params=s["params"],
+                        variadic=bool(s.get("variadic")),
+                    )
+                    for s in rows
+                ]
+                for name, rows in signatures.items()
+            },
+            abi_environment=dict(
+                architecture=graph.get("platform", {}).get("architecture")
+            ),
+            resource_model=dict(
+                resources=graph.get("resources", []),
+                topology=graph.get("topology", []),
+                platform=graph.get("platform", {}),
+            ),
         ),
         issues,
         len(reachable),

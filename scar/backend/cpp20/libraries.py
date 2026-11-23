@@ -2,6 +2,8 @@
 
 import re
 
+from .model import Attribute, Decl, Expr, Type, call
+
 _STANDARD_HEADERS = {
     "stdio.h": set(
         "printf fprintf sprintf snprintf vfprintf vprintf vsnprintf vsprintf scanf fscanf sscanf puts putchar getchar "
@@ -174,28 +176,6 @@ _RECORD_HEADERS = {
     "fd_set": "sys/select.h",
 }
 
-_PREDICATES = """template<class A, class R> struct unary_function_pointer {
-    using argument_type = A;
-    using result_type = R;
-    R (*function)(A);
-    R operator()(A value) const { return function(value); }
-};
-template<class A, class B, class R> struct binary_function_pointer {
-    using first_argument_type = A;
-    using second_argument_type = B;
-    using result_type = R;
-    R (*function)(A, B);
-    R operator()(A a, B b) const { return function(a, b); }
-};
-template<class A, class R> auto legacy_function(R (*f)(A)) { return unary_function_pointer<A,R>{f}; }
-template<class A, class B, class R> auto legacy_function(R (*f)(A,B)) { return binary_function_pointer<A,B,R>{f}; }
-template<class P> struct unary_negation {
-    using argument_type = typename P::argument_type;
-    using result_type = bool;
-    P predicate;
-    bool operator()(const argument_type& value) const { return !predicate(value); }
-};
-template<class P> auto legacy_not(const P& f) { return unary_negation<P>{f}; }"""
 _LEGACY_TYPES = {
     "unary_negate": "unary_negation",
     "pointer_to_unary_function": "unary_function_pointer",
@@ -208,65 +188,33 @@ class Libraries:
         self.headers = set()
         self.links = set()
         self.declarations = {}
-        self.helpers = set()
 
     def format_operator(self, decl, args):
-        """Preserve libc format interpretation for a dynamic format and no operands."""
-        signatures = {
-            "printf": ([], []),
-            "fprintf": (["FILE* sink"], ["sink"]),
-            "sprintf": (["char* out"], ["out"]),
-            "snprintf": (["char* out", "std::size_t limit"], ["out", "limit"]),
-        }
+        """Select the target's checked dynamic-format entry point."""
+        counts = {"printf": 1, "fprintf": 2, "sprintf": 2, "snprintf": 3}
         name = decl["name"]
-        if decl.get("provider") != "libc" or name not in signatures:
-            return None
-        declarations, names = signatures[name]
-        if len(args) != len(names) + 1:
+        if decl.get("provider") != "libc" or counts.get(name) != len(args):
             return None
         fmt = args[-1]
         while fmt["op"] == "cast":
             fmt = fmt["value"]
-        if fmt["op"] == "string":
-            return None
-        self.headers.update(("stdio.h", "cstdarg"))
-        parameters = ", ".join([*declarations, "const char* format"])
-        target = "dynamic_" + name
-        if name in ("sprintf", "snprintf"):
-            sizes = [*declarations, "std::size_t capacity", "const char* format"]
-            normal = ", ".join([*names, "format", "ap"])
-            checked = ", ".join(
-                [*names, "__USE_FORTIFY_LEVEL - 1", "capacity", "format", "ap"]
-            )
-            source = f"""inline int {target}_va({', '.join(sizes)}, ...) {{
-    std::va_list ap;
-    va_start(ap, format);
-#if defined(__GLIBC__) && __USE_FORTIFY_LEVEL > 0
-    int result = ::__v{name}_chk({checked});
-#else
-    int result = ::v{name}({normal});
-#endif
-    va_end(ap);
-    return result;
-}}
-[[gnu::always_inline]] inline int {target}({parameters}) {{
-#if defined(__GLIBC__) && __USE_FORTIFY_LEVEL > 0
-    auto capacity = __glibc_objsize(out);
-#else
-    auto capacity = std::size_t{{0}};
-#endif
-    return {target}_va({', '.join([*names, 'capacity', 'format'])});
-}}"""
-        else:
-            source = f"""inline int {target}({parameters}, ...) {{
-    std::va_list ap;
-    va_start(ap, format);
-    int result = ::v{name}({', '.join([*names, 'format', 'ap'])});
-    va_end(ap);
-    return result;
-}}"""
-        self.helpers.add(source)
-        return "scar::" + target
+        return None if fmt["op"] == "string" else "scar::dynamic_" + name
+
+    def prototype(
+        self, symbol, result, params, *, variadic=False, noexcept=False, noreturn=False
+    ):
+        self.declarations[symbol] = (
+            Decl(
+                "function",
+                name=symbol,
+                type=result,
+                params=tuple(Decl("param", type=ty) for ty in params)
+                + ((Decl("param", definition="variadic"),) if variadic else ()),
+                linkage="C",
+                qualifiers=("noexcept",) if noexcept else (),
+                attributes=(Attribute("noreturn"),) if noreturn else (),
+            ),
+        )
 
     def function(self, decl, spell_type):
         symbol = decl["name"]
@@ -279,9 +227,12 @@ class Libraries:
                 or decl.get("variadic")
             ):
                 raise ValueError("invalid glibc assertion failure interface")
-            self.declarations[symbol] = (
-                'extern "C" [[noreturn]] void __assert_fail(const char*, const char*, '
-                "unsigned int, const char*) noexcept;"
+            self.prototype(
+                symbol,
+                Type("name", name="void"),
+                [spell_type(p["type"]) for p in decl["params"]],
+                noexcept=True,
+                noreturn=True,
             )
             return "::" + symbol
         if provider == "libgfortran" and symbol in _GNU_IO:
@@ -309,7 +260,7 @@ class Libraries:
                 required = ["ptr", "ptr", length]
             if layout != required or decl.get("variadic") or decl["result"] != "void":
                 raise ValueError(f"invalid GNU I/O procedure interface {symbol}")
-            self.declarations[symbol] = f'extern "C" void {symbol}({", ".join(types)});'
+            self.prototype(symbol, Type("name", name="void"), types)
             self.links.add("libgfortran.so.5")
             return "::" + symbol
         if provider == "libc" and re.fullmatch(
@@ -325,9 +276,7 @@ class Libraries:
             ):
                 raise ValueError(f"invalid glibc scanning interface {symbol}")
             types = [spell_type(p["type"]) for p in decl["params"]]
-            self.declarations[symbol] = (
-                f'extern "C" int {symbol}({", ".join([*types, "..."])});'
-            )
+            self.prototype(symbol, Type("name", name="int"), types, variadic=True)
             return "::" + symbol
         routine = symbol.removeprefix("__isoc23_")
         if provider == "libc" and symbol != routine and routine in _C23_CONVERSIONS:
@@ -344,10 +293,31 @@ class Libraries:
             ):
                 raise ValueError(f"invalid glibc integer conversion interface {symbol}")
             result, logical_type = _C23_CONVERSIONS[routine], spell_type(decl["result"])
-            self.declarations[symbol] = (
-                f'extern "C" {result} {symbol}(const char*, char**, int) noexcept;\n'
-                f"static_assert(sizeof({result}) == sizeof({logical_type}) && "
-                f"std::is_signed_v<{result}> == std::is_signed_v<{logical_type}>);"
+            target = Type("name", name=result)
+            self.prototype(
+                symbol, target, [spell_type(t) for t in expected], noexcept=True
+            )
+            size = Expr(
+                "binary",
+                operator="==",
+                args=(
+                    Expr("sizeof_type", type=target),
+                    Expr("sizeof_type", type=logical_type),
+                ),
+            )
+            sign = Expr(
+                "binary",
+                operator="==",
+                args=tuple(
+                    Expr("template_name", name="std::is_signed_v", args=(t,))
+                    for t in (target, logical_type)
+                ),
+            )
+            self.declarations[symbol] += (
+                Decl(
+                    "static_assert",
+                    initializer=Expr("binary", operator="&&", args=(size, sign)),
+                ),
             )
             return "::" + symbol
         if symbol in _HEADER_BY_FUNCTION and provider in (None, "libc", "libm"):
@@ -377,11 +347,20 @@ class Libraries:
             return None
         if provider == "libc" and symbol in _RECORD_HEADERS:
             self.headers.add(_RECORD_HEADERS[symbol])
-            return ("struct ::" if symbol == "sigaction" else "::") + symbol
+            return Type(
+                "tagged" if symbol == "sigaction" else "name", name="::" + symbol
+            )
         if provider == "mpi" and symbol and _IDENTIFIER.fullmatch(symbol):
             self.links.add("MPI")
             self.headers.add("mpi.h")
-            return "::MPI_Status" if symbol == "ompi_status_public_t" else "::" + symbol
+            return Type(
+                "name",
+                name=(
+                    "::MPI_Status"
+                    if symbol == "ompi_status_public_t"
+                    else "::" + symbol
+                ),
+            )
         raise ValueError(f"no target binding for opaque record {record['name']!r}")
 
     def field(self, provider, record, field):
@@ -419,138 +398,160 @@ class Libraries:
             and not spec.get("args")
         ):
             self.headers.add("cstdarg")
-            return "std::va_list"
+            return Type("name", name="std::va_list")
         if spec.get("provider") != "cxx_standard":
             raise ValueError(f"no target operator library for {spec.get('provider')!r}")
         name = spec["name"]
-        args = [spell_type(t) for t in spec.get("args", ())]
+        args = tuple(spell_type(t) for t in spec.get("args", ()))
         if name in _LEGACY_TYPES:
-            self.helpers.add(_PREDICATES)
-            return f"scar::{_LEGACY_TYPES[name]}<{', '.join(args)}>"
+            return Type("template", name="scar::" + _LEGACY_TYPES[name], args=args)
         if name in _STREAM_ENUMS and not args:
             self.headers.add("ios")
-            return "std::ios_base::" + _STREAM_ENUMS[name]
+            return Type("name", name="std::ios_base::" + _STREAM_ENUMS[name])
         if name in ("iterator", "const_iterator") and len(args) == 1:
-            return f"typename {args[0]}::{name}"
+            return Type("member", parent=args[0], name=name)
         for family in ("map", "vector", "string"):
             if name in (f"{family}_iterator", f"{family}_const_iterator"):
                 self.headers.add(family)
-                type_name = "basic_string" if family == "string" else family
-                iterator = name[len(family) + 1 :]
-                return f"typename std::{type_name}<{', '.join(args)}>::{iterator}"
+                owner = Type(
+                    "template",
+                    name="std::" + ("basic_string" if family == "string" else family),
+                    args=args,
+                )
+                return Type("member", parent=owner, name=name[len(family) + 1 :])
         if name not in _TYPE_HEADERS:
             raise ValueError(f"no target binding for standard library type {name!r}")
         self.headers.add(_TYPE_HEADERS[name])
-        return f"std::{name}<{', '.join(args)}>"
+        return Type("template", name="std::" + name, args=args)
 
     def cpp_expression(self, expr, expression, spell_type):
         op = expr["op"]
+
         if op == "library_value":
             if expr.get("provider") != "cxx_standard":
-                raise ValueError(
-                    "value materialization requires a verified target provider"
-                )
+                raise ValueError("unbound library value")
             value = expression(expr["value"])
             if expr["mode"] == "qualify":
                 return value
             if expr["mode"] == "copy":
-                return f"std::decay_t<decltype(({value}))>({value})"
-            raise ValueError(f"unsupported library value construction {expr['mode']!r}")
+                ty = Type(
+                    "template",
+                    name="std::decay_t",
+                    args=(Type("decltype", args=(value,)),),
+                )
+                return Expr("construct", type=ty, args=(value,), qualifier="paren")
+            raise ValueError(f"unsupported value construction {expr['mode']!r}")
         if op == "variadic":
             self.headers.add("cstdarg")
             name, value = expr["name"], expression(expr["list"])
-            if name == "start" and expr["last"].get("op") == "var":
-                return f"va_start({value}, {expression(expr['last'])})"
+            if name == "start" and expr["last"]["op"] == "var":
+                return call("va_start", value, expression(expr["last"]))
             if name == "end":
-                return f"va_end({value})"
+                return call("va_end", value)
             if name == "copy":
-                return f"va_copy({value}, {expression(expr['source'])})"
+                return call("va_copy", value, expression(expr["source"]))
             if name == "arg":
-                # decltype's parentheses protect template commas from the macro.
                 ty = spell_type(expr["type"])
-                return f"va_arg({value}, typename decltype(std::type_identity<{ty}>{{}})::type)"
-            raise ValueError(f"unsupported variadic ABI operation {name!r}")
+                identity = Expr(
+                    "construct",
+                    type=Type("template", name="std::type_identity", args=(ty,)),
+                    args=(),
+                    qualifier="brace",
+                )
+                return call(
+                    "va_arg",
+                    value,
+                    Type(
+                        "member", parent=Type("decltype", args=(identity,)), name="type"
+                    ),
+                )
+            raise ValueError(f"unsupported variadic operation {name!r}")
         if op == "library_construct":
             ty = expr["type"]
-            if not isinstance(ty, dict) or ty.get("kind") != "library":
-                raise ValueError(
-                    "library construction requires a declared library value type"
-                )
-            args = ", ".join(map(expression, expr.get("args", ())))
-            target = spell_type(ty)
+            if not isinstance(ty, dict) or ty["kind"] != "library":
+                raise ValueError("library construction requires a declared type")
             form = expr.get("form", "paren")
-            if form == "list":
-                return f"{target}{{{args}}}"
-            if form not in ("paren", "value"):
-                raise ValueError(f"unsupported library construction form {form!r}")
-            return f"{target}({args})"
-        if expr.get("provider") != "cxx_standard":
-            raise ValueError(
-                f"no target binding for operator provider {expr.get('provider')!r}"
+            if form not in ("list", "paren", "value"):
+                raise ValueError(f"unsupported construction form {form!r}")
+            return Expr(
+                "construct",
+                type=spell_type(ty),
+                args=tuple(map(expression, expr.get("args", ()))),
+                qualifier="brace" if form == "list" else "paren",
             )
+        if expr.get("provider") != "cxx_standard":
+            raise ValueError(f"unknown library {expr.get('provider')}")
         name = expr["name"]
         if op == "library_member":
             if name not in ("first", "second"):
-                raise ValueError(f"no standard library field {name!r}")
-            return f"({expression(expr['receiver'])}).{name}"
+                raise ValueError(f"unsupported library member {name}")
+            return Expr("member", args=(expression(expr["receiver"]),), name=name)
         if op == "library_ref":
             if name == "npos":
                 owner = expr.get("owner", expr.get("type"))
                 if not isinstance(owner, dict) or owner.get("name") != "basic_string":
-                    raise ValueError("npos requires a typed standard string owner")
-                return spell_type(owner) + "::npos"
+                    raise ValueError("npos requires a string owner")
+                return Expr("type_member", type=spell_type(owner), name="npos")
             if name in ("cout", "cerr", "cin", "clog") or name in _MANIPULATORS:
                 self.headers.add("iostream")
-                return "std::" + name
+                return Expr("name", name="std::" + name)
             if name.startswith("ios_") and name[4:] in _STREAM_CONSTANTS:
                 self.headers.add("ios")
-                return "std::ios_base::" + name[4:]
-            raise ValueError(
-                f"no target binding for standard library reference {name!r}"
-            )
-        args = [expression(a) for a in expr["args"]]
+                return Expr("name", name="std::ios_base::" + name[4:])
+            raise ValueError(f"unsupported library reference {name!r}")
+        args = tuple(map(expression, expr["args"]))
         receiver = (
             expression(expr["receiver"]) if expr.get("receiver") is not None else None
         )
         if name.startswith("operator"):
-            operands = [receiver, *args] if receiver is not None else args
+            values = (receiver, *args) if receiver is not None else args
             token = name[len("operator") :].strip()
-            if token == "bool" and len(operands) == 1:
-                return f"static_cast<bool>({operands[0]})"
-            if token not in _OPERATORS or not operands:
-                raise ValueError(f"unsupported standard library operator {name!r}")
-            left, rest = operands[0], operands[1:]
-            if token == "[]":
-                if len(rest) == 1:
-                    return f"({left})[{rest[0]}]"
-            elif token == "()":
-                return f"({left})({', '.join(rest)})"
-            elif token == "->":
+            if token == "bool" and len(values) == 1:
+                return Expr(
+                    "cast",
+                    operator="static",
+                    type=Type("name", name="bool"),
+                    args=values,
+                )
+            if token not in _OPERATORS or not values:
+                raise ValueError(f"unsupported operator {token!r}")
+            left, *rest = values
+            if token == "[]" and len(rest) == 1:
+                return Expr("subscript", args=values)
+            if token == "()":
+                return call(left, *rest)
+            if token == "->" and not rest:
+                return call(Expr("member", args=(left,), name="operator->"))
+            if token in ("++", "--"):
                 if not rest:
-                    return f"({left}).operator->()"
-            elif token in ("++", "--"):
-                if not rest:
-                    return f"({token}({left}))"
+                    return Expr("unary", operator=token, args=(left,))
                 if len(rest) == 1:
-                    if receiver is not None:
-                        return f"({left}).operator{token}({rest[0]})"
-                    return f"operator{token}({left}, {rest[0]})"
-            elif not rest and token in ("+", "-", "*", "&", "!", "~"):
-                return f"({token}({left}))"
-            elif len(rest) == 1 and token not in ("!", "~"):
-                return f"(({left}) {token} ({rest[0]}))"
-            raise ValueError(f"invalid arity for standard library operator {name!r}")
+                    return (
+                        call(Expr("member", args=(left,), name=name), *rest)
+                        if receiver is not None
+                        else call(name, *values)
+                    )
+            if not rest and token in ("+", "-", "*", "&", "!", "~"):
+                return Expr("unary", operator=token, args=(left,))
+            if len(rest) == 1 and token not in ("!", "~", "[]", "->"):
+                return Expr("binary", operator=token, args=values)
+            raise ValueError(f"invalid arity for operator {token!r}")
         if receiver is not None and name in _MEMBERS:
-            return f"({receiver}).{name}({', '.join(args)})"
+            return call(Expr("member", args=(receiver,), name=name), *args)
         if receiver is None and name in _FREE_HEADERS:
             self.headers.add(_FREE_HEADERS[name])
-            target = f"std::{name}"
-            if name in ("ptr_fun", "not1"):
-                self.helpers.add(_PREDICATES)
-                target = (
-                    "scar::legacy_function" if name == "ptr_fun" else "scar::legacy_not"
+            symbol = {
+                "ptr_fun": "scar::legacy_function",
+                "not1": "scar::legacy_not",
+            }.get(name, "std::" + name)
+            target = (
+                Expr(
+                    "template_name",
+                    name=symbol,
+                    args=tuple(map(spell_type, expr["template_args"])),
                 )
-            if expr.get("template_args"):
-                target += "<" + ", ".join(map(spell_type, expr["template_args"])) + ">"
-            return f"{target}({', '.join(args)})"
-        raise ValueError(f"no target binding for standard library operation {name!r}")
+                if expr.get("template_args")
+                else Expr("name", name=symbol)
+            )
+            return call(target, *args)
+        raise ValueError(f"no binding for library operation {name!r}")

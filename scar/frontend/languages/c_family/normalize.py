@@ -1,56 +1,10 @@
-"""Map Clang's typed declarations and expressions into SCAR operation regions."""
+"""F2 C/C++ normalization from a captured compiler semantic unit to SCAR operations."""
 
-import ast
-import ctypes
-from ctypes.util import find_library
-from functools import lru_cache
 import hashlib
-import math
-import os
-from pathlib import Path
+from pathlib import PurePath
 
-from . import cxx_library, cxx_objects
-
-
-@lru_cache(maxsize=1)
-def _clang():
-    from clang import cindex
-
-    if not cindex.Config.loaded:
-        library = os.environ.get("SCAR_LIBCLANG") or find_library("clang-18")
-        if library:
-            cindex.Config.set_library_file(library)
-    lib = cindex.conf.lib
-    # These semantic queries are in libclang 18 but absent from its Python wrapper.
-    extensions = {
-        "clang_Cursor_getVarDeclInitializer": (cindex.Cursor, [cindex.Cursor]),
-        "clang_getCursorBinaryOperatorKind": (ctypes.c_int, [cindex.Cursor]),
-        "clang_getCursorUnaryOperatorKind": (ctypes.c_int, [cindex.Cursor]),
-        "clang_getBinaryOperatorKindSpelling": (cindex._CXString, [ctypes.c_int]),
-        "clang_Cursor_Evaluate": (ctypes.c_void_p, [cindex.Cursor]),
-        "clang_EvalResult_getKind": (ctypes.c_int, [ctypes.c_void_p]),
-        "clang_EvalResult_isUnsignedInt": (ctypes.c_uint, [ctypes.c_void_p]),
-        "clang_EvalResult_getAsUnsigned": (ctypes.c_ulonglong, [ctypes.c_void_p]),
-        "clang_EvalResult_getAsLongLong": (ctypes.c_longlong, [ctypes.c_void_p]),
-        "clang_EvalResult_getAsDouble": (ctypes.c_double, [ctypes.c_void_p]),
-        "clang_EvalResult_dispose": (None, [ctypes.c_void_p]),
-        "clang_getPresumedLocation": (
-            None,
-            [
-                cindex.SourceLocation,
-                ctypes.POINTER(cindex._CXString),
-                ctypes.POINTER(ctypes.c_uint),
-                ctypes.POINTER(ctypes.c_uint),
-            ],
-        ),
-    }
-    for name, (result, args) in extensions.items():
-        function = getattr(lib, name)
-        function.argtypes = args
-        function.restype = result
-    lib.clang_Cursor_getVarDeclInitializer.errcheck = cindex.Cursor.from_result
-    lib.clang_getBinaryOperatorKindSpelling.errcheck = cindex._CXString.from_result
-    return cindex
+from . import objects, standard_library
+from .facts import ParsedUnit, cursor_kind as _kind
 
 
 class _Unsupported(Exception):
@@ -63,7 +17,7 @@ class _Unsupported(Exception):
 def _object(rule, *args):
     try:
         return rule(*args)
-    except cxx_objects.BindingError as error:
+    except objects.BindingError as error:
         raise _Unsupported(error.cursor, "object.protocol", str(error)) from error
 
 
@@ -158,23 +112,11 @@ _SDK_FORWARD_HEADERS = {
 }
 
 
-def _kind(cursor):
-    try:
-        return cursor.kind.name
-    except ValueError:
-        return f"CURSOR_{cursor._kind_id}"
-
-
-@lru_cache(maxsize=8192)
-def _source(root, filename):
-    return (root / filename).resolve()
-
-
 def _provider(cursor):
     loc = cursor.location
     if not loc.file:
         return None
-    path = Path(loc.file.name)
+    path = PurePath(loc.file.name)
     if path.name in {"mpi.h", "mpio.h"} and (
         loc.is_in_system_header or "openmpi" in path.parts
     ):
@@ -198,7 +140,7 @@ def _provider(cursor):
 
 
 def _public_header(cursor):
-    name = Path(cursor.location.file.name)
+    name = PurePath(cursor.location.file.name)
     if name.name in _SDK_FORWARD_HEADERS:
         return _SDK_FORWARD_HEADERS[name.name]
     if name.parent.name == "sys":
@@ -312,8 +254,10 @@ def _type(original, cursor, records):
     library = None
     if kind in {"RECORD", "ENUM"}:
         try:
-            library = cxx_library.wire_type(source, lambda t: _type(t, cursor, records))
-        except cxx_library.BindingError as error:
+            library = standard_library.wire_type(
+                source, lambda t: _type(t, cursor, records)
+            )
+        except standard_library.BindingError as error:
             raise _Unsupported(cursor, "library.type", str(error)) from error
     if library:
         result = library
@@ -365,7 +309,7 @@ def _type(original, cursor, records):
         opaque = {"name": name, "opaque": True}
         where = record.location
         if where.file:
-            header = Path(where.file.name)
+            header = PurePath(where.file.name)
             if (
                 where.is_in_system_header
                 and header.name in {"struct_FILE.h", "FILE.h", "__FILE.h", "stdio.h"}
@@ -414,55 +358,11 @@ def _param_type(cursor, records):
     return _type(t, cursor, records)
 
 
-def _number(cursor):
-    lib = _clang().conf.lib
-    evaluated = lib.clang_Cursor_Evaluate(cursor)
-    if evaluated:
-        try:
-            kind = lib.clang_EvalResult_getKind(evaluated)
-            if kind == 1:
-                if lib.clang_EvalResult_isUnsignedInt(evaluated):
-                    return lib.clang_EvalResult_getAsUnsigned(evaluated)
-                return lib.clang_EvalResult_getAsLongLong(evaluated)
-            if kind == 2 and cursor.type.get_canonical().kind.name in {
-                "FLOAT",
-                "DOUBLE",
-            }:
-                value = lib.clang_EvalResult_getAsDouble(evaluated)
-                if math.isfinite(value):
-                    return value
-        finally:
-            lib.clang_EvalResult_dispose(evaluated)
-    raise _Unsupported(
-        cursor,
-        "literal.representation",
-        f"no exact constant representation for {_kind(cursor)}",
-    )
-
-
-def _string(cursor):
-    spelling = cursor.spelling
-    if spelling.startswith('"'):
-        try:
-            raw = ast.literal_eval("b" + spelling.replace(r"\?", "?"))
-            if isinstance(raw, bytes) and len(raw) + 1 <= cursor.type.get_array_size():
-                return raw.decode("utf-8")
-        except (ValueError, SyntaxError, UnicodeError):
-            pass
-    raise _Unsupported(
-        cursor,
-        "literal.string_encoding",
-        "string literal requires an explicit byte or wide-character representation",
-    )
-
-
 class _Unit:
-    def __init__(self, path, root, flags):
-        self.path = path
-        self.root = root
-        relative = path.relative_to(root).as_posix()
+    def __init__(self, facts: ParsedUnit):
+        self.facts = facts
         self.unit_tag = hashlib.sha256(
-            "\0".join((relative, *flags)).encode()
+            "\0".join((facts.source_name, *facts.flags)).encode()
         ).hexdigest()[:16]
         self.functions = {}
         self.externs = {}
@@ -473,52 +373,40 @@ class _Unit:
         self.pending_functions = {}
         self.expanded_records = set()
         self.methods = {}
-        self.macros = {}
-        self.flags = flags
-        self.diagnostics = []
+        self.diagnostics = list(facts.diagnostics)
 
-    def macro(self, cursor):
-        if cursor.spelling not in {"va_arg", "assert"} or not cursor.location.file:
-            return
-        decl = cursor.referenced
-        if not decl or not decl.location.file or not decl.location.is_in_system_header:
-            return
-        public_header = Path(decl.location.file.name).name
-        if cursor.spelling == "va_arg" and public_header in {
+    def macro_at(self, cursor):
+        declaration = self.facts.macro(cursor)
+        if (
+            not declaration
+            or not declaration.location.file
+            or not declaration.location.is_in_system_header
+        ):
+            return None
+        header = PurePath(declaration.location.file.name).name
+        if declaration.spelling == "assert" and header == "assert.h":
+            return "assert"
+        if declaration.spelling == "va_arg" and header in {
             "stdarg.h",
             "__stdarg_va_arg.h",
         }:
-            if "__builtin_va_arg" in {t.spelling for t in decl.get_tokens()}:
-                self.macros[(cursor.location.file.name, cursor.location.offset)] = (
-                    "va_arg"
-                )
-        elif cursor.spelling == "assert" and public_header == "assert.h":
-            self.macros[(cursor.location.file.name, cursor.location.offset)] = "assert"
-
-    def macro_at(self, cursor):
-        loc = cursor.location
-        return self.macros.get((loc.file.name, loc.offset)) if loc.file else None
+            if any(
+                t.spelling == "__builtin_va_arg" for t in self.facts.tokens(declaration)
+            ):
+                return "va_arg"
+        return None
 
     def assertion_file(self, cursor):
         if any(
             f.startswith(("-fmacro-prefix-map=", "-ffile-prefix-map="))
-            for f in self.flags
+            for f in self.facts.flags
         ):
             raise _Unsupported(
                 cursor,
                 "literal.file_remap",
                 "assertion file requires the compiler's remapped path",
             )
-        clang = _clang()
-        file = clang._CXString()
-        line, column = ctypes.c_uint(), ctypes.c_uint()
-        clang.conf.lib.clang_getPresumedLocation(
-            cursor.location,
-            ctypes.byref(file),
-            ctypes.byref(line),
-            ctypes.byref(column),
-        )
-        return {"op": "string", "value": clang.conf.lib.clang_getCString(file)}
+        return {"op": "string", "value": self.facts.presumed_filename(cursor)}
 
     def type_info(self, t, cursor):
         return _type(t, cursor, self.records)
@@ -533,9 +421,7 @@ class _Unit:
         return {"name": cursor.spelling, "type": _param_type(cursor, self.records)}
 
     def require(self, cursor):
-        if not cursor.location.file or not _source(
-            self.root, cursor.location.file.name
-        ).is_relative_to(self.root):
+        if not self.facts.owns(cursor.location):
             return
         definition = cursor.get_definition()
         if definition:
@@ -602,17 +488,7 @@ class _Unit:
                 record["methods"] = list(declared.values())
 
     def location(self, location):
-        filename = location.file.name if location.file else str(self.path)
-        path = _source(self.root, filename)
-        return {
-            "file": (
-                str(path.relative_to(self.root))
-                if path.is_relative_to(self.root)
-                else filename
-            ),
-            "line": location.line,
-            "column": location.column,
-        }
+        return self.facts.location(location)
 
     def diagnostic(self, error, symbol=None):
         self.diagnostics.append(
@@ -650,7 +526,7 @@ class _Unit:
             "result": result,
             "location": self.location(cursor.location),
         }
-        method = _object(cxx_objects.method, cursor, self)
+        method = _object(objects.method, cursor, self)
         if method:
             sig["method"] = method
             self.methods.setdefault(method["owner"], {})[method["symbol"]] = method
@@ -719,7 +595,8 @@ class _Unit:
         children = list(cursor.get_children())
         for child in children:
             if child.kind.is_attribute() and any(
-                t.spelling in {"constructor", "destructor"} for t in child.get_tokens()
+                t.spelling in {"constructor", "destructor"}
+                for t in self.facts.tokens(child)
             ):
                 self.diagnostic(
                     _Unsupported(
@@ -734,7 +611,7 @@ class _Unit:
                 reader.local(parameter)
             declaration["body"] = reader.statements(blocks[0])
             try:
-                _object(cxx_objects.prepare, declaration, cursor, reader)
+                _object(objects.prepare, declaration, cursor, reader)
             except _Unsupported as error:
                 reader.errors.append(error)
             if name == "main" and (
@@ -763,7 +640,7 @@ class _Unit:
                 self.diagnostic(error, name)
             reader.collect_calls(cursor)
         declaration["calls"] = sorted(reader.calls)
-        pattern = _clang().conf.lib.clang_getSpecializedCursorTemplate(cursor)
+        pattern = self.facts.template_pattern(cursor)
         if pattern:
             declaration["specializes"] = self.template(pattern)
         self.functions[name] = declaration
@@ -795,12 +672,10 @@ class _Unit:
                         "offset_bits": field.get_field_offsetof(),
                     }
                 )
-                tokens = list(field.get_tokens())
+                tokens = list(self.facts.tokens(field))
                 # Keep aggregate/array bounds separate from the default initializer.
                 following = [
-                    t.spelling
-                    for t in tokens
-                    if t.location.offset > field.location.offset
+                    t.spelling for t in tokens if t.offset > field.location.offset
                 ]
                 depth = 0
                 for token in following:
@@ -827,7 +702,7 @@ class _Unit:
                 "align_bytes": cursor.type.get_align(),
                 "standard_layout": True if cursor.type.is_pod() else None,
             }
-            metadata = _object(cxx_objects.record, cursor, self)
+            metadata = _object(objects.record, cursor, self)
             if (
                 metadata["bases"]
                 or any(m["virtual"] for m in metadata["methods"])
@@ -844,9 +719,7 @@ class _Unit:
             if _kind(child) in _FUNCTIONS | _RECORDS:
                 self.declaration(child)
             elif (
-                _kind(child) == "VAR_DECL"
-                and _clang().conf.lib.clang_Cursor_getVarDeclInitializer(child)
-                is not None
+                _kind(child) == "VAR_DECL" and self.facts.initializer(child) is not None
             ):
                 # An in-class static/constexpr initializer is a definition for
                 # value use. Preserve its identity across translation units.
@@ -855,7 +728,7 @@ class _Unit:
     def declaration(self, cursor):
         kind = _kind(cursor)
         loc = cursor.location
-        if loc.file and not _source(self.root, loc.file.name).is_relative_to(self.root):
+        if loc.file and not self.facts.owns(loc):
             return
         if kind in _SCOPES:
             for child in cursor.get_children():
@@ -910,7 +783,7 @@ class _Body:
                 _kind(node) == "CALL_EXPR"
                 and node.referenced
                 and _kind(node.referenced) in _FUNCTIONS
-                and not cxx_library.is_standard(node.referenced)
+                and not standard_library.is_standard(node.referenced)
             ):
                 self.calls.add(_symbol(node.referenced, self.unit.unit_tag))
 
@@ -952,7 +825,7 @@ class _Body:
             if element_type.get("kind") == "const":
                 element_type = element_type["of"]
             if element_type.get("kind") != "library":
-                lifetime = _object(cxx_objects.lifetime, element, self)
+                lifetime = _object(objects.lifetime, element, self)
                 if not lifetime:
                     raise _Unsupported(
                         cursor,
@@ -965,7 +838,7 @@ class _Body:
             )
         if cursor.storage_class.name == "STATIC" and name is None:
             row["storage"] = "static"
-        initializer = _clang().conf.lib.clang_Cursor_getVarDeclInitializer(cursor)
+        initializer = self.unit.facts.initializer(cursor)
         if initializer is not None:
             if (
                 ty == _va_interface()
@@ -981,8 +854,8 @@ class _Body:
                 and initializer.location.offset == cursor.location.offset
                 and not any(
                     t.spelling in {"(", "{", "="}
-                    for t in cursor.get_tokens()
-                    if t.location.offset > cursor.location.offset
+                    for t in self.unit.facts.tokens(cursor)
+                    if t.offset > cursor.location.offset
                 )
             ):
                 # A bare declaration default-initializes each element. Its
@@ -1004,7 +877,7 @@ class _Body:
     def reference(self, cursor):
         declaration = cursor.referenced
         kind = _kind(declaration) if declaration else ""
-        public = cxx_library.reference(
+        public = standard_library.reference(
             declaration, lambda t: self.unit.type_info(t, cursor)
         )
         if public:
@@ -1040,9 +913,28 @@ class _Body:
                 if header_provider:
                     external["provider"] = header_provider
                 self.unit.globals.setdefault(name, external)
-        else:
-            name = self.local(declaration)
-        return {"op": "var", "name": name}
+            return {"op": "var", "name": name, "scope": "global"}
+        return {"op": "var", "name": self.local(declaration)}
+
+    def number(self, cursor):
+        result = self.unit.facts.number(cursor)
+        if result is None:
+            raise _Unsupported(
+                cursor,
+                "literal.representation",
+                f"no exact constant representation for {_kind(cursor)}",
+            )
+        return result
+
+    def string(self, cursor):
+        result = self.unit.facts.string(cursor)
+        if result is None:
+            raise _Unsupported(
+                cursor,
+                "literal.string_encoding",
+                "string literal requires an explicit byte or wide-character representation",
+            )
+        return result
 
     def arguments(self, cursor, declaration):
         arguments = list(cursor.get_arguments())
@@ -1133,12 +1025,19 @@ class _Body:
                 value.type.get_canonical().kind.name == "VARIABLEARRAY"
                 and _kind(value) == "DECL_REF_EXPR"
                 and value.referenced
-                and next((t.spelling for t in cursor.get_tokens()), None) == "sizeof"
+                and next((t.spelling for t in self.unit.facts.tokens(cursor)), None)
+                == "sizeof"
             ):
                 return {
                     "op": "runtime_array_size",
                     "name": self.local(value.referenced),
                 }
+        if kind == "IMAGINARY_LITERAL" and len(children) == 1:
+            return {
+                "op": "literal",
+                "type": self.unit.type_info(cursor.type, cursor),
+                "value": [0.0, self.number(children[0])],
+            }
         if kind in {
             "INTEGER_LITERAL",
             "FLOATING_LITERAL",
@@ -1150,10 +1049,10 @@ class _Body:
             return {
                 "op": "literal",
                 "type": _type(cursor.type, cursor, self.unit.records),
-                "value": _number(cursor),
+                "value": self.number(cursor),
             }
         if kind == "STRING_LITERAL":
-            return {"op": "string", "value": _string(cursor)}
+            return {"op": "string", "value": self.string(cursor)}
         if kind in {"CXX_NULL_PTR_LITERAL_EXPR", "GNU_NULL_EXPR"}:
             return {"op": "literal", "type": "i32", "value": 0}
         if kind == "DECL_REF_EXPR":
@@ -1161,11 +1060,11 @@ class _Body:
         if kind == "CXX_THIS_EXPR":
             return {"op": "var", "name": "this"}
         if kind == "CXX_NEW_EXPR":
-            allocation = _object(cxx_objects.allocation, cursor, self)
+            allocation = _object(objects.allocation, cursor, self)
             if allocation:
                 return allocation
             pointee = cursor.type.get_pointee().get_canonical()
-            tokens = [t.spelling for t in cursor.get_tokens()]
+            tokens = [t.spelling for t in self.unit.facts.tokens(cursor)]
             if (
                 pointee.kind.name in {"RECORD", "CONSTANTARRAY"}
                 or "new" not in tokens
@@ -1213,7 +1112,7 @@ class _Body:
                 )
             return out
         if kind == "CXX_DELETE_EXPR" and len(children) == 1:
-            destruction = _object(cxx_objects.deletion, cursor, self)
+            destruction = _object(objects.deletion, cursor, self)
             if destruction:
                 return destruction
             pointer = children[0].type.get_canonical()
@@ -1226,7 +1125,7 @@ class _Body:
                     "allocation.destruction",
                     "destruction requires a resolved destructor before releasing storage",
                 )
-            tokens = [t.spelling for t in cursor.get_tokens()]
+            tokens = [t.spelling for t in self.unit.facts.tokens(cursor)]
             array = "delete" in tokens and tokens[tokens.index("delete") + 1 :][:2] == [
                 "[",
                 "]",
@@ -1268,7 +1167,7 @@ class _Body:
                 return {
                     "op": "literal",
                     "type": _type(cursor.type, cursor, self.unit.records),
-                    "value": _number(cursor),
+                    "value": self.number(cursor),
                 }
             if len(operands) != 1:
                 raise _Unsupported(
@@ -1311,9 +1210,9 @@ class _Body:
                         },
                         "value": value,
                     }
-                if cxx_library.is_standard(
+                if standard_library.is_standard(
                     source.get_declaration()
-                ) and cxx_library.is_standard(target.get_declaration()):
+                ) and standard_library.is_standard(target.get_declaration()):
                     return value
                 # Implicit derived-to-base subobject conversion preserves the lvalue.
                 # Base copying or user-defined conversion appears as a constructor or call.
@@ -1415,12 +1314,24 @@ class _Body:
             ):
                 mode = "explicit_pointer"
             target_type = self.unit.type_info(target, cursor)
+            source_type = self.unit.type_info(source, cursor)
             if kind == "UNEXPOSED_EXPR":
                 legacy = _writable_string(
                     value, target_type, self.unit.location(cursor.location)
                 )
                 if legacy:
                     return legacy
+                if target_type == {"kind": "const", "of": source_type}:
+                    # Qualification adds no value copy. A const reference bound to
+                    # this expression must still observe writes through its alias.
+                    return {
+                        "op": "cast",
+                        "mode": "static",
+                        "conversion": "qualification",
+                        "source_type": source_type,
+                        "type": {"kind": "ref", "to": target_type},
+                        "value": value,
+                    }
             emitted_type = target_type
             if isinstance(target_type, dict) and target_type.get("kind") == "const":
                 emitted_type = target_type["of"]
@@ -1428,7 +1339,7 @@ class _Body:
                 "op": "cast",
                 "mode": mode,
                 "conversion": "implicit" if kind == "UNEXPOSED_EXPR" else "explicit",
-                "source_type": self.unit.type_info(source, cursor),
+                "source_type": source_type,
                 "target_type": target_type,
                 "type": emitted_type,
                 "value": value,
@@ -1452,7 +1363,7 @@ class _Body:
             )
             if not children or children[0].type.get_canonical().kind.name == "POINTER":
                 base = {"op": "unary", "operator": "deref", "value": base}
-            if cxx_library.public_field(cursor.referenced):
+            if standard_library.public_field(cursor.referenced):
                 return {
                     "op": "library_member",
                     "provider": "cxx_standard",
@@ -1483,10 +1394,7 @@ class _Body:
                 record = record.semantic_parent
             return {"op": "member", "base": base, "field": cursor.spelling}
         if kind in {"BINARY_OPERATOR", "COMPOUND_ASSIGNMENT_OPERATOR"}:
-            lib = _clang().conf.lib
-            symbol = lib.clang_getBinaryOperatorKindSpelling(
-                lib.clang_getCursorBinaryOperatorKind(cursor)
-            )
+            symbol = self.unit.facts.binary_operator(cursor)
             left, right = (self.expression(c) for c in children)
             if symbol in _BINARY:
                 return {
@@ -1506,7 +1414,7 @@ class _Body:
                 cursor, "expression.binary_operator", f"operator {symbol}"
             )
         if kind == "UNARY_OPERATOR":
-            opcode = _clang().conf.lib.clang_getCursorUnaryOperatorKind(cursor)
+            opcode = self.unit.facts.unary_opcode(cursor)
             if opcode == 13 and len(children) == 1:  # GCC __extension__ marker.
                 return self.expression(children[0])
             operator = _UNARY.get(opcode)
@@ -1558,17 +1466,17 @@ class _Body:
                     )
                 return result
             try:
-                library = cxx_library.bind_call(
+                library = standard_library.bind_call(
                     cursor,
                     declaration,
                     self.expression,
                     lambda t: _type(t, cursor, self.unit.records),
                 )
-            except cxx_library.BindingError as error:
+            except standard_library.BindingError as error:
                 raise _Unsupported(cursor, "library.call", str(error)) from error
             if library:
                 return library
-            method = _object(cxx_objects.invoke, cursor, self)
+            method = _object(objects.invoke, cursor, self)
             if method:
                 return method
             args = self.arguments(cursor, declaration)
@@ -1583,9 +1491,7 @@ class _Body:
                         "call.virtual",
                         f"virtual dispatch slot for {declaration.spelling}",
                     )
-                if not declaration.location.file or not _source(
-                    self.unit.root, declaration.location.file.name
-                ).is_relative_to(self.unit.root):
+                if not self.unit.facts.owns(declaration.location):
                     raise _Unsupported(
                         cursor,
                         "call.library_method",
@@ -1638,22 +1544,21 @@ class _Body:
                             "right": call,
                         }
                 return call
-            if (
-                declaration
-                and _kind(declaration) in {"PARM_DECL", "VAR_DECL", "FIELD_DECL"}
-                and children
-            ):
+            if children and children[0].kind.is_expression():
                 pointer = children[0].type.get_canonical()
                 target_type = (
                     pointer.get_pointee() if pointer.kind.name == "POINTER" else pointer
                 )
-                return {
-                    "op": "indirect_call",
-                    "target": self.expression(children[0]),
-                    "args": args,
-                    "signature": _type(target_type, cursor, self.unit.records),
-                    "location": self.unit.location(cursor.location),
-                }
+                # A call through a field, subscript or conditional expression may
+                # have a precise callable ABI even with no single declaration.
+                if target_type.kind.name == "FUNCTIONPROTO":
+                    return {
+                        "op": "indirect_call",
+                        "target": self.expression(children[0]),
+                        "args": args,
+                        "signature": _type(target_type, cursor, self.unit.records),
+                        "location": self.unit.location(cursor.location),
+                    }
             raise _Unsupported(
                 cursor,
                 "call.dispatch",
@@ -1700,7 +1605,7 @@ class _Body:
         # libclang omits empty clauses; use only the punctuation boundaries to assign roles.
         separators = []
         depth = 0
-        for token in cursor.get_tokens():
+        for token in self.unit.facts.tokens(cursor):
             spelling = token.spelling
             if spelling == "(":
                 depth += 1
@@ -1709,7 +1614,7 @@ class _Body:
                 if depth == 0:
                     break
             elif spelling == ";" and depth == 1:
-                separators.append(token.location.offset)
+                separators.append(token.offset)
         if len(separators) != 2 or not children:
             raise _Unsupported(
                 cursor, "control.for", "cannot bind the three clauses of this for loop"
@@ -1861,33 +1766,11 @@ class _Body:
         )
 
 
-def translate(path: Path, flags: list[str], *, root: Path, language=None) -> dict:
-    """Read one compiler invocation and return graph declarations plus coverage gaps."""
-    path, root = Path(path).resolve(), Path(root).resolve()
-    if language is not None and not any(s.startswith("-x") for s in flags):
-        dialect = {"c": "c", "c++": "c++", "cpp": "c++", "cxx": "c++"}[language.lower()]
-        flags = ["-x", dialect, *flags]
-    unit = _Unit(path, root, flags)
-    clang = _clang()
-    parsed = clang.Index.create().parse(
-        str(path.relative_to(root)),
-        args=["-working-directory", str(root), *flags],
-        options=clang.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
-    )
-    for diagnostic in parsed.diagnostics:
-        if diagnostic.severity >= clang.Diagnostic.Error:
-            unit.diagnostics.append(
-                {
-                    **unit.location(diagnostic.location),
-                    "code": "c_family.parse",
-                    "detail": diagnostic.spelling,
-                }
-            )
-    for declaration in parsed.cursor.get_children():
-        if _kind(declaration) == "MACRO_INSTANTIATION":
-            unit.macro(declaration)
-        elif _kind(declaration) not in {"INCLUSION_DIRECTIVE", "MACRO_DEFINITION"}:
-            unit.declaration(declaration)
+def normalize_unit(facts: ParsedUnit) -> dict:
+    """Consume the captured AST and return a neutral unit without compiler handles."""
+    unit = _Unit(facts)
+    for declaration in facts.declarations:
+        unit.declaration(declaration)
     unit.expand()
     return {
         "functions": list(unit.functions.values()),

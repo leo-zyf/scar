@@ -1,433 +1,10 @@
-"""Build Python module/control/value graphs and lower sealed numeric entry ABIs."""
+"""F2 module initialization, lexical state, dispatch and external process operations."""
 
 import ast
-import builtins
-from collections import deque
-from importlib.util import resolve_name
-import math
 from pathlib import Path
 import shlex
-import sys
-import symtable
-import tokenize
 
-_OPS = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div"}
-
-
-class Unsupported(ValueError):
-    def __init__(self, node, detail):
-        self.line = getattr(node, "lineno", 1)
-        self.kind = type(node).__name__
-        super().__init__(detail)
-
-
-def var(name):
-    return dict(op="var", name=name)
-
-
-def literal(value):
-    if isinstance(value, str):
-        return dict(op="string", value=value)
-    return dict(op="literal", type="f64", value=float(value))
-
-
-def _coefficient(node):
-    if (
-        type(node.value) not in (int, float)
-        or not math.isfinite(node.value)
-        or abs(node.value) > 2**53
-    ):
-        raise Unsupported(
-            node, "constant exceeds the declared float64 arithmetic domain"
-        )
-    return literal(node.value)
-
-
-def _names(fn):
-    args = fn.args
-    if (
-        fn.decorator_list
-        or args.defaults
-        or args.posonlyargs
-        or args.kwonlyargs
-        or args.vararg
-        or args.kwarg
-    ):
-        raise Unsupported(
-            fn, "Python callable requires runtime argument binding or decorators"
-        )
-    return [a.arg for a in args.args]
-
-
-def _scalar(node, bound, symbols):
-    if isinstance(node, ast.Name) and node.id in bound:
-        return var(node.id)
-    if isinstance(node, ast.Constant):
-        return _coefficient(node)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        return dict(
-            op="unary",
-            operator="neg" if isinstance(node.op, ast.USub) else "pos",
-            value=_scalar(node.operand, bound, symbols),
-        )
-    if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
-        if isinstance(node.op, ast.Div) and not (
-            isinstance(node.right, ast.Constant) and node.right.value != 0
-        ):
-            raise Unsupported(
-                node, "division needs the Python zero-divisor exception contract"
-            )
-        return dict(
-            op="binary",
-            operator=_OPS[type(node.op)],
-            left=_scalar(node.left, bound, symbols),
-            right=_scalar(node.right, bound, symbols),
-        )
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in symbols
-        and not node.keywords
-    ):
-        return dict(
-            op="call",
-            callee=symbols[node.func.id],
-            args=[_scalar(x, bound, symbols) for x in node.args],
-        )
-    raise Unsupported(node, "unresolved Python operation or dynamic dispatch")
-
-
-def _array_function(fn, names, symbols, entry):
-    array_names = names[:-1] if entry else names
-    if not array_names:
-        raise Unsupported(fn, "array entry needs at least one numerical input")
-    element, count, output = "$index", "$count", "$output"
-    n = var("$elements")
-    ptr = {"kind": "ptr", "to": {"kind": "const", "of": "f64"}}
-    internal = {}
-    prefix = []
-    serial = 0
-
-    def at(base):
-        return dict(op="index", base=base, indices=[var(element)])
-
-    def copy(target, expr):
-        return dict(
-            op="map",
-            index=element,
-            extent=n,
-            independent=True,
-            proof="fresh private result or owned destination; same-index accesses",
-            body=[dict(op="assign", target=at(var(target)), value=expr)],
-        )
-
-    def scratch(statements):
-        nonlocal serial
-        serial += 1
-        name = f"$temporary{serial}"
-        statements.append(dict(op="buffer", name=name, type="f64", extent=n))
-        return name
-
-    def evaluate(node, statements, bound):
-        if isinstance(node, ast.Name) and node.id in bound:
-            return var(internal.get(node.id, node.id)), True
-        if isinstance(node, ast.Constant):
-            return _coefficient(node), False
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            value, array = evaluate(node.operand, statements, bound)
-            if not array:
-                return dict(op="unary", operator="neg", value=value), False
-            dest = scratch(statements)
-            statements.append(
-                copy(dest, dict(op="unary", operator="neg", value=at(value)))
-            )
-            return var(dest), True
-        if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
-            a, aa = evaluate(node.left, statements, bound)
-            b, ba = evaluate(node.right, statements, bound)
-            if not (aa or ba):
-                raise Unsupported(
-                    node, "scalar-only subtree needs Python scalar promotion"
-                )
-            if isinstance(node.op, ast.Div):
-                raise Unsupported(
-                    node, "array divide requires NumPy error-mode effects"
-                )
-            dest = scratch(statements)
-            expr = dict(
-                op="binary",
-                operator=_OPS[type(node.op)],
-                left=at(a) if aa else a,
-                right=at(b) if ba else b,
-            )
-            statements.append(copy(dest, expr))
-            return var(dest), True
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in symbols
-            and not node.keywords
-        ):
-            args = [evaluate(a, statements, bound) for a in node.args]
-            if not all(is_array for _, is_array in args):
-                raise Unsupported(node, "array call has a nonarray argument")
-            dest = scratch(statements)
-            statements.append(
-                dict(
-                    op="expr",
-                    value=dict(
-                        op="call",
-                        callee=symbols[node.func.id],
-                        args=[n, *[v for v, _ in args], var(dest)],
-                    ),
-                )
-            )
-            return var(dest), True
-        raise Unsupported(
-            node, "dynamic Python expression outside the declared array ABI"
-        )
-
-    for node in ast.walk(fn):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ):
-            name = node.targets[0].id
-            if name not in internal:
-                internal[name] = "$local_" + name
-                prefix.append(
-                    dict(op="buffer", name=internal[name], type="f64", extent=n)
-                )
-                if name in array_names:
-                    prefix.append(copy(internal[name], at(var(name))))
-
-    def statements(nodes, bound, inner=False):
-        result = []
-        for node in nodes:
-            if (
-                isinstance(node, ast.Expr)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-            ):
-                continue
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                name = node.targets[0].id
-                v, is_array = evaluate(node.value, result, bound)
-                if not is_array:
-                    raise Unsupported(node, "array variable assigned a scalar")
-                result.append(copy(internal[name], at(v)))
-                bound.add(name)
-            elif isinstance(node, ast.Return) and not inner:
-                v, is_array = evaluate(node.value, result, bound)
-                if not is_array:
-                    raise Unsupported(node, "array entry returned a scalar")
-                result.extend([copy(output, at(v)), dict(op="return")])
-            elif (
-                entry
-                and isinstance(node, ast.For)
-                and isinstance(node.target, ast.Name)
-                and not node.orelse
-                and isinstance(node.iter, ast.Call)
-                and isinstance(node.iter.func, ast.Name)
-                and node.iter.func.id == "range"
-                and not node.iter.keywords
-                and len(node.iter.args) == 1
-                and isinstance(node.iter.args[0], ast.Name)
-                and node.iter.args[0].id == names[-1]
-                and node.target.id not in bound
-                and node.target.id != names[-1]
-            ):
-                i = "$iteration"
-                result.append(
-                    dict(
-                        op="for",
-                        init=[
-                            dict(
-                                op="decl",
-                                name=i,
-                                type="i64",
-                                init=dict(op="literal", type="i64", value=0),
-                            )
-                        ],
-                        condition=dict(
-                            op="binary", operator="lt", left=var(i), right=var(count)
-                        ),
-                        step=dict(op="unary", operator="preinc", value=var(i)),
-                        body=statements(node.body, bound.copy(), True),
-                    )
-                )
-            else:
-                raise Unsupported(node, "statement outside the closed array profile")
-        return result
-
-    if not isinstance(fn.body[-1], ast.Return):
-        raise Unsupported(fn, "array function needs a total return")
-    params = [dict(name="$elements", type="i64")]
-    if entry:
-        params.append(dict(name=count, type="i64"))
-    params.extend(dict(name=name, type=ptr) for name in array_names)
-    params.append(dict(name=output, type={"kind": "ptr", "to": "f64"}))
-    return dict(
-        name=symbols[fn.name],
-        result="void",
-        params=params,
-        body=prefix + statements(fn.body, set(array_names)),
-    )
-
-
-def translate(path, flags, *, root, abi):
-    try:
-        tree = _parse(path)
-    except SyntaxError as error:
-        location = dict(
-            file=path.relative_to(root).as_posix(),
-            line=error.lineno,
-            column=error.offset,
-        )
-        issue = dict(code="python.syntax", detail=error.msg, field="syntax", **location)
-        return dict(functions=[], externs=[], diagnostics=[issue])
-    if abi.get("kind") == "python_module":
-        return _ModuleGraph(path, root, abi, tree).translate()
-    definitions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    exports, imports = abi.get("exports", {}), abi.get("imports", {})
-    symbols = {**{name: exports.get(name, name) for name in definitions}, **imports}
-    functions, externs, diagnostics = [], [], []
-    partial = set()
-    initialization = False
-
-    def problem(node, error, symbol=None):
-        diagnostics.append(
-            dict(
-                code="python." + getattr(error, "kind", type(node).__name__),
-                detail=str(error),
-                symbol=symbol,
-                file=str(path.relative_to(root)),
-                line=getattr(error, "line", node.lineno),
-            )
-        )
-
-    for fn in definitions.values():
-        symbol = symbols[fn.name]
-        try:
-            names = _names(fn)
-            if abi.get("kind") == "binary_f64_arrays":
-                f = _array_function(fn, names, symbols, fn.name == abi["entry"])
-            else:
-                explicit = fn.name in exports
-                if not explicit and any(
-                    not isinstance(a.annotation, ast.Name) or a.annotation.id != "float"
-                    for a in fn.args.args
-                ):
-                    raise Unsupported(
-                        fn,
-                        "function parameters need a typed binding or float annotation",
-                    )
-                if len(fn.body) != 1 or not isinstance(fn.body[0], ast.Return):
-                    raise Unsupported(fn, "scalar function needs a single value return")
-                f = dict(
-                    name=symbol,
-                    result="f64",
-                    params=[dict(name=n, type="f64") for n in names],
-                    body=[
-                        dict(
-                            op="return", value=_scalar(fn.body[0].value, names, symbols)
-                        )
-                    ],
-                )
-            f["location"] = dict(file=str(path.relative_to(root)), line=fn.lineno)
-            functions.append(f)
-        except Unsupported as exc:
-            problem(fn, exc, symbol)
-            partial.add(symbol)
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) and not (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ):
-            problem(
-                node,
-                Unsupported(
-                    node, "module initialization requires executable semantics"
-                ),
-            )
-            initialization = True
-    for fn in definitions.values():
-        for call in ast.walk(fn):
-            if (
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Name)
-                and call.func.id in imports
-            ):
-                externs.append(
-                    dict(
-                        name=imports[call.func.id],
-                        params=[
-                            dict(name=f"p{i}", type="f64")
-                            for i in range(len(call.args))
-                        ],
-                        result="f64",
-                    )
-                )
-    if partial or initialization:
-        module = ".".join(path.relative_to(root).with_suffix("").parts)
-        profile = dict(
-            module=module,
-            main=False,
-            project={
-                module: {
-                    "path": path.relative_to(root).as_posix(),
-                    "package": path.name == "__init__.py",
-                    "exports": _catalog(tree, module),
-                }
-            },
-        )
-        evidence = _ModuleGraph(path, root, profile, tree, aliases=symbols)
-        unit = evidence.translate()
-        if initialization:
-            partial.add(evidence.root_symbol)
-        functions.extend(
-            f
-            for f in unit["functions"]
-            if f["name"] in partial or ".<locals>." in f["name"]
-        )
-        diagnostics.extend(
-            d
-            for d in unit["diagnostics"]
-            if d["symbol"] in partial or ".<locals>." in d["symbol"]
-        )
-        externs.extend(unit["externs"])
-    return dict(functions=functions, externs=externs, diagnostics=diagnostics)
-
-
-def _parse(path):
-    # Respect the encoding declaration without importing or executing user code.
-    with tokenize.open(path) as source:
-        return ast.parse(source.read(), filename=str(path))
-
-
-def _relative(node, module, package):
-    if not node.level:
-        return node.module or ""
-    parent = module if package else module.rpartition(".")[0]
-    try:
-        return resolve_name("." * node.level + (node.module or ""), parent)
-    except (ValueError, ImportError):
-        return ""
-
-
-def _provider(name):
-    base = name.split(".", 1)[0]
-    return (
-        "python_stdlib"
-        if base in sys.stdlib_module_names or base == "builtins"
-        else "python_package"
-    )
+from .facts import _function, _literal_fact, _relative, provider
 
 
 def _py_type(name=None):
@@ -435,118 +12,6 @@ def _py_type(name=None):
         "kind": "python_object",
         "class": name or {"status": "unresolved", "field": "runtime_class"},
     }
-
-
-def _function(module, qualified):
-    return f"py:{module}:{qualified}"
-
-
-def _literal_fact(value):
-    return {"class": type(value).__name__, "values": [value]}
-
-
-def _catalog(tree, module):
-    """Export lexical names and initial values. Mutable globals remain state edges."""
-    exports = {}
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            exports[node.name] = {
-                "class": "type" if isinstance(node, ast.ClassDef) else "function",
-                "symbol": _function(module, node.name),
-            }
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            value = node.value
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    fact = {}
-                    if isinstance(value, ast.Constant) and type(value.value) in (
-                        bool,
-                        str,
-                        int,
-                        float,
-                        type(None),
-                    ):
-                        fact = _literal_fact(value.value)
-                    exports[target.id] = {**fact, "state": _function(module, target.id)}
-    return exports
-
-
-def project_units(entry: Path, root: Path) -> list[dict]:
-    """Discover source-root modules and package initializers for syntactic imports."""
-    root = Path(root).resolve()
-    entry = Path(entry)
-    entry = (root / entry).resolve() if not entry.is_absolute() else entry.resolve()
-
-    def module_path(path):
-        relative = path.relative_to(root).with_suffix("")
-        pieces = relative.parts[:-1] if relative.name == "__init__" else relative.parts
-        return ".".join(pieces) or "__main__"
-
-    def resolve(module):
-        if not module or not all(part.isidentifier() for part in module.split(".")):
-            return None
-        stem = root.joinpath(*module.split("."))
-        # CPython's FileFinder tries the package before its sibling module.
-        for path in (stem / "__init__.py", stem.with_suffix(".py")):
-            if path.is_file() and path.resolve().is_relative_to(root):
-                return path.resolve()
-        return None
-
-    entry_module = module_path(entry)
-    catalog = {}
-    pending = deque([(entry_module, entry)])
-    scheduled = {entry_module}
-
-    def enqueue(module):
-        parts = module.split(".")
-        for i in range(1, len(parts) + 1):
-            candidate = ".".join(parts[:i])
-            path = resolve(candidate)
-            if path and candidate not in scheduled:
-                scheduled.add(candidate)
-                pending.append((candidate, path))
-
-    while pending:
-        module, path = pending.popleft()
-        package = path.name == "__init__.py"
-        try:
-            tree = _parse(path)
-        except SyntaxError:
-            catalog[module] = {
-                "path": path.relative_to(root).as_posix(),
-                "package": package,
-                "exports": {},
-            }
-            continue
-        catalog[module] = {
-            "path": path.relative_to(root).as_posix(),
-            "package": package,
-            "exports": _catalog(tree, module),
-        }
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for name in node.names:
-                    enqueue(name.name)
-            elif isinstance(node, ast.ImportFrom):
-                source = _relative(node, module, package)
-                if source:
-                    enqueue(source)
-                    for name in node.names:
-                        enqueue(source + "." + name.name)
-    return [
-        dict(
-            path=spec["path"],
-            language="python",
-            abi=dict(
-                kind="python_module",
-                module=name,
-                main=name == entry_module,
-                project=catalog,
-            ),
-        )
-        for name, spec in catalog.items()
-    ]
 
 
 def _join_facts(*facts):
@@ -639,11 +104,11 @@ def _static_values(operator, left, right):
 class _ModuleGraph:
     """Own one file and retain structured evidence separately from executable ABI bodies."""
 
-    def __init__(self, path, root, abi, tree, aliases=None):
-        self.path = path.relative_to(root).as_posix()
+    def __init__(self, parsed, abi, aliases=None):
+        self.path = parsed.path.relative_to(parsed.root).as_posix()
         self.module = abi["module"]
         self.main = abi["main"]
-        self.tree = tree
+        self.tree = parsed.tree
         self.project = abi["project"]
         self.functions = []
         self.externs = {}
@@ -653,8 +118,9 @@ class _ModuleGraph:
         self.initial = {}
         self.package = self.project[self.module]["package"]
         self.root_symbol = "__main__" if self.main else _function(self.module, "<init>")
-        with tokenize.open(path) as source:
-            self.table = symtable.symtable(source.read(), str(path), "exec")
+        self.table = parsed.scopes
+        self.builtins = parsed.builtins
+        self.libraries = parsed.libraries
 
     def location(self, node):
         return dict(
@@ -686,7 +152,7 @@ class _ModuleGraph:
             "py:external:" + target,
             dict(
                 name="py:external:" + target,
-                provider=_provider(target),
+                provider=provider(target, self.libraries),
                 symbol=target,
                 calling_convention="python",
                 params=[],
@@ -748,18 +214,10 @@ class _Scope:
         self.parent = parent
         self.env = {}
         self.calls = set()
-        symbols = table.get_symbols() if table else []
-        self.locals = {s.get_name() for s in symbols if s.is_local()}
-        self.global_names = {s.get_name() for s in symbols if s.is_declared_global()}
-        self.nonlocals = {
-            s.get_name() for s in symbols if s.is_free() or s.is_nonlocal()
-        }
-        self.cells = {
-            s.get_name()
-            for child in (table.get_children() if table else [])
-            for s in child.get_symbols()
-            if s.is_free()
-        } & self.locals
+        self.locals = table.local if table else frozenset()
+        self.global_names = table.declared_global if table else frozenset()
+        self.nonlocals = table.free if table else frozenset()
+        self.cells = table.cell if table else frozenset()
 
     def issue(self, node, field, detail):
         return self.unit.issue(node, self.symbol, field, detail)
@@ -774,7 +232,8 @@ class _Scope:
                 owner = owner.parent
             if owner and not owner.module_scope:
                 return {
-                    **var(name),
+                    "op": "var",
+                    "name": name,
                     "cell": {
                         "owner": owner.symbol,
                         "name": name,
@@ -786,8 +245,12 @@ class _Scope:
             or name in self.global_names
             or (name not in self.locals and name not in self.nonlocals)
         ):
-            return {**var(_function(self.unit.module, name)), "scope": "global"}
-        return var(name)
+            return {
+                "op": "var",
+                "name": _function(self.unit.module, name),
+                "scope": "global",
+            }
+        return {"op": "var", "name": name}
 
     def fact(self, name):
         if name in self.env:
@@ -798,7 +261,7 @@ class _Scope:
             return {}
         if not self.module_scope and name in self.unit.initial:
             return self.unit.initial[name]
-        if hasattr(builtins, name):
+        if name in self.unit.builtins:
             return {"external": "builtins." + name}
         return {}
 
@@ -1059,7 +522,7 @@ class _Scope:
                     R(
                         node,
                         op,
-                        provider=_provider(name),
+                        provider=provider(name, self.unit.libraries),
                         symbol=name,
                         type=_py_type(f.get("class")),
                         effects=effect,
@@ -1262,7 +725,7 @@ class _Scope:
                         provider=(
                             "project"
                             if module in self.unit.project
-                            else _provider(module)
+                            else provider(module, self.unit.libraries)
                         ),
                         initializers=deps,
                         cache="sys.modules",
@@ -1296,14 +759,7 @@ class _Scope:
                     )
                     facts[arg.arg] = {}
             table = (
-                next(
-                    (
-                        c
-                        for c in self.table.get_children()
-                        if c.get_name() == node.name and c.get_lineno() == node.lineno
-                    ),
-                    None,
-                )
+                self.table.children.get((node.name, node.lineno))
                 if self.table
                 else None
             )

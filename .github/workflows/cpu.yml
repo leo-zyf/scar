@@ -41,6 +41,8 @@ jobs:
       - name: Verify source format
         run: |
           "$RUNNER_TEMP/scar-verify/bin/python" -m black --check scar tests tools
+          find scar -type f \( -name '*.cpp' -o -name '*.hpp' \) \
+            -exec clang-format-18 --dry-run --Werror --style=file {} +
       - name: Verify isolated stages from installed wheel
         run: |
           verify="$RUNNER_TEMP/scar-verify/bin/python"

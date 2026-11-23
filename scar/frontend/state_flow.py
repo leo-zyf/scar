@@ -33,6 +33,8 @@ def state_flow(nodes, entry, accesses):
         reads, writes = set(), set()
         for effect in by_node[port]:
             domain = effect["domain"]
+            if "binding" in effect:
+                reads.add(effect["binding"])
             # An escaped local or global is also covered by the shared memory
             # token, so an opaque call invalidates reaching reads through it.
             domains = {domain}
@@ -41,7 +43,7 @@ def state_flow(nodes, entry, accesses):
             mode = effect["mode"]
             if mode in {"read", "read_write", "unknown"}:
                 reads.update(domains)
-            if mode in {"write", "read_write", "unknown"}:
+            if mode in {"write", "bind", "read_write", "unknown"}:
                 writes.update(domains)
         for field, value in nodes[port].items():
             if field in regions and isinstance(value, list) and not nested:

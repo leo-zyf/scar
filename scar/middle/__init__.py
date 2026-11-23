@@ -3,15 +3,21 @@
 from collections import Counter
 from pathlib import Path
 
-from scar.contract import GRAPH, IR, PLAN, document, member, open_product, write_json
-from .link import link
-from .rewrites import optimize
+from scar.contract import GRAPH, PLAN, document, open_product, write_json
 
 
 def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
+    from .binding import bind
+    from .normalization import normalize
+    from .rewrites import optimize
+    from .execution import prepare, seal
+
     path, revision, graph = open_product(graph_path, "graph.json", GRAPH)
     out = Path(out).resolve()
-    module, issues, count = link(graph, path.parent)
+    bound, issues, count = bind(graph, path.parent)
+    binding_issues = len(issues)
+    module, normalized_issues = normalize(bound)
+    issues.extend(normalized_issues)
     abi = graph.get("entry_abi")
     if shape is not None or trip_count is not None:
         if not abi or abi["kind"] != "binary_f64_arrays":
@@ -33,22 +39,20 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
         module["entry_abi"] = abi
     status = "INCOMPLETE" if issues else "READY"
     changes = []
-    fragments = []
+    lowering_facts = {}
     if not issues:
-        for fn in module.pop("functions"):
+        for fn in module["functions"]:
             if optimize_graph:
                 changes.extend(optimize(fn))
-            fragments.append(member(out, "functions", fn))
-    ir = document(
-        IR,
+        module, lowering_facts = prepare(module)
+    ir_path = seal(
+        module,
+        out,
         status=status,
         graph_sha256=revision,
         contract=graph["contract"],
-        module=module if not issues else {"entry": graph["entry"]},
-        functions=fragments,
         logical_optimization=optimize_graph,
     )
-    write_json(out / "exec-ir.json", ir)
     report = document(
         PLAN,
         status=status,
@@ -59,13 +63,19 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
         issues=issues,
         baseline_defects=module.get("baseline_defects", []),
         normalizations=module.get("normalizations", []),
+        layers=[
+            dict(layer="M1_BIND", issues=binding_issues),
+            dict(layer="M2_NORMALIZE", issues=len(normalized_issues)),
+            dict(layer="M3_REWRITE", enabled=optimize_graph, changes=len(changes)),
+            dict(layer="M4_EXECUTION", status=status, **lowering_facts),
+        ],
         issue_categories=dict(Counter(d["code"] for d in issues).most_common()),
     )
     write_json(out / "plan.json", report)
     return dict(
         status=status,
         plan=str(out / "plan.json"),
-        ir=str(out / "exec-ir.json"),
+        ir=str(ir_path),
         reachable_symbols=count,
         rewrites=len(changes),
         blockers=len(issues),

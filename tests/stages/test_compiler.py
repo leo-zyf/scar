@@ -29,7 +29,7 @@ raise SystemExit(main(sys.argv[2:]))
 """
 
 
-def _run(command, folder, *, input=None):
+def _run(command, folder, *, input=None, returncode=0):
     env = dict(
         os.environ,
         PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
@@ -38,15 +38,16 @@ def _run(command, folder, *, input=None):
     completed = subprocess.run(
         command, cwd=folder, env=env, input=input, capture_output=True, timeout=120
     )
-    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert completed.returncode == returncode, completed.stderr.decode(errors="replace")
     return completed.stdout
 
 
-def _stage(folder, phase, *arguments):
+def _stage(folder, phase, *arguments, returncode=0):
     return json.loads(
         _run(
             [sys.executable, "-B", "-c", _PHASE_COMMAND, phase, *map(str, arguments)],
             folder,
+            returncode=returncode,
         )
     )
 
@@ -56,6 +57,52 @@ def _payloads(graph, document):
         json.loads((graph / unit["graph"]["path"]).read_bytes())
         for unit in document["units"]
     ]
+
+
+def test_python_modules_preserve_structure_and_open_bindings(tmp_path):
+    source = tmp_path / "entry.py"
+    source.write_text("""import helper
+from pathlib import Path
+
+def outer():
+    total = 1
+    def increment():
+        nonlocal total
+        total += helper.choose()
+        return total
+    for step in range(3):
+        if step > 0:
+            print(increment())
+
+Path("must-not-execute").write_text("executed")
+outer()
+""")
+    (tmp_path / "helper.py").write_text("def choose():\n    return 2\n")
+    graph = tmp_path / "graph"
+    _stage(tmp_path, "frontend", "build", "--entry", source, "--out", graph)
+    document = json.loads((graph / "graph.json").read_bytes())
+    assert len(document["units"]) == 2
+    functions = [f for unit in _payloads(graph, document) for f in unit["functions"]]
+    nodes = [n for f in functions for n in f["nodes"]]
+    assert sum(n["op"] == "for" for n in nodes) == 1
+    assert sum(n["op"] == "if" for n in nodes) == 1
+    assert any(
+        state["kind"] == "cell" for f in functions for state in f["states"].values()
+    )
+    assert not (tmp_path / "must-not-execute").exists()
+    source.rename(tmp_path / "hidden-entry")
+    result = _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        graph,
+        "--out",
+        tmp_path / "plan",
+        returncode=2,
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert not (tmp_path / "must-not-execute").exists()
 
 
 def test_python_array_three_stages_and_independent_output(tmp_path):
@@ -173,6 +220,7 @@ struct Member {
 };
 struct Holder { Member member; };
 Holder holder;
+struct Copied { int value; };
 struct Base {
     int initial;
     Base(int x) : initial(x) {}
@@ -187,6 +235,10 @@ struct Derived : Base {
 };
 extern "C" int object_protocol() {
     if (holder.member.value != 42) return 2;
+    Copied original;
+    original.value = 9;
+    Copied copied = original;
+    if (copied.value != 9) return 3;
     int x = 3;
     {
         Derived local(x);
@@ -490,3 +542,226 @@ def test_fixed_form_program_emits_cpp20(tmp_path):
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == "COMPILED"
     assert _run([result["executable"]], tmp_path) == _run([baseline], tmp_path)
+
+
+@pytest.fixture(scope="module")
+def coordinate_library(tmp_path_factory):
+    """Emit one native library so every shape tests the identical physical schedule."""
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import schedule_ir
+    from scar.middle.execution import prepare, seal
+    from scar.middle.normalization import normalize
+
+    folder = tmp_path_factory.mktemp("map-coordinates")
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def integer(value):
+        return dict(op="literal", type="i64", value=value)
+
+    def binary(operator, left, right):
+        return dict(op="binary", operator=operator, left=left, right=right)
+
+    def cell(name, index):
+        return dict(op="index", base=var(name), indices=[index])
+
+    pointer = dict(kind="ptr", to="i64")
+    params = [dict(name=k, type="i64") for k in ("n0", "n1", "w0", "w1")]
+    params += [dict(name=k, type=pointer) for k in ("out", "input")]
+    i = var("i")
+    col = binary("mod", i, var("w0"))
+    row = binary("mod", binary("div", i, var("w0")), var("w1"))
+    read = cell("input", binary("add", col, binary("mul", integer(7), row)))
+    write = dict(op="assign", target=cell("out", i), value=binary("add", read, i))
+    extent = binary("mul", var("n0"), var("n1"))
+    mapping = dict(op="map", site="view/0", index="i", extent=extent, body=[write])
+    alias = dict(
+        op="decl",
+        name="alias",
+        type=pointer,
+        init=dict(op="unary", operator="addr", value=var("w0")),
+    )
+    change = dict(
+        op="assign",
+        target=cell("alias", integer(0)),
+        value=binary("add", integer(2), binary("band", i, integer(1))),
+    )
+    # The x radix is now mutable, while a second, immutable y radix on its own
+    # cannot authorize rewriting the dependent quotient/remainder chain.
+    mutable = dict(mapping, site="mutable/0", body=[change, write])
+    plain = dict(name="map_view", result="void", params=params, body=[mapping])
+    other = dict(
+        name="map_mutable", result="void", params=params, body=[alias, mutable]
+    )
+    entry = dict(name="main", result="i32", params=[], body=[])
+    bound = dict(
+        entry="main",
+        functions=[entry, plain, other],
+        externs=[],
+        globals=[],
+        records=[],
+        declarations={},
+        abi_environment={},
+    )
+    normalized, issues = normalize(bound)
+    assert not issues
+    module, facts = prepare(normalized)
+    assert facts["iteration_layouts"] == 1
+    source = seal(
+        module,
+        folder,
+        status="READY",
+        graph_sha256=None,
+        contract={},
+        logical_optimization={},
+    )
+    scheduled = schedule_ir(source, folder / "b1", policy="serial")
+    physical = json.loads((scheduled.parent / "physical-plan.json").read_bytes())
+    assert physical["regions"]["view/0"]["serial_layout"] == "mixed_radix"
+    assert physical["regions"]["mutable/0"]["serial_layout"] == "linear"
+    target = lower_scheduled(scheduled, folder / "b2a")
+    delivery = print_target(target, folder / "b2b")
+    folder = Path(delivery["project"])
+    names = [str(Path(path).relative_to(folder)) for path in delivery["sources"]]
+    # The second map has an escaped radix: the actual indirect update must be
+    # visible to subsequent uses of quotient/remainder in the same iteration.
+    translation = (folder / names[0]).read_text()
+    first, second = translation.split('extern "C" void map_mutable')
+    assert "scar_axis_" in first
+    assert "v_i % v_w0" in second
+    library = folder / "maps.so"
+    _run(
+        [
+            "c++",
+            "-std=c++20",
+            "-O3",
+            "-Werror",
+            "-shared",
+            "-fPIC",
+            "-Iinclude",
+            *names,
+            "-o",
+            str(library),
+        ],
+        folder,
+    )
+    return CDLL(str(library))
+
+
+@pytest.mark.parametrize(
+    "width,height,read_width,read_height,overlap,mutable",
+    [
+        (3, 2, 3, 2, False, False),
+        (3, 2, 3, 2, True, False),
+        (3, 2, 2, 3, True, False),
+        (0, 4, 0, 4, False, False),
+        (-3, -2, 3, 2, False, False),
+        (3, 2, 3, 2, True, True),
+    ],
+)
+def test_serial_map_coordinates(
+    coordinate_library, width, height, read_width, read_height, overlap, mutable
+):
+    from ctypes import POINTER, byref, cast, c_int64, sizeof
+
+    values = list(range(128))
+    expected = values.copy()
+    offset = 1 if overlap else 64
+    actual = (c_int64 * len(values))(*values)
+    procedure = (
+        coordinate_library.map_mutable if mutable else coordinate_library.map_view
+    )
+    pointer = POINTER(c_int64)
+    procedure.argtypes = [c_int64] * 4 + [pointer, pointer]
+    procedure.restype = None
+    procedure(
+        width,
+        height,
+        read_width,
+        read_height,
+        cast(byref(actual, offset * sizeof(c_int64)), pointer),
+        actual,
+    )
+    for i in range(width * height):
+        if mutable:
+            read_width = 2 + (i & 1)
+        expected[offset + i] = (
+            expected[i % read_width + 7 * ((i // read_width) % read_height)] + i
+        )
+    assert list(actual) == expected
+
+
+def test_cpp20_global_and_lexical_bindings(tmp_path):
+    from scar.contract import IR, document, member, write_json
+
+    def literal(value):
+        return dict(op="literal", type="i32", value=value)
+
+    def binary(operator, left, right):
+        return dict(op="binary", operator=operator, left=left, right=right)
+
+    def declaration(name, value):
+        return dict(op="decl", name=name, type="i32", init=value)
+
+    def assign(target, value):
+        return dict(op="assign", target=target, value=value)
+
+    n = dict(op="var", name="n")
+    global_n = dict(n, scope="global")
+    total = dict(op="var", name="sum")
+    accumulate = assign(total, binary("add", total, n))
+    difference = dict(
+        name="difference",
+        params=[dict(name="n", type="i32")],
+        result="i32",
+        body=[dict(op="return", value=binary("sub", global_n, n))],
+    )
+    call = dict(op="call", callee="difference", args=[literal(5)])
+    body = [
+        declaration("sum", n),
+        dict(
+            op="block",
+            body=[
+                declaration("n", literal(3)),
+                accumulate,
+                assign(global_n, binary("add", global_n, n)),
+            ],
+        ),
+        accumulate,
+        dict(
+            op="for",
+            init=[declaration("n", literal(0))],
+            condition=binary("lt", n, literal(2)),
+            step=dict(op="unary", operator="postinc", value=n),
+            body=[accumulate],
+        ),
+        dict(op="map", site="main/0", extent=literal(2), index="n", body=[accumulate]),
+        dict(op="return", value=binary("ne", binary("add", total, call), literal(36))),
+    ]
+    main = dict(name="main", params=[], result="i32", body=body)
+    source = tmp_path / "exec-ir.json"
+    write_json(
+        source,
+        document(
+            IR,
+            status="READY",
+            module=dict(entry="main", globals=[declaration("n", literal(10))]),
+            functions=[member(tmp_path, "functions", fn) for fn in (main, difference)],
+        ),
+    )
+    delivery = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        source,
+        "--physical",
+        "serial",
+        "--out",
+        tmp_path / "delivery",
+    )
+    exe = delivery["executable"]
+    assert _run([exe], tmp_path) == b""
+    symbols = _run(["nm", "-g", "-P", "--defined-only", exe], tmp_path).splitlines()
+    assert any(symbol.startswith(b"n D ") for symbol in symbols)

@@ -51,6 +51,32 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def semantic_form(value):
+    """Compare operation products independently of diagnostic annotations."""
+    if isinstance(value, dict):
+        return {
+            k: semantic_form(v)
+            for k, v in value.items()
+            if k not in {"location", "site"}
+        }
+    if isinstance(value, list):
+        return [semantic_form(v) for v in value]
+    return value
+
+
+def walk_operations(value):
+    """Iterate neutral operation records without interpreting their semantics."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, dict):
+            if "op" in item:
+                yield item
+            pending.extend(item.values())
+
+
 def publish(path, data):
     """Publish a complete file; readers see either revision during a rerun."""
     path = Path(path)

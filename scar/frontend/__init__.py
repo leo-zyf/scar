@@ -3,36 +3,48 @@
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
-import json
 from pathlib import Path
 
 from scar.contract import GRAPH, digest, document, json_bytes, member, write_json
-from .graph import function_graph
-from .hardware import snapshot
 
 
 def _unit(job):
-    root, profile, revision, out = job
+    from .graph import function_graph
+    from .state_flow import state_flow
+
+    root, profile, revision, out, source_hashes, parsed, source_bytes = job
     path = root / profile["path"]
     language = profile["language"].lower()
     flags = profile.get("flags", [])
     if language in {"c", "c++", "cpp", "cxx"}:
-        from .c_family import translate
+        from .languages.c_family import parse_unit, normalize_unit
     elif language in {"fortran", "f77", "f90"}:
-        from .fortran import translate
+        from .languages.fortran import parse_unit, normalize_unit
     elif language == "python":
-        from .python import translate
+        from .languages.python import parse_unit, normalize_unit
     else:
         raise ValueError(f"unsupported source language {language}")
     try:
-        if language == "python":
-            unit = translate(path, flags, root=root, abi=profile.get("abi", {}))
-        elif language in {"c", "c++", "cpp", "cxx"}:
-            unit = translate(
-                path, flags, root=root, language="c" if language == "c" else "c++"
+        if language == "python" and parsed is None:
+            parsed = parse_unit(
+                path,
+                flags,
+                root=root,
+                abi=profile.get("abi", {}),
+                source_bytes=source_bytes,
+                source_hashes=source_hashes,
             )
-        else:
-            unit = translate(path, flags, root=root)
+        elif language in {"c", "c++", "cpp", "cxx"}:
+            parsed = parse_unit(
+                path,
+                flags,
+                root=root,
+                language="c" if language == "c" else "c++",
+                source_hashes=source_hashes,
+            )
+        elif parsed is None:
+            parsed = parse_unit(path, flags, root=root)
+        unit = normalize_unit(parsed)
     except ValueError as error:
         unit = dict(
             functions=[],
@@ -45,13 +57,21 @@ def _unit(job):
                 )
             ],
         )
+    captured = dict(getattr(parsed, "source_digests", {}))
+    source_facts = dict(
+        files=captured,
+        compiler=getattr(parsed, "compiler_id", None),
+    )
+    revision = digest(json_bytes([revision, source_facts]))
     functions = [function_graph(f, revision) for f in unit.get("functions", [])]
     initializers = function_graph(
         dict(
             name="@initializers",
             params=[],
             result="void",
-            body=[{"op": "decl", **g} for g in unit.get("globals", [])],
+            body=[
+                {"op": "decl", **g, "scope": "global"} for g in unit.get("globals", [])
+            ],
         ),
         revision,
     )
@@ -85,12 +105,22 @@ def _unit(job):
             )
     payload["global_graph"] = initializers
     payload["functions"] = functions
+    # F4 consumes the complete F3 graph without accessing language parsers.
+    state_graphs = [initializers, *functions]
+    state_graphs.extend(
+        r["initializer_graph"] for r in payload["records"] if "initializer_graph" in r
+    )
+    for graph in state_graphs:
+        graph["state_flow"] = state_flow(
+            graph["nodes"], graph["entry"], graph["accesses"]
+        )
     receipt = member(out, "units", payload)
     return dict(
         path=profile["path"],
         language=language,
         flags=flags,
         revision=revision,
+        source_facts=source_facts,
         graph=receipt,
         initializer_calls=initializers["calls"],
         initializer_objects=initializers["objects"],
@@ -115,68 +145,70 @@ def _unit(job):
     )
 
 
-def _input(manifest):
-    if manifest.suffix.lower() == ".py":
-        from .python import project_units
-
-        return manifest.parent, {
-            "entry": "__main__",
-            "units": project_units(manifest, manifest.parent),
-        }
-    spec = json.loads(manifest.read_bytes())
-    root = (manifest.parent / spec.get("source_root", ".")).resolve(strict=True)
-    if "source" in spec and "units" not in spec:
-        spec["units"] = [
-            dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
-        ]
-    return root, spec
-
-
 def build(manifest, out, *, jobs=1):
-    manifest, out = Path(manifest).resolve(strict=True), Path(out).resolve()
-    root, spec = _input(manifest)
-    locks = spec.get("source_lock", {}).get("files", {})
-    sources = {}
-    for relative in dict.fromkeys([*locks, *(u["path"] for u in spec["units"])]):
-        path = (root / relative).resolve(strict=True)
-        if not path.is_relative_to(root) or Path(relative).is_absolute():
-            raise ValueError(f"input must be inside source_root: {relative}")
-        raw = path.read_bytes()
-        sources[relative] = digest(raw)
-        if relative in locks:
-            lock = locks[relative]
-            if sources[relative] != lock["sha256"] or len(raw) != lock["size_bytes"]:
-                raise ValueError(f"source lock changed: {relative}")
-    snapshot_id = digest(json_bytes(sources))
-    profiles = [{"language": spec.get("language"), **p} for p in spec["units"]]
-    if (
-        not profiles
-        or jobs < 1
-        or len({json_bytes(p) for p in profiles}) != len(profiles)
-    ):
-        raise ValueError(
-            "expected distinct compilation profiles and a positive worker count"
+    from .hardware import snapshot
+    from .input import read_request
+
+    if jobs < 1:
+        raise ValueError("expected a positive worker count")
+    request, out = read_request(manifest), Path(out).resolve()
+    root = request.root
+    sources = dict(request.source_hashes)
+    profiles = request.profiles
+    if request.project_entry:
+        from .languages.python import capture_project
+
+        capture = capture_project(
+            request.project_entry,
+            root,
+            buffers=request.python_buffers,
+            source_hashes=request.source_hashes,
         )
-    if any(not p["language"] or p["language"] == "mixed" for p in profiles):
-        raise ValueError("each compilation unit needs its source language")
+        profiles, parsed_units = capture.profiles, capture.units
+        sources.update(capture.source_digests)
+    else:
+        parsed_units = (None,) * len(profiles)
+    snapshot_id = digest(json_bytes(sources))
     evidence = None
-    entry_abi = spec.get("entry_abi")
-    if "observe" in spec:
+    entry_abi = request.entry_abi
+    if request.observation is not None:
         from .observation import array_abi, observe
 
-        evidence = observe(manifest, root, spec)
-        entry_abi = array_abi(spec["entry"], evidence)
+        evidence = observe(request.manifest, root, request.observation)
+        entry_abi = array_abi(request.entry, evidence)
     if entry_abi and entry_abi["kind"] == "binary_f64_arrays":
-        for p in profiles:
-            if p["language"] == "python":
-                p["abi"] = {**p.get("abi", {}), **entry_abi}
+        profiles = tuple(
+            (
+                {**p, "abi": {**p.get("abi", {}), **entry_abi}}
+                if p["language"].lower() == "python"
+                else p
+            )
+            for p in profiles
+        )
     out.mkdir(parents=True, exist_ok=True)
-    work = [(root, p, digest(json_bytes([snapshot_id, p])), out) for p in profiles]
+    work = [
+        (
+            root,
+            p,
+            digest(json_bytes([snapshot_id, p])),
+            out,
+            sources,
+            parsed,
+            request.python_buffers.get(p["path"]) if parsed is None else None,
+        )
+        for p, parsed in zip(profiles, parsed_units)
+    ]
     if jobs == 1 or len(work) == 1:
         units = list(map(_unit, work))
     else:
         with ProcessPoolExecutor(max_workers=min(jobs, len(work))) as pool:
             units = list(pool.map(_unit, work, chunksize=1))
+    for unit in units:
+        for name, revision in unit["source_facts"]["files"].items():
+            if sources.setdefault(name, revision) != revision:
+                raise ValueError(
+                    f"compilation units observed different source revisions: {name}"
+                )
     resources, topology, platform = snapshot(root)
     diagnostics = [issue for unit in units for issue in unit["diagnostics"]]
     counts = Counter(d["code"] for d in diagnostics)
@@ -189,11 +221,11 @@ def build(manifest, out, *, jobs=1):
     )
     graph = document(
         GRAPH,
-        entry=spec["entry"],
+        entry=request.entry,
         entry_abi=entry_abi,
         observation=evidence,
         units=units,
-        source_revision=snapshot_id,
+        source_revision=digest(json_bytes(sources)),
         resources=[asdict(r) for r in resources],
         platform=platform,
         topology=[

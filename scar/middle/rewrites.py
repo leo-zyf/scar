@@ -1,6 +1,6 @@
 """Local equivalence rules and legality proofs for pointwise iteration domains."""
 
-from .link import semantics
+from scar.contract import semantic_form as semantics
 
 
 def _fold(expr, changes):
@@ -99,26 +99,29 @@ def _nodes(value):
             yield from _nodes(child)
 
 
+def _introduced_scalar(fn, name, type_, rule, site):
+    state = fn.setdefault("state_contract", {})
+    private = state.setdefault("private_scalars", [])
+    private.append(name)
+    private.sort()
+    state.setdefault("scalars", {})[name] = dict(type=type_, initialized=True)
+    state.setdefault("introduced", {})[name] = dict(rule=rule, site=site)
+
+
 def _share_extents(fn, changes):
     """Value-number repeated integer iteration domains at their first evaluation."""
     bindings = {s["name"]: s["type"] for s in fn["body"] if s["op"] == "decl"}
     reserved = {n["name"] for n in _nodes(fn["body"]) if "name" in n}
     reserved.update(p["name"] for p in fn["params"])
-    # Only privately owned scalar locals whose address never leaves are eligible.
-    for n in _nodes(fn["body"]):
-        if (
-            n["op"] == "unary"
-            and n["operator"] == "addr"
-            or n["op"] == "decl"
-            and isinstance(n["type"], dict)
-            and n["type"]["kind"] == "ref"
-        ):
-            for term in _nodes(n.get("value", n.get("init"))):
-                if term["op"] == "var":
-                    bindings.pop(term["name"], None)
+    private = set(fn.get("state_contract", {}).get("private_scalars", ()))
+    bindings = {name: spec for name, spec in bindings.items() if name in private}
 
     def scalar(e):
-        if e["op"] == "var" and bindings.get(e["name"]) in ("i64", "i32"):
+        if (
+            e["op"] == "var"
+            and e.get("scope") != "global"
+            and bindings.get(e["name"]) in ("i64", "i32")
+        ):
             return bindings[e["name"]]
         if e["op"] == "literal" and e["type"] in ("i64", "i32"):
             return e["type"]
@@ -139,7 +142,6 @@ def _share_extents(fn, changes):
             begin += 1
             continue
         expr = semantics(first["extent"])
-        names = {v["name"] for v in _nodes(expr) if v["op"] == "var"}
         end = begin
         while (
             end < len(body)
@@ -150,8 +152,6 @@ def _share_extents(fn, changes):
                 n["op"] not in {"assign", "var", "index", "literal", "binary", "cast"}
                 or n["op"] == "assign"
                 and n["target"]["op"] != "index"
-                or n["op"] == "var"
-                and n["name"] in names
                 for n in _nodes(body[end]["body"])
             ):
                 break
@@ -174,15 +174,186 @@ def _share_extents(fn, changes):
         decl = dict(
             op="decl", name=slot, type={"kind": "const", "of": t}, init=first["extent"]
         )
+        _introduced_scalar(fn, slot, t, "common_iteration_extent", first["site"])
+        fn["state_contract"].setdefault("value_definitions", {})[slot] = dict(
+            value=expr,
+            uses=[each["site"] for each in body[begin:end]],
+            proof="snapshot dominates these uses; referenced frame-private scalars are not written in the group",
+        )
         for each in body[begin:end]:
             each["extent"] = {"op": "var", "name": slot}
         body.insert(begin, decl)
         begin = end + 1
 
 
+def _bounded_coordinates(fn, changes):
+    """Use immutable iteration domains to remove redundant coordinate arithmetic."""
+    integer_types = {p + str(n) for p in ("i", "u") for n in (8, 16, 32, 64)}
+    types = {p["name"]: p["type"] for p in fn["params"]}
+    types.update(
+        {n["name"]: n["type"] for n in _nodes(fn["body"]) if n["op"] == "decl"}
+    )
+    private = set(fn.get("state_contract", {}).get("private_scalars", ()))
+    epochs = {}
+
+    def scalar_type(name):
+        spec = types.get(name)
+        while isinstance(spec, dict) and spec.get("kind") == "const":
+            spec = spec["of"]
+        return spec if isinstance(spec, str) and spec in integer_types else None
+
+    def term(value, env):
+        op = value.get("op")
+        if (
+            op == "literal"
+            and isinstance(value["type"], str)
+            and value["type"] in integer_types
+        ):
+            return ("literal", value["type"], value["value"])
+        if (
+            op == "var"
+            and value.get("scope") != "global"
+            and scalar_type(value["name"])
+            and value["name"] in private
+        ):
+            name = value["name"]
+            return env.get(name, ("value", name, epochs.get(name, 0)))
+        if (
+            op == "cast"
+            and isinstance(value["type"], str)
+            and value["type"] in integer_types
+        ):
+            operand = term(value["value"], env)
+            return ("cast", value["type"], operand) if operand is not None else None
+        if op == "binary":
+            a, b = term(value["left"], env), term(value["right"], env)
+            if a is not None and b is not None:
+                return ("binary", value["operator"], a, b)
+        if (
+            op == "intrinsic"
+            and value["name"] in {"max", "min"}
+            and value["type"] in integer_types
+        ):
+            args = [term(a, env) for a in value["args"]]
+            if all(a is not None for a in args):
+                return ("intrinsic", value["name"], value["type"], *args)
+        return None
+
+    def writes(value):
+        names = set()
+        for node in _nodes(value):
+            target = node.get("target") if node["op"] in {"assign", "update"} else None
+            if node["op"] == "unary" and node["operator"] in {
+                "preinc",
+                "postinc",
+                "predec",
+                "postdec",
+            }:
+                target = node["value"]
+            if isinstance(target, dict) and target.get("op") == "var":
+                names.add(target["name"])
+        return names
+
+    def invalidate(env, names):
+        for name in names:
+            env.pop(name, None)
+            epochs[name] = epochs.get(name, 0) + 1
+
+    def expression(value, env, bounds):
+        if isinstance(value, list):
+            return [expression(v, env, bounds) for v in value]
+        if not isinstance(value, dict):
+            return value
+        result = {k: expression(v, env, bounds) for k, v in value.items()}
+        if result.get("op") == "binary" and result["operator"] in {"mod", "div"}:
+            left = result["left"]
+            if (
+                left.get("op") == "var"
+                and left.get("scope") != "global"
+                and left["name"] in bounds
+            ):
+                domain = bounds[left["name"]]
+                if term(result["right"], env) == domain:
+                    changes.append(
+                        dict(
+                            rule="bounded_integer_coordinate",
+                            site=result.get("site"),
+                            operator=result["operator"],
+                            proof="0 <= index < immutable iteration extent; positive divisor equals that extent in every executed iteration",
+                        )
+                    )
+                    return (
+                        left
+                        if result["operator"] == "mod"
+                        else dict(op="literal", type="i64", value=0)
+                    )
+        return result
+
+    def sequence(body, env, bounds):
+        for statement in body:
+            op = statement["op"]
+            if op in {"for", "while", "do_while", "each", "map"}:
+                invalidate(env, writes(statement))
+                inner = env.copy()
+                domains = bounds.copy()
+                if op == "map":
+                    types[statement["index"]] = "i64"
+                    extent = term(statement["extent"], env)
+                    pure = all(
+                        n["op"]
+                        in {
+                            "assign",
+                            "var",
+                            "index",
+                            "literal",
+                            "binary",
+                            "unary",
+                            "cast",
+                            "intrinsic",
+                        }
+                        and not (n["op"] == "assign" and n["target"]["op"] != "index")
+                        and not (
+                            n["op"] == "unary" and n["operator"] not in {"pos", "neg"}
+                        )
+                        for n in _nodes(statement["body"])
+                    )
+                    if extent is not None and pure:
+                        domains[statement["index"]] = extent
+                sequence(statement["body"], inner, domains)
+                invalidate(env, writes(statement))
+            elif op == "block":
+                sequence(statement["body"], env, bounds)
+            elif op == "if":
+                sequence(statement["then"], env.copy(), bounds)
+                sequence(statement.get("else", []), env.copy(), bounds)
+                env.clear()
+                invalidate(env, writes(statement))
+            else:
+                replacement = expression(statement, env, bounds)
+                statement.clear()
+                statement.update(replacement)
+                if op == "decl":
+                    name = statement["name"]
+                    invalidate(env, {name})
+                    value = term(statement.get("init", {}), env)
+                    if value is not None:
+                        env[name] = value
+                else:
+                    invalidate(env, writes(statement))
+                if any(
+                    n["op"]
+                    in {"call", "indirect_call", "object_dispatch", "library_call"}
+                    for n in _nodes(statement)
+                ):
+                    env.clear()
+
+    sequence(fn["body"], {}, {})
+
+
 def optimize(fn):
     changes = []
     fn["body"] = _fold(fn["body"], changes)
+    _bounded_coordinates(fn, changes)
     _share_extents(fn, changes)
     params = {p["name"]: p for p in fn["params"]}
     # Only immutable scalar coefficients can be shared throughout the region.
@@ -194,6 +365,7 @@ def optimize(fn):
         and v["type"]["kind"] == "const"
     }
     body = fn["body"]
+    occupied = {n["name"] for n in _nodes(body) if "name" in n} | set(params)
     start = 0
     while start < len(body):
         first = body[start]
@@ -214,13 +386,21 @@ def optimize(fn):
         if end - start > 1:
             sources = body[start:end]
             stored, merged = {}, []
-            reserved = set(params) | params[None] | {first["index"]}
+            reserved = occupied | {first["index"]}
             for position, (item, name) in enumerate(zip(sources, destinations)):
                 assignment = item["body"][0]
                 local = f"scar_element_value_{position}"
                 while local in reserved:
                     local += "_"
                 reserved.add(local)
+                occupied.add(local)
+                _introduced_scalar(
+                    fn,
+                    local,
+                    params[name]["type"]["to"],
+                    "legal_map_fusion",
+                    first["site"],
+                )
                 merged.append(
                     dict(
                         op="decl",

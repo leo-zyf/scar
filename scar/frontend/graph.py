@@ -1,7 +1,6 @@
 """Encode one definition as a hierarchical port graph, including mutable effects."""
 
 from scar.contract import digest, json_bytes
-from .state_flow import state_flow
 
 _REGIONS = {"body", "then", "else", "init"}
 _CONTROL = {
@@ -18,6 +17,22 @@ _CONTROL = {
     "continue",
 }
 
+_CALLS = {
+    "call",
+    "indirect_call",
+    "object_construct",
+    "object_new",
+    "object_dispatch",
+    "library_construct",
+    "library_call",
+}
+
+
+def _reference(spec):
+    while isinstance(spec, dict) and spec.get("kind") == "const":
+        spec = spec["of"]
+    return isinstance(spec, dict) and spec.get("kind") in {"ref", "rref"}
+
 
 def function_graph(function, revision):
     name = function["name"]
@@ -29,7 +44,42 @@ def function_graph(function, revision):
         cell = info.get("cell")
         return f"activation/{cell['owner']}/{cell['name']}" if cell else None
 
+    def binding(value, scope):
+        name = value["name"]
+        domain = (
+            cell_domain(value)
+            or (scope.get(name) if value.get("scope") != "global" else None)
+            or f"global/{name}"
+        )
+        domains.setdefault(domain, dict(name=name, kind="global"))
+        return domain
+
+    def storage(value, scope):
+        """Return a single known lvalue domain, or the shared memory domain."""
+        if not isinstance(value, dict):
+            return "memory"
+        op = value.get("op")
+        if op == "var":
+            slot = binding(value, scope)
+            return domains[slot].get("alias_to", slot)
+        if (op == "cast" and _reference(value.get("type"))) or (
+            op == "library_value" and value.get("mode") == "qualify"
+        ):
+            return storage(value["value"], scope)
+        if op == "select":
+            left, right = storage(value["then"], scope), storage(value["else"], scope)
+            return left if left == right else "memory"
+        if op == "binary" and value.get("operator") == "comma":
+            return storage(value["right"], scope)
+        if op == "unary" and value.get("operator") == "deref":
+            address = value["value"]
+            if address.get("op") == "unary" and address.get("operator") == "addr":
+                return storage(address["value"], scope)
+        return "memory"
+
     def declare(scope, variable, slot, info):
+        if info.get("scope") == "global":
+            slot = "global"
         domain = cell_domain(info) or f"{slot}/{variable}"
         scope[variable] = domain
         domains[domain] = dict(
@@ -37,6 +87,31 @@ def function_graph(function, revision):
         )
         if info.get("cell"):
             domains[domain].update(kind="cell", activation=info["cell"])
+        if _reference(info.get("type")):
+            target = storage(info.get("init"), scope)
+            domains[domain]["alias_to"] = target if target != domain else "memory"
+
+    def arguments(value, scope, consumer=None):
+        types = value.get("parameter_types")
+        if types is None and value.get("op") == "indirect_call":
+            types = value.get("signature", {}).get("params")
+        modes = value.get("parameter_modes")
+        args = []
+        for i, arg in enumerate(value["args"]):
+            if modes is not None:
+                by_reference = i < len(modes) and modes[i] == "reference"
+            elif types is not None:
+                by_reference = i < len(types) and _reference(types[i])
+            else:
+                # An open callable can retain an lvalue argument. Its contents
+                # may also be read by a value parameter.
+                by_reference = True
+            if by_reference and consumer is not None:
+                target = storage(arg, scope)
+                if target != "memory":
+                    accesses.append(dict(node=consumer, domain=target, mode="unknown"))
+            args.append(encode(arg, scope, "address" if by_reference else "read"))
+        return args
 
     def encode(value, scope, mode="read"):
         if isinstance(value, list):
@@ -44,7 +119,14 @@ def function_graph(function, revision):
         if not isinstance(value, dict):
             return value
         if "op" not in value:
-            return {k: encode(v, scope) for k, v in value.items()}
+            return {
+                k: (
+                    arguments(value, scope)
+                    if k == "args" and "parameter_types" in value
+                    else encode(v, scope)
+                )
+                for k, v in value.items()
+            }
         number = len(nodes)
         op = value["op"]
         row = {"op": op}
@@ -55,7 +137,11 @@ def function_graph(function, revision):
             declare(scope, value["name"], f"local/{number}", value)
             if "init" in value or op == "buffer":
                 accesses.append(
-                    dict(node=number, domain=scope[value["name"]], mode="write")
+                    dict(
+                        node=number,
+                        domain=scope[value["name"]],
+                        mode="bind" if _reference(value.get("type")) else "write",
+                    )
                 )
         elif op in {"map", "each"}:
             variable = value["index"] if op == "map" else value["name"]
@@ -94,16 +180,16 @@ def function_graph(function, revision):
                 )
             )
         elif op == "var":
-            variable = value["name"]
-            domain = (
-                cell_domain(value)
-                or (scope.get(variable) if value.get("scope") != "global" else None)
-                or f"global/{variable}"
-            )
-            domains.setdefault(domain, dict(name=variable, kind="global"))
+            slot = binding(value, scope)
+            domain = domains[slot].get("alias_to", slot)
             if value.get("cell"):
-                domains[domain].update(kind="cell", activation=value["cell"])
-            accesses.append(dict(node=number, domain=domain, mode=mode))
+                domains[slot].update(kind="cell", activation=value["cell"])
+            access = dict(node=number, domain=domain, mode=mode)
+            if domain != slot:
+                access["binding"] = slot
+            if mode == "address" and domain != "memory":
+                domains[domain]["address_taken"] = True
+            accesses.append(access)
         elif op in {"index", "member"} or (
             op == "unary" and value["operator"] == "deref"
         ):
@@ -147,7 +233,9 @@ def function_graph(function, revision):
         ]
         for key in keys:
             field = value[key]
-            if key in _REGIONS and isinstance(field, list):
+            if key == "args" and op in _CALLS:
+                row[key] = arguments(value, scope, number)
+            elif key in _REGIONS and isinstance(field, list):
                 inner = scope if key == "init" else scope.copy()
                 row[key] = [encode(child, inner) for child in field]
             else:
@@ -167,6 +255,35 @@ def function_graph(function, revision):
                     access = "read_write"
                 if op == "unary" and key == "value" and value["operator"] == "addr":
                     access = "address"
+                if key == "init" and op == "decl" and _reference(value.get("type")):
+                    access = "address"
+                if (
+                    key == "value"
+                    and op == "return"
+                    and _reference(function.get("result"))
+                ):
+                    access = "address"
+                if key == "value" and (
+                    (op == "cast" and _reference(value.get("type")))
+                    or (op == "library_value" and value.get("mode") == "qualify")
+                ):
+                    access = mode
+                if (
+                    key == "value"
+                    and op == "cast"
+                    and value.get("conversion") == "array_decay"
+                ):
+                    access = "address"
+                if (op == "select" and key in {"then", "else"}) or (
+                    op == "binary"
+                    and value.get("operator") == "comma"
+                    and key == "right"
+                ):
+                    access = mode
+                if op == "library_call" and key == "receiver":
+                    access = "address"
+                if key == "range" and op == "each" and _reference(value.get("type")):
+                    access = "address"
                 row[key] = encode(field, scope, access)
         return {"port": number}
 
@@ -181,6 +298,10 @@ def function_graph(function, revision):
     if "initializers" in function:
         signature["initializers"] = encode(function["initializers"], scope)
     body = encode(function.get("body") or function.get("partial_body", []), scope)
+    if any(a["domain"] == "memory" for a in accesses) or any(
+        d.get("alias_to") == "memory" for d in domains.values()
+    ):
+        domains["memory"] = {"name": "memory", "kind": "shared_memory"}
     return dict(
         id=identity,
         signature=signature,
@@ -192,5 +313,4 @@ def function_graph(function, revision):
         calls=sorted(calls),
         objects=sorted(objects),
         dispatch=dispatch,
-        state_flow=state_flow(nodes, body, accesses),
     )

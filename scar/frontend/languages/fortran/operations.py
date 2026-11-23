@@ -1,18 +1,23 @@
-"""Map resolved Fortran expressions and statements to typed SCAR operations."""
+"""F2: normalize operations using captured Fortran symbols, syntax and ABI data."""
 
-from dataclasses import dataclass, field
 import math
 import re
 
-
-class Gap(ValueError):
-    def __init__(self, code, detail, node=None):
-        super().__init__(detail)
-        self.code, self.node = code, node
+from .facts import Gap, kind, ptr
 
 
-def kind(node):
-    return type(node).__name__
+def _syntax_nodes(root, kinds):
+    """Traverse already-captured nodes; no parsing or name resolution."""
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if kind(node) in kinds:
+            yield node
+        children = (
+            node if isinstance(node, (tuple, list)) else getattr(node, "children", ())
+        )
+        if children:
+            pending.extend(reversed(children))
 
 
 def var(name):
@@ -52,61 +57,6 @@ def decl(name, dtype, init=None):
     if init is not None:
         result["init"] = init
     return result
-
-
-def ptr(dtype, readonly=False):
-    return {"kind": "ptr", "to": {"kind": "const", "of": dtype} if readonly else dtype}
-
-
-@dataclass
-class Symbol:
-    category: str
-    size: int
-    attrs: frozenset
-    value: str | None = None
-    binding: str | None = None
-    result: str | None = None
-    dims: tuple = ()
-    location: object = None
-    bounds: list = field(default_factory=list)
-    char_length: object = None
-
-    @property
-    def dtype(self):
-        category = self.category
-        ordinary = {"REAL": "f", "INTEGER": "i", "LOGICAL": "i"}
-        if category in ordinary and self.size in (1, 2, 4, 8):
-            return ordinary[category] + str(8 * self.size)
-        if category == "CHARACTER" and self.size == 1:
-            return "char"
-        if category == "COMPLEX" and self.size in (4, 8):
-            return "c" + str(16 * self.size)
-        raise Gap("type", f"{category} kind {self.size}", self.location)
-
-    @property
-    def dummy(self):
-        return any(v == "DUMMY" or v.startswith("DUMMY(") for v in self.attrs)
-
-    @property
-    def intent(self):
-        return next(
-            (v[6:-1].lower() for v in self.attrs if v.startswith("DUMMY(")),
-            "unspecified",
-        )
-
-    @property
-    def byref(self):
-        return self.dummy and "VALUE" not in self.attrs
-
-    @property
-    def restricted(self):
-        return self.dummy and not self.attrs & {
-            "POINTER",
-            "TARGET",
-            "ASYNCHRONOUS",
-            "VOLATILE",
-            "ALLOCATABLE",
-        }
 
 
 _OPERATORS = {
@@ -239,8 +189,9 @@ def integer(expr):
 
 class Body:
     def __init__(
-        self, symbols, function_name, result_name, link_name, location, defaults
+        self, symbols, function_name, result_name, link_name, location, defaults, target
     ):
+        self.target = target
         self.symbols = symbols
         self.function_name, self.result_name = function_name, result_name
         self.link_name, self.location = link_name, location
@@ -342,7 +293,7 @@ class Body:
                 "args": [length, available],
             }
         )
-        size = self.size_type()
+        size = self.target.size_type
         copy = self.libc(
             "memmove", [ptr("void"), ptr("void", True), size], [dst, src, cast(size, n)]
         )
@@ -981,7 +932,7 @@ class Body:
                 actuals.append(text)
                 types.append(ptr("char"))
                 if not (interface and interface["bind_c"]):
-                    lengths.append(cast(self.size_type(), length))
+                    lengths.append(cast(self.target.size_type, length))
                 continue
             if symbol and symbol.dims:
                 actuals.append(pointer(var(arg_name), symbol, symbol.dtype))
@@ -1069,7 +1020,7 @@ class Body:
             types.append(ptr(dtype))
         actuals.extend(lengths)
         if lengths:
-            types.extend([self.size_type()] * len(lengths))
+            types.extend([self.target.size_type] * len(lengths))
         self.externs[target] = {
             "name": target,
             "params": [dict(name=f"arg{i}", type=t) for i, t in enumerate(types)],
@@ -1225,26 +1176,22 @@ class Body:
             return self.character_assignment(chars, rhs)
         target_shape = self.shape_of(target)
         if target_shape:
-            from fparser.two.Fortran2003 import (
-                Name,
-                Part_Ref,
-                Function_Reference,
-                Structure_Constructor,
-            )
-            from fparser.two.utils import walk
-
             name = str(target if kind(target) == "Name" else target.items[0]).lower()
             target_sym = self.fact(name)
             if any(length is None for length in target_shape):
                 raise Gap("array_extent", f"unbound extent of {name}", target)
-            indexed = walk(rhs, (Part_Ref, Function_Reference, Structure_Constructor))
+            indexed = list(
+                _syntax_nodes(
+                    rhs, {"Part_Ref", "Function_Reference", "Structure_Constructor"}
+                )
+            )
             procedures = [self.symbols.get(str(n.items[0]).lower()) for n in indexed]
             if any(
                 s and "PROCEDURE" in s.attrs and "INTRINSIC-PROC" not in s.attrs
                 for s in procedures
             ):
                 raise Gap("array_effect", "array RHS contains a user procedure", rhs)
-            referenced = {str(n).lower() for n in walk(rhs, Name)}
+            referenced = {str(n).lower() for n in _syntax_nodes(rhs, {"Name"})}
             snapshot = name in referenced and (
                 kind(target) != "Name"
                 or any(str(n.items[0]).lower() == name for n in indexed)
@@ -1328,7 +1275,7 @@ class Body:
 
     def runtime_call(self, leaf, args, profile=None):
         symbol = "_gfortran_" + leaf
-        profile = profile or self.io_profile()
+        profile = profile or self.target.data_transfer()
         types = profile.signatures.get(symbol)
         if types is None or len(args) != len(types):
             raise Gap("io_abi", f"runtime argument declaration for {symbol}")
@@ -1373,7 +1320,7 @@ class Body:
         if "unit" not in fields:
             raise Gap("io_control", operation + " requires UNIT", node)
         unit = self.expression(fields.pop("unit"))[0]
-        profile = self.file_profile(operation, tuple(sorted(fields)))
+        profile = self.target.file_control(operation, tuple(sorted(fields)))
         steps, set_field, addr = self.io_descriptor(node, profile, operation, unit)
         for key, value in fields.items():
             if key == "recl":
@@ -1400,7 +1347,7 @@ class Body:
                 opts[name] = val
         if "unit" not in opts or self.character_view(opts["unit"]):
             raise Gap("io_format", "missing or internal unit", node)
-        profile = self.io_profile()
+        profile = self.target.data_transfer()
         unit_val = (
             literal("i32", profile.default_unit)
             if str(opts["unit"]) == "*"

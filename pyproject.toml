@@ -21,6 +21,10 @@ scar = "scar.cli:main"
 include = ["scar", "scar.*"]
 namespaces = false
 
+[tool.setuptools.package-data]
+"scar.backend.cpp20" = ["runtime.hpp"]
+"scar.backend.planning" = ["calibration.cpp"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests/stages"]
 

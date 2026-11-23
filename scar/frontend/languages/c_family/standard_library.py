@@ -358,5 +358,16 @@ def bind_call(cursor, declaration, expression, lower_type):
                 "value": op["receiver"],
             }
     op["args"] = [expression(arg) for arg in arguments]
+    modes = {
+        "LVALUEREFERENCE": "reference",
+        "RVALUEREFERENCE": "reference",
+        "POINTER": "pointer",
+        "CONSTANTARRAY": "pointer",
+        "INCOMPLETEARRAY": "pointer",
+    }
+    op["parameter_modes"] = [
+        modes.get(parameter.type.get_canonical().kind.name, "value")
+        for parameter in list(declaration.get_arguments())[: len(arguments)]
+    ]
     op["effects"] = "unknown"
     return op
