@@ -313,14 +313,16 @@ def _stage_native_sources(manifest, evidence, project, regions):
     captures = evidence.get('compiler_types', {})
     project.mkdir()
     if not mixed and fortran:
-        from .fortran_bridge import emit_fortran
+        from .fortran_bridge import prepare_fortran
 
-        build = emit_fortran(manifest, project, source_bytes, captures=captures)
+        build, wrapper, exports = prepare_fortran(manifest, project, source_bytes, captures=captures)
+        if 'f2c-cfi-v1' in build['runtime_support']:
+            _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, ())
         build['libraries'] = (*manifest.get('libraries', ()), *build['libraries'])
         for key in ('link_options', 'runtime_dirs'):
             if manifest.get(key):
                 build[key] = manifest[key]
-        return build, {}
+        return build, {}, wrapper, exports
     c_units = [units[name] for name, language in languages.items() if language == 'c']
     cxx_units = [units[name] for name, language in languages.items() if language == 'c++' and fortran]
     c_root = Path('src/c-abi') if mixed else Path('src')
@@ -362,34 +364,52 @@ def _stage_native_sources(manifest, evidence, project, regions):
         (project / 'translation.json').write_text(json.dumps(translation, indent=2) + '\n')
     fortran_libraries = ()
     runtime_support = ()
+    wrapper, exports = None, ()
+    cfi_runtime = False
     if fortran:
-        from .fortran_bridge import emit_fortran
+        from .fortran_bridge import prepare_fortran
 
         config = dict(manifest, units=fortran, language='fortran')
-        bridge = emit_fortran(config, project, source_bytes, source_directory='src/fortran-abi',
-                              mixed=True, captures=captures)
+        bridge, wrapper, exports = prepare_fortran(config, project, source_bytes,
+                                                  source_directory='src/fortran-abi', mixed=True,
+                                                  captures=captures)
         settings.update({name: ((), bridge['compile_options']) for name in bridge['sources']})
         fortran_libraries = bridge['libraries']
-        if cfi_headers or bridge.get('gnu_cfi_descriptors'):
-            if _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, cfi_headers):
-                runtime_support = ('gnu-cfi-v1',)
+        runtime_support = bridge['runtime_support']
+        if cfi_headers or 'f2c-cfi-v1' in runtime_support:
+            cfi_runtime = _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, cfi_headers)
+        if cfi_runtime:
+            runtime_support += ('gnu-cfi-v1',)
 
     profiles = (manifest,) if profile == 'c' else (manifest, manifest.get('cxx', {}))
     linkage = {key: tuple(value for profile in profiles for value in profile.get(key, ()))
                for key in ('libraries', 'link_options', 'runtime_dirs')}
     linkage['libraries'] = (*linkage['libraries'], *fortran_libraries)
     common = set(settings.values())
-    if runtime_support:
+    if cfi_runtime:
         common.add(((), ()))
     include_dirs, compile_options = next(iter(common)) if len(common) == 1 else ((), ())
     configuration = dict(sources=tuple(settings), include_dirs=include_dirs, compile_options=compile_options,
                          source_settings=settings if len(common) > 1 else {}, **linkage)
     if runtime_support:
         configuration['runtime_support'] = runtime_support
-    return configuration, anchors
+    return configuration, anchors, wrapper, exports
 
 
-def _fortran_fragment(region, export, capture, fragments, compiler_types):
+def _abi_declaration(export):
+    arguments = []
+    for row in export['arguments']:
+        argument = {key: row[key] for key in ('wrapper_name', 'c_type', 'transport_type', 'by_value', 'read_only')}
+        if descriptor := row.get('descriptor'):
+            argument['descriptor'] = {key: descriptor[key] for key in
+                                      ('rank', 'cfi_type', 'lower_bounds', 'contiguous', 'intent') if key in descriptor}
+        arguments.append(argument)
+    result = export['result']
+    return dict(symbol=export['symbol'], transport=export['transport'], arguments=arguments,
+                result={key: result[key] for key in ('c_type', 'transport_type')} if result else None)
+
+
+def _fortran_anchor(region, export, capture, path, digest, compiler_types):
     abi, source = region['fortran_abi'], region['source']
     if (abi['profile'] != 'BIND_C_RANK1_ASSUMED_SIZE' or abi['procedure'] != export['procedure']
             or abi['symbol'] != region['symbol'] or source['sha256'] != export['source_sha256']
@@ -412,11 +432,9 @@ def _fortran_fragment(region, export, capture, fragments, compiler_types):
     if (parameters != abi['parameters'] or region['parameters'] != [
             dict(name=row['name'], type=row['type']) for row in parameters]):
         return None
-    wrapper = export['wrapper']
-    if fragments.get(wrapper['path'], {}).get('sha256') != wrapper['sha256']:
-        raise ValueError(f'generated Fortran wrapper changed for {export["symbol"]}')
     domain = dict(parameter=abi['bounds']['parameter'], minimum=1, maximum=abi['bounds']['maximum'])
-    return dict(wrapper, bindings=bindings, authority='VERIFIED_ABI_WRAPPER', count_domain=domain)
+    return dict(path=path, symbol=export['symbol'], abi_sha256=digest, bindings=bindings,
+                authority='TYPED_ABI_EXPORT', count_domain=domain)
 
 
 def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact, list[dict]]:
@@ -427,21 +445,17 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
     by_unit = defaultdict(list)
     for region in regions:
         by_unit[region['source']['path']].append(region)
-    configuration, anchors = _stage_native_sources(target, evidence, pending, by_unit)
+    configuration, anchors, wrapper, exports = _stage_native_sources(target, evidence, pending, by_unit)
     fragments = {}
     for directory in ('src', 'include'):
         for path in sorted((pending / directory).rglob('*')):
             if path.is_file():
                 name = path.relative_to(pending).as_posix()
                 fragments[name] = asdict(local_member(artifact(path), out))
-    emission = pending / 'fortran-emission.json'
-    exports = []
-    bridge_exports = {}
+    declarations = [_abi_declaration(row) for row in exports]
+    bridge_exports = {(row['unit'], row['symbol']): (row, json_digest(declaration))
+                      for row, declaration in zip(exports, declarations, strict=True)}
     captures = {row['unit']: row for row in evidence.get('units', ()) if row['language'] == 'fortran'}
-    if emission.is_file():
-        data = emission.read_bytes()
-        bridge_exports = {(row['unit'], row['symbol']): row for row in json.loads(data)['c_exports']}
-        exports = sorted(row['symbol'] for row in bridge_exports.values())
     retained = []
     for region in regions:
         if region['region'] in anchors:
@@ -449,14 +463,17 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
             fragment = {'path': path, 'span': span, 'sha256': fragments[path]['sha256'],
                         'slice_sha256': region['source']['slice_sha256']}
             retained.append({**region, 'fragment': fragment})
-        elif 'fortran_abi' in region and (export := bridge_exports.get((region['source']['path'], region['symbol']))):
+        elif 'fortran_abi' in region and (binding := bridge_exports.get((region['source']['path'], region['symbol']))):
             unit = region['source']['path']
-            fragment = _fortran_fragment(region, export, captures.get(unit), fragments,
-                                         evidence['compiler_types'].get(unit))
+            export, digest = binding
+            fragment = _fortran_anchor(region, export, captures.get(unit), wrapper, digest,
+                                       evidence['compiler_types'].get(unit))
             if fragment is not None:
                 lowered = dict(region, fragment=fragment)
                 del lowered['fortran_abi']
                 retained.append(lowered)
     seals = {row['region']: json_digest(row) for row in retained}
-    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=3,
-                       configuration=configuration, fragments=fragments, exports=exports, region_seals=seals)), retained
+    abi_units = {wrapper: declarations} if declarations else {}
+    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=4,
+                       configuration=configuration, fragments=fragments, abi_units=abi_units,
+                       exports=sorted(row['symbol'] for row in exports), region_seals=seals)), retained

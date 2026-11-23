@@ -1,37 +1,13 @@
-"""B1 renders the executable IR as C++20 project inputs."""
+"""B2 renders the executable IR as C++20 project inputs."""
 
 from collections import defaultdict
 import json
-import math
 from pathlib import Path
 import sys
 
 from scar.contract import ElementwiseEntry, FragmentModule, Member, ScalarModule, read_artifact, write_json
 
-
-_BINARY = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
-
-
-def _expression(row, slots, symbols):
-    kind, *args = row
-    if kind == "read":
-        return slots[args[0]]
-    if kind == "constant":
-        value = float(args[0])
-        if not math.isfinite(value):
-            raise ValueError("portable constants must be finite")
-        return value.hex()
-    if kind == "neg":
-        return "(-" + _expression(args[0], slots, symbols) + ")"
-    if kind in _BINARY:
-        left, right = (_expression(arg, slots, symbols) for arg in args)
-        return f"({left} {_BINARY[kind]} {right})"
-    if kind == "call":
-        name, arity = symbols[args[0]]
-        if len(args) != arity + 1:
-            raise ValueError("portable call does not match its signature")
-        return name + "(" + ", ".join(_expression(arg, slots, symbols) for arg in args[1:]) + ")"
-    raise ValueError(f"unsupported portable expression {kind}")
+from .abi import emit_scalar_module, f2c_support_header, render_abi_wrappers, render_expression
 
 
 def _statements(rows, slots, symbols, indent, *, loop=False):
@@ -39,12 +15,12 @@ def _statements(rows, slots, symbols, indent, *, loop=False):
     for kind, *args in rows:
         if kind == "store":
             name, value = args
-            expression = _expression(value, slots, symbols)
+            expression = render_expression(value, slots, symbols)
             fresh = name not in slots
             slot = slots.setdefault(name, f"v{len(slots)}")
             code.append(f"{indent}{'double ' if fresh else ''}{slot} = {expression};")
         elif kind == "return":
-            code.append(f"{indent}return {_expression(args[0], slots, symbols)};")
+            code.append(f"{indent}return {render_expression(args[0], slots, symbols)};")
         elif kind == "repeat" and loop:
             code.append(indent + "for (std::int64_t step = 0; step < steps; ++step) {")
             code.extend(_statements(args[0], slots.copy(), symbols, indent + "    "))
@@ -169,13 +145,19 @@ def _elementwise(body, cpus, project):
 
 
 def _runtime_support(configuration, project):
-    support = configuration.pop("runtime_support", ())
-    if not support:
-        return
-    if support != ["gnu-cfi-v1"]:
+    support = set(configuration.pop("runtime_support", ()))
+    f2c = support & {"f2c-v1", "f2c-cfi-v1"}
+    if support - (f2c | {"gnu-cfi-v1"}) or len(f2c) > 1:
         raise ValueError("unknown native runtime requirement")
-    if not (project / "include/scar_generated/ISO_Fortran_binding.h").is_file():
+    headers = project / "include/scar_generated"
+    descriptors = "f2c-cfi-v1" in f2c
+    if (descriptors or "gnu-cfi-v1" in support) and not (headers / "ISO_Fortran_binding.h").is_file():
         raise ValueError("generated GNU CFI runtime requires its sealed ABI header")
+    if f2c:
+        with (headers / "scar_f2c_call.hpp").open("xb") as stream:
+            stream.write(f2c_support_header(descriptors=descriptors))
+    if "gnu-cfi-v1" not in support:
+        return
     name = "src/fortran-abi/scar_gnu_cfi.cpp"
     destination = project / name
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -186,28 +168,40 @@ def _runtime_support(configuration, project):
 
 def _fragments(body, project, bundle):
     material = json.loads(read_artifact(body.artifact.resolve(bundle)))
-    if (set(material) != {"schema", "schema_version", "configuration", "fragments", "exports"}
-            or material["schema"] != "scar.native-units-ir" or material["schema_version"] != 1):
+    fields = {"schema", "schema_version", "configuration", "fragments", "exports"}
+    version = material.get("schema_version")
+    if version == 2:
+        fields.add("abi_units")
+    if set(material) != fields or material["schema"] != "scar.native-units-ir" or version not in (1, 2):
         raise ValueError("invalid C++20 fragment module")
+    fragments, abi_units = material["fragments"], material.get("abi_units", {})
     regions = defaultdict(list)
     configuration = material["configuration"]
     for row in body.regions:
         regions[row["fragment"]["path"]].append(row)
-    if not regions.keys() <= set(configuration["sources"]) & material["fragments"].keys():
+    sources = set(configuration["sources"])
+    if fragments.keys() & abi_units.keys() or not abi_units.keys() <= sources:
+        raise ValueError("an ABI declaration must own a separate C++20 unit")
+    if not regions.keys() <= sources & (fragments.keys() | abi_units.keys()):
         raise ValueError("a typed native region has no owned C++20 unit")
     definitions, decisions = [], []
-    for name, reference in material["fragments"].items():
+    for name in (*fragments, *abi_units):
         relative = Path(name)
         if (relative.as_posix() != name or len(relative.parts) < 2 or ".." in relative.parts
                 or relative.parts[0] not in {"src", "include"}):
             raise ValueError(f"invalid C++20 fragment path {name}")
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        data = read_artifact(Member(**reference).resolve(bundle))
+        declarations, spans = (), {}
+        if name in abi_units:
+            declarations = abi_units[name]
+            data, spans = render_abi_wrappers(declarations)
+        else:
+            data = read_artifact(Member(**fragments[name]).resolve(bundle))
         if name in regions:
             from .regions import render_regions
 
-            data, helpers, emitted = render_regions(regions[name], configuration, name, data)
+            data, helpers, emitted = render_regions(regions[name], configuration, name, data, declarations, spans)
             definitions.extend(helpers)
             decisions.extend(emitted)
         destination.write_bytes(data)
@@ -231,8 +225,6 @@ def lower_project(ir, project, bundle):
     configuration, exports, invocation = _fragments(fragments, project, bundle)
     for body in ir.bodies:
         if isinstance(body, ScalarModule):
-            from .scalars import emit_scalar_module
-
             emit_scalar_module(body, project, configuration)
             exports = (*exports, *(function["name"] for function in body.functions))
     return configuration, exports, invocation

@@ -206,7 +206,13 @@ end subroutine fill_pair
     _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--jobs", 3, "--out", graph)
     graph_path = graph / "graph.json"
     document = json.loads(graph_path.read_bytes())
-    assert not Path(document["program"]["native"]["module"]["path"]).is_absolute()
+    material_path = Path(document["program"]["native"]["module"]["path"])
+    assert not material_path.is_absolute()
+    material = json.loads((graph / material_path).read_bytes())
+    wrapper = "src/fortran-abi/scar_c_abi.cpp"
+    assert {row["symbol"] for row in material["abi_units"][wrapper]} == {"extra", "initialize_fortran"}
+    assert wrapper not in material["fragments"]
+    assert "include/scar_generated/scar_f2c_call.hpp" not in material["fragments"]
     if python_binding:
         links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
         assert {"python_adjust", "scale_value"} <= links
@@ -223,10 +229,13 @@ end subroutine fill_pair
     regions = logical["lowering"]["bodies"][0]["regions"]
     typed = {row["symbol"]: row for row in regions if row["region"] in rewrites}
     assert {"initialize", "initialize_fortran"} <= typed.keys()
+    assert typed["initialize_fortran"]["fragment"]["authority"] == "TYPED_ABI_EXPORT"
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
+    assert (delivery / "project" / wrapper).is_file()
+    assert (delivery / "project/include/scar_generated/scar_f2c_call.hpp").is_file()
     generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())
     emitted = {row["region"] for row in generated["regions"] if row["status"] == "GUARDED_REGION"}
     assert {typed[name]["region"] for name in ("initialize", "initialize_fortran")} <= emitted

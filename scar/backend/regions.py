@@ -1,11 +1,12 @@
 """Render proved counted regions and retain the exact source fallback."""
 
-from collections import defaultdict
 from hashlib import sha256
 import math
 from pathlib import Path
 import platform
 import re
+
+from ..contract import json_digest
 
 
 _PARAMETERS = {"i32": "int", "f64": "double", "ptr<f64>": "double*", "ptr<const f64>": "const double*"}
@@ -134,16 +135,43 @@ def _strict_source(configuration, name):
             and not any(flag.startswith("-m") and flag not in {"-m64", "-msse2"} for flag in flags))
 
 
-def render_regions(rows, material, name, data):
+def _abi_span(row, declarations, spans):
+    witness = row["fragment"]
+    symbol = row["symbol"]
+    declaration = declarations.get(symbol)
+    if (declaration is None or witness["symbol"] != symbol or witness["abi_sha256"] != json_digest(declaration)
+            or declaration["result"] is not None):
+        raise ValueError(f"native region ABI witness changed: {symbol}")
+    actual = []
+    for argument in declaration["arguments"]:
+        native_type = argument["c_type"]
+        if argument.get("descriptor"):
+            raise ValueError(f"native region does not admit descriptor arguments: {symbol}")
+        if not argument["by_value"]:
+            native_type = ("const " if argument["read_only"] else "") + native_type + "*"
+        actual.append((argument["wrapper_name"], native_type))
+    expected = [(witness["bindings"].get(parameter["name"]), _PARAMETERS.get(parameter["type"]))
+                for parameter in row["parameters"]]
+    if actual != expected:
+        raise ValueError(f"native region parameters differ from the ABI declaration: {symbol}")
+    return spans[symbol]
+
+
+def render_regions(rows, material, name, data, declarations, abi_spans):
     """Splice only verified body ranges, returning the guarded helper definitions."""
     spans, definitions, decisions = [], [], []
+    exports = {row["symbol"]: row for row in declarations}
     digest = sha256(data).hexdigest()
     for row in rows:
         witness = row["fragment"]
-        start, stop = witness["span"]
+        if witness.get("authority") == "TYPED_ABI_EXPORT":
+            start, stop = _abi_span(row, exports, abi_spans)
+        else:
+            start, stop = witness["span"]
+            if witness["sha256"] != digest or sha256(data[start:stop]).hexdigest() != witness["slice_sha256"]:
+                raise ValueError(f"native region source witness changed: {name}:{start}")
         original = data[start:stop]
-        if (witness["path"] != name or witness["sha256"] != digest or not (0 <= start < stop <= len(data))
-                or sha256(original).hexdigest() != witness["slice_sha256"]
+        if (witness["path"] != name or not (0 <= start < stop <= len(data))
                 or not original.startswith(b"{") or not original.endswith(b"}")):
             raise ValueError(f"native region source witness changed: {name}:{start}")
         if not _strict_source(material, name):

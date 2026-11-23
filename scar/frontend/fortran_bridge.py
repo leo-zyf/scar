@@ -1,4 +1,4 @@
-"""Translate admitted Fortran sources and render standalone C++20 ABI bridges."""
+"""Read the admitted Fortran ABI and prepare compiler-compatible transport bodies."""
 
 import hashlib
 import json
@@ -33,144 +33,6 @@ _FUNCTION_BODY = '/* Function Body */'
 _CPP_NONCODE = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'')
 _POINTER_SHIFT = re.compile(r'^\s*(?:--(\w+)|(\w+)\s*-=\s*(\w+))\s*;', re.MULTILINE)
 _INDIRECT_CALL = re.compile(r'\(\s*\*\s*(\w+)\s*\)\s*\(\s*(?!\s*\))')
-_CALL_WRAPPER = '''#pragma once
-
-template<class Result, class... Args>
-static inline Result scar_f2c_call(Result (*callee)(...), Args... args) {
-    return reinterpret_cast<Result (*)(Args...)>(callee)(args...);
-}
-'''
-_CFI_ELEMENT = '''
-#include <cstdint>
-
-using longint = std::int64_t;
-
-// The companion CFI ABI describes byte addresses of live scalar objects.
-template<class T>
-static inline T* scar_cfi_element(T* base, longint byte_offset) {
-    return reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(base) +
-                                static_cast<std::uintptr_t>(byte_offset));
-}
-'''
-_CFI_VIEW = '''static_assert(CFI_VERSION == 1);
-static_assert(std::is_same_v<CFI_index_t, longint>);
-static_assert(sizeof(std::uintptr_t) == sizeof(longint));
-
-struct ScarCFIAxis {
-    longint extent, stride, origin, lower, upper;
-};
-
-template<class T, std::size_t Rank>
-struct ScarCFIView {
-    T* data;
-    std::array<ScarCFIAxis, Rank> axes;
-};
-
-template<class T, CFI_type_t Type, std::size_t Rank>
-static ScarCFIView<T, Rank> scar_cfi_view(CFI_cdesc_t* descriptor,
-                                        std::array<longint, Rank> origins) {
-    static_assert(0 < Rank && Rank <= CFI_MAX_RANK);
-    if (!descriptor || descriptor->version != CFI_VERSION || descriptor->rank != Rank ||
-        descriptor->type != Type || descriptor->elem_len != sizeof(T) ||
-        descriptor->attribute != CFI_attribute_other) std::abort();
-
-    ScarCFIView<T, Rank> result{};
-    result.data = static_cast<T*>(descriptor->base_addr);
-    bool empty = false;
-    for (std::size_t i = 0; i < Rank; ++i) {
-        const CFI_dim_t& dim = descriptor->dim[i];
-        if (dim.lower_bound != 0 || dim.extent < 0 || dim.sm % longint(sizeof(T))) std::abort();
-        ScarCFIAxis& axis = result.axes[i];
-        axis.extent = dim.extent;
-        axis.stride = dim.sm;
-        axis.origin = origins[i];
-        if (dim.extent == 0) {
-            empty = true;
-            axis.lower = 1;
-            axis.upper = 0;
-        } else {
-            axis.lower = axis.origin;
-            if (__builtin_add_overflow(axis.origin, dim.extent - 1, &axis.upper)) std::abort();
-        }
-    }
-
-    if (!empty) {
-        longint min_offset = 0, max_offset = 0;
-        for (const auto& axis : result.axes) {
-            longint displacement;
-            if ((axis.extent > 1 && axis.stride == 0) ||
-                __builtin_mul_overflow(axis.extent - 1, axis.stride, &displacement)) std::abort();
-            longint& sum = displacement < 0 ? min_offset : max_offset;
-            if (__builtin_add_overflow(sum, displacement, &sum)) std::abort();
-        }
-        const auto base = reinterpret_cast<std::uintptr_t>(result.data);
-        const auto available = (std::numeric_limits<std::uintptr_t>::max)() - base;
-        const auto negative = std::uintptr_t(0) - static_cast<std::uintptr_t>(min_offset);
-        // The caller establishes accessible backing objects and their lifetime.
-        // Check the representable byte envelope before evaluating any element.
-        if (!base || base % alignof(T) || negative > base || max_offset == (std::numeric_limits<longint>::max)() ||
-            static_cast<std::uintptr_t>(max_offset) > available ||
-            sizeof(T) - 1 > available - static_cast<std::uintptr_t>(max_offset)) std::abort();
-    }
-    return result;
-}
-'''
-_CFI_PACKING = '''template<class T, std::size_t Rank>
-class ScarCFIPacking {
-public:
-    explicit ScarCFIPacking(ScarCFIView<T, Rank>& view) {
-        for (const auto& axis : view.axes) {
-            if (axis.extent == 0) return;
-        }
-
-        // GNU requires the exact packed stride at every axis, even singletons.
-        std::array<longint, Rank> packed_strides;
-        longint bytes = sizeof(T);
-        bool packed = true;
-        for (std::size_t i = 0; i < Rank; ++i) {
-            packed_strides[i] = bytes;
-            packed &= view.axes[i].stride == bytes;
-            if (__builtin_mul_overflow(bytes, view.axes[i].extent, &bytes)) std::abort();
-        }
-        if (packed) return;
-
-        count = bytes / sizeof(T);
-        buffer.reset(new (std::nothrow) T[count]);
-        if (!buffer) std::abort();
-        source = view;
-        // GNU's BIND(C) prologue copies the bytes in for all INTENT modes.
-        transfer<true>();
-        view.data = buffer.get();
-        for (std::size_t i = 0; i < Rank; ++i) view.axes[i].stride = packed_strides[i];
-    }
-
-    void copy_back() {
-        if (buffer) transfer<false>();
-    }
-
-private:
-    template<bool CopyIn>
-    void transfer() {
-        for (longint i = 0; i < count; ++i) {
-            longint linear = i;
-            longint offset = 0;
-            for (const auto& axis : source.axes) {
-                offset += (linear % axis.extent) * axis.stride;
-                linear /= axis.extent;
-            }
-            T* element = scar_cfi_element(source.data, offset);
-            T* packed = buffer.get() + i;
-            if constexpr (CopyIn) std::memcpy(packed, element, sizeof(T));
-            else std::memcpy(element, packed, sizeof(T));
-        }
-    }
-
-    ScarCFIView<T, Rank> source;
-    std::unique_ptr<T[]> buffer;
-    longint count = 0;
-};
-'''
-_CFI_AXIS_FIELDS = ('extent', 'stride', 'origin', 'lower', 'upper')
 
 
 def _runtime(config, name):
@@ -267,8 +129,6 @@ def _translate_f2c(units, project, config, *, source_directory='src', descriptor
     # keeps its ABI and permits strict C++20 string literal initialization.
     contents = re.sub(r'\bchar\s*\*\s*cifmt\b', 'const char *cifmt', contents)
     (generated / 'f2c.h').write_text(contents, encoding='utf-8')
-    wrapper = _CALL_WRAPPER + (_CFI_ELEMENT if descriptor_units else '')
-    (generated / 'scar_f2c_call.hpp').write_text(wrapper, encoding='utf-8')
 
     sources = []
     with TemporaryDirectory(prefix='.f2c-', dir=project) as temporary:
@@ -304,81 +164,9 @@ def _translate_f2c(units, project, config, *, source_directory='src', descriptor
             dest.write_text(_repair_f2c_source(translated, descriptor_arrays), encoding='utf-8')
             sources.append(dest.relative_to(project).as_posix())
 
-    return {'sources': sources, 'libraries': (str(archive), 'm'),
+    support = 'f2c-cfi-v1' if descriptor_units else 'f2c-v1'
+    return {'sources': sources, 'libraries': (str(archive), 'm'), 'runtime_support': (support,),
             'compile_options': ('-ffp-contract=off', '-fno-fast-math', '-Werror=write-strings')}
-
-
-def _c_abi_source(exports):
-    descriptors = [arg['descriptor'] for row in exports for arg in row['arguments'] if 'descriptor' in arg]
-    has_packing = any(row.get('contiguous') for row in descriptors)
-    lines = ['#include <type_traits>']
-    if descriptors:
-        lines.extend(['#include <ISO_Fortran_binding.h>', '#include <array>', '#include <cstdlib>',
-                      '#include <limits>', '#include "scar_f2c_call.hpp"'])
-    if has_packing:
-        lines.extend(['#include <cstring>', '#include <memory>', '#include <new>'])
-    lines.extend(['#include "f2c.h"', 'static_assert(std::is_same_v<integer, int>);',
-                  'static_assert(std::is_same_v<doublereal, double>);'])
-    if any(argument['transport_type'] == 'real' for row in exports for argument in row['arguments']):
-        lines.append('static_assert(std::is_same_v<real, float>);')
-    if descriptors:
-        lines.append(_CFI_VIEW)
-    if has_packing:
-        lines.append(_CFI_PACKING)
-    header = ('\n'.join(lines) + '\n').encode()
-    chunks, spans, position = [header], {}, len(header)
-    for row in exports:
-        result = row['result']
-        native_return = result['c_type'] if result else 'void'
-        transport_return = result['transport_type'] if result else 'int'
-        types, parameters, arguments, checks = [], [], [], []
-        packings, copy_backs = [], []
-        for index, argument in enumerate(row['arguments']):
-            name = f'arg{index}'
-            argument['wrapper_name'] = name
-            types.append(f'{argument["transport_type"]} *')
-            if descriptor := argument.get('descriptor'):
-                parameters.append(f'CFI_cdesc_t *{name}')
-                view = f'view{index}'
-                lower = ', '.join(map(str, descriptor['lower_bounds']))
-                template = f'{argument["c_type"]}, {descriptor["cfi_type"]}, {descriptor["rank"]}'
-                checks.append(f'    auto {view} = scar_cfi_view<{template}>({name}, {{{lower}}});')
-                if descriptor.get('contiguous'):
-                    packing = f'packing{index}'
-                    packings.append(f'    ScarCFIPacking {packing}({view});')
-                    if descriptor['intent'] != 'in':
-                        copy_backs.append(f'    {packing}.copy_back();')
-                arguments.append(f'{view}.data')
-                for axis in range(descriptor['rank']):
-                    for field in _CFI_AXIS_FIELDS:
-                        types.append('longint *')
-                        arguments.append(f'&{view}.axes[{axis}].{field}')
-            elif argument['by_value']:
-                parameters.append(f'{argument["c_type"]} {name}')
-                arguments.append('&' + name)
-            elif argument['read_only']:
-                parameters.append(f'const {argument["c_type"]} *{name}')
-                arguments.append(f'const_cast<{argument["c_type"]} *>({name})')
-            else:
-                parameters.append(f'{argument["c_type"]} *{name}')
-                arguments.append(name)
-        prefix = (f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});\n'
-                  f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) ').encode()
-        body = ['{', *checks, *packings]
-        call = f'{row["transport"]}({", ".join(arguments)});'
-        if result and copy_backs:
-            body.append('    const auto result = ' + call)
-            body.extend(copy_backs)
-            body.append('    return result;')
-        else:
-            body.append('    ' + ('return ' if result else '') + call)
-            body.extend(copy_backs)
-        compound = '\n'.join((*body, '}')).encode()
-        start = position + len(prefix)
-        spans[row['symbol']] = (start, start + len(compound))
-        chunks.extend((prefix, compound, b'\n'))
-        position = start + len(compound) + 1
-    return b''.join(chunks), spans
 
 
 def _translate_freeform(manifest, units, project, config, captures, source_directory, mixed):
@@ -415,24 +203,11 @@ def _translate_freeform(manifest, units, project, config, captures, source_direc
         transport = [(f'{name}.f', source.encode(), (), True) for name, source in lowered['sources'].items()]
         build = _translate_f2c([*legacy, *transport], project, config, source_directory=source_directory,
                                descriptor_units=lowered['descriptor_units'])
-        exports = lowered['exports']
-        if exports:
-            wrapper = Path(source_directory) / 'scar_c_abi.cpp'
-            data, spans = _c_abi_source(exports)
-            (project / wrapper).write_bytes(data)
-            build['sources'].append(wrapper.as_posix())
-            digest = hashlib.sha256(data).hexdigest()
-            for row in exports:
-                start, stop = spans[row['symbol']]
-                row['wrapper'] = dict(path=wrapper.as_posix(), span=[start, stop], sha256=digest,
-                                      slice_sha256=hashlib.sha256(data[start:stop]).hexdigest())
-        if lowered['descriptor_units']:
-            build['gnu_cfi_descriptors'] = True
-        return build, exports
+        return build, lowered['exports']
 
 
-def emit_fortran(manifest, project, source_bytes, *, source_directory='src', mixed=False, captures):
-    """Emit standalone C++20 host sources. Return shared CMake writer arguments."""
+def prepare_fortran(manifest, project, source_bytes, *, source_directory='src', mixed=False, captures):
+    """Return sealed transport inputs and declarations for the target ABI."""
     config = manifest.get('fortran', {})
     units = [(row['path'], source_bytes[row['path']], tuple(row.get('flags', ())), False)
              for row in manifest['units']]
@@ -449,8 +224,13 @@ def emit_fortran(manifest, project, source_bytes, *, source_directory='src', mix
     digests = {name: hashlib.sha256(data).hexdigest() for name, data, _, _ in units}
     for row in exports:
         row['source_sha256'] = digests[row['unit']]
-    recipe = {'schema': 'scar.fortran-emission', 'schema_version': 1, 'compiler': translation,
+        for index, argument in enumerate(row['arguments']):
+            argument['wrapper_name'] = f'arg{index}'
+    wrapper = (Path(source_directory) / 'scar_c_abi.cpp').as_posix() if exports else None
+    if wrapper:
+        build['sources'].append(wrapper)
+    recipe = {'schema': 'scar.fortran-emission', 'schema_version': 2, 'compiler': translation,
               'sources': [{'path': name, 'sha256': digest} for name, digest in digests.items()],
               'native_libraries': list(build['libraries']), 'c_exports': exports}
     (project / 'fortran-emission.json').write_text(json.dumps(recipe, indent=2) + '\n', encoding='utf-8')
-    return build
+    return build, wrapper, exports

@@ -104,24 +104,34 @@ def _subtree_operations(region_id, regions):
     return operations
 
 
-def _count_limit(row, source, fragment, operations):
-    """Admit a phase-neutral source or verified ABI fragment handoff."""
+def _within_span(witness, size):
+    start, stop = witness['span']
+    return type(start) is int and type(stop) is int and 0 <= start < stop <= size
+
+
+def _count_limit(row, source, operations, fragments, abi_digests):
+    """Match a source anchor or an exported signature to its sealed input."""
     witness = row['fragment']
-    for selection, size in ((row['source'], source['size_bytes']), (witness, fragment['size'])):
-        start, stop = selection['span']
-        if (type(start) is not int or type(stop) is not int or not 0 <= start < stop <= size):
-            return None
-    if any(operations[key].attributes.get('symbol') != row['symbol']
-           or operations[key].attributes.get('unit') != row['source']['path']
-           for key in row['operations']):
+    if (not _within_span(row['source'], source['size_bytes'])
+            or any(operations[key].attributes.get('symbol') != row['symbol']
+                   or operations[key].attributes.get('unit') != row['source']['path']
+                   for key in row['operations'])):
         return None
 
     authority = witness.get('authority', 'DIRECT_SOURCE')
+    if authority == 'TYPED_ABI_EXPORT':
+        digest = abi_digests.get((witness['path'], row['symbol']))
+        if not digest or digest != witness['abi_sha256'] or witness['symbol'] != row['symbol']:
+            return None
+    else:
+        fragment = fragments.get(witness['path'])
+        if fragment is None or fragment['sha256'] != witness['sha256'] or not _within_span(witness, fragment['size']):
+            return None
     if authority == 'DIRECT_SOURCE':
         if witness['slice_sha256'] == row['source']['slice_sha256'] and 'bindings' not in witness:
             return 2**31 - 1
         return None
-    if authority != 'VERIFIED_ABI_WRAPPER':
+    if authority not in ('TYPED_ABI_EXPORT', 'VERIFIED_ABI_WRAPPER'):
         return None
     domain = witness.get('count_domain', {})
     bindings = witness.get('bindings', {})
@@ -134,7 +144,7 @@ def _count_limit(row, source, fragment, operations):
     return maximum
 
 
-def rewrite_native_regions(graph, rows, fragments, seals=None):
+def rewrite_native_regions(graph, rows, fragments, abi_digests, seals=None):
     """Return guarded typed bodies and their source-aligned proof ledger."""
     regions = {region.id: region for region in graph.regions}
     sources = graph.target['source_lock']['files']
@@ -147,10 +157,8 @@ def rewrite_native_regions(graph, rows, fragments, seals=None):
         if seals is None and row['fragment'].get('authority', 'DIRECT_SOURCE') != 'DIRECT_SOURCE':
             continue
         region = regions.get(identity)
-        fragment = fragments.get(row['fragment']['path'])
         source = sources.get(row['source']['path'])
         if (region is None or region.kind != 'FUNCTION'
-                or fragment is None or fragment['sha256'] != row['fragment']['sha256']
                 or source is None or source['sha256'] != row['source']['sha256']
                 or identity in seen or not row['operations']
                 or len(set(row['operations'])) != len(row['operations'])
@@ -159,7 +167,7 @@ def rewrite_native_regions(graph, rows, fragments, seals=None):
         candidate = _fuse(row)
         if candidate is None:
             continue
-        maximum = _count_limit(candidate, source, fragment, operations)
+        maximum = _count_limit(candidate, source, operations, fragments, abi_digests)
         if maximum is None:
             continue
         if 'count_domain' in candidate['fragment']:

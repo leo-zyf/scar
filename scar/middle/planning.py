@@ -5,8 +5,8 @@ from pathlib import Path
 from dataclasses import asdict
 
 from scar.contract import (
-    ElementwiseEntry, ExecutableIR, FragmentModule, Member, Plan, ScalarModule, Step, copy_artifact, local_member,
-    open_graph, product_artifact, read_artifact, write_json, write_plan,
+    ElementwiseEntry, ExecutableIR, FragmentModule, Member, Plan, ScalarModule, Step, copy_artifact, json_digest,
+    local_member, open_graph, product_artifact, read_artifact, write_json, write_plan,
 )
 
 from .native import rewrite_native_regions
@@ -52,19 +52,30 @@ def _seal_fragments(graph, native, graph_root, product, root):
     source_root = Path(reference.path).parent
     material = json.loads(read_artifact(reference))
     version = material.get('schema_version')
-    seals = material.pop('region_seals', None) if version in (2, 3) else None
-    if (set(material) != {'schema', 'schema_version', 'configuration', 'fragments', 'exports'}
-            or material['schema'] != 'scar.native-units-ir' or version not in (1, 2, 3)
-            or (version >= 2 and type(seals) is not dict)):
+    fields = {'schema', 'schema_version', 'configuration', 'fragments', 'exports'}
+    if version == 4:
+        fields.add('abi_units')
+    if version in (2, 3, 4):
+        fields.add('region_seals')
+    if (set(material) != fields or material['schema'] != 'scar.native-units-ir'
+            or version not in (1, 2, 3, 4) or (version >= 2 and type(material['region_seals']) is not dict)):
         raise ValueError('invalid frontend fragment material')
-    regions, rewrites = rewrite_native_regions(graph, native.regions, material['fragments'], seals)
-    material['schema_version'] = 1
+    seals = material.pop('region_seals', None)
+    abi_digests = {}
+    for path, declarations in material.get('abi_units', {}).items():
+        for row in declarations:
+            identity = path, row['symbol']
+            if identity in abi_digests:
+                raise ValueError(f'duplicate ABI declaration for {row["symbol"]} in {path}')
+            abi_digests[identity] = json_digest(row)
+    regions, rewrites = rewrite_native_regions(graph, native.regions, material['fragments'], abi_digests, seals)
+    material['schema_version'] = 2 if version == 4 else 1
     members = {}
     for name, file in material['fragments'].items():
         identity = file['sha256']
         owned = members.get(identity)
         if owned is None:
-            source = Member(**file).resolve(source_root) if version == 3 else file
+            source = Member(**file).resolve(source_root) if version >= 3 else file
             copied = copy_artifact(source, product / 'blobs' / identity)
             members[identity] = owned = asdict(local_member(copied, root))
         material['fragments'][name] = owned
