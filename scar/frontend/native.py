@@ -12,7 +12,10 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import Edge, Operation, Region, artifact, copy_artifact, read_artifact, verify_artifact, write_json
+from scar.contract import (
+    Edge, Graph, GraphProgram, NativeProgram, Operation, Region, artifact, copy_artifact, local_member,
+    read_artifact, verify_artifact, write_json,
+)
 
 from .clang import capture_unit, counted_function_bodies, gnu_cfi_header, gnu_cfi_overlay, typed_call_occurrences
 
@@ -132,7 +135,7 @@ def _lock_sources(target):
     return locked
 
 
-def _lock_cases(target, out):
+def _lock_cases(target, out, bundle):
     baseline = target.get("baseline")
     if not baseline:
         return ()
@@ -142,21 +145,22 @@ def _lock_cases(target, out):
     command = Path(argv[0])
     if not command.is_absolute():
         command = (cwd / command) if "/" in argv[0] else shutil.which(argv[0])
-    receipts = [_record_input(baseline, "receipt", command, out / "original", executable=True)]
+    receipts = [_record_input(baseline, "receipt", command, out / "original", bundle, executable=True)]
     for index, case in enumerate(target.get("cases", ())):
         if case.get("stdin") is not None:
-            receipts.append(_record_input(case, "input_receipt", cwd / case["stdin"], out / f"case-{index}.stdin"))
+            receipts.append(_record_input(case, "input_receipt", cwd / case["stdin"],
+                                          out / f"case-{index}.stdin", bundle))
     return receipts
 
 
-def _record_input(row, field, path, destination, *, executable=False):
+def _record_input(row, field, path, destination, bundle, *, executable=False):
     if path is None:
         raise ValueError(f"could not resolve native case {field}")
     reference = artifact(path)
     if field in row and row[field] != asdict(reference):
         raise ValueError(f"native case {field} changed: {reference.path}")
     retained = copy_artifact(reference, destination, executable=executable)
-    row[field] = asdict(retained)
+    row[field] = asdict(local_member(retained, bundle))
     return retained
 
 
@@ -791,9 +795,9 @@ def _graph(target, locked, captured):
     return tuple(regions), tuple(operations), tuple(dict.fromkeys(edges)), records, counted
 
 
-def build_native(target, reference, out, *, jobs):
+def build_native(target, reference, out, *, jobs, bundle):
     locked = _lock_sources(target)
-    case_receipts = _lock_cases(target, out / "cases")
+    case_receipts = _lock_cases(target, out / "cases", bundle)
     units = target["units"]
     compilers = [_compiler(target, unit) for unit in units]
     fortran = [index for index, unit in enumerate(units)
@@ -835,12 +839,11 @@ def build_native(target, reference, out, *, jobs):
 
     try:
         material, typed_regions = prepare_native_units(target, evidence, out / "native-units", regions=counted)
-        evidence["native_units"] = asdict(material)
-        evidence["native_regions"] = typed_regions
+        program = GraphProgram(native=NativeProgram(local_member(material, bundle), tuple(typed_regions)))
     except (OSError, ValueError) as error:
-        evidence["native_units_frontier"] = str(error)
+        program = GraphProgram(unavailable=str(error))
     for receipt in (*locked.values(), *case_receipts, reference):
         verify_artifact(receipt)
     if header_ref:
         read_artifact(header_ref)
-    return target, regions, operations, edges, evidence
+    return Graph(target, regions, operations, edges, (), evidence, program)

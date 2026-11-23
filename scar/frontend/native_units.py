@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from ..contract import Artifact, artifact, json_digest, read_artifact, write_json
+from ..contract import Artifact, artifact, json_digest, local_member, read_artifact, write_json
 
 _GNU_CFI_HEADER = "ISO_Fortran_binding.h"
 _GNU_CFI_ROUTINES = {"CFI_establish", "CFI_is_contiguous", "CFI_section", "CFI_setpointer"}
@@ -389,7 +389,7 @@ def _stage_native_sources(manifest, evidence, project, regions):
     return configuration, anchors
 
 
-def _fortran_fragment(region, export, capture, emission, fragments, compiler_types):
+def _fortran_fragment(region, export, capture, fragments, compiler_types):
     abi, source = region['fortran_abi'], region['source']
     if (abi['profile'] != 'BIND_C_RANK1_ASSUMED_SIZE' or abi['procedure'] != export['procedure']
             or abi['symbol'] != region['symbol'] or source['sha256'] != export['source_sha256']
@@ -415,11 +415,8 @@ def _fortran_fragment(region, export, capture, emission, fragments, compiler_typ
     wrapper = export['wrapper']
     if fragments.get(wrapper['path'], {}).get('sha256') != wrapper['sha256']:
         raise ValueError(f'generated Fortran wrapper changed for {export["symbol"]}')
-    translation = dict(schema='scar.fortran-region-bridge', schema_version=1, emission=emission,
-                       compiler_types=compiler_types, compiler_ssa=capture['ssa'])
     domain = dict(parameter=abi['bounds']['parameter'], minimum=1, maximum=abi['bounds']['maximum'])
-    return dict(wrapper, bindings=bindings, translation=translation,
-                authority='VERIFIED_ABI_WRAPPER', count_domain=domain)
+    return dict(wrapper, bindings=bindings, authority='VERIFIED_ABI_WRAPPER', count_domain=domain)
 
 
 def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact, list[dict]]:
@@ -436,14 +433,13 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
         for path in sorted((pending / directory).rglob('*')):
             if path.is_file():
                 name = path.relative_to(pending).as_posix()
-                fragments[name] = asdict(artifact(path))
+                fragments[name] = asdict(local_member(artifact(path), out))
     emission = pending / 'fortran-emission.json'
     exports = []
     bridge_exports = {}
     captures = {row['unit']: row for row in evidence.get('units', ()) if row['language'] == 'fortran'}
     if emission.is_file():
         data = emission.read_bytes()
-        emission_ref = asdict(Artifact(str(emission.resolve()), sha256(data).hexdigest(), len(data)))
         bridge_exports = {(row['unit'], row['symbol']): row for row in json.loads(data)['c_exports']}
         exports = sorted(row['symbol'] for row in bridge_exports.values())
     retained = []
@@ -455,10 +451,12 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
             retained.append({**region, 'fragment': fragment})
         elif 'fortran_abi' in region and (export := bridge_exports.get((region['source']['path'], region['symbol']))):
             unit = region['source']['path']
-            fragment = _fortran_fragment(region, export, captures.get(unit), emission_ref,
-                                         fragments, evidence['compiler_types'].get(unit))
+            fragment = _fortran_fragment(region, export, captures.get(unit), fragments,
+                                         evidence['compiler_types'].get(unit))
             if fragment is not None:
-                retained.append({**region, 'fragment': fragment})
+                lowered = dict(region, fragment=fragment)
+                del lowered['fortran_abi']
+                retained.append(lowered)
     seals = {row['region']: json_digest(row) for row in retained}
-    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=2,
+    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=3,
                        configuration=configuration, fragments=fragments, exports=exports, region_seals=seals)), retained

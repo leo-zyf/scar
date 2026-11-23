@@ -11,7 +11,8 @@ from tempfile import NamedTemporaryFile
 
 GRAPH_SCHEMA = "scar.graph-bundle"
 PLAN_SCHEMA = "scar.compiler-plan"
-WIRE_VERSION = 3
+LEGACY_WIRE_VERSION = 3
+GRAPH_WIRE_VERSION = 4
 PLAN_WIRE_VERSION = 4
 
 
@@ -82,6 +83,22 @@ class Resource:
 
 
 @dataclass(frozen=True)
+class NativeProgram:
+    module: Member | Artifact
+    regions: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True)
+class GraphProgram:
+    """Executable semantics exposed by a source-backed graph."""
+
+    native: NativeProgram | None = None
+    scalars: tuple[dict, ...] = ()
+    elementwise: dict | None = None
+    unavailable: str | None = None
+
+
+@dataclass(frozen=True)
 class Graph:
     target: dict
     regions: tuple[Region, ...]
@@ -89,6 +106,7 @@ class Graph:
     edges: tuple[Edge, ...]
     resources: tuple[Resource, ...]
     evidence: dict = field(default_factory=dict)
+    program: GraphProgram = field(default_factory=GraphProgram)
 
 
 @dataclass(frozen=True)
@@ -209,6 +227,13 @@ def local_member(reference, root):
     return Member(Path(reference.path).relative_to(Path(root).resolve()).as_posix(), reference.sha256, reference.size)
 
 
+def product_artifact(reference, root):
+    """Resolve a bundle member, accepting absolute receipts from older products."""
+    if Path(reference["path"]).is_absolute():
+        return Artifact(**reference)
+    return Member(**reference).resolve(root)
+
+
 def write_json(path, document):
     path = Path(path).resolve()
     encoded = (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
@@ -224,7 +249,7 @@ def write_json(path, document):
     return _identity(path, encoded)
 
 
-def _open(path, filename, schema, *, versions=(WIRE_VERSION,)):
+def _open(path, filename, schema, *, versions):
     path = Path(path)
     if path.is_dir():
         path = path / filename
@@ -282,18 +307,38 @@ def validate_graph(graph):
 
 
 def write_graph(path, graph):
-    return write_json(path, dict(schema=GRAPH_SCHEMA, schema_version=WIRE_VERSION, **asdict(validate_graph(graph))))
+    if graph.program.native and not isinstance(graph.program.native.module, Member):
+        raise ValueError("native module must belong to its graph bundle")
+    return write_json(path, dict(schema=GRAPH_SCHEMA, schema_version=GRAPH_WIRE_VERSION,
+                                 **asdict(validate_graph(graph))))
 
 
 def open_graph(path):
-    reference, value, _ = _open(path, "graph.json", GRAPH_SCHEMA)
+    reference, value, version = _open(path, "graph.json", GRAPH_SCHEMA,
+                                     versions=(LEGACY_WIRE_VERSION, GRAPH_WIRE_VERSION))
+    evidence = value["evidence"]
+    if version == LEGACY_WIRE_VERSION:
+        native = (NativeProgram(Artifact(**evidence["native_units"]), tuple(evidence.get("native_regions", ())))
+                  if "native_units" in evidence else None)
+        program = GraphProgram(native, tuple(evidence.get("scalar_functions", ())), evidence.get("portable"),
+                               evidence.get("native_units_frontier"))
+    else:
+        executable = value["program"]
+        native = executable["native"]
+        program = GraphProgram(
+            NativeProgram(Member(**native["module"]), tuple(native["regions"])) if native else None,
+            tuple(executable["scalars"]),
+            executable["elementwise"],
+            executable["unavailable"],
+        )
     graph = Graph(
         value["target"],
         _rows(value["regions"], Region, ("operations", "children")),
         _rows(value["operations"], Operation, ("inputs", "outputs", "effects")),
         _rows(value["edges"], Edge),
         _rows(value["resources"], Resource),
-        value["evidence"],
+        evidence,
+        program,
     )
     return reference, validate_graph(graph)
 
@@ -373,7 +418,8 @@ def _lowering_from_dict(document):
 
 
 def open_plan(path):
-    reference, value, version = _open(path, "plan.json", PLAN_SCHEMA, versions=(WIRE_VERSION, PLAN_WIRE_VERSION))
+    reference, value, version = _open(path, "plan.json", PLAN_SCHEMA,
+                                     versions=(LEGACY_WIRE_VERSION, PLAN_WIRE_VERSION))
     value["graph"] = Artifact(**value["graph"])
     value["rewrites"] = tuple(value["rewrites"])
     value["schedule"] = _rows(value["schedule"], Step, ("depends_on",))

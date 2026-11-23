@@ -107,9 +107,9 @@ def _subtree_operations(region_id, regions):
 def _count_limit(row, source, fragment, operations):
     """Admit a phase-neutral source or verified ABI fragment handoff."""
     witness = row['fragment']
-    for selection, receipt in ((row['source'], source), (witness, fragment)):
+    for selection, size in ((row['source'], source['size_bytes']), (witness, fragment['size'])):
         start, stop = selection['span']
-        if (type(start) is not int or type(stop) is not int or not 0 <= start < stop <= receipt['size']):
+        if (type(start) is not int or type(stop) is not int or not 0 <= start < stop <= size):
             return None
     if any(operations[key].attributes.get('symbol') != row['symbol']
            or operations[key].attributes.get('unit') != row['source']['path']
@@ -134,13 +134,13 @@ def _count_limit(row, source, fragment, operations):
     return maximum
 
 
-def rewrite_native_regions(graph, fragments, seals=None):
+def rewrite_native_regions(graph, rows, fragments, seals=None):
     """Return guarded typed bodies and their source-aligned proof ledger."""
     regions = {region.id: region for region in graph.regions}
-    sources = graph.evidence.get('locked_sources', {})
+    sources = graph.target['source_lock']['files']
     operations = {operation.id: operation for operation in graph.operations}
     optimized, proofs, seen = [], [], set()
-    for row in graph.evidence.get('native_regions', ()):
+    for row in rows:
         identity = row['region']
         if seals is not None and seals.get(identity) != json_digest(row):
             continue

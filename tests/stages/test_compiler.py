@@ -66,9 +66,11 @@ def run(initial, fixed, count):
     assert any(region["kind"].lower() == "loop" for region in document["regions"])
     assert any(resource["kind"] == "CPU" for resource in document["resources"])
     assert any(edge["kind"] == "OBSERVED_CALL" for edge in document["edges"])
+    assert document["program"]["elementwise"]["entry"] == "run"
 
     shape = tmp_path / "shape.json"
     shape.write_text("[3, 5]\n")
+    graph = graph.rename(tmp_path / "relocated-graph")
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, "--input-shapes", shape, "--trip-count", 4)
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
@@ -202,13 +204,18 @@ end subroutine fill_pair
         cases=[] if python_binding else [dict(id="mixed", stdin=str(case), comparison="exact")])))
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--jobs", 3, "--out", graph)
+    graph_path = graph / "graph.json"
+    document = json.loads(graph_path.read_bytes())
+    assert not Path(document["program"]["native"]["module"]["path"]).is_absolute()
     if python_binding:
-        document = json.loads((graph / "graph.json").read_bytes())
         links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
         assert {"python_adjust", "scale_value"} <= links
+    document["evidence"] = {}
+    graph_path.write_text(json.dumps(document))
     original = baseline.rename(tmp_path / "hidden-original")
     case.rename(tmp_path / "hidden-case")
     sources.rename(tmp_path / "hidden-sources")
+    graph = graph.rename(tmp_path / "relocated-graph")
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
     logical = json.loads((plan / "plan.json").read_bytes())
     assert all(row["resource"] is None and row["start_ns"] is None for row in logical["schedule"])

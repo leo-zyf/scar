@@ -11,7 +11,7 @@ import symtable
 import sys
 import tokenize
 
-from scar.contract import Edge, Operation, Region, artifact, read_artifact, write_json
+from scar.contract import Edge, Graph, GraphProgram, Operation, Region, artifact, read_artifact, write_json
 
 from .portable import lower_portable, lower_scalar_exports
 
@@ -374,7 +374,7 @@ def build_python(path, out, *, target=None, manifest=None, declarations=None):
     portable = lower_portable(text, target.get("entry"), tree=tree)
     if portable:
         target["entry"] = portable["entry"]
-        evidence["portable"] = portable
+    functions = ()
     if "scalar_abi" in target:
         functions = lower_scalar_exports(tree, target["scalar_abi"], declarations or {})
         module = regions[0]
@@ -382,15 +382,8 @@ def build_python(path, out, *, target=None, manifest=None, declarations=None):
                    if region.id in module.children and region.kind == "FUNCTION"}
         for function in functions:
             function["region"] = members[function["source_name"]]
-        evidence["scalar_functions"] = functions
-    if "observe" in target:
-        from .observe import observe_python
-
-        observed, links = observe_python(path, target["entry"], target["observe"], out, regions, operations)
-        evidence["observation"] = asdict(observed)
-        evidence["coverage"]["runtime"] = "BOUNDED_CALLS"
-        edges = (*edges, *links)
     read_artifact(reference)
     if manifest:
         read_artifact(manifest)
-    return target, regions, operations, edges, evidence
+    program = GraphProgram(scalars=tuple(functions), elementwise=portable)
+    return Graph(target, regions, operations, edges, (), evidence, program)

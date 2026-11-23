@@ -1,14 +1,15 @@
 """Build a source-backed program graph from an explicitly selected input."""
 
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
-from scar.contract import Edge, Graph, artifact, read_artifact, write_graph
+from scar.contract import Edge, Graph, artifact, read_artifact, verify_artifact, write_graph
 
 from .hardware import snapshot
 
 
-def _mixed_graph(target, request, out, jobs):
+def _mixed_graph(target, request, out, jobs, bundle):
     from .clang import scalar_declarations
     from .native import build_native
     from .python import build_python
@@ -20,7 +21,9 @@ def _mixed_graph(target, request, out, jobs):
                   source_lock={"files": {path: entry for path, entry in files.items() if path not in names}})
     folder = out / "native"
     folder.mkdir()
-    native, regions, operations, edges, evidence = build_native(native, request, folder, jobs=jobs)
+    graph = build_native(native, request, folder, jobs=jobs, bundle=bundle)
+    native, evidence = graph.target, graph.evidence
+    regions, operations, edges = graph.regions, graph.operations, graph.edges
     region_kinds = {region.id: region.kind for region in regions}
     parents = {child: region.id for region in regions for child in region.children}
     native_functions = {}
@@ -43,20 +46,21 @@ def _mixed_graph(target, request, out, jobs):
         folder.mkdir()
         spec = dict(schema_version=1, source_root=native["source_root"], source=name,
                     source_lock={"files": {name: files[name]}}, scalar_abi=unit["abi"])
-        _, rs, ops, links, proof = build_python(Path(request.path), folder, target=spec, declarations=declarations)
-        regions.extend(rs)
-        operations.extend(ops)
-        edges.extend(links)
+        unit_graph = build_python(Path(request.path), folder, target=spec, declarations=declarations)
+        regions.extend(unit_graph.regions)
+        operations.extend(unit_graph.operations)
+        edges.extend(unit_graph.edges)
+        proof = unit_graph.evidence
         evidence["locked_sources"].update(proof["locked_sources"])
         evidence.setdefault("python_materials", {})[name] = proof["source_material"]
-        for function in proof["scalar_functions"]:
+        for function in unit_graph.program.scalars:
             symbol = function["name"]
             if symbol in exported or symbol in native_functions:
                 raise ValueError(f"multiple definitions for mixed-language symbol {symbol}")
             exported[symbol] = function["region"]
             functions.append(function)
         imports = unit["abi"].get("imports", {})
-        for op in ops:
+        for op in unit_graph.operations:
             name = op.attributes.get("callee_syntax")
             if op.kind == "CALL" and name in imports:
                 symbol = imports[name]
@@ -70,9 +74,25 @@ def _mixed_graph(target, request, out, jobs):
             row["target"] = exported[row["symbol"]]
             row["resolution"] = "MIXED_ABI_DEFINITION"
             edges.append(Edge(row["operation"], row["target"], "CALL", row["symbol"]))
-    evidence["scalar_functions"] = functions
     native.update(units=target["units"], source_lock=target["source_lock"])
-    return native, tuple(regions), tuple(operations), tuple(edges), evidence
+    return replace(graph, regions=tuple(regions), operations=tuple(operations), edges=tuple(edges),
+                   program=replace(graph.program, scalars=tuple(functions)))
+
+
+def _observe(graph, out):
+    from .observe import observe_python
+
+    target = graph.target
+    path = Path(target["source_root"]) / target["units"][0]["path"]
+    observation, links = observe_python(path, target["entry"], target["observe"], out, graph.regions,
+                                        graph.operations)
+    source = graph.evidence["locked_sources"][target["units"][0]["path"]]
+    verify_artifact(source)
+    if graph.evidence["input"] != source:
+        verify_artifact(graph.evidence["input"])
+    coverage = dict(graph.evidence["coverage"], runtime="BOUNDED_CALLS")
+    return replace(graph, edges=(*graph.edges, *links),
+                   evidence=dict(graph.evidence, coverage=coverage, observation=asdict(observation)))
 
 
 def build(source: Path, out: Path, *, jobs: int = 1) -> Graph:
@@ -94,16 +114,17 @@ def build(source: Path, out: Path, *, jobs: int = 1) -> Graph:
     if target is None or target.get("schema") == "scar.python-entry":
         from .python import build_python
 
-        target, regions, operations, edges, evidence = build_python(source, evidence_dir, target=target,
-                                                                  manifest=request)
+        graph = build_python(source, evidence_dir, target=target, manifest=request)
+        if "observe" in graph.target:
+            graph = _observe(graph, evidence_dir)
     elif any(unit.get("language") == "python" for unit in target.get("units", ())):
-        target, regions, operations, edges, evidence = _mixed_graph(target, request, evidence_dir, jobs)
+        graph = _mixed_graph(target, request, evidence_dir, jobs, out)
     else:
         from .native import build_native
 
-        target, regions, operations, edges, evidence = build_native(target, request, evidence_dir, jobs=jobs)
-    resources, resource_edges, hardware = snapshot(Path(target["source_root"]))
-    graph = Graph(target, regions, operations, (*edges, *resource_edges), resources,
-                  {**evidence, "hardware": hardware})
+        graph = build_native(target, request, evidence_dir, jobs=jobs, bundle=out)
+    resources, resource_edges, hardware = snapshot(Path(graph.target["source_root"]))
+    graph = replace(graph, edges=(*graph.edges, *resource_edges), resources=resources,
+                    evidence=dict(graph.evidence, hardware=hardware))
     write_graph(out / "graph.json", graph)
     return graph
