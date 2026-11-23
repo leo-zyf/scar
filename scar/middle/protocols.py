@@ -1,7 +1,7 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
 from scar.contract import walk_operations
-from . import arrays, exceptions, host_protocols, scalars, text, values
+from . import arrays, exceptions, host_protocols, objects, scalars, text, values
 from .values import Value as _Value, literal as _literal
 
 
@@ -100,6 +100,7 @@ class _Project:
         self.result_facts = {}
         self.providers = {}
         self.array_ops = set()
+        self.objects = objects.ObjectModel()
         self.active = []
         self.global_reads = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
@@ -279,6 +280,14 @@ class _Frame:
         if target.get("op") == "index":
             arrays.index(self, target, steps, rhs=value)
             return
+        if target.get("op") == "member":
+            if values.runtime(value.kind) and value.value["op"] != "literal":
+                value = self.effect(value.value, value.kind, steps)
+            base = self.evaluate(target["base"], steps)
+            self.project.objects.write(
+                self, target, base, target["field"], value, steps
+            )
+            return
         if target.get("op") != "var" or target.get("cell"):
             self.fail(
                 target,
@@ -305,6 +314,8 @@ class _Frame:
             )
         scope = self.project.names if global_ else self.env
         previous = scope.get(name)
+        if global_ and value.kind == "project_method" and not self.dynamic:
+            value = objects.persist_method(self, target, value, steps)
         if not values.runtime(value.kind):
             if self.dynamic or value.kind == "range":
                 self.fail(
@@ -312,7 +323,15 @@ class _Frame:
                     "conditional_binding",
                     f"{value.kind} needs a persistent runtime binding here",
                 )
-            if previous is not None and previous != value:
+            if (
+                previous is not None
+                and previous != value
+                and not (
+                    self.initializing
+                    and global_
+                    and previous.kind == value.kind == "project_class"
+                )
+            ):
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
             return
@@ -579,6 +598,21 @@ class _Frame:
             return arrays.index(self, node, steps, discard=discard)
         if op == "member":
             base = self.evaluate(node["base"], steps)
+            if values.object_name(base.kind) is not None:
+                return self.project.objects.member(
+                    self, node, base, node["field"], steps
+                )
+            if base.kind == "project_class":
+                method = self.project.objects.layouts[base.value].methods.get(
+                    node["field"]
+                )
+                if method:
+                    return _Value("function", method)
+                self.fail(
+                    node,
+                    "class_attribute",
+                    f"no ordinary method binding for {base.value}.{node['field']}",
+                )
             if base.kind == "handle:text_stream":
                 base = self.effect(base.value, base.kind, steps, facts=base.facts)
             host_member = host_protocols.member(self, node, base, node["field"])
@@ -628,6 +662,9 @@ class _Frame:
             ):
                 lhs = self.effect(lhs.value, lhs.kind, steps, facts=lhs.facts)
             rhs = self.evaluate(right_node, steps)
+            identity = objects.compare(operator, lhs, rhs)
+            if identity is not None:
+                return identity
             numeric = arrays.binary(self, node, operator, lhs, rhs, steps, discard)
             if numeric is None:
                 numeric = scalars.binary(self, node, operator, lhs, rhs)
@@ -675,6 +712,11 @@ class _Frame:
 
     def call(self, node, steps, discard):
         target = self.evaluate(node["target"], steps)
+        if target.kind == "project_method":
+            method, receiver = target.value
+            if receiver.value.get("scope") == "global":
+                receiver = self.effect(receiver.value, receiver.kind, steps)
+            target = _Value("project_method", (method, receiver))
 
         def argument(expr):
             value = self.evaluate(expr, steps)
@@ -689,6 +731,15 @@ class _Frame:
             if key is None or key in kwargs:
                 self.fail(node, "keyword_binding", "dynamic or repeated keyword")
             kwargs[key] = argument(item["value"])
+        if target.kind == "project_class":
+            return self.project.objects.construct(
+                self, node, target, args, kwargs, steps
+            )
+        if target.kind == "project_method":
+            method, receiver = target.value
+            return self.invoke_project(
+                node, method, [receiver, *args], kwargs, steps, discard
+            )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
         if target.kind == "exception_class":
@@ -773,7 +824,9 @@ class _Frame:
                 "dispatch_contract",
                 f"a callable has no reachable project body ({target.kind}: {target.value})",
             )
-        name = target.value
+        return self.invoke_project(node, target.value, args, kwargs, steps, discard)
+
+    def invoke_project(self, node, name, args, kwargs, steps, discard):
         formals = self.project.functions[name]["params"]
         if len(args) > len(formals):
             self.fail(
@@ -833,6 +886,8 @@ class _Frame:
             self.return_facts = {}
 
     def truth(self, value, node):
+        if values.object_name(value.kind) is not None:
+            return _literal(True)
         if values.rank(value.kind) is not None:
             self.fail(
                 node,
@@ -1184,11 +1239,12 @@ class _Frame:
                 self.store(node["target"], self.evaluate(node["value"], steps), steps)
             elif op == "python_import":
                 self.imported(node, steps)
+            elif op == "python_define_class":
+                self.store(
+                    node["target"], self.project.objects.define(self, node), steps
+                )
             elif op == "python_define":
-                if any(
-                    node.get(k)
-                    for k in ("defaults", "decorators", "annotations", "type_params")
-                ) or any(x is not None for x in node.get("keyword_defaults", ())):
+                if not objects.plain_definition(node):
                     self.fail(
                         node,
                         "function_creation",
@@ -1213,26 +1269,41 @@ class _Frame:
                 steps.append(dict(op="return", value=self.scalar(value, node)))
                 self.record_return(value)
                 return False
-            elif op == "update" and node["target"].get("op") == "var":
+            elif op == "update" and node["target"].get("op") in {"var", "member"}:
                 target = node["target"]
-                left = self.ref(target)
+                receiver = None
+                if target["op"] == "member":
+                    receiver = self.evaluate(target["base"], steps)
+                    receiver = self.effect(
+                        self.scalar(receiver, target), receiver.kind, steps
+                    )
+                    left = self.project.objects.member(
+                        self, target, receiver, target["field"], steps
+                    )
+                else:
+                    left = self.ref(target)
                 left = self.effect(left.value, left.kind, steps, facts=left.facts)
                 right = self.evaluate(node["value"], steps)
                 if arrays.update(self, node, left, right, steps):
-                    self.store(target, left, steps)
-                    continue
-                result = scalars.binary(self, node, node["operator"], left, right)
-                if result is None:
-                    result = arrays.binary(
-                        self, node, node["operator"], left, right, steps
-                    )
+                    result = left
+                else:
+                    result = scalars.binary(self, node, node["operator"], left, right)
+                    if result is None:
+                        result = arrays.binary(
+                            self, node, node["operator"], left, right, steps
+                        )
                 if result is None:
                     self.fail(
                         node,
                         "update_contract",
                         "in-place operation needs a closed scalar contract",
                     )
-                self.store(target, result, steps)
+                if receiver is not None:
+                    self.project.objects.write(
+                        self, target, receiver, target["field"], result, steps
+                    )
+                else:
+                    self.store(target, result, steps)
             elif op in {"break", "continue"} and self.loops:
                 flow = self.loops[-1]
                 flow[op].append(self.snapshot())
@@ -1317,8 +1388,12 @@ def normalize_protocols(module):
                 "module entry required for closed Python name binding",
             )
         project.compile(entry, ())
+        omitted = set(module.get("python_candidate_only", ())).difference(
+            project.closed
+        )
+        omitted.update(project.objects.class_bodies)
         for name, fn in functions.items():
-            if name not in project.closed:
+            if name not in project.closed and name not in omitted:
                 raise _Unclosed(
                     name,
                     fn,
@@ -1326,6 +1401,10 @@ def normalize_protocols(module):
                     "no proven activation or call signature for this reachable body",
                 )
         for obligation in module.get("protocol_obligations", ()):
+            if obligation.get("symbol") in omitted or project.objects.discharged(
+                obligation
+            ):
+                continue
             if obligation.get("field") not in {
                 "dispatch",
                 "native_binding",
@@ -1378,9 +1457,27 @@ def normalize_protocols(module):
         )
         for contract in contracts
     ]
+    for layout in project.objects.layouts.values():
+        methods = set(layout.methods.values())
+        changes.append(
+            dict(
+                code="closed_instance_layout",
+                record=layout.name,
+                namespace=layout.body_symbol,
+                fields=sorted(layout.fields),
+                activated_methods=sorted(methods & project.closed.keys()),
+                inactive_methods=sorted(methods - project.closed.keys()),
+                proof="ordinary class and method bindings close throughout the entry call graph with shared identity, checked field presence and observable writes",
+            )
+        )
     module["functions"] = [
-        project.closed.get(fn["name"], fn) for fn in module["functions"]
+        project.closed.get(fn["name"], fn)
+        for fn in module["functions"]
+        if fn["name"] not in omitted
     ]
+    module["records"].extend(
+        layout.record() for layout in project.objects.layouts.values()
+    )
     module["globals"].extend(
         dict(op="decl", name=n, type=values.wire(t)) for n, t in project.globals.items()
     )
@@ -1394,6 +1491,10 @@ def normalize_protocols(module):
         e for e in module["externs"] if e.get("calling_convention") != "python"
     ]
     declarations = module["declarations"]
+    for symbol in omitted:
+        declarations.pop(symbol, None)
+    module.pop("python_class_candidates", None)
+    module.pop("python_candidate_only", None)
     for name, fn in project.closed.items():
         # Keep independent native declarations for the downstream ABI comparison.
         # Only graph-level Python object placeholders acquire the inferred contract.

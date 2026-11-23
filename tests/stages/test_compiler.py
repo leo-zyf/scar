@@ -503,6 +503,15 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
         "dynamic": "value = input()\nprint(value)\n",
         "generator": "def gen():\n    print('not executed')\n    yield 'x'\ngen()\n",
         "annotation": "def mark():\n    print('annotation')\n    return None\nx: mark() = 'value'\n",
+        "object_lookup": (
+            "class Item:\n    def __getattribute__(self, name):\n        return 2.5\n"
+            "print(Item().value)\n"
+        ),
+        "object_descriptor": (
+            "class Item:\n    @property\n    def value(self):\n"
+            "        print('descriptor')\n        return 2.5\n"
+            "print(Item().value)\n"
+        ),
     }
     for name, text in sources.items():
         folder = tmp_path / name
@@ -547,6 +556,73 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             assert process.returncode == 2 and report["blockers"] > 0
             ir = json.loads((plan / "exec-ir.json").read_bytes())
             assert ir["status"] == "INCOMPLETE" and not ir["functions"]
+
+
+def test_shared_objects_preserve_aliases_bound_receivers_and_field_presence(tmp_path):
+    entry = tmp_path / "objects.py"
+    entry.write_text(
+        """import numpy as np
+class Cell:
+    'Mutable state shared across aliases.'
+    def __init__(self, value, present):
+        if present:
+            self.value = value
+    def add(self, amount):
+        self.value += amount
+        return self.value
+    def unused(self):
+        return never_called()
+original = Cell(2.5, True)
+alias = original
+method = original.add
+original = Cell(10.0, True)
+print(method(1.25), alias.value, original.value, alias is original)
+def invoke_saved(amount):
+    return method(amount)
+print(invoke_saved(0.5), alias.value)
+def transfer(value):
+    return value
+print(transfer(alias) is alias)
+pending = Cell(9.0, False)
+try:
+    print(pending.value)
+except AttributeError as error:
+    print(str(error))
+class Holder:
+    def __init__(self, data):
+        self.λ = data
+data = np.array([1.0, 2.0])
+holder = Holder(data)
+saved = holder.λ
+data[0] = 7.0
+saved[1] = 8.0
+print(holder.λ[0], data[1])
+class Example:
+    def read(self):
+        return 1
+old_type = Example
+class Example:
+    def read(self):
+        return 2
+print(old_type().read(), Example().read())
+""",
+        encoding="utf-8",
+    )
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    assert expected == (
+        b"3.75 3.75 10.0 False\n4.25 4.25\nTrue\n"
+        b"'Cell' object has no attribute 'value'\n7.0 8.0\n1 2\n"
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert len([r for r in ir["module"]["records"] if r.get("object_state")]) == 4
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
 
 
 def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_path):

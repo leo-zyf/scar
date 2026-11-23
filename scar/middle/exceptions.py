@@ -12,6 +12,7 @@ _CLASSES = {
     "TypeError": "type_error",
     "IndexError": "index_error",
     "KeyError": "key_error",
+    "AttributeError": "attribute_error",
     "OSError": "os_error",
     "EOFError": "eof",
     "RuntimeError": "runtime_error",

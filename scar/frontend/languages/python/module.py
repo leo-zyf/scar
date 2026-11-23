@@ -308,6 +308,7 @@ class _ModuleGraph:
         self.tree = parsed.tree
         self.source_hash = parsed.source_hash
         version = tuple(int(v) for v in parsed.compiler_id.split()[1].split(".")[:2])
+        self.version = version
         future = any(
             isinstance(n, ast.ImportFrom)
             and n.level == 0
@@ -451,10 +452,12 @@ class _Scope:
         parent=None,
         globals_only=False,
         class_scope=False,
+        definition_path=None,
     ):
         self.unit = unit
         self.symbol = symbol
         self.qualified = qualified
+        self.definition_path = qualified if definition_path is None else definition_path
         self.module_scope = globals_only
         self.class_scope = class_scope
         self.table = table
@@ -548,6 +551,43 @@ class _Scope:
                 self.env[name] = {
                     k: v for k, v in fact.items() if k in {"class", "guards"}
                 }
+
+    def class_creation(self, node):
+        keywords = {item.arg for item in node.keywords}
+        if "metaclass" in keywords:
+            meta = "explicit_keyword"
+        elif None in keywords:
+            meta = "keyword_unpack"
+        elif node.bases:
+            meta = "from_bases"
+        else:
+            meta = "default_type"
+        implicit = {
+            "__module__": {"source": "namespace_lookup", "name": "__name__"},
+            "__qualname__": {"source": "lexical_qualname"},
+        }
+        if ast.get_docstring(node, clean=False) is not None:
+            implicit["__doc__"] = {
+                "source": "leading_docstring",
+                "when": "docstrings_enabled",
+            }
+        if "__class__" in self.cells:
+            implicit["__classcell__"] = {
+                "source": "lexical_cell",
+                "owner": self.symbol,
+                "name": "__class__",
+            }
+        if self.unit.version >= (3, 13):
+            implicit["__firstlineno__"] = {"source": "class_definition_first_line"}
+            implicit["__static_attributes__"] = {
+                "source": "compiler_instance_attribute_stores"
+            }
+        return {
+            "bases": "resolve_supplied" if node.bases else "implicit_object",
+            "metaclass": meta,
+            "namespace": "prepare_then_execute",
+            "implicit_bindings": implicit,
+        }
 
     def definition(self, node, body, params, initial):
         # CPython's symbol table resolves lexical bindings across all branches.
@@ -1348,9 +1388,16 @@ class _Scope:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             separator = "." if self.class_scope else ".<locals>."
             qual = (self.qualified + separator if self.qualified else "") + node.name
-            symbol = self.unit.aliases.get(qual, _function(self.unit.module, qual))
+            if node.name in self.global_names:
+                qual = node.name
+            link = (
+                self.definition_path + separator if self.definition_path else ""
+            ) + node.name
+            symbol = self.unit.aliases.get(link, _function(self.unit.module, link))
             if self.table and sum(n == node.name for n, _ in self.table.children) > 1:
-                symbol += f"@{node.lineno}"
+                site = f"@{node.lineno}"
+                link += site
+                symbol += site
             table = (
                 self.table.children.get((node.name, node.lineno))
                 if self.table
@@ -1371,7 +1418,13 @@ class _Scope:
                 ]
                 body_symbol = symbol + ".<class_body>"
                 nested = _Scope(
-                    self.unit, body_symbol, qual, table, parent=self, class_scope=True
+                    self.unit,
+                    body_symbol,
+                    qual,
+                    table,
+                    parent=self,
+                    class_scope=True,
+                    definition_path=link,
                 )
                 body = nested.definition(node, node.body, [], {})
                 body.update(scope_kind="class", owner_class=symbol)
@@ -1385,11 +1438,14 @@ class _Scope:
                         node,
                         "python_define_class",
                         symbol=symbol,
+                        source_name=node.name,
+                        qualname=qual,
                         target=dest,
                         body_symbol=body_symbol,
                         bases=bases,
                         keywords=keywords,
                         decorators=decorators,
+                        creation_protocol=nested.class_creation(node),
                         effects=["CTRL", "STATE"],
                         class_protocol=self.issue(
                             node,
@@ -1467,10 +1523,14 @@ class _Scope:
                         )
                     )
                     facts[arg.arg] = {}
-            nested = _Scope(self.unit, symbol, qual, table, parent=self)
+            nested = _Scope(
+                self.unit, symbol, qual, table, parent=self, definition_path=link
+            )
             definition = nested.definition(node, node.body, params, facts)
             if self.class_scope:
                 definition["owner_class"] = self.symbol.removesuffix(".<class_body>")
+                definition["source_name"] = node.name
+                definition["qualname"] = qual
             self.unit.functions.append(definition)
             fact = (
                 {"class": "function", "symbol": symbol}

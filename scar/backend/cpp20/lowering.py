@@ -194,7 +194,7 @@ class Lowerer:
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
         self.libraries = Libraries()
-        self.objects = ObjectModel(symbol_name)
+        self.objects = ObjectModel(symbol_name, module.get("records", ()))
         self.receiver = None
         self.headers = self.libraries.headers
         self.used_sdk_headers = set()
@@ -305,7 +305,11 @@ class Lowerer:
             )
         if kind == "library":
             return self.libraries.cpp_type(spec, self.type_name)
+        if kind == "object_ref":
+            return self.objects.reference(spec, self)
         if kind == "record":
+            if self.objects.shared_record(spec["name"]):
+                raise ValueError("shared object state requires an object reference")
             return named(symbol_name(spec["name"], "rec"))
         if kind == "function":
             alias = (
@@ -1375,7 +1379,8 @@ class Lowerer:
                 or function["result"] == "text"
                 or (
                     isinstance(function["result"], dict)
-                    and function["result"].get("kind") in {"ndarray", "handle"}
+                    and function["result"].get("kind")
+                    in {"ndarray", "handle", "object_ref"}
                 )
                 else "C"
             ),
@@ -1507,6 +1512,16 @@ class Lowerer:
             )
         for key in order.static_order():
             record = records[key]
+            if self.objects.shared_record(key):
+                definitions.append(
+                    Decl(
+                        "record",
+                        name=self.objects.tag(key),
+                        definition="struct",
+                        members=self.objects.shared_members(record, self),
+                    )
+                )
+                continue
             self.receiver = "this"
             fields = tuple(
                 Decl(

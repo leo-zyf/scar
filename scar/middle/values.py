@@ -9,6 +9,7 @@ _UNKNOWN = object()
 _MIN, _MAX = -(1 << 63), (1 << 63) - 1
 _ARRAY_PREFIX = "ndarray:f64:"
 _HANDLE_PREFIX = "handle:"
+_OBJECT_PREFIX = "object_ref:"
 
 
 def rank(kind):
@@ -19,12 +20,22 @@ def array_kind(n):
     return _ARRAY_PREFIX + str(n)
 
 
+def object_kind(name):
+    return _OBJECT_PREFIX + name
+
+
+def object_name(kind):
+    return kind[len(_OBJECT_PREFIX) :] if kind.startswith(_OBJECT_PREFIX) else None
+
+
 def wire(kind):
     if kind == "numpy_f64":
         return "f64"
     n = rank(kind)
     if n is not None:
         return dict(kind="ndarray", element="f64", rank=n)
+    if (name := object_name(kind)) is not None:
+        return dict(kind="object_ref", record=name)
     if kind.startswith(_HANDLE_PREFIX):
         return dict(kind="handle", resource=kind[len(_HANDLE_PREFIX) :])
     return kind
@@ -37,6 +48,8 @@ def from_wire(spec):
         return array_kind(spec["rank"])
     if spec.get("kind") == "handle":
         return _HANDLE_PREFIX + spec["resource"]
+    if spec.get("kind") == "object_ref":
+        return object_kind(spec["record"])
     raise ValueError(f"unrecognized protocol value type: {spec}")
 
 
@@ -45,6 +58,7 @@ def runtime(kind):
         kind in SCALARS
         or kind == "numpy_f64"
         or rank(kind) is not None
+        or object_name(kind) is not None
         or kind in {"handle:text_stream", "handle:error"}
     )
 

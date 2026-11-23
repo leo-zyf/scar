@@ -277,6 +277,53 @@ def _close_callbacks(functions, externs, globals_, entry):
     return issues
 
 
+class _PythonClasses:
+    """Link class namespace definitions without inventing a method call."""
+
+    def __init__(self):
+        self.functions = set()
+        self.creation = defaultdict(dict)
+        self.declarations = defaultdict(dict)
+        self.methods = set()
+
+    def collect(self, graph):
+        signature = graph["signature"]
+        scope = signature.get("python_scope")
+        if not scope or not graph.get("source_defined"):
+            return
+        name, owner = signature["name"], signature.get("owner_class")
+        self.functions.add(name)
+        if scope["kind"] == "function" and owner:
+            self.methods.add((owner, name))
+        for node in graph["nodes"]:
+            if node["op"] == "python_define_class":
+                self.creation[name][(node["symbol"], node["body_symbol"])] = None
+            elif scope["kind"] == "class" and owner and node["op"] == "python_define":
+                self.declarations[owner, name][node["symbol"]] = None
+
+    def candidates(self, reachable, definitions):
+        classes, optional = {}, set()
+        pending = sorted(reachable.intersection(self.creation))
+        while pending:
+            name = pending.pop()
+            targets = set()
+            for owner, body in self.creation.get(name, ()):
+                methods = [
+                    m
+                    for m in self.declarations.get((owner, body), ())
+                    if (owner, m) in self.methods
+                ]
+                classes[owner] = dict(body_symbol=body, methods=methods)
+                targets.update((body, *methods))
+            if name in optional:
+                for _, function in definitions[name]:
+                    targets.update(function["calls"])
+            for target in sorted((targets & self.functions) - reachable - optional):
+                optional.add(target)
+                pending.append(target)
+        return classes, optional
+
+
 def bind(graph, folder):
     definitions = defaultdict(list)
     roots = {graph["entry"]}
@@ -286,6 +333,7 @@ def bind(graph, folder):
     field_calls = defaultdict(set)
     constructor_initializers = {}
     text_profiles = {}
+    python_classes = _PythonClasses()
     for index, unit in enumerate(graph["units"]):
         for identity, profile in validate_text_profiles(
             unit.get("source_facts", {}).get("text_profiles", {})
@@ -302,6 +350,7 @@ def bind(graph, folder):
         all_issues += unit["diagnostics"]
         payload = read_member(folder, unit["graph"])
         for fn in payload["functions"]:
+            python_classes.collect(fn)
             signature = fn["signature"]
             if signature.get("method", {}).get("kind") == "constructor":
                 constructor_initializers[signature["name"]] = signature.get(
@@ -428,7 +477,9 @@ def bind(graph, folder):
             len(default_objects),
         ):
             break
-    issues = [d for d in all_issues if not d.get("symbol") or d["symbol"] in reachable]
+    class_candidates, candidate_only = python_classes.candidates(reachable, definitions)
+    covered = reachable | candidate_only
+    issues = [d for d in all_issues if not d.get("symbol") or d["symbol"] in covered]
 
     def issue(code, symbol, detail):
         issues.append(dict(code=code, symbol=symbol, detail=detail))
@@ -455,7 +506,7 @@ def bind(graph, folder):
                 issue("conflicting_global", name, str(error))
         for fn in payload["functions"]:
             name = fn["signature"]["name"]
-            if name not in reachable:
+            if name not in covered:
                 continue
             if "result" in fn["signature"] and "params" in fn["signature"]:
                 signatures[name].append(fn["signature"])
@@ -572,6 +623,14 @@ def bind(graph, folder):
             records=[r for name, r in records.items() if name in used_records],
             state_evidence=state_evidence,
             text_profiles=text_profiles,
+            **(
+                dict(
+                    python_class_candidates=class_candidates,
+                    python_candidate_only=sorted(candidate_only),
+                )
+                if class_candidates
+                else {}
+            ),
             **({"protocol_obligations": obligations} if protocol_names else {}),
             declarations={
                 name: [
