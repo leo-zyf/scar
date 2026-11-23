@@ -14,6 +14,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler.model import document as leaf_document
 from scar.compiler.pipeline_frontend import (
     PipelinePlan,
@@ -25,6 +26,7 @@ from scar.compiler.pipeline_frontend import (
 from scar.optimization.pipeline_memory import verify_pipeline_memory
 from scar.optimization.hardware import validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
+from scar.runtime.compiled_deployment import thread_environment
 from scar.codegen import cpp
 from scar.codegen.pipeline_resource_events import (
     DIAGNOSTIC_CAPACITY_PER_EVENT,
@@ -351,54 +353,92 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
     original finite domain. Only compute lane order is implemented; its model
     timestamps are never used as native timing or deployment authority.
     """
-    pipeline = read_pipeline(pipeline) if isinstance(pipeline, (str, Path)) else pipeline_from_dict(document(pipeline))
-    memory = _memory(pipeline, memory_plan)
-    _sources(pipeline)
-    _require(isinstance(operators, Mapping) and set(operators) == {call.id for call in pipeline.calls},
-             "one explicit operator artifact binding per pipeline call is required")
-    loaded = []
-    for call in pipeline.calls:
-        value = operators[call.id]
-        operator = cpp.load(value.directory if isinstance(value, cpp.CppArtifact) else value)
-        _compatible(call, operator, memory)
-        loaded.append(operator)
-    bindings = [_operator_receipt(call, operator) for call, operator in zip(pipeline.calls, loaded)]
-    if execution_schedule is not None:
-        execution_schedule=_admit_execution_schedule(pipeline,memory,loaded,execution_schedule)
-    source = _source(pipeline, memory, loaded,execution_schedule)
+    context = _build_context()
+    directory = Path(out).resolve()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.scar-pipeline-', dir=directory.parent) as scratch:
+        staged = Path(scratch) / 'package'
+        staged.mkdir()
+        with replay_transaction() as transaction:
+            with transaction.observe_paths() as observed:
+                pipeline = read_pipeline(pipeline) if isinstance(pipeline, (str, Path)) else pipeline_from_dict(document(pipeline))
+                memory = _memory(pipeline, memory_plan)
+                _sources(pipeline)
+                _require(isinstance(operators, Mapping) and set(operators) == {call.id for call in pipeline.calls},
+                         "one explicit operator artifact binding per pipeline call is required")
+                loaded = []
+                for call in pipeline.calls:
+                    value = operators[call.id]
+                    operator = cpp.load(value.directory if isinstance(value, cpp.CppArtifact) else value)
+                    _compatible(call, operator, memory)
+                    loaded.append(operator)
+                bindings = [_operator_receipt(call, operator) for call, operator in zip(pipeline.calls, loaded)]
+                if execution_schedule is not None:
+                    execution_schedule = _admit_execution_schedule(pipeline, memory, loaded, execution_schedule)
+                source = _source(pipeline, memory, loaded, execution_schedule).encode()
+                header = (_DIRECTORY / "scar_abi_v1.h").read_bytes()
+                fingerprint = pipeline_implementation_sha256()
+            metadata = _compile_pipeline(pipeline, memory, bindings, execution_schedule,
+                source, header, fingerprint, staged, transaction)
+        if directory.exists():
+            for name in (*metadata['files'].values(), 'artifact.json'):
+                (staged / name).replace(directory / name)
+        else:
+            staged.rename(directory)
+    if observed.complete_paths and context == _build_context():
+        _verify_members(directory, metadata)
+        _require((directory / 'artifact.json').read_bytes() == _json_bytes(metadata),
+                 'pipeline publication manifest differs from admitted output')
+        return _bind_native_host(directory, metadata, pipeline, memory, loaded, execution_schedule)
+    return load(directory)
+
+
+def _build_context():
+    return os.getcwd(), frozenset(os.sched_getaffinity(0)), thread_environment()
+
+
+def _write_member(path, raw, transaction):
+    path.write_bytes(raw)
+    digest = _digest(raw)
+    transaction.watch(path, digest, len(raw))
+    return digest
+
+
+def _compile_pipeline(pipeline, memory, bindings, execution_schedule, source,
+                      header, fingerprint, directory, transaction):
     compiler_options=(*cpp.COMPILER_OPTIONS,*(()if execution_schedule is None else('-pthread',)))
-    header = (_DIRECTORY / "scar_abi_v1.h").read_bytes()
-    fingerprint = pipeline_implementation_sha256()
     compiler = shlex.split(os.environ.get("CXX", "g++"))
     _require(bool(compiler) and shutil.which(compiler[0]) is not None, "pipeline C++20 compiler unavailable")
-    build_id = _digest(source.encode() + header + _json_bytes(bindings) + fingerprint.encode() +
+    build_id = _digest(source + header + _json_bytes(bindings) + fingerprint.encode() +
                        _json_bytes(compiler) + _json_bytes(list(compiler_options)))
-    directory = Path(out).resolve(); directory.mkdir(parents=True, exist_ok=True)
-    (directory / "pipeline.json").write_bytes(_json_bytes(document(pipeline)))
-    (directory / "memory-plan.json").write_bytes(_json_bytes(memory))
-    (directory / "pipeline.cpp").write_text(source)
-    (directory / "scar_abi_v1.h").write_bytes(header)
     library = directory / ("pipeline_" + build_id[:20] + ".so")
+    members = {"pipeline": ("pipeline.json", _json_bytes(document(pipeline))),
+               "memory_plan": ("memory-plan.json", _json_bytes(memory)),
+               "source": ("pipeline.cpp", source), "abi_header": ("scar_abi_v1.h", header)}
+    if execution_schedule is not None:
+        members['execution_schedule'] = ('execution-schedule.json', _json_bytes(execution_schedule))
+    files = {key: name for key, (name, _) in members.items()}
+    checksums = {key: _write_member(directory / name, raw, transaction)
+                 for key, (name, raw) in members.items()}
     fd, temporary = tempfile.mkstemp(prefix=".pipeline-", suffix=".so", dir=directory); os.close(fd)
     try:
         process = subprocess.run([*compiler, *compiler_options, str(directory / "pipeline.cpp"),
                                   "-o", temporary, "-lm"], capture_output=True, text=True)
         if process.returncode:
             raise RuntimeError("pipeline C++20 compilation failed:\n" + process.stderr.strip())
+        binary = Path(temporary).read_bytes()
         os.replace(temporary, library)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
     version = subprocess.run([*compiler, "--version"], capture_output=True, text=True).stdout.splitlines()
-    files = {"pipeline": "pipeline.json", "memory_plan": "memory-plan.json", "source": "pipeline.cpp",
-             "abi_header": "scar_abi_v1.h", "library": library.name}
-    if execution_schedule is not None:
-        files['execution_schedule']='execution-schedule.json'
-        (directory/files['execution_schedule']).write_bytes(_json_bytes(execution_schedule))
+    files['library'] = library.name
+    checksums['library'] = _digest(binary)
+    transaction.watch(library, checksums['library'], len(binary))
     metadata = {
         "schema": "scar.native-array-pipeline", "schema_version": 1, "pipeline_abi_version": 1,
         "backend": "cpp", "build_id": build_id, "pipeline_sha256": pipeline_digest(pipeline),
         "memory_plan_sha256": semantic_sha256(memory), "pipeline_implementation_sha256": fingerprint,
-        "files": files, "sha256": {key: _digest((directory / name).read_bytes()) for key, name in files.items()},
+        "files": files, "sha256": checksums,
         "operators": bindings, "compiler": compiler, "compiler_options": list(compiler_options),
         "compiler_version": version[0] if version else "unknown",
         "workspace_bytes": memory["total_workspace_bytes"], "final_bytes": memory["final_bytes"],
@@ -441,8 +481,14 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
                 logical_release='LAST_SUCCESSFUL_CONSUMER_RETIRE_THEN_PHYSICAL_SLOT_RELEASE_EVENT',
                 final_storage_admission='ADOPT_PRIVATE_CALLER_DESCRIPTOR_AT_FINAL_ALLOCATE_EVENT',
                 native_diagnostic_symbol='scar_pipeline_run_diagnostic_v1')
-    (directory / "artifact.json").write_bytes(_json_bytes(metadata))
-    return load(directory)
+    _write_member(directory / "artifact.json", _json_bytes(metadata), transaction)
+    return metadata
+
+
+def _verify_members(directory, metadata):
+    for key, filename in metadata["files"].items():
+        _require(Path(filename).name == filename and _digest((directory / filename).read_bytes()) == metadata["sha256"][key],
+                 "pipeline artifact file/receipt differs: " + key)
 
 
 def load(out):
@@ -450,15 +496,13 @@ def load(out):
     metadata = json.loads((directory / "artifact.json").read_bytes())
     _require((metadata.get("schema"), metadata.get("schema_version"), metadata.get("pipeline_abi_version")) ==
              ("scar.native-array-pipeline", 1, 1), "unsupported native pipeline schema or ABI")
-    for key, filename in metadata["files"].items():
-        _require(Path(filename).name == filename and _digest((directory / filename).read_bytes()) == metadata["sha256"][key],
-                 "pipeline artifact file/receipt differs: " + key)
+    _verify_members(directory, metadata)
     pipeline = read_pipeline(directory / metadata["files"]["pipeline"])
     memory = _memory(pipeline, json.loads((directory / metadata["files"]["memory_plan"]).read_bytes()))
     _sources(pipeline)
     _require(pipeline_digest(pipeline) == metadata["pipeline_sha256"] and
              semantic_sha256(memory) == metadata["memory_plan_sha256"], "pipeline source/memory digest differs")
-    operators, pointers = [], []
+    operators = []
     _require(len(metadata["operators"]) == len(pipeline.calls), "pipeline operator binding count differs")
     for call, binding in zip(pipeline.calls, metadata["operators"]):
         for receipt in binding["files"].values():
@@ -466,7 +510,6 @@ def load(out):
         operator = cpp.load(binding["artifact_directory"])
         _compatible(call, operator, memory)
         _require(_operator_receipt(call, operator) == binding, "operator source/call binding differs")
-        pointers.append(operator._library.scar_get_operator_table_v1())
         operators.append(operator)
     parallel_fields=('execution_family'in metadata,'execution_schedule_sha256'in metadata,
                      'execution_schedule'in metadata['files'])
@@ -502,6 +545,10 @@ def load(out):
                        _json_bytes(metadata["operators"]) + metadata["pipeline_implementation_sha256"].encode() +
                        _json_bytes(metadata["compiler"]) + _json_bytes(metadata["compiler_options"]))
     _require(identity == metadata["build_id"], "pipeline build identity differs")
+    return _bind_native_host(directory, metadata, pipeline, memory, operators, execution_schedule)
+
+
+def _bind_native_host(directory, metadata, pipeline, memory, operators, execution_schedule):
     library = ctypes.CDLL(str(directory / metadata["files"]["library"]))
     for name, expected in (("scar_pipeline_plan_sha256_v1", metadata["pipeline_sha256"]),
                            ("scar_pipeline_memory_sha256_v1", metadata["memory_plan_sha256"])):
@@ -522,6 +569,7 @@ def load(out):
                                ctypes.POINTER(ctypes.c_uint64)]
         diagnostic.restype = ctypes.c_int32
     final = next(value for value in memory["values"] if value["id"] == pipeline.output)
+    pointers = [operator._library.scar_get_operator_table_v1() for operator in operators]
     return PipelineArtifact(pipeline, directory, memory, metadata, library, run, tuple(operators),
                             (_TablePointer * len(pointers))(*pointers), tuple(final["shape"]), execution_schedule,
                             diagnostic)

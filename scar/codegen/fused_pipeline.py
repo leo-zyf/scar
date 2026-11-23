@@ -100,9 +100,11 @@ def _compatible(expected, operator, memory):
                  "fused operator timed obligations differ from the selected representation")
 
 
-def _operator_files(directory, names, manifest_path, manifest_digest):
+def _operator_files(directory, names, manifest_path, manifest_digest=None):
     files = {kind: {"path": str(directory / name), "sha256": _digest((directory / name).read_bytes())}
              for kind, name in names.items()}
+    if manifest_digest is None:
+        manifest_digest = _digest(manifest_path.read_bytes())
     files["manifest"] = {"path": str(manifest_path), "sha256": manifest_digest}
     return files
 
@@ -110,8 +112,7 @@ def _operator_files(directory, names, manifest_path, manifest_digest):
 def _operator_receipt(operator, *, files=None):
     metadata = operator.report
     if files is None:
-        files = _operator_files(operator.directory, metadata["files"], operator.metadata_path,
-                                _digest(operator.metadata_path.read_bytes()))
+        files = _operator_files(operator.directory, metadata["files"], operator.metadata_path)
     return {"artifact_directory": str(operator.directory), "build_id": metadata["build_id"],
             "plan_sha256": metadata["plan_sha256"], "library_sha256": metadata["sha256"]["library"],
             "cpu_threads": operator.plan.cpu_threads,

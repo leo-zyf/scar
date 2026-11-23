@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from scar.analysis.target_graph import build_target_graph
-from scar.codegen import cpp
+from scar.codegen import cpp, pipeline as pipeline_codegen
 from scar.codegen.pipeline import GuardFailure, build, load
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.pipeline_frontend import CalleeGuard, RegionCall, compose_pipeline
@@ -65,8 +65,10 @@ def test_native_pipeline_reuses_slots_and_guards_one_ffi_entry(tmp_path, monkeyp
         **{key: model[key] for key in ("task_placements", "resource_capacities", "memory_capacities",
              "materialization_sizes", "memory_locations", "model_instantiation")})
     operator = cpp.build(bound, tmp_path / "operator", resource_schedule=schedule, timed_plan=solved)
-    artifact = build(pipeline, tmp_path / "host", memory_plan=memory,
-                     operators={call.id: operator for call in calls})
+    with monkeypatch.context() as publication:
+        publication.setattr(pipeline_codegen, 'load', lambda *args: pytest.fail('fresh build repeated cold admission'))
+        artifact = build(pipeline, tmp_path / "host", memory_plan=memory,
+                         operators={call.id: operator for call in calls})
     count = [0]; native = artifact._run
     def one_entry(*arguments):
         count[0] += 1
