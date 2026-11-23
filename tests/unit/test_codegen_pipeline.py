@@ -4,11 +4,13 @@ import ctypes
 from hashlib import sha256
 import json
 import os
+from pathlib import Path
 import shutil
 
 import numpy as np
 import pytest
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.target_graph import build_target_graph
 from scar.codegen import cpp, pipeline as pipeline_codegen
 from scar.codegen.pipeline import GuardFailure, build, load
@@ -65,7 +67,7 @@ def test_native_pipeline_reuses_slots_and_guards_one_ffi_entry(tmp_path, monkeyp
         **{key: model[key] for key in ("task_placements", "resource_capacities", "memory_capacities",
              "materialization_sizes", "memory_locations", "model_instantiation")})
     operator = cpp.build(bound, tmp_path / "operator", resource_schedule=schedule, timed_plan=solved)
-    with monkeypatch.context() as publication:
+    with replay_transaction(), monkeypatch.context() as publication:
         publication.setattr(pipeline_codegen, 'load', lambda *args: pytest.fail('fresh build repeated cold admission'))
         artifact = build(pipeline, tmp_path / "host", memory_plan=memory,
                          operators={call.id: operator for call in calls})
@@ -107,4 +109,19 @@ def test_native_pipeline_reuses_slots_and_guards_one_ffi_entry(tmp_path, monkeyp
     bad["assignment"]["value:1"] = deepcopy(bad["assignment"]["value:0"])
     with pytest.raises(ValueError, match="source/lifetime replay"):
         build(pipeline, tmp_path / "bad", memory_plan=bad, operators={call.id: operator for call in calls})
+    assert not (tmp_path / "bad").exists()
+
+    compile_native = pipeline_codegen.subprocess.run
+
+    def tamper_during_compile(arguments, **options):
+        result = compile_native(arguments, **options)
+        for argument in arguments:
+            if Path(argument).name == "pipeline.cpp":
+                Path(argument).with_name("memory-plan.json").write_text("{}")
+        return result
+
+    with monkeypatch.context() as publication:
+        publication.setattr(pipeline_codegen.subprocess, "run", tamper_during_compile)
+        with pytest.raises(ValueError, match="artifact file/receipt differs: memory_plan"):
+            build(pipeline, tmp_path / "bad", memory_plan=memory, operators={call.id: operator for call in calls})
     assert not (tmp_path / "bad").exists()

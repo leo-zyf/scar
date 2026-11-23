@@ -379,16 +379,15 @@ def build(pipeline, out, *, memory_plan, operators, execution_schedule=None):
                 header = (_DIRECTORY / "scar_abi_v1.h").read_bytes()
                 fingerprint = pipeline_implementation_sha256()
             metadata = _compile_pipeline(pipeline, memory, bindings, execution_schedule,
-                source, header, fingerprint, staged, transaction)
+                source, header, fingerprint, staged)
+            _verify_publication(staged, metadata)
         if directory.exists():
             for name in (*metadata['files'].values(), 'artifact.json'):
                 (staged / name).replace(directory / name)
         else:
             staged.rename(directory)
     if observed.complete_paths and context == _build_context():
-        _verify_members(directory, metadata)
-        _require((directory / 'artifact.json').read_bytes() == _json_bytes(metadata),
-                 'pipeline publication manifest differs from admitted output')
+        _verify_publication(directory, metadata)
         return _bind_native_host(directory, metadata, pipeline, memory, loaded, execution_schedule)
     return load(directory)
 
@@ -397,15 +396,8 @@ def _build_context():
     return os.getcwd(), frozenset(os.sched_getaffinity(0)), thread_environment()
 
 
-def _write_member(path, raw, transaction):
-    path.write_bytes(raw)
-    digest = _digest(raw)
-    transaction.watch(path, digest, len(raw))
-    return digest
-
-
 def _compile_pipeline(pipeline, memory, bindings, execution_schedule, source,
-                      header, fingerprint, directory, transaction):
+                      header, fingerprint, directory):
     compiler_options=(*cpp.COMPILER_OPTIONS,*(()if execution_schedule is None else('-pthread',)))
     compiler = shlex.split(os.environ.get("CXX", "g++"))
     _require(bool(compiler) and shutil.which(compiler[0]) is not None, "pipeline C++20 compiler unavailable")
@@ -418,8 +410,10 @@ def _compile_pipeline(pipeline, memory, bindings, execution_schedule, source,
     if execution_schedule is not None:
         members['execution_schedule'] = ('execution-schedule.json', _json_bytes(execution_schedule))
     files = {key: name for key, (name, _) in members.items()}
-    checksums = {key: _write_member(directory / name, raw, transaction)
-                 for key, (name, raw) in members.items()}
+    checksums = {}
+    for key, (name, raw) in members.items():
+        (directory / name).write_bytes(raw)
+        checksums[key] = _digest(raw)
     fd, temporary = tempfile.mkstemp(prefix=".pipeline-", suffix=".so", dir=directory); os.close(fd)
     try:
         process = subprocess.run([*compiler, *compiler_options, str(directory / "pipeline.cpp"),
@@ -433,7 +427,6 @@ def _compile_pipeline(pipeline, memory, bindings, execution_schedule, source,
     version = subprocess.run([*compiler, "--version"], capture_output=True, text=True).stdout.splitlines()
     files['library'] = library.name
     checksums['library'] = _digest(binary)
-    transaction.watch(library, checksums['library'], len(binary))
     metadata = {
         "schema": "scar.native-array-pipeline", "schema_version": 1, "pipeline_abi_version": 1,
         "backend": "cpp", "build_id": build_id, "pipeline_sha256": pipeline_digest(pipeline),
@@ -481,7 +474,7 @@ def _compile_pipeline(pipeline, memory, bindings, execution_schedule, source,
                 logical_release='LAST_SUCCESSFUL_CONSUMER_RETIRE_THEN_PHYSICAL_SLOT_RELEASE_EVENT',
                 final_storage_admission='ADOPT_PRIVATE_CALLER_DESCRIPTOR_AT_FINAL_ALLOCATE_EVENT',
                 native_diagnostic_symbol='scar_pipeline_run_diagnostic_v1')
-    _write_member(directory / "artifact.json", _json_bytes(metadata), transaction)
+    (directory / "artifact.json").write_bytes(_json_bytes(metadata))
     return metadata
 
 
@@ -489,6 +482,12 @@ def _verify_members(directory, metadata):
     for key, filename in metadata["files"].items():
         _require(Path(filename).name == filename and _digest((directory / filename).read_bytes()) == metadata["sha256"][key],
                  "pipeline artifact file/receipt differs: " + key)
+
+
+def _verify_publication(directory, metadata):
+    _verify_members(directory, metadata)
+    _require((directory / 'artifact.json').read_bytes() == _json_bytes(metadata),
+             'pipeline publication manifest differs from admitted output')
 
 
 def load(out):
