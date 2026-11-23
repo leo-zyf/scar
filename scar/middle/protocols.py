@@ -1,12 +1,34 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
 from scar.contract import walk_operations
-from . import arrays
-from .arrays import Value as _Value, literal as _literal
+from . import arrays, host_protocols, values
+from .values import Value as _Value, literal as _literal
 
 
 def _slot(module, name):
     return f"py:{module}:{name}"
+
+
+def _join(paths):
+    """Only bindings present on every control predecessor are definitely bound."""
+    result = {}
+    for name, first in paths[0].items():
+        incoming = [path.get(name) for path in paths[1:]]
+        if all(v == first for v in incoming):
+            result[name] = first
+        elif all(
+            v is not None and v.kind == first.kind and v.value == first.value
+            for v in incoming
+        ):
+            facts = {}
+            if first.kind == "i64":
+                bounds = [v.bounds for v in [first, *incoming]]
+                facts["range"] = (
+                    min(lo for lo, _ in bounds),
+                    max(hi for _, hi in bounds),
+                )
+            result[name] = _Value(first.kind, first.value, facts)
+    return result
 
 
 class _Unclosed(Exception):
@@ -35,6 +57,7 @@ class _Project:
         self.providers = {}
         self.array_ops = set()
         self.active = []
+        self.global_reads = {}
         self.shadow = set()
         for function in functions.values():
             for node in walk_operations(function["body"]):
@@ -48,6 +71,11 @@ class _Project:
                     target = node.get("target", node.get("binding", {}))
                     if target.get("scope") == "global":
                         self.shadow.add(target["name"])
+
+    def global_read(self, name, value):
+        for active in self.active:
+            if self.functions[active]["python_scope"]["kind"] == "function":
+                self.global_reads[active][name] = (value.kind, value.value)
 
     def compile(self, name, types):
         fn = self.functions[name]
@@ -66,6 +94,16 @@ class _Project:
                     "argument_types",
                     f"call types {types} conflict with earlier {self.types[name]}",
                 )
+            for slot, required in self.global_reads.get(name, {}).items():
+                current = self.names.get(slot)
+                if current is None or (current.kind, current.value) != required:
+                    raise _Unclosed(
+                        name,
+                        fn,
+                        "name_binding",
+                        f"cached function requires initialized binding {slot} at this call",
+                    )
+                self.global_read(slot, current)
             return self.closed[name]
         scope = fn.get("python_scope", {})
         kind = scope.get("kind")
@@ -88,6 +126,7 @@ class _Project:
                 "the invocation must bind every formal parameter once",
             )
         self.active.append(name)
+        self.global_reads[name] = {}
         try:
             frame = _Frame(self, fn, types)
             result = frame.lower()
@@ -108,6 +147,8 @@ class _Frame:
         self.locals = {}
         self.returns = set()
         self.next_temp = 0
+        self.loops = []
+        self.dynamic = 0
         self.params = []
         for formal, kind in zip(fn["params"], types):
             if formal.get("cell") or formal.get("binding") not in {
@@ -121,7 +162,7 @@ class _Frame:
                     "captured or variadic parameter needs a binding contract",
                 )
             name = formal["name"]
-            self.params.append(dict(name=name, type=arrays.wire(kind)))
+            self.params.append(dict(name=name, type=values.wire(kind)))
             self.env[name] = _Value(kind, None).at(name)
             self.locals[name] = kind
 
@@ -129,7 +170,7 @@ class _Frame:
         raise _Unclosed(self.name, node, field, message)
 
     def scalar(self, value, node):
-        if not arrays.runtime(value.kind):
+        if not values.runtime(value.kind):
             self.fail(
                 node, "value_contract", "symbolic binding escapes its closed namespace"
             )
@@ -144,7 +185,7 @@ class _Frame:
             steps.append(dict(op="expr", value=node))
             return _literal(None)
         name = self.temporary()
-        steps.append(dict(op="decl", name=name, type=arrays.wire(kind), init=node))
+        steps.append(dict(op="decl", name=name, type=values.wire(kind), init=node))
         return _Value(kind, None, facts or {}).at(name)
 
     def ref(self, node):
@@ -153,10 +194,12 @@ class _Frame:
             self.fail(node, "cell", "a lexical cell needs a closed activation lifetime")
         if node.get("scope") == "global":
             result = self.project.names.get(name)
+            if result is not None:
+                self.project.global_read(name, result)
             if (
                 result is not None
                 and not self.initializing
-                and arrays.runtime(result.kind)
+                and values.runtime(result.kind)
                 and result.value["op"] == "var"
             ):
                 result = _Value(result.kind, result.value)
@@ -164,16 +207,18 @@ class _Frame:
             slot = _slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
             if result is None and slot not in self.project.shadow:
-                if name == "print":
+                if name in {"print", "range"}:
                     result = _Value("builtin", name)
                 elif name == "float":
                     result = _Value("dtype", "f64")
                 else:
-                    self.fail(
-                        node,
-                        "provider_contract",
-                        f"builtins.{name} needs a typed provider contract",
-                    )
+                    result = host_protocols.builtin(self, node, name)
+                    if result is None:
+                        self.fail(
+                            node,
+                            "provider_contract",
+                            f"builtins.{name} needs a typed provider contract",
+                        )
         else:
             result = self.env.get(name)
         if result is None:
@@ -214,7 +259,13 @@ class _Frame:
             )
         scope = self.project.names if global_ else self.env
         previous = scope.get(name)
-        if not arrays.runtime(value.kind):
+        if not values.runtime(value.kind):
+            if self.dynamic or value.kind == "range":
+                self.fail(
+                    target,
+                    "conditional_binding",
+                    f"{value.kind} needs a persistent runtime binding here",
+                )
             if previous is not None and previous != value:
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
@@ -238,6 +289,20 @@ class _Frame:
     def imported(self, node, steps):
         req = node.get("request", {})
         mod = node["module"]
+        if self.dynamic:
+            self.fail(
+                node,
+                "conditional_import",
+                "runtime-dependent module initialization requires an import-state contract",
+            )
+        if (
+            self.initializing
+            and node.get("source_provider", {}).get("status") == "verified_stdlib"
+        ):
+            self.store(
+                node["binding"], host_protocols.import_provider(self, node), steps
+            )
+            return
         if (
             self.initializing
             and mod == "numpy"
@@ -341,16 +406,23 @@ class _Frame:
             return arrays.index(self, node, steps, discard=discard)
         if op == "member":
             base = self.evaluate(node["base"], steps)
+            if base.kind == "handle:text_stream":
+                base = self.effect(base.value, base.kind, steps, facts=base.facts)
+            host_member = host_protocols.member(self, node, base, node["field"])
+            if host_member is not None:
+                return host_member
             if base.kind == "provider_namespace":
                 return arrays.provider_member(self, node, node["field"])
-            if arrays.rank(base.kind) is not None and node["field"] == "copy":
+            if values.rank(base.kind) is not None and node["field"] == "copy":
                 return _Value("array_copy_method", base)
             if base.kind == "module":
-                value = self.project.names.get(_slot(base.value, node["field"]))
+                slot = _slot(base.value, node["field"])
+                value = self.project.names.get(slot)
                 if value is not None:
+                    self.project.global_read(slot, value)
                     if (
                         not self.initializing
-                        and arrays.runtime(value.kind)
+                        and values.runtime(value.kind)
                         and value.value["op"] == "var"
                     ):
                         return _Value(value.kind, value.value)
@@ -388,7 +460,7 @@ class _Frame:
             numeric = arrays.scalar_binary(self, node, operator, lhs, rhs)
             if numeric is not None:
                 return numeric
-            if arrays.rank(lhs.kind) is not None or arrays.rank(rhs.kind) is not None:
+            if values.rank(lhs.kind) is not None or values.rank(rhs.kind) is not None:
                 self.fail(
                     node,
                     "array_operator",
@@ -426,10 +498,7 @@ class _Frame:
 
         def argument(expr):
             value = self.evaluate(expr, steps)
-            if arrays.runtime(value.kind) and value.value["op"] not in {
-                "var",
-                "literal",
-            }:
+            if values.runtime(value.kind) and value.value["op"] != "literal":
                 return self.effect(value.value, value.kind, steps, facts=value.facts)
             return value
 
@@ -442,8 +511,20 @@ class _Frame:
             kwargs[key] = argument(item["value"])
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        if target.kind == "builtin" and target.value == "range":
+            if kwargs or not 1 <= len(args) <= 3 or any(v.kind != "i64" for v in args):
+                self.fail(
+                    node,
+                    "range_contract",
+                    "range requires one to three index-width integers",
+                )
+            if len(args) == 3 and (
+                type(args[2].exact) is not int or args[2].exact == 0
+            ):
+                self.fail(node, "range_step", "a nonzero constant step is required")
+            return _Value("range", tuple(args))
         if target.kind == "builtin" and target.value == "print":
-            if any(a.kind not in {"bool", "i64", "text", "unit"} for a in args):
+            if any(a.kind not in {"bool", "i64", "f64", "text", "unit"} for a in args):
                 self.fail(
                     node,
                     "print_contract",
@@ -455,16 +536,17 @@ class _Frame:
             sep = _literal(" ") if sep.kind == "unit" else sep
             end = _literal("\n") if end.kind == "unit" else end
             flush = kwargs.get("flush", _literal(False))
+            stream = kwargs.get("file", _literal(None))
             if (
                 sep.kind != "text"
                 or end.kind != "text"
                 or flush.kind != "bool"
-                or kwargs.get("file", _literal(None)).kind != "unit"
+                or stream.kind not in {"unit", "handle:text_stream"}
             ):
                 self.fail(
                     node,
                     "print_contract",
-                    "print requires the default text output, text separators and a Boolean flush flag",
+                    "print requires a text stream, text separators and a Boolean flush flag",
                 )
             call = dict(
                 op="text_print",
@@ -481,9 +563,22 @@ class _Frame:
                     unit="None",
                     integer_base=10,
                 ),
-                keyword_order=[k for k in kwargs if k != "file"],
+                keyword_order=[
+                    "stream" if k == "file" else k
+                    for k in kwargs
+                    if k != "file" or stream.kind != "unit"
+                ],
             )
+            if stream.kind != "unit":
+                call["stream"] = stream.value
+            if any(a.kind == "f64" for a in args):
+                call["scalar_format"]["float"] = "shortest_binary64"
             return self.effect(call, "unit", steps, discard)
+        host_call = host_protocols.invoke(
+            self, node, target, args, kwargs, steps, discard
+        )
+        if host_call is not None:
+            return host_call
         if target.kind != "function" or target.value not in self.project.functions:
             self.fail(
                 node,
@@ -519,19 +614,19 @@ class _Frame:
                 )
         if kwargs:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
-        values = [self.scalar(v, node) for v in bound]
+        operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound))
         call = dict(
             op="call",
             callee=name,
-            args=values,
+            args=operands,
             type=function["result"],
-            parameter_types=[arrays.wire(v.kind) for v in bound],
+            parameter_types=[values.wire(v.kind) for v in bound],
         )
-        return self.effect(call, arrays.from_wire(function["result"]), steps, discard)
+        return self.effect(call, values.from_wire(function["result"]), steps, discard)
 
     def truth(self, value, node):
-        if arrays.rank(value.kind) is not None:
+        if values.rank(value.kind) is not None:
             self.fail(
                 node,
                 "array_truth",
@@ -544,6 +639,10 @@ class _Frame:
             return value
         if value.kind == "unit":
             return _literal(False)
+        if value.kind not in {"i64", "f64", "text"}:
+            self.fail(
+                node, "truth_contract", f"{value.kind} has no closed truth conversion"
+            )
         return _Value(
             "bool",
             dict(
@@ -554,6 +653,291 @@ class _Frame:
                 type="bool",
             ),
         )
+
+    def snapshot(self):
+        return self.env.copy(), self.project.names.copy()
+
+    def restore(self, state):
+        self.env, self.project.names = (scope.copy() for scope in state)
+
+    def merge(self, states):
+        self.env, self.project.names = (_join(group) for group in zip(*states))
+
+    def conditional(self, node, steps):
+        check = self.truth(self.evaluate(node["condition"], steps), node)
+        if check.value["op"] == "literal":
+            return self.sequence(
+                node["then"] if check.value["value"] else node["else"], steps
+            )
+        start = self.snapshot()
+        arms, exits = [], []
+        self.dynamic += 1
+        for side in ("then", "else"):
+            self.restore(start)
+            out = []
+            if self.sequence(node[side], out):
+                exits.append(self.snapshot())
+            arms.append(out)
+        self.dynamic -= 1
+        steps.append(
+            dict(op="if", condition=check.value, then=arms[0], **{"else": arms[1]})
+        )
+        if exits:
+            self.merge(exits)
+        return bool(exits)
+
+    def range_loop(self, node, steps):
+        domain = self.evaluate(node["range"], steps)
+        if (
+            node.get("protocol") != "iterator"
+            or domain.kind != "range"
+            or node["target"].get("op") != "var"
+        ):
+            self.fail(
+                node,
+                "iterator_contract",
+                "counted iteration requires a closed range and one lexical target",
+            )
+        args = domain.value
+        start, stop = (_literal(0), args[0]) if len(args) == 1 else args[:2]
+        step = args[2] if len(args) == 3 else _literal(1)
+        stride = step.exact
+        if type(stride) is not int or not stride:
+            self.fail(node, "range_step", "a nonzero constant step is required")
+        # Range operands are already captured in source order by call().
+        positive = stride > 0
+        al, ah = start.bounds
+        bl, bh = stop.bounds
+        empty = al >= bh if positive else ah <= bl
+        nonempty = ah < bl if positive else al > bh
+        distance = bh - al if positive else ah - bl
+        count = max(0, (distance + abs(stride) - 1) // abs(stride))
+        low, high = (al, bh - 1) if positive else (bl + 1, ah)
+        cursor = self.temporary()
+        iv = _Value("i64", None, {"range": (low, high)}).at(cursor)
+        condition = dict(
+            op="binary",
+            operator="lt" if positive else "gt",
+            type="bool",
+            left=iv.value,
+            right=stop.value,
+        )
+        advance = dict(
+            op="binary", operator="add", type="i64", left=iv.value, right=step.value
+        )
+        if not empty and (high + stride > (1 << 63) - 1 or low + stride < -(1 << 63)):
+            # The terminal mathematical index may exceed int64. Substituting
+            # the exclusive end when that happens leaves precisely the same visits.
+            limit = (1 << 63) - 1 - stride if positive else -(1 << 63) - stride
+            guard = dict(
+                op="binary",
+                operator="gt" if positive else "lt",
+                left=iv.value,
+                right=_literal(limit).value,
+                type="bool",
+            )
+            advance = dict(
+                op="select",
+                condition=guard,
+                then=stop.value,
+                **{"else": advance},
+                type="i64",
+            )
+        loop = dict(
+            op="for",
+            init=[dict(op="decl", name=cursor, type="i64", init=start.value)],
+            condition=condition,
+            step=dict(
+                op="update", operator="set", target=iv.value, value=advance, type="i64"
+            ),
+            body=[],
+        )
+        return loop, iv, count, empty, nonempty
+
+    def widen_loop(self, node, iv, count):
+        body = node["body"]
+        writes = {}
+        nested = False
+        for op in walk_operations(body):
+            if op["op"] in {"for", "while"}:
+                nested = True
+            if op["op"] in {
+                "for",
+                "assign",
+                "update",
+                "python_define",
+                "python_import",
+            }:
+                dest = op.get("target", op.get("binding", {}))
+                if dest.get("op") == "var":
+                    writes.setdefault(
+                        (dest.get("scope") == "global", dest["name"]), []
+                    ).append(op)
+        if iv is not None:
+            target = node["target"]
+            index = (target.get("scope") == "global", target["name"])
+            writes.setdefault(index, [])
+        else:
+            index = None
+
+        def delta(port):
+            if port.get("op") == "literal" and type(port.get("value")) is int:
+                return (port["value"],) * 2
+            if port.get("op") == "var":
+                key = port.get("scope") == "global", port["name"]
+                if key == index and not writes[key]:
+                    return iv.bounds
+                binding = (self.project.names if key[0] else self.env).get(key[1])
+                if key not in writes and binding and binding.kind == "i64":
+                    return binding.bounds
+            return None
+
+        for (global_, name), sites in writes.items():
+            env = self.project.names if global_ else self.env
+            value = env.get(name)
+            if value is None:
+                continue
+            if not values.runtime(value.kind):
+                self.fail(
+                    node,
+                    "loop_binding",
+                    f"loop-carried symbolic binding {name} needs a runtime representation",
+                )
+            facts = {}
+            if value.kind == "i64" and count and not nested and sites:
+                down = up = 0
+                for site in sites:
+                    rhs = site.get("value", {})
+                    op = site.get("operator")
+                    if (
+                        site["op"] == "assign"
+                        and rhs.get("op") == "binary"
+                        and rhs["left"].get("op") == "var"
+                        and rhs["left"]["name"] == name
+                        and (rhs["left"].get("scope") == "global") == global_
+                    ):
+                        op, rhs = rhs["operator"], rhs["right"]
+                    elif site["op"] != "update":
+                        break
+                    interval = delta(rhs)
+                    if op not in {"add", "sub"} or interval is None:
+                        break
+                    a, b = interval
+                    if op == "sub":
+                        a, b = -b, -a
+                    down += min(a, 0)
+                    up += max(b, 0)
+                else:
+                    lower = value.bounds[0] + (count - 1) * down
+                    upper = value.bounds[1] + (count - 1) * up
+                    if -(1 << 63) <= lower <= upper < 1 << 63:
+                        facts["range"] = (lower, upper)
+            env[name] = _Value(value.kind, value.value, facts)
+
+    def refine_loop_test(self, test):
+        if test.get("op") != "binary":
+            return
+        op = test["operator"]
+        left, right = test["left"], test["right"]
+        if right.get("op") == "var" and left.get("op") == "literal":
+            left, right = right, left
+            op = {"gt": "lt", "ge": "le", "lt": "gt", "le": "ge", "eq": "eq"}.get(op)
+        if (
+            left.get("op") != "var"
+            or right.get("op") != "literal"
+            or type(right["value"]) is not int
+        ):
+            return
+        env = self.project.names if left.get("scope") == "global" else self.env
+        v = env.get(left["name"])
+        if v is None or v.kind != "i64":
+            return
+        low, high = v.bounds
+        b = right["value"]
+        if op in {"le", "lt", "eq"}:
+            high = min(high, b - (op == "lt"))
+        if op in {"ge", "gt", "eq"}:
+            low = max(low, b + (op == "gt"))
+        if low <= high:
+            env[left["name"]] = _Value("i64", v.value, {"range": (low, high)})
+
+    def loop(self, node, steps):
+        counted = node["op"] == "for"
+        start = self.snapshot()
+        if counted:
+            loop, iv, count, empty, nonempty = self.range_loop(node, steps)
+        else:
+            iv, count = None, None
+            loop = dict(op="while", body=[])
+        self.widen_loop(node, iv, count)
+        header = self.snapshot()
+        if not counted:
+            test_setup = []
+            test = self.truth(self.evaluate(node["condition"], test_setup), node)
+            empty = test.exact is False
+            nonempty = test.exact is True
+            loop["condition"] = test.value if not test_setup else _literal(True).value
+            if test_setup:
+                loop["body"].extend(test_setup)
+                loop["body"].append(
+                    dict(
+                        op="if",
+                        condition=dict(
+                            op="unary", operator="not", value=test.value, type="bool"
+                        ),
+                        then=[dict(op="break")],
+                        **{"else": []},
+                    )
+                )
+            self.refine_loop_test(test.value)
+        flag = None
+        if node.get("else"):
+            flag = self.temporary()
+        flow = {"break": [], "continue": [], "else_flag": flag}
+        self.loops.append(flow)
+        self.dynamic += 1
+        if not empty:
+            if counted:
+                self.store(node["target"], iv, loop["body"])
+            if self.sequence(node["body"], loop["body"]):
+                flow["continue"].append(self.snapshot())
+        self.dynamic -= 1
+        self.loops.pop()
+        broke = flow["break"]
+        if flag and broke:
+            steps.append(
+                dict(op="decl", name=flag, type="bool", init=_literal(True).value)
+            )
+        steps.append(loop)
+        if empty:
+            normal = [start]
+        elif counted:
+            normal = ([start] if not nonempty else []) + flow["continue"]
+        else:
+            normal = [] if nonempty else [header, *flow["continue"]]
+        exits = list(broke)
+        if normal:
+            self.merge(normal)
+            else_body = []
+            self.dynamic += bool(broke)
+            if self.sequence(node.get("else", []), else_body):
+                exits.append(self.snapshot())
+            self.dynamic -= bool(broke)
+            if else_body:
+                if broke:
+                    steps.append(
+                        dict(
+                            op="if",
+                            condition=dict(op="var", type="bool", name=flag),
+                            then=else_body,
+                            **{"else": []},
+                        )
+                    )
+                else:
+                    steps.extend(else_body)
+        if exits:
+            self.merge(exits)
+        return bool(exits)
 
     def sequence(self, body, steps):
         for node in body:
@@ -590,59 +974,37 @@ class _Frame:
                 steps.append(dict(op="return", value=self.scalar(value, node)))
                 self.returns.add(value.kind)
                 return False
-            elif op == "if":
-                check = self.truth(self.evaluate(node["condition"], steps), node)
-                if check.value["op"] == "literal":
-                    branch = node["then"] if check.value["value"] else node["else"]
-                    if not self.sequence(branch, steps):
-                        return False
-                    continue
-                if self.initializing and any(
-                    n["op"] in {"assign", "python_import", "python_define"}
-                    for n in walk_operations([node["then"], node["else"]])
-                ):
+            elif op == "update" and node["target"].get("op") == "var":
+                target = node["target"]
+                left = self.ref(target)
+                right = self.evaluate(node["value"], steps)
+                result = arrays.scalar_binary(self, node, node["operator"], left, right)
+                if result is None:
                     self.fail(
                         node,
-                        "conditional_binding",
-                        "runtime-dependent module binding or initialization",
+                        "update_contract",
+                        "in-place operation needs a closed scalar contract",
                     )
-                incoming = self.env
-                arms, exits = [], []
-                for side in ("then", "else"):
-                    self.env = dict(incoming)
-                    statements = []
-                    if self.sequence(node[side], statements):
-                        exits.append(self.env)
-                    arms.append(statements)
-                steps.append(
-                    dict(
-                        op="if",
-                        condition=check.value,
-                        then=arms[0],
-                        **{"else": arms[1]},
+                self.store(target, result, steps)
+            elif op in {"break", "continue"} and self.loops:
+                flow = self.loops[-1]
+                flow[op].append(self.snapshot())
+                if op == "break" and flow["else_flag"]:
+                    steps.append(
+                        dict(
+                            op="assign",
+                            target=dict(op="var", name=flow["else_flag"], type="bool"),
+                            value=_literal(False).value,
+                        )
                     )
-                )
-                if not exits:
+                steps.append(dict(op=op))
+                return False
+            elif op == "if":
+                if not self.conditional(node, steps):
                     return False
-                self.env = {}
-                for key, value in exits[0].items():
-                    others = [out.get(key) for out in exits[1:]]
-                    if all(v == value for v in others):
-                        self.env[key] = value
-                    elif all(
-                        v is not None
-                        and v.kind == value.kind
-                        and v.value == value.value
-                        for v in others
-                    ):
-                        facts = {}
-                        if value.kind == "i64":
-                            bounds = [v.bounds for v in (value, *others)]
-                            facts["range"] = (
-                                min(b[0] for b in bounds),
-                                max(b[1] for b in bounds),
-                            )
-                        self.env[key] = _Value(value.kind, value.value, facts)
+            elif op in {"for", "while"}:
+                if not self.loop(node, steps):
+                    return False
             else:
                 self.fail(node, "statement_contract", f"unclosed statement {op}")
         return True
@@ -666,14 +1028,14 @@ class _Frame:
         result = "void" if self.initializing else next(iter(self.returns))
         parameters = {p["name"] for p in self.params}
         declarations = [
-            dict(op="decl", name=n, type=arrays.wire(t))
+            dict(op="decl", name=n, type=values.wire(t))
             for n, t in self.locals.items()
             if n not in parameters
         ]
         return dict(
             name=self.name,
             params=self.params,
-            result=arrays.wire(result),
+            result=values.wire(result),
             location=self.fn.get("location"),
             body=[*declarations, *body],
         )
@@ -767,7 +1129,7 @@ def normalize_protocols(module):
         project.closed.get(fn["name"], fn) for fn in module["functions"]
     ]
     module["globals"].extend(
-        dict(op="decl", name=n, type=arrays.wire(t)) for n, t in project.globals.items()
+        dict(op="decl", name=n, type=values.wire(t)) for n, t in project.globals.items()
     )
     if project.array_ops:
         module["operator_requirements"] = {

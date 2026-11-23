@@ -180,7 +180,7 @@ def _lower_image(path, revision, scheduled, destination):
     publish(runtime, support)
     headers = []
     for name in sorted(lowerer.used_sdk_headers):
-        if name not in {"array.hpp"}:
+        if name not in {"array.hpp", "host.hpp"}:
             raise ValueError(f"unregistered target SDK header {name!r}")
         data = Path(__file__).with_name(name).read_bytes()
         sealed = destination / "runtime" / (digest(data) + ".hpp")
@@ -297,7 +297,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     (directory / "src").mkdir()
     (directory / "include/scar/runtime.hpp").write_bytes(runtime)
     for header in product.get("sdk_headers", ()):
-        if header["output"] not in {"include/scar/array.hpp"}:
+        if header["output"] not in {"include/scar/array.hpp", "include/scar/host.hpp"}:
             raise ValueError("invalid target SDK header output")
         target = directory / header["output"]
         if target.exists():

@@ -133,6 +133,107 @@ print(snapshot[0] == 1.0)
     assert [h["output"] for h in target["sdk_headers"]] == ["include/scar/array.hpp"]
 
 
+def test_host_protocols_preserve_files_stream_aliases_and_text(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text(
+        """import os
+import shutil
+import time
+from os.path import join as combine
+os.makedirs('data/nested', exist_ok=True)
+path = combine('data', 'science.txt')
+writer = open(path, 'w', encoding='utf-8')
+alias = writer
+print('科学', 1.25, -0.0, True, None, sep='|', file=writer, flush=True)
+print(alias.write('α\\r\\nβ\\rγ\\n'))
+alias.close()
+writer.close()
+reader = open(path)
+print(reader.read(), end='')
+reader.close()
+print(shutil.copyfile(path, 'data/content.txt'))
+print(shutil.copy(path, 'data/nested'))
+print(shutil.copy2(path, 'data/metadata.txt'))
+print(shutil.copytree('data/nested', 'tree'))
+print(os.path.isfile('tree/science.txt'), os.path.isdir('tree'))
+print(os.path.exists('invalid\\0path'), os.path.isfile('invalid\\0path'))
+shutil.rmtree('tree')
+shutil.rmtree('absent', ignore_errors=True)
+os.chdir('data')
+print(os.path.exists('metadata.txt'), time.time() > 0.0)
+print(str(1e-5), str(1e15), str(1e16), str(False), str(None))
+""",
+        encoding="utf-8",
+    )
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    expected = _run([sys.executable, "-B", entry], reference)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = tmp_path / "native"
+    native.mkdir()
+    assert _run([result["executable"]], native) == expected
+    for relative in (
+        "data/science.txt",
+        "data/content.txt",
+        "data/nested/science.txt",
+        "data/metadata.txt",
+    ):
+        assert (native / relative).read_bytes() == (reference / relative).read_bytes()
+    target = json.loads((delivery / "target-ir.json").read_bytes())
+    assert [h["output"] for h in target["sdk_headers"]] == ["include/scar/host.hpp"]
+
+
+def test_python_loops_remain_structured_and_preserve_exit_bindings(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""s = 0
+for i in range(1, 6):
+    if i == 2: continue
+    if i == 4: break
+    s += i
+else: print('wrong')
+print(s, i)
+for i in range(3, -2, -2): print(i)
+else: print('done')
+k = 0
+while k < 3:
+    k += 1
+    if k == 2: continue
+    print(k)
+else: print('while', k)
+n = 4
+for j in range(n): n = 0
+print(j, n)
+for v in range(9223372036854775806, 9223372036854775807, 3): print(v)
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    from scar.contract import read_member, walk_operations
+
+    loops = [
+        node
+        for receipt in ir["functions"]
+        for node in walk_operations(read_member(plan, receipt))
+        if node["op"] in {"for", "while"}
+    ]
+    assert len(loops) == 5
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
 def test_local_provider_name_does_not_select_an_unrelated_library(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

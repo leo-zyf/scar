@@ -121,6 +121,58 @@ def test_python_project_locks_and_parses_each_imported_file_once(tmp_path, monke
     }
 
 
+def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
+    import codecs
+    from importlib.machinery import BuiltinImporter, FrozenImporter
+    import os
+
+    from scar.contract import walk_operations
+
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        "import os, shutil, sys, time, math, subprocess\n"
+        "from os.path import join as combine\nopen('never-executed')\n"
+    )
+    (facts,) = python.capture_project(entry, tmp_path).units
+    unit = _offline(monkeypatch, python, facts)
+    nodes = list(walk_operations(unit["functions"][0]["partial_body"]))
+    imported = next(n for n in nodes if n.get("module") == "os.path")
+    assert imported["bound_value"]["external"] == "os.path.join"
+    source = imported["source_provider"]
+    assert source["module"] == "os" and source["status"] == "verified_stdlib"
+    assert source["aliases"]["os.path"]["module"] == os.path.__name__
+    opened = next(
+        n for n in nodes if n["op"] == "python_builtin" and n["name"] == "open"
+    )
+    assert opened["source_runtime"] == facts.runtime_facts
+    with entry.open() as stream:
+        assert codecs.lookup(
+            facts.runtime_facts["default_text_encoding"]
+        ) == codecs.lookup(stream.encoding)
+
+    shadows = {"os", "shutil", "sys", "time", "math"}
+    for name in shadows:
+        (tmp_path / (name + ".py")).write_text(
+            "raise RuntimeError('capture executed a module')\n"
+        )
+    project = python.capture_project(entry, tmp_path)
+    path_modules = {
+        name
+        for name in shadows
+        if not (BuiltinImporter.find_spec(name) or FrozenImporter.find_spec(name))
+    }
+    assert set(project.catalog) == {"entry"} | path_modules
+    for name in shadows:
+        provider = project.units[0].providers[name]
+        if name in path_modules:
+            assert provider["status"] == "project" and provider["file"] == name + ".py"
+        else:
+            assert provider == facts.providers[name] and provider["loader"] in {
+                "frozen",
+                "builtin",
+            }
+
+
 def test_python_binding_time_loop_edges_and_class_frames(tmp_path, monkeypatch):
     from scar.contract import walk_operations
 

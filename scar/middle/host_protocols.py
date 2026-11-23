@@ -1,0 +1,372 @@
+"""M2: bind verified source host APIs to language-independent effect contracts."""
+
+import math
+
+from .values import Value, literal, wire
+
+_STREAM = "handle:text_stream"
+_REQUIRED = object()
+_FORMAT = dict(
+    boolean_true="True",
+    boolean_false="False",
+    unit="None",
+    integer_base=10,
+    float="shortest_binary64",
+)
+
+# Names and defaults belong to source binding. The emitted interfaces do not.
+# Each item is (source parameter, value type, default); None is a real default.
+_SIGNATURES = {
+    "os.path.exists": ("fs.exists", "bool", [("path", "text", _REQUIRED)]),
+    "os.path.isfile": ("fs.is_file", "bool", [("path", "text", _REQUIRED)]),
+    "os.path.isdir": ("fs.is_dir", "bool", [("path", "text", _REQUIRED)]),
+    "os.mkdir": (
+        "fs.mkdir",
+        "unit",
+        [("path", "text", _REQUIRED), ("mode", "i64", 0o777), ("dir_fd", "unit", None)],
+    ),
+    "os.makedirs": (
+        "fs.makedirs",
+        "unit",
+        [
+            ("name", "text", _REQUIRED),
+            ("mode", "i64", 0o777),
+            ("exist_ok", "bool", False),
+        ],
+    ),
+    "os.chdir": ("process.chdir", "unit", [("path", "text", _REQUIRED)]),
+    "os.getcwd": ("process.getcwd", "text", []),
+    "shutil.rmtree": (
+        "fs.remove_tree",
+        "unit",
+        [("path", "text", _REQUIRED), ("ignore_errors", "bool", False)],
+    ),
+    "shutil.copyfile": (
+        "fs.copy_file",
+        "text",
+        [
+            ("src", "text", _REQUIRED),
+            ("dst", "text", _REQUIRED),
+            ("follow_symlinks", "bool", True),
+        ],
+    ),
+    "shutil.copy": (
+        "fs.copy",
+        "text",
+        [
+            ("src", "text", _REQUIRED),
+            ("dst", "text", _REQUIRED),
+            ("follow_symlinks", "bool", True),
+        ],
+    ),
+    "shutil.copy2": (
+        "fs.copy2",
+        "text",
+        [
+            ("src", "text", _REQUIRED),
+            ("dst", "text", _REQUIRED),
+            ("follow_symlinks", "bool", True),
+        ],
+    ),
+    "shutil.copytree": (
+        "fs.copy_tree",
+        "text",
+        [("src", "text", _REQUIRED), ("dst", "text", _REQUIRED)],
+    ),
+    "time.time": ("time.wall", "f64", []),
+    "time.sleep": ("time.sleep", "unit", [("secs", "f64", _REQUIRED)]),
+}
+_METHODS = {
+    "write": ("stream.write", "i64", [("s", "text", _REQUIRED)]),
+    "flush": ("stream.flush", "unit", []),
+    "close": ("stream.close", "unit", []),
+    "read": ("stream.read", "text", [("size", "i64", -1)]),
+    "readline": ("stream.readline", "text", [("size", "i64", -1)]),
+}
+_MEMBERS = {
+    "os": {"path", "mkdir", "makedirs", "chdir", "getcwd"},
+    "os.path": {"join", "exists", "isfile", "isdir"},
+    "shutil": {"rmtree", "copyfile", "copy", "copy2", "copytree"},
+    "time": {"time", "sleep"},
+    "sys": set(),
+    "math": {"pi", "e", "tau"},
+    "subprocess": set(),
+}
+
+
+def builtin(frame, node, name):
+    if name in {"open", "str"}:
+        return Value(
+            "host_callable", "builtins." + name, node.get("source_runtime", {})
+        )
+    return None
+
+
+def import_provider(frame, node):
+    source = node.get("source_provider", {})
+    module = node["module"]
+    if (
+        source.get("status") != "verified_stdlib"
+        or source.get("module") != module.split(".")[0]
+        or source.get("platform") not in {"linux", "linux2"}
+        or not source.get("sha256")
+    ):
+        frame.fail(
+            node,
+            "host_provider",
+            "host APIs require a pinned POSIX standard-library identity",
+        )
+    identity = source["module"]
+    key = "stdlib:" + identity
+    prior = frame.project.providers.get(key)
+    if prior and prior["sha256"] != source["sha256"]:
+        frame.fail(
+            node,
+            "host_provider",
+            "one program resolves conflicting host provider identities",
+        )
+    frame.project.providers[key] = dict(
+        source, contract="closed host APIs with explicit resource effects"
+    )
+    if module not in _MEMBERS:
+        frame.fail(node, "host_provider", f"no host namespace contract for {module}")
+    if module == "os.path":
+        _path_identity(frame, node, source)
+    namespace = Value("host_namespace", module, source)
+    if node["request"]["form"] == "from":
+        return member(frame, node, namespace, node["member"])
+    if module == "os.path" and not node.get("alias"):
+        return Value("host_namespace", "os", source)
+    return namespace
+
+
+def member(frame, node, base, name):
+    if base.kind == _STREAM:
+        if name not in _METHODS:
+            frame.fail(node, "stream_member", f"no closed stream method for {name}")
+        return Value("host_method", (base, name))
+    if base.kind != "host_namespace":
+        return None
+    if name not in _MEMBERS.get(base.value, ()):
+        frame.fail(node, "host_member", f"no host API contract for {base.value}.{name}")
+    qualified = base.value + "." + name
+    if qualified == "os.path":
+        _path_identity(frame, node, base.facts)
+        return Value("host_namespace", qualified, base.facts)
+    if base.value == "math":
+        return literal(getattr(math, name))
+    return Value("host_callable", qualified, base.facts)
+
+
+def _path_identity(frame, node, source):
+    alias = source.get("aliases", {}).get("os.path", {})
+    if alias.get("status") != "verified_stdlib" or not alias.get("sha256"):
+        frame.fail(
+            node,
+            "host_provider",
+            "the imported path implementation requires its own verified identity",
+        )
+
+
+def _bind(frame, node, args, keywords, parameters):
+    if len(args) > len(parameters):
+        frame.fail(node, "host_arguments", "too many positional arguments")
+    unknown = set(keywords) - {p[0] for p in parameters}
+    if unknown:
+        frame.fail(
+            node,
+            "host_arguments",
+            f"unclosed host keyword arguments: {sorted(unknown)}",
+        )
+    bound = []
+    for i, (name, kind, default) in enumerate(parameters):
+        if i < len(args):
+            if name in keywords:
+                frame.fail(node, "host_arguments", f"multiple values for {name}")
+            value = args[i]
+        elif name in keywords:
+            value = keywords[name]
+        elif default is not _REQUIRED:
+            value = literal(default)
+        else:
+            frame.fail(node, "host_arguments", f"missing argument {name}")
+        if (
+            kind == "f64"
+            and value.kind == "i64"
+            and max(map(abs, value.bounds)) <= 1 << 53
+        ):
+            value = Value(
+                "f64", dict(op="cast", type="f64", value=value.value), value.facts
+            )
+        allowed = kind if isinstance(kind, tuple) else (kind,)
+        if value.kind not in allowed:
+            frame.fail(
+                node, "host_arguments", f"{name} requires {kind}, got {value.kind}"
+            )
+        bound.append(value)
+    return bound
+
+
+def _emit(frame, node, interface, result, args, steps, discard):
+    filesystem = interface.startswith("fs.")
+    reads = ["process.cwd"] if filesystem else []
+    writes = []
+    if filesystem:
+        reads.append("filesystem")
+        if interface not in {"fs.exists", "fs.is_file", "fs.is_dir"}:
+            writes.append("filesystem")
+    if interface == "process.chdir":
+        writes.append("process.cwd")
+    if interface == "process.getcwd":
+        reads.append("process.cwd")
+    if interface.startswith("stream."):
+        reads.append("stream.state")
+        writes.append("stream.state")
+        if interface == "stream.open":
+            reads += ["process.cwd", "filesystem"]
+            if args[1].exact[:1] != "r":
+                writes.append("filesystem")
+        elif interface in {"stream.write", "stream.flush", "stream.close"}:
+            writes.append("filesystem")
+        else:
+            reads.append("filesystem")
+    if interface.startswith("time."):
+        reads.append("host.clock")
+    effects = ["VAL"] if interface == "path.join" else ["IO", "STATE"]
+    return frame.effect(
+        dict(
+            op="host_call",
+            interface=interface,
+            semantics_version=1,
+            args=[frame.scalar(value, node) for value in args],
+            type=wire(result),
+            effects=effects,
+            reads=reads,
+            writes=writes,
+            may_raise=True,
+        ),
+        result,
+        steps,
+        discard,
+    )
+
+
+def _open(frame, node, target, args, keywords, steps, discard):
+    parameters = [
+        ("file", "text", _REQUIRED),
+        ("mode", "text", "r"),
+        ("buffering", "i64", -1),
+        ("encoding", ("unit", "text"), None),
+        ("errors", ("unit", "text"), None),
+        ("newline", ("unit", "text"), None),
+        ("closefd", "bool", True),
+        ("opener", "unit", None),
+    ]
+    bound = _bind(frame, node, args, keywords, parameters)
+    path, mode, buffering, encoding, errors, newline, closefd, opener = bound
+    if mode.exact not in {"r", "rt", "w", "wt", "a", "at", "x", "xt"}:
+        frame.fail(
+            node, "stream_mode", "text stream mode must be a closed r/w/a/x mode"
+        )
+    default_encoding = target.facts.get("default_text_encoding", "")
+    encoding_name = default_encoding if encoding.kind == "unit" else encoding.exact
+    if not isinstance(encoding_name, str) or encoding_name.lower().replace(
+        "-", ""
+    ) not in {"utf8", "utf_8"}:
+        frame.fail(
+            node, "stream_encoding", "text streams require a proven UTF-8 encoding"
+        )
+    if (
+        buffering.exact != -1
+        or errors.kind != "unit"
+        and errors.exact != "strict"
+        or newline.kind != "unit"
+        or closefd.exact is not True
+        or opener.kind != "unit"
+    ):
+        frame.fail(
+            node,
+            "stream_options",
+            "nondefault buffering, errors, newline or opener requires another stream contract",
+        )
+    return _emit(
+        frame,
+        node,
+        "stream.open",
+        _STREAM,
+        [path, mode, literal("utf-8"), literal("universal")],
+        steps,
+        discard,
+    )
+
+
+def invoke(frame, node, target, args, keywords, steps, discard):
+    if target.kind == "host_method":
+        receiver, method = target.value
+        interface, result, parameters = _METHODS[method]
+        values = _bind(frame, node, args, keywords, parameters)
+        return _emit(
+            frame, node, interface, result, [receiver, *values], steps, discard
+        )
+    if target.kind != "host_callable":
+        return None
+    name = target.value
+    if name == "builtins.open":
+        return _open(frame, node, target, args, keywords, steps, discard)
+    if name == "builtins.str":
+        if keywords or len(args) > 1:
+            frame.fail(
+                node, "text_conversion", "str requires zero or one closed scalar"
+            )
+        if not args:
+            return literal("")
+        value = args[0]
+        if value.kind not in {"bool", "i64", "f64", "text", "unit"}:
+            frame.fail(
+                node,
+                "text_conversion",
+                "str requires a scalar text conversion contract",
+            )
+        if value.kind == "text":
+            return value
+        return frame.effect(
+            dict(
+                op="text_format", value=value.value, type="text", scalar_format=_FORMAT
+            ),
+            "text",
+            steps,
+            discard,
+        )
+    if name == "os.path.join":
+        if not args or keywords or any(v.kind != "text" for v in args):
+            frame.fail(
+                node,
+                "path_arguments",
+                "path.join requires positional text path components",
+            )
+        return _emit(frame, node, "path.join", "text", args, steps, discard)
+    interface, result, parameters = _SIGNATURES[name]
+    values = _bind(frame, node, args, keywords, parameters)
+    if name in {"os.mkdir", "os.makedirs"}:
+        if values[1].exact != 0o777:
+            frame.fail(
+                node,
+                "filesystem_mode",
+                "nondefault directory permissions need an explicit mode contract",
+            )
+        if name == "os.mkdir" and values[2].kind != "unit":
+            frame.fail(
+                node,
+                "filesystem_directory",
+                "relative directory descriptors need a separate filesystem contract",
+            )
+        values = values[:1] if name == "os.mkdir" else [values[0], values[2]]
+    if name in {"shutil.copyfile", "shutil.copy", "shutil.copy2"}:
+        if values[-1].exact is not True:
+            frame.fail(
+                node,
+                "filesystem_links",
+                "non-following symbolic links need a separate copy contract",
+            )
+        values = values[:2]
+    return _emit(frame, node, interface, result, values, steps, discard)

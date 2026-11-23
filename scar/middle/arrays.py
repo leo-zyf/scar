@@ -1,15 +1,25 @@
 """M2 contracts for exact-width scalar arithmetic, dense arrays and their views."""
 
-from dataclasses import dataclass, field
 import math
 import operator
 import re
 
-SCALARS = {"bool", "i64", "f64", "text", "unit"}
+from .values import (
+    SCALARS,
+    Value,
+    _MIN,
+    _MAX,
+    _UNKNOWN,
+    array_kind,
+    from_wire,
+    literal,
+    numeric_facts as _numeric_facts,
+    rank,
+    runtime,
+    wire,
+)
+
 _NUMERIC = {"i64", "f64"}
-_UNKNOWN = object()
-_MIN, _MAX = -(1 << 63), (1 << 63) - 1
-_PREFIX = "ndarray:f64:"
 _PROVIDED = {"array", "zeros", "float64"}
 _OPERATORS = {
     "add": ("add", operator.add),
@@ -23,58 +33,6 @@ _OPERATORS = {
     "gt": ("gt", operator.gt),
     "gte": ("ge", operator.ge),
 }
-
-
-def rank(kind):
-    return int(kind[len(_PREFIX) :]) if kind.startswith(_PREFIX) else None
-
-
-def array_kind(n):
-    return _PREFIX + str(n)
-
-
-def wire(kind):
-    n = rank(kind)
-    return kind if n is None else dict(kind="ndarray", element="f64", rank=n)
-
-
-def from_wire(spec):
-    return array_kind(spec["rank"]) if isinstance(spec, dict) else spec
-
-
-def runtime(kind):
-    return kind in SCALARS or rank(kind) is not None
-
-
-@dataclass(frozen=True)
-class Value:
-    kind: str
-    value: object
-    facts: dict = field(default_factory=dict)
-
-    @property
-    def exact(self):
-        return self.facts.get("exact", _UNKNOWN)
-
-    @property
-    def bounds(self):
-        return self.facts.get("range", (_MIN, _MAX))
-
-    def at(self, name, **attributes):
-        return Value(
-            self.kind,
-            dict(op="var", name=name, type=wire(self.kind), **attributes),
-            self.facts,
-        )
-
-
-def literal(value):
-    kind = {bool: "bool", int: "i64", float: "f64", str: "text", type(None): "unit"}[
-        type(value)
-    ]
-    return Value(
-        kind, dict(op="literal", type=kind, value=value), _numeric_facts(value)
-    )
 
 
 def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
@@ -137,12 +95,6 @@ def _as_float(frame, node, item):
     if item.kind == "i64":
         return dict(op="cast", type="f64", value=item.value)
     frame.fail(node, "array_element", f"cannot convert {item.kind} to binary64")
-
-
-def _numeric_facts(value):
-    if type(value) is int:
-        return {"exact": value, "range": (value, value)}
-    return {"exact": value} if type(value) is not float or math.isfinite(value) else {}
 
 
 def scalar_unary(frame, node, item, steps, discard):

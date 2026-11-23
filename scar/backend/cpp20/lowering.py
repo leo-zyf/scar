@@ -50,6 +50,29 @@ _ARRAY_EFFECTS = {
     "array_load": {"STATE"},
     "array_store": {"STATE"},
 }
+_TEXT_STREAM = {"kind": "handle", "resource": "text_stream"}
+_HOST_SIGNATURES = {
+    "fs.exists": ("bool", ("text",)),
+    "fs.is_file": ("bool", ("text",)),
+    "fs.is_dir": ("bool", ("text",)),
+    "fs.mkdir": ("unit", ("text",)),
+    "fs.makedirs": ("unit", ("text", "bool")),
+    "fs.remove_tree": ("unit", ("text", "bool")),
+    "fs.copy_file": ("text", ("text", "text")),
+    "fs.copy": ("text", ("text", "text")),
+    "fs.copy2": ("text", ("text", "text")),
+    "fs.copy_tree": ("text", ("text", "text")),
+    "process.chdir": ("unit", ("text",)),
+    "process.getcwd": ("text", ()),
+    "stream.open": (_TEXT_STREAM, ("text", "text", "text", "text")),
+    "stream.write": ("i64", (_TEXT_STREAM, "text")),
+    "stream.read": ("text", (_TEXT_STREAM, "i64")),
+    "stream.readline": ("text", (_TEXT_STREAM, "i64")),
+    "stream.close": ("unit", (_TEXT_STREAM,)),
+    "stream.flush": ("unit", (_TEXT_STREAM,)),
+    "time.wall": ("f64", ()),
+    "time.sleep": ("unit", ("f64",)),
+}
 _BINARY = {
     "add": "+",
     "sub": "-",
@@ -253,6 +276,9 @@ class Lowerer:
                 raise ValueError(f"unsupported scalar {spec!r}")
             return named(_SCALARS[spec])
         kind = spec["kind"]
+        if spec == _TEXT_STREAM:
+            self.used_sdk_headers.add("host.hpp")
+            return named("scar::host::text_stream")
         if kind == "ndarray":
             ndarray_rank(spec)
             if "array.hpp" not in self.used_sdk_headers:
@@ -382,13 +408,8 @@ class Lowerer:
         )
         return cast(ty, v)
 
-    def text_print(self, expr):
-        if expr.get("type") != "unit" or expr.get("encoding") != "utf-8":
-            raise ValueError("text_print requires unit result and UTF-8 encoding")
-        if not {"IO", "STATE"}.issubset(expr.get("effects", ())):
-            raise ValueError("text_print lacks observable output effects")
+    def scalar_format(self, fmt):
         spellings = ("boolean_true", "boolean_false", "unit")
-        fmt = expr.get("scalar_format")
         argument_types = ("text",)
         if fmt is None:
             fmt = dict.fromkeys(spellings, "")
@@ -396,13 +417,37 @@ class Lowerer:
         else:
             if (
                 not isinstance(fmt, dict)
-                or set(fmt) != {*spellings, "integer_base"}
+                or set(fmt) - {"float"} != {*spellings, "integer_base"}
                 or type(fmt["integer_base"]) is not int
                 or fmt["integer_base"] != 10
+                or ("float" in fmt and fmt["float"] != "shortest_binary64")
             ):
                 raise ValueError("unsupported text_print scalar format")
             argument_types = ("text", "bool", "unit", "i64")
+            if "float" in fmt:
+                argument_types += ("f64",)
+        formatting = Expr(
+            "braced",
+            args=(
+                *(utf8_literal(fmt[k], "std::string_view") for k in spellings),
+                integer(fmt["integer_base"]),
+            ),
+        )
+        return formatting, argument_types
+
+    def text_print(self, expr):
+        if expr.get("type") != "unit" or expr.get("encoding") != "utf-8":
+            raise ValueError("text_print requires unit result and UTF-8 encoding")
+        if not {"IO", "STATE"}.issubset(expr.get("effects", ())):
+            raise ValueError("text_print lacks observable output effects")
+        formatting, argument_types = self.scalar_format(expr.get("scalar_format"))
+        extended = "stream" in expr
+        namespace = "scar::host::" if extended else "scar::"
+        if extended:
+            self.used_sdk_headers.add("host.hpp")
         options = {"sep": "text", "end": "text", "flush": "bool"}
+        if "stream" in expr:
+            options["stream"] = _TEXT_STREAM
         order = expr.get("keyword_order", tuple(options))
         if (
             not isinstance(order, (list, tuple))
@@ -419,7 +464,7 @@ class Lowerer:
                 Expr(
                     "braced",
                     args=(
-                        name("scar::text_role::" + role),
+                        name(namespace + "text_role::" + role),
                         cast(self.type_name(value["type"]), self.expression(value)),
                     ),
                 )
@@ -430,15 +475,36 @@ class Lowerer:
         for key in (*order, *(k for k in options if k not in order)):
             append(key, expr[key], (options[key],))
         # List initialization snapshots each value in order before the call writes.
-        formatting = Expr(
-            "braced",
-            args=(
-                *(utf8_literal(fmt[k], "std::string_view") for k in spellings),
-                integer(fmt["integer_base"]),
-            ),
-        )
         output = Expr("braced", args=(Expr("braced", args=tuple(operands)), formatting))
-        return call("scar::text_print", output)
+        return call(namespace + "text_print", output)
+
+    def host_call(self, node):
+        interface = node.get("interface")
+        args = node.get("args")
+        if (
+            not isinstance(args, list)
+            or type(node.get("semantics_version")) is not int
+            or node["semantics_version"] != 1
+        ):
+            raise ValueError("invalid host interface version or operand list")
+        effects = {"VAL"} if interface == "path.join" else {"IO", "STATE"}
+        if set(node.get("effects", ())) != effects:
+            raise ValueError(f"invalid host effects for {interface!r}")
+        if interface == "path.join" and args:
+            result, expected = "text", ("text",) * len(args)
+        elif interface in _HOST_SIGNATURES:
+            result, expected = _HOST_SIGNATURES[interface]
+        else:
+            raise ValueError(f"unsupported host interface {interface!r}")
+        if node.get("type") != result or tuple(a.get("type") for a in args) != expected:
+            raise ValueError(f"host interface signature mismatch for {interface!r}")
+        self.used_sdk_headers.add("host.hpp")
+        arguments = tuple(
+            cast(self.type_name(a["type"]), self.expression(a)) for a in args
+        )
+        if interface == "path.join" or len(arguments) > 1:
+            arguments = (Expr("braced", args=arguments),)
+        return call("scar::host::" + interface.replace(".", "_"), *arguments)
 
     def array_operation(self, node):
         op = node["op"]
@@ -530,6 +596,23 @@ class Lowerer:
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
             return self.text_print(expr)
+        if op == "host_call":
+            return self.host_call(expr)
+        if op == "text_format":
+            formatting, types = self.scalar_format(expr.get("scalar_format"))
+            value = expr["value"]
+            if expr.get("type") != "text" or value.get("type") not in types:
+                raise ValueError("unsupported scalar-to-text contract")
+            return call(
+                "scar::format_scalar",
+                Expr(
+                    "braced",
+                    args=(
+                        cast(self.type_name(value["type"]), self.expression(value)),
+                        formatting,
+                    ),
+                ),
+            )
         if op.startswith("array_") and op != "array_store":
             return self.array_operation(expr)
         if op == "string":
@@ -1014,7 +1097,7 @@ class Lowerer:
                 or function["result"] == "text"
                 or (
                     isinstance(function["result"], dict)
-                    and function["result"].get("kind") == "ndarray"
+                    and function["result"].get("kind") in {"ndarray", "handle"}
                 )
                 else "C"
             ),

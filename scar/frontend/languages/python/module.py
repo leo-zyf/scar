@@ -336,6 +336,7 @@ class _ModuleGraph:
         self.builtins = parsed.builtins
         self.libraries = parsed.libraries
         self.providers = parsed.providers
+        self.runtime = parsed.runtime_facts
 
     def location(self, node):
         return dict(
@@ -692,6 +693,8 @@ class _Scope:
             record = self.variable(node.id)
             if f.get("external", "").startswith("builtins."):
                 record = {"op": "python_builtin", "name": node.id}
+                if f["external"] == "builtins.open":
+                    record["source_runtime"] = self.unit.runtime
             evidence = {
                 k: f[k]
                 for k in (

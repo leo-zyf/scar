@@ -6,14 +6,18 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from functools import cache
 from hashlib import sha256
+from importlib.machinery import BuiltinImporter, ExtensionFileLoader, FrozenImporter
+from importlib.machinery import PathFinder, SourceFileLoader, SourcelessFileLoader
 from importlib.util import resolve_name
-from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution
 from io import BytesIO, TextIOWrapper
+import locale
 from math import isfinite
+import os
 from pathlib import Path
 import symtable
 import sys
+import sysconfig
 import tokenize
 
 
@@ -62,6 +66,7 @@ class ParsedUnit:
     source_hash: str
     diagnostics: tuple = ()
     providers: dict = field(default_factory=dict)
+    runtime_facts: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -71,10 +76,18 @@ class ParsedUnit:
 
 
 def parse_unit(
-    path, flags=(), *, root, abi=None, source_bytes=None, source_hashes=None
+    path,
+    flags=(),
+    *,
+    root,
+    abi=None,
+    source_bytes=None,
+    source_hashes=None,
+    _imports=None,
 ):
     """F1: read source once and capture both CPython syntax and lexical binding."""
     path, root = Path(path).resolve(), Path(root).resolve()
+    imports = _imports or _Imports(root)
     relative = path.relative_to(root).as_posix()
     raw = path.read_bytes() if source_bytes is None else source_bytes
     source_hash = sha256(raw).hexdigest()
@@ -115,6 +128,7 @@ def parse_unit(
             {},
             source_hash,
             (issue,),
+            runtime_facts=imports.runtime,
         )
     module = (abi or {}).get("module") or ".".join(
         path.relative_to(root).with_suffix("").parts
@@ -129,23 +143,161 @@ def parse_unit(
         frozenset(sys.stdlib_module_names),
         _catalog(tree, module),
         source_hash,
-        providers=_provider_facts(tree, root),
+        providers=imports.providers_for(tree),
+        runtime_facts=imports.runtime,
     )
 
 
-def _provider_facts(tree, root):
-    """Resolve supported provider identities without importing their code."""
-    imports = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-            imports.add(node.module.split(".")[0])
-    result = {}
-    for name in imports & {"numpy"}:
+def _digest_file(path):
+    digest = sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@cache
+def _interpreter_digest():
+    """Fingerprint the interpreter image supplying built-in and frozen code."""
+    images = [Path(sys.executable).resolve(strict=True)]
+    if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+        directory = sysconfig.get_config_var("LIBDIR")
+        library = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var(
+            "LDLIBRARY"
+        )
+        if directory and library and (image := Path(directory, library)).is_file():
+            images.append(image)
+    parts = [
+        ParsedUnit.compiler_id,
+        sys.version,
+        sys.platform,
+        *map(_digest_file, images),
+    ]
+    return sha256("\0".join(parts).encode()).hexdigest()
+
+
+class _Imports:
+    """One capture's standard-finder results. No loader executes a target module."""
+
+    supported = frozenset(
+        {"os", "shutil", "sys", "time", "math", "subprocess", "numpy"}
+    )
+
+    def __init__(self, root):
+        self.root = root
+        self.search_path = [str(root), *sys.path]
+        self.specs = {}
+        self.providers = {}
+        locale_encoding = (
+            locale.getencoding()
+            if hasattr(locale, "getencoding")
+            else locale.getpreferredencoding(False)
+        )
+        self.runtime = dict(
+            interpreter=ParsedUnit.compiler_id,
+            platform=sys.platform,
+            os_name=os.name,
+            default_text_encoding="utf-8" if sys.flags.utf8_mode else locale_encoding,
+            filesystem_encoding=sys.getfilesystemencoding(),
+            utf8_mode=bool(sys.flags.utf8_mode),
+        )
+
+    def top(self, name):
+        if name not in self.specs:
+            self.specs[name] = (
+                BuiltinImporter.find_spec(name)
+                or FrozenImporter.find_spec(name)
+                or PathFinder.find_spec(name, self.search_path)
+            )
+        return self.specs[name]
+
+    def project_source(self, name):
+        parts = name.split(".")
+        if not all(part.isidentifier() for part in parts):
+            return None
+        spec = self.top(parts[0])
+        for part in parts[1:]:
+            locations = list(spec.submodule_search_locations or ()) if spec else []
+            if not any(Path(p).resolve().is_relative_to(self.root) for p in locations):
+                return None
+            # A child is looked up on its parent's search path. Passing its leaf
+            # to FileFinder avoids consulting sys.modules for an unexecuted parent.
+            spec = PathFinder.find_spec(part, locations)
+        if spec and isinstance(spec.loader, SourceFileLoader):
+            source = Path(spec.origin).resolve()
+            if source.is_relative_to(self.root):
+                return source
+        return None
+
+    def stdlib(self, name):
+        spec = self.top(name)
+        if not spec or not spec.origin:
+            raise ValueError("no interpreter module resolved")
+        if spec.loader in (BuiltinImporter, FrozenImporter):
+            loader = "builtin" if spec.loader is BuiltinImporter else "frozen"
+            origin, digest, basis = (
+                spec.origin,
+                _interpreter_digest(),
+                "interpreter_image",
+            )
+        else:
+            roots = [
+                Path(sysconfig.get_path(k)).resolve() for k in ("stdlib", "platstdlib")
+            ]
+            roots.extend(r / "lib-dynload" for r in tuple(roots))
+            if shared := sysconfig.get_config_var("DESTSHARED"):
+                roots.append(Path(shared).resolve())
+            trusted = PathFinder.find_spec(name, [str(r) for r in dict.fromkeys(roots)])
+            source = Path(spec.origin).resolve(strict=True)
+            if (
+                not isinstance(
+                    spec.loader,
+                    (SourceFileLoader, ExtensionFileLoader, SourcelessFileLoader),
+                )
+                or not trusted
+                or not trusted.origin
+                or source != Path(trusted.origin).resolve(strict=True)
+                or not any(source.is_relative_to(r) for r in roots)
+            ):
+                raise ValueError(
+                    f"module resolves outside interpreter stdlib: {source}"
+                )
+            loader, origin, digest, basis = (
+                "path",
+                str(source),
+                _digest_file(source),
+                "provider_file",
+            )
+        return dict(
+            status="verified_stdlib",
+            module=name,
+            loader=loader,
+            origin=origin,
+            sha256=digest,
+            hash_basis=basis,
+            **self.runtime,
+        )
+
+    def identify(self, name):
         try:
-            spec = PathFinder.find_spec(name, [str(root), *sys.path])
-            if spec is None or not spec.origin:
+            if name != "numpy":
+                result = self.stdlib(name)
+                if name == "os":
+                    # os.path is an alias registered by os, even though os has no __path__.
+                    path_module = {"posix": "posixpath", "nt": "ntpath"}.get(os.name)
+                    if path_module:
+                        try:
+                            path_source = self.stdlib(path_module)
+                        except (OSError, ValueError) as error:
+                            path_source = dict(
+                                status="unresolved",
+                                module=path_module,
+                                reason=str(error),
+                            )
+                        result["aliases"] = {"os.path": path_source}
+                return result
+            spec = self.top(name)
+            if not spec or not spec.origin:
                 raise ValueError("module has no resolved filesystem origin")
             package = distribution(name)
             origin = Path(spec.origin).resolve(strict=True)
@@ -154,17 +306,35 @@ def _provider_facts(tree, root):
             )
             if origin != expected:
                 raise ValueError("import resolves outside the installed distribution")
-            result[name] = dict(
+            return dict(
                 status="verified_distribution",
                 distribution=name,
                 version=package.version,
                 origin=str(origin),
-                sha256=sha256(origin.read_bytes()).hexdigest(),
+                sha256=_digest_file(origin),
                 resolution="standard path finder; provider code not executed",
             )
         except (OSError, ValueError, PackageNotFoundError) as error:
-            result[name] = dict(status="unresolved", reason=str(error))
-    return result
+            if name != "numpy" and (source := self.project_source(name)):
+                return dict(
+                    status="project",
+                    module=name,
+                    origin=str(source),
+                    file=source.relative_to(self.root).as_posix(),
+                )
+            return dict(status="unresolved", reason=str(error))
+
+    def providers_for(self, tree):
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(a.name.split(".", 1)[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                names.add(node.module.split(".", 1)[0])
+        supported = names & self.supported
+        for name in sorted(supported - self.providers.keys()):
+            self.providers[name] = self.identify(name)
+        return {n: self.providers[n] for n in sorted(supported)}
 
 
 def _relative(node, module, package):
@@ -285,22 +455,14 @@ def capture_project(
     root = Path(root).resolve()
     entry = Path(entry)
     entry = (root / entry).resolve() if not entry.is_absolute() else entry.resolve()
+    imports = _Imports(root)
 
     def module_path(path):
         relative = path.relative_to(root).with_suffix("")
         pieces = relative.parts[:-1] if relative.name == "__init__" else relative.parts
         return ".".join(pieces) or "__main__"
 
-    @cache
-    def resolve(module):
-        if not module or not all(part.isidentifier() for part in module.split(".")):
-            return None
-        stem = root.joinpath(*module.split("."))
-        # CPython's FileFinder tries the package before its sibling module.
-        for path in (stem / "__init__.py", stem.with_suffix(".py")):
-            if path.is_file() and path.resolve().is_relative_to(root):
-                return path.resolve()
-        return None
+    resolve = cache(imports.project_source)
 
     entry_module = module_path(entry)
     catalog = {}
@@ -332,6 +494,7 @@ def capture_project(
                 abi={"module": module},
                 source_bytes=(buffers or {}).get(relative),
                 source_hashes=source_hashes,
+                _imports=imports,
             )
             by_path[path] = facts
         elif facts.tree is not None and module != facts.abi["module"]:

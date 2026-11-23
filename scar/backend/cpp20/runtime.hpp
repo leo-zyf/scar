@@ -19,6 +19,7 @@
 #include <ios>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -33,9 +34,9 @@
 #endif
 
 namespace scar {
-enum class text_role { argument, sep, end, flush };
+enum class text_role { argument, sep, end, flush, stream };
 using text_value =
-    std::variant<std::string, bool, std::nullptr_t, std::int64_t>;
+    std::variant<std::string, bool, std::nullptr_t, std::int64_t, double>;
 struct text_operand {
   text_role role;
   text_value value;
@@ -64,34 +65,99 @@ inline void write_stdout(std::string_view bytes, bool line_buffered) {
     flush_stdout();
 }
 
-inline void write_text_value(const text_value &value, const text_format &format,
-                             bool line_buffered) {
-  if (auto text = std::get_if<std::string>(&value)) {
-    write_stdout(*text, line_buffered);
-  } else if (auto boolean = std::get_if<bool>(&value)) {
-    write_stdout(*boolean ? format.boolean_true : format.boolean_false,
-                 line_buffered);
-  } else if (std::holds_alternative<std::nullptr_t>(value)) {
-    write_stdout(format.unit, line_buffered);
+// Format the shortest round-tripping decimal with the declared binary64
+// profile.
+inline std::string shortest_binary64(double value) {
+  static_assert(std::numeric_limits<double>::is_iec559 &&
+                std::numeric_limits<double>::digits == 53);
+  if (std::isnan(value))
+    return "nan";
+  if (std::isinf(value))
+    return std::signbit(value) ? "-inf" : "inf";
+  if (value == 0.)
+    return std::signbit(value) ? "-0.0" : "0.0";
+  char storage[48];
+  auto [end, error] =
+      std::to_chars(storage, storage + sizeof(storage), std::abs(value),
+                    std::chars_format::scientific);
+  if (error != std::errc{})
+    throw std::runtime_error("binary64 conversion failed");
+  std::string_view sci(storage, static_cast<std::size_t>(end - storage));
+  const auto e = sci.find('e');
+  if (e == sci.npos || e + 2 >= sci.size())
+    throw std::runtime_error("invalid binary64 exponent");
+  int power = 0;
+  auto parsed = std::from_chars(storage + e + 2, end, power);
+  if (parsed.ec != std::errc{} || parsed.ptr != end)
+    throw std::runtime_error("invalid binary64 exponent");
+  if (sci[e + 1] == '-')
+    power = -power;
+  std::string out = std::signbit(value) ? "-" : "";
+  if (power < -4 || power >= 16) {
+    out.append(sci);
+    return out;
+  }
+  std::string digits(sci.substr(0, e));
+  if (digits.size() > 1)
+    digits.erase(1, 1);
+  const auto point = power + 1;
+  if (point <= 0) {
+    out += "0.";
+    out.append(-point, '0');
+    out += digits;
+  } else if (static_cast<std::size_t>(point) >= digits.size()) {
+    out += digits;
+    out.append(point - digits.size(), '0');
+    out += ".0";
   } else {
+    digits.insert(point, 1, '.');
+    out += digits;
+  }
+  return out;
+}
+template <class Value, class Write>
+inline void render_scalar(const Value &value, const text_format &format,
+                          Write write) {
+  if (auto s = std::get_if<std::string>(&value))
+    write(*s);
+  else if (auto b = std::get_if<bool>(&value))
+    write(*b ? format.boolean_true : format.boolean_false);
+  else if (std::holds_alternative<std::nullptr_t>(value))
+    write(format.unit);
+  else if (auto f = std::get_if<double>(&value))
+    write(shortest_binary64(*f));
+  else if (auto i = std::get_if<std::int64_t>(&value)) {
     char digits[std::numeric_limits<std::int64_t>::digits10 + 3];
     auto [end, error] =
-        std::to_chars(digits, digits + sizeof(digits),
-                      std::get<std::int64_t>(value), format.integer_base);
+        std::to_chars(digits, digits + sizeof(digits), *i, format.integer_base);
     if (error != std::errc{})
       throw std::ios_base::failure("integer formatting failed");
-    write_stdout({digits, static_cast<std::size_t>(end - digits)},
-                 line_buffered);
-  }
+    write(std::string_view(digits, static_cast<std::size_t>(end - digits)));
+  } else
+    throw std::invalid_argument("unsupported scalar text representation");
 }
-
-inline std::nullptr_t text_print(const text_output &output) {
+struct formatted_scalar {
+  text_value value;
+  text_format format;
+};
+inline std::string format_scalar(const formatted_scalar &input) {
+  std::string result;
+  render_scalar(input.value, input.format,
+                [&](std::string_view v) { result.assign(v); });
+  return result;
+}
+inline void write_text_value(const text_value &value, const text_format &format,
+                             bool line_buffered) {
+  render_scalar(value, format,
+                [&](std::string_view s) { write_stdout(s, line_buffered); });
+}
+template <class Output, class Write, class Flush>
+inline std::nullptr_t print_sequence(const Output &output, Write write,
+                                     Flush flush_stream) {
   std::string_view separator = " ", ending = "\n";
   bool flush = false;
   for (const auto &operand : output.operands) {
     switch (operand.role) {
-    case text_role::argument:
-      break;
     case text_role::sep:
       separator = std::get<std::string>(operand.value);
       break;
@@ -101,22 +167,29 @@ inline std::nullptr_t text_print(const text_output &output) {
     case text_role::flush:
       flush = std::get<bool>(operand.value);
       break;
+    case text_role::argument:
+    case text_role::stream:
+      break;
     }
   }
-  const bool line_buffered = ::isatty(::fileno(stdout)) != 0;
   bool first = true;
   for (const auto &operand : output.operands) {
-    if (operand.role == text_role::argument) {
-      if (!first)
-        write_stdout(separator, line_buffered);
-      write_text_value(operand.value, output.format, line_buffered);
-      first = false;
-    }
+    if (operand.role != text_role::argument)
+      continue;
+    if (!first)
+      write(separator);
+    render_scalar(operand.value, output.format, write);
+    first = false;
   }
-  write_stdout(ending, line_buffered);
+  write(ending);
   if (flush)
-    flush_stdout();
+    flush_stream();
   return nullptr;
+}
+inline std::nullptr_t text_print(const text_output &output) {
+  const bool tty = ::isatty(::fileno(stdout)) != 0;
+  return print_sequence(
+      output, [&](std::string_view s) { write_stdout(s, tty); }, flush_stdout);
 }
 
 template <class T, std::size_t N> using array = T[N];

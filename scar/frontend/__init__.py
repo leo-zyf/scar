@@ -63,6 +63,7 @@ def _unit(job):
         files=captured,
         compiler=getattr(parsed, "compiler_id", None),
         providers=getattr(parsed, "providers", {}),
+        runtime=getattr(parsed, "runtime_facts", {}),
     )
     revision = digest(json_bytes([revision, source_facts]))
     functions = [function_graph(f, revision) for f in unit.get("functions", [])]
