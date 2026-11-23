@@ -59,7 +59,13 @@ def runtime(kind):
         or kind == "numpy_f64"
         or rank(kind) is not None
         or object_name(kind) is not None
-        or kind in {"handle:text_stream", "handle:error"}
+        or kind
+        in {
+            "handle:text_stream",
+            "handle:error",
+            "handle:graphics_context",
+            "handle:graphics_lines",
+        }
     )
 
 

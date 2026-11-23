@@ -1,7 +1,16 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
 from scar.contract import walk_operations
-from . import arrays, exceptions, host_protocols, objects, scalars, text, values
+from . import (
+    arrays,
+    exceptions,
+    graphics,
+    host_protocols,
+    objects,
+    scalars,
+    text,
+    values,
+)
 from .values import Value as _Value, literal as _literal
 
 
@@ -101,6 +110,8 @@ class _Project:
         self.providers = {}
         self.array_ops = set()
         self.objects = objects.ObjectModel()
+        self.graphics = graphics.Graphics()
+        self.decisions = []
         self.active = []
         self.global_reads = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
@@ -500,6 +511,8 @@ class _Frame:
                 receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
             elif status == "verified_distribution" and mod == "numpy":
                 value = arrays.import_provider(self, node)
+            elif status == "verified_distribution" and graphics.handles_import(node):
+                value = self.project.graphics.import_provider(self, node, steps)
             else:
                 identity = (
                     f"{origin['distribution']} {origin['version']}"
@@ -620,6 +633,8 @@ class _Frame:
                 return host_member
             if base.kind == "provider_namespace":
                 return arrays.provider_member(self, node, node["field"])
+            if base.kind == "graphics_namespace":
+                return self.project.graphics.member(self, node, base, node["field"])
             if values.rank(base.kind) is not None and node["field"] == "copy":
                 return _Value("array_copy_method", base)
             if base.kind == "module":
@@ -688,8 +703,22 @@ class _Frame:
                 or operator == "add"
                 and lhs.kind == "text"
             ):
-                if left["op"] == right["op"] == "literal":
-                    a, b = left["value"], right["value"]
+                if (
+                    lhs.exact is not values._UNKNOWN
+                    and rhs.exact is not values._UNKNOWN
+                ):
+                    a, b = lhs.exact, rhs.exact
+                    if left["op"] != "literal" or right["op"] != "literal":
+                        self.project.decisions.append(
+                            dict(
+                                code="exact_primitive_fact",
+                                symbol=self.name,
+                                location=node.get("location"),
+                                operator=operator,
+                                operand_types=[lhs.kind, rhs.kind],
+                                proof="current reaching scalar facts determine the primitive result; operand effects remain at their evaluation sites",
+                            )
+                        )
                     return _literal(
                         (a == b if operator == "eq" else a != b) if equal else a + b
                     )
@@ -742,6 +771,10 @@ class _Frame:
             )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        if target.kind == "graphics_callable":
+            return self.project.graphics.invoke(
+                self, node, target.value, args, kwargs, steps, discard
+            )
         if target.kind == "exception_class":
             return exceptions.construct(
                 self, node, target, args, kwargs, steps, discard
@@ -1439,6 +1472,11 @@ def normalize_protocols(module):
         status="INCOMPLETE" if issue else "READY",
         **({"first_gap": issue} if issue else {}),
         **(
+            {"graphics_operations": sorted(project.graphics.operations)}
+            if project.graphics.operations
+            else {}
+        ),
+        **(
             {
                 "providers": list(project.providers.values()),
                 "array_operations": sorted(project.array_ops),
@@ -1448,8 +1486,8 @@ def normalize_protocols(module):
         ),
     )
     if issue:
-        return module, [], [issue]
-    changes = [
+        return module, project.decisions, [issue]
+    changes = project.decisions + [
         dict(
             **contract,
             code="closed_python_protocol",
@@ -1482,11 +1520,13 @@ def normalize_protocols(module):
         dict(op="decl", name=n, type=values.wire(t)) for n, t in project.globals.items()
     )
     if project.array_ops:
-        module["operator_requirements"] = {
-            "ndarray": dict(
-                device="cpu", element="f64", operations=sorted(project.array_ops)
-            )
-        }
+        module.setdefault("operator_requirements", {})["ndarray"] = dict(
+            device="cpu", element="f64", operations=sorted(project.array_ops)
+        )
+    if project.graphics.operations:
+        module.setdefault("operator_requirements", {})[
+            "graphics"
+        ] = project.graphics.requirement()
     module["externs"] = [
         e for e in module["externs"] if e.get("calling_convention") != "python"
     ]

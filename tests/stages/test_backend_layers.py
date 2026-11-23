@@ -9,7 +9,7 @@ import sys
 import pytest
 
 import scar
-from scar.contract import IR, document, member, write_json
+from scar.contract import IR, document, file_receipt, member, write_json
 
 _RUN_LAYER = """
 import importlib, sys
@@ -45,6 +45,105 @@ elif layer == "B1":
 else:
     run(source, output)
 """
+
+
+def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
+    def execution(folder, *, family=None, tagged=False):
+        function = dict(
+            name="main",
+            params=[],
+            result="i32",
+            body=[dict(op="return", value=dict(op="literal", type="i32", value=0))],
+        )
+        if tagged:
+            function["body"].insert(
+                0,
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="future_operator",
+                        operator_family="future",
+                        type="unit",
+                        effects=["STATE"],
+                    ),
+                ),
+            )
+        module = dict(entry="main", externs=[], globals=[], records=[])
+        if family:
+            module["operator_requirements"] = {family: dict(profile="future.v1")}
+        path = folder / "exec-ir.json"
+        write_json(
+            path,
+            document(
+                IR,
+                status="READY",
+                module=module,
+                functions=[member(folder, "functions", function)],
+            ),
+        )
+        return path
+
+    required = execution(tmp_path / "required", family="future")
+    tagged = execution(tmp_path / "tagged", tagged=True)
+    bundle = tmp_path / "bundle"
+    plain_image = execution(bundle / "images/driver")
+    required_image = execution(bundle / "images/solver", family="future")
+    write_json(
+        bundle / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            kind="image_bundle",
+            root_image="driver",
+            images=[
+                dict(
+                    id=identity,
+                    entry="main",
+                    output=identity,
+                    ir=file_receipt(bundle, source),
+                )
+                for identity, source in (
+                    ("driver", plain_image),
+                    ("solver", required_image),
+                )
+            ],
+        ),
+    )
+    command = """
+import sys
+class Boundary:
+    def find_spec(self, name, path=None, target=None):
+        if any(name == p or name.startswith(p + '.') for p in (
+            'scar.frontend', 'scar.middle', 'scar.backend.cpp20', 'scar.backend.build')):
+            raise RuntimeError('unavailable target layer was entered: ' + name)
+sys.meta_path.insert(0, Boundary())
+from scar.cli import main
+raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--physical', 'serial']))
+"""
+    for index, source in enumerate((required, tagged, bundle / "exec-ir.json")):
+        delivery = tmp_path / f"delivery-{index}"
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", command, str(source), str(delivery)],
+            env=dict(
+                os.environ,
+                PYTHONDONTWRITEBYTECODE="1",
+                PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
+            ),
+            capture_output=True,
+            timeout=60,
+        )
+        assert result.returncode == 2, result.stderr.decode()
+        report = json.loads(result.stdout)
+        assert report["status"] == "INCOMPLETE"
+        assert all(i["code"] == "missing_operator_binding" for i in report["issues"])
+        assert {i["requirement"] for i in report["issues"]} == {"future"}
+        assert not (delivery / "project").exists()
+        assert not (delivery / "target-ir.json").exists()
+        physical = json.loads((delivery / "physical-plan.json").read_bytes())
+        scheduled = json.loads((delivery / "scheduled-ir.json").read_bytes())
+        assert physical["status"] == scheduled["status"] == "INCOMPLETE"
+        if index == 2:
+            assert {i["image_id"] for i in report["issues"]} == {"solver"}
 
 
 def test_backend_products_replay_and_reject_changed_bytes(tmp_path):

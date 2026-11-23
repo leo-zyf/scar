@@ -24,7 +24,7 @@ class BlockOtherStages:
 phase = sys.argv[1]
 forbidden = {'scar.' + name for name in ('frontend', 'middle', 'backend') if name != phase}
 if phase != "frontend":
-    forbidden.add("numpy")
+    forbidden.update(("numpy", "matplotlib"))
 sys.meta_path.insert(0, BlockOtherStages())
 from scar.cli import main
 raise SystemExit(main(sys.argv[2:]))
@@ -512,6 +512,16 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             "        print('descriptor')\n        return 2.5\n"
             "print(Item().value)\n"
         ),
+        "constant_condition": (
+            "mode = 'chosen'\n"
+            "def check():\n    print('condition')\n    return mode == 'chosen'\n"
+            "if check():\n    from os.path import join\n"
+            "else:\n    import scar_missing_inactive_package\n"
+            "print(join('selected', 'path'))\n"
+            "state = 'first'\n"
+            "def report():\n    print(state == 'first')\n"
+            "report()\nstate = 'second'\nreport()\n"
+        ),
     }
     for name, text in sources.items():
         folder = tmp_path / name
@@ -546,6 +556,10 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             timeout=60,
         )
         report = json.loads(process.stdout)
+        if name == "constant_condition":
+            assert report["status"] == "READY", report
+            decisions = json.loads((plan / "plan.json").read_bytes())["normalizations"]
+            assert any(d["code"] == "exact_primitive_fact" for d in decisions)
         if report["status"] == "READY":
             assert process.returncode == 0
             result = _stage(
@@ -556,6 +570,62 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             assert process.returncode == 2 and report["blockers"] > 0
             ir = json.loads((plan / "exec-ir.json").read_bytes())
             assert ir["status"] == "INCOMPLETE" and not ir["functions"]
+
+
+def test_graphics_state_is_logical_ir_and_requires_native_qualification(tmp_path):
+    entry = tmp_path / "graphics.py"
+    entry.write_text("""import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as again
+x = np.array([0.0, 1.0])
+y = np.array([[2.0, 3.0], [4.0, 5.0]])
+lines = plt.plot(x, y, color='red', marker='.', linestyle='')
+y[0, 0] = 99.0
+again.grid(True)
+plt.savefig('curves.jpeg')
+plt.savefig('curves.pdf')
+""")
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    report = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert report["status"] == "READY" and report["blockers"] == 0
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    from scar.contract import read_member, walk_operations
+
+    operations = [
+        node
+        for receipt in ir["functions"]
+        for node in walk_operations(read_member(plan, receipt))
+    ]
+    contexts = [n for n in operations if n["op"] == "graphics_context"]
+    plots = [n for n in operations if n["op"] == "graphics_plot"]
+    grids = [n for n in operations if n["op"] == "graphics_grid"]
+    saves = [n for n in operations if n["op"] == "graphics_save"]
+    assert len(contexts) == len(plots) == len(grids) == 1 and len(saves) == 2
+    assert plots[0]["data_capture"] == "snapshot_at_call"
+    assert plots[0]["type"] == {"kind": "handle", "resource": "graphics_lines"}
+    assert (
+        plots[0]["context"]
+        == grids[0]["context"]
+        == saves[0]["context"]
+        == saves[1]["context"]
+    )
+    assert all(
+        n["operator_family"] == "graphics"
+        and n["may_raise"]
+        and "STATE" in n["effects"]
+        for n in contexts + plots + grids + saves
+    )
+    assert set(ir["module"]["operator_requirements"]) == {"ndarray", "graphics"}
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
+    )
+    shutil.rmtree(plan)
+    assert result["status"] == "INCOMPLETE" and "executable" not in result
+    assert {i["requirement"] for i in result["issues"]} == {"graphics"}
+    assert not (delivery / "project").exists()
 
 
 def test_shared_objects_preserve_aliases_bound_receivers_and_field_presence(tmp_path):
