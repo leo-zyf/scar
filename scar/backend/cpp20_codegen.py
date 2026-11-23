@@ -5,12 +5,18 @@ from pathlib import Path
 import sys
 
 from scar.contract import (
-    ElementwiseEntry, FragmentModule, Member, ScalarModule, read_artifact, read_native_material, write_json,
+    ElementwiseEntry,
+    FragmentModule,
+    Member,
+    ScalarModule,
+    read_artifact,
+    read_native_material,
+    write_json,
 )
 
-from .abi import c_source_edits, emit_scalar_module, f2c_support_header, render_abi_wrappers, render_expression
-from .fortran import emit_fortran_transport
-from .regions import emit_region_helpers, region_edits
+from .abi import f2c_support_header, render_abi_wrappers
+from .scalar_codegen import emit_scalar_module, render_expression
+from .region_codegen import emit_region_helpers, plan_region_source_edits
 
 
 def _statements(rows, slots, symbols, indent, *, loop=False):
@@ -44,16 +50,20 @@ def _functions(portable, trip_count):
         if len(slots) != len(function["parameters"]):
             raise ValueError("duplicate portable parameter")
         symbol = f"function{index}"
-        definitions.append(f"double {symbol}({', '.join('double ' + value for value in slots.values())}) {{")
+        definitions.append(
+            f"double {symbol}({', '.join('double ' + value for value in slots.values())}) {{"
+        )
         if name == entry:
             definitions.append(f"    constexpr std::int64_t steps = {trip_count};")
-        definitions.extend(_statements(function["body"], slots, symbols, "    ", loop=name == entry))
+        definitions.extend(
+            _statements(function["body"], slots, symbols, "    ", loop=name == entry)
+        )
         definitions.append("}")
         symbols[name] = (symbol, len(function["parameters"]))
     return "\n".join(definitions), symbols[entry]
 
 
-def _source(body, cpus):
+def _render_elementwise_source(body, cpus):
     rows, columns = body.shape
     if any(cpu >= 1024 for cpu in cpus):
         raise ValueError("CPU index exceeds the C++ affinity ABI")
@@ -61,9 +71,19 @@ def _source(body, cpus):
     elements = rows * columns
     if elements > sys.maxsize // ((inputs + 1) * 8):
         raise ValueError("array-loop storage exceeds host address limits")
-    call = f"{entry}(" + ", ".join(f"input[{index} * elements + i]" for index in range(inputs)) + ")"
-    source = _SOURCE.replace("@FUNCTIONS@", definitions).replace("@CPUS@", ", ".join(map(str, cpus)))
-    source = source.replace("@ELEMENTS@", str(elements)).replace("@INPUTS@", str(inputs)).replace("@CALL@", call)
+    call = (
+        f"{entry}("
+        + ", ".join(f"input[{index} * elements + i]" for index in range(inputs))
+        + ")"
+    )
+    source = _SOURCE.replace("@FUNCTIONS@", definitions).replace(
+        "@CPUS@", ", ".join(map(str, cpus))
+    )
+    source = (
+        source.replace("@ELEMENTS@", str(elements))
+        .replace("@INPUTS@", str(inputs))
+        .replace("@CALL@", call)
+    )
     return source, inputs
 
 
@@ -135,15 +155,28 @@ int main(int argc, char** argv) {
 """
 
 
-def _elementwise(body, cpus, project):
-    source, inputs = _source(body, cpus)
+def _emit_elementwise_entry(body, cpus, project):
+    source, inputs = _render_elementwise_source(body, cpus)
     (project / "src").mkdir(parents=True)
     (project / "src/main.cpp").write_text(source, encoding="utf-8")
-    configuration = dict(sources=["src/main.cpp"], libraries=["pthread"],
-        compile_options=["-pthread", "-O3", "-fno-fast-math", "-ffp-contract=off",
-                         "-frounding-math", "-ftrapping-math"])
-    invocation = dict(inputs=inputs, shape=body.shape,
-                      dtype="little-endian-float64", args=["INPUT.bin", "OUTPUT.bin"])
+    configuration = dict(
+        sources=["src/main.cpp"],
+        libraries=["pthread"],
+        compile_options=[
+            "-pthread",
+            "-O3",
+            "-fno-fast-math",
+            "-ffp-contract=off",
+            "-frounding-math",
+            "-ftrapping-math",
+        ],
+    )
+    invocation = dict(
+        inputs=inputs,
+        shape=body.shape,
+        dtype="little-endian-float64",
+        args=["INPUT.bin", "OUTPUT.bin"],
+    )
     return configuration, (), invocation
 
 
@@ -154,7 +187,9 @@ def _runtime_support(configuration, project):
         raise ValueError("unknown native runtime requirement")
     headers = project / "include/scar_generated"
     descriptors = "f2c-cfi-v1" in f2c
-    if (descriptors or "gnu-cfi-v1" in support) and not (headers / "ISO_Fortran_binding.h").is_file():
+    if (descriptors or "gnu-cfi-v1" in support) and not (
+        headers / "ISO_Fortran_binding.h"
+    ).is_file():
         raise ValueError("generated GNU CFI runtime requires its sealed ABI header")
     if f2c:
         with (headers / "scar_f2c_call.hpp").open("xb") as stream:
@@ -169,31 +204,23 @@ def _runtime_support(configuration, project):
     configuration["sources"] = [*configuration["sources"], name]
 
 
-def _apply_source_edits(name, data, insertions, replacements):
-    if not insertions and not replacements:
+def _apply_region_replacements(name, data, replacements):
+    if not replacements:
         return data
-    edits = {start: (stop, replacement) for start, stop, replacement in replacements}
-    if len(edits) != len(replacements):
-        raise ValueError(f"duplicate native source replacement in {name}")
     chunks, position = [], 0
-    for offset in sorted(insertions.keys() | edits.keys()):
-        if offset < position:
-            raise ValueError(f"overlapping native source edits in {name} at byte {offset}")
-        chunks.extend((data[position:offset], *insertions.get(offset, ())))
-        position = offset
-        if offset in edits:
-            position, replacement = edits[offset]
-            chunks.append(replacement)
+    for start, stop, replacement in sorted(replacements):
+        if not position <= start < stop <= len(data):
+            raise ValueError(f"overlapping or invalid region replacement in {name}")
+        chunks.extend((data[position:start], replacement))
+        position = stop
     chunks.append(data[position:])
     return b"".join(chunks)
 
 
-def _fragments(body, project, bundle):
+def _emit_fragment_module(body, project, bundle):
     material = read_native_material(body.artifact.resolve(bundle), graph=False)
     fragments = material["fragments"]
     abi_units = material["abi_units"]
-    adaptations = material["c_adaptations"]
-    transport = material["fortran_transport"]
     regions = defaultdict(list)
     configuration = material["configuration"]
     for row in body.regions:
@@ -203,15 +230,16 @@ def _fragments(body, project, bundle):
         raise ValueError("an ABI declaration must own a separate C++20 unit")
     if not regions.keys() <= sources & (fragments.keys() | abi_units.keys()):
         raise ValueError("a typed native region has no owned C++20 unit")
-    translated = {row["output"] for row in transport["units"]} if transport else set()
-    if translated & (fragments.keys() | abi_units.keys()) or not translated <= sources:
-        raise ValueError("a Fortran transport must own separate C++20 units")
     project.mkdir(parents=True, exist_ok=True)
     definitions, decisions = [], []
     for name in (*fragments, *abi_units):
         relative = Path(name)
-        if (relative.as_posix() != name or len(relative.parts) < 2 or ".." in relative.parts
-                or relative.parts[0] not in {"src", "include"}):
+        if (
+            relative.as_posix() != name
+            or len(relative.parts) < 2
+            or ".." in relative.parts
+            or relative.parts[0] not in {"src", "include"}
+        ):
             raise ValueError(f"invalid C++20 fragment path {name}")
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -221,35 +249,41 @@ def _fragments(body, project, bundle):
             data, spans = render_abi_wrappers(declarations)
         else:
             data = read_artifact(Member(**fragments[name]).resolve(bundle))
-            if transport and name == "include/scar_generated/ISO_Fortran_binding.h":
-                data = b"#pragma GCC system_header\n" + data
-        insertions, replacements = {}, []
-        if name in adaptations:
-            insertions, replacements = c_source_edits(name, data, adaptations[name])
+        replacements = []
         if name in regions:
-            guarded, helpers, emitted = region_edits(regions[name], configuration, name, data, declarations, spans)
+            guarded, helpers, emitted = plan_region_source_edits(
+                regions[name], configuration, name, data, declarations, spans
+            )
             replacements.extend(guarded)
             definitions.extend(helpers)
             decisions.extend(emitted)
-        destination.write_bytes(_apply_source_edits(name, data, insertions, replacements))
-    if transport:
-        emit_fortran_transport(transport, project, bundle)
+        destination.write_bytes(_apply_region_replacements(name, data, replacements))
     _runtime_support(configuration, project)
     if decisions:
         emit_region_helpers(project, configuration, definitions)
-        write_json(project / "native-region-lowering.json", dict(schema="scar.native-region-lowering",
-                   schema_version=1, regions=decisions))
+        write_json(
+            project / "native-region-lowering.json",
+            dict(
+                schema="scar.native-region-lowering",
+                schema_version=1,
+                regions=decisions,
+            ),
+        )
     return configuration, tuple(material["exports"]), None
 
 
-def lower_project(ir, project, bundle):
+def emit_cpp20_project(ir, project, bundle):
     """Return C++20 build inputs and the ABI of the sealed executable entry."""
     if len(ir.bodies) == 1 and isinstance(ir.bodies[0], ElementwiseEntry):
-        return _elementwise(ir.bodies[0], ir.cpu_ids, project)
-    fragments = next((body for body in ir.bodies if isinstance(body, FragmentModule)), None)
+        return _emit_elementwise_entry(ir.bodies[0], ir.cpu_ids, project)
+    fragments = next(
+        (body for body in ir.bodies if isinstance(body, FragmentModule)), None
+    )
     if fragments is None:
         raise ValueError("standalone scalar IR needs a native entry module")
-    configuration, exports, invocation = _fragments(fragments, project, bundle)
+    configuration, exports, invocation = _emit_fragment_module(
+        fragments, project, bundle
+    )
     for body in ir.bodies:
         if isinstance(body, ScalarModule):
             emit_scalar_module(body, project, configuration)

@@ -23,8 +23,11 @@ def _text(path):
 
 
 def _limits():
-    memory = [int(row.split()[1]) * 1024 for row in _text(Path("/proc/meminfo")).splitlines()
-              if row.startswith("MemAvailable:")]
+    memory = [
+        int(row.split()[1]) * 1024
+        for row in _text(Path("/proc/meminfo")).splitlines()
+        if row.startswith("MemAvailable:")
+    ]
     quotas = []
     root = Path("/sys/fs/cgroup")
     for row in _text(Path("/proc/self/cgroup")).splitlines():
@@ -37,14 +40,18 @@ def _limits():
             quota = _text(directory / "cpu.max").split()
             limit = _text(directory / "memory.max")
             current = _text(directory / "memory.current")
-            if len(quota) == 2 and all(value.isdigit() for value in quota) and int(quota[1]):
+            if (
+                len(quota) == 2
+                and all(value.isdigit() for value in quota)
+                and int(quota[1])
+            ):
                 quotas.append(int(quota[0]) / int(quota[1]))
             if limit.isdigit() and current.isdigit():
                 memory.append(max(0, int(limit) - int(current)))
     return min(memory, default=None), min(quotas, default=None)
 
 
-def _cohort(resources, available):
+def _select_cpu_domain(resources, available):
     domains = defaultdict(dict)
     for resource in resources:
         if resource.kind != "CPU":
@@ -57,12 +64,15 @@ def _cohort(resources, available):
             # Co-locate within a known memory domain; package bounds missing NUMA facts.
             domain = ("NUMA", node) if node is not None else ("PACKAGE", key[0])
             domains[domain][key] = min(domains[domain].get(key, cpu), cpu)
-    largest = min((tuple(sorted(domain.values())) for domain in domains.values()),
-                  key=lambda cpus: (-len(cpus), cpus), default=())
+    largest = min(
+        (tuple(sorted(domain.values())) for domain in domains.values()),
+        key=lambda cpus: (-len(cpus), cpus),
+        default=(),
+    )
     return largest or available[:1]
 
 
-def _work(body):
+def _describe_elementwise_work(body):
     functions = {function["name"]: function for function in body.program["functions"]}
 
     @lru_cache(maxsize=None)
@@ -87,7 +97,9 @@ def _work(body):
         for kind, *args in rows:
             if kind == "repeat":
                 nested = statements(args[0])
-                result.update({key: amount * body.count for key, amount in nested.items()})
+                result.update(
+                    {key: amount * body.count for key, amount in nested.items()}
+                )
             else:
                 result.update(expression(args[-1]))
         return result
@@ -96,10 +108,20 @@ def _work(body):
     elements = math.prod(body.shape)
     inputs = len(functions[entry]["parameters"])
     bytes_ = elements * (inputs + 1) * 8
-    return dict(elements=elements, repetitions=body.count, input_arrays=inputs, independent_axis="element",
-                loop_carried_axis="per_element_recurrence", peak_resident_bytes=bytes_, stream_bytes=bytes_,
-                memory_scope="OWNED_INPUT_AND_OUTPUT_ARRAYS",
-                arithmetic={key: amount * elements for key, amount in sorted(function_cost(entry).items())})
+    return dict(
+        elements=elements,
+        repetitions=body.count,
+        input_arrays=inputs,
+        independent_axis="element",
+        loop_carried_axis="per_element_recurrence",
+        peak_resident_bytes=bytes_,
+        stream_bytes=bytes_,
+        memory_scope="OWNED_INPUT_AND_OUTPUT_ARRAYS",
+        arithmetic={
+            key: amount * elements
+            for key, amount in sorted(function_cost(entry).items())
+        },
+    )
 
 
 def _widths(limit):
@@ -111,32 +133,58 @@ def _widths(limit):
     return widths
 
 
-def _probe(directory, cpus, widths, memory, compiler, env):
+def _measure_cpu_costs(directory, cpus, widths, memory, compiler, env):
     source = directory / "cpu-probe.cpp"
     binary = directory / "cpu-probe"
     source.write_text(_PROBE, encoding="utf-8")
     flags = ["-std=c++20", "-O3", "-pthread", "-ffp-contract=off", "-fno-fast-math"]
-    subprocess.run([compiler, *flags, str(source), "-o", str(binary)], env=env,
-                   capture_output=True, check=True, timeout=20)
+    subprocess.run(
+        [compiler, *flags, str(source), "-o", str(binary)],
+        env=env,
+        capture_output=True,
+        check=True,
+        timeout=20,
+    )
     # Each arm has its own bounded vector; the sample need not exceed the LLC.
     elements = min(2**22, memory // 128) if memory is not None else 2**20
     if elements < 2**15:
         raise ValueError("insufficient free memory for a CPU bandwidth probe")
     iterations = 2**20
-    command = [str(binary), str(elements), str(iterations), ",".join(map(str, cpus)), ",".join(map(str, widths))]
-    result = subprocess.run(command, env=env, capture_output=True,
-                            text=True, check=True, timeout=15)
+    command = [
+        str(binary),
+        str(elements),
+        str(iterations),
+        ",".join(map(str, cpus)),
+        ",".join(map(str, widths)),
+    ]
+    result = subprocess.run(
+        command, env=env, capture_output=True, text=True, check=True, timeout=15
+    )
     samples = defaultdict(list)
     for line in result.stdout.splitlines():
         width, setup, copy, arithmetic, divide = map(int, line.split())
         if width not in widths or min(setup, copy, arithmetic, divide) <= 0:
             raise ValueError("unusable CPU probe sample")
-        samples[width].append(dict(team_setup_ns=setup, copy_ns=copy, arithmetic_ns=arithmetic, divide_ns=divide))
+        samples[width].append(
+            dict(
+                team_setup_ns=setup,
+                copy_ns=copy,
+                arithmetic_ns=arithmetic,
+                divide_ns=divide,
+            )
+        )
     if any(len(samples[width]) != 3 for width in widths):
         raise ValueError("incomplete CPU probe")
-    return dict(compiler=asdict(artifact(Path(compiler))), flags=flags, probe_sha256=sha256(_PROBE.encode()).hexdigest(),
-                copy_sample_bytes=2 * elements * 8, arithmetic_sample_ops=2 * iterations, divide_sample_ops=iterations,
-                bandwidth_scope="BOUNDED_HOST_COPY", samples=dict(samples))
+    return dict(
+        compiler=asdict(artifact(Path(compiler))),
+        flags=flags,
+        probe_sha256=sha256(_PROBE.encode()).hexdigest(),
+        copy_sample_bytes=2 * elements * 8,
+        arithmetic_sample_ops=2 * iterations,
+        divide_sample_ops=iterations,
+        bandwidth_scope="BOUNDED_HOST_COPY",
+        samples=dict(samples),
+    )
 
 
 def _estimates(work, cpus, probe):
@@ -147,12 +195,23 @@ def _estimates(work, cpus, probe):
         times = []
         for sample in samples:
             setup = sample["team_setup_ns"]
-            copies = work["stream_bytes"] * sample["copy_ns"] / probe["copy_sample_bytes"]
-            arithmetic = other * sample["arithmetic_ns"] / probe["arithmetic_sample_ops"]
+            copies = (
+                work["stream_bytes"] * sample["copy_ns"] / probe["copy_sample_bytes"]
+            )
+            arithmetic = (
+                other * sample["arithmetic_ns"] / probe["arithmetic_sample_ops"]
+            )
             arithmetic += division * sample["divide_ns"] / probe["divide_sample_ops"]
             times.append(math.ceil(setup + max(copies, arithmetic)))
-        estimates.append(dict(workers=width, cpu_ids=list(cpus[:width]), min_ns=min(times),
-                              median_ns=median(times), max_ns=max(times)))
+        estimates.append(
+            dict(
+                workers=width,
+                cpu_ids=list(cpus[:width]),
+                min_ns=min(times),
+                median_ns=median(times),
+                max_ns=max(times),
+            )
+        )
     return estimates
 
 
@@ -160,70 +219,173 @@ def physical_plan(plan, directory, cpu_threads, compiler, environment):
     """Return selected CPU ids and evidence, with a serial fallback on weak evidence."""
     available = tuple(sorted(cpu for cpu in os.sched_getaffinity(0) if 0 <= cpu < 1024))
     explicit = plan.lowering.cpu_ids
-    if explicit and (set(explicit) - set(available) or cpu_threads is not None and len(explicit) > cpu_threads):
-        raise ValueError("the recorded CPU cohort is unavailable under the current affinity or worker limit")
-    body = next((body for body in plan.lowering.bodies if isinstance(body, ElementwiseEntry)), None)
+    if explicit and (
+        set(explicit) - set(available)
+        or cpu_threads is not None
+        and len(explicit) > cpu_threads
+    ):
+        raise ValueError(
+            "the recorded CPU cohort is unavailable under the current affinity or worker limit"
+        )
+    body = next(
+        (body for body in plan.lowering.bodies if isinstance(body, ElementwiseEntry)),
+        None,
+    )
     memory, quota = _limits()
-    cohort = _cohort(plan.resources, available)
-    count = min(len(cohort), cpu_threads or len(cohort), max(1, int(quota)) if quota is not None else len(cohort))
+    cohort = _select_cpu_domain(plan.resources, available)
+    count = min(
+        len(cohort),
+        cpu_threads or len(cohort),
+        max(1, int(quota)) if quota is not None else len(cohort),
+    )
     cohort = cohort[:count]
-    capacity = next((resource.capacity for resource in plan.resources
-                     if resource.kind in {"NUMA_MEMORY", "DRAM"} and resource.capacity is not None
-                     and (resource.kind == "DRAM" or cohort
-                          and cohort[0] in resource.attributes.get("logical_cpus", ()))), None)
+    capacity = next(
+        (
+            resource.capacity
+            for resource in plan.resources
+            if resource.kind in {"NUMA_MEMORY", "DRAM"}
+            and resource.capacity is not None
+            and (
+                resource.kind == "DRAM"
+                or cohort
+                and cohort[0] in resource.attributes.get("logical_cpus", ())
+            )
+        ),
+        None,
+    )
     if capacity is not None:
         memory = min(memory, capacity) if memory is not None else capacity
-    host = dict(machine=platform.machine(), kernel=platform.release(), affinity=list(available),
-                cohort=list(cohort), cpu_quota=quota, available_memory_bytes=memory)
-    host["fingerprint"] = sha256(json.dumps({key: value for key, value in host.items()
-                                             if key != "available_memory_bytes"}, sort_keys=True).encode()).hexdigest()
-    result = dict(schema="scar.physical-plan", schema_version=1, host=host, worker_limit=cpu_threads)
+    host = dict(
+        machine=platform.machine(),
+        kernel=platform.release(),
+        affinity=list(available),
+        cohort=list(cohort),
+        cpu_quota=quota,
+        available_memory_bytes=memory,
+    )
+    host["fingerprint"] = sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in host.items()
+                if key != "available_memory_bytes"
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    result = dict(
+        schema="scar.physical-plan",
+        schema_version=1,
+        host=host,
+        worker_limit=cpu_threads,
+    )
     if body is None:
-        reason = "NO_BOUNDED_PARALLEL_BODY" if plan.lowering.bodies else "NO_EXECUTABLE_BODY"
-        decision = "PRESERVE_NATIVE_PLACEMENT" if plan.lowering.bodies else "KEEP_ORIGINAL"
+        reason = (
+            "NO_BOUNDED_PARALLEL_BODY" if plan.lowering.bodies else "NO_EXECUTABLE_BODY"
+        )
+        decision = (
+            "PRESERVE_NATIVE_PLACEMENT" if plan.lowering.bodies else "KEEP_ORIGINAL"
+        )
         result.update(reason=reason, cpu_ids=list(explicit), decision=decision)
         return explicit, result
     elif not cohort and not explicit:
         raise ValueError("no CPU is available for the C++20 affinity ABI")
     else:
-        work = result["work"] = _work(body)
+        work = result["work"] = _describe_elementwise_work(body)
         if memory is not None and work["peak_resident_bytes"] > memory:
-            result.update(reason="INSUFFICIENT_AVAILABLE_MEMORY", cpu_ids=[], decision="KEEP_ORIGINAL")
+            result.update(
+                reason="INSUFFICIENT_AVAILABLE_MEMORY",
+                cpu_ids=[],
+                decision="KEEP_ORIGINAL",
+            )
             return (), result
         cpus = explicit or cohort[:1]
         reason = "LEGACY_EXPLICIT_COHORT" if explicit else "ONE_ELIGIBLE_WORKER"
         limit = min(len(cohort), work["elements"])
         if not explicit and limit > 1:
             try:
-                probe = _probe(directory, cohort[:limit], _widths(limit), memory, compiler, environment)
+                probe = _measure_cpu_costs(
+                    directory,
+                    cohort[:limit],
+                    _widths(limit),
+                    memory,
+                    compiler,
+                    environment,
+                )
                 estimates = _estimates(work, cohort, probe)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 reason = "CPU_PROBE_UNAVAILABLE"
                 result["probe_error"] = str(error)
             else:
-                result.update(probe=probe, estimates=estimates, time_model="TEAM_SETUP_PLUS_MAX_OF_COPY_AND_ARITHMETIC")
+                result.update(
+                    probe=probe,
+                    estimates=estimates,
+                    time_model="TEAM_SETUP_PLUS_MAX_OF_COPY_AND_ARITHMETIC",
+                )
                 serial = estimates[0]
                 # Require a strict benefit across the observed sample ranges.
-                eligible = [row for row in estimates[1:] if row["max_ns"] < serial["min_ns"]]
+                eligible = [
+                    row for row in estimates[1:] if row["max_ns"] < serial["min_ns"]
+                ]
                 if eligible:
-                    best = min(eligible, key=lambda row: (row["median_ns"], row["workers"]))
+                    best = min(
+                        eligible, key=lambda row: (row["median_ns"], row["workers"])
+                    )
                     cpus = tuple(best["cpu_ids"])
                     reason = "PREDICTED_PARALLEL_BENEFIT"
                 else:
                     reason = "NO_STABLE_PREDICTED_PARALLEL_BENEFIT"
-    result.update(reason=reason, cpu_ids=list(cpus), decision="CPU_TEAM" if len(cpus) > 1 else "CPU_SERIAL")
-    chosen = next((row for row in result.get("estimates", ()) if row["cpu_ids"] == list(cpus)), None)
-    bounds = {key: chosen[f"{key}_ns"] for key in ("min", "median", "max")} if chosen else None
+    result.update(
+        reason=reason,
+        cpu_ids=list(cpus),
+        decision="CPU_TEAM" if len(cpus) > 1 else "CPU_SERIAL",
+    )
+    chosen = next(
+        (row for row in result.get("estimates", ()) if row["cpu_ids"] == list(cpus)),
+        None,
+    )
+    bounds = (
+        {key: chosen[f"{key}_ns"] for key in ("min", "median", "max")}
+        if chosen
+        else None
+    )
     result["time_schedule"] = dict(
-        time_origin="INPUTS_READY", unit="ns", peak_owned_memory_bytes=work["peak_resident_bytes"],
-        windows=[dict(id="input", resource="HOST_CPU_AND_IO", cpu_ids=list(cpus[:1]),
-                      depends_on=[], start_ns=None, duration_ns=None),
-                 dict(id="compute", resource="HOST_CPU", cpu_ids=list(cpus), depends_on=["input"],
-                      start_ns=0 if chosen else None, duration_ns=chosen["median_ns"] if chosen else None,
-                      duration_bounds_ns=bounds),
-                 dict(id="output", resource="HOST_CPU_AND_IO", cpu_ids=list(cpus[:1]),
-                      depends_on=["compute"], start_ns=None, duration_ns=None)])
-    result["unmodeled_choices"] = ["ISA_AND_SIMD", "CROSS_NUMA", "OPERATOR_LIBRARY_VARIANTS"]
+        time_origin="INPUTS_READY",
+        unit="ns",
+        peak_owned_memory_bytes=work["peak_resident_bytes"],
+        windows=[
+            dict(
+                id="input",
+                resource="HOST_CPU_AND_IO",
+                cpu_ids=list(cpus[:1]),
+                depends_on=[],
+                start_ns=None,
+                duration_ns=None,
+            ),
+            dict(
+                id="compute",
+                resource="HOST_CPU",
+                cpu_ids=list(cpus),
+                depends_on=["input"],
+                start_ns=0 if chosen else None,
+                duration_ns=chosen["median_ns"] if chosen else None,
+                duration_bounds_ns=bounds,
+            ),
+            dict(
+                id="output",
+                resource="HOST_CPU_AND_IO",
+                cpu_ids=list(cpus[:1]),
+                depends_on=["compute"],
+                start_ns=None,
+                duration_ns=None,
+            ),
+        ],
+    )
+    result["unmodeled_choices"] = [
+        "ISA_AND_SIMD",
+        "CROSS_NUMA",
+        "OPERATOR_LIBRARY_VARIANTS",
+    ]
     return tuple(cpus), result
 
 

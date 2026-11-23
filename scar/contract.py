@@ -8,14 +8,13 @@ from pathlib import Path
 import re
 from tempfile import NamedTemporaryFile
 
-
 GRAPH_SCHEMA = "scar.graph-bundle"
 PLAN_SCHEMA = "scar.compiler-plan"
 LEGACY_WIRE_VERSION = 3
 GRAPH_WIRE_VERSION = 4
 PLAN_WIRE_VERSION = 4
-NATIVE_GRAPH_VERSION = 6
-NATIVE_PLAN_VERSION = 4
+NATIVE_GRAPH_VERSION = 7
+NATIVE_PLAN_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -25,8 +24,12 @@ class Artifact:
     size: int
 
     def __post_init__(self):
-        if (not Path(self.path).is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", self.sha256)
-                or type(self.size) is not int or self.size < 0):
+        if (
+            not Path(self.path).is_absolute()
+            or not re.fullmatch(r"[0-9a-f]{64}", self.sha256)
+            or type(self.size) is not int
+            or self.size < 0
+        ):
             raise ValueError("invalid artifact identity")
 
 
@@ -41,8 +44,13 @@ class Member:
     def resolve(self, root):
         name = Path(self.path)
         root = Path(root).resolve(strict=True)
-        if (name.is_absolute() or name.as_posix() != self.path or self.path == "."
-                or ".." in name.parts or (root / name).resolve(strict=True) != root / name):
+        if (
+            name.is_absolute()
+            or name.as_posix() != self.path
+            or self.path == "."
+            or ".." in name.parts
+            or (root / name).resolve(strict=True) != root / name
+        ):
             raise ValueError(f"invalid local product member {self.path}")
         return Artifact(str(root / name), self.sha256, self.size)
 
@@ -173,7 +181,13 @@ def _identity(path, data):
 
 
 def json_digest(document):
-    payload = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    payload = json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -204,33 +218,38 @@ def read_native_material(reference, *, graph):
     if type(document) is not dict:
         raise ValueError("native module material must be an object")
     version = document.get("schema_version")
-    versions = range(1, NATIVE_GRAPH_VERSION + 1) if graph else range(1, NATIVE_PLAN_VERSION + 1)
-    if type(version) is not int or version not in versions or document.get("schema") != "scar.native-units-ir":
+    versions = (
+        range(1, NATIVE_GRAPH_VERSION + 1)
+        if graph
+        else range(1, NATIVE_PLAN_VERSION + 1)
+    )
+    if (
+        type(version) is not int
+        or version not in versions
+        or document.get("schema") != "scar.native-units-ir"
+    ):
         raise ValueError("unsupported native module material version")
     fields = {"schema", "schema_version", "configuration", "fragments", "exports"}
     first_abi, first_adaptation = (4, 5) if graph else (2, 3)
-    maps = {"abi_units": first_abi, "c_adaptations": first_adaptation}
-    fields.update(name for name, first in maps.items() if version >= first)
-    if version >= (6 if graph else 4):
+    if version >= first_abi:
+        fields.add("abi_units")
+    if first_adaptation <= version <= (6 if graph else 4):
+        fields.add("c_adaptations")
+    if version == (6 if graph else 4):
         fields.add("fortran_transport")
     if graph and version >= 2:
         fields.add("region_seals")
-    if (set(document) != fields or any(type(document[key]) is not dict
-            for key in fields & {"configuration", "fragments", "region_seals", *maps})):
+    if set(document) != fields or any(
+        type(document[key]) is not dict
+        for key in fields
+        & {"configuration", "fragments", "region_seals", "abi_units", "c_adaptations"}
+    ):
         raise ValueError("invalid native module material fields")
-    for key in maps:
-        document.setdefault(key, {})
-    transport = document.setdefault("fortran_transport", None)
-    if transport is not None and (type(transport) is not dict
-            or set(transport) != {"translator", "header", "units"}
-            or type(transport["header"]) is not dict
-            or type(transport["units"]) is not list or not transport["units"]
-            or any(type(unit) is not dict or set(unit) != {"source", "output", "extended", "descriptor_arrays"}
-                   or type(unit["source"]) is not dict or type(unit["output"]) is not str
-                   for unit in transport["units"])):
-        raise ValueError("invalid Fortran transport material")
-    if not document["c_adaptations"].keys() <= document["fragments"].keys():
-        raise ValueError("C compatibility declarations require an owned source fragment")
+    document.setdefault("abi_units", {})
+    if document.pop("fortran_transport", None) is not None or document.pop(
+        "c_adaptations", None
+    ):
+        raise ValueError("rebuild this product with scar build to seal C++ fragments")
     return document
 
 
@@ -262,7 +281,11 @@ def copy_artifact(reference, destination, *, executable=False):
 
 
 def local_member(reference, root):
-    return Member(Path(reference.path).relative_to(Path(root).resolve()).as_posix(), reference.sha256, reference.size)
+    return Member(
+        Path(reference.path).relative_to(Path(root).resolve()).as_posix(),
+        reference.sha256,
+        reference.size,
+    )
 
 
 def product_artifact(reference, root):
@@ -274,8 +297,12 @@ def product_artifact(reference, root):
 
 def write_json(path, document):
     path = Path(path).resolve()
-    encoded = (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
-               + "\n").encode("utf-8")
+    encoded = (
+        json.dumps(
+            document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False
+        )
+        + "\n"
+    ).encode("utf-8")
     with NamedTemporaryFile(dir=path.parent, delete=False) as stream:
         temp = Path(stream.name)
         try:
@@ -303,7 +330,10 @@ def _open(path, filename, schema, *, versions):
 
 
 def _rows(rows, model, tuple_fields=()):
-    return tuple(model(**{**row, **{key: tuple(row[key]) for key in tuple_fields}}) for row in rows)
+    return tuple(
+        model(**{**row, **{key: tuple(row[key]) for key in tuple_fields}})
+        for row in rows
+    )
 
 
 def validate_graph(graph):
@@ -311,12 +341,18 @@ def validate_graph(graph):
     operations = {row.id: row for row in graph.operations}
     identities = (*regions, *operations, *(row.id for row in graph.resources))
     count = len(graph.regions) + len(graph.operations) + len(graph.resources)
-    if len(set(identities)) != count or any(not isinstance(key, str) or not key for key in identities):
+    if len(set(identities)) != count or any(
+        not isinstance(key, str) or not key for key in identities
+    ):
         raise ValueError("graph IDs must be nonempty and globally unique")
     assigned, parent = set(), {}
     for region in graph.regions:
         for key in region.operations:
-            if key in assigned or key not in operations or operations[key].region != region.id:
+            if (
+                key in assigned
+                or key not in operations
+                or operations[key].region != region.id
+            ):
                 raise ValueError(f"operation ownership differs in region {region.id}")
             assigned.add(key)
         for child in region.children:
@@ -339,7 +375,9 @@ def validate_graph(graph):
         if edge.source not in known or edge.target not in known or not edge.kind:
             raise ValueError("graph edge has unresolved endpoint or type")
     for resource in graph.resources:
-        if resource.capacity is not None and (type(resource.capacity) is not int or resource.capacity < 0):
+        if resource.capacity is not None and (
+            type(resource.capacity) is not int or resource.capacity < 0
+        ):
             raise ValueError(f"invalid resource capacity: {resource.id}")
     return graph
 
@@ -347,24 +385,48 @@ def validate_graph(graph):
 def write_graph(path, graph):
     if graph.program.native and not isinstance(graph.program.native.module, Member):
         raise ValueError("native module must belong to its graph bundle")
-    return write_json(path, dict(schema=GRAPH_SCHEMA, schema_version=GRAPH_WIRE_VERSION,
-                                 **asdict(validate_graph(graph))))
+    return write_json(
+        path,
+        dict(
+            schema=GRAPH_SCHEMA,
+            schema_version=GRAPH_WIRE_VERSION,
+            **asdict(validate_graph(graph)),
+        ),
+    )
 
 
 def open_graph(path):
-    reference, value, version = _open(path, "graph.json", GRAPH_SCHEMA,
-                                     versions=(LEGACY_WIRE_VERSION, GRAPH_WIRE_VERSION))
+    reference, value, version = _open(
+        path,
+        "graph.json",
+        GRAPH_SCHEMA,
+        versions=(LEGACY_WIRE_VERSION, GRAPH_WIRE_VERSION),
+    )
     evidence = value["evidence"]
     if version == LEGACY_WIRE_VERSION:
-        native = (NativeProgram(Artifact(**evidence["native_units"]), tuple(evidence.get("native_regions", ())))
-                  if "native_units" in evidence else None)
-        program = GraphProgram(native, tuple(evidence.get("scalar_functions", ())), evidence.get("portable"),
-                               evidence.get("native_units_frontier"))
+        native = (
+            NativeProgram(
+                Artifact(**evidence["native_units"]),
+                tuple(evidence.get("native_regions", ())),
+            )
+            if "native_units" in evidence
+            else None
+        )
+        program = GraphProgram(
+            native,
+            tuple(evidence.get("scalar_functions", ())),
+            evidence.get("portable"),
+            evidence.get("native_units_frontier"),
+        )
     else:
         executable = value["program"]
         native = executable["native"]
         program = GraphProgram(
-            NativeProgram(Member(**native["module"]), tuple(native["regions"])) if native else None,
+            (
+                NativeProgram(Member(**native["module"]), tuple(native["regions"]))
+                if native
+                else None
+            ),
             tuple(executable["scalars"]),
             executable["elementwise"],
             executable["unavailable"],
@@ -404,16 +466,22 @@ def validate_plan(plan):
 
 def _validate_lowering(lowering):
     kinds = {body.kind for body in lowering.bodies}
-    if (lowering.cxx_standard != 20 or len(kinds) != len(lowering.bodies)
-            or ("ELEMENTWISE_ENTRY" in kinds and len(kinds) != 1)
-            or len(set(lowering.cpu_ids)) != len(lowering.cpu_ids)
-            or any(type(cpu) is not int or cpu < 0 for cpu in lowering.cpu_ids)):
+    if (
+        lowering.cxx_standard != 20
+        or len(kinds) != len(lowering.bodies)
+        or ("ELEMENTWISE_ENTRY" in kinds and len(kinds) != 1)
+        or len(set(lowering.cpu_ids)) != len(lowering.cpu_ids)
+        or any(type(cpu) is not int or cpu < 0 for cpu in lowering.cpu_ids)
+    ):
         raise ValueError("invalid executable IR target or CPU allocation")
     for body in lowering.bodies:
         if isinstance(body, ElementwiseEntry):
-            if (len(body.shape) != 2
-                    or any(type(size) is not int or size <= 0 for size in body.shape)
-                    or type(body.count) is not int or not 0 < body.count < 2**63):
+            if (
+                len(body.shape) != 2
+                or any(type(size) is not int or size <= 0 for size in body.shape)
+                or type(body.count) is not int
+                or not 0 < body.count < 2**63
+            ):
                 raise ValueError("invalid elementwise entry shape or count")
         elif isinstance(body, ScalarModule):
             if not body.functions:
@@ -424,7 +492,14 @@ def _validate_lowering(lowering):
 
 def write_plan(path, plan):
     _verify_logical(plan)
-    return write_json(path, dict(schema=PLAN_SCHEMA, schema_version=PLAN_WIRE_VERSION, **asdict(validate_plan(plan))))
+    return write_json(
+        path,
+        dict(
+            schema=PLAN_SCHEMA,
+            schema_version=PLAN_WIRE_VERSION,
+            **asdict(validate_plan(plan)),
+        ),
+    )
 
 
 def _verify_logical(plan):
@@ -432,8 +507,13 @@ def _verify_logical(plan):
         if ir is not None and ir.cpu_ids:
             raise ValueError("logical IR has a backend CPU assignment")
     for step in plan.schedule:
-        if any(field is not None for field in (step.resource, step.start_ns, step.duration_ns)):
-            raise ValueError("logical dependencies have a backend resource or time assignment")
+        if any(
+            field is not None
+            for field in (step.resource, step.start_ns, step.duration_ns)
+        ):
+            raise ValueError(
+                "logical dependencies have a backend resource or time assignment"
+            )
 
 
 def _lowering_from_dict(document):
@@ -447,17 +527,25 @@ def _lowering_from_dict(document):
             row["shape"] = tuple(row["shape"])
             bodies.append(ElementwiseEntry(**row))
         elif kind == "FRAGMENT_MODULE":
-            bodies.append(FragmentModule(Member(**row["artifact"]), tuple(row.get("regions", ()))))
+            bodies.append(
+                FragmentModule(Member(**row["artifact"]), tuple(row.get("regions", ())))
+            )
         elif kind == "SCALAR_MODULE":
             bodies.append(ScalarModule(tuple(row["functions"])))
         else:
             raise ValueError(f"unsupported executable IR body {kind}")
-    return ExecutableIR(tuple(bodies), tuple(document["cpu_ids"]), document["cxx_standard"])
+    return ExecutableIR(
+        tuple(bodies), tuple(document["cpu_ids"]), document["cxx_standard"]
+    )
 
 
 def open_plan(path):
-    reference, value, version = _open(path, "plan.json", PLAN_SCHEMA,
-                                     versions=(LEGACY_WIRE_VERSION, PLAN_WIRE_VERSION))
+    reference, value, version = _open(
+        path,
+        "plan.json",
+        PLAN_SCHEMA,
+        versions=(LEGACY_WIRE_VERSION, PLAN_WIRE_VERSION),
+    )
     value["graph"] = Artifact(**value["graph"])
     value["rewrites"] = tuple(value["rewrites"])
     value["schedule"] = _rows(value["schedule"], Step, ("depends_on",))

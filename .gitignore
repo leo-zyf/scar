@@ -13,7 +13,7 @@ dist/
 .venv-planner/
 .env
 .DS_Store
-/scar.bak/
+*.bak/
 
 # Generated graphs and measurements are local current outputs, not source.
 artifacts/**

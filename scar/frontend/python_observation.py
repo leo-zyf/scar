@@ -2,12 +2,10 @@
 
 from dataclasses import asdict
 import json
-from pathlib import Path
 import subprocess
 import sys
 
 from scar.contract import Edge, artifact, verify_artifact, write_json
-
 
 _OBSERVE = """
 import json
@@ -61,8 +59,12 @@ def observe_python(path, entry, spec, out, regions, operations):
         raise ValueError("observation requires a named Python entry")
     limit = spec.get("event_limit", 256)
     timeout = spec.get("timeout_seconds", 10)
-    if (type(limit) is not int or not 1 <= limit <= 4096
-            or type(timeout) is not int or not 1 <= timeout <= 60):
+    if (
+        type(limit) is not int
+        or not 1 <= limit <= 4096
+        or type(timeout) is not int
+        or not 1 <= timeout <= 60
+    ):
         raise ValueError("invalid bounded observation limits")
     arguments, receipts = [], []
     for arg in spec["arguments"]:
@@ -70,19 +72,48 @@ def observe_python(path, entry, spec, out, regions, operations):
             reference = artifact(path.parent / arg["npy"])
             arguments.append(dict(npy=reference.path))
             receipts.append(reference)
-        elif set(arg) == {"scalar"} and type(arg["scalar"]) in {int, float, bool, str, type(None)}:
+        elif set(arg) == {"scalar"} and type(arg["scalar"]) in {
+            int,
+            float,
+            bool,
+            str,
+            type(None),
+        }:
             arguments.append(arg)
         else:
             raise ValueError("observation arguments require scalar or npy payloads")
     request = out / "observation-input.json"
-    write_json(request, dict(arguments=arguments, event_limit=limit, inputs=[asdict(ref) for ref in receipts]))
+    write_json(
+        request,
+        dict(
+            arguments=arguments,
+            event_limit=limit,
+            inputs=[asdict(ref) for ref in receipts],
+        ),
+    )
     report = out / "observation.json"
     try:
-        run = subprocess.run([sys.executable, "-B", "-c", _OBSERVE, str(path), entry, str(request), str(report)],
-                             cwd=path.parent, timeout=timeout, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.PIPE, text=True)
+        run = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _OBSERVE,
+                str(path),
+                entry,
+                str(request),
+                str(report),
+            ],
+            cwd=path.parent,
+            timeout=timeout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
     except subprocess.TimeoutExpired as error:
-        raise ValueError("bounded Python observation exceeded its time limit") from error
+        raise ValueError(
+            "bounded Python observation exceeded its time limit"
+        ) from error
     if run.returncode:
         raise ValueError(f"bounded observation failed: {run.stderr.strip()}")
     for reference in receipts:
@@ -102,13 +133,18 @@ def observe_python(path, entry, spec, out, regions, operations):
         while owner.kind != "FUNCTION" and owner.id in parent:
             owner = by_id[parent[owner.id]]
         if owner.kind == "FUNCTION":
-            sites.setdefault((owner.name, op.attributes["source_span"][0]), []).append(op.id)
+            sites.setdefault((owner.name, op.attributes["source_span"][0]), []).append(
+                op.id
+            )
     reference = artifact(report)
     events = json.loads(report.read_bytes())["events"]
     edges = set()
     for event in events:
         caller = sites.get((event["caller"], event["line"]), ())
         callee = functions.get(event["callee"], ())
-        if len(caller) == len(callee) == 1 and len(functions.get(event["caller"], ())) == 1:
+        if (
+            len(caller) == len(callee) == 1
+            and len(functions.get(event["caller"], ())) == 1
+        ):
             edges.add(Edge(caller[0], callee[0], "OBSERVED_CALL", event["callee"]))
     return reference, tuple(sorted(edges, key=lambda edge: (edge.source, edge.target)))

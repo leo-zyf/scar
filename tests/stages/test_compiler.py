@@ -121,6 +121,9 @@ extern "C" int formula_(int*);
 extern "C" int extra(int*);
 extern "C" void initialize(double*, double*, int);
 extern "C" void initialize_fortran(int, double*, double*);
+extern "C" void legacy_update__(const int*, double*, const float*);
+extern "C" float legacy_bias__(const float*);
+extern "C" void legacy_text__(char*, __SIZE_TYPE__);
 #ifdef SCAR_PYTHON_ABI
 extern "C" double python_adjust(double);
 #endif
@@ -138,6 +141,17 @@ int main() {
     for (int i = 0; i < 5; ++i) {
         if (first[i] != 2.5 * (i + 1) || second[i] != first[i]) return 3;
     }
+    const int extent[] = {2, 3};
+    const float factor = -0.5f;
+    double field[] = {1., 2., 3., 4., 5., 6.};
+    legacy_update__(extent, field, &factor);
+    if (legacy_bias__(&factor) != 0.75f) return 4;
+    for (int i = 0; i < 6; ++i) {
+        if (field[i] != i + 1.75) return 5;
+    }
+    char message[6] = {};
+    legacy_text__(message, sizeof(message));
+    if (message[0] != 'S' || message[3] != 'R' || message[4] != ' ') return 6;
     std::printf("%d\\n", old(n) + modern(n) + newest(n) + formula_(&n) + extra(&n));
 #ifdef SCAR_PYTHON_ABI
     std::printf("%.1f\\n", python_adjust(n));
@@ -148,6 +162,7 @@ int main() {
         ("formula.f", "fortran", "legacy", "      INTEGER FUNCTION FORMULA(N)\n"
          "      INTEGER N\n      FORMULA = N * N + 2\n      END\n"),
         ("extra.f90", "fortran", "f2008", '''
+#if 1
 function extra(n) result(value) bind(C)
   use, intrinsic :: iso_c_binding, only: c_int
   implicit none
@@ -155,6 +170,14 @@ function extra(n) result(value) bind(C)
   integer(c_int) :: value
   value = 2*n
 end function extra
+#else
+function extra(n) result(value) bind(C)
+  use, intrinsic :: iso_c_binding, only: c_int
+  integer(c_int), intent(in) :: n
+  integer(c_int) :: value
+  value = -n
+end function extra
+#endif
 
 subroutine fill_pair(n,left,right) bind(C, name="initialize_fortran")
   use, intrinsic :: iso_c_binding, only: c_int, c_double
@@ -170,6 +193,32 @@ subroutine fill_pair(n,left,right) bind(C, name="initialize_fortran")
   end do
 end subroutine fill_pair
 '''),
+        ("legacy.f90", "fortran", "gnu", '''
+subroutine legacy_update(extent, values, factor)
+  implicit none
+  integer, intent(in) :: extent(2)
+  real(kind=8), intent(inout) :: values(extent(1), extent(2))
+  real, intent(in) :: factor
+  real :: legacy_bias
+  external legacy_bias
+  real :: bias
+  bias = 0.0 + &
+    +legacy_bias(factor)
+  values = values + bias
+end subroutine legacy_update
+
+real function legacy_bias(factor) result(bias)
+  implicit none
+  real, intent(in) :: factor
+  bias = factor + 1.25
+end function legacy_bias
+
+subroutine legacy_text(message)
+  implicit none
+  character(len=*), intent(out) :: message
+  message = "SCAR"
+end subroutine legacy_text
+'''),
     ]
     files, profiles, objects = {}, [], []
     for index, (name, language, standard, text) in enumerate(units):
@@ -178,6 +227,10 @@ end subroutine fill_pair
         source.write_bytes(raw)
         files[name] = {"sha256": sha256(raw).hexdigest(), "size_bytes": len(raw)}
         options = ["-std=" + standard]
+        if name == "extra.f90":
+            options.append("-cpp")
+        if name == "legacy.f90":
+            options.append("-fsecond-underscore")
         unit_flags = [*options, "-DSCAR_PYTHON_ABI"] if python_binding and name == "main.cpp" else options
         profiles.append(dict(path=name, language=language, flags=unit_flags))
         compiler = {"c": "gcc", "c++": "g++", "fortran": "gfortran"}[language]
@@ -202,7 +255,8 @@ end subroutine fill_pair
         scale.argtypes, scale.restype = [c_double], c_double
         result = runpy.run_path(str(source), init_globals={"native_scale": scale})["adjust"](7.0)
         expected += f"{result:.1f}\n".encode()
-    translator = tmp_path / "backend-f2c"
+    translator = tmp_path / "frontend-f2c"
+    translator.symlink_to(f2c["f2c"].resolve())
     header = tmp_path / "input-f2c.h"
     shutil.copyfile(f2c["f2c_header"], header)
     toolchain = dict(f2c=str(translator), f2c_header=str(header), f2c_archive=str(f2c["f2c_archive"].resolve()))
@@ -220,20 +274,26 @@ end subroutine fill_pair
     assert not material_path.is_absolute()
     material = json.loads((graph / material_path).read_bytes())
     wrapper = "src/fortran-abi/scar_c_abi.cpp"
-    transport = material["fortran_transport"]
-    assert transport["translator"] == str(translator) and not translator.exists()
-    assert [row["extended"] for row in transport["units"]] == [False, True, True]
-    assert all(row["output"] not in material["fragments"] for row in transport["units"])
-    assert (graph / material_path.parent / transport["header"]["path"]).read_bytes() == header.read_bytes()
+    translated = {name for name in material["fragments"] if name.startswith("src/fortran-abi/")}
+    assert len(translated) == 6
+    assert "fortran_transport" not in material and str(translator) not in json.dumps(material)
+    assert "include/scar_generated/f2c.h" in material["fragments"]
+    translator.unlink()
     header.rename(tmp_path / "hidden-f2c.h")
-    assert {row["symbol"] for row in material["abi_units"][wrapper]} == {"extra", "initialize_fortran"}
+    exports = {row["symbol"]: row for row in material["abi_units"][wrapper]}
+    assert exports.keys() == {"extra", "initialize_fortran", "legacy_update__", "legacy_bias__", "legacy_text__"}
+    assert exports["legacy_bias__"]["result"] == {
+        "c_type": "float", "transport_type": "doublereal",
+    }
+    legacy_evidence = next(row for row in document["evidence"]["units"] if row["unit"] == "legacy.f90")
+    assert legacy_evidence["normalization_object_sha256"]
     assert wrapper not in material["fragments"]
     assert "include/scar_generated/scar_f2c_call.hpp" not in material["fragments"]
     old_c = "src/c-abi/old.cpp"
-    original_bytes = graph / material_path.parent / material["fragments"][old_c]["path"]
-    assert original_bytes.read_bytes() == (sources / "old.c").read_bytes()
-    adaptation = material["c_adaptations"][old_c]
-    assert adaptation["linkage"] and adaptation["identifier_definitions"] and adaptation["pointer_conversions"]
+    fragment = (graph / material_path.parent / material["fragments"][old_c]["path"]).read_bytes()
+    assert b'extern "C" { int old(int x)' in fragment
+    assert b"static_cast<const int *>" in fragment
+    assert "c_adaptations" not in material
     if python_binding:
         links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
         assert {"python_adjust", "scale_value"} <= links
@@ -253,14 +313,13 @@ end subroutine fill_pair
     assert typed["initialize_fortran"]["fragment"]["authority"] == "TYPED_ABI_EXPORT"
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
-    translator.symlink_to(f2c["f2c"].resolve())
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
     lowered_c = (delivery / "project" / old_c).read_bytes()
     assert b'extern "C" { int old(int x)' in lowered_c
     assert b"static_cast<const int *>" in lowered_c
     assert (delivery / "project" / wrapper).is_file()
-    assert all((delivery / "project" / row["output"]).is_file() for row in transport["units"])
+    assert all((delivery / "project" / name).is_file() for name in translated)
     assert (delivery / "project/include/scar_generated/scar_f2c_call.hpp").is_file()
     generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())
     emitted = {row["region"] for row in generated["regions"] if row["status"] == "GUARDED_REGION"}

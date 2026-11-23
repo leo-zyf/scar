@@ -2,4 +2,4 @@
 
 from .planning import plan
 
-__all__ = ['plan']
+__all__ = ["plan"]

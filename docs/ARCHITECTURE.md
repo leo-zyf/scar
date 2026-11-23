@@ -18,8 +18,21 @@
 
 选择线程数、物理核和时间成本属于后端。闭合的逐元素区域使用同 NUMA 物理核分片，线程机制为 C++20 `std::jthread`。探针对比启动、带宽和运算吞吐，估算区间分离后才采用预计更快的线程组。原生动态长度区域可以按守卫执行已证明的循环融合。
 
-源码语言适配归前端。在混编清单中，Python 单元可用 `abi.exports` 和 `abi.imports` 声明受限 FP64 标量接口。前端把调用绑定到匹配的原生声明和符号。可选的 Python `observe` 用已声明参数运行一次入口，并保留带调用位点和数组元数据的有界报告。原生区间通过 SSA 和源锚点封存。Fortran `BIND(C)` 发布有序参数、传参方式、布局、链接符号和声明收据。一维计数循环以该收据绑定到导出符号，中端核验后应用共享融合规则。后端统一生成 C++20 包装函数、f2c 支持头和所需的 GNU CFI 兼容实现。循环守卫由后端按生成后的函数体位置插入。
+源码语言适配归前端。混编清单中的 Python 单元可用 `abi.exports` 和 `abi.imports` 声明受限 FP64 标量接口。Fortran 前端从声明和编译证据提取参数、传参方式、布局、链接符号和返回类型。当前覆盖 `BIND(C)` 及已核对签名的 GNU 外部过程。Fortran 翻译器在 `build` 期间运行，图包封存生成的代码片段及其 ABI。中端核验图里的类型化区域及锚点。后端依据计划生成 C++20 包装函数、运行守卫和运行时支持。
 
-C 输入原样封存，兼容声明记录原始坐标上的链接范围、指针转换和旧式参数。中端的循环证明沿用同一坐标。后端在一次源码组装中合入兼容生成和循环守卫。Fortran 输入经类型核验后以定长格式传递，供后端调用 f2c 生成函数体。输入和 ABI 头文件带收据封入图包及计划包。f2c 可执行文件和链接归档属于目标工具链。
+C 前端根据编译证据处理链接范围、指针转换和旧式参数。未改动的函数体通过原始源码和新片段各自的坐标及摘要关联。Fortran 前端所需的 `f2c` 可执行文件与目标链接所需的 `libf2c` 归档分别配置。新计划封存 C++ 片段及其校验收据。包含待翻译 C 或 Fortran 源码的旧工件需重新运行 `build`。
+
+## 源码职责
+
+| 层 | 文件与职责 |
+| --- | --- |
+| 源码与编译证据 | `compiler_capture.py` 调用各单元编译器。 `clang.py` 读取 C/C++ 声明和源位置，`gnu_fortran.py` 读取 GNU Fortran 类型、ABI 和预处理证据，`gcc_ir.py` 解码编译器 SSA 和调用记录。 |
+| 程序图 | `compiled_graph.py` 连接编译单元、基本块、循环和调用。 `python_graph.py` 建立 Python 区域和依赖，`python_observation.py` 采集可选的有界运行证据，`hardware.py` 采集硬件资源。 |
+| 可执行图材料 | `counted_regions.py` 提取已核对的计数区域，`python_ir.py` 投影数组和标量 IR。 `c_fragments.py` 应用 C 源码兼容改写，`fortran_normalize.py` 规范化 Fortran 过程，`fortran_fragments.py` 生成 Fortran 对应的 C++ 片段。 `fragment_bundle.py` 将片段和 ABI 封入图包。 |
+| 逻辑改写与计划 | `array_rewrites.py` 和 `region_rewrites.py` 分别证明数组 IR 和计数区域的等价改写。 `planning.py` 生成逻辑依赖和自包含计划。 |
+| 物理调度与生成 | `cpu_schedule.py` 计算物理调度。 `cpp20_codegen.py` 组装 C++20，调用 `abi.py`、`scalar_codegen.py`、`region_codegen.py` 生成对应部分。 `gnu_cfi.cpp` 提供目标 C++ 运行时的 CFI 支持。 |
+| 构建与验收 | `cmake_build.py` 构建 C++20 工程。 `validation.py` 核验符号并运行已封存的验证用例。 |
+
+各阶段的 `__init__.py` 仅编排本阶段工作。`cli.py` 分派公开命令，`contract.py` 负责公共工件格式和校验。
 
 CPU 验收在三个相互禁止导入的进程运行。中端启动前移动图包，原生用例同时移走源文件，并检查移除诊断记录后仍能化简。后端启动前移走前端产物，并移动计划包。图包和计划包内供下一阶段使用的文件通过相对路径和 SHA-256 收据引用。原图收据只用于追溯。系统工具链、链接库和工作负载声明的外部运行资源由目标平台提供。安装后的 wheel 运行同一验收，GitHub Actions 上传分发包与报告。
