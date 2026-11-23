@@ -644,12 +644,12 @@ def stage_source_revision(manifest, project, source_edits=(), *, captures=None, 
 
 def verify_mixed_linkage(manifest, calls, executable):
     """Check that bound cross-language targets have their original link symbols."""
-    from ..contracts import native_bound_targets
+    from ..contracts import native_bound_targets, read_native_metadata
 
     languages = {unit['path']: unit.get('language', manifest['language']) for unit in manifest['units']}
     if len(set(languages.values())) <= 1:
         return []
-    links = read_artifact(calls)['calls']
+    links = read_native_metadata(calls)['calls']
     targets = sorted({(call['caller']['unit'], target['callee']['unit'], target['linkage_symbol'])
                       for call in links for target in native_bound_targets(call)
                       if languages[call['caller']['unit']] != languages[target['callee']['unit']]})

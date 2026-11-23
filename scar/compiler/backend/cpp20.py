@@ -6,17 +6,19 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from scar.analysis.replay_transaction import pinned_file_reference
+from scar.analysis.replay_transaction import pinned_file_reference, replay_transaction
 from scar.artifacts import file_reference
 from scar.codegen.native_provider_bundle import _dependencies, cpu_executable_dynamic
 from scar.codegen.native_project import (
-    build_native_project, publish_cpp20_inputs, replay_cpp20_inputs, write_native_project,
+    build_native_project, publish_cpp20_inputs, render_cpp_template, replay_cpp20_inputs, write_native_project,
 )
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.optimization.resource_solver import semantic_sha256
 
-from ..contracts import ExecutionPlanRef, ScheduledArrayLoop, ScheduledLoop
-from ..middle.plan import publish_plan, read_native_binding, replay_native_revision
+from ..contracts import (
+    ExecutionPlanRef, ScheduledArrayLoop, ScheduledLoop, cpp20_capability, entry_baseline_only,
+    native_compiler_types, publish_plan, read_native_metadata, verify_native_binding, verify_source_lock,
+)
 from ..operator_stack import (
     load_operator_stack, nvidia_stack_build, verify_operator_stack_linkage, verify_stack_components_once,
 )
@@ -26,22 +28,15 @@ from ..qualification import executable_receipt
 _NATIVE_ENTRY = 'CPP20_NATIVE_ENTRY'
 _SERIAL_LOOP = 'CPP_SERIAL_TEMPORAL'
 _OPENMP_LOOP = 'CPP_OPENMP_EXPLICIT_ROW_PARTITION_TEMPORAL'
-_ABI1_PROFILES = frozenset((_NATIVE_ENTRY, _SERIAL_LOOP, _OPENMP_LOOP))
 _ENTRY_TARGET = 'scar_entry'
 _ENTRY_BINARY = Path('bin') / _ENTRY_TARGET
-
-
-def cpp20_capability(profile: str, *, operator_abi_version: int = 1) -> dict:
-    """Describe the target ABI used by an admitted delivery profile."""
-    if profile not in _ABI1_PROFILES or type(operator_abi_version) is not int or operator_abi_version != 1:
-        raise ValueError('unqualified C++20 operator ABI or delivery profile')
-    report = dict(schema='scar.cpp20-backend-capability', schema_version=1, profile=profile,
-                  cxx_standard=20, operator_abi_version=operator_abi_version)
-    if profile == _NATIVE_ENTRY:
-        report['target_kind'] = 'EXECUTABLE'
-    else:
-        report.update(target_kind='SHARED_OPERATOR', temporal_control_abi_version=1)
-    return report
+_NATIVE_LOWERING = 'scar.native-cpp20-lowering'
+_PYTHON_LOWERING = 'scar.python-cpp20-lowering'
+_PYTHON_PROFILES = {'CPP20_INVARIANT_LOOP_SERIAL_V1': (_SERIAL_LOOP, 'INVARIANT_LOOP'),
+                    'CPP20_INVARIANT_LOOP_OPENMP_V1': (_OPENMP_LOOP, 'INVARIANT_LOOP'),
+                    'CPP20_COMPOSITE_INVARIANT_LOOP_SERIAL_V1': (_SERIAL_LOOP, 'COMPOSITE_LOOP'),
+                    'CPP20_COMPOSITE_INVARIANT_LOOP_OPENMP_V1': (_OPENMP_LOOP, 'COMPOSITE_LOOP'),
+                    'CPP20_ARRAY_LOOP_TEMPORAL_FUSION_V1': ('CPP_SYNCHRONOUS_CPU_TEMPORAL_LOOP', 'ARRAY_LOOP')}
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +93,20 @@ def deliver(plan: ExecutionPlanRef | ScheduledLoop | ScheduledArrayLoop, project
             catalog=None, plan_only: bool = False) -> NativeProject | dict:
     """Lower a verified entry or region plan through the C++20 backend."""
     if isinstance(plan, ExecutionPlanRef) and project is not None and not plan_only:
-        return _emit_native(plan, Path(project).resolve())
+        project = Path(project).resolve()
+        if plan.lowering is None:
+            raise ValueError('delivery requires a version 2 compiler plan; replay older plans with their producer')
+        with replay_transaction():
+            plan.read_graph_binding()
+            lowering = read_artifact(plan.lowering)
+            if (type(lowering.get('schema_version')) is not int or lowering['schema_version'] != 1
+                    or lowering.get('graph') != plan.graph):
+                raise ValueError('C++20 lowering differs from its sealed graph')
+            if lowering['schema'] == _NATIVE_LOWERING:
+                return _emit_native(plan, project, admission=_admit_native_lowering(plan, lowering))
+            if lowering['schema'] == _PYTHON_LOWERING:
+                return _emit_python(plan, project, lowering)
+            raise ValueError('unsupported sealed C++20 lowering profile')
     if isinstance(plan, ScheduledLoop) and project is None and catalog is not None:
         return _lower_loop(plan, catalog=catalog, plan_only=plan_only)
     if isinstance(plan, ScheduledArrayLoop) and project is None and catalog is not None:
@@ -106,12 +114,12 @@ def deliver(plan: ExecutionPlanRef | ScheduledLoop | ScheduledArrayLoop, project
     raise ValueError('C++20 delivery requires a project path for an entry or a source catalog for a loop')
 
 
-def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
-    """Replay the schedule, emit its C++20 project and seal the linked output."""
+def _emit_native(schedule: ExecutionPlanRef, project: Path, *, admission) -> NativeProject:
+    """Emit the admitted C++20 entry and seal its linked output."""
     from ..frontend.clang import verify_mixed_linkage
 
     artifacts = schedule.artifacts.copy()
-    manifest, observation, delivery = admit_entry(schedule)
+    manifest, observation, delivery = admission
     with verify_stack_components_once():
         toolchain = _entry_toolchain(manifest)
         delivery['toolchain'] = toolchain.receipt()
@@ -132,23 +140,269 @@ def _emit_native(schedule: ExecutionPlanRef, project: Path) -> NativeProject:
     return NativeProject(executable, receipt, manifest, observation, delivery, dynamic, artifacts)
 
 
-def admit_entry(schedule: ExecutionPlanRef):
-    """Replay the selected implementation against the frozen problem and source."""
-    artifacts = schedule.artifacts
-    manifest, edits, compiler_types, effect_scope = replay_native_revision(artifacts)
-    observation, binding = read_native_binding(schedule)
-    if effect_scope != binding.get('entry_effect_scope'):
-        raise ValueError('execution plan differs from the verified native entry effect scope')
+def _read_selection(reference):
+    from scar.ir.implementation_plan import problem_from_dict
+
+    problem, schedule = reference.read_pair()
+    problem = problem_from_dict(problem)
+    if asdict(problem.target) != reference.artifacts['hardware']:
+        raise ValueError('selected execution plan differs from the original hardware graph')
+    return problem, schedule
+
+
+def _admit_native_lowering(reference, lowering):
+    from scar.optimization.joint_planner import verify_execution_plan
+
+    artifacts = reference.artifacts
+    if (set(lowering) != {'schema', 'schema_version', 'graph', 'plan', 'problem', 'delivery'}
+            or lowering['plan'] != artifacts['execution_plan']
+            or lowering['problem'] != artifacts['planning_problem']):
+        raise ValueError('native lowering requires the original planning and graph receipts')
+    problem, schedule = _read_selection(reference)
+    if type(schedule.get('baseline_only')) is not bool or entry_baseline_only(problem) and not schedule['baseline_only']:
+        raise ValueError('execution plan does not honor the planning problem baseline scope')
+    verification = verify_execution_plan(problem, schedule)
+    observation, binding = verify_native_binding(reference, problem, schedule, verification)
+
+    manifest = read_native_metadata(artifacts['request'])
+    verify_source_lock(manifest)
+    evidence = read_native_metadata(artifacts['graph_evidence'])
+    if (evidence['entry'] != reference.entry
+            or any(evidence[name] != artifacts[name] for name in ('request', 'program', 'hardware', 'calls'))):
+        raise ValueError('native lowering graph evidence differs from the selected entry')
+    ledger = read_artifact(artifacts['rewrites'])
+    if (ledger['schema_version'] != 1 or ledger['program'] != artifacts['program']
+            or ledger['result'] != artifacts['simplified']):
+        raise ValueError('native lowering is not bound to the original rewrite ledger')
     operations = binding.pop('rewrite_operations')
-    selected_edits = edits if operations else []
-    if operations != [edit['operation'] for edit in selected_edits]:
-        raise ValueError('scheduled source edits differ from the verified graph revision')
-    capability = cpp20_capability(_NATIVE_ENTRY, operator_abi_version=manifest.get('operator_abi_version', 1))
-    delivery = dict(schema='scar.native-delivery', schema_version=1,
-                    plan=artifacts['execution_plan'], problem=artifacts['planning_problem'],
-                    request=artifacts['request'], source_edits=selected_edits, compiler_types=compiler_types,
-                    capability=capability, **binding)
-    return manifest, observation, delivery
+    edits = ledger.get('source_edits', []) if operations else []
+    if operations != [edit['operation'] for edit in edits]:
+        raise ValueError('selected source edits differ from the sealed rewrite ledger')
+    effects = ledger.get('entry_effects')
+    if binding.get('entry_effect_scope') != (effects['status'] if effects else None):
+        raise ValueError('native lowering differs from its sealed entry effect scope')
+    expected = dict(schema='scar.native-delivery', schema_version=1, plan=artifacts['execution_plan'],
+                    problem=artifacts['planning_problem'], request=artifacts['request'], source_edits=edits,
+                    compiler_types=native_compiler_types(manifest, evidence),
+                    capability=cpp20_capability(_NATIVE_ENTRY,
+                        operator_abi_version=manifest.get('operator_abi_version', 1)), **binding)
+    if lowering['delivery'] != expected:
+        raise ValueError('sealed native lowering differs from the selected executable contract')
+    return manifest, observation, expected
+
+
+def _prepared_python_loop(reference, row, option):
+    from scar.compiler.temporal_invariant_loop import uses_openmp
+
+    if (set(row) != {'operation', 'option', 'profile', 'loop_id', 'proof', 'source_motion', 'schedule', 'lowering'}
+            or row['option'] != 'REGISTER_TEMPORAL_FUSION' or row['profile'] not in _PYTHON_PROFILES):
+        raise ValueError('unsupported selected Python C++20 region profile')
+    family, kind = _PYTHON_PROFILES[row['profile']]
+    composite = kind == 'COMPOSITE_LOOP'
+    prepared = read_artifact(row['lowering'])
+    expected = dict(schema='scar.cpp20-loop-lowering', schema_version=1, loop_id=row['loop_id'],
+        proof=row['proof'], source_motion=row['source_motion'], schedule=row['schedule'],
+        parallel=family == _OPENMP_LOOP)
+    if {key: value for key, value in prepared.items() if key != 'plan'} != expected:
+        raise ValueError('sealed Python lowering differs from the selected loop descriptor')
+    plan = prepared['plan']
+    schedule = read_artifact(row['schedule'])
+    motion = read_artifact(row['source_motion'])
+    interface = plan['loop_interface']
+    proof = read_artifact(row['proof'])
+    proof_schema = 'scar.composite-invariant-loop-proof' if composite else 'scar.invariant-loop-proof'
+    if proof.pop('schema') != proof_schema or proof.pop('schema_version') != 1:
+        raise ValueError('sealed Python lowering requires its original loop proof profile')
+    compositions = tuple(proof['compositions']) if composite else ()
+    if composite:
+        retained = interface['original_composite_f4_proof']
+        if (not compositions or proof['body_identity'] != 'DERIVED_FUSED_DAG_NOT_A_NEW_PYTHON_CALLABLE'
+                or proof['transformation_authorized'] is not False
+                or motion['proof_sha256'] != semantic_sha256(retained)):
+            raise ValueError('composite proof must retain its original derived body and routes')
+        for shard, material in zip(compositions, retained['compositions'], strict=True):
+            item = read_artifact(shard)
+            if (item['schema'] != 'scar.composite-loop-composition' or item['schema_version'] != 1
+                    or item['fusion_certificate'] != material['fusion_certificate']
+                    or item['fusion_certificate']['pipeline_sha256'] != semantic_sha256(item['pipeline'])):
+                raise ValueError('sealed composite lowering differs from the original composition receipts')
+        proof['compositions'] = retained['compositions']
+    binding = schedule['resource_binding']
+    consumed = plan['execution_movement_binding']
+    specialization = dict(input_shapes=schedule['input_shapes'], trip_count=schedule['trip_count'],
+                          input_layout='C_CONTIGUOUS')
+    hardware = reference.artifacts['hardware']
+    proof_key = 'original_composite_f4_proof' if composite else 'original_f4_proof'
+    if (uses_openmp(plan) != expected['parallel'] or proof['id'] != row['loop_id']
+            or schedule['selected_kind'] != 'REGISTER_TEMPORAL_FUSION'
+            or binding['target_sha256'] != hardware['sha256']
+            or Path(binding['target_path']) != Path(hardware['uri']).parent
+            or option.demands != {f'cpu:{cpu}': 1 for cpu in binding['cpu_ids']}
+            or semantic_sha256(binding) != semantic_sha256(plan['execution_plan']['resource_binding'])
+            or plan['body_sha256'] != schedule['body_sha256']
+            or plan['memory_budget_bytes'] != schedule['effective_incremental_budget_bytes']
+            or semantic_sha256(interface.get(proof_key)) != semantic_sha256(proof)
+            or interface.get('execution_specialization') != specialization
+            or interface.get('source_motion') != row['source_motion'] or motion['proof'] != row['proof']
+            or consumed is None or consumed['source_motion'] != row['source_motion']
+            or consumed['source_motion_sha256'] != semantic_sha256(motion)):
+        raise ValueError('prepared Python loop differs from its original evidence or selected resource scope')
+    rows, columns = schedule['input_shapes'][plan['carry_parameter']]
+    if list(option.workspace_bytes.values()) != [rows * columns * 8]:
+        raise ValueError('selected Python loop workspace does not cover the emitted final array')
+    return plan, schedule, proof, compositions
+
+
+def _emit_python(reference, project, lowering):
+    from scar.compiler.invariant_export import publish_prepared_temporal_export
+    from scar.compiler.temporal_invariant_loop import emit_prepared_temporal_invariant_loop
+    from scar.optimization.joint_planner import verify_structural_trial_plan
+
+    if (reference.scope != 'PYTHON_STRUCTURAL_TRIAL_ONLY'
+            or reference.decision.get('admitted') is not False
+            or reference.decision.get('default_backend') != 'NO_OP'
+            or reference.decision.get('timing_qualified') is not False
+            or reference.decision.get('deployment_authorized') is not False
+            or set(lowering) != {'schema', 'schema_version', 'graph', 'operations'}
+            or type(lowering['operations']) is not dict):
+        raise ValueError('Python C++20 delivery requires an unpriced structural-trial plan')
+    problem, schedule = _read_selection(reference)
+    verification = verify_structural_trial_plan(problem, schedule)
+    selections = schedule['selected']
+    if (set(lowering['operations']) != {item['operation'] for item in selections}
+            or reference.decision['trial_only'] is not bool(selections)):
+        raise ValueError('sealed Python lowering does not cover exactly the selected region')
+    if not selections:
+        return dict(delivery='KEEP_ORIGINAL', artifacts={}, validation=[], verification=verification,
+                    deployment_authorized=False)
+
+    selected = selections[0]
+    region = problem.operations[0]
+    option = next(item for item in region.options if item.id == selected['option'])
+    row = lowering['operations'][selected['operation']]
+    if type(row) is not dict or row.get('profile') not in _PYTHON_PROFILES:
+        raise ValueError('selected Python lowering requires a typed descriptor')
+    family, kind = _PYTHON_PROFILES[row['profile']]
+    lowering_kind = 'array_loop_temporal_fusion' if kind == 'ARRAY_LOOP' else 'register_temporal_fusion'
+    if (option.lowering != lowering_kind or row != option.parameters.get('delivery')
+            or (row['operation'], row['option']) != (selected['operation'], selected['option'])):
+        raise ValueError('sealed Python delivery differs from the selected implementation option')
+    graph = reference.artifacts
+    evidence = read_artifact(graph['graph_evidence'])
+    if (evidence['schema'] != 'scar.python-graph-evidence' or evidence['target_executed'] is not False
+            or any(evidence[key] != graph[key] for key in ('program', 'hardware', 'request', 'calls'))
+            or not any(item['region'] == selected['operation'] and item['kind'] == kind
+                and item['proof'] == row['proof'] and item.get('source_motion') == row['source_motion']
+                for item in evidence['regions'])):
+        raise ValueError('selected Python descriptor is absent from the original graph evidence')
+    if kind == 'ARRAY_LOOP':
+        return _emit_array_trial(reference, project, row, option, verification)
+    plan, local_schedule, proof, compositions = _prepared_python_loop(reference, row, option)
+    capability = cpp20_capability(family,
+                                 operator_abi_version=plan['execution_plan']['operator_abi_version'])
+    artifact = emit_prepared_temporal_invariant_loop(plan, project / 'native')
+    if (artifact.report['cxx_standard'] != capability['cxx_standard']
+            or artifact.report['operator_descriptor_abi_version'] != capability['operator_abi_version']
+            or artifact.report['temporal_control_abi_version'] != capability['temporal_control_abi_version']):
+        raise ValueError('emitted temporal operator has a different C++20 ABI')
+    bundle = project / 'bundle'
+    exported = publish_prepared_temporal_export(artifact, bundle, schedule=local_schedule,
+        schedule_reference=row['schedule'], proof=proof, proof_reference=row['proof'], compositions=compositions)
+    invocation = dict(input_order=proof['body']['parameters'], input_shapes=local_schedule['input_shapes'],
+                      trip_count=local_schedule['trip_count'])
+    return _publish_python_delivery(reference, project, row, artifact, exported, capability, invocation,
+                                    verification, library_name='temporal.so')
+
+
+def _emit_array_trial(reference, project, row, option, verification):
+    from scar.codegen.loop import build, describe_capability
+    from scar.compiler.invariant_loop_runtime import export_loop
+    from scar.compiler.loop_admission import loop_from_dict
+    from scar.compiler.model import plan_from_dict
+
+    prepared = read_artifact(row['lowering'])
+    if (set(row) != {'operation', 'option', 'profile', 'loop_id', 'proof', 'source_motion', 'schedule', 'lowering'}
+            or row['option'] != 'ARRAY_LOOP_TEMPORAL_FUSION' or row['source_motion'] is not None
+            or set(prepared) != {'schema', 'schema_version', 'loop_id', 'proof', 'strategy', 'schedule', 'hardware'}
+            or prepared['schema'] != 'scar.cpp20-array-loop-lowering' or prepared['schema_version'] != 1
+            or any(row[key] != prepared[key] for key in ('loop_id', 'proof', 'schedule'))
+            or prepared['hardware'] != reference.artifacts['hardware']):
+        raise ValueError('sealed array descriptor differs from the selected source and target')
+    loop = loop_from_dict(read_artifact(row['proof']))
+    execution = plan_from_dict(read_artifact(row['schedule']))
+    strategy = read_artifact(prepared['strategy'])
+    binding = execution.resource_binding
+    hardware = prepared['hardware']
+    if (loop.id != row['loop_id'] or binding is None or binding.target_sha256 != hardware['sha256']
+            or Path(binding.target_path) != Path(hardware['uri']).parent
+            or option.demands != {f'cpu:{cpu}': 1 for cpu in binding.cpu_ids}
+            or list(option.workspace_bytes.values()) != [strategy['final_bytes']]):
+        raise ValueError('selected array lowering has different source, CPU or final-array authority')
+    artifact = build(loop, project / 'native', strategy=strategy, execution_plan=execution)
+    exported = export_loop(artifact.directory, project / 'bundle', source_proof=row['proof'],
+                           execution_plan=row['schedule'])
+    invocation = dict(input_order=[loop.state_parameter],
+        input_shapes={loop.state_parameter: artifact.report['state_shape']}, trip_count=artifact.report['trip_count'])
+    return _publish_python_delivery(reference, project, row, artifact, exported, describe_capability(execution),
+        invocation, verification, library_name=artifact.report['files']['library'],
+        array_contract=artifact.report['contract_sha256'])
+
+
+def _publish_python_delivery(reference, project, row, artifact, exported, capability, invocation,
+                             verification, *, library_name, array_contract=None):
+    bundle = project / 'bundle'
+    library = pinned_file_reference(bundle / library_name, 'scar.native-temporal-library')
+    if library['sha256'] != exported['library_sha256']:
+        raise ValueError('prepared temporal bundle changed before native validation')
+    executable, inputs, validation = _build_temporal_entry(project, row, invocation, library_name, array_contract)
+    artifacts = dict(native_artifact=artifact_reference(artifact.directory / 'artifact.json', artifact.report['schema']),
+        bundle_export=artifact_reference(bundle / 'export-report.json', exported['schema']),
+        native_library=library, cpp20_inputs=inputs)
+    result = dict(schema='scar.python-cpp20-delivery', schema_version=1, graph=reference.graph,
+        lowering=reference.lowering, operation=row['operation'], capability=capability,
+        artifacts=artifacts.copy(), bundle=str(bundle), executable=executable_receipt(executable),
+        project=str(project), verification=verification, validation=[validation],
+        invocation=dict(invocation, arguments=['INPUT.bin', 'OUTPUT.bin'], representation='LITTLE_ENDIAN_FLOAT64_C_CONTIGUOUS'),
+        delivery='TRIAL_COMPILED', deployment_authorized=False)
+    artifacts['delivery'] = publish_plan(project / 'delivery.json', result)
+    return dict(result, artifacts=artifacts)
+
+
+def _build_temporal_entry(project, row, invocation, library_name, array_contract):
+    from scar.codegen import __file__ as codegen_path
+
+    shape = invocation['input_shapes'][invocation['input_order'][0]]
+    inputs = len(invocation['input_order'])
+    template = Path(codegen_path).with_name('temporal_entry.cpp.in')
+    source = render_cpp_template(template, dict(zip(
+        ('@SCAR_ROWS@', '@SCAR_COLUMNS@', '@SCAR_INPUT_COUNT@', '@SCAR_STEPS@',
+         '@SCAR_ARRAY_LOOP@', '@SCAR_LIBRARY@', '@SCAR_CONTRACT_SHA256@'),
+        (*shape, inputs, invocation['trip_count'], int(array_contract is not None), library_name, array_contract or ''))))
+    (project / 'src').mkdir()
+    (project / 'src/main.cpp').write_bytes(source)
+    shutil.copy2(project / 'native/scar_abi_v1.h', project / 'src/scar_abi_v1.h')
+    if array_contract is not None:
+        shutil.copy2(project / 'native/loop_abi_v1.h', project / 'src/loop_abi_v1.h')
+    configuration = dict(sources=['src/main.cpp'], libraries=['dl'], install_dirs=[['bundle', '.']])
+    receipt = publish_cpp20_inputs(project, configuration, plan=row['lowering'])
+    executable, _ = build_cpp20_project(project, receipt, plan=row['lowering'])
+    output = project / 'validation/native-smoke.bin'
+    try:
+        report = subprocess.run([str(executable), '--smoke', str(output)], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        validation = dict(status='TIMED_OUT', native_abi_passed=False)
+    else:
+        ok = report.returncode == 0 and output.is_file() and output.stat().st_size == shape[0] * shape[1] * 8
+        status = 'PASSED' if ok else 'NATIVE_ABI_VALIDATION_FAILED'
+        if 1 <= report.returncode <= (6 if array_contract is not None else 4):
+            status = 'NATIVE_ABI_GUARD_REFUSED'
+        validation = dict(status=status, native_abi_passed=ok,
+            returncode=report.returncode, stderr=report.stderr.decode(errors='replace'))
+        if ok:
+            validation['output'] = pinned_file_reference(output, 'scar.temporal-validation-output')
+    validation.update(profile='CXX20_TEMPORAL_ABI_SMOKE', original_program_executed=False,
+                      numerical_equivalence_qualified=False)
+    return executable, receipt, validation
 
 
 def _verify_linkage(executable, toolchain, dependencies=None):

@@ -5,16 +5,28 @@ hardware snapshot. Unsupported functions stay explicit; no AST fallback or
 target execution supplies a replacement semantic model.
 """
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import time
+from typing import TYPE_CHECKING
 
 from scar.analysis.source_decoded_bodies import reuse_decoded_source_bodies
 from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 
-from ..contracts import GraphBundle, ScheduledArrayLoop, ScheduledLoop
+from ..contracts import ExecutionPlanRef, GraphBundle, ScheduledArrayLoop, ScheduledLoop, python_build_receipts
 from .plan import publish_plan
+
+if TYPE_CHECKING:
+    from scar.compiler.loop_admission import InvariantLoopProof
+    from scar.compiler.pipeline_loop_frontend import CompositeInvariantLoopProof
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphLoopEvidence:
+    proof: 'InvariantLoopProof | CompositeInvariantLoopProof'
+    motion: dict
+    composite: bool
 
 
 def project_loop_calibrations(domain, calibrations, out):
@@ -70,6 +82,9 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
 
     The standalone export replays schedules from persisted evidence.
     """
+    admitted = proof if isinstance(proof, _GraphLoopEvidence) else None
+    if admitted is not None:
+        proof = admitted.proof
     target = Path(hardware['path']).parent
     arguments = dict(input_shapes=shapes, trip_count=count, memory_budget_bytes=budget)
     report = dict(physical_optimality_proven=False, performance_qualified=False)
@@ -78,11 +93,16 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
 
     if model or threads is not None:
         from scar.optimization.temporal_cpu_choices import (
-            build_temporal_cpu_domain, plan_selected_temporal_cpu_choice, preview_temporal_cpu_choice,
+            _build_admitted_temporal_cpu_domain, build_temporal_cpu_domain,
+            plan_selected_temporal_cpu_choice, preview_temporal_cpu_choice,
         )
 
-        domain = build_temporal_cpu_domain(proof, target, **arguments, catalog=catalog,
-                                           max_threads=max_threads if model else threads)
+        limit = max_threads if model else threads
+        if admitted is None:
+            domain = build_temporal_cpu_domain(proof, target, **arguments, catalog=catalog, max_threads=limit)
+        else:
+            domain = _build_admitted_temporal_cpu_domain(proof, target, **arguments, max_threads=limit,
+                                                         composite=admitted.composite)
         composite = domain.get('proof_kind') == 'COMPOSITE'
         report['cpu_domain'] = publish_plan(directory / 'cpu-domain.json', domain)
         if composite:
@@ -109,9 +129,12 @@ def plan_loop_region(proof, hardware, directory, *, shapes, count, budget, catal
             report['selection_scope'] = ('EXPLICIT_COMPOSITE_CPU_TEAM_PREVIEW_UNRANKED' if composite
                                          else 'EXPLICIT_CPU_TEAM_PREVIEW_UNRANKED')
     else:
-        from scar.optimization.invariant_loop_schedule import plan_invariant_loop_schedule
+        from scar.optimization.invariant_loop_schedule import _plan_admitted_loop, plan_invariant_loop_schedule
 
-        schedule = plan_invariant_loop_schedule(proof, target, **arguments, catalog=catalog)
+        if admitted is None:
+            schedule = plan_invariant_loop_schedule(proof, target, **arguments, catalog=catalog)
+        else:
+            schedule = _plan_admitted_loop(proof, target, **arguments, composite=admitted.composite)
         report['selection_scope'] = schedule.get('comparison_scope', 'STRUCTURAL_LOGICAL_WORK_AND_RESOURCE_MODEL')
 
     snapshot = schedule['target_snapshot']
@@ -418,12 +441,12 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     started=time.monotonic()
     source_filter=None if source is None else Path(source).absolute()
     with BuildSession(program) as session:
-        graph=GraphBundle.from_python_session(session)
-        parent=asdict(graph.evidence)
-        manifest=graph.report
+        request, target_receipt = python_build_receipts(session)
+        parent = asdict(request)
+        manifest = session.report
         target=manifest['target']
         _check(target)
-        hardware=Path(graph.hardware.uri).parent
+        hardware=Path(target_receipt.uri).parent
         sources=_planning_sources(session.view.catalog,source_filter)
         # Complete region admission before building per-region hardware domains.
         discovery = RegionDiscovery(session.view)
@@ -546,6 +569,214 @@ def plan_build(program, out, *, source=None, shape=None, input_shapes=None,
     report['seconds']=time.monotonic()-started
     (out/'result.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     return report
+
+
+def _invariant_evidence(row):
+    from scar.optimization.resource_solver import semantic_sha256
+
+    proof_reference, motion_reference = row['proof'], row['source_motion']
+    composite = row['kind'] == 'COMPOSITE_LOOP'
+    if composite:
+        from scar.compiler.pipeline_loop_frontend import _read_composite_invariant_loop_materials
+
+        proof, _ = _read_composite_invariant_loop_materials(proof_reference['uri'],
+                                                           expected_reference=proof_reference)
+        family = ('scar.source-composite-loop-motion', 1)
+    else:
+        from scar.compiler.loop_admission import InvariantLoopProof, PROOF_SCHEMA, validate_invariant_loop_proof
+        from scar.ir.record_codec import decode
+
+        document = read_artifact(proof_reference)
+        if (document.get('schema'), document.get('schema_version')) != (PROOF_SCHEMA, 1):
+            raise ValueError('original F4 invariant loop proof required')
+        proof = decode(InvariantLoopProof, {key: value for key, value in document.items()
+                                           if key not in ('schema', 'schema_version')})
+        validate_invariant_loop_proof(proof)
+        family = ('scar.source-loop-motion', 2)
+    motion = read_artifact(motion_reference)
+    if (row['id'] != proof.id or (motion.get('schema'), motion.get('schema_version')) != family
+            or motion.get('proof') != proof_reference or motion.get('proof_id') != proof.id
+            or motion.get('proof_sha256') != semantic_sha256(asdict(proof))
+            or motion.get('source_replacement_authorized') is not False):
+        raise ValueError('source movement differs from its original F4 graph evidence')
+    return _GraphLoopEvidence(proof, motion, composite)
+
+
+def _loop_specialization(loop_id, parameters, shapes):
+    if isinstance(shapes, (list, tuple)):
+        return {name: list(shapes) for name in parameters}
+    if type(shapes) is not dict:
+        raise ValueError('a common shape or original input shape map is required')
+    shapes = shapes.get(loop_id, shapes)
+    names = set(parameters)
+    if set(shapes) == names:
+        return shapes
+    if set(shapes) == set(parameters.values()):
+        return {name: shapes[outer] for name, outer in parameters.items()}
+    raise ValueError('loop shapes must name its original leaf or outer parameters')
+
+
+def _payload_budget(shape, requested):
+    if len(shape) != 2 or any(type(size) is not int or size <= 0 for size in shape):
+        raise ValueError('positive rank-two loop input shape required')
+    return requested if requested is not None else 8 * shape[0] * shape[1]
+
+
+def _graph_region_trial(graph, row, folder, *, shapes, count, threads, memory_budget):
+    from scar.optimization.resource_solver import semantic_sha256
+
+    hardware = dict(path=graph.hardware.uri, sha256=graph.hardware.sha256, bytes=graph.hardware.size_bytes)
+    parallel = threads is not None and threads > 1
+    motion_reference = row.get('source_motion')
+    if row['kind'] == 'ARRAY_LOOP':
+        from scar.compiler.loop_admission import check_loop_sources, loop_from_dict
+
+        original = loop_from_dict(read_artifact(row['proof']))
+        if original.id != row['id'] or motion_reference is not None:
+            raise ValueError('array recurrence differs from its original graph proof')
+        check_loop_sources(original)
+        parameters = {original.state_parameter: original.body.parameters[0]}
+        carry = original.state_parameter
+    else:
+        admitted = _invariant_evidence(row)
+        original = admitted.proof
+        if admitted.motion['movement_legality']['status'] != 'CONDITIONAL':
+            return None, None, 'SOURCE_MOVEMENT_LEGALITY_UNRESOLVED'
+        parameters, carry = original.parameter_map, original.carry_parameter
+    if semantic_sha256(row['source']) != semantic_sha256(asdict(original.source)):
+        raise ValueError('loop source differs from the original graph region')
+    inputs = _loop_specialization(original.id, parameters, shapes)
+    budget = _payload_budget(inputs[carry], memory_budget)
+    folder.mkdir()
+
+    if row['kind'] == 'ARRAY_LOOP':
+        candidate = plan_array_loop(original, hardware, folder, shapes=inputs, count=count, budget=budget,
+                                    threads=threads if parallel else None)
+        if candidate['selected_kind'] != 'ARRAY_LOOP_TEMPORAL_FUSION':
+            return None, None, candidate['profitability_status']
+        prepared = publish_plan(folder / 'cpp20-lowering.json', dict(schema='scar.cpp20-array-loop-lowering',
+            schema_version=1, loop_id=original.id, proof=row['proof'], strategy=candidate['strategy'],
+            schedule=candidate['schedule'], hardware=asdict(graph.hardware)))
+        profile = 'CPP20_ARRAY_LOOP_TEMPORAL_FUSION_V1'
+    else:
+        candidate = plan_loop_region(admitted, hardware, folder, shapes=inputs, count=count, budget=budget,
+                                     threads=threads if parallel else None)
+        if candidate['selected_kind'] != 'REGISTER_TEMPORAL_FUSION':
+            return None, None, candidate.get('status', candidate['selected_kind'])
+        prepared = _prepare_loop_lowering(original, folder, row['proof'], motion_reference, candidate['schedule'],
+                                          composite=admitted.composite, parallel=parallel)
+        family = 'COMPOSITE_INVARIANT_LOOP' if admitted.composite else 'INVARIANT_LOOP'
+        workers = 'OPENMP' if parallel else 'SERIAL'
+        profile = f'CPP20_{family}_{workers}_V1'
+    return dict(operation=row['region'], option=candidate['selected_kind'], profile=profile,
+                loop_id=original.id, proof=row['proof'], source_motion=motion_reference,
+                schedule=candidate['schedule'], lowering=prepared), inputs, None
+
+
+def _plan_python_trial(graph, region, source, shapes, delivery):
+    from scar.ir.implementation_plan import (CostEstimate, ImplementationOption, PlanningDataEdge,
+        PlanningOperation, PlanningProblem, PlanningResource)
+    from scar.optimization.joint_planner import structural_trial_plan
+
+    timing = CostEstimate(None, None, None, 'UNKNOWN', 'original guarded region', source,
+                          ('COMPLETE_ORIGINAL_AND_NATIVE_REGION_DURATION',))
+    data, resources, locations = (), (), {}
+    if delivery is not None:
+        schedule = read_artifact(delivery['schedule'])
+        binding = schedule['resource_binding']
+        host_memory = binding['memory_domain_id']
+        cpus = {f'cpu:{cpu}': 1 for cpu in binding['cpu_ids']}
+        placement_source = (dict(role='region_resource_schedule', artifact=delivery['schedule']),)
+        resources = tuple(PlanningResource(cpu, 'EXECUTION', 1, placement_source) for cpu in cpus)
+        resources += (PlanningResource(host_memory, 'MEMORY', binding['memory_budget_bytes'], placement_source),)
+        locations = dict.fromkeys(shapes, host_memory)
+        data = tuple(PlanningDataEdge(f'input:{index}', name, None, region, 8 * shape[0] * shape[1],
+                                      host_memory, source_refs=source)
+                     for index, (name, shape) in enumerate(shapes.items()))
+        rows, columns = next(iter(shapes.values()))
+        selected = ImplementationOption(delivery['option'], delivery['option'].lower(),
+            (*source, *placement_source), cpus, {host_memory: 8 * rows * columns}, locations, {}, timing,
+            {'delivery': delivery})
+    original = ImplementationOption('original', 'preserve_source_region', source, {}, {}, locations, {}, timing, {})
+    options = (original, selected) if delivery is not None else (original,)
+    problem = PlanningProblem(graph.hardware, source, resources,
+        (PlanningOperation(region, source, (), options, original.id),), data,
+        assumptions=('ORIGINAL_GUARDED_CODE_RETAINED', 'NATIVE_REGION_TRIAL_HAS_UNKNOWN_DURATION'))
+    return problem, structural_trial_plan(problem, delivery['option'] if delivery is not None else None)
+
+
+def schedule_python_graph(graph, out, *, shapes=None, trip_count=None, threads=None, memory_budget_bytes=None,
+                          entry_region=None):
+    """Plan a source-qualified Python region from the published graph receipts."""
+    from scar.analysis.replay_transaction import pinned_file_reference
+    from scar.ir.implementation_plan import problem_document
+
+    if (not isinstance(graph, GraphBundle) or graph.publication is None or graph.model is None
+            or graph.publication.schema != 'scar.graph-bundle' or graph.evidence.schema != 'scar.python-graph-evidence'):
+        raise ValueError('published Python graph bundle required')
+    publication = asdict(graph.publication)
+    references = graph.references()
+    evidence = graph.report
+    if (evidence.get('schema') != graph.evidence.schema or type(evidence.get('schema_version')) is not int
+            or evidence['schema_version'] != 1
+            or evidence.get('target_executed') is not False or evidence.get('loops_unrolled') is not False
+            or any(evidence.get(role) != references[role] for role in ('program', 'hardware', 'request', 'calls'))):
+        raise ValueError('Python graph evidence differs from its published source and target bindings')
+    for receipt in (graph.publication, graph.request, graph.evidence):
+        if pinned_file_reference(receipt.uri, receipt.schema) != asdict(receipt):
+            raise ValueError('published Python graph input changed before planning')
+    if threads is not None and (type(threads) is not int or threads < 1):
+        raise ValueError('positive explicit CPU thread count required')
+    if entry_region is not None and entry_region not in graph.entry_regions:
+        raise ValueError('selected region must name an original graph entry')
+    out = Path(out).resolve()
+    if out.exists():
+        raise ValueError('fresh Python planning output required')
+    out.mkdir(parents=True)
+    source = (dict(role='original_program', artifact=references['program']),
+              dict(role='source_evidence', artifact=references['graph_evidence']))
+    region_ids = {region.id.wire for region in graph.model.regions}
+    entry = region = entry_region if entry_region is not None else graph.entry_regions[0]
+    frontiers, specialization, delivery = [], None, None
+    for index, row in enumerate(evidence['regions']):
+        if row['region'] not in region_ids:
+            raise ValueError('Python proof region is absent from the original program graph')
+        if entry_region is not None and row['region'] != entry_region:
+            continue
+        if row['kind'] not in ('INVARIANT_LOOP', 'COMPOSITE_LOOP', 'ARRAY_LOOP'):
+            frontiers.append(dict(region=row['region'], kind=row['kind'], reason='LOWERING_PROFILE_OPEN'))
+            continue
+        if delivery is not None:
+            frontiers.append(dict(region=row['region'], kind=row['kind'], reason='SEPARATE_REGION_TRIAL_REQUIRED'))
+            continue
+        if shapes is None or trip_count is None:
+            frontiers.append(dict(region=row['region'], kind=row['kind'], reason='INPUT_SHAPES_OR_TRIP_COUNT_REQUIRED'))
+            continue
+        if evidence.get('source_filter') is not None and row['source']['path'] != evidence['source_filter']:
+            raise ValueError('loop proof is outside the original source graph entry scope')
+        delivery, specialization, reason = _graph_region_trial(graph, row, out / f'region-{index}',
+            shapes=shapes, count=trip_count, threads=threads, memory_budget=memory_budget_bytes)
+        if delivery is None:
+            frontiers.append(dict(region=row['region'], kind=row['kind'], reason=reason))
+            continue
+        source = (*source, dict(role='original_region_proof', artifact=row['proof']))
+        if delivery['source_motion'] is not None:
+            source = (*source, dict(role='source_motion', artifact=delivery['source_motion']))
+        region = row['region']
+        if region in graph.entry_regions:
+            entry = region
+
+    problem, plan = _plan_python_trial(graph, region, source, specialization, delivery)
+    deliveries = {} if delivery is None else {region: delivery}
+    lowering_reference = publish_plan(out / 'lowering.json', dict(schema='scar.python-cpp20-lowering', schema_version=1,
+                                                                 graph=publication, operations=deliveries))
+    artifacts = dict(references, planning_problem=publish_plan(out / 'planning-problem.json', problem_document(problem)),
+                     execution_plan=publish_plan(out / 'plan.json', plan))
+    decision = dict(admitted=False, trial_only=bool(deliveries), default_backend='NO_OP', frontiers=frontiers,
+                    reason='UNPRICED_STRUCTURAL_REGION_TRIAL' if deliveries else 'NO_SOURCE_QUALIFIED_REGION_TRIAL',
+                    timing_qualified=False, deployment_authorized=False)
+    return ExecutionPlanRef(entry, artifacts, decision, 'PYTHON_STRUCTURAL_TRIAL_ONLY',
+                            graph=publication, lowering=lowering_reference)
 
 
 def main(argv=None):

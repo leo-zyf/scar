@@ -23,6 +23,7 @@ def _build(arguments):
         inputs = parser.add_mutually_exclusive_group(required=True)
         inputs.add_argument('--manifest', metavar='FILE', help='build a native target')
         inputs.add_argument('--entry', metavar='FILE', help='build a Python entry with optional trace evidence')
+        inputs.add_argument('--python-build', metavar='DIR', help='build the compiler graph from an admitted Python entry')
         inputs.add_argument('--formal', action='store_true', help='publish a Python formal source catalog')
         inputs.add_argument('--static', action='store_true', help='build a Python static source graph')
         parser.add_argument('--out', required=True)
@@ -32,6 +33,9 @@ def _build(arguments):
     if _has_option(arguments, '--manifest'):
         from scar.compiler.driver import main as build
         return build(['--graph-only', *arguments])
+    if _has_option(arguments, '--python-build'):
+        from scar.compiler.driver import build_python_main
+        return build_python_main(arguments)
     if '--static' in arguments:
         from scar.analysis.static_program import main as build
         return build([argument for argument in arguments if argument != '--static'])
@@ -49,7 +53,7 @@ def _compile(arguments):
         inputs = parser.add_mutually_exclusive_group(required=True)
         inputs.add_argument('--manifest', help='locked native compilation units')
         inputs.add_argument('--domains', help='prepared Python program domains')
-        inputs.add_argument('--plan', help='replay a sealed native execution plan')
+        inputs.add_argument('--plan', help='replay a sealed execution plan')
         parser.add_argument('--out', required=True)
         parser.parse_args(arguments)
         return 0

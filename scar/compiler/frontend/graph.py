@@ -939,13 +939,18 @@ def build_graph(inputs: NativeInputs, directory, *, jobs, adapters=BUILTIN_ADAPT
                                  for row in calls['calls'] if row['operation'] is not None
                                  for target in native_bound_targets(row)),
                   reachable_regions=len(calls['reachable']))
-    evidence_path = directory / 'graph-report.json'
+    evidence_path = directory / ('graph-evidence.json' if program is not None else 'graph-report.json')
     (directory / 'compiler-cfg.json').write_text(json.dumps(captured.functions, indent=2, ensure_ascii=False) + '\n')
     evidence_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+    evidence = file_reference(evidence_path, 'scar.native-graph-evidence')
+    if program is not None:
+        return GraphBundle.publish(directory, request=request, program=program, hardware=target,
+                                   evidence=evidence, calls=call_receipt, entry_regions=(report['entry'],),
+                                   model=model, report=report, call_document=calls)
     return GraphBundle(request, None if program is None else ProviderArtifact(**program),
                        ProviderArtifact(**target),
-                       ProviderArtifact(**file_reference(evidence_path, 'scar.native-graph-evidence')),
-                       ProviderArtifact(**call_receipt), report, native_model=model, native_calls=calls)
+                       ProviderArtifact(**evidence),
+                       ProviderArtifact(**call_receipt), report, model=model, call_document=calls)
 
 
 def check_main(argv=None):

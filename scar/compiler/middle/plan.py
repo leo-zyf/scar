@@ -1,15 +1,14 @@
 """Verified graph rewrites and resource plans."""
 
 import argparse
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
 import re
 from subprocess import CompletedProcess
 
-from scar.artifacts import _durable_bytes, file_reference
+from scar.artifacts import file_reference
 from scar.ir.execution_recipe import artifact_reference, read_artifact
 from scar.ir.program.codec import SCHEMA as PROGRAM_SCHEMA, dumps, loads
 from scar.ir.implementation_plan import (
@@ -19,11 +18,13 @@ from scar.ir.implementation_plan import (
 from scar.ir.program.providers import ProviderArtifact
 from scar.optimization.joint_planner import _verify_admitted_plan
 
-from ..contracts import ExecutionPlanRef, GraphBundle, verify_source_lock
+from ..contracts import (
+    ExecutionPlanRef, GraphBundle, cpp20_capability, entry_baseline_only, entry_cpus, entry_sources,
+    native_compiler_types, native_delivery, publish_plan, read_native_metadata, verify_native_binding, verify_source_lock,
+)
 from .native_effects import is_ssa_copy, native_entry_effects
 
 
-_NATIVE_DELIVERY_PROFILE = 'CPP20_NATIVE_ENTRY'
 _NATIVE_COST_SCHEMA = 'scar.native-entry-cost'
 
 _REVISION_SCHEMAS = {
@@ -43,26 +44,18 @@ class NativeRevision:
     entry_effect_scope: str | None = None
 
 
-def _native_input(reference):
-    """Share request and inventory documents within one pinned compiler replay."""
-    from scar.analysis.replay_transaction import detached_replay
-
-    identity = tuple(sorted(reference.items()))
-    return detached_replay('scar.native-input-metadata.v1', identity, lambda: read_artifact(reference))
-
-
 def rewrite_native(graph: GraphBundle, out):
     """Publish the source-locked revision and pass its parsed request to qualification."""
     if graph.program is None:
         raise ValueError('no validated entry region')
     path = out / 'simplified.json'
     artifacts = graph.references()
-    manifest = _native_input(artifacts['request'])
+    manifest = read_native_metadata(artifacts['request'])
     verify_source_lock(manifest)
-    original = graph.native_model
+    original = graph.model
     if original is None:
         original = _read_program(artifacts['program'])
-    calls = graph.native_calls if graph.native_calls is not None else read_artifact(artifacts['calls'])
+    calls = graph.call_document if graph.call_document is not None else read_native_metadata(artifacts['calls'])
     effects = native_entry_effects(original, graph.report, calls)
     simplified_graph, rules = _copy_revision(original, graph.report['anchors'])
     edits = copy_source_edits(manifest, graph.report, rules)
@@ -91,7 +84,7 @@ def schedule_native(revision: NativeRevision, observation, cases, out) -> Execut
     cpu = observation['cpu']
     if (observation.get('schema') != _NATIVE_COST_SCHEMA or observation['request'] != request
             or observation['exit'] != 0 or type(cpu) is not int
-            or cases != _native_input(request)['cases']
+            or cases != read_native_metadata(request)['cases']
             or cpu not in entry_cpus(revision.artifacts['hardware'])):
         raise ValueError('native observation differs from the locked request or target')
     artifacts = dict(revision.artifacts, cost=publish_plan(out / 'cost-observation.json', observation))
@@ -125,86 +118,7 @@ def read_plan_contract(reference: ExecutionPlanRef):
 def read_native_binding(reference: ExecutionPlanRef):
     """Resolve a selected native lowering without reconstructing the choice domain."""
     problem, plan, verification = read_plan_contract(reference)
-    artifacts = reference.artifacts
-    if artifacts['cost']['schema'] != _NATIVE_COST_SCHEMA:
-        raise ValueError('native delivery requires a native cost artifact')
-    observation = read_artifact(artifacts['cost'])
-    if (problem.target != ProviderArtifact(**artifacts['hardware'])
-            or problem.source_refs != entry_sources(artifacts)
-            or observation['request'] != artifacts['request'] or observation['exit'] != 0):
-        raise ValueError('native planning problem does not bind the admitted inputs')
-    if (len(problem.operations) != 1 or problem.operations[0].id != 'entry'
-            or problem.data_edges or problem.activities or problem.timing_constraints
-            or problem.reserved_memory):
-        raise ValueError('native C++20 entry lowering requires one admitted execution region')
-
-    selected = plan['selected'][0]
-    mode = next(option for option in problem.operations[0].options if option.id == selected['option'])
-    cpu = observation['cpu']
-    if (type(cpu) is not int or cpu not in entry_cpus(artifacts['hardware'])
-            or mode.parameters.get('region') != reference.entry
-            or mode.demands != {f'cpu:{cpu}': 1}
-            or mode.workspace_bytes or selected['start_ns'] != 0
-            or mode.proof_refs != problem.source_refs):
-        raise ValueError('selected native implementation has no admitted CPU binding')
-
-    variant = observation.get('variants', {}).get(mode.id)
-    if mode.parameters.get('delivery') != _native_delivery(cpu, variant):
-        raise ValueError('selected native implementation has no admitted C++20 delivery binding')
-    version = observation['schema_version']
-    rewrites = mode.parameters.get('rewrites', [])
-    if version == 1 and (variant is not None or not plan['baseline_only'] or mode.id != 'original'):
-        raise ValueError('a baseline observation can only deliver the original implementation')
-    if version not in (1, 2) or (version == 2 and variant is None):
-        raise ValueError('selected native implementation has no calibrated project')
-    if mode.id == 'canonical':
-        if mode.lowering != 'canonicalize_scalar_copies' or not rewrites or observation.get('calibration_error'):
-            raise ValueError('canonical delivery requires a qualified source revision')
-    elif mode.id != 'original' or mode.lowering != 'preserve_entry' or rewrites:
-        raise ValueError('unsupported native delivery implementation')
-
-    binding = dict(cpus=[cpu], lowering=mode.lowering, selected=plan['selected'],
-                   rewrite_operations=rewrites, verification=verification)
-    if 'entry_effect_scope' in mode.parameters:
-        scope = mode.parameters['entry_effect_scope']
-        if scope not in ('CLOSED_BODY', 'OPEN_BODY'):
-            raise ValueError('unsupported native entry effect scope')
-        binding['entry_effect_scope'] = scope
-    if variant is not None:
-        binding['trial_variant'] = variant
-    return observation, binding
-
-
-def entry_sources(artifacts):
-    roles = ('request', 'program', 'graph_evidence', 'calls', 'simplified', 'rewrites', 'cost')
-    return tuple(dict(role=role, **artifacts[role]) for role in roles)
-
-
-def entry_cpus(hardware):
-    from scar.analysis.replay_transaction import current_transaction
-    from scar.analysis.target_graph import TargetHardwareGraph
-    from scar.ir.program.target_hardware import CpuExecutor
-
-    target = ProviderArtifact(**hardware)
-
-    def admitted_cpus():
-        graph = TargetHardwareGraph(Path(target.uri).parent, expected=target)
-        cpu_ids = {cpu for executor in graph.resources() if isinstance(executor, CpuExecutor)
-                   for cpu in executor.cpu_ids}
-        cpu_ids.intersection_update(graph.inventory['cpu']['online_cpu_ids'] or ())
-        if graph.report['schema_version'] == 1:
-            allowed = graph.inventory.get('execution_constraints', {}).get('allowed_cpu_ids')
-            if allowed is not None:
-                cpu_ids.intersection_update(allowed)
-        for constraints in graph.constraints():
-            if constraints.allowed_cpu_ids is not None:
-                cpu_ids.intersection_update(constraints.allowed_cpu_ids)
-        return frozenset(cpu_ids)
-
-    transaction = current_transaction()
-    retained = (admitted_cpus() if transaction is None
-                else transaction.memo('scar.native-entry.cpu-admission/v1', target, admitted_cpus))
-    return os.sched_getaffinity(0).intersection(retained)
+    return verify_native_binding(reference, problem, plan, verification)
 
 
 def _read_program(reference):
@@ -387,22 +301,12 @@ def _retain_native_revision(transaction, artifacts, produce):
 def _revision_inputs(artifacts, manifest, evidence, edits, entry_effect_scope):
     if any(evidence[key] != artifacts[key] for key in ('request', 'program', 'hardware', 'calls')):
         raise ValueError('compiler evidence differs from the admitted frontend outputs')
-    typed_units = {unit['path'] for unit in manifest['units']
-                   if unit.get('language', manifest['language']) in ('c', 'fortran')}
-    needs_fortran_abi = any(unit.get('language', manifest['language']) == 'fortran'
-                            for unit in manifest['units'])
-    retained_units = typed_units | {unit['path'] for unit in manifest['units']
-                                   if needs_fortran_abi and unit.get('language', manifest['language']) == 'c++'}
-    compiler_types = {row['unit']: row['artifacts']['types'] for row in evidence.get('units', ())
-                      if row['unit'] in retained_units and 'types' in row['artifacts']}
-    if not typed_units <= compiler_types.keys():
-        raise ValueError('C and Fortran translation require original type evidence for every unit')
-    return manifest, edits, compiler_types, entry_effect_scope
+    return manifest, edits, native_compiler_types(manifest, evidence), entry_effect_scope
 
 
 def _read_native_revision(artifacts):
-    manifest = _native_input(artifacts['request'])
-    evidence = read_artifact(artifacts['graph_evidence'])
+    manifest = read_native_metadata(artifacts['request'])
+    evidence = read_native_metadata(artifacts['graph_evidence'])
     rewrite = read_artifact(artifacts['rewrites'])
     if (rewrite['schema_version'] != 1 or rewrite['program'] != artifacts['program']
             or rewrite['result'] != artifacts['simplified']):
@@ -413,7 +317,7 @@ def _read_native_revision(artifacts):
     effects = rewrite.get('entry_effects')
     original = _read_program(artifacts['program']) if rewrite['rules'] or effects is not None else None
     if effects is not None:
-        replayed = native_entry_effects(original, evidence, read_artifact(artifacts['calls']))
+        replayed = native_entry_effects(original, evidence, read_native_metadata(artifacts['calls']))
         if replayed != effects:
             raise ValueError('native entry effects differ from the original graph and call proof')
     if rewrite['rules']:
@@ -479,17 +383,6 @@ def native_cost_decision(observation, locked_cases):
         row['verdict'] == 'ADVANCE_TO_RELEASE_REVIEW' for row in decisions.values()))
 
 
-def entry_baseline_only(problem):
-    return 'PHYSICAL_COST_BASELINE_ONLY' in problem.assumptions
-
-
-def _native_delivery(cpu, variant):
-    binding = dict(profile=_NATIVE_DELIVERY_PROFILE, version=1, device='CPU', cpu_ids=[cpu])
-    if variant is not None:
-        binding['trial_variant'] = variant
-    return binding
-
-
 def entry_problem(entry, artifacts, observation, edits=(), *, decision=None, entry_effect_scope=None):
     source_refs = entry_sources(artifacts)
     cpu = observation['cpu']
@@ -500,7 +393,7 @@ def entry_problem(entry, artifacts, observation, edits=(), *, decision=None, ent
     def implementation(mode, estimate):
         lowering = 'canonicalize_scalar_copies' if mode == 'canonical' else 'preserve_entry'
         variant = observation.get('variants', {}).get(mode)
-        parameters = dict(region=entry, delivery=_native_delivery(cpu, variant))
+        parameters = dict(region=entry, delivery=native_delivery(cpu, variant))
         if entry_effect_scope is not None:
             parameters['entry_effect_scope'] = entry_effect_scope
         if mode == 'canonical':
@@ -538,11 +431,25 @@ def entry_problem(entry, artifacts, observation, edits=(), *, decision=None, ent
         assumptions=assumptions)
 
 
-def publish_plan(path, document):
-    """Persist the versioned plan used by downstream replay."""
-    encoded = (json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + '\n').encode()
-    _durable_bytes(path, encoded, replace=False)
-    return artifact_reference(path, document['schema'])
+def seal_native_lowering(graph, schedule, out):
+    artifacts = schedule.artifacts
+    manifest, edits, compiler_types, effect_scope = replay_native_revision(artifacts)
+    _, binding = read_native_binding(schedule)
+    if effect_scope != binding.get('entry_effect_scope'):
+        raise ValueError('execution plan differs from the verified entry effect scope')
+    operations = binding.pop('rewrite_operations')
+    selected_edits = edits if operations else []
+    if operations != [edit['operation'] for edit in selected_edits]:
+        raise ValueError('scheduled source edits differ from the verified graph revision')
+    plan, problem, graph_ref = artifacts['execution_plan'], artifacts['planning_problem'], asdict(graph.publication)
+    delivery = dict(schema='scar.native-delivery', schema_version=1, plan=plan, problem=problem,
+                    request=artifacts['request'], source_edits=selected_edits, compiler_types=compiler_types,
+                    capability=cpp20_capability('CPP20_NATIVE_ENTRY',
+                                               operator_abi_version=manifest.get('operator_abi_version', 1)),
+                    **binding)
+    lowering = publish_plan(out / 'cpp20-lowering.json', dict(schema='scar.native-cpp20-lowering',
+        schema_version=1, graph=graph_ref, plan=plan, problem=problem, delivery=delivery))
+    return replace(schedule, graph=graph_ref, lowering=lowering)
 
 
 def main(argv=None):

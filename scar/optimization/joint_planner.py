@@ -64,6 +64,48 @@ def _plan_report(problem, baseline_only):
     return report
 
 
+def structural_trial_plan(problem, option_id=None):
+    """Bind one guarded source region without inventing a physical duration."""
+    problem = validate_problem(problem)
+    if (len(problem.operations) != 1 or problem.activities or problem.timing_constraints
+            or any(edge.producer is not None or edge.transfers for edge in problem.data_edges)):
+        raise ValueError('structural trial requires one original region with borrowed inputs')
+    operation = problem.operations[0]
+    if any(mode.cost.basis != 'UNKNOWN' or any(value is not None for value in
+           (mode.cost.estimate_ns, mode.cost.lower_ns, mode.cost.upper_ns)) for mode in operation.options):
+        raise ValueError('structural trial does not replace a known timing model')
+    plan = _plan_report(problem, baseline_only=option_id is None)
+    plan.update(status='UNRESOLVED' if option_id is None else 'STRUCTURAL_TRIAL_UNPRICED',
+                solver_status='NOT_RUN_UNPRICED_STRUCTURAL_TRIAL', trial_only=option_id is not None)
+    if option_id is None:
+        return plan
+    options = {mode.id: mode for mode in operation.options}
+    option = options.get(option_id)
+    capacities = {resource.id: resource.capacity - problem.reserved_memory.get(resource.id, 0)
+                  for resource in problem.resources}
+    if (option is None or option_id == operation.baseline_option or option.unresolved_resources
+            or any(units > capacities[resource] for resource, units in
+                   {**option.demands, **option.workspace_bytes}.items())
+            or not option.demands or not option.workspace_bytes
+            or any(option.input_locations[edge.value] != edge.external_location for edge in problem.data_edges)):
+        raise ValueError('structural trial implementation has unresolved or infeasible resource demand')
+    plan['selected'] = [dict(operation=operation.id, option=option.id, start_ns=None, end_ns=None)]
+    return plan
+
+
+def verify_structural_trial_plan(problem, plan):
+    """Check a sealed unpriced region plan without invoking a timed solver."""
+    selected = plan.get('selected')
+    if (type(selected) is not list or len(selected) > 1
+            or any(type(row) is not dict or type(row.get('option')) is not str for row in selected)):
+        raise ValueError('original structural region choice required')
+    expected = structural_trial_plan(problem, selected[0]['option'] if selected else None)
+    if plan != expected:
+        raise ValueError('structural trial differs from the original typed problem and resource binding')
+    return dict(structural_trial=bool(selected), feasible_under_declared_resources=bool(selected),
+                timing_qualified=False, execution_authorized=False)
+
+
 def solve_implementations(problem, *,max_seconds=30,workers=4,baseline_only=False):
     """Select legal modes and data routes, then minimize completion time.
 

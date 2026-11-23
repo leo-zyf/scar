@@ -1,0 +1,99 @@
+#include "scar_abi_v1.h"
+#if @SCAR_ARRAY_LOOP@
+#include "loop_abi_v1.h"
+#endif
+
+#include <array>
+#include <cstdint>
+#include <dlfcn.h>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string_view>
+#include <vector>
+
+namespace {
+constexpr std::size_t rows = @SCAR_ROWS@ULL;
+constexpr std::size_t columns = @SCAR_COLUMNS@ULL;
+constexpr std::size_t inputs = @SCAR_INPUT_COUNT@ULL;
+constexpr std::uint64_t steps = @SCAR_STEPS@ULL;
+constexpr std::size_t elements = rows * columns;
+using TemporalRun = int32_t (*)(const scar_array_v1*, uint64_t, uint64_t, scar_array_v1*, uint64_t*);
+
+scar_array_v1 descriptor(double* data) {
+    const auto start = reinterpret_cast<uintptr_t>(data);
+    return {data, 2, {rows, columns}, {columns * sizeof(double), sizeof(double)},
+            start, start + elements * sizeof(double)};
+}
+
+bool load_inputs(std::string_view path, std::vector<double>& values) {
+    if (path == "--smoke") {
+        for (std::size_t input = 0; input < inputs; ++input) {
+            for (std::size_t index = 0; index < elements; ++index) {
+                values[input * elements + index] = 0.125 * (1 + index % 7) + 0.0625 * (input + 1);
+            }
+        }
+        return true;
+    }
+    std::ifstream stream{std::filesystem::path(path), std::ios::binary};
+    return stream.read(reinterpret_cast<char*>(values.data()), values.size() * sizeof(double))
+           && stream.get() == std::char_traits<char>::eof();
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "usage: scar_entry INPUT.bin OUTPUT.bin\n";
+        return 64;
+    }
+    std::vector<double> input(inputs * elements);
+    if (!load_inputs(argv[1], input)) {
+        std::cerr << "input must contain the exact specialized array payloads\n";
+        return 65;
+    }
+    const auto root = std::filesystem::canonical("/proc/self/exe").parent_path().parent_path();
+    // The process can still own OpenMP workers at shutdown.
+    const auto library = dlopen((root / "bundle" / "@SCAR_LIBRARY@").c_str(), RTLD_LOCAL | RTLD_NOW);
+    if (!library) {
+        std::cerr << dlerror() << '\n';
+        return 66;
+    }
+    std::array<scar_array_v1, inputs> descriptors{};
+    for (std::size_t index = 0; index < inputs; ++index) {
+        descriptors[index] = descriptor(input.data() + index * elements);
+    }
+    std::vector<double> output(elements);
+    auto result = descriptor(output.data());
+#if @SCAR_ARRAY_LOOP@
+    using GetLoop = const scar_loop_table_v1* (*)();
+    const auto get_loop = reinterpret_cast<GetLoop>(dlsym(library, "scar_get_loop_table_v1"));
+    const auto table = get_loop ? get_loop() : nullptr;
+    if (!table || table->abi_version != 1 || table->struct_size < sizeof(scar_loop_table_v1)
+        || table->trip_count != steps || !table->run || !table->contract_sha256
+        || std::string_view(table->contract_sha256) != "@SCAR_CONTRACT_SHA256@") {
+        std::cerr << "array-loop ABI 1 table differs from its selected contract\n";
+        return 66;
+    }
+    const auto status = table->run(descriptors.data(), steps, &result);
+#else
+    auto run = reinterpret_cast<TemporalRun>(dlsym(library, "scar_temporal_invariant_loop_v1"));
+    if (!run) {
+        std::cerr << "missing temporal operator ABI 1 entry\n";
+        return 66;
+    }
+    std::array<uint64_t, 2> counters{};
+    const auto status = run(descriptors.data(), descriptors.size(), steps, &result, counters.data());
+    if (status == SCAR_OK_V1 && (counters[0] != elements || counters[1] != elements * steps)) {
+        std::cerr << "native temporal ABI counters differ from the specialization\n";
+        return 67;
+    }
+#endif
+    if (status != SCAR_OK_V1) {
+        std::cerr << "native temporal guard refused input, status " << status << '\n';
+        return status;
+    }
+    std::ofstream stream(argv[2], std::ios::binary);
+    stream.write(reinterpret_cast<const char*>(output.data()), output.size() * sizeof(double));
+    stream.close();
+    return stream ? 0 : 68;
+}

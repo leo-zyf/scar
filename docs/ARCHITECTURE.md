@@ -1,5 +1,7 @@
 # SCAR 的分层和交接合同
 
+原生目标与已支持的 Python 区域共用 `scar.graph-bundle` v2 和 `scar.compiler-plan` v2。Python 前端从已准入的 F4 证据投影出真正的程序图，保留循环与携带值。`plan --graph` 使用同一个入口读取两种图。`compile --plan` 消费计划及封存的降级输入，独立校验与图、选项和资源的绑定。Python 的试验计划保留未知时间成本，交付工程可用 C++20 入口验证已声明的输入布局。旧 Python 编译域入口仍提供尚未迁移的交付路径。
+
 `scar/cli.py` 负责命令分派。原生目标由 `scar/compiler/driver.py` 编排，已建模的 Python 区域由 `scar/compiler/pipeline.py` 编排。两条入口共用 `scar/compiler/contracts.py` 的交接类型和 C++20 后端。工件引用包含 `uri`、`schema`、`size_bytes`、`sha256`。原生运行把这些引用集中写入 `result.json` 的 `artifacts` 字段。
 
 ## 1. 前端

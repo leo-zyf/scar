@@ -15,10 +15,9 @@ from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.artifacts import file_reference
 from scar.codegen import native_project
-from scar.compiler.backend.cpp20 import replay_native_revision
 from scar.compiler.contracts import ExecutionPlanRef
 from scar.compiler.frontend.clang import stage_source_revision
-from scar.compiler.middle.plan import read_native_binding, read_plan_contract
+from scar.compiler.middle.plan import read_native_binding, read_plan_contract, replay_native_revision
 from scar.ir.execution_recipe import read_artifact
 
 
@@ -122,6 +121,37 @@ def _run(directory, name, args, *, stdin=None, environment=None):
     return result.stdout
 
 
+def _compile_sealed(directory, plan, output, *, environment=None):
+    # Guard the stage boundary in the interpreter which actually delivers the project.
+    script = '''
+import sys
+from scar.cli import main
+
+def reject_reentry(frame, event, arg):
+    if event != 'call':
+        return
+    module = frame.f_globals.get('__name__', '')
+    name = frame.f_code.co_name
+    if (module == 'scar.analysis.build' and name == '__init__'
+            or module == 'scar.compiler.frontend.clang' and name == 'capture_unit'
+            or module == 'scar.compiler.frontend.graph' and name == 'capture_target'
+            or module == 'scar.compiler.middle.plan' and name == 'replay_native_revision'
+            or module == 'scar.analysis.source_motion_window' and name == 'derive_array_motion'
+            or module.startswith('scar.optimization.') and name in (
+                'optimize_region', 'construct_implementations', 'solve_implementations', 'solve_resource_schedule')):
+        raise RuntimeError(f'C++20 delivery reentered {module}.{name}')
+
+sys.setprofile(reject_reentry)
+try:
+    status = main(sys.argv[1:])
+finally:
+    sys.setprofile(None)
+raise SystemExit(status)
+'''
+    _run(directory, 'delivery', [sys.executable, '-B', '-c', script, 'compile', '--plan', plan,
+                                 '--out', output, '--repetitions', '1'], environment=environment)
+
+
 def _tools(folder, profile):
     required = ("gcc", "g++", "gfortran", "cmake", "ninja", "nm", "readelf", "taskset")
     missing = [name for name in required if shutil.which(name) is None]
@@ -215,9 +245,7 @@ def cpp20_delivery(native_plan):
         trial = Path(variant["uri"]).parent / "project"
         (trial / "CMakeLists.txt").write_text('message(FATAL_ERROR "stale trial build script")\n', encoding="utf-8")
         environment = {"CMAKE_GENERATOR": "SCAR unavailable test generator"}
-    _run(plan.parent, "delivery", [sys.executable, "-m", "scar", "compile", "--plan",
-                                     plan / "compiler-plan.json", "--out", output, "--repetitions", "1"],
-         environment=environment)
+    _compile_sealed(plan.parent, plan / 'compiler-plan.json', output, environment=environment)
     return output, json.loads((output / "result.json").read_bytes())
 
 
@@ -265,6 +293,12 @@ def test_native_middle_replays_cost_and_schedule(native_graph, native_plan, tmp_
     for role, status in (("rewrite", "IR_VALIDATED"), ("cost", "OBSERVED"), ("schedule", "SCHEDULED")):
         assert plan["layers"][role] == status
     frozen = ExecutionPlanRef.read(folder / "compiler-plan.json")
+    assert frozen.document()["schema_version"] == 2
+    assert frozen.graph == graph["graph_bundle"]
+    assert frozen.read_graph_binding()["entry_regions"] == [frozen.entry]
+    lowering = read_artifact(frozen.lowering)
+    assert lowering["graph"] == frozen.graph
+    assert lowering["plan"] == frozen.artifacts["execution_plan"]
     for role in ("program", "hardware", "calls", "request", "graph_evidence"):
         assert frozen.artifacts[role] == graph["artifacts"][role]
     problem, schedule, verification = read_plan_contract(frozen)
@@ -385,6 +419,62 @@ def test_native_lowering_requires_an_abi_bridge_for_kr_promotions(tmp_path):
     plan.write_text('{"schema":"test.lowering-plan"}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="parameter promotion or adjustment requires an ABI bridge"):
         stage_source_revision(request, tmp_path / "project", plan=file_reference(plan, "test.lowering-plan"))
+
+
+@pytest.mark.skipif(sys.version_info[:3] != (3, 14, 7), reason='Python F4 compiler ABI')
+def test_python_loop_uses_the_sealed_cpp20_delivery(tmp_path):
+    import runpy
+
+    import numpy as np
+
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    source = source_dir / 'program.py'
+    source.write_text('def advance(payload, fixed):\n'
+                      '    prepared = fixed * fixed\n'
+                      '    return payload + prepared\n\n'
+                      'def simulate(initial, fixed, count):\n'
+                      '    for unused in range(count):\n'
+                      '        initial = advance(initial, fixed)\n'
+                      '    return initial\n')
+    python = (sys.executable, '-B', '-m', 'scar')
+    formal, admitted = tmp_path / 'formal', tmp_path / 'admitted'
+    graph, plan, delivered = (tmp_path / name for name in ('graph', 'plan', 'delivered'))
+    _run(tmp_path, 'formal', [*python, 'build', '--formal', source_dir, '--out', formal, '--jobs', '2',
+                             '--verify-body-interfaces'])
+    _run(tmp_path, 'admission', [*python, 'build', '--entry', source, '--catalog', formal / 'catalog',
+                                '--out', admitted, '--jobs', '2'])
+    _run(tmp_path, 'graph', [*python, 'build', '--python-build', admitted, '--out', graph])
+    shapes = tmp_path / 'shapes.json'
+    shapes.write_text('[3, 5]\n')
+    _run(tmp_path, 'plan', [*python, 'plan', '--graph', graph, '--input-shapes', shapes,
+                           '--trip-count', '4', '--cpu-threads', '1', '--out', plan])
+    frozen = ExecutionPlanRef.read(plan / 'compiler-plan.json')
+    assert frozen.document()['schema_version'] == 2
+    assert frozen.read_graph_binding()['artifacts']['program'] == frozen.artifacts['program']
+    assert frozen.decision['trial_only'] is True and frozen.decision['deployment_authorized'] is False
+    _compile_sealed(tmp_path, plan / 'compiler-plan.json', delivered)
+    result = json.loads((delivered / 'result.json').read_bytes())
+    assert result['delivery'] == 'TRIAL_COMPILED'
+    assert result['validation'][0]['native_abi_passed'] is True
+    bundle = json.loads((Path(result['bundle']) / 'runtime.json').read_bytes())
+    initial = np.arange(15, dtype='<f8').reshape(3, 5) / 8
+    fixed = (np.arange(15, dtype='<f8').reshape(3, 5) + 1) / 16
+    values = {'payload': initial, 'fixed': fixed}
+    input_path, output_path = tmp_path / 'inputs.bin', tmp_path / 'output.bin'
+    input_path.write_bytes(b''.join(values[name].tobytes() for name in bundle['input_order']))
+    _run(tmp_path, 'standalone', [result['executable']['path'], input_path, output_path])
+    expected = runpy.run_path(str(source))['simulate'](initial, fixed, 4)
+    assert output_path.read_bytes() == expected.tobytes()
+
+    retained_graph = Path(frozen.artifacts['program']['uri'])
+    original_graph = retained_graph.read_bytes()
+    try:
+        retained_graph.write_bytes(original_graph + b'\n')
+        with pytest.raises(ValueError, match='graph artifact changed before delivery: program'):
+            frozen.read_graph_binding()
+    finally:
+        retained_graph.write_bytes(original_graph)
 
 
 def test_cpp20_inputs_share_one_snapshot_and_recheck_membership(tmp_path, monkeypatch):

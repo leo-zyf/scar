@@ -153,6 +153,14 @@ def plan_invariant_loop_schedule(proof, target, *, input_shapes, trip_count, mem
     metadata. Nonpositive counts preserve the original carry alias.
     """
     proof, composite = _admit_proof(proof, catalog)
+    return _plan_admitted_loop(proof, target, input_shapes=input_shapes, trip_count=trip_count,
+                               memory_budget_bytes=memory_budget_bytes, cpu_threads=cpu_threads,
+                               composite=composite)
+
+
+def _plan_admitted_loop(proof, target, *, input_shapes, trip_count, memory_budget_bytes,
+                        cpu_threads=1, composite):
+    """Construct resource placement after the caller admits the source proof."""
     if cpu_threads != 1 or type(cpu_threads) is not int:
         raise ValueError('current register-temporal lowering supports an explicit single CPU only')
     if type(trip_count) is not int or not -(2**63) <= trip_count < 2**63:

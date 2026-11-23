@@ -29,17 +29,18 @@ def _reference_receipt(reference):
 
 
 def _source(value):
-    return {name: getattr(value, name) for name in ('path', 'sha256', 'code_key', 'qualname')}
+    return {name: value[name] for name in ('path', 'sha256', 'code_key', 'qualname')}
 
 
 def _source_receipts(sources):
     receipts = {}
     for source in sources:
-        if source.path not in receipts:
-            receipts[source.path] = _receipt(source.path)
-        receipt = receipts[source.path]
-        if receipt['sha256'] != source.sha256:
-            raise ValueError('original temporal source changed after proof replay: ' + source.path)
+        path = source['path']
+        if path not in receipts:
+            receipts[path] = _receipt(path)
+        receipt = receipts[path]
+        if receipt['sha256'] != source['sha256']:
+            raise ValueError('original temporal source changed after proof replay: ' + path)
         yield receipt
 
 
@@ -114,6 +115,44 @@ def publish_temporal_export(artifact, out, *, schedule, schedule_receipt, proof_
         raise ValueError('temporal export original F4 proof differs from compiled interface')
 
     parallel, cost_selected = _verify_schedule(proof, schedule, artifact, catalog=catalog, composite=composite)
+    return _publish_bundle(artifact, out, schedule=schedule, schedule_receipt=schedule_receipt,
+        proof_reference=proof_reference, proof=asdict(proof), compositions=compositions, composite=composite,
+        parallel=parallel, cost_selected=cost_selected, native_receipts=native_receipts)
+
+
+def publish_prepared_temporal_export(artifact, out, *, schedule, schedule_reference, proof,
+                                     proof_reference, compositions=()):
+    """Seal a selected temporal operator without reopening source analysis."""
+    composite = proof_reference['schema'] == 'scar.composite-invariant-loop-proof'
+    if bool(compositions) != composite:
+        raise ValueError('prepared temporal proof requires its original composition receipts')
+    parallel = artifact.report['schema'] == 'scar.native-parallel-temporal-invariant-loop'
+    schema = schedule['schema']
+    cost = 'scar.cost-selected-composite-temporal-cpu-resource-plan' if composite else 'scar.cost-selected-temporal-cpu-resource-plan'
+    if parallel:
+        preview = ('scar.parallel-composite-temporal-resource-plan' if composite
+                   else 'scar.parallel-temporal-invariant-loop-resource-plan')
+        allowed = (preview, cost)
+    else:
+        allowed = ('scar.composite-invariant-loop-resource-plan' if composite else 'scar.invariant-loop-resource-plan',)
+    if schema not in allowed or schedule['selected_kind'] != 'REGISTER_TEMPORAL_FUSION' or schedule['trip_count'] <= 0:
+        raise ValueError('prepared temporal export requires its selected native schedule profile')
+    if parallel:
+        scheduled, compiled = schedule['backend'], artifact.report['capability']
+        if any(semantic_sha256(scheduled[key]) != semantic_sha256(compiled[key])
+               for key in ('family', 'compiler', 'generators', 'row_partition')):
+            raise ValueError('parallel compiled backend differs from scheduled capability')
+    return _publish_bundle(artifact, out, schedule=schedule, schedule_receipt=_reference_receipt(schedule_reference),
+        proof_reference=proof_reference, proof=proof, compositions=compositions, composite=composite,
+        parallel=parallel, cost_selected=schema == cost, native_receipts=None)
+
+
+def _publish_bundle(artifact, out, *, schedule, schedule_receipt, proof_reference, proof,
+                    compositions, composite, parallel, cost_selected, native_receipts):
+    plan = artifact.plan
+    interface = plan['loop_interface']
+    motion_ref = interface['source_motion']
+    proof_hash = semantic_sha256(proof)
     binding = plan['execution_plan']['resource_binding']
     if (binding is None or semantic_sha256(binding) != semantic_sha256(schedule['resource_binding'])
             or plan['memory_budget_bytes'] != schedule['effective_incremental_budget_bytes']
@@ -133,15 +172,15 @@ def publish_temporal_export(artifact, out, *, schedule, schedule_receipt, proof_
                            _receipt(artifact.directory / 'plan.json', _json(plan)))
     evidence = [*native_receipts, schedule_receipt, _reference_receipt(proof_reference)]
     if composite:
-        leaf = proof.root_callee_source
-        global_name = proof.root_global_name
-        sources = (proof.source, leaf, *(source for guard in proof.nested_callee_guards
-                                         for source in (guard.owner_source, guard.target_source)))
+        leaf = proof['root_callee_source']
+        global_name = proof['root_global_name']
+        sources = (proof['source'], leaf, *(source for guard in proof['nested_callee_guards']
+                                         for source in (guard['owner_source'], guard['target_source'])))
         evidence.extend((_reference_receipt(motion_ref), *_source_receipts(sources)))
     else:
-        leaf = proof.body.source
-        global_name = proof.leaf_global_name
-        evidence.extend((*_source_receipts((proof.source, leaf)), _reference_receipt(motion_ref)))
+        leaf = proof['body']['source']
+        global_name = proof['leaf_global_name']
+        evidence.extend((*_source_receipts((proof['source'], leaf)), _reference_receipt(motion_ref)))
     evidence.extend(artifact.report['generators'])
     additional = compositions
     if cost_selected and not composite:
@@ -159,9 +198,9 @@ def publish_temporal_export(artifact, out, *, schedule, schedule_receipt, proof_
     contract = dict(schema=SCHEMA, schema_version=1,
         native=dict(library='temporal.so', library_sha256=digest, operator_descriptor_abi_version=1,
                     temporal_control_abi_version=1, control_family=family),
-        source=_source(proof.source), leaf=dict(global_name=global_name, source=_source(leaf)),
-        parameters=list(proof.parameters), input_order=list(proof.body.parameters), parameter_map=proof.parameter_map,
-        carry_parameter=proof.carry_parameter, trip_count_parameter=proof.trip_count_parameter,
+        source=_source(proof['source']), leaf=dict(global_name=global_name, source=_source(leaf)),
+        parameters=list(proof['parameters']), input_order=list(proof['body']['parameters']), parameter_map=proof['parameter_map'],
+        carry_parameter=proof['carry_parameter'], trip_count_parameter=proof['trip_count_parameter'],
         trip_count=schedule['trip_count'], arrays={name: dict(shape=shape, dtype='float64', layout='C_CONTIGUOUS')
                                                   for name, shape in schedule['input_shapes'].items()},
         memory_budget_bytes=schedule['effective_incremental_budget_bytes'], memory_scope=plan['memory_scope'],
@@ -172,10 +211,10 @@ def publish_temporal_export(artifact, out, *, schedule, schedule_receipt, proof_
         profitability_status='UNPROVEN_NO_SOURCED_TIMING_MODEL', deployment_authorized=False,
         validation_execution_requires_trial=True)
     if composite:
-        guards = [dict(owner_source=_source(g.owner_source), lookup_name=g.lookup_name,
-                       target_source=_source(g.target_source), global_path=list(g.global_path),
-                       lookup_semantics=g.lookup_semantics) for g in proof.nested_callee_guards]
-        contract.update(proof_kind='COMPOSITE', body_identity=proof.body_identity, derived_body_sha256=plan['body_sha256'],
+        guards = [dict(owner_source=_source(g['owner_source']), lookup_name=g['lookup_name'],
+                       target_source=_source(g['target_source']), global_path=list(g['global_path']),
+                       lookup_semantics=g['lookup_semantics']) for g in proof['nested_callee_guards']]
+        contract.update(proof_kind='COMPOSITE', body_identity=proof['body_identity'], derived_body_sha256=plan['body_sha256'],
             root_callee_source=_source(leaf), nested_callee_guards=guards, original_composite_f4_proof_sha256=proof_hash,
             specialization_authority='COMPILED_INTERFACE' if specialization is not None else 'EXPORT_RUNTIME_NARROWING_OF_GENERIC_NATIVE',
             selection_authority='COMPLETE_COMPOSITE_CPU_FORWARD_COST_MODEL_NOT_ENTRY_PERFORMANCE_SELECTION' if cost_selected

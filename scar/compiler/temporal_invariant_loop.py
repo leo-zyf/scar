@@ -14,11 +14,7 @@ import shlex
 import subprocess
 
 from scar.codegen import cpp
-from scar.analysis.source_motion_window import derive_array_motion,verify_array_motion
 from scar.compiler.model import document,plan_from_dict,region_from_dict
-from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
-from scar.compiler.invariant_loop import plan_invariant_loop
-from scar.optimization.optimizer import optimize_region
 from scar.optimization.hardware import bind_cpu_placement,validate_cpu_placement
 from scar.optimization.resource_solver import semantic_sha256
 
@@ -81,6 +77,9 @@ def uses_openmp(plan):
 
 
 def _execution_plan(body,budget,binding):
+    from scar.compiler.pipeline_frontend import prepare_pipeline_leaf
+    from scar.optimization.optimizer import optimize_region
+
     execution=prepare_pipeline_leaf(optimize_region(body,memory_budget_bytes=budget))
     scalar = cpp._supported(execution)
     if any(scalar[node.id] and node.op != 'const' for node in execution.region.nodes):
@@ -176,6 +175,9 @@ def _execution_movement_binding(body,execution,interface,budget,motion):
 
 
 def _plan(body,carry_parameter,loop_interface,memory_budget_bytes,resource_binding):
+    from scar.analysis.source_motion_window import derive_array_motion
+    from scar.compiler.invariant_loop import plan_invariant_loop
+
     base=plan_invariant_loop(body,carry_parameter=carry_parameter,loop_interface=loop_interface,
         memory_budget_bytes=memory_budget_bytes)
     original=region_from_dict(base['body'])
@@ -218,15 +220,40 @@ def _parallel_plan(body, carry, interface, budget, binding):
     return plan, execution
 
 
-def _source(plan,execution):
+def _prepared_movement(plan, execution):
+    """Check the sealed emitter inputs without projecting movement again."""
+    motion, movement = plan['execution_motion_analysis'], plan['execution_movement_binding']
+    nodes = {node.id for node in execution.region.nodes}
+    prefix = 'parallel-temporal-invariant-loop:' if uses_openmp(plan) else 'temporal-invariant-loop:'
+    if (plan['id'] != prefix + semantic_sha256({key: value for key, value in plan.items() if key != 'id'})
+            or movement is None or movement['execution_motion_sha256'] != semantic_sha256(motion)
+            or movement['optimized_body_sha256'] != semantic_sha256(asdict(execution.region))
+            or any(set(table) != nodes for table in (motion['placements'], motion['dependencies'], movement['node_placements']))):
+        raise ValueError('sealed temporal movement does not match the prepared execution')
+    stable = set(movement['stable_formal_inputs'])
+    for node, row in movement['node_placements'].items():
+        placement = motion['placements'][node]['temporal_placement']
+        dependencies = motion['dependencies'][node]
+        if (row != dict(placement=placement, formal_dependencies=dependencies)
+                or placement == 'PRE_TEMPORAL_LOOP' and not set(dependencies) <= stable):
+            raise ValueError('sealed temporal placement differs from the admitted stable inputs')
+    return motion, movement
+
+
+def _source(plan, execution, *, prepared=False):
     # Keep the existing descriptor, pointer-bound, finite-load and optional
     # affinity implementations. Only the loop nesting/Expr placement changes.
-    motion=verify_array_motion(plan['execution_motion_analysis'],execution.region,
-        carry_parameter=plan['carry_parameter'],loop_interface=plan['loop_interface'])
-    movement=_execution_movement_binding(region_from_dict(plan['body']),execution,
-        plan['loop_interface'],plan['memory_budget_bytes'],motion)
-    if movement!=plan['execution_movement_binding']:
-        raise ValueError('native expression placement differs from source movement binding replay')
+    if prepared:
+        motion, movement = _prepared_movement(plan, execution)
+    else:
+        from scar.analysis.source_motion_window import verify_array_motion
+
+        motion = verify_array_motion(plan['execution_motion_analysis'], execution.region,
+            carry_parameter=plan['carry_parameter'], loop_interface=plan['loop_interface'])
+        movement = _execution_movement_binding(region_from_dict(plan['body']), execution,
+            plan['loop_interface'], plan['memory_budget_bytes'], motion)
+        if movement != plan['execution_movement_binding']:
+            raise ValueError('native expression placement differs from source movement binding replay')
     support=cpp._source(execution,cpp._supported(execution)).split('int32_t run(',1)[0]
     body=execution.region;names={};pre=[];varying=[]
     carry=plan['carry_parameter'];invariant_ops=0;variant_ops=0
@@ -320,8 +347,8 @@ def _replace(source,old,new):
     return source.replace(old,new,1)
 
 
-def _parallel_source(plan,execution):
-    raw,counts=_source(plan,execution);source=raw.decode();workers=execution.cpu_threads
+def _parallel_source(plan, execution, *, prepared=False):
+    raw,counts=_source(plan,execution,prepared=prepared);source=raw.decode();workers=execution.cpu_threads
     source='#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n#include <omp.h>\n'+source
     source=_replace(source,'int32_t temporal_run(const scar_array_v1 *inputs, uint64_t count, uint64_t steps,\n'
         '                    scar_array_v1 *output, uint64_t *counters) {',
@@ -470,6 +497,15 @@ def _source_receipt(plan):
 
 def emit_temporal_invariant_loop(plan, out):
     """Build the selected C++20 temporal operator from its published lowering."""
+    return _emit_temporal_invariant_loop(plan, out, prepared=False)
+
+
+def emit_prepared_temporal_invariant_loop(plan, out):
+    """Build directly from a lowering already admitted at the compiler boundary."""
+    return _emit_temporal_invariant_loop(plan, out, prepared=True)
+
+
+def _emit_temporal_invariant_loop(plan, out, *, prepared):
     parallel = uses_openmp(plan)
     execution = plan_from_dict(plan['execution_plan'])
     binding = execution.resource_binding
@@ -480,13 +516,14 @@ def emit_temporal_invariant_loop(plan, out):
     if out.exists():
         raise ValueError('fresh temporal LICM output required')
     render = _parallel_source if parallel else _source
-    raw, counts = render(plan, execution)
+    raw, counts = render(plan, execution, prepared=prepared)
     capability = describe_parallel_temporal_capability(binding) if parallel else None
     compiler = capability['compiler'] if parallel else _compiler(parallel=False)
     generators = capability['generators'] if parallel else _sources()
     paths = {key: out / name for key, name in _ARTIFACT_FILES.items()}
     out.mkdir(parents=True)
-    (out / 'plan.json').write_bytes(_json(plan))
+    plan_bytes = _json(plan)
+    (out / 'plan.json').write_bytes(plan_bytes)
     paths['source'].write_bytes(raw)
     header = Path(cpp.__file__).with_name(_ARTIFACT_FILES['header'])
     paths['header'].write_bytes(header.read_bytes())
@@ -506,7 +543,13 @@ def emit_temporal_invariant_loop(plan, out):
         report.update(capability=capability, cpu_ids=list(binding.cpu_ids))
     else:
         report['cpu_placement'] = 'UNBOUND' if binding is None else 'EXPLICIT_SINGLE_CPU_NOT_OPTIMIZED'
-    (out / 'artifact.json').write_bytes(_json(report))
+    report_bytes = _json(report)
+    (out / 'artifact.json').write_bytes(report_bytes)
+    if prepared:
+        if ((out / 'plan.json').read_bytes() != plan_bytes or paths['source'].read_bytes() != raw
+                or (out / 'artifact.json').read_bytes() != report_bytes):
+            raise ValueError('prepared temporal files changed during publication')
+        return _bind_temporal_abi(plan, out, report, parallel)
     return load_temporal_invariant_loop(out)
 
 
@@ -534,6 +577,10 @@ def load_temporal_invariant_loop(directory):
     raw, _ = render(plan, actual)
     if raw != (directory / _ARTIFACT_FILES['source']).read_bytes():
         raise ValueError('temporal LICM native source routing changed')
+    return _bind_temporal_abi(plan, directory, report, parallel)
+
+
+def _bind_temporal_abi(plan, directory, report, parallel):
     library = ctypes.CDLL(str(directory / _ARTIFACT_FILES['library']))
     run = library.scar_temporal_invariant_loop_v1
     args = [ctypes.POINTER(cpp._Array), ctypes.c_uint64, ctypes.c_uint64,
@@ -549,5 +596,6 @@ def load_temporal_invariant_loop(directory):
 
 
 __all__=['build_temporal_invariant_loop','build_parallel_temporal_invariant_loop',
-    'describe_parallel_temporal_capability','emit_temporal_invariant_loop', 'load_temporal_invariant_loop',
+    'describe_parallel_temporal_capability','emit_temporal_invariant_loop', 'emit_prepared_temporal_invariant_loop',
+    'load_temporal_invariant_loop',
     'ParallelTemporalInvariantArtifact','TemporalInvariantLoopArtifact','uses_openmp']

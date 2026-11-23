@@ -161,6 +161,12 @@ def _composite_guard_profile(proof):
 def build_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budget_bytes,max_threads=None,catalog=None):
     """Enumerate representative physical-core/SMT masks; never compile a target."""
     proof,composite=_admit_proof(proof,catalog)
+    return _build_admitted_temporal_cpu_domain(proof,target,input_shapes=input_shapes,trip_count=trip_count,
+        memory_budget_bytes=memory_budget_bytes,max_threads=max_threads,composite=composite)
+
+
+def _build_admitted_temporal_cpu_domain(proof,target,*,input_shapes,trip_count,memory_budget_bytes,
+                                       max_threads=None,composite):
     domain=_build_temporal_body_cpu_domain(proof.body,proof.carry_parameter,target,
         proof_id=proof.id,proof_sha256=semantic_sha256(asdict(proof)),input_shapes=input_shapes,
         trip_count=trip_count,memory_budget_bytes=memory_budget_bytes,max_threads=max_threads)

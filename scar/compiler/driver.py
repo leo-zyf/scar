@@ -1,6 +1,7 @@
 """SCAR compiler driver for locked native build targets."""
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 import subprocess
@@ -20,12 +21,15 @@ def _graph_report(graph):
     state = 'BLOCKED' if graph.program is None else 'PARTIAL' if incomplete else 'STRUCTURE_VALIDATED'
     counts = ('entry', 'regions', 'operations', 'values', 'locations', 'excluded_control',
               'call_frontiers', 'call_sites', 'call_links', 'reachable_regions')
-    return dict(schema='scar.native-entry-result', schema_version=1,
+    report = dict(schema='scar.native-entry-result', schema_version=1,
                 graph={key: facts[key] for key in counts}, artifacts=graph.references(),
                 frontend_frontiers=len(facts['frontend_frontiers']), cfg_frontiers=len(facts['frontiers']),
                 status=f'GRAPH_{state}', selection='KEEP_ORIGINAL',
                 layers=dict(source='LOCKED', compiler='CAPTURED', graph=state, hardware='OBSERVED',
                             calls='PARTIAL' if facts['call_frontiers'] or graph.program is None else 'BOUND'))
+    if graph.publication is not None:
+        report['graph_bundle'] = asdict(graph.publication)
+    return report
 
 
 def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only=False,
@@ -52,7 +56,9 @@ def compile_native(manifest, out, *, jobs, repetitions, case_seconds, graph_only
 def _plan_graph(graph, out, result, *, repetitions, case_seconds):
     from .backend.cpp20 import build_trial_variant
     from .contracts import verify_source_lock
-    from .middle.plan import entry_cpus, publish_plan, replay_native_revision, rewrite_native, schedule_native
+    from .middle.plan import (
+        entry_cpus, publish_plan, replay_native_revision, rewrite_native, schedule_native, seal_native_lowering,
+    )
     from .qualification import NativeCases
 
     layers = result['layers']
@@ -86,6 +92,7 @@ def _plan_graph(graph, out, result, *, repetitions, case_seconds):
         layer = 'schedule'
         schedule = schedule_native(revision, observation, request['cases'], out)
         verify_source_lock(request)
+        schedule = seal_native_lowering(graph, schedule, out)
         retained_plan = publish_plan(out / 'compiler-plan.json', schedule.document())
         result.update(artifacts=dict(schedule.artifacts, compiler_plan=retained_plan), cost_decision=schedule.decision,
                       planning_scope=schedule.scope)
@@ -124,39 +131,87 @@ def _compile_graph(graph, out, result, *, repetitions, case_seconds):
         result.update(delivery='INCOMPLETE', delivery_error=str(error))
 
 
-def plan_native_graph(directory, out, *, repetitions, case_seconds):
-    """Schedule a retained native graph without repeating frontend capture."""
+def plan_graph(directory, out, *, repetitions, case_seconds, shapes=None, trip_count=None, threads=None,
+               region=None, memory_budget_bytes=None):
+    """Schedule a retained graph without repeating frontend capture."""
     from scar.analysis.replay_transaction import replay_transaction
     from .contracts import GraphBundle
 
-    graph = GraphBundle.read_native(directory)
-    result = _graph_report(graph)
-    out = out.resolve()
-    out.mkdir(parents=True, exist_ok=False)
     with replay_transaction():
-        schedule, _ = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
-    if schedule is not None:
+        graph = GraphBundle.open(directory)
+        out = out.resolve()
+        if graph.request.schema == 'scar.native-entry':
+            if any(value is not None for value in (shapes, trip_count, threads, region, memory_budget_bytes)):
+                raise ValueError('region inputs cannot specialize a native entry')
+            out.mkdir(parents=True, exist_ok=False)
+            result = _graph_report(graph)
+            schedule, _ = _plan_graph(graph, out, result, repetitions=repetitions, case_seconds=case_seconds)
+        else:
+            from .middle.plan import publish_plan
+            from .middle.python import schedule_python_graph
+
+            constraints = dict(shapes=shapes, trip_count=trip_count, threads=threads,
+                               memory_budget_bytes=memory_budget_bytes)
+            if region is not None:
+                constraints['entry_region'] = region
+            schedule = schedule_python_graph(graph, out, **constraints)
+            retained = publish_plan(out / 'compiler-plan.json', schedule.document())
+            result = dict(schema='scar.compiler-planning-result', schema_version=2,
+                          graph_bundle=asdict(graph.publication), planning_scope=schedule.scope,
+                          artifacts=dict(schedule.artifacts, compiler_plan=retained), cost_decision=schedule.decision,
+                          status='PLAN_TRIAL_READY' if schedule.decision['trial_only'] else 'PLAN_BASELINE_RETAINED')
+    if schedule is not None and graph.request.schema == 'scar.native-entry':
         result['status'] = 'PLAN_SCHEDULED'
     _publish_result(out, result)
     return result
 
 
 def plan_main(argv=None):
-    parser = argparse.ArgumentParser(prog='scar plan', description='Plan a retained native program graph.')
+    parser = argparse.ArgumentParser(prog='scar plan', description='Plan a retained program graph.')
     parser.add_argument('--graph', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--repetitions', type=int, choices=range(1, 10), default=3)
     parser.add_argument('--case-seconds', type=int, default=3600)
+    parser.add_argument('--input-shapes', type=Path, help='JSON rank-two shape or map of inputs to shapes')
+    parser.add_argument('--trip-count', type=int)
+    parser.add_argument('--cpu-threads', type=int)
+    parser.add_argument('--region', help='exact Python region identifier from the graph')
+    parser.add_argument('--memory-budget-bytes', type=int)
     args = parser.parse_args(argv)
     if not 1 <= args.case_seconds <= 3600:
         parser.error('--case-seconds must be between 1 and 3600')
     try:
-        result = plan_native_graph(args.graph, args.out, repetitions=args.repetitions,
-                                   case_seconds=args.case_seconds)
+        shapes = None if args.input_shapes is None else json.loads(args.input_shapes.read_bytes())
+        result = plan_graph(args.graph, args.out, repetitions=args.repetitions, case_seconds=args.case_seconds,
+                            shapes=shapes, trip_count=args.trip_count, threads=args.cpu_threads,
+                            region=args.region, memory_budget_bytes=args.memory_budget_bytes)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f'{error}\n')
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    return 0 if result['status'] == 'PLAN_SCHEDULED' else 1
+    return 0 if result['status'] in ('PLAN_SCHEDULED', 'PLAN_TRIAL_READY', 'PLAN_BASELINE_RETAINED') else 1
+
+
+def build_python_main(argv=None):
+    """Project an admitted Python source build into the compiler's typed graph."""
+    from scar.analysis.replay_transaction import replay_transaction
+    from .frontend.python_graph import build_python_graph
+
+    parser = argparse.ArgumentParser(prog='scar build')
+    parser.add_argument('--python-build', required=True, type=Path)
+    parser.add_argument('--source', type=Path, help='source file in the admitted Python build')
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args(argv)
+    try:
+        with replay_transaction():
+            graph = build_python_graph(args.python_build, args.out, source=args.source)
+        report = dict(schema='scar.compiler-graph-result', schema_version=2, status='GRAPH_STRUCTURE_VALIDATED',
+                      graph_bundle=asdict(graph.publication), artifacts=graph.references(),
+                      entries=list(graph.entry_regions))
+        _publish_result(args.out, report)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        parser.exit(1, f'{error}\n')
+    print(json.dumps(report, indent=2))
+    return 0
 
 
 def _validate_delivery(project, cases, out, repetitions):
@@ -183,12 +238,16 @@ def compile_saved_plan(path, out, *, repetitions, case_seconds):
         transaction.watch(reference['uri'], reference['sha256'], reference['size_bytes'])
         out.mkdir(parents=True, exist_ok=False)
         project = deliver(plan, out / 'project')
-        cases = NativeCases(project.manifest, project.observation['cpu'], case_seconds)
-        rows = _validate_delivery(project, cases, out, repetitions)
-    artifacts = dict(project.artifacts, compiler_plan=reference)
-    result = dict(schema='scar.compiler-replay', schema_version=1, artifacts=artifacts,
-                  executable=project.receipt, cpus=project.delivery['cpus'], validation=rows,
-                  delivery='COMPARED' if all(row['matches'] for row in rows) else 'MISMATCH')
+        if isinstance(project, dict):
+            result = project.copy()
+        else:
+            cases = NativeCases(project.manifest, project.observation['cpu'], case_seconds)
+            rows = _validate_delivery(project, cases, out, repetitions)
+            result = dict(artifacts=project.artifacts, executable=project.receipt,
+                cpus=project.delivery['cpus'], validation=rows,
+                delivery='COMPARED' if all(row['matches'] for row in rows) else 'MISMATCH')
+    result.update(schema='scar.compiler-replay', schema_version=2, graph_bundle=plan.graph,
+                  project=str(out / 'project'), artifacts=dict(result['artifacts'], compiler_plan=reference))
     _publish_result(out, result)
     return result
 
@@ -198,7 +257,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--manifest', type=Path)
-    inputs.add_argument('--plan', type=Path, help='replay a sealed compiler-plan.json')
+    inputs.add_argument('--plan', type=Path, help='replay a sealed compiler-plan.json for an entry or region')
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--jobs', type=int, choices=range(1, 13), default=4)
     parser.add_argument('--repetitions', type=int, choices=range(1, 10), default=3)
