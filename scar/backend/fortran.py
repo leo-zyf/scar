@@ -98,9 +98,10 @@ def _repair_f2c_source(source, descriptor_arrays=()):
     edits = [(call.start(), call.end(), f'scar_f2c_call({call[1]}, ')
              for call in _INDIRECT_CALL.finditer(mask)]
     literal = r'("(?:\\.|[^"\\])*")'
-    # libf2c's STOP message and formatted WRITE input strings are read-only.
-    for match in re.finditer(r'\b(?:s_stop\s*\(\s*|do_fio\s*\(\s*&\w+\s*,\s*)'
-                             + literal + r'\s*,', source):
+    # Literal arguments to libf2c's STOP and output calls are read-only.
+    prefix = (r'\b(?:s_stop\s*\(\s*|do_fio\s*\(\s*&\w+\s*,\s*'
+              r'|do_lio\s*\(\s*&\w+\s*,\s*&\w+\s*,\s*)')
+    for match in re.finditer(prefix + literal + r'\s*,', source):
         edits.append((*match.span(1), f'const_cast<char*>({match[1]})'))
     return '#include "scar_f2c_call.hpp"\n' + _apply_spans(source, edits)
 
