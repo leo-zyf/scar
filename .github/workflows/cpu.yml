@@ -1,4 +1,4 @@
-name: CPU gates and package
+name: Independent CPU stages and package
 
 on:
   push:
@@ -13,129 +13,38 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-    defaults:
-      run:
-        shell: bash
     steps:
-      - name: Check out SCAR
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.14.7"
-
-      - name: Install CPU toolchain and gate dependencies
+      - name: Install compiler toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc g++ gfortran cmake ninja-build binutils util-linux \
-            libclang1-18 f2c libf2c2-dev
-          python -m pip install pytest numpy networkx fparser==0.2.3 build \
-            'PyYAML>=6,<7' 'antlr4-python3-runtime==4.9.3'
-
-      - name: Run CPU gates
+            gcc g++ gfortran cmake binutils libclang1-18 f2c libf2c2-dev
+          python -m pip install build
+      - name: Build and install wheel
         run: |
-          python scripts/run_gate.py gates/cpu.json \
-            --out "$RUNNER_TEMP/scar-ci/gates.json" \
-            --evidence-dir "$RUNNER_TEMP/scar-ci/test-evidence"
-          python -m scar.optimization.cpu_fixed_grid_forward --help >/dev/null
-
-      - name: Build source distribution and wheel
-        run: python -m build --outdir "$RUNNER_TEMP/scar-ci/dist"
-
-      - name: Verify wheel contents
+          packages="$RUNNER_TEMP/scar-packages"
+          python -m build --outdir "$packages"
+          python -m venv "$RUNNER_TEMP/scar-verify"
+          verify="$RUNNER_TEMP/scar-verify/bin/python"
+          wheel=("$packages"/*.whl)
+          "$verify" -m pip install "${wheel[0]}[fortran,test]"
+      - name: Verify isolated stages from installed wheel
         run: |
-          git diff --exit-code HEAD -- scar sitecustomize.py pyproject.toml
-          python - "$RUNNER_TEMP/scar-ci/dist" <<'PY'
-          from pathlib import Path
-          import subprocess
-          import sys
-          import tomllib
-          from zipfile import ZipFile
-
-          dist = Path(sys.argv[1])
-          wheel, = dist.glob("*.whl")
-          sdist, = dist.glob("*.tar.gz")
-          config = tomllib.loads(Path("pyproject.toml").read_text())
-          setuptools = config["tool"]["setuptools"]
-          tracked_paths = subprocess.check_output(
-              ["git", "ls-files", "-z", "--", "scar", "sitecustomize.py"]
-          ).decode().split("\0")
-          tracked = {Path(path) for path in tracked_paths if path}
-          sources = {path for path in tracked if path.suffix == ".py"}
-          for package, patterns in setuptools["package-data"].items():
-              directory = Path(*package.split("."))
-              for pattern in patterns:
-                  sources.update(path for path in directory.glob(pattern) if path in tracked)
-          expected = {path.as_posix() for path in sources}
-          metadata = f"scar-{config['project']['version']}.dist-info/"
-          with ZipFile(wheel) as archive:
-              names = archive.namelist()
-              if len(names) != len(set(names)):
-                  raise SystemExit("Duplicate wheel members")
-              payload = {name for name in names if not name.startswith(metadata)}
-              if payload != expected:
-                  raise SystemExit(f"Wheel content differs. Missing {sorted(expected - payload)} "
-                                   f"and unexpected {sorted(payload - expected)}")
-              for name in sorted(payload):
-                  if archive.read(name) != Path(name).read_bytes():
-                      raise SystemExit(f"Wheel bytes differ for {name}")
-          print(f"Verified {len(expected)} tracked files in {wheel.name}, built from {sdist.name}")
-          PY
-
-      - name: Replay native and Python compiler plans from the installed wheel
-        run: |
-          smoke="$RUNNER_TEMP/scar-ci/smoke"
-          python -m venv "$smoke"
-          wheel=("$RUNNER_TEMP/scar-ci/dist/"*.whl)
-          "$smoke/bin/python" -m pip install --no-index --no-deps "${wheel[@]}"
-          mapfile -t plans < <(python - "$RUNNER_TEMP/scar-ci/test-evidence" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          found = {}
-          for path in sorted(Path(sys.argv[1]).rglob('compiler-plan.json')):
-              plan = json.loads(path.read_bytes())
-              if plan.get('schema_version') == 2:
-                  found.setdefault(plan['lowering']['schema'], path)
-          for schema in ('scar.native-cpp20-lowering', 'scar.python-cpp20-lowering'):
-              print(found[schema])
-          PY
-          )
-          test "${#plans[@]}" -eq 2
-          cd "$smoke"
-          env -u PYTHONPATH "$smoke/bin/scar" --help
-          for variant in table score transition; do
-            env -u PYTHONPATH "$smoke/bin/python" -m scar.codegen.scalar_standalone "$variant" --help >/dev/null
-          done
-          for index in "${!plans[@]}"; do
-            env -u PYTHONPATH "$smoke/bin/scar" compile --plan "${plans[$index]}" \
-              --out "$smoke/replayed-$index" --repetitions 1 --case-seconds 60
-          done
-
-      - name: Upload verified distributions
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          verify="$RUNNER_TEMP/scar-verify/bin/python"
+          cd "$RUNNER_TEMP"
+          "$verify" -m scar --help
+          "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
+            --junitxml="$RUNNER_TEMP/scar-gates.xml"
+      - name: Upload packages and stage results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: scar-cpu-distributions
+          name: scar-cpu
           path: |
-            ${{ runner.temp }}/scar-ci/dist/*.whl
-            ${{ runner.temp }}/scar-ci/dist/*.tar.gz
-          if-no-files-found: error
-
-      - name: Upload CPU gate reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: scar-cpu-gates
-          path: |
-            ${{ runner.temp }}/scar-ci/gates.json
-            ${{ runner.temp }}/scar-ci/gates.md
-            ${{ runner.temp }}/scar-ci/test-evidence/**/result.json
-            ${{ runner.temp }}/scar-ci/test-evidence/**/*.log
-            ${{ runner.temp }}/scar-ci/test-evidence/**/*.stdout
-            ${{ runner.temp }}/scar-ci/test-evidence/**/*.stderr
-          if-no-files-found: warn
+            ${{ runner.temp }}/scar-packages/*
+            ${{ runner.temp }}/scar-gates.xml

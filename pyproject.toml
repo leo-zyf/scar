@@ -5,51 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scar"
 version = "0.1.0"
-description = "State-Control-Action-Resource execution analysis and optimization prototype"
+description = "State-Control-Action-Resource program graph compiler"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "networkx>=3.0,<4"]
+dependencies = []
 
 [project.optional-dependencies]
-torch = ["torch>=2.0"]
-planning = ["ortools==9.15.6755"]
-cpu-cost = ["scipy>=1.11,<2"]
-native-source = ["tree-sitter==0.26.0", "tree-sitter-cpp==0.23.4"]
-configuration-source = ["PyYAML>=6,<7", "antlr4-python3-runtime==4.9.3"]
+fortran = ["fparser==0.2.3"]
+test = ["pytest>=8", "numpy>=1.24"]
 
 [project.scripts]
 scar = "scar.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["scar*"]
-
-[tool.setuptools]
-py-modules = ["sitecustomize"]
+include = ["scar", "scar.*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-"scar.codegen" = ["*.h", "*.in"]
-"scar.trace" = ["*.c"]
-"scar" = ["native/*.cpp", "native/*.hpp"]
-"scar.visualization" = ["assets/*", "assets/vendor/*"]
+"scar.frontend" = ["*.cpp"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-
-# Macro-compiler target baseline; bounded region compilation is implemented.
-[tool.scar.codegen]
-host_backend = "cpp"
-cxx_standard = 20
-operator_abi_version = 1
-execution_plan_schema_version = 1
-resource_bound_plan_schema_version = 2
-stateful_region_schema_version = 1
-stateful_stage_plan_schema_version = 1
-stateful_operator_abi_version = 1
-versioned_resource_schedule_schema_version = 2
-temporal_resource_schedule_schema_version = 3
-temporal_resource_projection_schema_version = 1
-activity_cost_table_schema_version = 1
-target_hardware_graph_schema_version = 2
-stateful_runtime_contract_schema_version = 1
-operator_calling_convention = "c_function_table"
-torch_abi = "inherit_imported_torch_target"
-python_boundary = "entry_and_explicit_compatibility_calls"
+testpaths = ["tests/stages"]

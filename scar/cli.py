@@ -1,116 +1,111 @@
-"""SCAR's compiler and the tools used to inspect its input and output."""
+"""Public stage commands. The driver is the only cross-stage caller."""
 
 import argparse
-from functools import partial
-from importlib import import_module
-import sys
+from dataclasses import asdict
+import json
+from pathlib import Path
 
 
-def _invoke(module, function, arguments):
-    return getattr(import_module(module), function)(arguments)
+def _positive(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return number
 
 
-def _has_option(arguments, option):
-    if '--' in arguments:
-        arguments = arguments[:arguments.index('--')]
-    return any(argument == option or argument.startswith(option + '=') for argument in arguments)
+def _source(parser):
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--manifest", type=Path, help="locked native compilation request")
+    source.add_argument("--entry", type=Path, help="Python source file")
+    parser.add_argument("--jobs", type=_positive, default=1, help="frontend worker count")
 
 
-def _build(arguments):
-    if arguments in (['--help'], ['-h']):
-        parser = argparse.ArgumentParser(prog='scar build',
-                                         description='Build the program and hardware graph.')
-        inputs = parser.add_mutually_exclusive_group(required=True)
-        inputs.add_argument('--manifest', metavar='FILE', help='build a native target')
-        inputs.add_argument('--entry', metavar='FILE', help='build a Python entry with optional trace evidence')
-        inputs.add_argument('--python-build', metavar='DIR', help='build the compiler graph from an admitted Python entry')
-        inputs.add_argument('--formal', action='store_true', help='publish a Python formal source catalog')
-        inputs.add_argument('--static', action='store_true', help='build a Python static source graph')
-        parser.add_argument('--out', required=True)
-        parser.epilog = 'Pass --help after selecting an input mode to see its options.'
-        parser.parse_args(arguments)
-        return 0
-    if _has_option(arguments, '--manifest'):
-        from scar.compiler.driver import main as build
-        return build(['--graph-only', *arguments])
-    if _has_option(arguments, '--python-build'):
-        from scar.compiler.driver import build_python_main
-        return build_python_main(arguments)
-    if '--static' in arguments:
-        from scar.analysis.static_program import main as build
-        return build([argument for argument in arguments if argument != '--static'])
-    if '--formal' in arguments:
-        from scar.compiler.frontend.python import main as build
-        return build([argument for argument in arguments if argument != '--formal'])
-    from scar.analysis.build import main as build
-    return build(arguments)
+def _specialization(parser):
+    parser.add_argument("--input-shapes", type=Path, help="JSON rank-two input shape for the Python array ABI")
+    parser.add_argument("--trip-count", type=_positive)
+    parser.add_argument("--cpu-threads", type=_positive)
 
 
-def _compile(arguments):
-    if not arguments or arguments == ['--help'] or arguments == ['-h']:
-        parser = argparse.ArgumentParser(prog='scar compile',
-                                         description='Build, simplify and deliver a C++20 target.')
-        inputs = parser.add_mutually_exclusive_group(required=True)
-        inputs.add_argument('--manifest', help='locked native compilation units')
-        inputs.add_argument('--domains', help='prepared Python program domains')
-        inputs.add_argument('--plan', help='replay a sealed execution plan')
-        parser.add_argument('--out', required=True)
-        parser.parse_args(arguments)
-        return 0
-    if _has_option(arguments, '--domains'):
-        from scar.compiler.pipeline import compile_domains_main as compile_target
-    else:
-        from scar.compiler.driver import main as compile_target
-    return compile_target(arguments)
+def _constraints(args):
+    shape = json.loads(args.input_shapes.read_bytes()) if args.input_shapes is not None else None
+    return dict(input_shape=shape, trip_count=args.trip_count, threads=args.cpu_threads)
 
 
-def _plan(arguments):
-    if _has_option(arguments, '--build'):
-        from scar.compiler.middle.python import main as plan
-    elif _has_option(arguments, '--graph'):
-        from scar.compiler.driver import plan_main as plan
-    else:
-        from scar.compiler.middle.plan import main as plan
-    return plan(arguments)
+def _build(source, output, jobs):
+    from .frontend import build
+
+    graph = build(source, output, jobs=jobs)
+    return dict(graph=str((output / "graph.json").resolve()), regions=len(graph.regions),
+                operations=len(graph.operations), edges=len(graph.edges), resources=len(graph.resources))
 
 
-def _run(arguments):
-    if _has_option(arguments, '--pipeline'):
-        from scar.runtime.compiled_entry import main as run
-    else:
-        from scar.runtime.entry_cli import main as run
-    return run(arguments)
+def _plan(source, output, args):
+    from .middle import plan
+
+    selected = plan(source, output, **_constraints(args))
+    return dict(plan=str((output / "plan.json").resolve()), decision=selected.decision,
+                steps=len(selected.schedule), rewrites=len(selected.rewrites))
 
 
-COMMANDS = {
-    'trace': ('record evidence from a child program', partial(_invoke, 'scar.trace.cli', 'trace_main')),
-    'import-capture': ('import retained trace evidence', partial(_invoke, 'scar.trace.cli', 'import_main')),
-    'build': ('build the program and hardware graph', _build),
-    'build-query': ('inspect a program graph', partial(_invoke, 'scar.analysis.build', 'query_main')),
-    'check-program': ('validate a saved program graph',
-                      partial(_invoke, 'scar.compiler.frontend.graph', 'check_main')),
-    'plan': ('plan from a resource and dependency graph', _plan),
-    'compile': ('build, simplify and deliver a target', _compile),
-    'run': ('run a published execution contract', _run),
-    'view-graph': ('view a program graph', partial(_invoke, 'scar.visualization.cli', 'main')),
-}
+def _compile(source, output, args):
+    from .backend import compile_plan
+
+    return compile_plan(source, output, case_seconds=args.case_seconds, repetitions=args.repetitions)
+
+
+def _parser():
+    parser = argparse.ArgumentParser(prog="scar", description="Program graph compiler for Linux CPU targets")
+    commands = parser.add_subparsers(dest="command", required=True)
+    build = commands.add_parser("build", help="publish a typed program and hardware graph")
+    _source(build)
+    build.add_argument("--out", required=True, type=Path)
+
+    plan = commands.add_parser("plan", help="derive a sealed plan from a retained graph")
+    plan.add_argument("--graph", required=True, type=Path)
+    plan.add_argument("--out", required=True, type=Path)
+    _specialization(plan)
+
+    compile_ = commands.add_parser("compile", help="consume a sealed plan and build a C++20 project")
+    compile_source = compile_.add_mutually_exclusive_group(required=True)
+    compile_source.add_argument("--plan", type=Path)
+    compile_source.add_argument("--manifest", type=Path, help="run the three stages on a native request")
+    compile_source.add_argument("--entry", type=Path, help="run the three stages on a Python source")
+    compile_.add_argument("--out", required=True, type=Path)
+    compile_.add_argument("--jobs", type=_positive, default=1)
+    compile_.add_argument("--case-seconds", type=_positive, default=30)
+    compile_.add_argument("--repetitions", type=_positive, default=1)
+    _specialization(compile_)
+
+    check = commands.add_parser("check-program", help="verify a persisted graph and print its identity")
+    check.add_argument("--graph", required=True, type=Path)
+    return parser
 
 
 def main(argv=None):
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments:
-        command, *options = arguments
-        if command == 'static':
-            return _build(['--static', *options]) or 0
-        if command in COMMANDS:
-            return COMMANDS[command][1](options) or 0
-    parser = argparse.ArgumentParser(prog='scar', description=__doc__)
-    commands = parser.add_subparsers(required=True)
-    for command, (help_, _) in COMMANDS.items():
-        commands.add_parser(command, help=help_)
-    parser.parse_args(arguments)
-    return 0
+    parser = _parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "build":
+            result = _build(args.manifest or args.entry, args.out, args.jobs)
+        elif args.command == "plan":
+            result = _plan(args.graph, args.out, args)
+        elif args.command == "compile":
+            if args.plan is not None:
+                if any(item is not None for item in (args.input_shapes, args.trip_count, args.cpu_threads)):
+                    parser.error("plan specialization belongs to scar plan")
+                result = _compile(args.plan, args.out, args)
+            else:
+                args.out.mkdir(parents=True, exist_ok=False)
+                graph, plan = args.out / "graph", args.out / "plan"
+                _build(args.manifest or args.entry, graph, args.jobs)
+                _plan(graph / "graph.json", plan, args)
+                result = _compile(plan / "plan.json", args.out / "delivery", args)
+        else:
+            from .contract import open_graph
 
-
-if __name__ == '__main__':
-    raise SystemExit(main())
+            reference, graph = open_graph(args.graph)
+            result = dict(graph=asdict(reference), regions=len(graph.regions), operations=len(graph.operations))
+    except (OSError, ValueError) as error:
+        parser.exit(2, f"scar {args.command}: {error}\n")
+    print(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False))
+    return int(result.get("status") == "VALIDATION_FAILED")
