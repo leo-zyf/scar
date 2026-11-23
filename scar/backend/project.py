@@ -60,15 +60,20 @@ def _cmake_project(root, config):
 
 
 def _system_environment():
-    return dict({key: value for key, value in os.environ.items() if not key.startswith('LD_')}, LC_ALL='C')
+    return dict({key: value for key, value in os.environ.items()
+                 if not key.startswith('LD_') and key not in {'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS'}}, LC_ALL='C')
+
+
+def compiler_path():
+    compiler = shutil.which('g++')
+    if compiler is None:
+        raise ValueError('g++ is required for the CPU C++20 backend')
+    return str(Path(compiler).resolve(strict=True))
 
 
 def build_project(project, config):
     _cmake_project(project, config)
-    compiler = shutil.which('g++')
-    if compiler is None:
-        raise ValueError('g++ is required for the CPU C++20 backend')
-    compiler = str(Path(compiler).resolve(strict=True))
+    compiler = compiler_path()
     env = _system_environment()
     logs = []
     with TemporaryDirectory(prefix='.build-', dir=project.parent) as build_dir:

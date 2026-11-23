@@ -23,12 +23,11 @@ def _source(parser):
 def _specialization(parser):
     parser.add_argument("--input-shapes", type=Path, help="JSON rank-two input shape for the Python array ABI")
     parser.add_argument("--trip-count", type=_positive)
-    parser.add_argument("--cpu-threads", type=_positive)
 
 
 def _constraints(args):
     shape = json.loads(args.input_shapes.read_bytes()) if args.input_shapes is not None else None
-    return dict(input_shape=shape, trip_count=args.trip_count, threads=args.cpu_threads)
+    return dict(input_shape=shape, trip_count=args.trip_count)
 
 
 def _build(source, output, jobs):
@@ -50,7 +49,8 @@ def _plan(source, output, args):
 def _compile(source, output, args):
     from .backend import compile_plan
 
-    return compile_plan(source, output, case_seconds=args.case_seconds, repetitions=args.repetitions)
+    return compile_plan(source, output, case_seconds=args.case_seconds, repetitions=args.repetitions,
+                        warmups=args.warmups, cpu_threads=args.cpu_threads)
 
 
 def _parser():
@@ -74,6 +74,8 @@ def _parser():
     compile_.add_argument("--jobs", type=_positive, default=1)
     compile_.add_argument("--case-seconds", type=_positive, default=30)
     compile_.add_argument("--repetitions", type=_positive, default=1)
+    compile_.add_argument("--warmups", type=_positive, default=1)
+    compile_.add_argument("--cpu-threads", type=_positive, help="limit available backend workers")
     _specialization(compile_)
 
     check = commands.add_parser("check-program", help="verify a persisted graph and print its identity")
@@ -91,7 +93,7 @@ def main(argv=None):
             result = _plan(args.graph, args.out, args)
         elif args.command == "compile":
             if args.plan is not None:
-                if any(item is not None for item in (args.input_shapes, args.trip_count, args.cpu_threads)):
+                if any(item is not None for item in (args.input_shapes, args.trip_count)):
                     parser.error("plan specialization belongs to scar plan")
                 result = _compile(args.plan, args.out, args)
             else:

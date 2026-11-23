@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from hashlib import sha256
 import json
+import math
 from pathlib import Path
 import re
 import shutil
@@ -13,7 +14,7 @@ from tempfile import TemporaryDirectory
 
 from scar.contract import Edge, Operation, Region, artifact, copy_artifact, read_artifact, verify_artifact, write_json
 
-from .clang import capture_unit, gnu_cfi_header, gnu_cfi_overlay
+from .clang import capture_unit, counted_function_bodies, gnu_cfi_header, gnu_cfi_overlay, typed_call_occurrences
 
 
 _COMPILER = {"c": "gcc", "c++": "g++", "fortran": "gfortran"}
@@ -30,6 +31,17 @@ _VUSE = re.compile(r"# VUSE <(\.MEM_\d+(?:\(D\))?)>")
 _VDEF = re.compile(r"# (\.MEM_\d+) = VDEF <(\.MEM_\d+(?:\(D\))?)>")
 _IPA_SYMBOL = re.compile(r"^(.+)/(\d+) \((.*)\)(?: @.*)?$")
 _IPA_ID = re.compile(r"/(\d+)(?=\s|$)")
+_JUMP = re.compile(r"\bgoto <bb (\d+)>")
+_VERSIONED_NAME = re.compile(r"([A-Za-z_]\w*)_\d+(\(D\))?")
+_LOOSE_FLOAT = {"-Ofast", "-ffast-math", "-funsafe-math-optimizations", "-fassociative-math",
+                "-ffinite-math-only", "-freciprocal-math", "-fno-signed-zeros", "-fno-trapping-math"}
+_FORTRAN_SCALARS = {
+    "integer(kind=4)": "i32", "integer(kind=8)": "i64",
+    "real(kind=4)": "f32", "real(kind=8)": "f64",
+    "logical(kind=4)": "fortran-logical32",
+}
+_FORTRAN_DECL = re.compile(
+    r"^  (?:static )?((?:integer|real|logical)\(kind=[48]\)) ([A-Za-z_][\w.]*)\s*(?:= .*?)?;$", re.M)
 
 
 def _lock_sources(target):
@@ -123,8 +135,11 @@ def _capture(target, unit, compiler, out, scratch, cfi):
         typed_path = out / "types.fortran-original"
         typed_path.write_bytes(result.stdout)
         typed = artifact(typed_path)
+        bodies, call_sites = {}, {}
     else:
         document = capture_unit(root, unit, cfi=cfi)
+        bodies = {} if _LOOSE_FLOAT.intersection(flags) else counted_function_bodies(document)
+        call_sites = typed_call_occurrences(document)
         typed = write_json(out / "types.json", document)
     evidence["types"] = asdict(typed)
     functions = []
@@ -136,7 +151,7 @@ def _capture(target, unit, compiler, out, scratch, cfi):
         symbols = _symbols(ipa.read_text(errors="replace"))
     else:
         symbols = {}
-    return evidence, functions, symbols
+    return evidence, functions, symbols, bodies, call_sites
 
 
 def _symbols(raw):
@@ -163,7 +178,7 @@ def _names(text):
 
 
 def _block(number, depth, raw):
-    operations, successors = [], []
+    operations, successors, branches = [], [], []
     memory, memory_site, in_successor_line = (), None, False
     for line in raw.splitlines():
         if line.startswith(";;    succ:"):
@@ -214,8 +229,10 @@ def _block(number, depth, raw):
             operations.append({"opcode": "gimple_unparsed", "text": text, "site": site or memory_site,
                                "result": None, "operands": text, "memory": memory})
             memory, memory_site = (), None
+        elif match := _JUMP.match(text):
+            branches.append(match[1])
     return {"number": number, "compiler_loop_depth": depth, "operations": operations,
-            "successors": tuple(dict.fromkeys(successors))}
+            "successors": tuple(dict.fromkeys(successors)), "branches": tuple(branches)}
 
 
 def _functions(raw):
@@ -227,7 +244,12 @@ def _functions(raw):
         blocks = list(_BLOCK.finditer(body))
         if not blocks:
             continue
-        functions.append({"name": function[1], "symbol": function[2], "blocks": [
+        preamble = body[:blocks[0].start()]
+        locals_ = re.findall(r"^  (int|double) ([A-Za-z_]\w*);$", preamble, re.M)
+        functions.append({"name": function[1], "symbol": function[2], "locals": {name: type_ for type_, name in locals_},
+                          "scalar_types": {name: _FORTRAN_SCALARS[type_] for type_, name in _FORTRAN_DECL.findall(preamble)
+                                           if type_ in _FORTRAN_SCALARS},
+                          "blocks": [
             _block(block[1], int(block[2]), body[block.end():blocks[j + 1].start() if j + 1 < len(blocks) else len(body)])
             for j, block in enumerate(blocks)
         ]})
@@ -281,16 +303,192 @@ def _natural_loops(blocks):
     return loops, backedges
 
 
+class _OutsideCountedProfile(Exception):
+    pass
+
+
+def _require(condition):
+    if not condition:
+        raise _OutsideCountedProfile()
+
+
+def _fields(instruction):
+    match = _GIMPLE.fullmatch(instruction["text"])
+    _require(match is not None)
+    return tuple(field.strip() for field in match[2].split(","))
+
+
+def _active_instructions(block):
+    return [row for row in block["operations"] if row["opcode"] not in {"gimple_label", "gimple_nop"}]
+
+
+_ARITHMETIC = {"plus_expr": "add", "minus_expr": "sub", "mult_expr": "mul", "rdiv_expr": "div"}
+_FLOAT_LITERAL = re.compile(r"[+-]?(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+class _CountedLane:
+    """Decode one acyclic SSA loop body with an exact scalar memory interface."""
+
+    def __init__(self, rows, induction, index, parameters):
+        self.induction, self.index, self.parameters = induction, index, parameters
+        self.index_value = ["index", "i32", index]
+        self.definitions = {}
+        self.used = set()
+        self.accesses = []
+        self.store = None
+        for row in rows:
+            _require(row["opcode"] == "gimple_assign")
+            args = _fields(row)
+            _require(len(args) == 5 and args[-1] == "NULL")
+            destination = args[1]
+            if destination.startswith("*"):
+                _require(self.store is None and row["memory"] and row["memory"][1])
+                self.store = args
+            else:
+                _require(_SSA.fullmatch(destination) is not None and destination not in self.definitions)
+                self.definitions[destination] = (args, row["memory"])
+        _require(self.store is not None)
+
+    def definition(self, name):
+        _require(name in self.definitions and name not in self.used)
+        self.used.add(name)
+        return self.definitions[name]
+
+    def parameter(self, name, types):
+        match = _VERSIONED_NAME.fullmatch(name)
+        _require(match is not None and match[2] == "(D)" and self.parameters.get(match[1]) in types)
+        return match[1]
+
+    def address(self, operand, *, write=False):
+        _require(operand.startswith("*"))
+        fields, memory = self.definition(operand[1:])
+        _require(not memory and fields[0] == "pointer_plus_expr" and fields[4] == "NULL")
+        allowed = {"ptr<f64>"} if write else {"ptr<f64>", "ptr<const f64>"}
+        name = self.parameter(fields[2], allowed)
+        scale, memory = self.definition(fields[3])
+        _require(not memory and scale[0] == "mult_expr" and scale[3:] == ("8", "NULL"))
+        index, memory = self.definition(scale[2])
+        _require(not memory and index[0] == "nop_expr" and index[2:] == (self.induction, "NULL", "NULL"))
+        return name
+
+    def expression(self, value, type_):
+        if type_ == "i32" and value == self.induction:
+            return self.index_value
+        if type_ == "f64" and _FLOAT_LITERAL.fullmatch(value):
+            number = float(value)
+            _require(math.isfinite(number))
+            return ["constant", type_, number]
+        if type_ == "i32" and re.fullmatch(r"[+-]?\d+", value):
+            number = int(value)
+            _require(-(2**31) <= number < 2**31)
+            return ["constant", type_, number]
+        if value.endswith("(D)"):
+            return ["parameter", type_, self.parameter(value, {type_})]
+        fields, memory = self.definition(value)
+        opcode, _, left, right, _ = fields
+        if opcode == "mem_ref" and type_ == "f64":
+            _require(memory and memory[1] is None and right == "NULL")
+            name = self.address(left)
+            self.accesses.append({"kind": "READ", "pointer": name, "index": self.index_value, "type": type_})
+            return ["load", type_, name, self.index_value]
+        _require(not memory)
+        if opcode == "float_expr" and type_ == "f64" and right == "NULL":
+            return ["cast", type_, self.expression(left, "i32")]
+        if opcode in {"ssa_name", "integer_cst", "real_cst"} and right == "NULL":
+            return self.expression(left, type_)
+        _require(opcode in _ARITHMETIC and (type_ == "f64" or opcode != "rdiv_expr") and right != "NULL")
+        return [_ARITHMETIC[opcode], type_, self.expression(left, type_), self.expression(right, type_)]
+
+    def finish(self, increment):
+        fields, memory = self.definition(increment)
+        _require(not memory and fields[0] == "plus_expr" and fields[2:] == (self.induction, "1", "NULL"))
+        opcode, destination, source, right, _ = self.store
+        _require(opcode in {"ssa_name", "real_cst"} and right == "NULL")
+        name = self.address(destination, write=True)
+        result = self.expression(source, "f64")
+        _require(self.used == self.definitions.keys())
+        self.accesses.append({"kind": "WRITE", "pointer": name, "index": self.index_value, "type": "f64"})
+        return {"kind": "store", "pointer": name, "index": self.index_value, "value": result, "type": "f64"}
+
+
+def _counted_body(function, loops, declaration):
+    parameters = {row["name"]: row["type"] for row in declaration["parameters"]}
+    blocks = {block["number"]: block for block in function["blocks"]}
+    position = function["blocks"][0]["number"]
+    body, accesses, visited = [], [], set()
+    while position not in visited:
+        visited.add(position)
+        entry = blocks[position]
+        rows = _active_instructions(entry)
+        if entry["successors"] == ("EXIT",):
+            _require(len(rows) == 1 and rows[0]["text"] == "gimple_return <NULL>")
+            break
+        _require(len(rows) == 1 and rows[0]["opcode"] == "gimple_assign" and not rows[0]["memory"])
+        initial = _fields(rows[0])
+        _require(len(initial) == 5 and initial[0] == "integer_cst" and initial[2:] == ("0", "NULL", "NULL"))
+        _require(len(entry["successors"]) == 1 and entry["successors"][0] in loops)
+        header = entry["successors"][0]
+        check = blocks[header]
+        _require(len(check["branches"]) == 2 and len(check["successors"]) == 2)
+        repeat, exit_ = check["branches"]
+        _require({repeat, exit_} == set(check["successors"]) and loops[header] == {header, repeat}
+                 and repeat != header and exit_ in blocks and blocks[repeat]["successors"] == (header,)
+                 and not {header, repeat} & visited)
+        visited.update((header, repeat))
+        test = _active_instructions(check)
+        _require(test and test[-1]["opcode"] == "gimple_cond" and not test[-1]["memory"])
+        condition = _fields(test[-1])
+        _require(len(condition) == 5 and condition[0] == "lt_expr" and condition[3:] == ("NULL", "NULL"))
+        _, induction, upper, _, _ = condition
+        name = _VERSIONED_NAME.fullmatch(induction)
+        _require(name is not None and not name[2] and function["locals"].get(name[1]) == "int")
+        phis = [row for row in test[:-1] if row["opcode"] == "gimple_phi"]
+        _require(len(phis) == len(test) - 1)
+        index_phis = [row for row in phis if row["result"] == induction]
+        _require(len(index_phis) == 1 and all(row["result"].startswith(".MEM_") or row is index_phis[0]
+                                              for row in phis))
+        incoming = {block: value for value, block in index_phis[0]["phi"]}
+        _require(incoming.keys() == {position, repeat} and incoming[position] == initial[1])
+        lane = _CountedLane(_active_instructions(blocks[repeat]), induction, name[1], parameters)
+        bound = lane.parameter(upper, {"i32"})
+        statement = lane.finish(incoming[repeat])
+        accesses.extend({**access, "loop": len(body)} for access in lane.accesses)
+        body.append({"kind": "for", "index": name[1], "index_type": "i32", "start": ["constant", "i32", 0],
+                     "stop": ["parameter", "i32", bound], "step": 1, "comparison": "lt", "body": [statement]})
+        position = exit_
+    _require(visited == blocks.keys() and len(body) == len(loops) and bool(body))
+    return body, accesses
+
+
+def _counted_region(function, loops, declaration, region, operations, unit, locked, source):
+    if not declaration or not loops:
+        return None
+    start, stop = declaration["span"]
+    original = source[start:stop]
+    if not (0 <= start < stop <= len(source) and original.startswith(b"{") and original.endswith(b"}")
+            and not any(token in original for token in (b"#", b"%:", b"??=", b"\\\n", b"_Pragma", b"__pragma"))):
+        return None
+    try:
+        body, accesses = _counted_body(function, loops, declaration)
+    except _OutsideCountedProfile:
+        return None
+    return {"schema": "scar.native-region", "schema_version": 1, "region": region,
+            "operations": [row.id for row in operations], "symbol": function["symbol"],
+            "parameters": declaration["parameters"], "return_type": "void", "body": body,
+            "source": {"path": unit, "sha256": locked.sha256, "span": [start, stop],
+                       "slice_sha256": sha256(original).hexdigest()},
+            "effects": {"external": "NONE", "floating_exceptions": "PRESERVE_PROFILE", "accesses": accesses}}
+
+
 _KINDS = {"gimple_assign": "ASSIGN", "gimple_call": "CALL", "gimple_return": "RETURN",
           "gimple_phi": "PHI", "gimple_cond": "BRANCH", "gimple_switch": "BRANCH",
           "gimple_goto": "BRANCH", "gimple_label": "LABEL", "gimple_nop": "NOP"}
 
 
-def _function_graph(function, unit, source_lock):
+def _function_graph(function, unit, source_lock, loops, backedges):
     key = json.dumps([unit, function["symbol"], source_lock.sha256], separators=(",", ":"))
     region = f"fn:{sha256(key.encode()).hexdigest()[:24]}"
     blocks = function["blocks"]
-    loops, backedges = _natural_loops(blocks)
     children = defaultdict(list)
     loop_ids = {header: f"{region}:loop:{header}" for header in loops}
     for header, members in loops.items():
@@ -298,6 +496,7 @@ def _function_graph(function, unit, source_lock):
         children[loop_ids[min(parents)[2]] if parents else region].append(loop_ids[header])
     regions, operations, edges, calls, uses = [], [], [], [], []
     definitions, boundaries = {}, {}
+    scalar_types = function["scalar_types"]
     for block in blocks:
         number = block["number"]
         identity = f"{region}:bb:{number}"
@@ -328,12 +527,21 @@ def _function_graph(function, unit, source_lock):
             kind = _KINDS.get(opcode, "UNKNOWN")
             attributes = {"unit": unit, "symbol": function["symbol"], "opcode": opcode,
                           "gimple": instruction["text"], "source": instruction["site"]}
+            if scalar_types:
+                typed = {}
+                for name in (*names, *output):
+                    value = name.removesuffix("(D)")
+                    origin = value if value in scalar_types else value.rpartition("_")[0]
+                    if origin in scalar_types:
+                        typed[f"{region}:{name}"] = scalar_types[origin]
+                if typed:
+                    attributes["compiler_scalar_types"] = typed
             if phi:
                 attributes["incoming"] = [{"value": f"{region}:{name}", "block": f"{region}:bb:{pred}"}
                                           for name, pred in phi]
             if instruction.get("call") is not None:
                 attributes["callee"] = instruction["call"]
-                calls.append((op, instruction["call"]))
+                calls.append((op, instruction["call"], instruction["site"], memory))
             operations.append(Operation(op, identity, kind, opcode.removeprefix("gimple_"),
                                         tuple(f"{region}:{name}" for name in names),
                                         tuple(f"{region}:{name}" for name in output),
@@ -362,28 +570,54 @@ def _function_graph(function, unit, source_lock):
 
 
 def _graph(target, locked, captured):
-    regions, operations, edges, records, pending = [], [], [], [], []
+    regions, operations, edges, records, pending, counted = [], [], [], [], [], []
     definitions, local = defaultdict(list), {}
-    for (evidence, functions, symbols), unit in zip(captured, target["units"]):
+    root = Path(target["source_root"])
+    for (_, functions, symbols, typed_bodies, call_sites), unit in zip(captured, target["units"]):
         name = unit["path"]
         declarations = {row["symbol"]: row for row in symbols.values() if row["definition"]}
         module_children = []
+        source = None
         for body in functions:
-            identity, rs, ops, es, calls = _function_graph(body, name, locked[name])
+            loops, backedges = _natural_loops(body["blocks"])
+            identity, rs, ops, es, calls = _function_graph(body, name, locked[name], loops, backedges)
             regions.extend(rs)
             operations.extend(ops)
             edges.extend(es)
             module_children.append(identity)
             symbol = body["symbol"]
+            if loops and symbol in typed_bodies:
+                if source is None:
+                    source = read_artifact(locked[name])
+                row = _counted_region(body, loops, typed_bodies[symbol], identity, ops, name, locked[name], source)
+                if row is not None:
+                    counted.append(row)
             local[name, symbol] = identity
             owner = declarations.get(symbol)
             if owner is not None and owner["public"]:
                 definitions[symbol].append(identity)
             rows = tuple(symbols[ordinal] for ordinal in owner["calls"] if ordinal in symbols) if owner else ()
-            pending.extend((operation, name, symbol, callee, rows) for operation, callee in calls)
+            pending.extend((operation, name, symbol, callee, site, memory, rows, call_sites)
+                           for operation, callee, site, memory in calls)
         regions.append(Region(f"tu:{name}", "MODULE", name, children=tuple(module_children)))
-    for operation, unit, caller, callee, rows in pending:
+    for operation, unit, caller, callee, site, memory, rows, call_sites in pending:
         candidates = {row["symbol"] for row in rows if callee in (row["symbol"], row["display"])}
+        typed = defaultdict(set)
+        if site is not None:
+            file = root / (site["file"] or unit)
+            if file.is_relative_to(root):
+                call_site = file.relative_to(root).as_posix(), int(site["line"]), callee
+                column = int(site["column"])
+                for symbol, usr, type_, begin, end in call_sites.get(call_site, ()):
+                    if begin <= column and (end is None or column < end):
+                        typed[symbol].add((usr, type_))
+        authorities = ["GCC_IPA"]
+        if len(candidates) != 1 and typed:
+            observed = {row["symbol"] for row in rows}
+            bounded = set(typed).intersection(observed, candidates or observed)
+            if len(bounded) == 1:
+                candidates = bounded
+                authorities.append("CLANG_TYPED_OCCURRENCE")
         symbol = next(iter(candidates)) if len(candidates) == 1 else None
         target_id = None
         if symbol is not None:
@@ -398,9 +632,16 @@ def _graph(target, locked, captured):
             status = "UNBOUND_SYMBOL"
         if target_id:
             edges.append(Edge(operation, target_id, "CALL", symbol))
-        records.append({"operation": operation, "unit": unit, "caller": caller, "gimple_target": callee,
-                        "symbol": symbol, "target": target_id, "resolution": status})
-    return tuple(regions), tuple(operations), tuple(dict.fromkeys(edges)), records
+        record = {"operation": operation, "unit": unit, "caller": caller, "gimple_target": callee,
+                  "symbol": symbol, "target": target_id, "resolution": status, "source": site,
+                  "authority": authorities if symbol else [],
+                  "effects": {"external": "UNKNOWN",
+                              "memory_ssa": "DEFINITION" if memory and memory[1] else "USE" if memory else "UNOBSERVED"}}
+        if len(typed.get(symbol, ())) == 1:
+            usr, type_ = next(iter(typed[symbol]))
+            record["declaration"] = {"usr": usr, "type": type_}
+        records.append(record)
+    return tuple(regions), tuple(operations), tuple(dict.fromkeys(edges)), records, counted
 
 
 def build_native(target, reference, out, *, jobs):
@@ -432,7 +673,7 @@ def build_native(target, reference, out, *, jobs):
                     captured[index] = result
         for index in fortran:
             captured[index] = run(index)
-    regions, operations, edges, calls = _graph(target, locked, captured)
+    regions, operations, edges, calls, counted = _graph(target, locked, captured)
     units_evidence = [item[0] for item in captured]
     evidence = {
         "input": asdict(reference),
@@ -446,7 +687,9 @@ def build_native(target, reference, out, *, jobs):
     from .native_units import prepare_native_units
 
     try:
-        evidence["native_units"] = asdict(prepare_native_units(target, evidence, out / "native-units"))
+        material, typed_regions = prepare_native_units(target, evidence, out / "native-units", regions=counted)
+        evidence["native_units"] = asdict(material)
+        evidence["native_regions"] = typed_regions
     except (OSError, ValueError) as error:
         evidence["native_units_frontier"] = str(error)
     for receipt in (*locked.values(), *case_receipts, reference):

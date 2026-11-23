@@ -2,6 +2,7 @@
 
 import ast
 import math
+import re
 
 
 _BINARY = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div"}
@@ -132,3 +133,56 @@ def lower_portable(source_text, entry_name=None, *, tree=None):
     except _Unsupported:
         return None
     return dict(entry=entry_name, functions=list(prepared.values()))
+
+
+def lower_scalar_exports(tree, abi, declarations):
+    """Normalize explicitly bound, closed binary64 scalar functions."""
+    exports = abi.get("exports", {})
+    imports = abi.get("imports", {})
+    if not exports or exports.keys() & imports.keys():
+        raise ValueError("scalar ABI requires disjoint exported and imported names")
+    functions = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name not in functions:
+            functions[node.name] = node
+        elif not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                  and isinstance(node.value.value, str)):
+            raise ValueError("scalar ABI requires a closed module of ordinary functions")
+
+    def symbol(name, arity):
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+            raise ValueError("invalid scalar ABI link symbol")
+        if declarations.get(name) != arity:
+            raise ValueError(f"no matching native binary64 declaration for {name}")
+        return name
+
+    def expression(node, parameters):
+        if isinstance(node, ast.Name) and node.id in parameters:
+            return ["read", node.id]
+        if isinstance(node, ast.Constant) and type(node.value) is float and math.isfinite(node.value):
+            return ["constant", node.value]
+        if isinstance(node, ast.UnaryOp) and type(node.op) is ast.USub:
+            return ["neg", expression(node.operand, parameters)]
+        if isinstance(node, ast.BinOp) and type(node.op) in (ast.Add, ast.Sub, ast.Mult):
+            return [_BINARY[type(node.op)], expression(node.left, parameters), expression(node.right, parameters)]
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in imports
+                and node.func.id not in parameters and not node.keywords):
+            return ["call", symbol(imports[node.func.id], len(node.args)),
+                    *(expression(arg, parameters) for arg in node.args)]
+        raise ValueError("operation requires a more general Python scalar ABI")
+
+    prepared = []
+    for name, external in exports.items():
+        function = functions.get(name)
+        if function is None or function.decorator_list or function.returns is not None:
+            raise ValueError(f"unbound Python scalar export {name}")
+        args = function.args
+        if (args.posonlyargs or args.kwonlyargs or args.defaults or args.vararg or args.kwarg
+                or any(arg.annotation is not None for arg in args.args)):
+            raise ValueError(f"unsupported ABI parameters for {name}")
+        parameters = [arg.arg for arg in args.args]
+        if len(function.body) != 1 or not isinstance(function.body[0], ast.Return):
+            raise ValueError(f"expected one closed scalar return for {name}")
+        prepared.append(dict(name=symbol(external, len(parameters)), source_name=name, parameters=parameters,
+                             result=expression(function.body[0].value, parameters)))
+    return prepared

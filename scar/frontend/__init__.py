@@ -2,10 +2,93 @@
 
 import json
 from pathlib import Path
+import re
 
-from scar.contract import Graph, artifact, read_artifact, write_graph
+from scar.contract import Edge, Graph, artifact, read_artifact, write_graph
 
 from .hardware import snapshot
+
+
+def _scalar_declarations(native, compiler_types, symbols):
+    accepted = {}
+    for unit in native["units"]:
+        if unit.get("language", native["language"]) not in {"c", "c++"}:
+            continue
+        types = json.loads(read_artifact(compiler_types[unit["path"]]))
+        for row in types["records"]:
+            if row["kind"] != "FunctionDecl" or row["symbol"] not in symbols:
+                continue
+            match = re.fullmatch(r"double \(((?:double(?:, double)*)?)\)", row["canonical_type"])
+            arity = match[1].count("double") if match else None
+            if accepted.setdefault(row["symbol"], arity) != arity:
+                raise ValueError(f"inconsistent native declarations for {row['symbol']}")
+    return accepted
+
+
+def _mixed_graph(target, request, out, jobs):
+    from .native import build_native
+    from .python import build_python
+
+    python = [row for row in target["units"] if row.get("language") == "python"]
+    names = {row["path"] for row in python}
+    files = target["source_lock"]["files"]
+    native = dict(target, units=[row for row in target["units"] if row.get("language") != "python"],
+                  source_lock={"files": {path: entry for path, entry in files.items() if path not in names}})
+    folder = out / "native"
+    folder.mkdir()
+    native, regions, operations, edges, evidence = build_native(native, request, folder, jobs=jobs)
+    region_kinds = {region.id: region.kind for region in regions}
+    parents = {child: region.id for region in regions for child in region.children}
+    native_functions = {}
+    for op in operations:
+        symbol = op.attributes.get("symbol")
+        if symbol is not None:
+            region = op.region
+            while region_kinds[region] != "FUNCTION":
+                region = parents[region]
+            native_functions.setdefault(symbol, set()).add(region)
+
+    symbols = {symbol for unit in python for role in ("exports", "imports")
+               for symbol in unit["abi"].get(role, {}).values()}
+    declarations = _scalar_declarations(native, evidence["compiler_types"], symbols)
+    exported, functions = {}, []
+    regions, operations, edges = list(regions), list(operations), list(edges)
+    for index, unit in enumerate(python):
+        name = unit["path"]
+        folder = out / f"python-{index}"
+        folder.mkdir()
+        spec = dict(schema_version=1, source_root=native["source_root"], source=name,
+                    source_lock={"files": {name: files[name]}}, scalar_abi=unit["abi"])
+        _, rs, ops, links, proof = build_python(Path(request.path), folder, target=spec, declarations=declarations)
+        regions.extend(rs)
+        operations.extend(ops)
+        edges.extend(links)
+        evidence["locked_sources"].update(proof["locked_sources"])
+        evidence.setdefault("python_materials", {})[name] = proof["source_material"]
+        for function in proof["scalar_functions"]:
+            symbol = function["name"]
+            if symbol in exported or symbol in native_functions:
+                raise ValueError(f"multiple definitions for mixed-language symbol {symbol}")
+            exported[symbol] = function["region"]
+            functions.append(function)
+        imports = unit["abi"].get("imports", {})
+        for op in ops:
+            name = op.attributes.get("callee_syntax")
+            if op.kind == "CALL" and name in imports:
+                symbol = imports[name]
+                destinations = native_functions.get(symbol, ())
+                if len(destinations) != 1:
+                    raise ValueError(f"import {symbol} requires one native provider")
+                edges.append(Edge(op.id, next(iter(destinations)), "CALL", symbol))
+
+    for row in evidence["native_calls"]:
+        if row["resolution"] == "EXTERNAL" and row["symbol"] in exported:
+            row["target"] = exported[row["symbol"]]
+            row["resolution"] = "MIXED_ABI_DEFINITION"
+            edges.append(Edge(row["operation"], row["target"], "CALL", row["symbol"]))
+    evidence["scalar_functions"] = functions
+    native.update(units=target["units"], source_lock=target["source_lock"])
+    return native, tuple(regions), tuple(operations), tuple(edges), evidence
 
 
 def build(source: Path, out: Path, *, jobs: int = 1) -> Graph:
@@ -29,6 +112,8 @@ def build(source: Path, out: Path, *, jobs: int = 1) -> Graph:
 
         target, regions, operations, edges, evidence = build_python(source, evidence_dir, target=target,
                                                                   manifest=request)
+    elif any(unit.get("language") == "python" for unit in target.get("units", ())):
+        target, regions, operations, edges, evidence = _mixed_graph(target, request, evidence_dir, jobs)
     else:
         from .native import build_native
 

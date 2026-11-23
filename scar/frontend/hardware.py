@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import platform
 import re
 
 from scar.contract import Edge, Resource
@@ -33,6 +34,46 @@ def _memory(text):
     return int(match[1]) * 1024 if match else None
 
 
+def _cpu_isa():
+    by_cpu, profiles = {}, {}
+    for section in (_text(Path("/proc/cpuinfo")) or "").split("\n\n"):
+        fields = {key.strip(): value.strip() for line in section.splitlines()
+                  for key, separator, value in (line.partition(":"),) if separator}
+        number = fields.get("processor", "")
+        flags = fields.get("flags", fields.get("Features", ""))
+        if number.isdecimal() and flags:
+            features = tuple(sorted(set(flags.split())))
+            by_cpu[int(number)] = profiles.setdefault(features, f"isa:{len(profiles)}")
+    return by_cpu, {identity: list(features) for features, identity in profiles.items()}
+
+
+def _cache_size(text):
+    match = re.fullmatch(r"(\d+)([KMG]?)", text or "")
+    if match is None:
+        return None
+    power = {"": 0, "K": 1, "M": 2, "G": 3}
+    return int(match[1]) * 1024 ** power[match[2]]
+
+
+def _caches(root, allowed):
+    domains = {}
+    for cpu in sorted(allowed):
+        for location in sorted((root / f"cpu{cpu}" / "cache").glob("index*")):
+            level, kind = _integer(location / "level"), _text(location / "type")
+            shared = sorted(_numbers(_text(location / "shared_cpu_list")))
+            if level is None or kind is None or cpu not in shared:
+                continue
+            identity = f"cpu-cache:{level}:{kind.lower()}:{shared[0]}"
+            if identity not in domains:
+                domains[identity] = Resource(identity, "CPU_CACHE", _cache_size(_text(location / "size")),
+                    {"level": level, "type": kind, "shared_cpu_ids": shared, "capacity_unit": "bytes",
+                     "cache_line_bytes": _integer(location / "coherency_line_size"),
+                     "ways": _integer(location / "ways_of_associativity")})
+    edges = [Edge(f"cpu:{cpu}", identity, "RESOURCE", "SHARED_CPU_CACHE")
+             for identity, cache in domains.items() for cpu in cache.attributes["shared_cpu_ids"] if cpu in allowed]
+    return tuple(domains.values()), edges
+
+
 def _mount(path):
     selected = None
     for line in (_text(Path("/proc/self/mountinfo")) or "").splitlines():
@@ -52,13 +93,18 @@ def snapshot(path):
     online = _numbers(_text(cpu_root / "online"))
     affinity = getattr(os, "sched_getaffinity", None)
     allowed = set(affinity(0)) if affinity else online or set(range(os.cpu_count() or 1))
+    isa_by_cpu, isa_profiles = _cpu_isa()
+    architecture = platform.machine()
     by_cpu = {}
-    for node in sorted(Path("/sys/devices/system/node").glob("node[0-9]*")):
-        number = int(node.name[4:])
+    nodes = {int(row.name[4:]): row for row in Path("/sys/devices/system/node").glob("node[0-9]*")}
+    for number, node in sorted(nodes.items()):
         identity = f"dram:numa:{number}"
         cpus = _numbers(_text(node / "cpulist"))
+        metric = (_text(node / "distance") or "").split()
+        distances = dict(zip(map(str, sorted(nodes)), map(int, metric))) if all(row.isdecimal() for row in metric) else {}
         resources.append(Resource(identity, "NUMA_MEMORY", _memory(_text(node / "meminfo")),
-                                  {"node": number, "logical_cpus": sorted(cpus), "capacity_unit": "bytes"}))
+                                  {"node": number, "logical_cpus": sorted(cpus), "capacity_unit": "bytes",
+                                   "relative_distances": distances}))
         by_cpu.update({cpu: number for cpu in cpus})
     if not by_cpu:
         resources.append(Resource("dram:host", "DRAM", _memory(_text(Path("/proc/meminfo"))),
@@ -69,10 +115,15 @@ def snapshot(path):
         resources.append(Resource(f"cpu:{cpu}", "CPU", 1,
                                   {"logical_cpu": cpu, "package_id": _integer(topology / "physical_package_id"),
                                    "core_id": _integer(topology / "core_id"), "numa_node": number,
+                                   "architecture": architecture, "isa_profile": isa_by_cpu.get(cpu),
+                                   "smt_siblings": sorted(_numbers(_text(topology / "thread_siblings_list"))),
                                    "capacity_unit": "logical_thread"}))
         memory = f"dram:numa:{number}" if number is not None else "dram:host"
         if number is not None or not by_cpu:
             edges.append(Edge(f"cpu:{cpu}", memory, "RESOURCE", "HOST_MEMORY_ACCESS"))
+    caches, cache_edges = _caches(cpu_root, allowed)
+    resources.extend(caches)
+    edges.extend(cache_edges)
 
     storage = {}
     for device in sorted(Path("/sys/block").iterdir()) if Path("/sys/block").is_dir() else ():
@@ -121,5 +172,6 @@ def snapshot(path):
             resources.append(Resource(memory_id, "DEVICE_MEMORY", memory, {"capacity_unit": "bytes"}))
             edges.append(Edge(identity, memory_id, "RESOURCE", "DEVICE_MEMORY_ACCESS"))
     evidence = {"provider": "linux-proc-sysfs", "online_cpu_ids": sorted(online),
-                "affinity_cpu_ids": sorted(allowed), "cpu_constraint": "sched_getaffinity" if affinity else "inventory"}
+                "affinity_cpu_ids": sorted(allowed), "cpu_constraint": "sched_getaffinity" if affinity else "inventory",
+                "architecture": architecture, "isa_profiles": isa_profiles}
     return tuple(resources), tuple(edges), evidence

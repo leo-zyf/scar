@@ -1,11 +1,12 @@
 """B1 renders the executable IR as C++20 project inputs."""
 
+from collections import defaultdict
 import json
 import math
 from pathlib import Path
 import sys
 
-from scar.contract import ElementwiseEntry, FragmentModule, Member, read_artifact
+from scar.contract import ElementwiseEntry, FragmentModule, Member, ScalarModule, read_artifact, write_json
 
 
 _BINARY = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
@@ -106,6 +107,13 @@ constexpr std::int64_t input_count = @INPUTS@;
 
 @FUNCTIONS@
 
+bool pin_cpu(int cpu) {
+    cpu_set_t affinity;
+    CPU_ZERO(&affinity);
+    CPU_SET(cpu, &affinity);
+    return sched_setaffinity(0, sizeof(affinity), &affinity) == 0;
+}
+
 int main(int argc, char** argv) {
     constexpr std::int64_t bytes = elements * input_count * sizeof(double);
     std::error_code error;
@@ -113,6 +121,7 @@ int main(int argc, char** argv) {
         std::cerr << "input must contain the exact specialized payload\\n";
         return 65;
     }
+    if (!pin_cpu(cpus.front())) return 67;
     std::vector<double> input(elements * input_count), output(elements);
     std::ifstream file(argv[1], std::ios::binary);
     if (!file.read(reinterpret_cast<char*>(input.data()), bytes)) return 65;
@@ -120,10 +129,7 @@ int main(int argc, char** argv) {
 
     std::array<int, cpus.size()> errors{};
     auto execute = [&](std::size_t worker) {
-        cpu_set_t affinity;
-        CPU_ZERO(&affinity);
-        CPU_SET(cpus[worker], &affinity);
-        if (sched_setaffinity(0, sizeof(affinity), &affinity) != 0) {
+        if (worker != 0 && !pin_cpu(cpus[worker])) {
             errors[worker] = 67;
             return;
         }
@@ -167,6 +173,13 @@ def _fragments(body, project, bundle):
     if (set(material) != {"schema", "schema_version", "configuration", "fragments", "exports"}
             or material["schema"] != "scar.native-units-ir" or material["schema_version"] != 1):
         raise ValueError("invalid C++20 fragment module")
+    regions = defaultdict(list)
+    configuration = material["configuration"]
+    for row in body.regions:
+        regions[row["fragment"]["path"]].append(row)
+    if not regions.keys() <= set(configuration["sources"]) & material["fragments"].keys():
+        raise ValueError("a typed native region has no owned C++20 unit")
+    definitions, decisions = [], []
     for name, reference in material["fragments"].items():
         relative = Path(name)
         if (relative.as_posix() != name or len(relative.parts) < 2 or ".." in relative.parts
@@ -174,15 +187,35 @@ def _fragments(body, project, bundle):
             raise ValueError(f"invalid C++20 fragment path {name}")
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(read_artifact(Member(**reference).resolve(bundle)))
-    return material["configuration"], tuple(material["exports"]), None
+        data = read_artifact(Member(**reference).resolve(bundle))
+        if name in regions:
+            from .regions import render_regions
+
+            data, helpers, emitted = render_regions(regions[name], configuration, name, data)
+            definitions.extend(helpers)
+            decisions.extend(emitted)
+        destination.write_bytes(data)
+    if decisions:
+        from .regions import emit_region_helpers
+
+        emit_region_helpers(project, configuration, definitions)
+        write_json(project / "native-region-lowering.json", dict(schema="scar.native-region-lowering",
+                   schema_version=1, regions=decisions))
+    return configuration, tuple(material["exports"]), None
 
 
 def lower_project(ir, project, bundle):
-    """Return C++20 build inputs and the ABI of one sealed executable body."""
-    body, = ir.bodies
-    if isinstance(body, ElementwiseEntry):
-        return _elementwise(body, ir.cpu_ids, project)
-    if isinstance(body, FragmentModule):
-        return _fragments(body, project, bundle)
-    raise ValueError("unsupported executable body")
+    """Return C++20 build inputs and the ABI of the sealed executable entry."""
+    if len(ir.bodies) == 1 and isinstance(ir.bodies[0], ElementwiseEntry):
+        return _elementwise(ir.bodies[0], ir.cpu_ids, project)
+    fragments = next((body for body in ir.bodies if isinstance(body, FragmentModule)), None)
+    if fragments is None:
+        raise ValueError("standalone scalar IR needs a native entry module")
+    configuration, exports, invocation = _fragments(fragments, project, bundle)
+    for body in ir.bodies:
+        if isinstance(body, ScalarModule):
+            from .scalars import emit_scalar_module
+
+            emit_scalar_module(body, project, configuration)
+            exports = (*exports, *(function["name"] for function in body.functions))
+    return configuration, exports, invocation

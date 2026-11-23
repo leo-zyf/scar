@@ -3,6 +3,7 @@
 import ast
 from collections import Counter, defaultdict
 from dataclasses import asdict, replace
+from hashlib import sha256
 from io import BytesIO
 import math
 from pathlib import Path
@@ -12,7 +13,7 @@ import tokenize
 
 from scar.contract import Edge, Operation, Region, artifact, read_artifact, write_json
 
-from .portable import lower_portable
+from .portable import lower_portable, lower_scalar_exports
 
 
 _FUNCTION = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -61,7 +62,8 @@ def _parameters(args):
 class _Graph:
     def __init__(self, unit, digest):
         self.unit = unit
-        self.root = f"python:{digest}:module"
+        identity = sha256((unit + "\0" + digest).encode()).hexdigest()
+        self.root = f"python:{identity}:module"
         self.regions = {self.root: ("MODULE", unit)}
         self.children = defaultdict(list)
         self.owners = defaultdict(list)
@@ -326,7 +328,7 @@ class _Graph:
         return regions, tuple(self.operations.values()), tuple(dict.fromkeys(self.edges))
 
 
-def build_python(path, out, *, target=None, manifest=None):
+def build_python(path, out, *, target=None, manifest=None, declarations=None):
     if target is not None:
         if target.get("schema_version") != 1:
             raise ValueError("Python manifest requires scar.python-entry v1")
@@ -373,6 +375,21 @@ def build_python(path, out, *, target=None, manifest=None):
     if portable:
         target["entry"] = portable["entry"]
         evidence["portable"] = portable
+    if "scalar_abi" in target:
+        functions = lower_scalar_exports(tree, target["scalar_abi"], declarations or {})
+        module = regions[0]
+        members = {region.name: region.id for region in regions
+                   if region.id in module.children and region.kind == "FUNCTION"}
+        for function in functions:
+            function["region"] = members[function["source_name"]]
+        evidence["scalar_functions"] = functions
+    if "observe" in target:
+        from .observe import observe_python
+
+        observed, links = observe_python(path, target["entry"], target["observe"], out, regions, operations)
+        evidence["observation"] = asdict(observed)
+        evidence["coverage"]["runtime"] = "BOUNDED_CALLS"
+        edges = (*edges, *links)
     read_artifact(reference)
     if manifest:
         read_artifact(manifest)

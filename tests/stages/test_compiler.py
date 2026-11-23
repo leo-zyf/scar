@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from ctypes import CDLL, c_double
+import runpy
 
 import pytest
 
@@ -52,10 +54,18 @@ def run(initial, fixed, count):
     return initial
 """, encoding="utf-8")
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
-    _stage(tmp_path, "frontend", "build", "--entry", source, "--out", graph)
+    initial = np.arange(15, dtype="<f8").reshape(3, 5) / 8
+    fixed = (np.arange(15, dtype="<f8").reshape(3, 5) + 1) / 16
+    np.save(tmp_path / "initial.npy", initial)
+    np.save(tmp_path / "fixed.npy", fixed)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(dict(schema="scar.python-entry", schema_version=1, source=source.name,
+        entry="run", observe=dict(arguments=[{"npy": "initial.npy"}, {"npy": "fixed.npy"}, {"scalar": 4}]))))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
     document = json.loads((graph / "graph.json").read_bytes())
     assert any(region["kind"].lower() == "loop" for region in document["regions"])
     assert any(resource["kind"] == "CPU" for resource in document["resources"])
+    assert any(edge["kind"] == "OBSERVED_CALL" for edge in document["edges"])
 
     shape = tmp_path / "shape.json"
     shape.write_text("[3, 5]\n")
@@ -66,17 +76,14 @@ def run(initial, fixed, count):
     assert result["status"] == "TRIAL_COMPILED"
     assert result["deployment_authorized"] is False
 
-    initial = np.arange(15, dtype="<f8").reshape(3, 5) / 8
-    fixed = (np.arange(15, dtype="<f8").reshape(3, 5) + 1) / 16
     inputs, output = tmp_path / "input.bin", tmp_path / "output.bin"
     inputs.write_bytes(initial.tobytes() + fixed.tobytes())
     _run([result["executable"]["path"], inputs, output], tmp_path)
-    import runpy
-
     assert output.read_bytes() == runpy.run_path(str(source))["run"](initial, fixed, 4).tobytes()
 
 
-def test_locked_mixed_target_three_stages(tmp_path):
+@pytest.mark.parametrize("python_binding", (False, True))
+def test_locked_mixed_target_three_stages(tmp_path, python_binding):
     if any(shutil.which(name) is None for name in ("gcc", "g++", "gfortran", "cmake", "nm", "readelf")):
         pytest.skip("native C++20 build tools unavailable")
     prefix = Path(os.environ.get("SCAR_CI_F2C_PREFIX", "/usr"))
@@ -89,7 +96,13 @@ def test_locked_mixed_target_three_stages(tmp_path):
     sources.mkdir()
     units = [
         ("old.c", "c", "c89", "int old(x)\nint x;\n{ return x + 1; }\n"),
-        ("new.c", "c", "c17", "int modern(int x) { return x * 2; }\n"),
+        ("new.c", "c", "c17", "int modern(int x) { return x * 2; }\n"
+         "double scale_value(double x) { return 2.0 * x; }\n"
+         "void initialize(double *a, double *b, int n) {\n"
+         "    int i;\n"
+         "    for (i = 0; i < n; ++i) a[i] = 1.0 + (double)i / n;\n"
+         "    for (i = 0; i < n; ++i) b[i] = a[i];\n"
+         "}\n"),
         ("cpp.cpp", "c++", "c++17", 'extern "C" int newest(int x) { return x - 3; }\n'),
         ("main.cpp", "c++", "c++98", '''
 #include <cstdio>
@@ -98,10 +111,23 @@ extern "C" int modern(int);
 extern "C" int newest(int);
 extern "C" int formula_(int*);
 extern "C" int extra(int*);
+extern "C" void initialize(double*, double*, int);
+#ifdef SCAR_PYTHON_ABI
+extern "C" double python_adjust(double);
+#endif
 int main() {
     int n;
     if (std::scanf("%d", &n) != 1) return 1;
+    double first[5], second[5], overlapping[6];
+    initialize(first, second, 5);
+    initialize(overlapping, overlapping + 1, 5);
+    for (int i = 0; i < 5; ++i) {
+        if (first[i] != second[i] || overlapping[i + 1] != 1.0) return 2;
+    }
     std::printf("%d\\n", old(n) + modern(n) + newest(n) + formula_(&n) + extra(&n));
+#ifdef SCAR_PYTHON_ABI
+    std::printf("%.1f\\n", python_adjust(n));
+#endif
     return 0;
 }
 '''),
@@ -124,7 +150,8 @@ end function extra
         source.write_bytes(raw)
         files[name] = {"sha256": sha256(raw).hexdigest(), "size_bytes": len(raw)}
         options = ["-std=" + standard]
-        profiles.append(dict(path=name, language=language, flags=options))
+        unit_flags = [*options, "-DSCAR_PYTHON_ABI"] if python_binding and name == "main.cpp" else options
+        profiles.append(dict(path=name, language=language, flags=unit_flags))
         compiler = {"c": "gcc", "c++": "g++", "fortran": "gfortran"}[language]
         object_file = tmp_path / f"baseline-{index}.o"
         _run([compiler, *options, "-O2", "-c", source, "-o", object_file], tmp_path)
@@ -133,21 +160,44 @@ end function extra
     _run(["g++", *objects, "-lgfortran", "-lm", "-o", baseline], tmp_path)
     case = tmp_path / "input.txt"
     case.write_bytes(b"7\n")
+    expected = b"91\n"
+    if python_binding:
+        source = sources / "adjust.py"
+        raw = b"def adjust(value):\n    return native_scale(value) + 0.5\n"
+        source.write_bytes(raw)
+        files[source.name] = {"sha256": sha256(raw).hexdigest(), "size_bytes": len(raw)}
+        profiles.append(dict(path=source.name, language="python", flags=[],
+                             abi=dict(exports={"adjust": "python_adjust"}, imports={"native_scale": "scale_value"})))
+        provider = tmp_path / "original-provider.so"
+        _run(["gcc", "-shared", "-fPIC", sources / "new.c", "-o", provider], tmp_path)
+        scale = CDLL(provider).scale_value
+        scale.argtypes, scale.restype = [c_double], c_double
+        result = runpy.run_path(str(source), init_globals={"native_scale": scale})["adjust"](7.0)
+        expected += f"{result:.1f}\n".encode()
     manifest = tmp_path / "request.json"
     manifest.write_text(json.dumps(dict(schema="scar.native-entry", schema_version=1, language="mixed",
         source_root=str(sources), entry="main", units=profiles, source_lock={"files": files},
         fortran={name: str(path.resolve()) for name, path in f2c.items()},
         baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
-        cases=[dict(id="mixed", stdin=str(case), comparison="exact")])))
+        cases=[] if python_binding else [dict(id="mixed", stdin=str(case), comparison="exact")])))
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--jobs", 3, "--out", graph)
+    if python_binding:
+        document = json.loads((graph / "graph.json").read_bytes())
+        links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
+        assert {"python_adjust", "scale_value"} <= links
     original = baseline.rename(tmp_path / "hidden-original")
     case.rename(tmp_path / "hidden-case")
     sources.rename(tmp_path / "hidden-sources")
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    logical = json.loads((plan / "plan.json").read_bytes())
+    assert all(row["resource"] is None and row["start_ns"] is None for row in logical["schedule"])
+    assert any(row["rule"] == "FUSE_ADJACENT_COUNTED_PRODUCER_COPY" for row in logical["rewrites"])
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
-    assert result["status"] == "VALIDATED"
+    assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
+    assert (delivery / "project/native-region-lowering.json").is_file()
     executable = Path(result["executable"]["path"])
-    assert _run([executable], tmp_path, input=b"7\n") == _run([original], tmp_path, input=b"7\n") == b"91\n"
+    assert _run([original], tmp_path, input=b"7\n") == b"91\n"
+    assert _run([executable], tmp_path, input=b"7\n") == expected

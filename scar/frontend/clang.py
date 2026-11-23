@@ -38,6 +38,49 @@ _Visitor = CFUNCTYPE(c_uint, _Cursor, _Cursor, c_void_p)
 _CALLABLES = {'FunctionDecl', 'CXXMethod', 'Constructor', 'Destructor', 'ConversionFunction'}
 _CX_LINKAGE_EXTERNAL = 4
 _GNU_CFI_HEADER = 'ISO_Fortran_binding.h'
+_LOOP_TYPES = {'int': 'i32', 'double': 'f64',
+               'double *': 'ptr<f64>', 'const double *': 'ptr<const f64>'}
+
+
+def counted_function_bodies(document):
+    """Locate closed void bodies whose source statements can match counted SSA loops."""
+    records, parents = document['records'], defaultdict(list)
+    for record in records:
+        if record['path'] == document['path']:
+            parents[record['parent']].append(record)
+    bodies = {}
+    for index, declaration in enumerate(records):
+        if (declaration['path'] != document['path'] or declaration['kind'] != 'FunctionDecl'
+                or not declaration['definition'] or not declaration['symbol']
+                or not declaration['canonical_type'].startswith('void (')):
+            continue
+        children = parents[index]
+        arguments = [row for row in children if row['kind'] == 'ParmDecl']
+        compounds = [row for row in children if row['kind'] == 'CompoundStmt']
+        if (len(compounds) != 1 or not compounds[0]['span']
+                or any(not row['name'] or row['canonical_type'] not in _LOOP_TYPES for row in arguments)):
+            continue
+        bodies[declaration['symbol']] = {
+            'span': compounds[0]['span'],
+            'parameters': [{'name': row['name'], 'type': _LOOP_TYPES[row['canonical_type']]} for row in arguments],
+        }
+    return bodies
+
+
+def typed_call_occurrences(document):
+    """Index explicit calls by their observed source spelling and compiler declaration."""
+    calls = defaultdict(set)
+    for row in document['records']:
+        target = row['reference']
+        if row['kind'] == 'CallExpr' and target and target.get('symbol') and row.get('call_range'):
+            start_line, start_column, end_line, end_column = row['call_range']
+            for line in range(start_line, end_line + 1):
+                calls[row['path'], line, target['name']].add((
+                    target['symbol'], target['usr'], target['canonical_type'],
+                    start_column if line == start_line else 0,
+                    end_column if line == end_line else None,
+                ))
+    return calls
 
 
 @lru_cache(maxsize=8)
@@ -150,8 +193,8 @@ def capture_unit(source_root, unit, *, cfi=None):
                     return 1
                 kind = string(lib.clang_getCursorKindSpelling(cur.kind))
                 span = lib.clang_getCursorExtent(cur)
-                begin_path, _, _, begin = location(lib.clang_getRangeStart(span))
-                end_path, _, _, end = location(lib.clang_getRangeEnd(span))
+                begin_path, start_line, start_column, begin = location(lib.clang_getRangeStart(span))
+                end_path, end_line, end_column, end = location(lib.clang_getRangeEnd(span))
                 type_ = lib.clang_getCursorType(cur)
                 reference = lib.clang_getCursorReferenced(cur)
                 target = None
@@ -162,6 +205,9 @@ def capture_unit(source_root, unit, *, cfi=None):
                                   kind=reference_kind,
                                   symbol=string(lib.clang_Cursor_getMangling(reference))
                                   if reference_kind in _CALLABLES else '')
+                    if kind == 'CallExpr' and reference_kind in _CALLABLES:
+                        target_type = lib.clang_getCanonicalType(lib.clang_getCursorType(reference))
+                        target['canonical_type'] = string(lib.clang_getTypeSpelling(target_type))
                     if reference_kind == 'FunctionDecl' and target['symbol'].startswith('CFI_'):
                         header, _, _, _ = location(lib.clang_getCursorLocation(reference))
                         if cfi is not None and header == cfi.snapshot:
@@ -182,6 +228,8 @@ def capture_unit(source_root, unit, *, cfi=None):
                                     offset=offset, span=[begin, end] if begin_path == end_path == path else None,
                                     type=string(lib.clang_getTypeSpelling(type_)),
                                     canonical_type=string(lib.clang_getTypeSpelling(lib.clang_getCanonicalType(type_)))))
+                if kind == 'CallExpr' and begin_path == end_path == path:
+                    records[-1]['call_range'] = [start_line, start_column, end_line, end_column]
                 children(cur, index)
             except Exception as exc:
                 error = exc

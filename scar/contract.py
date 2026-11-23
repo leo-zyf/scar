@@ -12,6 +12,7 @@ from tempfile import NamedTemporaryFile
 GRAPH_SCHEMA = "scar.graph-bundle"
 PLAN_SCHEMA = "scar.compiler-plan"
 WIRE_VERSION = 3
+PLAN_WIRE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,7 @@ class Graph:
 @dataclass(frozen=True)
 class Step:
     operation: str
-    resource: str
+    resource: str | None = None
     start_ns: int | None = None
     duration_ns: int | None = None
     depends_on: tuple[str, ...] = ()
@@ -104,6 +105,7 @@ class FragmentModule:
     """Opaque C++20-compatible leaves retained by the source adapters."""
 
     artifact: Member
+    regions: tuple[dict, ...] = ()
     kind: str = field(default="FRAGMENT_MODULE", init=False)
 
 
@@ -118,10 +120,18 @@ class ElementwiseEntry:
 
 
 @dataclass(frozen=True)
+class ScalarModule:
+    """Closed scalar functions with explicit link symbols."""
+
+    functions: tuple[dict, ...]
+    kind: str = field(default="SCALAR_MODULE", init=False)
+
+
+@dataclass(frozen=True)
 class ExecutableIR:
     """The sole code generation input. Source language is absent from this layer."""
 
-    bodies: tuple[FragmentModule | ElementwiseEntry, ...] = ()
+    bodies: tuple[FragmentModule | ElementwiseEntry | ScalarModule, ...] = ()
     cpu_ids: tuple[int, ...] = ()
     cxx_standard: int = 20
 
@@ -134,6 +144,8 @@ class Plan:
     schedule: tuple[Step, ...]
     lowering: ExecutableIR
     decision: dict
+    reference_lowering: ExecutableIR | None = None
+    resources: tuple[Resource, ...] = ()
 
 
 def _identity(path, data):
@@ -207,7 +219,7 @@ def write_json(path, document):
     return _identity(path, encoded)
 
 
-def _open(path, filename, schema):
+def _open(path, filename, schema, *, versions=(WIRE_VERSION,)):
     path = Path(path)
     if path.is_dir():
         path = path / filename
@@ -216,9 +228,10 @@ def _open(path, filename, schema):
     document = json.loads(data)
     if type(document) is not dict or document.pop("schema", None) != schema:
         raise ValueError(f"invalid {schema} document")
-    if document.pop("schema_version", None) != WIRE_VERSION:
+    version = document.pop("schema_version", None)
+    if version not in versions:
         raise ValueError(f"unsupported {schema} version")
-    return _identity(path, data), document
+    return _identity(path, data), document, version
 
 
 def _rows(rows, model, tuple_fields=()):
@@ -268,7 +281,7 @@ def write_graph(path, graph):
 
 
 def open_graph(path):
-    reference, value = _open(path, "graph.json", GRAPH_SCHEMA)
+    reference, value, _ = _open(path, "graph.json", GRAPH_SCHEMA)
     graph = Graph(
         value["target"],
         _rows(value["regions"], Region, ("operations", "children")),
@@ -295,24 +308,44 @@ def validate_plan(plan):
         for key in step.depends_on:
             if key == step.operation or key not in steps:
                 raise ValueError(f"unbound schedule dependency for {step.operation}")
-    lowering = plan.lowering
-    if (lowering.cxx_standard != 20 or len(lowering.bodies) > 1
+    for lowering in (plan.lowering, plan.reference_lowering):
+        if lowering is not None:
+            _validate_lowering(lowering)
+    return plan
+
+
+def _validate_lowering(lowering):
+    kinds = {body.kind for body in lowering.bodies}
+    if (lowering.cxx_standard != 20 or len(kinds) != len(lowering.bodies)
+            or ("ELEMENTWISE_ENTRY" in kinds and len(kinds) != 1)
             or len(set(lowering.cpu_ids)) != len(lowering.cpu_ids)
             or any(type(cpu) is not int or cpu < 0 for cpu in lowering.cpu_ids)):
         raise ValueError("invalid executable IR target or CPU allocation")
     for body in lowering.bodies:
         if isinstance(body, ElementwiseEntry):
-            if (not lowering.cpu_ids or len(body.shape) != 2
+            if (len(body.shape) != 2
                     or any(type(size) is not int or size <= 0 for size in body.shape)
                     or type(body.count) is not int or not 0 < body.count < 2**63):
                 raise ValueError("invalid elementwise entry shape or count")
+        elif isinstance(body, ScalarModule):
+            if not body.functions:
+                raise ValueError("empty scalar function module")
         elif not isinstance(body, FragmentModule):
             raise ValueError("unsupported executable IR body")
-    return plan
 
 
 def write_plan(path, plan):
-    return write_json(path, dict(schema=PLAN_SCHEMA, schema_version=WIRE_VERSION, **asdict(validate_plan(plan))))
+    _verify_logical(plan)
+    return write_json(path, dict(schema=PLAN_SCHEMA, schema_version=PLAN_WIRE_VERSION, **asdict(validate_plan(plan))))
+
+
+def _verify_logical(plan):
+    for ir in (plan.lowering, plan.reference_lowering):
+        if ir is not None and ir.cpu_ids:
+            raise ValueError("logical IR has a backend CPU assignment")
+    for step in plan.schedule:
+        if any(field is not None for field in (step.resource, step.start_ns, step.duration_ns)):
+            raise ValueError("logical dependencies have a backend resource or time assignment")
 
 
 def _lowering_from_dict(document):
@@ -326,19 +359,26 @@ def _lowering_from_dict(document):
             row["shape"] = tuple(row["shape"])
             bodies.append(ElementwiseEntry(**row))
         elif kind == "FRAGMENT_MODULE":
-            bodies.append(FragmentModule(Member(**row["artifact"])))
+            bodies.append(FragmentModule(Member(**row["artifact"]), tuple(row.get("regions", ()))))
+        elif kind == "SCALAR_MODULE":
+            bodies.append(ScalarModule(tuple(row["functions"])))
         else:
             raise ValueError(f"unsupported executable IR body {kind}")
     return ExecutableIR(tuple(bodies), tuple(document["cpu_ids"]), document["cxx_standard"])
 
 
 def open_plan(path):
-    reference, value = _open(path, "plan.json", PLAN_SCHEMA)
+    reference, value, version = _open(path, "plan.json", PLAN_SCHEMA, versions=(WIRE_VERSION, PLAN_WIRE_VERSION))
     value["graph"] = Artifact(**value["graph"])
     value["rewrites"] = tuple(value["rewrites"])
     value["schedule"] = _rows(value["schedule"], Step, ("depends_on",))
     value["lowering"] = _lowering_from_dict(value["lowering"])
+    if value.get("reference_lowering") is not None:
+        value["reference_lowering"] = _lowering_from_dict(value["reference_lowering"])
+    value["resources"] = _rows(value.get("resources", ()), Resource)
     plan = validate_plan(Plan(**value))
+    if version == PLAN_WIRE_VERSION:
+        _verify_logical(plan)
     return reference, plan
 
 

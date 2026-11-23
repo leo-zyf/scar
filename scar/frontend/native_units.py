@@ -195,7 +195,7 @@ def _c_abi_spans(path, data, declarations):
         yield start, stop
 
 
-def _lower_c(path, data, declarations, conversions, definitions, edits):
+def _lower_c(path, data, declarations, conversions, definitions, edits, regions):
     linkage = list(_c_abi_spans(path, data, declarations))
     insertions = defaultdict(list)
     prior = 0
@@ -221,7 +221,26 @@ def _lower_c(path, data, declarations, conversions, definitions, edits):
         if start in replacements or any(left < stop and start < right for left, right in conversions):
             raise ValueError(f'selected source edit overlaps a typed C++20 conversion: {path}:{start}')
         replacements[start] = stop, replacement
-    return _apply_spans(path, data, insertions, replacements), provenance, linkage
+    converted = _apply_spans(path, data, insertions, replacements)
+    return converted, provenance, linkage, _map_body_spans(data, converted, insertions, replacements, regions)
+
+
+def _map_body_spans(original, converted, insertions, replacements, regions):
+    result = {}
+    for region in regions:
+        start, stop = region['source']['span']
+        if any(start < offset < stop for offset in insertions):
+            continue
+        if any(left < stop and start < right for left, (right, _) in replacements.items()):
+            continue
+        delta = sum(len(data) - (right - left) for left, (right, data) in replacements.items() if right <= start)
+        begin = start + delta + sum(map(len, (data for offset, rows in insertions.items()
+                                            if offset <= start for data in rows)))
+        end = stop + delta + sum(map(len, (data for offset, rows in insertions.items()
+                                          if offset < stop for data in rows)))
+        if original[start:stop] == converted[begin:end]:
+            result[region['region']] = [begin, end]
+    return result
 
 
 def _apply_spans(path, data, insertions, replacements):
@@ -301,7 +320,7 @@ def _source_edits(rows, units, source_bytes):
     return edits
 
 
-def stage_native_sources(manifest, lowering, project):
+def stage_native_sources(manifest, lowering, project, regions):
     """Translate and stage pinned source inputs using the plan's original type evidence."""
     profile = manifest['language']
     units = {unit['path']: unit for unit in manifest['units']}
@@ -328,7 +347,7 @@ def stage_native_sources(manifest, lowering, project):
         for key in ('link_options', 'runtime_dirs'):
             if manifest.get(key):
                 build[key] = manifest[key]
-        return build
+        return build, {}
     c_units = [units[name] for name, language in languages.items() if language == 'c']
     cxx_units = [units[name] for name, language in languages.items() if language == 'c++' and fortran]
     c_root = Path('src/c-abi') if mixed else Path('src')
@@ -340,17 +359,20 @@ def stage_native_sources(manifest, lowering, project):
     if (decls.keys() | casts.keys() | headers.keys()) - material.keys():
         raise ValueError('C translation referenced project files missing from the source lock')
 
-    settings, translation = {}, []
+    settings, translation, anchors = {}, [], {}
     for name, data in source_bytes.items():
         language = languages.get(name)
+        unit_regions = regions.get(name, ())
         if language == 'c' or (language is None and mixed and c_units):
             output = c_root / name
             if language == 'c':
                 output = output.with_suffix('.cpp')
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, c_root)
             selected = [(start, *edit) for start, edit in edits.get(name, {}).items()]
-            converted, conversions, linkage = _lower_c(name, data, decls[name], casts[name], headers[name], selected)
+            converted, conversions, linkage, spans = _lower_c(
+                name, data, decls[name], casts[name], headers[name], selected, unit_regions)
             _stage(project, output, converted)
+            anchors.update({region: (output.as_posix(), span) for region, span in spans.items()})
             if language == 'c' or conversions or linkage:
                 row = dict(source=name, output=str(output), c_pointer_conversions=conversions, c_linkage=linkage)
                 if headers[name]:
@@ -359,7 +381,11 @@ def stage_native_sources(manifest, lowering, project):
                 translation.append(row)
         if language in (None, 'c++'):
             output = cxx_root / name
-            _stage(project, output, _apply_spans(name, data, {}, edits.get(name, {})))
+            replacements = edits.get(name, {})
+            converted = _apply_spans(name, data, {}, replacements)
+            _stage(project, output, converted)
+            spans = _map_body_spans(data, converted, {}, replacements, unit_regions)
+            anchors.update({region: (output.as_posix(), span) for region, span in spans.items()})
             if language == 'c++':
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, cxx_root)
 
@@ -385,16 +411,20 @@ def stage_native_sources(manifest, lowering, project):
     linkage['libraries'] = (*linkage['libraries'], *fortran_libraries)
     common = set(settings.values())
     include_dirs, compile_options = next(iter(common)) if len(common) == 1 else ((), ())
-    return dict(sources=tuple(settings), include_dirs=include_dirs, compile_options=compile_options,
-                source_settings=settings if len(common) > 1 else {}, **linkage)
+    configuration = dict(sources=tuple(settings), include_dirs=include_dirs, compile_options=compile_options,
+                         source_settings=settings if len(common) > 1 else {}, **linkage)
+    return configuration, anchors
 
 
-def prepare_native_units(target, evidence, out) -> Artifact:
+def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact, list[dict]]:
     """Seal the C++20-compatible leaves without lowering the whole execution graph."""
     out = Path(out)
     out.mkdir(parents=True)
     pending = out / 'inputs'
-    configuration = stage_native_sources(target, evidence, pending)
+    by_unit = defaultdict(list)
+    for region in regions:
+        by_unit[region['source']['path']].append(region)
+    configuration, anchors = stage_native_sources(target, evidence, pending, by_unit)
     fragments = {}
     for directory in ('src', 'include'):
         for path in sorted((pending / directory).rglob('*')):
@@ -405,5 +435,12 @@ def prepare_native_units(target, evidence, out) -> Artifact:
     exports = []
     if emission.is_file():
         exports = sorted(row['symbol'] for row in json.loads(emission.read_bytes())['c_exports'])
+    retained = []
+    for region in regions:
+        if region['region'] in anchors:
+            path, span = anchors[region['region']]
+            fragment = {'path': path, 'span': span, 'sha256': fragments[path]['sha256'],
+                        'slice_sha256': region['source']['slice_sha256']}
+            retained.append({**region, 'fragment': fragment})
     return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=1,
-                       configuration=configuration, fragments=fragments, exports=exports))
+                       configuration=configuration, fragments=fragments, exports=exports)), retained
