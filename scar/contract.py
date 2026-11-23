@@ -14,8 +14,8 @@ PLAN_SCHEMA = "scar.compiler-plan"
 LEGACY_WIRE_VERSION = 3
 GRAPH_WIRE_VERSION = 4
 PLAN_WIRE_VERSION = 4
-NATIVE_GRAPH_VERSION = 5
-NATIVE_PLAN_VERSION = 3
+NATIVE_GRAPH_VERSION = 6
+NATIVE_PLAN_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -211,6 +211,8 @@ def read_native_material(reference, *, graph):
     first_abi, first_adaptation = (4, 5) if graph else (2, 3)
     maps = {"abi_units": first_abi, "c_adaptations": first_adaptation}
     fields.update(name for name, first in maps.items() if version >= first)
+    if version >= (6 if graph else 4):
+        fields.add("fortran_transport")
     if graph and version >= 2:
         fields.add("region_seals")
     if (set(document) != fields or any(type(document[key]) is not dict
@@ -218,6 +220,15 @@ def read_native_material(reference, *, graph):
         raise ValueError("invalid native module material fields")
     for key in maps:
         document.setdefault(key, {})
+    transport = document.setdefault("fortran_transport", None)
+    if transport is not None and (type(transport) is not dict
+            or set(transport) != {"translator", "header", "units"}
+            or type(transport["header"]) is not dict
+            or type(transport["units"]) is not list or not transport["units"]
+            or any(type(unit) is not dict or set(unit) != {"source", "output", "extended", "descriptor_arrays"}
+                   or type(unit["source"]) is not dict or type(unit["output"]) is not str
+                   for unit in transport["units"])):
+        raise ValueError("invalid Fortran transport material")
     if not document["c_adaptations"].keys() <= document["fragments"].keys():
         raise ValueError("C compatibility declarations require an owned source fragment")
     return document

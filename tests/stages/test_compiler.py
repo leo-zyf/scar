@@ -41,6 +41,18 @@ def _stage(folder, phase, *arguments):
     return json.loads(_run([sys.executable, "-B", "-c", _PHASE_COMMAND, phase, *map(str, arguments)], folder))
 
 
+def _f2c_toolchain(folder):
+    if any(shutil.which(name) is None for name in ("gcc", "g++", "gfortran", "cmake", "nm", "readelf")):
+        pytest.skip("native C++20 build tools unavailable")
+    prefix = Path(os.environ.get("SCAR_CI_F2C_PREFIX", "/usr"))
+    arch = _run(["gcc", "-print-multiarch"], folder).decode().strip()
+    paths = {"f2c": prefix / "bin/f2c", "f2c_header": prefix / "include/f2c.h",
+             "f2c_archive": prefix / "lib" / arch / "libf2c.a"}
+    if not all(path.is_file() for path in paths.values()):
+        pytest.skip("native build requires f2c and libf2c2-dev")
+    return paths
+
+
 def test_python_array_three_stages_and_independent_output(tmp_path):
     np = pytest.importorskip("numpy")
     source = tmp_path / "simulation.py"
@@ -86,14 +98,7 @@ def run(initial, fixed, count):
 
 @pytest.mark.parametrize("python_binding", (False, True))
 def test_locked_mixed_target_three_stages(tmp_path, python_binding):
-    if any(shutil.which(name) is None for name in ("gcc", "g++", "gfortran", "cmake", "nm", "readelf")):
-        pytest.skip("native C++20 build tools unavailable")
-    prefix = Path(os.environ.get("SCAR_CI_F2C_PREFIX", "/usr"))
-    arch = _run(["gcc", "-print-multiarch"], tmp_path).decode().strip()
-    f2c = {"f2c": prefix / "bin/f2c", "f2c_header": prefix / "include/f2c.h",
-           "f2c_archive": prefix / "lib" / arch / "libf2c.a"}
-    if not all(path.is_file() for path in f2c.values()):
-        pytest.skip("native build requires f2c and libf2c2-dev")
+    f2c = _f2c_toolchain(tmp_path)
     sources = tmp_path / "source"
     sources.mkdir()
     units = [
@@ -197,10 +202,14 @@ end subroutine fill_pair
         scale.argtypes, scale.restype = [c_double], c_double
         result = runpy.run_path(str(source), init_globals={"native_scale": scale})["adjust"](7.0)
         expected += f"{result:.1f}\n".encode()
+    translator = tmp_path / "backend-f2c"
+    header = tmp_path / "input-f2c.h"
+    shutil.copyfile(f2c["f2c_header"], header)
+    toolchain = dict(f2c=str(translator), f2c_header=str(header), f2c_archive=str(f2c["f2c_archive"].resolve()))
     manifest = tmp_path / "request.json"
     manifest.write_text(json.dumps(dict(schema="scar.native-entry", schema_version=1, language="mixed",
         source_root=str(sources), entry="main", units=profiles, source_lock={"files": files},
-        fortran={name: str(path.resolve()) for name, path in f2c.items()},
+        fortran=toolchain,
         baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
         cases=[] if python_binding else [dict(id="mixed", stdin=str(case), comparison="exact")])))
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
@@ -211,6 +220,12 @@ end subroutine fill_pair
     assert not material_path.is_absolute()
     material = json.loads((graph / material_path).read_bytes())
     wrapper = "src/fortran-abi/scar_c_abi.cpp"
+    transport = material["fortran_transport"]
+    assert transport["translator"] == str(translator) and not translator.exists()
+    assert [row["extended"] for row in transport["units"]] == [False, True, True]
+    assert all(row["output"] not in material["fragments"] for row in transport["units"])
+    assert (graph / material_path.parent / transport["header"]["path"]).read_bytes() == header.read_bytes()
+    header.rename(tmp_path / "hidden-f2c.h")
     assert {row["symbol"] for row in material["abi_units"][wrapper]} == {"extra", "initialize_fortran"}
     assert wrapper not in material["fragments"]
     assert "include/scar_generated/scar_f2c_call.hpp" not in material["fragments"]
@@ -238,12 +253,14 @@ end subroutine fill_pair
     assert typed["initialize_fortran"]["fragment"]["authority"] == "TYPED_ABI_EXPORT"
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
+    translator.symlink_to(f2c["f2c"].resolve())
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
     lowered_c = (delivery / "project" / old_c).read_bytes()
     assert b'extern "C" { int old(int x)' in lowered_c
     assert b"static_cast<const int *>" in lowered_c
     assert (delivery / "project" / wrapper).is_file()
+    assert all((delivery / "project" / row["output"]).is_file() for row in transport["units"])
     assert (delivery / "project/include/scar_generated/scar_f2c_call.hpp").is_file()
     generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())
     emitted = {row["region"] for row in generated["regions"] if row["status"] == "GUARDED_REGION"}
@@ -251,3 +268,24 @@ end subroutine fill_pair
     executable = Path(result["executable"]["path"])
     assert _run([original], tmp_path, input=b"7\n") == b"91\n"
     assert _run([executable], tmp_path, input=b"7\n") == expected
+
+
+def test_fixed_form_transport_bootstraps_cpp_project(tmp_path):
+    toolchain = {name: str(path.resolve()) for name, path in _f2c_toolchain(tmp_path).items()}
+    data = b"      PROGRAM LEGACY\n      WRITE (*,'(I4)') 8\n      END\n"
+    source = tmp_path / "legacy.f"
+    source.write_bytes(data)
+    baseline = tmp_path / "original"
+    _run(["gfortran", str(source), "-o", str(baseline)], tmp_path)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(dict(schema="scar.native-entry", schema_version=1, language="fortran",
+        source_root=str(tmp_path), entry="main", units=[dict(path=source.name, flags=["-std=legacy"])],
+        source_lock=dict(files={source.name: dict(sha256=sha256(data).hexdigest(), size_bytes=len(data))}),
+        fortran=toolchain, baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
+        cases=[dict(id="fixed", comparison="exact")])))
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
+    assert result["status"] == "VALIDATED"
+    assert (delivery / "project/src/fortran-0.cpp").is_file()

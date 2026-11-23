@@ -9,6 +9,7 @@ from scar.contract import (
 )
 
 from .abi import c_source_edits, emit_scalar_module, f2c_support_header, render_abi_wrappers, render_expression
+from .fortran import emit_fortran_transport
 from .regions import emit_region_helpers, region_edits
 
 
@@ -192,6 +193,7 @@ def _fragments(body, project, bundle):
     fragments = material["fragments"]
     abi_units = material["abi_units"]
     adaptations = material["c_adaptations"]
+    transport = material["fortran_transport"]
     regions = defaultdict(list)
     configuration = material["configuration"]
     for row in body.regions:
@@ -201,6 +203,10 @@ def _fragments(body, project, bundle):
         raise ValueError("an ABI declaration must own a separate C++20 unit")
     if not regions.keys() <= sources & (fragments.keys() | abi_units.keys()):
         raise ValueError("a typed native region has no owned C++20 unit")
+    translated = {row["output"] for row in transport["units"]} if transport else set()
+    if translated & (fragments.keys() | abi_units.keys()) or not translated <= sources:
+        raise ValueError("a Fortran transport must own separate C++20 units")
+    project.mkdir(parents=True, exist_ok=True)
     definitions, decisions = [], []
     for name in (*fragments, *abi_units):
         relative = Path(name)
@@ -215,6 +221,8 @@ def _fragments(body, project, bundle):
             data, spans = render_abi_wrappers(declarations)
         else:
             data = read_artifact(Member(**fragments[name]).resolve(bundle))
+            if transport and name == "include/scar_generated/ISO_Fortran_binding.h":
+                data = b"#pragma GCC system_header\n" + data
         insertions, replacements = {}, []
         if name in adaptations:
             insertions, replacements = c_source_edits(name, data, adaptations[name])
@@ -224,6 +232,8 @@ def _fragments(body, project, bundle):
             definitions.extend(helpers)
             decisions.extend(emitted)
         destination.write_bytes(_apply_source_edits(name, data, insertions, replacements))
+    if transport:
+        emit_fortran_transport(transport, project, bundle)
     _runtime_support(configuration, project)
     if decisions:
         emit_region_helpers(project, configuration, definitions)

@@ -2,17 +2,23 @@
 
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
 
 from ..contract import NATIVE_GRAPH_VERSION, Artifact, artifact, json_digest, local_member, read_artifact, write_json
-from .fortran_bridge import prepare_fortran
 
 _GNU_CFI_HEADER = "ISO_Fortran_binding.h"
 _GNU_CFI_ROUTINES = {"CFI_establish", "CFI_is_contiguous", "CFI_section", "CFI_setpointer"}
+_FIXED_SUFFIXES = {'.f', '.for', '.ftn'}
+_FIXED_FLAGS = {'-std=legacy', '-std=gnu', '-ffixed-form', '-ffixed-line-length-72',
+                '-fno-fast-math', '-ffp-contract=off'}
 
 
 def _compile_settings(flags, source_root, staged_root):
@@ -250,6 +256,93 @@ def _stage(project, name, data):
         stream.write(data)
 
 
+@dataclass(frozen=True)
+class _FortranInput:
+    settings: dict
+    transport: dict
+    wrapper: str | None
+    exports: list[dict]
+
+
+def _normalize_freeform(manifest, units, config, captures, project, mixed):
+    env = os.environ.copy()
+    if 'fparser_path' in config:
+        dependency = Path(config['fparser_path']).resolve()
+        if not (dependency / 'fparser').is_dir():
+            raise ValueError('fortran.fparser_path must contain the fparser package')
+        env['PYTHONPATH'] = os.pathsep.join(filter(None, (str(dependency), env.get('PYTHONPATH'))))
+    with TemporaryDirectory(prefix='.fortran-freeform-', dir=project) as temporary:
+        work = Path(temporary)
+        snapshots = []
+        for index, (name, data, _) in enumerate(units):
+            if name not in captures:
+                raise ValueError(f'no sealed Fortran type evidence for {name}')
+            snapshot = work / 'sources' / name
+            _stage(work, snapshot.relative_to(work), data)
+            types = work / f'unit-{index}.fortran-original'
+            types.write_bytes(read_artifact(captures[name]))
+            snapshots.append(dict(unit=name, source=str(snapshot), semantics=str(types),
+                                  passthrough=Path(name).suffix.lower() in _FIXED_SUFFIXES))
+        request = work / 'lowering.json'
+        request.write_text(json.dumps(dict(entry=manifest.get('entry', 'main'), mixed=mixed, units=snapshots)),
+                           encoding='utf-8')
+        helper = Path(__file__).with_name('_fortran_freeform.py')
+        run = subprocess.run([sys.executable, '-B', str(helper), str(request)], cwd=work,
+                             capture_output=True, text=True, timeout=180, env=env)
+        if run.returncode:
+            raise ValueError(f'Fortran normalization failed with status {run.returncode}\n{run.stderr.strip()}')
+        return json.loads(run.stdout)
+
+
+def _transport_input(project, name, data):
+    path = Path('fortran') / name
+    _stage(project, path, data)
+    member = Artifact(str(project / path), sha256(data).hexdigest(), len(data))
+    return asdict(local_member(member, project.parent))
+
+
+def _prepare_fortran(manifest, project, source_bytes, captures, *, mixed):
+    config = manifest.get('fortran', {})
+    if not config.get('f2c_header') or not config.get('f2c_archive'):
+        raise ValueError('Fortran entries require fortran.f2c_header and fortran.f2c_archive')
+    units = [(row['path'], source_bytes[row['path']], row.get('flags', ())) for row in manifest['units']]
+    fixed = [(name, data) for name, data, _ in units if Path(name).suffix.lower() in _FIXED_SUFFIXES]
+    for name, _, flags in units:
+        if Path(name).suffix.lower() in _FIXED_SUFFIXES and set(flags) - _FIXED_FLAGS:
+            raise ValueError(f'f2c transport requires supported fixed-form options: {name}')
+    normalized = dict(sources={}, exports=[], descriptor_units={})
+    if len(fixed) != len(units):
+        normalized = _normalize_freeform(manifest, units, config, captures, project, mixed)
+    sources = [(data, False, ()) for _, data in fixed]
+    sources.extend((source.encode(), True, normalized['descriptor_units'].get(f'{name}.f', ()))
+                   for name, source in normalized['sources'].items())
+    directory = 'src/fortran-abi' if mixed else 'src'
+    transport_units = [
+        dict(source=_transport_input(project, f'{index:04d}.f', data), output=f'{directory}/fortran-{index}.cpp',
+             extended=extended, descriptor_arrays=arrays)
+        for index, (data, extended, arrays) in enumerate(sources)
+    ]
+    tool = config.get('f2c')
+    transport = dict(translator=str(Path(tool).absolute()) if tool else None,
+                     header=_transport_input(project, 'f2c.h', Path(config['f2c_header']).read_bytes()),
+                     units=transport_units)
+    exports = normalized['exports']
+    digests = {name: sha256(data).hexdigest() for name, data, _ in units}
+    for export in exports:
+        export['source_sha256'] = digests[export['unit']]
+        for index, argument in enumerate(export['arguments']):
+            argument['wrapper_name'] = f'arg{index}'
+    wrapper = f'{directory}/scar_c_abi.cpp' if exports else None
+    destinations = [row['output'] for row in transport_units]
+    if wrapper:
+        destinations.append(wrapper)
+    support = 'f2c-cfi-v1' if normalized['descriptor_units'] else 'f2c-v1'
+    settings = dict(sources=destinations, libraries=(str(Path(config['f2c_archive']).absolute()), 'm'),
+                    runtime_support=(support,),
+                    compile_options=('-ffp-contract=off', '-fno-fast-math', '-Werror=write-strings'))
+    return _FortranInput(settings, transport, wrapper, exports)
+
+
 def _stage_gnu_cfi(header, project, headers):
     if header is not None:
         origin, digest = header['path'], header['sha256']
@@ -270,7 +363,7 @@ def _stage_gnu_cfi(header, project, headers):
         raise ValueError(f'unsupported standalone GNU CFI routines: {sorted(unsupported)}')
 
     # It remains a toolchain header when sealed into the relocatable project.
-    _stage(project, 'include/scar_generated/' + _GNU_CFI_HEADER, b'#pragma GCC system_header\n' + data)
+    _stage(project, 'include/scar_generated/' + _GNU_CFI_HEADER, data)
     return bool(symbols)
 
 
@@ -290,15 +383,19 @@ def _stage_native_sources(manifest, evidence, project, regions):
     source_bytes = {name: _locked_source(root, name, lock) for name, lock in material.items()}
     captures = evidence.get('compiler_types', {})
     project.mkdir()
+    bridge = None
+    if fortran:
+        config = dict(manifest, units=fortran, language='fortran')
+        bridge = _prepare_fortran(config, project, source_bytes, captures, mixed=mixed)
     if not mixed and fortran:
-        build, wrapper, exports = prepare_fortran(manifest, project, source_bytes, captures=captures)
+        build = dict(bridge.settings)
         if 'f2c-cfi-v1' in build['runtime_support']:
             _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, ())
         build['libraries'] = (*manifest.get('libraries', ()), *build['libraries'])
         for key in ('link_options', 'runtime_dirs'):
             if manifest.get(key):
                 build[key] = manifest[key]
-        return build, {}, {}, wrapper, exports
+        return build, {}, {}, bridge
     c_units = [units[name] for name, language in languages.items() if language == 'c']
     cxx_units = [units[name] for name, language in languages.items() if language == 'c++' and fortran]
     c_root = Path('src/c-abi') if mixed else Path('src')
@@ -334,16 +431,12 @@ def _stage_native_sources(manifest, evidence, project, regions):
 
     fortran_libraries = ()
     runtime_support = ()
-    wrapper, exports = None, ()
     cfi_runtime = False
-    if fortran:
-        config = dict(manifest, units=fortran, language='fortran')
-        bridge, wrapper, exports = prepare_fortran(config, project, source_bytes,
-                                                  source_directory='src/fortran-abi', mixed=True,
-                                                  captures=captures)
-        settings.update({name: ((), bridge['compile_options']) for name in bridge['sources']})
-        fortran_libraries = bridge['libraries']
-        runtime_support = bridge['runtime_support']
+    if bridge:
+        build = bridge.settings
+        settings.update({name: ((), build['compile_options']) for name in build['sources']})
+        fortran_libraries = build['libraries']
+        runtime_support = build['runtime_support']
         if cfi_headers or 'f2c-cfi-v1' in runtime_support:
             cfi_runtime = _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, cfi_headers)
         if cfi_runtime:
@@ -361,7 +454,7 @@ def _stage_native_sources(manifest, evidence, project, regions):
                          source_settings=settings if len(common) > 1 else {}, **linkage)
     if runtime_support:
         configuration['runtime_support'] = runtime_support
-    return configuration, anchors, adaptations, wrapper, exports
+    return configuration, anchors, adaptations, bridge
 
 
 def _abi_declaration(export):
@@ -406,20 +499,22 @@ def _fortran_anchor(region, export, capture, path, digest, compiler_types):
 
 
 def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact, list[dict]]:
-    """Seal the C++20-compatible leaves without lowering the whole execution graph."""
+    """Seal source leaves and typed declarations for independently lowering the graph."""
     out = Path(out)
     out.mkdir(parents=True)
     pending = out / 'inputs'
     by_unit = defaultdict(list)
     for region in regions:
         by_unit[region['source']['path']].append(region)
-    configuration, anchors, adaptations, wrapper, exports = _stage_native_sources(target, evidence, pending, by_unit)
+    configuration, anchors, adaptations, bridge = _stage_native_sources(target, evidence, pending, by_unit)
     fragments = {}
     for directory in ('src', 'include'):
         for path in sorted((pending / directory).rglob('*')):
             if path.is_file():
                 name = path.relative_to(pending).as_posix()
                 fragments[name] = asdict(local_member(artifact(path), out))
+    exports = bridge.exports if bridge else ()
+    wrapper = bridge.wrapper if bridge else None
     declarations = [_abi_declaration(row) for row in exports]
     bridge_exports = {(row['unit'], row['symbol']): (row, json_digest(declaration))
                       for row, declaration in zip(exports, declarations, strict=True)}
@@ -444,5 +539,5 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
     abi_units = {wrapper: declarations} if declarations else {}
     return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=NATIVE_GRAPH_VERSION,
                        configuration=configuration, fragments=fragments, abi_units=abi_units,
-                       c_adaptations=adaptations,
+                       c_adaptations=adaptations, fortran_transport=bridge.transport if bridge else None,
                        exports=sorted(row['symbol'] for row in exports), region_seals=seals)), retained

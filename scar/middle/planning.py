@@ -63,14 +63,21 @@ def _seal_fragments(graph, native, graph_root, product, root):
     regions, rewrites = rewrite_native_regions(graph, native.regions, material['fragments'], abi_digests, seals)
     material['schema_version'] = NATIVE_PLAN_VERSION
     members = {}
-    for name, file in material['fragments'].items():
+
+    def own(file):
         identity = file['sha256']
         owned = members.get(identity)
         if owned is None:
             source = Member(**file).resolve(source_root) if version >= 3 else file
             copied = copy_artifact(source, product / 'blobs' / identity)
             members[identity] = owned = asdict(local_member(copied, root))
-        material['fragments'][name] = owned
+        return owned
+
+    material['fragments'] = {name: own(file) for name, file in material['fragments'].items()}
+    if transport := material['fortran_transport']:
+        transport['header'] = own(transport['header'])
+        for unit in transport['units']:
+            unit['source'] = own(unit['source'])
     manifest = write_json(product / 'fragments.json', material)
     member = local_member(manifest, root)
     return FragmentModule(member, regions), FragmentModule(member), rewrites
