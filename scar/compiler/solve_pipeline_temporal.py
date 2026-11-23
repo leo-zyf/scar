@@ -101,18 +101,17 @@ def _decision(cases):
 
 
 def _case(reference, search_budget):
-    from .project_pipeline_temporal import SCHEMA as PREPARATION, open_temporal_inputs
+    from .project_pipeline_temporal import SCHEMA as PREPARATION, _open_temporal_source
     from scar.optimization.pipeline_temporal_model import solve_pipeline_temporal_projection
     preparation = read_artifact(reference)
     if (preparation.get('schema') != PREPARATION or type(preparation.get('schema_version')) is not int
             or preparation['schema_version'] != 1 or preparation.get('solver_invoked') is not False):
         raise ValueError('published source-only L2 preparation required')
-    inputs = read_artifact(preparation['inputs'])
     projection = read_artifact(preparation['projection'])
-    with open_temporal_inputs(preparation['inputs']) as (pipeline, memory, ready, target):
+    with _open_temporal_source(preparation['inputs']) as (pipeline, memory, ready, target, _, _, inputs):
         plan = solve_pipeline_temporal_projection(pipeline, memory, ready, target, projection,
             search_budget=search_budget)
-    for retained in (reference, preparation['inputs'], preparation['projection']):
+    for retained in (reference, preparation['projection']):
         read_artifact(retained, json_document=False)
     solver = plan['solver_report']
     solution = solver['solution']

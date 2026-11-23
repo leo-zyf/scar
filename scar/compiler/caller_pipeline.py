@@ -293,7 +293,12 @@ def write_caller_pipeline_proof(proof,path):
 
 
 def read_caller_pipeline_proof(path,*,view,provider):
-    document_=json.loads(Path(path).read_bytes())
+    """Replay the source proof from its path or its sealed artifact reference."""
+    if isinstance(path,dict):
+        from scar.ir.execution_recipe import read_artifact
+        document_=read_artifact(path)
+    else:
+        document_=json.loads(Path(path).read_bytes())
     expected={'schema','schema_version',*CallerPipelineProof.__dataclass_fields__}
     if set(document_)!=expected or(document_['schema'],document_['schema_version'])!=(SCHEMA,1):
         raise ValueError('supported caller pipeline proof fields/version required')

@@ -27,7 +27,7 @@ from scar.ir.program.dependencies import (GraphNamespace,DependencyPoint as Poin
     DependencyFrame,DependencyEdge as Edge,DependencyEvidence as Evidence,DependencyCondition as Condition,
     DependencyKind as K,DependencyMeaning as Meaning,DependencyStrength as Strength,
     DependencyNeighborhood as Neighborhood,DependencyFrontier as Frontier)
-from scar.ir.execution_recipe import artifact_reference,read_artifact
+from scar.ir.execution_recipe import _json as _artifact_json,artifact_reference,read_artifact
 from scar.ir.record_codec import encode,decode
 
 
@@ -273,8 +273,7 @@ def _graph(provider):
 def _replay(reference,view,provider,original=None):
     from scar.compiler.caller_pipeline import read_caller_pipeline_proof,SCHEMA as PROOF_SCHEMA
     if reference.get('schema')!=PROOF_SCHEMA:raise ValueError('original caller pipeline proof reference required')
-    read_artifact(reference)
-    replayed=read_caller_pipeline_proof(reference['uri'],view=view,provider=provider)
+    replayed=read_caller_pipeline_proof(reference,view=view,provider=provider)
     if original is not None and _canonical(proof_document(original))!=_canonical(proof_document(replayed)):
         raise ValueError('provided caller proof differs from independently replayed original')
     return replayed
@@ -301,14 +300,26 @@ def publish_caller_values(proof_reference,out,*,view,provider,proof=None,input_s
 
 
 def read_caller_values(path,*,view,provider):
-    path=Path(path).resolve();path=path.parent if path.is_file()else path
-    original=(path/'result.json').read_bytes();report=json.loads(original)
+    """Replay this value publication and its original proof from one report image."""
+    if isinstance(path,dict):
+        reference=path
+        report_path=Path(reference['uri']).resolve()
+        if reference.get('schema')!=SCHEMA or report_path.name!='result.json':
+            raise ValueError('original caller values report reference required')
+        original=read_artifact(reference,json_document=False)
+        report=_artifact_json(original)
+        path=report_path.parent
+    else:
+        path=Path(path).resolve();path=path.parent if path.is_file()else path
+        original=(path/'result.json').read_bytes()
+        report=json.loads(original)
     if(report.get('schema'),report.get('schema_version'))!=(SCHEMA,1)or report['pins']!=_pins():
         raise ValueError('caller values schema/producing rules changed')
     proof=_replay(report['original_proof'],view,provider)
     values=CallerPipelineValueProvider(proof,report['original_proof'],view=view,provider=provider,
         input_shapes=report['input_shapes'],register=False)
     if(report['pipeline_sha256']!=values.projection.pipeline_sha256 or report['summary']!=values.summary()
+            or report['input_shapes']!=values.projection.input_shapes
             or report['required_guards']!=list(values.projection.required_guards)
             or report['runtime_guards_discharged']is not False or report['transformation_authorized']is not False
             or report['target_executed']is not False or type(report['source_bodies_copied'])is not int

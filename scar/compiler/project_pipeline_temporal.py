@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 
-from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.ir.execution_recipe import artifact_reference, open_artifact, read_artifact
 
 INPUTS = 'scar.pipeline-temporal-inputs'
 SCHEMA = 'scar.pipeline-temporal-preparation'
@@ -39,49 +39,52 @@ def _hardware(session, ready=None):
 
 
 @contextmanager
-def open_temporal_inputs(reference, *, include_source=False):
-    """Replay original source/value routes, pool and CPU plan before L2 use."""
+def _open_temporal_source(reference):
+    """Check source/receipt bindings inside the original F4 session."""
     from scar.analysis.build import BuildSession
     from scar.analysis.caller_pipeline_values import read_caller_values
-    from scar.compiler.caller_pipeline import read_caller_pipeline_proof
-    from scar.optimization.pipeline_memory import verify_pipeline_memory
-    from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule
     if isinstance(reference, (str, Path)):
         path = Path(reference).resolve()
-        reference = artifact_reference(path/'inputs.json' if path.is_dir() else path, INPUTS)
-    raw = read_artifact(reference)
+        reference, raw = open_artifact(path/'inputs.json' if path.is_dir() else path, INPUTS)
+    else:
+        raw = read_artifact(reference)
     if (raw.get('schema'), raw.get('schema_version')) != (INPUTS, 1):
         raise ValueError('original temporal input publication required')
-    for field in ('program', 'proof', 'source_values', 'memory', 'ready'):
-        read_artifact(raw[field])
     manifest = Path(raw['program']['uri']).parent/'manifest.json'
     if raw['program'] != artifact_reference(manifest, 'scar.program-build'):
         raise ValueError('program reference must identify the original build manifest')
     with BuildSession(Path(raw['program']['uri']).parent) as session:
         _, provider = _provider(session, raw['provider'])
-        proof = read_caller_pipeline_proof(raw['proof']['uri'], view=session.view, provider=provider)
-        source_values = read_artifact(raw['source_values'])
-        if source_values['original_proof'] != raw['proof']:
+        caller_values = read_caller_values(raw['source_values'], view=session.view, provider=provider)
+        if caller_values.reference != raw['proof']:
             raise ValueError('source value publication differs from selected proof')
-        caller_values=read_caller_values(raw['source_values']['uri'], view=session.view, provider=provider)
-        memory = verify_pipeline_memory(proof.pipeline, read_artifact(raw['memory']))
-        if source_values['input_shapes'] != memory['input_shapes']:
+        proof = caller_values.proof
+        memory = read_artifact(raw['memory'])
+        if caller_values.projection.input_shapes != memory['input_shapes']:
             raise ValueError('source value and memory specialization shapes differ')
         ready = read_artifact(raw['ready'])
         if ready['input_graph'] != raw['source_values']:
             raise ValueError('ready input graph differs from original source values')
         target = _hardware(session, ready)
-        verify_pipeline_ready_schedule(proof.pipeline, memory, target, ready)
-        if include_source:
-            yield proof.pipeline,memory,ready,target,proof,caller_values.projection,raw
-        else:
-            yield proof.pipeline, memory, ready, target
-        read_artifact(reference)
+        yield proof.pipeline, memory, ready, target, proof, caller_values.projection, raw
+        read_artifact(reference, json_document=False)
+
+
+@contextmanager
+def open_temporal_inputs(reference, *, include_source=False):
+    """Independently replay source, memory and ready plan before exposing them."""
+    from scar.optimization.pipeline_schedule import verify_pipeline_ready_schedule
+
+    with _open_temporal_source(reference) as admitted:
+        pipeline, memory, ready, target = admitted[:4]
+        verify_pipeline_ready_schedule(pipeline, memory, target, ready)
+        yield admitted if include_source else admitted[:4]
 
 
 def _project(reference, out, cost_model):
     from scar.optimization.pipeline_temporal_model import project_pipeline_temporal_model
-    with open_temporal_inputs(reference) as (pipeline, memory, ready, target):
+    # The projection owns the full replay of its memory and ready plans.
+    with _open_temporal_source(reference) as (pipeline, memory, ready, target, *_):
         projection = project_pipeline_temporal_model(pipeline, memory, ready, target, cost_model=cost_model)
         projected = _write(out/'projection.json', projection)
     report = dict(schema=SCHEMA, schema_version=1, inputs=reference, projection=projected,
