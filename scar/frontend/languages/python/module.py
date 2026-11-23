@@ -23,6 +23,65 @@ _STREAM_DIRECTIONS = {
 }
 
 
+def _annotation_items(node):
+    args = node.args
+    # CPython visits ordinary positional annotations before positional-only ones.
+    parameters = [
+        *args.args,
+        *args.posonlyargs,
+        args.vararg,
+        *args.kwonlyargs,
+        args.kwarg,
+    ]
+    for arg in parameters:
+        if arg is not None and arg.annotation is not None:
+            yield arg.arg, arg.annotation
+    if node.returns is not None:
+        yield "return", node.returns
+
+
+def _deferred_syntax(value):
+    """Preserve unevaluated syntax without introducing execution ports or effects."""
+    if isinstance(value, ast.AST):
+        return {
+            "syntax": type(value).__name__,
+            "fields": [
+                [k, _deferred_syntax(v)]
+                for k, v in ast.iter_fields(value)
+                if k != "ctx"
+            ],
+        }
+    if isinstance(value, list):
+        return [_deferred_syntax(v) for v in value]
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if isinstance(value, float):
+        return {"float": value.hex()}
+    if isinstance(value, complex):
+        return {"complex": [value.real.hex(), value.imag.hex()]}
+    if value is Ellipsis:
+        return {"singleton": "Ellipsis"}
+    return value
+
+
+def _type_parameters(node):
+    return [
+        {
+            "name": param.name,
+            "kind": type(param).__name__,
+            **{
+                field: {
+                    "evaluation": "deferred",
+                    "syntax": _deferred_syntax(getattr(param, field)),
+                }
+                for field in ("bound", "default_value")
+                if getattr(param, field, None) is not None
+            },
+        }
+        for param in getattr(node, "type_params", ())
+    ]
+
+
 def _declared(slot):
     definitions = slot.get("definitions", ())
     result = {"state": slot["state"]}
@@ -66,7 +125,12 @@ def _guarded(fact, state):
         result.update(expected, guards=prior if guard in prior else [*prior, guard])
         if "class" in fact:
             result["class"] = fact["class"]
-    for key in ("possible_symbols", "maybe_unbound", "process_channels"):
+    for key in (
+        "possible_symbols",
+        "maybe_unbound",
+        "process_channels",
+        "import_sources",
+    ):
         if key in fact:
             result[key] = fact[key]
     if examples := _examples(fact):
@@ -243,6 +307,22 @@ class _ModuleGraph:
         self.main = abi["main"]
         self.tree = parsed.tree
         self.source_hash = parsed.source_hash
+        version = tuple(int(v) for v in parsed.compiler_id.split()[1].split(".")[:2])
+        future = any(
+            isinstance(n, ast.ImportFrom)
+            and n.level == 0
+            and n.module == "__future__"
+            and any(a.name == "annotations" for a in n.names)
+            for n in self.tree.body
+        )
+        self.annotation_protocol = {
+            "evaluation": (
+                "stringized"
+                if future
+                else "deferred" if version >= (3, 14) else "eager"
+            ),
+            "compiler": parsed.compiler_id,
+        }
         self.project = abi["project"]
         self.functions = []
         self.externs = {}
@@ -309,21 +389,25 @@ class _ModuleGraph:
         for alias in node.names:
             name = alias.name
             sub = ".".join(x for x in (base, name) if x)
-            if sub in self.project:
-                yield sub, alias.asname or name, _guarded(
-                    {"class": "module", "module": sub}, "sys.modules." + sub
-                )
-            elif base in self.project:
-                state = _function(base, name)
-                fact = _guarded(
-                    _declared(
-                        self.project[base]["exports"].get(name, {"state": state})
-                    ),
-                    state,
-                )
-                yield base, alias.asname or name, fact
+            state = _function(base, name)
+            if base in self.project:
+                slot = self.project[base]["exports"].get(name)
+                fact = _guarded(_declared(slot or {"state": state}), state)
             else:
-                yield base, alias.asname or name, _guarded({"external": sub}, sub)
+                slot = None
+                fact = _guarded({"external": sub}, sub)
+            if sub in self.project and name != "*":
+                if not slot:
+                    fact = _guarded({"class": "module", "module": sub}, state)
+                fact["import_sources"] = [
+                    {"kind": "attribute", "module": base, "name": name, "state": state},
+                    {
+                        "kind": "submodule",
+                        "module": sub,
+                        "when": "package_attribute_missing",
+                    },
+                ]
+            yield base, alias.asname or name, fact
 
     def translate(self):
         # Function bodies may resolve imports from module state. Execution order
@@ -484,15 +568,36 @@ class _Scope:
             "native_binding",
             "Python object and effect contracts require target lowering before execution",
         )
-        return dict(
+        kind = (
+            "module"
+            if self.module_scope
+            else "class" if self.class_scope else "function"
+        )
+        signature = dict(
             name=self.symbol,
             params=params,
             result="void" if self.module_scope else _py_type(),
             location=self.unit.location(node),
             calling_convention="python",
+            python_scope=dict(
+                kind=kind,
+                module=self.unit.module,
+                initializer=self.unit.root_symbol,
+                main=self.unit.main,
+            ),
             calls=sorted(self.calls),
             partial_body=[*prelude, *steps],
         )
+        if kind == "function":
+            yields = any(
+                isinstance(n, (ast.Yield, ast.YieldFrom)) for n in scope_nodes(body)
+            )
+            if isinstance(node, ast.AsyncFunctionDef):
+                protocol = "async_generator" if yields else "coroutine"
+            else:
+                protocol = "generator" if yields else "regular"
+            signature["call_protocol"] = {"kind": protocol}
+        return signature
 
     def _external_value(self, target, args, keywords):
         if target == "builtins.str" and len(args) == 1:
@@ -1064,18 +1169,80 @@ class _Scope:
             result.extend(self.statement(n))
         return result
 
+    def annotated_assignment(self, node):
+        target = node.target
+        steps = []
+        if node.value is not None:
+            value, fact = self.expr(node.value)
+            steps.append(
+                self.record(
+                    node, "assign", target=self.destination(target, fact), value=value
+                )
+            )
+        elif isinstance(target, (ast.Attribute, ast.Subscript)):
+            # Without an RHS the base and index expressions still run, with
+            # no final attribute or item lookup/store.
+            operands = [target.value] + (
+                [target.slice] if isinstance(target, ast.Subscript) else []
+            )
+            steps.extend(
+                self.record(t, "expr", value=self.expr(t)[0]) for t in operands
+            )
+        namespace = self.module_scope or self.class_scope
+        stored = bool(namespace and node.simple)
+        mode = self.unit.annotation_protocol["evaluation"]
+        if not namespace or not stored and mode != "eager":
+            mode = "not_evaluated"
+        fields = {
+            "target_syntax": _deferred_syntax(target),
+            "stored": stored,
+            "annotation_protocol": {
+                **self.unit.annotation_protocol,
+                "evaluation": mode,
+            },
+        }
+        if mode == "eager":
+            fields["value"] = self.expr(node.annotation)[0]
+        else:
+            fields["syntax"] = _deferred_syntax(node.annotation)
+        if stored:
+            fields["effects"] = ["STATE"]
+        steps.append(self.record(node, "annotation", **fields))
+        return steps
+
     def statement(self, node):
         R = self.record
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             steps = []
-            for module, bound, fact in self.unit.module_bindings(node):
+            from_import = isinstance(node, ast.ImportFrom)
+            fromlist = [a.name for a in node.names] if from_import else []
+            for i, (module, bound, fact) in enumerate(self.unit.module_bindings(node)):
+                alias = node.names[i]
                 self.invalidate_shared()
                 deps = []
-                for i in range(1, len(module.split(".")) + 1):
-                    path = ".".join(module.split(".")[:i])
-                    if path in self.unit.project:
-                        deps.append(_function(path, "<init>"))
+                conditional = []
+                if not from_import or i == 0:
+                    parts = module.split(".")
+                    for depth in range(1, len(parts) + 1):
+                        path = ".".join(parts[:depth])
+                        if path in self.unit.project:
+                            deps.append(_function(path, "<init>"))
+                    for member in fromlist:
+                        child = module + "." + member
+                        if child in self.unit.project:
+                            conditional.append(
+                                {
+                                    "module": child,
+                                    "initializer": _function(child, "<init>"),
+                                    "when": {
+                                        "kind": "package_attribute_missing",
+                                        "module": module,
+                                        "name": member,
+                                    },
+                                }
+                            )
                 self.calls.update(deps)
+                self.calls.update(row["initializer"] for row in conditional)
                 if bound == "*" or not module:
                     self.issue(
                         node, "import_binding", "dynamic or relative wildcard binding"
@@ -1089,13 +1256,25 @@ class _Scope:
                         "python_import",
                         module=module,
                         binding=binding,
-                        member=bound,
+                        member=alias.name,
+                        alias=alias.asname,
+                        bound_value=fact,
+                        request={
+                            "form": "from" if from_import else "import",
+                            "module": (
+                                (node.module or "") if from_import else alias.name
+                            ),
+                            "level": node.level if from_import else 0,
+                            "fromlist": fromlist,
+                            "binding_index": i if from_import else 0,
+                        },
                         provider=(
                             "project"
                             if module in self.unit.project
                             else provider(module, self.unit.libraries)
                         ),
                         initializers=deps,
+                        conditional_initializers=conditional,
                         cache="sys.modules",
                         effects=["CTRL", "STATE", "IO"],
                     )
@@ -1117,6 +1296,8 @@ class _Scope:
                     node, "scope_binding", "compiler scope unavailable for " + node.name
                 )
             decorators = [self.expr(d)[0] for d in node.decorator_list]
+            type_params = _type_parameters(node)
+            creation = {"type_params": type_params} if type_params else {}
             if isinstance(node, ast.ClassDef):
                 bases = [self.expr(b)[0] for b in node.bases]
                 keywords = [
@@ -1150,6 +1331,7 @@ class _Scope:
                             "class_protocol",
                             "runtime class namespace, metaclass and MRO",
                         ),
+                        **creation,
                     )
                 ]
             params = []
@@ -1159,6 +1341,43 @@ class _Scope:
             keyword_defaults = [
                 self.expr(d)[0] if d is not None else None for d in a.kw_defaults
             ]
+            annotations = []
+            for name, expression in _annotation_items(node):
+                if self.unit.annotation_protocol["evaluation"] != "eager":
+                    field = {"syntax": _deferred_syntax(expression)}
+                elif type_params:
+                    # Generic function annotations see the compiler-created
+                    # type-parameter scope. Outer names alone cannot resolve them.
+                    field = {
+                        "value": R(
+                            expression,
+                            "annotation_evaluation",
+                            scope="type_parameters",
+                            expression=_deferred_syntax(expression),
+                            effects=["CTRL", "STATE", "OPAQUE"],
+                        )
+                    }
+                    self.invalidate_shared()
+                else:
+                    field = {"value": self.expr(expression)[0]}
+                annotations.append({"name": name, **field})
+            if annotations:
+                creation.update(
+                    annotations=annotations,
+                    annotation_protocol=self.unit.annotation_protocol,
+                )
+            positional = [*a.posonlyargs, *a.args]
+            default_from = {
+                arg.arg: {"field": "defaults", "index": i}
+                for i, arg in enumerate(positional[len(positional) - len(a.defaults) :])
+            }
+            default_from.update(
+                {
+                    arg.arg: {"field": "keyword_defaults", "index": i}
+                    for i, (arg, value) in enumerate(zip(a.kwonlyargs, a.kw_defaults))
+                    if value is not None
+                }
+            )
             for category, group in (
                 ("posonly", a.posonlyargs),
                 ("positional", a.args),
@@ -1172,6 +1391,13 @@ class _Scope:
                             name=arg.arg,
                             type=_py_type(),
                             binding=category,
+                            required=category not in {"varargs", "kwargs"}
+                            and arg.arg not in default_from,
+                            **(
+                                {"default_from": default_from[arg.arg]}
+                                if arg.arg in default_from
+                                else {}
+                            ),
                             location=self.unit.location(arg),
                         )
                     )
@@ -1200,26 +1426,16 @@ class _Scope:
                     decorators=decorators,
                     defaults=defaults,
                     keyword_defaults=keyword_defaults,
+                    **creation,
                 )
             ]
         if isinstance(node, ast.Expr):
             return [R(node, "expr", value=self.expr(node.value)[0])]
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            if node.value is None:
-                return [
-                    R(
-                        node,
-                        "annotation",
-                        target=(
-                            self.variable(node.target.id)
-                            if isinstance(node.target, ast.Name)
-                            else self.expr(node.target)[0]
-                        ),
-                        type_expression=self.expr(node.annotation)[0],
-                    )
-                ]
+        if isinstance(node, ast.AnnAssign):
+            return self.annotated_assignment(node)
+        if isinstance(node, ast.Assign):
             value, f = self.expr(node.value)
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            targets = node.targets
             if len(targets) == 1:
                 return [
                     R(

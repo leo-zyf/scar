@@ -32,7 +32,12 @@ class Boundary:
         if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden):
             raise RuntimeError("layer import violation " + name)
 sys.meta_path.insert(0, Boundary())
-run = getattr(importlib.import_module(module), entry)
+implementation = importlib.import_module(module)
+if layer == "B2b":
+    # A target package carries the exact SDK revision. Printing must also work
+    # without consulting the SDK of the currently installed compiler.
+    implementation.__file__ = str(Path(output) / "absent-sdk" / "__init__.py")
+run = getattr(implementation, entry)
 if layer == "B3":
     run(source)
 elif layer == "B1":

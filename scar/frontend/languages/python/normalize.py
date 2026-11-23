@@ -37,6 +37,29 @@ def normalize_unit(parsed):
     evidence = _ModuleGraph(parsed, profile, aliases=symbols)
     unit = evidence.translate()
     protocols = {f["name"]: f for f in unit["functions"]}
+    # The scalar ABI recognizes the standard builtin float annotation. Other
+    # annotation protocols and type parameters require executable module setup.
+    pinned_float = "float" not in parsed.exports and "float" not in imports
+    annotation_setup = {
+        creation["location"]["line"]
+        for creation in protocols[evidence.root_symbol]["partial_body"]
+        if creation["op"] == "python_define"
+        and (
+            creation.get("type_params")
+            or any(
+                not (
+                    pinned_float
+                    and (
+                        a.get("value", {}).get("op") == "python_builtin"
+                        and a["value"].get("name") == "float"
+                        or a.get("syntax")
+                        == {"syntax": "Name", "fields": [["id", "float"]]}
+                    )
+                )
+                for a in creation.get("annotations", ())
+            )
+        )
+    }
     functions, externs, diagnostics = [], [], []
     partial = set()
     initialization = False
@@ -55,6 +78,11 @@ def normalize_unit(parsed):
     for fn in definitions.values():
         symbol = symbols[fn.name]
         try:
+            if fn.lineno in annotation_setup:
+                raise Unsupported(
+                    fn,
+                    "function needs its source annotation or type-parameter protocol",
+                )
             if declaration_counts[fn.name] != 1:
                 raise Unsupported(
                     fn, "repeated definitions require sequential module binding"
@@ -87,6 +115,7 @@ def normalize_unit(parsed):
             node.decorator_list
             or node.args.defaults
             or any(d is not None for d in node.args.kw_defaults)
+            or node.lineno in annotation_setup
         ):
             problem(
                 node,

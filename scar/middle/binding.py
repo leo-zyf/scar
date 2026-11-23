@@ -451,8 +451,15 @@ def bind(graph, folder):
                 continue
             if "result" in fn["signature"] and "params" in fn["signature"]:
                 signatures[name].append(fn["signature"])
-            if fn["defined"]:
+            protocol = (
+                not fn["defined"]
+                and fn.get("source_defined")
+                and fn["signature"].get("calling_convention") == "python"
+            )
+            if fn["defined"] or protocol:
                 body = _definition(fn)
+                if protocol:
+                    body["execution_kind"] = "python_protocol"
                 if name in functions and semantics(functions[name]) != semantics(body):
                     issue(
                         "conflicting_definition",
@@ -536,6 +543,18 @@ def bind(graph, folder):
     issues.extend(d for d in layout_issues if d["symbol"] in used_records)
     issues.extend(_close_callbacks(functions, externs, globals_, graph["entry"]))
     issues = list({json_bytes(d): d for d in issues}.values())
+    protocol_names = {
+        name
+        for name, function in functions.items()
+        if function.get("execution_kind") == "python_protocol"
+    }
+    obligations, binding_issues = [], []
+    for problem in issues:
+        deferred = problem.get("symbol") in protocol_names and problem[
+            "code"
+        ].startswith("python.")
+        (obligations if deferred else binding_issues).append(problem)
+    issues = binding_issues
     return (
         dict(
             entry=graph["entry"],
@@ -544,6 +563,7 @@ def bind(graph, folder):
             externs=list(externs.values()),
             records=[r for name, r in records.items() if name in used_records],
             state_evidence=state_evidence,
+            **({"protocol_obligations": obligations} if protocol_names else {}),
             declarations={
                 name: [
                     dict(

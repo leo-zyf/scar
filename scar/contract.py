@@ -107,7 +107,9 @@ def member(folder, group, value):
     return dict(path=relative, sha256=sha, size=len(data))
 
 
-def read_member(folder, receipt):
+def read_blob(folder, receipt):
+    """Read one sealed byte member without imposing a serialization format."""
+    folder = Path(folder)
     relative = Path(receipt["path"])
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("artifact member must be relative to its package")
@@ -117,7 +119,11 @@ def read_member(folder, receipt):
     data = path.read_bytes()
     if len(data) != receipt["size"] or digest(data) != receipt["sha256"]:
         raise ValueError(f"artifact checksum mismatch for {relative}")
-    return json.loads(data)
+    return data
+
+
+def read_member(folder, receipt):
+    return json.loads(read_blob(folder, receipt))
 
 
 def file_receipt(folder, path):

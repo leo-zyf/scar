@@ -25,6 +25,8 @@ from .objects import ObjectModel
 
 _SCALARS = {
     "void": "void",
+    "unit": "std::nullptr_t",
+    "text": "std::string",
     "bool": "bool",
     "char": "char",
     "i8": "std::int8_t",
@@ -116,6 +118,17 @@ _BINARY_MATH = set(
 
 def unary(operator, value, postfix=False):
     return Expr("unary", operator=operator, args=(value,), postfix=postfix)
+
+
+def utf8_literal(value, target):
+    if not isinstance(value, str):
+        raise ValueError("text literal requires a UTF-8 string")
+    return Expr(
+        "construct",
+        type=named(target),
+        args=(Expr("string", value=value), integer(len(value.encode("utf-8")))),
+        qualifier="paren",
+    )
 
 
 def variable(symbol, ty, init=None, **attributes):
@@ -264,6 +277,12 @@ class Lowerer:
             if spec["kind"] == "const":
                 return self.literal(spec["of"], value)
             raise ValueError(f"invalid literal of type {spec!r}")
+        if spec == "unit":
+            if value is not None:
+                raise ValueError("unit literal requires null")
+            return Expr("nullptr")
+        if spec == "text":
+            return utf8_literal(value, "std::string")
         if spec == "bool":
             if value not in (False, True, 0, 1):
                 raise ValueError("invalid Boolean literal")
@@ -318,6 +337,64 @@ class Lowerer:
         )
         return cast(ty, v)
 
+    def text_print(self, expr):
+        if expr.get("type") != "unit" or expr.get("encoding") != "utf-8":
+            raise ValueError("text_print requires unit result and UTF-8 encoding")
+        if not {"IO", "STATE"}.issubset(expr.get("effects", ())):
+            raise ValueError("text_print lacks observable output effects")
+        spellings = ("boolean_true", "boolean_false", "unit")
+        fmt = expr.get("scalar_format")
+        argument_types = ("text",)
+        if fmt is None:
+            fmt = dict.fromkeys(spellings, "")
+            fmt["integer_base"] = 10
+        else:
+            if (
+                not isinstance(fmt, dict)
+                or set(fmt) != {*spellings, "integer_base"}
+                or type(fmt["integer_base"]) is not int
+                or fmt["integer_base"] != 10
+            ):
+                raise ValueError("unsupported text_print scalar format")
+            argument_types = ("text", "bool", "unit", "i64")
+        options = {"sep": "text", "end": "text", "flush": "bool"}
+        order = expr.get("keyword_order", tuple(options))
+        if (
+            not isinstance(order, (list, tuple))
+            or any(not isinstance(key, str) or key not in options for key in order)
+            or len(set(order)) != len(order)
+        ):
+            raise ValueError("invalid text_print keyword order")
+        operands = []
+
+        def append(role, value, types):
+            if not isinstance(value, dict) or value.get("type") not in types:
+                raise ValueError(f"unsupported text_print {role} type")
+            operands.append(
+                Expr(
+                    "braced",
+                    args=(
+                        name("scar::text_role::" + role),
+                        cast(self.type_name(value["type"]), self.expression(value)),
+                    ),
+                )
+            )
+
+        for value in expr["args"]:
+            append("argument", value, argument_types)
+        for key in (*order, *(k for k in options if k not in order)):
+            append(key, expr[key], (options[key],))
+        # List initialization snapshots each value in order before the call writes.
+        formatting = Expr(
+            "braced",
+            args=(
+                *(utf8_literal(fmt[k], "std::string_view") for k in spellings),
+                integer(fmt["integer_base"]),
+            ),
+        )
+        output = Expr("braced", args=(Expr("braced", args=tuple(operands)), formatting))
+        return call("scar::text_print", output)
+
     def expression(self, expr):
         self.weight += 1
         if id(expr) in self.axis_names:
@@ -337,6 +414,8 @@ class Lowerer:
             return self.objects.expression(expr, self)
         if op == "literal":
             return self.literal(expr["type"], expr["value"])
+        if op == "text_print":
+            return self.text_print(expr)
         if op == "string":
             return Expr("string", value=expr["value"])
         if op == "runtime_array_size":
@@ -811,7 +890,11 @@ class Lowerer:
             name=self.functions[function["name"]],
             type=self.type_name(function["result"]),
             params=params,
-            linkage=None if function["name"] == "main" else "C",
+            linkage=(
+                None
+                if function["name"] == "main" or function["result"] == "text"
+                else "C"
+            ),
         )
 
     def entry_wrapper(self):
@@ -829,12 +912,20 @@ class Lowerer:
             raise ValueError("entry conflicts with main")
         params = ()
         if abi is None:
-            if fn["params"] or fn["result"] not in ("i32", "i16", "i8", "bool", "void"):
+            if fn["params"] or fn["result"] not in (
+                "i32",
+                "i16",
+                "i8",
+                "bool",
+                "void",
+                "unit",
+            ):
                 raise ValueError("entry requires explicit ABI")
             invoke = call(symbol)
             body = (
                 Stmt(
-                    "expression" if fn["result"] == "void" else "return", value=invoke
+                    "expression" if fn["result"] in ("void", "unit") else "return",
+                    value=invoke,
                 ),
             )
         else:

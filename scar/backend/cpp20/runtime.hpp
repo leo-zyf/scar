@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cfenv>
+#include <charconv>
 #include <climits>
 #include <cmath>
 #include <complex>
@@ -14,10 +15,17 @@
 #include <cstring>
 #include <fenv.h>
 #include <fstream>
+#include <initializer_list>
+#include <ios>
 #include <limits>
 #include <new>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <type_traits>
+#include <unistd.h>
 #include <utility>
+#include <variant>
 #include <vector>
 #if defined(_OPENMP)
 #include <omp.h>
@@ -25,6 +33,92 @@
 #endif
 
 namespace scar {
+enum class text_role { argument, sep, end, flush };
+using text_value =
+    std::variant<std::string, bool, std::nullptr_t, std::int64_t>;
+struct text_operand {
+  text_role role;
+  text_value value;
+};
+struct text_format {
+  std::string_view boolean_true, boolean_false, unit;
+  int integer_base;
+};
+struct text_output {
+  std::initializer_list<text_operand> operands;
+  text_format format;
+};
+
+inline void flush_stdout() {
+  if (std::fflush(stdout) != 0)
+    throw std::ios_base::failure("stdout flush failed");
+}
+
+inline void write_stdout(std::string_view bytes, bool line_buffered) {
+  if (bytes.empty())
+    return;
+  if (std::fwrite(bytes.data(), 1, bytes.size(), stdout) != bytes.size() ||
+      std::ferror(stdout))
+    throw std::ios_base::failure("stdout write failed");
+  if (line_buffered && bytes.find_first_of("\r\n") != std::string_view::npos)
+    flush_stdout();
+}
+
+inline void write_text_value(const text_value &value, const text_format &format,
+                             bool line_buffered) {
+  if (auto text = std::get_if<std::string>(&value)) {
+    write_stdout(*text, line_buffered);
+  } else if (auto boolean = std::get_if<bool>(&value)) {
+    write_stdout(*boolean ? format.boolean_true : format.boolean_false,
+                 line_buffered);
+  } else if (std::holds_alternative<std::nullptr_t>(value)) {
+    write_stdout(format.unit, line_buffered);
+  } else {
+    char digits[std::numeric_limits<std::int64_t>::digits10 + 3];
+    auto [end, error] =
+        std::to_chars(digits, digits + sizeof(digits),
+                      std::get<std::int64_t>(value), format.integer_base);
+    if (error != std::errc{})
+      throw std::ios_base::failure("integer formatting failed");
+    write_stdout({digits, static_cast<std::size_t>(end - digits)},
+                 line_buffered);
+  }
+}
+
+inline std::nullptr_t text_print(const text_output &output) {
+  std::string_view separator = " ", ending = "\n";
+  bool flush = false;
+  for (const auto &operand : output.operands) {
+    switch (operand.role) {
+    case text_role::argument:
+      break;
+    case text_role::sep:
+      separator = std::get<std::string>(operand.value);
+      break;
+    case text_role::end:
+      ending = std::get<std::string>(operand.value);
+      break;
+    case text_role::flush:
+      flush = std::get<bool>(operand.value);
+      break;
+    }
+  }
+  const bool line_buffered = ::isatty(::fileno(stdout)) != 0;
+  bool first = true;
+  for (const auto &operand : output.operands) {
+    if (operand.role == text_role::argument) {
+      if (!first)
+        write_stdout(separator, line_buffered);
+      write_text_value(operand.value, output.format, line_buffered);
+      first = false;
+    }
+  }
+  write_stdout(ending, line_buffered);
+  if (flush)
+    flush_stdout();
+  return nullptr;
+}
+
 template <class T, std::size_t N> using array = T[N];
 template <class R, class... A> using function = R(A...);
 template <class R, class... A> using variadic_function = R(A..., ...);
@@ -152,7 +246,8 @@ inline int dynamic_printf(const char *format, ...) {
   return result;
 }
 inline int dynamic_snprintf_va(char *out, std::size_t limit,
-                               std::size_t capacity, const char *format, ...) {
+                               [[maybe_unused]] std::size_t capacity,
+                               const char *format, ...) {
   std::va_list ap;
   va_start(ap, format);
 #if defined(__GLIBC__) && __USE_FORTIFY_LEVEL > 0
@@ -173,7 +268,7 @@ inline int dynamic_snprintf_va(char *out, std::size_t limit,
 #endif
   return dynamic_snprintf_va(out, limit, capacity, format);
 }
-inline int dynamic_sprintf_va(char *out, std::size_t capacity,
+inline int dynamic_sprintf_va(char *out, [[maybe_unused]] std::size_t capacity,
                               const char *format, ...) {
   std::va_list ap;
   va_start(ap, format);

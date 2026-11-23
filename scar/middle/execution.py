@@ -197,6 +197,10 @@ def prepare(module):
 
 
 def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
+    if status == "READY" and any(
+        fn.get("execution_kind") == "python_protocol" for fn in module["functions"]
+    ):
+        raise ValueError("execution IR cannot contain unresolved source protocols")
     payload = dict(module)
     functions = (
         [member(out, "functions", f) for f in payload.pop("functions", [])]

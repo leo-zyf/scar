@@ -59,6 +59,23 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
     assert all(f["partial_body"] for f in functions.values())
 
 
+def test_scalar_annotation_contract_uses_captured_compiler_semantics(
+    tmp_path, monkeypatch
+):
+    entry = tmp_path / "typed.py"
+    entry.write_text("def scale(x: float) -> float:\n    return x * 2.0\n")
+    facts = python.parse_unit(entry, root=tmp_path, abi={"exports": {"scale": "scale"}})
+    entry.unlink()
+    for version in ("cpython 3.12.3", "cpython 3.14.7"):
+        with monkeypatch.context() as patch:
+            patch.setattr(type(facts), "compiler_id", version)
+            result = _offline(
+                patch, python, facts, (ast, "parse"), (symtable, "symtable")
+            )
+        scale = next(f for f in result["functions"] if f["name"] == "scale")
+        assert "body" in scale and not result["diagnostics"]
+
+
 def test_python_project_locks_and_parses_each_imported_file_once(tmp_path, monkeypatch):
     from collections import Counter
     from hashlib import sha256

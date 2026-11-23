@@ -70,10 +70,28 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         issues=issues,
         baseline_defects=module.get("baseline_defects", []),
         normalizations=module.get("normalizations", []),
+        **(
+            {"protocol_analysis": module["protocol_analysis"]}
+            if "protocol_analysis" in module
+            else {}
+        ),
         layers=[
-            dict(layer="M1_BIND", issues=binding_issues),
-            dict(layer="M2_NORMALIZE", issues=len(normalized_issues)),
-            dict(layer="M3_REWRITE", enabled=optimize_graph, changes=len(changes)),
+            dict(
+                layer="M1_BIND",
+                status="INCOMPLETE" if binding_issues else "READY",
+                issues=binding_issues,
+            ),
+            dict(
+                layer="M2_NORMALIZE",
+                status="INCOMPLETE" if issues else "READY",
+                issues=len(normalized_issues),
+            ),
+            dict(
+                layer="M3_REWRITE",
+                enabled=optimize_graph,
+                executed=not issues and optimize_graph,
+                changes=len(changes),
+            ),
             dict(layer="M4_EXECUTION", status=status, **lowering_facts),
         ],
         issue_categories=dict(Counter(d["code"] for d in issues).most_common()),

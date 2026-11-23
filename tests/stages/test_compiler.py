@@ -59,6 +59,92 @@ def _payloads(graph, document):
     ]
 
 
+def test_python_project_protocols_preserve_initialization_and_effect_order(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text(
+        "import helper\nfrom helper import echo as show\nimport helper as again\n"
+        "print('科学\\0计算', sep='|', end=';\\n')\n"
+        "print(show('left'), again.echo('right'), True, None, 42, sep='|')\n",
+        encoding="utf-8",
+    )
+    (source / "helper.py").write_text(
+        "print('initialize')\n"
+        "def echo(value):\n"
+        "    result = value + '✓'\n"
+        "    print('call', end=':')\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    expected = _run([sys.executable, "-B", entry], source)
+    assert expected.count(b"initialize") == 1 and b"\x00" in expected
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
+def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_path):
+    sources = {
+        "global": "x = 'one'\ndef show():\n    print(x)\nshow()\nx = 'two'\nshow()\n",
+        "builtin": (
+            "def other(value):\n    return None\n"
+            "print = other\nprint('must stay silent')\n"
+        ),
+        "dynamic": "value = input()\nprint(value)\n",
+        "generator": "def gen():\n    print('not executed')\n    yield 'x'\ngen()\n",
+        "annotation": "def mark():\n    print('annotation')\n    return None\nx: mark() = 'value'\n",
+    }
+    for name, text in sources.items():
+        folder = tmp_path / name
+        folder.mkdir()
+        entry = folder / "entry.py"
+        entry.write_text(text)
+        expected = _run([sys.executable, "-B", entry], folder, input=b"input\n")
+        graph, plan = folder / "graph", folder / "plan"
+        _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+        entry.unlink()
+        # A supported binding must preserve behavior; an open protocol must block
+        # execution IR. This also allows later principled domain extensions.
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _PHASE_COMMAND,
+                "middle",
+                "plan",
+                "--graph",
+                str(graph),
+                "--out",
+                str(plan),
+            ],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(scar.__file__).resolve().parents[1]),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            capture_output=True,
+            timeout=60,
+        )
+        report = json.loads(process.stdout)
+        if report["status"] == "READY":
+            assert process.returncode == 0
+            result = _stage(
+                folder, "backend", "compile", "--ir", plan, "--out", folder / "delivery"
+            )
+            assert _run([result["executable"]], folder, input=b"input\n") == expected
+        else:
+            assert process.returncode == 2 and report["blockers"] > 0
+            ir = json.loads((plan / "exec-ir.json").read_bytes())
+            assert ir["status"] == "INCOMPLETE" and not ir["functions"]
+
+
 def test_mixed_program_images_preserve_link_and_state_boundaries(tmp_path):
     sources = tmp_path / "source"
     sources.mkdir()

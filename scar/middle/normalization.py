@@ -221,13 +221,22 @@ def _state_contract(function, evidence):
 
 
 def normalize(bound):
+    from .protocols import normalize_protocols
+
     module = deepcopy(bound)
+    module, protocol_changes, issues = normalize_protocols(module)
+    if issues:
+        # An open object protocol is not a native ABI. In particular, Python
+        # keyword/default binding cannot be checked by counting C arguments.
+        module["normalizations"] = protocol_changes
+        module["baseline_defects"] = []
+        return module, issues
     declarations = module.pop("declarations")
     environment = module.pop("abi_environment")
     functions = {f["name"]: f for f in module["functions"]}
     globals_ = {g["name"]: g for g in module["globals"]}
     externs = {e["name"]: e for e in module["externs"]}
-    issues, defects = [], []
+    defects = []
     for name, variants in declarations.items():
         if len({json_bytes(_abi(v)) for v in variants}) < 2:
             continue
@@ -254,9 +263,10 @@ def normalize(bound):
                 )
             )
     module["baseline_defects"] = defects
-    module["normalizations"], call_issues = _bind_call_arguments(
+    call_changes, call_issues = _bind_call_arguments(
         functions, externs, globals_, module["records"]
     )
+    module["normalizations"] = protocol_changes + call_changes
     issues.extend(call_issues)
     for function in module["functions"]:
         evidence = module.get("state_evidence", {}).get(function["name"], {})

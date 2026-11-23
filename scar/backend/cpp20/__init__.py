@@ -14,6 +14,8 @@ from scar.contract import (
     file_receipt,
     member,
     open_product,
+    publish,
+    read_blob,
     read_image_product,
     read_member,
     validate_images,
@@ -155,6 +157,8 @@ def _lower_image(path, revision, scheduled, destination):
         for name, unit in units.items()
     ]
     support = Path(__file__).with_name("runtime.hpp").read_bytes()
+    runtime = destination / "runtime" / (digest(support) + ".hpp")
+    publish(runtime, support)
     metadata = dict(
         openmp=lowerer.openmp,
         runtime_libraries=sorted(lowerer.libraries.links),
@@ -168,6 +172,7 @@ def _lower_image(path, revision, scheduled, destination):
         units=members,
         ir_sha256=physical.get("ir_sha256"),
         runtime_sha256=digest(support),
+        runtime=file_receipt(destination, runtime),
         **metadata,
     )
     path = destination / "target-ir.json"
@@ -250,6 +255,10 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     from .model import from_data
     from .printer import print_unit
 
+    if "runtime" in product:
+        runtime = read_blob(path.parent, product["runtime"])
+    elif runtime is None:
+        runtime = Path(__file__).with_name("runtime.hpp").read_bytes()
     if product.get("kind") == "image_bundle" or digest(runtime) != product.get(
         "runtime_sha256"
     ):
@@ -296,7 +305,7 @@ def print_target(target, destination, *, jobs=4):
     project = destination / "project"
     if project.exists():
         raise ValueError(f"output project already exists at {project}")
-    runtime = Path(__file__).with_name("runtime.hpp").read_bytes()
+    runtime = None
     manifest = destination / "cpp20.json"
     with TemporaryDirectory(prefix=".scar-project-", dir=destination) as tmp:
         staging = Path(tmp) / "project"
